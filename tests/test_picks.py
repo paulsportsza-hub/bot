@@ -163,14 +163,32 @@ class TestFindBestOdds:
     def test_sa_bookmaker_flag(self):
         entries = find_best_odds(SAMPLE_EVENT)
         by_name = {e.outcome: e for e in entries}
-        # Hollywoodbets is in SA_BOOKMAKERS
-        assert by_name["Arsenal"].is_sa_book is True
+        # Hollywoodbets was removed from SA_BOOKMAKERS whitelist (now 5 books)
+        # Arsenal best is from Hollywoodbets which is no longer SA
+        assert by_name["Arsenal"].is_sa_book is False
+        # Draw best is from Hollywoodbets (3.10) — also not SA
+        assert by_name["Draw"].is_sa_book is False
 
     def test_non_sa_bookmaker(self):
         entries = find_best_odds(SAMPLE_EVENT)
         by_name = {e.outcome: e for e in entries}
         # Chelsea best is 3.40 from Bet365 (not SA)
         assert by_name["Chelsea"].is_sa_book is False
+
+    def test_sa_bookmaker_betway(self):
+        """Betway (in SA_BOOKMAKERS whitelist) is flagged correctly."""
+        event = {
+            "bookmakers": [
+                {
+                    "key": "betway", "title": "Betway",
+                    "markets": [{"key": "h2h", "outcomes": [
+                        {"name": "Team A", "price": 3.00},
+                    ]}],
+                },
+            ],
+        }
+        entries = find_best_odds(event)
+        assert entries[0].is_sa_book is True
 
     def test_empty_event(self):
         entries = find_best_odds({"bookmakers": []})

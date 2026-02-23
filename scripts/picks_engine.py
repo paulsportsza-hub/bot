@@ -36,6 +36,7 @@ async def get_picks_for_user(
     league_keys: list[str],
     risk_profile: str = "moderate",
     max_picks: int = 5,
+    bankroll: float | None = None,
 ) -> dict[str, Any]:
     """Full picks pipeline for a user.
 
@@ -43,7 +44,7 @@ async def get_picks_for_user(
     2. For each event, for each market (h2h, totals):
        - Estimate true probability using sharp bookmaker lines (Pinnacle)
        - Fallback: use vig-removed fair probability from all bookmakers
-       - Calculate EV using true prob vs best available odds
+       - Calculate EV using SA-best odds vs true probability
        - Calculate Kelly stake
     3. Filter by user's risk profile (min EV threshold)
     4. Rank by EV (highest edge first)
@@ -53,6 +54,7 @@ async def get_picks_for_user(
         league_keys: Internal league keys (e.g. ["epl", "nba"])
         risk_profile: "conservative", "moderate", or "aggressive"
         max_picks: Maximum picks to return
+        bankroll: User's bankroll in ZAR (defaults to BANKROLL_DEFAULT)
 
     Returns dict with: ok, picks, total_events, total_markets, quota_remaining, errors
     """
@@ -60,7 +62,7 @@ async def get_picks_for_user(
     min_ev = risk["min_ev"]
     kelly_frac = risk["kelly_fraction"]
     max_stake_pct = risk["max_stake_pct"] / 100.0  # Convert 2 → 0.02
-    bankroll = BANKROLL_DEFAULT
+    bankroll = bankroll or BANKROLL_DEFAULT
 
     all_picks: list[dict] = []
     total_events = 0
@@ -103,15 +105,16 @@ async def get_picks_for_user(
             for outcome_name in [home, away, "Draw"]:
                 total_markets += 1
 
-                best = _best_for_outcome(bookmakers, "h2h", outcome_name)
-                if not best:
-                    continue
-
                 # True probability: sharp book → fair prob fallback
                 true_prob = _get_sharp_probability(bookmakers, "h2h", outcome_name)
                 if true_prob is None:
                     true_prob = fair_probs.get(outcome_name)
                 if not true_prob or true_prob <= 0:
+                    continue
+
+                # SA-only odds for user-facing display
+                best = _best_sa_for_outcome(bookmakers, "h2h", outcome_name)
+                if not best:
                     continue
 
                 ev_pct = calculate_ev(best["odds"], true_prob)
@@ -137,14 +140,15 @@ async def get_picks_for_user(
             for outcome_name in ["Over", "Under"]:
                 total_markets += 1
 
-                best = _best_for_outcome(bookmakers, "totals", outcome_name)
-                if not best:
-                    continue
-
                 true_prob = _get_sharp_probability(bookmakers, "totals", outcome_name)
                 if true_prob is None:
                     true_prob = fair_probs_totals.get(outcome_name)
                 if not true_prob or true_prob <= 0:
+                    continue
+
+                # SA-only odds for user-facing display
+                best = _best_sa_for_outcome(bookmakers, "totals", outcome_name)
+                if not best:
                     continue
 
                 ev_pct = calculate_ev(best["odds"], true_prob)
@@ -259,6 +263,50 @@ def _best_for_outcome(
         "bookmaker_key": best["bookmaker_key"],
         "bookmaker_title": best["bookmaker_title"],
         "is_sa": best["is_sa"],
+        "all_odds": all_odds,
+    }
+
+
+def _best_sa_for_outcome(
+    bookmakers: list[dict], market: str, outcome_name: str,
+) -> dict | None:
+    """Find best odds from SA bookmakers only for a specific outcome.
+
+    Used for user-facing display — only shows odds from whitelisted SA books.
+    Returns dict with: odds, bookmaker_key, bookmaker_title, is_sa, all_odds
+    or None if no SA bookmaker has this outcome.
+    """
+    all_odds: list[dict] = []
+
+    for bk in bookmakers:
+        bk_key = bk.get("key", "").lower()
+        if bk_key not in config.SA_BOOKMAKERS:
+            continue
+        bk_title = config.SA_BOOKMAKERS.get(bk_key, bk.get("title", bk_key))
+
+        for mkt in bk.get("markets", []):
+            if mkt["key"] != market:
+                continue
+            for outcome in mkt.get("outcomes", []):
+                if outcome["name"] == outcome_name:
+                    all_odds.append({
+                        "odds": outcome["price"],
+                        "bookmaker_key": bk_key,
+                        "bookmaker_title": bk_title,
+                        "is_sa": True,
+                    })
+
+    if not all_odds:
+        return None
+
+    all_odds.sort(key=lambda x: x["odds"], reverse=True)
+    best = all_odds[0]
+
+    return {
+        "odds": best["odds"],
+        "bookmaker_key": best["bookmaker_key"],
+        "bookmaker_title": best["bookmaker_title"],
+        "is_sa": True,
         "all_odds": all_odds,
     }
 

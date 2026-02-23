@@ -212,6 +212,28 @@ def find_best_odds(event: dict, market: str = "h2h") -> list[OddsEntry]:
     return list(best.values())
 
 
+def find_best_sa_odds(event: dict, market: str = "h2h") -> list[OddsEntry]:
+    """Like find_best_odds but only considers SA-whitelisted bookmakers."""
+    best: dict[str, OddsEntry] = {}
+    for bk in event.get("bookmakers", []):
+        bk_key = bk.get("key", "").lower()
+        if bk_key not in config.SA_BOOKMAKERS:
+            continue
+        bk_title = config.SA_BOOKMAKERS.get(bk_key, bk.get("title", bk_key))
+        for mkt in bk.get("markets", []):
+            if mkt["key"] != market:
+                continue
+            for outcome in mkt["outcomes"]:
+                name = outcome["name"]
+                price = outcome["price"]
+                if name not in best or price > best[name].price:
+                    best[name] = OddsEntry(
+                        outcome=name, price=price,
+                        bookmaker=bk_title, is_sa_book=True,
+                    )
+    return list(best.values())
+
+
 def fair_probabilities(event: dict, market: str = "h2h") -> dict[str, float]:
     """Calculate fair (vig-removed) probabilities for each outcome.
 

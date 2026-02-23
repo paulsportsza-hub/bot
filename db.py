@@ -38,6 +38,7 @@ class User(Base):
     archetype: Mapped[str | None] = mapped_column(String(50))  # eager_bettor/casual_fan/complete_newbie
     engagement_score: Mapped[float] = mapped_column(Float, default=5.0)
     notification_prefs: Mapped[str | None] = mapped_column(Text)  # JSON notification preferences
+    bankroll: Mapped[float | None] = mapped_column(Float)  # weekly bankroll in ZAR
     source: Mapped[str | None] = mapped_column(String(100))  # organic, fb_ad_123, etc.
     fb_click_id: Mapped[str | None] = mapped_column(String(255))
     fb_ad_id: Mapped[str | None] = mapped_column(String(255))
@@ -62,6 +63,22 @@ class Tip(Base):
     prediction: Mapped[str] = mapped_column(Text)
     odds: Mapped[float | None] = mapped_column(Float)
     result: Mapped[str | None] = mapped_column(String(16))  # win / loss / pending
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class GameSubscription(Base):
+    __tablename__ = "game_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    event_id: Mapped[str] = mapped_column(String(128))
+    sport_key: Mapped[str | None] = mapped_column(String(64))
+    home_team: Mapped[str | None] = mapped_column(String(128))
+    away_team: Mapped[str | None] = mapped_column(String(128))
+    commence_time: Mapped[str | None] = mapped_column(String(64))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -106,6 +123,7 @@ async def _migrate_columns() -> None:
                 ("archetype", "NULL"),
                 ("engagement_score", "5.0"),
                 ("notification_prefs", "NULL"),
+                ("bankroll", "NULL"),
                 ("source", "NULL"),
                 ("fb_click_id", "NULL"),
                 ("fb_ad_id", "NULL"),
@@ -206,6 +224,20 @@ async def clear_user_sport_prefs(user_id: int) -> None:
         await s.commit()
 
 
+async def clear_user_league_teams(user_id: int, sport_key: str, league_key: str) -> None:
+    """Delete team prefs for a specific league while keeping the league pref itself."""
+    async with async_session() as s:
+        await s.execute(
+            delete(UserSportPref).where(
+                UserSportPref.user_id == user_id,
+                UserSportPref.sport_key == sport_key,
+                UserSportPref.league == league_key,
+                UserSportPref.team_name != None,  # noqa: E711
+            )
+        )
+        await s.commit()
+
+
 async def update_pref_team(pref_id: int, team_name: str) -> None:
     async with async_session() as s:
         pref = await s.get(UserSportPref, pref_id)
@@ -252,8 +284,17 @@ async def reset_user_profile(user_id: int) -> None:
             user.education_stage = 0
             user.archetype = None
             user.engagement_score = 5.0
+            user.bankroll = None
             await s.commit()
     await clear_user_sport_prefs(user_id)
+
+
+async def update_user_bankroll(user_id: int, bankroll: float | None) -> None:
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.bankroll = bankroll
+            await s.commit()
 
 
 async def update_user_archetype(
@@ -295,6 +336,90 @@ async def update_notification_prefs(user_id: int, prefs: dict) -> None:
         if user:
             user.notification_prefs = json.dumps(prefs)
             await s.commit()
+
+
+async def subscribe_to_game(
+    user_id: int, event_id: str,
+    sport_key: str | None = None,
+    home_team: str | None = None,
+    away_team: str | None = None,
+    commence_time: str | None = None,
+) -> GameSubscription:
+    """Subscribe a user to live score updates for a game."""
+    async with async_session() as s:
+        # Check for existing subscription
+        result = await s.execute(
+            select(GameSubscription).where(
+                GameSubscription.user_id == user_id,
+                GameSubscription.event_id == event_id,
+                GameSubscription.is_active == True,  # noqa: E712
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            return existing
+        sub = GameSubscription(
+            user_id=user_id, event_id=event_id,
+            sport_key=sport_key, home_team=home_team,
+            away_team=away_team, commence_time=commence_time,
+        )
+        s.add(sub)
+        await s.commit()
+        await s.refresh(sub)
+        return sub
+
+
+async def unsubscribe_from_game(user_id: int, event_id: str) -> None:
+    """Unsubscribe a user from a game."""
+    async with async_session() as s:
+        result = await s.execute(
+            select(GameSubscription).where(
+                GameSubscription.user_id == user_id,
+                GameSubscription.event_id == event_id,
+                GameSubscription.is_active == True,  # noqa: E712
+            )
+        )
+        for sub in result.scalars().all():
+            sub.is_active = False
+        await s.commit()
+
+
+async def get_user_subscriptions(user_id: int) -> list[GameSubscription]:
+    """Get all active subscriptions for a user."""
+    async with async_session() as s:
+        result = await s.execute(
+            select(GameSubscription).where(
+                GameSubscription.user_id == user_id,
+                GameSubscription.is_active == True,  # noqa: E712
+            )
+        )
+        return list(result.scalars().all())
+
+
+async def get_subscribers_for_event(event_id: str) -> list[GameSubscription]:
+    """Get all active subscribers for an event."""
+    async with async_session() as s:
+        result = await s.execute(
+            select(GameSubscription).where(
+                GameSubscription.event_id == event_id,
+                GameSubscription.is_active == True,  # noqa: E712
+            )
+        )
+        return list(result.scalars().all())
+
+
+async def deactivate_subscriptions_for_event(event_id: str) -> None:
+    """Deactivate all subscriptions for a completed event."""
+    async with async_session() as s:
+        result = await s.execute(
+            select(GameSubscription).where(
+                GameSubscription.event_id == event_id,
+                GameSubscription.is_active == True,  # noqa: E712
+            )
+        )
+        for sub in result.scalars().all():
+            sub.is_active = False
+        await s.commit()
 
 
 async def get_user_count() -> int:

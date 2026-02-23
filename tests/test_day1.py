@@ -86,7 +86,7 @@ class TestExperienceOnboarding:
 
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 2/7" in text
+        assert "Step 2/8" in text
         assert "sports" in text.lower()
 
     async def test_cmd_start_shows_experience_first(self, test_db):
@@ -103,7 +103,7 @@ class TestExperienceOnboarding:
 
         call_args = mock_update.message.reply_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 1/7" in text
+        assert "Step 1/8" in text
         assert "experience" in text.lower()
 
     async def test_onboarding_done_saves_experience(self, test_db):
@@ -386,7 +386,7 @@ class TestMenuHandlers:
         assert ob["step"] == "experience"
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 1/7" in text
+        assert "Step 1/8" in text
 
 
 # ── Priority 3: Experience-Adapted Pick Cards ────────────────

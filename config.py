@@ -41,10 +41,13 @@ RISK_PROFILES: dict[str, dict] = {
     "aggressive":   {"label": "🔥 Aggressive",   "kelly_fraction": 1.00, "max_stake_pct": 10, "min_ev": 1.0},
 }
 
-# ── SA Bookmakers (highlighted in pick cards) ─────────────
-SA_BOOKMAKERS: set[str] = {
-    "betway", "hollywoodbets", "supabets", "sportingbet",
-    "sunbet", "betxchange", "playabets", "gbets",
+# ── SA Bookmakers (whitelisted for user-facing odds) ──────
+SA_BOOKMAKERS: dict[str, str] = {
+    "betway": "Betway",
+    "sportingbet": "SportingBet",
+    "10bet": "10Bet",
+    "playabets": "PlayaBets",
+    "supabets": "SupaBets",
 }
 
 
@@ -357,10 +360,11 @@ TEAM_ALIASES: dict[str, str] = {
     "supersport": "SuperSport United", "matsatsantsa": "SuperSport United",
     # EPL
     "man u": "Man United", "man utd": "Man United", "mufc": "Man United",
-    "manchester united": "Man United",
+    "manchester united": "Man United", "red devils": "Man United",
     "man c": "Man City", "mcfc": "Man City", "manchester city": "Man City",
-    "pool": "Liverpool", "lfc": "Liverpool",
-    "gooners": "Arsenal", "ars": "Arsenal", "afc": "Arsenal",
+    "sky blues": "Man City", "cityzens": "Man City",
+    "pool": "Liverpool", "lfc": "Liverpool", "reds": "Liverpool",
+    "gunners": "Arsenal", "gooners": "Arsenal", "ars": "Arsenal", "afc": "Arsenal",
     "tottenham": "Spurs", "thfc": "Spurs",
     "toffees": "Everton",
     "magpies": "Newcastle", "nufc": "Newcastle", "toon": "Newcastle",
@@ -368,9 +372,11 @@ TEAM_ALIASES: dict[str, str] = {
     "blues": "Chelsea", "cfc": "Chelsea",
     "villans": "Aston Villa", "villa": "Aston Villa",
     "seagulls": "Brighton",
+    "wolves": "Wolverhampton",
+    "forest": "Nottingham Forest",
     # La Liga
-    "barca": "Barcelona", "fcb": "Barcelona",
-    "real": "Real Madrid", "madrid": "Real Madrid",
+    "barca": "Barcelona", "fcb": "Barcelona", "blaugrana": "Barcelona",
+    "real": "Real Madrid", "madrid": "Real Madrid", "los blancos": "Real Madrid",
     "atleti": "Atletico Madrid", "atletico": "Atletico Madrid",
     # Bundesliga
     "bayern": "Bayern Munich",
@@ -384,11 +390,16 @@ TEAM_ALIASES: dict[str, str] = {
     # Ligue 1
     "paris": "PSG", "paris sg": "PSG", "paris saint-germain": "PSG",
     "om": "Marseille",
+    # SA PSL (extended)
+    "glamour boys": "Kaizer Chiefs",
+    "usuthu": "AmaZulu",
+    "masandawana": "Mamelodi Sundowns",
     # Rugby
-    "springboks": "South Africa", "boks": "South Africa",
+    "springboks": "South Africa", "boks": "South Africa", "bokke": "South Africa",
     "all blacks": "New Zealand",
     "wallabies": "Australia",
     "pumas": "Argentina",
+    "les bleus": "France",
     # Cricket
     "csk": "Chennai Super Kings",
     "mi": "Mumbai Indians",
@@ -400,13 +411,23 @@ TEAM_ALIASES: dict[str, str] = {
     "lsg": "Lucknow Super Giants",
     "srh": "Sunrisers Hyderabad",
     "pbks": "Punjab Kings",
+    "proteas": "South Africa",
+    "blackcaps": "New Zealand",
+    "windies": "West Indies",
     # Tennis
-    "nole": "Djokovic", "novak": "Djokovic",
+    "nole": "Djokovic", "novak": "Djokovic", "djoker": "Djokovic",
     "carlitos": "Alcaraz",
+    "rafa": "Nadal",
     "iga": "Swiatek",
     "coco": "Gauff",
+    # Boxing
+    "canelo": "Canelo Alvarez",
+    "tank": "Gervonta Davis",
+    "fury": "Tyson Fury",
     # MMA
     "ddp": "Dricus Du Plessis", "dricus": "Dricus Du Plessis",
+    "stillknocks": "Dricus Du Plessis",
+    "poatan": "Alex Pereira",
     "bones": "Jon Jones",
     "do bronx": "Charles Oliveira",
     "blessed": "Max Holloway",
@@ -450,6 +471,104 @@ SA_PRIORITY_GROUPS: list[str] = [
     "Ice Hockey",
     "Baseball",
 ]
+
+
+# ── League-specific examples for team input prompts ───────
+
+LEAGUE_EXAMPLES: dict[str, str] = {
+    # Soccer
+    "psl": "e.g. Chiefs, Pirates, Sundowns",
+    "epl": "e.g. Arsenal, Liverpool, Man City",
+    "la_liga": "e.g. Real Madrid, Barcelona, Atletico",
+    "bundesliga": "e.g. Bayern Munich, Dortmund, Leverkusen",
+    "serie_a": "e.g. Juventus, AC Milan, Inter Milan",
+    "ligue_1": "e.g. PSG, Marseille, Lyon",
+    "ucl": "e.g. Real Madrid, Man City, Bayern",
+    "mls": "e.g. Inter Miami, LAFC, LA Galaxy",
+    # Rugby
+    "urc": "e.g. Bulls, Stormers, Sharks, Leinster",
+    "super_rugby": "e.g. Crusaders, Blues, Hurricanes",
+    "currie_cup": "e.g. Bulls, Stormers, Sharks",
+    "six_nations": "e.g. England, France, Ireland",
+    "rugby_champ": "e.g. South Africa, New Zealand",
+    "rwc": "e.g. South Africa, New Zealand, England",
+    # Cricket
+    "csa_cricket": "e.g. Proteas, MI Cape Town, Paarl Royals",
+    "test_cricket": "e.g. South Africa, India, Australia",
+    "ipl": "e.g. Mumbai Indians, CSK, RCB",
+    "big_bash": "e.g. Sydney Sixers, Perth Scorchers",
+    "t20_wc": "e.g. South Africa, India, England",
+    # Tennis
+    "atp": "e.g. Djokovic, Alcaraz, Sinner",
+    "wta": "e.g. Sabalenka, Swiatek, Gauff",
+    "grand_slams": "e.g. Djokovic, Alcaraz, Sabalenka",
+    # Boxing
+    "boxing_major": "e.g. Canelo, Usyk, Crawford",
+    # MMA
+    "ufc": "e.g. Islam, Pereira, Dricus, Jones",
+    # Basketball
+    "nba": "e.g. Lakers, Celtics, Warriors",
+    "euroleague": "e.g. Real Madrid, Barcelona",
+    # American Football
+    "nfl": "e.g. Chiefs, 49ers, Eagles",
+    # Golf
+    "pga": "e.g. Scheffler, McIlroy, Rahm",
+    "dp_world": "e.g. McIlroy, Hovland, Rahm",
+    "golf_majors": "e.g. Scheffler, McIlroy",
+    # Motorsport
+    "f1": "e.g. Verstappen, Hamilton, Leclerc",
+    "motogp": "e.g. Bagnaia, Martin, Marquez",
+}
+
+
+# ── Team abbreviations (for compact button display) ───────
+
+TEAM_ABBREVIATIONS: dict[str, str] = {
+    # Soccer — SA PSL
+    "Kaizer Chiefs": "KC", "Orlando Pirates": "OPI", "Mamelodi Sundowns": "SUN",
+    "Cape Town City": "CTC", "Stellenbosch": "STL", "AmaZulu": "AMA",
+    "SuperSport United": "SSU", "Sekhukhune United": "SEK",
+    # Soccer — EPL
+    "Arsenal": "ARS", "Aston Villa": "AVL", "Chelsea": "CHE",
+    "Liverpool": "LIV", "Man City": "MCI", "Man United": "MUN",
+    "Newcastle": "NEW", "Spurs": "TOT", "Brighton": "BHA",
+    "West Ham": "WHU", "Crystal Palace": "CRY", "Fulham": "FUL",
+    "Everton": "EVE", "Brentford": "BRE", "Wolves": "WOL",
+    "Nottingham Forest": "NFO", "Bournemouth": "BOU",
+    # Soccer — La Liga
+    "Real Madrid": "RMA", "Barcelona": "BAR", "Atletico Madrid": "ATM",
+    "Real Sociedad": "RSO", "Athletic Bilbao": "ATH", "Villarreal": "VIL",
+    "Sevilla": "SEV", "Real Betis": "BET", "Valencia": "VAL", "Girona": "GIR",
+    # Soccer — Bundesliga
+    "Bayern Munich": "BAY", "Borussia Dortmund": "BVB", "RB Leipzig": "RBL",
+    "Bayer Leverkusen": "LEV", "Eintracht Frankfurt": "SGE", "Stuttgart": "STU",
+    # Soccer — Serie A
+    "AC Milan": "ACM", "Inter Milan": "INT", "Juventus": "JUV",
+    "Napoli": "NAP", "Roma": "ROM", "Lazio": "LAZ", "Atalanta": "ATA",
+    # Soccer — other
+    "PSG": "PSG", "Marseille": "OM", "Lyon": "LYO", "Monaco": "MON",
+    "Inter Miami": "MIA", "LAFC": "LAFC", "LA Galaxy": "LAG",
+    # Rugby
+    "Bulls": "BUL", "Stormers": "STO", "Sharks": "SHA", "Lions": "LIO",
+    "Crusaders": "CRU", "Blues": "BLU", "Hurricanes": "HUR",
+    "South Africa": "RSA", "New Zealand": "NZL", "Australia": "AUS",
+    "England": "ENG", "France": "FRA", "Ireland": "IRE",
+    "Scotland": "SCO", "Wales": "WAL", "Italy": "ITA", "Argentina": "ARG",
+    # Basketball
+    "Lakers": "LAL", "Celtics": "BOS", "Warriors": "GSW", "Nuggets": "DEN",
+    "Bucks": "MIL", "76ers": "PHI", "Heat": "MIA", "Suns": "PHX",
+    "Knicks": "NYK", "Mavericks": "DAL", "Cavaliers": "CLE", "Thunder": "OKC",
+    # NFL
+    "Chiefs": "KC", "49ers": "SF", "Eagles": "PHI", "Bills": "BUF",
+    "Cowboys": "DAL", "Ravens": "BAL", "Lions": "DET", "Dolphins": "MIA",
+}
+
+
+def abbreviate_team(name: str, max_len: int = 3) -> str:
+    """Get short team abbreviation for compact display."""
+    if name in TEAM_ABBREVIATIONS:
+        return TEAM_ABBREVIATIONS[name]
+    return name[:max_len].upper()
 
 
 def get_sport_emoji(group: str) -> str:

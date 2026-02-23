@@ -301,6 +301,7 @@ ALIASES: dict[str, str] = {
     # Soccer — EPL
     "mcu": "Manchester City", "man city": "Manchester City",
     "city": "Manchester City", "cityzens": "Manchester City",
+    "sky blues": "Manchester City",
     "manu": "Manchester United", "man utd": "Manchester United",
     "man u": "Manchester United", "united": "Manchester United",
     "red devils": "Manchester United",
@@ -330,14 +331,15 @@ ALIASES: dict[str, str] = {
     "matsatsantsa": "SuperSport United", "supersport": "SuperSport United",
     "stellies": "Stellenbosch", "sekhukhune": "Sekhukhune United",
     "galaxy": "TS Galaxy", "polokwane": "Polokwane City",
+    "glamour boys": "Kaizer Chiefs",
     # Soccer — La Liga
-    "barca": "Barcelona", "fcb": "Barcelona",
-    "madrid": "Real Madrid", "real": "Real Madrid",
+    "barca": "Barcelona", "fcb": "Barcelona", "blaugrana": "Barcelona",
+    "madrid": "Real Madrid", "real": "Real Madrid", "los blancos": "Real Madrid",
     "atleti": "Atletico Madrid", "atletico": "Atletico Madrid",
     # Tennis
     "djoko": "Novak Djokovic", "nole": "Novak Djokovic", "djokovic": "Novak Djokovic",
     "alcaraz": "Carlos Alcaraz", "carlitos": "Carlos Alcaraz",
-    "rafa": "Rafael Nadal", "nadal": "Rafael Nadal",
+    "rafa": "Rafael Nadal", "nadal": "Rafael Nadal", "djoker": "Novak Djokovic",
     "sinner": "Jannik Sinner",
     "meddy": "Daniil Medvedev", "medvedev": "Daniil Medvedev",
     "zverev": "Alexander Zverev", "sascha": "Alexander Zverev",
@@ -375,6 +377,14 @@ ALIASES: dict[str, str] = {
     # Rugby
     "boks": "Springboks", "springboks": "Springboks", "bokke": "Springboks",
     "all blacks": "All Blacks",
+    "les bleus": "France",
+    # Boxing (extended)
+    "canelo": "Canelo Alvarez",
+    "tank": "Gervonta Davis", "tank davis": "Gervonta Davis",
+    "fury": "Tyson Fury",
+    # MMA (extended)
+    "stillknocks": "Dricus Du Plessis",
+    "poatan": "Alex Pereira",
 }
 
 

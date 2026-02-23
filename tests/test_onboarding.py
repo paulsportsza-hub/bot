@@ -288,7 +288,7 @@ class TestRiskSelection:
         await bot.handle_ob_risk(query, "moderate")
 
         assert ob["risk"] == "moderate"
-        assert ob["step"] == "notify"
+        assert ob["step"] == "bankroll"
 
 
 class TestNotifySelection:
@@ -321,7 +321,7 @@ class TestSummaryAndEdit:
 
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 7/7" in text
+        assert "Step 8/8" in text
         assert "Arsenal" in text
         # Edit buttons are in the keyboard markup
         kb = call_args[1].get("reply_markup")
