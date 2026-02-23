@@ -30,7 +30,8 @@ class TestOnboardingState:
     def test_get_ob_creates_fresh_state(self):
         bot._onboarding_state.clear()
         ob = bot._get_ob(99999)
-        assert ob["step"] == "sports"
+        assert ob["step"] == "experience"
+        assert ob["experience"] is None
         assert ob["selected_sports"] == []
 
     def test_get_ob_returns_same_state(self):
@@ -86,7 +87,7 @@ class TestSportsDone:
         assert ob["step"] == "leagues"
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 2" in text
+        assert "Step 3" in text
 
 
 class TestLeagueSelection:

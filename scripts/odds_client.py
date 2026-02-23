@@ -262,12 +262,26 @@ def format_odds_message(events: list[dict], sport_label: str) -> str:
     return "\n".join(lines)
 
 
-def format_pick_card(pick: ValueBet) -> str:
-    """Format a single ValueBet as an HTML pick card for Telegram."""
+def format_pick_card(pick: ValueBet, experience: str = "experienced") -> str:
+    """Format a single ValueBet as an HTML pick card for Telegram.
+
+    Adapts output based on experience level:
+    - experienced: compact stats (odds, EV%, Kelly stake)
+    - casual: narrative + explained odds + suggested stake
+    - newbie: full hand-holding with explanations in Rands
+    """
+    if experience == "newbie":
+        return _format_pick_newbie(pick)
+    elif experience == "casual":
+        return _format_pick_casual(pick)
+    return _format_pick_experienced(pick)
+
+
+def _format_pick_experienced(pick: ValueBet) -> str:
+    """Compact stats for experienced bettors."""
     sport = config.ALL_SPORTS.get(pick.sport_key)
     emoji = sport.emoji if sport else "🏅"
 
-    # Highlight SA bookmakers
     bk_display = pick.bookmaker
     if pick.is_sa_book:
         bk_display = f"🇿🇦 {pick.bookmaker}"
@@ -278,4 +292,74 @@ def format_pick_card(pick: ValueBet) -> str:
         f"   💰 Odds: <b>{pick.best_price:.2f}</b> @ {bk_display}\n"
         f"   📈 EV: <b>{pick.ev_pct:+.1f}%</b> | {pick.confidence}\n"
         f"   🎯 Kelly: <code>{pick.kelly_stake:.1%}</code> of bankroll"
+    )
+
+
+def _format_pick_casual(pick: ValueBet) -> str:
+    """Narrative style with explained odds for casual bettors."""
+    sport = config.ALL_SPORTS.get(pick.sport_key)
+    emoji = sport.emoji if sport else "🏅"
+
+    bk_display = pick.bookmaker
+    if pick.is_sa_book:
+        bk_display = f"🇿🇦 {pick.bookmaker}"
+
+    # Calculate payout for R100 bet
+    payout = pick.best_price * 100
+
+    # Suggested stake based on Kelly
+    if pick.kelly_stake >= 0.05:
+        stake_hint = "Medium-High stake"
+    elif pick.kelly_stake >= 0.02:
+        stake_hint = "Medium stake"
+    else:
+        stake_hint = "Small stake"
+
+    return (
+        f"{emoji} <b>{pick.home}</b> vs <b>{pick.away}</b>\n"
+        f"   📌 We like: <b>{pick.outcome}</b>\n"
+        f"   💰 Best odds: <b>{pick.best_price:.2f}</b> @ {bk_display}\n"
+        f"   💵 R100 bet pays <b>R{payout:.0f}</b>\n"
+        f"   📈 Edge: <b>{pick.ev_pct:+.1f}%</b> above fair value | {pick.confidence}\n"
+        f"   💡 Suggested: <b>{stake_hint}</b>"
+    )
+
+
+def _format_pick_newbie(pick: ValueBet) -> str:
+    """Full hand-holding for new bettors — explains everything."""
+    sport = config.ALL_SPORTS.get(pick.sport_key)
+    emoji = sport.emoji if sport else "🏅"
+
+    bk_display = pick.bookmaker
+    if pick.is_sa_book:
+        bk_display = f"🇿🇦 {pick.bookmaker}"
+
+    # Payout examples
+    payout_20 = pick.best_price * 20
+    payout_50 = pick.best_price * 50
+
+    # Simple confidence label
+    if "High" in pick.confidence:
+        conf_explain = "Our analysis shows strong value here"
+    elif "Medium" in pick.confidence:
+        conf_explain = "Decent value — worth a small bet"
+    else:
+        conf_explain = "Some value, but proceed with caution"
+
+    # Bet type explanation
+    if pick.outcome == "Draw":
+        bet_explain = "a <b>Draw</b> (neither team wins)"
+    elif pick.outcome == pick.home:
+        bet_explain = f"<b>{pick.outcome}</b> to win (home team)"
+    else:
+        bet_explain = f"<b>{pick.outcome}</b> to win (away team)"
+
+    return (
+        f"{emoji} <b>{pick.home}</b> vs <b>{pick.away}</b>\n"
+        f"   📌 Bet on: {bet_explain}\n"
+        f"   💰 Odds: <b>{pick.best_price:.2f}</b> @ {bk_display}\n"
+        f"   💵 Bet R20 → get <b>R{payout_20:.0f}</b> back\n"
+        f"   💵 Bet R50 → get <b>R{payout_50:.0f}</b> back\n"
+        f"   {pick.confidence} — {conf_explain}\n"
+        f"   💡 <i>Start small: R20-50 per bet</i>"
     )

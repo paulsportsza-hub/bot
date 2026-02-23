@@ -19,6 +19,7 @@ tests/
   test_bot_handlers.py ← /start, /menu, /help handler tests
   test_onboarding.py   ← Full onboarding quiz state machine tests
   test_picks.py        ← EV calc, Kelly stake, value bet scanning, pick cards, /admin
+  test_day1.py         ← Experience onboarding, persistent menu, adapted pick cards
 ```
 
 ## Sports Structure
@@ -61,12 +62,18 @@ All inline keyboard callbacks use `prefix:action` format:
 - `sport:epl` — View odds for EPL
 - `ai:nba` — AI tip for NBA
 - `menu:home` — Main menu
-- `picks:go` — Today's value bet picks
+- `picks:today` / `picks:go` — Today's value bet picks
+- `ob_exp:experienced` / `ob_exp:casual` / `ob_exp:newbie` — Experience level
 - `ob_sport:psl` — Toggle PSL in onboarding
 - `ob_league:epl:English Premier League` — Toggle league
 - `ob_risk:moderate` — Select risk profile
 - `ob_notify:18` — Select 6 PM notifications
 - `ob_done:finish` — Complete onboarding
+- `bets:active` / `bets:history` — My Bets sub-menu
+- `teams:view` / `teams:edit` — My Teams sub-menu
+- `stats:overview` / `stats:leaderboard` — Stats sub-menu
+- `affiliate:compare` / `affiliate:sa` / `affiliate:intl` — Bookmakers sub-menu
+- `settings:home` / `settings:risk` / `settings:notify` / `settings:sports` — Settings sub-menu
 
 ## Picks / Value Bet Flow
 1. User taps "Today's Picks" button or sends `/picks`
@@ -94,21 +101,39 @@ betway, hollywoodbets, supabets, sportingbet, sunbet, betxchange, playabets, gbe
 - `/admin` — Dashboard showing Odds API quota (requests used/remaining) and bot stats
 - `/stats` — Legacy stats command (user count, tip results)
 
-## Onboarding Quiz Flow
-1. **Sports selection** — Two-tier: SA first (🇿🇦 header), then Global (🌍 header)
-2. **League selection** — Per selected sport, toggle leagues
-3. **Team selection** — Type favourite team per sport (optional, skip available)
-4. **Risk profile** — Conservative / Moderate / Aggressive
-5. **Notification time** — 7 AM / 12 PM / 6 PM / 9 PM
-6. **Summary** — Review all selections, confirm with "Let's go!"
+## Onboarding Quiz Flow (7 steps)
+1. **Experience level** — Experienced / Casual / Newbie (routes post-onboarding differently)
+2. **Sports selection** — Two-tier: SA first (🇿🇦 header), then Global (🌍 header)
+3. **League selection** — Per selected sport, toggle leagues
+4. **Team selection** — Type favourite team per sport (optional, skip available)
+5. **Risk profile** — Conservative / Moderate / Aggressive
+6. **Notification time** — 7 AM / 12 PM / 6 PM / 9 PM
+7. **Summary** — Review all selections, confirm with "Let's go!"
+
+### Post-onboarding routing by experience:
+- **Experienced** → Straight to picks (auto-triggers `_do_picks`)
+- **Casual** → Main menu
+- **Newbie** → Mini-lesson explaining odds in Rands
 
 State tracked in `bot._onboarding_state[user_id]` dict.
 
 ## DB Models
-- `User` — id, username, first_name, risk_profile, notification_hour, onboarding_done
+- `User` — id, username, first_name, risk_profile, notification_hour, onboarding_done, experience_level, education_stage
 - `UserSportPref` — user_id, sport_key, league, team_name
 - `Tip` — sport, match, prediction, odds, result
 - `Bet` — user_id, tip_id, stake
+
+## Persistent Menu System
+Main menu: `kb_main()` → Daily Briefing | My Bets | My Teams | Stats | Bookmakers | Settings
+
+Sub-menus: `kb_bets()`, `kb_teams()`, `kb_stats()`, `kb_bookmakers()`, `kb_settings()`
+Every sub-screen has "🔙 Back" + "🏠 Main Menu" via `kb_nav()`.
+
+## Experience-Adapted Pick Cards
+`format_pick_card(pick, experience="experienced")` in `scripts/odds_client.py`:
+- **Experienced**: compact stats — odds, EV%, Kelly stake fraction
+- **Casual**: narrative — "We like X", R100 payout, stake hint (no Kelly)
+- **Newbie**: full hand-holding — bet type explained, payout in R20/R50, "Start small" advice
 
 ## Conventions
 - HTML parse_mode throughout all messages
@@ -119,7 +144,7 @@ State tracked in `bot._onboarding_state[user_id]` dict.
 
 ## Verification
 ```bash
-# Run all tests (101 tests)
+# Run all tests (154 tests)
 pytest tests/ -x -q
 
 # Run specific test file

@@ -34,8 +34,8 @@ log = logging.getLogger("mzansiedge")
 claude = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
 
 # ── Onboarding state machine ─────────────────────────────
-# Steps: sports → leagues → teams → risk → notify → summary
-ONBOARD_STEPS = ("sports", "leagues", "teams", "risk", "notify", "summary")
+# Steps: experience → sports → leagues → teams → risk → notify → summary
+ONBOARD_STEPS = ("experience", "sports", "leagues", "teams", "risk", "notify", "summary")
 
 # Per-user in-memory onboarding state
 _onboarding_state: dict[int, dict] = {}
@@ -45,7 +45,8 @@ def _get_ob(user_id: int) -> dict:
     """Get or create onboarding state for a user."""
     if user_id not in _onboarding_state:
         _onboarding_state[user_id] = {
-            "step": "sports",
+            "step": "experience",
+            "experience": None,       # experienced / casual / newbie
             "selected_sports": [],
             "selected_leagues": {},   # sport_key → [league, ...]
             "teams": {},              # sport_key → team_name
@@ -57,28 +58,86 @@ def _get_ob(user_id: int) -> dict:
 
 # ── Keyboards ─────────────────────────────────────────────
 
-MAIN_MENU_KB = InlineKeyboardMarkup(
-    [
+def kb_main() -> InlineKeyboardMarkup:
+    """Main persistent menu — every sub-screen navigates back here."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Daily Briefing", callback_data="picks:today")],
         [
-            InlineKeyboardButton("🎯 Today's Picks", callback_data="picks:go"),
+            InlineKeyboardButton("💰 My Bets", callback_data="bets:active"),
+            InlineKeyboardButton("🏟️ My Teams", callback_data="teams:view"),
         ],
         [
-            InlineKeyboardButton("⚽ Soccer/PSL", callback_data="sport:psl"),
-            InlineKeyboardButton("🏉 Rugby", callback_data="sport:urc"),
+            InlineKeyboardButton("📈 Stats", callback_data="stats:overview"),
+            InlineKeyboardButton("🎰 Bookmakers", callback_data="affiliate:compare"),
         ],
+        [InlineKeyboardButton("⚙️ Settings", callback_data="settings:home")],
+    ])
+
+
+def kb_nav(back_target: str = "menu:home") -> InlineKeyboardMarkup:
+    """Standard navigation row: Back + Main Menu."""
+    return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🏏 Cricket", callback_data="sport:csa_cricket"),
-            InlineKeyboardButton("📊 All Odds", callback_data="sport:all"),
+            InlineKeyboardButton("🔙 Back", callback_data=back_target),
+            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
         ],
+    ])
+
+
+def kb_bets() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 Active Bets", callback_data="bets:active")],
+        [InlineKeyboardButton("📜 Bet History", callback_data="bets:history")],
         [
-            InlineKeyboardButton("🤖 AI Tip", callback_data="ai:tip"),
-            InlineKeyboardButton("📜 History", callback_data="menu:history"),
+            InlineKeyboardButton("🔙 Back", callback_data="menu:home"),
+            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
         ],
+    ])
+
+
+def kb_teams() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👀 View My Teams", callback_data="teams:view")],
+        [InlineKeyboardButton("✏️ Edit Teams", callback_data="teams:edit")],
         [
-            InlineKeyboardButton("ℹ️ Help", callback_data="menu:help"),
+            InlineKeyboardButton("🔙 Back", callback_data="menu:home"),
+            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
         ],
-    ]
-)
+    ])
+
+
+def kb_stats() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Overview", callback_data="stats:overview")],
+        [InlineKeyboardButton("🏆 Leaderboard", callback_data="stats:leaderboard")],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="menu:home"),
+            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
+        ],
+    ])
+
+
+def kb_bookmakers() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🇿🇦 SA Bookmakers", callback_data="affiliate:sa")],
+        [InlineKeyboardButton("🌍 International", callback_data="affiliate:intl")],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="menu:home"),
+            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
+        ],
+    ])
+
+
+def kb_settings() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎯 Risk Profile", callback_data="settings:risk")],
+        [InlineKeyboardButton("⏰ Notifications", callback_data="settings:notify")],
+        [InlineKeyboardButton("⚽ My Sports", callback_data="settings:sports")],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="menu:home"),
+            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
+        ],
+    ])
 
 
 def back_button(target: str = "menu:home") -> InlineKeyboardMarkup:
@@ -168,6 +227,14 @@ def kb_onboarding_team_skip(sport_key: str) -> InlineKeyboardMarkup:
     ])
 
 
+def kb_onboarding_experience() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎯 I bet regularly", callback_data="ob_exp:experienced")],
+        [InlineKeyboardButton("🤔 I've placed a few bets", callback_data="ob_exp:casual")],
+        [InlineKeyboardButton("🆕 I'm completely new", callback_data="ob_exp:newbie")],
+    ])
+
+
 # ── /start ────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -181,23 +248,22 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             Your AI-powered sports betting assistant.
             Pick a sport or get an AI tip below.
         """)
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=MAIN_MENU_KB)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
     else:
         # Start onboarding
         _onboarding_state.pop(user.id, None)  # reset
         ob = _get_ob(user.id)
-        ob["step"] = "sports"
+        ob["step"] = "experience"
         text = textwrap.dedent(f"""\
             <b>🇿🇦 Welcome to MzansiEdge, {user.first_name}!</b>
 
             Let's set up your profile in a few quick steps.
 
-            <b>Step 1/6:</b> Which sports do you follow?
-            Tap to select, then hit <b>Done</b>.
+            <b>Step 1/7:</b> What's your betting experience?
         """)
         await update.message.reply_text(
             text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_sports(),
+            reply_markup=kb_onboarding_experience(),
         )
 
 
@@ -210,7 +276,7 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
         Hey {user.first_name}, pick a sport or get an AI tip.
     """)
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=MAIN_MENU_KB)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
 
 
 # ── /help ─────────────────────────────────────────────────
@@ -238,7 +304,7 @@ HELP_TEXT = textwrap.dedent("""\
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=back_button())
+    await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
 # ── /odds ─────────────────────────────────────────────────
@@ -299,6 +365,8 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await handle_sport(query, action)
     elif prefix == "ai":
         await handle_ai(query, action)
+    elif prefix == "ob_exp":
+        await handle_ob_experience(query, action)
     elif prefix == "ob_sport":
         await handle_ob_sport(query, action)
     elif prefix == "ob_nav":
@@ -313,6 +381,16 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await handle_ob_team_skip(query, action)
     elif prefix == "picks":
         await handle_picks(query, action)
+    elif prefix == "bets":
+        await handle_bets(query, action)
+    elif prefix == "teams":
+        await handle_teams(query, action)
+    elif prefix == "stats":
+        await handle_stats_menu(query, action)
+    elif prefix == "affiliate":
+        await handle_affiliate(query, action)
+    elif prefix == "settings":
+        await handle_settings(query, action)
     elif prefix == "ob_done":
         await handle_ob_done(query)
     else:
@@ -327,12 +405,12 @@ async def handle_menu(query, action: str) -> None:
         text = textwrap.dedent(f"""\
             <b>🇿🇦 MzansiEdge — Main Menu</b>
 
-            Hey {user.first_name}, pick a sport or get an AI tip.
+            Hey {user.first_name}, what would you like to do?
         """)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=MAIN_MENU_KB)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
 
     elif action == "help":
-        await query.edit_message_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=back_button())
+        await query.edit_message_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
     elif action == "history":
         tips = await db.get_recent_tips(limit=5)
@@ -348,7 +426,7 @@ async def handle_menu(query, action: str) -> None:
                     + (f" @ {t.odds:.2f}" if t.odds else "")
                 )
             text = "\n".join(lines)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_button())
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
 # ── Sport / odds handlers ────────────────────────────────
@@ -370,7 +448,7 @@ async def handle_sport(query, action: str) -> None:
         if not sport or not sport.api_key:
             await query.edit_message_text(
                 f"⚠️ Odds not available for <b>{action}</b> right now.",
-                parse_mode=ParseMode.HTML, reply_markup=back_button(),
+                parse_mode=ParseMode.HTML, reply_markup=kb_nav(),
             )
             return
         try:
@@ -380,7 +458,7 @@ async def handle_sport(query, action: str) -> None:
             log.error("Odds fetch error for %s: %s", action, exc)
             text = f"⚠️ Could not fetch <b>{sport.label}</b> odds. Try again later."
 
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_button())
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
 # ── AI tip handler ────────────────────────────────────────
@@ -435,10 +513,28 @@ async def handle_ai(query, action: str) -> None:
     except Exception:
         pass
 
-    await query.edit_message_text(tip_text, parse_mode=ParseMode.HTML, reply_markup=back_button())
+    await query.edit_message_text(tip_text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
 # ── Onboarding handlers ──────────────────────────────────
+
+async def handle_ob_experience(query, level: str) -> None:
+    """Set experience level during onboarding, then proceed to sports."""
+    user_id = query.from_user.id
+    ob = _get_ob(user_id)
+    ob["experience"] = level
+    ob["step"] = "sports"
+
+    text = textwrap.dedent("""\
+        <b>Step 2/7: Select your sports</b>
+
+        Tap to toggle. Hit <b>Done</b> when ready.
+    """)
+    await query.edit_message_text(
+        text, parse_mode=ParseMode.HTML,
+        reply_markup=kb_onboarding_sports(),
+    )
+
 
 async def handle_ob_sport(query, sport_key: str) -> None:
     """Toggle a sport selection during onboarding."""
@@ -451,7 +547,7 @@ async def handle_ob_sport(query, sport_key: str) -> None:
         ob["selected_sports"].append(sport_key)
 
     text = textwrap.dedent("""\
-        <b>Step 1/6: Select your sports</b>
+        <b>Step 2/7: Select your sports</b>
 
         Tap to toggle. Hit <b>Done</b> when ready.
     """)
@@ -480,7 +576,7 @@ async def handle_ob_nav(query, action: str) -> None:
         sport_key = ob["selected_sports"][0]
         sport = config.ALL_SPORTS.get(sport_key)
         label = sport.label if sport else sport_key
-        text = f"<b>Step 2/6: Select leagues for {sport.emoji} {label}</b>\n\nTap to toggle."
+        text = f"<b>Step 3/7: Select leagues for {sport.emoji} {label}</b>\n\nTap to toggle."
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=kb_onboarding_leagues(sport_key),
@@ -488,7 +584,7 @@ async def handle_ob_nav(query, action: str) -> None:
 
     elif action == "back_sports":
         ob["step"] = "sports"
-        text = "<b>Step 1/6: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+        text = "<b>Step 2/7: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=kb_onboarding_sports(ob["selected_sports"]),
@@ -504,7 +600,7 @@ async def handle_ob_nav(query, action: str) -> None:
             next_key = ob["selected_sports"][idx]
             sport = config.ALL_SPORTS.get(next_key)
             label = sport.label if sport else next_key
-            text = f"<b>Step 2/6: Select leagues for {sport.emoji} {label}</b>\n\nTap to toggle."
+            text = f"<b>Step 3/7: Select leagues for {sport.emoji} {label}</b>\n\nTap to toggle."
             await query.edit_message_text(
                 text, parse_mode=ParseMode.HTML,
                 reply_markup=kb_onboarding_leagues(next_key),
@@ -518,7 +614,7 @@ async def handle_ob_nav(query, action: str) -> None:
     elif action == "teams_done":
         # Move to risk
         ob["step"] = "risk"
-        text = "<b>Step 4/6: Risk profile</b>\n\nHow aggressive should your tips be?"
+        text = "<b>Step 5/7: Risk profile</b>\n\nHow aggressive should your tips be?"
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=kb_onboarding_risk(),
@@ -537,7 +633,7 @@ async def _show_team_prompt(query, ob: dict) -> None:
     if idx >= len(sports):
         # All done, move to risk
         ob["step"] = "risk"
-        text = "<b>Step 4/6: Risk profile</b>\n\nHow aggressive should your tips be?"
+        text = "<b>Step 5/7: Risk profile</b>\n\nHow aggressive should your tips be?"
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=kb_onboarding_risk(),
@@ -550,7 +646,7 @@ async def _show_team_prompt(query, ob: dict) -> None:
     emoji = sport.emoji if sport else "🏅"
 
     text = textwrap.dedent(f"""\
-        <b>Step 3/6: Favourite team for {emoji} {label}</b>
+        <b>Step 4/7: Favourite team for {emoji} {label}</b>
 
         Type your favourite team name, or tap <b>Skip</b>.
     """)
@@ -589,7 +685,7 @@ async def handle_ob_league(query, action: str) -> None:
     sport = config.ALL_SPORTS.get(sport_key)
     label = sport.label if sport else sport_key
     emoji = sport.emoji if sport else "🏅"
-    text = f"<b>Step 2/6: Select leagues for {emoji} {label}</b>\n\nTap to toggle."
+    text = f"<b>Step 3/7: Select leagues for {emoji} {label}</b>\n\nTap to toggle."
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
         reply_markup=kb_onboarding_leagues(sport_key, leagues),
@@ -603,7 +699,7 @@ async def handle_ob_risk(query, risk_key: str) -> None:
     ob["risk"] = risk_key
     ob["step"] = "notify"
 
-    text = "<b>Step 5/6: Daily picks notification</b>\n\nWhen do you want your daily tips?"
+    text = "<b>Step 6/7: Daily picks notification</b>\n\nWhen do you want your daily tips?"
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
         reply_markup=kb_onboarding_notify(),
@@ -639,7 +735,7 @@ async def _show_summary(query, ob: dict) -> None:
     notify_str = f"{hour}:00" if hour is not None else "Not set"
 
     text = textwrap.dedent(f"""\
-        <b>Step 6/6: Your profile summary</b>
+        <b>Step 7/7: Your profile summary</b>
 
         <b>Sports:</b>
     """) + "\n".join(sports_lines) + textwrap.dedent(f"""
@@ -658,7 +754,7 @@ async def _show_summary(query, ob: dict) -> None:
 
 
 async def handle_ob_done(query) -> None:
-    """Persist onboarding data and show main menu."""
+    """Persist onboarding data and route by experience level."""
     user_id = query.from_user.id
     ob = _get_ob(user_id)
 
@@ -677,17 +773,51 @@ async def handle_ob_done(query) -> None:
         await db.update_user_risk(user_id, ob["risk"])
     if ob.get("notify_hour") is not None:
         await db.update_user_notification_hour(user_id, ob["notify_hour"])
+    if ob.get("experience"):
+        await db.update_user_experience(user_id, ob["experience"])
 
     await db.set_onboarding_done(user_id)
+    experience = ob.get("experience", "casual")
     _onboarding_state.pop(user_id, None)
 
     user = query.from_user
-    text = textwrap.dedent(f"""\
-        <b>🇿🇦 You're all set, {user.first_name}!</b>
 
-        Pick a sport below or tap <b>AI Tip</b> for a prediction.
-    """)
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=MAIN_MENU_KB)
+    if experience == "experienced":
+        # Go straight to picks
+        text = textwrap.dedent(f"""\
+            <b>🇿🇦 You're all set, {user.first_name}!</b>
+
+            Let's find today's value bets right away.
+        """)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
+        # Trigger picks flow
+        await _do_picks(user_id=user_id, reply=query.edit_message_text)
+    elif experience == "newbie":
+        # Mini-lesson for new users
+        text = textwrap.dedent(f"""\
+            <b>🇿🇦 Welcome aboard, {user.first_name}!</b>
+
+            <b>🎓 Quick Lesson: How Odds Work</b>
+
+            Decimal odds show your total payout per R1 bet.
+            • Odds of <b>2.00</b> = bet R10, get R20 back (R10 profit)
+            • Odds of <b>3.50</b> = bet R10, get R35 back (R25 profit)
+
+            <b>Higher odds = less likely but bigger payout.</b>
+
+            MzansiEdge finds bets where the odds are <i>better than they should be</i> — that's called <b>value</b>.
+
+            Tap <b>📊 Daily Briefing</b> when you're ready!
+        """)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
+    else:
+        # Casual — show main menu
+        text = textwrap.dedent(f"""\
+            <b>🇿🇦 You're all set, {user.first_name}!</b>
+
+            Pick a sport below or tap <b>📊 Daily Briefing</b> for today's picks.
+        """)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
 
 
 # ── Free-text handler ────────────────────────────────────
@@ -712,7 +842,7 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
                 label = sport.label if sport else next_key
                 emoji = sport.emoji if sport else "🏅"
                 text = textwrap.dedent(f"""\
-                    <b>Step 3/6: Favourite team for {emoji} {label}</b>
+                    <b>Step 4/7: Favourite team for {emoji} {label}</b>
 
                     Type your favourite team name, or tap <b>Skip</b>.
                 """)
@@ -723,7 +853,7 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             else:
                 # Move to risk
                 ob["step"] = "risk"
-                text = "<b>Step 4/6: Risk profile</b>\n\nHow aggressive should your tips be?"
+                text = "<b>Step 5/7: Risk profile</b>\n\nHow aggressive should your tips be?"
                 await update.message.reply_text(
                     text, parse_mode=ParseMode.HTML,
                     reply_markup=kb_onboarding_risk(),
@@ -746,7 +876,7 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         log.error("Claude chat error: %s", exc)
         reply = "⚠️ Couldn't process that. Try again or use the menu buttons."
 
-    await update.message.reply_text(reply, parse_mode=ParseMode.HTML, reply_markup=back_button())
+    await update.message.reply_text(reply, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
 # ── /picks — Today's value bets ───────────────────────────
@@ -765,8 +895,8 @@ async def cmd_picks(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_picks(query, action: str) -> None:
-    """Callback handler for picks:go button."""
-    if action == "go":
+    """Callback handler for picks:go and picks:today buttons."""
+    if action in ("go", "today"):
         await _do_picks(
             user_id=query.from_user.id,
             reply=query.edit_message_text,
@@ -785,6 +915,7 @@ async def _do_picks(user_id: int, reply) -> None:
     profile = config.RISK_PROFILES.get(risk_key, config.RISK_PROFILES["moderate"])
     min_ev = profile["min_ev"]
     kelly_frac = profile["kelly_fraction"]
+    experience = (user.experience_level if user else None) or "casual"
 
     # Get user's preferred sports (fall back to all with API keys)
     prefs = await db.get_user_sport_prefs(user_id)
@@ -816,32 +947,237 @@ async def _do_picks(user_id: int, reply) -> None:
 
     if not top_picks:
         risk_label = profile["label"]
-        text = (
-            "<b>🎯 Today's Picks</b>\n\n"
-            f"No value bets found above <b>{min_ev:.0f}% EV</b> "
-            f"for your {risk_label} profile right now.\n\n"
-            "Try again later or switch to a more aggressive profile."
-        )
-        await reply(text, parse_mode=ParseMode.HTML, reply_markup=back_button())
+        if experience == "newbie":
+            text = (
+                "<b>🎯 Today's Picks</b>\n\n"
+                "No value bets found right now.\n\n"
+                "This means bookmaker odds are fair — no easy edges today.\n"
+                "Check back later! We scan markets throughout the day."
+            )
+        else:
+            text = (
+                "<b>🎯 Today's Picks</b>\n\n"
+                f"No value bets found above <b>{min_ev:.0f}% EV</b> "
+                f"for your {risk_label} profile right now.\n\n"
+                "Try again later or switch to a more aggressive profile."
+            )
+        await reply(text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
         return
 
-    # Build response
-    lines = [
-        f"<b>🎯 Today's Picks</b> ({len(top_picks)} value bet{'s' if len(top_picks) != 1 else ''})\n"
-        f"Profile: {profile['label']} | Min EV: {min_ev:.0f}%\n",
-    ]
+    # Build header based on experience
+    if experience == "newbie":
+        header = (
+            f"<b>🎯 Today's Picks</b> ({len(top_picks)} bet{'s' if len(top_picks) != 1 else ''})\n"
+            f"We found bets where the odds are better than they should be!\n"
+        )
+    elif experience == "casual":
+        header = (
+            f"<b>🎯 Today's Picks</b> ({len(top_picks)} value bet{'s' if len(top_picks) != 1 else ''})\n"
+            f"Profile: {profile['label']}\n"
+        )
+    else:
+        header = (
+            f"<b>🎯 Today's Picks</b> ({len(top_picks)} value bet{'s' if len(top_picks) != 1 else ''})\n"
+            f"Profile: {profile['label']} | Min EV: {min_ev:.0f}%\n"
+        )
+
+    lines = [header]
     for pick in top_picks:
-        lines.append(format_pick_card(pick))
+        lines.append(format_pick_card(pick, experience=experience))
         lines.append("")  # spacer
 
     lines.append("<i>Always gamble responsibly. 🇿🇦</i>")
     text = "\n".join(lines)
 
-    # Truncate if too long for Telegram (4096 char limit)
+    # Chunked sending for long messages
     if len(text) > 4000:
-        text = text[:3990] + "\n…"
+        chunks = _chunk_message(text, 4000)
+        for i, chunk in enumerate(chunks):
+            if i == len(chunks) - 1:
+                await reply(chunk, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+            else:
+                await reply(chunk, parse_mode=ParseMode.HTML)
+    else:
+        await reply(text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
-    await reply(text, parse_mode=ParseMode.HTML, reply_markup=back_button())
+
+def _chunk_message(text: str, max_len: int = 4000) -> list[str]:
+    """Split a long message into chunks at line boundaries."""
+    lines = text.split("\n")
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1  # +1 for newline
+        if current_len + line_len > max_len and current:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_len = line_len
+        else:
+            current.append(line)
+            current_len += line_len
+
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+# ── Sub-menu handlers ────────────────────────────────────
+
+async def handle_bets(query, action: str) -> None:
+    """Handle bets:* callbacks."""
+    user_id = query.from_user.id
+    if action == "active":
+        text = (
+            "<b>💰 My Bets</b>\n\n"
+            "No active bets yet.\n\n"
+            "Tap <b>📊 Daily Briefing</b> to find today's value bets!"
+        )
+    elif action == "history":
+        tips = await db.get_recent_tips(limit=5)
+        if not tips:
+            text = "<b>📜 Bet History</b>\n\nNo bets recorded yet."
+        else:
+            lines = ["<b>📜 Recent Bets</b>\n"]
+            for t in tips:
+                icon = {"win": "✅", "loss": "❌"}.get(t.result, "⏳")
+                lines.append(
+                    f"{icon} <b>{t.match}</b>\n"
+                    f"   {t.prediction}"
+                    + (f" @ {t.odds:.2f}" if t.odds else "")
+                )
+            text = "\n".join(lines)
+    else:
+        text = "<b>💰 My Bets</b>"
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_bets())
+
+
+async def handle_teams(query, action: str) -> None:
+    """Handle teams:* callbacks."""
+    user_id = query.from_user.id
+    if action in ("view", "edit"):
+        prefs = await db.get_user_sport_prefs(user_id)
+        teams_with_names = [p for p in prefs if p.team_name]
+        if not teams_with_names:
+            text = (
+                "<b>🏟️ My Teams</b>\n\n"
+                "No favourite teams set yet.\n"
+                "Use /start to redo onboarding and pick your teams."
+            )
+        else:
+            lines = ["<b>🏟️ My Teams</b>\n"]
+            for p in teams_with_names:
+                sport = config.ALL_SPORTS.get(p.sport_key)
+                emoji = sport.emoji if sport else "🏅"
+                label = sport.label if sport else p.sport_key
+                lines.append(f"  {emoji} <b>{label}</b>: ❤️ {p.team_name}")
+            text = "\n".join(lines)
+    else:
+        text = "<b>🏟️ My Teams</b>"
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_teams())
+
+
+async def handle_stats_menu(query, action: str) -> None:
+    """Handle stats:* callbacks."""
+    user_id = query.from_user.id
+    if action == "overview":
+        tips = await db.get_recent_tips(limit=100)
+        total = len(tips)
+        wins = sum(1 for t in tips if t.result == "win")
+        losses = sum(1 for t in tips if t.result == "loss")
+        pending = sum(1 for t in tips if t.result is None or t.result == "pending")
+        win_rate = f"{wins / (wins + losses) * 100:.0f}%" if (wins + losses) > 0 else "N/A"
+        text = textwrap.dedent(f"""\
+            <b>📈 Stats Overview</b>
+
+            📝 Total tips: <b>{total}</b>
+            ✅ Wins: <b>{wins}</b> | ❌ Losses: <b>{losses}</b>
+            ⏳ Pending: <b>{pending}</b>
+            🎯 Win rate: <b>{win_rate}</b>
+        """)
+    elif action == "leaderboard":
+        text = (
+            "<b>🏆 Leaderboard</b>\n\n"
+            "Coming soon! Track your performance against other users."
+        )
+    else:
+        text = "<b>📈 Stats</b>"
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_stats())
+
+
+async def handle_affiliate(query, action: str) -> None:
+    """Handle affiliate:* callbacks (bookmaker comparison)."""
+    if action == "compare" or action == "sa":
+        text = textwrap.dedent("""\
+            <b>🎰 SA Bookmakers</b>
+
+            🇿🇦 <b>Hollywoodbets</b> — Best for soccer & horse racing
+            🇿🇦 <b>Betway</b> — Great odds, fast payouts
+            🇿🇦 <b>Supabets</b> — Wide range of markets
+            🇿🇦 <b>Sportingbet</b> — Reliable, good promos
+            🇿🇦 <b>Sunbet</b> — Sun International backed
+            🇿🇦 <b>GBets</b> — Growing fast, good value
+
+            <i>Always gamble responsibly. 18+ only.</i>
+        """)
+    elif action == "intl":
+        text = textwrap.dedent("""\
+            <b>🌍 International Bookmakers</b>
+
+            🌐 <b>Bet365</b> — Widest market coverage
+            🌐 <b>1xBet</b> — High odds across sports
+            🌐 <b>Pinnacle</b> — Best odds, low margins
+
+            <i>Check local regulations. Gamble responsibly.</i>
+        """)
+    else:
+        text = "<b>🎰 Bookmakers</b>"
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_bookmakers())
+
+
+async def handle_settings(query, action: str) -> None:
+    """Handle settings:* callbacks."""
+    user_id = query.from_user.id
+    user = await db.get_user(user_id)
+
+    if action == "home":
+        risk_label = config.RISK_PROFILES.get(
+            user.risk_profile if user else "moderate", {}
+        ).get("label", "Not set")
+        hour = user.notification_hour if user else None
+        notify_str = f"{hour}:00" if hour is not None else "Not set"
+        exp = (user.experience_level if user else None) or "Not set"
+
+        text = textwrap.dedent(f"""\
+            <b>⚙️ Settings</b>
+
+            🎯 Risk profile: <b>{risk_label}</b>
+            ⏰ Daily picks: <b>{notify_str}</b>
+            🎓 Experience: <b>{exp.title()}</b>
+        """)
+    elif action == "risk":
+        text = "<b>🎯 Change Risk Profile</b>\n\nSelect your risk tolerance:"
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=kb_onboarding_risk(),
+        )
+        return
+    elif action == "notify":
+        text = "<b>⏰ Change Notification Time</b>\n\nWhen do you want daily picks?"
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=kb_onboarding_notify(),
+        )
+        return
+    elif action == "sports":
+        text = (
+            "<b>⚽ Change Sports</b>\n\n"
+            "Use /start to redo onboarding and update your sports."
+        )
+    else:
+        text = "<b>⚙️ Settings</b>"
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
 
 
 # ── /admin — admin dashboard with API quota ───────────────

@@ -33,6 +33,8 @@ class User(Base):
     risk_profile: Mapped[str | None] = mapped_column(String(32))
     notification_hour: Mapped[int | None] = mapped_column(Integer)
     onboarding_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    experience_level: Mapped[str | None] = mapped_column(String(32))  # experienced/casual/newbie
+    education_stage: Mapped[int] = mapped_column(Integer, default=0)  # newbie lesson progress
 
 
 class UserSportPref(Base):
@@ -111,6 +113,14 @@ async def update_user_notification_hour(user_id: int, hour: int) -> None:
         user = await s.get(User, user_id)
         if user:
             user.notification_hour = hour
+            await s.commit()
+
+
+async def update_user_experience(user_id: int, experience_level: str) -> None:
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.experience_level = experience_level
             await s.commit()
 
 
