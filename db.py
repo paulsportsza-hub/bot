@@ -42,6 +42,9 @@ class User(Base):
     source: Mapped[str | None] = mapped_column(String(100))  # organic, fb_ad_123, etc.
     fb_click_id: Mapped[str | None] = mapped_column(String(255))
     fb_ad_id: Mapped[str | None] = mapped_column(String(255))
+    # WhatsApp readiness
+    whatsapp_phone: Mapped[str | None] = mapped_column(String(32))  # e.g. "+27821234567"
+    preferred_platform: Mapped[str | None] = mapped_column(String(16))  # "telegram" | "whatsapp"
 
 
 class UserSportPref(Base):
@@ -127,6 +130,8 @@ async def _migrate_columns() -> None:
                 ("source", "NULL"),
                 ("fb_click_id", "NULL"),
                 ("fb_ad_id", "NULL"),
+                ("whatsapp_phone", "NULL"),
+                ("preferred_platform", "'telegram'"),
             ]:
                 try:
                     await conn.execute(
@@ -285,6 +290,8 @@ async def reset_user_profile(user_id: int) -> None:
             user.archetype = None
             user.engagement_score = 5.0
             user.bankroll = None
+            user.whatsapp_phone = None
+            user.preferred_platform = None
             await s.commit()
     await clear_user_sport_prefs(user_id)
 
@@ -294,6 +301,18 @@ async def update_user_bankroll(user_id: int, bankroll: float | None) -> None:
         user = await s.get(User, user_id)
         if user:
             user.bankroll = bankroll
+            await s.commit()
+
+
+async def update_user_whatsapp(
+    user_id: int, phone: str | None, platform: str = "whatsapp",
+) -> None:
+    """Set WhatsApp phone number and preferred platform."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.whatsapp_phone = phone
+            user.preferred_platform = platform
             await s.commit()
 
 

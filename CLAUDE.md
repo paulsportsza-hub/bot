@@ -6,9 +6,20 @@ AI-powered sports betting Telegram bot for South Africa. Uses python-telegram-bo
 ## Architecture
 
 ```
-bot.py              ← Main bot: handlers, onboarding, picks, callback routing
-config.py           ← Environment config, sport/league definitions, TOP_TEAMS, aliases, risk profiles, SPORT_DISPLAY, SA_PRIORITY_GROUPS, LEAGUE_EXAMPLES, TEAM_ABBREVIATIONS
-db.py               ← Async SQLAlchemy models & helpers (incl. archetype, engagement_score, notification_prefs, bankroll, GameSubscription)
+bot.py              ← Main bot: handlers, onboarding, picks, callback routing (Telegram-specific)
+config.py           ← Environment config, sport/league definitions, TOP_TEAMS, aliases, risk profiles, SA_BOOKMAKERS (dict-of-dicts), LEAGUE_EXAMPLES, TEAM_ABBREVIATIONS
+db.py               ← Async SQLAlchemy models & helpers (User, GameSubscription, WhatsApp columns)
+services/
+  __init__.py       ← Service layer init
+  user_service.py   ← Platform-agnostic user logic: archetype classification, profile data, onboarding persistence
+  schedule_service.py ← Platform-agnostic schedule: event fetching, date grouping, game tips data
+  picks_service.py  ← Platform-agnostic picks: orchestrates picks pipeline, returns structured data
+  templates.py      ← Message template registry: all user-facing strings with telegram/whatsapp variants
+renderers/
+  __init__.py       ← Renderers init
+  telegram_renderer.py  ← Telegram HTML rendering: profile, schedule, picks, tips
+  whatsapp_renderer.py  ← WhatsApp plain text rendering (placeholder for future integration)
+  whatsapp_menus.py     ← WhatsApp 3-button menu definitions + Telegram keyboard audit
 scripts/
   odds_client.py    ← The Odds API client, EV calculation, value bet scanning, odds caching, find_best_sa_odds()
   picks_engine.py   ← Picks pipeline: fetch → EV calc (SA-only odds) → filter → rank → format pick cards
@@ -28,7 +39,7 @@ scripts/
   test_odds_client.py ← best_odds, format_odds (mocked HTTP)
   test_bot_handlers.py ← /start, /menu, /help handler tests
   test_onboarding.py   ← Full onboarding quiz state machine, fuzzy matching, edit flow
-  test_picks.py        ← EV calc, Kelly stake, value bet scanning, pick cards, /admin, SA bookmaker flag
+  test_picks.py        ← EV calc, Kelly stake, value bet scanning, pick cards, /admin
   test_day1.py         ← Experience onboarding, persistent menu, adapted pick cards, profile reset
 ```
 
@@ -160,7 +171,7 @@ All inline keyboard callbacks use `prefix:action` format:
 11. Computes Kelly criterion stake, capped at `max_stake_pct` of user's bankroll (default R1000, min R10)
 12. Ranks by EV descending, returns top `max_picks` as structured dicts
 13. Bot formats each pick via `picks_engine.format_pick_card(pick, index, experience)` and sends as individual messages
-14. Pick cards show: match, outcome, best SA odds@bookmaker (🇿🇦), EV%, confidence, stake→return
+14. Pick cards show: match, outcome, best SA odds@bookmaker (.co.za name), EV%, confidence, stake→return
 
 ### Risk Profile Thresholds
 | Profile      | min_ev | Kelly fraction | Max stake % |
@@ -169,19 +180,25 @@ All inline keyboard callbacks use `prefix:action` format:
 | Moderate     | 3%     | 0.50           | 5%          |
 | Aggressive   | 1%     | 1.00           | 10%         |
 
-### SA Bookmaker Whitelist (5 books, displayed to users with 🇿🇦)
-`config.SA_BOOKMAKERS` is a `dict[str, str]` mapping API key → display name:
-- `betway` → Betway
-- `sportingbet` → SportingBet
-- `10bet` → 10Bet
-- `playabets` → PlayaBets
-- `supabets` → SupaBets
+### SA Bookmaker Whitelist (5 books, .co.za display names)
+`config.SA_BOOKMAKERS` is a `dict[str, dict]` mapping API key → bookmaker config:
+```python
+SA_BOOKMAKERS = {
+    "betway": {"display_name": "Betway.co.za", "short_name": "Betway", "guide_url": "", "affiliate_base_url": ""},
+    "sportingbet": {"display_name": "SportingBet.co.za", ...},
+    "10bet": {"display_name": "10Bet.co.za", ...},
+    "playabets": {"display_name": "PlayaBets.co.za", ...},
+    "supabets": {"display_name": "SupaBets.co.za", ...},
+}
+```
+- `config.sa_display_name(bk_key)` → returns `.co.za` display name for a bookmaker key
+- No 🇿🇦 flags on individual bookmaker names (flag only used in branding/welcome messages)
 
 Sharp bookmakers (Pinnacle, Betfair, etc.) are kept for internal probability estimation only — never shown to users.
 
 ### SA Odds Functions
 - `odds_client.find_best_sa_odds(event, market)` → list of `OddsEntry` filtered to SA bookmakers only
-- `picks_engine._best_sa_for_outcome(bookmakers, outcome, market)` → `(best_odds, bookmaker_key, bookmaker_display_name)` for SA books
+- `picks_engine._best_sa_for_outcome(bookmakers, outcome, market)` → best odds from SA-whitelisted bookmakers for user-facing display
 
 ## Admin Commands
 - `/admin` — Dashboard showing Odds API quota (requests used/remaining), total users, onboarded users
@@ -205,7 +222,7 @@ Sharp bookmakers (Pinnacle, Betfair, etc.) are kept for internal probability est
 All experience levels get the same welcome message with a CTA to "Set Up My Story" (notification preferences quiz) or "Skip for Now". The story quiz walks through 6 notification types (daily_picks, game_day_alerts, weekly_recap, edu_tips, market_movers, live_scores) with Yes/No for each, saved as JSON in `User.notification_prefs`.
 
 ### Archetype classification (on onboarding completion)
-`bot.classify_archetype(experience, risk, num_sports)` → `(archetype, engagement_score)`:
+`services.user_service.classify_archetype(experience, risk, num_sports)` → `(archetype, engagement_score)`:
 - **complete_newbie**: experience="newbie" → score 3.0
 - **eager_bettor**: experienced + aggressive/moderate → score 8-10
 - **casual_fan**: everyone else → score 5-7
@@ -223,7 +240,7 @@ State tracked in `bot._onboarding_state[user_id]` dict with `_team_input_sport`,
 Settings → "🔄 Reset Profile" → warning screen → "Yes, reset everything" → clears all prefs, risk, experience, bankroll, onboarding_done in DB → redirects to onboarding. Betting history/stats NOT deleted.
 
 ## DB Models
-- `User` — id, username, first_name, risk_profile, notification_hour, onboarding_done, experience_level, education_stage, archetype, engagement_score, notification_prefs (JSON), bankroll (float), source, fb_click_id, fb_ad_id
+- `User` — id, username, first_name, risk_profile, notification_hour, onboarding_done, experience_level, education_stage, archetype, engagement_score, notification_prefs (JSON), bankroll (float), source, fb_click_id, fb_ad_id, whatsapp_phone (str), preferred_platform (str: "telegram"|"whatsapp")
 - `UserSportPref` — user_id, sport_key, league, team_name
 - `Tip` — sport, match, prediction, odds, result
 - `Bet` — user_id, tip_id, stake
@@ -235,6 +252,7 @@ Settings → "🔄 Reset Profile" → warning screen → "Yes, reset everything"
 - `clear_user_league_teams(user_id, sport_key, league_key)` — Delete team prefs for a specific league while keeping the league pref itself
 - `update_user_archetype(user_id, archetype, engagement_score)` — Set archetype classification
 - `update_user_bankroll(user_id, bankroll)` — Set weekly bankroll in ZAR
+- `update_user_whatsapp(user_id, phone, platform)` — Set WhatsApp phone and preferred platform
 - `get_onboarded_count()` — Count of users who completed onboarding
 - `get_notification_prefs(user)` — Parse JSON notification prefs with defaults (daily_picks, game_day_alerts, weekly_recap, edu_tips, market_movers, bankroll_updates, live_scores)
 - `update_notification_prefs(user_id, prefs)` — Save notification preferences as JSON
@@ -291,11 +309,11 @@ Every sub-screen has "↩️ Back" + "🏠 Main Menu" via `kb_nav()`.
 `/schedule` command or "📅 Schedule" button shows upcoming games for user's followed teams.
 - `cmd_schedule()` — Entry point for /schedule command
 - `_build_schedule()` — Shared logic for command + callback. Fetches events per league via `fetch_events_for_league()`, converts to SAST (Africa/Johannesburg), groups by date ("Today" / "Tomorrow" / "Wednesday, 26 Feb"), numbers events with sport emojis and kick-off times. Bolds user's followed teams. Abbreviated team buttons using `config.abbreviate_team()`. Limits to top 5 buttons for Telegram constraints. Returns (text, markup).
-- `_generate_game_tips()` — AI game breakdown per event using Claude Haiku. Builds structured odds context, calls Claude for ~200-word narrative (team form, betting angle, risk assessment). Uses `find_best_sa_odds()` for SA-only odds display. Shows tip buttons with EV% and 🇿🇦 flag. Caches tips in `_game_tips_cache`. Triggered by "Get Tips" button (`schedule:tips:{event_id}`).
+- `_generate_game_tips()` — AI game breakdown per event using Claude Haiku. Builds structured odds context, calls Claude for ~200-word narrative (team form, betting angle, risk assessment). Uses `find_best_sa_odds()` for SA-only odds display. Shows tip buttons with EV%. Caches tips in `_game_tips_cache`. Triggered by "Get Tips" button (`schedule:tips:{event_id}`).
 - Shows "No upcoming games found" if no matches for followed teams.
 
 ## AI Game Breakdown
-When a user taps a game in the schedule, `_generate_game_tips()` calls Claude Haiku (`claude-3-5-haiku-20241022`) with a `GAME_ANALYSIS_PROMPT` system prompt and structured odds context. The response is a ~200-word narrative covering team form, betting angles, and risk assessment. Below the narrative, tip buttons are displayed: `💰 {outcome} @ {odds:.2f} (EV: +{ev}%) 🇿🇦`.
+When a user taps a game in the schedule, `_generate_game_tips()` calls Claude Haiku (`claude-haiku-4-5-20251001`) with a `GAME_ANALYSIS_PROMPT` system prompt and structured odds context. The response is a ~200-word narrative covering team form, betting angles, and risk assessment. Below the narrative, tip buttons are displayed: `💰 {outcome} @ {odds:.2f} (EV: +{ev}%)`.
 
 Tips are cached in `_game_tips_cache[event_id]` for use by the tip detail page.
 
@@ -392,8 +410,78 @@ Settings → "📖 My Notifications" shows toggle buttons for each notification 
 
 Legacy `format_pick_card(pick)` in `scripts/odds_client.py` still used for ValueBet objects in test suite.
 
+## Service Layer (`services/`)
+Platform-agnostic business logic extracted from bot.py. Services return plain data (dicts) that renderers format for specific platforms.
+
+### user_service.py
+| Function | Purpose |
+|----------|---------|
+| `classify_archetype(experience, risk, num_sports)` | Classify user into archetype with engagement score |
+| `get_profile_data(user_id)` | Fetch structured profile data (experience, sports, risk, bankroll, notify) |
+| `persist_onboarding(user_id, ob)` | Save all onboarding data to DB and classify archetype |
+| `get_user_league_keys(user_id)` | Get user's preferred league keys (fallback: all leagues) |
+| `get_user_teams(user_id)` | Get user's followed team names (lowercased set) |
+
+### schedule_service.py
+| Function | Purpose |
+|----------|---------|
+| `get_schedule(user_id, max_events)` | Build schedule data: events grouped by date with SAST times |
+| `get_game_tips_data(event_id, user_id)` | Fetch odds and calculate EV for a specific game |
+
+### picks_service.py
+| Function | Purpose |
+|----------|---------|
+| `get_picks(user_id, max_picks)` | Full picks pipeline: loads profile → fetches odds → returns structured picks |
+
+### templates.py
+Message template registry with `telegram` and `whatsapp` variants for all user-facing strings.
+
+```python
+from services.templates import render
+msg = render("welcome_new_user", name="Paul")  # Telegram HTML
+msg = render("picks_header", platform="whatsapp", count=3, s="s", ...)
+```
+
+~40 templates covering: welcome, menus, picks, schedule, onboarding, settings, errors, subscriptions.
+
+## Renderers (`renderers/`)
+Platform-specific rendering of service layer data.
+
+### telegram_renderer.py
+Formats data as Telegram HTML with `<b>`, `<i>`, `<code>` tags:
+- `render_profile_summary(data)` → HTML profile card
+- `render_schedule(data)` → HTML schedule with date groups
+- `render_picks_header(data)` / `render_no_picks(data)` → HTML picks messages
+- `render_game_tips(data, narrative)` → HTML game analysis with odds
+- `render_tip_detail(tip, experience, bankroll)` → Experience-adapted tip detail
+
+### whatsapp_renderer.py (placeholder)
+Formats data as WhatsApp-safe plain text with `*bold*`, `_italic_`:
+- Same function signatures as telegram_renderer
+- Strips HTML tags, uses WhatsApp formatting
+- `menu_buttons()` / `picks_buttons()` → WhatsApp interactive button format (max 3 per message)
+
+### whatsapp_menus.py
+Documents WhatsApp 3-button menu adaptations:
+- `TELEGRAM_KEYBOARD_AUDIT` — maps each keyboard function to button count + adaptation needed
+- Defines cascading menu structures for WhatsApp (e.g. main menu → more... sub-menus)
+- Paginated sport selection (3 per screen)
+
+## WhatsApp Readiness
+DB supports multi-platform users:
+- `User.whatsapp_phone` — Phone number (e.g. "+27821234567")
+- `User.preferred_platform` — "telegram" or "whatsapp"
+- `db.update_user_whatsapp(user_id, phone, platform)` — Set WhatsApp config
+- Profile reset clears WhatsApp fields
+
+The architecture separates concerns:
+1. **Services** return plain data (no platform deps)
+2. **Renderers** format data for specific platforms
+3. **Templates** provide platform-specific message strings
+4. **bot.py** handles only Telegram-specific dispatch (PTB handlers, InlineKeyboardMarkup)
+
 ## Conventions
-- HTML parse_mode throughout all messages
+- HTML parse_mode throughout all Telegram messages
 - PTB v20+ async handlers
 - Inline keyboards only (no reply keyboards)
 - Max 2 buttons per row for mobile
@@ -401,6 +489,8 @@ Legacy `format_pick_card(pick)` in `scripts/odds_client.py` still used for Value
 - Loading messages use randomised verb templates
 - Sport-appropriate language via `fav_type` field
 - ↩️ back arrow (not 🔙) across all buttons
+- .co.za domain names for SA bookmaker display (no 🇿🇦 flags on bookmaker names)
+- Onboarding back buttons on every step except the first (experience)
 
 ## Verification
 ```bash

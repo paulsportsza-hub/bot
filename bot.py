@@ -29,6 +29,13 @@ from scripts.picks_engine import (
     get_picks_for_user,
     format_pick_card as format_engine_pick_card,
 )
+from services.user_service import (
+    classify_archetype,
+    get_profile_data,
+    persist_onboarding,
+)
+from services.picks_service import get_picks as svc_get_picks
+from services.schedule_service import get_schedule, get_game_tips_data
 
 logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
@@ -1447,77 +1454,35 @@ async def _show_summary(query, ob: dict) -> None:
 async def format_profile_summary(user_id: int) -> str:
     """Build a clean, well-spaced profile summary string.
 
+    Uses the service layer for data, renders as Telegram HTML.
     Used in: /settings home, My Teams view, after edits.
     """
-    from collections import defaultdict
-
-    user = await db.get_user(user_id)
-    prefs = await db.get_user_sport_prefs(user_id)
+    data = await get_profile_data(user_id)
 
     lines = ["📋 <b>Your MzansiEdge Profile</b>\n"]
+    lines.append(f"🎯 Experience: {data['experience_label']}\n")
 
-    # Experience
-    exp_labels = {
-        "experienced": "I bet regularly",
-        "casual": "I bet sometimes",
-        "newbie": "I'm new to betting",
-    }
-    exp = (user.experience_level if user else None) or "casual"
-    lines.append(f"🎯 Experience: {exp_labels.get(exp, exp)}\n")
-
-    # Group prefs by sport → league → teams
-    sport_leagues: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
-    sport_order: list[str] = []
-    for pref in prefs:
-        sk = pref.sport_key
-        if sk not in sport_order:
-            sport_order.append(sk)
-        lg_label = ""
-        if pref.league:
-            lg = config.ALL_LEAGUES.get(pref.league)
-            lg_label = _abbreviate_league(lg.label) if lg else pref.league
-        if pref.team_name:
-            sport_leagues[sk][lg_label].append(pref.team_name)
-        elif lg_label:
-            sport_leagues[sk].setdefault(lg_label, [])
-
-    for sk in sport_order:
-        sport = config.ALL_SPORTS.get(sk)
-        emoji = sport.emoji if sport else "🏅"
-        sport_label = sport.label if sport else sk
-        league_dict = sport_leagues.get(sk, {})
-
-        lines.append(f"{emoji} <b>{sport_label}</b>")
-        if len(league_dict) <= 1:
+    for sport in data["sports"]:
+        lines.append(f"{sport['emoji']} <b>{sport['label']}</b>")
+        if len(sport["leagues"]) <= 1:
             all_t: list[str] = []
-            for teams in league_dict.values():
-                all_t.extend(teams)
+            for lg in sport["leagues"]:
+                all_t.extend(lg["teams"])
             if all_t:
                 lines.append(f"  {', '.join(all_t)}")
         else:
-            for lg_name, teams in league_dict.items():
-                if lg_name and teams:
-                    lines.append(f"  {lg_name}: {', '.join(teams)}")
-                elif lg_name:
-                    lines.append(f"  {lg_name}")
-                elif teams:
-                    lines.append(f"  {', '.join(teams)}")
-        lines.append("")  # blank line between sports
+            for lg in sport["leagues"]:
+                if lg["label"] and lg["teams"]:
+                    lines.append(f"  {lg['label']}: {', '.join(lg['teams'])}")
+                elif lg["label"]:
+                    lines.append(f"  {lg['label']}")
+                elif lg["teams"]:
+                    lines.append(f"  {', '.join(lg['teams'])}")
+        lines.append("")
 
-    # Settings section — bold sub-headings, blank line separator
-    risk = (user.risk_profile if user else None) or "moderate"
-    risk_raw = config.RISK_PROFILES.get(risk, {}).get("label", risk)
-    # Strip emoji from risk label — e.g. "⚖️ Moderate" → "Moderate"
-    risk_label = risk_raw.split(" ", 1)[-1] if " " in risk_raw else risk_raw
-    hour = user.notification_hour if user else None
-    notify_map = {7: "Morning (7 AM)", 12: "Midday (12 PM)", 18: "Evening (6 PM)", 21: "Night (9 PM)"}
-    notify_str = notify_map.get(hour, f"{hour}:00") if hour is not None else "Not set"
-    bankroll = getattr(user, "bankroll", None) if user else None
-    bankroll_str = f"R{bankroll:,.0f}" if bankroll else "Not set"
-
-    lines.append(f"⚖️ <b>Risk:</b> {risk_label}")
-    lines.append(f"💰 <b>Bankroll:</b> {bankroll_str}")
-    lines.append(f"🔔 <b>Daily picks:</b> {notify_str}")
+    lines.append(f"⚖️ <b>Risk:</b> {data['risk_label']}")
+    lines.append(f"💰 <b>Bankroll:</b> {data['bankroll_str']}")
+    lines.append(f"🔔 <b>Daily picks:</b> {data['notify_str']}")
 
     return "\n".join(lines)
 
@@ -1609,84 +1574,13 @@ async def handle_ob_summary(query, action: str) -> None:
     await _show_summary(query, ob)
 
 
-def classify_archetype(
-    experience: str, risk: str, num_sports: int,
-) -> tuple[str, float]:
-    """Classify user into an archetype with engagement score.
-
-    Returns (archetype, engagement_score) where:
-    - eager_bettor: experienced + aggressive/moderate, many sports
-    - casual_fan: casual experience or conservative risk
-    - complete_newbie: newbie experience level
-    """
-    if experience == "newbie":
-        return "complete_newbie", 3.0
-    score = 5.0
-    if experience == "experienced":
-        score += 2.0
-    if risk == "aggressive":
-        score += 2.0
-    elif risk == "moderate":
-        score += 1.0
-    if num_sports >= 3:
-        score += 1.0
-    if experience == "experienced" and risk in ("aggressive", "moderate"):
-        return "eager_bettor", min(score, 10.0)
-    return "casual_fan", min(score, 10.0)
-
-
 async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Persist onboarding data and route by experience level."""
     user_id = query.from_user.id
     ob = _get_ob(user_id)
 
-    # Save to DB
-    await db.clear_user_sport_prefs(user_id)
-    for sk in ob["selected_sports"]:
-        leagues = ob["selected_leagues"].get(sk, [])
-        favs_dict = ob["favourites"].get(sk, {})
-
-        # Handle both old (list) and new (dict) favourites formats
-        if isinstance(favs_dict, list):
-            favs_dict = {"": favs_dict}
-
-        if leagues:
-            for lg_key in leagues:
-                teams = favs_dict.get(lg_key, [])
-                if teams:
-                    for team in teams:
-                        await db.save_sport_pref(user_id, sk, league=lg_key, team_name=team)
-                else:
-                    await db.save_sport_pref(user_id, sk, league=lg_key)
-        else:
-            # Collect all teams from any key
-            all_teams: list[str] = []
-            for teams in favs_dict.values():
-                all_teams.extend(teams)
-            if all_teams:
-                for team in all_teams:
-                    await db.save_sport_pref(user_id, sk, team_name=team)
-            else:
-                await db.save_sport_pref(user_id, sk)
-
-    if ob["risk"]:
-        await db.update_user_risk(user_id, ob["risk"])
-    if ob.get("bankroll") is not None:
-        await db.update_user_bankroll(user_id, ob["bankroll"])
-    if ob.get("notify_hour") is not None:
-        await db.update_user_notification_hour(user_id, ob["notify_hour"])
-    if ob.get("experience"):
-        await db.update_user_experience(user_id, ob["experience"])
-
-    # Classify user archetype
-    archetype, eng_score = classify_archetype(
-        ob.get("experience", "casual"),
-        ob.get("risk", "moderate"),
-        len(ob.get("selected_sports", [])),
-    )
-    await db.update_user_archetype(user_id, archetype, eng_score)
-
-    await db.set_onboarding_done(user_id)
+    # Delegate persistence to service layer
+    await persist_onboarding(user_id, ob)
     experience = ob.get("experience", "casual")
     _onboarding_state.pop(user_id, None)
 
