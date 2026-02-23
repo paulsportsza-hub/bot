@@ -42,13 +42,46 @@ RISK_PROFILES: dict[str, dict] = {
 }
 
 # ── SA Bookmakers (whitelisted for user-facing odds) ──────
-SA_BOOKMAKERS: dict[str, str] = {
-    "betway": "Betway",
-    "sportingbet": "SportingBet",
-    "10bet": "10Bet",
-    "playabets": "PlayaBets",
-    "supabets": "SupaBets",
+SA_BOOKMAKERS: dict[str, dict] = {
+    "betway": {
+        "display_name": "Betway.co.za",
+        "short_name": "Betway",
+        "guide_url": "",
+        "affiliate_base_url": "",
+    },
+    "sportingbet": {
+        "display_name": "SportingBet.co.za",
+        "short_name": "SportingBet",
+        "guide_url": "",
+        "affiliate_base_url": "",
+    },
+    "10bet": {
+        "display_name": "10Bet.co.za",
+        "short_name": "10Bet",
+        "guide_url": "",
+        "affiliate_base_url": "",
+    },
+    "playabets": {
+        "display_name": "PlayaBets.co.za",
+        "short_name": "PlayaBets",
+        "guide_url": "",
+        "affiliate_base_url": "",
+    },
+    "supabets": {
+        "display_name": "SupaBets.co.za",
+        "short_name": "SupaBets",
+        "guide_url": "",
+        "affiliate_base_url": "",
+    },
 }
+
+
+def sa_display_name(bk_key: str) -> str:
+    """Get the .co.za display name for an SA bookmaker key."""
+    bk = SA_BOOKMAKERS.get(bk_key)
+    if bk:
+        return bk["display_name"]
+    return bk_key
 
 
 # ── Sport & League definitions ────────────────────────────

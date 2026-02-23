@@ -219,7 +219,7 @@ def find_best_sa_odds(event: dict, market: str = "h2h") -> list[OddsEntry]:
         bk_key = bk.get("key", "").lower()
         if bk_key not in config.SA_BOOKMAKERS:
             continue
-        bk_title = config.SA_BOOKMAKERS.get(bk_key, bk.get("title", bk_key))
+        bk_title = config.sa_display_name(bk_key)
         for mkt in bk.get("markets", []):
             if mkt["key"] != market:
                 continue
@@ -381,7 +381,7 @@ def _format_pick_experienced(pick: ValueBet) -> str:
 
     bk_display = pick.bookmaker
     if pick.is_sa_book:
-        bk_display = f"🇿🇦 {pick.bookmaker}"
+        bk_display = pick.bookmaker
 
     return (
         f"{emoji} <b>{pick.home}</b> vs <b>{pick.away}</b>\n"
@@ -399,7 +399,7 @@ def _format_pick_casual(pick: ValueBet) -> str:
 
     bk_display = pick.bookmaker
     if pick.is_sa_book:
-        bk_display = f"🇿🇦 {pick.bookmaker}"
+        bk_display = pick.bookmaker
 
     # Calculate payout for R100 bet
     payout = pick.best_price * 100
@@ -429,7 +429,7 @@ def _format_pick_newbie(pick: ValueBet) -> str:
 
     bk_display = pick.bookmaker
     if pick.is_sa_book:
-        bk_display = f"🇿🇦 {pick.bookmaker}"
+        bk_display = pick.bookmaker
 
     # Payout examples
     payout_20 = pick.best_price * 20

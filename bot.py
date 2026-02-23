@@ -365,6 +365,7 @@ def kb_onboarding_sports(selected: list[str] | None = None) -> InlineKeyboardMar
 
     if selected:
         rows.append([InlineKeyboardButton("✅ Done — Next step »", callback_data="ob_nav:sports_done")])
+    rows.append([InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_experience")])
 
     return InlineKeyboardMarkup(rows)
 
@@ -423,6 +424,7 @@ def kb_onboarding_risk() -> InlineKeyboardMarkup:
     rows = []
     for key, prof in config.RISK_PROFILES.items():
         rows.append([InlineKeyboardButton(prof["label"], callback_data=f"ob_risk:{key}")])
+    rows.append([InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_risk")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -436,6 +438,7 @@ def kb_onboarding_notify() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🌆 6 PM", callback_data="ob_notify:18"),
             InlineKeyboardButton("🌙 9 PM", callback_data="ob_notify:21"),
         ],
+        [InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_notify")],
     ])
 
 
@@ -451,6 +454,7 @@ def kb_onboarding_bankroll() -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton("🤷 Not sure — skip", callback_data="ob_bankroll:skip")],
         [InlineKeyboardButton("✏️ Custom amount", callback_data="ob_bankroll:custom")],
+        [InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_bankroll")],
     ])
 
 
@@ -672,7 +676,12 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             event_id = action.split(":", 1)[1]
             await _generate_game_tips(query, ctx, event_id, query.from_user.id)
     elif prefix == "tip":
-        await handle_tip_detail(query, ctx, action)
+        if action == "affiliate_soon":
+            await query.answer("🔗 Affiliate link coming soon! Check back tomorrow.", show_alert=True)
+        elif action == "guide_soon":
+            await query.answer("📖 Betting guide coming soon! Check back tomorrow.", show_alert=True)
+        else:
+            await handle_tip_detail(query, ctx, action)
     elif prefix == "subscribe":
         await handle_subscribe(query, action)
     elif prefix == "unsubscribe":
@@ -903,12 +912,57 @@ async def handle_ob_nav(query, action: str) -> None:
         ob["_league_idx"] = 0
         await _show_league_step(query, ob)
 
+    elif action == "back_experience":
+        ob["step"] = "experience"
+        text = "<b>Step 1/8:</b> What's your betting experience?"
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=kb_onboarding_experience(),
+        )
+
     elif action == "back_sports":
         ob["step"] = "sports"
         text = "<b>Step 2/8: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=kb_onboarding_sports(ob["selected_sports"]),
+        )
+
+    elif action == "back_risk":
+        # Back from risk → favourites (re-show last team prompt)
+        ob["step"] = "favourites"
+        queue = ob.get("_fav_league_queue", [])
+        if queue:
+            ob["_fav_idx"] = max(0, len(queue) - 1)
+            await _show_next_team_prompt(query, ob)
+        else:
+            # No favourites queue — back to sports
+            ob["step"] = "sports"
+            text = "<b>Step 2/8: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+            await query.edit_message_text(
+                text, parse_mode=ParseMode.HTML,
+                reply_markup=kb_onboarding_sports(ob["selected_sports"]),
+            )
+
+    elif action == "back_bankroll":
+        # Back from bankroll → risk
+        ob["step"] = "risk"
+        text = "<b>Step 5/8: Risk profile</b>\n\nHow aggressive should your tips be?"
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=kb_onboarding_risk(),
+        )
+
+    elif action == "back_notify":
+        # Back from notify → bankroll
+        ob["step"] = "bankroll"
+        text = (
+            "<b>Step 6/8: Weekly bankroll</b>\n\n"
+            "How much do you set aside for betting each week?"
+        )
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=kb_onboarding_bankroll(),
         )
 
     elif action.startswith("league_done:"):
@@ -1354,7 +1408,9 @@ async def _show_summary(query, ob: dict) -> None:
                     sports_lines.append(f"  {lg_label}")
         sports_lines.append("")  # blank line between sports
 
-    risk_label = config.RISK_PROFILES.get(ob["risk"], {}).get("label", ob["risk"] or "Not set")
+    # Strip emoji from risk label — e.g. "⚖️ Moderate" → "Moderate"
+    risk_raw = config.RISK_PROFILES.get(ob["risk"], {}).get("label", ob["risk"] or "Not set")
+    risk_label = risk_raw.split(" ", 1)[-1] if " " in risk_raw else risk_raw
     hour = ob.get("notify_hour")
     notify_map = {7: "Morning (7 AM)", 12: "Midday (12 PM)", 18: "Evening (6 PM)", 21: "Night (9 PM)"}
     notify_str = notify_map.get(hour, f"{hour}:00") if hour is not None else "Not set"
@@ -1372,9 +1428,9 @@ async def _show_summary(query, ob: dict) -> None:
         "<b>Step 8/8: Your profile summary</b>\n\n"
         f"🎯 Experience: {exp_labels.get(exp, exp)}\n\n"
         + "\n".join(sports_lines)
-        + f"⚖️ Risk: {risk_label}\n"
-        f"💰 Bankroll: {bankroll_str}\n"
-        f"🔔 Daily picks: {notify_str}\n\n"
+        + f"\n⚖️ <b>Risk:</b> {risk_label}\n"
+        f"💰 <b>Bankroll:</b> {bankroll_str}\n"
+        f"🔔 <b>Daily picks:</b> {notify_str}\n\n"
         "All good? Tap <b>Let's go!</b> to start."
     )
 
@@ -1448,18 +1504,20 @@ async def format_profile_summary(user_id: int) -> str:
                     lines.append(f"  {', '.join(teams)}")
         lines.append("")  # blank line between sports
 
-    # Settings section
+    # Settings section — bold sub-headings, blank line separator
     risk = (user.risk_profile if user else None) or "moderate"
-    risk_labels = config.RISK_PROFILES.get(risk, {}).get("label", risk)
+    risk_raw = config.RISK_PROFILES.get(risk, {}).get("label", risk)
+    # Strip emoji from risk label — e.g. "⚖️ Moderate" → "Moderate"
+    risk_label = risk_raw.split(" ", 1)[-1] if " " in risk_raw else risk_raw
     hour = user.notification_hour if user else None
     notify_map = {7: "Morning (7 AM)", 12: "Midday (12 PM)", 18: "Evening (6 PM)", 21: "Night (9 PM)"}
     notify_str = notify_map.get(hour, f"{hour}:00") if hour is not None else "Not set"
     bankroll = getattr(user, "bankroll", None) if user else None
     bankroll_str = f"R{bankroll:,.0f}" if bankroll else "Not set"
 
-    lines.append(f"⚖️ Risk: {risk_labels}")
-    lines.append(f"💰 Bankroll: {bankroll_str}")
-    lines.append(f"🔔 Updates: {notify_str}")
+    lines.append(f"⚖️ <b>Risk:</b> {risk_label}")
+    lines.append(f"💰 <b>Bankroll:</b> {bankroll_str}")
+    lines.append(f"🔔 <b>Daily picks:</b> {notify_str}")
 
     return "\n".join(lines)
 
@@ -2411,7 +2469,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
 
     # Build odds context for Claude
     odds_context = "\n".join(
-        f"- {t['outcome']}: {t['odds']:.2f} ({t['bookie']} 🇿🇦), "
+        f"- {t['outcome']}: {t['odds']:.2f} ({t['bookie']}), "
         f"fair prob {t['prob']}%, EV {t['ev']:+.1f}%"
         for t in tips
     ) if tips else "No SA bookmaker odds available."
@@ -2451,7 +2509,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             value_marker = " 💰" if tip["ev"] > 2 else ""
             lines.append(
                 f"  {tip['outcome']}: <b>{tip['odds']:.2f}</b> "
-                f"({tip['bookie']} 🇿🇦 | {tip['prob']}% | EV: {ev_ind}){value_marker}"
+                f"({tip['bookie']} | {tip['prob']}% | EV: {ev_ind}){value_marker}"
             )
 
     msg = "\n".join(lines)
@@ -2461,7 +2519,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     for i, tip in enumerate(tips[:3]):
         if tip["ev"] > 0:
             buttons.append([InlineKeyboardButton(
-                f"💰 {tip['outcome']} @ {tip['odds']:.2f} (EV: +{tip['ev']}%) 🇿🇦",
+                f"💰 {tip['outcome']} @ {tip['odds']:.2f} (EV: +{tip['ev']}%)",
                 callback_data=f"tip:detail:{event_id}:{i}",
             )])
     buttons.append([InlineKeyboardButton("📊 Full Picks Scan", callback_data="picks:today")])
@@ -2543,25 +2601,52 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     buttons: list[list[InlineKeyboardButton]] = []
 
     # Telegraph guide button
-    bookie_key = tip.get("bookie", "").lower().replace(" ", "")
+    bookie_raw = tip.get("bookie", "")
     # Map display name back to config key
     guide_key = None
     for k, v in config.SA_BOOKMAKERS.items():
-        if v.lower().replace(" ", "") == bookie_key or k == bookie_key:
+        if k == bookie_raw.lower().replace(" ", "").replace(".co.za", ""):
+            guide_key = k
+            break
+        if v["display_name"].lower() == bookie_raw.lower() or v["short_name"].lower() == bookie_raw.lower():
             guide_key = k
             break
 
-    if guide_key:
-        from scripts.telegraph_guides import get_guide_url
+    bookie_display = tip.get("bookie", "")
+    bk_config = config.SA_BOOKMAKERS.get(guide_key, {}) if guide_key else {}
+
+    # Affiliate button — always show
+    affiliate_url = bk_config.get("affiliate_base_url", "")
+    if affiliate_url:
+        buttons.append([InlineKeyboardButton(
+            f"📲 Place on {bookie_display} →",
+            url=affiliate_url,
+        )])
+    else:
+        buttons.append([InlineKeyboardButton(
+            f"📲 Place on {bookie_display} →",
+            callback_data="tip:affiliate_soon",
+        )])
+
+    # Guide button — always show
+    guide_url = bk_config.get("guide_url", "")
+    if not guide_url and guide_key:
+        from scripts.telegraph_guides import get_guide_url as _get_guide
         try:
-            guide_url = await get_guide_url(guide_key)
-            if guide_url:
-                buttons.append([InlineKeyboardButton(
-                    f"📖 How to bet on {tip['bookie']}",
-                    url=guide_url,
-                )])
+            guide_url = await _get_guide(guide_key) or ""
         except Exception:
-            pass
+            guide_url = ""
+
+    if guide_url:
+        buttons.append([InlineKeyboardButton(
+            f"📖 How to bet on {bookie_display}",
+            url=guide_url,
+        )])
+    else:
+        buttons.append([InlineKeyboardButton(
+            f"📖 How to bet on {bookie_display}",
+            callback_data="tip:guide_soon",
+        )])
 
     buttons.append([InlineKeyboardButton(
         "🔔 Follow this game",
@@ -2598,7 +2683,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             stake_str = f"\n💵 Stake R{stake:,.0f} → R{pot_return:,.0f}"
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
-            f"💰 <b>{outcome}</b> @ <b>{odds:.2f}</b> ({bookie} 🇿🇦)\n"
+            f"💰 <b>{outcome}</b> @ <b>{odds:.2f}</b> ({bookie})\n"
             f"📈 EV: <b>+{ev}%</b> | Fair prob: {prob}%\n"
             f"🎯 Kelly fraction: <code>{ks:.1%}</code>{stake_str}\n\n"
             f"<i>EV = (odds × true_prob - 1). Positive = edge in your favour.</i>"
@@ -2617,7 +2702,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
             f"📋 <b>What's the bet?</b>\n{bet_explain}\n\n"
-            f"💵 <b>The odds: {odds:.2f}</b> at {bookie} 🇿🇦\n"
+            f"💵 <b>The odds: {odds:.2f}</b> at {bookie}\n"
             f"  Bet R20 → get <b>R{payout_20:.0f}</b> back\n"
             f"  Bet R50 → get <b>R{payout_50:.0f}</b> back\n\n"
             f"🎯 Our AI gives this a <b>{prob}%</b> chance — "
@@ -2634,7 +2719,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             stake_hint = f"\n💡 Suggested stake: <b>R{suggested:.0f}</b>"
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
-            f"💰 We like <b>{outcome}</b> @ {odds:.2f} ({bookie} 🇿🇦)\n\n"
+            f"💰 We like <b>{outcome}</b> @ {odds:.2f} ({bookie})\n\n"
             f"The AI found a <b>+{ev}%</b> edge here.\n"
             f"Fair probability: {prob}% — odds suggest less.\n\n"
             f"💵 R100 bet pays <b>R{payout_100:.0f}</b>{stake_hint}\n\n"
@@ -2941,12 +3026,11 @@ async def handle_affiliate(query, action: str) -> None:
         text = textwrap.dedent("""\
             <b>🎰 SA Bookmakers</b>
 
-            🇿🇦 <b>Hollywoodbets</b> — Best for soccer & horse racing
-            🇿🇦 <b>Betway</b> — Great odds, fast payouts
-            🇿🇦 <b>Supabets</b> — Wide range of markets
-            🇿🇦 <b>Sportingbet</b> — Reliable, good promos
-            🇿🇦 <b>Sunbet</b> — Sun International backed
-            🇿🇦 <b>GBets</b> — Growing fast, good value
+            <b>Betway.co.za</b> — Great odds, fast payouts
+            <b>SportingBet.co.za</b> — Reliable, good promos
+            <b>10Bet.co.za</b> — Competitive odds, clean interface
+            <b>PlayaBets.co.za</b> — Strong local coverage
+            <b>SupaBets.co.za</b> — Wide range of markets
 
             <i>Always gamble responsibly. 18+ only.</i>
         """)

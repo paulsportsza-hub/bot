@@ -453,12 +453,14 @@ class TestKeyboards:
     def test_kb_onboarding_risk(self):
         kb = bot.kb_onboarding_risk()
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert len(texts) == 3
+        assert len(texts) == 4  # 3 risk options + back button
+        assert any("↩️" in t for t in texts)
 
     def test_kb_onboarding_notify(self):
         kb = bot.kb_onboarding_notify()
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert len(texts) == 4
+        assert len(texts) == 5  # 4 time options + back button
+        assert any("↩️" in t for t in texts)
 
     def test_kb_settings_has_reset(self):
         kb = bot.kb_settings()

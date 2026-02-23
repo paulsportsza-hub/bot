@@ -293,17 +293,17 @@ class TestFormatPickCard:
         assert "Hollywoodbets" in card
         assert "EV" in card
 
-    def test_sa_bookmaker_highlighted(self):
+    def test_sa_bookmaker_shown(self):
         pick = ValueBet(
             home="A", away="B", sport_key="soccer",
-            outcome="A", best_price=2.0, bookmaker="Hollywoodbets",
+            outcome="A", best_price=2.0, bookmaker="Betway.co.za",
             is_sa_book=True, fair_prob=0.5, ev_pct=5.0,
             kelly_stake=0.05, confidence="🟡 Medium",
         )
         card = format_pick_card(pick)
-        assert "🇿🇦" in card
+        assert "Betway.co.za" in card
 
-    def test_non_sa_bookmaker_not_highlighted(self):
+    def test_non_sa_bookmaker_shown(self):
         pick = ValueBet(
             home="A", away="B", sport_key="soccer",
             outcome="A", best_price=2.0, bookmaker="Bet365",
@@ -311,7 +311,7 @@ class TestFormatPickCard:
             kelly_stake=0.05, confidence="🟡 Medium",
         )
         card = format_pick_card(pick)
-        assert "🇿🇦" not in card
+        assert "Bet365" in card
 
     def test_html_formatted(self):
         pick = ValueBet(

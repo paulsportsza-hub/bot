@@ -334,7 +334,7 @@ class TestMenuHandlers:
         await bot.handle_affiliate(query, "sa")
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Hollywoodbets" in text
+        assert "Betway.co.za" in text
 
     async def test_handle_affiliate_intl(self, test_db):
         query = _make_query(user_id=40006)
@@ -405,9 +405,9 @@ class TestExperiencedPickCard:
         card = format_pick_card(SAMPLE_PICK, experience="experienced")
         assert "Hollywoodbets" in card
 
-    def test_experienced_sa_flag(self):
+    def test_experienced_bookmaker_display(self):
         card = format_pick_card(SAMPLE_PICK, experience="experienced")
-        assert "🇿🇦" in card
+        assert "Hollywoodbets" in card
 
 
 class TestCasualPickCard:

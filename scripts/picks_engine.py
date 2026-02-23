@@ -282,7 +282,7 @@ def _best_sa_for_outcome(
         bk_key = bk.get("key", "").lower()
         if bk_key not in config.SA_BOOKMAKERS:
             continue
-        bk_title = config.SA_BOOKMAKERS.get(bk_key, bk.get("title", bk_key))
+        bk_title = config.sa_display_name(bk_key)
 
         for mkt in bk.get("markets", []):
             if mkt["key"] != market:
@@ -368,7 +368,7 @@ def format_pick_card(pick: dict, index: int, experience: str = "casual") -> str:
     potential = pick["potential_return"]
     bookie = pick["bookmaker"]
     market = pick["market"]
-    sa_flag = " 🇿🇦" if pick.get("is_sa_bookmaker") else ""
+    sa_flag = ""  # All displayed bookmakers are SA — no flag needed
 
     # Parse commence time
     try:
