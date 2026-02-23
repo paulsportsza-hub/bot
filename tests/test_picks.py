@@ -222,40 +222,39 @@ VALUE_EVENT = {
 
 class TestScanValueBets:
     def test_finds_value_bets(self):
-        # VALUE_EVENT has an outlier Everton price → should produce positive EV
-        picks = scan_value_bets([VALUE_EVENT], "epl", min_ev=0.0)
+        picks = scan_value_bets([VALUE_EVENT], "soccer", min_ev=0.0)
         assert len(picks) > 0
         assert all(isinstance(p, ValueBet) for p in picks)
 
     def test_filters_by_min_ev(self):
-        all_picks = scan_value_bets([VALUE_EVENT], "epl", min_ev=0.0)
-        high_picks = scan_value_bets([VALUE_EVENT], "epl", min_ev=50.0)
+        all_picks = scan_value_bets([VALUE_EVENT], "soccer", min_ev=0.0)
+        high_picks = scan_value_bets([VALUE_EVENT], "soccer", min_ev=50.0)
         assert len(high_picks) <= len(all_picks)
 
     def test_sorted_by_ev_descending(self):
-        picks = scan_value_bets([VALUE_EVENT], "epl", min_ev=0.0)
+        picks = scan_value_bets([VALUE_EVENT], "soccer", min_ev=0.0)
         if len(picks) >= 2:
             for i in range(len(picks) - 1):
                 assert picks[i].ev_pct >= picks[i + 1].ev_pct
 
     def test_empty_events(self):
-        picks = scan_value_bets([], "epl")
+        picks = scan_value_bets([], "soccer")
         assert picks == []
 
     def test_value_bet_fields(self):
-        picks = scan_value_bets([VALUE_EVENT], "epl", min_ev=0.0)
+        picks = scan_value_bets([VALUE_EVENT], "soccer", min_ev=0.0)
         assert len(picks) > 0
         p = picks[0]
         assert p.home == "Liverpool"
         assert p.away == "Everton"
-        assert p.sport_key == "epl"
+        assert p.sport_key == "soccer"
         assert p.best_price > 0
         assert p.bookmaker != ""
         assert p.confidence != ""
 
     def test_efficient_market_no_value(self):
         """An efficient market (SAMPLE_EVENT) should produce few/no value bets at high min_ev."""
-        picks = scan_value_bets([SAMPLE_EVENT], "epl", min_ev=5.0)
+        picks = scan_value_bets([SAMPLE_EVENT], "soccer", min_ev=5.0)
         assert len(picks) == 0
 
 
@@ -264,7 +263,7 @@ class TestScanValueBets:
 class TestFormatPickCard:
     def test_contains_match_info(self):
         pick = ValueBet(
-            home="Arsenal", away="Chelsea", sport_key="epl",
+            home="Arsenal", away="Chelsea", sport_key="soccer",
             outcome="Arsenal", best_price=2.30, bookmaker="Hollywoodbets",
             is_sa_book=True, fair_prob=0.45, ev_pct=3.5,
             kelly_stake=0.05, confidence="🟡 Medium",
@@ -278,7 +277,7 @@ class TestFormatPickCard:
 
     def test_sa_bookmaker_highlighted(self):
         pick = ValueBet(
-            home="A", away="B", sport_key="epl",
+            home="A", away="B", sport_key="soccer",
             outcome="A", best_price=2.0, bookmaker="Hollywoodbets",
             is_sa_book=True, fair_prob=0.5, ev_pct=5.0,
             kelly_stake=0.05, confidence="🟡 Medium",
@@ -288,7 +287,7 @@ class TestFormatPickCard:
 
     def test_non_sa_bookmaker_not_highlighted(self):
         pick = ValueBet(
-            home="A", away="B", sport_key="epl",
+            home="A", away="B", sport_key="soccer",
             outcome="A", best_price=2.0, bookmaker="Bet365",
             is_sa_book=False, fair_prob=0.5, ev_pct=5.0,
             kelly_stake=0.05, confidence="🟡 Medium",
@@ -298,7 +297,7 @@ class TestFormatPickCard:
 
     def test_html_formatted(self):
         pick = ValueBet(
-            home="A", away="B", sport_key="epl",
+            home="A", away="B", sport_key="soccer",
             outcome="A", best_price=2.0, bookmaker="Bet365",
             is_sa_book=False, fair_prob=0.5, ev_pct=5.0,
             kelly_stake=0.05, confidence="🟡 Medium",
@@ -339,7 +338,7 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     """Picks should respect user sport preferences."""
     await db.upsert_user(77778, "picker2", "Picker2")
     await db.update_user_risk(77778, "aggressive")
-    await db.save_sport_pref(77778, "epl")
+    await db.save_sport_pref(77778, "soccer", league="epl")
     mock_update.effective_user.id = 77778
 
     with patch("bot.fetch_odds", new_callable=AsyncMock, return_value=[SAMPLE_EVENT]):

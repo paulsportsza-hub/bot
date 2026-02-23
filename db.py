@@ -199,6 +199,20 @@ async def save_bet(user_id: int, tip_id: int, stake: float) -> Bet:
         return bet
 
 
+async def reset_user_profile(user_id: int) -> None:
+    """Wipe all user preferences but keep account + history."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.onboarding_done = False
+            user.risk_profile = None
+            user.notification_hour = None
+            user.experience_level = None
+            user.education_stage = 0
+            await s.commit()
+    await clear_user_sport_prefs(user_id)
+
+
 async def get_user_count() -> int:
     async with async_session() as s:
         result = await s.execute(select(func.count(User.id)))

@@ -30,14 +30,14 @@ def _make_query(user_id: int = 55555, data: str = "") -> MagicMock:
 
 
 SAMPLE_PICK = ValueBet(
-    home="Arsenal", away="Chelsea", sport_key="epl",
+    home="Arsenal", away="Chelsea", sport_key="soccer",
     outcome="Arsenal", best_price=2.30, bookmaker="Hollywoodbets",
     is_sa_book=True, fair_prob=0.45, ev_pct=3.5,
     kelly_stake=0.05, confidence="🟡 Medium",
 )
 
 NEWBIE_PICK = ValueBet(
-    home="Liverpool", away="Everton", sport_key="epl",
+    home="Liverpool", away="Everton", sport_key="soccer",
     outcome="Draw", best_price=3.50, bookmaker="Bet365",
     is_sa_book=False, fair_prob=0.30, ev_pct=5.0,
     kelly_stake=0.03, confidence="🟡 Medium",
@@ -113,9 +113,9 @@ class TestExperienceOnboarding:
 
         ob = bot._get_ob(user_id)
         ob["experience"] = "newbie"
-        ob["selected_sports"] = ["epl"]
-        ob["selected_leagues"] = {"epl": []}
-        ob["teams"] = {}
+        ob["selected_sports"] = ["soccer"]
+        ob["selected_leagues"] = {"soccer": ["epl"]}
+        ob["favourites"] = {}
         ob["risk"] = "conservative"
         ob["notify_hour"] = 7
 
@@ -134,9 +134,9 @@ class TestExperienceOnboarding:
 
         ob = bot._get_ob(user_id)
         ob["experience"] = "experienced"
-        ob["selected_sports"] = ["epl"]
-        ob["selected_leagues"] = {"epl": []}
-        ob["teams"] = {}
+        ob["selected_sports"] = ["soccer"]
+        ob["selected_leagues"] = {"soccer": ["epl"]}
+        ob["favourites"] = {}
         ob["risk"] = "aggressive"
         ob["notify_hour"] = 18
 
@@ -156,9 +156,9 @@ class TestExperienceOnboarding:
 
         ob = bot._get_ob(user_id)
         ob["experience"] = "newbie"
-        ob["selected_sports"] = ["epl"]
-        ob["selected_leagues"] = {"epl": []}
-        ob["teams"] = {}
+        ob["selected_sports"] = ["soccer"]
+        ob["selected_leagues"] = {"soccer": ["epl"]}
+        ob["favourites"] = {}
         ob["risk"] = "conservative"
         ob["notify_hour"] = 7
 
@@ -186,6 +186,29 @@ class TestDBExperience:
         await db.upsert_user(30003, "edu_tester", "EduTester")
         user = await db.get_user(30003)
         assert user.education_stage == 0
+
+
+class TestDBResetProfile:
+    async def test_reset_clears_preferences(self, test_db):
+        user_id = 30010
+        await db.upsert_user(user_id, "resetter", "Resetter")
+        await db.update_user_risk(user_id, "aggressive")
+        await db.update_user_notification_hour(user_id, 21)
+        await db.update_user_experience(user_id, "experienced")
+        await db.set_onboarding_done(user_id)
+        await db.save_sport_pref(user_id, "soccer", league="epl", team_name="Arsenal")
+
+        await db.reset_user_profile(user_id)
+
+        user = await db.get_user(user_id)
+        assert user.onboarding_done is False
+        assert user.risk_profile is None
+        assert user.notification_hour is None
+        assert user.experience_level is None
+        assert user.education_stage == 0
+
+        prefs = await db.get_user_sport_prefs(user_id)
+        assert len(prefs) == 0
 
 
 # ── Priority 2: Persistent Menu System ──────────────────────
@@ -283,7 +306,7 @@ class TestMenuHandlers:
 
     async def test_handle_teams_view_with_teams(self, test_db):
         await db.upsert_user(40003, "team_fan", "TeamFan")
-        await db.save_sport_pref(40003, "epl", team_name="Arsenal")
+        await db.save_sport_pref(40003, "soccer", team_name="Arsenal")
         query = _make_query(user_id=40003)
         await bot.handle_teams(query, "view")
         call_args = query.edit_message_text.call_args
@@ -320,6 +343,41 @@ class TestMenuHandlers:
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
         assert "Settings" in text
         assert "Risk" in text or "risk" in text
+
+    async def test_handle_settings_reset_shows_warning(self, test_db):
+        await db.upsert_user(40008, "reset_user", "ResetUser")
+        query = _make_query(user_id=40008)
+        await bot.handle_settings(query, "reset")
+        call_args = query.edit_message_text.call_args
+        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert "Reset" in text
+        assert "NOT" in text  # history not deleted
+
+    async def test_handle_settings_reset_confirm(self, test_db):
+        user_id = 40009
+        await db.upsert_user(user_id, "reset_confirm", "ResetConfirm")
+        await db.set_onboarding_done(user_id)
+        await db.save_sport_pref(user_id, "soccer", league="epl")
+
+        query = _make_query(user_id=user_id)
+        await bot.handle_settings(query, "reset:confirm")
+
+        user = await db.get_user(user_id)
+        assert user.onboarding_done is False
+
+        prefs = await db.get_user_sport_prefs(user_id)
+        assert len(prefs) == 0
+
+    async def test_handle_ob_restart(self, test_db):
+        bot._onboarding_state.clear()
+        query = _make_query(user_id=40010)
+        await bot.handle_ob_restart(query)
+
+        ob = bot._get_ob(40010)
+        assert ob["step"] == "experience"
+        call_args = query.edit_message_text.call_args
+        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert "Step 1/7" in text
 
 
 # ── Priority 3: Experience-Adapted Pick Cards ────────────────
@@ -390,7 +448,7 @@ class TestNewbiePickCard:
 
     def test_newbie_bet_type_away(self):
         away_pick = ValueBet(
-            home="Arsenal", away="Chelsea", sport_key="epl",
+            home="Arsenal", away="Chelsea", sport_key="soccer",
             outcome="Chelsea", best_price=3.40, bookmaker="Bet365",
             is_sa_book=False, fair_prob=0.30, ev_pct=2.0,
             kelly_stake=0.02, confidence="🔴 Low",
