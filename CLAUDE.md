@@ -7,13 +7,16 @@ AI-powered sports betting Telegram bot for South Africa. Uses python-telegram-bo
 
 ```
 bot.py              ← Main bot: handlers, onboarding, picks, callback routing
-config.py           ← Environment config, sport/league definitions, TOP_TEAMS, aliases, risk profiles
-db.py               ← Async SQLAlchemy models & helpers
+config.py           ← Environment config, sport/league definitions, TOP_TEAMS, aliases, risk profiles, SPORT_DISPLAY, SA_PRIORITY_GROUPS
+db.py               ← Async SQLAlchemy models & helpers (incl. archetype, engagement_score)
 scripts/
   odds_client.py    ← The Odds API client, EV calculation, value bet scanning, pick cards
+  sports_data.py    ← Sports data service: Odds API fetch, file caching, curated lists, thefuzz fuzzy matching
 tests/
   conftest.py       ← Pytest fixtures (mock bot, in-memory DB)
-  test_config.py    ← Sport categories, leagues, fav types, aliases, risk profiles
+  test_config.py    ← Sport categories, leagues, fav types, aliases, risk profiles, SPORT_DISPLAY, SA_PRIORITY_GROUPS
+  test_sports_data.py ← Curated lists, aliases, caching, fuzzy matching, get_top_teams
+  test_archetype.py   ← classify_archetype logic, archetype DB columns
   test_db.py        ← User CRUD, sport prefs, bet creation tests
   test_odds_client.py ← best_odds, format_odds (mocked HTTP)
   test_bot_handlers.py ← /start, /menu, /help handler tests
@@ -76,6 +79,17 @@ class LeagueDef:
 ### fav_type helpers
 - `config.fav_label(sport)` → "favourite team" / "favourite player" / "favourite fighter" / "favourite driver or team"
 - `config.fav_label_plural(sport)` → plural form
+
+### SPORT_DISPLAY dict (Odds API group mapping)
+`config.SPORT_DISPLAY[group]` → `{"emoji": "⚽", "entity": "team", "entities": "teams"}`. Maps Odds API group names (Soccer, Tennis, Boxing, etc.) to display config. 12 groups.
+
+### SA_PRIORITY_GROUPS list
+Ordered SA-first display: Soccer → Rugby Union → Cricket → Boxing → MMA → Tennis → Golf → Basketball → ...
+
+### Display helpers
+- `config.get_sport_emoji(group)` → emoji for Odds API group (fallback: 🏅)
+- `config.get_entity_label(group, plural=False)` → "team"/"player"/"fighter" (fallback: "team")
+- `config.ODDS_API_BASE` → alias for `ODDS_BASE_URL`
 
 ## Callback Data Pattern
 All inline keyboard callbacks use `prefix:action` format:
@@ -144,8 +158,18 @@ betway, hollywoodbets, supabets, sportingbet, sunbet, betxchange, playabets, gbe
 - **Casual** → Main menu
 - **Newbie** → Mini-lesson explaining odds in Rands
 
+### Archetype classification (on onboarding completion)
+`bot.classify_archetype(experience, risk, num_sports)` → `(archetype, engagement_score)`:
+- **complete_newbie**: experience="newbie" → score 3.0
+- **eager_bettor**: experienced + aggressive/moderate → score 8-10
+- **casual_fan**: everyone else → score 5-7
+
+Saved to `User.archetype` and `User.engagement_score` via `db.update_user_archetype()`.
+
 ### Fuzzy matching (manual favourite input)
-Pipeline: alias check → exact match → partial match → `difflib.get_close_matches`. Shows "Did you mean?" with top 3 suggestions. Falls back to accepting raw input.
+Two fuzzy matching systems:
+1. **bot.py**: `difflib.get_close_matches` against `config.TEAM_ALIASES` + `config.TOP_TEAMS`. Used in onboarding flow.
+2. **scripts/sports_data.py**: `thefuzz` (Levenshtein) against dynamic/curated lists. Pipeline: exact → alias → fuzzy → substring. Returns top 3 with confidence scores.
 
 State tracked in `bot._onboarding_state[user_id]` dict.
 
@@ -153,14 +177,25 @@ State tracked in `bot._onboarding_state[user_id]` dict.
 Settings → "🔄 Reset Profile" → warning screen → "Yes, reset everything" → clears all prefs, risk, experience, onboarding_done in DB → redirects to onboarding. Betting history/stats NOT deleted.
 
 ## DB Models
-- `User` — id, username, first_name, risk_profile, notification_hour, onboarding_done, experience_level, education_stage
+- `User` — id, username, first_name, risk_profile, notification_hour, onboarding_done, experience_level, education_stage, archetype, engagement_score, source, fb_click_id, fb_ad_id
 - `UserSportPref` — user_id, sport_key, league, team_name
 - `Tip` — sport, match, prediction, odds, result
 - `Bet` — user_id, tip_id, stake
 
 ### Key DB helpers
-- `reset_user_profile(user_id)` — Wipe all user preferences but keep account + history
+- `reset_user_profile(user_id)` — Wipe all user preferences (incl. archetype/engagement) but keep account + history
 - `clear_user_sport_prefs(user_id)` — Delete all sport prefs for a user
+- `update_user_archetype(user_id, archetype, engagement_score)` — Set archetype classification
+- `_migrate_columns()` — Auto-add new columns to existing SQLite databases on startup
+
+### Sports Data Service (`scripts/sports_data.py`)
+- **File caching**: JSON files in `data/sports_cache/` with configurable TTL (24h sports, 12h teams)
+- `fetch_available_sports()` → grouped dict from Odds API `/sports`
+- `fetch_teams_for_sport(sport_key)` → team list from Odds API events
+- `get_top_teams_for_sport(group, sport_key, limit)` → API first, curated fallback
+- `CURATED_LISTS` — ~15 sport keys with fallback team/player lists
+- `ALIASES` — ~80+ lowercase nickname → canonical name mappings
+- `fuzzy_match_team(input, known_names)` → top 3 matches with confidence scores
 
 ## Persistent Menu System
 Main menu: `kb_main()` → Daily Briefing | My Bets | My Teams | Stats | Bookmakers | Settings
@@ -185,7 +220,7 @@ Every sub-screen has "🔙 Back" + "🏠 Main Menu" via `kb_nav()`.
 
 ## Verification
 ```bash
-# Run all tests (209 tests)
+# Run all tests (277 tests)
 pytest tests/ -x -q
 
 # Run specific test file

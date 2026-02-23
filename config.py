@@ -28,6 +28,7 @@ TZ: str = os.environ.get("TZ", "Africa/Johannesburg")
 
 # ── Odds API settings ─────────────────────────────────────
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4"
+ODDS_API_BASE = ODDS_BASE_URL  # alias used by scripts/sports_data.py
 
 # ── Paths ──────────────────────────────────────────────────
 DATA_DIR = Path("data")
@@ -416,3 +417,47 @@ TEAM_ALIASES: dict[str, str] = {
     "charles": "Charles Leclerc", "leclerc": "Charles Leclerc",
     "lando": "Lando Norris", "norris": "Lando Norris",
 }
+
+
+# ── Sport Display Config (maps Odds API group names) ─────
+
+SPORT_DISPLAY: dict[str, dict[str, str]] = {
+    "Soccer":               {"emoji": "⚽", "entity": "team",    "entities": "teams"},
+    "Tennis":               {"emoji": "🎾", "entity": "player",  "entities": "players"},
+    "Boxing":               {"emoji": "🥊", "entity": "fighter", "entities": "fighters"},
+    "Mixed Martial Arts":   {"emoji": "🥋", "entity": "fighter", "entities": "fighters"},
+    "Rugby Union":          {"emoji": "🏉", "entity": "team",    "entities": "teams"},
+    "Rugby League":         {"emoji": "🏉", "entity": "team",    "entities": "teams"},
+    "Cricket":              {"emoji": "🏏", "entity": "team",    "entities": "teams"},
+    "Golf":                 {"emoji": "⛳", "entity": "player",  "entities": "players"},
+    "Basketball":           {"emoji": "🏀", "entity": "team",    "entities": "teams"},
+    "American Football":    {"emoji": "🏈", "entity": "team",    "entities": "teams"},
+    "Ice Hockey":           {"emoji": "🏒", "entity": "team",    "entities": "teams"},
+    "Baseball":             {"emoji": "⚾", "entity": "team",    "entities": "teams"},
+}
+
+SA_PRIORITY_GROUPS: list[str] = [
+    "Soccer",
+    "Rugby Union",
+    "Cricket",
+    "Boxing",
+    "Mixed Martial Arts",
+    "Tennis",
+    "Golf",
+    "Basketball",
+    "Rugby League",
+    "American Football",
+    "Ice Hockey",
+    "Baseball",
+]
+
+
+def get_sport_emoji(group: str) -> str:
+    """Get emoji for a sport group."""
+    return SPORT_DISPLAY.get(group, {}).get("emoji", "🏅")
+
+
+def get_entity_label(group: str, plural: bool = False) -> str:
+    """Get 'team', 'player', or 'fighter' for a sport group."""
+    key = "entities" if plural else "entity"
+    return SPORT_DISPLAY.get(group, {}).get(key, "teams" if plural else "team")

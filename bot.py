@@ -1123,6 +1123,32 @@ async def handle_ob_summary(query, action: str) -> None:
     await _show_summary(query, ob)
 
 
+def classify_archetype(
+    experience: str, risk: str, num_sports: int,
+) -> tuple[str, float]:
+    """Classify user into an archetype with engagement score.
+
+    Returns (archetype, engagement_score) where:
+    - eager_bettor: experienced + aggressive/moderate, many sports
+    - casual_fan: casual experience or conservative risk
+    - complete_newbie: newbie experience level
+    """
+    if experience == "newbie":
+        return "complete_newbie", 3.0
+    score = 5.0
+    if experience == "experienced":
+        score += 2.0
+    if risk == "aggressive":
+        score += 2.0
+    elif risk == "moderate":
+        score += 1.0
+    if num_sports >= 3:
+        score += 1.0
+    if experience == "experienced" and risk in ("aggressive", "moderate"):
+        return "eager_bettor", min(score, 10.0)
+    return "casual_fan", min(score, 10.0)
+
+
 async def handle_ob_done(query) -> None:
     """Persist onboarding data and route by experience level."""
     user_id = query.from_user.id
@@ -1146,6 +1172,14 @@ async def handle_ob_done(query) -> None:
         await db.update_user_notification_hour(user_id, ob["notify_hour"])
     if ob.get("experience"):
         await db.update_user_experience(user_id, ob["experience"])
+
+    # Classify user archetype
+    archetype, eng_score = classify_archetype(
+        ob.get("experience", "casual"),
+        ob.get("risk", "moderate"),
+        len(ob.get("selected_sports", [])),
+    )
+    await db.update_user_archetype(user_id, archetype, eng_score)
 
     await db.set_onboarding_done(user_id)
     experience = ob.get("experience", "casual")

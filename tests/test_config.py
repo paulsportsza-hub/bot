@@ -177,6 +177,76 @@ class TestTeamAliases:
             assert key == key.lower(), f"alias key '{key}' is not lowercase"
 
 
+class TestSportDisplay:
+    def test_sport_display_not_empty(self):
+        assert len(config.SPORT_DISPLAY) > 0
+
+    def test_soccer_display(self):
+        assert config.SPORT_DISPLAY["Soccer"]["emoji"] == "⚽"
+        assert config.SPORT_DISPLAY["Soccer"]["entity"] == "team"
+        assert config.SPORT_DISPLAY["Soccer"]["entities"] == "teams"
+
+    def test_tennis_display(self):
+        assert config.SPORT_DISPLAY["Tennis"]["entity"] == "player"
+
+    def test_boxing_display(self):
+        assert config.SPORT_DISPLAY["Boxing"]["entity"] == "fighter"
+
+    def test_mma_display(self):
+        assert config.SPORT_DISPLAY["Mixed Martial Arts"]["entity"] == "fighter"
+
+    def test_all_entries_have_required_keys(self):
+        for group, info in config.SPORT_DISPLAY.items():
+            assert "emoji" in info, f"{group} missing emoji"
+            assert "entity" in info, f"{group} missing entity"
+            assert "entities" in info, f"{group} missing entities"
+
+
+class TestSAPriorityGroups:
+    def test_sa_priority_not_empty(self):
+        assert len(config.SA_PRIORITY_GROUPS) > 0
+
+    def test_soccer_first(self):
+        assert config.SA_PRIORITY_GROUPS[0] == "Soccer"
+
+    def test_rugby_in_top_3(self):
+        assert "Rugby Union" in config.SA_PRIORITY_GROUPS[:3]
+
+    def test_cricket_in_top_3(self):
+        assert "Cricket" in config.SA_PRIORITY_GROUPS[:3]
+
+    def test_all_groups_in_sport_display(self):
+        for group in config.SA_PRIORITY_GROUPS:
+            assert group in config.SPORT_DISPLAY, f"{group} not in SPORT_DISPLAY"
+
+
+class TestSportHelpers:
+    def test_get_sport_emoji_known(self):
+        assert config.get_sport_emoji("Soccer") == "⚽"
+        assert config.get_sport_emoji("Tennis") == "🎾"
+
+    def test_get_sport_emoji_unknown(self):
+        assert config.get_sport_emoji("Curling") == "🏅"
+
+    def test_get_entity_label_team(self):
+        assert config.get_entity_label("Soccer") == "team"
+        assert config.get_entity_label("Soccer", plural=True) == "teams"
+
+    def test_get_entity_label_player(self):
+        assert config.get_entity_label("Tennis") == "player"
+        assert config.get_entity_label("Tennis", plural=True) == "players"
+
+    def test_get_entity_label_fighter(self):
+        assert config.get_entity_label("Boxing") == "fighter"
+
+    def test_get_entity_label_unknown(self):
+        assert config.get_entity_label("Unknown Sport") == "team"
+        assert config.get_entity_label("Unknown Sport", plural=True) == "teams"
+
+    def test_odds_api_base_alias(self):
+        assert config.ODDS_API_BASE == config.ODDS_BASE_URL
+
+
 class TestRiskProfiles:
     def test_risk_profiles_exist(self):
         assert len(config.RISK_PROFILES) == 3
