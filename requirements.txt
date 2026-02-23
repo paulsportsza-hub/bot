@@ -1,0 +1,7 @@
+python-telegram-bot[ext]==21.10
+sqlalchemy[asyncio]==2.0.36
+aiosqlite==0.20.0
+httpx==0.28.1
+anthropic==0.42.0
+python-dotenv==1.0.1
+apscheduler==3.10.4
