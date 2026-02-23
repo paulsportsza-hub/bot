@@ -10,7 +10,8 @@ bot.py              ← Main bot: handlers, onboarding, picks, callback routing
 config.py           ← Environment config, sport/league definitions, TOP_TEAMS, aliases, risk profiles, SPORT_DISPLAY, SA_PRIORITY_GROUPS
 db.py               ← Async SQLAlchemy models & helpers (incl. archetype, engagement_score)
 scripts/
-  odds_client.py    ← The Odds API client, EV calculation, value bet scanning, pick cards
+  odds_client.py    ← The Odds API client, EV calculation, value bet scanning, odds caching
+  picks_engine.py   ← Picks pipeline: fetch → EV calc → filter → rank → format pick cards
   sports_data.py    ← Sports data service: Odds API fetch, file caching, curated lists, thefuzz fuzzy matching
 tests/
   conftest.py       ← Pytest fixtures (mock bot, in-memory DB)
@@ -121,18 +122,21 @@ All inline keyboard callbacks use `prefix:action` format:
 - `stats:overview` / `stats:leaderboard` — Stats sub-menu
 - `affiliate:compare` / `affiliate:sa` / `affiliate:intl` — Bookmakers sub-menu
 - `settings:home` / `settings:risk` / `settings:notify` / `settings:sports` / `settings:reset` / `settings:reset:confirm` — Settings sub-menu
+- `nav:main` — Navigate to main menu (alias for `menu:home`)
 
 ## Picks / Value Bet Flow
 1. User taps "Today's Picks" button or sends `/picks`
-2. Bot shows loading message with randomised verb template
-3. Loads user's risk profile from DB (conservative/moderate/aggressive)
-4. Fetches live odds for user's preferred leagues via `fetch_odds()`
-5. For each event, calculates fair probabilities (vig-removed market consensus)
-6. Computes EV% for each outcome: `(best_odds × fair_prob - 1) × 100`
-7. Filters to positive EV above profile's `min_ev` threshold
-8. Computes Kelly criterion stake for each value bet
-9. Ranks by EV descending, shows top 10 as pick cards
-10. Pick cards show: match, outcome, best odds@bookmaker (🇿🇦 for SA books), EV%, confidence, Kelly stake
+2. `_do_picks_flow(chat_id, bot, user_id)` sends loading message with randomised verb
+3. Loads user's risk profile + preferred leagues from DB
+4. Calls `picks_engine.get_picks_for_user(league_keys, risk_profile, max_picks=10)`
+5. Engine fetches cached odds per league via `odds_client.fetch_odds_cached()`
+6. For each event, estimates sharp probabilities (Pinnacle/Betfair lines preferred, fallback to vig-removed consensus)
+7. Computes EV% for each outcome: `(best_odds × fair_prob - 1) × 100`
+8. Filters to positive EV above profile's `min_ev` threshold
+9. Computes Kelly criterion stake, capped at `max_stake_pct` of R1000 bankroll (min R10)
+10. Ranks by EV descending, returns top `max_picks` as structured dicts
+11. Bot formats each pick via `picks_engine.format_pick_card(pick, index, experience)` and sends as individual messages
+12. Pick cards show: match, outcome, best odds@bookmaker (🇿🇦 for SA books), EV%, confidence, stake→return
 
 ### Risk Profile Thresholds
 | Profile      | min_ev | Kelly fraction | Max stake % |
@@ -145,7 +149,8 @@ All inline keyboard callbacks use `prefix:action` format:
 betway, hollywoodbets, supabets, sportingbet, sunbet, betxchange, playabets, gbets
 
 ## Admin Commands
-- `/admin` — Dashboard showing Odds API quota (requests used/remaining) and bot stats
+- `/admin` — Dashboard showing Odds API quota (requests used/remaining), total users, onboarded users
+- `/settings` — User preferences (risk profile, notifications, sports, profile reset)
 - `/stats` — Legacy stats command (user count, tip results)
 
 ## Onboarding Quiz Flow (7 steps)
@@ -158,7 +163,7 @@ betway, hollywoodbets, supabets, sportingbet, sunbet, betxchange, playabets, gbe
 7. **Summary** — Review all selections with **edit buttons**: "Edit Sports & Favourites" and "Edit Risk & Notifications". Confirm with "Let's go!"
 
 ### Post-onboarding routing by experience:
-- **Experienced** → Straight to picks (auto-triggers `_do_picks`)
+- **Experienced** → Straight to picks (auto-triggers `_do_picks_flow`)
 - **Casual** → Main menu
 - **Newbie** → Mini-lesson explaining odds in Rands
 
@@ -190,7 +195,31 @@ Settings → "🔄 Reset Profile" → warning screen → "Yes, reset everything"
 - `reset_user_profile(user_id)` — Wipe all user preferences (incl. archetype/engagement) but keep account + history
 - `clear_user_sport_prefs(user_id)` — Delete all sport prefs for a user
 - `update_user_archetype(user_id, archetype, engagement_score)` — Set archetype classification
+- `get_onboarded_count()` — Count of users who completed onboarding
 - `_migrate_columns()` — Auto-add new columns to existing SQLite databases on startup
+
+### Picks Engine (`scripts/picks_engine.py`)
+| Function | Purpose |
+|----------|---------|
+| `get_picks_for_user(league_keys, risk_profile, max_picks)` | Full pipeline: fetch cached odds → sharp prob estimation → EV calc → filter → rank |
+| `format_pick_card(pick, index, experience)` | Experience-aware pick card formatting (experienced/casual/newbie) |
+
+Returns dict: `{ok, picks, total_scanned, total_events, total_markets, quota_remaining, errors}`
+
+Each pick dict contains: `event_id, sport_key, home_team, away_team, commence_time, market, outcome, odds, bookmaker, bookmaker_key, is_sa_bookmaker, ev, confidence, sharp_prob, stake, potential_return, profit, all_odds, confidence_label`
+
+### Odds Caching (`scripts/odds_client.py`)
+- File-based JSON cache in `data/odds_cache/` with 30-minute TTL
+- `fetch_odds_cached(sport_key, regions, markets, odds_format)` → `{ok, data, error}`
+- Cache key format: `odds_{sport_key}_{markets}.json`
+- Handles quota exhaustion gracefully (returns error dict)
+- Keeps API usage within 500 requests/month free tier
+
+### Sharp Bookmaker Probability
+Engine prefers sharp book lines for "true" probability estimation:
+- **Sharp books**: Pinnacle (`pinnacle`), Betfair Exchange (`betfair_ex_eu`), Matchbook (`matchbook`)
+- **Fallback**: Vig-removed consensus from all bookmakers (same as `fair_probabilities()`)
+- Sharp lines are devigged to sum to 1.0 before EV calculation
 
 ### Sports Data Service (`scripts/sports_data.py`)
 - **File caching**: JSON files in `data/sports_cache/` with configurable TTL (24h sports, 12h teams)
@@ -208,10 +237,12 @@ Sub-menus: `kb_bets()`, `kb_teams()`, `kb_stats()`, `kb_bookmakers()`, `kb_setti
 Every sub-screen has "🔙 Back" + "🏠 Main Menu" via `kb_nav()`.
 
 ## Experience-Adapted Pick Cards
-`format_pick_card(pick, experience="experienced")` in `scripts/odds_client.py`:
-- **Experienced**: compact stats — odds, EV%, Kelly stake fraction
-- **Casual**: narrative — "We like X", R100 payout, stake hint (no Kelly)
+`format_pick_card(pick, index, experience)` in `scripts/picks_engine.py`:
+- **Experienced**: compact stats — odds, EV%, Kelly stake, stake→return with profit
+- **Casual**: narrative — "We like X", explained odds, R100 payout illustration
 - **Newbie**: full hand-holding — bet type explained, payout in R20/R50, "Start small" advice
+
+Legacy `format_pick_card(pick)` in `scripts/odds_client.py` still used for ValueBet objects in test suite.
 
 ## Conventions
 - HTML parse_mode throughout all messages
@@ -225,7 +256,7 @@ Every sub-screen has "🔙 Back" + "🏠 Main Menu" via `kb_nav()`.
 ## Verification
 ```bash
 # Run unit tests (277 tests)
-pytest tests/ -x -q --ignore=tests/e2e_telegram.py
+pytest tests/ -x -q --ignore=tests/e2e_telegram.py --ignore=tests/e2e_telethon.py
 
 # Run specific test file
 pytest tests/test_onboarding.py -v

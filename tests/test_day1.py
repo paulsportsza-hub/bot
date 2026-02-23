@@ -120,7 +120,10 @@ class TestExperienceOnboarding:
         ob["notify_hour"] = 7
 
         query = _make_query(user_id=user_id)
-        await bot.handle_ob_done(query)
+        mock_ctx = MagicMock()
+        mock_ctx.bot = MagicMock()
+        mock_ctx.bot.send_message = AsyncMock()
+        await bot.handle_ob_done(query, mock_ctx)
 
         user = await db.get_user(user_id)
         assert user.experience_level == "newbie"
@@ -141,8 +144,11 @@ class TestExperienceOnboarding:
         ob["notify_hour"] = 18
 
         query = _make_query(user_id=user_id)
-        with patch("bot._do_picks", new_callable=AsyncMock):
-            await bot.handle_ob_done(query)
+        mock_ctx = MagicMock()
+        mock_ctx.bot = MagicMock()
+        mock_ctx.bot.send_message = AsyncMock()
+        with patch("bot._do_picks_flow", new_callable=AsyncMock):
+            await bot.handle_ob_done(query, mock_ctx)
 
         call_args = query.edit_message_text.call_args_list[0]
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
@@ -163,7 +169,10 @@ class TestExperienceOnboarding:
         ob["notify_hour"] = 7
 
         query = _make_query(user_id=user_id)
-        await bot.handle_ob_done(query)
+        mock_ctx = MagicMock()
+        mock_ctx.bot = MagicMock()
+        mock_ctx.bot.send_message = AsyncMock()
+        await bot.handle_ob_done(query, mock_ctx)
 
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")

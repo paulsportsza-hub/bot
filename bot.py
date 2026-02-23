@@ -22,8 +22,12 @@ from telegram.ext import (
 import config
 import db
 from scripts.odds_client import (
-    fetch_odds, format_odds_message, format_pick_card,
+    fetch_odds, format_odds_message,
     get_quota, scan_value_bets,
+)
+from scripts.picks_engine import (
+    get_picks_for_user,
+    format_pick_card as format_engine_pick_card,
 )
 
 logging.basicConfig(
@@ -400,6 +404,26 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
+# ── /settings ─────────────────────────────────────────────
+
+async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show settings menu directly via /settings command."""
+    user = update.effective_user
+    db_user = await db.upsert_user(user.id, user.username, user.first_name)
+
+    if not db_user.onboarding_done:
+        await update.message.reply_text(
+            "⚙️ Complete onboarding first!\n\nUse /start to get set up.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await update.message.reply_text(
+        "⚙️ <b>Settings</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_settings(),
+    )
+
+
 # ── /odds ─────────────────────────────────────────────────
 
 async def cmd_odds(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -456,6 +480,10 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if prefix == "noop":
         return
+    elif prefix == "nav":
+        if action == "main":
+            await handle_menu(query, "home")
+        return
     elif prefix == "menu":
         await handle_menu(query, action)
     elif prefix == "sport":
@@ -487,7 +515,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     elif prefix == "ob_summary":
         await handle_ob_summary(query, action)
     elif prefix == "picks":
-        await handle_picks(query, action)
+        await handle_picks(query, ctx, action)
     elif prefix == "bets":
         await handle_bets(query, action)
     elif prefix == "teams":
@@ -499,7 +527,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     elif prefix == "settings":
         await handle_settings(query, action)
     elif prefix == "ob_done":
-        await handle_ob_done(query)
+        await handle_ob_done(query, ctx)
     elif prefix == "ob_restart":
         await handle_ob_restart(query)
     elif prefix == "ob_fav_back":
@@ -1149,7 +1177,7 @@ def classify_archetype(
     return "casual_fan", min(score, 10.0)
 
 
-async def handle_ob_done(query) -> None:
+async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Persist onboarding data and route by experience level."""
     user_id = query.from_user.id
     ob = _get_ob(user_id)
@@ -1194,7 +1222,11 @@ async def handle_ob_done(query) -> None:
             Let's find today's value bets right away.
         """)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
-        await _do_picks(user_id=user_id, reply=query.edit_message_text)
+        await _do_picks_flow(
+            chat_id=query.message.chat_id,
+            bot=ctx.bot,
+            user_id=user_id,
+        )
     elif experience == "newbie":
         text = textwrap.dedent(f"""\
             <b>🇿🇦 Welcome aboard, {user.first_name}!</b>
@@ -1309,120 +1341,147 @@ LOADING_VERBS = [
     "Analysing odds", "Finding edges",
 ]
 
+
 async def cmd_picks(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Entry point for /picks command."""
-    await _do_picks(
+    await _do_picks_flow(
+        chat_id=update.effective_chat.id,
+        bot=ctx.bot,
         user_id=update.effective_user.id,
-        reply=update.message.reply_text,
     )
 
 
-async def handle_picks(query, action: str) -> None:
+async def handle_picks(query, ctx: ContextTypes.DEFAULT_TYPE, action: str) -> None:
     """Callback handler for picks:go and picks:today buttons."""
     if action in ("go", "today"):
-        await _do_picks(
+        await _do_picks_flow(
+            chat_id=query.message.chat_id,
+            bot=ctx.bot,
             user_id=query.from_user.id,
-            reply=query.edit_message_text,
         )
 
 
-async def _do_picks(user_id: int, reply) -> None:
-    """Core picks logic — fetch odds for user's leagues, compute EV, display cards."""
+async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
+    """Core picks logic — fetch cached odds, compute EV, display pick cards."""
     import random
     verb = random.choice(LOADING_VERBS)
-    await reply(f"🎯 <i>{verb}…</i>", parse_mode=ParseMode.HTML)
 
     # Load user profile
     user = await db.get_user(user_id)
     risk_key = (user.risk_profile if user else None) or "moderate"
     profile = config.RISK_PROFILES.get(risk_key, config.RISK_PROFILES["moderate"])
-    min_ev = profile["min_ev"]
-    kelly_frac = profile["kelly_fraction"]
     experience = (user.experience_level if user else None) or "casual"
 
-    # Get user's preferred leagues (fall back to all)
+    # Get user's preferred leagues (fall back to all mapped leagues)
     prefs = await db.get_user_sport_prefs(user_id)
     if prefs:
         league_keys = list({p.league for p in prefs if p.league})
     else:
         league_keys = list(config.SPORTS_MAP.keys())
 
-    # Fetch odds and scan for value
-    all_picks = []
-    for lk in league_keys:
-        league = config.ALL_LEAGUES.get(lk)
-        api_key = league.api_key if league else config.SPORTS_MAP.get(lk)
-        if not api_key:
-            continue
-        sport_key = config.LEAGUE_SPORT.get(lk, lk)
-        try:
-            events = await fetch_odds(api_key)
-            picks = scan_value_bets(
-                events, sport_key=sport_key,
-                min_ev=min_ev, kelly_fraction=kelly_frac,
-            )
-            all_picks.extend(picks)
-        except Exception as exc:
-            log.warning("Picks fetch error for %s: %s", lk, exc)
+    if not league_keys:
+        await bot.send_message(
+            chat_id,
+            "🏟️ You haven't selected any leagues yet!\n\n"
+            "Tap below to set up your sports.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚽ Set Up Sports", callback_data="settings:sports")],
+            ]),
+        )
+        return
 
-    # Sort by EV descending, take top 10
-    all_picks.sort(key=lambda p: p.ev_pct, reverse=True)
-    top_picks = all_picks[:10]
+    # Send loading message
+    loading_msg = await bot.send_message(
+        chat_id,
+        f"🔍 <i>{verb} across {len(league_keys)} league{'s' if len(league_keys) != 1 else ''}…</i>",
+        parse_mode=ParseMode.HTML,
+    )
 
-    if not top_picks:
+    # Fetch picks via the engine
+    try:
+        result = await get_picks_for_user(
+            league_keys=league_keys,
+            risk_profile=risk_key,
+            max_picks=5,
+        )
+    except Exception as exc:
+        log.error("Picks engine error: %s", exc)
+        result = {"ok": False, "picks": [], "total_events": 0, "total_markets": 0,
+                  "quota_remaining": "?", "errors": [str(exc)]}
+
+    # Delete loading message
+    try:
+        await loading_msg.delete()
+    except Exception:
+        pass
+
+    # Handle quota exhausted
+    if result.get("errors") and any("quota_exhausted" in str(e) for e in result["errors"]):
+        await bot.send_message(
+            chat_id,
+            "⚠️ <b>We've hit our daily data limit.</b>\n\n"
+            "Picks will refresh tomorrow. Your bankroll is safe — "
+            "no bets placed automatically.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_nav(),
+        )
+        return
+
+    # No picks found
+    if not result["ok"] or not result["picks"]:
         risk_label = profile["label"]
         if experience == "newbie":
             text = (
-                "<b>🎯 Today's Picks</b>\n\n"
-                "No value bets found right now.\n\n"
+                "📭 <b>No value bets found right now</b>\n\n"
+                f"Scanned {result['total_events']} events across your leagues.\n\n"
                 "This means bookmaker odds are fair — no easy edges today.\n"
-                "Check back later! We scan markets throughout the day."
+                "Check back later! We scan markets throughout the day.\n\n"
+                f"<i>API quota: {result.get('quota_remaining', '?')} remaining</i>"
             )
         else:
             text = (
-                "<b>🎯 Today's Picks</b>\n\n"
-                f"No value bets found above <b>{min_ev:.0f}% EV</b> "
-                f"for your {risk_label} profile right now.\n\n"
-                "Try again later or switch to a more aggressive profile."
+                "📭 <b>No value bets found right now</b>\n\n"
+                f"Scanned {result['total_events']} events | "
+                f"{result['total_markets']} markets\n\n"
+                f"No edges meeting your {risk_label} profile.\n"
+                "This is the AI protecting your bankroll — "
+                "check back when more markets open or adjust your risk in /settings.\n\n"
+                f"<i>API quota: {result.get('quota_remaining', '?')} remaining</i>"
             )
-        await reply(text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+        await bot.send_message(
+            chat_id, text, parse_mode=ParseMode.HTML,
+            reply_markup=kb_nav(),
+        )
         return
 
-    # Build header based on experience
-    if experience == "newbie":
-        header = (
-            f"<b>🎯 Today's Picks</b> ({len(top_picks)} bet{'s' if len(top_picks) != 1 else ''})\n"
-            f"We found bets where the odds are better than they should be!\n"
-        )
-    elif experience == "casual":
-        header = (
-            f"<b>🎯 Today's Picks</b> ({len(top_picks)} value bet{'s' if len(top_picks) != 1 else ''})\n"
-            f"Profile: {profile['label']}\n"
-        )
-    else:
-        header = (
-            f"<b>🎯 Today's Picks</b> ({len(top_picks)} value bet{'s' if len(top_picks) != 1 else ''})\n"
-            f"Profile: {profile['label']} | Min EV: {min_ev:.0f}%\n"
+    picks = result["picks"]
+
+    # Send header
+    await bot.send_message(
+        chat_id,
+        f"💰 <b>Found {len(picks)} value bet{'s' if len(picks) != 1 else ''}!</b>\n\n"
+        f"📊 Scanned {result['total_events']} events | "
+        f"{result['total_markets']} markets\n"
+        f"⚖️ Risk: {profile['label']}\n"
+        f"<i>API quota: {result.get('quota_remaining', '?')} remaining</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Send individual pick cards
+    for i, pick in enumerate(picks, 1):
+        card = format_engine_pick_card(pick, i, experience)
+        await bot.send_message(
+            chat_id, card, parse_mode=ParseMode.HTML,
         )
 
-    lines = [header]
-    for pick in top_picks:
-        lines.append(format_pick_card(pick, experience=experience))
-        lines.append("")  # spacer
-
-    lines.append("<i>Always gamble responsibly. 🇿🇦</i>")
-    text = "\n".join(lines)
-
-    # Chunked sending for long messages
-    if len(text) > 4000:
-        chunks = _chunk_message(text, 4000)
-        for i, chunk in enumerate(chunks):
-            if i == len(chunks) - 1:
-                await reply(chunk, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
-            else:
-                await reply(chunk, parse_mode=ParseMode.HTML)
-    else:
-        await reply(text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+    # Final footer
+    await bot.send_message(
+        chat_id,
+        "<i>Always gamble responsibly. 🇿🇦</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_nav(),
+    )
 
 
 def _chunk_message(text: str, max_len: int = 4000) -> list[str]:
@@ -1678,6 +1737,7 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     quota = get_quota()
     count = await db.get_user_count()
+    onboarded = await db.get_onboarded_count()
     tips = await db.get_recent_tips(limit=100)
     wins = sum(1 for t in tips if t.result == "win")
     losses = sum(1 for t in tips if t.result == "loss")
@@ -1691,7 +1751,7 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         Requests remaining: <code>{quota['requests_remaining']}</code>
 
         <b>📊 Bot Stats</b>
-        👥 Users: <b>{count}</b>
+        👥 Users: <b>{count}</b> (onboarded: {onboarded})
         📝 Tips: <b>{len(tips)}</b>
         ✅ Wins: <b>{wins}</b> | ❌ Losses: <b>{losses}</b> | ⏳ Pending: <b>{pending}</b>
     """)
@@ -1720,12 +1780,24 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ── Main ──────────────────────────────────────────────────
 
+async def _post_init(app_instance) -> None:
+    """Run on bot startup: init DB and register commands with BotFather."""
+    await db.init_db()
+    await app_instance.bot.set_my_commands([
+        ("start", "Start the bot"),
+        ("menu", "Main menu"),
+        ("picks", "Today's picks"),
+        ("help", "How to use MzansiEdge"),
+        ("settings", "Your preferences"),
+    ])
+
+
 def main() -> None:
     log.info("Starting MzansiEdge bot…")
     app = Application.builder().token(config.BOT_TOKEN).build()
 
-    # Initialise DB on startup
-    app.post_init = lambda _app: db.init_db()
+    # Initialise DB + register commands on startup
+    app.post_init = _post_init
 
     # Command handlers
     app.add_handler(CommandHandler("start", cmd_start))
@@ -1734,6 +1806,7 @@ def main() -> None:
     app.add_handler(CommandHandler("odds", cmd_odds))
     app.add_handler(CommandHandler("tip", cmd_tip))
     app.add_handler(CommandHandler("picks", cmd_picks))
+    app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("stats", cmd_stats))
 

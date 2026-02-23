@@ -326,12 +326,16 @@ async def test_cmd_picks_no_prefs(test_db, mock_update, mock_context):
     await db.upsert_user(77777, "picker", "Picker")
     await db.set_onboarding_done(77777)
     mock_update.effective_user.id = 77777
+    mock_update.effective_chat.id = 77777
 
-    # Mock fetch_odds to return empty (no events = no picks)
-    with patch("bot.fetch_odds", new_callable=AsyncMock, return_value=[]):
+    no_picks_result = {
+        "ok": False, "picks": [], "total_events": 0, "total_markets": 0,
+        "total_scanned": 0, "quota_remaining": "499", "errors": None,
+    }
+    with patch("bot.get_picks_for_user", new_callable=AsyncMock, return_value=no_picks_result):
         await bot.cmd_picks(mock_update, mock_context)
 
-    assert mock_update.message.reply_text.call_count >= 1
+    assert mock_context.bot.send_message.call_count >= 1
 
 
 async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
@@ -340,13 +344,29 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     await db.update_user_risk(77778, "aggressive")
     await db.save_sport_pref(77778, "soccer", league="epl")
     mock_update.effective_user.id = 77778
+    mock_update.effective_chat.id = 77778
 
-    with patch("bot.fetch_odds", new_callable=AsyncMock, return_value=[SAMPLE_EVENT]):
+    pick_result = {
+        "ok": True,
+        "picks": [{
+            "event_id": "abc123", "sport_key": "soccer",
+            "home_team": "Arsenal", "away_team": "Chelsea",
+            "commence_time": "2026-02-23T15:00:00Z",
+            "market": "h2h", "outcome": "Arsenal",
+            "odds": 2.30, "bookmaker": "Hollywoodbets",
+            "bookmaker_key": "hollywoodbets", "is_sa_bookmaker": True,
+            "ev": 5.3, "confidence": 45, "sharp_prob": 45.0,
+            "stake": 150.0, "potential_return": 345.0, "profit": 195.0,
+            "all_odds": [], "confidence_label": "🟡 Medium",
+        }],
+        "total_events": 5, "total_markets": 15, "total_scanned": 1,
+        "quota_remaining": "498", "errors": None,
+    }
+    with patch("bot.get_picks_for_user", new_callable=AsyncMock, return_value=pick_result):
         await bot.cmd_picks(mock_update, mock_context)
 
-    calls = mock_update.message.reply_text.call_args_list
-    # At least loading + result
-    assert len(calls) >= 1
+    # Should have: loading deleted, header, pick card, footer
+    assert mock_context.bot.send_message.call_count >= 2
 
 
 async def test_cmd_admin_shows_quota(test_db, mock_update, mock_context):
@@ -374,8 +394,13 @@ async def test_handle_picks_go(test_db, mock_update, mock_context):
     await db.upsert_user(77779, "picker3", "Picker3")
     query = mock_update.callback_query
     query.from_user.id = 77779
+    query.message.chat_id = 77779
 
-    with patch("bot.fetch_odds", new_callable=AsyncMock, return_value=[]):
-        await bot.handle_picks(query, "go")
+    no_picks_result = {
+        "ok": False, "picks": [], "total_events": 0, "total_markets": 0,
+        "total_scanned": 0, "quota_remaining": "499", "errors": None,
+    }
+    with patch("bot.get_picks_for_user", new_callable=AsyncMock, return_value=no_picks_result):
+        await bot.handle_picks(query, mock_context, "go")
 
-    assert query.edit_message_text.call_count >= 1
+    assert mock_context.bot.send_message.call_count >= 1

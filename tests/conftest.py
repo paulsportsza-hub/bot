@@ -63,4 +63,8 @@ def mock_update():
 @pytest.fixture
 def mock_context():
     """Create a mock ContextTypes.DEFAULT_TYPE."""
-    return MagicMock()
+    ctx = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.delete = AsyncMock()
+    ctx.bot.send_message = AsyncMock(return_value=mock_msg)
+    return ctx

@@ -384,7 +384,10 @@ class TestOnboardingDone:
         ob["notify_hour"] = 21
 
         query = _make_query(user_id=user_id)
-        await bot.handle_ob_done(query)
+        mock_ctx = MagicMock()
+        mock_ctx.bot = MagicMock()
+        mock_ctx.bot.send_message = AsyncMock()
+        await bot.handle_ob_done(query, mock_ctx)
 
         # Check DB
         user = await db.get_user(user_id)

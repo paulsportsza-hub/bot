@@ -269,3 +269,11 @@ async def get_user_count() -> int:
     async with async_session() as s:
         result = await s.execute(select(func.count(User.id)))
         return result.scalar_one()
+
+
+async def get_onboarded_count() -> int:
+    async with async_session() as s:
+        result = await s.execute(
+            select(func.count(User.id)).where(User.onboarding_done == True)  # noqa: E712
+        )
+        return result.scalar_one()

@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
 
 import httpx
 
 import config
+
+logger = logging.getLogger(__name__)
+
+# ── Odds caching (preserves API quota) ───────────────────
+ODDS_CACHE_DIR = config.DATA_DIR / "odds_cache"
+ODDS_CACHE_DIR.mkdir(exist_ok=True)
+
+ODDS_CACHE_TTL = 30   # minutes — odds change, but not every second
 
 
 # ── Data classes ──────────────────────────────────────────
@@ -94,6 +107,68 @@ def _update_quota(resp: httpx.Response) -> None:
     _last_quota["requests_remaining"] = resp.headers.get(
         "x-requests-remaining", _last_quota["requests_remaining"]
     )
+
+
+# ── Odds caching functions ───────────────────────────────
+
+def _odds_cache_key(sport_key: str, markets: str) -> str:
+    return f"odds_{sport_key}_{markets.replace(',', '_')}"
+
+
+def _read_odds_cache(key: str, ttl_minutes: int) -> list | None:
+    """Read from odds cache if fresh enough."""
+    path = ODDS_CACHE_DIR / f"{key}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        fetched = datetime.fromisoformat(data["fetched_at"])
+        if datetime.now(timezone.utc) - fetched < timedelta(minutes=ttl_minutes):
+            return data["payload"]
+    except Exception:
+        pass
+    return None
+
+
+def _write_odds_cache(key: str, payload: Any) -> None:
+    """Write to odds cache."""
+    path = ODDS_CACHE_DIR / f"{key}.json"
+    try:
+        path.write_text(json.dumps({
+            "payload": payload,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }))
+    except Exception:
+        pass
+
+
+async def fetch_odds_cached(
+    sport_key: str,
+    regions: str = "eu",
+    markets: str = "h2h",
+    odds_format: str = "decimal",
+) -> dict[str, Any]:
+    """Fetch odds with caching to preserve API quota.
+
+    Returns {"ok": bool, "data": list|None, "error": str|None}.
+    """
+    cache_key = _odds_cache_key(sport_key, markets)
+
+    cached = _read_odds_cache(cache_key, ODDS_CACHE_TTL)
+    if cached is not None:
+        logger.info("Cache HIT for %s", cache_key)
+        return {"ok": True, "data": cached, "error": None}
+
+    try:
+        data = await fetch_odds(sport_key, regions=regions, markets=markets, odds_format=odds_format)
+        _write_odds_cache(cache_key, data)
+        return {"ok": True, "data": data, "error": None}
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            return {"ok": False, "data": None, "error": "quota_exhausted"}
+        return {"ok": False, "data": None, "error": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "data": None, "error": str(exc)}
 
 
 # ── Odds analysis ────────────────────────────────────────
