@@ -100,6 +100,8 @@ async def _migrate_columns() -> None:
     try:
         async with aiosqlite.connect(db_path) as conn:
             for col, default in [
+                ("experience_level", "NULL"),
+                ("education_stage", "0"),
                 ("archetype", "NULL"),
                 ("engagement_score", "5.0"),
                 ("source", "NULL"),

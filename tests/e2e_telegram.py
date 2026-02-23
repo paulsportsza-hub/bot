@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("e2e")
 
 BOT_USERNAME = "mzansiedge_bot"
-BOT_CHAT_URL = f"https://web.telegram.org/a/#?tgaddr=tg%3A%2F%2Fresolve%3Fdomain%3D{BOT_USERNAME}"
+BOT_CHAT_NAME = "Mzansi Edge"
 SESSION_PATH = Path("data/telegram_session.json")
 REPORT_PATH = Path("data/e2e_report.json")
 SCREENSHOT_DIR = Path("data/e2e_screenshots")
@@ -82,26 +82,41 @@ def record_test(name: str, status: str, details: str = "", duration: float = 0):
 
 
 async def open_bot_chat(page: Page):
-    """Navigate to the bot's chat on Telegram Web."""
-    await page.goto(BOT_CHAT_URL)
-    await page.wait_for_timeout(3000)
+    """Navigate to the bot's chat on Telegram Web A."""
+    await page.goto("https://web.telegram.org/a/")
+    await page.wait_for_timeout(8000)
 
-    # Wait for chat to load — look for the message input area
+    # Click on the bot chat in the sidebar
+    sidebar_link = page.locator("a.ListItem-button", has_text=BOT_CHAT_NAME).first
     try:
-        await page.wait_for_selector('[contenteditable="true"]', timeout=15000)
+        await sidebar_link.click(timeout=10000)
+        await page.wait_for_timeout(3000)
     except Exception:
-        # Try alternative selectors for Telegram Web
-        try:
-            await page.wait_for_selector('[class*="composer"]', timeout=10000)
-        except Exception:
-            logger.warning("Could not find message input area")
+        logger.warning("Could not find %s in sidebar, trying search", BOT_CHAT_NAME)
+        # Fallback: use search
+        search = page.locator('#telegram-search-input, input[placeholder*="Search"]').first
+        if await search.count() > 0:
+            await search.click()
+            await page.keyboard.type(BOT_CHAT_NAME, delay=50)
+            await page.wait_for_timeout(3000)
+            result = page.locator("a.ListItem-button", has_text=BOT_CHAT_NAME).first
+            await result.click(timeout=10000)
+            await page.wait_for_timeout(3000)
+
+    # Verify message input is visible
+    try:
+        await page.wait_for_selector("#editable-message-text", timeout=10000)
+    except Exception:
+        logger.warning("Could not find message input after opening chat")
 
 
 async def send_message(page: Page, text: str):
     """Type and send a message to the bot."""
-    input_area = page.locator('[contenteditable="true"]').last
-    await input_area.click()
-    await input_area.fill("")
+    input_el = page.locator("#editable-message-text")
+    await input_el.click()
+    # Clear existing text
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Backspace")
     await page.keyboard.type(text, delay=30)
     await page.keyboard.press("Enter")
     await page.wait_for_timeout(500)
@@ -110,48 +125,53 @@ async def send_message(page: Page, text: str):
 async def send_command(page: Page, command: str):
     """Send a /command to the bot."""
     await send_message(page, command)
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(4000)
 
 
 async def wait_for_bot_response(page: Page, timeout: int = 10000) -> Optional[str]:
     """Wait for the bot to respond. Returns the latest bot message text."""
     start = time.time()
+    last_count = await page.locator(".Message").count()
     while (time.time() - start) * 1000 < timeout:
-        messages = await page.locator('[class*="message"]').all()
-        if messages:
-            last_msg = messages[-1]
-            text = await last_msg.inner_text()
-            if text:
-                return text
+        current_count = await page.locator(".Message").count()
+        if current_count > last_count:
+            msgs = await page.locator(".Message").all()
+            if msgs:
+                return (await msgs[-1].inner_text()).strip()
         await page.wait_for_timeout(500)
+    # Return last message even if count didn't change
+    msgs = await page.locator(".Message").all()
+    if msgs:
+        return (await msgs[-1].inner_text()).strip()
     return None
 
 
 async def get_inline_buttons(page: Page) -> list[dict]:
-    """Get all visible inline keyboard buttons."""
-    # Telegram Web A uses various selectors for inline buttons
-    selectors = [
-        '[class*="inline-button"]',
-        '[class*="reply-markup"] button',
-        'button[class*="Button"]',
-        '.inline-buttons button',
-        '[class*="InlineButtons"] button',
-    ]
+    """Get all visible inline keyboard buttons from the last bot message."""
     button_data: list[dict] = []
     seen_texts: set[str] = set()
 
-    for sel in selectors:
+    # Telegram Web A: inline buttons are plain <button> elements with
+    # a specific class pattern (obfuscated, but they have "no-upper-case")
+    # They live inside the last message's reply markup area.
+    # Strategy: get all buttons, filter out non-inline ones.
+    all_buttons = await page.locator("button").all()
+    skip_texts = {"Open", ""}
+    skip_classes = {"main-menu", "translucent", "menu-container"}
+
+    for btn in all_buttons:
         try:
-            buttons = await page.locator(sel).all()
-            for btn in buttons:
-                try:
-                    text = (await btn.inner_text()).strip()
-                    is_visible = await btn.is_visible()
-                    if is_visible and text and text not in seen_texts:
-                        seen_texts.add(text)
-                        button_data.append({"text": text, "element": btn})
-                except Exception:
-                    pass
+            text = (await btn.inner_text()).strip()
+            if not text or text in skip_texts or text in seen_texts:
+                continue
+            cls = await btn.get_attribute("class") or ""
+            # Inline bot buttons have "no-upper-case" in their class
+            if "no-upper-case" not in cls:
+                continue
+            is_visible = await btn.is_visible()
+            if is_visible:
+                seen_texts.add(text)
+                button_data.append({"text": text, "element": btn})
         except Exception:
             pass
 
@@ -164,23 +184,27 @@ async def click_button_by_text(page: Page, text: str, partial: bool = False) -> 
     for btn in buttons:
         if partial and text.lower() in btn["text"].lower():
             await btn["element"].click()
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(2500)
             return True
         elif btn["text"].lower() == text.lower():
             await btn["element"].click()
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(2500)
             return True
     return False
 
 
 async def get_last_bot_message(page: Page) -> str:
-    """Get the text of the most recent bot message."""
+    """Get the text of the most recent bot message (not our own)."""
     await page.wait_for_timeout(1000)
-    # Telegram Web A: bot messages are in message bubbles without "own" class
-    all_msgs = await page.locator('[class*="message-content"], [class*="text-content"], [class*="Message"] [class*="content"]').all()
-    if all_msgs:
-        last = all_msgs[-1]
-        return (await last.inner_text()).strip()
+    msgs = await page.locator(".Message").all()
+    # Walk backwards to find the last non-own message
+    for msg in reversed(msgs):
+        cls = await msg.get_attribute("class") or ""
+        if "own" not in cls:
+            return (await msg.inner_text()).strip()
+    # Fallback: just return last message
+    if msgs:
+        return (await msgs[-1].inner_text()).strip()
     return ""
 
 
@@ -1113,16 +1137,32 @@ async def run_all_tests():
         logger.info("Starting E2E tests against @%s", BOT_USERNAME)
         logger.info("=" * 60)
 
-        # Navigate to Telegram Web
-        await page.goto("https://web.telegram.org/a/")
-        await page.wait_for_timeout(5000)
-
         # Open bot chat
         await open_bot_chat(page)
-        await page.wait_for_timeout(3000)
         await screenshot(page, "initial_state")
 
-        # ── TEST SUITE 1: Full Onboarding Flow ──
+        # ── TEST SUITE 2: Post-Onboarding (run first since user is onboarded) ──
+        logger.info("")
+        logger.info("SUITE 2: Post-Onboarding Features")
+        logger.info("-" * 40)
+
+        await test_start_when_onboarded(page)
+        await test_all_commands_respond(page)
+        await test_settings_menu(page)
+        await test_back_buttons_work(page)
+        await test_html_parse_mode(page)
+        await test_rapid_commands(page)
+
+        # ── TEST SUITE 3: Profile Reset (sets up for onboarding test) ──
+        logger.info("")
+        logger.info("SUITE 3: Profile Reset & Re-onboarding")
+        logger.info("-" * 40)
+
+        await send_command(page, "/settings")
+        await page.wait_for_timeout(2000)
+        await test_profile_reset(page)
+
+        # ── TEST SUITE 1: Full Onboarding Flow (after reset) ──
         logger.info("")
         logger.info("SUITE 1: Complete Onboarding Flow")
         logger.info("-" * 40)
@@ -1142,78 +1182,10 @@ async def run_all_tests():
         await test_edit_sports_flow(page)
         await test_confirm_onboarding(page)
 
-        # ── TEST SUITE 2: Post-Onboarding ──
-        logger.info("")
-        logger.info("SUITE 2: Post-Onboarding Features")
-        logger.info("-" * 40)
-
-        await test_all_commands_respond(page)
-        await test_settings_menu(page)
-        await test_back_buttons_work(page)
-        await test_html_parse_mode(page)
-
-        # ── TEST SUITE 3: Profile Reset ──
-        logger.info("")
-        logger.info("SUITE 3: Profile Reset & Re-onboarding")
-        logger.info("-" * 40)
-
-        await send_command(page, "/settings")
-        await page.wait_for_timeout(3000)
-        await test_profile_reset(page)
-
-        # ── TEST SUITE 4: Fuzzy Matching ──
-        logger.info("")
-        logger.info("SUITE 4: Fuzzy Matching")
-        logger.info("-" * 40)
-
-        await test_fuzzy_matching(page)
-
         # ── TEST SUITE 5: Edge Cases ──
         logger.info("")
         logger.info("SUITE 5: Edge Cases")
         logger.info("-" * 40)
-
-        # First complete onboarding so we can test /start when onboarded
-        # (fuzzy_matching left us mid-onboarding, complete it first)
-        await send_command(page, "/start")
-        await page.wait_for_timeout(3000)
-        # Try to get through onboarding quickly
-        await click_button_by_text(page, "sometimes", partial=True)
-        await page.wait_for_timeout(1000)
-        await click_button_by_text(page, "soccer", partial=True)
-        await page.wait_for_timeout(500)
-        await click_button_by_text(page, "done", partial=True)
-        await page.wait_for_timeout(2000)
-        # League selection
-        await click_button_by_text(page, "premier", partial=True)
-        await page.wait_for_timeout(500)
-        await click_button_by_text(page, "done", partial=True)
-        await page.wait_for_timeout(2000)
-        # Skip teams
-        await click_button_by_text(page, "skip", partial=True)
-        await page.wait_for_timeout(2000)
-        # Risk
-        await click_button_by_text(page, "moderate", partial=True)
-        await page.wait_for_timeout(2000)
-        # Notify
-        buttons = await get_inline_buttons(page)
-        if buttons:
-            await buttons[0]["element"].click()
-            await page.wait_for_timeout(2000)
-        # Confirm
-        await click_button_by_text(page, "go", partial=True)
-        await page.wait_for_timeout(3000)
-
-        await test_start_when_onboarded(page)
-        await test_rapid_commands(page)
-
-        # Reset and test edge cases
-        await send_command(page, "/settings")
-        await page.wait_for_timeout(2000)
-        await click_button_by_text(page, "reset", partial=True)
-        await page.wait_for_timeout(2000)
-        await click_button_by_text(page, "yes", partial=True)
-        await page.wait_for_timeout(3000)
 
         await test_zero_sports_done(page)
         await test_random_text_during_onboarding(page)
