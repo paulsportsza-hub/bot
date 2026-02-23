@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, Float, Integer, String, Text,
-    func, select,
+    func, select, delete,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -30,6 +30,19 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    risk_profile: Mapped[str | None] = mapped_column(String(32))
+    notification_hour: Mapped[int | None] = mapped_column(Integer)
+    onboarding_done: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class UserSportPref(Base):
+    __tablename__ = "user_sport_prefs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    sport_key: Mapped[str] = mapped_column(String(64))
+    league: Mapped[str | None] = mapped_column(String(128))
+    team_name: Mapped[str | None] = mapped_column(String(128))
 
 
 class Tip(Base):
@@ -65,7 +78,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-async def upsert_user(user_id: int, username: str | None, first_name: str | None) -> None:
+async def upsert_user(user_id: int, username: str | None, first_name: str | None) -> User:
     async with async_session() as s:
         existing = await s.get(User, user_id)
         if existing:
@@ -73,8 +86,81 @@ async def upsert_user(user_id: int, username: str | None, first_name: str | None
             existing.first_name = first_name
             existing.is_active = True
         else:
-            s.add(User(id=user_id, username=username, first_name=first_name))
+            existing = User(id=user_id, username=username, first_name=first_name)
+            s.add(existing)
         await s.commit()
+        await s.refresh(existing)
+        return existing
+
+
+async def get_user(user_id: int) -> User | None:
+    async with async_session() as s:
+        return await s.get(User, user_id)
+
+
+async def update_user_risk(user_id: int, risk_profile: str) -> None:
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.risk_profile = risk_profile
+            await s.commit()
+
+
+async def update_user_notification_hour(user_id: int, hour: int) -> None:
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.notification_hour = hour
+            await s.commit()
+
+
+async def set_onboarding_done(user_id: int) -> None:
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.onboarding_done = True
+            await s.commit()
+
+
+async def save_sport_pref(
+    user_id: int,
+    sport_key: str,
+    league: str | None = None,
+    team_name: str | None = None,
+) -> UserSportPref:
+    async with async_session() as s:
+        pref = UserSportPref(
+            user_id=user_id, sport_key=sport_key,
+            league=league, team_name=team_name,
+        )
+        s.add(pref)
+        await s.commit()
+        await s.refresh(pref)
+        return pref
+
+
+async def get_user_sport_prefs(user_id: int) -> list[UserSportPref]:
+    async with async_session() as s:
+        result = await s.execute(
+            select(UserSportPref).where(UserSportPref.user_id == user_id)
+        )
+        return list(result.scalars().all())
+
+
+async def clear_user_sport_prefs(user_id: int) -> None:
+    async with async_session() as s:
+        await s.execute(
+            delete(UserSportPref).where(UserSportPref.user_id == user_id)
+        )
+        await s.commit()
+
+
+async def update_pref_team(pref_id: int, team_name: str) -> None:
+    async with async_session() as s:
+        pref = await s.get(UserSportPref, pref_id)
+        if pref:
+            pref.team_name = team_name
+            await s.commit()
 
 
 async def save_tip(sport: str, match: str, prediction: str, odds: float | None = None) -> Tip:
@@ -92,6 +178,15 @@ async def get_recent_tips(limit: int = 10) -> list[Tip]:
             select(Tip).order_by(Tip.created_at.desc()).limit(limit)
         )
         return list(result.scalars().all())
+
+
+async def save_bet(user_id: int, tip_id: int, stake: float) -> Bet:
+    async with async_session() as s:
+        bet = Bet(user_id=user_id, tip_id=tip_id, stake=stake)
+        s.add(bet)
+        await s.commit()
+        await s.refresh(bet)
+        return bet
 
 
 async def get_user_count() -> int:
