@@ -312,7 +312,7 @@ class TestSummaryAndEdit:
         ob = bot._get_ob(10023)
         ob["selected_sports"] = ["soccer"]
         ob["selected_leagues"] = {"soccer": ["epl"]}
-        ob["favourites"] = {"soccer": ["Arsenal"]}
+        ob["favourites"] = {"soccer": {"epl": ["Arsenal"]}}
         ob["risk"] = "moderate"
         ob["notify_hour"] = 18
 
@@ -379,7 +379,7 @@ class TestOnboardingDone:
         ob = bot._get_ob(user_id)
         ob["selected_sports"] = ["soccer", "basketball"]
         ob["selected_leagues"] = {"soccer": ["epl"], "basketball": ["nba"]}
-        ob["favourites"] = {"soccer": ["Arsenal"]}
+        ob["favourites"] = {"soccer": {"epl": ["Arsenal"]}}
         ob["risk"] = "aggressive"
         ob["notify_hour"] = 21
 
@@ -397,7 +397,7 @@ class TestOnboardingDone:
 
         prefs = await db.get_user_sport_prefs(user_id)
         assert len(prefs) >= 2
-        soccer_prefs = [p for p in prefs if p.sport_key == "soccer"]
+        soccer_prefs = [p for p in prefs if p.sport_key == "soccer" and p.team_name]
         assert len(soccer_prefs) == 1
         assert soccer_prefs[0].team_name == "Arsenal"
         assert soccer_prefs[0].league == "epl"

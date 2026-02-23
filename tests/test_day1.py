@@ -350,7 +350,7 @@ class TestMenuHandlers:
         await bot.handle_settings(query, "home")
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Settings" in text
+        assert "Profile" in text or "Settings" in text
         assert "Risk" in text or "risk" in text
 
     async def test_handle_settings_reset_shows_warning(self, test_db):

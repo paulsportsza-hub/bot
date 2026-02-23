@@ -8,11 +8,11 @@ AI-powered sports betting Telegram bot for South Africa. Uses python-telegram-bo
 ```
 bot.py              ← Main bot: handlers, onboarding, picks, callback routing
 config.py           ← Environment config, sport/league definitions, TOP_TEAMS, aliases, risk profiles, SPORT_DISPLAY, SA_PRIORITY_GROUPS
-db.py               ← Async SQLAlchemy models & helpers (incl. archetype, engagement_score)
+db.py               ← Async SQLAlchemy models & helpers (incl. archetype, engagement_score, notification_prefs)
 scripts/
   odds_client.py    ← The Odds API client, EV calculation, value bet scanning, odds caching
   picks_engine.py   ← Picks pipeline: fetch → EV calc → filter → rank → format pick cards
-  sports_data.py    ← Sports data service: Odds API fetch, file caching, curated lists, thefuzz fuzzy matching
+  sports_data.py    ← Sports data service: Odds API fetch, file caching, curated lists, thefuzz fuzzy matching, events fetch
 tests/
   conftest.py       ← Pytest fixtures (mock bot, in-memory DB)
   test_config.py    ← Sport categories, leagues, fav types, aliases, risk profiles, SPORT_DISPLAY, SA_PRIORITY_GROUPS
@@ -122,7 +122,12 @@ All inline keyboard callbacks use `prefix:action` format:
 - `stats:overview` / `stats:leaderboard` — Stats sub-menu
 - `affiliate:compare` / `affiliate:sa` / `affiliate:intl` — Bookmakers sub-menu
 - `settings:home` / `settings:risk` / `settings:notify` / `settings:sports` / `settings:reset` / `settings:reset:confirm` — Settings sub-menu
+- `settings:story` / `settings:toggle_notify:{key}` — Notification preferences in settings
 - `nav:main` — Navigate to main menu (alias for `menu:home`)
+- `nav:schedule` — Navigate to schedule view
+- `schedule:tips:{event_id}` — Get AI tips for a specific game
+- `story:start` / `story:pref:{key}:{yes|no}` — Betting story notification quiz
+- `ob_fav_retry:{sport_key}` — Re-prompt for team text input
 
 ## Picks / Value Bet Flow
 1. User taps "Today's Picks" button or sends `/picks`
@@ -154,18 +159,19 @@ betway, hollywoodbets, supabets, sportingbet, sunbet, betxchange, playabets, gbe
 - `/stats` — Legacy stats command (user count, tip results)
 
 ## Onboarding Quiz Flow (7 steps)
-1. **Experience level** — Experienced / Casual / Newbie (routes post-onboarding differently)
+1. **Experience level** — Experienced / Casual / Newbie
 2. **Sports selection** — Category-based grid (Soccer, Rugby, Cricket, Tennis, Boxing, MMA, Basketball, American Football, Golf, Motorsport, Horse Racing)
 3. **League selection** — Per selected sport, toggle leagues. **Single-league sports auto-select** (e.g. NFL, UFC).
-4. **Favourites** — Multi-select buttons of top teams/players per sport. "Type manually" option with fuzzy matching. Horse racing skipped (fav_type="skip"). Sport-appropriate language (team/player/fighter/driver).
+4. **Favourites** — Text-based input per league. User types comma-separated team/player names with fuzzy matching. Max 5 per league. Horse racing skipped (fav_type="skip"). Sport-appropriate language (team/player/fighter/driver). Queue-based: iterates `_fav_league_queue` of `(sport_key, league_key)` pairs.
 5. **Risk profile** — Conservative / Moderate / Aggressive
 6. **Notification time** — 7 AM / 12 PM / 6 PM / 9 PM
-7. **Summary** — Review all selections with **edit buttons**: "Edit Sports & Favourites" and "Edit Risk & Notifications". Confirm with "Let's go!"
+7. **Summary** — Clean profile display (no heart emojis), league-prefixed teams, edit buttons: "Edit Sports & Favourites" and "Edit Risk & Notifications". Confirm with "Let's go!"
 
-### Post-onboarding routing by experience:
-- **Experienced** → Straight to picks (auto-triggers `_do_picks_flow`)
-- **Casual** → Main menu
-- **Newbie** → Mini-lesson explaining odds in Rands
+### Favourites data structure
+`ob["favourites"]` is a dict-of-dicts: `{sport_key: {league_key: [team_names...]}}`. Saved to DB as one `UserSportPref` row per team per league.
+
+### Post-onboarding: Welcome message + Betting Story quiz
+All experience levels get the same welcome message with a CTA to "Set Up My Story" (notification preferences quiz) or "Skip for Now". The story quiz walks through 5 notification types (daily_picks, game_day_alerts, weekly_recap, edu_tips, market_movers) with Yes/No for each, saved as JSON in `User.notification_prefs`.
 
 ### Archetype classification (on onboarding completion)
 `bot.classify_archetype(experience, risk, num_sports)` → `(archetype, engagement_score)`:
@@ -175,18 +181,18 @@ betway, hollywoodbets, supabets, sportingbet, sunbet, betxchange, playabets, gbe
 
 Saved to `User.archetype` and `User.engagement_score` via `db.update_user_archetype()`.
 
-### Fuzzy matching (manual favourite input)
+### Fuzzy matching (text-based team input)
 Two fuzzy matching systems:
-1. **bot.py**: `difflib.get_close_matches` against `config.TEAM_ALIASES` + `config.TOP_TEAMS`. Used in onboarding flow.
+1. **bot.py `_handle_team_text_input()`**: Processes comma-separated team names. Pipeline: alias lookup (sports_data.ALIASES + config.TEAM_ALIASES) → `difflib.get_close_matches` against `config.TOP_TEAMS[league]` then all alias targets. Shows matched/unmatched results with Continue/Try Again buttons.
 2. **scripts/sports_data.py**: `thefuzz` (Levenshtein) against dynamic/curated lists. Pipeline: exact → alias → fuzzy → substring. Returns top 3 with confidence scores.
 
-State tracked in `bot._onboarding_state[user_id]` dict.
+State tracked in `bot._onboarding_state[user_id]` dict with `_team_input_sport`, `_team_input_league`, `_fav_league_queue` keys.
 
 ## Profile Reset
 Settings → "🔄 Reset Profile" → warning screen → "Yes, reset everything" → clears all prefs, risk, experience, onboarding_done in DB → redirects to onboarding. Betting history/stats NOT deleted.
 
 ## DB Models
-- `User` — id, username, first_name, risk_profile, notification_hour, onboarding_done, experience_level, education_stage, archetype, engagement_score, source, fb_click_id, fb_ad_id
+- `User` — id, username, first_name, risk_profile, notification_hour, onboarding_done, experience_level, education_stage, archetype, engagement_score, notification_prefs (JSON), source, fb_click_id, fb_ad_id
 - `UserSportPref` — user_id, sport_key, league, team_name
 - `Tip` — sport, match, prediction, odds, result
 - `Bet` — user_id, tip_id, stake
@@ -196,6 +202,8 @@ Settings → "🔄 Reset Profile" → warning screen → "Yes, reset everything"
 - `clear_user_sport_prefs(user_id)` — Delete all sport prefs for a user
 - `update_user_archetype(user_id, archetype, engagement_score)` — Set archetype classification
 - `get_onboarded_count()` — Count of users who completed onboarding
+- `get_notification_prefs(user)` — Parse JSON notification prefs with defaults (daily_picks, game_day_alerts, weekly_recap, edu_tips, market_movers, bankroll_updates)
+- `update_notification_prefs(user_id, prefs)` — Save notification preferences as JSON
 - `_migrate_columns()` — Auto-add new columns to existing SQLite databases on startup
 
 ### Picks Engine (`scripts/picks_engine.py`)
@@ -227,14 +235,43 @@ Engine prefers sharp book lines for "true" probability estimation:
 - `fetch_teams_for_sport(sport_key)` → team list from Odds API events
 - `get_top_teams_for_sport(group, sport_key, limit)` → API first, curated fallback
 - `CURATED_LISTS` — ~15 sport keys with fallback team/player lists
-- `ALIASES` — ~80+ lowercase nickname → canonical name mappings
+- `ALIASES` — ~100+ lowercase nickname → canonical name mappings (incl. EPL full squads, SA PSL slang)
 - `fuzzy_match_team(input, known_names)` → top 3 matches with confidence scores
+- `fetch_events_for_league(league_key)` → upcoming events from Odds API `/events` endpoint (free, 2hr cache)
 
 ## Persistent Menu System
-Main menu: `kb_main()` → Daily Briefing | My Bets | My Teams | Stats | Bookmakers | Settings
+Main menu: `kb_main()` → Daily Briefing | My Bets | My Teams | Stats | Schedule | Bookmakers | Settings
 
 Sub-menus: `kb_bets()`, `kb_teams()`, `kb_stats()`, `kb_bookmakers()`, `kb_settings()`
 Every sub-screen has "🔙 Back" + "🏠 Main Menu" via `kb_nav()`.
+
+## Schedule Feature
+`/schedule` command or "📅 Schedule" button shows upcoming games for user's followed teams.
+- `cmd_schedule()` — Entry point for /schedule command
+- `_build_schedule()` — Shared logic for command + callback. Fetches events per league via `fetch_events_for_league()`, filters to user's teams, formats with kick-off times (SAST). Returns (text, markup).
+- `_generate_game_tips()` — AI tips per game using `fair_probabilities()` and `find_best_odds()` from odds_client. Triggered by "Get Tips" button (`schedule:tips:{event_id}`).
+- Shows "No upcoming games found" if no matches for followed teams.
+
+## Betting Story / Notification Preferences
+Multi-step notification quiz presented after onboarding or accessible via Settings → "📖 My Notifications".
+
+### Story quiz state
+`_story_state[chat_id]` dict with `step` (0-4) and `prefs` dict. Steps iterate through `STORY_STEPS` list.
+
+### 5 notification types
+| Key | Default | Description |
+|-----|---------|-------------|
+| daily_picks | on | Morning value bet picks |
+| game_day_alerts | on | Pre-match alerts for followed teams |
+| weekly_recap | on | Weekly performance summary |
+| edu_tips | on | Betting education tips |
+| market_movers | off | Line movement alerts |
+
+### Settings integration
+Settings → "📖 My Notifications" shows toggle buttons for each notification type with on/off emoji indicators.
+
+## Profile Summary
+`format_profile_summary(user_id)` — Reusable async helper that formats a clean profile display. Used in `settings:home` and onboarding summary. Shows experience, sports grouped by league with teams, risk profile, and notification time.
 
 ## Experience-Adapted Pick Cards
 `format_pick_card(pick, index, experience)` in `scripts/picks_engine.py`:

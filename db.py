@@ -37,6 +37,7 @@ class User(Base):
     education_stage: Mapped[int] = mapped_column(Integer, default=0)  # newbie lesson progress
     archetype: Mapped[str | None] = mapped_column(String(50))  # eager_bettor/casual_fan/complete_newbie
     engagement_score: Mapped[float] = mapped_column(Float, default=5.0)
+    notification_prefs: Mapped[str | None] = mapped_column(Text)  # JSON notification preferences
     source: Mapped[str | None] = mapped_column(String(100))  # organic, fb_ad_123, etc.
     fb_click_id: Mapped[str | None] = mapped_column(String(255))
     fb_ad_id: Mapped[str | None] = mapped_column(String(255))
@@ -104,6 +105,7 @@ async def _migrate_columns() -> None:
                 ("education_stage", "0"),
                 ("archetype", "NULL"),
                 ("engagement_score", "5.0"),
+                ("notification_prefs", "NULL"),
                 ("source", "NULL"),
                 ("fb_click_id", "NULL"),
                 ("fb_ad_id", "NULL"),
@@ -262,6 +264,36 @@ async def update_user_archetype(
         if user:
             user.archetype = archetype
             user.engagement_score = engagement_score
+            await s.commit()
+
+
+def get_notification_prefs(user: User | None) -> dict:
+    """Parse JSON notification prefs with defaults."""
+    import json
+    default = {
+        "daily_picks": True,
+        "game_day_alerts": True,
+        "weekly_recap": True,
+        "edu_tips": True,
+        "market_movers": False,
+        "bankroll_updates": True,
+    }
+    if not user:
+        return default
+    try:
+        prefs = json.loads(user.notification_prefs or "{}")
+        return {**default, **prefs}
+    except Exception:
+        return default
+
+
+async def update_notification_prefs(user_id: int, prefs: dict) -> None:
+    """Save notification preferences as JSON."""
+    import json
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.notification_prefs = json.dumps(prefs)
             await s.commit()
 
 

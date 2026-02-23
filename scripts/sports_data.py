@@ -149,6 +149,38 @@ async def fetch_teams_for_sport(sport_key: str) -> list[str]:
         return []
 
 
+async def fetch_events_for_league(league_key: str) -> list[dict]:
+    """Fetch upcoming events for a league.
+
+    Returns list of event dicts with: id, home_team, away_team, commence_time, sport_key.
+    Cached for 2 hours. Uses /events endpoint (does NOT count against odds quota).
+    """
+    # Map internal league key → Odds API key
+    api_key = config.SPORTS_MAP.get(league_key, league_key)
+    cache_key = f"events_{api_key}"
+    cached = _read_cache(cache_key, ttl_hours=2)
+    if cached:
+        return cached
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{config.ODDS_BASE_URL}/sports/{api_key}/events",
+                params={"apiKey": config.ODDS_API_KEY},
+            )
+            if resp.status_code != 200:
+                log.error("Events API returned %d for %s", resp.status_code, league_key)
+                return []
+
+            events = resp.json()
+            _write_cache(cache_key, events)
+            return events
+
+    except Exception as e:
+        log.error("Failed to fetch events for %s: %s", league_key, e)
+        return []
+
+
 async def get_top_teams_for_sport(
     sport_group: str,
     sport_key: str | None = None,
@@ -281,6 +313,13 @@ ALIASES: dict[str, str] = {
     "hammers": "West Ham", "whu": "West Ham",
     "wolves": "Wolverhampton",
     "forest": "Nottingham Forest", "nffc": "Nottingham Forest",
+    "man united": "Manchester United",
+    "newcastle": "Newcastle United",
+    "brighton": "Brighton and Hove Albion",
+    "everton": "Everton", "toffees": "Everton",
+    "fulham": "Fulham", "palace": "Crystal Palace",
+    "bournemouth": "AFC Bournemouth", "brentford": "Brentford",
+    "chelsea": "Chelsea", "liverpool": "Liverpool", "arsenal": "Arsenal",
     # Soccer — SA PSL
     "chiefs": "Kaizer Chiefs", "kc": "Kaizer Chiefs", "amakhosi": "Kaizer Chiefs",
     "pirates": "Orlando Pirates", "bucs": "Orlando Pirates", "buccaneers": "Orlando Pirates",
@@ -289,6 +328,8 @@ ALIASES: dict[str, str] = {
     "amazulu": "AmaZulu", "usuthu": "AmaZulu",
     "cct": "Cape Town City", "ctc": "Cape Town City",
     "matsatsantsa": "SuperSport United", "supersport": "SuperSport United",
+    "stellies": "Stellenbosch", "sekhukhune": "Sekhukhune United",
+    "galaxy": "TS Galaxy", "polokwane": "Polokwane City",
     # Soccer — La Liga
     "barca": "Barcelona", "fcb": "Barcelona",
     "madrid": "Real Madrid", "real": "Real Madrid",

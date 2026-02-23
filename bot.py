@@ -45,6 +45,67 @@ ONBOARD_STEPS = ("experience", "sports", "leagues", "favourites", "risk", "notif
 # Per-user in-memory onboarding state
 _onboarding_state: dict[int, dict] = {}
 
+# Per-user story/notification quiz state
+_story_state: dict[int, dict] = {}
+
+STORY_STEPS = ["daily_picks", "game_day_alerts", "weekly_recap", "edu_tips", "market_movers"]
+
+STORY_PROMPTS: dict[str, dict] = {
+    "daily_picks": {
+        "title": "📊 <b>Daily Picks</b>",
+        "body": (
+            "Want me to send you AI-powered value bets every day?\n\n"
+            "I'll scan your leagues each morning, find the edges,\n"
+            "and send them straight to you."
+        ),
+        "yes": "✅ Yes — Send me daily picks",
+        "no": "❌ No — I'll check manually",
+    },
+    "game_day_alerts": {
+        "title": "🏟️ <b>Game Day Alerts</b>",
+        "body": (
+            "Get a heads-up when your followed teams are playing today?\n\n"
+            "Includes kickoff times and quick pre-match tips."
+        ),
+        "yes": "✅ Yes — Alert me on game days",
+        "no": "❌ No thanks",
+    },
+    "weekly_recap": {
+        "title": "📈 <b>Weekly Recap</b>",
+        "body": (
+            "Every Sunday, I can send you a recap of the week:\n"
+            "how your picks performed, bankroll movement, and\n"
+            "what's coming up next week."
+        ),
+        "yes": "✅ Yes — Send weekly recaps",
+        "no": "❌ Skip this one",
+    },
+    "edu_tips": {
+        "title": "🎓 <b>Betting Education</b>",
+        "body": (
+            "I'll send you short, practical tips to level up\n"
+            "your betting game. Things like:\n\n"
+            "• How odds work\n"
+            "• Reading form guides\n"
+            "• Bankroll management basics\n"
+            "• Spotting value vs. hype\n\n"
+            "One tip every few days — no spam."
+        ),
+        "yes": "✅ Yes — Teach me",
+        "no": "❌ I'm good",
+    },
+    "market_movers": {
+        "title": "📉 <b>Market Movers</b>",
+        "body": (
+            "Get alerted when odds shift significantly on games\n"
+            "you're watching. Big line movements often signal\n"
+            "sharp money or breaking news."
+        ),
+        "yes": "✅ Yes — Alert me",
+        "no": "❌ Not interested",
+    },
+}
+
 
 def _get_ob(user_id: int) -> dict:
     """Get or create onboarding state for a user."""
@@ -54,7 +115,7 @@ def _get_ob(user_id: int) -> dict:
             "experience": None,         # experienced / casual / newbie
             "selected_sports": [],      # category keys: ["soccer", "rugby"]
             "selected_leagues": {},     # sport_key → [league_key, ...]
-            "favourites": {},           # sport_key → [name, ...]
+            "favourites": {},           # sport_key → {league_key: [name, ...], ...}
             "risk": None,
             "notify_hour": None,
             "_league_idx": 0,
@@ -63,6 +124,9 @@ def _get_ob(user_id: int) -> dict:
             "_fav_manual_sport": None,  # which sport we're inputting for
             "_editing": None,           # None / "sports" / "risk" / "sport:{key}"
             "_suggestions": [],         # fuzzy match suggestions
+            "_team_input_sport": None,  # sport key for text-based team input
+            "_team_input_league": None, # league key for text-based team input
+            "_fav_league_queue": [],    # leagues to prompt for teams
         }
     return _onboarding_state[user_id]
 
@@ -144,6 +208,7 @@ def kb_main() -> InlineKeyboardMarkup:
     """Main persistent menu — every sub-screen navigates back here."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Daily Briefing", callback_data="picks:today")],
+        [InlineKeyboardButton("📅 Schedule", callback_data="nav:schedule")],
         [
             InlineKeyboardButton("💰 My Bets", callback_data="bets:active"),
             InlineKeyboardButton("🏟️ My Teams", callback_data="teams:view"),
@@ -214,6 +279,7 @@ def kb_settings() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎯 Risk Profile", callback_data="settings:risk")],
         [InlineKeyboardButton("⏰ Notifications", callback_data="settings:notify")],
+        [InlineKeyboardButton("📖 My Notifications", callback_data="settings:story")],
         [InlineKeyboardButton("⚽ My Sports", callback_data="settings:sports")],
         [InlineKeyboardButton("🔄 Reset Profile", callback_data="settings:reset")],
         [
@@ -483,6 +549,10 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     elif prefix == "nav":
         if action == "main":
             await handle_menu(query, "home")
+        elif action == "schedule":
+            user_id = query.from_user.id
+            text, markup = await _build_schedule(user_id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
     elif prefix == "menu":
         await handle_menu(query, action)
@@ -524,12 +594,63 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await handle_stats_menu(query, action)
     elif prefix == "affiliate":
         await handle_affiliate(query, action)
+    elif prefix == "story":
+        chat_id = query.message.chat_id
+        user_id = query.from_user.id
+        if action == "start":
+            _story_state[chat_id] = {"step": "daily_picks", "prefs": {}}
+            await _show_story_step(query, chat_id)
+        elif action.startswith("pref:"):
+            parts = action.split(":")
+            if len(parts) >= 3:
+                pref_key = parts[1]
+                value = parts[2] == "yes"
+                state = _story_state.get(chat_id, {})
+                state.setdefault("prefs", {})[pref_key] = value
+                _story_state[chat_id] = state
+                await _advance_story_quiz(query, chat_id, user_id)
+    elif prefix == "schedule":
+        if action.startswith("tips:"):
+            event_id = action.split(":", 1)[1]
+            await _generate_game_tips(query, ctx, event_id, query.from_user.id)
     elif prefix == "settings":
         await handle_settings(query, action)
     elif prefix == "ob_done":
         await handle_ob_done(query, ctx)
     elif prefix == "ob_restart":
         await handle_ob_restart(query)
+    elif prefix == "ob_fav_retry":
+        # Re-prompt for team input for this sport/league
+        user_id = query.from_user.id
+        ob_state = _get_ob(user_id)
+        sport_key = action
+        league_key = ob_state.get("_team_input_league")
+        ob_state["_team_input_sport"] = sport_key
+        ob_state["_team_input_league"] = league_key
+        sport = config.ALL_SPORTS.get(sport_key)
+        emoji = sport.emoji if sport else "🏅"
+        entity = config.fav_label(sport) if sport else "favourite"
+        if league_key:
+            lg = config.ALL_LEAGUES.get(league_key)
+            league_label = lg.label if lg else league_key
+            text = (
+                f"<b>{emoji} {league_label} — try again</b>\n\n"
+                f"Type your {entity}s separated by commas.\n"
+                f"<i>Tip: Use full names or common nicknames.</i>"
+            )
+        else:
+            sport_label = sport.label if sport else sport_key
+            text = (
+                f"<b>{emoji} {sport_label} — try again</b>\n\n"
+                f"Type your {entity}s separated by commas.\n"
+                f"<i>Tip: Use full names or common nicknames.</i>"
+            )
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏭ Skip", callback_data=f"ob_fav_done:{sport_key}")],
+            ]),
+        )
     elif prefix == "ob_fav_back":
         await handle_ob_fav_back(query, action)
     else:
@@ -787,18 +908,16 @@ async def _advance_league_step(query, ob: dict) -> None:
     editing = ob.get("_editing")
     if editing and editing.startswith("sport:"):
         edit_sport = editing.split(":", 1)[1]
-        # After editing this sport's leagues, show its favourites
         sport = config.ALL_SPORTS.get(edit_sport)
         if sport and sport.fav_type != "skip":
-            ob["_fav_manual"] = False
-            ob["_fav_manual_sport"] = None
-            text = _fav_step_text(sport)
-            await query.edit_message_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=kb_onboarding_favourites(edit_sport, ob["favourites"].get(edit_sport, [])),
-            )
+            # Build league queue for this sport and show text input
+            leagues = ob["selected_leagues"].get(edit_sport, [])
+            queue: list[tuple[str, str | None]] = [(edit_sport, lk) for lk in leagues] if leagues else [(edit_sport, None)]
+            ob["_fav_league_queue"] = queue
+            ob["_fav_idx"] = 0
+            ob["step"] = "favourites"
+            await _show_next_team_prompt(query, ob)
             return
-        # No favourites for this sport, return to summary
         ob["_editing"] = None
         ob["step"] = "summary"
         await _show_summary(query, ob)
@@ -808,46 +927,77 @@ async def _advance_league_step(query, ob: dict) -> None:
 
 
 async def _show_fav_step(query, ob: dict) -> None:
-    """Show favourite selection for the current sport."""
+    """Build queue of leagues to prompt for teams, then show first prompt."""
+    # Build the full queue of (sport_key, league_key) pairs to prompt
+    queue: list[tuple[str, str | None]] = []
+    for sk in ob["selected_sports"]:
+        sport = config.ALL_SPORTS.get(sk)
+        if not sport or sport.fav_type == "skip":
+            continue
+        leagues = ob["selected_leagues"].get(sk, [])
+        if leagues:
+            for lk in leagues:
+                queue.append((sk, lk))
+        else:
+            # Sports without league selection (shouldn't happen, but just in case)
+            queue.append((sk, None))
+
+    ob["_fav_league_queue"] = queue
+    ob["_fav_idx"] = 0
+    await _show_next_team_prompt(query, ob)
+
+
+async def _show_next_team_prompt(query, ob: dict) -> None:
+    """Show the text-input prompt for the next league in the queue."""
+    queue = ob.get("_fav_league_queue", [])
     idx = ob.get("_fav_idx", 0)
-    sports = ob["selected_sports"]
 
-    while idx < len(sports):
-        sport_key = sports[idx]
-        sport = config.ALL_SPORTS.get(sport_key)
-        if not sport:
-            idx += 1
-            ob["_fav_idx"] = idx
-            continue
-
-        # Skip sports with fav_type == "skip" (horse racing)
-        if sport.fav_type == "skip":
-            idx += 1
-            ob["_fav_idx"] = idx
-            continue
-
-        # Check if there are any teams/players to show
-        teams = _get_all_teams_for_sport(sport_key)
-        if not teams:
-            idx += 1
-            ob["_fav_idx"] = idx
-            continue
-
-        # Show favourites selection
-        text = _fav_step_text(sport)
-        existing = ob["favourites"].get(sport_key, [])
+    if idx >= len(queue):
+        # All leagues done — move to risk
+        ob["step"] = "risk"
+        ob["_team_input_sport"] = None
+        ob["_team_input_league"] = None
+        text = "<b>Step 5/7: Risk profile</b>\n\nHow aggressive should your tips be?"
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_favourites(sport_key, existing),
+            reply_markup=kb_onboarding_risk(),
         )
         return
 
-    # All favourites done — move to risk
-    ob["step"] = "risk"
-    text = "<b>Step 5/7: Risk profile</b>\n\nHow aggressive should your tips be?"
+    sport_key, league_key = queue[idx]
+    sport = config.ALL_SPORTS.get(sport_key)
+    emoji = sport.emoji if sport else "🏅"
+    entity = config.fav_label(sport) if sport else "favourite"
+
+    # Set state for text input
+    ob["step"] = "favourites"
+    ob["_team_input_sport"] = sport_key
+    ob["_team_input_league"] = league_key
+
+    if league_key:
+        lg = config.ALL_LEAGUES.get(league_key)
+        league_label = lg.label if lg else league_key
+        text = (
+            f"<b>Step 4/7: {emoji} {league_label} — who do you follow?</b>\n\n"
+            f"Type your {entity}s separated by commas.\n"
+            f"Max 5 per league. Examples:\n\n"
+            f"  <i>Arsenal, Chelsea, Man United</i>\n"
+            f"  <i>Chiefs, Pirates, Sundowns</i>\n\n"
+            f"Or type <b>skip</b> to move on."
+        )
+    else:
+        sport_label = sport.label if sport else sport_key
+        text = (
+            f"<b>Step 4/7: {emoji} {sport_label} — who do you follow?</b>\n\n"
+            f"Type your {entity}s separated by commas.\n"
+            f"Max 5. Or type <b>skip</b> to move on."
+        )
+
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_risk(),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⏭ Skip", callback_data=f"ob_fav_done:{sport_key}")],
+        ]),
     )
 
 
@@ -856,7 +1006,7 @@ def _fav_step_text(sport: config.SportDef) -> str:
     label = config.fav_label(sport)
     return (
         f"<b>Step 4/7: Select your {label}s for {sport.emoji} {sport.label}</b>\n\n"
-        f"Tap to toggle, or type manually."
+        f"Type names separated by commas, or tap Skip."
     )
 
 
@@ -947,11 +1097,13 @@ async def handle_ob_fav_manual(query, sport_key: str) -> None:
 
 
 async def handle_ob_fav_done(query, sport_key: str) -> None:
-    """Done with favourites for this sport, advance to next."""
+    """Done with favourites for this sport/league, advance to next."""
     user_id = query.from_user.id
     ob = _get_ob(user_id)
     ob["_fav_manual"] = False
     ob["_fav_manual_sport"] = None
+    ob["_team_input_sport"] = None
+    ob["_team_input_league"] = None
 
     # Check if editing a single sport
     editing = ob.get("_editing")
@@ -962,7 +1114,7 @@ async def handle_ob_fav_done(query, sport_key: str) -> None:
         return
 
     ob["_fav_idx"] = ob.get("_fav_idx", 0) + 1
-    await _show_fav_step(query, ob)
+    await _show_next_team_prompt(query, ob)
 
 
 async def handle_ob_fav_suggest(query, action: str) -> None:
@@ -1032,42 +1184,71 @@ async def handle_ob_notify(query, hour_str: str) -> None:
 
 
 async def _show_summary(query, ob: dict) -> None:
-    """Show onboarding summary with edit buttons."""
+    """Show onboarding summary with edit buttons — clean formatting, no heart emojis."""
     sports_lines = []
     for sk in ob["selected_sports"]:
         sport = config.ALL_SPORTS.get(sk)
-        label = f"{sport.emoji} {sport.label}" if sport else sk
+        emoji = sport.emoji if sport else "🏅"
+        sport_label = sport.label if sport else sk
         leagues = ob["selected_leagues"].get(sk, [])
-        favs = ob["favourites"].get(sk, [])
+        favs_dict = ob["favourites"].get(sk, {})
 
-        league_labels = []
+        # Flatten favourites: league_key → [names]
+        if isinstance(favs_dict, list):
+            # Legacy format: flat list
+            all_teams = favs_dict
+            league_teams: dict[str, list[str]] = {"": all_teams}
+        else:
+            league_teams = favs_dict
+
+        league_labels_map: dict[str, str] = {}
         if sport:
             for lg in sport.leagues:
-                if lg.key in leagues:
-                    league_labels.append(lg.label)
+                league_labels_map[lg.key] = lg.label
 
-        line = f"  • {label}"
-        if league_labels:
-            line += f" ({', '.join(league_labels)})"
-        if favs:
-            line += f"\n    ❤️ {', '.join(favs)}"
-        sports_lines.append(line)
+        sports_lines.append(f"{emoji} <b>{sport_label}</b>")
+
+        if len(leagues) <= 1 or not any(league_teams.values()):
+            # Single league or no teams — compact format
+            all_t: list[str] = []
+            for teams in league_teams.values():
+                all_t.extend(teams)
+            if all_t:
+                sports_lines.append(f"  {', '.join(all_t)}")
+            elif leagues:
+                league_names = [league_labels_map.get(lk, lk) for lk in leagues]
+                sports_lines.append(f"  {', '.join(league_names)}")
+        else:
+            # Multiple leagues — show per-league
+            for lk in leagues:
+                lg_label = league_labels_map.get(lk, lk)
+                teams = league_teams.get(lk, [])
+                if teams:
+                    sports_lines.append(f"  {lg_label}: {', '.join(teams)}")
+                else:
+                    sports_lines.append(f"  {lg_label}")
+        sports_lines.append("")  # blank line between sports
 
     risk_label = config.RISK_PROFILES.get(ob["risk"], {}).get("label", ob["risk"] or "Not set")
     hour = ob.get("notify_hour")
-    notify_str = f"{hour}:00" if hour is not None else "Not set"
+    notify_map = {7: "Morning (7 AM)", 12: "Midday (12 PM)", 18: "Evening (6 PM)", 21: "Night (9 PM)"}
+    notify_str = notify_map.get(hour, f"{hour}:00") if hour is not None else "Not set"
 
-    text = textwrap.dedent(f"""\
-        <b>Step 7/7: Your profile summary</b>
+    exp_labels = {
+        "experienced": "I bet regularly",
+        "casual": "I bet sometimes",
+        "newbie": "I'm new to betting",
+    }
+    exp = ob.get("experience") or "casual"
 
-        <b>Sports:</b>
-    """) + "\n".join(sports_lines) + textwrap.dedent(f"""
-
-        <b>Risk:</b> {risk_label}
-        <b>Daily picks:</b> {notify_str}
-
-        All good? Tap <b>Let's go!</b> to start.
-    """)
+    text = (
+        "<b>Step 7/7: Your profile summary</b>\n\n"
+        f"🎯 Experience: {exp_labels.get(exp, exp)}\n\n"
+        + "\n".join(sports_lines)
+        + f"⚖️ Risk: {risk_label}\n"
+        f"🔔 Daily picks: {notify_str}\n\n"
+        "All good? Tap <b>Let's go!</b> to start."
+    )
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🚀 Let's go!", callback_data="ob_done:finish")],
@@ -1075,6 +1256,81 @@ async def _show_summary(query, ob: dict) -> None:
         [InlineKeyboardButton("⚙️ Edit Risk & Notifications", callback_data="ob_edit:risk")],
     ])
     await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+# ── Profile summary helper ────────────────────────────────
+
+async def format_profile_summary(user_id: int) -> str:
+    """Build a clean, well-spaced profile summary string.
+
+    Used in: /settings home, My Teams view, after edits.
+    """
+    from collections import defaultdict
+
+    user = await db.get_user(user_id)
+    prefs = await db.get_user_sport_prefs(user_id)
+
+    lines = ["📋 <b>Your MzansiEdge Profile</b>\n"]
+
+    # Experience
+    exp_labels = {
+        "experienced": "I bet regularly",
+        "casual": "I bet sometimes",
+        "newbie": "I'm new to betting",
+    }
+    exp = (user.experience_level if user else None) or "casual"
+    lines.append(f"🎯 Experience: {exp_labels.get(exp, exp)}\n")
+
+    # Group prefs by sport → league → teams
+    sport_leagues: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    sport_order: list[str] = []
+    for pref in prefs:
+        sk = pref.sport_key
+        if sk not in sport_order:
+            sport_order.append(sk)
+        lg_label = ""
+        if pref.league:
+            lg = config.ALL_LEAGUES.get(pref.league)
+            lg_label = lg.label if lg else pref.league
+        if pref.team_name:
+            sport_leagues[sk][lg_label].append(pref.team_name)
+        elif lg_label:
+            sport_leagues[sk].setdefault(lg_label, [])
+
+    for sk in sport_order:
+        sport = config.ALL_SPORTS.get(sk)
+        emoji = sport.emoji if sport else "🏅"
+        sport_label = sport.label if sport else sk
+        league_dict = sport_leagues.get(sk, {})
+
+        lines.append(f"{emoji} <b>{sport_label}</b>")
+        if len(league_dict) <= 1:
+            all_t: list[str] = []
+            for teams in league_dict.values():
+                all_t.extend(teams)
+            if all_t:
+                lines.append(f"  {', '.join(all_t)}")
+        else:
+            for lg_name, teams in league_dict.items():
+                if lg_name and teams:
+                    lines.append(f"  {lg_name}: {', '.join(teams)}")
+                elif lg_name:
+                    lines.append(f"  {lg_name}")
+                elif teams:
+                    lines.append(f"  {', '.join(teams)}")
+        lines.append("")  # blank line between sports
+
+    # Settings section
+    risk = (user.risk_profile if user else None) or "moderate"
+    risk_labels = config.RISK_PROFILES.get(risk, {}).get("label", risk)
+    hour = user.notification_hour if user else None
+    notify_map = {7: "Morning (7 AM)", 12: "Midday (12 PM)", 18: "Evening (6 PM)", 21: "Night (9 PM)"}
+    notify_str = notify_map.get(hour, f"{hour}:00") if hour is not None else "Not set"
+
+    lines.append(f"⚖️ Risk: {risk_labels}")
+    lines.append(f"🔔 Updates: {notify_str}")
+
+    return "\n".join(lines)
 
 
 # ── Summary edit handlers ─────────────────────────────────
@@ -1099,7 +1355,7 @@ async def handle_ob_edit(query, action: str) -> None:
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
 
     elif action.startswith("sport:"):
-        # Re-edit a specific sport's leagues
+        # Re-edit a specific sport's leagues & teams
         sport_key = action.split(":", 1)[1]
         ob["_editing"] = f"sport:{sport_key}"
         sport = config.ALL_SPORTS.get(sport_key)
@@ -1108,14 +1364,27 @@ async def handle_ob_edit(query, action: str) -> None:
             await _show_summary(query, ob)
             return
 
-        # If single league, skip to favourites
+        # If single league, skip to team text input
         if len(sport.leagues) == 1:
             ob["selected_leagues"][sport_key] = [sport.leagues[0].key]
             if sport.fav_type != "skip":
-                text = _fav_step_text(sport)
+                lk = sport.leagues[0].key
+                ob["_team_input_sport"] = sport_key
+                ob["_team_input_league"] = lk
+                ob["step"] = "favourites"
+                entity = config.fav_label(sport)
+                lg = config.ALL_LEAGUES.get(lk)
+                league_label = lg.label if lg else lk
+                text = (
+                    f"<b>{sport.emoji} {league_label} — who do you follow?</b>\n\n"
+                    f"Type your {entity}s separated by commas.\n"
+                    f"Max 5. Or type <b>skip</b> to move on."
+                )
                 await query.edit_message_text(
                     text, parse_mode=ParseMode.HTML,
-                    reply_markup=kb_onboarding_favourites(sport_key, ob["favourites"].get(sport_key, [])),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏭ Skip", callback_data=f"ob_fav_done:{sport_key}")],
+                    ]),
                 )
             else:
                 ob["_editing"] = None
@@ -1186,13 +1455,30 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await db.clear_user_sport_prefs(user_id)
     for sk in ob["selected_sports"]:
         leagues = ob["selected_leagues"].get(sk, [])
-        favs = ob["favourites"].get(sk, [])
-        fav_str = ", ".join(favs) if favs else None
+        favs_dict = ob["favourites"].get(sk, {})
+
+        # Handle both old (list) and new (dict) favourites formats
+        if isinstance(favs_dict, list):
+            favs_dict = {"": favs_dict}
+
         if leagues:
             for lg_key in leagues:
-                await db.save_sport_pref(user_id, sk, league=lg_key, team_name=fav_str)
+                teams = favs_dict.get(lg_key, [])
+                if teams:
+                    for team in teams:
+                        await db.save_sport_pref(user_id, sk, league=lg_key, team_name=team)
+                else:
+                    await db.save_sport_pref(user_id, sk, league=lg_key)
         else:
-            await db.save_sport_pref(user_id, sk, team_name=fav_str)
+            # Collect all teams from any key
+            all_teams: list[str] = []
+            for teams in favs_dict.values():
+                all_teams.extend(teams)
+            if all_teams:
+                for team in all_teams:
+                    await db.save_sport_pref(user_id, sk, team_name=team)
+            else:
+                await db.save_sport_pref(user_id, sk)
 
     if ob["risk"]:
         await db.update_user_risk(user_id, ob["risk"])
@@ -1214,104 +1500,238 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     _onboarding_state.pop(user_id, None)
 
     user = query.from_user
+    name = user.first_name or "champ"
 
-    if experience == "experienced":
-        text = textwrap.dedent(f"""\
-            <b>🇿🇦 You're all set, {user.first_name}!</b>
+    # Big welcome message with story quiz CTA
+    text = (
+        f"🎉 <b>Welcome to MzansiEdge, {name}!</b>\n\n"
+        "You're in. Your edge is live.\n\n"
+        "Here's what I can do for you:\n\n"
+        "📊 <b>AI-Powered Picks</b> — I scan odds across bookmakers, "
+        "find value bets, and tell you exactly where the edge is.\n\n"
+        "📅 <b>Schedule & Tips</b> — See when your teams play and get "
+        "instant AI analysis for any upcoming game.\n\n"
+        "📖 <b>Your Betting Story</b> — MzansiEdge isn't just tips — "
+        "it's a journey. Track your wins, learn as you go, and build "
+        "your bankroll over time.\n\n"
+        "🔔 <b>But first — let's set up your story.</b>\n"
+        "Choose what updates you want to receive so I know "
+        "exactly how to keep you in the game."
+    )
+    await query.edit_message_text(
+        text, parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📖 Set Up My Story", callback_data="story:start")],
+            [InlineKeyboardButton("⏭️ Skip for Now", callback_data="nav:main")],
+        ]),
+    )
 
-            Let's find today's value bets right away.
-        """)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
-        await _do_picks_flow(
-            chat_id=query.message.chat_id,
-            bot=ctx.bot,
-            user_id=user_id,
+
+# ── Team text input handler ──────────────────────────────
+
+async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
+    """Process typed team names with comma separation during onboarding."""
+    from scripts.sports_data import fuzzy_match_team as sd_fuzzy, ALIASES as SD_ALIASES
+
+    sport_key = ob["_team_input_sport"]
+    league_key = ob["_team_input_league"]
+    raw = update.message.text.strip()
+
+    # Handle skip
+    if raw.lower() in ("skip", "none", "n/a"):
+        ob["_team_input_sport"] = None
+        ob["_team_input_league"] = None
+        ob["_fav_idx"] = ob.get("_fav_idx", 0) + 1
+        # Need to send a new message since we can't edit user's text message
+        queue = ob.get("_fav_league_queue", [])
+        idx = ob["_fav_idx"]
+        if idx >= len(queue):
+            ob["step"] = "risk"
+            await update.message.reply_text(
+                "<b>Step 5/7: Risk profile</b>\n\nHow aggressive should your tips be?",
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb_onboarding_risk(),
+            )
+        else:
+            _sk, _lk = queue[idx]
+            ob["_team_input_sport"] = _sk
+            ob["_team_input_league"] = _lk
+            sport = config.ALL_SPORTS.get(_sk)
+            emoji = sport.emoji if sport else "🏅"
+            entity = config.fav_label(sport) if sport else "favourite"
+            if _lk:
+                lg = config.ALL_LEAGUES.get(_lk)
+                league_label = lg.label if lg else _lk
+                text = (
+                    f"<b>Step 4/7: {emoji} {league_label} — who do you follow?</b>\n\n"
+                    f"Type your {entity}s separated by commas.\n"
+                    f"Max 5. Or type <b>skip</b> to move on."
+                )
+            else:
+                sport_label = sport.label if sport else _sk
+                text = (
+                    f"<b>Step 4/7: {emoji} {sport_label} — who do you follow?</b>\n\n"
+                    f"Type your {entity}s separated by commas.\n"
+                    f"Max 5. Or type <b>skip</b> to move on."
+                )
+            await update.message.reply_text(
+                text, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⏭ Skip", callback_data=f"ob_fav_done:{_sk}")],
+                ]),
+            )
+        return
+
+    # Split by comma, clean each entry
+    raw_names = [name.strip() for name in raw.split(",") if name.strip()]
+    if not raw_names:
+        await update.message.reply_text(
+            "Didn't catch that. Type team names separated by commas, or <b>skip</b>.",
+            parse_mode=ParseMode.HTML,
         )
-    elif experience == "newbie":
-        text = textwrap.dedent(f"""\
-            <b>🇿🇦 Welcome aboard, {user.first_name}!</b>
+        return
 
-            <b>🎓 Quick Lesson: How Odds Work</b>
+    # Enforce max 5 per league
+    if len(raw_names) > 5:
+        await update.message.reply_text(
+            "⚠️ Max 5 per league! I'll use your first 5.",
+            parse_mode=ParseMode.HTML,
+        )
+        raw_names = raw_names[:5]
 
-            Decimal odds show your total payout per R1 bet.
-            • Odds of <b>2.00</b> = bet R10, get R20 back (R10 profit)
-            • Odds of <b>3.50</b> = bet R10, get R35 back (R25 profit)
+    # Build known names list: TOP_TEAMS for this league + curated lists
+    known_names: list[str] = []
+    if league_key:
+        known_names = list(config.TOP_TEAMS.get(league_key, []))
+    if not known_names:
+        known_names = _get_all_teams_for_sport(sport_key)
 
-            <b>Higher odds = less likely but bigger payout.</b>
+    # Also include alias targets in the known names
+    alias_names = set(SD_ALIASES.values())
 
-            MzansiEdge finds bets where the odds are <i>better than they should be</i> — that's called <b>value</b>.
+    matched: list[str] = []
+    unmatched: list[str] = []
 
-            Tap <b>📊 Daily Briefing</b> when you're ready!
-        """)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
-    else:
-        text = textwrap.dedent(f"""\
-            <b>🇿🇦 You're all set, {user.first_name}!</b>
+    for name in raw_names:
+        name_lower = name.lower().strip()
+        # 1. Check alias first
+        if name_lower in SD_ALIASES:
+            matched.append(SD_ALIASES[name_lower])
+            continue
+        if name_lower in config.TEAM_ALIASES:
+            matched.append(config.TEAM_ALIASES[name_lower])
+            continue
 
-            Pick a sport below or tap <b>📊 Daily Briefing</b> for today's picks.
-        """)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
+        # 2. Fuzzy match against known names
+        if known_names:
+            results = sd_fuzzy(name, known_names)
+            if results and results[0]["confidence"] >= 70:
+                matched.append(results[0]["name"])
+                continue
+
+        # 3. Try fuzzy against all alias targets
+        all_names = list(alias_names | set(known_names))
+        if all_names:
+            results = sd_fuzzy(name, all_names)
+            if results and results[0]["confidence"] >= 70:
+                matched.append(results[0]["name"])
+                continue
+
+        unmatched.append(name)
+
+    # Build confirmation message
+    lines: list[str] = []
+    if matched:
+        lines.append("<b>Matched:</b>")
+        for m in matched:
+            lines.append(f"  ✅ {m}")
+    if unmatched:
+        lines.append("")
+        lines.append("<b>Couldn't match:</b>")
+        for u in unmatched:
+            lines.append(f"  ❌ {u}")
+        lines.append("")
+        lines.append("<i>These will be skipped. You can add them later in /settings.</i>")
+
+    if not matched:
+        await update.message.reply_text(
+            "Couldn't match any of those names. Try again?\n\n"
+            "<i>Tip: Use full names like \"Manchester United\" or common "
+            "nicknames like \"Chiefs\", \"Barca\", \"Spurs\".</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Save matched teams to favourites
+    if sport_key not in ob["favourites"]:
+        ob["favourites"][sport_key] = {}
+    fav_key = league_key or "_general"
+    ob["favourites"][sport_key][fav_key] = matched
+
+    # Show confirmation with buttons
+    msg = "\n".join(lines)
+    await update.message.reply_text(
+        f"{msg}\n\n"
+        f"<b>{len(matched)} {'team' if len(matched) == 1 else 'teams'} added.</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Continue", callback_data=f"ob_fav_done:{sport_key}")],
+            [InlineKeyboardButton("🔄 Try Again", callback_data=f"ob_fav_retry:{sport_key}")],
+        ]),
+    )
 
 
 # ── Free-text handler ────────────────────────────────────
 
 async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle free text — favourite input during onboarding OR AI chat."""
+    """Handle free text — team input during onboarding OR AI chat."""
     user = update.effective_user
     ob = _onboarding_state.get(user.id)
 
-    # If in manual favourite input mode
+    # Text-based team input (comma-separated)
+    if ob and ob.get("_team_input_sport"):
+        await _handle_team_text_input(update, ctx, ob)
+        return
+
+    # Legacy manual favourite input mode (single name)
     if ob and ob.get("_fav_manual") and ob.get("_fav_manual_sport"):
         sport_key = ob["_fav_manual_sport"]
         text_input = update.message.text.strip()
-
         match, suggestions = fuzzy_match_team(text_input, sport_key)
 
         if match:
-            # Good match — add it
             if sport_key not in ob["favourites"]:
-                ob["favourites"][sport_key] = []
-            if match not in ob["favourites"][sport_key]:
-                ob["favourites"][sport_key].append(match)
-
+                ob["favourites"][sport_key] = {}
+            ob["favourites"].setdefault(sport_key, {}).setdefault("_manual", [])
+            if match not in ob["favourites"][sport_key].get("_manual", []):
+                ob["favourites"][sport_key].setdefault("_manual", []).append(match)
             ob["_fav_manual"] = False
             ob["_fav_manual_sport"] = None
-
-            sport = config.ALL_SPORTS.get(sport_key)
-            fav_text = _fav_step_text(sport) if sport else "<b>Step 4/7</b>"
             await update.message.reply_text(
-                f"✅ Added <b>{match}</b>!\n\n{fav_text}",
+                f"✅ Added <b>{match}</b>!",
                 parse_mode=ParseMode.HTML,
-                reply_markup=kb_onboarding_favourites(sport_key, ob["favourites"][sport_key]),
             )
         elif suggestions:
-            # Ambiguous — show "Did you mean?" buttons
             ob["_suggestions"] = suggestions
             rows = []
             for i, s in enumerate(suggestions):
                 rows.append([InlineKeyboardButton(s, callback_data=f"ob_fav_suggest:{sport_key}:{i}")])
             rows.append([InlineKeyboardButton("❌ None of these", callback_data=f"ob_fav_manual:{sport_key}")])
-
             await update.message.reply_text(
-                f"🤔 Did you mean one of these?",
+                "🤔 Did you mean one of these?",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(rows),
             )
         else:
-            # No match at all — add as-is
             if sport_key not in ob["favourites"]:
-                ob["favourites"][sport_key] = []
-            ob["favourites"][sport_key].append(text_input)
-
+                ob["favourites"][sport_key] = {}
+            ob["favourites"].setdefault(sport_key, {}).setdefault("_manual", [])
+            ob["favourites"][sport_key]["_manual"].append(text_input)
             ob["_fav_manual"] = False
             ob["_fav_manual_sport"] = None
-
-            sport = config.ALL_SPORTS.get(sport_key)
-            fav_text = _fav_step_text(sport) if sport else "<b>Step 4/7</b>"
             await update.message.reply_text(
-                f"✅ Added <b>{text_input}</b>!\n\n{fav_text}",
+                f"✅ Added <b>{text_input}</b>!",
                 parse_mode=ParseMode.HTML,
-                reply_markup=kb_onboarding_favourites(sport_key, ob["favourites"][sport_key]),
             )
         return
 
@@ -1484,6 +1904,243 @@ async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
     )
 
 
+# ── /schedule — Upcoming games ───────────────────────────
+
+async def cmd_schedule(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show upcoming games for user's followed teams."""
+    user_id = update.effective_user.id
+    db_user = await db.get_user(user_id)
+
+    if not db_user or not db_user.onboarding_done:
+        await update.message.reply_text(
+            "🏟️ Complete your profile first!\n\nUse /start to get set up.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    text, markup = await _build_schedule(user_id)
+
+    await update.message.reply_text(
+        text, parse_mode=ParseMode.HTML, reply_markup=markup,
+    )
+
+
+async def _build_schedule(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Shared schedule logic for command + callback. Returns (text, markup)."""
+    from datetime import datetime as dt_cls
+    from scripts.sports_data import fetch_events_for_league
+
+    prefs = await db.get_user_sport_prefs(user_id)
+    user_teams: set[str] = set()
+    league_keys: set[str] = set()
+    for pref in prefs:
+        if pref.team_name:
+            user_teams.add(pref.team_name.lower())
+        if pref.league:
+            league_keys.add(pref.league)
+
+    if not league_keys:
+        text = (
+            "🏟️ <b>No leagues selected!</b>\n\n"
+            "Update your sports in /settings."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Edit Sports", callback_data="settings:sports")],
+            [InlineKeyboardButton("🔙 Menu", callback_data="nav:main")],
+        ])
+        return text, markup
+
+    all_events: list[dict] = []
+    for lk in league_keys:
+        events = await fetch_events_for_league(lk)
+        for event in events:
+            home = event.get("home_team", "")
+            away = event.get("away_team", "")
+            is_relevant = (
+                home.lower() in user_teams
+                or away.lower() in user_teams
+                or not user_teams
+            )
+            if is_relevant:
+                all_events.append({**event, "league_key": lk})
+
+    if not all_events:
+        text = (
+            "📅 <b>No upcoming games found</b>\n\n"
+            "None of your followed teams have scheduled games right now. "
+            "Check back later or add more teams in /settings."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
+            [InlineKeyboardButton("🔙 Menu", callback_data="nav:main")],
+        ])
+        return text, markup
+
+    all_events.sort(key=lambda e: e.get("commence_time", ""))
+    upcoming = all_events[:10]
+
+    lines = [f"📅 <b>Upcoming Games ({len(upcoming)})</b>\n"]
+    current_date = None
+
+    for event in upcoming:
+        try:
+            ct = dt_cls.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+            event_date = ct.strftime("%A, %d %b")
+            event_time = ct.strftime("%H:%M")
+        except Exception:
+            event_date = "TBC"
+            event_time = ""
+
+        if event_date != current_date:
+            current_date = event_date
+            lines.append(f"\n<b>{event_date}</b>")
+
+        home = event.get("home_team", "?")
+        away = event.get("away_team", "?")
+        home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
+        away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
+        lines.append(f"  ⏰ {event_time}  {home_display} vs {away_display}")
+
+    text = "\n".join(lines)
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    for i, event in enumerate(upcoming[:5]):
+        home = event.get("home_team", "?")
+        away = event.get("away_team", "?")
+        event_id = event.get("id", str(i))
+        buttons.append([InlineKeyboardButton(
+            f"🎯 Tips: {home[:12]} v {away[:12]}",
+            callback_data=f"schedule:tips:{event_id}",
+        )])
+    buttons.append([InlineKeyboardButton("🔙 Menu", callback_data="nav:main")])
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
+    """Generate AI betting tips for a specific game."""
+    from datetime import datetime as dt_cls
+    from scripts.sports_data import fetch_events_for_league
+    from scripts.odds_client import fetch_odds_cached, fair_probabilities, find_best_odds, calculate_ev
+
+    db_user = await db.get_user(user_id)
+    prefs = await db.get_user_sport_prefs(user_id)
+    league_keys = list({p.league for p in prefs if p.league})
+
+    target_event = None
+    target_league = None
+    for lk in league_keys:
+        events = await fetch_events_for_league(lk)
+        for event in events:
+            if event.get("id") == event_id:
+                target_event = event
+                target_league = lk
+                break
+        if target_event:
+            break
+
+    if not target_event:
+        await query.edit_message_text(
+            "⚠️ Couldn't find that game. It may have already started.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    home = target_event.get("home_team", "?")
+    away = target_event.get("away_team", "?")
+
+    # Fetch odds for this league
+    api_key = config.SPORTS_MAP.get(target_league, target_league)
+    odds_result = await fetch_odds_cached(api_key, regions="eu,uk,au", markets="h2h")
+
+    if not odds_result["ok"]:
+        await query.edit_message_text(
+            f"⚠️ Couldn't fetch odds for {home} vs {away}. Try again later.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    event_odds = None
+    for ev in (odds_result["data"] or []):
+        if ev.get("id") == event_id:
+            event_odds = ev
+            break
+
+    if not event_odds or not event_odds.get("bookmakers"):
+        await query.edit_message_text(
+            f"📊 <b>{home} vs {away}</b>\n\n"
+            "No odds available yet for this game. Check back closer to kickoff!",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Schedule", callback_data="nav:schedule")],
+            ]),
+        )
+        return
+
+    # Compute fair probabilities and find best odds per outcome
+    fair_probs = fair_probabilities(event_odds)
+    best_entries = find_best_odds(event_odds)
+
+    tips: list[dict] = []
+    for entry in best_entries:
+        prob = fair_probs.get(entry.outcome, 0)
+        if prob <= 0:
+            continue
+        ev_pct = calculate_ev(entry.price, prob)
+        implied = round(prob * 100)
+        sa_flag = " 🇿🇦" if entry.is_sa_book else ""
+        tips.append({
+            "outcome": entry.outcome,
+            "odds": entry.price,
+            "bookie": entry.bookmaker,
+            "sa_flag": sa_flag,
+            "ev": round(ev_pct, 1),
+            "prob": implied,
+        })
+
+    tips.sort(key=lambda t: t["ev"], reverse=True)
+
+    try:
+        ct = dt_cls.fromisoformat(target_event["commence_time"].replace("Z", "+00:00"))
+        kickoff = ct.strftime("%a %d %b, %H:%M")
+    except Exception:
+        kickoff = "TBC"
+
+    lines = [
+        f"🎯 <b>AI Tips: {home} vs {away}</b>",
+        f"⏰ {kickoff}\n",
+    ]
+
+    if not tips:
+        lines.append("No odds data available for analysis yet.")
+    else:
+        best_tip = tips[0]
+        if best_tip["ev"] > 0:
+            lines.append(f"💰 <b>Best Value:</b> {best_tip['outcome']} @ {best_tip['odds']:.2f}")
+            lines.append(f"   EV: <b>+{best_tip['ev']}%</b> edge | {best_tip['prob']}% chance")
+            lines.append(f"   Best at: {best_tip['bookie']}{best_tip['sa_flag']}\n")
+        else:
+            lines.append("⚖️ No clear value edge found for this game.\n")
+
+        lines.append("<b>All Outcomes:</b>")
+        for tip in tips:
+            ev_ind = f"+{tip['ev']}%" if tip["ev"] > 0 else f"{tip['ev']}%"
+            value_marker = " 💰" if tip["ev"] > 2 else ""
+            lines.append(
+                f"  {tip['outcome']}: {tip['odds']:.2f} "
+                f"({tip['prob']}% | EV: {ev_ind}){value_marker}"
+            )
+
+    msg = "\n".join(lines)
+    await query.edit_message_text(
+        msg, parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 Full Picks Scan", callback_data="picks:today")],
+            [InlineKeyboardButton("🔙 Back to Schedule", callback_data="nav:schedule")],
+        ]),
+    )
+
+
 def _chunk_message(text: str, max_len: int = 4000) -> list[str]:
     """Split a long message into chunks at line boundaries."""
     lines = text.split("\n")
@@ -1504,6 +2161,105 @@ def _chunk_message(text: str, max_len: int = 4000) -> list[str]:
     if current:
         chunks.append("\n".join(current))
     return chunks
+
+
+# ── Story / notification quiz ─────────────────────────────
+
+async def _show_story_step(query, chat_id: int) -> None:
+    """Display the current story quiz question."""
+    state = _story_state.get(chat_id)
+    if not state:
+        return
+
+    step = state["step"]
+    prompt = STORY_PROMPTS.get(step)
+    if not prompt:
+        return
+
+    text = f"{prompt['title']}\n\n{prompt['body']}"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(prompt["yes"], callback_data=f"story:pref:{step}:yes")],
+        [InlineKeyboardButton(prompt["no"], callback_data=f"story:pref:{step}:no")],
+    ])
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def _advance_story_quiz(query, chat_id: int, user_id: int) -> None:
+    """Move to the next story quiz step."""
+    state = _story_state.get(chat_id)
+    if not state:
+        return
+
+    db_user = await db.get_user(user_id)
+    experience = (db_user.experience_level if db_user else None) or "casual"
+
+    current_step = state["step"]
+    current_idx = STORY_STEPS.index(current_step) if current_step in STORY_STEPS else -1
+
+    next_idx = current_idx + 1
+    while next_idx < len(STORY_STEPS):
+        next_step = STORY_STEPS[next_idx]
+        if next_step == "edu_tips" and experience == "experienced":
+            next_idx += 1
+            continue
+        if next_step == "market_movers" and experience == "newbie":
+            next_idx += 1
+            continue
+        break
+
+    if next_idx >= len(STORY_STEPS):
+        await _save_story_prefs(query, chat_id, user_id)
+        return
+
+    state["step"] = STORY_STEPS[next_idx]
+    await _show_story_step(query, chat_id)
+
+
+async def _save_story_prefs(query, chat_id: int, user_id: int) -> None:
+    """Save story preferences and show confirmation."""
+    state = _story_state.get(chat_id, {})
+    prefs = state.get("prefs", {})
+
+    # Fill in defaults for skipped steps
+    defaults = {
+        "daily_picks": True, "game_day_alerts": True,
+        "weekly_recap": True, "edu_tips": True,
+        "market_movers": False, "bankroll_updates": True,
+    }
+    full_prefs = {**defaults, **prefs}
+
+    await db.update_notification_prefs(user_id, full_prefs)
+    _story_state.pop(chat_id, None)
+
+    # Build summary
+    labels = {
+        "daily_picks": "Daily AI picks",
+        "game_day_alerts": "Game day alerts",
+        "weekly_recap": "Weekly recaps",
+        "edu_tips": "Education tips",
+        "market_movers": "Market movers",
+        "bankroll_updates": "Bankroll updates",
+    }
+    pref_lines = []
+    for key, label in labels.items():
+        icon = "✅" if full_prefs.get(key, False) else "❌"
+        pref_lines.append(f"  {icon} {label}")
+
+    text = (
+        "📖 <b>Your Story is Set!</b>\n\n"
+        "Here's what you'll receive:\n\n"
+        + "\n".join(pref_lines)
+        + "\n\nYou can change these anytime in /settings.\n\n"
+        "Ready to start? 🚀"
+    )
+    await query.edit_message_text(
+        text, parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎯 Show Me Today's Picks", callback_data="picks:today")],
+            [InlineKeyboardButton("📅 Check the Schedule", callback_data="nav:schedule")],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")],
+        ]),
+    )
 
 
 # ── Sub-menu handlers ────────────────────────────────────
@@ -1548,17 +2304,34 @@ async def handle_teams(query, action: str) -> None:
                 "Use /start to redo onboarding and pick your teams."
             )
         else:
-            lines = ["<b>🏟️ My Teams</b>\n"]
-            seen: set[str] = set()
+            # Group by sport → league → teams (clean format, no heart emojis)
+            from collections import defaultdict
+            sport_league_teams: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
             for p in teams_with_names:
-                key = f"{p.sport_key}:{p.team_name}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                sport = config.ALL_SPORTS.get(p.sport_key)
+                lg_label = ""
+                if p.league:
+                    lg = config.ALL_LEAGUES.get(p.league)
+                    lg_label = lg.label if lg else p.league
+                sport_league_teams[p.sport_key][lg_label].append(p.team_name)
+
+            lines = ["<b>🏟️ My Teams</b>\n"]
+            for sk, league_dict in sport_league_teams.items():
+                sport = config.ALL_SPORTS.get(sk)
                 emoji = sport.emoji if sport else "🏅"
-                label = sport.label if sport else p.sport_key
-                lines.append(f"  {emoji} <b>{label}</b>: ❤️ {p.team_name}")
+                label = sport.label if sport else sk
+                lines.append(f"{emoji} <b>{label}</b>")
+                if len(league_dict) <= 1:
+                    all_t: list[str] = []
+                    for teams in league_dict.values():
+                        all_t.extend(teams)
+                    lines.append(f"  {', '.join(all_t)}")
+                else:
+                    for lg_name, teams in league_dict.items():
+                        if lg_name and teams:
+                            lines.append(f"  {lg_name}: {', '.join(teams)}")
+                        elif teams:
+                            lines.append(f"  {', '.join(teams)}")
+                lines.append("")
             text = "\n".join(lines)
     else:
         text = "<b>🏟️ My Teams</b>"
@@ -1628,20 +2401,7 @@ async def handle_settings(query, action: str) -> None:
     user = await db.get_user(user_id)
 
     if action == "home":
-        risk_label = config.RISK_PROFILES.get(
-            user.risk_profile if user else "moderate", {}
-        ).get("label", "Not set")
-        hour = user.notification_hour if user else None
-        notify_str = f"{hour}:00" if hour is not None else "Not set"
-        exp = (user.experience_level if user else None) or "Not set"
-
-        text = textwrap.dedent(f"""\
-            <b>⚙️ Settings</b>
-
-            🎯 Risk profile: <b>{risk_label}</b>
-            ⏰ Daily picks: <b>{notify_str}</b>
-            🎓 Experience: <b>{exp.title()}</b>
-        """)
+        text = await format_profile_summary(user_id)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
     elif action == "risk":
         text = "<b>🎯 Change Risk Profile</b>\n\nSelect your risk tolerance:"
@@ -1689,6 +2449,55 @@ async def handle_settings(query, action: str) -> None:
             [InlineKeyboardButton("🚀 Start onboarding", callback_data="ob_restart:go")],
         ])
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    elif action == "story":
+        # Notification preferences toggle view
+        notify_prefs = db.get_notification_prefs(user)
+        lines_text = "📖 <b>Your Notifications</b>\n\nTap to toggle:\n"
+        buttons: list[list[InlineKeyboardButton]] = []
+        for key, label in [
+            ("daily_picks", "📊 Daily AI Picks"),
+            ("game_day_alerts", "🏟️ Game Day Alerts"),
+            ("weekly_recap", "📈 Weekly Recap"),
+            ("edu_tips", "🎓 Education Tips"),
+            ("market_movers", "📉 Market Movers"),
+            ("bankroll_updates", "💰 Bankroll Updates"),
+        ]:
+            status = "✅" if notify_prefs.get(key, False) else "❌"
+            buttons.append([InlineKeyboardButton(
+                f"{status} {label}",
+                callback_data=f"settings:toggle_notify:{key}",
+            )])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="settings:home")])
+        await query.edit_message_text(
+            lines_text, parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+    elif action.startswith("toggle_notify:"):
+        key = action.split(":", 1)[1]
+        notify_prefs = db.get_notification_prefs(user)
+        notify_prefs[key] = not notify_prefs.get(key, False)
+        await db.update_notification_prefs(user_id, notify_prefs)
+        # Re-show the notification settings
+        lines_text = "📖 <b>Your Notifications</b>\n\nTap to toggle:\n"
+        buttons_list: list[list[InlineKeyboardButton]] = []
+        for k, label in [
+            ("daily_picks", "📊 Daily AI Picks"),
+            ("game_day_alerts", "🏟️ Game Day Alerts"),
+            ("weekly_recap", "📈 Weekly Recap"),
+            ("edu_tips", "🎓 Education Tips"),
+            ("market_movers", "📉 Market Movers"),
+            ("bankroll_updates", "💰 Bankroll Updates"),
+        ]:
+            status = "✅" if notify_prefs.get(k, False) else "❌"
+            buttons_list.append([InlineKeyboardButton(
+                f"{status} {label}",
+                callback_data=f"settings:toggle_notify:{k}",
+            )])
+        buttons_list.append([InlineKeyboardButton("🔙 Back", callback_data="settings:home")])
+        await query.edit_message_text(
+            lines_text, parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons_list),
+        )
     else:
         await query.edit_message_text("<b>⚙️ Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings())
 
@@ -1787,6 +2596,7 @@ async def _post_init(app_instance) -> None:
         ("start", "Start the bot"),
         ("menu", "Main menu"),
         ("picks", "Today's picks"),
+        ("schedule", "Upcoming games"),
         ("help", "How to use MzansiEdge"),
         ("settings", "Your preferences"),
     ])
@@ -1806,6 +2616,7 @@ def main() -> None:
     app.add_handler(CommandHandler("odds", cmd_odds))
     app.add_handler(CommandHandler("tip", cmd_tip))
     app.add_handler(CommandHandler("picks", cmd_picks))
+    app.add_handler(CommandHandler("schedule", cmd_schedule))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("stats", cmd_stats))

@@ -465,6 +465,7 @@ async def suite_onboarding(client: TelegramClient):
         step += 1
         btn_data = get_button_data(msg)
         btn_texts = get_button_texts(msg)
+        text = msg_text(msg)
 
         if any("ob_risk:" in d for d in btn_data):
             break  # Reached risk profile
@@ -495,45 +496,45 @@ async def suite_onboarding(client: TelegramClient):
                 msg = await get_latest_bot_msg(client)
             continue
 
-        # Favourites selection
+        # Text-based team input (new UX: type comma-separated names)
         if any("ob_fav_done:" in d for d in btn_data):
             if not fav_tested:
                 t0 = time.time()
-                fav_btns = [d for d in btn_data
-                            if d.startswith("ob_fav:") and "manual" not in d
-                            and "done" not in d and "suggest" not in d and "back" not in d]
-                has_manual = any("ob_fav_manual:" in d for d in btn_data)
                 has_skip = any("ob_fav_done:" in d for d in btn_data)
+                is_text_input = "type" in text.lower() or "comma" in text.lower() or "favourite" in text.lower()
 
-                if fav_btns:
-                    record("fav_shows_team_buttons", "PASS",
-                           f"{len(fav_btns)} team/player buttons", time.time() - t0)
-                else:
-                    record("fav_shows_team_buttons", "WARN",
-                           "No team buttons (might be empty sport)", time.time() - t0)
-
-                if has_manual:
-                    record("fav_has_manual_input", "PASS",
-                           "Type manually button present", time.time() - t0)
-                else:
-                    record("fav_has_manual_input", "FAIL",
-                           f"No manual button. Data: {btn_data}", time.time() - t0)
+                record("fav_text_input_prompt", "PASS" if is_text_input else "WARN",
+                       f"Text input mode: {is_text_input}. Text: {text[:80]}",
+                       time.time() - t0)
 
                 record("fav_has_skip", "PASS" if has_skip else "FAIL",
                        f"Skip/Done: {has_skip}", time.time() - t0)
                 fav_tested = True
 
-            # Select first team if available, then skip/done
-            fav_btns = [d for d in btn_data
-                        if d.startswith("ob_fav:") and "manual" not in d
-                        and "done" not in d and "suggest" not in d and "back" not in d]
-            if fav_btns:
-                msg = await click_button_by_data(client, msg, fav_btns[0])
+            # Type a team name to test text input
+            msg_reply = await send_and_wait(client, "Arsenal")
+            if msg_reply:
+                reply_text = msg_text(msg_reply)
+                reply_data = get_button_data(msg_reply)
+                if "arsenal" in reply_text.lower():
+                    record("fav_text_input_works", "PASS",
+                           f"Arsenal matched. Text: {reply_text[:80]}")
+                    # Click Continue if available
+                    if any("ob_fav_done:" in d for d in reply_data):
+                        msg = await click_button_by_data(client, msg_reply, "ob_fav_done:")
+                        if not msg:
+                            msg = await get_latest_bot_msg(client)
+                    else:
+                        msg = msg_reply
+                else:
+                    # Just skip
+                    msg = await click_button_by_data(client, msg, "ob_fav_done:")
+                    if not msg:
+                        msg = await get_latest_bot_msg(client)
+            else:
+                msg = await click_button_by_data(client, msg, "ob_fav_done:")
                 if not msg:
                     msg = await get_latest_bot_msg(client)
-            msg = await click_button_by_data(client, msg, "ob_fav_done:")
-            if not msg:
-                msg = await get_latest_bot_msg(client)
             continue
 
         # Other navigation
@@ -641,18 +642,29 @@ async def suite_onboarding(client: TelegramClient):
 
         btn_data = get_button_data(msg)
         text = msg_text(msg)
+        btn_texts = get_button_texts(msg)
 
-        # After onboarding casual users get main menu
-        has_menu = any(
-            d.startswith("picks:") or d.startswith("settings:")
-            or d.startswith("sport:") or d.startswith("menu:")
-            for d in btn_data
-        )
-        record("onboarding_completes_to_menu", "PASS" if has_menu else "WARN",
-               f"Menu shown: {has_menu}. Buttons: {get_button_texts(msg)[:5]}",
-               time.time() - t0)
+        # After onboarding, user sees welcome message with story quiz CTA
+        has_welcome = "welcome" in text.lower() or "mzansiedge" in text.lower()
+        has_story = "story:start" in btn_data or any("story" in t.lower() for t in btn_texts)
+        has_skip = "nav:main" in btn_data or any("skip" in t.lower() for t in btn_texts)
+
+        if has_welcome and (has_story or has_skip):
+            record("onboarding_completes_to_welcome", "PASS",
+                   f"Welcome shown. Buttons: {btn_texts[:5]}",
+                   time.time() - t0)
+        else:
+            # Might still show menu (backward compat)
+            has_menu = any(
+                d.startswith("picks:") or d.startswith("settings:")
+                or d.startswith("sport:") or d.startswith("menu:")
+                for d in btn_data
+            )
+            record("onboarding_completes_to_welcome", "PASS" if has_menu else "WARN",
+                   f"Welcome: {has_welcome}, Story: {has_story}. Buttons: {btn_texts[:5]}",
+                   time.time() - t0)
     else:
-        record("onboarding_completes_to_menu", "FAIL",
+        record("onboarding_completes_to_welcome", "FAIL",
                f"No finish button. Data: {btn_data}", time.time() - t0)
 
 
@@ -893,7 +905,7 @@ async def _quick_onboard(client: TelegramClient, msg: Message | None):
                 msg = await get_latest_bot_msg(client)
             continue
 
-        # Favourites → skip
+        # Favourites (text input) → skip
         if any("ob_fav_done:" in d for d in btn_data):
             msg = await click_button_by_data(client, msg, "ob_fav_done:")
             if not msg:
@@ -917,6 +929,14 @@ async def _quick_onboard(client: TelegramClient, msg: Message | None):
         # Summary → confirm
         if "ob_done:finish" in btn_data:
             msg = await click_button_by_data(client, msg, "ob_done:finish")
+            if not msg:
+                msg = await get_latest_bot_msg(client)
+            # Don't break — welcome message comes next
+            continue
+
+        # Welcome/story screen → skip to main menu
+        if "story:start" in btn_data or "nav:main" in btn_data:
+            msg = await click_button_by_data(client, msg, "nav:main")
             if not msg:
                 msg = await get_latest_bot_msg(client)
             break
@@ -985,22 +1005,20 @@ async def suite_fuzzy(client: TelegramClient):
         if not msg:
             msg = await get_latest_bot_msg(client)
 
-    # Now at favourites — check for manual input button
+    # Now at favourites — should be text input mode (type team names directly)
     btn_data = get_button_data(msg)
-    has_manual = any("ob_fav_manual:" in d for d in btn_data)
-    if not has_manual:
-        record("fuzzy_manual_button_present", "FAIL",
-               f"No manual input button. Data: {btn_data}")
+    text = msg_text(msg)
+    is_text_input = any("ob_fav_done:" in d for d in btn_data)
+    if not is_text_input:
+        record("fuzzy_text_input_ready", "FAIL",
+               f"Not at team input. Data: {btn_data}")
         await _quick_onboard(client, msg)
         return
-    record("fuzzy_manual_button_present", "PASS", "Type manually button found")
+    record("fuzzy_text_input_ready", "PASS",
+           f"Text input mode active. Text: {text[:60]}")
 
     # ── Test 1: Typo — "Arsnal" → Arsenal ──
     t0 = time.time()
-    msg = await click_button_by_data(client, msg, "ob_fav_manual:")
-    if not msg:
-        msg = await get_latest_bot_msg(client)
-
     msg_reply = await send_and_wait(client, "Arsnal")
     text = msg_text(msg_reply)
     btn_texts = get_button_texts(msg_reply)
@@ -1015,66 +1033,42 @@ async def suite_fuzzy(client: TelegramClient):
                f"No match. Text: {text[:80]}, Buttons: {btn_texts}",
                time.time() - t0)
 
-    # Accept suggestion or continue
-    if any("ob_fav_suggest:" in d for d in btn_data):
-        msg = await click_button_by_data(client, msg_reply, "ob_fav_suggest:")
+    # Click Continue/Done to move to next league or accept
+    msg = msg_reply
+    btn_data = get_button_data(msg)
+    if any("ob_fav_done:" in d for d in btn_data):
+        msg = await click_button_by_data(client, msg, "ob_fav_done:")
         if not msg:
             msg = await get_latest_bot_msg(client)
-    else:
-        msg = msg_reply
 
-    # ── Test 2: Alias — "gooners" → Arsenal ──
+    # ── Test 2: Alias — "gooners" → Arsenal (next league or same) ──
     t0 = time.time()
     btn_data = get_button_data(msg)
-    if any("ob_fav_manual:" in d for d in btn_data):
-        msg = await click_button_by_data(client, msg, "ob_fav_manual:")
-        if not msg:
-            msg = await get_latest_bot_msg(client)
+    # If we're still in text input mode (another league), test alias
+    if any("ob_fav_done:" in d for d in btn_data):
+        msg_reply = await send_and_wait(client, "gooners")
+        text = msg_text(msg_reply)
+        btn_texts = get_button_texts(msg_reply)
+        btn_data = get_button_data(msg_reply)
 
-    msg_reply = await send_and_wait(client, "gooners")
-    text = msg_text(msg_reply)
-    btn_texts = get_button_texts(msg_reply)
-    btn_data = get_button_data(msg_reply)
+        arsenal_match = "arsenal" in text.lower() or any("arsenal" in t.lower() for t in btn_texts)
+        if arsenal_match:
+            record("fuzzy_alias_gooners", "PASS",
+                   f"gooners → Arsenal. Text: {text[:80]}", time.time() - t0)
+        else:
+            record("fuzzy_alias_gooners", "FAIL",
+                   f"No match. Text: {text[:80]}, Buttons: {btn_texts}",
+                   time.time() - t0)
 
-    arsenal_match = "arsenal" in text.lower() or any("arsenal" in t.lower() for t in btn_texts)
-    if arsenal_match:
-        record("fuzzy_alias_gooners", "PASS",
-               f"gooners → Arsenal. Text: {text[:80]}", time.time() - t0)
-    else:
-        record("fuzzy_alias_gooners", "FAIL",
-               f"No match. Text: {text[:80]}, Buttons: {btn_texts}",
-               time.time() - t0)
-
-    if any("ob_fav_suggest:" in d for d in btn_data):
-        msg = await click_button_by_data(client, msg_reply, "ob_fav_suggest:")
-        if not msg:
-            msg = await get_latest_bot_msg(client)
-    else:
         msg = msg_reply
-
-    # ── Test 3: SA slang — "amakhosi" → Kaizer Chiefs ──
-    t0 = time.time()
-    btn_data = get_button_data(msg)
-    if any("ob_fav_manual:" in d for d in btn_data):
-        msg = await click_button_by_data(client, msg, "ob_fav_manual:")
-        if not msg:
-            msg = await get_latest_bot_msg(client)
-
-    msg_reply = await send_and_wait(client, "amakhosi")
-    text = msg_text(msg_reply)
-    btn_texts = get_button_texts(msg_reply)
-
-    chiefs_match = (
-        "chiefs" in text.lower() or "kaizer" in text.lower()
-        or any("chiefs" in t.lower() for t in btn_texts)
-    )
-    if chiefs_match:
-        record("fuzzy_sa_amakhosi", "PASS",
-               f"amakhosi → Chiefs. Text: {text[:80]}", time.time() - t0)
+        btn_data = get_button_data(msg)
+        if any("ob_fav_done:" in d for d in btn_data):
+            msg = await click_button_by_data(client, msg, "ob_fav_done:")
+            if not msg:
+                msg = await get_latest_bot_msg(client)
     else:
-        record("fuzzy_sa_amakhosi", "FAIL",
-               f"No match. Text: {text[:80]}, Buttons: {btn_texts}",
-               time.time() - t0)
+        record("fuzzy_alias_gooners", "WARN",
+               "Not in text input mode for alias test")
 
     # Complete onboarding to restore state
     logger.info("  Completing onboarding to restore state...")
