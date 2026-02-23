@@ -35,9 +35,15 @@ DATA_DIR.mkdir(exist_ok=True)
 
 # ── Risk profiles ─────────────────────────────────────────
 RISK_PROFILES: dict[str, dict] = {
-    "conservative": {"label": "🛡 Conservative", "kelly_fraction": 0.25, "max_stake_pct": 2},
-    "moderate":     {"label": "⚖️ Moderate",     "kelly_fraction": 0.50, "max_stake_pct": 5},
-    "aggressive":   {"label": "🔥 Aggressive",   "kelly_fraction": 1.00, "max_stake_pct": 10},
+    "conservative": {"label": "🛡 Conservative", "kelly_fraction": 0.25, "max_stake_pct": 2, "min_ev": 5.0},
+    "moderate":     {"label": "⚖️ Moderate",     "kelly_fraction": 0.50, "max_stake_pct": 5, "min_ev": 3.0},
+    "aggressive":   {"label": "🔥 Aggressive",   "kelly_fraction": 1.00, "max_stake_pct": 10, "min_ev": 1.0},
+}
+
+# ── SA Bookmakers (highlighted in pick cards) ─────────────
+SA_BOOKMAKERS: set[str] = {
+    "betway", "hollywoodbets", "supabets", "sportingbet",
+    "sunbet", "betxchange", "playabets", "gbets",
 }
 
 

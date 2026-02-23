@@ -20,7 +20,10 @@ from telegram.ext import (
 
 import config
 import db
-from scripts.odds_client import fetch_odds, format_odds_message
+from scripts.odds_client import (
+    fetch_odds, format_odds_message, format_pick_card,
+    get_quota, scan_value_bets,
+)
 
 logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
@@ -56,6 +59,9 @@ def _get_ob(user_id: int) -> dict:
 
 MAIN_MENU_KB = InlineKeyboardMarkup(
     [
+        [
+            InlineKeyboardButton("🎯 Today's Picks", callback_data="picks:go"),
+        ],
         [
             InlineKeyboardButton("⚽ Soccer/PSL", callback_data="sport:psl"),
             InlineKeyboardButton("🏉 Rugby", callback_data="sport:urc"),
@@ -215,6 +221,7 @@ HELP_TEXT = textwrap.dedent("""\
     <b>Commands</b>
     /start — Onboarding / Main menu
     /menu — Main menu
+    /picks — Today's value bets (EV-based)
     /odds — Quick odds overview
     /tip — Get an AI prediction
     /help — This message
@@ -304,6 +311,8 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await handle_ob_notify(query, action)
     elif prefix == "ob_team_skip":
         await handle_ob_team_skip(query, action)
+    elif prefix == "picks":
+        await handle_picks(query, action)
     elif prefix == "ob_done":
         await handle_ob_done(query)
     else:
@@ -740,6 +749,130 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(reply, parse_mode=ParseMode.HTML, reply_markup=back_button())
 
 
+# ── /picks — Today's value bets ───────────────────────────
+
+LOADING_VERBS = [
+    "Scanning markets", "Crunching numbers", "Hunting value",
+    "Analysing odds", "Finding edges",
+]
+
+async def cmd_picks(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Entry point for /picks command."""
+    await _do_picks(
+        user_id=update.effective_user.id,
+        reply=update.message.reply_text,
+    )
+
+
+async def handle_picks(query, action: str) -> None:
+    """Callback handler for picks:go button."""
+    if action == "go":
+        await _do_picks(
+            user_id=query.from_user.id,
+            reply=query.edit_message_text,
+        )
+
+
+async def _do_picks(user_id: int, reply) -> None:
+    """Core picks logic — fetch odds for user's sports, compute EV, display cards."""
+    import random
+    verb = random.choice(LOADING_VERBS)
+    await reply(f"🎯 <i>{verb}…</i>", parse_mode=ParseMode.HTML)
+
+    # Load user profile
+    user = await db.get_user(user_id)
+    risk_key = (user.risk_profile if user else None) or "moderate"
+    profile = config.RISK_PROFILES.get(risk_key, config.RISK_PROFILES["moderate"])
+    min_ev = profile["min_ev"]
+    kelly_frac = profile["kelly_fraction"]
+
+    # Get user's preferred sports (fall back to all with API keys)
+    prefs = await db.get_user_sport_prefs(user_id)
+    if prefs:
+        sport_keys = list({p.sport_key for p in prefs})
+    else:
+        sport_keys = [s.key for s in config.SA_SPORTS + config.GLOBAL_SPORTS]
+
+    # Fetch odds and scan for value
+    all_picks = []
+    for sk in sport_keys:
+        sport = config.ALL_SPORTS.get(sk)
+        api_key = sport.api_key if sport else None
+        if not api_key:
+            continue
+        try:
+            events = await fetch_odds(api_key)
+            picks = scan_value_bets(
+                events, sport_key=sk,
+                min_ev=min_ev, kelly_fraction=kelly_frac,
+            )
+            all_picks.extend(picks)
+        except Exception as exc:
+            log.warning("Picks fetch error for %s: %s", sk, exc)
+
+    # Sort by EV descending, take top 10
+    all_picks.sort(key=lambda p: p.ev_pct, reverse=True)
+    top_picks = all_picks[:10]
+
+    if not top_picks:
+        risk_label = profile["label"]
+        text = (
+            "<b>🎯 Today's Picks</b>\n\n"
+            f"No value bets found above <b>{min_ev:.0f}% EV</b> "
+            f"for your {risk_label} profile right now.\n\n"
+            "Try again later or switch to a more aggressive profile."
+        )
+        await reply(text, parse_mode=ParseMode.HTML, reply_markup=back_button())
+        return
+
+    # Build response
+    lines = [
+        f"<b>🎯 Today's Picks</b> ({len(top_picks)} value bet{'s' if len(top_picks) != 1 else ''})\n"
+        f"Profile: {profile['label']} | Min EV: {min_ev:.0f}%\n",
+    ]
+    for pick in top_picks:
+        lines.append(format_pick_card(pick))
+        lines.append("")  # spacer
+
+    lines.append("<i>Always gamble responsibly. 🇿🇦</i>")
+    text = "\n".join(lines)
+
+    # Truncate if too long for Telegram (4096 char limit)
+    if len(text) > 4000:
+        text = text[:3990] + "\n…"
+
+    await reply(text, parse_mode=ParseMode.HTML, reply_markup=back_button())
+
+
+# ── /admin — admin dashboard with API quota ───────────────
+
+async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin-only command showing API quota and bot stats."""
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+
+    quota = get_quota()
+    count = await db.get_user_count()
+    tips = await db.get_recent_tips(limit=100)
+    wins = sum(1 for t in tips if t.result == "win")
+    losses = sum(1 for t in tips if t.result == "loss")
+    pending = sum(1 for t in tips if t.result is None or t.result == "pending")
+
+    text = textwrap.dedent(f"""\
+        <b>🔧 Admin Dashboard</b>
+
+        <b>📡 Odds API Quota</b>
+        Requests used: <code>{quota['requests_used']}</code>
+        Requests remaining: <code>{quota['requests_remaining']}</code>
+
+        <b>📊 Bot Stats</b>
+        👥 Users: <b>{count}</b>
+        📝 Tips: <b>{len(tips)}</b>
+        ✅ Wins: <b>{wins}</b> | ❌ Losses: <b>{losses}</b> | ⏳ Pending: <b>{pending}</b>
+    """)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
 # ── Admin: /stats ─────────────────────────────────────────
 
 async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -775,6 +908,8 @@ def main() -> None:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("odds", cmd_odds))
     app.add_handler(CommandHandler("tip", cmd_tip))
+    app.add_handler(CommandHandler("picks", cmd_picks))
+    app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("stats", cmd_stats))
 
     # Callback query handler (prefix:action routing)

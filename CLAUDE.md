@@ -6,18 +6,19 @@ AI-powered sports betting Telegram bot for South Africa. Uses python-telegram-bo
 ## Architecture
 
 ```
-bot.py              ← Main bot: handlers, onboarding, callback routing
-config.py           ← Environment config, sport definitions (SA + Global tiers)
+bot.py              ← Main bot: handlers, onboarding, picks, callback routing
+config.py           ← Environment config, sport definitions (SA + Global tiers), risk profiles
 db.py               ← Async SQLAlchemy models & helpers
 scripts/
-  odds_client.py    ← The Odds API client (fetch_odds, best_odds, format_odds_message)
+  odds_client.py    ← The Odds API client, EV calculation, value bet scanning, pick cards
 tests/
   conftest.py       ← Pytest fixtures (mock bot, in-memory DB)
   test_config.py    ← Sports structure, risk profile tests
   test_db.py        ← User CRUD, sport prefs, bet creation tests
-  test_odds_client.py ← EV calc, best_odds, format_odds (mocked HTTP)
+  test_odds_client.py ← best_odds, format_odds (mocked HTTP)
   test_bot_handlers.py ← /start, /menu, /help handler tests
   test_onboarding.py   ← Full onboarding quiz state machine tests
+  test_picks.py        ← EV calc, Kelly stake, value bet scanning, pick cards, /admin
 ```
 
 ## Sports Structure
@@ -60,11 +61,38 @@ All inline keyboard callbacks use `prefix:action` format:
 - `sport:epl` — View odds for EPL
 - `ai:nba` — AI tip for NBA
 - `menu:home` — Main menu
+- `picks:go` — Today's value bet picks
 - `ob_sport:psl` — Toggle PSL in onboarding
 - `ob_league:epl:English Premier League` — Toggle league
 - `ob_risk:moderate` — Select risk profile
 - `ob_notify:18` — Select 6 PM notifications
 - `ob_done:finish` — Complete onboarding
+
+## Picks / Value Bet Flow
+1. User taps "Today's Picks" button or sends `/picks`
+2. Bot shows loading message with randomised verb template
+3. Loads user's risk profile from DB (conservative/moderate/aggressive)
+4. Fetches live odds for user's preferred sports via `fetch_odds()`
+5. For each event, calculates fair probabilities (vig-removed market consensus)
+6. Computes EV% for each outcome: `(best_odds × fair_prob - 1) × 100`
+7. Filters to positive EV above profile's `min_ev` threshold
+8. Computes Kelly criterion stake for each value bet
+9. Ranks by EV descending, shows top 10 as pick cards
+10. Pick cards show: match, outcome, best odds@bookmaker (🇿🇦 for SA books), EV%, confidence, Kelly stake
+
+### Risk Profile Thresholds
+| Profile      | min_ev | Kelly fraction | Max stake % |
+|-------------|--------|----------------|-------------|
+| Conservative | 5%     | 0.25           | 2%          |
+| Moderate     | 3%     | 0.50           | 5%          |
+| Aggressive   | 1%     | 1.00           | 10%         |
+
+### SA Bookmakers (highlighted with 🇿🇦)
+betway, hollywoodbets, supabets, sportingbet, sunbet, betxchange, playabets, gbets
+
+## Admin Commands
+- `/admin` — Dashboard showing Odds API quota (requests used/remaining) and bot stats
+- `/stats` — Legacy stats command (user count, tip results)
 
 ## Onboarding Quiz Flow
 1. **Sports selection** — Two-tier: SA first (🇿🇦 header), then Global (🌍 header)
@@ -87,14 +115,15 @@ State tracked in `bot._onboarding_state[user_id]` dict.
 - PTB v20+ async handlers
 - Inline keyboards only (no reply keyboards)
 - `prefix:action` callback_data routing in `on_button()`
+- Loading messages use randomised verb templates
 
 ## Verification
 ```bash
-# Run all tests
+# Run all tests (101 tests)
 pytest tests/ -x -q
 
 # Run specific test file
-pytest tests/test_onboarding.py -v
+pytest tests/test_picks.py -v
 
 # Start the bot
 python bot.py
