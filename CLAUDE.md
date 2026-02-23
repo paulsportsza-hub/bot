@@ -17,6 +17,10 @@ tests/
   test_config.py    ← Sport categories, leagues, fav types, aliases, risk profiles, SPORT_DISPLAY, SA_PRIORITY_GROUPS
   test_sports_data.py ← Curated lists, aliases, caching, fuzzy matching, get_top_teams
   test_archetype.py   ← classify_archetype logic, archetype DB columns
+  e2e_telegram.py     ← Playwright E2E tests against live bot on Telegram Web
+save_telegram_session.py ← One-time script to save Telegram Web login state
+scripts/
+  setup_e2e.sh        ← Install system deps for Playwright Chromium
   test_db.py        ← User CRUD, sport prefs, bet creation tests
   test_odds_client.py ← best_odds, format_odds (mocked HTTP)
   test_bot_handlers.py ← /start, /menu, /help handler tests
@@ -220,8 +224,8 @@ Every sub-screen has "🔙 Back" + "🏠 Main Menu" via `kb_nav()`.
 
 ## Verification
 ```bash
-# Run all tests (277 tests)
-pytest tests/ -x -q
+# Run unit tests (277 tests)
+pytest tests/ -x -q --ignore=tests/e2e_telegram.py
 
 # Run specific test file
 pytest tests/test_onboarding.py -v
@@ -229,6 +233,39 @@ pytest tests/test_onboarding.py -v
 # Start the bot
 python bot.py
 ```
+
+## E2E Testing (Playwright on Telegram Web)
+
+### Setup (one-time)
+```bash
+# 1. Install system deps (needs sudo)
+sudo bash scripts/setup_e2e.sh
+
+# 2. Save Telegram Web login session (needs display)
+python save_telegram_session.py
+# → Saves data/telegram_session.json
+```
+
+### Running E2E tests
+```bash
+python tests/e2e_telegram.py                    # Run all suites
+python tests/e2e_telegram.py --test onboarding  # Specific suite
+python tests/e2e_telegram.py --test commands    # Post-onboarding commands
+python tests/e2e_telegram.py --test fuzzy       # Fuzzy matching only
+python tests/e2e_telegram.py --test edge        # Edge cases
+python tests/e2e_telegram.py --report           # View saved report
+```
+
+### E2E test suites
+1. **Onboarding Flow** — /start, experience, sports, leagues, teams, risk, notify, summary, edit, confirm
+2. **Post-Onboarding** — all commands respond, settings menu, back buttons, HTML formatting
+3. **Profile Reset** — warning screen, confirm reset, re-onboarding
+4. **Fuzzy Matching** — typos ("Arsnal"), aliases ("gooners"), SA slang ("amakhosi")
+5. **Edge Cases** — zero sports, /start when onboarded, random text, rapid commands
+
+### Reports
+- `data/e2e_report.json` — structured JSON report
+- `data/e2e_screenshots/` — screenshots at every step
 
 ## Environment Variables
 See `.env.example` for required variables:
