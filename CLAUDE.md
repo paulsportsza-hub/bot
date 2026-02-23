@@ -1,4 +1,4 @@
-# PaulSportSA — CLAUDE.md
+# MzansiEdge — CLAUDE.md
 
 ## Overview
 AI-powered sports betting Telegram bot for South Africa. Uses python-telegram-bot v20+ (PTB), Claude API for AI tips, The Odds API for live odds, and async SQLAlchemy for persistence.

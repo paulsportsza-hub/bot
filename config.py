@@ -1,4 +1,4 @@
-"""PaulSportSA configuration — loads .env and exposes app-wide constants."""
+"""MzansiEdge configuration — loads .env and exposes app-wide constants."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 
 # ── Database ───────────────────────────────────────────────
 DATABASE_URL: str = os.environ.get(
-    "DATABASE_URL", "sqlite+aiosqlite:///data/paulsportsza.db"
+    "DATABASE_URL", "sqlite+aiosqlite:///data/mzansiedge.db"
 )
 
 # ── Timezone ───────────────────────────────────────────────

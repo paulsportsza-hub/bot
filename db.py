@@ -1,4 +1,4 @@
-"""Async SQLAlchemy models & helpers for PaulSportSA."""
+"""Async SQLAlchemy models & helpers for MzansiEdge."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for PaulSportSA tests."""
+"""Shared pytest fixtures for MzansiEdge tests."""
 
 from __future__ import annotations
 

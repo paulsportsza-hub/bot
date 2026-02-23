@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PaulSportSA — AI-powered sports betting Telegram bot for South Africa."""
+"""MzansiEdge — AI-powered sports betting Telegram bot for South Africa."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
     level=logging.INFO,
 )
-log = logging.getLogger("paulsportsza")
+log = logging.getLogger("mzansiedge")
 
 claude = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
 
@@ -182,7 +182,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ob = _get_ob(user.id)
         ob["step"] = "sports"
         text = textwrap.dedent(f"""\
-            <b>🇿🇦 Welcome to PaulSportSA, {user.first_name}!</b>
+            <b>🇿🇦 Welcome to MzansiEdge, {user.first_name}!</b>
 
             Let's set up your profile in a few quick steps.
 
@@ -200,7 +200,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     text = textwrap.dedent(f"""\
-        <b>🇿🇦 PaulSportSA — Main Menu</b>
+        <b>🇿🇦 MzansiEdge — Main Menu</b>
 
         Hey {user.first_name}, pick a sport or get an AI tip.
     """)
@@ -210,7 +210,7 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # ── /help ─────────────────────────────────────────────────
 
 HELP_TEXT = textwrap.dedent("""\
-    <b>PaulSportSA — Help</b>
+    <b>MzansiEdge — Help</b>
 
     <b>Commands</b>
     /start — Onboarding / Main menu
@@ -316,7 +316,7 @@ async def handle_menu(query, action: str) -> None:
     if action == "home":
         user = query.from_user
         text = textwrap.dedent(f"""\
-            <b>🇿🇦 PaulSportSA — Main Menu</b>
+            <b>🇿🇦 MzansiEdge — Main Menu</b>
 
             Hey {user.first_name}, pick a sport or get an AI tip.
         """)
@@ -377,7 +377,7 @@ async def handle_sport(query, action: str) -> None:
 # ── AI tip handler ────────────────────────────────────────
 
 SYSTEM_PROMPT = textwrap.dedent("""\
-    You are PaulSportSA, an expert South African sports betting analyst.
+    You are MzansiEdge, an expert South African sports betting analyst.
     Given live odds data, provide a concise betting tip. Include:
     - The recommended bet (team/outcome)
     - Why it has value
@@ -763,7 +763,7 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # ── Main ──────────────────────────────────────────────────
 
 def main() -> None:
-    log.info("Starting PaulSportSA bot…")
+    log.info("Starting MzansiEdge bot…")
     app = Application.builder().token(config.BOT_TOKEN).build()
 
     # Initialise DB on startup
