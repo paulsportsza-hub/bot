@@ -41,6 +41,7 @@ scripts/
   test_onboarding.py   ← Full onboarding quiz state machine, fuzzy matching, edit flow
   test_picks.py        ← EV calc, Kelly stake, value bet scanning, pick cards, /admin
   test_day1.py         ← Experience onboarding, persistent menu, adapted pick cards, profile reset
+  test_e2e_flow.py     ← Telethon-based E2E flow tests: sticky keyboard, Your Games, Hot Tips, sport filter
 ```
 
 ## Sport Categories & Leagues
@@ -124,11 +125,11 @@ All inline keyboard callbacks use `prefix:action` format:
 - `ai:{category_key}` — AI tip for a sport category
 - `menu:home` — Main menu
 - `picks:today` / `picks:go` — Legacy picks (still works via _do_picks_flow)
-- `yg:day:{offset}:{sport_filter}` — Your Games: switch day (0-6, "all" or sport_key)
-- `yg:sport:{day_offset}:{sport_key}` — Your Games: filter by sport
-- `yg:page:{day_offset}:{sport_filter}:{page}` — Your Games: pagination within day
+- `yg:all:{page}` — Your Games: default all-games view with pagination
+- `yg:sport:{key}:{day}:{page}` — Your Games: sport-specific 7-day view
+- `yg:game:{event_id}` — Your Games: tap game → AI breakdown
 - `yg:noop` — No-op for pagination label
-- `hot:go` — Hot Tips: show/refresh cross-market value bets
+- `hot:go` / `hot:show` — Hot Tips: scan all sports, send separate messages per tip
 - `ob_exp:experienced` / `ob_exp:casual` / `ob_exp:newbie` — Experience level
 - `ob_sport:{category_key}` — Toggle sport in onboarding
 - `ob_nav:sports_done` / `ob_nav:back_sports` / `ob_nav:league_done:{key}` — Navigation
@@ -207,7 +208,7 @@ SA_BOOKMAKERS = {
 - `config.get_active_website_url()` → `"https://www.betway.co.za"`
 - `config.sa_display_name(bk_key)` → returns `.co.za` display name for any bookmaker key
 
-**Betway branding:** All user-facing odds display, tip details, bookmaker menus, and pick cards use Betway branding with 🇿🇦 flag. Sharp bookmakers (Pinnacle, Betfair, etc.) are kept for internal probability estimation only — never shown to users.
+**Betway branding:** All user-facing odds display, tip details, bookmaker menus, and pick cards use Betway branding (no 🇿🇦 flags on bookmaker names or tips). Sharp bookmakers (Pinnacle, Betfair, etc.) are kept for internal probability estimation only — never shown to users.
 
 ### SA Odds Functions
 - `odds_client.find_best_sa_odds(event, market)` → list of `OddsEntry` filtered to SA bookmakers only
@@ -347,61 +348,84 @@ Sub-menus: `kb_bets()`, `kb_teams()`, `kb_stats()`, `kb_bookmakers()`, `kb_setti
 Every sub-screen has "↩️ Back" + "🏠 Main Menu" via `kb_nav()`.
 
 ## Your Games Feature (replaces Schedule)
-`/schedule` command or "⚽ Your Games" button shows personalised 7-day schedule with AI edge indicators.
+`/schedule` command or "⚽ Your Games" button shows personalised game schedule with two views.
+
+### Two-view architecture
+1. **Default (all games)**: `_render_your_games_all(user_id, page)` — Shows all games sorted by edge first then by time. Sport filter emoji buttons at bottom.
+2. **Sport view**: `_render_your_games_sport(user_id, sport_key, day_offset, page)` — 7-day schedule for one sport with day navigation tabs.
 
 ### Core functions
 - `_show_your_games(update, ctx, user_id)` — Entry point (reply keyboard + /schedule command)
-- `_build_your_games(user_id, day_offset, sport_filter, page)` — Main builder with day nav, sport filters, edge indicators, pagination
+- `_render_your_games_all(user_id, page)` — Default all-games view, sorted by edge, with sport filter buttons
+- `_render_your_games_sport(user_id, sport_key, day_offset, page)` — Sport-specific 7-day view with day nav
 - `_fetch_schedule_games(user_id)` — Fetches and caches events from user's leagues
 - `_check_edges_for_games(games)` — Quick EV check per game (🔥 marker if any outcome has EV > 2%)
-- `_render_schedule_page()` — Legacy schedule renderer (kept for backward compat)
+- `_parse_date(commence_time)` — Parse commence_time to SAST datetime
+- `_format_date_label(date_obj, now_dt)` — Format date as "Today", "Tomorrow", "Wednesday, 26 Feb"
+- `_get_sport_emoji_for_api_key(api_key)` — Map Odds API sport key to emoji
 
-### Day navigation
-Two rows of buttons: `[Today] [Tmrw] [Wed] [Thu]` / `[Fri] [Sat] [Sun]`. Active day shown as `[Today]`. Callback: `yg:day:{offset}:{sport_filter}`.
+### Callback patterns
+- `yg:all:{page}` — Default all-games view with pagination
+- `yg:sport:{key}:{day}:{page}` — Sport-specific view with day offset + pagination
+- `yg:game:{event_id}` — Tap a game → AI breakdown (replaces `schedule:tips:`)
+- `yg:noop` — No-op for pagination label
 
-### Sport filter tabs
-Shown when user follows 3+ sport categories. Row of emoji buttons (e.g. `⚽ 🏉 🏏`) + "All" filter. Callback: `yg:sport:{day_offset}:{sport_key}`.
+### Sport filter buttons
+Shown when user follows 2+ sport categories. Row of emoji buttons (e.g. `⚽ 🏉 🏏`). Tapping switches to sport-specific 7-day view.
 
 ### Edge indicators
-`_check_edges_for_games()` does a quick EV scan using cached odds. Games with EV > 2% on any outcome get a 🔥 marker in both the text list and game buttons.
+`_check_edges_for_games()` does a quick EV scan using cached odds. Games with EV > 2% on any outcome get a 🔥 marker. In default view, edge games sort to the top.
 
 ### Pagination
-5 games per page within each day. Callback: `yg:page:{day_offset}:{sport_filter}:{page}`.
+10 games per page (`GAMES_PER_PAGE = 10`). Callbacks: `yg:all:{page}` or `yg:sport:{key}:{day}:{page}`.
 
 ### Game tap → AI breakdown
-Same flow as before: `schedule:tips:{event_id}` → `_generate_game_tips()`.
+`yg:game:{event_id}` → `_generate_game_tips()`. Back button returns to `yg:all:0`.
 
 ## Hot Tips Feature (replaces Picks)
-`/picks` command or "🔥 Hot Tips" button shows cross-market value bet discovery feed.
+`/picks` command or "🔥 Hot Tips" button scans ALL sports for value bets and sends separate messages per tip.
 
 ### Core functions
 - `_show_hot_tips(update, ctx, user_id)` — Entry point (reply keyboard + /picks command)
-- `_build_hot_tips(user_id)` — Scans user's leagues via `get_picks_for_user()`, returns top 5 EV picks formatted as compact cards
+- `_do_hot_tips_flow(chat_id, bot)` — Core logic: scan all sports, send separate messages per tip with Betway button
+- `_fetch_hot_tips_all_sports()` — Scans `HOT_TIPS_SCAN_SPORTS` (~25 Odds API sport keys) for value bets. Uses 15-min cache.
+- `_format_kickoff_display(commence_time)` — Format as "Today 19:30" or "Wed 26 Feb, 15:00"
 
-### Features
-- Scans all user leagues for value bets using existing picks engine
-- Formats picks via `format_engine_pick_card()` (experience-adapted)
-- Shows scan stats (events, markets, risk profile)
-- "🔄 Refresh Tips" button for re-scanning
-- Handles quota exhaustion and no-picks scenarios gracefully
+### All-sports scanning
+`HOT_TIPS_SCAN_SPORTS` is a list of ~25 Odds API sport keys covering soccer, rugby, cricket, basketball, NFL, MMA, boxing, tennis, golf. Tips are scanned across ALL sports (not just user's preferences).
+
+### 15-minute cache
+`_hot_tips_cache["global"]` stores `{"tips": [...], "ts": float}` with `HOT_TIPS_CACHE_TTL = 900` seconds.
+
+### Message format
+- Header message: "🔥 Hot Tips — N Value Bets"
+- Individual tip messages (one per tip): match, kickoff, outcome, odds, EV%, confidence
+- Each tip has a "📲 Bet on Betway →" button (URL link)
+- Footer message with Refresh, Your Games, Menu buttons
+
+### No flags or disclaimers
+- No 🇿🇦 flags on bookmaker names in tip/pick outputs
+- No "gamble responsibly" disclaimers in tip outputs
+- Clean, focused tip presentation
 
 ### Legacy compatibility
 - `/picks` command redirects to Hot Tips
 - `picks:today` / `picks:go` callbacks still work via `_do_picks_flow()`
 - `_do_picks_flow()` still exists for direct API use
+- `hot:go` / `hot:show` both trigger `_do_hot_tips_flow()`
 
 ## AI Game Breakdown
-When a user taps a game in the schedule, `_generate_game_tips()` calls Claude Haiku (`claude-haiku-4-5-20251001`) with `GAME_ANALYSIS_PROMPT`. The prompt uses structured emoji section headers:
+When a user taps a game in Your Games, `_generate_game_tips()` calls Claude Haiku (`claude-haiku-4-5-20251001`) with `GAME_ANALYSIS_PROMPT`. The prompt uses structured emoji section headers:
 - 📋 **The Setup** — team form and context
 - 🎯 **The Edge** — specific value angle
 - ⚠️ **The Risk** — what could go wrong
 - 🏆 **Verdict** — punchy one-line pick
 
-No disclaimers in the AI output (handled separately). South African conversational tone. Odds shown separately below as "🇿🇦 Betway Odds" section. Tips cached in `_game_tips_cache[event_id]`.
+No disclaimers in the AI output (handled separately). South African conversational tone. Odds shown separately below as "Betway Odds" section. Tips cached in `_game_tips_cache[event_id]`.
 
 ## Tip Detail Page
 Tapping a tip button (`tip:detail:{event_id}:{index}`) shows an experience-adapted detail card via `_format_tip_detail()`:
-- **Experienced**: odds with Betway 🇿🇦 branding, EV%, Kelly stake fraction
+- **Experienced**: odds with Betway branding, EV%, Kelly stake fraction
 - **Casual**: narrative, R100 payout example, stake hint, Betway branding
 - **Newbie**: bet type explanation, R20/R50 payout examples, "Start small" advice
 
@@ -410,7 +434,7 @@ If user has bankroll set, shows personalised stake recommendation.
 Buttons always use the active bookmaker (Betway for MVP):
 - `📲 Bet on Betway →` → website URL (or affiliate URL when available)
 - `🔔 Follow this game` → `subscribe:{event_id}` for live score alerts
-- `↩️ Back` → return to game tips view
+- `↩️ Back` → return to Your Games (`yg:all:0`)
 
 ## Telegra.ph Betting Guides (`scripts/telegraph_guides.py`)
 Publishes step-by-step betting guides for SA bookmakers on Telegra.ph (instant view).
@@ -578,7 +602,7 @@ The architecture separates concerns:
 ## Verification
 ```bash
 # Run unit tests (281 tests)
-pytest tests/ -x -q --ignore=tests/e2e_telegram.py --ignore=tests/e2e_telethon.py
+pytest tests/ -x -q --ignore=tests/e2e_telegram.py --ignore=tests/e2e_telethon.py --ignore=tests/test_e2e_flow.py
 
 # Run specific test file
 pytest tests/test_onboarding.py -v
@@ -616,6 +640,24 @@ python tests/e2e_telegram.py --report           # View saved report
 4. **Fuzzy Matching** — typos ("Arsnal"), aliases ("gooners"), SA slang ("amakhosi")
 5. **Edge Cases** — zero sports, /start when onboarded, random text, rapid commands
 6. **Sticky Keyboard & UX Polish** — keyboard appears after /start, all 6 buttons respond, back arrows use ↩️, schedule formatting, profile accessibility
+
+### Telethon E2E flow tests
+```bash
+python tests/test_e2e_flow.py                    # Run all 8 flow tests
+python tests/test_e2e_flow.py --test sticky_keyboard  # Specific test
+python tests/test_e2e_flow.py --test hot_tips     # Hot Tips separate messages
+python tests/test_e2e_flow.py --test no_za_flags  # Verify no ZA flags in tips
+```
+
+8 Telethon-based tests:
+1. **sticky_keyboard** — Verify 3×2 reply keyboard layout
+2. **your_games** — Default all-games view
+3. **sport_filter** — Sport emoji button → sport-specific view
+4. **pagination** — Pagination when >10 games
+5. **hot_tips** — Separate messages per tip with Betway buttons
+6. **all_sports** — Header mentions "all markets"
+7. **no_za_flags** — No 🇿🇦 flags in tip messages
+8. **game_breakdown** — Game tap → AI analysis with Betway button
 
 ### Reports
 - `data/e2e_report.json` — structured JSON report

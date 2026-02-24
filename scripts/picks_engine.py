@@ -380,7 +380,7 @@ def format_pick_card(pick: dict, index: int, experience: str = "casual") -> str:
         return (
             f"<b>#{index} | {home} vs {away}</b>\n"
             f"⏰ {kickoff}\n\n"
-            f"💰 <b>{outcome}</b> @ <b>{odds:.2f}</b> ({bookie} 🇿🇦)\n"
+            f"💰 <b>{outcome}</b> @ <b>{odds:.2f}</b> ({bookie})\n"
             f"📈 EV: <b>+{ev}%</b> | Conf: {confidence}% | Kelly: R{stake:,.0f}\n"
             f"💵 Stake R{stake:,.0f} → Return R{potential:,.0f} (+R{profit:,.0f})\n\n"
             f"<i>{market.upper()} market</i>"
@@ -412,7 +412,7 @@ def format_pick_card(pick: dict, index: int, experience: str = "casual") -> str:
             f"that's a <b>+{ev}%</b> edge in our favour.\n\n"
             f"💡 <b>Suggested bet:</b> R{stake:,.0f}\n"
             f"If it wins → you get <b>R{potential:,.0f}</b> back (R{profit:,.0f} profit)\n\n"
-            f"📲 Best odds at: <b>{bookie}</b> 🇿🇦\n\n"
+            f"📲 Best odds at: <b>{bookie}</b>\n\n"
             f"<i>💡 Tip: Start small while you're learning. R20-50 bets are perfect.</i>"
         )
 
@@ -421,7 +421,7 @@ def format_pick_card(pick: dict, index: int, experience: str = "casual") -> str:
         return (
             f"<b>#{index} 🏟️ {home} vs {away}</b>\n"
             f"⏰ {kickoff}\n\n"
-            f"💰 <b>{outcome}</b> @ {odds:.2f} ({bookie} 🇿🇦)\n"
+            f"💰 <b>{outcome}</b> @ {odds:.2f} ({bookie})\n"
             f"The AI found a <b>+{ev}%</b> edge here — confidence {confidence}%.\n\n"
             f"📊 Suggested: R{stake:,.0f} → potential R{potential:,.0f} return\n"
             f"<i>(R{profit:,.0f} profit if it lands)</i>"

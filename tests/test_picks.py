@@ -340,24 +340,25 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_cmd_picks_no_prefs(test_db, mock_update, mock_context):
-    """Picks (/picks → Hot Tips) with no user prefs should still work."""
+    """Picks (/picks → Hot Tips) with no tips should show empty message."""
     await db.upsert_user(77777, "picker", "Picker")
     await db.set_onboarding_done(77777)
     mock_update.effective_user.id = 77777
     mock_update.effective_chat.id = 77777
 
-    no_picks_result = {
-        "ok": False, "picks": [], "total_events": 0, "total_markets": 0,
-        "total_scanned": 0, "quota_remaining": "499", "errors": None,
-    }
-    with patch("bot.get_picks_for_user", new_callable=AsyncMock, return_value=no_picks_result):
+    # Mock the loading message to have a delete method
+    loading_msg = AsyncMock()
+    mock_context.bot.send_message = AsyncMock(return_value=loading_msg)
+
+    with patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=[]):
         await bot.cmd_picks(mock_update, mock_context)
 
-    # Hot Tips renders via reply_text
-    assert mock_update.message.reply_text.call_count >= 1
-    call_args = mock_update.message.reply_text.call_args
-    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-    assert "Hot Tips" in text
+    # Hot Tips sends via bot.send_message (loading + empty state)
+    assert mock_context.bot.send_message.call_count >= 2
+    # Last call should be the "no edges" message
+    last_call = mock_context.bot.send_message.call_args_list[-1]
+    text = last_call[1].get("text", "") or (last_call[0][1] if len(last_call[0]) > 1 else "")
+    assert "Hot Tips" in text or "No edges" in text
 
 
 async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
@@ -368,30 +369,30 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     mock_update.effective_user.id = 77778
     mock_update.effective_chat.id = 77778
 
-    pick_result = {
-        "ok": True,
-        "picks": [{
-            "event_id": "abc123", "sport_key": "soccer",
-            "home_team": "Arsenal", "away_team": "Chelsea",
-            "commence_time": "2026-02-23T15:00:00Z",
-            "market": "h2h", "outcome": "Arsenal",
-            "odds": 2.30, "bookmaker": "Hollywoodbets",
-            "bookmaker_key": "hollywoodbets", "is_sa_bookmaker": True,
-            "ev": 5.3, "confidence": 45, "sharp_prob": 45.0,
-            "stake": 150.0, "potential_return": 345.0, "profit": 195.0,
-            "all_odds": [], "confidence_label": "🟡 Medium",
-        }],
-        "total_events": 5, "total_markets": 15, "total_scanned": 1,
-        "quota_remaining": "498", "errors": None,
-    }
-    with patch("bot.get_picks_for_user", new_callable=AsyncMock, return_value=pick_result):
+    mock_tips = [{
+        "event_id": "abc123", "sport_key": "soccer_epl",
+        "home_team": "Arsenal", "away_team": "Chelsea",
+        "commence_time": "2026-02-23T15:00:00Z",
+        "outcome": "Arsenal", "odds": 2.30, "bookmaker": "Betway",
+        "ev": 5.3, "prob": 45, "kelly": 4.2,
+    }]
+
+    loading_msg = AsyncMock()
+    mock_context.bot.send_message = AsyncMock(return_value=loading_msg)
+
+    with patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=mock_tips):
         await bot.cmd_picks(mock_update, mock_context)
 
-    # Hot Tips shows picks via reply_text
-    assert mock_update.message.reply_text.call_count >= 1
-    call_args = mock_update.message.reply_text.call_args
-    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-    assert "Hot Tips" in text
+    # Hot Tips sends header + tip messages + footer via bot.send_message
+    assert mock_context.bot.send_message.call_count >= 3
+    # Check that one message contains the tip
+    all_texts = []
+    for call in mock_context.bot.send_message.call_args_list:
+        t = call[1].get("text", "") or (call[0][1] if len(call[0]) > 1 else "")
+        all_texts.append(t)
+    combined = " ".join(all_texts)
+    assert "Hot Tips" in combined
+    assert "Arsenal" in combined
 
 
 async def test_cmd_admin_shows_quota(test_db, mock_update, mock_context):

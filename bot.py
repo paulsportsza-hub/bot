@@ -287,7 +287,7 @@ def kb_main() -> InlineKeyboardMarkup:
     """Main persistent menu — every sub-screen navigates back here."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("⚽ Your Games", callback_data="yg:day:0:all"),
+            InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0"),
             InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go"),
         ],
         [
@@ -352,7 +352,7 @@ def kb_bookmakers() -> InlineKeyboardMarkup:
     buttons: list[list[InlineKeyboardButton]] = []
     if website:
         buttons.append([InlineKeyboardButton(
-            f"🇿🇦 {active['short_name']} — Sign Up", url=website,
+            f"📲 {active['short_name']} — Sign Up", url=website,
         )])
     if guide:
         buttons.append([InlineKeyboardButton(
@@ -593,7 +593,7 @@ HELP_TEXT = textwrap.dedent("""\
     <b>How tips work</b>
     Our AI analyses live odds, recent form, and
     historical data to suggest value bets. Always
-    gamble responsibly. 🇿🇦
+    gamble responsibly.
 """)
 
 
@@ -683,7 +683,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         elif action == "schedule":
             # Legacy nav:schedule → redirect to Your Games
             user_id = query.from_user.id
-            text, markup = await _build_your_games(user_id)
+            text, markup = await _render_your_games_all(user_id)
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
     elif prefix == "menu":
@@ -747,33 +747,26 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = query.from_user.id
         if action == "noop":
             return
-        elif action.startswith("day:"):
-            # yg:day:{offset}:{sport_filter}
-            parts = action.split(":")
-            day_off = int(parts[1]) if len(parts) > 1 else 0
-            sf = parts[2] if len(parts) > 2 and parts[2] != "all" else None
-            text, markup = await _build_your_games(user_id, day_offset=day_off, sport_filter=sf)
+        elif action.startswith("all:"):
+            # yg:all:{page}
+            pg = int(action.split(":")[1]) if ":" in action else 0
+            text, markup = await _render_your_games_all(user_id, page=pg)
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         elif action.startswith("sport:"):
-            # yg:sport:{day_offset}:{sport_key}
+            # yg:sport:{key}:{day}:{page}
             parts = action.split(":")
-            day_off = int(parts[1]) if len(parts) > 1 else 0
-            sf = parts[2] if len(parts) > 2 and parts[2] != "all" else None
-            text, markup = await _build_your_games(user_id, day_offset=day_off, sport_filter=sf)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-        elif action.startswith("page:"):
-            # yg:page:{day_offset}:{sport_filter}:{page}
-            parts = action.split(":")
-            day_off = int(parts[1]) if len(parts) > 1 else 0
-            sf = parts[2] if len(parts) > 2 and parts[2] != "all" else None
+            sk = parts[1] if len(parts) > 1 else ""
+            day_off = int(parts[2]) if len(parts) > 2 else 0
             pg = int(parts[3]) if len(parts) > 3 else 0
-            text, markup = await _build_your_games(user_id, day_offset=day_off, sport_filter=sf, page=pg)
+            text, markup = await _render_your_games_sport(user_id, sk, day_offset=day_off, page=pg)
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif action.startswith("game:"):
+            # yg:game:{event_id} — show AI game breakdown
+            event_id = action.split(":", 1)[1]
+            await _generate_game_tips(query, ctx, event_id, user_id)
     elif prefix == "hot":
-        user_id = query.from_user.id
-        if action == "go":
-            text, markup = await _build_hot_tips(user_id)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        if action in ("go", "show"):
+            await _do_hot_tips_flow(query.message.chat_id, ctx.bot)
     elif prefix == "schedule":
         if action == "noop":
             return
@@ -2043,7 +2036,7 @@ async def _show_live_games(update: Update, user_id: int) -> None:
             f"🔕 Unfollow {sub.home_team} vs {sub.away_team}",
             callback_data=f"unsubscribe:{sub.event_id}",
         )])
-    buttons.append([InlineKeyboardButton("⚽ Your Games", callback_data="yg:day:0:all")])
+    buttons.append([InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")])
 
     await update.message.reply_text(
         "\n".join(lines), parse_mode=ParseMode.HTML,
@@ -2109,36 +2102,67 @@ async def _show_betway_guide(update: Update) -> None:
     )
 
 
-# ── Your Games — personalised 7-day schedule with edge indicators ──
+# ── Your Games — all-games default + sport-specific 7-day view ──
+
+
+def _parse_date(commence_time: str):
+    """Parse commence_time string to SAST datetime. Returns None on failure."""
+    from datetime import datetime as dt_cls
+    from zoneinfo import ZoneInfo
+    try:
+        ct = dt_cls.fromisoformat(commence_time.replace("Z", "+00:00"))
+        return ct.astimezone(ZoneInfo(config.TZ))
+    except Exception:
+        return None
+
+
+def _format_date_label(date_obj, now_dt=None) -> str:
+    """Format a date as 'Today', 'Tomorrow', or 'Wednesday, 26 Feb'."""
+    from datetime import datetime as dt_cls, timedelta
+    from zoneinfo import ZoneInfo
+    if now_dt is None:
+        now_dt = dt_cls.now(ZoneInfo(config.TZ))
+    today = now_dt.date() if hasattr(now_dt, "date") else now_dt
+    if date_obj == today:
+        return "Today"
+    if date_obj == today + timedelta(days=1):
+        return "Tomorrow"
+    return date_obj.strftime("%A, %d %b")
+
+
+def _get_sport_emoji_for_api_key(api_key: str) -> str:
+    """Get sport emoji for an Odds API sport key."""
+    for s in config.SPORTS:
+        for lg in s.leagues:
+            if lg.api_key == api_key:
+                return s.emoji
+    if api_key.startswith("soccer"): return "⚽"
+    if api_key.startswith("rugby"): return "🏉"
+    if api_key.startswith("cricket"): return "🏏"
+    if api_key.startswith("basketball"): return "🏀"
+    if api_key.startswith("american"): return "🏈"
+    if api_key.startswith("tennis"): return "🎾"
+    if api_key.startswith("mma") or api_key.startswith("boxing"): return "🥊"
+    if api_key.startswith("golf"): return "⛳"
+    return "🏅"
+
 
 async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-    """Show the personalised 'Your Games' schedule with day nav and edge indicators."""
-    text, markup = await _build_your_games(user_id)
+    """Show the default all-games view."""
+    text, markup = await _render_your_games_all(user_id)
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
-async def _build_your_games(
-    user_id: int,
-    day_offset: int = 0,
-    sport_filter: str | None = None,
-    page: int = 0,
+async def _render_your_games_all(
+    user_id: int, page: int = 0,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """Build the Your Games view with day nav, sport filters, and edge indicators.
-
-    Args:
-        user_id: Telegram user ID
-        day_offset: 0=Today, 1=Tomorrow, ... 6=+6 days
-        sport_filter: Optional sport_key to filter by (None = all sports)
-        page: Pagination page within a day
-    """
-    from datetime import datetime as dt_cls, timedelta
+    """Default Your Games — all games sorted by edge, sport filter buttons below."""
+    from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
 
     sa_tz = ZoneInfo(config.TZ)
     now = dt_cls.now(sa_tz)
-    target_date = (now + timedelta(days=day_offset)).date()
 
-    # Fetch all user events (uses cache)
     games = _schedule_cache.get(user_id)
     if games is None:
         games = await _fetch_schedule_games(user_id)
@@ -2158,76 +2182,61 @@ async def _build_your_games(
         ])
         return text, markup
 
-    # Filter games for the target date
-    day_games = []
-    for event in games:
-        try:
-            ct = dt_cls.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
-            ct_sa = ct.astimezone(sa_tz)
-            if ct_sa.date() == target_date:
-                day_games.append({**event, "_ct_sa": ct_sa})
-        except Exception:
-            continue
+    if not games:
+        text = (
+            "⚽ <b>Your Games</b>\n\n"
+            "No upcoming games found for your teams.\n"
+            "Check back later or add more teams in Settings."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
+            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+        ])
+        return text, markup
 
-    # Apply sport filter
-    if sport_filter:
-        day_games = [g for g in day_games if config.LEAGUE_SPORT.get(g.get("league_key", "")) == sport_filter]
+    # Check edges
+    edge_events = await _check_edges_for_games(games)
 
-    # Detect unique sports for filter tabs
-    user_sport_keys = set()
-    for lk in league_keys:
-        sk = config.LEAGUE_SPORT.get(lk)
-        if sk:
-            user_sport_keys.add(sk)
+    # Sort: edge games first, then by commence_time
+    def sort_key(g):
+        has_edge = 1 if edge_events.get(g.get("id", "")) else 0
+        return (-has_edge, g.get("commence_time", ""))
 
-    # Quick EV check for edge indicators
-    edge_events = await _check_edges_for_games(day_games)
+    sorted_games = sorted(games, key=sort_key)
 
-    # Day header
-    day_names = []
-    for d in range(7):
-        d_date = (now + timedelta(days=d)).date()
-        if d == 0:
-            day_names.append("Today")
-        elif d == 1:
-            day_names.append("Tmrw")
-        else:
-            day_names.append(d_date.strftime("%a"))
-
-    # Date label for header
-    if day_offset == 0:
-        date_label = "Today"
-    elif day_offset == 1:
-        date_label = "Tomorrow"
-    else:
-        date_label = target_date.strftime("%A, %d %b")
-
-    # Build text
-    total_today = len(day_games)
-    edge_count = sum(1 for eid in edge_events if edge_events[eid])
-
-    header_parts = [f"⚽ <b>Your Games — {date_label}</b>"]
-    if total_today == 0:
-        header_parts.append("\nNo games scheduled for this day.")
-        if sport_filter:
-            sport_def = config.ALL_SPORTS.get(sport_filter)
-            sport_name = sport_def.label if sport_def else sport_filter
-            header_parts.append(f"\n<i>(Filtered: {sport_name} only)</i>")
-    else:
-        summary_parts = [f"{total_today} game{'s' if total_today != 1 else ''}"]
-        if edge_count:
-            summary_parts.append(f"🔥 {edge_count} with edge")
-        header_parts.append(f"\n{' · '.join(summary_parts)}")
-
-    # Paginate games for this day
+    # Paginate
     per_page = GAMES_PER_PAGE
-    total_pages = max(1, (len(day_games) + per_page - 1) // per_page)
+    total_pages = max(1, (len(sorted_games) + per_page - 1) // per_page)
     page = max(0, min(page, total_pages - 1))
-    page_games = day_games[page * per_page : (page + 1) * per_page]
+    page_games = sorted_games[page * per_page : (page + 1) * per_page]
 
+    edge_count = sum(1 for eid in edge_events if edge_events[eid])
+    total = len(sorted_games)
+
+    lines = ["⚽ <b>Your Games</b>"]
+    summary = [f"{total} game{'s' if total != 1 else ''}"]
+    if edge_count:
+        summary.append(f"🔥 {edge_count} with edge")
+    lines.append(" · ".join(summary))
+    lines.append("")
+
+    # Group page games by date
+    current_date_label = None
     for idx, event in enumerate(page_games, page * per_page + 1):
-        ct_sa = event.get("_ct_sa")
-        event_time = ct_sa.strftime("%H:%M") if ct_sa else ""
+        ct_sa = _parse_date(event.get("commence_time", ""))
+        if ct_sa:
+            event_date = ct_sa.date()
+            date_label = _format_date_label(event_date, now)
+            if date_label != current_date_label:
+                current_date_label = date_label
+                lines.append(f"<b>{date_label}</b>")
+            event_time = ct_sa.strftime("%H:%M")
+        else:
+            event_time = ""
+            if current_date_label != "TBC":
+                current_date_label = "TBC"
+                lines.append("<b>TBC</b>")
+
         home = event.get("home_team", "?")
         away = event.get("away_team", "?")
         emoji = event.get("sport_emoji", "🏅")
@@ -2235,49 +2244,12 @@ async def _build_your_games(
         home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
         away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
         edge_marker = " 🔥" if edge_events.get(event_id) else ""
-        header_parts.append(f"\n{idx}. {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
+        lines.append(f"{idx}. {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
 
-    text = "\n".join(header_parts)
+    text = "\n".join(lines)
 
     # Build buttons
     buttons: list[list[InlineKeyboardButton]] = []
-
-    # Day navigation tabs — row 1: Today, Tmrw, Wed, Thu; row 2: Fri, Sat, Sun
-    day_row1: list[InlineKeyboardButton] = []
-    day_row2: list[InlineKeyboardButton] = []
-    for d in range(7):
-        label = day_names[d]
-        if d == day_offset:
-            label = f"[{label}]"
-        cb = f"yg:day:{d}:{sport_filter or 'all'}"
-        btn = InlineKeyboardButton(label, callback_data=cb)
-        if d < 4:
-            day_row1.append(btn)
-        else:
-            day_row2.append(btn)
-    buttons.append(day_row1)
-    buttons.append(day_row2)
-
-    # Sport filter tabs — only if user follows 3+ sports
-    if len(user_sport_keys) >= 3:
-        sport_row: list[InlineKeyboardButton] = []
-        # "All" filter
-        all_label = "[All]" if not sport_filter else "All"
-        sport_row.append(InlineKeyboardButton(
-            all_label, callback_data=f"yg:sport:{day_offset}:all",
-        ))
-        for sk in sorted(user_sport_keys):
-            sport_def = config.ALL_SPORTS.get(sk)
-            if not sport_def:
-                continue
-            s_label = sport_def.emoji
-            if sk == sport_filter:
-                s_label = f"[{s_label}]"
-            sport_row.append(InlineKeyboardButton(
-                s_label, callback_data=f"yg:sport:{day_offset}:{sk}",
-            ))
-        # Limit to 5 buttons per row
-        buttons.append(sport_row[:5])
 
     # Game buttons
     for i, event in enumerate(page_games, page * per_page + 1):
@@ -2290,29 +2262,174 @@ async def _build_your_games(
         edge = " 🔥" if edge_events.get(event_id) else ""
         buttons.append([InlineKeyboardButton(
             f"[{i}] {emoji} {h_abbr} vs {a_abbr}{edge}",
-            callback_data=f"schedule:tips:{event_id}",
+            callback_data=f"yg:game:{event_id}",
         )])
 
-    # Pagination within day
+    # Pagination
     if total_pages > 1:
         nav_row: list[InlineKeyboardButton] = []
-        sf = sport_filter or "all"
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"yg:all:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="yg:noop"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"yg:all:{page + 1}"))
+        buttons.append(nav_row)
+
+    # Sport filter buttons (only if 2+ sports)
+    user_sport_keys = set()
+    for lk in league_keys:
+        sk = config.LEAGUE_SPORT.get(lk)
+        if sk:
+            user_sport_keys.add(sk)
+    if len(user_sport_keys) >= 2:
+        sport_row: list[InlineKeyboardButton] = []
+        for sk in sorted(user_sport_keys):
+            sport_def = config.ALL_SPORTS.get(sk)
+            if not sport_def:
+                continue
+            sport_row.append(InlineKeyboardButton(
+                sport_def.emoji,
+                callback_data=f"yg:sport:{sk}:0:0",
+            ))
+        buttons.append(sport_row[:6])
+
+    # Bottom nav
+    buttons.append([
+        InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go"),
+        InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
+    ])
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def _render_your_games_sport(
+    user_id: int, sport_key: str, day_offset: int = 0, page: int = 0,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Sport-specific Your Games view with 7-day navigation."""
+    from datetime import datetime as dt_cls, timedelta
+    from zoneinfo import ZoneInfo
+
+    sa_tz = ZoneInfo(config.TZ)
+    now = dt_cls.now(sa_tz)
+    target_date = (now + timedelta(days=day_offset)).date()
+
+    games = _schedule_cache.get(user_id)
+    if games is None:
+        games = await _fetch_schedule_games(user_id)
+
+    prefs = await db.get_user_sport_prefs(user_id)
+    user_teams = {p.team_name.lower() for p in prefs if p.team_name}
+
+    sport_def = config.ALL_SPORTS.get(sport_key)
+    sport_name = sport_def.label if sport_def else sport_key
+    sport_emoji = sport_def.emoji if sport_def else "🏅"
+
+    # Filter by sport and date
+    day_games = []
+    for event in games:
+        sk = config.LEAGUE_SPORT.get(event.get("league_key", ""))
+        if sk != sport_key:
+            continue
+        ct_sa = _parse_date(event.get("commence_time", ""))
+        if ct_sa and ct_sa.date() == target_date:
+            day_games.append({**event, "_ct_sa": ct_sa})
+
+    edge_events = await _check_edges_for_games(day_games)
+
+    date_label = _format_date_label(target_date, now)
+
+    # Day navigation labels
+    day_names = []
+    for d in range(7):
+        d_date = (now + timedelta(days=d)).date()
+        if d == 0:
+            day_names.append("Today")
+        elif d == 1:
+            day_names.append("Tmrw")
+        else:
+            day_names.append(d_date.strftime("%a"))
+
+    # Build text
+    lines = [f"{sport_emoji} <b>{sport_name} — {date_label}</b>"]
+    if not day_games:
+        lines.append(f"\nNo {sport_name.lower()} games on {date_label.lower()}.")
+    else:
+        total = len(day_games)
+        edge_count = sum(1 for g in day_games if edge_events.get(g.get("id", "")))
+        summary = [f"{total} game{'s' if total != 1 else ''}"]
+        if edge_count:
+            summary.append(f"🔥 {edge_count} with edge")
+        lines.append(" · ".join(summary))
+        lines.append("")
+
+    # Paginate
+    per_page = GAMES_PER_PAGE
+    total_pages = max(1, (len(day_games) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    page_games = day_games[page * per_page : (page + 1) * per_page]
+
+    for idx, event in enumerate(page_games, page * per_page + 1):
+        ct_sa = event.get("_ct_sa")
+        event_time = ct_sa.strftime("%H:%M") if ct_sa else ""
+        home = event.get("home_team", "?")
+        away = event.get("away_team", "?")
+        event_id = event.get("id", "")
+        home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
+        away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
+        edge_marker = " 🔥" if edge_events.get(event_id) else ""
+        lines.append(f"{idx}. {sport_emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
+
+    text = "\n".join(lines)
+
+    # Build buttons
+    buttons: list[list[InlineKeyboardButton]] = []
+
+    # Day navigation tabs — 2 rows
+    day_row1: list[InlineKeyboardButton] = []
+    day_row2: list[InlineKeyboardButton] = []
+    for d in range(7):
+        label = day_names[d]
+        if d == day_offset:
+            label = f"[{label}]"
+        cb = f"yg:sport:{sport_key}:{d}:0"
+        btn = InlineKeyboardButton(label, callback_data=cb)
+        if d < 4:
+            day_row1.append(btn)
+        else:
+            day_row2.append(btn)
+    buttons.append(day_row1)
+    buttons.append(day_row2)
+
+    # Game buttons
+    for i, event in enumerate(page_games, page * per_page + 1):
+        home = event.get("home_team", "?")
+        away = event.get("away_team", "?")
+        event_id = event.get("id", str(i))
+        h_abbr = config.abbreviate_team(home)
+        a_abbr = config.abbreviate_team(away)
+        edge = " 🔥" if edge_events.get(event_id) else ""
+        buttons.append([InlineKeyboardButton(
+            f"[{i}] {sport_emoji} {h_abbr} vs {a_abbr}{edge}",
+            callback_data=f"yg:game:{event_id}",
+        )])
+
+    # Pagination
+    if total_pages > 1:
+        nav_row: list[InlineKeyboardButton] = []
         if page > 0:
             nav_row.append(InlineKeyboardButton(
-                "⬅️ Prev", callback_data=f"yg:page:{day_offset}:{sf}:{page - 1}",
+                "⬅️ Prev", callback_data=f"yg:sport:{sport_key}:{day_offset}:{page - 1}",
             ))
-        nav_row.append(InlineKeyboardButton(
-            f"📄 {page + 1}/{total_pages}", callback_data="yg:noop",
-        ))
+        nav_row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="yg:noop"))
         if page < total_pages - 1:
             nav_row.append(InlineKeyboardButton(
-                "Next ➡️", callback_data=f"yg:page:{day_offset}:{sf}:{page + 1}",
+                "Next ➡️", callback_data=f"yg:sport:{sport_key}:{day_offset}:{page + 1}",
             ))
         buttons.append(nav_row)
 
     # Bottom nav
     buttons.append([
-        InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go"),
+        InlineKeyboardButton("⬅️ All Games", callback_data="yg:all:0"),
         InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
     ])
 
@@ -2379,107 +2496,198 @@ async def _check_edges_for_games(games: list[dict]) -> dict[str, bool]:
     return edge_map
 
 
-# ── Hot Tips — cross-market discovery feed ───────────────
+# ── Hot Tips — all-sports value bet scanner ───────────────
+
+# Comprehensive list of Odds API sport keys to scan across all markets
+HOT_TIPS_SCAN_SPORTS = [
+    # Soccer
+    "soccer_epl", "soccer_spain_la_liga", "soccer_germany_bundesliga",
+    "soccer_italy_serie_a", "soccer_france_ligue_one", "soccer_uefa_champs_league",
+    "soccer_south_africa_premier_league", "soccer_usa_mls",
+    # Rugby
+    "rugbyunion_super_rugby_pacific", "rugbyunion_urc",
+    # Cricket
+    "cricket_ipl", "cricket_test_match", "cricket_big_bash",
+    # Basketball
+    "basketball_nba", "basketball_euroleague",
+    # American Football
+    "americanfootball_nfl",
+    # MMA & Boxing
+    "mma_mixed_martial_arts", "boxing_boxing",
+    # Tennis (Grand Slams)
+    "tennis_atp_aus_open_singles", "tennis_atp_french_open_singles",
+    "tennis_atp_us_open_singles", "tennis_atp_wimbledon_singles",
+    # Golf
+    "golf_pga_championship_winner", "golf_masters_tournament_winner",
+]
+
+_hot_tips_cache: dict[str, dict] = {}  # "global" → {"tips": [...], "ts": float}
+HOT_TIPS_CACHE_TTL = 900  # 15 minutes
+
+
+def _format_kickoff_display(commence_time: str) -> str:
+    """Format commence time as 'Today 19:30' or 'Wed 26 Feb, 15:00'."""
+    ct_sa = _parse_date(commence_time)
+    if not ct_sa:
+        return "TBC"
+    from datetime import datetime as dt_cls, timedelta
+    from zoneinfo import ZoneInfo
+    now = dt_cls.now(ZoneInfo(config.TZ))
+    today = now.date()
+    if ct_sa.date() == today:
+        return f"Today {ct_sa.strftime('%H:%M')}"
+    if ct_sa.date() == today + timedelta(days=1):
+        return f"Tomorrow {ct_sa.strftime('%H:%M')}"
+    return ct_sa.strftime("%a %d %b, %H:%M")
+
+
+async def _fetch_hot_tips_all_sports() -> list[dict]:
+    """Scan all major sports for value bets. Uses 15-min cache."""
+    import time
+    from scripts.odds_client import fetch_odds_cached, fair_probabilities, find_best_sa_odds, calculate_ev
+    from scripts.odds_client import kelly_stake as calc_kelly
+
+    cache_entry = _hot_tips_cache.get("global")
+    if cache_entry and (time.time() - cache_entry["ts"]) < HOT_TIPS_CACHE_TTL:
+        return cache_entry["tips"]
+
+    all_tips: list[dict] = []
+
+    for sport_key in HOT_TIPS_SCAN_SPORTS:
+        try:
+            result = await fetch_odds_cached(sport_key, regions="eu,uk,au", markets="h2h")
+            if not result["ok"] or not result.get("data"):
+                continue
+
+            for event in result["data"]:
+                if not event.get("bookmakers"):
+                    continue
+
+                fair_probs = fair_probabilities(event)
+                best_entries = find_best_sa_odds(event)
+
+                for entry in best_entries:
+                    prob = fair_probs.get(entry.outcome, 0)
+                    if prob <= 0:
+                        continue
+                    ev_pct = calculate_ev(entry.price, prob)
+                    if ev_pct < 2.0:
+                        continue
+
+                    all_tips.append({
+                        "event_id": event.get("id", ""),
+                        "sport_key": sport_key,
+                        "home_team": event.get("home_team", "?"),
+                        "away_team": event.get("away_team", "?"),
+                        "commence_time": event.get("commence_time", ""),
+                        "outcome": entry.outcome,
+                        "odds": entry.price,
+                        "bookmaker": entry.bookmaker,
+                        "ev": round(ev_pct, 1),
+                        "prob": round(prob * 100),
+                        "kelly": round(calc_kelly(entry.price, prob, fraction=0.5) * 100, 1),
+                    })
+        except Exception as exc:
+            log.warning("Hot tips scan error for %s: %s", sport_key, exc)
+            continue
+
+    # Sort by EV descending, take top 10
+    all_tips.sort(key=lambda t: t["ev"], reverse=True)
+    top_tips = all_tips[:10]
+
+    _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time()}
+    return top_tips
+
 
 async def _show_hot_tips(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-    """Show the Hot Tips cross-market discovery feed."""
-    text, markup = await _build_hot_tips(user_id)
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    """Entry point for Hot Tips from sticky keyboard."""
+    await _do_hot_tips_flow(update.effective_chat.id, ctx.bot)
 
 
-async def _build_hot_tips(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
-    """Build the Hot Tips view — top EV picks across all major leagues.
-
-    Scans user's leagues + major markets for the best value bets right now.
-    """
+async def _do_hot_tips_flow(chat_id: int, bot) -> None:
+    """Core Hot Tips — scan all sports, send separate messages per tip."""
     import random
 
-    user = await db.get_user(user_id)
-    risk_key = (user.risk_profile if user else None) or "moderate"
-    experience = (user.experience_level if user else None) or "casual"
+    verb = random.choice(LOADING_VERBS)
+    loading = await bot.send_message(
+        chat_id,
+        f"🔥 <i>{verb} across all markets…</i>",
+        parse_mode=ParseMode.HTML,
+    )
 
-    prefs = await db.get_user_sport_prefs(user_id)
-    if prefs:
-        league_keys = list({p.league for p in prefs if p.league})
-    else:
-        league_keys = list(config.SPORTS_MAP.keys())
+    tips = await _fetch_hot_tips_all_sports()
 
-    if not league_keys:
-        text = (
-            "🔥 <b>Hot Tips</b>\n\n"
-            "Set up your sports first to get personalised tips!"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚙️ Edit Sports", callback_data="settings:sports")],
-            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-        ])
-        return text, markup
-
-    # Use the existing picks engine for cross-market scanning
-    user_bankroll = getattr(user, "bankroll", None) if user else None
     try:
-        result = await get_picks_for_user(
-            league_keys=league_keys,
-            risk_profile=risk_key,
-            max_picks=5,
-            bankroll=user_bankroll,
-        )
-    except Exception as exc:
-        log.error("Hot Tips engine error: %s", exc)
-        result = {"ok": False, "picks": [], "total_events": 0, "total_markets": 0,
-                  "quota_remaining": "?", "errors": [str(exc)]}
+        await loading.delete()
+    except Exception:
+        pass
 
-    profile = config.RISK_PROFILES.get(risk_key, config.RISK_PROFILES["moderate"])
-
-    # Handle quota exhausted
-    if result.get("errors") and any("quota_exhausted" in str(e) for e in result["errors"]):
-        text = (
+    if not tips:
+        await bot.send_message(
+            chat_id,
             "🔥 <b>Hot Tips</b>\n\n"
-            "⚠️ Daily data limit reached. Tips refresh tomorrow.\n"
-            "Your bankroll is safe — no bets placed automatically."
+            "No edges found right now — the market is efficient.\n"
+            "Check back when more games open!",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+            ]),
         )
-        return text, InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚽ Your Games", callback_data="yg:day:0:all")],
-            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-        ])
+        return
 
-    if not result["ok"] or not result["picks"]:
-        text = (
-            "🔥 <b>Hot Tips</b>\n\n"
-            f"Scanned {result['total_events']} events across your leagues.\n\n"
-            "No edges found right now — the AI is protecting your bankroll.\n"
-            "Check back when more markets open!"
+    # Header message
+    await bot.send_message(
+        chat_id,
+        f"🔥 <b>Hot Tips — {len(tips)} Value Bet{'s' if len(tips) != 1 else ''}</b>\n\n"
+        f"Scanned {len(HOT_TIPS_SCAN_SPORTS)} markets across all sports.",
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Individual tip messages with Betway button
+    active_bk = config.get_active_bookmaker()
+    betway_url = active_bk.get("affiliate_base_url") or active_bk.get("website_url", "")
+
+    for i, tip in enumerate(tips, 1):
+        kickoff = _format_kickoff_display(tip["commence_time"])
+        sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
+
+        card = (
+            f"<b>#{i} {sport_emoji} {tip['home_team']} vs {tip['away_team']}</b>\n"
+            f"⏰ {kickoff}\n\n"
+            f"💰 <b>{tip['outcome']}</b> @ <b>{tip['odds']:.2f}</b>\n"
+            f"📈 EV: <b>+{tip['ev']}%</b> · Confidence: {tip['prob']}%"
         )
-        return text, InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚽ Your Games", callback_data="yg:day:0:all")],
+
+        tip_buttons: list[list[InlineKeyboardButton]] = []
+        if betway_url:
+            tip_buttons.append([InlineKeyboardButton(
+                f"📲 Bet on {active_bk['short_name']} →",
+                url=betway_url,
+            )])
+        else:
+            tip_buttons.append([InlineKeyboardButton(
+                f"📲 Bet on {active_bk['short_name']} →",
+                callback_data="tip:affiliate_soon",
+            )])
+
+        await bot.send_message(
+            chat_id, card,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(tip_buttons),
+        )
+
+    # Footer with navigation
+    await bot.send_message(
+        chat_id,
+        f"<i>{len(tips)} tips found across all markets.</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="hot:go")],
+            [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-        ])
-
-    picks = result["picks"]
-
-    lines = [
-        f"🔥 <b>Hot Tips — {len(picks)} Value Bet{'s' if len(picks) != 1 else ''}</b>\n",
-        f"📊 Scanned {result['total_events']} events · "
-        f"{result['total_markets']} markets",
-        f"⚖️ Risk: {profile['label']}\n",
-    ]
-
-    # Format each pick as a compact card
-    for i, pick in enumerate(picks, 1):
-        card = format_engine_pick_card(pick, i, experience)
-        lines.append(card)
-        lines.append("")
-
-    lines.append("<i>Always gamble responsibly. 🇿🇦</i>")
-    text = "\n".join(lines)
-
-    buttons: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton("🔄 Refresh Tips", callback_data="hot:go")],
-        [InlineKeyboardButton("⚽ Your Games", callback_data="yg:day:0:all")],
-        [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-    ]
-
-    return text, InlineKeyboardMarkup(buttons)
+        ]),
+    )
 
 
 async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2724,10 +2932,10 @@ async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
             chat_id, card, parse_mode=ParseMode.HTML,
         )
 
-    # Final footer
+    # Final footer with navigation
     await bot.send_message(
         chat_id,
-        "<i>Always gamble responsibly. 🇿🇦</i>",
+        f"<i>{len(picks)} tips found.</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb_nav(),
     )
@@ -2912,7 +3120,7 @@ async def _build_schedule(user_id: int, page: int = 0) -> tuple[str, InlineKeybo
 
 
 # ── Schedule pagination ───────────────────────────────────
-GAMES_PER_PAGE = 5
+GAMES_PER_PAGE = 10
 
 # Cache for schedule games per user (user_id → list of event dicts)
 _schedule_cache: dict[int, list[dict]] = {}
@@ -3007,7 +3215,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             "No odds available yet for this game. Check back closer to kickoff!",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="nav:schedule")],
+                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")],
             ]),
         )
         return
@@ -3080,7 +3288,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     if not tips:
         lines.append("No odds available on Betway for this game yet.")
     else:
-        lines.append(f"<b>🇿🇦 {config.get_active_display_name()} Odds:</b>")
+        lines.append(f"<b>{config.get_active_display_name()} Odds:</b>")
         for tip in tips:
             ev_ind = f"+{tip['ev']}%" if tip["ev"] > 0 else f"{tip['ev']}%"
             value_marker = " 💰" if tip["ev"] > 2 else ""
@@ -3116,7 +3324,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         )])
 
     buttons.append([InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")])
-    buttons.append([InlineKeyboardButton("↩️ Back to Your Games", callback_data="nav:schedule")])
+    buttons.append([InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")])
 
     await query.edit_message_text(
         msg, parse_mode=ParseMode.HTML,
@@ -3177,7 +3385,7 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             "⚠️ Tip data expired. Tap the game again for fresh analysis.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="nav:schedule")],
+                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")],
             ]),
         )
         return
@@ -3244,7 +3452,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             stake_str = f"\n💵 Stake R{stake:,.0f} → R{pot_return:,.0f}"
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
-            f"💰 <b>{outcome}</b> @ <b>{odds:.2f}</b> ({bookie} 🇿🇦)\n"
+            f"💰 <b>{outcome}</b> @ <b>{odds:.2f}</b> ({bookie})\n"
             f"📈 EV: <b>+{ev}%</b> | Fair prob: {prob}%\n"
             f"🎯 Kelly fraction: <code>{ks:.1%}</code>{stake_str}\n\n"
             f"<i>EV = (odds × true_prob - 1). Positive = edge in your favour.</i>"
@@ -3263,7 +3471,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
             f"📋 <b>What's the bet?</b>\n{bet_explain}\n\n"
-            f"💵 <b>The odds: {odds:.2f}</b> on {bookie} 🇿🇦\n"
+            f"💵 <b>The odds: {odds:.2f}</b> on {bookie}\n"
             f"  Bet R20 → get <b>R{payout_20:.0f}</b> back\n"
             f"  Bet R50 → get <b>R{payout_50:.0f}</b> back\n\n"
             f"🎯 Our AI gives this a <b>{prob}%</b> chance — "
@@ -3280,7 +3488,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             stake_hint = f"\n💡 Suggested stake: <b>R{suggested:.0f}</b>"
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
-            f"💰 We like <b>{outcome}</b> @ {odds:.2f} ({bookie} 🇿🇦)\n\n"
+            f"💰 We like <b>{outcome}</b> @ {odds:.2f} ({bookie})\n\n"
             f"The AI found a <b>+{ev}%</b> edge here.\n"
             f"Fair probability: {prob}% — odds suggest less.\n\n"
             f"💵 R100 bet pays <b>R{payout_100:.0f}</b>{stake_hint}\n\n"
@@ -3408,7 +3616,7 @@ async def _save_story_prefs(query, chat_id: int, user_id: int) -> None:
         text, parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔥 Show Me Hot Tips", callback_data="hot:go")],
-            [InlineKeyboardButton("⚽ Your Games", callback_data="yg:day:0:all")],
+            [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
             [InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")],
         ]),
     )
@@ -3587,7 +3795,7 @@ async def handle_affiliate(query, action: str) -> None:
     name = active["short_name"]
     website = active.get("website_url", "betway.co.za")
     text = (
-        f"<b>🇿🇦 {name} — Our Recommended Bookmaker</b>\n\n"
+        f"<b>{name} — Our Recommended Bookmaker</b>\n\n"
         f"✅ Licensed in South Africa\n"
         f"✅ Fast deposits & withdrawals\n"
         f"✅ Great odds across all sports\n"
