@@ -147,12 +147,11 @@ async def test_handle_menu_history_empty(test_db, mock_update, mock_context):
 
 class TestStickyKeyboard:
     def test_get_main_keyboard_shape(self):
-        """Sticky keyboard should be 3 rows of 2."""
+        """Sticky keyboard should be 2 rows of 3."""
         kb = bot.get_main_keyboard()
-        assert len(kb.keyboard) == 3
-        assert len(kb.keyboard[0]) == 2
-        assert len(kb.keyboard[1]) == 2
-        assert len(kb.keyboard[2]) == 2
+        assert len(kb.keyboard) == 2
+        assert len(kb.keyboard[0]) == 3
+        assert len(kb.keyboard[1]) == 3
 
     def test_get_main_keyboard_labels(self):
         """Sticky keyboard has correct labels."""
@@ -160,10 +159,10 @@ class TestStickyKeyboard:
         labels = [btn.text for row in kb.keyboard for btn in row]
         assert "⚽ Your Games" in labels
         assert "🔥 Hot Tips" in labels
-        assert "🔴 Live Games" in labels
-        assert "📊 My Stats" in labels
-        assert "📖 Betway Guide" in labels
+        assert "📖 Guide" in labels
+        assert "👤 Profile" in labels
         assert "⚙️ Settings" in labels
+        assert "❓ Help" in labels
 
     def test_get_main_keyboard_persistent(self):
         """Keyboard should be persistent and resized."""

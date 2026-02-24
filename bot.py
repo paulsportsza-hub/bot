@@ -67,23 +67,25 @@ _team_edit_state: dict[int, dict] = {}
 # Always-visible bottom keyboard (separate from inline keyboards)
 
 _KEYBOARD_LABELS = [
-    "⚽ Your Games", "🔥 Hot Tips", "🔴 Live Games",
-    "📊 My Stats", "📖 Betway Guide", "⚙️ Settings",
+    "⚽ Your Games", "🔥 Hot Tips", "📖 Guide",
+    "👤 Profile", "⚙️ Settings", "❓ Help",
 ]
 
 # Legacy labels kept for transition — users with cached keyboards may still send these
 _LEGACY_LABELS = {
-    "🎯 Today's Picks": "hot_tips",     # old picks → Hot Tips
-    "📅 Schedule": "your_games",         # old schedule → Your Games
+    "🎯 Today's Picks": "hot_tips",         # old picks → Hot Tips
+    "📅 Schedule": "your_games",             # old schedule → Your Games
+    "🔴 Live Games": "live_games",           # old keyboard → Live Games
+    "📊 My Stats": "stats",                  # old keyboard → Profile
+    "📖 Betway Guide": "guide",              # old keyboard → Guide
 }
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Return the persistent 3×2 reply keyboard."""
+    """Return the persistent 2×3 reply keyboard."""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("⚽ Your Games"), KeyboardButton("🔥 Hot Tips")],
-            [KeyboardButton("🔴 Live Games"), KeyboardButton("📊 My Stats")],
-            [KeyboardButton("📖 Betway Guide"), KeyboardButton("⚙️ Settings")],
+            [KeyboardButton("⚽ Your Games"), KeyboardButton("🔥 Hot Tips"), KeyboardButton("📖 Guide")],
+            [KeyboardButton("👤 Profile"), KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -584,11 +586,11 @@ HELP_TEXT = textwrap.dedent("""\
 
     <b>Bottom keyboard</b>
     ⚽ <b>Your Games</b> — Personalised 7-day schedule with AI edge markers
-    🔥 <b>Hot Tips</b> — Best value bets across your leagues
-    🔴 <b>Live Games</b> — Games you're following live
-    📊 <b>My Stats</b> — Your profile and engagement
-    📖 <b>Betway Guide</b> — Step-by-step betting guide
+    🔥 <b>Hot Tips</b> — Top 5 value bets across all sports
+    📖 <b>Guide</b> — Step-by-step Betway betting guide
+    👤 <b>Profile</b> — Your sports, teams, and preferences
     ⚙️ <b>Settings</b> — Edit sports, risk, notifications
+    ❓ <b>Help</b> — This message
 
     <b>How tips work</b>
     Our AI analyses live odds, recent form, and
@@ -1982,6 +1984,14 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         text = "🔥 Hot Tips"
     elif legacy == "your_games":
         text = "⚽ Your Games"
+    elif legacy == "live_games":
+        await _show_live_games(update, user_id)
+        return
+    elif legacy == "stats":
+        await _show_stats_overview(update, user_id)
+        return
+    elif legacy == "guide":
+        text = "📖 Guide"
 
     if text == "⚽ Your Games":
         db_user = await db.get_user(user_id)
@@ -1994,12 +2004,17 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await _show_your_games(update, ctx, user_id)
     elif text == "🔥 Hot Tips":
         await _show_hot_tips(update, ctx, user_id)
-    elif text == "🔴 Live Games":
-        await _show_live_games(update, user_id)
-    elif text == "📊 My Stats":
-        await _show_stats_overview(update, user_id)
-    elif text == "📖 Betway Guide":
+    elif text == "📖 Guide":
         await _show_betway_guide(update)
+    elif text == "👤 Profile":
+        db_user = await db.get_user(user_id)
+        if not db_user or not db_user.onboarding_done:
+            await update.message.reply_text(
+                "👤 Complete onboarding first!\n\nUse /start to get set up.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        await _show_profile(update, user_id)
     elif text == "⚙️ Settings":
         db_user = await db.get_user(user_id)
         if not db_user or not db_user.onboarding_done:
@@ -2011,6 +2026,8 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(
             "⚙️ <b>Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
         )
+    elif text == "❓ Help":
+        await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
 async def _show_live_games(update: Update, user_id: int) -> None:
@@ -2068,6 +2085,16 @@ async def _show_stats_overview(update: Update, user_id: int) -> None:
     await update.message.reply_text(
         "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb_nav(),
     )
+
+
+async def _show_profile(update: Update, user_id: int) -> None:
+    """Show user profile summary from the sticky keyboard."""
+    summary = await format_profile_summary(user_id)
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚙️ Edit Profile", callback_data="settings:home")],
+        [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+    ])
+    await update.message.reply_text(summary, parse_mode=ParseMode.HTML, reply_markup=buttons)
 
 
 async def _show_betway_guide(update: Update) -> None:
@@ -2185,10 +2212,12 @@ async def _render_your_games_all(
     if not games:
         text = (
             "⚽ <b>Your Games</b>\n\n"
-            "No upcoming games found for your teams.\n"
-            "Check back later or add more teams in Settings."
+            "No games for your teams this week 😔\n\n"
+            "Try <b>🔥 Hot Tips</b> to discover value bets across all sports, "
+            "or add more teams in Settings."
         )
         markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
             [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
         ])
@@ -2591,9 +2620,9 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
             log.warning("Hot tips scan error for %s: %s", sport_key, exc)
             continue
 
-    # Sort by EV descending, take top 10
+    # Sort by EV descending, take top 5
     all_tips.sort(key=lambda t: t["ev"], reverse=True)
-    top_tips = all_tips[:10]
+    top_tips = all_tips[:5]
 
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time()}
     return top_tips
@@ -2652,11 +2681,13 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
         kickoff = _format_kickoff_display(tip["commence_time"])
         sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
 
+        prob = tip['prob']
+        conf_dot = "🟢" if prob >= 60 else ("🟡" if prob >= 40 else "🔴")
         card = (
             f"<b>#{i} {sport_emoji} {tip['home_team']} vs {tip['away_team']}</b>\n"
             f"⏰ {kickoff}\n\n"
             f"💰 <b>{tip['outcome']}</b> @ <b>{tip['odds']:.2f}</b>\n"
-            f"📈 EV: <b>+{tip['ev']}%</b> · Confidence: {tip['prob']}%"
+            f"📈 EV: <b>+{tip['ev']}%</b> · {conf_dot} Confidence: {prob}%"
         )
 
         tip_buttons: list[list[InlineKeyboardButton]] = []
@@ -4077,7 +4108,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_button))
 
     # Persistent reply keyboard taps (must be BEFORE freetext_handler)
-    _kb_pattern = r"^(⚽ Your Games|🔥 Hot Tips|🔴 Live Games|📊 My Stats|📖 Betway Guide|⚙️ Settings|🎯 Today's Picks|📅 Schedule)$"
+    _kb_pattern = r"^(⚽ Your Games|🔥 Hot Tips|📖 Guide|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule)$"
     app.add_handler(MessageHandler(filters.Regex(_kb_pattern), handle_keyboard_tap))
 
     # Free-text chat (also handles favourite input during onboarding)

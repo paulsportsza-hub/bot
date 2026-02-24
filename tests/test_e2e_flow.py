@@ -109,7 +109,7 @@ def get_reply_keyboard_labels(msg) -> list[str]:
 # ── Test Functions ───────────────────────────────────────
 
 async def test_sticky_keyboard_layout(client: TelegramClient) -> TestResult:
-    """Verify the persistent reply keyboard has the correct 3×2 layout."""
+    """Verify the persistent reply keyboard has the correct 2×3 layout."""
     start = time.time()
     try:
         msgs = await send_and_wait(client, "/menu", wait=5)
@@ -125,7 +125,7 @@ async def test_sticky_keyboard_layout(client: TelegramClient) -> TestResult:
             return TestResult("sticky_keyboard_layout", False, "No reply keyboard found", time.time() - start)
 
         labels = get_reply_keyboard_labels(kb_msg)
-        expected = ["⚽ Your Games", "🔥 Hot Tips", "🔴 Live Games", "📊 My Stats", "📖 Betway Guide", "⚙️ Settings"]
+        expected = ["⚽ Your Games", "🔥 Hot Tips", "📖 Guide", "👤 Profile", "⚙️ Settings", "❓ Help"]
 
         for exp in expected:
             if exp not in labels:
