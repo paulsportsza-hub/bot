@@ -3,6 +3,12 @@
 
 from __future__ import annotations
 
+import os
+import sentry_sdk
+from dotenv import load_dotenv
+load_dotenv()
+sentry_sdk.init(dsn=os.getenv("SENTRY_DSN", ""))
+
 import difflib
 import logging
 import textwrap
