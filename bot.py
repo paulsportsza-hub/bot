@@ -726,7 +726,19 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 _story_state[chat_id] = state
                 await _advance_story_quiz(query, chat_id, user_id)
     elif prefix == "schedule":
-        if action.startswith("tips:"):
+        if action == "noop":
+            return
+        elif action.startswith("page:"):
+            page_num = int(action.split(":", 1)[1])
+            user_id = query.from_user.id
+            games = _schedule_cache.get(user_id, [])
+            if not games:
+                games = await _fetch_schedule_games(user_id)
+            prefs = await db.get_user_sport_prefs(user_id)
+            user_teams = {p.team_name.lower() for p in prefs if p.team_name}
+            text, markup = _render_schedule_page(games, user_teams, page=page_num)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif action.startswith("tips:"):
             event_id = action.split(":", 1)[1]
             await _generate_game_tips(query, ctx, event_id, query.from_user.id)
     elif prefix == "tip":
@@ -2288,13 +2300,9 @@ async def cmd_schedule(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def _build_schedule(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
-    """Shared schedule logic for command + callback. Returns (text, markup)."""
-    from datetime import datetime as dt_cls, date as date_cls
-    from zoneinfo import ZoneInfo
+async def _fetch_schedule_games(user_id: int) -> list[dict]:
+    """Fetch and cache schedule events for a user. Returns sorted event list."""
     from scripts.sports_data import fetch_events_for_league
-
-    sa_tz = ZoneInfo(config.TZ)
 
     prefs = await db.get_user_sport_prefs(user_id)
     user_teams: set[str] = set()
@@ -2304,17 +2312,6 @@ async def _build_schedule(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             user_teams.add(pref.team_name.lower())
         if pref.league:
             league_keys.add(pref.league)
-
-    if not league_keys:
-        text = (
-            "🏟️ <b>No leagues selected!</b>\n\n"
-            "Update your sports in /settings."
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚙️ Edit Sports", callback_data="settings:sports")],
-            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-        ])
-        return text, markup
 
     all_events: list[dict] = []
     for lk in league_keys:
@@ -2333,28 +2330,35 @@ async def _build_schedule(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             if is_relevant:
                 all_events.append({**event, "league_key": lk, "sport_emoji": sport_emoji})
 
-    if not all_events:
-        text = (
-            "📅 <b>No upcoming games found</b>\n\n"
-            "None of your followed teams have scheduled games right now. "
-            "Check back later or add more teams in /settings."
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
-            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-        ])
-        return text, markup
-
     all_events.sort(key=lambda e: e.get("commence_time", ""))
-    upcoming = all_events[:10]
+    # Cache for pagination
+    _schedule_cache[user_id] = all_events
+    return all_events
+
+
+def _render_schedule_page(
+    games: list[dict], user_teams: set[str], page: int = 0,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Render a single page of the schedule with pagination."""
+    from datetime import datetime as dt_cls
+    from zoneinfo import ZoneInfo
+
+    sa_tz = ZoneInfo(config.TZ)
+
+    total_pages = max(1, (len(games) + GAMES_PER_PAGE - 1) // GAMES_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * GAMES_PER_PAGE
+    end = start + GAMES_PER_PAGE
+    page_games = games[start:end]
 
     today = dt_cls.now(sa_tz).date()
     tomorrow = today + __import__("datetime").timedelta(days=1)
 
-    lines = [f"📅 <b>Upcoming Games ({len(upcoming)})</b>\n"]
+    lines = [f"📅 <b>Upcoming Games ({len(games)})</b>\n"]
     current_date_str = None
 
-    for idx, event in enumerate(upcoming, 1):
+    for idx, event in enumerate(page_games, start + 1):
         try:
             ct = dt_cls.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
             ct_sa = ct.astimezone(sa_tz)
@@ -2385,7 +2389,7 @@ async def _build_schedule(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     text = "\n".join(lines)
 
     buttons: list[list[InlineKeyboardButton]] = []
-    for i, event in enumerate(upcoming[:5], 1):
+    for i, event in enumerate(page_games, start + 1):
         home = event.get("home_team", "?")
         away = event.get("away_team", "?")
         emoji = event.get("sport_emoji", "🏅")
@@ -2396,10 +2400,72 @@ async def _build_schedule(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             f"[{i}] {emoji} {h_abbr} vs {a_abbr}",
             callback_data=f"schedule:tips:{event_id}",
         )])
+
+    # Pagination row — only show if more than one page
+    if total_pages > 1:
+        nav_row: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(
+                "⬅️ Prev", callback_data=f"schedule:page:{page - 1}",
+            ))
+        nav_row.append(InlineKeyboardButton(
+            f"📄 {page + 1}/{total_pages}", callback_data="schedule:noop",
+        ))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(
+                "Next ➡️", callback_data=f"schedule:page:{page + 1}",
+            ))
+        buttons.append(nav_row)
+
     buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
     return text, InlineKeyboardMarkup(buttons)
 
+
+async def _build_schedule(user_id: int, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+    """Shared schedule logic for command + callback. Returns (text, markup)."""
+    prefs = await db.get_user_sport_prefs(user_id)
+    user_teams: set[str] = set()
+    league_keys: set[str] = set()
+    for pref in prefs:
+        if pref.team_name:
+            user_teams.add(pref.team_name.lower())
+        if pref.league:
+            league_keys.add(pref.league)
+
+    if not league_keys:
+        text = (
+            "🏟️ <b>No leagues selected!</b>\n\n"
+            "Update your sports in /settings."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Edit Sports", callback_data="settings:sports")],
+            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+        ])
+        return text, markup
+
+    games = await _fetch_schedule_games(user_id)
+
+    if not games:
+        text = (
+            "📅 <b>No upcoming games found</b>\n\n"
+            "None of your followed teams have scheduled games right now. "
+            "Check back later or add more teams in /settings."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
+            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+        ])
+        return text, markup
+
+    return _render_schedule_page(games, user_teams, page=page)
+
+
+# ── Schedule pagination ───────────────────────────────────
+GAMES_PER_PAGE = 5
+
+# Cache for schedule games per user (user_id → list of event dicts)
+_schedule_cache: dict[int, list[dict]] = {}
 
 # Cache for game tips (event_id → list of tip dicts)
 _game_tips_cache: dict[str, list[dict]] = {}
