@@ -18,6 +18,17 @@ ADMIN_IDS: list[int] = [int(i) for i in os.environ["ADMIN_IDS"].split(",")]
 ODDS_API_KEY: str = os.environ["ODDS_API_KEY"]
 ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 
+# ── Paystack (subscriptions) ─────────────────────────────
+PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "")
+PAYSTACK_PUBLIC_KEY: str = os.environ.get("PAYSTACK_PUBLIC_KEY", "")
+PAYSTACK_BASE_URL: str = "https://api.paystack.co"
+PREMIUM_PLAN_AMOUNT: int = 4900  # R49.00 in kobo/cents
+PREMIUM_PLAN_NAME: str = "MzansiEdge Premium"
+
+# ── PostHog (analytics) ──────────────────────────────────
+POSTHOG_API_KEY: str = os.environ.get("POSTHOG_API_KEY", "")
+POSTHOG_HOST: str = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
+
 # ── Database ───────────────────────────────────────────────
 DATABASE_URL: str = os.environ.get(
     "DATABASE_URL", "sqlite+aiosqlite:///data/mzansiedge.db"

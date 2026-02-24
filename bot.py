@@ -24,6 +24,7 @@ from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
+    ConversationHandler,
     ContextTypes,
     MessageHandler,
     filters,
@@ -46,6 +47,8 @@ from services.user_service import (
 )
 from services.picks_service import get_picks as svc_get_picks
 from services.schedule_service import get_schedule, get_game_tips_data
+from services.analytics import track as analytics_track
+from services import paystack_service
 
 logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
@@ -521,6 +524,7 @@ def kb_onboarding_bankroll() -> InlineKeyboardMarkup:
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     db_user = await db.upsert_user(user.id, user.username, user.first_name)
+    analytics_track(user.id, "user_signed_up", {"returning": db_user.onboarding_done})
 
     if db_user.onboarding_done:
         text = textwrap.dedent(f"""\
@@ -800,6 +804,12 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await handle_subscribe(query, action)
     elif prefix == "unsubscribe":
         await handle_unsubscribe(query, action)
+    elif prefix == "sub":
+        if action.startswith("verify:"):
+            reference = action.split(":", 1)[1]
+            await _handle_sub_verify(query, reference)
+        elif action == "cancel":
+            await query.edit_message_text("❌ Subscription cancelled.", parse_mode=ParseMode.HTML)
     elif prefix == "settings":
         await handle_settings(query, action)
     elif prefix == "ob_done":
@@ -3436,6 +3446,12 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     db_user = await db.get_user(user_id)
     experience = (db_user.experience_level if db_user else None) or "casual"
     bankroll = getattr(db_user, "bankroll", None) if db_user else None
+    analytics_track(user_id, "tip_viewed", {
+        "sport": tip.get("sport_key", ""),
+        "match": f"{tip.get('home_team', '?')} vs {tip.get('away_team', '?')}",
+        "outcome": tip.get("outcome", ""),
+        "ev": tip.get("ev", 0),
+    })
 
     text = _format_tip_detail(tip, experience, bankroll)
 
@@ -4124,6 +4140,253 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             log.warning("Failed to send morning teaser to user %s: %s", user.id, exc)
 
 
+# ── Subscription (Paystack) ──────────────────────────────
+
+
+async def _handle_sub_verify(query, reference: str) -> None:
+    """Verify payment after user clicks 'I've Paid'."""
+    user_id = query.from_user.id
+    await query.edit_message_text(
+        "⏳ <i>Verifying your payment…</i>", parse_mode=ParseMode.HTML,
+    )
+
+    try:
+        tx_data = await paystack_service.verify_transaction(reference)
+        status = tx_data.get("status", "")
+
+        if status == "success":
+            sub_code = tx_data.get("subscription", {}).get("subscription_code", "") if isinstance(tx_data.get("subscription"), dict) else ""
+            plan_code_val = tx_data.get("plan", {}).get("plan_code", "") if isinstance(tx_data.get("plan"), dict) else ""
+            await db.activate_subscription(user_id, sub_code, plan_code_val)
+            analytics_track(user_id, "subscription_confirmed", {"plan": "premium", "method": "manual_verify"})
+
+            await query.edit_message_text(
+                "✅ <b>Payment confirmed!</b>\n\n"
+                "Welcome to MzansiEdge Premium! "
+                "You now get AI-powered tips daily.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
+                    [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+                ]),
+            )
+        else:
+            await query.edit_message_text(
+                f"⏳ <b>Payment not yet confirmed</b>\n\n"
+                f"Status: <code>{status or 'pending'}</code>\n\n"
+                "If you've completed payment, wait a moment and try again.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Check Again", callback_data=f"sub:verify:{reference}")],
+                    [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+                ]),
+            )
+    except Exception as exc:
+        log.error("Payment verification error: %s", exc)
+        await query.edit_message_text(
+            "⚠️ Couldn't verify payment right now. Try again in a moment.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Try Again", callback_data=f"sub:verify:{reference}")],
+                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+            ]),
+        )
+
+
+# ConversationHandler state for email collection
+SUB_EMAIL = 0
+
+# Per-user state: pending Paystack reference
+_subscribe_state: dict[int, dict] = {}
+
+
+async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start subscription flow — check status, then prompt for email."""
+    user_id = update.effective_user.id
+    db_user = await db.get_user(user_id)
+
+    if db.is_premium(db_user):
+        await update.message.reply_text(
+            "✅ <b>You're already a MzansiEdge Premium member!</b>\n\n"
+            "Your subscription is active. Use /status to see details.",
+            parse_mode=ParseMode.HTML,
+        )
+        return ConversationHandler.END
+
+    text = (
+        "💎 <b>MzansiEdge Premium — R49/month</b>\n\n"
+        "Unlock daily AI-powered value bets, personalised alerts, "
+        "and priority access to new features.\n\n"
+        "To subscribe, please enter your <b>email address</b> below.\n"
+        "<i>(Used for Paystack payment — never shared.)</i>"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    analytics_track(user_id, "subscription_started")
+    return SUB_EMAIL
+
+
+async def _receive_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive email, initialize Paystack transaction, send payment link."""
+    import re
+    user_id = update.effective_user.id
+    email = update.message.text.strip().lower()
+
+    # Basic email validation
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        await update.message.reply_text(
+            "⚠️ That doesn't look like a valid email. Please try again:",
+            parse_mode=ParseMode.HTML,
+        )
+        return SUB_EMAIL
+
+    await db.update_user_email(user_id, email)
+
+    loading = await update.message.reply_text(
+        "⏳ <i>Setting up your payment…</i>", parse_mode=ParseMode.HTML,
+    )
+
+    try:
+        result = await paystack_service.initialize_transaction(email, user_id)
+        auth_url = result["authorization_url"]
+        reference = result["reference"]
+        _subscribe_state[user_id] = {"reference": reference, "email": email}
+
+        try:
+            await loading.delete()
+        except Exception:
+            pass
+
+        await update.message.reply_text(
+            "💳 <b>Payment Ready!</b>\n\n"
+            f"Tap below to complete your R49/month subscription.\n\n"
+            f"<i>Reference: <code>{reference}</code></i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Pay with Paystack →", url=auth_url)],
+                [InlineKeyboardButton("✅ I've Paid — Verify", callback_data=f"sub:verify:{reference}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sub:cancel")],
+            ]),
+        )
+    except Exception as exc:
+        log.error("Paystack init error: %s", exc)
+        try:
+            await loading.delete()
+        except Exception:
+            pass
+        await update.message.reply_text(
+            "⚠️ Something went wrong setting up payment. Please try again later.",
+            parse_mode=ParseMode.HTML,
+        )
+
+    return ConversationHandler.END
+
+
+async def cmd_subscribe_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel subscription flow."""
+    await update.message.reply_text("❌ Subscription cancelled.", parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show subscription status."""
+    user_id = update.effective_user.id
+    db_user = await db.get_user(user_id)
+
+    if db.is_premium(db_user):
+        started = ""
+        if db_user.subscription_started_at:
+            started = f"\n📅 Member since: <b>{db_user.subscription_started_at.strftime('%d %b %Y')}</b>"
+        await update.message.reply_text(
+            f"💎 <b>MzansiEdge Premium</b>\n\n"
+            f"Status: ✅ <b>Active</b>{started}\n"
+            f"Plan: R49/month\n\n"
+            f"You're getting full access to AI-powered tips and alerts.",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await update.message.reply_text(
+            "💎 <b>MzansiEdge Premium</b>\n\n"
+            "Status: ❌ <b>Not subscribed</b>\n\n"
+            "Use /subscribe to get started — R49/month.",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+# ── Webhook handler (aiohttp) ────────────────────────────
+
+async def _run_webhook_server(app_instance) -> None:
+    """Start a small aiohttp server to receive Paystack webhooks."""
+    from aiohttp import web
+
+    async def handle_paystack_webhook(request: web.Request) -> web.Response:
+        body = await request.read()
+        signature = request.headers.get("x-paystack-signature", "")
+
+        if not paystack_service.verify_webhook_signature(body, signature):
+            log.warning("Invalid Paystack webhook signature")
+            return web.Response(status=400)
+
+        event = paystack_service.parse_webhook_event(body)
+        event_type = event.get("event", "")
+        data = event.get("data", {})
+
+        log.info("Paystack webhook: %s", event_type)
+
+        if event_type == "charge.success":
+            metadata = data.get("metadata", {})
+            tg_user_id = metadata.get("telegram_user_id")
+            customer_email = data.get("customer", {}).get("email", "")
+            sub_code = data.get("subscription", {}).get("subscription_code", "")
+            plan_code_val = data.get("plan", {}).get("plan_code", "")
+
+            # Resolve user by metadata or email
+            user_id = int(tg_user_id) if tg_user_id else None
+            if not user_id and customer_email:
+                found = await db.get_user_by_email(customer_email)
+                if found:
+                    user_id = found.id
+
+            if user_id:
+                await db.activate_subscription(user_id, sub_code or "", plan_code_val or "")
+                analytics_track(user_id, "subscription_confirmed", {"plan": "premium"})
+                try:
+                    await app_instance.bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "✅ <b>Welcome to MzansiEdge Premium!</b>\n\n"
+                            "Your subscription is now active. "
+                            "You get AI-powered tips daily.\n\n"
+                            "Use 🔥 <b>Hot Tips</b> to see today's value bets!"
+                        ),
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
+                            [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+                        ]),
+                    )
+                except Exception as exc:
+                    log.warning("Failed to notify user %s of subscription: %s", user_id, exc)
+
+        elif event_type == "subscription.disable":
+            customer_email = data.get("customer", {}).get("email", "")
+            if customer_email:
+                found = await db.get_user_by_email(customer_email)
+                if found:
+                    await db.deactivate_subscription(found.id)
+                    analytics_track(found.id, "subscription_cancelled", {"plan": "premium"})
+
+        return web.Response(status=200, text="OK")
+
+    webhook_app = web.Application()
+    webhook_app.router.add_post("/webhook/paystack", handle_paystack_webhook)
+
+    runner = web.AppRunner(webhook_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8443)
+    await site.start()
+    log.info("Paystack webhook server listening on port 8443")
+
+
 # ── Main ──────────────────────────────────────────────────
 
 def _seconds_until_next_hour() -> float:
@@ -4159,11 +4422,27 @@ async def _post_init(app_instance) -> None:
         )
         log.info("Scheduled morning teaser job (runs hourly)")
 
+    # Ensure Paystack plan exists (non-blocking)
+    if config.PAYSTACK_SECRET_KEY:
+        try:
+            plan_code = await paystack_service.ensure_plan()
+            log.info("Paystack plan ready: %s", plan_code)
+        except Exception as exc:
+            log.warning("Paystack plan setup failed: %s", exc)
+
+        # Start webhook listener for Paystack payment notifications
+        try:
+            await _run_webhook_server(app_instance)
+        except Exception as exc:
+            log.warning("Webhook server failed to start: %s", exc)
+
     await app_instance.bot.set_my_commands([
         ("start", "Start the bot"),
         ("menu", "Main menu"),
         ("picks", "Hot tips — best value bets"),
         ("schedule", "Your games — personalised schedule"),
+        ("subscribe", "Subscribe to Premium"),
+        ("status", "Subscription status"),
         ("help", "How to use MzansiEdge"),
         ("settings", "Your preferences"),
     ])
@@ -4176,6 +4455,16 @@ def main() -> None:
     # Initialise DB + register commands on startup
     app.post_init = _post_init
 
+    # Subscribe conversation handler (must be before general command handlers)
+    subscribe_conv = ConversationHandler(
+        entry_points=[CommandHandler("subscribe", cmd_subscribe)],
+        states={
+            SUB_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_email)],
+        },
+        fallbacks=[CommandHandler("cancel", cmd_subscribe_cancel)],
+    )
+    app.add_handler(subscribe_conv)
+
     # Command handlers
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
@@ -4187,6 +4476,7 @@ def main() -> None:
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("status", cmd_status))
 
     # Callback query handler (prefix:action routing)
     app.add_handler(CallbackQueryHandler(on_button))

@@ -45,6 +45,12 @@ class User(Base):
     # WhatsApp readiness
     whatsapp_phone: Mapped[str | None] = mapped_column(String(32))  # e.g. "+27821234567"
     preferred_platform: Mapped[str | None] = mapped_column(String(16))  # "telegram" | "whatsapp"
+    # Paystack subscription
+    email: Mapped[str | None] = mapped_column(String(255))  # for Paystack
+    subscription_status: Mapped[str | None] = mapped_column(String(32))  # "active" | "cancelled" | None
+    subscription_code: Mapped[str | None] = mapped_column(String(128))  # Paystack subscription code
+    plan_code: Mapped[str | None] = mapped_column(String(128))  # Paystack plan code
+    subscription_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class UserSportPref(Base):
@@ -132,6 +138,11 @@ async def _migrate_columns() -> None:
                 ("fb_ad_id", "NULL"),
                 ("whatsapp_phone", "NULL"),
                 ("preferred_platform", "'telegram'"),
+                ("email", "NULL"),
+                ("subscription_status", "NULL"),
+                ("subscription_code", "NULL"),
+                ("plan_code", "NULL"),
+                ("subscription_started_at", "NULL"),
             ]:
                 try:
                     await conn.execute(
@@ -460,6 +471,52 @@ async def get_users_for_notification(hour: int) -> list[User]:
             if prefs.get("daily_picks", True):
                 filtered.append(u)
         return filtered
+
+
+async def update_user_email(user_id: int, email: str) -> None:
+    """Store user's email for Paystack."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.email = email
+            await s.commit()
+
+
+async def activate_subscription(
+    user_id: int, subscription_code: str, plan_code: str,
+) -> None:
+    """Mark user as subscribed after successful Paystack payment."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.subscription_status = "active"
+            user.subscription_code = subscription_code
+            user.plan_code = plan_code
+            user.subscription_started_at = dt.datetime.now(dt.timezone.utc)
+            await s.commit()
+
+
+async def deactivate_subscription(user_id: int) -> None:
+    """Deactivate user subscription (cancelled or expired)."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.subscription_status = "cancelled"
+            await s.commit()
+
+
+async def get_user_by_email(email: str) -> User | None:
+    """Find a user by email (for webhook resolution)."""
+    async with async_session() as s:
+        result = await s.execute(select(User).where(User.email == email))
+        return result.scalars().first()
+
+
+def is_premium(user: User | None) -> bool:
+    """Check if a user has an active premium subscription."""
+    if not user:
+        return False
+    return user.subscription_status == "active"
 
 
 async def get_user_count() -> int:
