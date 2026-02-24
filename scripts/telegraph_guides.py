@@ -24,40 +24,91 @@ URLS_FILE = config.DATA_DIR / "telegraph_urls.json"
 
 BOOKMAKER_GUIDES: dict[str, dict] = {
     "betway": {
-        "title": "How to Bet on Betway SA — Step by Step",
+        "title": "How to Bet on Betway SA — Complete Guide (2026)",
         "content": [
-            {"tag": "h3", "children": ["1. Sign Up"]},
+            {"tag": "p", "children": [
+                {"tag": "i", "children": [
+                    "A step-by-step guide from MzansiEdge — your AI sports betting assistant."
+                ]},
+            ]},
+            {"tag": "h3", "children": ["🔑 1. Create Your Betway Account"]},
             {"tag": "p", "children": [
                 "Go to ", {"tag": "b", "children": ["betway.co.za"]},
                 " and tap ", {"tag": "b", "children": ["Register"]}, ".",
-                " Fill in your name, email, ID number, and create a password.",
-                " You must be 18+ and have a valid SA ID."
             ]},
-            {"tag": "h3", "children": ["2. Verify Your Account"]},
             {"tag": "p", "children": [
-                "Upload a photo of your SA ID or passport.",
-                " Verification usually takes a few hours.",
-                " You can deposit while waiting."
+                "You'll need:",
             ]},
-            {"tag": "h3", "children": ["3. Deposit"]},
+            {"tag": "ul", "children": [
+                {"tag": "li", "children": ["Full name and email address"]},
+                {"tag": "li", "children": ["SA ID number (must be 18+)"]},
+                {"tag": "li", "children": ["A password you'll remember"]},
+                {"tag": "li", "children": ["Your mobile number for OTP verification"]},
+            ]},
             {"tag": "p", "children": [
-                "Tap ", {"tag": "b", "children": ["Deposit"]}, " and choose your method:",
-                " EFT, Ozow (instant EFT), credit/debit card, or voucher.",
-                " Minimum deposit is usually R10."
+                "Registration takes about 2 minutes.",
             ]},
-            {"tag": "h3", "children": ["4. Place a Bet"]},
+            {"tag": "h3", "children": ["✅ 2. Verify Your Account (FICA)"]},
             {"tag": "p", "children": [
-                "Browse sports or use the search bar.",
-                " Tap the odds you want — it adds to your bet slip.",
-                " Enter your stake amount and tap ", {"tag": "b", "children": ["Place Bet"]}, "."
+                "Betway requires FICA verification before you can withdraw.",
+                " Upload a clear photo of your SA ID or passport.",
+                " Verification is usually approved within a few hours — you can deposit and bet while waiting.",
             ]},
-            {"tag": "h3", "children": ["5. Withdraw Winnings"]},
+            {"tag": "h3", "children": ["💰 3. Make Your First Deposit"]},
             {"tag": "p", "children": [
-                "Go to ", {"tag": "b", "children": ["My Account → Withdraw"]}, ".",
-                " Enter your SA bank details (FNB, Standard Bank, Capitec, etc).",
-                " Withdrawals usually arrive within 24 hours."
+                "Tap ", {"tag": "b", "children": ["Deposit"]},
+                " and choose from these options:",
             ]},
-            {"tag": "p", "children": [{"tag": "i", "children": ["Always gamble responsibly. 18+ only."]}]},
+            {"tag": "ul", "children": [
+                {"tag": "li", "children": [{"tag": "b", "children": ["Ozow (Instant EFT)"]}, " — Fastest option. Links to FNB, Standard Bank, Capitec, Nedbank, Absa."]},
+                {"tag": "li", "children": [{"tag": "b", "children": ["Credit/Debit Card"]}, " — Visa or Mastercard."]},
+                {"tag": "li", "children": [{"tag": "b", "children": ["Bank Transfer (EFT)"]}, " — Manual transfer, takes 1-2 hours."]},
+                {"tag": "li", "children": [{"tag": "b", "children": ["Voucher"]}, " — Buy a Betway voucher at selected retailers."]},
+            ]},
+            {"tag": "p", "children": [
+                "Minimum deposit: ", {"tag": "b", "children": ["R10"]}, ".",
+                " We recommend starting with R100-R500 for your first week.",
+            ]},
+            {"tag": "h3", "children": ["🎯 4. Place Your First Bet"]},
+            {"tag": "p", "children": [
+                "Here's how to place a bet on Betway:",
+            ]},
+            {"tag": "ol", "children": [
+                {"tag": "li", "children": ["Browse ", {"tag": "b", "children": ["Sports"]}, " or use the search bar to find your match"]},
+                {"tag": "li", "children": ["Tap the ", {"tag": "b", "children": ["odds"]}, " you want — it adds to your bet slip"]},
+                {"tag": "li", "children": ["Enter your ", {"tag": "b", "children": ["stake amount"]}, " (how much you want to bet)"]},
+                {"tag": "li", "children": ["Check the potential payout at the bottom"]},
+                {"tag": "li", "children": ["Tap ", {"tag": "b", "children": ["Place Bet"]}, " to confirm"]},
+            ]},
+            {"tag": "p", "children": [
+                {"tag": "b", "children": ["Pro tip:"]},
+                " Start with single bets (one outcome) while you're learning.",
+                " Accumulators are tempting but much harder to win.",
+            ]},
+            {"tag": "h3", "children": ["💵 5. Withdraw Your Winnings"]},
+            {"tag": "p", "children": [
+                "When you're ready to cash out:",
+            ]},
+            {"tag": "ol", "children": [
+                {"tag": "li", "children": ["Go to ", {"tag": "b", "children": ["My Account → Withdraw"]}]},
+                {"tag": "li", "children": ["Enter your SA bank details (FNB, Standard Bank, Capitec, Nedbank, or Absa)"]},
+                {"tag": "li", "children": ["Enter the amount you want to withdraw"]},
+                {"tag": "li", "children": ["Confirm — withdrawals usually arrive within ", {"tag": "b", "children": ["24 hours"]}]},
+            ]},
+            {"tag": "p", "children": [
+                {"tag": "i", "children": ["Note: You must be FICA-verified before your first withdrawal."]}
+            ]},
+            {"tag": "h3", "children": ["📱 6. Get the Betway App"]},
+            {"tag": "p", "children": [
+                "Betway has a mobile app for Android and iOS.",
+                " Download it from betway.co.za for the best experience — quicker bets, push notifications for your games, and easy deposits.",
+            ]},
+            {"tag": "hr"},
+            {"tag": "p", "children": [
+                {"tag": "i", "children": [
+                    "Guide by MzansiEdge. Always gamble responsibly. 18+ only. National Responsible Gambling Programme: 0800 006 008."
+                ]},
+            ]},
         ],
     },
     "sportingbet": {
@@ -254,3 +305,17 @@ async def get_guide_url(bookmaker_key: str) -> str | None:
     except Exception as exc:
         log.error("Failed to create Telegraph guide for %s: %s", bookmaker_key, exc)
         return None
+
+
+async def ensure_active_guide() -> str | None:
+    """Pre-publish the guide for the active bookmaker and wire URL into config.
+
+    Call this at bot startup to ensure the guide URL is ready.
+    Returns the URL or None on failure.
+    """
+    bk_key = config.ACTIVE_BOOKMAKER
+    url = await get_guide_url(bk_key)
+    if url:
+        config.SA_BOOKMAKERS[bk_key]["guide_url"] = url
+        log.info("Active bookmaker guide URL wired: %s", url)
+    return url

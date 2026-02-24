@@ -180,21 +180,28 @@ All inline keyboard callbacks use `prefix:action` format:
 | Moderate     | 3%     | 0.50           | 5%          |
 | Aggressive   | 1%     | 1.00           | 10%         |
 
-### SA Bookmaker Whitelist (5 books, .co.za display names)
-`config.SA_BOOKMAKERS` is a `dict[str, dict]` mapping API key → bookmaker config:
+### SA Bookmaker Config (Betway-exclusive MVP)
+**MVP Strategy:** Betway is the only active bookmaker. Other SA books are dormant (`active: False`) for future expansion.
+
 ```python
+ACTIVE_BOOKMAKER = "betway"
+
 SA_BOOKMAKERS = {
-    "betway": {"display_name": "Betway.co.za", "short_name": "Betway", "guide_url": "", "affiliate_base_url": ""},
-    "sportingbet": {"display_name": "SportingBet.co.za", ...},
-    "10bet": {"display_name": "10Bet.co.za", ...},
-    "playabets": {"display_name": "PlayaBets.co.za", ...},
-    "supabets": {"display_name": "SupaBets.co.za", ...},
+    "betway": {"display_name": "Betway.co.za", "short_name": "Betway", "website_url": "https://www.betway.co.za", "guide_url": "<telegraph_url>", "affiliate_base_url": "", "active": True},
+    "sportingbet": {..., "active": False},
+    "10bet": {..., "active": False},
+    "playabets": {..., "active": False},
+    "supabets": {..., "active": False},
 }
 ```
-- `config.sa_display_name(bk_key)` → returns `.co.za` display name for a bookmaker key
-- No 🇿🇦 flags on individual bookmaker names (flag only used in branding/welcome messages)
 
-Sharp bookmakers (Pinnacle, Betfair, etc.) are kept for internal probability estimation only — never shown to users.
+**Helper functions:**
+- `config.get_active_bookmaker()` → returns the active bookmaker's full config dict
+- `config.get_active_display_name()` → `"Betway"` (short name)
+- `config.get_active_website_url()` → `"https://www.betway.co.za"`
+- `config.sa_display_name(bk_key)` → returns `.co.za` display name for any bookmaker key
+
+**Betway branding:** All user-facing odds display, tip details, bookmaker menus, and pick cards use Betway branding with 🇿🇦 flag. Sharp bookmakers (Pinnacle, Betfair, etc.) are kept for internal probability estimation only — never shown to users.
 
 ### SA Odds Functions
 - `odds_client.find_best_sa_odds(event, market)` → list of `OddsEntry` filtered to SA bookmakers only
@@ -339,32 +346,37 @@ Every sub-screen has "↩️ Back" + "🏠 Main Menu" via `kb_nav()`.
 - Shows "No upcoming games found" if no matches for followed teams.
 
 ## AI Game Breakdown
-When a user taps a game in the schedule, `_generate_game_tips()` calls Claude Haiku (`claude-haiku-4-5-20251001`) with a `GAME_ANALYSIS_PROMPT` system prompt and structured odds context. The response is a ~200-word narrative covering team form, betting angles, and risk assessment. Below the narrative, tip buttons are displayed: `💰 {outcome} @ {odds:.2f} (EV: +{ev}%)`.
+When a user taps a game in the schedule, `_generate_game_tips()` calls Claude Haiku (`claude-haiku-4-5-20251001`) with `GAME_ANALYSIS_PROMPT`. The prompt uses structured emoji section headers:
+- 📋 **The Setup** — team form and context
+- 🎯 **The Edge** — specific value angle
+- ⚠️ **The Risk** — what could go wrong
+- 🏆 **Verdict** — punchy one-line pick
 
-Tips are cached in `_game_tips_cache[event_id]` for use by the tip detail page.
+No disclaimers in the AI output (handled separately). South African conversational tone. Odds shown separately below as "🇿🇦 Betway Odds" section. Tips cached in `_game_tips_cache[event_id]`.
 
 ## Tip Detail Page
 Tapping a tip button (`tip:detail:{event_id}:{index}`) shows an experience-adapted detail card via `_format_tip_detail()`:
-- **Experienced**: odds, EV%, Kelly stake fraction, top 3 bookmaker comparison
-- **Casual**: narrative, R100 payout example, stake hint, bookmaker name
+- **Experienced**: odds with Betway 🇿🇦 branding, EV%, Kelly stake fraction
+- **Casual**: narrative, R100 payout example, stake hint, Betway branding
 - **Newbie**: bet type explanation, R20/R50 payout examples, "Start small" advice
 
 If user has bankroll set, shows personalised stake recommendation.
 
-Buttons:
-- `📖 How to bet on {bookie}` → Telegra.ph guide URL
+Buttons always use the active bookmaker (Betway for MVP):
+- `📲 Bet on Betway →` → website URL (or affiliate URL when available)
 - `🔔 Follow this game` → `subscribe:{event_id}` for live score alerts
 - `↩️ Back` → return to game tips view
 
 ## Telegra.ph Betting Guides (`scripts/telegraph_guides.py`)
-Publishes step-by-step betting guides for 5 SA bookmakers on Telegra.ph (instant view).
+Publishes step-by-step betting guides for SA bookmakers on Telegra.ph (instant view).
 
-- `BOOKMAKER_GUIDES` dict — Guide content in Telegraph Node format for each bookmaker (signup, deposit, placing bet, withdrawal steps)
+- `BOOKMAKER_GUIDES` dict — Guide content in Telegraph Node format (signup, FICA, deposit, bet placement, withdrawal, app)
 - `_ensure_account()` — Creates Telegraph account, caches token in `data/telegraph_token.json`
 - `_create_page(token, title, content)` — POST to Telegraph API `/createPage`
 - `get_guide_url(bookmaker_key)` → Publishes guide if not cached, returns URL from `data/telegraph_urls.json`
+- `ensure_active_guide()` → Pre-publishes guide for `ACTIVE_BOOKMAKER` and wires URL into `config.SA_BOOKMAKERS[key]["guide_url"]`. Called at bot startup in `_post_init()`.
 
-Supports: betway, sportingbet, 10bet, playabets, supabets.
+MVP: Betway guide is comprehensive (6 steps: signup, FICA, deposit methods, bet placement, withdrawal, app). Other bookmaker guides are basic (4 steps).
 
 ## Live Game Subscriptions
 Users can subscribe to live score updates for specific games.

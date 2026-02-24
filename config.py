@@ -42,36 +42,49 @@ RISK_PROFILES: dict[str, dict] = {
 }
 
 # ── SA Bookmakers (whitelisted for user-facing odds) ──────
+# MVP: Betway-exclusive. Other books are dormant (active=False) for future expansion.
+ACTIVE_BOOKMAKER = "betway"
+
 SA_BOOKMAKERS: dict[str, dict] = {
     "betway": {
         "display_name": "Betway.co.za",
         "short_name": "Betway",
+        "website_url": "https://www.betway.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
+        "active": True,
     },
     "sportingbet": {
         "display_name": "SportingBet.co.za",
         "short_name": "SportingBet",
+        "website_url": "https://www.sportingbet.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
+        "active": False,
     },
     "10bet": {
         "display_name": "10Bet.co.za",
         "short_name": "10Bet",
+        "website_url": "https://www.10bet.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
+        "active": False,
     },
     "playabets": {
         "display_name": "PlayaBets.co.za",
         "short_name": "PlayaBets",
+        "website_url": "https://www.playabets.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
+        "active": False,
     },
     "supabets": {
         "display_name": "SupaBets.co.za",
         "short_name": "SupaBets",
+        "website_url": "https://www.supabets.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
+        "active": False,
     },
 }
 
@@ -82,6 +95,21 @@ def sa_display_name(bk_key: str) -> str:
     if bk:
         return bk["display_name"]
     return bk_key
+
+
+def get_active_bookmaker() -> dict:
+    """Get the active bookmaker config dict."""
+    return SA_BOOKMAKERS[ACTIVE_BOOKMAKER]
+
+
+def get_active_display_name() -> str:
+    """Get the active bookmaker's short display name (e.g. 'Betway')."""
+    return SA_BOOKMAKERS[ACTIVE_BOOKMAKER]["short_name"]
+
+
+def get_active_website_url() -> str:
+    """Get the active bookmaker's website URL."""
+    return SA_BOOKMAKERS[ACTIVE_BOOKMAKER]["website_url"]
 
 
 # ── Sport & League definitions ────────────────────────────

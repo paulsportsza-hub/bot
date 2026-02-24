@@ -334,14 +334,23 @@ def kb_stats() -> InlineKeyboardMarkup:
 
 
 def kb_bookmakers() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🇿🇦 SA Bookmakers", callback_data="affiliate:sa")],
-        [InlineKeyboardButton("🌍 International", callback_data="affiliate:intl")],
-        [
-            InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
-            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
-        ],
+    active = config.get_active_bookmaker()
+    website = active.get("website_url", "")
+    guide = active.get("guide_url", "")
+    buttons: list[list[InlineKeyboardButton]] = []
+    if website:
+        buttons.append([InlineKeyboardButton(
+            f"🇿🇦 {active['short_name']} — Sign Up", url=website,
+        )])
+    if guide:
+        buttons.append([InlineKeyboardButton(
+            f"📖 How to Bet on {active['short_name']}", url=guide,
+        )])
+    buttons.append([
+        InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
+        InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
     ])
+    return InlineKeyboardMarkup(buttons)
 
 
 def kb_settings() -> InlineKeyboardMarkup:
@@ -2396,15 +2405,29 @@ async def _build_schedule(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
 _game_tips_cache: dict[str, list[dict]] = {}
 
 GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
-    You are MzansiEdge, an expert South African sports betting analyst.
-    Given odds and probability data for an upcoming match, write a ~150-word
-    narrative analysis covering:
-    1. Team form / recent context (what you'd expect from each side)
-    2. The best betting angle (where the edge is)
-    3. Risk assessment (what could go wrong)
-    Format in Telegram HTML (<b>, <i> tags). Be direct and conversational.
-    Do NOT include odds numbers (those will be shown separately).
-    End with a one-line responsible gambling reminder.
+    You are MzansiEdge, a sharp South African sports betting analyst.
+    Given odds and probability data for an upcoming match, write a punchy
+    ~150-word analysis using these EXACT section headers:
+
+    📋 <b>The Setup</b>
+    One paragraph on recent form, head-to-head context, and what to expect.
+
+    🎯 <b>The Edge</b>
+    Where the value is. Be specific about which outcome and why the market
+    has mispriced it.
+
+    ⚠️ <b>The Risk</b>
+    One sentence on what could go wrong.
+
+    🏆 <b>Verdict</b>
+    One bold sentence: your top pick with conviction level.
+
+    Rules:
+    - Telegram HTML only (<b>, <i> tags)
+    - Do NOT include odds numbers or bookmaker names (shown separately)
+    - No disclaimers, no "gamble responsibly" — we handle that elsewhere
+    - Be direct, confident, conversational — like a mate who knows his stuff
+    - South African tone: use "edge", "value", "sharp"
 """)
 
 
@@ -2510,7 +2533,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         f"- {t['outcome']}: {t['odds']:.2f} ({t['bookie']}), "
         f"fair prob {t['prob']}%, EV {t['ev']:+.1f}%"
         for t in tips
-    ) if tips else "No SA bookmaker odds available."
+    ) if tips else "No Betway odds available."
 
     # Get AI narrative
     narrative = ""
@@ -2539,15 +2562,15 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         lines.append("")
 
     if not tips:
-        lines.append("No SA bookmaker odds available for this game yet.")
+        lines.append("No odds available on Betway for this game yet.")
     else:
-        lines.append("<b>SA Bookmaker Odds:</b>")
+        lines.append(f"<b>🇿🇦 {config.get_active_display_name()} Odds:</b>")
         for tip in tips:
             ev_ind = f"+{tip['ev']}%" if tip["ev"] > 0 else f"{tip['ev']}%"
             value_marker = " 💰" if tip["ev"] > 2 else ""
             lines.append(
                 f"  {tip['outcome']}: <b>{tip['odds']:.2f}</b> "
-                f"({tip['bookie']} | {tip['prob']}% | EV: {ev_ind}){value_marker}"
+                f"({tip['prob']}% | EV: {ev_ind}){value_marker}"
             )
 
     msg = "\n".join(lines)
@@ -2635,54 +2658,48 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
 
     text = _format_tip_detail(tip, experience, bankroll)
 
-    # Build buttons
+    # Build buttons — always use the active bookmaker (Betway for MVP)
     buttons: list[list[InlineKeyboardButton]] = []
+    active_bk = config.get_active_bookmaker()
+    active_name = active_bk["short_name"]
 
-    # Telegraph guide button
-    bookie_raw = tip.get("bookie", "")
-    # Map display name back to config key
-    guide_key = None
-    for k, v in config.SA_BOOKMAKERS.items():
-        if k == bookie_raw.lower().replace(" ", "").replace(".co.za", ""):
-            guide_key = k
-            break
-        if v["display_name"].lower() == bookie_raw.lower() or v["short_name"].lower() == bookie_raw.lower():
-            guide_key = k
-            break
-
-    bookie_display = tip.get("bookie", "")
-    bk_config = config.SA_BOOKMAKERS.get(guide_key, {}) if guide_key else {}
-
-    # Affiliate button — always show
-    affiliate_url = bk_config.get("affiliate_base_url", "")
+    # Affiliate button
+    affiliate_url = active_bk.get("affiliate_base_url", "")
     if affiliate_url:
         buttons.append([InlineKeyboardButton(
-            f"📲 Place on {bookie_display} →",
+            f"📲 Bet on {active_name} →",
             url=affiliate_url,
         )])
     else:
-        buttons.append([InlineKeyboardButton(
-            f"📲 Place on {bookie_display} →",
-            callback_data="tip:affiliate_soon",
-        )])
+        website_url = active_bk.get("website_url", "")
+        if website_url:
+            buttons.append([InlineKeyboardButton(
+                f"📲 Bet on {active_name} →",
+                url=website_url,
+            )])
+        else:
+            buttons.append([InlineKeyboardButton(
+                f"📲 Bet on {active_name} →",
+                callback_data="tip:affiliate_soon",
+            )])
 
-    # Guide button — always show
-    guide_url = bk_config.get("guide_url", "")
-    if not guide_url and guide_key:
+    # Guide button
+    guide_url = active_bk.get("guide_url", "")
+    if not guide_url:
         from scripts.telegraph_guides import get_guide_url as _get_guide
         try:
-            guide_url = await _get_guide(guide_key) or ""
+            guide_url = await _get_guide(config.ACTIVE_BOOKMAKER) or ""
         except Exception:
             guide_url = ""
 
     if guide_url:
         buttons.append([InlineKeyboardButton(
-            f"📖 How to bet on {bookie_display}",
+            f"📖 How to bet on {active_name}",
             url=guide_url,
         )])
     else:
         buttons.append([InlineKeyboardButton(
-            f"📖 How to bet on {bookie_display}",
+            f"📖 How to bet on {active_name}",
             callback_data="tip:guide_soon",
         )])
 
@@ -2707,9 +2724,9 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
     odds = tip["odds"]
     ev = tip["ev"]
     prob = tip["prob"]
-    bookie = tip["bookie"]
     home = tip["home_team"]
     away = tip["away_team"]
+    bookie = config.get_active_display_name()
 
     if experience == "experienced":
         from scripts.odds_client import kelly_stake as calc_kelly
@@ -2721,7 +2738,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             stake_str = f"\n💵 Stake R{stake:,.0f} → R{pot_return:,.0f}"
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
-            f"💰 <b>{outcome}</b> @ <b>{odds:.2f}</b> ({bookie})\n"
+            f"💰 <b>{outcome}</b> @ <b>{odds:.2f}</b> ({bookie} 🇿🇦)\n"
             f"📈 EV: <b>+{ev}%</b> | Fair prob: {prob}%\n"
             f"🎯 Kelly fraction: <code>{ks:.1%}</code>{stake_str}\n\n"
             f"<i>EV = (odds × true_prob - 1). Positive = edge in your favour.</i>"
@@ -2740,7 +2757,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
             f"📋 <b>What's the bet?</b>\n{bet_explain}\n\n"
-            f"💵 <b>The odds: {odds:.2f}</b> at {bookie}\n"
+            f"💵 <b>The odds: {odds:.2f}</b> on {bookie} 🇿🇦\n"
             f"  Bet R20 → get <b>R{payout_20:.0f}</b> back\n"
             f"  Bet R50 → get <b>R{payout_50:.0f}</b> back\n\n"
             f"🎯 Our AI gives this a <b>{prob}%</b> chance — "
@@ -2757,7 +2774,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             stake_hint = f"\n💡 Suggested stake: <b>R{suggested:.0f}</b>"
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
-            f"💰 We like <b>{outcome}</b> @ {odds:.2f} ({bookie})\n\n"
+            f"💰 We like <b>{outcome}</b> @ {odds:.2f} ({bookie} 🇿🇦)\n\n"
             f"The AI found a <b>+{ev}%</b> edge here.\n"
             f"Fair probability: {prob}% — odds suggest less.\n\n"
             f"💵 R100 bet pays <b>R{payout_100:.0f}</b>{stake_hint}\n\n"
@@ -3059,31 +3076,19 @@ async def handle_stats_menu(query, action: str) -> None:
 
 
 async def handle_affiliate(query, action: str) -> None:
-    """Handle affiliate:* callbacks (bookmaker comparison)."""
-    if action in ("compare", "sa"):
-        text = textwrap.dedent("""\
-            <b>🎰 SA Bookmakers</b>
-
-            <b>Betway.co.za</b> — Great odds, fast payouts
-            <b>SportingBet.co.za</b> — Reliable, good promos
-            <b>10Bet.co.za</b> — Competitive odds, clean interface
-            <b>PlayaBets.co.za</b> — Strong local coverage
-            <b>SupaBets.co.za</b> — Wide range of markets
-
-            <i>Always gamble responsibly. 18+ only.</i>
-        """)
-    elif action == "intl":
-        text = textwrap.dedent("""\
-            <b>🌍 International Bookmakers</b>
-
-            🌐 <b>Bet365</b> — Widest market coverage
-            🌐 <b>1xBet</b> — High odds across sports
-            🌐 <b>Pinnacle</b> — Best odds, low margins
-
-            <i>Check local regulations. Gamble responsibly.</i>
-        """)
-    else:
-        text = "<b>🎰 Bookmakers</b>"
+    """Handle affiliate:* callbacks (bookmaker info)."""
+    active = config.get_active_bookmaker()
+    name = active["short_name"]
+    website = active.get("website_url", "betway.co.za")
+    text = (
+        f"<b>🇿🇦 {name} — Our Recommended Bookmaker</b>\n\n"
+        f"✅ Licensed in South Africa\n"
+        f"✅ Fast deposits & withdrawals\n"
+        f"✅ Great odds across all sports\n"
+        f"✅ Easy sign-up with SA ID\n\n"
+        f"🌐 <b>{website}</b>\n\n"
+        f"<i>Always gamble responsibly. 18+ only.</i>"
+    )
     await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_bookmakers())
 
 
@@ -3315,8 +3320,16 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # ── Main ──────────────────────────────────────────────────
 
 async def _post_init(app_instance) -> None:
-    """Run on bot startup: init DB and register commands with BotFather."""
+    """Run on bot startup: init DB, publish guides, register commands."""
     await db.init_db()
+
+    # Pre-publish Betway Telegra.ph guide and wire URL into config
+    try:
+        from scripts.telegraph_guides import ensure_active_guide
+        await ensure_active_guide()
+    except Exception as exc:
+        log.warning("Could not pre-publish guide: %s", exc)
+
     await app_instance.bot.set_my_commands([
         ("start", "Start the bot"),
         ("menu", "Main menu"),
