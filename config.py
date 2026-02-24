@@ -41,8 +41,40 @@ RISK_PROFILES: dict[str, dict] = {
     "aggressive":   {"label": "🔥 Aggressive",   "kelly_fraction": 1.00, "max_stake_pct": 10, "min_ev": 1.0},
 }
 
+# ── Bookmaker Affiliates (multi-bookmaker) ───────────────
+# status: "active" = approved affiliate, "pending_approval" = applied but not yet approved
+BOOKMAKER_AFFILIATES: dict[str, dict] = {
+    "betway": {
+        "name": "Betway",
+        "affiliate_code": "BPA117074",
+        "base_url": "https://www.betway.co.za",
+        "status": "pending_approval",
+        "deep_link_template": None,
+    },
+    "hollywoodbets": {
+        "name": "Hollywoodbets",
+        "affiliate_code": None,
+        "base_url": "https://www.hollywoodbets.net",
+        "status": "pending_approval",
+        "deep_link_template": None,
+    },
+    "sportingbet": {
+        "name": "Sportingbet",
+        "affiliate_code": None,
+        "base_url": "https://www.sportingbet.co.za",
+        "status": "pending_approval",
+        "deep_link_template": None,
+    },
+    "supabets": {
+        "name": "SupaBets",
+        "affiliate_code": None,
+        "base_url": "https://www.supabets.co.za",
+        "status": "pending_approval",
+        "deep_link_template": None,
+    },
+}
+
 # ── SA Bookmakers (whitelisted for user-facing odds) ──────
-# MVP: Betway-exclusive. Other books are dormant (active=False) for future expansion.
 ACTIVE_BOOKMAKER = "betway"
 
 SA_BOOKMAKERS: dict[str, dict] = {

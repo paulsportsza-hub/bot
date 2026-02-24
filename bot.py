@@ -41,10 +41,21 @@ from services.user_service import (
 from services.picks_service import get_picks as svc_get_picks
 from services.schedule_service import get_schedule, get_game_tips_data
 
-logging.basicConfig(
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-    level=logging.INFO,
-)
+# ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
+from logging.handlers import RotatingFileHandler
+
+_log_fmt = logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s")
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+
+_sh = logging.StreamHandler()
+_sh.setFormatter(_log_fmt)
+_root.addHandler(_sh)
+
+_fh = RotatingFileHandler("bot.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+_fh.setFormatter(_log_fmt)
+_root.addHandler(_fh)
+
 log = logging.getLogger("mzansiedge")
 
 claude = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
