@@ -66,14 +66,18 @@ _team_edit_state: dict[int, dict] = {}
 # ── Persistent Reply Keyboard ──────────────────────────────
 # Always-visible bottom keyboard (separate from inline keyboards)
 
-_KEYBOARD_LABELS = ["🎯 Picks", "📅 Schedule", "🔴 Live", "📊 Stats", "⚙️ Settings", "❓ Help"]
+_KEYBOARD_LABELS = [
+    "🎯 Today's Picks", "📅 Schedule", "🔴 Live Games",
+    "📊 My Stats", "📖 Betway Guide", "⚙️ Settings",
+]
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Return the persistent 2×3 reply keyboard."""
+    """Return the persistent 3×2 reply keyboard."""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("🎯 Picks"), KeyboardButton("📅 Schedule"), KeyboardButton("🔴 Live")],
-            [KeyboardButton("📊 Stats"), KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")],
+            [KeyboardButton("🎯 Today's Picks"), KeyboardButton("📅 Schedule")],
+            [KeyboardButton("🔴 Live Games"), KeyboardButton("📊 My Stats")],
+            [KeyboardButton("📖 Betway Guide"), KeyboardButton("⚙️ Settings")],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -1934,7 +1938,7 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     if ob and not ob.get("done"):
         return
 
-    if text == "🎯 Picks":
+    if text == "🎯 Today's Picks":
         await _do_picks_flow(chat_id=chat_id, bot=ctx.bot, user_id=user_id)
     elif text == "📅 Schedule":
         db_user = await db.get_user(user_id)
@@ -1946,10 +1950,12 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             return
         sched_text, markup = await _build_schedule(user_id)
         await update.message.reply_text(sched_text, parse_mode=ParseMode.HTML, reply_markup=markup)
-    elif text == "🔴 Live":
+    elif text == "🔴 Live Games":
         await _show_live_games(update, user_id)
-    elif text == "📊 Stats":
+    elif text == "📊 My Stats":
         await _show_stats_overview(update, user_id)
+    elif text == "📖 Betway Guide":
+        await _show_betway_guide(update)
     elif text == "⚙️ Settings":
         db_user = await db.get_user(user_id)
         if not db_user or not db_user.onboarding_done:
@@ -1961,8 +1967,6 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(
             "⚙️ <b>Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
         )
-    elif text == "❓ Help":
-        await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
 async def _show_live_games(update: Update, user_id: int) -> None:
@@ -2019,6 +2023,38 @@ async def _show_stats_overview(update: Update, user_id: int) -> None:
 
     await update.message.reply_text(
         "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb_nav(),
+    )
+
+
+async def _show_betway_guide(update: Update) -> None:
+    """Show the Betway beginner's betting guide."""
+    active_bk = config.get_active_bookmaker()
+    guide_url = active_bk.get("guide_url", "")
+
+    if guide_url:
+        text = (
+            "📖 <b>Betway Betting Guide</b>\n\n"
+            "New to Betway? Our step-by-step guide covers everything "
+            "from creating your account to placing your first bet.\n\n"
+            f'👉 <a href="{guide_url}">Read the full guide</a>'
+        )
+        buttons = [[InlineKeyboardButton("📖 Open Guide →", url=guide_url)]]
+    else:
+        text = (
+            "📖 <b>Betway Betting Guide</b>\n\n"
+            "Our step-by-step Betway guide is coming soon! "
+            "It will cover everything from signing up to placing your first bet.\n\n"
+            'In the meantime, visit <a href="https://www.betway.co.za">Betway.co.za</a> to get started.'
+        )
+        buttons = [[InlineKeyboardButton(
+            "📲 Visit Betway.co.za →",
+            url="https://www.betway.co.za",
+        )]]
+
+    await update.message.reply_text(
+        text, parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+        disable_web_page_preview=True,
     )
 
 
@@ -3417,7 +3453,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_button))
 
     # Persistent reply keyboard taps (must be BEFORE freetext_handler)
-    _kb_pattern = r"^(🎯 Picks|📅 Schedule|🔴 Live|📊 Stats|⚙️ Settings|❓ Help)$"
+    _kb_pattern = r"^(🎯 Today's Picks|📅 Schedule|🔴 Live Games|📊 My Stats|📖 Betway Guide|⚙️ Settings)$"
     app.add_handler(MessageHandler(filters.Regex(_kb_pattern), handle_keyboard_tap))
 
     # Free-text chat (also handles favourite input during onboarding)
