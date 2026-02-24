@@ -317,14 +317,13 @@ Engine prefers sharp book lines for "true" probability estimation:
 Always-visible bottom keyboard using `ReplyKeyboardMarkup` with `is_persistent=True`.
 
 ```
-⚽ Your Games | 🔥 Hot Tips
-🔴 Live Games | 📊 My Stats
-📖 Betway Guide | ⚙️ Settings
+⚽ Your Games | 🔥 Hot Tips | 📖 Guide
+👤 Profile    | ⚙️ Settings | ❓ Help
 ```
 
-- `get_main_keyboard()` — returns the 3×2 `ReplyKeyboardMarkup`
+- `get_main_keyboard()` — returns the 2×3 `ReplyKeyboardMarkup`
 - `handle_keyboard_tap()` — `MessageHandler` with `filters.Regex` that routes taps to existing handlers
-- `_LEGACY_LABELS` dict maps old button labels ("🎯 Today's Picks", "📅 Schedule") to new handlers for cached keyboards
+- `_LEGACY_LABELS` dict maps old button labels ("🎯 Today's Picks", "📅 Schedule", "🔴 Live Games", "📊 My Stats", "📖 Betway Guide") to new handlers for cached keyboards
 - Sent after onboarding completes (in `handle_ob_done`)
 - Sent with `/start` for returning users and `/menu`
 - Hidden during onboarding with `ReplyKeyboardRemove()`
@@ -334,12 +333,12 @@ Always-visible bottom keyboard using `ReplyKeyboardMarkup` with `is_persistent=T
 ### Keyboard routes
 | Button | Handler |
 |--------|---------|
-| ⚽ Your Games | `_show_your_games()` → `_build_your_games()` — personalised 7-day schedule with edge indicators |
-| 🔥 Hot Tips | `_show_hot_tips()` → `_build_hot_tips()` — cross-market value bet feed |
-| 🔴 Live Games | `_show_live_games()` — shows active game subscriptions |
-| 📊 My Stats | `_show_stats_overview()` — user stats (archetype, engagement, bankroll) |
-| 📖 Betway Guide | `_show_betway_guide()` — Telegra.ph guide link |
+| ⚽ Your Games | `_show_your_games()` — personalised 7-day schedule with edge indicators |
+| 🔥 Hot Tips | `_show_hot_tips()` — top 5 cross-market value bets with confidence indicators |
+| 📖 Guide | `_show_betway_guide()` — Telegra.ph guide link |
+| 👤 Profile | `_show_profile()` — full profile summary via `format_profile_summary()` |
 | ⚙️ Settings | `kb_settings()` inline menu |
+| ❓ Help | HELP_TEXT — commands and feature descriptions |
 
 ## Inline Menu System
 Main menu: `kb_main()` → Your Games | Hot Tips | My Bets | My Teams | Stats | Bookmakers | Settings
@@ -397,9 +396,12 @@ Shown when user follows 2+ sport categories. Row of emoji buttons (e.g. `⚽ �
 ### 15-minute cache
 `_hot_tips_cache["global"]` stores `{"tips": [...], "ts": float}` with `HOT_TIPS_CACHE_TTL = 900` seconds.
 
+### Top 5 selection
+Scanned tips are sorted by EV% descending and capped at top 5 for a focused discovery feed.
+
 ### Message format
 - Header message: "🔥 Hot Tips — N Value Bets"
-- Individual tip messages (one per tip): match, kickoff, outcome, odds, EV%, confidence
+- Individual tip messages (one per tip): match, kickoff, outcome, odds, EV%, confidence with indicator (🟢 ≥60%, 🟡 ≥40%, 🔴 <40%)
 - Each tip has a "📲 Bet on Betway →" button (URL link)
 - Footer message with Refresh, Your Games, Menu buttons
 
@@ -650,7 +652,7 @@ python tests/test_e2e_flow.py --test no_za_flags  # Verify no ZA flags in tips
 ```
 
 8 Telethon-based tests:
-1. **sticky_keyboard** — Verify 3×2 reply keyboard layout
+1. **sticky_keyboard** — Verify 2×3 reply keyboard layout
 2. **your_games** — Default all-games view
 3. **sport_filter** — Sport emoji button → sport-specific view
 4. **pagination** — Pagination when >10 games
