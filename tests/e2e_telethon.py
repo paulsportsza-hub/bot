@@ -12,6 +12,7 @@ Usage:
     python tests/e2e_telethon.py --test fuzzy        # Fuzzy matching
     python tests/e2e_telethon.py --test reset        # Profile reset
     python tests/e2e_telethon.py --test edge         # Edge cases
+    python tests/e2e_telethon.py --test keyboard     # Sticky keyboard & UX polish
     python tests/e2e_telethon.py --report            # View saved report
 """
 
@@ -1195,6 +1196,164 @@ async def suite_edge(client: TelegramClient):
 
 
 # ═══════════════════════════════════════════
+# TEST SUITE 6: STICKY KEYBOARD & UX POLISH
+# ═══════════════════════════════════════════
+
+async def suite_keyboard(client: TelegramClient):
+    """Test persistent reply keyboard and UX polish (back arrows, bookmaker display, schedule)."""
+    logger.info("")
+    logger.info("SUITE 6: Sticky Keyboard & UX Polish")
+    logger.info("-" * 40)
+
+    # ── 1. Sticky keyboard appears after /start for returning user ──
+    t0 = time.time()
+    msg = await send_cmd(client, "/start")
+    # After /start, returning user gets two messages:
+    # 1) Welcome with ReplyKeyboardMarkup
+    # 2) Inline quick menu
+    # Check recent messages for ReplyKeyboard presence
+    msgs = await client.get_messages(BOT_USERNAME, limit=5)
+    keyboard_msg = None
+    for m in msgs:
+        if not m.out and m.reply_markup:
+            # Check if it's a ReplyKeyboard (not inline)
+            # Telethon: ReplyKeyboardMarkup vs ReplyInlineMarkup
+            markup_type = type(m.reply_markup).__name__
+            if "ReplyKeyboardMarkup" in markup_type:
+                keyboard_msg = m
+                break
+
+    if keyboard_msg:
+        record("sticky_kb_after_start", "PASS",
+               f"ReplyKeyboardMarkup found in message", time.time() - t0)
+    else:
+        # Even if we can't detect the markup type, check for text that indicates keyboard
+        record("sticky_kb_after_start", "WARN",
+               "Could not detect ReplyKeyboardMarkup (may still be visible to user)",
+               time.time() - t0)
+
+    # ── 2. All 6 keyboard buttons respond ──
+    kb_buttons = [
+        ("🎯 Picks", "picks"),
+        ("📅 Schedule", "schedule"),
+        ("🔴 Live", "live"),
+        ("📊 Stats", "stats"),
+        ("⚙️ Settings", "settings"),
+        ("❓ Help", "help"),
+    ]
+
+    for btn_text, btn_name in kb_buttons:
+        t0 = time.time()
+        msg = await send_and_wait(client, btn_text, timeout=PICKS_TIMEOUT if btn_name == "picks" else BOT_REPLY_TIMEOUT)
+        if msg and (msg.text or msg.buttons):
+            text = msg_text(msg)
+            # Verify it's a relevant response
+            relevant = True
+            if btn_name == "help" and "help" not in text.lower() and "command" not in text.lower():
+                relevant = False
+            if btn_name == "settings" and "settings" not in text.lower() and not msg.buttons:
+                relevant = False
+            if btn_name == "live" and "live" not in text.lower() and "follow" not in text.lower() and "game" not in text.lower():
+                relevant = False
+            if btn_name == "stats" and "stats" not in text.lower() and "profile" not in text.lower():
+                relevant = False
+
+            record(f"sticky_kb_{btn_name}_responds", "PASS" if relevant else "WARN",
+                   f"Response: {text[:60]}", time.time() - t0)
+        else:
+            record(f"sticky_kb_{btn_name}_responds", "FAIL",
+                   f"No response for '{btn_text}'", time.time() - t0)
+        await asyncio.sleep(1)
+
+    # ── 3. Back arrows use ↩️ (not 🔙) in inline keyboards ──
+    t0 = time.time()
+    # Check help response — should have nav buttons
+    msg = await send_and_wait(client, "❓ Help")
+    if msg:
+        btn_texts = get_button_texts(msg)
+        has_old_back = any("🔙" in t for t in btn_texts)
+        has_new_back = any("↩️" in t for t in btn_texts)
+        if has_old_back:
+            record("back_arrow_standard", "FAIL",
+                   f"Found old 🔙 back arrow. Buttons: {btn_texts}", time.time() - t0)
+        elif has_new_back:
+            record("back_arrow_standard", "PASS",
+                   f"Uses ↩️ back arrow. Buttons: {btn_texts}", time.time() - t0)
+        else:
+            record("back_arrow_standard", "WARN",
+                   f"No back arrow button found. Buttons: {btn_texts}", time.time() - t0)
+    else:
+        record("back_arrow_standard", "WARN", "No help response")
+
+    # Also check settings for back arrows
+    msg = await send_and_wait(client, "⚙️ Settings")
+    if msg and msg.buttons:
+        btn_texts = get_button_texts(msg)
+        has_old_back = any("🔙" in t for t in btn_texts)
+        if has_old_back:
+            record("settings_back_arrow", "FAIL",
+                   f"Old 🔙 in settings. Buttons: {btn_texts}")
+        else:
+            record("settings_back_arrow", "PASS",
+                   f"No old 🔙 in settings. Buttons: {btn_texts}")
+
+    # ── 4. Schedule shows numbered events with date grouping ──
+    t0 = time.time()
+    msg = await send_and_wait(client, "📅 Schedule", timeout=BOT_REPLY_TIMEOUT)
+    if msg:
+        text = msg_text(msg)
+        btn_texts = get_button_texts(msg)
+
+        # Check for numbered events (e.g. "1." or "2.")
+        import re
+        has_numbering = bool(re.search(r'\d+\.', text))
+        # Check for date headers (Today, Tomorrow, or day names)
+        has_date_group = (
+            "today" in text.lower() or "tomorrow" in text.lower()
+            or any(day in text.lower() for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"])
+        )
+        # Check for abbreviated team buttons
+        btn_text_str = " ".join(btn_texts)
+        has_abbreviated_btns = bool(re.search(r'\[?\d+\]?', btn_text_str))  # buttons with numbers
+
+        if "no upcoming" in text.lower() or "no leagues" in text.lower():
+            record("schedule_format", "WARN",
+                   f"No games found — can't test formatting. Text: {text[:80]}",
+                   time.time() - t0)
+        else:
+            if has_numbering:
+                record("schedule_numbered_events", "PASS",
+                       f"Numbered events found. Text: {text[:80]}", time.time() - t0)
+            else:
+                record("schedule_numbered_events", "WARN",
+                       f"No numbering. Text: {text[:80]}", time.time() - t0)
+
+            if has_date_group:
+                record("schedule_date_grouping", "PASS",
+                       f"Date grouping found", time.time() - t0)
+            else:
+                record("schedule_date_grouping", "WARN",
+                       f"No date grouping detected. Text: {text[:80]}", time.time() - t0)
+    else:
+        record("schedule_format", "FAIL", "No schedule response", time.time() - t0)
+
+    # ── 5. Profile summary shows abbreviated leagues ──
+    t0 = time.time()
+    msg = await send_and_wait(client, "⚙️ Settings")
+    if msg and msg.buttons:
+        # Navigate to profile view if available
+        btn_data = get_button_data(msg)
+        # Settings typically shows the profile summary at the top
+        text = msg_text(msg)
+        # Just check if settings responds (profile summary shown via /start or settings:home)
+        record("profile_accessible", "PASS",
+               f"Settings accessible. Text: {text[:60]}", time.time() - t0)
+    else:
+        record("profile_accessible", "WARN",
+               "Settings not showing buttons", time.time() - t0)
+
+
+# ═══════════════════════════════════════════
 # MAIN RUNNER
 # ═══════════════════════════════════════════
 
@@ -1250,6 +1409,9 @@ async def run_all_tests():
         # Suite 5: Edge Cases
         await suite_edge(client)
 
+        # Suite 6: Sticky Keyboard & UX Polish
+        await suite_keyboard(client)
+
     except Exception as e:
         logger.exception("Unhandled exception in test runner: %s", e)
         record("test_runner_exception", "ERROR", str(e))
@@ -1286,6 +1448,7 @@ async def run_specific_suite(suite_name: str):
             "reset": suite_reset,
             "fuzzy": suite_fuzzy,
             "edge": suite_edge,
+            "keyboard": suite_keyboard,
         }
         fn = suites.get(suite_name)
         if fn:

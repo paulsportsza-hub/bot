@@ -299,7 +299,33 @@ Engine prefers sharp book lines for "true" probability estimation:
 - `fuzzy_match_team(input, known_names)` → top 3 matches with confidence scores
 - `fetch_events_for_league(league_key)` → upcoming events from Odds API `/events` endpoint (free, 2hr cache)
 
-## Persistent Menu System
+## Persistent Reply Keyboard (Sticky Keyboard)
+Always-visible bottom keyboard using `ReplyKeyboardMarkup` with `is_persistent=True`.
+
+```
+🎯 Picks | 📅 Schedule | 🔴 Live
+📊 Stats | ⚙️ Settings  | ❓ Help
+```
+
+- `get_main_keyboard()` — returns the 2×3 `ReplyKeyboardMarkup`
+- `handle_keyboard_tap()` — `MessageHandler` with `filters.Regex` that routes taps to existing handlers
+- Sent after onboarding completes (in `handle_ob_done`)
+- Sent with `/start` for returning users and `/menu`
+- Hidden during onboarding with `ReplyKeyboardRemove()`
+- Coexists with inline keyboards (`InlineKeyboardMarkup`) — both visible simultaneously
+- Handler registered BEFORE `freetext_handler` in `main()` (order matters in PTB)
+
+### Keyboard routes
+| Button | Handler |
+|--------|---------|
+| 🎯 Picks | `_do_picks_flow()` |
+| 📅 Schedule | `_build_schedule()` |
+| 🔴 Live | `_show_live_games()` — shows active game subscriptions |
+| 📊 Stats | `_show_stats_overview()` — user stats (archetype, engagement, bankroll) |
+| ⚙️ Settings | `kb_settings()` inline menu |
+| ❓ Help | `HELP_TEXT` with `kb_nav()` |
+
+## Inline Menu System
 Main menu: `kb_main()` → Daily Briefing | My Bets | My Teams | Stats | Schedule | Bookmakers | Settings
 
 Sub-menus: `kb_bets()`, `kb_teams()`, `kb_stats()`, `kb_bookmakers()`, `kb_settings()`
@@ -494,7 +520,7 @@ The architecture separates concerns:
 
 ## Verification
 ```bash
-# Run unit tests (278 tests)
+# Run unit tests (281 tests)
 pytest tests/ -x -q --ignore=tests/e2e_telegram.py --ignore=tests/e2e_telethon.py
 
 # Run specific test file
@@ -532,6 +558,7 @@ python tests/e2e_telegram.py --report           # View saved report
 3. **Profile Reset** — warning screen, confirm reset, re-onboarding
 4. **Fuzzy Matching** — typos ("Arsnal"), aliases ("gooners"), SA slang ("amakhosi")
 5. **Edge Cases** — zero sports, /start when onboarded, random text, rapid commands
+6. **Sticky Keyboard & UX Polish** — keyboard appears after /start, all 6 buttons respond, back arrows use ↩️, schedule formatting, profile accessibility
 
 ### Reports
 - `data/e2e_report.json` — structured JSON report

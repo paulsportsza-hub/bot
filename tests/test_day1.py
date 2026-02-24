@@ -26,6 +26,8 @@ def _make_query(user_id: int = 55555, data: str = "") -> MagicMock:
     query.from_user.first_name = "Tester"
     query.from_user.username = "tester"
     query.data = data
+    query.message.chat.send_message = AsyncMock()
+    query.message.chat_id = user_id
     return query
 
 

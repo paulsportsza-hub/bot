@@ -8,7 +8,11 @@ import logging
 import textwrap
 
 import anthropic
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton, InlineKeyboardMarkup,
+    KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -57,6 +61,24 @@ _story_state: dict[int, dict] = {}
 
 # Per-user settings team edit state
 _team_edit_state: dict[int, dict] = {}
+
+
+# ── Persistent Reply Keyboard ──────────────────────────────
+# Always-visible bottom keyboard (separate from inline keyboards)
+
+_KEYBOARD_LABELS = ["🎯 Picks", "📅 Schedule", "🔴 Live", "📊 Stats", "⚙️ Settings", "❓ Help"]
+
+def get_main_keyboard() -> ReplyKeyboardMarkup:
+    """Return the persistent 2×3 reply keyboard."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🎯 Picks"), KeyboardButton("📅 Schedule"), KeyboardButton("🔴 Live")],
+            [KeyboardButton("📊 Stats"), KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
 
 STORY_STEPS = ["daily_picks", "game_day_alerts", "weekly_recap", "edu_tips", "market_movers", "live_scores"]
 
@@ -478,12 +500,23 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             Your AI-powered sports betting assistant.
             Pick a sport or get an AI tip below.
         """)
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
+        # Send sticky keyboard + inline menu
+        await update.message.reply_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard(),
+        )
+        await update.message.reply_text(
+            "👇 <i>Quick menu:</i>", parse_mode=ParseMode.HTML, reply_markup=kb_main(),
+        )
     else:
-        # Start onboarding
+        # Start onboarding — hide sticky keyboard
         _onboarding_state.pop(user.id, None)  # reset
         ob = _get_ob(user.id)
         ob["step"] = "experience"
+        # Remove persistent keyboard during onboarding
+        await update.message.reply_text(
+            "🇿🇦 Setting up your profile…",
+            reply_markup=ReplyKeyboardRemove(),
+        )
         text = textwrap.dedent(f"""\
             <b>🇿🇦 Welcome to MzansiEdge, {user.first_name}!</b>
 
@@ -506,7 +539,12 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
         Hey {user.first_name}, pick a sport or get an AI tip.
     """)
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
+    await update.message.reply_text(
+        text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard(),
+    )
+    await update.message.reply_text(
+        "👇 <i>Quick menu:</i>", parse_mode=ParseMode.HTML, reply_markup=kb_main(),
+    )
 
 
 # ── /help ─────────────────────────────────────────────────
@@ -1610,6 +1648,13 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             [InlineKeyboardButton("⏭️ Skip for Now", callback_data="nav:main")],
         ]),
     )
+    # Activate the persistent reply keyboard
+    await ctx.bot.send_message(
+        query.message.chat_id,
+        "⌨️ <i>Your quick-access keyboard is now active!</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_keyboard(),
+    )
 
 
 # ── Team text input handler ──────────────────────────────
@@ -1857,6 +1902,105 @@ async def _handle_settings_team_edit(update: Update, ctx) -> bool:
         "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb_teams(),
     )
     return True
+
+
+async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle taps on the persistent reply keyboard buttons."""
+    text = update.message.text.strip()
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    # Ignore during active onboarding — shouldn't happen but be safe
+    ob = _onboarding_state.get(user_id)
+    if ob and not ob.get("done"):
+        return
+
+    if text == "🎯 Picks":
+        await _do_picks_flow(chat_id=chat_id, bot=ctx.bot, user_id=user_id)
+    elif text == "📅 Schedule":
+        db_user = await db.get_user(user_id)
+        if not db_user or not db_user.onboarding_done:
+            await update.message.reply_text(
+                "🏟️ Complete your profile first!\n\nUse /start to get set up.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        sched_text, markup = await _build_schedule(user_id)
+        await update.message.reply_text(sched_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif text == "🔴 Live":
+        await _show_live_games(update, user_id)
+    elif text == "📊 Stats":
+        await _show_stats_overview(update, user_id)
+    elif text == "⚙️ Settings":
+        db_user = await db.get_user(user_id)
+        if not db_user or not db_user.onboarding_done:
+            await update.message.reply_text(
+                "⚙️ Complete onboarding first!\n\nUse /start to get set up.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        await update.message.reply_text(
+            "⚙️ <b>Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
+        )
+    elif text == "❓ Help":
+        await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+
+
+async def _show_live_games(update: Update, user_id: int) -> None:
+    """Show user's active game subscriptions."""
+    subs = await db.get_user_subscriptions(user_id)
+    active = [s for s in subs if s.is_active]
+
+    if not active:
+        await update.message.reply_text(
+            "🔴 <b>Live Games</b>\n\n"
+            "You're not following any live games yet.\n\n"
+            "Use 📅 <b>Schedule</b> to find games, tap one for tips, "
+            "then hit <b>🔔 Follow this game</b> to get live updates.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    lines = [f"🔴 <b>Live Games ({len(active)})</b>\n"]
+    buttons = []
+    for sub in active:
+        lines.append(f"  ⚡ {sub.home_team} vs {sub.away_team}")
+        buttons.append([InlineKeyboardButton(
+            f"🔕 Unfollow {sub.home_team} vs {sub.away_team}",
+            callback_data=f"unsubscribe:{sub.event_id}",
+        )])
+    buttons.append([InlineKeyboardButton("📅 Schedule", callback_data="nav:schedule")])
+
+    await update.message.reply_text(
+        "\n".join(lines), parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def _show_stats_overview(update: Update, user_id: int) -> None:
+    """Show user-facing stats overview."""
+    db_user = await db.get_user(user_id)
+    if not db_user or not db_user.onboarding_done:
+        await update.message.reply_text(
+            "📊 Complete onboarding first!\n\nUse /start to get set up.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    archetype = db_user.archetype or "casual_fan"
+    exp = db_user.experience_level or "casual"
+    score = db_user.engagement_score or 5.0
+    bankroll = db_user.bankroll
+
+    lines = ["📊 <b>Your Stats</b>\n"]
+    lines.append(f"🎯 Profile: <b>{archetype.replace('_', ' ').title()}</b>")
+    lines.append(f"📈 Engagement: <b>{score:.0f}/10</b>")
+    if bankroll:
+        lines.append(f"💰 Bankroll: <b>R{bankroll:,.0f}/week</b>")
+
+    await update.message.reply_text(
+        "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb_nav(),
+    )
 
 
 async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3086,6 +3230,11 @@ async def handle_ob_restart(query) -> None:
     _onboarding_state.pop(user_id, None)
     ob = _get_ob(user_id)
     ob["step"] = "experience"
+    # Remove sticky keyboard during onboarding
+    await query.message.chat.send_message(
+        "🇿🇦 Setting up your profile…",
+        reply_markup=ReplyKeyboardRemove(),
+    )
     text = textwrap.dedent(f"""\
         <b>🇿🇦 Let's set up your profile!</b>
 
@@ -3199,6 +3348,10 @@ def main() -> None:
 
     # Callback query handler (prefix:action routing)
     app.add_handler(CallbackQueryHandler(on_button))
+
+    # Persistent reply keyboard taps (must be BEFORE freetext_handler)
+    _kb_pattern = r"^(🎯 Picks|📅 Schedule|🔴 Live|📊 Stats|⚙️ Settings|❓ Help)$"
+    app.add_handler(MessageHandler(filters.Regex(_kb_pattern), handle_keyboard_tap))
 
     # Free-text chat (also handles favourite input during onboarding)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, freetext_handler))
