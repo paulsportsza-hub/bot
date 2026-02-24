@@ -441,6 +441,27 @@ async def deactivate_subscriptions_for_event(event_id: str) -> None:
         await s.commit()
 
 
+async def get_users_for_notification(hour: int) -> list[User]:
+    """Get onboarded users whose notification_hour matches and who want daily_picks."""
+    import json
+    async with async_session() as s:
+        result = await s.execute(
+            select(User).where(
+                User.onboarding_done == True,  # noqa: E712
+                User.notification_hour == hour,
+                User.is_active == True,  # noqa: E712
+            )
+        )
+        users = list(result.scalars().all())
+        # Filter to users who have daily_picks enabled
+        filtered = []
+        for u in users:
+            prefs = get_notification_prefs(u)
+            if prefs.get("daily_picks", True):
+                filtered.append(u)
+        return filtered
+
+
 async def get_user_count() -> int:
     async with async_session() as s:
         result = await s.execute(select(func.count(User.id)))

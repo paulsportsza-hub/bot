@@ -2673,9 +2673,9 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
         parse_mode=ParseMode.HTML,
     )
 
-    # Individual tip messages with Betway button
+    # Individual tip messages with Betway affiliate button
     active_bk = config.get_active_bookmaker()
-    betway_url = active_bk.get("affiliate_base_url") or active_bk.get("website_url", "")
+    betway_url = config.get_affiliate_url()
 
     for i, tip in enumerate(tips, 1):
         kickoff = _format_kickoff_display(tip["commence_time"])
@@ -3160,29 +3160,34 @@ _schedule_cache: dict[int, list[dict]] = {}
 _game_tips_cache: dict[str, list[dict]] = {}
 
 GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
-    You are MzansiEdge, a sharp South African sports betting analyst.
-    Given odds and probability data for an upcoming match, write a punchy
-    ~150-word analysis using these EXACT section headers:
+    You are MzansiEdge, a sharp South African sports betting analyst with deep knowledge
+    of form, matchups, and market dynamics. Given odds and probability data for an
+    upcoming match, write a punchy ~150-word analysis using these EXACT section headers:
 
     📋 <b>The Setup</b>
-    One paragraph on recent form, head-to-head context, and what to expect.
+    Recent form, key injuries/absences, head-to-head record, and venue factor.
+    Mention specific stats where relevant (win streak, clean sheets, scoring form).
 
     🎯 <b>The Edge</b>
-    Where the value is. Be specific about which outcome and why the market
-    has mispriced it.
+    Where the value is. Be specific about WHICH outcome and WHY the market has
+    mispriced it. Reference the probability gap between fair odds and market odds.
+    If there's no clear edge, say so honestly.
 
     ⚠️ <b>The Risk</b>
-    One sentence on what could go wrong.
+    One or two sentences on what could derail this pick. Be specific — name the
+    scenario (e.g. key player rested, weather, fixture congestion).
 
     🏆 <b>Verdict</b>
-    One bold sentence: your top pick with conviction level.
+    One bold sentence: your top pick with conviction level (High/Medium/Low).
 
     Rules:
     - Telegram HTML only (<b>, <i> tags)
-    - Do NOT include odds numbers or bookmaker names (shown separately)
+    - Do NOT include odds numbers or bookmaker names (shown separately below)
     - No disclaimers, no "gamble responsibly" — we handle that elsewhere
-    - Be direct, confident, conversational — like a mate who knows his stuff
-    - South African tone: use "edge", "value", "sharp"
+    - Be direct, confident, conversational — like a mate at the braai who knows his stuff
+    - South African tone: use "edge", "value", "sharp", "lekker"
+    - Sport-specific language: "clean sheet" for soccer, "try line" for rugby, "strike rate" for cricket
+    - If the data is thin, keep it shorter — don't pad with generic filler
 """)
 
 
@@ -3341,8 +3346,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
 
     # Betway affiliate button — always show below tips
     active_bk = config.get_active_bookmaker()
-    affiliate_url = active_bk.get("affiliate_base_url", "")
-    betway_url = affiliate_url or active_bk.get("website_url", "")
+    betway_url = config.get_affiliate_url(event_id)
     if betway_url:
         buttons.append([InlineKeyboardButton(
             f"📲 Place your bet on {active_bk['display_name']} →",
@@ -3435,8 +3439,7 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     active_name = active_bk["short_name"]
 
     # Betway affiliate button — always first
-    affiliate_url = active_bk.get("affiliate_base_url", "")
-    betway_url = affiliate_url or active_bk.get("website_url", "")
+    betway_url = config.get_affiliate_url(tip.get("event_id"))
     if betway_url:
         buttons.append([InlineKeyboardButton(
             f"📲 Place on {active_bk['display_name']} →",
@@ -4062,10 +4065,72 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+# ── Morning Notification Teasers ──────────────────────────
+
+async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Scheduled job: send morning teaser to users whose notification_hour matches now."""
+    from datetime import datetime as dt_cls
+    from zoneinfo import ZoneInfo
+
+    now = dt_cls.now(ZoneInfo(config.TZ))
+    current_hour = now.hour
+    log.info("Morning teaser job running for hour=%d (SAST)", current_hour)
+
+    users = await db.get_users_for_notification(current_hour)
+    if not users:
+        log.info("No users to notify at hour=%d", current_hour)
+        return
+
+    # Fetch hot tips once for all users (uses 15-min cache)
+    tips = await _fetch_hot_tips_all_sports()
+
+    for user in users:
+        try:
+            if tips:
+                top = tips[0]
+                sport_emoji = _get_sport_emoji_for_api_key(top.get("sport_key", ""))
+                kickoff = _format_kickoff_display(top["commence_time"])
+                teaser = (
+                    f"☀️ <b>Good morning!</b>\n\n"
+                    f"🔥 <b>{len(tips)} value bet{'s' if len(tips) != 1 else ''}</b> found today.\n\n"
+                    f"Top pick: {sport_emoji} <b>{top['home_team']} vs {top['away_team']}</b>\n"
+                    f"💰 {top['outcome']} @ {top['odds']:.2f} · EV +{top['ev']}%\n"
+                    f"⏰ {kickoff}\n\n"
+                    f"<i>Tap below to see all tips 👇</i>"
+                )
+            else:
+                teaser = (
+                    f"☀️ <b>Good morning!</b>\n\n"
+                    f"No value bets found yet today — the market is tight.\n"
+                    f"Check back later or browse your games!"
+                )
+
+            await ctx.bot.send_message(
+                chat_id=user.id,
+                text=teaser,
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔥 See Hot Tips", callback_data="hot:go")],
+                    [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+                ]),
+            )
+        except Exception as exc:
+            log.warning("Failed to send morning teaser to user %s: %s", user.id, exc)
+
+
 # ── Main ──────────────────────────────────────────────────
 
+def _seconds_until_next_hour() -> float:
+    """Calculate seconds until the next whole hour (SAST)."""
+    from datetime import datetime as dt_cls
+    from zoneinfo import ZoneInfo
+    now = dt_cls.now(ZoneInfo(config.TZ))
+    seconds_past = now.minute * 60 + now.second
+    return max(3600 - seconds_past, 60)  # at least 60s buffer
+
+
 async def _post_init(app_instance) -> None:
-    """Run on bot startup: init DB, publish guides, register commands."""
+    """Run on bot startup: init DB, publish guides, register commands, schedule jobs."""
     await db.init_db()
 
     # Pre-publish Betway Telegra.ph guide and wire URL into config
@@ -4074,6 +4139,19 @@ async def _post_init(app_instance) -> None:
         await ensure_active_guide()
     except Exception as exc:
         log.warning("Could not pre-publish guide: %s", exc)
+
+    # Schedule morning teaser notifications — runs every hour on the hour
+    # Checks SAST hour against each user's preferred notification_hour
+    from datetime import time as dt_time
+    job_queue = app_instance.job_queue
+    if job_queue:
+        job_queue.run_repeating(
+            _morning_teaser_job,
+            interval=3600,  # every hour
+            first=_seconds_until_next_hour(),
+            name="morning_teaser",
+        )
+        log.info("Scheduled morning teaser job (runs hourly)")
 
     await app_instance.bot.set_my_commands([
         ("start", "Start the bot"),

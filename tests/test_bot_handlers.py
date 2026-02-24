@@ -169,3 +169,105 @@ class TestStickyKeyboard:
         kb = bot.get_main_keyboard()
         assert kb.is_persistent is True
         assert kb.resize_keyboard is True
+
+
+class TestAffiliate:
+    def test_betway_affiliate_code_in_config(self):
+        """Config should have the Betway affiliate code."""
+        import config
+        assert config.BETWAY_AFFILIATE_CODE == "BPA117074"
+
+    def test_affiliate_base_url_has_btag(self):
+        """Betway affiliate_base_url should contain the btag parameter."""
+        import config
+        bk = config.SA_BOOKMAKERS["betway"]
+        assert "btag=BPA117074" in bk["affiliate_base_url"]
+
+    def test_get_affiliate_url_returns_url(self):
+        """get_affiliate_url() should return a non-empty URL."""
+        import config
+        url = config.get_affiliate_url()
+        assert url
+        assert "betway.co.za" in url
+        assert "btag=" in url
+
+    def test_get_affiliate_url_with_event_id(self):
+        """get_affiliate_url(event_id) should still return a valid URL (deep links pending)."""
+        import config
+        url = config.get_affiliate_url("some-event-123")
+        assert url
+        assert "betway.co.za" in url
+
+
+class TestMorningTeaser:
+    def test_seconds_until_next_hour(self):
+        """_seconds_until_next_hour should return a positive number."""
+        result = bot._seconds_until_next_hour()
+        assert result >= 60
+        assert result <= 3600
+
+    async def test_get_users_for_notification_empty(self, test_db):
+        """No users should be returned when none match the hour."""
+        users = await db.get_users_for_notification(7)
+        assert users == []
+
+    async def test_get_users_for_notification_matching(self, test_db):
+        """User with matching hour and daily_picks should be returned."""
+        user = await db.upsert_user(55555, "earlybird", "Early")
+        await db.set_onboarding_done(55555)
+        await db.update_user_notification_hour(55555, 7)
+        # Default notification_prefs has daily_picks=True
+        users = await db.get_users_for_notification(7)
+        assert len(users) == 1
+        assert users[0].id == 55555
+
+    async def test_get_users_for_notification_wrong_hour(self, test_db):
+        """User with different hour should not be returned."""
+        await db.upsert_user(66666, "nightowl", "Night")
+        await db.set_onboarding_done(66666)
+        await db.update_user_notification_hour(66666, 21)
+        users = await db.get_users_for_notification(7)
+        assert users == []
+
+    async def test_get_users_for_notification_daily_picks_disabled(self, test_db):
+        """User with daily_picks disabled should not be returned."""
+        import json
+        await db.upsert_user(77777, "quiet", "Quiet")
+        await db.set_onboarding_done(77777)
+        await db.update_user_notification_hour(77777, 7)
+        await db.update_notification_prefs(77777, {"daily_picks": False})
+        users = await db.get_users_for_notification(7)
+        assert users == []
+
+    async def test_morning_teaser_job_no_users(self, test_db, mock_context):
+        """Morning teaser with no matching users should not send messages."""
+        await bot._morning_teaser_job(mock_context)
+        mock_context.bot.send_message.assert_not_called()
+
+
+class TestAIPrompt:
+    def test_game_analysis_prompt_has_sections(self):
+        """GAME_ANALYSIS_PROMPT should contain all 4 section headers."""
+        prompt = bot.GAME_ANALYSIS_PROMPT
+        assert "The Setup" in prompt
+        assert "The Edge" in prompt
+        assert "The Risk" in prompt
+        assert "Verdict" in prompt
+
+    def test_game_analysis_prompt_sa_tone(self):
+        """Prompt should specify SA conversational tone."""
+        prompt = bot.GAME_ANALYSIS_PROMPT
+        assert "braai" in prompt
+        assert "lekker" in prompt
+
+    def test_game_analysis_prompt_sport_specific(self):
+        """Prompt should mention sport-specific language."""
+        prompt = bot.GAME_ANALYSIS_PROMPT
+        assert "clean sheet" in prompt
+        assert "try line" in prompt
+        assert "strike rate" in prompt
+
+    def test_game_analysis_prompt_conviction(self):
+        """Prompt should ask for conviction level."""
+        prompt = bot.GAME_ANALYSIS_PROMPT
+        assert "High/Medium/Low" in prompt

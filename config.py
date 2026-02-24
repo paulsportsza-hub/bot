@@ -44,6 +44,7 @@ RISK_PROFILES: dict[str, dict] = {
 # ── SA Bookmakers (whitelisted for user-facing odds) ──────
 # MVP: Betway-exclusive. Other books are dormant (active=False) for future expansion.
 ACTIVE_BOOKMAKER = "betway"
+BETWAY_AFFILIATE_CODE = "BPA117074"
 
 SA_BOOKMAKERS: dict[str, dict] = {
     "betway": {
@@ -51,7 +52,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "short_name": "Betway",
         "website_url": "https://www.betway.co.za",
         "guide_url": "",
-        "affiliate_base_url": "",
+        "affiliate_base_url": f"https://www.betway.co.za/?btag={BETWAY_AFFILIATE_CODE}",
         "active": True,
     },
     "sportingbet": {
@@ -110,6 +111,15 @@ def get_active_display_name() -> str:
 def get_active_website_url() -> str:
     """Get the active bookmaker's website URL."""
     return SA_BOOKMAKERS[ACTIVE_BOOKMAKER]["website_url"]
+
+
+def get_affiliate_url(event_id: str | None = None) -> str:
+    """Get the Betway affiliate URL. Deep links are pending — uses base affiliate URL for now."""
+    bk = SA_BOOKMAKERS[ACTIVE_BOOKMAKER]
+    base = bk.get("affiliate_base_url") or bk.get("website_url", "")
+    # TODO: Wire deep links when Betway provides event-specific URL format
+    # e.g. f"{base}&event={event_id}" once the deep link spec is available
+    return base
 
 
 # ── Sport & League definitions ────────────────────────────

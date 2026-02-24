@@ -25,8 +25,8 @@ from telethon.tl.types import (
 
 # ── Configuration ────────────────────────────────────────
 
-API_ID = 32418601
-API_HASH = "95e313a8ef5b998be0515dd8328fac57"
+API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
+API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_USERNAME = "mzansiedge_bot"
 SESSION_FILE = os.environ.get("TELETHON_SESSION", "data/telethon_session")
 
