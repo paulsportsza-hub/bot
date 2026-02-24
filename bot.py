@@ -743,9 +743,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await _generate_game_tips(query, ctx, event_id, query.from_user.id)
     elif prefix == "tip":
         if action == "affiliate_soon":
-            await query.answer("🔗 Affiliate link coming soon! Check back tomorrow.", show_alert=True)
-        elif action == "guide_soon":
-            await query.answer("📖 Betting guide coming soon! Check back tomorrow.", show_alert=True)
+            await query.answer("🔗 Betway.co.za link coming soon! Check back tomorrow.", show_alert=True)
         else:
             await handle_tip_detail(query, ctx, action)
     elif prefix == "subscribe":
@@ -2649,6 +2647,22 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
                 f"💰 {tip['outcome']} @ {tip['odds']:.2f} (EV: +{tip['ev']}%)",
                 callback_data=f"tip:detail:{event_id}:{i}",
             )])
+
+    # Betway affiliate button — always show below tips
+    active_bk = config.get_active_bookmaker()
+    affiliate_url = active_bk.get("affiliate_base_url", "")
+    betway_url = affiliate_url or active_bk.get("website_url", "")
+    if betway_url:
+        buttons.append([InlineKeyboardButton(
+            f"📲 Place your bet on {active_bk['display_name']} →",
+            url=betway_url,
+        )])
+    else:
+        buttons.append([InlineKeyboardButton(
+            f"📲 Place your bet on {active_bk['display_name']} →",
+            callback_data="tip:affiliate_soon",
+        )])
+
     buttons.append([InlineKeyboardButton("📊 Full Picks Scan", callback_data="picks:today")])
     buttons.append([InlineKeyboardButton("↩️ Back to Schedule", callback_data="nav:schedule")])
 
@@ -2729,44 +2743,18 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     active_bk = config.get_active_bookmaker()
     active_name = active_bk["short_name"]
 
-    # Affiliate button
+    # Betway affiliate button — always first
     affiliate_url = active_bk.get("affiliate_base_url", "")
-    if affiliate_url:
+    betway_url = affiliate_url or active_bk.get("website_url", "")
+    if betway_url:
         buttons.append([InlineKeyboardButton(
-            f"📲 Bet on {active_name} →",
-            url=affiliate_url,
-        )])
-    else:
-        website_url = active_bk.get("website_url", "")
-        if website_url:
-            buttons.append([InlineKeyboardButton(
-                f"📲 Bet on {active_name} →",
-                url=website_url,
-            )])
-        else:
-            buttons.append([InlineKeyboardButton(
-                f"📲 Bet on {active_name} →",
-                callback_data="tip:affiliate_soon",
-            )])
-
-    # Guide button
-    guide_url = active_bk.get("guide_url", "")
-    if not guide_url:
-        from scripts.telegraph_guides import get_guide_url as _get_guide
-        try:
-            guide_url = await _get_guide(config.ACTIVE_BOOKMAKER) or ""
-        except Exception:
-            guide_url = ""
-
-    if guide_url:
-        buttons.append([InlineKeyboardButton(
-            f"📖 How to bet on {active_name}",
-            url=guide_url,
+            f"📲 Place on {active_bk['display_name']} →",
+            url=betway_url,
         )])
     else:
         buttons.append([InlineKeyboardButton(
-            f"📖 How to bet on {active_name}",
-            callback_data="tip:guide_soon",
+            f"📲 Place on {active_bk['display_name']} →",
+            callback_data="tip:affiliate_soon",
         )])
 
     buttons.append([InlineKeyboardButton(
