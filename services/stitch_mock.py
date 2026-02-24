@@ -1,0 +1,110 @@
+"""Mock Stitch service for local development.
+
+Stitch has no test/sandbox environment. This mock simulates the full payment
+flow with realistic GraphQL response structures. Toggled via STITCH_MOCK_MODE=true.
+
+Payment IDs starting with "fail-" will simulate failed payments.
+All others simulate success.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Any
+
+log = logging.getLogger("mzansiedge.stitch.mock")
+
+# In-memory payment store for mock mode
+_mock_payments: dict[str, dict] = {}
+
+
+class MockStitchService:
+    """Mock implementation of StitchService for local development."""
+
+    async def get_client_token(self) -> str:
+        """Return a fake client token."""
+        log.info("[MOCK] Returning mock Stitch client token")
+        return "mock_stitch_token_for_local_dev"
+
+    async def create_payment(
+        self,
+        user_id: int,
+        amount_cents: int = 4900,
+        reference: str | None = None,
+    ) -> dict[str, Any]:
+        """Simulate payment creation. Returns a mock LinkPay checkout URL."""
+        if not reference:
+            reference = f"mze-{user_id}-{uuid.uuid4().hex[:8]}"
+
+        payment_id = f"mock-pir-{uuid.uuid4().hex[:12]}"
+
+        # Store for later status checks
+        _mock_payments[payment_id] = {
+            "payment_id": payment_id,
+            "user_id": user_id,
+            "reference": reference,
+            "amount_cents": amount_cents,
+            "status": "pending",
+        }
+        _mock_payments[reference] = _mock_payments[payment_id]
+
+        result = {
+            "payment_url": f"https://mock.stitch.money/checkout/{payment_id}",
+            "payment_id": payment_id,
+            "reference": reference,
+        }
+        log.info("[MOCK] Created payment: %s for user %s (R%.2f)", payment_id, user_id, amount_cents / 100)
+        return result
+
+    async def get_payment_status(self, payment_id: str) -> dict[str, Any]:
+        """Simulate payment status check.
+
+        In mock mode, payments auto-complete (simulate success).
+        Payment IDs containing "fail" return cancelled status.
+        """
+        stored = _mock_payments.get(payment_id, {})
+
+        if "fail" in payment_id:
+            status = "cancelled"
+            raw = "PaymentInitiationRequestCancelled"
+        else:
+            # Auto-complete in mock mode
+            status = "success"
+            raw = "PaymentInitiationRequestCompleted"
+
+        if stored:
+            stored["status"] = status
+
+        log.info("[MOCK] Payment status for %s: %s", payment_id, status)
+        return {
+            "status": status,
+            "payment_id": payment_id,
+            "raw_status": raw,
+        }
+
+
+def simulate_webhook_payload(
+    payment_id: str,
+    user_id: int,
+    status: str = "complete",
+) -> dict[str, Any]:
+    """Generate a mock Stitch webhook payload for testing.
+
+    Matches the structure Stitch sends via Svix webhooks.
+    """
+    return {
+        "type": "payment.complete" if status == "complete" else "payment.cancelled",
+        "data": {
+            "id": payment_id,
+            "status": {
+                "__typename": (
+                    "PaymentInitiationRequestCompleted"
+                    if status == "complete"
+                    else "PaymentInitiationRequestCancelled"
+                ),
+            },
+            "externalReference": str(user_id),
+            "amount": {"quantity": "49.00", "currency": "ZAR"},
+        },
+    }

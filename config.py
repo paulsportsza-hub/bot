@@ -18,12 +18,18 @@ ADMIN_IDS: list[int] = [int(i) for i in os.environ["ADMIN_IDS"].split(",")]
 ODDS_API_KEY: str = os.environ["ODDS_API_KEY"]
 ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 
-# ── Paystack (subscriptions) ─────────────────────────────
+# ── Paystack (subscriptions — deprecated, replaced by Stitch) ─
 PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "")
 PAYSTACK_PUBLIC_KEY: str = os.environ.get("PAYSTACK_PUBLIC_KEY", "")
 PAYSTACK_BASE_URL: str = "https://api.paystack.co"
-PREMIUM_PLAN_AMOUNT: int = 4900  # R49.00 in kobo/cents
+PREMIUM_PLAN_AMOUNT: int = 4900  # R49.00 in cents
 PREMIUM_PLAN_NAME: str = "MzansiEdge Premium"
+
+# ── Stitch (subscriptions — active) ──────────────────────
+STITCH_CLIENT_ID: str = os.environ.get("STITCH_CLIENT_ID", "")
+STITCH_CLIENT_SECRET: str = os.environ.get("STITCH_CLIENT_SECRET", "")
+STITCH_WEBHOOK_SECRET: str = os.environ.get("STITCH_WEBHOOK_SECRET", "")
+STITCH_MOCK_MODE: bool = os.environ.get("STITCH_MOCK_MODE", "false").lower() == "true"
 
 # ── PostHog (analytics) ──────────────────────────────────
 POSTHOG_API_KEY: str = os.environ.get("POSTHOG_API_KEY", "")

@@ -48,12 +48,21 @@ from services.user_service import (
 from services.picks_service import get_picks as svc_get_picks
 from services.schedule_service import get_schedule, get_game_tips_data
 from services.analytics import track as analytics_track
-from services import paystack_service
+from services.stitch_service import stitch as stitch_service
 
-logging.basicConfig(
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-    level=logging.INFO,
-)
+# ── Logging setup (BUG-008: use FileHandler so bot.log is always written) ──
+_log_fmt = logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s")
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+
+_sh = logging.StreamHandler()
+_sh.setFormatter(_log_fmt)
+_root.addHandler(_sh)
+
+_fh = logging.FileHandler("bot.log", encoding="utf-8")
+_fh.setFormatter(_log_fmt)
+_root.addHandler(_fh)
+
 log = logging.getLogger("mzansiedge")
 
 claude = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
@@ -525,6 +534,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     db_user = await db.upsert_user(user.id, user.username, user.first_name)
     analytics_track(user.id, "user_signed_up", {"returning": db_user.onboarding_done})
+    if not db_user.onboarding_done:
+        analytics_track(user.id, "onboarding_start")
 
     if db_user.onboarding_done:
         text = textwrap.dedent(f"""\
@@ -1031,6 +1042,7 @@ async def handle_ob_nav(query, action: str) -> None:
                 reply_markup=kb_onboarding_sports(),
             )
             return
+        analytics_track(user_id, "onboarding_pick_sports", {"sports": list(ob["selected_sports"])})
         # Move to leagues — start with first sport
         ob["step"] = "leagues"
         ob["_league_idx"] = 0
@@ -1346,6 +1358,7 @@ async def handle_ob_fav_done(query, sport_key: str) -> None:
     ob["_fav_manual_sport"] = None
     ob["_team_input_sport"] = None
     ob["_team_input_league"] = None
+    analytics_track(user_id, "onboarding_pick_teams", {"sport": sport_key})
 
     # Check if editing a single sport
     editing = ob.get("_editing")
@@ -1698,6 +1711,7 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Delegate persistence to service layer
     await persist_onboarding(user_id, ob)
+    analytics_track(user_id, "onboarding_complete", {"experience": ob.get("experience", "casual")})
     experience = ob.get("experience", "casual")
     _onboarding_state.pop(user_id, None)
 
@@ -4140,10 +4154,10 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             log.warning("Failed to send morning teaser to user %s: %s", user.id, exc)
 
 
-# ── Subscription (Paystack) ──────────────────────────────
+# ── Subscription (Stitch) ────────────────────────────────
 
 
-async def _handle_sub_verify(query, reference: str) -> None:
+async def _handle_sub_verify(query, payment_id: str) -> None:
     """Verify payment after user clicks 'I've Paid'."""
     user_id = query.from_user.id
     await query.edit_message_text(
@@ -4151,13 +4165,11 @@ async def _handle_sub_verify(query, reference: str) -> None:
     )
 
     try:
-        tx_data = await paystack_service.verify_transaction(reference)
-        status = tx_data.get("status", "")
+        result = await stitch_service.get_payment_status(payment_id)
+        status = result.get("status", "")
 
         if status == "success":
-            sub_code = tx_data.get("subscription", {}).get("subscription_code", "") if isinstance(tx_data.get("subscription"), dict) else ""
-            plan_code_val = tx_data.get("plan", {}).get("plan_code", "") if isinstance(tx_data.get("plan"), dict) else ""
-            await db.activate_subscription(user_id, sub_code, plan_code_val)
+            await db.activate_subscription(user_id, payment_id, "stitch_premium")
             analytics_track(user_id, "subscription_confirmed", {"plan": "premium", "method": "manual_verify"})
 
             await query.edit_message_text(
@@ -4177,7 +4189,7 @@ async def _handle_sub_verify(query, reference: str) -> None:
                 "If you've completed payment, wait a moment and try again.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Check Again", callback_data=f"sub:verify:{reference}")],
+                    [InlineKeyboardButton("🔄 Check Again", callback_data=f"sub:verify:{payment_id}")],
                     [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                 ]),
             )
@@ -4187,7 +4199,7 @@ async def _handle_sub_verify(query, reference: str) -> None:
             "⚠️ Couldn't verify payment right now. Try again in a moment.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Try Again", callback_data=f"sub:verify:{reference}")],
+                [InlineKeyboardButton("🔄 Try Again", callback_data=f"sub:verify:{payment_id}")],
                 [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
             ]),
         )
@@ -4196,7 +4208,7 @@ async def _handle_sub_verify(query, reference: str) -> None:
 # ConversationHandler state for email collection
 SUB_EMAIL = 0
 
-# Per-user state: pending Paystack reference
+# Per-user state: pending Stitch payment
 _subscribe_state: dict[int, dict] = {}
 
 
@@ -4218,15 +4230,16 @@ async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         "Unlock daily AI-powered value bets, personalised alerts, "
         "and priority access to new features.\n\n"
         "To subscribe, please enter your <b>email address</b> below.\n"
-        "<i>(Used for Paystack payment — never shared.)</i>"
+        "<i>(Used for payment confirmation — never shared.)</i>"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
     analytics_track(user_id, "subscription_started")
+    analytics_track(user_id, "onboarding_subscribe")
     return SUB_EMAIL
 
 
 async def _receive_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """Receive email, initialize Paystack transaction, send payment link."""
+    """Receive email, create Stitch payment, send checkout link."""
     import re
     user_id = update.effective_user.id
     email = update.message.text.strip().lower()
@@ -4246,10 +4259,11 @@ async def _receive_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     )
 
     try:
-        result = await paystack_service.initialize_transaction(email, user_id)
-        auth_url = result["authorization_url"]
+        result = await stitch_service.create_payment(user_id)
+        payment_url = result["payment_url"]
+        payment_id = result["payment_id"]
         reference = result["reference"]
-        _subscribe_state[user_id] = {"reference": reference, "email": email}
+        _subscribe_state[user_id] = {"payment_id": payment_id, "reference": reference, "email": email}
 
         try:
             await loading.delete()
@@ -4262,13 +4276,13 @@ async def _receive_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             f"<i>Reference: <code>{reference}</code></i>",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 Pay with Paystack →", url=auth_url)],
-                [InlineKeyboardButton("✅ I've Paid — Verify", callback_data=f"sub:verify:{reference}")],
+                [InlineKeyboardButton("💳 Pay Now →", url=payment_url)],
+                [InlineKeyboardButton("✅ I've Paid — Verify", callback_data=f"sub:verify:{payment_id}")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sub:cancel")],
             ]),
         )
     except Exception as exc:
-        log.error("Paystack init error: %s", exc)
+        log.error("Stitch payment init error: %s", exc)
         try:
             await loading.delete()
         except Exception:
@@ -4315,39 +4329,32 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # ── Webhook handler (aiohttp) ────────────────────────────
 
 async def _run_webhook_server(app_instance) -> None:
-    """Start a small aiohttp server to receive Paystack webhooks."""
+    """Start a small aiohttp server to receive Stitch webhooks."""
     from aiohttp import web
 
-    async def handle_paystack_webhook(request: web.Request) -> web.Response:
+    async def handle_stitch_webhook(request: web.Request) -> web.Response:
         body = await request.read()
-        signature = request.headers.get("x-paystack-signature", "")
+        headers = dict(request.headers)
 
-        if not paystack_service.verify_webhook_signature(body, signature):
-            log.warning("Invalid Paystack webhook signature")
+        if not stitch_service.verify_webhook(headers, body):
+            log.warning("Invalid Stitch webhook signature")
             return web.Response(status=400)
 
-        event = paystack_service.parse_webhook_event(body)
-        event_type = event.get("event", "")
+        event = stitch_service.parse_webhook_event(body)
+        event_type = event.get("type", "")
         data = event.get("data", {})
 
-        log.info("Paystack webhook: %s", event_type)
+        log.info("Stitch webhook: %s", event_type)
 
-        if event_type == "charge.success":
-            metadata = data.get("metadata", {})
-            tg_user_id = metadata.get("telegram_user_id")
-            customer_email = data.get("customer", {}).get("email", "")
-            sub_code = data.get("subscription", {}).get("subscription_code", "")
-            plan_code_val = data.get("plan", {}).get("plan_code", "")
+        if event_type == "payment.complete":
+            payment_id = data.get("id", "")
+            external_ref = data.get("externalReference", "")
 
-            # Resolve user by metadata or email
-            user_id = int(tg_user_id) if tg_user_id else None
-            if not user_id and customer_email:
-                found = await db.get_user_by_email(customer_email)
-                if found:
-                    user_id = found.id
+            # externalReference is the Telegram user_id (set during create_payment)
+            user_id = int(external_ref) if external_ref and external_ref.isdigit() else None
 
             if user_id:
-                await db.activate_subscription(user_id, sub_code or "", plan_code_val or "")
+                await db.activate_subscription(user_id, payment_id, "stitch_premium")
                 analytics_track(user_id, "subscription_confirmed", {"plan": "premium"})
                 try:
                     await app_instance.bot.send_message(
@@ -4367,24 +4374,23 @@ async def _run_webhook_server(app_instance) -> None:
                 except Exception as exc:
                     log.warning("Failed to notify user %s of subscription: %s", user_id, exc)
 
-        elif event_type == "subscription.disable":
-            customer_email = data.get("customer", {}).get("email", "")
-            if customer_email:
-                found = await db.get_user_by_email(customer_email)
-                if found:
-                    await db.deactivate_subscription(found.id)
-                    analytics_track(found.id, "subscription_cancelled", {"plan": "premium"})
+        elif event_type == "payment.cancelled":
+            external_ref = data.get("externalReference", "")
+            user_id = int(external_ref) if external_ref and external_ref.isdigit() else None
+            if user_id:
+                await db.deactivate_subscription(user_id)
+                analytics_track(user_id, "subscription_cancelled", {"plan": "premium"})
 
         return web.Response(status=200, text="OK")
 
     webhook_app = web.Application()
-    webhook_app.router.add_post("/webhook/paystack", handle_paystack_webhook)
+    webhook_app.router.add_post("/webhook/stitch", handle_stitch_webhook)
 
     runner = web.AppRunner(webhook_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8443)
     await site.start()
-    log.info("Paystack webhook server listening on port 8443")
+    log.info("Stitch webhook server listening on port 8443")
 
 
 # ── Main ──────────────────────────────────────────────────
@@ -4422,15 +4428,8 @@ async def _post_init(app_instance) -> None:
         )
         log.info("Scheduled morning teaser job (runs hourly)")
 
-    # Ensure Paystack plan exists (non-blocking)
-    if config.PAYSTACK_SECRET_KEY:
-        try:
-            plan_code = await paystack_service.ensure_plan()
-            log.info("Paystack plan ready: %s", plan_code)
-        except Exception as exc:
-            log.warning("Paystack plan setup failed: %s", exc)
-
-        # Start webhook listener for Paystack payment notifications
+    # Start webhook listener for Stitch payment notifications
+    if config.STITCH_CLIENT_ID or config.STITCH_MOCK_MODE:
         try:
             await _run_webhook_server(app_instance)
         except Exception as exc:
