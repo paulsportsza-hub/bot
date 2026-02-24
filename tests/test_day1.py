@@ -225,11 +225,12 @@ class TestDBResetProfile:
 # ── Priority 2: Persistent Menu System ──────────────────────
 
 class TestPersistentMenu:
-    def test_kb_main_has_daily_briefing(self):
+    def test_kb_main_has_your_games_and_hot_tips(self):
         kb = bot.kb_main()
         buttons = [btn for row in kb.inline_keyboard for btn in row]
         labels = [b.text for b in buttons]
-        assert any("Daily Briefing" in l for l in labels)
+        assert any("Your Games" in l for l in labels)
+        assert any("Hot Tips" in l for l in labels)
 
     def test_kb_main_has_my_bets(self):
         kb = bot.kb_main()

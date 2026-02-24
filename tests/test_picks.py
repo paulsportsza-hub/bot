@@ -340,7 +340,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_cmd_picks_no_prefs(test_db, mock_update, mock_context):
-    """Picks with no user prefs should still work (uses all sports)."""
+    """Picks (/picks → Hot Tips) with no user prefs should still work."""
     await db.upsert_user(77777, "picker", "Picker")
     await db.set_onboarding_done(77777)
     mock_update.effective_user.id = 77777
@@ -353,11 +353,15 @@ async def test_cmd_picks_no_prefs(test_db, mock_update, mock_context):
     with patch("bot.get_picks_for_user", new_callable=AsyncMock, return_value=no_picks_result):
         await bot.cmd_picks(mock_update, mock_context)
 
-    assert mock_context.bot.send_message.call_count >= 1
+    # Hot Tips renders via reply_text
+    assert mock_update.message.reply_text.call_count >= 1
+    call_args = mock_update.message.reply_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "Hot Tips" in text
 
 
 async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
-    """Picks should respect user sport preferences."""
+    """Picks (/picks → Hot Tips) should show value bets when found."""
     await db.upsert_user(77778, "picker2", "Picker2")
     await db.update_user_risk(77778, "aggressive")
     await db.save_sport_pref(77778, "soccer", league="epl")
@@ -383,8 +387,11 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     with patch("bot.get_picks_for_user", new_callable=AsyncMock, return_value=pick_result):
         await bot.cmd_picks(mock_update, mock_context)
 
-    # Should have: loading deleted, header, pick card, footer
-    assert mock_context.bot.send_message.call_count >= 2
+    # Hot Tips shows picks via reply_text
+    assert mock_update.message.reply_text.call_count >= 1
+    call_args = mock_update.message.reply_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "Hot Tips" in text
 
 
 async def test_cmd_admin_shows_quota(test_db, mock_update, mock_context):

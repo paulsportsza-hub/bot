@@ -123,7 +123,12 @@ All inline keyboard callbacks use `prefix:action` format:
 - `sport:{league_key}` — View odds for a league
 - `ai:{category_key}` — AI tip for a sport category
 - `menu:home` — Main menu
-- `picks:today` / `picks:go` — Today's value bet picks
+- `picks:today` / `picks:go` — Legacy picks (still works via _do_picks_flow)
+- `yg:day:{offset}:{sport_filter}` — Your Games: switch day (0-6, "all" or sport_key)
+- `yg:sport:{day_offset}:{sport_key}` — Your Games: filter by sport
+- `yg:page:{day_offset}:{sport_filter}:{page}` — Your Games: pagination within day
+- `yg:noop` — No-op for pagination label
+- `hot:go` — Hot Tips: show/refresh cross-market value bets
 - `ob_exp:experienced` / `ob_exp:casual` / `ob_exp:newbie` — Experience level
 - `ob_sport:{category_key}` — Toggle sport in onboarding
 - `ob_nav:sports_done` / `ob_nav:back_sports` / `ob_nav:league_done:{key}` — Navigation
@@ -149,7 +154,7 @@ All inline keyboard callbacks use `prefix:action` format:
 - `settings:story` / `settings:toggle_notify:{key}` — Notification preferences in settings
 - `settings:bankroll` / `settings:set_bankroll:{amount}` — Bankroll management in settings
 - `nav:main` — Navigate to main menu (alias for `menu:home`)
-- `nav:schedule` — Navigate to schedule view
+- `nav:schedule` — Navigate to Your Games (legacy redirect)
 - `schedule:tips:{event_id}` — Get AI tips for a specific game
 - `tip:detail:{event_id}:{index}` — View detailed tip analysis
 - `subscribe:{event_id}` — Subscribe to live score updates for a game
@@ -158,7 +163,8 @@ All inline keyboard callbacks use `prefix:action` format:
 - `ob_fav_retry:{sport_key}` — Re-prompt for team text input
 
 ## Picks / Value Bet Flow
-1. User taps "Today's Picks" button or sends `/picks`
+1. User taps "🔥 Hot Tips" button or sends `/picks` → `_build_hot_tips()` (new primary flow)
+   - Legacy: `picks:today` callback → `_do_picks_flow()` (still works)
 2. `_do_picks_flow(chat_id, bot, user_id)` sends loading message with randomised verb
 3. Loads user's risk profile + preferred leagues + bankroll from DB
 4. Calls `picks_engine.get_picks_for_user(league_keys, risk_profile, max_picks=10, bankroll=user_bankroll)`
@@ -310,12 +316,14 @@ Engine prefers sharp book lines for "true" probability estimation:
 Always-visible bottom keyboard using `ReplyKeyboardMarkup` with `is_persistent=True`.
 
 ```
-🎯 Picks | 📅 Schedule | 🔴 Live
-📊 Stats | ⚙️ Settings  | ❓ Help
+⚽ Your Games | 🔥 Hot Tips
+🔴 Live Games | 📊 My Stats
+📖 Betway Guide | ⚙️ Settings
 ```
 
-- `get_main_keyboard()` — returns the 2×3 `ReplyKeyboardMarkup`
+- `get_main_keyboard()` — returns the 3×2 `ReplyKeyboardMarkup`
 - `handle_keyboard_tap()` — `MessageHandler` with `filters.Regex` that routes taps to existing handlers
+- `_LEGACY_LABELS` dict maps old button labels ("🎯 Today's Picks", "📅 Schedule") to new handlers for cached keyboards
 - Sent after onboarding completes (in `handle_ob_done`)
 - Sent with `/start` for returning users and `/menu`
 - Hidden during onboarding with `ReplyKeyboardRemove()`
@@ -325,25 +333,62 @@ Always-visible bottom keyboard using `ReplyKeyboardMarkup` with `is_persistent=T
 ### Keyboard routes
 | Button | Handler |
 |--------|---------|
-| 🎯 Picks | `_do_picks_flow()` |
-| 📅 Schedule | `_build_schedule()` |
-| 🔴 Live | `_show_live_games()` — shows active game subscriptions |
-| 📊 Stats | `_show_stats_overview()` — user stats (archetype, engagement, bankroll) |
+| ⚽ Your Games | `_show_your_games()` → `_build_your_games()` — personalised 7-day schedule with edge indicators |
+| 🔥 Hot Tips | `_show_hot_tips()` → `_build_hot_tips()` — cross-market value bet feed |
+| 🔴 Live Games | `_show_live_games()` — shows active game subscriptions |
+| 📊 My Stats | `_show_stats_overview()` — user stats (archetype, engagement, bankroll) |
+| 📖 Betway Guide | `_show_betway_guide()` — Telegra.ph guide link |
 | ⚙️ Settings | `kb_settings()` inline menu |
-| ❓ Help | `HELP_TEXT` with `kb_nav()` |
 
 ## Inline Menu System
-Main menu: `kb_main()` → Daily Briefing | My Bets | My Teams | Stats | Schedule | Bookmakers | Settings
+Main menu: `kb_main()` → Your Games | Hot Tips | My Bets | My Teams | Stats | Bookmakers | Settings
 
 Sub-menus: `kb_bets()`, `kb_teams()`, `kb_stats()`, `kb_bookmakers()`, `kb_settings()`
 Every sub-screen has "↩️ Back" + "🏠 Main Menu" via `kb_nav()`.
 
-## Schedule Feature
-`/schedule` command or "📅 Schedule" button shows upcoming games for user's followed teams.
-- `cmd_schedule()` — Entry point for /schedule command
-- `_build_schedule()` — Shared logic for command + callback. Fetches events per league via `fetch_events_for_league()`, converts to SAST (Africa/Johannesburg), groups by date ("Today" / "Tomorrow" / "Wednesday, 26 Feb"), numbers events with sport emojis and kick-off times. Bolds user's followed teams. Abbreviated team buttons using `config.abbreviate_team()`. Limits to top 5 buttons for Telegram constraints. Returns (text, markup).
-- `_generate_game_tips()` — AI game breakdown per event using Claude Haiku. Builds structured odds context, calls Claude for ~200-word narrative (team form, betting angle, risk assessment). Uses `find_best_sa_odds()` for SA-only odds display. Shows tip buttons with EV%. Caches tips in `_game_tips_cache`. Triggered by "Get Tips" button (`schedule:tips:{event_id}`).
-- Shows "No upcoming games found" if no matches for followed teams.
+## Your Games Feature (replaces Schedule)
+`/schedule` command or "⚽ Your Games" button shows personalised 7-day schedule with AI edge indicators.
+
+### Core functions
+- `_show_your_games(update, ctx, user_id)` — Entry point (reply keyboard + /schedule command)
+- `_build_your_games(user_id, day_offset, sport_filter, page)` — Main builder with day nav, sport filters, edge indicators, pagination
+- `_fetch_schedule_games(user_id)` — Fetches and caches events from user's leagues
+- `_check_edges_for_games(games)` — Quick EV check per game (🔥 marker if any outcome has EV > 2%)
+- `_render_schedule_page()` — Legacy schedule renderer (kept for backward compat)
+
+### Day navigation
+Two rows of buttons: `[Today] [Tmrw] [Wed] [Thu]` / `[Fri] [Sat] [Sun]`. Active day shown as `[Today]`. Callback: `yg:day:{offset}:{sport_filter}`.
+
+### Sport filter tabs
+Shown when user follows 3+ sport categories. Row of emoji buttons (e.g. `⚽ 🏉 🏏`) + "All" filter. Callback: `yg:sport:{day_offset}:{sport_key}`.
+
+### Edge indicators
+`_check_edges_for_games()` does a quick EV scan using cached odds. Games with EV > 2% on any outcome get a 🔥 marker in both the text list and game buttons.
+
+### Pagination
+5 games per page within each day. Callback: `yg:page:{day_offset}:{sport_filter}:{page}`.
+
+### Game tap → AI breakdown
+Same flow as before: `schedule:tips:{event_id}` → `_generate_game_tips()`.
+
+## Hot Tips Feature (replaces Picks)
+`/picks` command or "🔥 Hot Tips" button shows cross-market value bet discovery feed.
+
+### Core functions
+- `_show_hot_tips(update, ctx, user_id)` — Entry point (reply keyboard + /picks command)
+- `_build_hot_tips(user_id)` — Scans user's leagues via `get_picks_for_user()`, returns top 5 EV picks formatted as compact cards
+
+### Features
+- Scans all user leagues for value bets using existing picks engine
+- Formats picks via `format_engine_pick_card()` (experience-adapted)
+- Shows scan stats (events, markets, risk profile)
+- "🔄 Refresh Tips" button for re-scanning
+- Handles quota exhaustion and no-picks scenarios gracefully
+
+### Legacy compatibility
+- `/picks` command redirects to Hot Tips
+- `picks:today` / `picks:go` callbacks still work via `_do_picks_flow()`
+- `_do_picks_flow()` still exists for direct API use
 
 ## AI Game Breakdown
 When a user taps a game in the schedule, `_generate_game_tips()` calls Claude Haiku (`claude-haiku-4-5-20251001`) with `GAME_ANALYSIS_PROMPT`. The prompt uses structured emoji section headers:
