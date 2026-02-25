@@ -18,6 +18,19 @@ ADMIN_IDS: list[int] = [int(i) for i in os.environ["ADMIN_IDS"].split(",")]
 ODDS_API_KEY: str = os.environ["ODDS_API_KEY"]
 ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 
+# ── Paystack (subscriptions — deprecated, replaced by Stitch) ─
+PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "")
+PAYSTACK_PUBLIC_KEY: str = os.environ.get("PAYSTACK_PUBLIC_KEY", "")
+PAYSTACK_BASE_URL: str = "https://api.paystack.co"
+PREMIUM_PLAN_AMOUNT: int = 4900  # R49.00 in cents
+PREMIUM_PLAN_NAME: str = "MzansiEdge Premium"
+
+# ── Stitch (subscriptions — active) ──────────────────────
+STITCH_CLIENT_ID: str = os.environ.get("STITCH_CLIENT_ID", "")
+STITCH_CLIENT_SECRET: str = os.environ.get("STITCH_CLIENT_SECRET", "")
+STITCH_WEBHOOK_SECRET: str = os.environ.get("STITCH_WEBHOOK_SECRET", "")
+STITCH_MOCK_MODE: bool = os.environ.get("STITCH_MOCK_MODE", "false").lower() == "true"
+
 # ── PostHog (analytics) ──────────────────────────────────
 POSTHOG_API_KEY: str = os.environ.get("POSTHOG_API_KEY", "")
 POSTHOG_HOST: str = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
@@ -81,6 +94,7 @@ BOOKMAKER_AFFILIATES: dict[str, dict] = {
 
 # ── SA Bookmakers (whitelisted for user-facing odds) ──────
 ACTIVE_BOOKMAKER = "betway"
+BETWAY_AFFILIATE_CODE = "BPA117074"
 
 SA_BOOKMAKERS: dict[str, dict] = {
     "betway": {
@@ -88,7 +102,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "short_name": "Betway",
         "website_url": "https://www.betway.co.za",
         "guide_url": "",
-        "affiliate_base_url": "",
+        "affiliate_base_url": f"https://www.betway.co.za/?btag={BETWAY_AFFILIATE_CODE}",
         "active": True,
     },
     "sportingbet": {
@@ -147,6 +161,15 @@ def get_active_display_name() -> str:
 def get_active_website_url() -> str:
     """Get the active bookmaker's website URL."""
     return SA_BOOKMAKERS[ACTIVE_BOOKMAKER]["website_url"]
+
+
+def get_affiliate_url(event_id: str | None = None) -> str:
+    """Get the Betway affiliate URL. Deep links are pending — uses base affiliate URL for now."""
+    bk = SA_BOOKMAKERS[ACTIVE_BOOKMAKER]
+    base = bk.get("affiliate_base_url") or bk.get("website_url", "")
+    # TODO: Wire deep links when Betway provides event-specific URL format
+    # e.g. f"{base}&event={event_id}" once the deep link spec is available
+    return base
 
 
 # ── Sport & League definitions ────────────────────────────

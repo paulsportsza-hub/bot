@@ -192,9 +192,10 @@ All inline keyboard callbacks use `prefix:action` format:
 
 ```python
 ACTIVE_BOOKMAKER = "betway"
+BETWAY_AFFILIATE_CODE = "BPA117074"
 
 SA_BOOKMAKERS = {
-    "betway": {"display_name": "Betway.co.za", "short_name": "Betway", "website_url": "https://www.betway.co.za", "guide_url": "<telegraph_url>", "affiliate_base_url": "", "active": True},
+    "betway": {"display_name": "Betway.co.za", "short_name": "Betway", "website_url": "https://www.betway.co.za", "guide_url": "<telegraph_url>", "affiliate_base_url": "https://www.betway.co.za/?btag=BPA117074", "active": True},
     "sportingbet": {..., "active": False},
     "10bet": {..., "active": False},
     "playabets": {..., "active": False},
@@ -206,9 +207,10 @@ SA_BOOKMAKERS = {
 - `config.get_active_bookmaker()` → returns the active bookmaker's full config dict
 - `config.get_active_display_name()` → `"Betway"` (short name)
 - `config.get_active_website_url()` → `"https://www.betway.co.za"`
+- `config.get_affiliate_url(event_id=None)` → Betway affiliate URL with `?btag=BPA117074` (deep links pending, uses base URL for now)
 - `config.sa_display_name(bk_key)` → returns `.co.za` display name for any bookmaker key
 
-**Betway branding:** All user-facing odds display, tip details, bookmaker menus, and pick cards use Betway branding (no 🇿🇦 flags on bookmaker names or tips). Sharp bookmakers (Pinnacle, Betfair, etc.) are kept for internal probability estimation only — never shown to users.
+**Betway branding:** All user-facing odds display, tip details, bookmaker menus, and pick cards use Betway branding with affiliate tracking via `?btag=BPA117074` (no 🇿🇦 flags on bookmaker names or tips). Sharp bookmakers (Pinnacle, Betfair, etc.) are kept for internal probability estimation only — never shown to users. Deep links to specific events are pending — `get_affiliate_url()` accepts an `event_id` parameter for future use.
 
 ### SA Odds Functions
 - `odds_client.find_best_sa_odds(event, market)` → list of `OddsEntry` filtered to SA bookmakers only
@@ -268,6 +270,7 @@ Settings → "🔄 Reset Profile" → warning screen → "Yes, reset everything"
 - `update_user_bankroll(user_id, bankroll)` — Set weekly bankroll in ZAR
 - `update_user_whatsapp(user_id, phone, platform)` — Set WhatsApp phone and preferred platform
 - `get_onboarded_count()` — Count of users who completed onboarding
+- `get_users_for_notification(hour)` — Get onboarded users with matching notification_hour and daily_picks enabled
 - `get_notification_prefs(user)` — Parse JSON notification prefs with defaults (daily_picks, game_day_alerts, weekly_recap, edu_tips, market_movers, bankroll_updates, live_scores)
 - `update_notification_prefs(user_id, prefs)` — Save notification preferences as JSON
 - `subscribe_to_game(user_id, event_id, ...)` — Subscribe to live score updates (deduplicates)
@@ -317,14 +320,13 @@ Engine prefers sharp book lines for "true" probability estimation:
 Always-visible bottom keyboard using `ReplyKeyboardMarkup` with `is_persistent=True`.
 
 ```
-⚽ Your Games | 🔥 Hot Tips
-🔴 Live Games | 📊 My Stats
-📖 Betway Guide | ⚙️ Settings
+⚽ Your Games | 🔥 Hot Tips | 📖 Guide
+👤 Profile    | ⚙️ Settings | ❓ Help
 ```
 
-- `get_main_keyboard()` — returns the 3×2 `ReplyKeyboardMarkup`
+- `get_main_keyboard()` — returns the 2×3 `ReplyKeyboardMarkup`
 - `handle_keyboard_tap()` — `MessageHandler` with `filters.Regex` that routes taps to existing handlers
-- `_LEGACY_LABELS` dict maps old button labels ("🎯 Today's Picks", "📅 Schedule") to new handlers for cached keyboards
+- `_LEGACY_LABELS` dict maps old button labels ("🎯 Today's Picks", "📅 Schedule", "🔴 Live Games", "📊 My Stats", "📖 Betway Guide") to new handlers for cached keyboards
 - Sent after onboarding completes (in `handle_ob_done`)
 - Sent with `/start` for returning users and `/menu`
 - Hidden during onboarding with `ReplyKeyboardRemove()`
@@ -334,12 +336,12 @@ Always-visible bottom keyboard using `ReplyKeyboardMarkup` with `is_persistent=T
 ### Keyboard routes
 | Button | Handler |
 |--------|---------|
-| ⚽ Your Games | `_show_your_games()` → `_build_your_games()` — personalised 7-day schedule with edge indicators |
-| 🔥 Hot Tips | `_show_hot_tips()` → `_build_hot_tips()` — cross-market value bet feed |
-| 🔴 Live Games | `_show_live_games()` — shows active game subscriptions |
-| 📊 My Stats | `_show_stats_overview()` — user stats (archetype, engagement, bankroll) |
-| 📖 Betway Guide | `_show_betway_guide()` — Telegra.ph guide link |
+| ⚽ Your Games | `_show_your_games()` — personalised 7-day schedule with edge indicators |
+| 🔥 Hot Tips | `_show_hot_tips()` — top 5 cross-market value bets with confidence indicators |
+| 📖 Guide | `_show_betway_guide()` — Telegra.ph guide link |
+| 👤 Profile | `_show_profile()` — full profile summary via `format_profile_summary()` |
 | ⚙️ Settings | `kb_settings()` inline menu |
+| ❓ Help | HELP_TEXT — commands and feature descriptions |
 
 ## Inline Menu System
 Main menu: `kb_main()` → Your Games | Hot Tips | My Bets | My Teams | Stats | Bookmakers | Settings
@@ -397,9 +399,12 @@ Shown when user follows 2+ sport categories. Row of emoji buttons (e.g. `⚽ �
 ### 15-minute cache
 `_hot_tips_cache["global"]` stores `{"tips": [...], "ts": float}` with `HOT_TIPS_CACHE_TTL = 900` seconds.
 
+### Top 5 selection
+Scanned tips are sorted by EV% descending and capped at top 5 for a focused discovery feed.
+
 ### Message format
 - Header message: "🔥 Hot Tips — N Value Bets"
-- Individual tip messages (one per tip): match, kickoff, outcome, odds, EV%, confidence
+- Individual tip messages (one per tip): match, kickoff, outcome, odds, EV%, confidence with indicator (🟢 ≥60%, 🟡 ≥40%, 🔴 <40%)
 - Each tip has a "📲 Bet on Betway →" button (URL link)
 - Footer message with Refresh, Your Games, Menu buttons
 
@@ -416,12 +421,12 @@ Shown when user follows 2+ sport categories. Row of emoji buttons (e.g. `⚽ �
 
 ## AI Game Breakdown
 When a user taps a game in Your Games, `_generate_game_tips()` calls Claude Haiku (`claude-haiku-4-5-20251001`) with `GAME_ANALYSIS_PROMPT`. The prompt uses structured emoji section headers:
-- 📋 **The Setup** — team form and context
-- 🎯 **The Edge** — specific value angle
-- ⚠️ **The Risk** — what could go wrong
-- 🏆 **Verdict** — punchy one-line pick
+- 📋 **The Setup** — recent form, injuries/absences, head-to-head, venue factor with specific stats
+- 🎯 **The Edge** — specific value angle with probability gap reference; honest when no edge exists
+- ⚠️ **The Risk** — specific scenario that could derail the pick (key player rested, weather, etc.)
+- 🏆 **Verdict** — bold one-line pick with conviction level (High/Medium/Low)
 
-No disclaimers in the AI output (handled separately). South African conversational tone. Odds shown separately below as "Betway Odds" section. Tips cached in `_game_tips_cache[event_id]`.
+No disclaimers in the AI output (handled separately). South African conversational tone ("braai", "lekker"). Sport-specific language ("clean sheet" for soccer, "try line" for rugby, "strike rate" for cricket). Keeps output short when data is thin. Odds shown separately below as "Betway Odds" section. Tips cached in `_game_tips_cache[event_id]`.
 
 ## Tip Detail Page
 Tapping a tip button (`tip:detail:{event_id}:{index}`) shows an experience-adapted detail card via `_format_tip_detail()`:
@@ -432,9 +437,36 @@ Tapping a tip button (`tip:detail:{event_id}:{index}`) shows an experience-adapt
 If user has bankroll set, shows personalised stake recommendation.
 
 Buttons always use the active bookmaker (Betway for MVP):
-- `📲 Bet on Betway →` → website URL (or affiliate URL when available)
+- `📲 Bet on Betway →` → affiliate URL with `?btag=BPA117074`
 - `🔔 Follow this game` → `subscribe:{event_id}` for live score alerts
 - `↩️ Back` → return to Your Games (`yg:all:0`)
+
+## Morning Notification Teasers (Scheduled Job)
+Automated daily teaser messages sent to users at their preferred notification hour.
+
+### Architecture
+- Uses PTB's `JobQueue.run_repeating()` with 1-hour interval
+- `_seconds_until_next_hour()` calculates first run time (aligns to next whole hour SAST)
+- `_morning_teaser_job(ctx)` — runs every hour, checks current SAST hour against users' `notification_hour`
+- `db.get_users_for_notification(hour)` — queries onboarded users with matching hour + `daily_picks` enabled
+
+### Teaser format
+When tips exist:
+```
+☀️ Good morning!
+🔥 N value bets found today.
+Top pick: ⚽ Team A vs Team B
+💰 Outcome @ odds · EV +X%
+⏰ Kickoff time
+```
+With buttons: "🔥 See Hot Tips" + "⚽ Your Games"
+
+When no tips: "No value bets found yet today" message with same buttons.
+
+### Notification preferences
+- Only sends to users with `daily_picks: true` in notification_prefs JSON
+- Respects `notification_hour` set during onboarding (7, 12, 18, or 21)
+- Silently skips users whose Telegram chat is unavailable (blocked bot, etc.)
 
 ## Telegra.ph Betting Guides (`scripts/telegraph_guides.py`)
 Publishes step-by-step betting guides for SA bookmakers on Telegra.ph (instant view).
@@ -590,7 +622,7 @@ The architecture separates concerns:
 ## Conventions
 - HTML parse_mode throughout all Telegram messages
 - PTB v20+ async handlers
-- Inline keyboards only (no reply keyboards)
+- Both persistent reply keyboard (2×3 sticky keyboard) and inline keyboards (callback menus)
 - Max 2 buttons per row for mobile
 - `prefix:action` callback_data routing in `on_button()`
 - Loading messages use randomised verb templates
@@ -601,8 +633,8 @@ The architecture separates concerns:
 
 ## Verification
 ```bash
-# Run unit tests (281 tests)
-pytest tests/ -x -q --ignore=tests/e2e_telegram.py --ignore=tests/e2e_telethon.py --ignore=tests/test_e2e_flow.py
+# Run unit tests (E2E auto-excluded via pytest.ini)
+pytest tests/ -x -q
 
 # Run specific test file
 pytest tests/test_onboarding.py -v
@@ -650,7 +682,7 @@ python tests/test_e2e_flow.py --test no_za_flags  # Verify no ZA flags in tips
 ```
 
 8 Telethon-based tests:
-1. **sticky_keyboard** — Verify 3×2 reply keyboard layout
+1. **sticky_keyboard** — Verify 2×3 reply keyboard layout
 2. **your_games** — Default all-games view
 3. **sport_filter** — Sport emoji button → sport-specific view
 4. **pagination** — Pagination when >10 games
