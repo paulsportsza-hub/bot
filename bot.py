@@ -6,6 +6,7 @@ from __future__ import annotations
 import difflib
 import logging
 import textwrap
+from html import escape as h
 
 import anthropic
 from telegram import (
@@ -526,31 +527,31 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     db_user = await db.upsert_user(user.id, user.username, user.first_name)
 
     if db_user.onboarding_done:
+        name = h(user.first_name or "")
         text = textwrap.dedent(f"""\
-            <b>🇿🇦 Welcome back, {user.first_name}!</b>
+            <b>🇿🇦 Welcome back, {name}!</b>
 
             Your AI-powered sports betting assistant.
             Pick a sport or get an AI tip below.
         """)
-        # Send sticky keyboard + inline menu
+        # Send sticky keyboard + inline menu in one message
         await update.message.reply_text(
-            text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard(),
-        )
-        await update.message.reply_text(
-            "👇 <i>Quick menu:</i>", parse_mode=ParseMode.HTML, reply_markup=kb_main(),
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=get_main_keyboard(),
         )
     else:
         # Start onboarding — hide sticky keyboard
         _onboarding_state.pop(user.id, None)  # reset
         ob = _get_ob(user.id)
         ob["step"] = "experience"
+        name = h(user.first_name or "")
         # Remove persistent keyboard during onboarding
         await update.message.reply_text(
             "🇿🇦 Setting up your profile…",
             reply_markup=ReplyKeyboardRemove(),
         )
         text = textwrap.dedent(f"""\
-            <b>🇿🇦 Welcome to MzansiEdge, {user.first_name}!</b>
+            <b>🇿🇦 Welcome to MzansiEdge, {name}!</b>
 
             Let's set up your profile in a few quick steps.
 
@@ -566,16 +567,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    name = h(user.first_name or "")
     text = textwrap.dedent(f"""\
         <b>🇿🇦 MzansiEdge — Main Menu</b>
 
-        Hey {user.first_name}, pick a sport or get an AI tip.
+        Hey {name}, pick a sport or get an AI tip.
     """)
     await update.message.reply_text(
         text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard(),
-    )
-    await update.message.reply_text(
-        "👇 <i>Quick menu:</i>", parse_mode=ParseMode.HTML, reply_markup=kb_main(),
     )
 
 
@@ -1846,12 +1845,12 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
     if matched:
         lines.append("<b>Matched:</b>")
         for m in matched:
-            lines.append(f"  ✅ {m}")
+            lines.append(f"  ✅ {h(m)}")
     if unmatched:
         lines.append("")
         lines.append("<b>Couldn't match:</b>")
         for u in unmatched:
-            lines.append(f"  ❌ {u}")
+            lines.append(f"  ❌ {h(u)}")
         lines.append("")
         lines.append("<i>These will be skipped. You can add them later in /settings.</i>")
 
@@ -1964,11 +1963,11 @@ async def _handle_settings_team_edit(update: Update, ctx) -> bool:
 
     lines: list[str] = ["<b>Updated!</b>\n"]
     for m in matched:
-        lines.append(f"  ✅ {m}")
+        lines.append(f"  ✅ {h(m)}")
     if unmatched:
         lines.append("")
         for u in unmatched:
-            lines.append(f"  ❌ {u} (skipped)")
+            lines.append(f"  ❌ {h(u)} (skipped)")
 
     await update.message.reply_text(
         "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb_teams(),
@@ -2248,14 +2247,14 @@ async def _render_your_games_all(
                 current_date_label = "TBC"
                 lines.append("<b>TBC</b>")
 
-        home = event.get("home_team", "?")
-        away = event.get("away_team", "?")
+        home = h(event.get("home_team", "?"))
+        away = h(event.get("away_team", "?"))
         emoji = event.get("sport_emoji", "🏅")
         event_id = event.get("id", "")
         home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
         away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
         edge_marker = " 🔥" if edge_events.get(event_id) else ""
-        lines.append(f"{idx}. {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
+        lines.append(f"[{idx}] {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
 
     text = "\n".join(lines)
 
@@ -2616,7 +2615,7 @@ async def _show_hot_tips(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_id
 
 
 async def _do_hot_tips_flow(chat_id: int, bot) -> None:
-    """Core Hot Tips — scan all sports, send separate messages per tip."""
+    """Core Hot Tips — scan all sports, show single consolidated message with numbered tips."""
     import random
 
     verb = random.choice(LOADING_VERBS)
@@ -2647,57 +2646,53 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
         )
         return
 
-    # Header message
-    await bot.send_message(
-        chat_id,
-        f"🔥 <b>Hot Tips — {len(tips)} Value Bet{'s' if len(tips) != 1 else ''}</b>\n\n"
-        f"Scanned {len(HOT_TIPS_SCAN_SPORTS)} markets across all sports.",
-        parse_mode=ParseMode.HTML,
-    )
-
-    # Individual tip messages with Betway button
-    active_bk = config.get_active_bookmaker()
-    betway_url = active_bk.get("affiliate_base_url") or active_bk.get("website_url", "")
+    # Build single consolidated message with all tips
+    lines = [
+        f"🔥 <b>Hot Tips — {len(tips)} Value Bet{'s' if len(tips) != 1 else ''}</b>",
+        f"<i>Scanned {len(HOT_TIPS_SCAN_SPORTS)} markets across all sports.</i>",
+        "",
+    ]
 
     for i, tip in enumerate(tips, 1):
         kickoff = _format_kickoff_display(tip["commence_time"])
         sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
+        home = h(tip.get("home_team", ""))
+        away = h(tip.get("away_team", ""))
+        outcome = h(tip.get("outcome", ""))
 
-        card = (
-            f"<b>#{i} {sport_emoji} {tip['home_team']} vs {tip['away_team']}</b>\n"
-            f"⏰ {kickoff}\n\n"
-            f"💰 <b>{tip['outcome']}</b> @ <b>{tip['odds']:.2f}</b>\n"
-            f"📈 EV: <b>+{tip['ev']}%</b> · Confidence: {tip['prob']}%"
+        lines.append(
+            f"[{i}] {sport_emoji} <b>{home} vs {away}</b>\n"
+            f"     ⏰ {kickoff}\n"
+            f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b> · EV +{tip['ev']}%"
         )
+        lines.append("")
 
-        tip_buttons: list[list[InlineKeyboardButton]] = []
-        if betway_url:
-            tip_buttons.append([InlineKeyboardButton(
-                f"📲 Bet on {active_bk['short_name']} →",
-                url=betway_url,
-            )])
-        else:
-            tip_buttons.append([InlineKeyboardButton(
-                f"📲 Bet on {active_bk['short_name']} →",
-                callback_data="tip:affiliate_soon",
-            )])
+    text = "\n".join(lines)
 
-        await bot.send_message(
-            chat_id, card,
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(tip_buttons),
-        )
+    # Build numbered tip buttons (rows of 5)
+    tip_buttons: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for i, tip in enumerate(tips, 1):
+        event_id = tip.get("event_id", "")
+        row.append(InlineKeyboardButton(
+            f"[{i}] 💡",
+            callback_data=f"tip:detail:{event_id}:{i - 1}",
+        ))
+        if len(row) == 5 or i == len(tips):
+            tip_buttons.append(row)
+            row = []
 
-    # Footer with navigation
+    # Navigation buttons
+    tip_buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="hot:go")])
+    tip_buttons.append([
+        InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0"),
+        InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
+    ])
+
     await bot.send_message(
-        chat_id,
-        f"<i>{len(tips)} tips found across all markets.</i>",
+        chat_id, text,
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Refresh", callback_data="hot:go")],
-            [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
-            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-        ]),
+        reply_markup=InlineKeyboardMarkup(tip_buttons),
     )
 
 
@@ -2780,14 +2775,14 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             ob["_fav_manual"] = False
             ob["_fav_manual_sport"] = None
             await update.message.reply_text(
-                f"✅ Added <b>{text_input}</b>!",
+                f"✅ Added <b>{h(text_input)}</b>!",
                 parse_mode=ParseMode.HTML,
             )
         return
 
     # Normal AI chat
     user_msg = update.message.text
-    await update.message.reply_text("🤖 <i>Thinking…</i>", parse_mode=ParseMode.HTML)
+    thinking_msg = await update.message.reply_text("🤖 <i>Thinking…</i>", parse_mode=ParseMode.HTML)
 
     try:
         resp = await claude.messages.create(
@@ -2801,7 +2796,16 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         log.error("Claude chat error: %s", exc)
         reply = "⚠️ Couldn't process that. Try again or use the menu buttons."
 
-    await update.message.reply_text(reply, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+    # Edit the "Thinking..." message in-place with the response (no stale message)
+    try:
+        await thinking_msg.edit_text(reply, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+    except Exception:
+        # Fallback: delete thinking and send new if edit fails
+        try:
+            await thinking_msg.delete()
+        except Exception:
+            pass
+        await update.message.reply_text(reply, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
 # ── /picks — Today's value bets ───────────────────────────

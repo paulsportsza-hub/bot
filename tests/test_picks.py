@@ -383,9 +383,9 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     with patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=mock_tips):
         await bot.cmd_picks(mock_update, mock_context)
 
-    # Hot Tips sends header + tip messages + footer via bot.send_message
-    assert mock_context.bot.send_message.call_count >= 3
-    # Check that one message contains the tip
+    # Hot Tips sends loading + single consolidated message via bot.send_message
+    assert mock_context.bot.send_message.call_count >= 2
+    # Check that the final message contains both header and tip
     all_texts = []
     for call in mock_context.bot.send_message.call_args_list:
         t = call[1].get("text", "") or (call[0][1] if len(call[0]) > 1 else "")

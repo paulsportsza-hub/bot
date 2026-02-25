@@ -33,7 +33,7 @@ async def test_cmd_start_new_user(test_db, mock_update, mock_context):
 
 
 async def test_cmd_start_returning_user(test_db, mock_update, mock_context):
-    """Returning user with onboarding done should get main menu + sticky keyboard."""
+    """Returning user with onboarding done should get single welcome message with sticky keyboard."""
     await db.upsert_user(22222, "veteran", "Veteran")
     await db.set_onboarding_done(22222)
 
@@ -45,24 +45,23 @@ async def test_cmd_start_returning_user(test_db, mock_update, mock_context):
 
     await bot.cmd_start(mock_update, mock_context)
 
-    # 2 calls: sticky keyboard message + inline quick menu
-    assert mock_update.message.reply_text.call_count == 2
-    # First call sends the welcome with ReplyKeyboardMarkup
+    # 1 call: single welcome message with sticky keyboard (consolidated UX)
+    assert mock_update.message.reply_text.call_count == 1
     call_args = mock_update.message.reply_text.call_args_list[0]
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
     assert "Welcome back" in text
 
 
 async def test_cmd_menu(mock_update, mock_context):
-    """The /menu command should show main menu + sticky keyboard."""
+    """The /menu command should show single main menu message with sticky keyboard."""
     mock_user = MagicMock()
     mock_user.first_name = "User"
     mock_update.effective_user = mock_user
 
     await bot.cmd_menu(mock_update, mock_context)
 
-    # 2 calls: sticky keyboard + inline quick menu
-    assert mock_update.message.reply_text.call_count == 2
+    # 1 call: single menu message with sticky keyboard (consolidated UX)
+    assert mock_update.message.reply_text.call_count == 1
     call_args = mock_update.message.reply_text.call_args_list[0]
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
     assert "Main Menu" in text

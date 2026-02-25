@@ -20,6 +20,18 @@ class EdgeRating:
     HIDDEN = "hidden"      # Below 40% — NOT shown to users
 
 
+def _safe_odds(snapshot: dict) -> float | None:
+    """Extract odds from a snapshot, returning None if missing or invalid."""
+    val = snapshot.get("odds")
+    if val is None:
+        return None
+    try:
+        fval = float(val)
+        return fval if fval > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def calculate_edge_rating(
     odds_snapshots: list[dict],
     model_prediction: dict,
@@ -30,6 +42,7 @@ def calculate_edge_rating(
     Args:
         odds_snapshots: list of dicts with keys: bookmaker, outcome, odds, timestamp
             Each dict represents one bookmaker's odds for the predicted outcome.
+            If odds is None for a bookmaker, that bookmaker is skipped.
         model_prediction: dict with keys:
             - outcome: str (e.g. "home", "away", "draw")
             - confidence: float (0.0-1.0) — Claude Haiku's confidence in the prediction
@@ -42,6 +55,11 @@ def calculate_edge_rating(
     Returns:
         EdgeRating string constant (platinum/gold/silver/bronze/hidden)
     """
+    if not odds_snapshots:
+        odds_snapshots = []
+    if not model_prediction:
+        model_prediction = {}
+
     scores: list[float] = []
 
     # Factor 1: Bookmaker consensus (0-25 points)
@@ -91,13 +109,14 @@ def _bookmaker_consensus(snapshots: list[dict], predicted_outcome: str) -> float
     if not snapshots or not predicted_outcome:
         return 0.0
 
-    # Group by bookmaker — get each bookmaker's view
+    # Group by bookmaker — get each bookmaker's view (skip None odds)
     bookmaker_odds: dict[str, float] = {}
     for snap in snapshots:
         bk = snap.get("bookmaker", "")
         outcome = snap.get("outcome", "")
-        if outcome == predicted_outcome and bk:
-            bookmaker_odds[bk] = snap.get("odds", 0.0)
+        odds = _safe_odds(snap)
+        if outcome == predicted_outcome and bk and odds is not None:
+            bookmaker_odds[bk] = odds
 
     num_bookmakers = len(bookmaker_odds)
     if num_bookmakers == 0:
@@ -127,7 +146,7 @@ def _model_alignment(snapshots: list[dict], prediction: dict) -> float:
         return model_confidence * 15  # Partial credit for model confidence alone
 
     # Calculate market-implied probability for the predicted outcome
-    outcome_odds = [s["odds"] for s in snapshots if s.get("outcome") == predicted_outcome and s.get("odds", 0) > 0]
+    outcome_odds = [o for s in snapshots if s.get("outcome") == predicted_outcome and (o := _safe_odds(s)) is not None]
     if not outcome_odds:
         return model_confidence * 15
 
@@ -190,7 +209,7 @@ def _value_detection(snapshots: list[dict], prediction: dict) -> float:
     if not snapshots or not predicted_outcome:
         return 0.0
 
-    outcome_odds = [s["odds"] for s in snapshots if s.get("outcome") == predicted_outcome and s.get("odds", 0) > 0]
+    outcome_odds = [o for s in snapshots if s.get("outcome") == predicted_outcome and (o := _safe_odds(s)) is not None]
     if not outcome_odds:
         return 0.0
 
@@ -217,7 +236,7 @@ def _market_breadth(snapshots: list[dict]) -> float:
 
     More bookmakers = more liquid market = more reliable odds.
     """
-    unique_bookmakers = {s.get("bookmaker") for s in snapshots if s.get("bookmaker")}
+    unique_bookmakers = {s.get("bookmaker") for s in snapshots if s.get("bookmaker") and _safe_odds(s) is not None}
     count = len(unique_bookmakers)
 
     if count >= 5:
