@@ -1,0 +1,15 @@
+[Unit]
+Description=MzansiEdge Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=paulsportsza
+WorkingDirectory=/home/paulsportsza/bot
+ExecStart=/usr/bin/python3 /home/paulsportsza/bot/bot.py
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

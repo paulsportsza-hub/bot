@@ -18,6 +18,11 @@ ADMIN_IDS: list[int] = [int(i) for i in os.environ["ADMIN_IDS"].split(",")]
 ODDS_API_KEY: str = os.environ["ODDS_API_KEY"]
 ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 
+# ── PostHog (analytics) ──────────────────────────────────
+POSTHOG_API_KEY: str = os.environ.get("POSTHOG_API_KEY", "")
+POSTHOG_HOST: str = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
+POSTHOG_PERSONAL_API_KEY: str = os.environ.get("POSTHOG_PERSONAL_API_KEY", "")
+
 # ── Database ───────────────────────────────────────────────
 DATABASE_URL: str = os.environ.get(
     "DATABASE_URL", "sqlite+aiosqlite:///data/mzansiedge.db"

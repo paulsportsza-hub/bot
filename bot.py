@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import os
 import textwrap
 from html import escape as h
 
@@ -4069,7 +4070,42 @@ async def _post_init(app_instance) -> None:
     ])
 
 
+def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
+    """Ensure only one bot instance runs at a time via PID file lock."""
+    import atexit
+    import signal
+
+    if os.path.exists(path):
+        try:
+            old_pid = int(open(path).read().strip())
+            os.kill(old_pid, 0)  # check if process is alive
+            log.error("Another instance is already running (PID %d). Exiting.", old_pid)
+            raise SystemExit(1)
+        except (ProcessLookupError, ValueError):
+            # Stale PID file — previous process is dead
+            log.warning("Removing stale PID file (PID was %s).", open(path).read().strip())
+
+    with open(path, "w") as f:
+        f.write(str(os.getpid()))
+
+    def _cleanup_pid() -> None:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+    atexit.register(_cleanup_pid)
+
+    def _signal_handler(signum: int, _frame: object) -> None:
+        _cleanup_pid()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+
 def main() -> None:
+    _acquire_pid_lock()
     log.info("Starting MzansiEdge bot…")
     app = Application.builder().token(config.BOT_TOKEN).build()
 
