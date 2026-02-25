@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import os
-import sentry_sdk
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None
 from dotenv import load_dotenv
 load_dotenv()
-sentry_sdk.init(dsn=os.getenv("SENTRY_DSN", ""))
+if sentry_sdk:
+    sentry_sdk.init(dsn=os.getenv("SENTRY_DSN", ""))
 
 import difflib
 import logging
@@ -2791,11 +2795,10 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
         outcome = h(tip.get("outcome", ""))
 
         badge = render_edge_badge(tip.get("edge_rating", ""))
-        badge_line = f"     {badge}\n" if badge else ""
+        badge_suffix = f" {badge}" if badge else ""
         lines.append(
-            f"[{i}] {sport_emoji} <b>{home} vs {away}</b>\n"
+            f"[{i}] {sport_emoji} <b>{home} vs {away}</b>{badge_suffix}\n"
             f"     ⏰ {kickoff}\n"
-            f"{badge_line}"
             f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b> · EV +{tip['ev']}%"
         )
         lines.append("")
@@ -3597,6 +3600,22 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             runner_ups=runner_ups,
             predicted_outcome=tip.get("outcome", ""),
         )
+
+        # Freshness indicator
+        last_updated = odds_result.get("last_updated")
+        if last_updated:
+            from datetime import datetime, timezone
+            try:
+                ts = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+                mins_ago = int((datetime.now(timezone.utc) - ts).total_seconds() / 60)
+                if mins_ago < 1:
+                    text += "\n\n<i>Odds updated just now</i>"
+                elif mins_ago < 60:
+                    text += f"\n\n<i>Odds updated {mins_ago} min ago</i>"
+                else:
+                    text += f"\n\n<i>Odds updated {mins_ago // 60}h ago</i>"
+            except (ValueError, TypeError):
+                pass
     else:
         # Fallback: single-bookmaker display
         text = _format_tip_detail(tip, experience, bankroll)
@@ -4653,9 +4672,16 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
         except (ProcessLookupError, ValueError):
             # Stale PID file — previous process is dead
             log.warning("Removing stale PID file (PID was %s).", open(path).read().strip())
+        except PermissionError:
+            log.error("Permission denied checking PID file at %s. Exiting.", path)
+            raise SystemExit(1)
 
-    with open(path, "w") as f:
-        f.write(str(os.getpid()))
+    try:
+        with open(path, "w") as f:
+            f.write(str(os.getpid()))
+    except PermissionError:
+        log.error("Permission denied writing PID file at %s. Exiting.", path)
+        raise SystemExit(1)
 
     def _cleanup_pid() -> None:
         try:

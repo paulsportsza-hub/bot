@@ -192,7 +192,7 @@ async def get_all_matches(
             if league:
                 query = """
                     SELECT DISTINCT match_id FROM odds_snapshots
-                    WHERE market_type = ? AND league = ?
+                    WHERE market_type = ? AND league = ? COLLATE NOCASE
                     ORDER BY scraped_at DESC LIMIT ?
                 """
                 params = (market_type, league, limit)

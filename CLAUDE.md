@@ -900,3 +900,21 @@ Shows full bookmaker odds comparison table for a match.
 
 ### Hot Tips Cache Fix
 Tips from _fetch_hot_tips_all_sports now stored in _game_tips_cache so tip detail can find them.
+
+## Wave 11A Bug Mop-Up (25 Feb 2026)
+
+### Bugs Fixed
+- BUG-019: sentry-sdk + posthog added to requirements.txt; sentry import guarded with try/except
+- BUG-017: odds_service league filter now case-insensitive (COLLATE NOCASE)
+- BUG-018: Silver emoji → ⛏️🥈, Bronze emoji → ⛏️🥉 (pickaxe + medal)
+- BUG-015: systemd ExecStart now uses .venv/bin/python instead of /usr/bin/python3
+- BUG-016: PID lock handles PermissionError on both read and write
+
+### UX Polish
+- CTA button: unified "📲 Bet on {bookmaker} →" format (no double emoji)
+- Tip detail: shows "Odds updated X min ago" freshness indicator from scrapers DB timestamp
+- Edge badge moved inline: `[1] ⚽ Chiefs vs Pirates ⛏️🔥` instead of separate line
+
+### Test Status
+- Tests: 295 passing, 0 failures
+- Open bugs: 0 (all 19 resolved)

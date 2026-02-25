@@ -7,7 +7,7 @@ Type=simple
 User=paulsportsza
 WorkingDirectory=/home/paulsportsza/bot
 EnvironmentFile=/home/paulsportsza/bot/.env
-ExecStart=/usr/bin/python3 /home/paulsportsza/bot/bot.py
+ExecStart=/home/paulsportsza/bot/.venv/bin/python /home/paulsportsza/bot/bot.py
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

@@ -10,8 +10,8 @@ import config
 EDGE_EMOJIS: dict[str, str] = {
     "platinum": "\u26cf\ufe0f\U0001f525",  # ⛏️🔥
     "gold": "\u26cf\ufe0f\u2b50",  # ⛏️⭐
-    "silver": "\u26cf\ufe0f",  # ⛏️
-    "bronze": "\U0001f7e4",  # 🟤
+    "silver": "\u26cf\ufe0f\U0001f948",  # ⛏️🥈
+    "bronze": "\u26cf\ufe0f\U0001f949",  # ⛏️🥉
 }
 
 EDGE_LABELS: dict[str, str] = {
@@ -100,8 +100,8 @@ def render_tip_button_label(best_bookmaker: dict) -> str:
     Returns e.g. '🎯 Bet Now at Hollywoodbets' or '🎯 Bet Now'.
     """
     if best_bookmaker and best_bookmaker.get("bookmaker_name"):
-        return f"\U0001f3af Bet Now at {best_bookmaker['bookmaker_name']}"
-    return "\U0001f3af Bet Now"
+        return f"Bet on {best_bookmaker['bookmaker_name']} \u2192"
+    return "Bet Now \u2192"
 
 
 def render_odds_comparison(odds_by_bookmaker: dict[str, float], predicted_outcome: str = "") -> str:
