@@ -945,6 +945,17 @@ async def handle_ai(query, action: str) -> None:
                     odds_context = "Could not fetch live odds."
 
     sport_label = sport.label if sport else sport_key
+
+    # If no league had an API key, show a graceful message instead of calling AI with no data
+    if not odds_context:
+        await query.edit_message_text(
+            f"⚠️ <b>{sport_label}</b>\n\n"
+            "No odds data available for this sport right now.\n"
+            "Try again later or pick a different sport.",
+            parse_mode=ParseMode.HTML, reply_markup=kb_nav(),
+        )
+        return
+
     try:
         resp = await claude.messages.create(
             model="claude-sonnet-4-20250514",
@@ -2194,10 +2205,29 @@ async def _render_your_games_all(
         return text, markup
 
     if not games:
+        # Check if the user only follows leagues without API data
+        keyless = [
+            config.ALL_LEAGUES[lk].label
+            for lk in league_keys
+            if lk in config.ALL_LEAGUES and not config.SPORTS_MAP.get(lk)
+        ]
+        if keyless and len(keyless) == len(league_keys):
+            extra = (
+                "\n\nYour leagues (<i>" + ", ".join(keyless) + "</i>) "
+                "don't have live odds data yet. "
+                "Try adding a league like EPL, PSL, or NBA for full coverage."
+            )
+        elif keyless:
+            extra = (
+                "\n\n<i>Note: " + ", ".join(keyless) +
+                " don't have live odds data yet.</i>"
+            )
+        else:
+            extra = "\nCheck back later or add more teams in Settings."
         text = (
             "⚽ <b>Your Games</b>\n\n"
-            "No upcoming games found for your teams.\n"
-            "Check back later or add more teams in Settings."
+            "No upcoming games found for your teams."
+            + extra
         )
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
@@ -2360,10 +2390,20 @@ async def _render_your_games_sport(
         else:
             day_names.append(d_date.strftime("%a"))
 
+    # Check if this sport has any leagues with API data
+    sport_leagues = sport_def.leagues if sport_def else []
+    has_api_leagues = any(lg.api_key for lg in sport_leagues)
+
     # Build text
     lines = [f"{sport_emoji} <b>{sport_name} — {date_label}</b>"]
     if not day_games:
-        lines.append(f"\nNo {sport_name.lower()} games on {date_label.lower()}.")
+        if not has_api_leagues:
+            lines.append(
+                f"\n{sport_name} doesn't have live odds data yet.\n"
+                "We're working on adding more sports — check back soon!"
+            )
+        else:
+            lines.append(f"\nNo {sport_name.lower()} games on {date_label.lower()}.")
     else:
         total = len(day_games)
         edge_count = sum(1 for g in day_games if edge_events.get(g.get("id", "")))
@@ -2989,6 +3029,9 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
 
     all_events: list[dict] = []
     for lk in league_keys:
+        # Skip leagues without an Odds API key — no data to fetch
+        if not config.SPORTS_MAP.get(lk):
+            continue
         sport_key = config.LEAGUE_SPORT.get(lk, "")
         sport = config.ALL_SPORTS.get(sport_key)
         sport_emoji = sport.emoji if sport else "🏅"
@@ -3209,7 +3252,18 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     )
 
     # Fetch odds for this league
-    api_key = config.SPORTS_MAP.get(target_league, target_league)
+    api_key = config.SPORTS_MAP.get(target_league)
+    if not api_key:
+        await query.edit_message_text(
+            f"📊 <b>{home} vs {away}</b>\n\n"
+            "Odds data isn't available for this league yet.\n"
+            "Check back soon — we're adding more coverage!",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")],
+            ]),
+        )
+        return
     odds_result = await fetch_odds_cached(api_key, regions="eu,uk,au", markets="h2h")
 
     if not odds_result["ok"]:

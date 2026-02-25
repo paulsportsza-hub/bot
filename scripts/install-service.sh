@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-service.sh — Install and enable the MzansiEdge systemd service
+# install-service.sh — Symlink and enable the MzansiEdge systemd service
 set -euo pipefail
 
 SERVICE_FILE="$(dirname "$(realpath "$0")")/../mzansiedge.service"
@@ -15,8 +15,8 @@ if [ ! -f "$SERVICE_FILE" ]; then
     exit 1
 fi
 
-echo "Copying $SERVICE_FILE → $DEST"
-cp "$SERVICE_FILE" "$DEST"
+echo "Symlinking $SERVICE_FILE → $DEST"
+ln -sf "$SERVICE_FILE" "$DEST"
 
 echo "Reloading systemd daemon…"
 systemctl daemon-reload
@@ -24,10 +24,11 @@ systemctl daemon-reload
 echo "Enabling mzansiedge.service…"
 systemctl enable mzansiedge.service
 
-echo "Starting mzansiedge.service…"
-systemctl start mzansiedge.service
-
 echo ""
-echo "Done. Check status with:"
+echo "Done. Service is enabled but NOT started."
+echo "When ready, start it with:"
+echo "  sudo systemctl start mzansiedge.service"
+echo ""
+echo "Monitor with:"
 echo "  systemctl status mzansiedge.service"
 echo "  journalctl -u mzansiedge.service -f"
