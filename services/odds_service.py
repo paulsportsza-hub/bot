@@ -25,6 +25,31 @@ log = logging.getLogger("mzansiedge.odds_service")
 # Path to the odds database (shared with Dataminer scrapers)
 ODDS_DB_PATH = "/home/paulsportsza/scrapers/odds.db"
 
+
+def build_match_id(home_team: str, away_team: str, commence_time: str) -> str:
+    """Build a normalised match_id from team names and date.
+
+    Returns e.g. "kaizer_chiefs_vs_orlando_pirates_2026-02-28"
+    """
+    import re
+
+    def normalise(name: str) -> str:
+        name = name.lower().strip()
+        name = re.sub(r"[^a-z0-9\s]", "", name)
+        return "_".join(name.split())
+
+    date_part = ""
+    if commence_time:
+        # Extract date from ISO string or similar
+        date_part = commence_time[:10]  # "2026-02-28" from "2026-02-28T15:00:00Z"
+
+    home = normalise(home_team)
+    away = normalise(away_team)
+
+    if date_part:
+        return f"{home}_vs_{away}_{date_part}"
+    return f"{home}_vs_{away}"
+
 # Column mapping for each market type → list of (outcome_key, column_name) pairs
 MARKET_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "1x2": [("home", "home_odds"), ("draw", "draw_odds"), ("away", "away_odds")],

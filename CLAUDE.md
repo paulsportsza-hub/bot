@@ -703,3 +703,200 @@ See `.env.example` for required variables:
 - `ADMIN_IDS` — Comma-separated Telegram user IDs
 - `TZ` — Timezone (default: Africa/Johannesburg)
 - `DATABASE_URL` — SQLAlchemy async URL
+
+## Agent Reporting Pipeline
+
+### Overview
+CLI agents push markdown reports to Notion via push-report script. Reports land in the Agent Reports Pipeline database, tagged and searchable.
+
+### Flow
+1. Team Lead writes brief → Director pastes into agent's tmux window
+2. Agent works → writes .md report to /home/paulsportsza/reports/
+3. Agent runs: push-report --agent X --wave Y report.md
+4. Report appears in Notion with status "New"
+5. Team Lead reads/reviews in Notion → marks "Reviewed"
+6. Team Lead writes next briefs → cycle repeats
+
+### push-report Script
+- Location: /usr/local/bin/push-report
+- Source: /home/paulsportsza/push-report.py
+- Zero external deps — Python 3 stdlib only (urllib.request)
+- Features: Multi-page splitting (>95 blocks → linked pages of 90), h4+ heading fix, 30s timeout
+- Config: PROJECT = "MzansiEdge", VALID_AGENTS = ["QA", "LeadDev", "Dataminer", "UX"], NOTION_DB_ID = "a7cd424d700a4ab684ec10bd08c9948b"
+
+### Environment Variables (set in /etc/environment AND ~/.bashrc)
+    NOTION_TOKEN=(set in ~/.bashrc — do not commit)
+    NOTION_DB_ID=a7cd424d700a4ab684ec10bd08c9948b
+
+### Usage
+    push-report --agent QA --wave 9A /home/paulsportsza/reports/qa-wave9a-20260225-1527.md
+    push-report --agent LeadDev --wave 9B --status "Action Taken" --title "Merge Complete" report.md
+
+### Agent Brief Template (REPORT section)
+Every agent brief MUST end with a REPORT section containing:
+- Write report to: /home/paulsportsza/reports/{agent}-{wave}-$(date +%Y%m%d-%H%M).md
+- Push to Notion: push-report --agent {Agent} --wave {Wave} /path/to/report.md
+
+### Notion Database References
+
+| Database | DB Hex ID | Data Source (collection://) |
+|---|---|---|
+| Agent Reports Pipeline | a7cd424d700a4ab684ec10bd08c9948b | collection://7da2d5d2-0e74-429e-9190-6a54d7bbcd23 |
+| Bug Tracker | — | collection://263e9fe5-ba1d-492a-b960-2f765379ed5a |
+| Sprint Log | — | collection://120f7ad1-5b03-47a6-ac30-4c4dfc490cf0 |
+
+| Notion Page | Page ID |
+|---|---|
+| Team Status | 312d9048-d73c-81a2-8ae6-c022d938c755 |
+| Agent Reporting Guide | 312d9048-d73c-814a-afc3-e7cd835d02fb |
+| Wiki | 311d9048-d73c-8178-a24e-e2c305937775 |
+
+## Multi-Bookmaker Architecture (Day 6+)
+
+### New Services (on feature/multi-bookmaker branch)
+| File | Purpose |
+|------|---------|
+| services/edge_rating.py | 5-factor edge scoring: consensus 30%, model alignment 25%, line movement 15%, value detection 20%, market breadth 10%. Returns PLATINUM/GOLD/SILVER/BRONZE/HIDDEN. |
+| services/affiliate_service.py | Best-odds bookmaker selection, rotating affiliate links, runner-up odds |
+| services/odds_service.py | Cross-bookmaker odds from Dataminer odds.db. Wide-format schema. |
+| services/analytics.py | PostHog v7 event tracking wrapper |
+| renderers/edge_renderer.py | Telegram HTML: edge badges, tip cards with odds comparison |
+
+### Edge Rating Tiers (SA Mining Theme)
+| Tier | Score | Requirements |
+|------|-------|-------------|
+| Platinum | 85%+ | 6+ bookmakers, 95%+ confidence |
+| Gold | 75%+ | Strong consensus + value |
+| Silver | Mid-range | Moderate confidence |
+| Bronze | 40% min | Minimum threshold |
+| Hidden | Below Bronze | NOT shown to users |
+
+### Integration Status
+- Services built and unit-tested (50+ edge case tests pass)
+- NOT yet wired into bot.py handlers — tips still show single-source odds
+- Merge needed: feature/stitch-integration into feature/multi-bookmaker (3 file conflicts)
+
+## Scraper Pipeline (Dataminer)
+
+### 5 Bookmakers LIVE
+| Bookmaker | Scraper | Method | Proxy |
+|-----------|---------|--------|-------|
+| Hollywoodbets | bookmakers/hollywoodbets.py | REST API | ISP proxy (mzansi_isp) |
+| Supabets | bookmakers/supabets.py | ASMX JSON | None |
+| Betway | bookmakers/betway.py | REST BetBook | None |
+| Sportingbet | bookmakers/sportingbet.py | REST CDS/Entain | None |
+| GBets | bookmakers/gbets.py | WebSocket Swarm | None |
+
+### Database
+- Location: /home/paulsportsza/scrapers/odds.db (SQLite)
+- Rows: 17,079+ (growing ~42K/day)
+- Schema: Wide-format — one row per (bookmaker, match, market, timestamp)
+- Columns: bookmaker, match_id, home_team, away_team, league, home_odds, draw_odds, away_odds, over_odds, under_odds, scraped_at, market_type
+- Markets: 1x2, btts, over_under_2.5
+- Leagues: PSL, EPL, Champions League
+- Cron: 57 runs/day, ~740 odds per run, 46-second runtime
+
+### Bright Data Credentials
+- API Key: 4148a9c8-d613-494c-86db-adaa53991e51
+- Customer ID: hl_b7cc8a14
+- Zone: mzansi_isp (ZA-geolocated ISP IPs)
+
+## Branch Status (as of Day 9 / 25 Feb 2026)
+
+main (69c8273) has two feature branches:
+- feature/stitch-integration (5b6abca) — 6 commits, 295 tests
+- feature/multi-bookmaker = ux/playbook-conventions-day6 (cf9dbcd) — 8 commits, 281 tests
+
+### Recommended Merge Order
+1. ux/playbook-conventions-day6 → main (clean)
+2. feature/stitch-integration → main (3 file conflicts, ~17 min)
+3. Delete feature/multi-bookmaker (duplicate)
+
+## Bug Tracker Summary
+
+### Open Bugs (4 — all P3)
+| ID | Description |
+|----|-------------|
+| BUG-009 | Keyless leagues — FIXED in cf9dbcd, needs re-verify |
+| BUG-013 | Platinum edge threshold may be too narrow |
+| BUG-015 | ExecStart uses system Python not venv |
+| BUG-016 | PID lock no PermissionError handling |
+
+## Payment Integration
+- Paystack: REJECTED (betting)
+- Stripe: Unavailable in SA
+- Stitch: Signing up (Feb 2026). Code on feature/stitch-integration branch.
+
+## Affiliate Status (25 Feb 2026)
+| Bookmaker | Status |
+|-----------|--------|
+| Playa Bets | Approved |
+| GBets | Verified |
+| Betway | Applied (BPA117074) |
+| Hollywoodbets | Applied |
+| Supabets | Under review |
+| Sportingbet | Applied |
+| WSB | Applied |
+| 10bet | Applied |
+| Bet.co.za | Not yet (needs 10 depositing customers) |
+
+## Integrations
+| Service | Status |
+|---------|--------|
+| Sentry | Live |
+| PostHog | Live (phx_UuZyiC5yp5IFVtotbdcAz1qo0gifBAVimabmwPGNHvhH3HS) |
+| ClickUp | Connected |
+| Notion | Connected |
+| Ahrefs | Connected |
+| Bitly | Connected |
+
+## CLAUDE.md Maintenance Rule
+CRITICAL: Every LeadDev brief MUST include a CLAUDE.md update section. The Team Lead is responsible for specifying what to add/change in CLAUDE.md as part of every brief. LeadDev appends or edits CLAUDE.md accordingly before filing the wave report. This keeps CLAUDE.md as the authoritative project memory that new sessions read on startup.
+
+## Key Dates
+| Date | Milestone |
+|------|-----------|
+| 14 March 2026 | Launch |
+| 25 Feb 2026 | Reporting pipeline deployed, 5 scrapers live, 17K+ odds |
+
+## Wave 10A — Merge + Edge Rating + Multi-Bookmaker (25 Feb 2026)
+
+### Branch Merge
+- Merged ux/playbook-conventions-day6 → main (fast-forward, 20 files)
+- Merged feature/stitch-integration → main (7 conflict hunks in 3 files resolved)
+- Deleted merged branches: ux/playbook-conventions-day6, feature/multi-bookmaker, feature/stitch-integration
+- 295 tests pass post-merge
+
+### P0 Bug Fixes
+| Fix | Description |
+|-----|-------------|
+| P0-1 | html.escape on user.first_name in handle_menu |
+| P0-2 | html.escape on user.first_name at onboarding completion |
+| P0-3 | Notification toggle re-render was missing live_scores option |
+| P0-4 | Tip detail now has "Back to Hot Tips" button (was only "Back to Your Games") |
+| P0-5 | hot:back callback now handled in on_button router |
+
+### Edge Rating Wired Into Hot Tips
+- calculate_edge_rating() called for each tip in _fetch_hot_tips_all_sports
+- HIDDEN tips (<40%) filtered out automatically
+- Tips sorted by edge rating (platinum first), then EV descending
+- Edge badges prepended to each tip line in consolidated message
+- Thresholds aligned to UX spec: GOLD 70%+, SILVER 55%+
+- Emojis updated: PLATINUM ⛏️🔥, GOLD ⛏️⭐, SILVER ⛏️, BRONZE 🟤
+
+### Multi-Bookmaker Odds in Tip Detail
+- OddsService queries Dataminer scrapers DB for all bookmaker odds
+- AffiliateService selects best-odds bookmaker with active affiliate priority
+- render_tip_with_odds() generates rich multi-bookmaker tip cards
+- Dynamic CTA button shows best-odds bookmaker name + affiliate link
+- "📊 All Bookmaker Odds" button with render_odds_comparison()
+- Graceful fallback to single-bookmaker display when scrapers DB has no match
+
+### New Function: build_match_id (odds_service.py)
+Normalises team names + date into composite match_id for scrapers DB lookup.
+
+### New Handler: odds:compare:{event_id}
+Shows full bookmaker odds comparison table for a match.
+
+### Hot Tips Cache Fix
+Tips from _fetch_hot_tips_all_sports now stored in _game_tips_cache so tip detail can find them.

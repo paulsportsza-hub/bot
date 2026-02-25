@@ -14,8 +14,8 @@ log = logging.getLogger("mzansiedge.edge")
 
 class EdgeRating:
     PLATINUM = "platinum"  # 85%+ confidence
-    GOLD = "gold"          # 75%+ confidence
-    SILVER = "silver"      # 60%+ confidence
+    GOLD = "gold"          # 70%+ confidence
+    SILVER = "silver"      # 55%+ confidence
     BRONZE = "bronze"      # 40%+ confidence
     HIDDEN = "hidden"      # Below 40% — NOT shown to users
 
@@ -91,9 +91,9 @@ def calculate_edge_rating(
 
     if total >= 85:
         return EdgeRating.PLATINUM
-    if total >= 75:
+    if total >= 70:
         return EdgeRating.GOLD
-    if total >= 60:
+    if total >= 55:
         return EdgeRating.SILVER
     if total >= 40:
         return EdgeRating.BRONZE

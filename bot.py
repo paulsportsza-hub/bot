@@ -51,6 +51,10 @@ from services.picks_service import get_picks as svc_get_picks
 from services.schedule_service import get_schedule, get_game_tips_data
 from services.analytics import track as analytics_track
 from services.stitch_service import stitch as stitch_service
+from services.edge_rating import EdgeRating, calculate_edge_rating
+from services import odds_service as odds_svc
+from services.affiliate_service import get_affiliate_url, select_best_bookmaker, get_runner_up_odds
+from renderers.edge_renderer import render_edge_badge, render_tip_with_odds, render_tip_button_label, render_odds_comparison
 
 # ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
 from logging.handlers import RotatingFileHandler
@@ -790,7 +794,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             event_id = action.split(":", 1)[1]
             await _generate_game_tips(query, ctx, event_id, user_id)
     elif prefix == "hot":
-        if action in ("go", "show"):
+        if action in ("go", "show", "back"):
             await _do_hot_tips_flow(query.message.chat_id, ctx.bot)
     elif prefix == "schedule":
         if action == "noop":
@@ -813,6 +817,10 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await query.answer("🔗 Betway.co.za link coming soon! Check back tomorrow.", show_alert=True)
         else:
             await handle_tip_detail(query, ctx, action)
+    elif prefix == "odds":
+        if action.startswith("compare:"):
+            event_id = action.split(":", 1)[1]
+            await _handle_odds_comparison(query, event_id)
     elif prefix == "subscribe":
         await handle_subscribe(query, action)
     elif prefix == "unsubscribe":
@@ -875,7 +883,7 @@ async def handle_menu(query, action: str) -> None:
         text = textwrap.dedent(f"""\
             <b>🇿🇦 MzansiEdge — Main Menu</b>
 
-            Hey {user.first_name}, what would you like to do?
+            Hey {h(user.first_name or '')}, what would you like to do?
         """)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
 
@@ -1729,7 +1737,7 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     _onboarding_state.pop(user_id, None)
 
     user = query.from_user
-    name = user.first_name or "champ"
+    name = h(user.first_name or "champ")
 
     # Big welcome message with story quiz CTA
     text = (
@@ -2674,6 +2682,30 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
                     if ev_pct < 2.0:
                         continue
 
+                    # Build odds snapshots from all bookmakers for edge rating
+                    odds_snaps = []
+                    for bk in event.get("bookmakers", []):
+                        for market in bk.get("markets", []):
+                            if market.get("key") != "h2h":
+                                continue
+                            for oc in market.get("outcomes", []):
+                                odds_snaps.append({
+                                    "bookmaker": bk.get("key", ""),
+                                    "outcome": oc.get("name", ""),
+                                    "odds": oc.get("price"),
+                                    "timestamp": event.get("commence_time", ""),
+                                })
+
+                    model_pred = {
+                        "outcome": entry.outcome,
+                        "confidence": min(prob, 0.95),
+                        "implied_prob": prob,
+                    }
+
+                    edge = calculate_edge_rating(odds_snaps, model_pred)
+                    if edge == EdgeRating.HIDDEN:
+                        continue  # Filter out low-confidence tips
+
                     all_tips.append({
                         "event_id": event.get("id", ""),
                         "sport_key": sport_key,
@@ -2686,14 +2718,16 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
                         "ev": round(ev_pct, 1),
                         "prob": round(prob * 100),
                         "kelly": round(calc_kelly(entry.price, prob, fraction=0.5) * 100, 1),
+                        "edge_rating": edge,
                     })
         except Exception as exc:
             log.warning("Hot tips scan error for %s: %s", sport_key, exc)
             continue
 
-    # Sort by EV descending, take top 5
-    all_tips.sort(key=lambda t: t["ev"], reverse=True)
-    top_tips = all_tips[:5]
+    # Sort by edge rating (platinum first), then EV descending
+    _rating_order = {EdgeRating.PLATINUM: 0, EdgeRating.GOLD: 1, EdgeRating.SILVER: 2, EdgeRating.BRONZE: 3}
+    all_tips.sort(key=lambda t: (_rating_order.get(t.get("edge_rating", ""), 9), -t["ev"]))
+    top_tips = all_tips[:10]
 
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time()}
     return top_tips
@@ -2716,6 +2750,12 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
     )
 
     tips = await _fetch_hot_tips_all_sports()
+
+    # Store tips in game_tips_cache so tip detail can find them
+    for tip in tips:
+        eid = tip.get("event_id", "")
+        if eid:
+            _game_tips_cache[eid] = [tip]
 
     try:
         await loading.delete()
@@ -2750,9 +2790,12 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
         away = h(tip.get("away_team", ""))
         outcome = h(tip.get("outcome", ""))
 
+        badge = render_edge_badge(tip.get("edge_rating", ""))
+        badge_line = f"     {badge}\n" if badge else ""
         lines.append(
             f"[{i}] {sport_emoji} <b>{home} vs {away}</b>\n"
             f"     ⏰ {kickoff}\n"
+            f"{badge_line}"
             f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b> · EV +{tip['ev']}%"
         )
         lines.append("")
@@ -3525,34 +3568,124 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         "ev": tip.get("ev", 0),
     })
 
-    text = _format_tip_detail(tip, experience, bankroll)
+    # Try multi-bookmaker odds from Dataminer scrapers DB
+    match_id = odds_svc.build_match_id(
+        tip.get("home_team", ""), tip.get("away_team", ""),
+        tip.get("commence_time", ""),
+    )
+    odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
+    # Extract bookmaker→odds dict for the predicted outcome
+    outcome_key = tip.get("outcome", "").lower()
+    # Map Odds API outcome names to our keys
+    _oc_map = {"home team": "home", "away team": "away", "draw": "draw"}
+    mapped_key = _oc_map.get(outcome_key, outcome_key)
+    outcome_data = odds_result.get("outcomes", {}).get(mapped_key, {})
+    odds_by_bookmaker = outcome_data.get("all_bookmakers", {})
 
-    # Build buttons — always use the active bookmaker (Betway for MVP)
-    buttons: list[list[InlineKeyboardButton]] = []
-    active_bk = config.get_active_bookmaker()
-    active_name = active_bk["short_name"]
+    if odds_by_bookmaker:
+        # Multi-bookmaker: select best odds with affiliate link
+        best_bk = select_best_bookmaker(odds_by_bookmaker, user_id, match_id)
+        runner_ups = get_runner_up_odds(odds_by_bookmaker, best_bk.get("bookmaker_key", ""))
+        edge = tip.get("edge_rating", "")
 
-    # Betway affiliate button — always first
-    betway_url = config.get_affiliate_url(tip.get("event_id"))
-    if betway_url:
-        buttons.append([InlineKeyboardButton(
-            f"📲 Place on {active_bk['display_name']} →",
-            url=betway_url,
-        )])
+        # Use edge renderer for rich tip card
+        text = render_tip_with_odds(
+            match=tip,
+            odds_by_bookmaker=odds_by_bookmaker,
+            edge_rating=edge,
+            best_bookmaker=best_bk,
+            runner_ups=runner_ups,
+            predicted_outcome=tip.get("outcome", ""),
+        )
     else:
+        # Fallback: single-bookmaker display
+        text = _format_tip_detail(tip, experience, bankroll)
+        best_bk = None
+
+    buttons: list[list[InlineKeyboardButton]] = []
+
+    if best_bk and best_bk.get("affiliate_url"):
+        # Dynamic CTA with best-odds bookmaker
+        cta_label = render_tip_button_label(best_bk)
+        buttons.append([InlineKeyboardButton(f"📲 {cta_label}", url=best_bk["affiliate_url"])])
+    else:
+        # Fallback to active bookmaker
+        active_bk = config.get_active_bookmaker()
+        affiliate_url = active_bk.get("affiliate_base_url", "")
+        bk_url = affiliate_url or active_bk.get("website_url", "")
+        if bk_url:
+            buttons.append([InlineKeyboardButton(
+                f"📲 Place on {active_bk['display_name']} →", url=bk_url,
+            )])
+        else:
+            buttons.append([InlineKeyboardButton(
+                f"📲 Place on {active_bk['display_name']} →",
+                callback_data="tip:affiliate_soon",
+            )])
+
+    # Odds comparison button (only if multi-bookmaker data available)
+    if odds_by_bookmaker and len(odds_by_bookmaker) > 1:
         buttons.append([InlineKeyboardButton(
-            f"📲 Place on {active_bk['display_name']} →",
-            callback_data="tip:affiliate_soon",
+            "📊 All Bookmaker Odds",
+            callback_data=f"odds:compare:{event_id}",
         )])
 
     buttons.append([InlineKeyboardButton(
         "🔔 Follow this game",
         callback_data=f"subscribe:{event_id}",
     )])
-    buttons.append([InlineKeyboardButton(
-        "↩️ Back",
-        callback_data=f"schedule:tips:{event_id}",
-    )])
+    buttons.append([InlineKeyboardButton("🔥 Back to Hot Tips", callback_data="hot:back")])
+    buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
+
+    await query.edit_message_text(
+        text, parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def _handle_odds_comparison(query, event_id: str) -> None:
+    """Show all bookmaker odds for a match (odds:compare:{event_id})."""
+    tips = _game_tips_cache.get(event_id, [])
+    if not tips:
+        await query.edit_message_text(
+            "⚠️ Tip data expired. Try Hot Tips again.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
+            ]),
+        )
+        return
+
+    tip = tips[0]
+    match_id = odds_svc.build_match_id(
+        tip.get("home_team", ""), tip.get("away_team", ""),
+        tip.get("commence_time", ""),
+    )
+    odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
+
+    # Build odds_by_bookmaker for the predicted outcome
+    outcome_key = tip.get("outcome", "").lower()
+    _oc_map = {"home team": "home", "away team": "away", "draw": "draw"}
+    mapped_key = _oc_map.get(outcome_key, outcome_key)
+    outcome_data = odds_result.get("outcomes", {}).get(mapped_key, {})
+    odds_by_bookmaker = outcome_data.get("all_bookmakers", {})
+
+    if not odds_by_bookmaker:
+        await query.answer("No multi-bookmaker data available for this match.", show_alert=True)
+        return
+
+    home = h(tip.get("home_team", ""))
+    away = h(tip.get("away_team", ""))
+    text = (
+        f"📊 <b>Odds Comparison</b>\n"
+        f"<b>{home} vs {away}</b>\n\n"
+        + render_odds_comparison(odds_by_bookmaker, tip.get("outcome", ""))
+    )
+
+    buttons = [
+        [InlineKeyboardButton("🔥 Back to Hot Tips", callback_data="hot:back")],
+        [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+    ]
 
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
@@ -4054,6 +4187,7 @@ async def handle_settings(query, action: str) -> None:
             ("edu_tips", "🎓 Education Tips"),
             ("market_movers", "📉 Market Movers"),
             ("bankroll_updates", "💰 Bankroll Updates"),
+            ("live_scores", "⚡ Live Scores"),
         ]:
             status = "✅" if notify_prefs.get(k, False) else "❌"
             buttons_list.append([InlineKeyboardButton(

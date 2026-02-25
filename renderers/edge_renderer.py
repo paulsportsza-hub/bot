@@ -8,10 +8,10 @@ from zoneinfo import ZoneInfo
 import config
 
 EDGE_EMOJIS: dict[str, str] = {
-    "platinum": "\u26a1",  # ⚡
-    "gold": "\U0001f947",  # 🥇
-    "silver": "\U0001f948",  # 🥈
-    "bronze": "\U0001f949",  # 🥉
+    "platinum": "\u26cf\ufe0f\U0001f525",  # ⛏️🔥
+    "gold": "\u26cf\ufe0f\u2b50",  # ⛏️⭐
+    "silver": "\u26cf\ufe0f",  # ⛏️
+    "bronze": "\U0001f7e4",  # 🟤
 }
 
 EDGE_LABELS: dict[str, str] = {
