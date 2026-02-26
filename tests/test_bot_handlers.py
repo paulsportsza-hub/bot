@@ -474,9 +474,9 @@ class TestVerdictBadgeInjection:
         """Simulate badge injection on a narrative string."""
         import re
         narrative = "🏆 <b>Verdict</b>\nBack the draw with Medium conviction — lekker value."
-        # Simulate the injection logic
-        tier_emoji = "⛏️⭐"
-        tier_label = "Gold Edge"
+        # Simulate the injection logic (Diamond tier emojis)
+        tier_emoji = "🥇"
+        tier_label = "GOLD EDGE"
         badge = f" — {tier_emoji} {tier_label}"
         narrative = re.sub(
             r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)",
@@ -484,10 +484,13 @@ class TestVerdictBadgeInjection:
             narrative,
             count=1,
         )
-        narrative = re.sub(r" with (?:High|Medium|Low) conviction", "", narrative)
-        assert "Gold Edge" in narrative
-        assert "⛏️⭐" in narrative
+        # Aggressive conviction stripping (Wave 14A)
+        narrative = re.sub(r"(?:with |— )?(?:High|Medium|Low) conviction:?\.?", "", narrative)
+        narrative = re.sub(r"Conviction: (?:High|Medium|Low)\.?", "", narrative)
+        assert "GOLD EDGE" in narrative
+        assert "🥇" in narrative
         assert "Medium conviction" not in narrative
+        assert "conviction" not in narrative.lower()
 
     def test_no_badge_without_verdict(self):
         """If no Verdict section, narrative stays unchanged."""
@@ -496,8 +499,119 @@ class TestVerdictBadgeInjection:
         original = narrative
         narrative = re.sub(
             r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)",
-            r"\1 — ⛏️⭐ Gold Edge",
+            r"\1 — 🥇 GOLD EDGE",
             narrative,
             count=1,
         )
         assert narrative == original
+
+
+class TestDiamondEdgeRebrand:
+    """Wave 14A: All tier references must use Diamond/Gold/Silver/Bronze."""
+
+    def test_edge_emojis_diamond_system(self):
+        """EDGE_EMOJIS must use 💎🥇🥈🥉 (no ⛏️)."""
+        from renderers.edge_renderer import EDGE_EMOJIS
+        assert "diamond" in EDGE_EMOJIS
+        assert "platinum" not in EDGE_EMOJIS
+        assert EDGE_EMOJIS["diamond"] == "💎"
+        assert EDGE_EMOJIS["gold"] == "🥇"
+        assert EDGE_EMOJIS["silver"] == "🥈"
+        assert EDGE_EMOJIS["bronze"] == "🥉"
+        # No pickaxe emojis
+        for v in EDGE_EMOJIS.values():
+            assert "⛏" not in v
+
+    def test_edge_labels_diamond_system(self):
+        """EDGE_LABELS must use DIAMOND EDGE/GOLD EDGE/etc."""
+        from renderers.edge_renderer import EDGE_LABELS
+        assert EDGE_LABELS["diamond"] == "DIAMOND EDGE"
+        assert EDGE_LABELS["gold"] == "GOLD EDGE"
+        assert EDGE_LABELS["silver"] == "SILVER EDGE"
+        assert EDGE_LABELS["bronze"] == "BRONZE EDGE"
+        assert "platinum" not in EDGE_LABELS
+
+    def test_edge_rating_class_diamond(self):
+        """EdgeRating class should have DIAMOND, not PLATINUM."""
+        from services.edge_rating import EdgeRating
+        assert hasattr(EdgeRating, "DIAMOND")
+        assert not hasattr(EdgeRating, "PLATINUM")
+        assert EdgeRating.DIAMOND == "diamond"
+
+
+class TestThresholdRecalibration:
+    """Wave 14A: New EV thresholds — Diamond ≥15%, Gold ≥8%, Silver ≥4%, Bronze ≥1%."""
+
+    def test_9pct_ev_is_gold_not_diamond(self):
+        """Leeds vs Man City draw at +9.3% EV should be Gold, not Diamond."""
+        tips = [
+            {"outcome": "Draw", "odds": 4.60, "ev": 9.3, "bookie_key": "gbets",
+             "odds_by_bookmaker": {"gbets": 4.60}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(tips, "ev-test", 111)
+        cta_text = buttons[0][0].text
+        # Should be 🥇 (Gold), not 💎 (Diamond)
+        assert "🥇" in cta_text
+        assert "💎" not in cta_text
+
+    def test_15pct_ev_is_diamond(self):
+        """EV ≥15% should be Diamond tier."""
+        tips = [
+            {"outcome": "Home Win", "odds": 6.00, "ev": 16.0, "bookie_key": "hwb",
+             "odds_by_bookmaker": {"hwb": 6.00}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(tips, "ev-test", 111)
+        cta_text = buttons[0][0].text
+        assert "💎" in cta_text
+
+    def test_4pct_ev_is_silver(self):
+        """EV ≥4% should be Silver tier."""
+        tips = [
+            {"outcome": "Away Win", "odds": 2.10, "ev": 4.5, "bookie_key": "betway",
+             "odds_by_bookmaker": {"betway": 2.10}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(tips, "ev-test", 111)
+        cta_text = buttons[0][0].text
+        assert "🥈" in cta_text
+
+    def test_1pct_ev_is_bronze(self):
+        """EV ≥1% but <4% should be Bronze tier."""
+        tips = [
+            {"outcome": "Draw", "odds": 3.10, "ev": 2.0, "bookie_key": "supabets",
+             "odds_by_bookmaker": {"supabets": 3.10}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(tips, "ev-test", 111)
+        cta_text = buttons[0][0].text
+        assert "🥉" in cta_text
+
+
+class TestConvictionStripping:
+    """Wave 14A: All conviction text must be stripped from AI responses."""
+
+    def test_strips_with_medium_conviction(self):
+        """Standard 'with Medium conviction' format."""
+        import re
+        text = "Back the draw with Medium conviction — lekker."
+        text = re.sub(r"(?:with |— )?(?:High|Medium|Low) conviction:?\.?", "", text)
+        assert "conviction" not in text.lower()
+
+    def test_strips_conviction_colon_format(self):
+        """'Conviction: Medium.' format."""
+        import re
+        text = "Back the draw. Conviction: Medium."
+        text = re.sub(r"Conviction: (?:High|Medium|Low)\.?", "", text)
+        assert "conviction" not in text.lower()
+
+    def test_strips_dash_conviction(self):
+        """'— High conviction' format."""
+        import re
+        text = "Back the draw — High conviction."
+        text = re.sub(r"(?:with |— )?(?:High|Medium|Low) conviction:?\.?", "", text)
+        assert "conviction" not in text.lower()
+
+    def test_strips_bare_conviction(self):
+        """'Low conviction' without prefix."""
+        import re
+        text = "Back the draw. Low conviction."
+        text = re.sub(r"(?:with |— )?(?:High|Medium|Low) conviction:?\.?", "", text)
+        assert "conviction" not in text.lower()

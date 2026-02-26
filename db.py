@@ -45,6 +45,8 @@ class User(Base):
     # WhatsApp readiness
     whatsapp_phone: Mapped[str | None] = mapped_column(String(32))  # e.g. "+27821234567"
     preferred_platform: Mapped[str | None] = mapped_column(String(16))  # "telegram" | "whatsapp"
+    # UX flags
+    edge_tooltip_shown: Mapped[bool] = mapped_column(Boolean, default=False)
     # Paystack subscription
     email: Mapped[str | None] = mapped_column(String(255))  # for Paystack
     subscription_status: Mapped[str | None] = mapped_column(String(32))  # "active" | "cancelled" | None
@@ -138,6 +140,7 @@ async def _migrate_columns() -> None:
                 ("fb_ad_id", "NULL"),
                 ("whatsapp_phone", "NULL"),
                 ("preferred_platform", "'telegram'"),
+                ("edge_tooltip_shown", "0"),
                 ("email", "NULL"),
                 ("subscription_status", "NULL"),
                 ("subscription_code", "NULL"),
@@ -204,6 +207,14 @@ async def set_onboarding_done(user_id: int) -> None:
         user = await s.get(User, user_id)
         if user:
             user.onboarding_done = True
+            await s.commit()
+
+
+async def set_edge_tooltip_shown(user_id: int) -> None:
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.edge_tooltip_shown = True
             await s.commit()
 
 

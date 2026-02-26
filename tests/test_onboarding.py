@@ -180,8 +180,8 @@ class TestFavouriteSelection:
         query = _make_query(user_id=10018)
         await bot.handle_ob_fav_done(query, "american_football")
 
-        # Should move to risk after the only sport
-        assert ob["step"] == "risk"
+        # Should move to edge explainer after the only sport (then risk)
+        assert ob["step"] == "edge_explainer"
 
     async def test_horse_racing_skips_favourites(self):
         """Horse racing (fav_type=skip) should skip favourite step."""
@@ -195,8 +195,8 @@ class TestFavouriteSelection:
         # Simulate _show_fav_step being called
         await bot._show_fav_step(query, ob)
 
-        # Should skip to risk since horse_racing has fav_type="skip"
-        assert ob["step"] == "risk"
+        # Should skip to edge explainer since horse_racing has fav_type="skip"
+        assert ob["step"] == "edge_explainer"
 
 
 class TestFavManualInput:
@@ -321,7 +321,7 @@ class TestSummaryAndEdit:
 
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 8/8" in text
+        assert "Step 9/9" in text
         assert "Arsenal" in text
         # Edit buttons are in the keyboard markup
         kb = call_args[1].get("reply_markup")

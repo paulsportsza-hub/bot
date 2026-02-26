@@ -9,22 +9,22 @@ from zoneinfo import ZoneInfo
 import config
 
 EDGE_EMOJIS: dict[str, str] = {
-    "platinum": "\u26cf\ufe0f\U0001f525",  # ⛏️🔥
-    "gold": "\u26cf\ufe0f\u2b50",  # ⛏️⭐
-    "silver": "\u26cf\ufe0f\U0001f948",  # ⛏️🥈
-    "bronze": "\u26cf\ufe0f\U0001f949",  # ⛏️🥉
+    "diamond": "\U0001f48e",  # 💎
+    "gold": "\U0001f947",     # 🥇
+    "silver": "\U0001f948",   # 🥈
+    "bronze": "\U0001f949",   # 🥉
 }
 
 EDGE_LABELS: dict[str, str] = {
-    "platinum": "PLATINUM EDGE",
-    "gold": "Gold Edge",
-    "silver": "Silver Edge",
-    "bronze": "Bronze Edge",
+    "diamond": "DIAMOND EDGE",
+    "gold": "GOLD EDGE",
+    "silver": "SILVER EDGE",
+    "bronze": "BRONZE EDGE",
 }
 
 
 def render_edge_badge(rating: str) -> str:
-    """Returns e.g. '⚡ PLATINUM EDGE' or '🥇 Gold Edge'."""
+    """Returns e.g. '💎 DIAMOND EDGE' or '🥇 GOLD EDGE'."""
     emoji = EDGE_EMOJIS.get(rating, "")
     label = EDGE_LABELS.get(rating, "")
     if emoji and label:
@@ -45,7 +45,7 @@ def render_tip_with_odds(
     Args:
         match: dict with keys: home_team, away_team, league, commence_time, sport_emoji
         odds_by_bookmaker: dict mapping bookmaker_key → decimal odds for the predicted outcome
-        edge_rating: EdgeRating string (platinum/gold/silver/bronze)
+        edge_rating: EdgeRating string (diamond/gold/silver/bronze)
         best_bookmaker: dict from affiliate_service.select_best_bookmaker()
         runner_ups: list from affiliate_service.get_runner_up_odds()
         predicted_outcome: human-readable outcome string (e.g. "Chiefs to Win")

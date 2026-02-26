@@ -13,7 +13,7 @@ log = logging.getLogger("mzansiedge.edge")
 
 
 class EdgeRating:
-    PLATINUM = "platinum"  # 85%+ confidence
+    DIAMOND = "diamond"    # 85%+ confidence
     GOLD = "gold"          # 70%+ confidence
     SILVER = "silver"      # 55%+ confidence
     BRONZE = "bronze"      # 40%+ confidence
@@ -53,7 +53,7 @@ def calculate_edge_rating(
             - hours: int (time window of movement)
 
     Returns:
-        EdgeRating string constant (platinum/gold/silver/bronze/hidden)
+        EdgeRating string constant (diamond/gold/silver/bronze/hidden)
     """
     if not odds_snapshots:
         odds_snapshots = []
@@ -90,7 +90,7 @@ def calculate_edge_rating(
     )
 
     if total >= 85:
-        return EdgeRating.PLATINUM
+        return EdgeRating.DIAMOND
     if total >= 70:
         return EdgeRating.GOLD
     if total >= 55:

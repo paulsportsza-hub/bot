@@ -756,20 +756,20 @@ Every agent brief MUST end with a REPORT section containing:
 ### New Services (on feature/multi-bookmaker branch)
 | File | Purpose |
 |------|---------|
-| services/edge_rating.py | 5-factor edge scoring: consensus 30%, model alignment 25%, line movement 15%, value detection 20%, market breadth 10%. Returns PLATINUM/GOLD/SILVER/BRONZE/HIDDEN. |
+| services/edge_rating.py | 5-factor edge scoring: consensus 30%, model alignment 25%, line movement 15%, value detection 20%, market breadth 10%. Returns DIAMOND/GOLD/SILVER/BRONZE/HIDDEN. |
 | services/affiliate_service.py | Best-odds bookmaker selection, rotating affiliate links, runner-up odds |
 | services/odds_service.py | Cross-bookmaker odds from Dataminer odds.db. Wide-format schema. |
 | services/analytics.py | PostHog v7 event tracking wrapper |
 | renderers/edge_renderer.py | Telegram HTML: edge badges, tip cards with odds comparison |
 
-### Edge Rating Tiers (SA Mining Theme)
-| Tier | Score | Requirements |
-|------|-------|-------------|
-| Platinum | 85%+ | 6+ bookmakers, 95%+ confidence |
-| Gold | 75%+ | Strong consensus + value |
-| Silver | Mid-range | Moderate confidence |
-| Bronze | 40% min | Minimum threshold |
-| Hidden | Below Bronze | NOT shown to users |
+### Edge Rating Tiers (Diamond System — Wave 14A)
+| Tier | Emoji | EV Threshold | Score Threshold |
+|------|-------|-------------|-----------------|
+| Diamond | 💎 | ≥15% | 85%+ |
+| Gold | 🥇 | ≥8% | 70%+ |
+| Silver | 🥈 | ≥4% | 55%+ |
+| Bronze | 🥉 | ≥1% | 40%+ |
+| Hidden | — | <1% | Below 40% — NOT shown to users |
 
 ### Integration Status
 - Services built and unit-tested (50+ edge case tests pass)
@@ -1237,3 +1237,54 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 13F)
 - Tests: 307 passing (8 new), 0 failures
+
+## Wave 14A — Diamond Edge System Overhaul (26 Feb 2026)
+
+**Diamond Edge System (Wave 14A):** Rebranded PLATINUM → DIAMOND with 💎 emoji. New tier emojis: 💎 Diamond, 🥇 Gold, 🥈 Silver, 🥉 Bronze. Recalibrated thresholds: Diamond ≥15% EV (rare), Gold ≥8%, Silver ≥4%, Bronze ≥1%. Conviction text fully stripped from all AI responses + Claude prompt updated to not generate it. Onboarding Edge explainer screen added. Guide section updated. First-time tooltip implemented.
+
+### P0: Rebrand PLATINUM → DIAMOND + New Emojis
+- `EdgeRating.PLATINUM` → `EdgeRating.DIAMOND` in services/edge_rating.py
+- `EDGE_EMOJIS`: `{"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}`
+- `EDGE_LABELS`: All UPPERCASE — `"DIAMOND EDGE"`, `"GOLD EDGE"`, `"SILVER EDGE"`, `"BRONZE EDGE"`
+- Updated all display locations: verdict badge, CTA buttons, Hot Tips, Tip Detail, narrative opener
+- Updated all test assertions across 6 test files
+- Zero instances of "PLATINUM", "⛏️", or "⛏️🔥/⛏️⭐/⛏️🥈/⛏️🥉" remain in codebase
+
+### P0: Recalibrated Tier Thresholds
+| Tier | Old EV Threshold | New EV Threshold |
+|------|-----------------|------------------|
+| Diamond (was Platinum) | ≥8% | ≥15% |
+| Gold | ≥5% | ≥8% |
+| Silver | ≥2% | ≥4% |
+| Bronze | <2% | ≥1% |
+- Applied in `_build_game_buttons()`, verdict badge injection, and `_build_tip_narrative()`
+- Leeds vs Man City draw at +9.3% EV now shows as 🥇 GOLD EDGE (not Diamond)
+- Edge scoring thresholds in `calculate_edge_rating()` unchanged (85/70/55/40)
+
+### P0: Fix BUG-NS-03 — Conviction Text Leak
+- Conviction stripping moved OUTSIDE `if narrative and tips:` block — now strips from ALL narratives
+- Regex handles all variants: "with Medium conviction", "Conviction: Medium.", "— High conviction", bare "Low conviction"
+- Claude prompt updated: "Do NOT include conviction levels (High/Medium/Low) in the Verdict. The Edge Rating badge handles this."
+- Double-space collapse after stripping
+
+### P1: Onboarding Edge Explainer Screen
+- New step between favourites and risk profile: `_show_edge_explainer()`
+- Onboarding flow now 9 steps (was 8): Experience → Sports → Leagues → Favourites → **Edge Explainer** → Risk → Bankroll → Notifications → Summary
+- Callback: `ob_nav:edge_done` → proceeds to risk step
+- All step numbers updated from X/8 to X/9 throughout
+- `back_risk` now goes to edge explainer (not directly to favourites)
+
+### P2: Guide — Edge Ratings Explained
+- `_show_betway_guide()` now shows Edge Ratings section first
+- Explains all 4 tiers with EV thresholds and rarity
+- Pro tip: "Focus on Gold and Diamond tips"
+- Betway guide link preserved below separator
+
+### P2: First-Time Edge Rating Tooltip
+- On first tip detail view with edge rating, appends: "ℹ️ New to Edge Ratings? Tap 📖 Guide to learn more."
+- Tracked via `User.edge_tooltip_shown` (Boolean) in DB
+- `db.set_edge_tooltip_shown(user_id)` helper + migration column added
+- Shown once per user, never again
+
+### Test Status (Wave 14A)
+- Tests: 318 passing (11 new), 0 failures
