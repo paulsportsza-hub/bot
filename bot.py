@@ -3993,10 +3993,11 @@ def _format_verified_context(ctx_data: dict) -> str:
 
         record = team.get("record")
         if record:
-            if sport == "soccer":
+            if isinstance(record, dict):
                 parts.append(f"  Record: W{record.get('wins', 0)} D{record.get('draws', 0)} L{record.get('losses', 0)}")
-            elif sport == "rugby":
-                parts.append(f"  Record: W{record.get('wins', 0)} D{record.get('draws', 0)} L{record.get('losses', 0)}")
+            elif isinstance(record, str) and record:
+                # ESPN format: "W-D-L" e.g. "7-10-10"
+                parts.append(f"  Record (W-D-L): {record}")
 
         form = team.get("form")
         if form:
@@ -4269,15 +4270,23 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         from scrapers.match_context_fetcher import get_match_context
 
         sport_key = config.LEAGUE_SPORT.get(target_league, "")
+        log.info("Fetching match context: %s vs %s, league=%s, sport=%s",
+                 home_raw, away_raw, target_league, sport_key)
         _match_ctx = await get_match_context(
             home_team=home_raw.lower().replace(" ", "_"),
             away_team=away_raw.lower().replace(" ", "_"),
             league=target_league or "",
             sport=sport_key,
         )
+        log.info("Match context result: data_available=%s, keys=%s",
+                 _match_ctx.get("data_available"), list(_match_ctx.keys())[:5])
         verified_context = _format_verified_context(_match_ctx)
+        if verified_context:
+            log.info("Verified context injected (%d chars)", len(verified_context))
+        else:
+            log.info("No verified context available")
     except Exception as exc:
-        log.warning("Match context fetch failed: %s", exc)
+        log.warning("Match context fetch failed: %s", exc, exc_info=True)
         _match_ctx = {}
         verified_context = ""
 
