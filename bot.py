@@ -2700,6 +2700,87 @@ def _assign_display_tiers(tips: list[dict]) -> None:
             tip["display_tier"] = EdgeRating.BRONZE
 
 
+def _build_tip_narrative(tip: dict) -> str:
+    """Build a compelling narrative explaining WHY this tip has value."""
+    outcome = tip.get("predicted_outcome", tip.get("outcome", "this team"))
+    best_bk = tip.get("best_bookmaker_display", _display_bookmaker_name(tip.get("best_bookmaker", "")))
+    best_odds = tip.get("best_odds", 0)
+    ev = tip.get("ev_pct", tip.get("ev", 0))
+    tier = tip.get("display_tier", tip.get("edge_rating", "GOLD"))
+    odds_by_bk = tip.get("odds_by_bookmaker", {})
+    consensus_prob = tip.get("consensus_prob", 0)
+
+    # Calculate market average odds for the predicted outcome
+    all_odds = [v for v in odds_by_bk.values() if v and v > 1]
+    avg_odds = sum(all_odds) / len(all_odds) if all_odds else best_odds
+
+    # How much above average is the best price?
+    premium_pct = ((best_odds - avg_odds) / avg_odds * 100) if avg_odds > 0 else 0
+
+    # How many bookmakers offer lower odds?
+    cheaper_count = sum(1 for o in all_odds if o < best_odds)
+
+    parts = []
+
+    # Opening — tier-specific conviction level
+    if tier == "PLATINUM":
+        parts.append("🔥 <b>Strong value pick.</b>")
+    elif tier == "GOLD":
+        parts.append("⭐ <b>Good value found.</b>")
+    elif tier == "SILVER":
+        parts.append("📊 <b>Decent opportunity.</b>")
+    else:
+        parts.append("📋 <b>Worth a look.</b>")
+
+    # Core insight — why the odds are good
+    if premium_pct > 5:
+        parts.append(
+            f"{best_bk} is offering {outcome} at <b>{best_odds:.2f}</b>, "
+            f"well above the market average of {avg_odds:.2f}."
+        )
+    elif premium_pct > 2:
+        parts.append(
+            f"{best_bk} has {outcome} at <b>{best_odds:.2f}</b>, "
+            f"above the {avg_odds:.2f} market average."
+        )
+    else:
+        parts.append(
+            f"Best price on {outcome} is <b>{best_odds:.2f}</b> at {best_bk}."
+        )
+
+    # Probability insight
+    if consensus_prob > 0:
+        prob_pct = consensus_prob * 100
+        parts.append(
+            f"Our model gives this a {prob_pct:.0f}% chance — "
+            f"at these odds, that's a <b>+{ev:.1f}% edge</b>."
+        )
+
+    # Social proof — other bookmakers
+    if cheaper_count >= 3:
+        parts.append(
+            f"{cheaper_count} other bookmakers have shorter odds, "
+            f"suggesting the market is moving this way."
+        )
+    elif cheaper_count >= 1:
+        parts.append(
+            "Other bookmakers are pricing this tighter, "
+            f"making the {best_bk} price stand out."
+        )
+
+    return " ".join(parts)
+
+
+def _format_freshness(minutes_ago: int) -> str:
+    """Smart freshness display — only show when impressive."""
+    if minutes_ago <= 5:
+        return "<i>⚡ Live odds</i>"
+    elif minutes_ago <= 20:
+        return f"<i>Odds updated {minutes_ago} min ago</i>"
+    else:
+        return "<i>Live SA bookmaker odds</i>"
+
+
 def _build_edge_snapshots_from_match(match: dict) -> list[dict]:
     """Convert odds_service match data into edge_rating odds_snapshots format.
 
@@ -3863,19 +3944,18 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             predicted_outcome=tip.get("outcome", ""),
         )
 
-        # Freshness indicator
+        # AI narrative explaining why this tip has value
+        narrative = _build_tip_narrative(tip)
+        text += f"\n\n{narrative}"
+
+        # Smart freshness indicator
         last_updated = odds_result.get("last_updated")
         if last_updated:
             from datetime import datetime, timezone
             try:
                 ts = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
                 mins_ago = int((datetime.now(timezone.utc) - ts).total_seconds() / 60)
-                if mins_ago < 1:
-                    text += "\n\n<i>Odds updated just now</i>"
-                elif mins_ago < 60:
-                    text += f"\n\n<i>Odds updated {mins_ago} min ago</i>"
-                else:
-                    text += f"\n\n<i>Odds updated {mins_ago // 60}h ago</i>"
+                text += f"\n\n{_format_freshness(mins_ago)}"
             except (ValueError, TypeError):
                 pass
     else:

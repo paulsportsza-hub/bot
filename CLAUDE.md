@@ -1055,3 +1055,21 @@ nohup python bot.py > /tmp/bot_latest.log 2>&1 &
 sleep 5 && tail -20 /tmp/bot_latest.log
 ```
 A stale process running old code is invisible to unit tests and has caused multiple missed bugs.
+
+## Wave 12D — AI Tip Narrative + Smart Freshness (26 Feb 2026)
+
+### AI Tip Narrative
+- `_build_tip_narrative(tip)` generates a compelling paragraph explaining WHY a tip has value
+- Tier-specific opening: Platinum = "Strong value pick", Gold = "Good value found", Silver = "Decent opportunity", Bronze = "Worth a look"
+- Explains bookmaker divergence (best price vs market average), model probability, EV percentage
+- Social proof: mentions when multiple bookmakers have shorter odds
+- Inserted in `handle_tip_detail()` after `render_tip_with_odds()` and before freshness indicator
+
+### Smart Freshness Display
+- `_format_freshness(minutes_ago)` replaces raw timestamp logic
+- Under 5 min: "⚡ Live odds" (impressive)
+- 6-20 min: "Odds updated X min ago" (honest)
+- Over 20 min: "Live SA bookmaker odds" (no specific time — avoids looking slow)
+
+### Test Status
+- Tests: 295 passing, 0 failures
