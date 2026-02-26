@@ -337,15 +337,19 @@ class TestMenuHandlers:
         await bot.handle_affiliate(query, "sa")
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        # Multi-bookmaker directory (Wave 15B)
+        assert "SA Bookmakers" in text
         assert "Betway" in text
-        assert "betway.co.za" in text
+        assert "Hollywoodbets" in text
+        assert "GBets" in text
 
     async def test_handle_affiliate_intl(self, test_db):
-        """Intl action now shows the same Betway-exclusive page."""
+        """Intl action now shows the same multi-bookmaker directory."""
         query = _make_query(user_id=40006)
         await bot.handle_affiliate(query, "intl")
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert "SA Bookmakers" in text
         assert "Betway" in text
 
     async def test_handle_settings_home(self, test_db):

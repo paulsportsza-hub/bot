@@ -842,3 +842,136 @@ class TestOddsComparison3Cta:
         assert "supabets" in away_btn.url
 
         del bot._game_tips_cache[event_id]
+
+
+# ── Wave 15B: Sport Filter Inline + Bookmaker Directory Tests ──
+
+
+class TestSportFilterInline:
+    """BUG-029: Sport filter re-renders inline, not new screen."""
+
+    @pytest.mark.asyncio
+    async def test_filtered_view_shows_only_sport(self, test_db):
+        """Filtering to soccer should only show soccer matches."""
+        user_id = 50001
+        bot._schedule_cache[user_id] = [
+            {"id": "s1", "home_team": "Chiefs", "away_team": "Pirates",
+             "commence_time": "2026-03-01T15:00:00Z", "sport_emoji": "⚽",
+             "league_key": "psl"},
+            {"id": "c1", "home_team": "SA", "away_team": "India",
+             "commence_time": "2026-03-01T10:00:00Z", "sport_emoji": "🏏",
+             "league_key": "test_cricket"},
+        ]
+        with patch.object(db, "get_user_sport_prefs", new_callable=AsyncMock,
+                          return_value=[MagicMock(team_name="Chiefs", league="psl"),
+                                        MagicMock(team_name="SA", league="test_cricket")]), \
+             patch.object(bot, "_check_edges_for_games", new_callable=AsyncMock,
+                          return_value={}):
+            text, markup = await bot._render_your_games_all(user_id, sport_filter="soccer")
+
+        assert "Soccer" in text
+        assert "Chiefs" in text
+        assert "India" not in text
+
+        del bot._schedule_cache[user_id]
+
+    @pytest.mark.asyncio
+    async def test_all_button_appears_when_filtered(self, test_db):
+        """When sport filter active, 'All' button should appear."""
+        user_id = 50002
+        bot._schedule_cache[user_id] = [
+            {"id": "s1", "home_team": "Chiefs", "away_team": "Pirates",
+             "commence_time": "2026-03-01T15:00:00Z", "sport_emoji": "⚽",
+             "league_key": "psl"},
+        ]
+        with patch.object(db, "get_user_sport_prefs", new_callable=AsyncMock,
+                          return_value=[MagicMock(team_name="Chiefs", league="psl"),
+                                        MagicMock(team_name="SA", league="test_cricket")]), \
+             patch.object(bot, "_check_edges_for_games", new_callable=AsyncMock,
+                          return_value={}):
+            text, markup = await bot._render_your_games_all(user_id, sport_filter="soccer")
+
+        all_labels = [btn.text for row in markup.inline_keyboard for btn in row]
+        assert "All" in all_labels
+
+        del bot._schedule_cache[user_id]
+
+    @pytest.mark.asyncio
+    async def test_no_filter_no_all_button(self, test_db):
+        """Without filter, no 'All' button should appear."""
+        user_id = 50003
+        bot._schedule_cache[user_id] = [
+            {"id": "s1", "home_team": "Chiefs", "away_team": "Pirates",
+             "commence_time": "2026-03-01T15:00:00Z", "sport_emoji": "⚽",
+             "league_key": "psl"},
+        ]
+        with patch.object(db, "get_user_sport_prefs", new_callable=AsyncMock,
+                          return_value=[MagicMock(team_name="Chiefs", league="psl"),
+                                        MagicMock(team_name="SA", league="test_cricket")]), \
+             patch.object(bot, "_check_edges_for_games", new_callable=AsyncMock,
+                          return_value={}):
+            text, markup = await bot._render_your_games_all(user_id, sport_filter=None)
+
+        all_labels = [btn.text for row in markup.inline_keyboard for btn in row]
+        assert "All" not in all_labels
+
+        del bot._schedule_cache[user_id]
+
+    @pytest.mark.asyncio
+    async def test_empty_filter_shows_inline_message(self, test_db):
+        """If no games match sport filter, show inline empty state."""
+        user_id = 50004
+        bot._schedule_cache[user_id] = [
+            {"id": "s1", "home_team": "Chiefs", "away_team": "Pirates",
+             "commence_time": "2026-03-01T15:00:00Z", "sport_emoji": "⚽",
+             "league_key": "psl"},
+        ]
+        with patch.object(db, "get_user_sport_prefs", new_callable=AsyncMock,
+                          return_value=[MagicMock(team_name="Chiefs", league="psl"),
+                                        MagicMock(team_name="SA", league="test_cricket")]), \
+             patch.object(bot, "_check_edges_for_games", new_callable=AsyncMock,
+                          return_value={}):
+            text, markup = await bot._render_your_games_all(user_id, sport_filter="cricket")
+
+        assert "no cricket" in text.lower()
+
+        del bot._schedule_cache[user_id]
+
+
+class TestMultiBookmakerDirectory:
+    """FIX-001: Bookmaker page should show all 5 SA bookmakers."""
+
+    @pytest.mark.asyncio
+    async def test_shows_all_five_bookmakers(self, test_db):
+        """Bookmaker directory should list all 5 SA bookmakers."""
+        query = MagicMock()
+        query.edit_message_text = AsyncMock()
+        await bot.handle_affiliate(query, "compare")
+        text = query.edit_message_text.call_args[0][0]
+        assert "SA Bookmakers" in text
+        assert "Betway" in text
+        assert "Hollywoodbets" in text
+        assert "Sportingbet" in text
+        assert "SupaBets" in text
+        assert "GBets" in text
+
+    @pytest.mark.asyncio
+    async def test_each_bookmaker_has_signup_button(self, test_db):
+        """Each bookmaker should have a sign-up URL button."""
+        query = MagicMock()
+        query.edit_message_text = AsyncMock()
+        await bot.handle_affiliate(query, "compare")
+        markup = query.edit_message_text.call_args[1]["reply_markup"]
+        url_buttons = [btn for row in markup.inline_keyboard
+                       for btn in row if btn.url]
+        assert len(url_buttons) >= 5
+        labels = " ".join(btn.text for btn in url_buttons)
+        assert "Betway" in labels
+        assert "GBets" in labels
+
+    def test_no_single_bookmaker_hardcoded(self):
+        """SA_BOOKMAKERS_INFO should have all 5 bookmakers."""
+        assert len(bot.SA_BOOKMAKERS_INFO) == 5
+        assert "betway" in bot.SA_BOOKMAKERS_INFO
+        assert "gbets" in bot.SA_BOOKMAKERS_INFO
+        assert "hollywoodbets" in bot.SA_BOOKMAKERS_INFO

@@ -1347,3 +1347,26 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 15A)
 - Tests: 335 passing (11 new), 0 failures
+
+## Wave 15B — Sport Filter + Bookmaker Directory (26 Feb 2026)
+
+**Sport Filter Inline (Wave 15B):** BUG-029 fixed — sport emoji buttons on Your Games now re-render the same message filtered to that sport. No separate screen. Day picker persists. "All" button removes filter. `_render_your_games_all()` now accepts `sport_filter` param. `_build_sport_filter_row()` helper for filter buttons.
+
+**Multi-Bookmaker Directory (Wave 15B):** FIX-001 — bookmaker page now shows all 5 SA bookmakers with taglines and affiliate sign-up buttons. Single-bookmaker "Recommended" page replaced. `SA_BOOKMAKERS_INFO` dict added to bot.py with name/emoji/tagline per bookmaker.
+
+### BUG-029: Sport Filter Inline Re-render
+- `_render_your_games_all(user_id, page, sport_filter)` — sport_filter param filters games by sport_key
+- Callback routing: `yg:sport:{key}` now calls `_render_your_games_all` with sport_filter (not separate handler)
+- Pagination preserves filter: `yg:all:{page}:{sport_filter}`
+- `_build_sport_filter_row()` — active sport bracketed, "All" button when filtered
+- Empty state inline: "No {sport} games scheduled."
+- Old `_render_your_games_sport()` is now dead code (retained for reference)
+
+### FIX-001: Multi-Bookmaker Directory
+- `SA_BOOKMAKERS_INFO` dict: 5 bookmakers with name, emoji, tagline
+- `handle_affiliate()` renders all 5 bookmakers with taglines
+- `kb_bookmakers()` generates one sign-up CTA button per bookmaker via `get_affiliate_url()`
+- Menu button "🎰 Bookmakers" routes to `affiliate:compare`
+
+### Test Status (Wave 15B)
+- Tests: 342 passing (7 new), 0 failures

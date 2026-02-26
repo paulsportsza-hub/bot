@@ -378,19 +378,44 @@ def kb_stats() -> InlineKeyboardMarkup:
     ])
 
 
+SA_BOOKMAKERS_INFO: dict[str, dict] = {
+    "betway": {
+        "name": "Betway",
+        "emoji": "🏦",
+        "tagline": "Fast payouts \u00b7 Wide markets \u00b7 Great live betting",
+    },
+    "hollywoodbets": {
+        "name": "Hollywoodbets",
+        "emoji": "🎬",
+        "tagline": "SA\u2019s favourite \u00b7 USSD betting \u00b7 Top Bet games",
+    },
+    "sportingbet": {
+        "name": "Sportingbet",
+        "emoji": "\u26a1",
+        "tagline": "Competitive odds \u00b7 Quick registration \u00b7 Live streaming",
+    },
+    "supabets": {
+        "name": "SupaBets",
+        "emoji": "🌟",
+        "tagline": "Easy sign-up \u00b7 Popular in SA \u00b7 Good promos",
+    },
+    "gbets": {
+        "name": "GBets",
+        "emoji": "🎰",
+        "tagline": "Sharp odds \u00b7 Goldrush Group \u00b7 Growing fast",
+    },
+}
+
+
 def kb_bookmakers() -> InlineKeyboardMarkup:
-    active = config.get_active_bookmaker()
-    website = active.get("website_url", "")
-    guide = active.get("guide_url", "")
+    """Build multi-bookmaker directory buttons — one sign-up CTA per bookmaker."""
     buttons: list[list[InlineKeyboardButton]] = []
-    if website:
-        buttons.append([InlineKeyboardButton(
-            f"📲 {active['short_name']} — Sign Up", url=website,
-        )])
-    if guide:
-        buttons.append([InlineKeyboardButton(
-            f"📖 How to Bet on {active['short_name']}", url=guide,
-        )])
+    for bk_key, info in SA_BOOKMAKERS_INFO.items():
+        url = get_affiliate_url(bk_key)
+        if url:
+            buttons.append([InlineKeyboardButton(
+                f"{info['emoji']} {info['name']} — Sign Up \u2192", url=url,
+            )])
     buttons.append([
         InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
         InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
@@ -782,17 +807,17 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if action == "noop":
             return
         elif action.startswith("all:"):
-            # yg:all:{page}
-            pg = int(action.split(":")[1]) if ":" in action else 0
-            text, markup = await _render_your_games_all(user_id, page=pg)
+            # yg:all:{page} or yg:all:{page}:{sport_filter}
+            parts = action.split(":")
+            pg = int(parts[1]) if len(parts) > 1 else 0
+            sf = parts[2] if len(parts) > 2 else None
+            text, markup = await _render_your_games_all(user_id, page=pg, sport_filter=sf)
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         elif action.startswith("sport:"):
-            # yg:sport:{key}:{day}:{page}
+            # yg:sport:{key} → inline re-render with filter (Wave 15B)
             parts = action.split(":")
             sk = parts[1] if len(parts) > 1 else ""
-            day_off = int(parts[2]) if len(parts) > 2 else 0
-            pg = int(parts[3]) if len(parts) > 3 else 0
-            text, markup = await _render_your_games_sport(user_id, sk, day_offset=day_off, page=pg)
+            text, markup = await _render_your_games_all(user_id, page=0, sport_filter=sk)
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         elif action.startswith("game:"):
             # yg:game:{event_id} — show AI game breakdown
@@ -2330,9 +2355,12 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
 
 
 async def _render_your_games_all(
-    user_id: int, page: int = 0,
+    user_id: int, page: int = 0, sport_filter: str | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """Default Your Games — all games sorted by edge, sport filter buttons below."""
+    """Your Games — all games (or filtered to one sport) sorted by edge.
+
+    sport_filter: if set, only show matches for that sport_key (inline re-render).
+    """
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
 
@@ -2390,6 +2418,21 @@ async def _render_your_games_all(
         ])
         return text, markup
 
+    # Collect available sport keys (from unfiltered games) for filter buttons
+    all_sport_keys: set[str] = set()
+    for lk in league_keys:
+        sk = config.LEAGUE_SPORT.get(lk)
+        if sk:
+            all_sport_keys.add(sk)
+
+    # Apply sport filter
+    all_games = games  # keep unfiltered ref for sport buttons
+    if sport_filter:
+        games = [
+            g for g in games
+            if config.LEAGUE_SPORT.get(g.get("league_key", "")) == sport_filter
+        ]
+
     # Check edges
     edge_events = await _check_edges_for_games(games)
 
@@ -2400,6 +2443,33 @@ async def _render_your_games_all(
 
     sorted_games = sorted(games, key=sort_key)
 
+    # Build title
+    if sport_filter:
+        sport_def = config.ALL_SPORTS.get(sport_filter)
+        sport_label = sport_def.label if sport_def else sport_filter
+        sport_emoji = sport_def.emoji if sport_def else "🏅"
+        title = f"{sport_emoji} <b>Your Games — {sport_label}</b>"
+    else:
+        title = "⚽ <b>Your Games</b>"
+
+    # Empty state after filter
+    if not sorted_games:
+        if sport_filter:
+            sport_def = config.ALL_SPORTS.get(sport_filter)
+            sn = sport_def.label.lower() if sport_def else sport_filter
+            text = f"{title}\n\nNo {sn} games scheduled."
+        else:
+            text = f"{title}\n\nNo upcoming games."
+        buttons: list[list[InlineKeyboardButton]] = []
+        # Still show sport filter so user can switch
+        if len(all_sport_keys) >= 2:
+            buttons.append(_build_sport_filter_row(all_sport_keys, sport_filter))
+        buttons.append([
+            InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go"),
+            InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
+        ])
+        return text, InlineKeyboardMarkup(buttons)
+
     # Paginate
     per_page = GAMES_PER_PAGE
     total_pages = max(1, (len(sorted_games) + per_page - 1) // per_page)
@@ -2409,7 +2479,7 @@ async def _render_your_games_all(
     edge_count = sum(1 for eid in edge_events if edge_events[eid])
     total = len(sorted_games)
 
-    lines = ["⚽ <b>Your Games</b>"]
+    lines = [title]
     summary = [f"{total} game{'s' if total != 1 else ''}"]
     if edge_count:
         summary.append(f"🔥 {edge_count} with edge")
@@ -2466,33 +2536,20 @@ async def _render_your_games_all(
             callback_data=f"yg:game:{event_id}",
         )])
 
-    # Pagination
+    # Pagination — preserve sport filter in callback
+    pg_suffix = f":{sport_filter}" if sport_filter else ""
     if total_pages > 1:
         nav_row: list[InlineKeyboardButton] = []
         if page > 0:
-            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"yg:all:{page - 1}"))
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"yg:all:{page - 1}{pg_suffix}"))
         nav_row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="yg:noop"))
         if page < total_pages - 1:
-            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"yg:all:{page + 1}"))
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"yg:all:{page + 1}{pg_suffix}"))
         buttons.append(nav_row)
 
     # Sport filter buttons (only if 2+ sports)
-    user_sport_keys = set()
-    for lk in league_keys:
-        sk = config.LEAGUE_SPORT.get(lk)
-        if sk:
-            user_sport_keys.add(sk)
-    if len(user_sport_keys) >= 2:
-        sport_row: list[InlineKeyboardButton] = []
-        for sk in sorted(user_sport_keys):
-            sport_def = config.ALL_SPORTS.get(sk)
-            if not sport_def:
-                continue
-            sport_row.append(InlineKeyboardButton(
-                sport_def.emoji,
-                callback_data=f"yg:sport:{sk}:0:0",
-            ))
-        buttons.append(sport_row[:6])
+    if len(all_sport_keys) >= 2:
+        buttons.append(_build_sport_filter_row(all_sport_keys, sport_filter))
 
     # Bottom nav
     buttons.append([
@@ -2501,6 +2558,22 @@ async def _render_your_games_all(
     ])
 
     return text, InlineKeyboardMarkup(buttons)
+
+
+def _build_sport_filter_row(
+    sport_keys: set[str], active_filter: str | None,
+) -> list[InlineKeyboardButton]:
+    """Build sport filter button row. Active sport is bracketed, 'All' appears when filtered."""
+    row: list[InlineKeyboardButton] = []
+    if active_filter:
+        row.append(InlineKeyboardButton("All", callback_data="yg:all:0"))
+    for sk in sorted(sport_keys):
+        sport_def = config.ALL_SPORTS.get(sk)
+        if not sport_def:
+            continue
+        label = f"[{sport_def.emoji}]" if sk == active_filter else sport_def.emoji
+        row.append(InlineKeyboardButton(label, callback_data=f"yg:sport:{sk}"))
+    return row[:7]
 
 
 async def _render_your_games_sport(
@@ -4763,19 +4836,19 @@ async def handle_stats_menu(query, action: str) -> None:
 
 
 async def handle_affiliate(query, action: str) -> None:
-    """Handle affiliate:* callbacks (bookmaker info)."""
-    active = config.get_active_bookmaker()
-    name = active["short_name"]
-    website = active.get("website_url", "betway.co.za")
-    text = (
-        f"<b>{name} — Our Recommended Bookmaker</b>\n\n"
-        f"✅ Licensed in South Africa\n"
-        f"✅ Fast deposits & withdrawals\n"
-        f"✅ Great odds across all sports\n"
-        f"✅ Easy sign-up with SA ID\n\n"
-        f"🌐 <b>{website}</b>\n\n"
-        f"<i>Always gamble responsibly. 18+ only.</i>"
-    )
+    """Handle affiliate:* callbacks — multi-bookmaker directory."""
+    lines = [
+        "📚 <b>SA Bookmakers</b>\n",
+        "All licensed. All verified. We compare odds across",
+        "all of them so you always get the best price.\n",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+    for info in SA_BOOKMAKERS_INFO.values():
+        lines.append(f"\n{info['emoji']} <b>{info['name']}</b>")
+        lines.append(info["tagline"])
+    lines.append("\n━━━━━━━━━━━━━━━━━━━━")
+    lines.append("\n<i>Always gamble responsibly. 18+ only.</i>")
+    text = "\n".join(lines)
     await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_bookmakers())
 
 
