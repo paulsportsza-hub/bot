@@ -2636,6 +2636,158 @@ HOT_TIPS_SCAN_SPORTS = [
 _hot_tips_cache: dict[str, dict] = {}  # "global" → {"tips": [...], "ts": float}
 HOT_TIPS_CACHE_TTL = 900  # 15 minutes
 
+# Leagues available in our scrapers DB (odds.db)
+DB_LEAGUES = ["psl", "epl", "champions_league"]
+
+
+def _build_edge_snapshots_from_match(match: dict) -> list[dict]:
+    """Convert odds_service match data into edge_rating odds_snapshots format.
+
+    calculate_edge_rating() expects: [{bookmaker, outcome, odds, timestamp}, ...]
+    get_best_odds() returns: {outcomes: {outcome_key: {all_bookmakers: {bk: odds}}}}
+    """
+    snapshots = []
+    outcomes = match.get("outcomes", {})
+    ts = match.get("last_updated", "")
+
+    for outcome_key, outcome_data in outcomes.items():
+        for bk_key, odds_val in outcome_data.get("all_bookmakers", {}).items():
+            snapshots.append({
+                "bookmaker": bk_key,
+                "outcome": outcome_key,
+                "odds": odds_val,
+                "timestamp": ts,
+            })
+
+    return snapshots
+
+
+def _build_model_from_consensus(match: dict) -> dict:
+    """Build a model prediction from cross-bookmaker consensus.
+
+    Without an external sharp line, average implied probabilities across
+    bookmakers to create the reference model. The predicted outcome is
+    the one with the highest consensus probability (the favourite).
+    """
+    outcomes = match.get("outcomes", {})
+    if not outcomes:
+        return {}
+
+    # Calculate average implied probability for each outcome
+    avg_probs: dict[str, float] = {}
+    for outcome_key, outcome_data in outcomes.items():
+        all_bk = outcome_data.get("all_bookmakers", {})
+        probs = [1.0 / o for o in all_bk.values() if o and o > 1.0]
+        if probs:
+            avg_probs[outcome_key] = sum(probs) / len(probs)
+
+    if not avg_probs:
+        return {}
+
+    # The favourite is the outcome with the highest implied probability
+    best_outcome = max(avg_probs, key=avg_probs.get)
+    best_prob = avg_probs[best_outcome]
+
+    # Confidence based on number of bookmakers (5 = 100%)
+    bk_count = match.get("bookmaker_count", 1)
+    confidence = min(bk_count / 5.0, 1.0)
+
+    return {
+        "outcome": best_outcome,
+        "confidence": confidence,
+        "implied_prob": best_prob,
+    }
+
+
+async def _fetch_hot_tips_from_db() -> list[dict]:
+    """Fetch hot tips from Dataminer's odds.db — no external API needed.
+
+    Uses cross-bookmaker consensus as the model, then scores with edge rating.
+    Returns tips in the same dict format as _fetch_hot_tips_all_sports().
+    """
+    import time
+
+    cache_entry = _hot_tips_cache.get("global")
+    if cache_entry and (time.time() - cache_entry["ts"]) < HOT_TIPS_CACHE_TTL:
+        return cache_entry["tips"]
+
+    all_tips: list[dict] = []
+
+    for league in DB_LEAGUES:
+        try:
+            matches = await odds_svc.get_all_matches(market_type="1x2", league=league)
+
+            for match in matches:
+                # Need 2+ bookmakers for meaningful edge calculation
+                if match.get("bookmaker_count", 0) < 2:
+                    continue
+
+                # Build inputs for edge rating
+                snapshots = _build_edge_snapshots_from_match(match)
+                model = _build_model_from_consensus(match)
+                if not model or not model.get("outcome"):
+                    continue
+
+                # Try to get line movement for bonus scoring
+                movement = await odds_svc.detect_line_movement(
+                    match["match_id"], model["outcome"],
+                )
+
+                edge = calculate_edge_rating(snapshots, model, movement)
+                if edge == EdgeRating.HIDDEN:
+                    continue
+
+                # Find best bookmaker for CTA
+                predicted_outcome = model["outcome"]
+                outcome_data = match["outcomes"].get(predicted_outcome, {})
+                odds_by_bk = outcome_data.get("all_bookmakers", {})
+                best_odds = outcome_data.get("best_odds", 0)
+                best_bk_key = outcome_data.get("best_bookmaker", "")
+
+                # Calculate EV: (consensus_prob * best_odds - 1) * 100
+                consensus_prob = model["implied_prob"]
+                ev_pct = round((consensus_prob * best_odds - 1) * 100, 1) if best_odds > 0 else 0
+
+                if ev_pct < 1.0:
+                    continue  # Minimum EV threshold
+
+                # Build a match_id-based event_id for cache lookups
+                event_id = match["match_id"]
+
+                # Map outcome key to human-readable label
+                _outcome_labels = {"home": match.get("home_team", "Home"),
+                                   "away": match.get("away_team", "Away"),
+                                   "draw": "Draw"}
+                outcome_label = _outcome_labels.get(predicted_outcome, predicted_outcome)
+
+                all_tips.append({
+                    "event_id": event_id,
+                    "sport_key": "soccer",
+                    "home_team": match.get("home_team", "?"),
+                    "away_team": match.get("away_team", "?"),
+                    "commence_time": match.get("last_updated", ""),
+                    "outcome": outcome_label,
+                    "odds": best_odds,
+                    "bookmaker": best_bk_key,
+                    "ev": ev_pct,
+                    "prob": round(consensus_prob * 100),
+                    "kelly": 0,  # Not calculated for DB tips
+                    "edge_rating": edge,
+                    "league": league,
+                    "odds_by_bookmaker": odds_by_bk,
+                })
+        except Exception as exc:
+            log.warning("Hot tips DB scan error for %s: %s", league, exc)
+            continue
+
+    # Sort by edge rating tier then EV descending
+    _rating_order = {EdgeRating.PLATINUM: 0, EdgeRating.GOLD: 1, EdgeRating.SILVER: 2, EdgeRating.BRONZE: 3}
+    all_tips.sort(key=lambda t: (_rating_order.get(t.get("edge_rating", ""), 9), -t["ev"]))
+    top_tips = all_tips[:10]
+
+    _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time()}
+    return top_tips
+
 
 def _format_kickoff_display(commence_time: str) -> str:
     """Format commence time as 'Today 19:30' or 'Wed 26 Feb, 15:00'."""
@@ -2753,7 +2905,16 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
         parse_mode=ParseMode.HTML,
     )
 
-    tips = await _fetch_hot_tips_all_sports()
+    # Primary: our own scraped data from odds.db (free, fast, always available)
+    tips = await _fetch_hot_tips_from_db()
+
+    # Fallback: Odds API if odds.db returned nothing
+    if not tips:
+        try:
+            tips = await _fetch_hot_tips_all_sports()
+        except Exception as exc:
+            log.warning("Odds API fallback also failed: %s", exc)
+            tips = []
 
     # Store tips in game_tips_cache so tip detail can find them
     for tip in tips:
@@ -2783,7 +2944,7 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
     # Build single consolidated message with all tips
     lines = [
         f"🔥 <b>Hot Tips — {len(tips)} Value Bet{'s' if len(tips) != 1 else ''}</b>",
-        f"<i>Scanned {len(HOT_TIPS_SCAN_SPORTS)} markets across all sports.</i>",
+        f"<i>Scanned {len(DB_LEAGUES)} leagues across 5 SA bookmakers.</i>",
         "",
     ]
 
@@ -4265,11 +4426,12 @@ async def handle_ob_fav_back(query, sport_key: str) -> None:
 # ── /admin — admin dashboard with API quota ───────────────
 
 async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin-only command showing API quota and bot stats."""
+    """Admin-only command showing API quota, odds.db stats, and bot stats."""
     if update.effective_user.id not in config.ADMIN_IDS:
         return
 
     quota = get_quota()
+    db_stats = await odds_svc.get_db_stats()
     count = await db.get_user_count()
     onboarded = await db.get_onboarded_count()
     tips = await db.get_recent_tips(limit=100)
@@ -4277,10 +4439,29 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     losses = sum(1 for t in tips if t.result == "loss")
     pending = sum(1 for t in tips if t.result is None or t.result == "pending")
 
+    # Format latest scrape time
+    latest = db_stats.get("latest_scrape", "N/A")
+    if latest and latest != "N/A":
+        from datetime import datetime, timezone
+        try:
+            ts = datetime.fromisoformat(latest.replace("Z", "+00:00"))
+            mins_ago = int((datetime.now(timezone.utc) - ts).total_seconds() / 60)
+            latest_display = f"{mins_ago} min ago"
+        except (ValueError, TypeError):
+            latest_display = latest[:19]
+    else:
+        latest_display = "N/A"
+
     text = textwrap.dedent(f"""\
         <b>🔧 Admin Dashboard</b>
 
-        <b>📡 Odds API Quota</b>
+        <b>📦 Odds Database (PRIMARY)</b>
+        📊 Rows: <code>{db_stats['total_rows']:,}</code>
+        ⚽ Matches: <code>{db_stats['match_count']}</code>
+        🏪 Bookmakers: <code>{db_stats['bookmaker_count']}</code>
+        🔄 Last scrape: <code>{latest_display}</code>
+
+        <b>📡 Odds API (fallback)</b>
         Requests used: <code>{quota['requests_used']}</code>
         Requests remaining: <code>{quota['requests_remaining']}</code>
 

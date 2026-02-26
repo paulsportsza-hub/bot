@@ -380,7 +380,8 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     loading_msg = AsyncMock()
     mock_context.bot.send_message = AsyncMock(return_value=loading_msg)
 
-    with patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=mock_tips):
+    with patch("bot._fetch_hot_tips_from_db", new_callable=AsyncMock, return_value=mock_tips), \
+         patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=mock_tips):
         await bot.cmd_picks(mock_update, mock_context)
 
     # Hot Tips sends loading + single consolidated message via bot.send_message
@@ -396,15 +397,17 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
 
 
 async def test_cmd_admin_shows_quota(test_db, mock_update, mock_context):
-    """Admin command should show API quota."""
+    """Admin command should show API quota and odds.db stats."""
     mock_update.effective_user.id = config.ADMIN_IDS[0]
 
-    await bot.cmd_admin(mock_update, mock_context)
+    mock_db_stats = {"total_rows": 1000, "bookmaker_count": 5, "latest_scrape": "N/A", "match_count": 50}
+    with patch("bot.odds_svc.get_db_stats", new_callable=AsyncMock, return_value=mock_db_stats):
+        await bot.cmd_admin(mock_update, mock_context)
 
     call_args = mock_update.message.reply_text.call_args
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
     assert "Admin Dashboard" in text
-    assert "Quota" in text
+    assert "Odds API" in text
     assert "requests" in text.lower()
 
 

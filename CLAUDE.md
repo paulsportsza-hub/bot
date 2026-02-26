@@ -919,6 +919,36 @@ Tips from _fetch_hot_tips_all_sports now stored in _game_tips_cache so tip detai
 - Tests: 295 passing, 0 failures
 - Open bugs: 0 (all 19 resolved)
 
+## Wave 12A — Migrate Hot Tips to odds.db (26 Feb 2026)
+
+### Architecture Change
+- Hot Tips now uses Dataminer's odds.db (38K+ rows, 5 SA bookmakers) as PRIMARY data source
+- External Odds API demoted to fallback only (was at 498/500 monthly requests)
+- Cross-bookmaker consensus model replaces sharp-book probability estimation
+
+### New Functions (bot.py)
+- `_build_edge_snapshots_from_match(match)` — converts odds_service match format to edge_rating snapshot format
+- `_build_model_from_consensus(match)` — averages implied probabilities across all bookmakers as model prediction
+- `_fetch_hot_tips_from_db()` — primary Hot Tips pipeline: queries odds.db → edge rating → filter HIDDEN → sort by tier + EV → top 10
+
+### Hot Tips Flow (updated)
+1. `_do_hot_tips_flow()` calls `_fetch_hot_tips_from_db()` first (primary)
+2. If DB returns no tips, falls back to `_fetch_hot_tips_all_sports()` (Odds API)
+3. Header updated: "Scanned 3 leagues across 5 SA bookmakers"
+
+### Admin Dashboard (updated)
+- `cmd_admin()` now shows odds.db stats prominently (rows, matches, bookmakers, last scrape)
+- Odds API section relabelled "(fallback)" with request quota
+- New function `get_db_stats()` in services/odds_service.py
+
+### DB_LEAGUES constant
+`DB_LEAGUES = ["psl", "epl", "champions_league"]` — leagues queried from odds.db
+
+### Test Status
+- Tests: 295 passing, 0 failures
+- test_cmd_admin_shows_quota updated to mock odds_svc.get_db_stats
+- test_cmd_picks_with_prefs updated to patch _fetch_hot_tips_from_db
+
 ## ⚠️ MANDATORY: Telethon E2E Testing Gate
 
 **NO wave can be marked as "PASS" or "COMPLETE" without Telethon E2E tests against the LIVE running bot.**
