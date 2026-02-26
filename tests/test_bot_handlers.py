@@ -615,3 +615,86 @@ class TestConvictionStripping:
         text = "Back the draw. Low conviction."
         text = re.sub(r"(?:with |— )?(?:High|Medium|Low) conviction:?\.?", "", text)
         assert "conviction" not in text.lower()
+
+
+class TestBug025NarrativeCaseMismatch:
+    """Wave 14D: BUG-025 — Narrative emoji must match actual tier."""
+
+    def test_gold_tier_gets_gold_emoji(self):
+        """A tip with display_tier='gold' should produce 🥇, not 🥉."""
+        tip = {
+            "outcome": "Draw", "odds": 4.60, "ev": 9.0, "bookmaker": "GBets",
+            "display_tier": "gold", "odds_by_bookmaker": {"gbets": 4.60, "betway": 4.30},
+            "prob": 25,
+        }
+        narrative = bot._build_tip_narrative(tip)
+        assert "🥇" in narrative
+        assert "🥉" not in narrative
+
+    def test_diamond_tier_gets_diamond_emoji(self):
+        """A tip with display_tier='diamond' should produce 💎."""
+        tip = {
+            "outcome": "Home Win", "odds": 6.00, "ev": 16.0, "bookmaker": "Hollywoodbets",
+            "display_tier": "diamond", "odds_by_bookmaker": {"hwb": 6.00, "betway": 5.50},
+            "prob": 20,
+        }
+        narrative = bot._build_tip_narrative(tip)
+        assert "💎" in narrative
+
+    def test_silver_tier_gets_silver_emoji(self):
+        """A tip with display_tier='silver' should produce 🥈."""
+        tip = {
+            "outcome": "Away Win", "odds": 2.20, "ev": 5.0, "bookmaker": "Betway",
+            "display_tier": "silver", "odds_by_bookmaker": {"betway": 2.20, "hwb": 2.10},
+            "prob": 40,
+        }
+        narrative = bot._build_tip_narrative(tip)
+        assert "🥈" in narrative
+
+    def test_bronze_tier_gets_bronze_emoji(self):
+        """A tip with display_tier='bronze' should produce 🥉."""
+        tip = {
+            "outcome": "Draw", "odds": 3.10, "ev": 1.5, "bookmaker": "SupaBets",
+            "display_tier": "bronze", "odds_by_bookmaker": {"supabets": 3.10, "betway": 3.00},
+            "prob": 30,
+        }
+        narrative = bot._build_tip_narrative(tip)
+        assert "🥉" in narrative
+
+
+class TestExperiencedSkipsEdgeExplainer:
+    """Wave 14D: Experienced users skip the Edge explainer screen."""
+
+    async def test_experienced_skips_to_risk(self):
+        """Experienced user after favourites should go to risk, not edge_explainer."""
+        bot._onboarding_state.clear()
+        ob = bot._get_ob(30001)
+        ob["experience"] = "experienced"
+        ob["selected_sports"] = ["soccer"]
+        ob["step"] = "favourites"
+        ob["_fav_idx"] = 0
+        ob["_fav_league_queue"] = []  # empty queue = all done
+
+        from unittest.mock import AsyncMock, MagicMock
+        query = MagicMock()
+        query.from_user = MagicMock(id=30001)
+        query.edit_message_text = AsyncMock()
+        await bot._show_next_team_prompt(query, ob)
+        assert ob["step"] == "risk"
+
+    async def test_casual_sees_edge_explainer(self):
+        """Casual user after favourites should see edge_explainer."""
+        bot._onboarding_state.clear()
+        ob = bot._get_ob(30002)
+        ob["experience"] = "casual"
+        ob["selected_sports"] = ["soccer"]
+        ob["step"] = "favourites"
+        ob["_fav_idx"] = 0
+        ob["_fav_league_queue"] = []
+
+        from unittest.mock import AsyncMock, MagicMock
+        query = MagicMock()
+        query.from_user = MagicMock(id=30002)
+        query.edit_message_text = AsyncMock()
+        await bot._show_next_team_prompt(query, ob)
+        assert ob["step"] == "edge_explainer"

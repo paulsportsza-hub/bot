@@ -1288,3 +1288,39 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 14A)
 - Tests: 318 passing (11 new), 0 failures
+
+## Wave 14D — Edge System Cleanup (26 Feb 2026)
+
+**Edge Cleanup (Wave 14D):** Fixed BUG-025 narrative case mismatch (all tiers showed 🥉 because comparisons used UPPERCASE but tier values are lowercase). Added edge badge to morning teaser. Experienced users now skip edge explainer in onboarding. Added ↩️ Back button to edge explainer. Softened guide from exact EV% thresholds to descriptive language. Tooltip now triggers on Gold/Diamond only.
+
+### P2-1: BUG-025 — Narrative Case Mismatch Fix
+- `_build_tip_narrative()` replaced UPPERCASE if/elif chain with `EDGE_EMOJIS.get(tier)` dict lookup
+- Dict keys are lowercase, matching `EdgeRating` values — all tiers now get correct emoji
+- Fallback: `EDGE_EMOJIS.get(tier.lower(), "🥉")` for safety
+
+### P2-2: Morning Teaser Edge Badge
+- `_morning_teaser_job()` calls `render_edge_badge()` on top pick's tier
+- Badge appended after team names: `"Top pick: ⚽ Home vs Away 🥇 GOLD EDGE"`
+
+### P2-3: Skip Edge Explainer for Experienced Users
+- `ob.get("experience") == "experienced"` → skip to risk step directly
+- Applied in: `_show_next_team_prompt()`, `favourites_done` callback, `back_risk` callback
+- Casual/beginner users still see the edge explainer
+
+### P2-4: Back Button on Edge Explainer
+- Added `↩️ Back` button with `ob_nav:back_edge` callback
+- Returns to last favourites prompt step
+
+### P3-1: Soften Guide EV Thresholds
+- Replaced exact EV% thresholds with descriptive language:
+  - Diamond: "Very high expected value" (was "EV ≥15%")
+  - Gold: "High expected value" (was "EV ≥8%")
+  - Silver: "Moderate expected value" (was "EV ≥4%")
+  - Bronze: "Positive expected value" (was "EV ≥1%")
+
+### P3-2: Tooltip Gold/Diamond Only
+- Tooltip now only triggers for `edge in ("diamond", "gold")`
+- Silver/Bronze tips no longer show the tooltip
+
+### Test Status (Wave 14D)
+- Tests: 324 passing (6 new), 0 failures

@@ -1110,10 +1110,39 @@ async def handle_ob_nav(query, action: str) -> None:
             reply_markup=kb_onboarding_risk(),
         )
 
+    elif action == "back_edge":
+        # Back from edge explainer → last favourites step
+        ob["step"] = "favourites"
+        queue = ob.get("_fav_league_queue", [])
+        if queue:
+            ob["_fav_idx"] = max(0, len(queue) - 1)
+            await _show_next_team_prompt(query, ob)
+        else:
+            ob["step"] = "sports"
+            text = "<b>Step 2/9: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+            await query.edit_message_text(
+                text, parse_mode=ParseMode.HTML,
+                reply_markup=kb_onboarding_sports(ob["selected_sports"]),
+            )
+
     elif action == "back_risk":
-        # Back from risk → edge explainer
-        ob["step"] = "edge_explainer"
-        await _show_edge_explainer(query, ob)
+        # Back from risk → edge explainer (or favourites for experienced)
+        if ob.get("experience") == "experienced":
+            ob["step"] = "favourites"
+            queue = ob.get("_fav_league_queue", [])
+            if queue:
+                ob["_fav_idx"] = max(0, len(queue) - 1)
+                await _show_next_team_prompt(query, ob)
+            else:
+                ob["step"] = "sports"
+                text = "<b>Step 2/9: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+                await query.edit_message_text(
+                    text, parse_mode=ParseMode.HTML,
+                    reply_markup=kb_onboarding_sports(ob["selected_sports"]),
+                )
+        else:
+            ob["step"] = "edge_explainer"
+            await _show_edge_explainer(query, ob)
 
     elif action == "back_bankroll":
         # Back from bankroll → risk
@@ -1141,9 +1170,17 @@ async def handle_ob_nav(query, action: str) -> None:
         await _advance_league_step(query, ob)
 
     elif action == "favourites_done":
-        # Move to edge explainer
-        ob["step"] = "edge_explainer"
-        await _show_edge_explainer(query, ob)
+        # Experienced users skip edge explainer
+        if ob.get("experience") == "experienced":
+            ob["step"] = "risk"
+            text = "<b>Step 6/9: Risk profile</b>\n\nHow aggressive should your tips be?"
+            await query.edit_message_text(
+                text, parse_mode=ParseMode.HTML,
+                reply_markup=kb_onboarding_risk(),
+            )
+        else:
+            ob["step"] = "edge_explainer"
+            await _show_edge_explainer(query, ob)
 
     elif action == "notify_done":
         ob["step"] = "summary"
@@ -1238,11 +1275,19 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
     idx = ob.get("_fav_idx", 0)
 
     if idx >= len(queue):
-        # All leagues done — show Edge explainer before risk
-        ob["step"] = "edge_explainer"
+        # All leagues done — experienced users skip edge explainer
         ob["_team_input_sport"] = None
         ob["_team_input_league"] = None
-        await _show_edge_explainer(query, ob)
+        if ob.get("experience") == "experienced":
+            ob["step"] = "risk"
+            text = "<b>Step 6/9: Risk profile</b>\n\nHow aggressive should your tips be?"
+            await query.edit_message_text(
+                text, parse_mode=ParseMode.HTML,
+                reply_markup=kb_onboarding_risk(),
+            )
+        else:
+            ob["step"] = "edge_explainer"
+            await _show_edge_explainer(query, ob)
         return
 
     sport_key, league_key = queue[idx]
@@ -1451,6 +1496,7 @@ async def _show_edge_explainer(query, ob: dict) -> None:
     )
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("Got it ✅", callback_data="ob_nav:edge_done")],
+        [InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_edge")],
     ])
     await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
@@ -2188,16 +2234,16 @@ async def _show_betway_guide(update: Update) -> None:
         "Our AI compares odds from 5+ SA bookmakers and "
         "calculates the expected value (EV) of every bet. "
         "The Edge Rating tells you how strong the value is:\n\n"
-        "💎 <b>Diamond Edge</b> (EV ≥15%)\n"
+        "💎 <b>Diamond Edge</b> — Very high expected value\n"
         "   Exceptional. The bookmakers have seriously\n"
         "   mispriced this. Rare — you might see 1-2 a week.\n\n"
-        "🥇 <b>Gold Edge</b> (EV ≥8%)\n"
+        "🥇 <b>Gold Edge</b> — High expected value\n"
         "   Strong value. Our AI found a meaningful gap\n"
         "   between the odds offered and fair probability.\n\n"
-        "🥈 <b>Silver Edge</b> (EV ≥4%)\n"
+        "🥈 <b>Silver Edge</b> — Moderate expected value\n"
         "   Solid. Good odds available at one or more\n"
         "   SA bookmakers.\n\n"
-        "🥉 <b>Bronze Edge</b> (EV ≥1%)\n"
+        "🥉 <b>Bronze Edge</b> — Positive expected value\n"
         "   Marginal. A slight positive edge exists.\n"
         "   Proceed with smaller stakes.\n\n"
         "💡 <i>Tip: Focus on Gold and Diamond tips for "
@@ -2789,15 +2835,9 @@ def _build_tip_narrative(tip: dict) -> str:
 
     parts = []
 
-    # Opening — unified "The Edge:" brand with tier-specific emoji
-    if tier == "DIAMOND":
-        parts.append("💎 <b>The Edge:</b>")
-    elif tier == "GOLD":
-        parts.append("🥇 <b>The Edge:</b>")
-    elif tier == "SILVER":
-        parts.append("🥈 <b>The Edge:</b>")
-    else:
-        parts.append("🥉 <b>The Edge:</b>")
+    # Opening — unified "The Edge:" brand with tier-specific emoji (use dict for case safety)
+    edge_emoji = EDGE_EMOJIS.get(tier, EDGE_EMOJIS.get(tier.lower() if isinstance(tier, str) else "", "🥉"))
+    parts.append(f"{edge_emoji} <b>The Edge:</b>")
 
     # Core insight — why the odds are good
     if premium_pct > 5:
@@ -4196,11 +4236,11 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     buttons.append([InlineKeyboardButton("🔥 Back to Hot Tips", callback_data="hot:back")])
     buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
-    # First-time Edge Rating tooltip (shown once per user)
+    # First-time Edge Rating tooltip (shown once, only on Gold/Diamond)
     db_user = await db.get_user(user_id)
     if db_user and not db_user.edge_tooltip_shown:
-        edge = tip.get("display_tier", tip.get("edge_rating", ""))
-        if edge:
+        edge = tip.get("display_tier", tip.get("edge_rating", "")).lower()
+        if edge in ("diamond", "gold"):
             text += "\n\nℹ️ <i>New to Edge Ratings? Tap 📖 Guide to learn more.</i>"
             await db.set_edge_tooltip_shown(user_id)
 
@@ -4954,10 +4994,14 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 sport_emoji = _get_sport_emoji_for_api_key(top.get("sport_key", ""))
                 kickoff = _format_kickoff_display(top["commence_time"])
                 thf, taf = _get_flag_prefixes(top.get("home_team", ""), top.get("away_team", ""))
+                # Edge badge for top pick
+                top_tier = top.get("display_tier", top.get("edge_rating", ""))
+                top_badge = render_edge_badge(top_tier)
+                badge_suffix = f" {top_badge}" if top_badge else ""
                 teaser = (
                     f"☀️ <b>Good morning!</b>\n\n"
                     f"🔥 <b>{len(tips)} value bet{'s' if len(tips) != 1 else ''}</b> found today.\n\n"
-                    f"Top pick: {sport_emoji} <b>{thf}{h(top['home_team'])} vs {taf}{h(top['away_team'])}</b>\n"
+                    f"Top pick: {sport_emoji} <b>{thf}{h(top['home_team'])} vs {taf}{h(top['away_team'])}</b>{badge_suffix}\n"
                     f"💰 {top['outcome']} @ {top['odds']:.2f} · EV +{top['ev']}%\n"
                     f"⏰ {kickoff}\n\n"
                     f"<i>Tap below to see all tips 👇</i>"
