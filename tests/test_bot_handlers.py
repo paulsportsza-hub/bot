@@ -975,3 +975,148 @@ class TestMultiBookmakerDirectory:
         assert "betway" in bot.SA_BOOKMAKERS_INFO
         assert "gbets" in bot.SA_BOOKMAKERS_INFO
         assert "hollywoodbets" in bot.SA_BOOKMAKERS_INFO
+
+
+# ── Wave 16A: Broadcast display tests ──
+
+class TestBroadcastDisplay:
+    """Test broadcast info helper and integration."""
+
+    @patch("bot._get_broadcast_line")
+    def test_get_broadcast_line_returns_display(self, mock_bc):
+        """_get_broadcast_line should return display string."""
+        mock_bc.return_value = "\U0001f4fa SS EPL (DStv 203)"
+        result = mock_bc(home_team="Arsenal", away_team="Chelsea",
+                         league_key="epl", match_date="2026-03-01")
+        assert "\U0001f4fa" in result
+        assert "DStv" in result
+
+    @patch("bot._get_broadcast_line")
+    def test_broadcast_empty_on_failure(self, mock_bc):
+        """_get_broadcast_line should return empty on failure."""
+        mock_bc.return_value = ""
+        result = mock_bc(home_team="Unknown FC", away_team="Unknown SC",
+                         league_key="unknown", match_date="")
+        assert result == ""
+
+
+# ── Wave 16B: Verified context + zero hallucination tests ──
+
+class TestVerifiedContext:
+    """Test verified context formatting and injection."""
+
+    def test_format_verified_context_with_data(self):
+        """_format_verified_context should produce structured text."""
+        ctx = {
+            "data_available": True,
+            "sport": "soccer",
+            "league": "PSL",
+            "data_source": "ESPN",
+            "home_team": {
+                "name": "Kaizer Chiefs",
+                "league_position": 5,
+                "points": 28,
+                "games_played": 18,
+                "form": "WWLDW",
+                "record": {"wins": 8, "draws": 4, "losses": 6},
+                "goals_per_game": 1.2,
+                "conceded_per_game": 0.8,
+                "goal_difference": 7,
+            },
+            "away_team": {
+                "name": "Orlando Pirates",
+                "league_position": 2,
+                "points": 38,
+                "games_played": 18,
+                "form": "WWWDW",
+                "record": {"wins": 12, "draws": 2, "losses": 4},
+                "goals_per_game": 1.6,
+                "conceded_per_game": 0.5,
+                "goal_difference": 20,
+            },
+            "head_to_head": [
+                {"date": "2025-11-15", "home": "Chiefs", "away": "Pirates", "score": "1-2"},
+            ],
+        }
+        result = bot._format_verified_context(ctx)
+        assert "VERIFIED DATA" in result
+        assert "Kaizer Chiefs" in result
+        assert "Orlando Pirates" in result
+        assert "League position: 5" in result
+        assert "League position: 2" in result
+        assert "WWLDW" in result
+        assert "HEAD-TO-HEAD" in result
+        assert "1-2" in result
+
+    def test_format_verified_context_unavailable(self):
+        """_format_verified_context returns empty when data unavailable."""
+        ctx = {"data_available": False, "error": "Unknown league"}
+        result = bot._format_verified_context(ctx)
+        assert result == ""
+
+    def test_format_verified_context_none(self):
+        """_format_verified_context handles None gracefully."""
+        assert bot._format_verified_context(None) == ""
+        assert bot._format_verified_context({}) == ""
+
+
+class TestSportValidation:
+    """Test sport-specific term validation."""
+
+    def test_strips_soccer_terms_from_rugby(self):
+        """validate_sport_context should strip soccer terms from rugby."""
+        text = "Pirates have kept a clean sheet in 3 games. They dominate the scrum."
+        result = bot.validate_sport_context(text, "rugby")
+        assert "clean sheet" not in result
+        assert "scrum" in result  # rugby term should stay
+
+    def test_strips_rugby_terms_from_soccer(self):
+        """validate_sport_context should strip rugby terms from soccer."""
+        text = "Good try line defence. Strong attacking play."
+        result = bot.validate_sport_context(text, "soccer")
+        assert "try line" not in result
+
+    def test_no_change_for_correct_sport(self):
+        """validate_sport_context shouldn't strip correct terms."""
+        text = "Chiefs kept a clean sheet at home."
+        result = bot.validate_sport_context(text, "soccer")
+        assert "clean sheet" in result
+
+    def test_empty_input(self):
+        """validate_sport_context handles empty/None input."""
+        assert bot.validate_sport_context("", "soccer") == ""
+        assert bot.validate_sport_context("test", "") == "test"
+
+
+class TestFactChecker:
+    """Test post-generation fact checker."""
+
+    def test_strips_wrong_position(self):
+        """fact_check_output strips fabricated league positions."""
+        narrative = "Kaizer Chiefs sit 3rd in the table, looking strong."
+        ctx = {
+            "data_available": True,
+            "home_team": {"name": "Kaizer Chiefs", "league_position": 5},
+            "away_team": {"name": "Orlando Pirates", "league_position": 2},
+        }
+        result = bot.fact_check_output(narrative, ctx)
+        assert "sit 3rd" not in result
+
+    def test_keeps_correct_position(self):
+        """fact_check_output keeps correct positions."""
+        narrative = "Kaizer Chiefs sit 5th in the table."
+        ctx = {
+            "data_available": True,
+            "home_team": {"name": "Kaizer Chiefs", "league_position": 5},
+            "away_team": {"name": "Orlando Pirates", "league_position": 2},
+        }
+        result = bot.fact_check_output(narrative, ctx)
+        assert "sit 5th" in result
+
+    def test_no_context_passthrough(self):
+        """fact_check_output passes through when no verified context."""
+        narrative = "Strong game expected."
+        result = bot.fact_check_output(narrative, {})
+        assert result == narrative
+        result2 = bot.fact_check_output(narrative, None)
+        assert result2 == narrative

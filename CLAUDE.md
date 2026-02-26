@@ -1370,3 +1370,61 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 15B)
 - Tests: 342 passing (7 new), 0 failures
+
+## Wave 16A — Broadcast Display on Event Cards (26 Feb 2026)
+
+**Broadcast Display (Wave 16A):** All three main event screens now show DStv broadcast info. `_get_broadcast_line()` helper wraps the Dataminer's `get_broadcast_info()` (sync function from scrapers/broadcast_scraper.py). Pre-formatted display like "📺 SS EPL (DStv 203)" with free-to-air option appended when available.
+
+### `_get_broadcast_line()` Helper
+- Wraps `scrapers.broadcast_scraper.get_broadcast_info()` (sync, no async needed)
+- Parameters: home_team, away_team, league_key, match_date
+- Returns pre-formatted `display` string or empty string on failure
+- 3-tier lookup: team match → league fallback → `LEAGUE_DEFAULT_CHANNELS` static default
+- DB: `/home/paulsportsza/scrapers/odds.db` table `broadcast_schedule`
+
+### Screens Updated
+1. **Hot Tips** — broadcast line appended below league/kickoff line: `     📺 SS EPL (DStv 203)`
+2. **Your Games** — broadcast line below each match: `     📺 SS PSL (DStv 202)`
+3. **Game Breakdown** — broadcast line in header between kickoff and AI narrative
+
+### Hot Tips `league_key` Field
+- Hot tips from DB now include `league_key` (raw key like "psl") alongside display `league` ("PSL")
+- Required for broadcast lookup which takes league_key not display name
+
+## Wave 16B — Zero Hallucination Prompt System (26 Feb 2026)
+
+**Verified Context (Wave 16B):** AI game breakdown now receives verified ESPN/Jolpica data as a VERIFIED_DATA section in the Claude prompt. Claude is instructed to use ONLY these facts for standings, form, H2H — never invent stats. Post-generation `validate_sport_context()` strips wrong-sport terminology. `fact_check_output()` removes fabricated league positions that contradict verified data.
+
+### `_format_verified_context(ctx_data)`
+- Converts `get_match_context()` dict into structured text block for Claude prompt
+- Includes: league positions, points, W/D/L record, form (last 5), goals/game, head-to-head
+- Returns empty string if `data_available: False`
+- Data sources: ESPN (soccer/rugby), Jolpica (F1)
+
+### `validate_sport_context(narrative, sport)`
+- Post-processor that strips sport-inappropriate terms
+- Soccer terms banned in rugby: "clean sheet", "penalty kick", "corner", "offside trap"
+- Rugby terms banned in soccer: "try line", "lineout", "scrum", "ruck", "maul"
+- Removes entire sentences containing wrong-sport terminology
+
+### `fact_check_output(narrative, ctx_data)`
+- Checks AI claims about league positions against verified data
+- Pattern matching: "sit 3rd", "currently 5th", "ranked 2nd" etc.
+- If claimed position contradicts verified position for named team, line is stripped
+- No-op when no verified context available
+
+### GAME_ANALYSIS_PROMPT Update
+- Added VERIFIED DATA RULES section between Verdict and FORMATTING RULES
+- Claude instructed to use ONLY verified data for standings/form/H2H
+- If no VERIFIED DATA provided, keep analysis general — say "form data unavailable"
+- May mention team reputation but must NOT cite specific stats without verified source
+
+### `_generate_game_tips()` Changes
+- Fetches verified context via `get_match_context()` (async) before Claude call
+- Normalises team names to underscore format for ESPN lookup
+- Injects VERIFIED_DATA block into user message when available
+- Post-processing pipeline: `sanitize_ai_response()` → `validate_sport_context()` → `fact_check_output()`
+- Graceful degradation: if context fetch fails, proceeds with odds-only analysis
+
+### Test Status (Wave 16A+16B)
+- Tests: 354 passing (12 new), 0 failures

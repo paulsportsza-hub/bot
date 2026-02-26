@@ -2517,6 +2517,16 @@ async def _render_your_games_all(
         edge_marker = " 🔥" if edge_events.get(event_id) else ""
         lines.append(f"<b>[{idx}]</b> {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
 
+        # Broadcast info (compact line under match)
+        _bc_date = event.get("commence_time", "")[:10] if event.get("commence_time") else ""
+        _bc_line = _get_broadcast_line(
+            home_team=home_raw, away_team=away_raw,
+            league_key=event.get("league_key", ""),
+            match_date=_bc_date,
+        )
+        if _bc_line:
+            lines.append(f"     {_bc_line}")
+
     text = "\n".join(lines)
 
     # Build buttons
@@ -2837,6 +2847,33 @@ def _display_bookmaker_name(key: str) -> str:
     return _BK_DISPLAY.get(key, key.title())
 
 
+def _get_broadcast_line(
+    home_team: str = "",
+    away_team: str = "",
+    league_key: str = "",
+    match_date: str = "",
+) -> str:
+    """Return broadcast display string from DStv schedule data.
+
+    Calls the synchronous get_broadcast_info() from the scrapers module.
+    Returns pre-formatted display like '📺 SS EPL (DStv 203)' or empty string.
+    """
+    try:
+        import sys
+        if "/home/paulsportsza" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza")
+        from scrapers.broadcast_scraper import get_broadcast_info
+        info = get_broadcast_info(
+            home_team=home_team,
+            away_team=away_team,
+            league=league_key,
+            match_date=match_date,
+        )
+        return info.get("display", "") or ""
+    except Exception:
+        return ""
+
+
 def _get_flag_prefixes(home: str, away: str) -> tuple[str, str]:
     """Return (home_flag, away_flag) with both-or-nothing rule.
 
@@ -3103,6 +3140,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                     "edge_rating": edge,
                     "edge_score": edge_score,
                     "league": _LEAGUE_DISPLAY.get(league, league.upper()),
+                    "league_key": league,
                     "odds_by_bookmaker": odds_by_bk,
                 })
         except Exception as exc:
@@ -3272,6 +3310,15 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
         time_line = f"     🏆 {league_display}"
         if kickoff and kickoff != "TBC":
             time_line += f" · ⏰ {kickoff}"
+
+        # Broadcast info (compact: appended to time_line)
+        broadcast = _get_broadcast_line(
+            home_team=home_raw, away_team=away_raw,
+            league_key=tip.get("league_key", ""),
+            match_date=tip.get("commence_time", "")[:10],
+        )
+        if broadcast:
+            time_line += f"\n     {broadcast}"
 
         bk_part = f" ({bk_name})" if bk_name else ""
         lines.append(
@@ -3832,6 +3879,16 @@ GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
     One bold sentence: your top pick. Do NOT include conviction levels (High/Medium/Low).
     The Edge Rating badge handles confidence display — never mention conviction.
 
+    VERIFIED DATA RULES (critical):
+    - If the user message contains a VERIFIED DATA section, use ONLY those facts for
+      standings, form, league positions, head-to-head records, and goal/point stats.
+    - Do NOT invent league positions, win/loss records, or form runs.
+    - Do NOT fabricate head-to-head results or scores.
+    - If no VERIFIED DATA is provided, keep analysis general — focus on odds value
+      and market dynamics. Say "form data unavailable" rather than guessing.
+    - You may mention general team reputation and playing style, but do NOT cite
+      specific statistics unless they appear in the VERIFIED DATA section.
+
     FORMATTING RULES (strict):
     - Do NOT output a match title line. The title is rendered separately.
     - Do NOT use markdown headers (#, ##, ###). Use section emojis directly.
@@ -3903,6 +3960,152 @@ def sanitize_ai_response(raw_text: str) -> str:
     text = re.sub(r'\s*\((?:High|Medium|Low)\s+conviction\)\.?', '', text, flags=re.IGNORECASE)
 
     return text
+
+
+def _format_verified_context(ctx_data: dict) -> str:
+    """Format verified ESPN/Jolpica context into text for Claude prompt injection.
+
+    Returns a VERIFIED_DATA block that Claude must use exclusively for facts.
+    Returns empty string if data_available is False.
+    """
+    if not ctx_data or not ctx_data.get("data_available"):
+        return ""
+
+    sport = ctx_data.get("sport", "")
+    parts: list[str] = []
+    parts.append("VERIFIED DATA (use ONLY these facts — do not invent stats):")
+    parts.append(f"Source: {ctx_data.get('data_source', 'ESPN')} API")
+    parts.append(f"League: {ctx_data.get('league', '')}")
+
+    for side in ("home_team", "away_team"):
+        team = ctx_data.get(side, {})
+        name = team.get("name", "?")
+        label = "HOME" if side == "home_team" else "AWAY"
+        parts.append(f"\n{label}: {name}")
+
+        pos = team.get("league_position")
+        pts = team.get("points")
+        gp = team.get("games_played")
+        if pos is not None:
+            parts.append(f"  League position: {pos}")
+        if pts is not None and gp is not None:
+            parts.append(f"  Points: {pts} in {gp} games")
+
+        record = team.get("record")
+        if record:
+            if sport == "soccer":
+                parts.append(f"  Record: W{record.get('wins', 0)} D{record.get('draws', 0)} L{record.get('losses', 0)}")
+            elif sport == "rugby":
+                parts.append(f"  Record: W{record.get('wins', 0)} D{record.get('draws', 0)} L{record.get('losses', 0)}")
+
+        form = team.get("form")
+        if form:
+            parts.append(f"  Form (last 5): {form}")
+
+        gpg = team.get("goals_per_game")
+        cpg = team.get("conceded_per_game")
+        if gpg is not None:
+            scored_label = "Goals" if sport == "soccer" else "Points"
+            parts.append(f"  {scored_label}/game: {gpg:.1f} scored, {cpg:.1f} conceded")
+
+        gd = team.get("goal_difference")
+        if gd is not None:
+            diff_label = "Goal difference" if sport == "soccer" else "Points difference"
+            parts.append(f"  {diff_label}: {gd:+d}")
+
+    # H2H
+    h2h = ctx_data.get("head_to_head", [])
+    if h2h:
+        parts.append("\nHEAD-TO-HEAD (recent meetings):")
+        for game in h2h[:5]:
+            parts.append(f"  {game.get('date', '?')}: {game.get('home', '?')} {game.get('score', '?')} {game.get('away', '?')}")
+
+    # F1 specific
+    if sport == "f1":
+        standings = ctx_data.get("driver_standings", [])
+        if standings:
+            parts.append("\nDRIVER STANDINGS:")
+            for d in standings[:10]:
+                parts.append(f"  {d.get('position', '?')}. {d.get('driver', '?')} — {d.get('points', 0)} pts ({d.get('constructor', '')})")
+
+    return "\n".join(parts)
+
+
+def validate_sport_context(narrative: str, sport: str) -> str:
+    """Strip sport-inappropriate language from AI output.
+
+    Soccer terms in rugby analysis (or vice versa) indicate hallucination.
+    """
+    if not narrative or not sport:
+        return narrative
+
+    # Terms that don't belong in each sport
+    wrong_terms: dict[str, list[str]] = {
+        "soccer": ["try line", "lineout", "scrum", "ruck", "maul", "conversion kick",
+                    "drop goal", "sin bin", "yellow card penalty"],
+        "rugby": ["clean sheet", "penalty kick", "corner", "offside trap",
+                   "hat-trick", "golden boot", "VAR"],
+        "cricket": ["clean sheet", "try line", "penalty kick", "offside"],
+        "f1": ["clean sheet", "try line", "penalty kick", "hat-trick"],
+    }
+
+    banned = wrong_terms.get(sport, [])
+    for term in banned:
+        # Case-insensitive removal of sentences containing wrong-sport terms
+        narrative = re.sub(
+            rf'[^.]*\b{re.escape(term)}\b[^.]*\.?\s*',
+            '', narrative, flags=re.IGNORECASE,
+        )
+
+    return narrative.strip()
+
+
+def fact_check_output(narrative: str, ctx_data: dict) -> str:
+    """Post-generation fact checker: strip lines with fabricated league positions.
+
+    If verified context has league positions, check that AI didn't invent
+    different positions. Flag and strip contradicting claims.
+    """
+    if not narrative or not ctx_data or not ctx_data.get("data_available"):
+        return narrative
+
+    # Extract verified positions
+    verified_positions: dict[str, int] = {}
+    for side in ("home_team", "away_team"):
+        team = ctx_data.get(side, {})
+        name = team.get("name", "")
+        pos = team.get("league_position")
+        if name and pos is not None:
+            verified_positions[name.lower()] = pos
+
+    if not verified_positions:
+        return narrative
+
+    # Look for position claims like "sit 3rd" or "in 5th place" or "currently 2nd"
+    import re as _re
+    position_pattern = _re.compile(
+        r'(?:sit|sitting|in|currently|placed|ranked)\s+(\d+)(?:st|nd|rd|th)',
+        _re.IGNORECASE,
+    )
+
+    lines = narrative.split('\n')
+    cleaned: list[str] = []
+    for line in lines:
+        match = position_pattern.search(line)
+        if match:
+            claimed_pos = int(match.group(1))
+            # Check if any verified team is in this line with wrong position
+            line_lower = line.lower()
+            is_wrong = False
+            for team_name, real_pos in verified_positions.items():
+                if team_name in line_lower and claimed_pos != real_pos:
+                    is_wrong = True
+                    break
+            if is_wrong:
+                continue  # Strip this line — it has a fabricated position
+        cleaned.append(line)
+
+    return '\n'.join(cleaned)
 
 
 async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
@@ -4056,6 +4259,35 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             "Provide general analysis based on what you know about these teams."
         )
 
+    # ── Fetch verified match context from ESPN/Jolpica ──
+    verified_context = ""
+    _match_ctx: dict = {}
+    try:
+        import sys as _sys
+        if "/home/paulsportsza" not in _sys.path:
+            _sys.path.insert(0, "/home/paulsportsza")
+        from scrapers.match_context_fetcher import get_match_context
+
+        sport_key = config.LEAGUE_SPORT.get(target_league, "")
+        _match_ctx = await get_match_context(
+            home_team=home_raw.lower().replace(" ", "_"),
+            away_team=away_raw.lower().replace(" ", "_"),
+            league=target_league or "",
+            sport=sport_key,
+        )
+        verified_context = _format_verified_context(_match_ctx)
+    except Exception as exc:
+        log.warning("Match context fetch failed: %s", exc)
+        _match_ctx = {}
+        verified_context = ""
+
+    # Build full user message for Claude
+    user_msg_parts = [f"Match: {home} vs {away}", f"Kickoff: {kickoff}"]
+    if verified_context:
+        user_msg_parts.append(f"\n{verified_context}")
+    user_msg_parts.append(f"\nOdds:\n{odds_context}")
+    user_message = "\n".join(user_msg_parts)
+
     # Get AI narrative — always call regardless of odds availability
     narrative = ""
     try:
@@ -4065,7 +4297,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             system=GAME_ANALYSIS_PROMPT,
             messages=[{
                 "role": "user",
-                "content": f"Match: {home} vs {away}\nKickoff: {kickoff}\n\nOdds:\n{odds_context}",
+                "content": user_message,
             }],
         )
         narrative = resp.content[0].text
@@ -4073,9 +4305,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         log.error("Claude game analysis error: %s", exc)
         narrative = ""
 
-    # ── Post-process AI output (sanitize markdown, spacing, conviction) ──
+    # ── Post-process AI output ──
     if narrative:
         narrative = sanitize_ai_response(narrative)
+        # Sport-specific validation: strip wrong-sport terminology
+        sport_key = config.LEAGUE_SPORT.get(target_league, "")
+        narrative = validate_sport_context(narrative, sport_key)
+        # Fact-check against verified data
+        narrative = fact_check_output(narrative, _match_ctx)
 
     # ── Inject Edge Rating badge into Verdict header ──
     if narrative and tips:
@@ -4100,11 +4337,22 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
                     count=1,
                 )
 
+    # Broadcast info for header
+    _bc_date = commence_time[:10] if commence_time else ""
+    broadcast_line = _get_broadcast_line(
+        home_team=home_raw, away_team=away_raw,
+        league_key=target_league or "",
+        match_date=_bc_date,
+    )
+
     # Build message — AI narrative first, then odds
     lines = [
         f"🎯 <b>{hf}{home} vs {af}{away}</b>",
-        f"⏰ {kickoff}\n",
+        f"⏰ {kickoff}",
     ]
+    if broadcast_line:
+        lines.append(broadcast_line)
+    lines.append("")
 
     if narrative:
         lines.append(narrative)
