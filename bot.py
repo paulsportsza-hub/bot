@@ -3743,6 +3743,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
                 "event_id": event_id,
                 "home_team": home,
                 "away_team": away,
+                "match_id": db_match_id,
+                "odds_by_bookmaker": dict(all_bk),
             })
 
     # Fallback to Odds API if odds.db had no data
@@ -3777,23 +3779,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
                             "away_team": away,
                         })
 
-    # If still no tips, show friendly message
-    if not tips:
-        await query.edit_message_text(
-            f"📊 <b>{home} vs {away}</b>\n\n"
-            "No SA bookmaker odds available for this match yet.\n"
-            "Check back closer to kickoff!",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
-                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")],
-            ]),
-        )
-        return
-
-    tips.sort(key=lambda t: t["ev"], reverse=True)
+    # Sort and cache tips if we have any
+    if tips:
+        tips.sort(key=lambda t: t["ev"], reverse=True)
     _game_tips_cache[event_id] = tips
 
+    # Parse kickoff time (needed for AI call regardless of odds)
     try:
         ct = dt_cls.fromisoformat(target_event["commence_time"].replace("Z", "+00:00"))
         kickoff = ct.strftime("%a %d %b, %H:%M")
@@ -3801,13 +3792,19 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         kickoff = "TBC"
 
     # Build odds context for Claude
-    odds_context = "\n".join(
-        f"- {t['outcome']}: {t['odds']:.2f} ({t['bookie']}), "
-        f"fair prob {t['prob']}%, EV {t['ev']:+.1f}%"
-        for t in tips
-    ) if tips else "No Betway odds available."
+    if tips:
+        odds_context = "\n".join(
+            f"- {t['outcome']}: {t['odds']:.2f} ({t['bookie']}), "
+            f"fair prob {t['prob']}%, EV {t['ev']:+.1f}%"
+            for t in tips
+        )
+    else:
+        odds_context = (
+            "No odds data available for this match yet. "
+            "Provide general analysis based on what you know about these teams."
+        )
 
-    # Get AI narrative
+    # Get AI narrative — always call regardless of odds availability
     narrative = ""
     try:
         resp = await claude.messages.create(
@@ -3824,6 +3821,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         log.error("Claude game analysis error: %s", exc)
         narrative = ""
 
+    # Build message — AI narrative first, then odds
     lines = [
         f"🎯 <b>{home} vs {away}</b>",
         f"⏰ {kickoff}\n",
@@ -3833,10 +3831,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         lines.append(narrative)
         lines.append("")
 
-    if not tips:
-        lines.append("No odds available on Betway for this game yet.")
-    else:
-        lines.append(f"<b>{config.get_active_display_name()} Odds:</b>")
+    if tips:
+        # Show bookmaker odds section
+        if db_match and db_match.get("outcomes"):
+            lines.append("<b>SA Bookmaker Odds:</b>")
+        else:
+            lines.append(f"<b>{config.get_active_display_name()} Odds:</b>")
         for tip in tips:
             ev_ind = f"+{tip['ev']}%" if tip["ev"] > 0 else f"{tip['ev']}%"
             value_marker = " 💰" if tip["ev"] > 2 else ""
@@ -3844,11 +3844,16 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
                 f"  {h(tip['outcome'])}: <b>{tip['odds']:.2f}</b> ({h(tip['bookie'])})\n"
                 f"    {tip['prob']}% · EV: {ev_ind}{value_marker}"
             )
+    else:
+        lines.append("No SA bookmaker odds available for this match yet.")
+        lines.append("Check back closer to kickoff for odds!")
 
     msg = "\n".join(lines)
 
-    # Build tip detail buttons for positive EV tips
+    # Build buttons
     buttons: list[list[InlineKeyboardButton]] = []
+
+    # Tip detail buttons for positive EV tips
     for i, tip in enumerate(tips[:3]):
         if tip["ev"] > 0:
             buttons.append([InlineKeyboardButton(
@@ -3856,19 +3861,45 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
                 callback_data=f"tip:detail:{event_id}:{i}",
             )])
 
-    # Betway affiliate button — always show below tips
-    active_bk = config.get_active_bookmaker()
-    betway_url = config.get_affiliate_url(event_id)
-    if betway_url:
+    # Multi-bookmaker comparison button (only when odds.db data exists)
+    if db_match and db_match.get("outcomes") and tips:
         buttons.append([InlineKeyboardButton(
-            f"📲 Place your bet on {active_bk['display_name']} →",
-            url=betway_url,
+            "📊 All Bookmaker Odds",
+            callback_data=f"odds:compare:{event_id}",
         )])
-    else:
-        buttons.append([InlineKeyboardButton(
-            f"📲 Place your bet on {active_bk['display_name']} →",
-            callback_data="tip:affiliate_soon",
-        )])
+
+    # Bookmaker affiliate button
+    if tips:
+        # Dynamic CTA using best-odds bookmaker when multi-bookmaker data available
+        top_tip = tips[0]
+        odds_by_bk = top_tip.get("odds_by_bookmaker", {})
+        if odds_by_bk:
+            best_bk = select_best_bookmaker(odds_by_bk, user_id, db_match_id or "")
+            if best_bk and best_bk.get("affiliate_url"):
+                cta_label = render_tip_button_label(best_bk)
+                buttons.append([InlineKeyboardButton(
+                    f"📲 {cta_label}", url=best_bk["affiliate_url"],
+                )])
+            else:
+                active_bk = config.get_active_bookmaker()
+                bk_url = config.get_affiliate_url(event_id) or active_bk.get("website_url", "")
+                buttons.append([InlineKeyboardButton(
+                    f"📲 Place your bet on {active_bk['display_name']} →",
+                    url=bk_url,
+                )])
+        else:
+            active_bk = config.get_active_bookmaker()
+            betway_url = config.get_affiliate_url(event_id)
+            if betway_url:
+                buttons.append([InlineKeyboardButton(
+                    f"📲 Place your bet on {active_bk['display_name']} →",
+                    url=betway_url,
+                )])
+            else:
+                buttons.append([InlineKeyboardButton(
+                    f"📲 Place your bet on {active_bk['display_name']} →",
+                    callback_data="tip:affiliate_soon",
+                )])
 
     buttons.append([InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")])
     buttons.append([InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")])
