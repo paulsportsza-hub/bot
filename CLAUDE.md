@@ -918,3 +918,43 @@ Tips from _fetch_hot_tips_all_sports now stored in _game_tips_cache so tip detai
 ### Test Status
 - Tests: 295 passing, 0 failures
 - Open bugs: 0 (all 19 resolved)
+
+## ⚠️ MANDATORY: Telethon E2E Testing Gate
+
+**NO wave can be marked as "PASS" or "COMPLETE" without Telethon E2E tests against the LIVE running bot.**
+
+### Rules
+1. **Unit tests are NOT sufficient.** They test code logic, not what the user actually sees.
+2. **Code review is NOT sufficient.** Imports and wiring can be correct on paper but fail at runtime.
+3. **Bot API getUpdates is NOT sufficient.** It doesn't capture the real user experience.
+4. **Every QA wave MUST include Telethon tests** that:
+   - Connect as a real Telegram user via the existing Telethon session
+   - Send actual messages/commands/button taps to @mzansiedge_bot
+   - Capture the VERBATIM response text the user would see
+   - Assert against expected UX (edge badges, multi-bookmaker odds, spacing, emojis)
+   - Save raw response captures to /home/paulsportsza/reports/e2e-screenshots/
+
+### Existing Telethon Setup
+- Session file: [find with: find /home/paulsportsza -name "*.session"]
+- Credentials: [find with: grep -r "API_ID" /home/paulsportsza/bot/.env]
+- Previous test file: /home/paulsportsza/bot/tests/test_e2e_flow.py
+- History: 8/8 passes across Days 5-8 (commands + keyboard buttons)
+
+### Critical Telethon Checks (minimum for any QA pass)
+1. /start → welcome message renders correctly
+2. Hot Tips → edge badges visible, tips sorted by tier, dynamic bookmaker (not hardcoded Betway)
+3. Tip detail → multi-bookmaker odds shown, CTA format correct, freshness indicator present
+4. Odds comparison → multiple SA bookmakers listed
+5. Settings → toggles work, live_scores preserved
+6. Navigation → back buttons work, no dead ends
+
+### Before Telethon Tests: Verify Bot is Fresh
+```bash
+# Compare code modification time vs process start time
+stat bot.py | grep Modify
+ps -p $(pgrep -f "python.*bot.py") -o lstart=
+# If process started BEFORE code was last modified → RESTART BOT FIRST
+```
+
+### Failure = Block
+If any Telethon E2E test fails, the wave is NOT complete. Fix and re-test.
