@@ -698,3 +698,147 @@ class TestExperiencedSkipsEdgeExplainer:
         query.edit_message_text = AsyncMock()
         await bot._show_next_team_prompt(query, ob)
         assert ob["step"] == "edge_explainer"
+
+
+# ── Wave 15A: AI Post-Processor Tests ──
+
+
+class TestSanitizeAiResponse:
+    """sanitize_ai_response() deterministic post-processor."""
+
+    def test_strips_markdown_headers(self):
+        raw = "# Leeds vs Man City — 28 Feb\n📋 The Setup\nSome text"
+        result = bot.sanitize_ai_response(raw)
+        assert '#' not in result
+        assert '📋' in result
+
+    def test_enforces_section_spacing(self):
+        raw = "Some setup text.\n🎯 The Edge\nSome edge text."
+        result = bot.sanitize_ai_response(raw)
+        assert "\n\n🎯" in result
+
+    def test_converts_markdown_bold(self):
+        raw = "The **Draw** is the sharpest value"
+        result = bot.sanitize_ai_response(raw)
+        assert "<b>Draw</b>" in result
+        assert "**" not in result
+
+    def test_strips_duplicate_match_title(self):
+        raw = "Leeds United vs Manchester City — 28 Feb\n📋 The Setup\nText"
+        result = bot.sanitize_ai_response(raw)
+        assert "Leeds United vs Manchester City — 28 Feb" not in result
+        assert "📋" in result
+
+    def test_strips_conviction_text(self):
+        raw = "Back the draw with High conviction."
+        result = bot.sanitize_ai_response(raw)
+        assert "conviction" not in result.lower()
+
+    def test_normalises_whitespace(self):
+        raw = "Text\n\n\n\n\nMore text"
+        result = bot.sanitize_ai_response(raw)
+        assert "\n\n\n" not in result
+        assert "Text\n\nMore text" == result
+
+    def test_converts_markdown_bullets(self):
+        raw = "- First point\n* Second point\nRegular line"
+        result = bot.sanitize_ai_response(raw)
+        assert "• First point" in result
+        assert "• Second point" in result
+
+    def test_enforces_section_header_bold(self):
+        raw = "📋 The Setup\nSome analysis text"
+        result = bot.sanitize_ai_response(raw)
+        assert "📋 <b>The Setup</b>" in result
+
+    def test_empty_input(self):
+        assert bot.sanitize_ai_response("") == ""
+        assert bot.sanitize_ai_response("   ") == ""
+
+
+class TestOddsComparison3Cta:
+    """BUG-026: Odds comparison should render one CTA per market."""
+
+    @pytest.mark.asyncio
+    async def test_three_cta_buttons_when_all_markets(self, test_db, mock_update):
+        """All 3 markets with odds should produce 3 CTA buttons."""
+        query = mock_update.callback_query
+        event_id = "test-3cta-001"
+
+        bot._game_tips_cache[event_id] = [{
+            "outcome": "Draw", "odds": 3.50, "bookie": "GBets",
+            "bookie_key": "gbets", "ev": 4.0, "prob": 30,
+            "event_id": event_id,
+            "home_team": "Leeds United", "away_team": "Manchester City",
+            "match_id": "leeds_vs_mancity_2026-03-01",
+            "odds_by_bookmaker": {"gbets": 3.50, "betway": 3.40},
+        }]
+
+        mock_db_result = {
+            "outcomes": {
+                "home": {"best_odds": 5.20, "best_bookmaker": "gbets",
+                         "all_bookmakers": {"gbets": 5.20, "betway": 5.10}},
+                "draw": {"best_odds": 4.60, "best_bookmaker": "gbets",
+                         "all_bookmakers": {"gbets": 4.60, "betway": 4.30}},
+                "away": {"best_odds": 1.63, "best_bookmaker": "supabets",
+                         "all_bookmakers": {"supabets": 1.63, "betway": 1.60}},
+            },
+        }
+        with patch("services.odds_service.get_best_odds",
+                    new_callable=AsyncMock, return_value=mock_db_result):
+            await bot._handle_odds_comparison(query, event_id)
+
+        markup = query.edit_message_text.call_args[1]["reply_markup"]
+        url_buttons = [btn for row in markup.inline_keyboard
+                       for btn in row if btn.url]
+        assert len(url_buttons) == 3
+        labels = [btn.text for btn in url_buttons]
+        assert any("Home Win" in l for l in labels)
+        assert any("Draw" in l for l in labels)
+        assert any("Away Win" in l for l in labels)
+
+        del bot._game_tips_cache[event_id]
+
+    @pytest.mark.asyncio
+    async def test_each_cta_points_to_correct_bookmaker(self, test_db, mock_update):
+        """Each CTA should point to the best-odds bookmaker for that market."""
+        query = mock_update.callback_query
+        event_id = "test-3cta-002"
+
+        bot._game_tips_cache[event_id] = [{
+            "outcome": "Home Win", "odds": 2.10, "bookie": "Betway",
+            "bookie_key": "betway", "ev": 5.0, "prob": 55,
+            "event_id": event_id,
+            "home_team": "Kaizer Chiefs", "away_team": "Orlando Pirates",
+            "match_id": "chiefs_vs_pirates",
+            "odds_by_bookmaker": {"betway": 2.10},
+        }]
+
+        mock_db_result = {
+            "outcomes": {
+                "home": {"best_odds": 2.15, "best_bookmaker": "hollywoodbets",
+                         "all_bookmakers": {"betway": 2.10, "hollywoodbets": 2.15}},
+                "draw": {"best_odds": 3.50, "best_bookmaker": "gbets",
+                         "all_bookmakers": {"betway": 3.40, "gbets": 3.50}},
+                "away": {"best_odds": 1.80, "best_bookmaker": "supabets",
+                         "all_bookmakers": {"betway": 1.75, "supabets": 1.80}},
+            },
+        }
+        with patch("services.odds_service.get_best_odds",
+                    new_callable=AsyncMock, return_value=mock_db_result):
+            await bot._handle_odds_comparison(query, event_id)
+
+        markup = query.edit_message_text.call_args[1]["reply_markup"]
+        url_buttons = [btn for row in markup.inline_keyboard
+                       for btn in row if btn.url]
+        # Home CTA → hollywoodbets URL
+        home_btn = [b for b in url_buttons if "Home Win" in b.text][0]
+        assert "hollywoodbets" in home_btn.url
+        # Draw CTA → gbets URL
+        draw_btn = [b for b in url_buttons if "Draw" in b.text][0]
+        assert "gbets" in draw_btn.url
+        # Away CTA → supabets URL
+        away_btn = [b for b in url_buttons if "Away Win" in b.text][0]
+        assert "supabets" in away_btn.url
+
+        del bot._game_tips_cache[event_id]

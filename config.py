@@ -90,6 +90,13 @@ BOOKMAKER_AFFILIATES: dict[str, dict] = {
         "status": "pending_approval",
         "deep_link_template": None,
     },
+    "gbets": {
+        "name": "GBets",
+        "affiliate_code": None,
+        "base_url": "https://www.gbets.co.za",
+        "status": "pending_approval",
+        "deep_link_template": None,
+    },
 }
 
 # ── SA Bookmakers (whitelisted for user-facing odds) ──────
@@ -133,6 +140,22 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "display_name": "SupaBets.co.za",
         "short_name": "SupaBets",
         "website_url": "https://www.supabets.co.za",
+        "guide_url": "",
+        "affiliate_base_url": "",
+        "active": False,
+    },
+    "hollywoodbets": {
+        "display_name": "Hollywoodbets.net",
+        "short_name": "Hollywoodbets",
+        "website_url": "https://www.hollywoodbets.net",
+        "guide_url": "",
+        "affiliate_base_url": "",
+        "active": False,
+    },
+    "gbets": {
+        "display_name": "GBets.co.za",
+        "short_name": "GBets",
+        "website_url": "https://www.gbets.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
         "active": False,

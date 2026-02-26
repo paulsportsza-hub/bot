@@ -1324,3 +1324,26 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 14D)
 - Tests: 324 passing (6 new), 0 failures
+
+## Wave 15A — AI Post-Processor + Odds CTA Fix (26 Feb 2026)
+
+**AI Post-Processor (Wave 15A):** New `sanitize_ai_response()` function runs on ALL AI-generated content. Strips markdown headers, enforces section spacing, converts markdown bold to HTML, normalises whitespace, strips conviction text. Applied to Game Breakdown and Tip Narrative. Eliminates formatting inconsistency permanently.
+
+**Odds Comparison 3-CTA (Wave 15A):** Fixed BUG-026 — now renders one affiliate CTA per market (Home/Draw/Away), each pointing to the best-odds bookmaker for that outcome. Root cause: GBets and Hollywoodbets were missing from `BOOKMAKER_AFFILIATES` and `SA_BOOKMAKERS` config dicts, so `get_affiliate_url()` returned empty → CTA buttons skipped.
+
+### BUG-026: Odds Comparison 3-CTA
+- Added `gbets` to `BOOKMAKER_AFFILIATES` and `SA_BOOKMAKERS` in config.py
+- Added `hollywoodbets` to `SA_BOOKMAKERS` in config.py
+- All 5 scraped bookmakers now have affiliate URL fallbacks → all CTA buttons render
+
+### BUG-027 + BUG-028: AI Post-Processor
+- `sanitize_ai_response(raw_text)` in bot.py — deterministic post-processor
+- Strips: markdown headers (#/##/###), duplicate match titles, markdown bold (**), stray emphasis (*/_), conviction text
+- Converts: markdown bullets to •, markdown bold to HTML `<b>`
+- Enforces: section spacing (blank line before 📋🎯⚠️🏆💰), section header bold, max 1 blank line
+- Applied after Claude response in `_generate_game_tips()`, replaces old conviction-only stripping
+- Claude prompt updated with strict FORMATTING RULES section
+- `import re` moved to top-level (was local imports)
+
+### Test Status (Wave 15A)
+- Tests: 335 passing (11 new), 0 failures

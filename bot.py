@@ -16,6 +16,7 @@ if sentry_sdk:
 import difflib
 import logging
 import os
+import re
 import textwrap
 from html import escape as h
 
@@ -3758,8 +3759,14 @@ GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
     One bold sentence: your top pick. Do NOT include conviction levels (High/Medium/Low).
     The Edge Rating badge handles confidence display — never mention conviction.
 
-    Rules:
-    - Telegram HTML only (<b>, <i> tags)
+    FORMATTING RULES (strict):
+    - Do NOT output a match title line. The title is rendered separately.
+    - Do NOT use markdown headers (#, ##, ###). Use section emojis directly.
+    - Use these exact section headers: 📋 The Setup / 🎯 The Edge / ⚠️ The Risk / 🏆 Verdict
+    - Leave a blank line before each section header.
+    - Do NOT include conviction levels, confidence ratings, or probability percentages in the Verdict.
+    - Keep paragraphs to 3-4 sentences max for mobile readability.
+    - Telegram HTML only (<b>, <i> tags). No markdown.
     - Do NOT include odds numbers or bookmaker names (shown separately below)
     - No disclaimers, no "gamble responsibly" — we handle that elsewhere
     - Be direct, confident, conversational — like a mate at the braai who knows his stuff
@@ -3767,6 +3774,62 @@ GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
     - Sport-specific language: "clean sheet" for soccer, "try line" for rugby, "strike rate" for cricket
     - If the data is thin, keep it shorter — don't pad with generic filler
 """)
+
+
+def sanitize_ai_response(raw_text: str) -> str:
+    """Deterministic post-processor for AI game breakdown output.
+
+    Enforces consistent formatting regardless of what Claude returns.
+    Runs BEFORE any Telegram HTML rendering.
+    """
+    text = raw_text.strip()
+    if not text:
+        return text
+
+    # 1. STRIP MARKDOWN HEADERS — remove # ## ### at start of lines
+    text = re.sub(r'^#{1,3}\s*', '', text, flags=re.MULTILINE)
+
+    # 2. STRIP DUPLICATE MATCH TITLE — first line with "vs" + digits
+    lines = text.split('\n')
+    if lines and ' vs ' in lines[0] and any(c.isdigit() for c in lines[0]):
+        lines = lines[1:]
+        text = '\n'.join(lines).strip()
+
+    # 3. CONVERT MARKDOWN BOLD TO HTML BOLD — **text** → <b>text</b>
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+
+    # 4. STRIP REMAINING MARKDOWN EMPHASIS — stray * or _
+    text = re.sub(r'(?<!\w)\*(?!\*)(.+?)(?<!\*)\*(?!\w)', r'\1', text)
+    text = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'\1', text)
+
+    # 5. CONVERT MARKDOWN BULLETS — "- item" or "* item" → "• item"
+    text = re.sub(r'^[\-\*]\s+', '• ', text, flags=re.MULTILINE)
+
+    # 6. ENFORCE SECTION SPACING — blank line before section emojis
+    for emoji in ('📋', '🎯', '⚠️', '🏆', '💰'):
+        text = re.sub(rf'([^\n])\n({emoji})', rf'\1\n\n\2', text)
+
+    # 7. ENFORCE SECTION HEADER BOLD (avoid double-bolding)
+    for emoji, header in [('📋', 'The Setup'), ('🎯', 'The Edge'),
+                          ('⚠️', 'The Risk'), ('🏆', 'Verdict')]:
+        text = re.sub(
+            rf'({emoji}\s*)(?!<b>)({header})',
+            rf'\1<b>\2</b>',
+            text,
+        )
+    text = text.replace('<b><b>', '<b>').replace('</b></b>', '</b>')
+
+    # 8. NORMALISE WHITESPACE
+    text = re.sub(r'\n{3,}', '\n\n', text)       # max 1 blank line
+    text = re.sub(r'[ \t]+$', '', text, flags=re.MULTILINE)  # trailing WS
+    text = text.strip()
+
+    # 9. STRIP CONVICTION TEXT (safety net)
+    text = re.sub(r'\s*(?:with\s+)?(?:High|Medium|Low)\s+conviction\.?', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*Conviction:\s*(?:High|Medium|Low)\.?', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*\((?:High|Medium|Low)\s+conviction\)\.?', '', text, flags=re.IGNORECASE)
+
+    return text
 
 
 async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
@@ -3937,12 +4000,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         log.error("Claude game analysis error: %s", exc)
         narrative = ""
 
+    # ── Post-process AI output (sanitize markdown, spacing, conviction) ──
+    if narrative:
+        narrative = sanitize_ai_response(narrative)
+
     # ── Inject Edge Rating badge into Verdict header ──
     if narrative and tips:
-        # Compute edge tier for the best positive-EV tip
         best_ev = max((t["ev"] for t in tips), default=0)
         if best_ev > 0:
-            # EV-based tier assignment (recalibrated Wave 14A)
             if best_ev >= 15:
                 tier = EdgeRating.DIAMOND
             elif best_ev >= 8:
@@ -3955,20 +4020,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             tier_label = EDGE_LABELS.get(tier, "")
             if tier_emoji and tier_label:
                 badge = f" — {tier_emoji} {tier_label}"
-                # Replace "🏆 Verdict" or "🏆 <b>Verdict</b>" with badge version
-                import re
                 narrative = re.sub(
                     r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)",
                     rf"\1{badge}",
                     narrative,
                     count=1,
                 )
-    # Strip ALL conviction text from any AI response (replaced by Edge Rating badge)
-    if narrative:
-        import re
-        narrative = re.sub(r"(?:with |— )?(?:High|Medium|Low) conviction:?\.?", "", narrative)
-        narrative = re.sub(r"Conviction: (?:High|Medium|Low)\.?", "", narrative)
-        narrative = re.sub(r"\s{2,}", " ", narrative)  # collapse double spaces from stripping
 
     # Build message — AI narrative first, then odds
     lines = [
@@ -5112,7 +5169,6 @@ async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def _receive_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive email, create Stitch payment, send checkout link."""
-    import re
     user_id = update.effective_user.id
     email = update.message.text.strip().lower()
 
