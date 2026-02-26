@@ -2115,7 +2115,8 @@ async def _show_live_games(update: Update, user_id: int) -> None:
     lines = [f"🔴 <b>Live Games ({len(active)})</b>\n"]
     buttons = []
     for sub in active:
-        lines.append(f"  ⚡ {h(sub.home_team)} vs {h(sub.away_team)}")
+        hf, af = _get_flag_prefixes(sub.home_team, sub.away_team)
+        lines.append(f"  ⚡ {hf}{h(sub.home_team)} vs {af}{h(sub.away_team)}")
         lines.append("")
         buttons.append([InlineKeyboardButton(
             f"🔕 Unfollow {sub.home_team} vs {sub.away_team}",
@@ -2354,15 +2355,17 @@ async def _render_your_games_all(
                 current_date_label = "TBC"
                 lines.append("<b>TBC</b>")
 
-        home = h(event.get("home_team", "?"))
-        away = h(event.get("away_team", "?"))
+        home_raw = event.get("home_team", "?")
+        away_raw = event.get("away_team", "?")
+        home = h(home_raw)
+        away = h(away_raw)
         emoji = event.get("sport_emoji", "🏅")
         event_id = event.get("id", "")
-        home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
-        away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
+        hf, af = _get_flag_prefixes(home_raw, away_raw)
+        home_display = f"<b>{hf}{home}</b>" if home.lower() in user_teams else f"{hf}{home}"
+        away_display = f"<b>{af}{away}</b>" if away.lower() in user_teams else f"{af}{away}"
         edge_marker = " 🔥" if edge_events.get(event_id) else ""
         lines.append(f"<b>[{idx}]</b> {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
-        lines.append("")
 
     text = "\n".join(lines)
 
@@ -2502,11 +2505,11 @@ async def _render_your_games_sport(
         home = event.get("home_team", "?")
         away = event.get("away_team", "?")
         event_id = event.get("id", "")
-        home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
-        away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
+        hf, af = _get_flag_prefixes(home, away)
+        home_display = f"<b>{hf}{home}</b>" if home.lower() in user_teams else f"{hf}{home}"
+        away_display = f"<b>{af}{away}</b>" if away.lower() in user_teams else f"{af}{away}"
         edge_marker = " 🔥" if edge_events.get(event_id) else ""
         lines.append(f"<b>[{idx}]</b> {sport_emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
-        lines.append("")
 
     text = "\n".join(lines)
 
@@ -2679,6 +2682,19 @@ def _display_team_name(key: str) -> str:
 def _display_bookmaker_name(key: str) -> str:
     """Convert bookmaker key to display name."""
     return _BK_DISPLAY.get(key, key.title())
+
+
+def _get_flag_prefixes(home: str, away: str) -> tuple[str, str]:
+    """Return (home_flag, away_flag) with both-or-nothing rule.
+
+    If BOTH teams have a flag → return both flags (with trailing space).
+    If EITHER team has no flag → return ('', '') for both.
+    """
+    hf = config.get_country_flag(home)
+    af = config.get_country_flag(away)
+    if hf and af:
+        return (hf + " ", af + " ")
+    return ("", "")
 
 
 HOT_TIPS_PAGE_SIZE = 5
@@ -3093,11 +3109,14 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
 
     for i, tip in enumerate(page_tips, start + 1):
         sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
-        home = h(tip.get("home_team", ""))
-        away = h(tip.get("away_team", ""))
+        home_raw = tip.get("home_team", "")
+        away_raw = tip.get("away_team", "")
+        home = h(home_raw)
+        away = h(away_raw)
         outcome = h(tip.get("outcome", ""))
         bk_name = h(tip.get("bookmaker", ""))
 
+        hf, af = _get_flag_prefixes(home_raw, away_raw)
         badge = render_edge_badge(tip.get("display_tier", tip.get("edge_rating", "")))
         badge_suffix = f" {badge}" if badge else ""
 
@@ -3109,7 +3128,7 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
 
         bk_part = f" ({bk_name})" if bk_name else ""
         lines.append(
-            f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b>{badge_suffix}\n"
+            f"<b>[{i}]</b> {sport_emoji} <b>{hf}{home} vs {af}{away}</b>{badge_suffix}\n"
             f"{time_line}\n"
             f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b>{bk_part} · EV +{tip['ev']}%"
         )
@@ -3545,13 +3564,15 @@ def _render_schedule_page(
             current_date_str = date_header
             lines.append(f"\n<b>{date_header}</b>")
 
-        home = h(event.get("home_team", "?"))
-        away = h(event.get("away_team", "?"))
+        home_raw = event.get("home_team", "?")
+        away_raw = event.get("away_team", "?")
+        home = h(home_raw)
+        away = h(away_raw)
         emoji = event.get("sport_emoji", "🏅")
-        home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
-        away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
+        hf, af = _get_flag_prefixes(home_raw, away_raw)
+        home_display = f"<b>{hf}{home}</b>" if home.lower() in user_teams else f"{hf}{home}"
+        away_display = f"<b>{af}{away}</b>" if away.lower() in user_teams else f"{af}{away}"
         lines.append(f"<b>[{idx}]</b> {emoji} {event_time}  {home_display} vs {away_display}")
-        lines.append("")
 
     text = "\n".join(lines)
 
@@ -3698,11 +3719,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         )
         return
 
-    home = h(target_event.get("home_team", "?"))
-    away = h(target_event.get("away_team", "?"))
+    home_raw = target_event.get("home_team", "?")
+    away_raw = target_event.get("away_team", "?")
+    home = h(home_raw)
+    away = h(away_raw)
+    hf, af = _get_flag_prefixes(home_raw, away_raw)
 
     await query.edit_message_text(
-        f"🤖 <i>Analysing {home} vs {away}…</i>",
+        f"🤖 <i>Analysing {hf}{home} vs {af}{away}…</i>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -3823,7 +3847,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
 
     # Build message — AI narrative first, then odds
     lines = [
-        f"🎯 <b>{home} vs {away}</b>",
+        f"🎯 <b>{hf}{home} vs {af}{away}</b>",
         f"⏰ {kickoff}\n",
     ]
 
@@ -4111,11 +4135,14 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
         await query.answer("No multi-bookmaker data available for this match.", show_alert=True)
         return
 
-    home = h(tip.get("home_team", ""))
-    away = h(tip.get("away_team", ""))
+    home_raw = tip.get("home_team", "")
+    away_raw = tip.get("away_team", "")
+    home = h(home_raw)
+    away = h(away_raw)
+    hf, af = _get_flag_prefixes(home_raw, away_raw)
     text = (
         f"📊 <b>Odds Comparison</b>\n"
-        f"<b>{home} vs {away}</b>\n\n"
+        f"<b>{hf}{home} vs {af}{away}</b>\n\n"
         + render_odds_comparison(odds_by_bookmaker, tip.get("outcome", ""))
     )
 
@@ -4136,8 +4163,11 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
     odds = tip["odds"]
     ev = tip["ev"]
     prob = tip["prob"]
-    home = h(tip["home_team"])
-    away = h(tip["away_team"])
+    home_raw = tip["home_team"]
+    away_raw = tip["away_team"]
+    home = h(home_raw)
+    away = h(away_raw)
+    hf, af = _get_flag_prefixes(home_raw, away_raw)
     bookie = config.get_active_display_name()
 
     if experience == "experienced":
@@ -4149,7 +4179,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             pot_return = round(stake * odds, 2)
             stake_str = f"\n💵 Stake R{stake:,.0f} → R{pot_return:,.0f}"
         return (
-            f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
+            f"📊 <b>Tip Detail: {hf}{home} vs {af}{away}</b>\n\n"
             f"💰 <b>{outcome}</b> @ <b>{odds:.2f}</b> ({bookie})\n"
             f"📈 EV: <b>+{ev}%</b> | Fair prob: {prob}%\n"
             f"🎯 Kelly fraction: <code>{ks:.1%}</code>{stake_str}\n\n"
@@ -4167,7 +4197,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             bet_explain = f"You're betting <b>{outcome}</b> (away team) wins."
 
         return (
-            f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
+            f"📊 <b>Tip Detail: {hf}{home} vs {af}{away}</b>\n\n"
             f"📋 <b>What's the bet?</b>\n{bet_explain}\n\n"
             f"💵 <b>The odds: {odds:.2f}</b> on {bookie}\n"
             f"  Bet R20 → get <b>R{payout_20:.0f}</b> back\n"
@@ -4185,7 +4215,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             suggested = round(min(bankroll * 0.05, 200), 0)
             stake_hint = f"\n🔍 Suggested stake: <b>R{suggested:.0f}</b>"
         return (
-            f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
+            f"📊 <b>Tip Detail: {hf}{home} vs {af}{away}</b>\n\n"
             f"💰 We like <b>{outcome}</b> @ {odds:.2f} ({bookie})\n\n"
             f"The AI found a <b>+{ev}%</b> edge here.\n"
             f"Fair probability: {prob}% — odds suggest less.\n\n"
@@ -4776,10 +4806,11 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 top = tips[0]
                 sport_emoji = _get_sport_emoji_for_api_key(top.get("sport_key", ""))
                 kickoff = _format_kickoff_display(top["commence_time"])
+                thf, taf = _get_flag_prefixes(top.get("home_team", ""), top.get("away_team", ""))
                 teaser = (
                     f"☀️ <b>Good morning!</b>\n\n"
                     f"🔥 <b>{len(tips)} value bet{'s' if len(tips) != 1 else ''}</b> found today.\n\n"
-                    f"Top pick: {sport_emoji} <b>{h(top['home_team'])} vs {h(top['away_team'])}</b>\n"
+                    f"Top pick: {sport_emoji} <b>{thf}{h(top['home_team'])} vs {taf}{h(top['away_team'])}</b>\n"
                     f"💰 {top['outcome']} @ {top['odds']:.2f} · EV +{top['ev']}%\n"
                     f"⏰ {kickoff}\n\n"
                     f"<i>Tap below to see all tips 👇</i>"

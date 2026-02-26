@@ -351,13 +351,24 @@ def format_odds_message(events: list[dict], sport_label: str) -> str:
     if not events:
         return f"<b>{sport_label}</b>\n\nNo upcoming events found."
 
+    import config as _cfg
+
     lines = [f"<b>{sport_label} — Upcoming Odds</b>\n"]
     for ev in events[:8]:
-        home = h(ev["home_team"])
-        away = h(ev["away_team"])
+        home_raw = ev["home_team"]
+        away_raw = ev["away_team"]
+        home = h(home_raw)
+        away = h(away_raw)
+        hf = _cfg.get_country_flag(home_raw)
+        af = _cfg.get_country_flag(away_raw)
+        if hf and af:
+            hf += " "
+            af += " "
+        else:
+            hf = af = ""
         odds = best_odds(ev)
         odds_str = " | ".join(f"{k}: <b>{v:.2f}</b>" for k, v in odds.items())
-        lines.append(f"\u26bd <b>{home}</b> vs <b>{away}</b>\n   {odds_str}")
+        lines.append(f"\u26bd <b>{hf}{home}</b> vs <b>{af}{away}</b>\n   {odds_str}")
         lines.append("")
     return "\n".join(lines)
 

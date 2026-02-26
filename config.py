@@ -692,6 +692,60 @@ def abbreviate_team(name: str, max_len: int = 3) -> str:
     return name[:max_len].upper()
 
 
+# ── Country Flags (for international matches) ────────────
+# Maps team/country names to flag emojis.
+# Used with both-or-nothing rule: only show flags if BOTH teams have one.
+
+COUNTRY_FLAGS: dict[str, str] = {
+    # Africa
+    "South Africa": "🇿🇦",
+    "Nigeria": "🇳🇬",
+    "Ghana": "🇬🇭",
+    "Kenya": "🇰🇪",
+    "Namibia": "🇳🇦",
+    "Zimbabwe": "🇿🇼",
+    # Europe
+    "England": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+    "Scotland": "🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+    "Wales": "🏴󠁧󠁢󠁷󠁬󠁳󠁿",
+    "Ireland": "🇮🇪",
+    "France": "🇫🇷",
+    "Italy": "🇮🇹",
+    "Germany": "🇩🇪",
+    "Spain": "🇪🇸",
+    "Portugal": "🇵🇹",
+    "Netherlands": "🇳🇱",
+    "Georgia": "🇬🇪",
+    "Romania": "🇷🇴",
+    # Oceania
+    "Australia": "🇦🇺",
+    "New Zealand": "🇳🇿",
+    "Fiji": "🇫🇯",
+    "Samoa": "🇼🇸",
+    "Tonga": "🇹🇴",
+    # Americas
+    "Argentina": "🇦🇷",
+    "USA": "🇺🇸",
+    "Canada": "🇨🇦",
+    "Uruguay": "🇺🇾",
+    "Chile": "🇨🇱",
+    "Brazil": "🇧🇷",
+    "West Indies": "🏝️",
+    # Asia
+    "India": "🇮🇳",
+    "Pakistan": "🇵🇰",
+    "Sri Lanka": "🇱🇰",
+    "Bangladesh": "🇧🇩",
+    "Afghanistan": "🇦🇫",
+    "Japan": "🇯🇵",
+}
+
+
+def get_country_flag(team_name: str) -> str:
+    """Get country flag emoji for a team name. Returns '' if not found."""
+    return COUNTRY_FLAGS.get(team_name, "")
+
+
 def get_sport_emoji(group: str) -> str:
     """Get emoji for a sport group."""
     return SPORT_DISPLAY.get(group, {}).get("emoji", "🏅")

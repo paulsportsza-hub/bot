@@ -61,10 +61,19 @@ def render_tip_with_odds(
         lines.append(f"<b>{badge}</b>")
 
     # Match header
-    home = h(match.get("home_team", "Home"))
-    away = h(match.get("away_team", "Away"))
+    home_raw = match.get("home_team", "Home")
+    away_raw = match.get("away_team", "Away")
+    home = h(home_raw)
+    away = h(away_raw)
+    hf = config.get_country_flag(home_raw)
+    af = config.get_country_flag(away_raw)
+    if hf and af:
+        hf += " "
+        af += " "
+    else:
+        hf = af = ""
     sport_emoji = match.get("sport_emoji", "\u26bd")
-    lines.append(f"{sport_emoji} <b>{home} vs {away}</b>")
+    lines.append(f"{sport_emoji} <b>{hf}{home} vs {af}{away}</b>")
 
     # League + kickoff
     league = match.get("league", "")

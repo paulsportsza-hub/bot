@@ -1128,3 +1128,46 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 12F)
 - Tests: 295 passing, 0 failures
+
+## Wave 12G — Restore AI Game Breakdown (26 Feb 2026)
+
+### Bug Fix
+- Removed early return in `_generate_game_tips()` that blocked Claude Haiku call when no odds data existed
+- AI breakdown now works for ALL sports including cricket, rugby, and matches without odds coverage
+
+### Enhancements
+- Multi-bookmaker CTA: uses `select_best_bookmaker()` when odds.db data available
+- "📊 All Bookmaker Odds" button added when odds.db data exists
+- Odds context prompt instructs Claude to provide general analysis when no odds available
+- Tip dicts from odds.db now include `match_id` and `odds_by_bookmaker` for downstream handlers
+- Conditional odds header: "SA Bookmaker Odds:" (odds.db) vs "Betway Odds:" (API)
+
+### Test Status (Wave 12G)
+- Tests: 295 passing, 0 failures
+
+## Wave 12H — Spacing Fix + Country Flags (26 Feb 2026)
+
+### P0: Double Spacing Fix
+- Deleted 3 `lines.append("")` lines causing double blank lines between game items
+- Affected: `_render_your_games_all()`, `_render_your_games_sport()`, `_render_schedule_page()`
+- Blank line before date headers already handles group spacing correctly
+
+### P1: Country Flags
+- `config.COUNTRY_FLAGS` — dict mapping ~35 country/team names to flag emojis (Africa, Europe, Oceania, Americas, Asia)
+- `config.get_country_flag(team_name)` — returns flag emoji or '' if not found
+- `_get_flag_prefixes(home, away)` — both-or-nothing rule: if BOTH teams have a flag, return both with trailing space; if either is missing, return ('','') for both
+- Applied to 10 display locations across 4 files:
+  1. `_render_your_games_all()` — Your Games default view
+  2. `_render_your_games_sport()` — Your Games sport view
+  3. `_render_schedule_page()` — Schedule view
+  4. `_build_hot_tips_page()` — Hot Tips listing
+  5. `_format_tip_detail()` — Tip detail (all 3 experience levels)
+  6. `_generate_game_tips()` — Game breakdown loading + header
+  7. `_handle_odds_comparison()` — Odds comparison header
+  8. `_show_live_games()` — Live games display
+  9. `_morning_teaser_job()` — Morning notification teaser
+  10. `render_tip_with_odds()` — Edge renderer tip cards
+  11. `format_odds_message()` — Odds client message
+
+### Test Status (Wave 12H)
+- Tests: 295 passing, 0 failures
