@@ -1073,3 +1073,31 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status
 - Tests: 295 passing, 0 failures
+
+## Wave 12E — Spacing, Bold Numbers, Game Detail Fix, Narrative Bugs (26 Feb 2026)
+
+### Bold Numbers + Spacing (Global)
+- All `[N]` numbered items now bold: `<b>[N]</b>` in Your Games (all + sport views) and Hot Tips
+- Blank line after each item for mobile readability
+- Blank line before date headers (except first) in Your Games
+- Sport view changed from `N.` dot notation to `<b>[N]</b>` brackets for consistency
+
+### Game Detail — odds.db First
+- `_generate_game_tips()` now tries odds.db before Odds API (same as Hot Tips)
+- If odds.db has data, builds tips from cross-bookmaker consensus (no API quota cost)
+- Falls back to Odds API only if odds.db has no match
+- Friendlier error: "No SA bookmaker odds available" instead of "Couldn't fetch odds"
+
+### Tip Detail — Tier Consistency
+- `handle_tip_detail()` now uses `display_tier` (percentile-based) instead of raw `edge_rating`
+- Fixes Platinum-in-listing / Gold-in-detail mismatch
+
+### Narrative Branding + Data Fix
+- All tiers use "**The Edge:**" as opener (product branding)
+- Fixed key mismatch: narrative now reads `odds`/`bookmaker`/`prob` (actual tip dict keys)
+- Guard against zero/missing data (returns empty string instead of "0.00 at .")
+- High-premium tips: "No other SA bookmaker has X at these odds"
+- Social proof: "shortened their prices" instead of "moving this way"
+
+### Test Status (Wave 12E)
+- Tests: 295 passing, 0 failures

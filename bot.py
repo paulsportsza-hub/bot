@@ -2341,6 +2341,8 @@ async def _render_your_games_all(
             event_date = ct_sa.date()
             date_label = _format_date_label(event_date, now)
             if date_label != current_date_label:
+                if current_date_label is not None:
+                    lines.append("")
                 current_date_label = date_label
                 lines.append(f"<b>{date_label}</b>")
             event_time = ct_sa.strftime("%H:%M")
@@ -2357,7 +2359,8 @@ async def _render_your_games_all(
         home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
         away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
         edge_marker = " 🔥" if edge_events.get(event_id) else ""
-        lines.append(f"[{idx}] {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
+        lines.append(f"<b>[{idx}]</b> {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
+        lines.append("")
 
     text = "\n".join(lines)
 
@@ -2500,7 +2503,8 @@ async def _render_your_games_sport(
         home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
         away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
         edge_marker = " 🔥" if edge_events.get(event_id) else ""
-        lines.append(f"{idx}. {sport_emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
+        lines.append(f"<b>[{idx}]</b> {sport_emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
+        lines.append("")
 
     text = "\n".join(lines)
 
@@ -2702,17 +2706,29 @@ def _assign_display_tiers(tips: list[dict]) -> None:
 
 def _build_tip_narrative(tip: dict) -> str:
     """Build a compelling narrative explaining WHY this tip has value."""
-    outcome = tip.get("predicted_outcome", tip.get("outcome", "this team"))
-    best_bk = tip.get("best_bookmaker_display", _display_bookmaker_name(tip.get("best_bookmaker", "")))
-    best_odds = tip.get("best_odds", 0)
-    ev = tip.get("ev_pct", tip.get("ev", 0))
+    outcome = tip.get("predicted_outcome", "") or tip.get("outcome", "this team")
+    best_bk = (
+        tip.get("best_bookmaker_display", "")
+        or tip.get("bookmaker", "")
+        or _display_bookmaker_name(tip.get("best_bookmaker", ""))
+        or "the best bookmaker"
+    )
+    best_odds = tip.get("best_odds", 0) or tip.get("odds", 0)
+    ev = tip.get("ev_pct", 0) or tip.get("ev", 0)
     tier = tip.get("display_tier", tip.get("edge_rating", "GOLD"))
     odds_by_bk = tip.get("odds_by_bookmaker", {})
+    # consensus_prob may be 0-1 or 0-100 (as "prob" percentage)
     consensus_prob = tip.get("consensus_prob", 0)
+    if consensus_prob == 0 and tip.get("prob", 0) > 0:
+        consensus_prob = tip["prob"] / 100.0
 
     # Calculate market average odds for the predicted outcome
     all_odds = [v for v in odds_by_bk.values() if v and v > 1]
     avg_odds = sum(all_odds) / len(all_odds) if all_odds else best_odds
+
+    # Guard against zero/missing data
+    if not best_odds or best_odds <= 1:
+        return ""
 
     # How much above average is the best price?
     premium_pct = ((best_odds - avg_odds) / avg_odds * 100) if avg_odds > 0 else 0
@@ -2722,20 +2738,21 @@ def _build_tip_narrative(tip: dict) -> str:
 
     parts = []
 
-    # Opening — tier-specific conviction level
+    # Opening — unified "The Edge:" brand with tier-specific emoji
     if tier == "PLATINUM":
-        parts.append("🔥 <b>Strong value pick.</b>")
+        parts.append("🔥 <b>The Edge:</b>")
     elif tier == "GOLD":
-        parts.append("⭐ <b>Good value found.</b>")
+        parts.append("⭐ <b>The Edge:</b>")
     elif tier == "SILVER":
-        parts.append("📊 <b>Decent opportunity.</b>")
+        parts.append("📊 <b>The Edge:</b>")
     else:
-        parts.append("📋 <b>Worth a look.</b>")
+        parts.append("📋 <b>The Edge:</b>")
 
     # Core insight — why the odds are good
     if premium_pct > 5:
         parts.append(
-            f"{best_bk} is offering {outcome} at <b>{best_odds:.2f}</b>, "
+            f"No other SA bookmaker has {outcome} at these odds. "
+            f"{best_bk} is offering <b>{best_odds:.2f}</b>, "
             f"well above the market average of {avg_odds:.2f}."
         )
     elif premium_pct > 2:
@@ -2759,8 +2776,7 @@ def _build_tip_narrative(tip: dict) -> str:
     # Social proof — other bookmakers
     if cheaper_count >= 3:
         parts.append(
-            f"{cheaper_count} other bookmakers have shorter odds, "
-            f"suggesting the market is moving this way."
+            f"{cheaper_count} other bookmakers have already shortened their prices."
         )
     elif cheaper_count >= 1:
         parts.append(
@@ -3091,7 +3107,7 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
 
         bk_part = f" ({bk_name})" if bk_name else ""
         lines.append(
-            f"[{i}] {sport_emoji} <b>{home} vs {away}</b>{badge_suffix}\n"
+            f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b>{badge_suffix}\n"
             f"{time_line}\n"
             f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b>{bk_part} · EV +{tip['ev']}%"
         )
@@ -3687,67 +3703,90 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         parse_mode=ParseMode.HTML,
     )
 
-    # Fetch odds for this league
-    api_key = config.SPORTS_MAP.get(target_league)
-    if not api_key:
-        await query.edit_message_text(
-            f"📊 <b>{home} vs {away}</b>\n\n"
-            "Odds data isn't available for this league yet.\n"
-            "Check back soon — we're adding more coverage!",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")],
-            ]),
-        )
-        return
-    odds_result = await fetch_odds_cached(api_key, regions="eu,uk,au", markets="h2h")
-
-    if not odds_result["ok"]:
-        await query.edit_message_text(
-            f"⚠️ Couldn't fetch odds for {home} vs {away}. Try again later.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    event_odds = None
-    for ev in (odds_result["data"] or []):
-        if ev.get("id") == event_id:
-            event_odds = ev
-            break
-
-    if not event_odds or not event_odds.get("bookmakers"):
-        await query.edit_message_text(
-            f"📊 <b>{home} vs {away}</b>\n\n"
-            "No odds available yet for this game. Check back closer to kickoff!",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")],
-            ]),
-        )
-        return
-
-    # Compute fair probabilities and find best SA odds per outcome
-    fair_probs = fair_probabilities(event_odds)
-    best_entries = find_best_sa_odds(event_odds)
-
+    # Try odds.db first (local scrapers — no API quota cost)
     tips: list[dict] = []
-    for entry in best_entries:
-        prob = fair_probs.get(entry.outcome, 0)
-        if prob <= 0:
-            continue
-        ev_pct = calculate_ev(entry.price, prob)
-        implied = round(prob * 100)
-        tips.append({
-            "outcome": entry.outcome,
-            "odds": entry.price,
-            "bookie": entry.bookmaker,
-            "bookie_key": getattr(entry, "bookmaker", "").lower().replace(" ", ""),
-            "ev": round(ev_pct, 1),
-            "prob": implied,
-            "event_id": event_id,
-            "home_team": home,
-            "away_team": away,
-        })
+    commence_time = target_event.get("commence_time", "")
+    db_match_id = odds_svc.build_match_id(home, away, commence_time)
+    db_match = None
+    if db_match_id:
+        try:
+            db_match = await odds_svc.get_best_odds(db_match_id, "1x2")
+        except Exception:
+            db_match = None
+
+    if db_match and db_match.get("outcomes"):
+        # Build tips from odds.db data
+        for outcome_key, outcome_data in db_match["outcomes"].items():
+            all_bk = outcome_data.get("all_bookmakers", {})
+            if not all_bk:
+                continue
+            best_price = outcome_data.get("best_odds", 0)
+            best_bk_key = outcome_data.get("best_bookmaker", "")
+            # Compute consensus prob from all bookmakers
+            implied_probs = [1.0 / o for o in all_bk.values() if o and o > 1]
+            if not implied_probs:
+                continue
+            fair_prob = sum(implied_probs) / len(implied_probs)
+            # Normalise later — just get raw prob for now
+            ev_pct = round((fair_prob * best_price - 1) * 100, 1) if best_price > 0 else 0
+            _outcome_labels = {"home": home, "away": away, "draw": "Draw"}
+            tips.append({
+                "outcome": _outcome_labels.get(outcome_key, outcome_key),
+                "odds": best_price,
+                "bookie": _display_bookmaker_name(best_bk_key),
+                "bookie_key": best_bk_key,
+                "ev": ev_pct,
+                "prob": round(fair_prob * 100),
+                "event_id": event_id,
+                "home_team": home,
+                "away_team": away,
+            })
+
+    # Fallback to Odds API if odds.db had no data
+    if not tips:
+        api_key = config.SPORTS_MAP.get(target_league)
+        if api_key:
+            odds_result = await fetch_odds_cached(api_key, regions="eu,uk,au", markets="h2h")
+            if odds_result["ok"]:
+                event_odds = None
+                for ev in (odds_result["data"] or []):
+                    if ev.get("id") == event_id:
+                        event_odds = ev
+                        break
+                if event_odds and event_odds.get("bookmakers"):
+                    fair_probs = fair_probabilities(event_odds)
+                    best_entries = find_best_sa_odds(event_odds)
+                    for entry in best_entries:
+                        prob = fair_probs.get(entry.outcome, 0)
+                        if prob <= 0:
+                            continue
+                        ev_pct = calculate_ev(entry.price, prob)
+                        implied = round(prob * 100)
+                        tips.append({
+                            "outcome": entry.outcome,
+                            "odds": entry.price,
+                            "bookie": entry.bookmaker,
+                            "bookie_key": getattr(entry, "bookmaker", "").lower().replace(" ", ""),
+                            "ev": round(ev_pct, 1),
+                            "prob": implied,
+                            "event_id": event_id,
+                            "home_team": home,
+                            "away_team": away,
+                        })
+
+    # If still no tips, show friendly message
+    if not tips:
+        await query.edit_message_text(
+            f"📊 <b>{home} vs {away}</b>\n\n"
+            "No SA bookmaker odds available for this match yet.\n"
+            "Check back closer to kickoff!",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
+                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")],
+            ]),
+        )
+        return
 
     tips.sort(key=lambda t: t["ev"], reverse=True)
     _game_tips_cache[event_id] = tips
@@ -3932,7 +3971,7 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         # Multi-bookmaker: select best odds with affiliate link
         best_bk = select_best_bookmaker(odds_by_bookmaker, user_id, match_id)
         runner_ups = get_runner_up_odds(odds_by_bookmaker, best_bk.get("bookmaker_key", ""))
-        edge = tip.get("edge_rating", "")
+        edge = tip.get("display_tier", tip.get("edge_rating", ""))
 
         # Use edge renderer for rich tip card
         text = render_tip_with_odds(
