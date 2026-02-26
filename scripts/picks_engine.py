@@ -410,10 +410,10 @@ def format_pick_card(pick: dict, index: int, experience: str = "casual") -> str:
             f"🎯 <b>How confident is the AI?</b> {confidence}%\n"
             f"Our AI thinks this outcome is more likely than the odds suggest — "
             f"that's a <b>+{ev}%</b> edge in our favour.\n\n"
-            f"💡 <b>Suggested bet:</b> R{stake:,.0f}\n"
+            f"🔍 <b>Suggested bet:</b> R{stake:,.0f}\n"
             f"If it wins → you get <b>R{potential:,.0f}</b> back (R{profit:,.0f} profit)\n\n"
             f"📲 Best odds at: <b>{bookie}</b>\n\n"
-            f"<i>💡 Tip: Start small while you're learning. R20-50 bets are perfect.</i>"
+            f"<i>🔍 Tip: Start small while you're learning. R20-50 bets are perfect.</i>"
         )
 
     else:

@@ -418,7 +418,7 @@ def _format_pick_casual(pick: ValueBet) -> str:
         f"   💰 Best odds: <b>{pick.best_price:.2f}</b> @ {bk_display}\n"
         f"   💵 R100 bet pays <b>R{payout:.0f}</b>\n"
         f"   📈 Edge: <b>{pick.ev_pct:+.1f}%</b> above fair value | {pick.confidence}\n"
-        f"   💡 Suggested: <b>{stake_hint}</b>"
+        f"   🔍 Suggested: <b>{stake_hint}</b>"
     )
 
 
@@ -458,5 +458,5 @@ def _format_pick_newbie(pick: ValueBet) -> str:
         f"   💵 Bet R20 → get <b>R{payout_20:.0f}</b> back\n"
         f"   💵 Bet R50 → get <b>R{payout_50:.0f}</b> back\n"
         f"   {pick.confidence} — {conf_explain}\n"
-        f"   💡 <i>Start small: R20-50 per bet</i>"
+        f"   🔍 <i>Start small: R20-50 per bet</i>"
     )

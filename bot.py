@@ -55,7 +55,7 @@ from services.picks_service import get_picks as svc_get_picks
 from services.schedule_service import get_schedule, get_game_tips_data
 from services.analytics import track as analytics_track
 from services.stitch_service import stitch as stitch_service
-from services.edge_rating import EdgeRating, calculate_edge_rating
+from services.edge_rating import EdgeRating, calculate_edge_rating, calculate_edge_score
 from services import odds_service as odds_svc
 from services.affiliate_service import get_affiliate_url, select_best_bookmaker, get_runner_up_odds
 from renderers.edge_renderer import render_edge_badge, render_tip_with_odds, render_tip_button_label, render_odds_comparison
@@ -800,6 +800,17 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     elif prefix == "hot":
         if action in ("go", "show", "back"):
             await _do_hot_tips_flow(query.message.chat_id, ctx.bot)
+        elif action.startswith("page:"):
+            try:
+                page_num = int(action.split(":")[1])
+            except (ValueError, IndexError):
+                page_num = 0
+            tips = _hot_tips_cache.get("global", {}).get("tips", [])
+            if tips:
+                text, markup = _build_hot_tips_page(tips, page_num)
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            else:
+                await _do_hot_tips_flow(query.message.chat_id, ctx.bot)
     elif prefix == "schedule":
         if action == "noop":
             return
@@ -2664,6 +2675,31 @@ def _display_bookmaker_name(key: str) -> str:
     return _BK_DISPLAY.get(key, key.title())
 
 
+HOT_TIPS_PAGE_SIZE = 5
+
+
+def _assign_display_tiers(tips: list[dict]) -> None:
+    """Assign percentile-based display tiers for UX diversity.
+
+    Raw edge_score and edge_rating are preserved for analytics.
+    display_tier is used for rendering badges.
+    """
+    if not tips:
+        return
+    tips.sort(key=lambda t: t.get("edge_score", 0), reverse=True)
+    n = len(tips)
+    for i, tip in enumerate(tips):
+        pct = i / max(n - 1, 1)  # 0.0 = best, 1.0 = worst
+        if pct <= 0.1:
+            tip["display_tier"] = EdgeRating.PLATINUM
+        elif pct <= 0.35:
+            tip["display_tier"] = EdgeRating.GOLD
+        elif pct <= 0.65:
+            tip["display_tier"] = EdgeRating.SILVER
+        else:
+            tip["display_tier"] = EdgeRating.BRONZE
+
+
 def _build_edge_snapshots_from_match(match: dict) -> list[dict]:
     """Convert odds_service match data into edge_rating odds_snapshots format.
 
@@ -2760,6 +2796,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                 edge = calculate_edge_rating(snapshots, model, movement)
                 if edge == EdgeRating.HIDDEN:
                     continue
+                edge_score = calculate_edge_score(snapshots, model, movement)
 
                 # Find best bookmaker for CTA
                 predicted_outcome = model["outcome"]
@@ -2802,6 +2839,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                     "prob": round(consensus_prob * 100),
                     "kelly": 0,  # Not calculated for DB tips
                     "edge_rating": edge,
+                    "edge_score": edge_score,
                     "league": _LEAGUE_DISPLAY.get(league, league.upper()),
                     "odds_by_bookmaker": odds_by_bk,
                 })
@@ -2809,10 +2847,10 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
             log.warning("Hot tips DB scan error for %s: %s", league, exc)
             continue
 
-    # Sort by edge rating tier then EV descending
-    _rating_order = {EdgeRating.PLATINUM: 0, EdgeRating.GOLD: 1, EdgeRating.SILVER: 2, EdgeRating.BRONZE: 3}
-    all_tips.sort(key=lambda t: (_rating_order.get(t.get("edge_rating", ""), 9), -t["ev"]))
+    # Sort by edge score descending, take top 10, then assign display tiers
+    all_tips.sort(key=lambda t: (-t.get("edge_score", 0), -t["ev"]))
     top_tips = all_tips[:10]
+    _assign_display_tiers(top_tips)
 
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time()}
     return top_tips
@@ -2923,8 +2961,97 @@ async def _show_hot_tips(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_id
     await _do_hot_tips_flow(update.effective_chat.id, ctx.bot)
 
 
+def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+    """Build text + keyboard for a single page of hot tips (max 5 per page)."""
+    total = len(tips)
+    total_pages = max((total + HOT_TIPS_PAGE_SIZE - 1) // HOT_TIPS_PAGE_SIZE, 1)
+    page = max(0, min(page, total_pages - 1))
+    start = page * HOT_TIPS_PAGE_SIZE
+    end = start + HOT_TIPS_PAGE_SIZE
+    page_tips = tips[start:end]
+
+    if not page_tips:
+        return (
+            "🔥 <b>Hot Tips</b>\n\nNo edges found right now — the market is efficient.\n"
+            "Check back when more games open!",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+            ]),
+        )
+
+    # Header with page info
+    if total_pages > 1:
+        header = f"🔥 <b>Hot Tips — Page {page + 1}/{total_pages} ({total} bet{'s' if total != 1 else ''} found)</b>"
+    else:
+        header = f"🔥 <b>Hot Tips — {total} Value Bet{'s' if total != 1 else ''}</b>"
+
+    lines = [
+        header,
+        f"<i>Scanned {len(DB_LEAGUES)} leagues across 5 SA bookmakers.</i>",
+        "",
+    ]
+
+    for i, tip in enumerate(page_tips, start + 1):
+        sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
+        home = h(tip.get("home_team", ""))
+        away = h(tip.get("away_team", ""))
+        outcome = h(tip.get("outcome", ""))
+        bk_name = h(tip.get("bookmaker", ""))
+
+        badge = render_edge_badge(tip.get("display_tier", tip.get("edge_rating", "")))
+        badge_suffix = f" {badge}" if badge else ""
+
+        league_display = tip.get("league", "")
+        kickoff = _format_kickoff_display(tip["commence_time"]) if tip.get("commence_time") else ""
+        time_line = f"     🏆 {league_display}"
+        if kickoff and kickoff != "TBC":
+            time_line += f" · ⏰ {kickoff}"
+
+        bk_part = f" ({bk_name})" if bk_name else ""
+        lines.append(
+            f"[{i}] {sport_emoji} <b>{home} vs {away}</b>{badge_suffix}\n"
+            f"{time_line}\n"
+            f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b>{bk_part} · EV +{tip['ev']}%"
+        )
+        lines.append("")
+
+    text = "\n".join(lines)
+
+    # Build numbered tip buttons (max 5 per page)
+    buttons: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for i, tip in enumerate(page_tips, start + 1):
+        event_id = tip.get("event_id", "")
+        row.append(InlineKeyboardButton(
+            f"[{i}] 🔍",
+            callback_data=f"tip:detail:{event_id}:{i - 1}",
+        ))
+        if len(row) == 5 or i == start + len(page_tips):
+            buttons.append(row)
+            row = []
+
+    # Pagination row
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"hot:page:{page - 1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"hot:page:{page + 1}"))
+    if nav:
+        buttons.append(nav)
+
+    # Action buttons
+    buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="hot:go")])
+    buttons.append([
+        InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0"),
+        InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
+    ])
+
+    return (text, InlineKeyboardMarkup(buttons))
+
+
 async def _do_hot_tips_flow(chat_id: int, bot) -> None:
-    """Core Hot Tips — scan all sports, show single consolidated message with numbered tips."""
+    """Core Hot Tips — fetch tips, cache, show first page."""
     import random
 
     verb = random.choice(LOADING_VERBS)
@@ -2956,79 +3083,8 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
     except Exception:
         pass
 
-    if not tips:
-        await bot.send_message(
-            chat_id,
-            "🔥 <b>Hot Tips</b>\n\n"
-            "No edges found right now — the market is efficient.\n"
-            "Check back when more games open!",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
-                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-            ]),
-        )
-        return
-
-    # Build single consolidated message with all tips
-    lines = [
-        f"🔥 <b>Hot Tips — {len(tips)} Value Bet{'s' if len(tips) != 1 else ''}</b>",
-        f"<i>Scanned {len(DB_LEAGUES)} leagues across 5 SA bookmakers.</i>",
-        "",
-    ]
-
-    for i, tip in enumerate(tips, 1):
-        sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
-        home = h(tip.get("home_team", ""))
-        away = h(tip.get("away_team", ""))
-        outcome = h(tip.get("outcome", ""))
-        bk_name = h(tip.get("bookmaker", ""))
-
-        badge = render_edge_badge(tip.get("edge_rating", ""))
-        badge_suffix = f" {badge}" if badge else ""
-
-        # Show league if available, kickoff if we have it
-        league_display = tip.get("league", "")
-        kickoff = _format_kickoff_display(tip["commence_time"]) if tip.get("commence_time") else ""
-        time_line = f"     🏆 {league_display}"
-        if kickoff and kickoff != "TBC":
-            time_line += f" · ⏰ {kickoff}"
-
-        bk_part = f" ({bk_name})" if bk_name else ""
-        lines.append(
-            f"[{i}] {sport_emoji} <b>{home} vs {away}</b>{badge_suffix}\n"
-            f"{time_line}\n"
-            f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b>{bk_part} · EV +{tip['ev']}%"
-        )
-        lines.append("")
-
-    text = "\n".join(lines)
-
-    # Build numbered tip buttons (rows of 5)
-    tip_buttons: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for i, tip in enumerate(tips, 1):
-        event_id = tip.get("event_id", "")
-        row.append(InlineKeyboardButton(
-            f"[{i}] 💡",
-            callback_data=f"tip:detail:{event_id}:{i - 1}",
-        ))
-        if len(row) == 5 or i == len(tips):
-            tip_buttons.append(row)
-            row = []
-
-    # Navigation buttons
-    tip_buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="hot:go")])
-    tip_buttons.append([
-        InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0"),
-        InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
-    ])
-
-    await bot.send_message(
-        chat_id, text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(tip_buttons),
-    )
+    text, markup = _build_hot_tips_page(tips, page=0)
+    await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3965,7 +4021,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
             f"  Bet R50 → get <b>R{payout_50:.0f}</b> back\n\n"
             f"🎯 Our AI gives this a <b>{prob}%</b> chance — "
             f"that's a <b>+{ev}%</b> edge in your favour.\n\n"
-            f"💡 <i>Start small: R20-R50 bets are perfect while learning.</i>"
+            f"🔍 <i>Start small: R20-R50 bets are perfect while learning.</i>"
         )
 
     else:
@@ -3974,7 +4030,7 @@ def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> st
         stake_hint = ""
         if bankroll:
             suggested = round(min(bankroll * 0.05, 200), 0)
-            stake_hint = f"\n💡 Suggested stake: <b>R{suggested:.0f}</b>"
+            stake_hint = f"\n🔍 Suggested stake: <b>R{suggested:.0f}</b>"
         return (
             f"📊 <b>Tip Detail: {home} vs {away}</b>\n\n"
             f"💰 We like <b>{outcome}</b> @ {odds:.2f} ({bookie})\n\n"

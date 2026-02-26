@@ -984,6 +984,28 @@ comparison button, freshness indicator, dynamic CTA bookmaker
 ### Test Status
 - Tests: 295 passing, 0 failures
 
+## Wave 12C — Hot Tips UX Polish (26 Feb 2026)
+
+### Mobile-First Rule
+- MAX 5 content items per page (tips, games, matches)
+- `HOT_TIPS_PAGE_SIZE = 5` constant
+- Pagination with ⬅️ Prev / Next ➡️ buttons via `hot:page:{N}` callback
+- `_build_hot_tips_page(tips, page)` — reusable page builder returns (text, markup)
+- Header shows "Page 1/2 (10 bets found)" when paginated
+
+### Icon Change
+- 💡 → 🔍 throughout bot (magnifying glass = "investigate detail")
+- Changed in: bot.py, scripts/odds_client.py, scripts/picks_engine.py
+
+### Edge Rating Display
+- Percentile-based tiers for UX diversity via `_assign_display_tiers()`
+- Top 10% = Platinum, Top 35% = Gold, Top 65% = Silver, Rest = Bronze
+- `display_tier` used for rendering badges; raw `edge_score` + `edge_rating` preserved for analytics
+- New function: `calculate_edge_score()` in services/edge_rating.py (returns raw 0-100 score)
+
+### Test Status
+- Tests: 295 passing, 0 failures
+
 ## ⚠️ MANDATORY: Telethon E2E Testing Gate
 
 **NO wave can be marked as "PASS" or "COMPLETE" without Telethon E2E tests against the LIVE running bot.**

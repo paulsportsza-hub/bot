@@ -100,6 +100,25 @@ def calculate_edge_rating(
     return EdgeRating.HIDDEN
 
 
+def calculate_edge_score(
+    odds_snapshots: list[dict],
+    model_prediction: dict,
+    line_movement: dict | None = None,
+) -> float:
+    """Return the raw edge score (0-100) without tier mapping."""
+    if not odds_snapshots:
+        odds_snapshots = []
+    if not model_prediction:
+        model_prediction = {}
+    return (
+        _bookmaker_consensus(odds_snapshots, model_prediction.get("outcome", ""))
+        + _model_alignment(odds_snapshots, model_prediction)
+        + _line_movement_score(line_movement, model_prediction.get("outcome", ""))
+        + _value_detection(odds_snapshots, model_prediction)
+        + _market_breadth(odds_snapshots)
+    )
+
+
 def _bookmaker_consensus(snapshots: list[dict], predicted_outcome: str) -> float:
     """Do multiple bookmakers agree on the favourite? (0-25 points)
 
