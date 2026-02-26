@@ -58,7 +58,7 @@ from services.stitch_service import stitch as stitch_service
 from services.edge_rating import EdgeRating, calculate_edge_rating, calculate_edge_score
 from services import odds_service as odds_svc
 from services.affiliate_service import get_affiliate_url, select_best_bookmaker, get_runner_up_odds
-from renderers.edge_renderer import render_edge_badge, render_tip_with_odds, render_tip_button_label, render_odds_comparison
+from renderers.edge_renderer import render_edge_badge, render_tip_with_odds, render_tip_button_label, render_odds_comparison, EDGE_EMOJIS, EDGE_LABELS
 
 # ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
 from logging.handlers import RotatingFileHandler
@@ -3658,6 +3658,11 @@ _schedule_cache: dict[int, list[dict]] = {}
 # Cache for game tips (event_id → list of tip dicts)
 _game_tips_cache: dict[str, list[dict]] = {}
 
+# Cache for full game analysis (event_id → (html, tips, timestamp))
+# TTL: 1 hour. Avoids re-calling Claude on "Back to Game" navigation.
+_ANALYSIS_CACHE_TTL = 3600
+_analysis_cache: dict[str, tuple[str, list[dict], float]] = {}
+
 GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
     You are MzansiEdge, a sharp South African sports betting analyst with deep knowledge
     of form, matchups, and market dynamics. Given odds and probability data for an
@@ -3692,9 +3697,23 @@ GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
 
 async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     """Generate AI betting tips for a specific game."""
+    import time as _time
     from datetime import datetime as dt_cls
     from scripts.sports_data import fetch_events_for_league
     from scripts.odds_client import fetch_odds_cached, fair_probabilities, find_best_sa_odds, calculate_ev
+
+    # ── Check analysis cache first (1-hour TTL) ──
+    cached = _analysis_cache.get(event_id)
+    if cached:
+        cached_msg, cached_tips, cached_ts = cached
+        if _time.time() - cached_ts < _ANALYSIS_CACHE_TTL:
+            _game_tips_cache[event_id] = cached_tips
+            buttons = _build_game_buttons(cached_tips, event_id, user_id)
+            await query.edit_message_text(
+                cached_msg, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
 
     db_user = await db.get_user(user_id)
     prefs = await db.get_user_sport_prefs(user_id)
@@ -3754,7 +3773,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             if not implied_probs:
                 continue
             fair_prob = sum(implied_probs) / len(implied_probs)
-            # Normalise later — just get raw prob for now
             ev_pct = round((fair_prob * best_price - 1) * 100, 1) if best_price > 0 else 0
             _outcome_labels = {"home": home, "away": away, "draw": "Draw"}
             tips.append({
@@ -3845,6 +3863,39 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         log.error("Claude game analysis error: %s", exc)
         narrative = ""
 
+    # ── Inject Edge Rating badge into Verdict header ──
+    if narrative and tips:
+        # Compute edge tier for the best positive-EV tip
+        best_ev = max((t["ev"] for t in tips), default=0)
+        if best_ev > 0:
+            # Use score-based tier: map EV to approximate edge_score
+            # (simplified: percentile within this match's tips)
+            _tier_scores = sorted([t["ev"] for t in tips if t["ev"] > 0], reverse=True)
+            n = len(_tier_scores)
+            if n >= 3 and best_ev == _tier_scores[0]:
+                tier = EdgeRating.PLATINUM if best_ev >= 8 else EdgeRating.GOLD
+            elif best_ev >= 5:
+                tier = EdgeRating.GOLD
+            elif best_ev >= 2:
+                tier = EdgeRating.SILVER
+            else:
+                tier = EdgeRating.BRONZE
+            tier_emoji = EDGE_EMOJIS.get(tier, "")
+            tier_label = EDGE_LABELS.get(tier, "")
+            if tier_emoji and tier_label:
+                badge = f" — {tier_emoji} {tier_label}"
+                # Replace "🏆 Verdict" or "🏆 <b>Verdict</b>" with badge version
+                import re
+                narrative = re.sub(
+                    r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)",
+                    rf"\1{badge}",
+                    narrative,
+                    count=1,
+                )
+        # Strip conviction level from verdict line (replaced by tier badge)
+        import re
+        narrative = re.sub(r" with (?:High|Medium|Low) conviction", "", narrative)
+
     # Build message — AI narrative first, then odds
     lines = [
         f"🎯 <b>{hf}{home} vs {af}{away}</b>",
@@ -3874,68 +3925,78 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
 
     msg = "\n".join(lines)
 
-    # Build buttons
-    buttons: list[list[InlineKeyboardButton]] = []
+    # ── Cache the full analysis (1-hour TTL) ──
+    _analysis_cache[event_id] = (msg, tips, _time.time())
 
-    # Tip detail buttons for positive EV tips
-    for i, tip in enumerate(tips[:3]):
-        if tip["ev"] > 0:
-            buttons.append([InlineKeyboardButton(
-                f"💰 {tip['outcome']} @ {tip['odds']:.2f} (EV: +{tip['ev']}%)",
-                callback_data=f"tip:detail:{event_id}:{i}",
-            )])
-
-    # Multi-bookmaker comparison button (only when odds.db data exists)
-    if db_match and db_match.get("outcomes") and tips:
-        buttons.append([InlineKeyboardButton(
-            "📊 All Bookmaker Odds",
-            callback_data=f"odds:compare:{event_id}",
-        )])
-
-    # Bookmaker affiliate button — match CTA to the best positive-EV outcome
-    if tips:
-        # Pick the highest positive-EV tip for the CTA bookmaker
-        best_ev_tip = max(
-            (t for t in tips if t["ev"] > 0),
-            key=lambda t: t["ev"],
-            default=tips[0],
-        )
-        odds_by_bk = best_ev_tip.get("odds_by_bookmaker", {})
-        if odds_by_bk:
-            best_bk = select_best_bookmaker(odds_by_bk, user_id, db_match_id or "")
-            if best_bk and best_bk.get("affiliate_url"):
-                cta_label = render_tip_button_label(best_bk)
-                buttons.append([InlineKeyboardButton(
-                    f"📲 {cta_label}", url=best_bk["affiliate_url"],
-                )])
-            else:
-                active_bk = config.get_active_bookmaker()
-                bk_url = config.get_affiliate_url(event_id) or active_bk.get("website_url", "")
-                buttons.append([InlineKeyboardButton(
-                    f"📲 Place your bet on {active_bk['display_name']} →",
-                    url=bk_url,
-                )])
-        else:
-            active_bk = config.get_active_bookmaker()
-            betway_url = config.get_affiliate_url(event_id)
-            if betway_url:
-                buttons.append([InlineKeyboardButton(
-                    f"📲 Place your bet on {active_bk['display_name']} →",
-                    url=betway_url,
-                )])
-            else:
-                buttons.append([InlineKeyboardButton(
-                    f"📲 Place your bet on {active_bk['display_name']} →",
-                    callback_data="tip:affiliate_soon",
-                )])
-
-    buttons.append([InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")])
-    buttons.append([InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")])
+    # Build simplified buttons (North Star: 4 buttons max)
+    buttons = _build_game_buttons(tips, event_id, user_id)
 
     await query.edit_message_text(
         msg, parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
+
+
+def _build_game_buttons(
+    tips: list[dict], event_id: str, user_id: int,
+) -> list[list[InlineKeyboardButton]]:
+    """Build simplified game breakdown buttons (North Star: recommend, compare, nav)."""
+    buttons: list[list[InlineKeyboardButton]] = []
+
+    if tips:
+        # Button 1: Recommended bet CTA — highest positive-EV outcome
+        best_ev_tip = max(
+            (t for t in tips if t["ev"] > 0),
+            key=lambda t: t["ev"],
+            default=None,
+        )
+        if best_ev_tip:
+            odds_by_bk = best_ev_tip.get("odds_by_bookmaker", {})
+            match_id = best_ev_tip.get("match_id", "")
+            best_bk = select_best_bookmaker(odds_by_bk, user_id, match_id) if odds_by_bk else {}
+
+            # Determine edge tier for badge
+            ev = best_ev_tip["ev"]
+            if ev >= 8:
+                tier = EdgeRating.PLATINUM
+            elif ev >= 5:
+                tier = EdgeRating.GOLD
+            elif ev >= 2:
+                tier = EdgeRating.SILVER
+            else:
+                tier = EdgeRating.BRONZE
+            tier_emoji = EDGE_EMOJIS.get(tier, "")
+
+            bk_name = (best_bk or {}).get("bookmaker_name", config.get_active_display_name())
+            aff_url = (best_bk or {}).get("affiliate_url", "") or config.get_affiliate_url(event_id)
+            outcome = best_ev_tip["outcome"]
+            odds_val = best_ev_tip["odds"]
+
+            cta_text = f"{tier_emoji} Back {outcome} @ {odds_val:.2f} on {bk_name} →"
+            if aff_url:
+                buttons.append([InlineKeyboardButton(cta_text, url=aff_url)])
+            else:
+                buttons.append([InlineKeyboardButton(cta_text, callback_data="tip:affiliate_soon")])
+        else:
+            # No positive EV — generic fallback
+            active_bk = config.get_active_bookmaker()
+            bk_url = config.get_affiliate_url(event_id) or active_bk.get("website_url", "")
+            buttons.append([InlineKeyboardButton(
+                f"📲 View odds on {active_bk['short_name']} →", url=bk_url,
+            )])
+
+        # Button 2: Compare All Odds (only when multi-bookmaker data exists)
+        has_multi_bk = any(t.get("odds_by_bookmaker") for t in tips)
+        if has_multi_bk:
+            buttons.append([InlineKeyboardButton(
+                "📊 Compare All Odds", callback_data=f"odds:compare:{event_id}",
+            )])
+
+    # Buttons 3-4: Navigation
+    buttons.append([InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")])
+    buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
+
+    return buttons
 
 
 async def handle_subscribe(query, event_id: str) -> None:
@@ -4169,11 +4230,29 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
 
     text = "\n".join(lines)
 
-    buttons = [
-        [InlineKeyboardButton("🔙 Back to Game", callback_data=f"yg:game:{event_id}")],
-        [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
-        [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-    ]
+    # Build buttons: affiliate link per market (best bookmaker each) + nav
+    buttons: list[list[InlineKeyboardButton]] = []
+
+    _aff_labels = {"home": "Home Win", "draw": "Draw", "away": "Away Win"}
+    for oc_key in ("home", "draw", "away"):
+        oc_data = outcomes.get(oc_key)
+        if not oc_data:
+            continue
+        best_bk_key = oc_data.get("best_bookmaker", "")
+        best_odds = oc_data.get("best_odds", 0)
+        if not best_bk_key:
+            continue
+        aff_url = get_affiliate_url(best_bk_key)
+        if not aff_url:
+            continue
+        bk_name = _display_bookmaker_name(best_bk_key)
+        label = _aff_labels.get(oc_key, oc_key)
+        buttons.append([InlineKeyboardButton(
+            f"📲 {bk_name} — Best for {label} →", url=aff_url,
+        )])
+
+    buttons.append([InlineKeyboardButton("↩️ Back to Game", callback_data=f"yg:game:{event_id}")])
+    buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,

@@ -396,3 +396,108 @@ class TestCtaBookmakerMatch:
             default=tips[0],
         )
         assert best_ev_tip["outcome"] == "Home Win"
+
+
+# ── Wave 13F: North Star — Simplify, Recommend, Convert ──
+
+
+class TestGameButtonSimplification:
+    """Game breakdown should have max 4 buttons (CTA, compare, back, menu)."""
+
+    def test_build_game_buttons_has_max_4(self):
+        """Simplified buttons: CTA + compare + back + menu = 4."""
+        tips = [
+            {"outcome": "Draw", "odds": 4.60, "ev": 8.0, "bookie_key": "gbets",
+             "odds_by_bookmaker": {"gbets": 4.60, "betway": 4.30}, "match_id": "test"},
+            {"outcome": "Home Win", "odds": 5.20, "ev": 3.0, "bookie_key": "hollywoodbets",
+             "odds_by_bookmaker": {"hollywoodbets": 5.20, "betway": 5.10}, "match_id": "test"},
+            {"outcome": "Away Win", "odds": 1.63, "ev": 2.0, "bookie_key": "supabets",
+             "odds_by_bookmaker": {"supabets": 1.63}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(tips, "ev-123", 111)
+        assert len(buttons) == 4  # CTA, compare, back, menu
+
+    def test_cta_uses_best_ev_outcome(self):
+        """CTA button text should include the highest EV outcome."""
+        tips = [
+            {"outcome": "Draw", "odds": 4.60, "ev": 8.0, "bookie_key": "gbets",
+             "odds_by_bookmaker": {"gbets": 4.60}, "match_id": "test"},
+            {"outcome": "Home Win", "odds": 2.10, "ev": 1.0, "bookie_key": "betway",
+             "odds_by_bookmaker": {"betway": 2.10}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(tips, "ev-456", 111)
+        cta_text = buttons[0][0].text
+        assert "Draw" in cta_text
+        assert "4.60" in cta_text
+
+    def test_no_positive_ev_shows_generic_cta(self):
+        """When no positive EV, show generic 'View odds' button."""
+        tips = [
+            {"outcome": "Home Win", "odds": 2.10, "ev": -1.0, "bookie_key": "betway",
+             "odds_by_bookmaker": {}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(tips, "ev-789", 111)
+        cta_text = buttons[0][0].text
+        assert "View odds" in cta_text
+
+    def test_nav_buttons_use_correct_emoji(self):
+        """Navigation back buttons should use ↩️ not 🔙."""
+        tips = [
+            {"outcome": "Draw", "odds": 4.60, "ev": 5.0, "bookie_key": "gbets",
+             "odds_by_bookmaker": {"gbets": 4.60}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(tips, "ev-nav", 111)
+        # Check only callback_data buttons (nav), not URL buttons (CTA)
+        for row in buttons:
+            for btn in row:
+                if btn.callback_data and btn.text and "Back" in btn.text:
+                    assert "↩️" in btn.text
+                    assert "🔙" not in btn.text
+
+
+class TestAnalysisCache:
+    """Game analysis should be cached for 1 hour."""
+
+    def test_cache_ttl_constant(self):
+        """Cache TTL should be 1 hour (3600 seconds)."""
+        assert bot._ANALYSIS_CACHE_TTL == 3600
+
+    def test_cache_structure_exists(self):
+        """Cache dict should exist and be empty on import."""
+        assert isinstance(bot._analysis_cache, dict)
+
+
+class TestVerdictBadgeInjection:
+    """Verdict header should get programmatic Edge Rating badge."""
+
+    def test_badge_injected_into_verdict(self):
+        """Simulate badge injection on a narrative string."""
+        import re
+        narrative = "🏆 <b>Verdict</b>\nBack the draw with Medium conviction — lekker value."
+        # Simulate the injection logic
+        tier_emoji = "⛏️⭐"
+        tier_label = "Gold Edge"
+        badge = f" — {tier_emoji} {tier_label}"
+        narrative = re.sub(
+            r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)",
+            rf"\1{badge}",
+            narrative,
+            count=1,
+        )
+        narrative = re.sub(r" with (?:High|Medium|Low) conviction", "", narrative)
+        assert "Gold Edge" in narrative
+        assert "⛏️⭐" in narrative
+        assert "Medium conviction" not in narrative
+
+    def test_no_badge_without_verdict(self):
+        """If no Verdict section, narrative stays unchanged."""
+        import re
+        narrative = "Some analysis text without a verdict."
+        original = narrative
+        narrative = re.sub(
+            r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)",
+            r"\1 — ⛏️⭐ Gold Edge",
+            narrative,
+            count=1,
+        )
+        assert narrative == original

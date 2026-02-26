@@ -1196,3 +1196,44 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 13B)
 - Tests: 299 passing (4 new), 0 failures
+
+## Wave 13F — North Star: Simplify, Recommend, Convert (26 Feb 2026)
+
+**North Star Applied:** Game Breakdown simplified from 7 to 4 buttons. Recommended bet CTA is now the hero — shows tier badge, outcome, odds, and best bookmaker in one button. Analysis cached for 1hr to make navigation instant. Verdict uses programmatic Edge Rating badge. All back buttons standardised to ↩️. Every screen now passes the Three Laws test: simplify ruthlessly, make betting effortless, our recommendation is the hero.
+
+### Game Breakdown Button Simplification (P0)
+- Reduced from 7 buttons to 4: recommended CTA, compare odds, back, menu
+- Removed: 3 individual outcome buttons, old static Betway CTA, Hot Tips button
+- New `_build_game_buttons(tips, event_id, user_id)` helper for reuse
+
+### Recommended Bet CTA (P0)
+- Hero button: `{tier_emoji} Back {outcome} @ {odds} on {bookmaker} →`
+- Uses highest positive-EV outcome (same logic as BUG-024 fix)
+- Shows edge tier emoji (PLATINUM ⛏️🔥, GOLD ⛏️⭐, SILVER ⛏️🥈, BRONZE ⛏️🥉)
+- Links to best bookmaker affiliate URL for that specific outcome
+- Falls back to "View odds on {bookmaker} →" when no positive EV exists
+
+### Verdict Edge Rating Badge (P0)
+- Programmatic, not AI-generated — injected AFTER Claude response
+- Format: `🏆 Verdict — ⛏️⭐ Gold Edge`
+- Strips "with High/Medium/Low conviction" text (replaced by tier badge)
+- Badge omitted when no EV data available
+
+### Analysis Caching (P1)
+- `_analysis_cache: dict[str, tuple[str, list, float]]` — event_id → (html, tips, timestamp)
+- TTL: 3600 seconds (1 hour)
+- On cache hit: serves instantly, skips Claude API call
+- "Back to Game" from Odds Comparison is now instant (no re-analysis)
+- Cleared on bot restart (in-memory only)
+
+### Odds Comparison Affiliate Buttons (P0)
+- Added 3 affiliate buttons at bottom of odds comparison (one per market)
+- Format: `📲 {Bookmaker} — Best for {Home Win/Draw/Away Win} →`
+- Only shown when bookmaker has an affiliate URL configured
+
+### Back Button Emoji Consistency (P1)
+- Fixed 🔙 → ↩️ in odds comparison back button
+- All `InlineKeyboardButton` with "Back" text now use ↩️
+
+### Test Status (Wave 13F)
+- Tests: 307 passing (8 new), 0 failures
