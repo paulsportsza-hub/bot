@@ -1023,3 +1023,13 @@ ps -p $(pgrep -f "python.*bot.py") -o lstart=
 
 ### Failure = Block
 If any Telethon E2E test fails, the wave is NOT complete. Fix and re-test.
+
+### Bot Restart After Every Commit
+Every LeadDev wave that modifies bot.py or any imported module MUST restart the bot process before marking complete:
+```bash
+pkill -f "python.*bot.py" && sleep 2
+cd /home/paulsportsza/bot && source .venv/bin/activate
+nohup python bot.py > /tmp/bot_latest.log 2>&1 &
+sleep 5 && tail -20 /tmp/bot_latest.log
+```
+A stale process running old code is invisible to unit tests and has caused multiple missed bugs.
