@@ -3857,14 +3857,18 @@ _game_tips_cache: dict[str, list[dict]] = {}
 _ANALYSIS_CACHE_TTL = 3600
 _analysis_cache: dict[str, tuple[str, list[dict], float]] = {}
 
-GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
-    You are MzansiEdge, a sharp South African sports betting analyst with deep knowledge
-    of form, matchups, and market dynamics. Given odds and probability data for an
-    upcoming match, write a punchy ~150-word analysis using these EXACT section headers:
+def _build_game_analysis_prompt(sport: str = "soccer") -> str:
+    """Build the system prompt for Claude game breakdown, parameterised by sport."""
+    return textwrap.dedent(f"""\
+    You are MzansiEdge, a sharp South African sports betting analyst.
+    SPORT: {sport}
+    You are analysing a {sport} match. Use ONLY terminology appropriate for {sport}.
+
+    Write a punchy ~150-word analysis using these EXACT section headers:
 
     📋 <b>The Setup</b>
-    Recent form, key injuries/absences, head-to-head record, and venue factor.
-    Mention specific stats where relevant (win streak, clean sheets, scoring form).
+    Summarise verified form, standings, and head-to-head from the VERIFIED DATA below.
+    If no verified data is provided, state "form data unavailable" and move on.
 
     🎯 <b>The Edge</b>
     Where the value is. Be specific about WHICH outcome and WHY the market has
@@ -3872,22 +3876,40 @@ GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
     If there's no clear edge, say so honestly.
 
     ⚠️ <b>The Risk</b>
-    One or two sentences on what could derail this pick. Be specific — name the
-    scenario (e.g. key player rested, weather, fixture congestion).
+    One or two sentences on what could derail this pick. Frame risks around the
+    verified data (e.g. poor away form, H2H dominance). Do NOT speculate.
 
     🏆 <b>Verdict</b>
     One bold sentence: your top pick. Do NOT include conviction levels (High/Medium/Low).
-    The Edge Rating badge handles confidence display — never mention conviction.
 
-    VERIFIED DATA RULES (critical):
-    - If the user message contains a VERIFIED DATA section, use ONLY those facts for
-      standings, form, league positions, head-to-head records, and goal/point stats.
-    - Do NOT invent league positions, win/loss records, or form runs.
-    - Do NOT fabricate head-to-head results or scores.
-    - If no VERIFIED DATA is provided, keep analysis general — focus on odds value
-      and market dynamics. Say "form data unavailable" rather than guessing.
-    - You may mention general team reputation and playing style, but do NOT cite
-      specific statistics unless they appear in the VERIFIED DATA section.
+    CRITICAL RULES — ABSOLUTE, NO EXCEPTIONS:
+
+    WHAT YOU CAN USE:
+    - VERIFIED_DATA: League positions, form, H2H, standings, points — use freely
+    - ODDS DATA: All bookmaker odds, implied probabilities, EV calculations — use freely
+    - YOUR OWN ANALYSIS: Interpreting what the verified data MEANS, assessing value,
+      explaining why odds may be mispriced, framing risk — this is your job
+
+    WHAT YOU MUST NEVER DO:
+    - NEVER mention any person by name (managers, coaches, players, owners, pundits)
+      unless their name appears in VERIFIED_DATA
+    - NEVER reference historical events, records, or streaks unless in VERIFIED_DATA
+    - NEVER describe a team's playing style, tactics, or approach
+      (e.g. "counter-attacking", "possession-based", "parking the bus")
+    - NEVER name stadiums, venues, or grounds unless in VERIFIED_DATA
+    - NEVER reference injuries, suspensions, transfers, or squad news
+    - NEVER use phrases like "historically", "traditionally", "known for", "famous for"
+    - NEVER reference specific past matches beyond the VERIFIED_DATA H2H section
+    - NEVER describe weather, pitch conditions, or travel factors
+
+    WHEN NO VERIFIED DATA IS PROVIDED:
+    - Discuss ONLY the odds, implied probabilities, and where value exists
+    - Frame the analysis around market pricing and bookmaker disagreement
+    - Say "form data unavailable" — do NOT fill the gap with assumed context
+    - Keep it short and honest. Better to say less than to say something wrong.
+
+    THE GOLDEN RULE: If you cannot point to the exact field in VERIFIED_DATA or
+    ODDS DATA that supports a claim, DO NOT MAKE THAT CLAIM.
 
     FORMATTING RULES (strict):
     - Do NOT output a match title line. The title is rendered separately.
@@ -3900,10 +3922,8 @@ GAME_ANALYSIS_PROMPT = textwrap.dedent("""\
     - Do NOT include odds numbers or bookmaker names (shown separately below)
     - No disclaimers, no "gamble responsibly" — we handle that elsewhere
     - Be direct, confident, conversational — like a mate at the braai who knows his stuff
-    - South African tone: use "edge", "value", "sharp", "lekker"
-    - Sport-specific language: "clean sheet" for soccer, "try line" for rugby, "strike rate" for cricket
     - If the data is thin, keep it shorter — don't pad with generic filler
-""")
+    """)
 
 
 def sanitize_ai_response(raw_text: str) -> str:
@@ -4033,78 +4053,149 @@ def _format_verified_context(ctx_data: dict) -> str:
 
 
 def validate_sport_context(narrative: str, sport: str) -> str:
-    """Strip sport-inappropriate language from AI output.
+    """Strip sport-inappropriate language from AI output using sport_terms.py.
 
-    Soccer terms in rugby analysis (or vice versa) indicate hallucination.
+    Uses the Dataminer-maintained SPORT_BANNED_TERMS dict for comprehensive
+    cross-sport term lists (cricket: 33, rugby: 31, soccer: 30, F1: 24).
     """
     if not narrative or not sport:
         return narrative
 
-    # Terms that don't belong in each sport
-    wrong_terms: dict[str, list[str]] = {
-        "soccer": ["try line", "lineout", "scrum", "ruck", "maul", "conversion kick",
-                    "drop goal", "sin bin", "yellow card penalty"],
-        "rugby": ["clean sheet", "penalty kick", "corner", "offside trap",
-                   "hat-trick", "golden boot", "VAR"],
-        "cricket": ["clean sheet", "try line", "penalty kick", "offside"],
-        "f1": ["clean sheet", "try line", "penalty kick", "hat-trick"],
-    }
+    try:
+        import sys as _sys
+        if "/home/paulsportsza" not in _sys.path:
+            _sys.path.insert(0, "/home/paulsportsza")
+        from scrapers.sport_terms import SPORT_BANNED_TERMS
+        banned = SPORT_BANNED_TERMS.get(sport, {}).get("banned", [])
+    except ImportError:
+        banned = []
 
-    banned = wrong_terms.get(sport, [])
     for term in banned:
         # Case-insensitive removal of sentences containing wrong-sport terms
-        narrative = re.sub(
-            rf'[^.]*\b{re.escape(term)}\b[^.]*\.?\s*',
-            '', narrative, flags=re.IGNORECASE,
-        )
+        pattern = rf'[^.]*\b{re.escape(term)}\b[^.]*\.?\s*'
+        before = narrative
+        narrative = re.sub(pattern, '', narrative, flags=re.IGNORECASE)
+        if narrative != before:
+            log.warning("Stripped wrong-sport term '%s' from %s analysis", term, sport)
 
     return narrative.strip()
 
 
+# ── Patterns for expanded fact checker ──
+
+_HISTORY_PATTERNS = [
+    r'\bhistorically\b', r'\btraditionally\b', r'\bknown for\b', r'\bfamous for\b',
+    r"\bhaven't won .* since\b", r'\blast time .* was\b', r'\bfirst time since\b',
+    r'\bin recent years\b', r'\bover the past\b', r'\bdating back to\b',
+]
+
+_STYLE_PATTERNS = [
+    r'\bcounter.?attack', r'\bpossession.?based\b', r'\bpark.?the bus\b',
+    r'\bhigh press\b', r'\blow block\b', r'\btiki.?taka\b', r'\bdirect football\b',
+    r'\broute one\b', r'\btotal football\b', r'\bgegenpressing\b',
+    r'\bplaying style\b', r'\btactical\b',
+]
+
+_CONDITION_PATTERNS = [
+    r'\bpitch condition', r'\bweather\b', r'\btravel fatigue\b',
+    r'\bfixture congestion\b', r'\bmid.?week\b', r'\brotation\b',
+    r'\bcold conditions\b', r'\bheat\b', r'\baltitude\b',
+]
+
+
 def fact_check_output(narrative: str, ctx_data: dict) -> str:
-    """Post-generation fact checker: strip lines with fabricated league positions.
+    """Post-generation fact checker: strip lines with unverified factual claims.
 
-    If verified context has league positions, check that AI didn't invent
-    different positions. Flag and strip contradicting claims.
+    Catches: fabricated positions, unverified person names, historical claims,
+    tactical/style descriptions, venue names, and condition references.
     """
-    if not narrative or not ctx_data or not ctx_data.get("data_available"):
+    if not narrative:
         return narrative
-
-    # Extract verified positions
-    verified_positions: dict[str, int] = {}
-    for side in ("home_team", "away_team"):
-        team = ctx_data.get(side, {})
-        name = team.get("name", "")
-        pos = team.get("league_position")
-        if name and pos is not None:
-            verified_positions[name.lower()] = pos
-
-    if not verified_positions:
-        return narrative
-
-    # Look for position claims like "sit 3rd" or "in 5th place" or "currently 2nd"
-    import re as _re
-    position_pattern = _re.compile(
-        r'(?:sit|sitting|in|currently|placed|ranked)\s+(\d+)(?:st|nd|rd|th)',
-        _re.IGNORECASE,
-    )
 
     lines = narrative.split('\n')
     cleaned: list[str] = []
+
+    # Extract verified names and positions from context
+    verified_names: set[str] = set()
+    verified_positions: dict[str, int] = {}
+    if ctx_data and ctx_data.get("data_available"):
+        for side in ("home_team", "away_team"):
+            team = ctx_data.get(side, {})
+            name = team.get("name", "")
+            if name:
+                verified_names.add(name.lower())
+                # Also add individual words from team names (e.g. "Chiefs", "Pirates")
+                for word in name.split():
+                    if len(word) > 3:
+                        verified_names.add(word.lower())
+            pos = team.get("league_position")
+            if name and pos is not None:
+                verified_positions[name.lower()] = pos
+
+        # H2H team names
+        for game in ctx_data.get("head_to_head", []):
+            for key in ("home", "away"):
+                h2h_name = game.get(key, "")
+                if h2h_name:
+                    verified_names.add(h2h_name.lower())
+
+    # Compile all ban patterns once
+    all_ban_patterns = (
+        [(p, "historical claim") for p in _HISTORY_PATTERNS]
+        + [(p, "tactical/style") for p in _STYLE_PATTERNS]
+        + [(p, "condition/weather") for p in _CONDITION_PATTERNS]
+    )
+
+    # Position check pattern
+    position_re = re.compile(
+        r'(?:sit|sitting|in|currently|placed|ranked)\s+(\d+)(?:st|nd|rd|th)',
+        re.IGNORECASE,
+    )
+
+    # Person name pattern — capitalised proper nouns that look like names
+    # (Two+ consecutive capitalised words not in verified_names)
+    person_re = re.compile(r'\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})+)\b')
+
     for line in lines:
-        match = position_pattern.search(line)
-        if match:
-            claimed_pos = int(match.group(1))
-            # Check if any verified team is in this line with wrong position
+        stripped = False
+
+        # 1. Check fabricated league positions
+        pos_match = position_re.search(line)
+        if pos_match and verified_positions:
+            claimed_pos = int(pos_match.group(1))
             line_lower = line.lower()
-            is_wrong = False
             for team_name, real_pos in verified_positions.items():
                 if team_name in line_lower and claimed_pos != real_pos:
-                    is_wrong = True
+                    log.warning("Stripped fabricated position: %s", line[:80])
+                    stripped = True
                     break
-            if is_wrong:
-                continue  # Strip this line — it has a fabricated position
-        cleaned.append(line)
+
+        # 2. Check historical/style/condition patterns
+        if not stripped:
+            for pattern, category in all_ban_patterns:
+                if re.search(pattern, line, re.IGNORECASE):
+                    log.warning("Stripped %s: %s", category, line[:80])
+                    stripped = True
+                    break
+
+        # 3. Check unverified person names
+        if not stripped:
+            name_matches = person_re.findall(line)
+            for name in name_matches:
+                name_lower = name.lower()
+                # Skip if it's a known team name or section header
+                if name_lower in verified_names:
+                    continue
+                if any(h in name_lower for h in ("the setup", "the edge", "the risk",
+                                                  "verdict", "bookmaker odds")):
+                    continue
+                # This looks like an unverified person name
+                log.warning("Stripped unverified name '%s': %s", name, line[:80])
+                stripped = True
+                break
+
+        if not stripped:
+            cleaned.append(line)
 
     return '\n'.join(cleaned)
 
@@ -4299,11 +4390,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
 
     # Get AI narrative — always call regardless of odds availability
     narrative = ""
+    _sport_for_prompt = config.LEAGUE_SPORT.get(target_league, "soccer")
     try:
         resp = await claude.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=512,
-            system=GAME_ANALYSIS_PROMPT,
+            system=_build_game_analysis_prompt(_sport_for_prompt),
             messages=[{
                 "role": "user",
                 "content": user_message,

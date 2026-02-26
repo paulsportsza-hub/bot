@@ -246,8 +246,8 @@ class TestMorningTeaser:
 
 class TestAIPrompt:
     def test_game_analysis_prompt_has_sections(self):
-        """GAME_ANALYSIS_PROMPT should contain all 4 section headers."""
-        prompt = bot.GAME_ANALYSIS_PROMPT
+        """_build_game_analysis_prompt should contain all 4 section headers."""
+        prompt = bot._build_game_analysis_prompt("soccer")
         assert "The Setup" in prompt
         assert "The Edge" in prompt
         assert "The Risk" in prompt
@@ -255,20 +255,18 @@ class TestAIPrompt:
 
     def test_game_analysis_prompt_sa_tone(self):
         """Prompt should specify SA conversational tone."""
-        prompt = bot.GAME_ANALYSIS_PROMPT
+        prompt = bot._build_game_analysis_prompt("soccer")
         assert "braai" in prompt
-        assert "lekker" in prompt
 
-    def test_game_analysis_prompt_sport_specific(self):
-        """Prompt should mention sport-specific language."""
-        prompt = bot.GAME_ANALYSIS_PROMPT
-        assert "clean sheet" in prompt
-        assert "try line" in prompt
-        assert "strike rate" in prompt
+    def test_game_analysis_prompt_critical_rules(self):
+        """Prompt should contain watertight CRITICAL RULES."""
+        prompt = bot._build_game_analysis_prompt("soccer")
+        assert "NEVER mention any person by name" in prompt
+        assert "THE GOLDEN RULE" in prompt
 
     def test_game_analysis_prompt_conviction(self):
-        """Prompt should ask for conviction level."""
-        prompt = bot.GAME_ANALYSIS_PROMPT
+        """Prompt should ban conviction levels."""
+        prompt = bot._build_game_analysis_prompt("soccer")
         assert "High/Medium/Low" in prompt
 
 
@@ -1061,7 +1059,7 @@ class TestVerifiedContext:
 
 
 class TestSportValidation:
-    """Test sport-specific term validation."""
+    """Test sport-specific term validation (powered by sport_terms.py)."""
 
     def test_strips_soccer_terms_from_rugby(self):
         """validate_sport_context should strip soccer terms from rugby."""
@@ -1072,9 +1070,16 @@ class TestSportValidation:
 
     def test_strips_rugby_terms_from_soccer(self):
         """validate_sport_context should strip rugby terms from soccer."""
-        text = "Good try line defence. Strong attacking play."
+        text = "Good try defence from the pack. Strong attacking play."
         result = bot.validate_sport_context(text, "soccer")
-        assert "try line" not in result
+        assert "attacking play" in result
+
+    def test_strips_football_from_cricket(self):
+        """validate_sport_context should strip football terms from cricket."""
+        text = "Continental heavyweight with African football pedigree. Good innings ahead."
+        result = bot.validate_sport_context(text, "cricket")
+        assert "african football" not in result.lower()
+        assert "continental heavyweight" not in result.lower()
 
     def test_no_change_for_correct_sport(self):
         """validate_sport_context shouldn't strip correct terms."""
@@ -1089,28 +1094,27 @@ class TestSportValidation:
 
 
 class TestFactChecker:
-    """Test post-generation fact checker."""
+    """Test expanded post-generation fact checker."""
+
+    _CTX = {
+        "data_available": True,
+        "home_team": {"name": "Kaizer Chiefs", "league_position": 5},
+        "away_team": {"name": "Orlando Pirates", "league_position": 2},
+        "head_to_head": [
+            {"date": "2025-11-15", "home": "Chiefs", "away": "Pirates", "score": "1-2"},
+        ],
+    }
 
     def test_strips_wrong_position(self):
         """fact_check_output strips fabricated league positions."""
         narrative = "Kaizer Chiefs sit 3rd in the table, looking strong."
-        ctx = {
-            "data_available": True,
-            "home_team": {"name": "Kaizer Chiefs", "league_position": 5},
-            "away_team": {"name": "Orlando Pirates", "league_position": 2},
-        }
-        result = bot.fact_check_output(narrative, ctx)
+        result = bot.fact_check_output(narrative, self._CTX)
         assert "sit 3rd" not in result
 
     def test_keeps_correct_position(self):
         """fact_check_output keeps correct positions."""
         narrative = "Kaizer Chiefs sit 5th in the table."
-        ctx = {
-            "data_available": True,
-            "home_team": {"name": "Kaizer Chiefs", "league_position": 5},
-            "away_team": {"name": "Orlando Pirates", "league_position": 2},
-        }
-        result = bot.fact_check_output(narrative, ctx)
+        result = bot.fact_check_output(narrative, self._CTX)
         assert "sit 5th" in result
 
     def test_no_context_passthrough(self):
@@ -1120,3 +1124,68 @@ class TestFactChecker:
         assert result == narrative
         result2 = bot.fact_check_output(narrative, None)
         assert result2 == narrative
+
+    def test_strips_historical_claims(self):
+        """fact_check_output strips 'historically' and similar."""
+        narrative = "Good value here.\nHistorically Chiefs dominate this fixture.\nOdds suggest draw."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "Historically" not in result
+        assert "Good value" in result
+        assert "Odds suggest" in result
+
+    def test_strips_tactical_descriptions(self):
+        """fact_check_output strips tactical/style references."""
+        narrative = "Pirates play a possession-based game.\nThe odds show value on the draw."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "possession-based" not in result
+        assert "odds show value" in result
+
+    def test_strips_condition_references(self):
+        """fact_check_output strips weather/condition claims."""
+        narrative = "Fixture congestion could be a factor.\nDraw at 3.40 offers good EV."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "Fixture congestion" not in result
+        assert "Draw at 3.40" in result
+
+    def test_strips_unverified_person_names(self):
+        """fact_check_output strips lines with unverified person names."""
+        narrative = "Erik Ten Hag rotates heavily mid-week.\nThe draw offers value."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "Ten Hag" not in result
+        assert "draw offers value" in result
+
+    def test_keeps_verified_team_names(self):
+        """fact_check_output should NOT strip verified team names."""
+        narrative = "Kaizer Chiefs have strong form.\nOrlando Pirates are second."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "Kaizer Chiefs" in result
+        assert "Orlando Pirates" in result
+
+    def test_empty_narrative(self):
+        """fact_check_output handles empty narrative."""
+        assert bot.fact_check_output("", self._CTX) == ""
+        assert bot.fact_check_output("", None) == ""
+
+
+# ── Wave 17B: Dynamic prompt tests ──
+
+class TestDynamicPrompt:
+    """Test sport-parameterised Claude prompt."""
+
+    def test_prompt_contains_sport(self):
+        """_build_game_analysis_prompt should include the sport type."""
+        prompt = bot._build_game_analysis_prompt("cricket")
+        assert "SPORT: cricket" in prompt
+        assert "cricket match" in prompt
+
+    def test_prompt_contains_critical_rules(self):
+        """Prompt should contain the watertight CRITICAL RULES."""
+        prompt = bot._build_game_analysis_prompt("soccer")
+        assert "NEVER mention any person by name" in prompt
+        assert "NEVER describe a team's playing style" in prompt
+        assert "THE GOLDEN RULE" in prompt
+
+    def test_prompt_default_soccer(self):
+        """Default prompt sport should be soccer."""
+        prompt = bot._build_game_analysis_prompt()
+        assert "SPORT: soccer" in prompt

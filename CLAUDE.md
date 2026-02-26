@@ -1428,3 +1428,32 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 16A+16B)
 - Tests: 354 passing (12 new), 0 failures
+
+## Wave 17B — Watertight Factual Accuracy (26 Feb 2026)
+
+**Watertight Prompt (Wave 17B):** Claude prompt CRITICAL RULES completely rewritten. ALL factual claims must come from VERIFIED_DATA or ODDS DATA — not just statistics but also names, venues, history, tactics. Post-generation fact checker expanded to catch: unverified person names, historical claims, tactical descriptions, venue references, condition claims, and wrong-sport terms. `sport_terms.py` integrated. Sport type now explicit in every prompt. Offending sentences stripped automatically with logging.
+
+### `_build_game_analysis_prompt(sport)` (replaces static `GAME_ANALYSIS_PROMPT`)
+- Dynamic function parameterised by sport type ("soccer", "cricket", "rugby", "f1")
+- Header: `SPORT: {sport}` + "You are analysing a {sport} match"
+- CRITICAL RULES section bans: person names, historical claims, tactical descriptions, venue names, injuries/transfers, weather/conditions, "historically"/"traditionally"/"known for"
+- WHAT YOU CAN USE: VERIFIED_DATA, ODDS DATA, own analytical reasoning only
+- THE GOLDEN RULE: "If you cannot point to the exact field in VERIFIED_DATA or ODDS DATA that supports a claim, DO NOT MAKE THAT CLAIM"
+
+### Expanded `fact_check_output(narrative, ctx_data)`
+- Strips fabricated league positions (existing, unchanged)
+- Strips historical claims: "historically", "traditionally", "known for", "dating back to", etc.
+- Strips tactical/style descriptions: "counter-attack", "possession-based", "high press", "gegenpressing", etc.
+- Strips condition references: "weather", "fixture congestion", "rotation", "altitude", etc.
+- Strips unverified person names: detects capitalised proper nouns not in verified_names set
+- All stripping logged via `log.warning()` for monitoring
+- Verified team names preserved (both full name and individual words >3 chars)
+
+### `validate_sport_context()` — Now Powered by `sport_terms.py`
+- Replaced hardcoded wrong_terms dict with `SPORT_BANNED_TERMS` from `scrapers/sport_terms.py`
+- Cricket: 33 banned terms (includes "african football", "continental heavyweight", "league table")
+- Rugby: 31, Soccer: 30, F1: 24 banned terms
+- Logging on every stripped term for monitoring
+
+### Test Status (Wave 17B)
+- Tests: 364 passing (10 new), 0 failures
