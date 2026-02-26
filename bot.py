@@ -914,10 +914,11 @@ async def handle_menu(query, action: str) -> None:
             for t in tips:
                 icon = {"win": "✅", "loss": "❌"}.get(t.result, "⏳")
                 lines.append(
-                    f"{icon} <b>{t.match}</b>\n"
-                    f"   {t.prediction}"
+                    f"{icon} <b>{h(t.match)}</b>\n"
+                    f"   {h(t.prediction)}"
                     + (f" @ {t.odds:.2f}" if t.odds else "")
                 )
+                lines.append("")
             text = "\n".join(lines)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
@@ -2114,7 +2115,8 @@ async def _show_live_games(update: Update, user_id: int) -> None:
     lines = [f"🔴 <b>Live Games ({len(active)})</b>\n"]
     buttons = []
     for sub in active:
-        lines.append(f"  ⚡ {sub.home_team} vs {sub.away_team}")
+        lines.append(f"  ⚡ {h(sub.home_team)} vs {h(sub.away_team)}")
+        lines.append("")
         buttons.append([InlineKeyboardButton(
             f"🔕 Unfollow {sub.home_team} vs {sub.away_team}",
             callback_data=f"unsubscribe:{sub.event_id}",
@@ -3543,12 +3545,13 @@ def _render_schedule_page(
             current_date_str = date_header
             lines.append(f"\n<b>{date_header}</b>")
 
-        home = event.get("home_team", "?")
-        away = event.get("away_team", "?")
+        home = h(event.get("home_team", "?"))
+        away = h(event.get("away_team", "?"))
         emoji = event.get("sport_emoji", "🏅")
         home_display = f"<b>{home}</b>" if home.lower() in user_teams else home
         away_display = f"<b>{away}</b>" if away.lower() in user_teams else away
-        lines.append(f"{idx}. {emoji} {event_time}  {home_display} vs {away_display}")
+        lines.append(f"<b>[{idx}]</b> {emoji} {event_time}  {home_display} vs {away_display}")
+        lines.append("")
 
     text = "\n".join(lines)
 
@@ -3626,7 +3629,7 @@ async def _build_schedule(user_id: int, page: int = 0) -> tuple[str, InlineKeybo
 
 
 # ── Schedule pagination ───────────────────────────────────
-GAMES_PER_PAGE = 10
+GAMES_PER_PAGE = 5
 
 # Cache for schedule games per user (user_id → list of event dicts)
 _schedule_cache: dict[int, list[dict]] = {}
@@ -3695,8 +3698,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         )
         return
 
-    home = target_event.get("home_team", "?")
-    away = target_event.get("away_team", "?")
+    home = h(target_event.get("home_team", "?"))
+    away = h(target_event.get("away_team", "?"))
 
     await query.edit_message_text(
         f"🤖 <i>Analysing {home} vs {away}…</i>",
@@ -3838,8 +3841,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             ev_ind = f"+{tip['ev']}%" if tip["ev"] > 0 else f"{tip['ev']}%"
             value_marker = " 💰" if tip["ev"] > 2 else ""
             lines.append(
-                f"  {tip['outcome']}: <b>{tip['odds']:.2f}</b> "
-                f"({tip['prob']}% | EV: {ev_ind}){value_marker}"
+                f"  {h(tip['outcome'])}: <b>{tip['odds']:.2f}</b> ({h(tip['bookie'])})\n"
+                f"    {tip['prob']}% · EV: {ev_ind}{value_marker}"
             )
 
     msg = "\n".join(lines)
@@ -4098,12 +4101,12 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
 
 def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> str:
     """Format a detailed tip card based on experience level."""
-    outcome = tip["outcome"]
+    outcome = h(tip["outcome"])
     odds = tip["odds"]
     ev = tip["ev"]
     prob = tip["prob"]
-    home = tip["home_team"]
-    away = tip["away_team"]
+    home = h(tip["home_team"])
+    away = h(tip["away_team"])
     bookie = config.get_active_display_name()
 
     if experience == "experienced":
@@ -4305,10 +4308,11 @@ async def handle_bets(query, action: str) -> None:
             for t in tips:
                 icon = {"win": "✅", "loss": "❌"}.get(t.result, "⏳")
                 lines.append(
-                    f"{icon} <b>{t.match}</b>\n"
-                    f"   {t.prediction}"
+                    f"{icon} <b>{h(t.match)}</b>\n"
+                    f"   {h(t.prediction)}"
                     + (f" @ {t.odds:.2f}" if t.odds else "")
                 )
+                lines.append("")
             text = "\n".join(lines)
     else:
         text = "<b>💰 My Bets</b>"
@@ -4744,7 +4748,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 teaser = (
                     f"☀️ <b>Good morning!</b>\n\n"
                     f"🔥 <b>{len(tips)} value bet{'s' if len(tips) != 1 else ''}</b> found today.\n\n"
-                    f"Top pick: {sport_emoji} <b>{top['home_team']} vs {top['away_team']}</b>\n"
+                    f"Top pick: {sport_emoji} <b>{h(top['home_team'])} vs {h(top['away_team'])}</b>\n"
                     f"💰 {top['outcome']} @ {top['odds']:.2f} · EV +{top['ev']}%\n"
                     f"⏰ {kickoff}\n\n"
                     f"<i>Tap below to see all tips 👇</i>"

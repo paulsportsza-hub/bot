@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from html import escape as h
 from zoneinfo import ZoneInfo
 
 import config
@@ -60,8 +61,8 @@ def render_tip_with_odds(
         lines.append(f"<b>{badge}</b>")
 
     # Match header
-    home = match.get("home_team", "Home")
-    away = match.get("away_team", "Away")
+    home = h(match.get("home_team", "Home"))
+    away = h(match.get("away_team", "Away"))
     sport_emoji = match.get("sport_emoji", "\u26bd")
     lines.append(f"{sport_emoji} <b>{home} vs {away}</b>")
 
@@ -97,7 +98,7 @@ def render_tip_with_odds(
 def render_tip_button_label(best_bookmaker: dict) -> str:
     """Render the CTA button label for a tip.
 
-    Returns e.g. '🎯 Bet Now at Hollywoodbets' or '🎯 Bet Now'.
+    Returns e.g. 'Bet on Hollywoodbets →' or 'Bet Now →'.
     """
     if best_bookmaker and best_bookmaker.get("bookmaker_name"):
         return f"Bet on {best_bookmaker['bookmaker_name']} \u2192"

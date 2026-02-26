@@ -346,16 +346,19 @@ def scan_value_bets(
 
 def format_odds_message(events: list[dict], sport_label: str) -> str:
     """Build an HTML-formatted odds summary for Telegram."""
+    from html import escape as h
+
     if not events:
         return f"<b>{sport_label}</b>\n\nNo upcoming events found."
 
     lines = [f"<b>{sport_label} — Upcoming Odds</b>\n"]
     for ev in events[:8]:
-        home = ev["home_team"]
-        away = ev["away_team"]
+        home = h(ev["home_team"])
+        away = h(ev["away_team"])
         odds = best_odds(ev)
         odds_str = " | ".join(f"{k}: <b>{v:.2f}</b>" for k, v in odds.items())
-        lines.append(f"\u26bd <b>{home}</b> vs <b>{away}</b>\n   {odds_str}\n")
+        lines.append(f"\u26bd <b>{home}</b> vs <b>{away}</b>\n   {odds_str}")
+        lines.append("")
     return "\n".join(lines)
 
 

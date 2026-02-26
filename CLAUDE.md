@@ -1101,3 +1101,30 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 12E)
 - Tests: 295 passing, 0 failures
+
+## Wave 12F — UX Audit Fixes (26 Feb 2026)
+
+### Pagination
+- `GAMES_PER_PAGE = 5` (was 10) — affects Your Games All, Your Games Sport, Schedule
+
+### Bold Numbers + Spacing (additional screens)
+- Schedule page: `N.` → `<b>[N]</b>` + blank lines between items
+- Tip History: blank lines between items
+- Bet History: blank lines between items
+- Live Games: blank lines between items
+
+### html.escape Additions
+- `render_tip_with_odds()` — home/away escaped
+- `_format_tip_detail()` — outcome/home/away escaped
+- `_generate_game_tips()` — home/away escaped
+- `format_odds_message()` — home/away escaped + blank lines
+- Morning teaser — home/away escaped
+- Tip History / Bet History — match/prediction escaped
+- Live Games — team names escaped
+- Schedule page — home/away escaped
+
+### Game Breakdown Format
+- Odds lines split into 2 lines: outcome + bookmaker on first, prob + EV on second
+
+### Test Status (Wave 12F)
+- Tests: 295 passing, 0 failures
