@@ -949,6 +949,41 @@ Tips from _fetch_hot_tips_all_sports now stored in _game_tips_cache so tip detai
 - test_cmd_admin_shows_quota updated to mock odds_svc.get_db_stats
 - test_cmd_picks_with_prefs updated to patch _fetch_hot_tips_from_db
 
+## Wave 12B — Hot Tips Display Fixes (26 Feb 2026)
+
+### Bugs Fixed
+- BUG-023 (P1): Tip detail now uses multi-bookmaker renderer with all 5 SA bookmakers
+  - `handle_tip_detail()` uses pre-fetched `odds_by_bookmaker` from DB tips directly
+  - No longer rebuilds match_id from display names (which caused lookup failures)
+  - `_handle_odds_comparison()` also uses stored match_id
+- BUG-024 (P2): Team names display properly via `_display_team_name()` (wraps odds_normaliser `display_name()`)
+- BUG-022 (P2): Bookmaker name shown in Hot Tips listing after odds
+
+### Display Fixes
+- Kickoff times no longer show scrape timestamp (odds.db has no kickoff data)
+- League shown instead: `🏆 PSL` / `🏆 EPL` / `🏆 Champions League`
+- All tips showing Gold Edge is expected behavior (5 SA books with similar odds = 70-80% score)
+
+### Display Format (Hot Tips Listing)
+```
+[1] ⚽ Mamelodi Sundowns vs Sekhukhune United ⛏️⭐
+     🏆 PSL
+     💰 Sundowns @ 1.48 (Hollywoodbets) · EV +2.8%
+```
+
+### Display Format (Tip Detail)
+Uses `render_tip_with_odds()` — shows edge badge, all bookmaker odds, best highlighted,
+comparison button, freshness indicator, dynamic CTA bookmaker
+
+### New Helper Functions
+- `_display_team_name(key)` — wraps `scrapers.odds_normaliser.display_name()`, fallback: title-case
+- `_display_bookmaker_name(key)` — maps bookmaker keys to display names
+- `_LEAGUE_DISPLAY` — maps league keys to display names
+- `_BK_DISPLAY` — maps bookmaker keys to display names
+
+### Test Status
+- Tests: 295 passing, 0 failures
+
 ## ⚠️ MANDATORY: Telethon E2E Testing Gate
 
 **NO wave can be marked as "PASS" or "COMPLETE" without Telethon E2E tests against the LIVE running bot.**

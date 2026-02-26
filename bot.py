@@ -2639,6 +2639,30 @@ HOT_TIPS_CACHE_TTL = 900  # 15 minutes
 # Leagues available in our scrapers DB (odds.db)
 DB_LEAGUES = ["psl", "epl", "champions_league"]
 
+# Display name helpers for odds.db normalised keys
+_LEAGUE_DISPLAY = {"psl": "PSL", "epl": "EPL", "champions_league": "Champions League"}
+_BK_DISPLAY = {
+    "hollywoodbets": "Hollywoodbets", "betway": "Betway",
+    "supabets": "SupaBets", "sportingbet": "Sportingbet", "gbets": "GBets",
+}
+
+
+def _display_team_name(key: str) -> str:
+    """Convert odds.db normalised key to display name: 'mamelodi_sundowns' → 'Mamelodi Sundowns'."""
+    try:
+        import sys
+        if "/home/paulsportsza" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza")
+        from scrapers.odds_normaliser import display_name
+        return display_name(key)
+    except (ImportError, Exception):
+        return key.replace("_", " ").title()
+
+
+def _display_bookmaker_name(key: str) -> str:
+    """Convert bookmaker key to display name."""
+    return _BK_DISPLAY.get(key, key.title())
+
 
 def _build_edge_snapshots_from_match(match: dict) -> list[dict]:
     """Convert odds_service match data into edge_rating odds_snapshots format.
@@ -2754,26 +2778,31 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                 # Build a match_id-based event_id for cache lookups
                 event_id = match["match_id"]
 
+                # Convert normalised keys to display names
+                home_display = _display_team_name(match.get("home_team", "?"))
+                away_display = _display_team_name(match.get("away_team", "?"))
+
                 # Map outcome key to human-readable label
-                _outcome_labels = {"home": match.get("home_team", "Home"),
-                                   "away": match.get("away_team", "Away"),
+                _outcome_labels = {"home": home_display,
+                                   "away": away_display,
                                    "draw": "Draw"}
                 outcome_label = _outcome_labels.get(predicted_outcome, predicted_outcome)
 
                 all_tips.append({
                     "event_id": event_id,
+                    "match_id": match["match_id"],  # Original DB key for lookups
                     "sport_key": "soccer",
-                    "home_team": match.get("home_team", "?"),
-                    "away_team": match.get("away_team", "?"),
-                    "commence_time": match.get("last_updated", ""),
+                    "home_team": home_display,
+                    "away_team": away_display,
+                    "commence_time": "",  # odds.db doesn't store kickoff times
                     "outcome": outcome_label,
                     "odds": best_odds,
-                    "bookmaker": best_bk_key,
+                    "bookmaker": _display_bookmaker_name(best_bk_key),
                     "ev": ev_pct,
                     "prob": round(consensus_prob * 100),
                     "kelly": 0,  # Not calculated for DB tips
                     "edge_rating": edge,
-                    "league": league,
+                    "league": _LEAGUE_DISPLAY.get(league, league.upper()),
                     "odds_by_bookmaker": odds_by_bk,
                 })
         except Exception as exc:
@@ -2949,18 +2978,27 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
     ]
 
     for i, tip in enumerate(tips, 1):
-        kickoff = _format_kickoff_display(tip["commence_time"])
         sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
         home = h(tip.get("home_team", ""))
         away = h(tip.get("away_team", ""))
         outcome = h(tip.get("outcome", ""))
+        bk_name = h(tip.get("bookmaker", ""))
 
         badge = render_edge_badge(tip.get("edge_rating", ""))
         badge_suffix = f" {badge}" if badge else ""
+
+        # Show league if available, kickoff if we have it
+        league_display = tip.get("league", "")
+        kickoff = _format_kickoff_display(tip["commence_time"]) if tip.get("commence_time") else ""
+        time_line = f"     🏆 {league_display}"
+        if kickoff and kickoff != "TBC":
+            time_line += f" · ⏰ {kickoff}"
+
+        bk_part = f" ({bk_name})" if bk_name else ""
         lines.append(
             f"[{i}] {sport_emoji} <b>{home} vs {away}</b>{badge_suffix}\n"
-            f"     ⏰ {kickoff}\n"
-            f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b> · EV +{tip['ev']}%"
+            f"{time_line}\n"
+            f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b>{bk_part} · EV +{tip['ev']}%"
         )
         lines.append("")
 
@@ -3732,19 +3770,26 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         "ev": tip.get("ev", 0),
     })
 
-    # Try multi-bookmaker odds from Dataminer scrapers DB
-    match_id = odds_svc.build_match_id(
+    # Check if tip already has multi-bookmaker data (DB-sourced tips)
+    pre_fetched_odds = tip.get("odds_by_bookmaker", {})
+    # Use stored match_id for DB tips, otherwise build from team names
+    match_id = tip.get("match_id", "") or odds_svc.build_match_id(
         tip.get("home_team", ""), tip.get("away_team", ""),
         tip.get("commence_time", ""),
     )
-    odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
-    # Extract bookmaker→odds dict for the predicted outcome
-    outcome_key = tip.get("outcome", "").lower()
-    # Map Odds API outcome names to our keys
-    _oc_map = {"home team": "home", "away team": "away", "draw": "draw"}
-    mapped_key = _oc_map.get(outcome_key, outcome_key)
-    outcome_data = odds_result.get("outcomes", {}).get(mapped_key, {})
-    odds_by_bookmaker = outcome_data.get("all_bookmakers", {})
+
+    if pre_fetched_odds:
+        # DB path: use pre-fetched odds, query DB only for freshness timestamp
+        odds_by_bookmaker = pre_fetched_odds
+        odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
+    else:
+        # Legacy API path: query scrapers DB for multi-bookmaker data
+        odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
+        outcome_key = tip.get("outcome", "").lower()
+        _oc_map = {"home team": "home", "away team": "away", "draw": "draw"}
+        mapped_key = _oc_map.get(outcome_key, outcome_key)
+        outcome_data = odds_result.get("outcomes", {}).get(mapped_key, {})
+        odds_by_bookmaker = outcome_data.get("all_bookmakers", {})
 
     if odds_by_bookmaker:
         # Multi-bookmaker: select best odds with affiliate link
@@ -3837,18 +3882,21 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
         return
 
     tip = tips[0]
-    match_id = odds_svc.build_match_id(
+    # Use stored match_id for DB tips, otherwise build from team names
+    match_id = tip.get("match_id", "") or odds_svc.build_match_id(
         tip.get("home_team", ""), tip.get("away_team", ""),
         tip.get("commence_time", ""),
     )
-    odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
 
-    # Build odds_by_bookmaker for the predicted outcome
-    outcome_key = tip.get("outcome", "").lower()
-    _oc_map = {"home team": "home", "away team": "away", "draw": "draw"}
-    mapped_key = _oc_map.get(outcome_key, outcome_key)
-    outcome_data = odds_result.get("outcomes", {}).get(mapped_key, {})
-    odds_by_bookmaker = outcome_data.get("all_bookmakers", {})
+    # Check pre-fetched odds first (DB-sourced tips), then try DB query
+    odds_by_bookmaker = tip.get("odds_by_bookmaker", {})
+    if not odds_by_bookmaker:
+        odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
+        outcome_key = tip.get("outcome", "").lower()
+        _oc_map = {"home team": "home", "away team": "away", "draw": "draw"}
+        mapped_key = _oc_map.get(outcome_key, outcome_key)
+        outcome_data = odds_result.get("outcomes", {}).get(mapped_key, {})
+        odds_by_bookmaker = outcome_data.get("all_bookmakers", {})
 
     if not odds_by_bookmaker:
         await query.answer("No multi-bookmaker data available for this match.", show_alert=True)
