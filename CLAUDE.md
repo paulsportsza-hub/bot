@@ -1171,3 +1171,28 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 12H)
 - Tests: 295 passing, 0 failures
+
+## Wave 13B — Odds Comparison UX Fixes (26 Feb 2026)
+
+### BUG-022: Odds Comparison Dead End (FIXED)
+- Added "🔙 Back to Game" button (`yg:game:{event_id}`) to `_handle_odds_comparison()`
+- Also kept "🔥 Hot Tips" and "↩️ Menu" buttons for alternate navigation
+
+### BUG-023: Odds Comparison Shows Only One Market (FIXED)
+- Rewrote `_handle_odds_comparison()` to fetch full match data via `odds_svc.get_best_odds()`
+- Now shows all 3 markets (Home Win / Draw / Away Win) with all bookmakers per market
+- Each market section: ⭐ marks best odds, bookmakers sorted descending
+- Outcome labels: 🏠 Home Win, 🤝 Draw, 🏟️ Away Win
+- Uses `_display_bookmaker_name()` for consistent bookmaker display names
+
+### BUG-024: CTA Bookmaker Mismatch (FIXED)
+- Game breakdown CTA now uses the highest positive-EV tip's bookmaker (not tips[0])
+- `best_ev_tip = max((t for t in tips if t["ev"] > 0), key=lambda t: t["ev"], default=tips[0])`
+- If AI recommends Draw and GBets has best draw odds, CTA links to GBets
+
+### New/Changed Callback Patterns
+- `odds:compare:{event_id}` — now shows all 3 markets (was single-outcome)
+- Back button in odds comparison: `yg:game:{event_id}` (new)
+
+### Test Status (Wave 13B)
+- Tests: 299 passing (4 new), 0 failures

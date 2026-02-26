@@ -3892,11 +3892,15 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             callback_data=f"odds:compare:{event_id}",
         )])
 
-    # Bookmaker affiliate button
+    # Bookmaker affiliate button — match CTA to the best positive-EV outcome
     if tips:
-        # Dynamic CTA using best-odds bookmaker when multi-bookmaker data available
-        top_tip = tips[0]
-        odds_by_bk = top_tip.get("odds_by_bookmaker", {})
+        # Pick the highest positive-EV tip for the CTA bookmaker
+        best_ev_tip = max(
+            (t for t in tips if t["ev"] > 0),
+            key=lambda t: t["ev"],
+            default=tips[0],
+        )
+        odds_by_bk = best_ev_tip.get("odds_by_bookmaker", {})
         if odds_by_bk:
             best_bk = select_best_bookmaker(odds_by_bk, user_id, db_match_id or "")
             if best_bk and best_bk.get("affiliate_url"):
@@ -4121,33 +4125,53 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
         tip.get("commence_time", ""),
     )
 
-    # Check pre-fetched odds first (DB-sourced tips), then try DB query
-    odds_by_bookmaker = tip.get("odds_by_bookmaker", {})
-    if not odds_by_bookmaker:
-        odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
-        outcome_key = tip.get("outcome", "").lower()
-        _oc_map = {"home team": "home", "away team": "away", "draw": "draw"}
-        mapped_key = _oc_map.get(outcome_key, outcome_key)
-        outcome_data = odds_result.get("outcomes", {}).get(mapped_key, {})
-        odds_by_bookmaker = outcome_data.get("all_bookmakers", {})
-
-    if not odds_by_bookmaker:
-        await query.answer("No multi-bookmaker data available for this match.", show_alert=True)
-        return
-
     home_raw = tip.get("home_team", "")
     away_raw = tip.get("away_team", "")
     home = h(home_raw)
     away = h(away_raw)
     hf, af = _get_flag_prefixes(home_raw, away_raw)
-    text = (
-        f"📊 <b>Odds Comparison</b>\n"
-        f"<b>{hf}{home} vs {af}{away}</b>\n\n"
-        + render_odds_comparison(odds_by_bookmaker, tip.get("outcome", ""))
-    )
+
+    # Fetch full match data with all outcomes from odds.db
+    db_match = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
+    outcomes = db_match.get("outcomes", {}) if db_match else {}
+
+    if not outcomes:
+        await query.answer("No multi-bookmaker data available for this match.", show_alert=True)
+        return
+
+    # Build all-markets comparison: Home / Draw / Away
+    _outcome_labels = {
+        "home": ("🏠", f"{home} (Home Win)"),
+        "draw": ("🤝", "Draw"),
+        "away": ("🏟️", f"{away} (Away Win)"),
+    }
+    lines = [
+        f"📊 <b>Odds Comparison</b>",
+        f"<b>{hf}{home} vs {af}{away}</b>",
+        "",
+    ]
+
+    for oc_key in ("home", "draw", "away"):
+        oc_data = outcomes.get(oc_key)
+        if not oc_data:
+            continue
+        all_bk = oc_data.get("all_bookmakers", {})
+        if not all_bk:
+            continue
+        emoji, label = _outcome_labels.get(oc_key, ("", oc_key))
+        lines.append(f"{emoji} <b>{label}</b>")
+        sorted_bk = sorted(all_bk.items(), key=lambda x: x[1], reverse=True)
+        for i, (bk_key, odds_val) in enumerate(sorted_bk):
+            name = _display_bookmaker_name(bk_key)
+            marker = "⭐ " if i == 0 else "  "
+            lines.append(f"{marker}{name}: <b>{odds_val:.2f}</b>")
+        lines.append("")
+
+    text = "\n".join(lines)
 
     buttons = [
-        [InlineKeyboardButton("🔥 Back to Hot Tips", callback_data="hot:back")],
+        [InlineKeyboardButton("🔙 Back to Game", callback_data=f"yg:game:{event_id}")],
+        [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
         [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
     ]
 

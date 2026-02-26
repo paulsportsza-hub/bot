@@ -270,3 +270,129 @@ class TestAIPrompt:
         """Prompt should ask for conviction level."""
         prompt = bot.GAME_ANALYSIS_PROMPT
         assert "High/Medium/Low" in prompt
+
+
+# ── Wave 13B: Odds Comparison UX Fixes ──
+
+
+class TestOddsComparisonBackButton:
+    """BUG-022: Odds comparison must have a back button to game breakdown."""
+
+    @pytest.mark.asyncio
+    async def test_back_button_present(self, test_db, mock_update):
+        """Odds comparison should include a 'Back to Game' button."""
+        query = mock_update.callback_query
+        event_id = "test-event-123"
+
+        # Seed cache with tip that has match_id
+        bot._game_tips_cache[event_id] = [{
+            "outcome": "Home Win",
+            "odds": 2.10,
+            "bookie": "Betway",
+            "bookie_key": "betway",
+            "ev": 5.0,
+            "prob": 55,
+            "event_id": event_id,
+            "home_team": "South Africa",
+            "away_team": "England",
+            "match_id": "south_africa_vs_england_2026-03-01",
+            "odds_by_bookmaker": {"betway": 2.10, "hollywoodbets": 2.15},
+        }]
+
+        # Mock odds.db to return all 3 outcomes
+        mock_db_result = {
+            "outcomes": {
+                "home": {"best_odds": 2.15, "best_bookmaker": "hollywoodbets", "all_bookmakers": {"betway": 2.10, "hollywoodbets": 2.15}},
+                "draw": {"best_odds": 3.50, "best_bookmaker": "gbets", "all_bookmakers": {"betway": 3.40, "gbets": 3.50}},
+                "away": {"best_odds": 1.80, "best_bookmaker": "supabets", "all_bookmakers": {"betway": 1.75, "supabets": 1.80}},
+            },
+        }
+        with patch("services.odds_service.get_best_odds", new_callable=AsyncMock, return_value=mock_db_result):
+            await bot._handle_odds_comparison(query, event_id)
+
+        call_args = query.edit_message_text.call_args
+        markup = call_args[1]["reply_markup"]
+        button_data = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+        assert f"yg:game:{event_id}" in button_data
+
+        # Cleanup
+        del bot._game_tips_cache[event_id]
+
+
+class TestOddsComparisonAllMarkets:
+    """BUG-023: Odds comparison should show all 3 markets."""
+
+    @pytest.mark.asyncio
+    async def test_shows_all_three_markets(self, test_db, mock_update):
+        """Odds comparison should show Home Win, Draw, and Away Win sections."""
+        query = mock_update.callback_query
+        event_id = "test-event-456"
+
+        bot._game_tips_cache[event_id] = [{
+            "outcome": "Draw",
+            "odds": 3.50,
+            "bookie": "GBets",
+            "bookie_key": "gbets",
+            "ev": 4.0,
+            "prob": 30,
+            "event_id": event_id,
+            "home_team": "Leeds United",
+            "away_team": "Manchester City",
+            "match_id": "leeds_united_vs_manchester_city_2026-03-01",
+            "odds_by_bookmaker": {"gbets": 3.50, "betway": 3.40},
+        }]
+
+        mock_db_result = {
+            "outcomes": {
+                "home": {"best_odds": 5.20, "best_bookmaker": "hollywoodbets", "all_bookmakers": {"hollywoodbets": 5.20, "betway": 5.10}},
+                "draw": {"best_odds": 4.60, "best_bookmaker": "gbets", "all_bookmakers": {"gbets": 4.60, "betway": 4.30}},
+                "away": {"best_odds": 1.63, "best_bookmaker": "supabets", "all_bookmakers": {"supabets": 1.63, "betway": 1.60}},
+            },
+        }
+        with patch("services.odds_service.get_best_odds", new_callable=AsyncMock, return_value=mock_db_result):
+            await bot._handle_odds_comparison(query, event_id)
+
+        text = query.edit_message_text.call_args[0][0]
+        assert "Home Win" in text
+        assert "Draw" in text
+        assert "Away Win" in text
+        # All bookmakers present in output
+        assert "Hollywoodbets" in text or "hollywoodbets" in text.lower()
+        assert "Betway" in text or "betway" in text.lower()
+        assert "GBets" in text or "gbets" in text.lower()
+
+        # Cleanup
+        del bot._game_tips_cache[event_id]
+
+
+class TestCtaBookmakerMatch:
+    """BUG-024: CTA should link to best bookmaker for best EV outcome."""
+
+    def test_best_ev_tip_selected_for_cta(self):
+        """The best positive-EV tip should be used for CTA, not tips[0]."""
+        tips = [
+            {"outcome": "Home Win", "odds": 2.10, "ev": 1.5, "odds_by_bookmaker": {"betway": 2.10}},
+            {"outcome": "Draw", "odds": 4.60, "ev": 8.0, "odds_by_bookmaker": {"gbets": 4.60, "betway": 4.30}},
+            {"outcome": "Away Win", "odds": 1.55, "ev": -2.0, "odds_by_bookmaker": {"hollywoodbets": 1.55}},
+        ]
+        # Replicate the logic from bot.py
+        best_ev_tip = max(
+            (t for t in tips if t["ev"] > 0),
+            key=lambda t: t["ev"],
+            default=tips[0],
+        )
+        assert best_ev_tip["outcome"] == "Draw"
+        assert best_ev_tip["ev"] == 8.0
+
+    def test_falls_back_to_first_tip_when_no_positive_ev(self):
+        """When no positive EV tips exist, fall back to tips[0]."""
+        tips = [
+            {"outcome": "Home Win", "odds": 2.10, "ev": -1.0, "odds_by_bookmaker": {"betway": 2.10}},
+            {"outcome": "Draw", "odds": 4.60, "ev": -2.0, "odds_by_bookmaker": {"gbets": 4.60}},
+        ]
+        best_ev_tip = max(
+            (t for t in tips if t["ev"] > 0),
+            key=lambda t: t["ev"],
+            default=tips[0],
+        )
+        assert best_ev_tip["outcome"] == "Home Win"
