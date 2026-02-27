@@ -1457,3 +1457,43 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 17B)
 - Tests: 364 passing (10 new), 0 failures
+
+## Wave 17E — Prompt Rebalance + Enriched Narrative (27 Feb 2026)
+
+**Prompt Rebalance (Wave 17E):** CRITICAL RULES rewritten to split FACTUAL CLAIMS (absolute, locked to VERIFIED_DATA) from NARRATIVE & OPINION (encouraged, use freely). Claude now explicitly told to reference coaches/players by name from VERIFIED_DATA, describe form momentum using actual results, build narrative tension from H2H. Banned sport terms injected directly into prompt. Setup section must never be empty.
+
+### `_build_game_analysis_prompt(sport, banned_terms)` (updated)
+- Now accepts `banned_terms` parameter — sport-specific banned terms injected into prompt text
+- FACTUAL CLAIMS section: zero exceptions, facts only from VERIFIED_DATA or ODDS DATA
+- NARRATIVE & OPINION section: ENCOURAGED — opinions, predictions, personality, conviction
+- SPORT VALIDATION section: shows banned terms for current sport
+- TONE section: sharp SA sports analyst at a braai, punchy, "lekker" sparingly
+- Setup section instruction: "MUST reference verified standings" (never say "form data unavailable")
+
+### Enriched `_format_verified_context(ctx_data)` (updated)
+- Now includes ALL enrichment fields from `get_match_context()`:
+  - Venue, coaches, top scorers (name + goals), key players (rugby)
+  - Home/away records, goals for/against, formations, starting XI lineups
+  - Last 5 results with scores + opponents + H/A (from `last_5` list)
+  - H2H with league tags
+  - Rugby: tries for/against, bonus points, points differential
+  - Cricket: wins/losses/NR/tied, NRR, runs for/against
+  - F1: constructor standings, last race with top 5 results + circuit
+
+### `fact_check_output(narrative, ctx_data)` (simplified)
+- Removed _HISTORY_PATTERNS, _STYLE_PATTERNS, _CONDITION_PATTERNS (narrative now encouraged)
+- Keeps: fabricated position detection, unverified person name detection
+- Verified names now include: coaches, top scorers, key players, F1 drivers (from ctx_data)
+- Person name check uses `any()` instead of `all()` for word matching (fixes "Under Nabi" false positive)
+
+### `_ensure_setup_not_empty(output, ctx_data)` (NEW)
+- Post-processor that detects thin Setup section (< 60 chars)
+- Injects fallback from verified standings: position, points, form, coach
+- Ensures Setup section always has meaningful content when verified data exists
+
+### Prompt builder wiring
+- `_generate_game_tips()` fetches `SPORT_BANNED_TERMS` and passes to `_build_game_analysis_prompt()`
+- Post-processing pipeline: sanitize → validate_sport → fact_check → ensure_setup_not_empty
+
+### Test Status (Wave 17E)
+- Tests: 378 passing (14 new), 0 failures

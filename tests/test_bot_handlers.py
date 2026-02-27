@@ -259,15 +259,15 @@ class TestAIPrompt:
         assert "braai" in prompt
 
     def test_game_analysis_prompt_critical_rules(self):
-        """Prompt should contain watertight CRITICAL RULES."""
+        """Prompt should contain rebalanced CRITICAL RULES."""
         prompt = bot._build_game_analysis_prompt("soccer")
-        assert "NEVER mention any person by name" in prompt
-        assert "THE GOLDEN RULE" in prompt
+        assert "FACTUAL CLAIMS" in prompt
+        assert "NARRATIVE & OPINION" in prompt
 
     def test_game_analysis_prompt_conviction(self):
-        """Prompt should ban conviction levels."""
+        """Prompt should ban conviction text."""
         prompt = bot._build_game_analysis_prompt("soccer")
-        assert "High/Medium/Low" in prompt
+        assert "conviction" in prompt.lower()
 
 
 # ── Wave 13B: Odds Comparison UX Fixes ──
@@ -1094,12 +1094,21 @@ class TestSportValidation:
 
 
 class TestFactChecker:
-    """Test expanded post-generation fact checker."""
+    """Test post-generation fact checker (positions + unverified names)."""
 
     _CTX = {
         "data_available": True,
-        "home_team": {"name": "Kaizer Chiefs", "league_position": 5},
-        "away_team": {"name": "Orlando Pirates", "league_position": 2},
+        "home_team": {
+            "name": "Kaizer Chiefs",
+            "league_position": 5,
+            "coach": "Nasreddine Nabi",
+            "top_scorer": {"name": "Ashley Du Preez", "goals": 8},
+        },
+        "away_team": {
+            "name": "Orlando Pirates",
+            "league_position": 2,
+            "coach": "Jose Riveiro",
+        },
         "head_to_head": [
             {"date": "2025-11-15", "home": "Chiefs", "away": "Pirates", "score": "1-2"},
         ],
@@ -1125,28 +1134,6 @@ class TestFactChecker:
         result2 = bot.fact_check_output(narrative, None)
         assert result2 == narrative
 
-    def test_strips_historical_claims(self):
-        """fact_check_output strips 'historically' and similar."""
-        narrative = "Good value here.\nHistorically Chiefs dominate this fixture.\nOdds suggest draw."
-        result = bot.fact_check_output(narrative, self._CTX)
-        assert "Historically" not in result
-        assert "Good value" in result
-        assert "Odds suggest" in result
-
-    def test_strips_tactical_descriptions(self):
-        """fact_check_output strips tactical/style references."""
-        narrative = "Pirates play a possession-based game.\nThe odds show value on the draw."
-        result = bot.fact_check_output(narrative, self._CTX)
-        assert "possession-based" not in result
-        assert "odds show value" in result
-
-    def test_strips_condition_references(self):
-        """fact_check_output strips weather/condition claims."""
-        narrative = "Fixture congestion could be a factor.\nDraw at 3.40 offers good EV."
-        result = bot.fact_check_output(narrative, self._CTX)
-        assert "Fixture congestion" not in result
-        assert "Draw at 3.40" in result
-
     def test_strips_unverified_person_names(self):
         """fact_check_output strips lines with unverified person names."""
         narrative = "Erik Ten Hag rotates heavily mid-week.\nThe draw offers value."
@@ -1160,6 +1147,26 @@ class TestFactChecker:
         result = bot.fact_check_output(narrative, self._CTX)
         assert "Kaizer Chiefs" in result
         assert "Orlando Pirates" in result
+
+    def test_keeps_verified_coach_names(self):
+        """fact_check_output should allow names from VERIFIED_DATA coaches."""
+        narrative = "Under Nasreddine Nabi, Chiefs have improved.\nJose Riveiro's Pirates are relentless."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "Nasreddine Nabi" in result
+        assert "Jose Riveiro" in result
+
+    def test_keeps_verified_scorer_names(self):
+        """fact_check_output should allow verified top scorer names."""
+        narrative = "Ashley Du Preez has 8 goals this season.\nDangerous in the box."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "Ashley Du Preez" in result
+
+    def test_allows_narrative_opinion(self):
+        """Narrative/opinion text should pass through freely."""
+        narrative = "This shapes up as a cracker.\nThe smart money says draw."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "shapes up" in result
+        assert "smart money" in result
 
     def test_empty_narrative(self):
         """fact_check_output handles empty narrative."""
@@ -1179,13 +1186,199 @@ class TestDynamicPrompt:
         assert "cricket match" in prompt
 
     def test_prompt_contains_critical_rules(self):
-        """Prompt should contain the watertight CRITICAL RULES."""
+        """Prompt should contain the rebalanced CRITICAL RULES."""
         prompt = bot._build_game_analysis_prompt("soccer")
-        assert "NEVER mention any person by name" in prompt
-        assert "NEVER describe a team's playing style" in prompt
-        assert "THE GOLDEN RULE" in prompt
+        assert "FACTUAL CLAIMS" in prompt
+        assert "NARRATIVE & OPINION" in prompt
+        assert "SPORT VALIDATION" in prompt
 
     def test_prompt_default_soccer(self):
         """Default prompt sport should be soccer."""
         prompt = bot._build_game_analysis_prompt()
         assert "SPORT: soccer" in prompt
+
+    def test_prompt_includes_banned_terms(self):
+        """Prompt should include banned terms when provided."""
+        prompt = bot._build_game_analysis_prompt("soccer", banned_terms="try, scrum, lineout")
+        assert "try, scrum, lineout" in prompt
+
+    def test_prompt_narrative_encouraged(self):
+        """Prompt should explicitly encourage narrative and personality."""
+        prompt = bot._build_game_analysis_prompt("soccer")
+        assert "ENCOURAGED" in prompt
+        assert "braai" in prompt
+        assert "personality" in prompt
+
+    def test_prompt_coaches_allowed(self):
+        """Prompt should encourage referencing coaches by name from VERIFIED_DATA."""
+        prompt = bot._build_game_analysis_prompt("soccer")
+        assert "coaches and players BY NAME" in prompt
+
+
+# ── Wave 17E: Enriched verified context tests ──
+
+
+class TestEnrichedVerifiedContext:
+    """Test that _format_verified_context includes all enrichment fields."""
+
+    def test_includes_coach(self):
+        """Verified context should include coach when available."""
+        ctx = {
+            "data_available": True,
+            "sport": "soccer",
+            "league": "PSL",
+            "data_source": "ESPN",
+            "home_team": {"name": "Chiefs", "coach": "Nasreddine Nabi"},
+            "away_team": {"name": "Pirates", "coach": "Jose Riveiro"},
+        }
+        result = bot._format_verified_context(ctx)
+        assert "Nasreddine Nabi" in result
+        assert "Jose Riveiro" in result
+
+    def test_includes_top_scorer(self):
+        """Verified context should include top scorers."""
+        ctx = {
+            "data_available": True,
+            "sport": "soccer",
+            "league": "PSL",
+            "data_source": "ESPN",
+            "home_team": {"name": "Chiefs", "top_scorer": {"name": "Du Preez", "goals": 8}},
+            "away_team": {"name": "Pirates"},
+        }
+        result = bot._format_verified_context(ctx)
+        assert "Du Preez" in result
+        assert "8 goals" in result
+
+    def test_includes_venue(self):
+        """Verified context should include venue."""
+        ctx = {
+            "data_available": True,
+            "sport": "soccer",
+            "league": "PSL",
+            "data_source": "ESPN",
+            "venue": "FNB Stadium",
+            "home_team": {"name": "Chiefs"},
+            "away_team": {"name": "Pirates"},
+        }
+        result = bot._format_verified_context(ctx)
+        assert "FNB Stadium" in result
+
+    def test_includes_formation(self):
+        """Verified context should include formation and lineup."""
+        ctx = {
+            "data_available": True,
+            "sport": "soccer",
+            "league": "PSL",
+            "data_source": "ESPN",
+            "home_team": {"name": "Chiefs", "formation": "4-3-3", "lineup": "Petersen; ..."},
+            "away_team": {"name": "Pirates"},
+        }
+        result = bot._format_verified_context(ctx)
+        assert "4-3-3" in result
+        assert "Petersen" in result
+
+    def test_includes_key_players_rugby(self):
+        """Verified context should include key players for rugby."""
+        ctx = {
+            "data_available": True,
+            "sport": "rugby",
+            "league": "URC",
+            "data_source": "ESPN",
+            "home_team": {
+                "name": "Bulls",
+                "key_players": [
+                    {"name": "Kurt-Lee Arendse", "position": "wing", "role": "star"},
+                ],
+            },
+            "away_team": {"name": "Stormers"},
+        }
+        result = bot._format_verified_context(ctx)
+        assert "Kurt-Lee Arendse" in result
+
+    def test_includes_last_5_results(self):
+        """Verified context should include recent results with scores."""
+        ctx = {
+            "data_available": True,
+            "sport": "soccer",
+            "league": "EPL",
+            "data_source": "ESPN",
+            "home_team": {
+                "name": "Man Utd",
+                "last_5": [
+                    {"opponent": "Burnley", "result": "W", "goals_for": 3, "goals_against": 2, "home_away": "home"},
+                    {"opponent": "West Ham", "result": "L", "goals_for": 0, "goals_against": 1, "home_away": "away"},
+                ],
+            },
+            "away_team": {"name": "Crystal Palace"},
+        }
+        result = bot._format_verified_context(ctx)
+        assert "Burnley" in result
+        assert "3-2" in result
+
+    def test_cricket_nrr(self):
+        """Verified context should include cricket NRR."""
+        ctx = {
+            "data_available": True,
+            "sport": "cricket",
+            "league": "SA20",
+            "data_source": "ESPN",
+            "home_team": {"name": "Paarl Royals", "nrr": 0.452, "wins": 5, "losses": 2},
+            "away_team": {"name": "MI Cape Town"},
+        }
+        result = bot._format_verified_context(ctx)
+        assert "+0.452" in result
+        assert "Wins: 5" in result
+
+    def test_f1_constructor_standings(self):
+        """Verified context should include F1 constructor standings."""
+        ctx = {
+            "data_available": True,
+            "sport": "f1",
+            "league": "Formula 1",
+            "data_source": "Jolpica",
+            "driver_standings": [{"position": 1, "driver": "Norris", "points": 120, "constructor": "McLaren", "wins": 3}],
+            "constructor_standings": [{"position": 1, "constructor": "McLaren", "points": 220}],
+            "home_team": {"name": "Norris"},
+            "away_team": {"name": "Verstappen"},
+        }
+        result = bot._format_verified_context(ctx)
+        assert "CONSTRUCTOR STANDINGS" in result
+        assert "McLaren" in result
+
+
+class TestSetupFallback:
+    """Test _ensure_setup_not_empty injects fallback when Setup is thin."""
+
+    def test_injects_fallback_when_empty(self):
+        """Should inject standings when Setup is just a header."""
+        output = "📋 <b>The Setup</b>\n\n🎯 <b>The Edge</b>\nGood value on draw."
+        ctx = {
+            "data_available": True,
+            "home_team": {"name": "Chiefs", "league_position": 5, "points": 28, "form": "WWLDW"},
+            "away_team": {"name": "Pirates", "league_position": 2, "points": 38},
+        }
+        result = bot._ensure_setup_not_empty(output, ctx)
+        assert "Chiefs" in result
+        assert "28 points" in result
+        assert "WWLDW" in result
+
+    def test_no_change_when_setup_has_content(self):
+        """Should not touch Setup when it already has rich content."""
+        output = (
+            "📋 <b>The Setup</b>\n"
+            "Chiefs sit 5th on 28 points with a streaky WWLDW form. Pirates are 2nd.\n\n"
+            "🎯 <b>The Edge</b>\nValue on the draw."
+        )
+        ctx = {
+            "data_available": True,
+            "home_team": {"name": "Chiefs", "league_position": 5, "points": 28},
+            "away_team": {"name": "Pirates", "league_position": 2, "points": 38},
+        }
+        result = bot._ensure_setup_not_empty(output, ctx)
+        assert result == output  # unchanged
+
+    def test_no_change_without_verified_data(self):
+        """Should not inject fallback when no verified data."""
+        output = "📋 <b>The Setup</b>\n\n🎯 <b>The Edge</b>\nOdds analysis."
+        result = bot._ensure_setup_not_empty(output, {})
+        assert result == output

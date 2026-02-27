@@ -3857,7 +3857,7 @@ _game_tips_cache: dict[str, list[dict]] = {}
 _ANALYSIS_CACHE_TTL = 3600
 _analysis_cache: dict[str, tuple[str, list[dict], float]] = {}
 
-def _build_game_analysis_prompt(sport: str = "soccer") -> str:
+def _build_game_analysis_prompt(sport: str = "soccer", banned_terms: str = "") -> str:
     """Build the system prompt for Claude game breakdown, parameterised by sport."""
     return textwrap.dedent(f"""\
     You are MzansiEdge, a sharp South African sports betting analyst.
@@ -3867,49 +3867,58 @@ def _build_game_analysis_prompt(sport: str = "soccer") -> str:
     Write a punchy ~150-word analysis using these EXACT section headers:
 
     📋 <b>The Setup</b>
-    Summarise verified form, standings, and head-to-head from the VERIFIED DATA below.
-    If no verified data is provided, state "form data unavailable" and move on.
+    MUST reference verified standings, form, and coaches/players from VERIFIED DATA.
+    Never leave this section empty. If data is limited, work with what you have —
+    even "13th on 35 points with a streaky WLWDL" tells a story.
 
     🎯 <b>The Edge</b>
-    Where the value is. Be specific about WHICH outcome and WHY the market has
-    mispriced it. Reference the probability gap between fair odds and market odds.
-    If there's no clear edge, say so honestly.
+    Analyse the odds using VERIFIED_DATA to support your opinion. Reference specific
+    bookmaker divergence and EV percentages. If there's no clear edge, say so honestly.
 
     ⚠️ <b>The Risk</b>
-    One or two sentences on what could derail this pick. Frame risks around the
-    verified data (e.g. poor away form, H2H dominance). Do NOT speculate.
+    Identify what could go wrong. Use verified form/H2H to ground it.
+    One or two sentences max.
 
     🏆 <b>Verdict</b>
-    One bold sentence: your top pick. Do NOT include conviction levels (High/Medium/Low).
+    One sentence. Clear recommendation. Do NOT include the Edge tier badge
+    (injected programmatically). Do NOT use the word "conviction".
 
-    CRITICAL RULES — ABSOLUTE, NO EXCEPTIONS:
+    CRITICAL RULES — READ CAREFULLY:
 
-    WHAT YOU CAN USE:
-    - VERIFIED_DATA: League positions, form, H2H, standings, points — use freely
-    - ODDS DATA: All bookmaker odds, implied probabilities, EV calculations — use freely
-    - YOUR OWN ANALYSIS: Interpreting what the verified data MEANS, assessing value,
-      explaining why odds may be mispriced, framing risk — this is your job
+    FACTUAL CLAIMS (ABSOLUTE — ZERO EXCEPTIONS):
+    - You may ONLY state facts that appear in VERIFIED_DATA or ODDS DATA below.
+    - This includes: league positions, points, form records, results, scores,
+      goal stats, H2H records, player names, coach/manager names, venues,
+      team nicknames, historical records, injury status, and ANY other
+      verifiable statement.
+    - If a fact is NOT in VERIFIED_DATA, you MUST NOT state it. No exceptions.
+    - Do NOT invent, estimate, or recall ANY factual claims from memory.
 
-    WHAT YOU MUST NEVER DO:
-    - NEVER mention any person by name (managers, coaches, players, owners, pundits)
-      unless their name appears in VERIFIED_DATA
-    - NEVER reference historical events, records, or streaks unless in VERIFIED_DATA
-    - NEVER describe a team's playing style, tactics, or approach
-      (e.g. "counter-attacking", "possession-based", "parking the bus")
-    - NEVER name stadiums, venues, or grounds unless in VERIFIED_DATA
-    - NEVER reference injuries, suspensions, transfers, or squad news
-    - NEVER use phrases like "historically", "traditionally", "known for", "famous for"
-    - NEVER reference specific past matches beyond the VERIFIED_DATA H2H section
-    - NEVER describe weather, pitch conditions, or travel factors
+    NARRATIVE & OPINION (ENCOURAGED — USE FREELY):
+    - You ARE encouraged to form opinions, make predictions, assess value,
+      identify narratives, and write with personality and conviction.
+    - Use phrases like: "this shapes up as...", "the key battle here is...",
+      "what makes this compelling is...", "the smart money says..."
+    - Reference coaches and players BY NAME when they appear in VERIFIED_DATA.
+      Example: "Michael Carrick's United" or "Arokodare's 8 goals"
+    - Describe form momentum using the actual results: "three wins on the
+      bounce including that 3-2 thriller against Burnley"
+    - Build narrative tension from H2H data: "City have won the last 4 at
+      Elland Road — but Leeds haven't been this sharp since October"
+    - For cricket, reference actual scorecard performances from VERIFIED_DATA.
+    - For F1, reference the championship battle from VERIFIED_DATA standings.
 
-    WHEN NO VERIFIED DATA IS PROVIDED:
-    - Discuss ONLY the odds, implied probabilities, and where value exists
-    - Frame the analysis around market pricing and bookmaker disagreement
-    - Say "form data unavailable" — do NOT fill the gap with assumed context
-    - Keep it short and honest. Better to say less than to say something wrong.
+    SECTION RULES:
+    - The Setup: MUST reference verified standings, form, and coaches/players.
+      Never say "form data unavailable" if VERIFIED_DATA has ANY content.
+    - The Edge: Analyse the odds using VERIFIED_DATA to support your opinion.
+    - The Risk: Use verified form/H2H to ground it.
+    - Verdict: One sentence. Clear recommendation. No conviction text. No Edge badge.
 
-    THE GOLDEN RULE: If you cannot point to the exact field in VERIFIED_DATA or
-    ODDS DATA that supports a claim, DO NOT MAKE THAT CLAIM.
+    SPORT VALIDATION:
+    - This is a {sport} match. Do NOT use terminology from other sports.
+    - Banned terms for this sport: {banned_terms if banned_terms else "none"}
+    - If you catch yourself writing a term from another sport, delete it.
 
     FORMATTING RULES (strict):
     - Do NOT output a match title line. The title is rendered separately.
@@ -3921,8 +3930,13 @@ def _build_game_analysis_prompt(sport: str = "soccer") -> str:
     - Telegram HTML only (<b>, <i> tags). No markdown.
     - Do NOT include odds numbers or bookmaker names (shown separately below)
     - No disclaimers, no "gamble responsibly" — we handle that elsewhere
-    - Be direct, confident, conversational — like a mate at the braai who knows his stuff
-    - If the data is thin, keep it shorter — don't pad with generic filler
+
+    TONE:
+    - Write like a sharp SA sports analyst at a braai — knowledgeable,
+      opinionated, confident, occasionally cheeky. Use "lekker" sparingly.
+    - Short punchy sentences. No waffle. Every line earns its place.
+    - Address the reader directly: "you", "your", not "one" or "the bettor".
+    - If the data is thin, keep it shorter — don't pad with generic filler.
     """)
 
 
@@ -3997,6 +4011,11 @@ def _format_verified_context(ctx_data: dict) -> str:
     parts.append(f"Source: {ctx_data.get('data_source', 'ESPN')} API")
     parts.append(f"League: {ctx_data.get('league', '')}")
 
+    # Venue
+    venue = ctx_data.get("venue")
+    if venue:
+        parts.append(f"Venue: {venue}")
+
     for side in ("home_team", "away_team"):
         team = ctx_data.get(side, {})
         name = team.get("name", "?")
@@ -4005,7 +4024,7 @@ def _format_verified_context(ctx_data: dict) -> str:
 
         pos = team.get("league_position")
         pts = team.get("points")
-        gp = team.get("games_played")
+        gp = team.get("games_played") or team.get("matches_played")
         if pos is not None:
             parts.append(f"  League position: {pos}")
         if pts is not None and gp is not None:
@@ -4016,13 +4035,33 @@ def _format_verified_context(ctx_data: dict) -> str:
             if isinstance(record, dict):
                 parts.append(f"  Record: W{record.get('wins', 0)} D{record.get('draws', 0)} L{record.get('losses', 0)}")
             elif isinstance(record, str) and record:
-                # ESPN format: "W-D-L" e.g. "7-10-10"
                 parts.append(f"  Record (W-D-L): {record}")
 
         form = team.get("form")
         if form:
             parts.append(f"  Form (last 5): {form}")
 
+        # Coach
+        coach = team.get("coach")
+        if coach:
+            parts.append(f"  Coach: {coach}")
+
+        # Top scorer (soccer)
+        top_scorer = team.get("top_scorer")
+        if top_scorer:
+            ts_name = top_scorer.get("name", "")
+            ts_goals = top_scorer.get("goals", "")
+            if ts_name:
+                parts.append(f"  Top scorer: {ts_name} ({ts_goals} goals)" if ts_goals else f"  Top scorer: {ts_name}")
+
+        # Key players (rugby)
+        key_players = team.get("key_players")
+        if key_players:
+            kp_strs = [f"{kp.get('name', '')} ({kp.get('position', '')})" for kp in key_players if kp.get("name")]
+            if kp_strs:
+                parts.append(f"  Key players: {', '.join(kp_strs)}")
+
+        # Goals / scoring stats
         gpg = team.get("goals_per_game")
         cpg = team.get("conceded_per_game")
         if gpg is not None:
@@ -4034,12 +4073,83 @@ def _format_verified_context(ctx_data: dict) -> str:
             diff_label = "Goal difference" if sport == "soccer" else "Points difference"
             parts.append(f"  {diff_label}: {gd:+d}")
 
+        # Home/away record (soccer)
+        home_rec = team.get("home_record")
+        away_rec = team.get("away_record")
+        if home_rec:
+            parts.append(f"  Home record (W-D-L): {home_rec}")
+        if away_rec:
+            parts.append(f"  Away record (W-D-L): {away_rec}")
+
+        # Goals for/against raw (soccer)
+        gf = team.get("goals_for")
+        ga = team.get("goals_against")
+        if gf is not None and ga is not None:
+            parts.append(f"  Goals: {gf} scored, {ga} conceded")
+
+        # Formation + lineup (soccer)
+        formation = team.get("formation")
+        if formation:
+            parts.append(f"  Formation: {formation}")
+        lineup = team.get("lineup")
+        if lineup:
+            parts.append(f"  Starting XI: {lineup}")
+
+        # Recent results with scores (soccer — last_5 list)
+        last_5 = team.get("last_5")
+        if last_5:
+            results_strs = []
+            for r in last_5[:5]:
+                opp = r.get("opponent", "?")
+                result = r.get("result", "?")
+                gf_r = r.get("goals_for", "")
+                ga_r = r.get("goals_against", "")
+                ha = r.get("home_away", "")
+                score_str = f"{gf_r}-{ga_r}" if gf_r != "" and ga_r != "" else ""
+                loc = "(H)" if ha == "home" else "(A)" if ha == "away" else ""
+                results_strs.append(f"{result} {score_str} vs {opp} {loc}".strip())
+            if results_strs:
+                parts.append(f"  Last 5 results: {' | '.join(results_strs)}")
+
+        # ── Rugby-specific ──
+        if sport == "rugby":
+            for key, lbl in [("wins", "Wins"), ("draws", "Draws"), ("losses", "Losses")]:
+                val = team.get(key)
+                if val is not None and not record:  # don't duplicate if record shown
+                    parts.append(f"  {lbl}: {val}")
+            pd = team.get("point_diff")
+            if pd is not None:
+                parts.append(f"  Points differential: {pd:+d}")
+            for key, lbl in [("points_for", "Points for"), ("points_against", "Points against"),
+                             ("tries_for", "Tries for"), ("tries_against", "Tries against"),
+                             ("bonus_points", "Bonus points")]:
+                val = team.get(key)
+                if val is not None:
+                    parts.append(f"  {lbl}: {val}")
+
+        # ── Cricket-specific ──
+        if sport == "cricket":
+            for key, lbl in [("wins", "Wins"), ("losses", "Losses"),
+                             ("no_result", "No result"), ("tied", "Tied")]:
+                val = team.get(key)
+                if val is not None:
+                    parts.append(f"  {lbl}: {val}")
+            nrr = team.get("nrr")
+            if nrr is not None:
+                parts.append(f"  Net Run Rate: {nrr:+.3f}")
+            for key, lbl in [("runs_for", "Runs for"), ("runs_against", "Runs against")]:
+                val = team.get(key)
+                if val is not None:
+                    parts.append(f"  {lbl}: {val}")
+
     # H2H
-    h2h = ctx_data.get("head_to_head", [])
+    h2h = ctx_data.get("head_to_head") or []
     if h2h:
         parts.append("\nHEAD-TO-HEAD (recent meetings):")
         for game in h2h[:5]:
-            parts.append(f"  {game.get('date', '?')}: {game.get('home', '?')} {game.get('score', '?')} {game.get('away', '?')}")
+            h2h_league = game.get("league", "")
+            league_str = f" [{h2h_league}]" if h2h_league else ""
+            parts.append(f"  {game.get('date', '?')}: {game.get('home', '?')} {game.get('score', '?')} {game.get('away', '?')}{league_str}")
 
     # F1 specific
     if sport == "f1":
@@ -4047,7 +4157,24 @@ def _format_verified_context(ctx_data: dict) -> str:
         if standings:
             parts.append("\nDRIVER STANDINGS:")
             for d in standings[:10]:
-                parts.append(f"  {d.get('position', '?')}. {d.get('driver', '?')} — {d.get('points', 0)} pts ({d.get('constructor', '')})")
+                wins = d.get("wins", 0)
+                wins_str = f", {wins} wins" if wins else ""
+                parts.append(f"  {d.get('position', '?')}. {d.get('driver', '?')} — {d.get('points', 0)} pts ({d.get('constructor', '')}){wins_str}")
+
+        constructors = ctx_data.get("constructor_standings", [])
+        if constructors:
+            parts.append("\nCONSTRUCTOR STANDINGS:")
+            for c in constructors[:5]:
+                parts.append(f"  {c.get('position', '?')}. {c.get('constructor', '?')} — {c.get('points', 0)} pts")
+
+        last_race = ctx_data.get("last_race")
+        if last_race:
+            parts.append(f"\nLAST RACE: {last_race.get('name', '?')} ({last_race.get('date', '?')})")
+            circuit = last_race.get("circuit")
+            if circuit:
+                parts.append(f"  Circuit: {circuit}")
+            for r in (last_race.get("results") or [])[:5]:
+                parts.append(f"  {r.get('position', '?')}. {r.get('driver', '?')} ({r.get('constructor', '')}) — {r.get('time', r.get('status', ''))}")
 
     return "\n".join(parts)
 
@@ -4081,33 +4208,66 @@ def validate_sport_context(narrative: str, sport: str) -> str:
     return narrative.strip()
 
 
-# ── Patterns for expanded fact checker ──
+def _ensure_setup_not_empty(output: str, ctx_data: dict) -> str:
+    """If The Setup section is empty or too short, inject a fallback from verified data."""
+    if not output or "📋" not in output:
+        return output
+    if not ctx_data or not ctx_data.get("data_available"):
+        return output
 
-_HISTORY_PATTERNS = [
-    r'\bhistorically\b', r'\btraditionally\b', r'\bknown for\b', r'\bfamous for\b',
-    r"\bhaven't won .* since\b", r'\blast time .* was\b', r'\bfirst time since\b',
-    r'\bin recent years\b', r'\bover the past\b', r'\bdating back to\b',
-]
+    try:
+        setup_start = output.index("📋")
+        # Find the next section header
+        next_section = len(output)
+        for marker in ("🎯", "⚠️", "🏆"):
+            idx = output.find(marker, setup_start + 1)
+            if idx != -1 and idx < next_section:
+                next_section = idx
 
-_STYLE_PATTERNS = [
-    r'\bcounter.?attack', r'\bpossession.?based\b', r'\bpark.?the bus\b',
-    r'\bhigh press\b', r'\blow block\b', r'\btiki.?taka\b', r'\bdirect football\b',
-    r'\broute one\b', r'\btotal football\b', r'\bgegenpressing\b',
-    r'\bplaying style\b', r'\btactical\b',
-]
+        setup_content = output[setup_start:next_section].strip()
 
-_CONDITION_PATTERNS = [
-    r'\bpitch condition', r'\bweather\b', r'\btravel fatigue\b',
-    r'\bfixture congestion\b', r'\bmid.?week\b', r'\brotation\b',
-    r'\bcold conditions\b', r'\bheat\b', r'\baltitude\b',
-]
+        # If Setup is just the header with minimal content (< 60 chars = header + maybe 1 word)
+        if len(setup_content) < 60:
+            fallback_parts = []
+            for side in ("home_team", "away_team"):
+                team = ctx_data.get(side, {})
+                name = team.get("name", "?")
+                pos = team.get("league_position")
+                pts = team.get("points")
+                form = team.get("form", "")
+                coach = team.get("coach", "")
+
+                bits = []
+                if pos is not None and pts is not None:
+                    bits.append(f"{pos}{'th' if pos > 3 else ['st','nd','rd'][pos-1] if pos <= 3 else 'th'} on {pts} points")
+                if form:
+                    bits.append(f"form {form}")
+                if coach:
+                    bits.append(f"under {coach}")
+
+                if bits:
+                    fallback_parts.append(f"{name}: {', '.join(bits)}.")
+
+            if fallback_parts:
+                fallback = "\n".join(fallback_parts)
+                # Replace the thin Setup with enriched version
+                output = (
+                    output[:setup_start]
+                    + f"📋 <b>The Setup</b>\n{fallback}\n\n"
+                    + output[next_section:]
+                )
+                log.info("Injected fallback Setup from verified data")
+    except (ValueError, IndexError):
+        pass
+
+    return output
 
 
 def fact_check_output(narrative: str, ctx_data: dict) -> str:
     """Post-generation fact checker: strip lines with unverified factual claims.
 
-    Catches: fabricated positions, unverified person names, historical claims,
-    tactical/style descriptions, venue names, and condition references.
+    Catches: fabricated league positions and unverified person names.
+    Narrative/opinion is ALLOWED — only verifiable facts are checked.
     """
     if not narrative:
         return narrative
@@ -4115,7 +4275,7 @@ def fact_check_output(narrative: str, ctx_data: dict) -> str:
     lines = narrative.split('\n')
     cleaned: list[str] = []
 
-    # Extract verified names and positions from context
+    # Extract verified names, positions, coaches, players from context
     verified_names: set[str] = set()
     verified_positions: dict[str, int] = {}
     if ctx_data and ctx_data.get("data_available"):
@@ -4132,19 +4292,47 @@ def fact_check_output(narrative: str, ctx_data: dict) -> str:
             if name and pos is not None:
                 verified_positions[name.lower()] = pos
 
+            # Coach name is verified — add to allowed names
+            coach = team.get("coach", "")
+            if coach:
+                verified_names.add(coach.lower())
+                for word in coach.split():
+                    if len(word) > 3:
+                        verified_names.add(word.lower())
+
+            # Top scorer name is verified
+            top_scorer = team.get("top_scorer")
+            if top_scorer and top_scorer.get("name"):
+                ts_name = top_scorer["name"]
+                verified_names.add(ts_name.lower())
+                for word in ts_name.split():
+                    if len(word) > 3:
+                        verified_names.add(word.lower())
+
+            # Key players are verified
+            for kp in (team.get("key_players") or []):
+                kp_name = kp.get("name", "")
+                if kp_name:
+                    verified_names.add(kp_name.lower())
+                    for word in kp_name.split():
+                        if len(word) > 3:
+                            verified_names.add(word.lower())
+
         # H2H team names
-        for game in ctx_data.get("head_to_head", []):
+        for game in (ctx_data.get("head_to_head") or []):
             for key in ("home", "away"):
                 h2h_name = game.get(key, "")
                 if h2h_name:
                     verified_names.add(h2h_name.lower())
 
-    # Compile all ban patterns once
-    all_ban_patterns = (
-        [(p, "historical claim") for p in _HISTORY_PATTERNS]
-        + [(p, "tactical/style") for p in _STYLE_PATTERNS]
-        + [(p, "condition/weather") for p in _CONDITION_PATTERNS]
-    )
+        # F1 driver names
+        for d in (ctx_data.get("driver_standings") or []):
+            driver_name = d.get("driver", "")
+            if driver_name:
+                verified_names.add(driver_name.lower())
+                for word in driver_name.split():
+                    if len(word) > 3:
+                        verified_names.add(word.lower())
 
     # Position check pattern
     position_re = re.compile(
@@ -4170,24 +4358,21 @@ def fact_check_output(narrative: str, ctx_data: dict) -> str:
                     stripped = True
                     break
 
-        # 2. Check historical/style/condition patterns
-        if not stripped:
-            for pattern, category in all_ban_patterns:
-                if re.search(pattern, line, re.IGNORECASE):
-                    log.warning("Stripped %s: %s", category, line[:80])
-                    stripped = True
-                    break
-
-        # 3. Check unverified person names
+        # 2. Check unverified person names
         if not stripped:
             name_matches = person_re.findall(line)
             for name in name_matches:
                 name_lower = name.lower()
-                # Skip if it's a known team name or section header
+                # Skip if it's a known/verified name or section header
                 if name_lower in verified_names:
                     continue
+                # Check individual words — if ANY significant word is in verified names, allow
+                name_words = [w.lower() for w in name.split() if len(w) > 3]
+                if name_words and any(w in verified_names for w in name_words):
+                    continue
                 if any(h in name_lower for h in ("the setup", "the edge", "the risk",
-                                                  "verdict", "bookmaker odds")):
+                                                  "verdict", "bookmaker odds",
+                                                  "south africa", "net run")):
                     continue
                 # This looks like an unverified person name
                 log.warning("Stripped unverified name '%s': %s", name, line[:80])
@@ -4391,11 +4576,24 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     # Get AI narrative — always call regardless of odds availability
     narrative = ""
     _sport_for_prompt = config.LEAGUE_SPORT.get(target_league, "soccer")
+
+    # Fetch banned sport terms for prompt + post-processing
+    _banned_terms_str = ""
+    try:
+        import sys as _sys
+        if "/home/paulsportsza" not in _sys.path:
+            _sys.path.insert(0, "/home/paulsportsza")
+        from scrapers.sport_terms import SPORT_BANNED_TERMS as _SBT
+        _banned_list = _SBT.get(_sport_for_prompt, {}).get("banned", [])
+        _banned_terms_str = ", ".join(_banned_list) if _banned_list else ""
+    except ImportError:
+        _banned_terms_str = ""
+
     try:
         resp = await claude.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=512,
-            system=_build_game_analysis_prompt(_sport_for_prompt),
+            system=_build_game_analysis_prompt(_sport_for_prompt, banned_terms=_banned_terms_str),
             messages=[{
                 "role": "user",
                 "content": user_message,
@@ -4414,6 +4612,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         narrative = validate_sport_context(narrative, sport_key)
         # Fact-check against verified data
         narrative = fact_check_output(narrative, _match_ctx)
+        # Ensure Setup section has content
+        narrative = _ensure_setup_not_empty(narrative, _match_ctx)
 
     # ── Inject Edge Rating badge into Verdict header ──
     if narrative and tips:
