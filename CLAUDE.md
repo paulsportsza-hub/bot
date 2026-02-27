@@ -68,12 +68,12 @@ class LeagueDef:
     api_key: str | None  # The Odds API sport key (None if not available)
 ```
 
-### 4 Sport Categories (Phase 0 — narrowed from 11)
+### 4 Sport Categories (Phase 0C — updated leagues)
 | Category | fav_type | Leagues |
 |----------|----------|---------|
-| soccer | team | PSL, EPL, La Liga, Bundesliga, Serie A, Ligue 1, Champions League, MLS |
-| rugby | team | URC, Super Rugby, Currie Cup, Six Nations, Rugby Championship, RWC |
-| cricket | team | CSA/SA20, Test Matches, IPL, Big Bash, T20 World Cup |
+| soccer | team | Premier League, PSL, La Liga, Bundesliga, Serie A, Ligue 1, Champions League, MLS |
+| rugby | team | International Rugby, URC, Super Rugby, Currie Cup, Six Nations, Rugby Championship |
+| cricket | team | CSA/SA20, Test Matches, ODIs, T20 Internationals, IPL, Big Bash, T20 World Cup |
 | combat | fighter | Major Bouts (boxing), UFC Events (mma) |
 
 ### Lookup maps (auto-generated from SPORTS)
@@ -240,8 +240,13 @@ Saved to `User.archetype` and `User.engagement_score` via `db.update_user_archet
 
 ### Fuzzy matching (text-based team input)
 Two fuzzy matching systems:
-1. **bot.py `_handle_team_text_input()`**: Processes comma-separated team names. Pipeline: alias lookup (sports_data.ALIASES + config.TEAM_ALIASES) → `difflib.get_close_matches` against `config.TOP_TEAMS[league]` then all alias targets. Shows matched/unmatched results with Continue/Try Again buttons.
+1. **bot.py `_handle_team_text_input()`**: Processes comma-separated team names. Pipeline: league-name detection (Fix 7) → league exclusion check (Fix 8) → alias lookup (sports_data.ALIASES + config.TEAM_ALIASES) → `difflib.get_close_matches` against `config.TOP_TEAMS[league]` then all alias targets. Shows matched/unmatched results with Continue/Try Again buttons. League-specific error tips (Fix 6) when no match.
 2. **scripts/sports_data.py**: `thefuzz` (Levenshtein) against dynamic/curated lists. Pipeline: exact → alias → fuzzy → substring. Returns top 3 with confidence scores.
+
+**Input validation (Phase 0C):**
+- **League-name detection** (Fix 7): Rejects league names ("UCL", "EPL", "Six Nations") typed as team input
+- **League exclusions** (Fix 8): `_LEAGUE_EXCLUSIONS` dict prevents wrong-league teams (e.g. SA not in Six Nations, England not in Rugby Championship)
+- **Error tips** (Fix 6): No-match error shows league-specific examples from `config.LEAGUE_EXAMPLES`
 
 State tracked in `bot._onboarding_state[user_id]` dict with `_team_input_sport`, `_team_input_league`, `_fav_league_queue` keys.
 
@@ -1545,9 +1550,13 @@ A stale process running old code is invisible to unit tests and has caused multi
 - Pattern: send/edit loading msg → `asyncio.create_task(_run_spinner(...))` → do work in try/finally → `stop_event.set()` → replace with result
 - Applied to: Hot Tips, picks, game analysis, AI odds analysis
 
-### Team Confirmation SA Flavour
-- Sport emoji prefixed to "Matched:" header
-- SA celebration phrases per sport: "Amakhosi! ⚽", "Go Bokke! 🏉", "Howzat! 🏏", "Let's go champ! 🥊"
+### Team-Aware Celebrations (Phase 0C, Fix 5)
+- `TEAM_CELEBRATIONS` dict: 60+ team-specific celebrations (replaces sport-level `_SA_CHEERS`)
+- `_SPORT_CHEERS_FALLBACK` dict: sport-level fallback when team not in dict
+- `_get_team_cheer(matched, sport_key)` — picks first matched team's celebration, falls back to sport
+- Example: "France" in Six Nations → "Allez les Bleus! 🏉" (NOT "Go Bokke!")
+- SA PSL teams use SA cultural names (Amakhosi, Masandawana, Usuthu)
+- EPL teams use real chants (YNWA, COYS, Glory Glory)
 - Entity label uses sport-appropriate term (team/fighter)
 
 ### Enhanced Aliases
