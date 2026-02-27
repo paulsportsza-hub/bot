@@ -83,6 +83,36 @@ class TestSportsStructure:
         lg_keys = [lg.key for lg in cricket.leagues]
         assert "ipl" in lg_keys
 
+    def test_epl_label_is_premier_league(self):
+        epl = config.ALL_LEAGUES["epl"]
+        assert epl.label == "Premier League"
+
+    def test_epl_is_first_soccer_league(self):
+        soccer = config.ALL_SPORTS["soccer"]
+        assert soccer.leagues[0].key == "epl"
+
+    def test_international_rugby_exists(self):
+        rugby = config.ALL_SPORTS["rugby"]
+        lg_keys = [lg.key for lg in rugby.leagues]
+        assert "international_rugby" in lg_keys
+
+    def test_international_rugby_is_first_rugby_league(self):
+        rugby = config.ALL_SPORTS["rugby"]
+        assert rugby.leagues[0].key == "international_rugby"
+
+    def test_rwc_removed(self):
+        assert "rwc" not in config.ALL_LEAGUES
+
+    def test_odis_exists(self):
+        cricket = config.ALL_SPORTS["cricket"]
+        lg_keys = [lg.key for lg in cricket.leagues]
+        assert "odis" in lg_keys
+
+    def test_t20i_exists(self):
+        cricket = config.ALL_SPORTS["cricket"]
+        lg_keys = [lg.key for lg in cricket.leagues]
+        assert "t20i" in lg_keys
+
     def test_no_removed_sports(self):
         keys = {s.key for s in config.SPORTS}
         for removed in ("tennis", "boxing", "mma", "basketball", "american_football", "golf", "motorsport", "horse_racing"):

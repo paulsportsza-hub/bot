@@ -293,15 +293,16 @@ def _get_all_teams_for_sport(sport_key: str) -> list[str]:
 # ── League abbreviation helper ────────────────────────────
 
 _LEAGUE_ABBREV: dict[str, str] = {
+    "Premier League": "Prem",
     "Champions League": "UCL",
     "Six Nations": "6N",
     "CSA / SA20": "SA20",
     "Rugby Championship": "RC",
-    "Rugby World Cup": "RWC",
+    "International Rugby": "Int Rugby",
     "T20 World Cup": "T20 WC",
+    "T20 Internationals": "T20i",
     "Major Bouts": "Boxing",
     "UFC Events": "UFC",
-    "English Premier League": "EPL",
     "South African Premier Soccer League": "PSL",
     "Indian Premier League": "IPL",
     "Super Rugby": "Super",
@@ -313,6 +314,99 @@ _LEAGUE_ABBREV: dict[str, str] = {
 def _abbreviate_league(label: str) -> str:
     """Shorten long league names for compact display."""
     return _LEAGUE_ABBREV.get(label, label)
+
+
+# ── Team-aware celebrations (Fix 5) ──────────────────────
+# Maps canonical team name → celebration string.
+# Falls back to sport-level defaults for unlisted teams.
+
+TEAM_CELEBRATIONS: dict[str, str] = {
+    # SA PSL
+    "Kaizer Chiefs": "Amakhosi! ⚽",
+    "Orlando Pirates": "Bucs on fire! ⚽",
+    "Mamelodi Sundowns": "Masandawana! ⚽",
+    "Cape Town City": "Mother City! ⚽",
+    "Stellenbosch": "Stellies rising! ⚽",
+    "AmaZulu": "Usuthu! ⚽",
+    "SuperSport United": "Matsatsantsa! ⚽",
+    "Sekhukhune United": "Babina Noko! ⚽",
+    # EPL
+    "Arsenal": "Come on you Gunners! ⚽",
+    "Liverpool": "YNWA! ⚽",
+    "Man City": "Cityzens! ⚽",
+    "Man United": "Glory Glory! ⚽",
+    "Chelsea": "Up the Blues! ⚽",
+    "Spurs": "COYS! ⚽",
+    "Newcastle": "Toon Army! ⚽",
+    "Aston Villa": "Up the Villa! ⚽",
+    # La Liga
+    "Real Madrid": "Hala Madrid! ⚽",
+    "Barcelona": "Forca Barca! ⚽",
+    "Atletico Madrid": "Aupa Atleti! ⚽",
+    # Bundesliga
+    "Bayern Munich": "Mia san Mia! ⚽",
+    "Borussia Dortmund": "Heja BVB! ⚽",
+    # Serie A
+    "Juventus": "Fino alla fine! ⚽",
+    "AC Milan": "Forza Milan! ⚽",
+    "Inter Milan": "Forza Inter! ⚽",
+    # Ligue 1
+    "PSG": "Ici c'est Paris! ⚽",
+    # Rugby — international teams
+    "South Africa": "Go Bokke! 🏉",
+    "New Zealand": "Ka mate! 🏉",
+    "England": "Swing low! 🏉",
+    "France": "Allez les Bleus! 🏉",
+    "Ireland": "Ireland's call! 🏉",
+    "Wales": "Mae hen wlad! 🏉",
+    "Scotland": "Flower of Scotland! 🏉",
+    "Australia": "Wallabies! 🏉",
+    "Argentina": "Los Pumas! 🏉",
+    "Italy": "Forza Azzurri! 🏉",
+    "Fiji": "Bula! 🏉",
+    "Japan": "Brave Blossoms! 🏉",
+    # Rugby — club teams
+    "Bulls": "Loftus roars! 🏉",
+    "Stormers": "Cape storm! 🏉",
+    "Sharks": "Durban vibes! 🏉",
+    "Lions": "Ellis Park! 🏉",
+    "Crusaders": "Red and black! 🏉",
+    "Blues": "Auckland! 🏉",
+    "Leinster": "The boys in blue! 🏉",
+    "Munster": "Stand up and fight! 🏉",
+    # Cricket
+    "Proteas": "Protea Fire! 🏏",
+    "India": "Chak de! 🏏",
+    "MI Cape Town": "Cape Town! 🏏",
+    "Joburg Super Kings": "Super Kings! 🏏",
+    "Paarl Royals": "Royals! 🏏",
+    "Mumbai Indians": "Duniya hila denge! 🏏",
+    "Chennai Super Kings": "Whistle Podu! 🏏",
+    "RCB": "Ee sala cup namde! 🏏",
+    # Combat
+    "Dricus Du Plessis": "Stillknocks! 🥊",
+    "Alex Pereira": "Poatan! 🥊",
+    "Jon Jones": "Bones! 🥊",
+    "Islam Makhachev": "Alhamdulillah! 🥊",
+    "Canelo Alvarez": "Viva Canelo! 🥊",
+}
+
+_SPORT_CHEERS_FALLBACK: dict[str, list[str]] = {
+    "soccer": ["Sho't left! ⚽", "Viva! ⚽", "Lekker! ⚽"],
+    "rugby": ["Forward! 🏉", "Lekker! 🏉"],
+    "cricket": ["Howzat! 🏏", "Sharp! 🏏"],
+    "combat": ["Let's go champ! 🥊", "War room ready! 🥊"],
+}
+
+
+def _get_team_cheer(matched: list[str], sport_key: str) -> str:
+    """Pick a celebration for matched teams. Team-specific first, sport fallback."""
+    import random as _rng
+    for team in matched:
+        if team in TEAM_CELEBRATIONS:
+            return TEAM_CELEBRATIONS[team]
+    fallback = _SPORT_CHEERS_FALLBACK.get(sport_key, ["Lekker! 🏅"])
+    return _rng.choice(fallback)
 
 
 # ── Keyboards ─────────────────────────────────────────────
@@ -1360,15 +1454,20 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
     ob["_team_input_sport"] = sport_key
     ob["_team_input_league"] = league_key
 
+    # Fix 4: Knockout/tournament context hint
+    _KNOCKOUT_LEAGUES: set[str] = {"ucl", "t20_wc", "rwc", "international_rugby"}
     if league_key:
         lg = config.ALL_LEAGUES.get(league_key)
         league_label = lg.label if lg else league_key
         example = config.LEAGUE_EXAMPLES.get(league_key, "")
         example_line = f"\n<i>{example}</i>\n" if example else ""
+        tournament_hint = ""
+        if league_key in _KNOCKOUT_LEAGUES:
+            tournament_hint = "\n🏆 <i>Tournament format — pick any team you support.</i>\n"
         text = (
             f"<b>Step 4/9: {emoji} {league_label} — who do you follow?</b>\n\n"
             f"Type your {entity}s separated by commas.\n"
-            f"Max 5 per league.{example_line}\n"
+            f"Max 5 per league.{example_line}{tournament_hint}\n"
             f"Or type <b>skip</b> to move on."
         )
     else:
@@ -1545,13 +1644,13 @@ async def _show_edge_explainer(query, ob: dict) -> None:
         "<b>Step 5/9: How Your Edge Works</b>\n\n"
         "Our Edge-AI scans odds across SA bookmakers in real time "
         "and flags when the price is better than it should be.\n\n"
-        "💎 <b>Diamond Edge</b> — The bookies got this wrong. Rare, lekker value.\n"
-        "🥇 <b>Gold Edge</b> — Sharp find. Definitely worth a look.\n"
-        "🥈 <b>Silver Edge</b> — Solid. The numbers say there's value here.\n"
-        "🥉 <b>Bronze Edge</b> — Small edge, but positive value.\n\n"
+        "💎 <b>Diamond Edge</b> — When you see this, you MOVE. Extremely rare, high confidence.\n"
+        "🥇 <b>Gold Edge</b> — Strong value. These are the bets that build bankrolls.\n"
+        "🥈 <b>Silver Edge</b> — Solid edge. The numbers say there's value here.\n"
+        "🥉 <b>Bronze Edge</b> — Small but positive. Worth considering.\n\n"
         "Higher Edge = bigger gap between the bookmaker price "
-        "and what our AI calculates as the true probability.\n\n"
-        "<i>Focus on 💎 Diamond and 🥇 Gold — that's where the real edges live.</i>"
+        "and what our Edge-AI calculates as the true probability.\n\n"
+        "<i>Pro tip: When 💎 Diamond or 🥇 Gold appears, act fast — edges don't last.</i>"
     )
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("Got it ✅", callback_data="ob_nav:edge_done")],
@@ -1743,7 +1842,7 @@ async def format_profile_summary(user_id: int) -> str:
     data = await get_profile_data(user_id)
 
     lines = ["📋 <b>Your MzansiEdge Profile</b>\n"]
-    lines.append(f"🎯 Experience: {data['experience_label']}\n")
+    lines.append(f"🎯 <b>Experience:</b> {data['experience_label']}\n")
 
     for sport in data["sports"]:
         lines.append(f"{sport['emoji']} <b>{sport['label']}</b>")
@@ -1756,7 +1855,7 @@ async def format_profile_summary(user_id: int) -> str:
         else:
             for lg in sport["leagues"]:
                 if lg["label"] and lg["teams"]:
-                    lines.append(f"  {lg['label']}: {', '.join(lg['teams'])}")
+                    lines.append(f"  <b>{lg['label']}:</b> {', '.join(lg['teams'])}")
                 elif lg["label"]:
                     lines.append(f"  {lg['label']}")
                 elif lg["teams"]:
@@ -1997,6 +2096,27 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
         )
         return
 
+    # Fix 7: Detect league names typed as team input
+    _LEAGUE_NAME_ALIASES: set[str] = {
+        "ucl", "champions league", "epl", "premier league", "psl",
+        "la liga", "bundesliga", "serie a", "ligue 1", "mls",
+        "urc", "super rugby", "currie cup", "six nations",
+        "rugby championship", "international rugby",
+        "ipl", "big bash", "t20 world cup", "sa20", "odis", "t20i",
+        "test cricket", "test matches", "ufc", "boxing",
+    }
+    league_inputs = [n for n in raw_names if n.lower().strip() in _LEAGUE_NAME_ALIASES]
+    if league_inputs:
+        lg = config.ALL_LEAGUES.get(league_key)
+        league_label = lg.label if lg else league_key
+        await update.message.reply_text(
+            f"That looks like a league name, not a team!\n\n"
+            f"You're selecting teams for <b>{h(league_label)}</b>.\n"
+            f"Try typing team or player names instead.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     # Enforce max 5 per league
     if len(raw_names) > 5:
         await update.message.reply_text(
@@ -2004,6 +2124,14 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
             parse_mode=ParseMode.HTML,
         )
         raw_names = raw_names[:5]
+
+    # Fix 8: League-specific excluded teams
+    _LEAGUE_EXCLUSIONS: dict[str, set[str]] = {
+        "six_nations": {"south africa", "new zealand", "australia", "argentina",
+                        "fiji", "japan", "samoa", "tonga", "georgia", "romania"},
+        "rugby_champ": {"england", "france", "ireland", "scotland", "wales", "italy"},
+    }
+    excluded = _LEAGUE_EXCLUSIONS.get(league_key, set())
 
     # Build known names list: TOP_TEAMS for this league + curated lists
     known_names: list[str] = []
@@ -2020,12 +2148,32 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
 
     for name in raw_names:
         name_lower = name.lower().strip()
+
+        # Fix 8: Check league exclusions before matching
+        if name_lower in excluded:
+            lg = config.ALL_LEAGUES.get(league_key)
+            league_label = lg.label if lg else league_key
+            unmatched.append(f"{name} (not in {league_label})")
+            continue
+
         # 1. Check alias first
         if name_lower in SD_ALIASES:
-            matched.append(SD_ALIASES[name_lower])
+            canonical = SD_ALIASES[name_lower]
+            if canonical.lower() in excluded:
+                lg = config.ALL_LEAGUES.get(league_key)
+                league_label = lg.label if lg else league_key
+                unmatched.append(f"{canonical} (not in {league_label})")
+                continue
+            matched.append(canonical)
             continue
         if name_lower in config.TEAM_ALIASES:
-            matched.append(config.TEAM_ALIASES[name_lower])
+            canonical = config.TEAM_ALIASES[name_lower]
+            if canonical.lower() in excluded:
+                lg = config.ALL_LEAGUES.get(league_key)
+                league_label = lg.label if lg else league_key
+                unmatched.append(f"{canonical} (not in {league_label})")
+                continue
+            matched.append(canonical)
             continue
 
         # 2. Fuzzy match against known names
@@ -2049,16 +2197,7 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
     sport = config.ALL_SPORTS.get(sport_key)
     s_emoji = sport.emoji if sport else "🏅"
 
-    # SA celebration phrases per sport
-    _SA_CHEERS: dict[str, list[str]] = {
-        "soccer": ["Amakhosi! ⚽", "Viva!", "Sho't left! ⚽"],
-        "rugby": ["Go Bokke! 🏉", "Allez! 🏉"],
-        "cricket": ["Howzat! 🏏", "Sharp! 🏏"],
-        "combat": ["Let's go champ! 🥊", "War room ready! 🥊"],
-    }
-    import random as _rng
-    cheer_list = _SA_CHEERS.get(sport_key, ["Lekker! 🏅"])
-    cheer = _rng.choice(cheer_list)
+    cheer = _get_team_cheer(matched, sport_key)
 
     lines: list[str] = []
     if matched:
@@ -2074,10 +2213,14 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
         lines.append("<i>These will be skipped. You can add them later in /settings.</i>")
 
     if not matched:
+        # Fix 6: League-specific error tips
+        example = config.LEAGUE_EXAMPLES.get(league_key, "")
+        tip_line = f"\n\n<i>Tip: {example}</i>" if example else (
+            "\n\n<i>Tip: Use full names like \"Manchester United\" or common "
+            "nicknames like \"Chiefs\", \"Barca\", \"Spurs\".</i>"
+        )
         await update.message.reply_text(
-            "Couldn't match any of those names. Try again?\n\n"
-            "<i>Tip: Use full names like \"Manchester United\" or common "
-            "nicknames like \"Chiefs\", \"Barca\", \"Spurs\".</i>",
+            f"Couldn't match any of those names. Try again?{tip_line}",
             parse_mode=ParseMode.HTML,
         )
         return

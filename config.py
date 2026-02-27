@@ -204,7 +204,7 @@ def get_affiliate_url(event_id: str | None = None) -> str:
 @dataclass
 class LeagueDef:
     key: str                     # internal identifier (e.g. "epl")
-    label: str                   # display name (e.g. "EPL")
+    label: str                   # display name (e.g. "Premier League")
     api_key: str | None = None   # The Odds API sport key
 
 
@@ -220,8 +220,8 @@ class SportDef:
 SPORTS: list[SportDef] = [
     # ── Soccer ⚽ ─────────────────────────────────────────
     SportDef(key="soccer", label="Soccer", emoji="⚽", fav_type="team", leagues=[
+        LeagueDef(key="epl", label="Premier League", api_key="soccer_epl"),
         LeagueDef(key="psl", label="PSL", api_key="soccer_south_africa_psl"),
-        LeagueDef(key="epl", label="EPL", api_key="soccer_epl"),
         LeagueDef(key="la_liga", label="La Liga", api_key="soccer_spain_la_liga"),
         LeagueDef(key="bundesliga", label="Bundesliga", api_key="soccer_germany_bundesliga"),
         LeagueDef(key="serie_a", label="Serie A", api_key="soccer_italy_serie_a"),
@@ -231,17 +231,19 @@ SPORTS: list[SportDef] = [
     ]),
     # ── Rugby 🏉 ─────────────────────────────────────────
     SportDef(key="rugby", label="Rugby", emoji="🏉", fav_type="team", leagues=[
+        LeagueDef(key="international_rugby", label="International Rugby"),
         LeagueDef(key="urc", label="URC"),
         LeagueDef(key="super_rugby", label="Super Rugby"),
         LeagueDef(key="currie_cup", label="Currie Cup"),
         LeagueDef(key="six_nations", label="Six Nations", api_key="rugbyunion_six_nations"),
         LeagueDef(key="rugby_champ", label="Rugby Championship"),
-        LeagueDef(key="rwc", label="Rugby World Cup"),
     ]),
     # ── Cricket 🏏 ────────────────────────────────────────
     SportDef(key="cricket", label="Cricket", emoji="🏏", fav_type="team", leagues=[
         LeagueDef(key="csa_cricket", label="CSA / SA20", api_key="cricket_international_t20"),
         LeagueDef(key="test_cricket", label="Test Matches"),
+        LeagueDef(key="odis", label="ODIs"),
+        LeagueDef(key="t20i", label="T20 Internationals"),
         LeagueDef(key="ipl", label="IPL", api_key="cricket_ipl"),
         LeagueDef(key="big_bash", label="Big Bash", api_key="cricket_big_bash"),
         LeagueDef(key="t20_wc", label="T20 World Cup", api_key="cricket_t20_world_cup"),
@@ -357,9 +359,10 @@ TOP_TEAMS: dict[str, list[str]] = {
     "rugby_champ": [
         "South Africa", "New Zealand", "Australia", "Argentina",
     ],
-    "rwc": [
-        "South Africa", "New Zealand", "England",
-        "France", "Ireland", "Australia",
+    "international_rugby": [
+        "South Africa", "New Zealand", "England", "France",
+        "Ireland", "Australia", "Scotland", "Wales",
+        "Argentina", "Italy", "Fiji", "Japan",
     ],
     # ── Cricket ──
     "csa_cricket": [
@@ -370,6 +373,16 @@ TOP_TEAMS: dict[str, list[str]] = {
     "test_cricket": [
         "South Africa", "India", "Australia",
         "England", "New Zealand", "Pakistan",
+    ],
+    "odis": [
+        "South Africa", "India", "Australia",
+        "England", "New Zealand", "Pakistan",
+        "Sri Lanka", "Bangladesh", "West Indies", "Afghanistan",
+    ],
+    "t20i": [
+        "South Africa", "India", "Australia",
+        "England", "New Zealand", "Pakistan",
+        "Sri Lanka", "West Indies", "Afghanistan",
     ],
     "ipl": [
         "Mumbai Indians", "Chennai Super Kings", "RCB",
@@ -539,10 +552,12 @@ LEAGUE_EXAMPLES: dict[str, str] = {
     "currie_cup": "e.g. Bulls, Stormers, Sharks",
     "six_nations": "e.g. England, France, Ireland",
     "rugby_champ": "e.g. South Africa, New Zealand",
-    "rwc": "e.g. South Africa, New Zealand, England",
+    "international_rugby": "e.g. South Africa, New Zealand, England, France",
     # Cricket
     "csa_cricket": "e.g. Proteas, MI Cape Town, Paarl Royals",
     "test_cricket": "e.g. South Africa, India, Australia",
+    "odis": "e.g. South Africa, India, Australia, England",
+    "t20i": "e.g. South Africa, India, England, Pakistan",
     "ipl": "e.g. Mumbai Indians, CSK, RCB",
     "big_bash": "e.g. Sydney Sixers, Perth Scorchers",
     "t20_wc": "e.g. South Africa, India, England",

@@ -71,7 +71,7 @@ async def get_profile_data(user_id: int) -> dict[str, Any]:
         lg_label = ""
         if pref.league:
             lg = config.ALL_LEAGUES.get(pref.league)
-            lg_label = _abbreviate_league(lg.label) if lg else pref.league
+            lg_label = lg.label if lg else pref.league
         if pref.team_name:
             sport_leagues[sk][lg_label].append(pref.team_name)
         elif lg_label:

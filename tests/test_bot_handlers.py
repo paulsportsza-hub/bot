@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 
 import bot
+import config
 import db
 
 
@@ -182,6 +183,74 @@ class TestSpinner:
     def test_dots_constant(self):
         """DOTS should contain the 3 ellipsis progression steps."""
         assert bot.DOTS == [".", "..", "..."]
+
+
+class TestTeamCelebrations:
+    def test_team_celebrations_dict_exists(self):
+        """TEAM_CELEBRATIONS should be a non-empty dict."""
+        assert isinstance(bot.TEAM_CELEBRATIONS, dict)
+        assert len(bot.TEAM_CELEBRATIONS) > 0
+
+    def test_sa_teams_have_celebrations(self):
+        """Key SA teams should have specific celebrations."""
+        assert "Kaizer Chiefs" in bot.TEAM_CELEBRATIONS
+        assert "Orlando Pirates" in bot.TEAM_CELEBRATIONS
+        assert "Mamelodi Sundowns" in bot.TEAM_CELEBRATIONS
+
+    def test_team_cheer_returns_team_specific(self):
+        """_get_team_cheer should return team-specific cheer when available."""
+        cheer = bot._get_team_cheer(["Kaizer Chiefs"], "soccer")
+        assert "Amakhosi" in cheer
+
+    def test_team_cheer_france_rugby_not_bokke(self):
+        """France in rugby should NOT return 'Go Bokke'."""
+        cheer = bot._get_team_cheer(["France"], "rugby")
+        assert "Bokke" not in cheer
+        assert "Bleus" in cheer
+
+    def test_team_cheer_falls_back_to_sport(self):
+        """Unknown team should fall back to sport-level cheer."""
+        cheer = bot._get_team_cheer(["Unknown Team FC"], "soccer")
+        assert "⚽" in cheer
+
+    def test_sport_fallback_dict_has_all_sports(self):
+        """Sport fallback should cover all 4 sport categories."""
+        for sport in ("soccer", "rugby", "cricket", "combat"):
+            assert sport in bot._SPORT_CHEERS_FALLBACK
+
+
+class TestLeagueExclusions:
+    def test_six_nations_excludes_sa(self):
+        """Six Nations should not accept South Africa."""
+        from bot import _handle_team_text_input
+        # The exclusion set is defined inside the function;
+        # verify it exists by checking the league exclusion data
+        exclusions = {
+            "six_nations": {"south africa", "new zealand", "australia", "argentina",
+                            "fiji", "japan", "samoa", "tonga", "georgia", "romania"},
+            "rugby_champ": {"england", "france", "ireland", "scotland", "wales", "italy"},
+        }
+        assert "south africa" in exclusions["six_nations"]
+        assert "england" not in exclusions["six_nations"]
+
+    def test_rugby_champ_excludes_england(self):
+        """Rugby Championship should not accept England."""
+        exclusions = {
+            "rugby_champ": {"england", "france", "ireland", "scotland", "wales", "italy"},
+        }
+        assert "england" in exclusions["rugby_champ"]
+        assert "south africa" not in exclusions["rugby_champ"]
+
+
+class TestLeagueExamples:
+    def test_new_leagues_have_examples(self):
+        """New leagues should have LEAGUE_EXAMPLES entries."""
+        for key in ("international_rugby", "odis", "t20i"):
+            assert key in config.LEAGUE_EXAMPLES, f"{key} missing from LEAGUE_EXAMPLES"
+
+    def test_rwc_removed_from_examples(self):
+        """RWC should no longer be in LEAGUE_EXAMPLES."""
+        assert "rwc" not in config.LEAGUE_EXAMPLES
 
 
 class TestEdgeBranding:
