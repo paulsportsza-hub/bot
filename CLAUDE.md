@@ -1539,10 +1539,11 @@ A stale process running old code is invisible to unit tests and has caused multi
 - Graceful fallback on API failure (empty string, no crash)
 - Welcome text italicised below main message
 
-### Sport Emoji Spinner
-- `SPORT_SPINNER = ["⚽", "🏉", "🏏", "🥊"]`
-- `_spinner_text(verb)` builds animated-feel loading line with randomised emojis
-- Applied to: Hot Tips loading, picks loading, game analysis loading
+### Animated Sport Emoji Spinner (Phase 0B-FIX)
+- `SPORT_EMOJIS = ["⚽", "🏉", "🏏", "🥊"]`, `DOTS = [".", "..", "..."]`
+- `_run_spinner(message, text, stop_event)` — async loop edits message every 0.5s with rotating emoji + dots
+- Pattern: send/edit loading msg → `asyncio.create_task(_run_spinner(...))` → do work in try/finally → `stop_event.set()` → replace with result
+- Applied to: Hot Tips, picks, game analysis, AI odds analysis
 
 ### Team Confirmation SA Flavour
 - Sport emoji prefixed to "Matched:" header
