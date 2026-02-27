@@ -175,16 +175,13 @@ class TestStickyKeyboard:
 
 
 class TestSpinner:
-    def test_spinner_text_has_sport_emojis(self):
-        """Spinner text should include sport emojis."""
-        text = bot._spinner_text("Scanning")
-        assert "⚽" in text or "🏉" in text or "🏏" in text or "🥊" in text
-        assert "Scanning" in text
+    def test_sport_emojis_constant(self):
+        """SPORT_EMOJIS should contain the 4 core sport emojis."""
+        assert bot.SPORT_EMOJIS == ["⚽", "🏉", "🏏", "🥊"]
 
-    def test_spinner_text_has_italic(self):
-        """Spinner text should use HTML italic."""
-        text = bot._spinner_text("Loading")
-        assert "<i>" in text
+    def test_dots_constant(self):
+        """DOTS should contain the 3 ellipsis progression steps."""
+        assert bot.DOTS == [".", "..", "..."]
 
 
 class TestEdgeBranding:

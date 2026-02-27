@@ -13,6 +13,7 @@ load_dotenv()
 if sentry_sdk:
     sentry_sdk.init(dsn=os.getenv("SENTRY_DSN", ""))
 
+import asyncio
 import difflib
 import logging
 import os
@@ -1009,7 +1010,11 @@ async def handle_ai(query, action: str) -> None:
     sport_key = action if action != "tip" else "soccer"
     sport = config.ALL_SPORTS.get(sport_key)
 
-    await query.edit_message_text("🤖 <i>Analysing odds…</i>", parse_mode=ParseMode.HTML)
+    _ai_msg = query.message
+    _ai_stop = asyncio.Event()
+    _ai_spinner = asyncio.create_task(
+        _run_spinner(_ai_msg, "Analysing odds", _ai_stop),
+    )
 
     # Fetch odds from the first league that has an api_key
     odds_context = ""
@@ -1027,6 +1032,8 @@ async def handle_ai(query, action: str) -> None:
 
     # If no league had an API key, show a graceful message instead of calling AI with no data
     if not odds_context:
+        _ai_stop.set()
+        await _ai_spinner
         await query.edit_message_text(
             f"⚠️ <b>{sport_label}</b>\n\n"
             "No odds data available for this sport right now.\n"
@@ -1057,6 +1064,8 @@ async def handle_ai(query, action: str) -> None:
     except Exception:
         pass
 
+    _ai_stop.set()
+    await _ai_spinner
     await query.edit_message_text(tip_text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
 
 
@@ -3429,31 +3438,36 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
 
 async def _do_hot_tips_flow(chat_id: int, bot) -> None:
     """Core Hot Tips — fetch tips, cache, show first page."""
-    import random
-
-    verb = random.choice(LOADING_VERBS)
     loading = await bot.send_message(
         chat_id,
-        _spinner_text(verb),
+        "⚽ Scanning odds across all bookmakers.",
         parse_mode=ParseMode.HTML,
     )
+    stop_spinner = asyncio.Event()
+    spinner_task = asyncio.create_task(
+        _run_spinner(loading, "Scanning odds across all bookmakers", stop_spinner),
+    )
 
-    # Primary: our own scraped data from odds.db (free, fast, always available)
-    tips = await _fetch_hot_tips_from_db()
+    try:
+        # Primary: our own scraped data from odds.db (free, fast, always available)
+        tips = await _fetch_hot_tips_from_db()
 
-    # Fallback: Odds API if odds.db returned nothing
-    if not tips:
-        try:
-            tips = await _fetch_hot_tips_all_sports()
-        except Exception as exc:
-            log.warning("Odds API fallback also failed: %s", exc)
-            tips = []
+        # Fallback: Odds API if odds.db returned nothing
+        if not tips:
+            try:
+                tips = await _fetch_hot_tips_all_sports()
+            except Exception as exc:
+                log.warning("Odds API fallback also failed: %s", exc)
+                tips = []
 
-    # Store tips in game_tips_cache so tip detail can find them
-    for tip in tips:
-        eid = tip.get("event_id", "")
-        if eid:
-            _game_tips_cache[eid] = [tip]
+        # Store tips in game_tips_cache so tip detail can find them
+        for tip in tips:
+            eid = tip.get("event_id", "")
+            if eid:
+                _game_tips_cache[eid] = [tip]
+    finally:
+        stop_spinner.set()
+        await spinner_task
 
     try:
         await loading.delete()
@@ -3578,18 +3592,25 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
 
 # ── /picks — Today's value bets ───────────────────────────
 
-LOADING_VERBS = [
-    "Scanning markets", "Crunching numbers", "Hunting value",
-    "Analysing odds", "Finding edges",
-]
+SPORT_EMOJIS = ["⚽", "🏉", "🏏", "🥊"]
+DOTS = [".", "..", "..."]
 
-SPORT_SPINNER = ["⚽", "🏉", "🏏", "🥊"]
 
-def _spinner_text(verb: str) -> str:
-    """Build an animated-feel loading line with rotating sport emojis."""
-    import random
-    emojis = " ".join(random.sample(SPORT_SPINNER, len(SPORT_SPINNER)))
-    return f"{emojis}\n\n<i>{verb}…</i>"
+async def _run_spinner(message, text: str, stop_event: asyncio.Event) -> None:
+    """Edit message every 0.5s with rotating emoji + dots. Runs until stop_event is set."""
+    frame = 0
+    while not stop_event.is_set():
+        emoji = SPORT_EMOJIS[frame % 4]
+        dots = DOTS[frame % 3]
+        try:
+            await message.edit_text(f"{emoji} {text}{dots}", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass  # Ignore edit conflicts (message unchanged, rate limits)
+        frame += 1
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def cmd_picks(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3609,9 +3630,6 @@ async def handle_picks(query, ctx: ContextTypes.DEFAULT_TYPE, action: str) -> No
 
 async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
     """Core picks logic — fetch cached odds, compute EV, display pick cards."""
-    import random
-    verb = random.choice(LOADING_VERBS)
-
     # Load user profile
     user = await db.get_user(user_id)
     risk_key = (user.risk_profile if user else None) or "moderate"
@@ -3637,11 +3655,15 @@ async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
         )
         return
 
-    # Send loading message
+    # Send loading message with animated spinner
     loading_msg = await bot.send_message(
         chat_id,
-        _spinner_text(f"{verb} across {len(league_keys)} league{'s' if len(league_keys) != 1 else ''}"),
+        "⚽ Running Edge-AI analysis.",
         parse_mode=ParseMode.HTML,
+    )
+    stop_spinner = asyncio.Event()
+    spinner_task = asyncio.create_task(
+        _run_spinner(loading_msg, "Running Edge-AI analysis", stop_spinner),
     )
 
     # Fetch picks via the engine
@@ -3657,6 +3679,9 @@ async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
         log.error("Picks engine error: %s", exc)
         result = {"ok": False, "picks": [], "total_events": 0, "total_markets": 0,
                   "quota_remaining": "?", "errors": [str(exc)]}
+    finally:
+        stop_spinner.set()
+        await spinner_task
 
     # Delete loading message
     try:
@@ -4487,9 +4512,11 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     away = h(away_raw)
     hf, af = _get_flag_prefixes(home_raw, away_raw)
 
-    await query.edit_message_text(
-        _spinner_text(f"Analysing {hf}{home} vs {af}{away}"),
-        parse_mode=ParseMode.HTML,
+    # Start animated spinner on the existing message
+    _spinner_msg = query.message
+    _spinner_stop = asyncio.Event()
+    _spinner_task = asyncio.create_task(
+        _run_spinner(_spinner_msg, f"Analysing {hf}{home} vs {af}{away}", _spinner_stop),
     )
 
     # Try odds.db first (local scrapers — no API quota cost)
@@ -4736,6 +4763,10 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
 
     # ── Cache the full analysis (1-hour TTL) ──
     _analysis_cache[event_id] = (msg, tips, _time.time())
+
+    # Stop spinner before final render
+    _spinner_stop.set()
+    await _spinner_task
 
     # Build simplified buttons (North Star: 4 buttons max)
     buttons = _build_game_buttons(tips, event_id, user_id)
