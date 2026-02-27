@@ -55,7 +55,7 @@ class SportDef:
     key: str          # "soccer", "rugby", etc.
     label: str        # display name
     emoji: str
-    fav_type: str     # "team" / "player" / "fighter" / "driver" / "skip"
+    fav_type: str     # "team" / "player" / "fighter" / "skip"
     leagues: list[LeagueDef]
 ```
 
@@ -68,20 +68,13 @@ class LeagueDef:
     api_key: str | None  # The Odds API sport key (None if not available)
 ```
 
-### 11 Sport Categories
+### 4 Sport Categories (Phase 0 — narrowed from 11)
 | Category | fav_type | Leagues |
 |----------|----------|---------|
 | soccer | team | PSL, EPL, La Liga, Bundesliga, Serie A, Ligue 1, Champions League, MLS |
 | rugby | team | URC, Super Rugby, Currie Cup, Six Nations, Rugby Championship, RWC |
 | cricket | team | CSA/SA20, Test Matches, IPL, Big Bash, T20 World Cup |
-| tennis | player | ATP Tour, WTA Tour, Grand Slams |
-| boxing | fighter | Major Bouts |
-| mma | fighter | UFC Events |
-| basketball | team | NBA, EuroLeague |
-| american_football | team | NFL |
-| golf | player | PGA Tour, DP World Tour, Majors |
-| motorsport | driver | Formula 1, MotoGP |
-| horse_racing | skip | SA Horse Racing |
+| combat | fighter | Major Bouts (boxing), UFC Events (mma) |
 
 ### Lookup maps (auto-generated from SPORTS)
 - `ALL_SPORTS` — category key → SportDef
@@ -90,29 +83,29 @@ class LeagueDef:
 - `SPORTS_MAP` — league key → api_key (only leagues with API keys)
 
 ### TOP_TEAMS dict
-`config.TOP_TEAMS[league_key]` → list of top teams/players for that league. Used for multi-select buttons in onboarding favourites step. ~32 league keys.
+`config.TOP_TEAMS[league_key]` → list of top teams/players for that league. Used for multi-select buttons in onboarding favourites step. ~20 league keys.
 
 ### TEAM_ALIASES dict
-`config.TEAM_ALIASES[lowercase_alias]` → canonical name. ~113+ aliases. Used for fuzzy matching during manual favourite input. Covers EPL nicknames (gunners, red devils, sky blues, reds, toffees), SA PSL slang (glamour boys, usuthu, masandawana), La Liga (los blancos, blaugrana), Rugby (bokke, les bleus), Tennis (rafa, djoker), Boxing (canelo, tank, fury), Cricket (proteas, blackcaps, windies), MMA (poatan, stillknocks).
+`config.TEAM_ALIASES[lowercase_alias]` → canonical name. ~100 aliases. Used for fuzzy matching during manual favourite input. Covers EPL nicknames (gunners, red devils, sky blues, reds, toffees), SA PSL slang (glamour boys, usuthu, masandawana), La Liga (los blancos, blaugrana), Rugby (bokke, les bleus), Boxing (canelo, tank, fury), Cricket (proteas, blackcaps, windies), MMA (poatan, stillknocks).
 
 ### LEAGUE_EXAMPLES dict
-`config.LEAGUE_EXAMPLES[league_key]` → example string for team input prompts. ~35 entries (e.g. `"epl": "e.g. Arsenal, Liverpool, Man City"`). Used in `_show_next_team_prompt()` during onboarding and settings team editing to show league-specific placeholder text.
+`config.LEAGUE_EXAMPLES[league_key]` → example string for team input prompts. ~25 entries (e.g. `"epl": "e.g. Arsenal, Liverpool, Man City"`). Used in `_show_next_team_prompt()` during onboarding and settings team editing to show league-specific placeholder text.
 
 ### TEAM_ABBREVIATIONS dict
-`config.TEAM_ABBREVIATIONS[team_name]` → short abbreviation. ~60 entries (e.g. `"Arsenal": "ARS"`, `"Kaizer Chiefs": "KC"`, `"Real Madrid": "RMA"`). Used for compact button display in schedule view.
+`config.TEAM_ABBREVIATIONS[team_name]` → short abbreviation. ~40 entries (e.g. `"Arsenal": "ARS"`, `"Kaizer Chiefs": "KC"`, `"Real Madrid": "RMA"`). Used for compact button display in schedule view.
 
 ### abbreviate_team()
 `config.abbreviate_team(name, max_len=3)` → abbreviation from `TEAM_ABBREVIATIONS` dict with fallback to first 3 chars uppercased.
 
 ### fav_type helpers
-- `config.fav_label(sport)` → "favourite team" / "favourite player" / "favourite fighter" / "favourite driver or team"
+- `config.fav_label(sport)` → "favourite team" / "favourite player" / "favourite fighter"
 - `config.fav_label_plural(sport)` → plural form
 
 ### SPORT_DISPLAY dict (Odds API group mapping)
-`config.SPORT_DISPLAY[group]` → `{"emoji": "⚽", "entity": "team", "entities": "teams"}`. Maps Odds API group names (Soccer, Tennis, Boxing, etc.) to display config. 12 groups.
+`config.SPORT_DISPLAY[group]` → `{"emoji": "⚽", "entity": "team", "entities": "teams"}`. Maps Odds API group names (Soccer, Boxing, etc.) to display config. 6 groups.
 
 ### SA_PRIORITY_GROUPS list
-Ordered SA-first display: Soccer → Rugby Union → Cricket → Boxing → MMA → Tennis → Golf → Basketball → ...
+Ordered SA-first display: Soccer → Rugby Union → Cricket → Boxing → Mixed Martial Arts
 
 ### Display helpers
 - `config.get_sport_emoji(group)` → emoji for Odds API group (fallback: 🏅)
@@ -223,9 +216,9 @@ SA_BOOKMAKERS = {
 
 ## Onboarding Quiz Flow (8 steps)
 1. **Experience level** — Experienced / Casual / Newbie
-2. **Sports selection** — Category-based grid (Soccer, Rugby, Cricket, Tennis, Boxing, MMA, Basketball, American Football, Golf, Motorsport, Horse Racing)
+2. **Sports selection** — Category-based grid (Soccer, Rugby, Cricket, Combat Sports)
 3. **League selection** — Per selected sport, toggle leagues. **Single-league sports auto-select** (e.g. NFL, UFC).
-4. **Favourites** — Text-based input per league. User types comma-separated team/player names with fuzzy matching. Max 5 per league. Horse racing skipped (fav_type="skip"). Sport-appropriate language (team/player/fighter/driver). Queue-based: iterates `_fav_league_queue` of `(sport_key, league_key)` pairs. League-specific examples from `config.LEAGUE_EXAMPLES`.
+4. **Favourites** — Text-based input per league. User types comma-separated team/player names with fuzzy matching. Max 5 per league. Sport-appropriate language (team/player/fighter). Queue-based: iterates `_fav_league_queue` of `(sport_key, league_key)` pairs. League-specific examples from `config.LEAGUE_EXAMPLES`.
 5. **Risk profile** — Conservative / Moderate / Aggressive
 6. **Weekly bankroll** — Preset buttons (R500, R1000, R2000, R5000) + "Not sure yet" skip + "Custom amount" text input. Saved to `User.bankroll`. Used for personalised Kelly stake sizing.
 7. **Notification time** — 7 AM / 12 PM / 6 PM / 9 PM
@@ -394,7 +387,7 @@ Shown when user follows 2+ sport categories. Row of emoji buttons (e.g. `⚽ �
 - `_format_kickoff_display(commence_time)` — Format as "Today 19:30" or "Wed 26 Feb, 15:00"
 
 ### All-sports scanning
-`HOT_TIPS_SCAN_SPORTS` is a list of ~25 Odds API sport keys covering soccer, rugby, cricket, basketball, NFL, MMA, boxing, tennis, golf. Tips are scanned across ALL sports (not just user's preferences).
+`HOT_TIPS_SCAN_SPORTS` is a list of ~16 Odds API sport keys covering soccer, rugby, cricket, MMA, boxing. Tips are scanned across all 4 core sports (not just user's preferences).
 
 ### 15-minute cache
 `_hot_tips_cache["global"]` stores `{"tips": [...], "ts": float}` with `HOT_TIPS_CACHE_TTL = 900` seconds.
