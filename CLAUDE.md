@@ -1490,3 +1490,71 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Wave 17E)
 - Tests: 378 passing (14 new), 0 failures
+
+## Phase 0B — Straggler Fixes + Onboarding UX Polish (27 Feb 2026)
+
+**Part A — QA Stragglers (6 fixes):**
+- STRAGGLER-001: Removed "Formula 1": "F1" and "Grand Slams": "Slams" from `_LEAGUE_ABBREV`
+- STRAGGLER-002: Changed "NBA" → "URC" in keyless league suggestion text
+- STRAGGLER-003: Removed F1/Jolpica references from docstrings (ESPN/Jolpica → ESPN)
+- STRAGGLER-004: Removed "Tennis" from `sports_data.py` docstring example
+- STRAGGLER-005: Replaced Tennis/Boxing E2E tests with Cricket/Combat equivalents
+- STRAGGLER-006: Removed "Grand Slams" abbreviation (tennis league)
+
+**Part B — Onboarding UX Polish (10 items):**
+
+### "Top Edge Picks" Rebrand (was "Hot Tips")
+- Sticky keyboard: "🔥 Hot Tips" → "💎 Top Edge Picks"
+- All inline buttons, headers, help text updated
+- `_LEGACY_LABELS` maps old "🔥 Hot Tips" → `hot_tips` for cached keyboards
+- Regex pattern in `main()` includes both old and new labels
+- Internal function names unchanged (hot_tips, _do_hot_tips_flow etc.)
+
+### "Edge Alerts" Rebrand (was "Your Betting Story")
+- Welcome message: "Your Betting Story" → "Edge Alerts"
+- "Set Up My Story" → "Set Up Edge Alerts"
+- "Your Story is Set!" → "Edge Alerts — All Set!"
+- Settings button: "📖 My Notifications" → "🔔 Edge Alerts"
+- "Show Me Hot Tips" → "💎 Top Edge Picks" post-story completion
+
+### "Edge-AI" Branding
+- Help text: "AI edge markers" → "Edge-AI markers"
+- Help text: "How tips work" → "How the Edge works"
+- Welcome message: "AI edge indicators" → "Edge-AI indicators"
+- Edge explainer: "our AI compares" → "Our Edge-AI scans"
+
+### Start Again Button
+- Added "🔄 Start Again" (`ob_nav:restart`) to risk, bankroll, and notify keyboards
+- `handle_ob_nav` handles `restart` action: clears state, restarts from experience step
+- Keyboard functions now return Back + Start Again side by side
+
+### Edge Rating Explainer Rewrite
+- New copy emphasises Edge-AI and SA flavour ("lekker", "The bookies got this wrong")
+- Pro tip footer: "Focus on 💎 Diamond and 🥇 Gold"
+- Title: "How Your Edge Works" (was "Understanding Your Edge")
+
+### Claude Haiku Personalised Welcome
+- `handle_ob_done()` calls Claude Haiku (`claude-haiku-4-5-20251001`) for 2-sentence welcome
+- Prompt includes: user name, sports, experience level, SA flair instructions
+- Graceful fallback on API failure (empty string, no crash)
+- Welcome text italicised below main message
+
+### Sport Emoji Spinner
+- `SPORT_SPINNER = ["⚽", "🏉", "🏏", "🥊"]`
+- `_spinner_text(verb)` builds animated-feel loading line with randomised emojis
+- Applied to: Hot Tips loading, picks loading, game analysis loading
+
+### Team Confirmation SA Flavour
+- Sport emoji prefixed to "Matched:" header
+- SA celebration phrases per sport: "Amakhosi! ⚽", "Go Bokke! 🏉", "Howzat! 🏏", "Let's go champ! 🥊"
+- Entity label uses sport-appropriate term (team/fighter)
+
+### Enhanced Aliases
+- Added ~20 new aliases in `config.TEAM_ALIASES`:
+  - MMA typos: "drikus", "du plessis", "pereira", "holloway", "omalley", "islam", "makhachev"
+  - SA slang: "amakhosi", "khosi", "buccaneers", "bucs", "masandawana", "downs"
+  - EPL common: "gooners", "gunners", "the reds", "pool", "man u", "man c", "chelsea fc"
+  - Rugby: "stormers", "bulls", "sharks", "lions"
+
+### Test Status (Phase 0B)
+- Tests: 384 passing (11 new), 0 failures

@@ -68,7 +68,7 @@ async def fetch_available_sports(include_inactive: bool = False) -> dict[str, li
 
     Returns: {
         "Soccer": [{"key": "soccer_epl", "title": "EPL", "active": True}, ...],
-        "Tennis": [...],
+        "Rugby Union": [...],
         ...
     }
 

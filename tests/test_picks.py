@@ -357,7 +357,7 @@ async def test_cmd_picks_no_prefs(test_db, mock_update, mock_context):
     # Last call should be the "no edges" message
     last_call = mock_context.bot.send_message.call_args_list[-1]
     text = last_call[1].get("text", "") or (last_call[0][1] if len(last_call[0]) > 1 else "")
-    assert "Hot Tips" in text or "No edges" in text
+    assert "Top Edge Picks" in text or "No edges" in text
 
 
 async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
@@ -391,7 +391,7 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
         t = call[1].get("text", "") or (call[0][1] if len(call[0]) > 1 else "")
         all_texts.append(t)
     combined = " ".join(all_texts)
-    assert "Hot Tips" in combined
+    assert "Top Edge Picks" in combined
     assert "Arsenal" in combined
 
 

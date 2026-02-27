@@ -155,9 +155,18 @@ class TestTeamAliases:
 
     def test_mma_aliases(self):
         assert config.TEAM_ALIASES["dricus"] == "Dricus Du Plessis"
+        assert config.TEAM_ALIASES["drikus"] == "Dricus Du Plessis"
+        assert config.TEAM_ALIASES["du plessis"] == "Dricus Du Plessis"
 
     def test_boxing_aliases(self):
         assert config.TEAM_ALIASES["canelo"] == "Canelo Alvarez"
+
+    def test_sa_slang_aliases(self):
+        """SA slang/nicknames correctly mapped."""
+        assert config.TEAM_ALIASES["amakhosi"] == "Kaizer Chiefs"
+        assert config.TEAM_ALIASES["masandawana"] == "Mamelodi Sundowns"
+        assert config.TEAM_ALIASES["bucs"] == "Orlando Pirates"
+        assert config.TEAM_ALIASES["bokke"] == "South Africa"
 
     def test_all_aliases_lowercase(self):
         for key in config.TEAM_ALIASES:

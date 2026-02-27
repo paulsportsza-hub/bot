@@ -422,12 +422,12 @@ async def suite_onboarding(client: TelegramClient):
         record("sports_toggle_checkmark", "WARN",
                f"No checkmark. Soccer text: '{soccer_text}'", time.time() - t0)
 
-    # Also select Tennis and Boxing
-    msg = await click_button_by_data(client, msg, "ob_sport:tennis")
+    # Also select Cricket and Combat
+    msg = await click_button_by_data(client, msg, "ob_sport:cricket")
     if not msg:
         msg = await get_latest_bot_msg(client)
     await asyncio.sleep(0.5)
-    msg = await click_button_by_data(client, msg, "ob_sport:boxing")
+    msg = await click_button_by_data(client, msg, "ob_sport:combat")
     if not msg:
         msg = await get_latest_bot_msg(client)
 

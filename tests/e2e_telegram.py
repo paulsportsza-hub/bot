@@ -282,7 +282,7 @@ async def test_experience_selection(page: Page, choice: str = "sometimes"):
 
         has_sport = any(
             emoji in " ".join(button_texts)
-            for emoji in ["Soccer", "Rugby", "Cricket", "Tennis", "Boxing"]
+            for emoji in ["Soccer", "Rugby", "Cricket", "Combat"]
         )
 
         if has_sport:
@@ -345,10 +345,10 @@ async def test_sport_selection(page: Page):
             record_test("sports_multi_select_toggle", "WARN",
                         f"No toggle visible. Buttons: {button_texts2}", time.time() - t0)
 
-        # Also select Tennis and Boxing
-        await click_button_by_text(page, "tennis", partial=True)
+        # Also select Cricket and Combat
+        await click_button_by_text(page, "cricket", partial=True)
         await page.wait_for_timeout(1000)
-        await click_button_by_text(page, "boxing", partial=True)
+        await click_button_by_text(page, "combat", partial=True)
         await page.wait_for_timeout(1000)
 
         await screenshot(page, "sports_multi_selected")
@@ -478,39 +478,35 @@ async def test_team_selection(page: Page):
         record_test("team_selection", "ERROR", str(e), time.time() - t0)
 
 
-async def test_tennis_skips_leagues(page: Page):
-    """TEST: Tennis should skip league selection and go straight to players."""
+async def test_combat_sports_flow(page: Page):
+    """TEST: Combat sports should show fighter selection with known fighters."""
     t0 = time.time()
     try:
         buttons = await get_inline_buttons(page)
         button_texts = [b["text"] for b in buttons]
-        await screenshot(page, "tennis_step")
+        await screenshot(page, "combat_step")
 
         msg = await get_last_bot_message(page)
 
-        says_player = "player" in msg.lower() if msg else False
-        says_league = "league" in msg.lower() if msg else False
+        says_fighter = "fighter" in msg.lower() if msg else False
 
-        if says_player and not says_league:
-            record_test("tennis_skips_leagues_shows_players", "PASS",
-                        "Tennis skipped leagues, shows players", time.time() - t0)
-        elif not says_league:
-            record_test("tennis_skips_leagues_shows_players", "WARN",
-                        f"No league step but couldn't confirm players. Message: {msg[:100] if msg else 'N/A'}",
+        if says_fighter:
+            record_test("combat_shows_fighters", "PASS",
+                        "Combat sports uses 'fighters' language", time.time() - t0)
+        else:
+            record_test("combat_shows_fighters", "WARN",
+                        f"Couldn't confirm 'fighters' label. Message: {msg[:100] if msg else 'N/A'}",
                         time.time() - t0)
-        else:
-            record_test("tennis_skips_leagues_shows_players", "FAIL",
-                        f"Tennis showed league selection. Message: {msg[:100] if msg else 'N/A'}", time.time() - t0)
 
-        known_players = ["djokovic", "alcaraz", "sinner", "medvedev", "zverev"]
-        found_players = [t for t in button_texts if any(p in t.lower() for p in known_players)]
+        known_fighters = ["usyk", "fury", "canelo", "crawford", "du plessis"]
+        found_fighters = [t for t in button_texts if any(f in t.lower() for f in known_fighters)]
 
-        if found_players:
-            record_test("tennis_shows_player_names", "PASS",
-                        f"Found players: {found_players}", time.time() - t0)
+        if found_fighters:
+            record_test("combat_shows_fighter_names", "PASS",
+                        f"Found fighters: {found_fighters}", time.time() - t0)
         else:
-            record_test("tennis_shows_player_names", "WARN",
-                        f"No recognized players. Buttons: {button_texts}", time.time() - t0)
+            record_test("combat_shows_fighter_names", "WARN",
+                        f"No recognized fighters. Buttons: {button_texts}", time.time() - t0)
 
         await click_button_by_text(page, "skip", partial=True)
         if not await click_button_by_text(page, "done", partial=True):
@@ -518,7 +514,7 @@ async def test_tennis_skips_leagues(page: Page):
         await page.wait_for_timeout(3000)
 
     except Exception as e:
-        record_test("tennis_skips_leagues", "ERROR", str(e), time.time() - t0)
+        record_test("combat_sports_flow", "ERROR", str(e), time.time() - t0)
 
 
 async def test_boxing_skips_leagues(page: Page):
@@ -1174,7 +1170,7 @@ async def run_all_tests():
         await test_sport_done_advances(page)
         await test_league_selection(page)
         await test_team_selection(page)
-        await test_tennis_skips_leagues(page)
+        await test_combat_sports_flow(page)
         await test_boxing_skips_leagues(page)
         await test_risk_profile(page)
         await test_notification_time(page)
@@ -1251,7 +1247,7 @@ async def run_specific_suite(suite_name: str):
             await test_sport_done_advances(page)
             await test_league_selection(page)
             await test_team_selection(page)
-            await test_tennis_skips_leagues(page)
+            await test_combat_sports_flow(page)
             await test_boxing_skips_leagues(page)
             await test_risk_profile(page)
             await test_notification_time(page)

@@ -438,16 +438,42 @@ class TestKeyboards:
     def test_kb_onboarding_risk(self):
         kb = bot.kb_onboarding_risk()
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert len(texts) == 4  # 3 risk options + back button
+        assert len(texts) == 5  # 3 risk options + back + start again
         assert any("↩️" in t for t in texts)
 
     def test_kb_onboarding_notify(self):
         kb = bot.kb_onboarding_notify()
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert len(texts) == 5  # 4 time options + back button
+        assert len(texts) == 6  # 4 time options + back + start again
         assert any("↩️" in t for t in texts)
 
     def test_kb_settings_has_reset(self):
         kb = bot.kb_settings()
         callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
         assert "settings:reset" in callbacks
+
+    def test_kb_onboarding_risk_has_start_again(self):
+        """Risk keyboard has Start Again button."""
+        kb = bot.kb_onboarding_risk()
+        texts = [btn.text for row in kb.inline_keyboard for btn in row]
+        assert any("Start Again" in t for t in texts)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        assert "ob_nav:restart" in callbacks
+
+    def test_kb_onboarding_notify_has_start_again(self):
+        """Notify keyboard has Start Again button."""
+        kb = bot.kb_onboarding_notify()
+        texts = [btn.text for row in kb.inline_keyboard for btn in row]
+        assert any("Start Again" in t for t in texts)
+
+    def test_kb_onboarding_bankroll_has_start_again(self):
+        """Bankroll keyboard has Start Again button."""
+        kb = bot.kb_onboarding_bankroll()
+        texts = [btn.text for row in kb.inline_keyboard for btn in row]
+        assert any("Start Again" in t for t in texts)
+
+    def test_kb_settings_has_edge_alerts(self):
+        """Settings keyboard uses Edge Alerts branding."""
+        kb = bot.kb_settings()
+        texts = [btn.text for row in kb.inline_keyboard for btn in row]
+        assert any("Edge Alerts" in t for t in texts)

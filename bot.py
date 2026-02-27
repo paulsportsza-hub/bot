@@ -98,24 +98,25 @@ _team_edit_state: dict[int, dict] = {}
 # Always-visible bottom keyboard (separate from inline keyboards)
 
 _KEYBOARD_LABELS = [
-    "⚽ Your Games", "🔥 Hot Tips", "📖 Guide",
+    "⚽ Your Games", "💎 Top Edge Picks", "📖 Guide",
     "👤 Profile", "⚙️ Settings", "❓ Help",
 ]
 
 # Legacy labels kept for transition — users with cached keyboards may still send these
 _LEGACY_LABELS = {
-    "🎯 Today's Picks": "hot_tips",         # old picks → Hot Tips
+    "🎯 Today's Picks": "hot_tips",         # old picks → Top Edge Picks
     "📅 Schedule": "your_games",             # old schedule → Your Games
     "🔴 Live Games": "live_games",           # old keyboard → Live Games
     "📊 My Stats": "stats",                  # old keyboard → Profile
     "📖 Betway Guide": "guide",              # old keyboard → Guide
+    "🔥 Hot Tips": "hot_tips",               # old Hot Tips → Top Edge Picks
 }
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Return the persistent 2×3 reply keyboard."""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("⚽ Your Games"), KeyboardButton("🔥 Hot Tips"), KeyboardButton("📖 Guide")],
+            [KeyboardButton("⚽ Your Games"), KeyboardButton("💎 Top Edge Picks"), KeyboardButton("📖 Guide")],
             [KeyboardButton("👤 Profile"), KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")],
         ],
         resize_keyboard=True,
@@ -297,12 +298,11 @@ _LEAGUE_ABBREV: dict[str, str] = {
     "Rugby Championship": "RC",
     "Rugby World Cup": "RWC",
     "T20 World Cup": "T20 WC",
-    "Grand Slams": "Slams",
     "Major Bouts": "Boxing",
     "UFC Events": "UFC",
-    "DP World Tour": "DPWT",
-    "Formula 1": "F1",
-    "SA Horse Racing": "SA Racing",
+    "English Premier League": "EPL",
+    "South African Premier Soccer League": "PSL",
+    "Indian Premier League": "IPL",
     "Super Rugby": "Super",
     "Currie Cup": "CC",
     "Test Matches": "Tests",
@@ -321,7 +321,7 @@ def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0"),
-            InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go"),
+            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
         ],
         [
             InlineKeyboardButton("💰 My Bets", callback_data="bets:active"),
@@ -428,7 +428,7 @@ def kb_settings() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🎯 Risk Profile", callback_data="settings:risk")],
         [InlineKeyboardButton("💰 Bankroll", callback_data="settings:bankroll")],
         [InlineKeyboardButton("⏰ Notifications", callback_data="settings:notify")],
-        [InlineKeyboardButton("📖 My Notifications", callback_data="settings:story")],
+        [InlineKeyboardButton("🔔 Edge Alerts", callback_data="settings:story")],
         [InlineKeyboardButton("⚽ My Sports", callback_data="settings:sports")],
         [InlineKeyboardButton("🔄 Reset Profile", callback_data="settings:reset")],
         [
@@ -532,7 +532,10 @@ def kb_onboarding_risk() -> InlineKeyboardMarkup:
     rows = []
     for key, prof in config.RISK_PROFILES.items():
         rows.append([InlineKeyboardButton(prof["label"], callback_data=f"ob_risk:{key}")])
-    rows.append([InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_risk")])
+    rows.append([
+        InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_risk"),
+        InlineKeyboardButton("🔄 Start Again", callback_data="ob_nav:restart"),
+    ])
     return InlineKeyboardMarkup(rows)
 
 
@@ -546,7 +549,10 @@ def kb_onboarding_notify() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🌆 6 PM", callback_data="ob_notify:18"),
             InlineKeyboardButton("🌙 9 PM", callback_data="ob_notify:21"),
         ],
-        [InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_notify")],
+        [
+            InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_notify"),
+            InlineKeyboardButton("🔄 Start Again", callback_data="ob_nav:restart"),
+        ],
     ])
 
 
@@ -562,7 +568,10 @@ def kb_onboarding_bankroll() -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton("🤷 Not sure — skip", callback_data="ob_bankroll:skip")],
         [InlineKeyboardButton("✏️ Custom amount", callback_data="ob_bankroll:custom")],
-        [InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_bankroll")],
+        [
+            InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_bankroll"),
+            InlineKeyboardButton("🔄 Start Again", callback_data="ob_nav:restart"),
+        ],
     ])
 
 
@@ -642,17 +651,17 @@ HELP_TEXT = textwrap.dedent("""\
     /help — This message
 
     <b>Bottom keyboard</b>
-    ⚽ <b>Your Games</b> — Personalised 7-day schedule with AI edge markers
-    🔥 <b>Hot Tips</b> — Top 5 value bets across all sports
+    ⚽ <b>Your Games</b> — Personalised 7-day schedule with Edge-AI markers
+    💎 <b>Top Edge Picks</b> — Best value bets across all sports
     📖 <b>Guide</b> — Step-by-step Betway betting guide
     👤 <b>Profile</b> — Your sports, teams, and preferences
-    ⚙️ <b>Settings</b> — Edit sports, risk, notifications
+    ⚙️ <b>Settings</b> — Edit sports, risk, Edge Alerts
     ❓ <b>Help</b> — This message
 
-    <b>How tips work</b>
-    Our AI analyses live odds, recent form, and
-    historical data to suggest value bets. Always
-    gamble responsibly.
+    <b>How the Edge works</b>
+    Our Edge-AI scans live odds across SA bookmakers,
+    calculates true probabilities, and flags when the
+    price is better than it should be.
 """)
 
 
@@ -1212,6 +1221,22 @@ async def handle_ob_nav(query, action: str) -> None:
         ob["step"] = "summary"
         await _show_summary(query, ob)
 
+    elif action == "restart":
+        # Reset onboarding state and start from scratch
+        user_id = query.from_user.id
+        _onboarding_state.pop(user_id, None)
+        ob = _get_ob(user_id)
+        ob["step"] = "experience"
+        name = h(query.from_user.first_name or "")
+        text = (
+            f"<b>🔄 Starting fresh, {name}!</b>\n\n"
+            "<b>Step 1/9:</b> What's your betting experience?"
+        )
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=kb_onboarding_experience(),
+        )
+
 
 async def _show_league_step(query, ob: dict) -> None:
     """Show league selection for the current sport, auto-selecting single-league sports."""
@@ -1508,17 +1533,16 @@ async def handle_ob_fav_suggest(query, action: str) -> None:
 async def _show_edge_explainer(query, ob: dict) -> None:
     """Show the Edge Rating explainer screen during onboarding."""
     text = (
-        "<b>Step 5/9: Understanding Your Edge</b>\n\n"
-        "💎🥇🥈🥉 Every tip comes with an <b>Edge Rating</b> — "
-        "our AI compares odds across 5+ SA bookmakers to find "
-        "where the value is.\n\n"
-        "💎 <b>Diamond Edge</b> — Rare. Exceptional value.\n"
-        "   The bookmakers got this one wrong.\n\n"
-        "🥇 <b>Gold Edge</b> — Strong find. Worth your attention.\n\n"
-        "🥈 <b>Silver Edge</b> — Solid value. Good odds available.\n\n"
-        "🥉 <b>Bronze Edge</b> — Slight edge. Positive value exists.\n\n"
-        "Higher edge = bigger gap between what the "
-        "bookmakers offer and what our AI thinks is fair."
+        "<b>Step 5/9: How Your Edge Works</b>\n\n"
+        "Our Edge-AI scans odds across SA bookmakers in real time "
+        "and flags when the price is better than it should be.\n\n"
+        "💎 <b>Diamond Edge</b> — The bookies got this wrong. Rare, lekker value.\n"
+        "🥇 <b>Gold Edge</b> — Sharp find. Definitely worth a look.\n"
+        "🥈 <b>Silver Edge</b> — Solid. The numbers say there's value here.\n"
+        "🥉 <b>Bronze Edge</b> — Small edge, but positive value.\n\n"
+        "Higher Edge = bigger gap between the bookmaker price "
+        "and what our AI calculates as the true probability.\n\n"
+        "<i>Focus on 💎 Diamond and 🥇 Gold — that's where the real edges live.</i>"
     )
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("Got it ✅", callback_data="ob_nav:edge_done")],
@@ -1839,25 +1863,55 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     name = h(user.first_name or "champ")
 
     # Big welcome message with story quiz CTA
+    # Generate a personalised welcome via Claude Haiku
+    sports_list = []
+    prefs = await db.get_user_sport_prefs(user_id)
+    if prefs:
+        sports_list = list({p.sport_key for p in prefs if p.sport_key})
+    sport_str = ", ".join(sports_list) if sports_list else "sports"
+
+    welcome_personal = ""
+    try:
+        from anthropic import AsyncAnthropic
+        _client = AsyncAnthropic()
+        _resp = await _client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=120,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Write a 2-sentence personalised welcome for {name} who just signed up "
+                    f"to MzansiEdge, a South African sports betting AI assistant. "
+                    f"They follow: {sport_str}. "
+                    f"Experience: {experience}. "
+                    "Be warm, use SA flair (lekker, sharp, eish). No emojis. "
+                    "Address them by name."
+                ),
+            }],
+        )
+        welcome_personal = _resp.content[0].text.strip()
+    except Exception as exc:
+        log.debug("Welcome personalisation failed: %s", exc)
+
+    personal_line = f"\n\n<i>{h(welcome_personal)}</i>" if welcome_personal else ""
+
     text = (
         f"🎉 <b>Welcome to MzansiEdge, {name}!</b>\n\n"
-        "You're in. Your edge is live.\n\n"
+        "You're in. Your Edge is live.\n\n"
         "Here's what I can do for you:\n\n"
         "⚽ <b>Your Games</b> — Your personalised 7-day schedule with "
-        "AI edge indicators on every game.\n\n"
-        "🔥 <b>Hot Tips</b> — I scan odds across bookmakers, "
-        "find value bets, and tell you exactly where the edge is.\n\n"
-        "📖 <b>Your Betting Story</b> — MzansiEdge isn't just tips — "
-        "it's a journey. Track your wins, learn as you go, and build "
-        "your bankroll over time.\n\n"
-        "🔔 <b>But first — let's set up your story.</b>\n"
-        "Choose what updates you want to receive so I know "
-        "exactly how to keep you in the game."
+        "Edge-AI indicators on every game.\n\n"
+        "💎 <b>Top Edge Picks</b> — I scan odds across bookmakers, "
+        "find value bets, and tell you exactly where the Edge is.\n\n"
+        "🔔 <b>Edge Alerts</b> — Daily picks, game day alerts, "
+        "market movers, live scores — choose what updates you want "
+        f"so I know exactly how to keep you in the game.{personal_line}"
     )
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📖 Set Up My Story", callback_data="story:start")],
+            [InlineKeyboardButton("🔔 Set Up Edge Alerts", callback_data="story:start")],
+            [InlineKeyboardButton("💎 Show Me Top Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⏭️ Skip for Now", callback_data="nav:main")],
         ]),
     )
@@ -1982,10 +2036,24 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
 
         unmatched.append(name)
 
-    # Build confirmation message
+    # Build confirmation message with sport emoji + SA flavour
+    sport = config.ALL_SPORTS.get(sport_key)
+    s_emoji = sport.emoji if sport else "🏅"
+
+    # SA celebration phrases per sport
+    _SA_CHEERS: dict[str, list[str]] = {
+        "soccer": ["Amakhosi! ⚽", "Viva!", "Sho't left! ⚽"],
+        "rugby": ["Go Bokke! 🏉", "Allez! 🏉"],
+        "cricket": ["Howzat! 🏏", "Sharp! 🏏"],
+        "combat": ["Let's go champ! 🥊", "War room ready! 🥊"],
+    }
+    import random as _rng
+    cheer_list = _SA_CHEERS.get(sport_key, ["Lekker! 🏅"])
+    cheer = _rng.choice(cheer_list)
+
     lines: list[str] = []
     if matched:
-        lines.append("<b>Matched:</b>")
+        lines.append(f"{s_emoji} <b>Matched:</b>")
         for m in matched:
             lines.append(f"  ✅ {h(m)}")
     if unmatched:
@@ -2011,11 +2079,13 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
     fav_key = league_key or "_general"
     ob["favourites"][sport_key][fav_key] = matched
 
-    # Show confirmation with buttons
+    # Show confirmation with buttons + SA cheer
+    entity_word = config.fav_label(sport).replace("favourite ", "") if sport else "team"
+    entity_plural = entity_word + "s" if len(matched) != 1 else entity_word
     msg = "\n".join(lines)
     await update.message.reply_text(
         f"{msg}\n\n"
-        f"<b>{len(matched)} {'team' if len(matched) == 1 else 'teams'} added.</b>",
+        f"<b>{len(matched)} {entity_plural} added.</b> {cheer}",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Continue", callback_data=f"ob_fav_done:{sport_key}")],
@@ -2131,7 +2201,7 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     # Handle legacy button labels from cached keyboards
     legacy = _LEGACY_LABELS.get(text)
     if legacy == "hot_tips":
-        text = "🔥 Hot Tips"
+        text = "💎 Top Edge Picks"
     elif legacy == "your_games":
         text = "⚽ Your Games"
     elif legacy == "live_games":
@@ -2152,7 +2222,7 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             )
             return
         await _show_your_games(update, ctx, user_id)
-    elif text == "🔥 Hot Tips":
+    elif text == "💎 Top Edge Picks":
         await _show_hot_tips(update, ctx, user_id)
     elif text == "📖 Guide":
         await _show_betway_guide(update)
@@ -2393,7 +2463,7 @@ async def _render_your_games_all(
             extra = (
                 "\n\nYour leagues (<i>" + ", ".join(keyless) + "</i>) "
                 "don't have live odds data yet. "
-                "Try adding a league like EPL, PSL, or NBA for full coverage."
+                "Try adding a league like EPL, PSL, or URC for full coverage."
             )
         elif keyless:
             extra = (
@@ -2408,7 +2478,7 @@ async def _render_your_games_all(
             + extra
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
         ])
@@ -2467,7 +2537,7 @@ async def _render_your_games_all(
         if len(all_sport_keys) >= 2:
             buttons.append(_build_sport_filter_row(all_sport_keys, sport_filter))
         buttons.append([
-            InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go"),
+            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
             InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
         ])
         return text, InlineKeyboardMarkup(buttons)
@@ -2565,7 +2635,7 @@ async def _render_your_games_all(
 
     # Bottom nav
     buttons.append([
-        InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go"),
+        InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
         InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
     ])
 
@@ -3267,7 +3337,7 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
 
     if not page_tips:
         return (
-            "🔥 <b>Hot Tips</b>\n\nNo edges found right now — the market is efficient.\n"
+            "💎 <b>Top Edge Picks</b>\n\nNo edges found right now — the market is efficient.\n"
             "Check back when more games open!",
             InlineKeyboardMarkup([
                 [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
@@ -3277,9 +3347,9 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
 
     # Header with page info
     if total_pages > 1:
-        header = f"🔥 <b>Hot Tips — Page {page + 1}/{total_pages} ({total} bet{'s' if total != 1 else ''} found)</b>"
+        header = f"💎 <b>Top Edge Picks — Page {page + 1}/{total_pages} ({total} bet{'s' if total != 1 else ''} found)</b>"
     else:
-        header = f"🔥 <b>Hot Tips — {total} Value Bet{'s' if total != 1 else ''}</b>"
+        header = f"💎 <b>Top Edge Picks — {total} Value Bet{'s' if total != 1 else ''}</b>"
 
     lines = [
         header,
@@ -3364,7 +3434,7 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
     verb = random.choice(LOADING_VERBS)
     loading = await bot.send_message(
         chat_id,
-        f"🔥 <i>{verb} across all markets…</i>",
+        _spinner_text(verb),
         parse_mode=ParseMode.HTML,
     )
 
@@ -3513,6 +3583,14 @@ LOADING_VERBS = [
     "Analysing odds", "Finding edges",
 ]
 
+SPORT_SPINNER = ["⚽", "🏉", "🏏", "🥊"]
+
+def _spinner_text(verb: str) -> str:
+    """Build an animated-feel loading line with rotating sport emojis."""
+    import random
+    emojis = " ".join(random.sample(SPORT_SPINNER, len(SPORT_SPINNER)))
+    return f"{emojis}\n\n<i>{verb}…</i>"
+
 
 async def cmd_picks(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Legacy /picks → redirects to Hot Tips."""
@@ -3562,7 +3640,7 @@ async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
     # Send loading message
     loading_msg = await bot.send_message(
         chat_id,
-        f"🔍 <i>{verb} across {len(league_keys)} league{'s' if len(league_keys) != 1 else ''}…</i>",
+        _spinner_text(f"{verb} across {len(league_keys)} league{'s' if len(league_keys) != 1 else ''}"),
         parse_mode=ParseMode.HTML,
     )
 
@@ -3992,7 +4070,7 @@ def sanitize_ai_response(raw_text: str) -> str:
 
 
 def _format_verified_context(ctx_data: dict) -> str:
-    """Format verified ESPN/Jolpica context into text for Claude prompt injection.
+    """Format verified ESPN context into text for Claude prompt injection.
 
     Returns a VERIFIED_DATA block that Claude must use exclusively for facts.
     Returns empty string if data_available is False.
@@ -4153,7 +4231,7 @@ def validate_sport_context(narrative: str, sport: str) -> str:
     """Strip sport-inappropriate language from AI output using sport_terms.py.
 
     Uses the Dataminer-maintained SPORT_BANNED_TERMS dict for comprehensive
-    cross-sport term lists (cricket: 33, rugby: 31, soccer: 30, F1: 24).
+    cross-sport term lists (cricket: 33, rugby: 31, soccer: 30, combat: 25).
     """
     if not narrative or not sport:
         return narrative
@@ -4410,7 +4488,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     hf, af = _get_flag_prefixes(home_raw, away_raw)
 
     await query.edit_message_text(
-        f"🤖 <i>Analysing {hf}{home} vs {af}{away}…</i>",
+        _spinner_text(f"Analysing {hf}{home} vs {af}{away}"),
         parse_mode=ParseMode.HTML,
     )
 
@@ -4511,7 +4589,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             "Provide general analysis based on what you know about these teams."
         )
 
-    # ── Fetch verified match context from ESPN/Jolpica ──
+    # ── Fetch verified match context from ESPN ──
     verified_context = ""
     _match_ctx: dict = {}
     try:
@@ -4890,7 +4968,7 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         "🔔 Follow this game",
         callback_data=f"subscribe:{event_id}",
     )])
-    buttons.append([InlineKeyboardButton("🔥 Back to Hot Tips", callback_data="hot:back")])
+    buttons.append([InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:back")])
     buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
     # First-time Edge Rating tooltip (shown once, only on Gold/Diamond)
@@ -4912,10 +4990,10 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
     tips = _game_tips_cache.get(event_id, [])
     if not tips:
         await query.edit_message_text(
-            "⚠️ Tip data expired. Try Hot Tips again.",
+            "⚠️ Tip data expired. Try Top Edge Picks again.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
+                [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
             ]),
         )
         return
@@ -5178,7 +5256,7 @@ async def _save_story_prefs(query, chat_id: int, user_id: int) -> None:
         pref_lines.append(f"  {icon} {label}")
 
     text = (
-        "📖 <b>Your Story is Set!</b>\n\n"
+        "🔔 <b>Edge Alerts — All Set!</b>\n\n"
         "Here's what you'll receive:\n\n"
         + "\n".join(pref_lines)
         + "\n\nYou can change these anytime in /settings.\n\n"
@@ -5187,7 +5265,7 @@ async def _save_story_prefs(query, chat_id: int, user_id: int) -> None:
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔥 Show Me Hot Tips", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
             [InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")],
         ]),
@@ -5675,7 +5753,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 text=teaser,
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔥 See Hot Tips", callback_data="hot:go")],
+                    [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
                     [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
                 ]),
             )
@@ -5707,7 +5785,7 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
                 "You now get AI-powered tips daily.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
+                    [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
                     [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
                 ]),
             )
@@ -5891,11 +5969,11 @@ async def _run_webhook_server(app_instance) -> None:
                             "✅ <b>Welcome to MzansiEdge Premium!</b>\n\n"
                             "Your subscription is now active. "
                             "You get AI-powered tips daily.\n\n"
-                            "Use 🔥 <b>Hot Tips</b> to see today's value bets!"
+                            "Use 💎 <b>Top Edge Picks</b> to see today's value bets!"
                         ),
                         parse_mode=ParseMode.HTML,
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔥 Hot Tips", callback_data="hot:go")],
+                            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
                             [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
                         ]),
                     )
@@ -6051,7 +6129,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_button))
 
     # Persistent reply keyboard taps (must be BEFORE freetext_handler)
-    _kb_pattern = r"^(⚽ Your Games|🔥 Hot Tips|📖 Guide|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule)$"
+    _kb_pattern = r"^(⚽ Your Games|💎 Top Edge Picks|🔥 Hot Tips|📖 Guide|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule)$"
     app.add_handler(MessageHandler(filters.Regex(_kb_pattern), handle_keyboard_tap))
 
     # Free-text chat (also handles favourite input during onboarding)

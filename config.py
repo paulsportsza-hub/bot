@@ -478,12 +478,26 @@ TEAM_ALIASES: dict[str, str] = {
     "fury": "Tyson Fury",
     # MMA
     "ddp": "Dricus Du Plessis", "dricus": "Dricus Du Plessis",
+    "drikus": "Dricus Du Plessis", "du plessis": "Dricus Du Plessis",
     "stillknocks": "Dricus Du Plessis",
-    "poatan": "Alex Pereira",
-    "bones": "Jon Jones",
+    "poatan": "Alex Pereira", "pereira": "Alex Pereira",
+    "bones": "Jon Jones", "jon jones": "Jon Jones",
     "do bronx": "Charles Oliveira",
-    "blessed": "Max Holloway",
-    "suga": "Sean O'Malley",
+    "blessed": "Max Holloway", "holloway": "Max Holloway",
+    "suga": "Sean O'Malley", "omalley": "Sean O'Malley",
+    "islam": "Islam Makhachev", "makhachev": "Islam Makhachev",
+    # Common typos / SA slang extras
+    "amakhosi": "Kaizer Chiefs", "khosi": "Kaizer Chiefs",
+    "buccaneers": "Orlando Pirates", "bucs": "Orlando Pirates",
+    "masandawana": "Mamelodi Sundowns", "downs": "Mamelodi Sundowns",
+    "gooners": "Arsenal", "gunners": "Arsenal", "arse": "Arsenal",
+    "the reds": "Liverpool", "pool": "Liverpool",
+    "man u": "Manchester United", "united": "Manchester United",
+    "man c": "Manchester City", "city": "Manchester City",
+    "spurs": "Tottenham Hotspur", "tottenham": "Tottenham Hotspur",
+    "chelsea fc": "Chelsea", "the blues": "Chelsea",
+    "stormers": "DHL Stormers", "bulls": "Vodacom Bulls",
+    "sharks": "Hollywoodbets Sharks", "lions": "Emirates Lions",
 }
 
 

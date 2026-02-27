@@ -157,7 +157,7 @@ class TestStickyKeyboard:
         kb = bot.get_main_keyboard()
         labels = [btn.text for row in kb.keyboard for btn in row]
         assert "⚽ Your Games" in labels
-        assert "🔥 Hot Tips" in labels
+        assert "💎 Top Edge Picks" in labels
         assert "📖 Guide" in labels
         assert "👤 Profile" in labels
         assert "⚙️ Settings" in labels
@@ -168,6 +168,37 @@ class TestStickyKeyboard:
         kb = bot.get_main_keyboard()
         assert kb.is_persistent is True
         assert kb.resize_keyboard is True
+
+    def test_legacy_hot_tips_label_maps(self):
+        """Old 'Hot Tips' keyboard label maps to hot_tips route."""
+        assert bot._LEGACY_LABELS.get("🔥 Hot Tips") == "hot_tips"
+
+
+class TestSpinner:
+    def test_spinner_text_has_sport_emojis(self):
+        """Spinner text should include sport emojis."""
+        text = bot._spinner_text("Scanning")
+        assert "⚽" in text or "🏉" in text or "🏏" in text or "🥊" in text
+        assert "Scanning" in text
+
+    def test_spinner_text_has_italic(self):
+        """Spinner text should use HTML italic."""
+        text = bot._spinner_text("Loading")
+        assert "<i>" in text
+
+
+class TestEdgeBranding:
+    def test_help_text_uses_edge_ai(self):
+        """HELP_TEXT should mention Edge-AI."""
+        assert "Edge-AI" in bot.HELP_TEXT
+
+    def test_help_text_uses_top_edge_picks(self):
+        """HELP_TEXT should use 'Top Edge Picks' not 'Hot Tips'."""
+        assert "Top Edge Picks" in bot.HELP_TEXT
+
+    def test_no_hot_tips_in_keyboard_labels(self):
+        """Keyboard labels should not contain 'Hot Tips'."""
+        assert "🔥 Hot Tips" not in bot._KEYBOARD_LABELS
 
 
 class TestAffiliate:
