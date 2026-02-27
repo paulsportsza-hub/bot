@@ -72,11 +72,11 @@ async def test_save_sport_pref(test_db):
 async def test_get_user_sport_prefs(test_db):
     await db.upsert_user(800, "hank", "Hank")
     await db.save_sport_pref(800, "psl")
-    await db.save_sport_pref(800, "nba")
+    await db.save_sport_pref(800, "urc")
     prefs = await db.get_user_sport_prefs(800)
     assert len(prefs) == 2
     keys = {p.sport_key for p in prefs}
-    assert keys == {"psl", "nba"}
+    assert keys == {"psl", "urc"}
 
 
 async def test_clear_user_sport_prefs(test_db):
@@ -97,8 +97,8 @@ async def test_save_tip(test_db):
 
 
 async def test_get_recent_tips(test_db):
-    await db.save_tip("nba", "Lakers vs Celtics", "Lakers win")
-    await db.save_tip("nba", "Bulls vs Heat", "Bulls win")
+    await db.save_tip("epl", "Arsenal vs Liverpool", "Arsenal win")
+    await db.save_tip("epl", "Chelsea vs Spurs", "Chelsea win")
     tips = await db.get_recent_tips(limit=5)
     assert len(tips) >= 2
 

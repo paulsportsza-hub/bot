@@ -56,13 +56,13 @@ class TestSportSelection:
     async def test_toggle_sport_off(self):
         bot._onboarding_state.clear()
         ob = bot._get_ob(10002)
-        ob["selected_sports"] = ["soccer", "basketball"]
+        ob["selected_sports"] = ["soccer", "combat"]
 
         query = _make_query(user_id=10002)
         await bot.handle_ob_sport(query, "soccer")
 
         assert "soccer" not in ob["selected_sports"]
-        assert "basketball" in ob["selected_sports"]
+        assert "combat" in ob["selected_sports"]
 
 
 class TestSportsDone:
@@ -77,17 +77,17 @@ class TestSportsDone:
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
         assert "select at least one" in text.lower()
 
-    async def test_sports_done_single_league_auto_select(self):
-        """Single-league sport should auto-select its league."""
+    async def test_sports_done_combat_shows_leagues(self):
+        """Combat sports should show league selection (boxing + UFC)."""
         bot._onboarding_state.clear()
         ob = bot._get_ob(10004)
-        ob["selected_sports"] = ["american_football"]  # NFL only
+        ob["selected_sports"] = ["combat"]
 
         query = _make_query(user_id=10004)
         await bot.handle_ob_nav(query, "sports_done")
 
-        # Should auto-select NFL and move past leagues
-        assert "nfl" in ob["selected_leagues"].get("american_football", [])
+        # Combat has 2 leagues, so should show league selection
+        assert ob["step"] == "leagues"
 
     async def test_sports_done_multi_league_shows_selection(self):
         """Multi-league sport should show league selection."""
@@ -173,29 +173,14 @@ class TestFavouriteSelection:
     async def test_fav_done_advances(self):
         bot._onboarding_state.clear()
         ob = bot._get_ob(10018)
-        ob["selected_sports"] = ["american_football"]  # only 1 sport
+        ob["selected_sports"] = ["combat"]  # only 1 sport
         ob["step"] = "favourites"
         ob["_fav_idx"] = 0
 
         query = _make_query(user_id=10018)
-        await bot.handle_ob_fav_done(query, "american_football")
+        await bot.handle_ob_fav_done(query, "combat")
 
         # Should move to edge explainer after the only sport (then risk)
-        assert ob["step"] == "edge_explainer"
-
-    async def test_horse_racing_skips_favourites(self):
-        """Horse racing (fav_type=skip) should skip favourite step."""
-        bot._onboarding_state.clear()
-        ob = bot._get_ob(10019)
-        ob["selected_sports"] = ["horse_racing"]
-        ob["step"] = "favourites"
-        ob["_fav_idx"] = 0
-
-        query = _make_query(user_id=10019)
-        # Simulate _show_fav_step being called
-        await bot._show_fav_step(query, ob)
-
-        # Should skip to edge explainer since horse_racing has fav_type="skip"
         assert ob["step"] == "edge_explainer"
 
 
@@ -255,12 +240,12 @@ class TestFuzzyMatching:
         assert suggestions == []
 
     def test_mma_alias(self):
-        match, suggestions = bot.fuzzy_match_team("dricus", "mma")
+        match, suggestions = bot.fuzzy_match_team("dricus", "combat")
         assert match == "Dricus Du Plessis"
 
-    def test_f1_alias(self):
-        match, suggestions = bot.fuzzy_match_team("max", "motorsport")
-        assert match == "Max Verstappen"
+    def test_combat_alias(self):
+        match, suggestions = bot.fuzzy_match_team("canelo", "combat")
+        assert match == "Canelo Alvarez"
 
 
 class TestFavSuggestHandler:
@@ -332,7 +317,7 @@ class TestSummaryAndEdit:
     async def test_edit_sports_shows_list(self):
         bot._onboarding_state.clear()
         ob = bot._get_ob(10024)
-        ob["selected_sports"] = ["soccer", "basketball"]
+        ob["selected_sports"] = ["soccer", "combat"]
 
         query = _make_query(user_id=10024)
         await bot.handle_ob_edit(query, "sports")
@@ -377,8 +362,8 @@ class TestOnboardingDone:
         await db.upsert_user(user_id, "tester", "Tester")
 
         ob = bot._get_ob(user_id)
-        ob["selected_sports"] = ["soccer", "basketball"]
-        ob["selected_leagues"] = {"soccer": ["epl"], "basketball": ["nba"]}
+        ob["selected_sports"] = ["soccer", "combat"]
+        ob["selected_leagues"] = {"soccer": ["epl"], "combat": ["ufc"]}
         ob["favourites"] = {"soccer": {"epl": ["Arsenal"]}}
         ob["risk"] = "aggressive"
         ob["notify_hour"] = 21

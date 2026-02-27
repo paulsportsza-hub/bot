@@ -2340,11 +2340,7 @@ def _get_sport_emoji_for_api_key(api_key: str) -> str:
     if api_key.startswith("soccer"): return "⚽"
     if api_key.startswith("rugby"): return "🏉"
     if api_key.startswith("cricket"): return "🏏"
-    if api_key.startswith("basketball"): return "🏀"
-    if api_key.startswith("american"): return "🏈"
-    if api_key.startswith("tennis"): return "🎾"
     if api_key.startswith("mma") or api_key.startswith("boxing"): return "🥊"
-    if api_key.startswith("golf"): return "⛳"
     return "🏅"
 
 
@@ -2454,7 +2450,13 @@ async def _render_your_games_all(
 
     # Empty state after filter
     if not sorted_games:
-        if sport_filter:
+        if sport_filter == "combat":
+            text = (
+                f"{title}\n\n"
+                "🥊 Combat Sports tips coming soon! We're building our data "
+                "pipeline for UFC/MMA and Boxing."
+            )
+        elif sport_filter:
             sport_def = config.ALL_SPORTS.get(sport_filter)
             sn = sport_def.label.lower() if sport_def else sport_filter
             text = f"{title}\n\nNo {sn} games scheduled."
@@ -2803,17 +2805,8 @@ HOT_TIPS_SCAN_SPORTS = [
     "rugbyunion_super_rugby_pacific", "rugbyunion_urc",
     # Cricket
     "cricket_ipl", "cricket_test_match", "cricket_big_bash",
-    # Basketball
-    "basketball_nba", "basketball_euroleague",
-    # American Football
-    "americanfootball_nfl",
-    # MMA & Boxing
+    # Combat Sports (MMA & Boxing)
     "mma_mixed_martial_arts", "boxing_boxing",
-    # Tennis (Grand Slams)
-    "tennis_atp_aus_open_singles", "tennis_atp_french_open_singles",
-    "tennis_atp_us_open_singles", "tennis_atp_wimbledon_singles",
-    # Golf
-    "golf_pga_championship_winner", "golf_masters_tournament_winner",
 ]
 
 _hot_tips_cache: dict[str, dict] = {}  # "global" → {"tips": [...], "ts": float}
@@ -4153,31 +4146,6 @@ def _format_verified_context(ctx_data: dict) -> str:
             league_str = f" [{h2h_league}]" if h2h_league else ""
             parts.append(f"  {game.get('date', '?')}: {game.get('home', '?')} {game.get('score', '?')} {game.get('away', '?')}{league_str}")
 
-    # F1 specific
-    if sport == "f1":
-        standings = ctx_data.get("driver_standings", [])
-        if standings:
-            parts.append("\nDRIVER STANDINGS:")
-            for d in standings[:10]:
-                wins = d.get("wins", 0)
-                wins_str = f", {wins} wins" if wins else ""
-                parts.append(f"  {d.get('position', '?')}. {d.get('driver', '?')} — {d.get('points', 0)} pts ({d.get('constructor', '')}){wins_str}")
-
-        constructors = ctx_data.get("constructor_standings", [])
-        if constructors:
-            parts.append("\nCONSTRUCTOR STANDINGS:")
-            for c in constructors[:5]:
-                parts.append(f"  {c.get('position', '?')}. {c.get('constructor', '?')} — {c.get('points', 0)} pts")
-
-        last_race = ctx_data.get("last_race")
-        if last_race:
-            parts.append(f"\nLAST RACE: {last_race.get('name', '?')} ({last_race.get('date', '?')})")
-            circuit = last_race.get("circuit")
-            if circuit:
-                parts.append(f"  Circuit: {circuit}")
-            for r in (last_race.get("results") or [])[:5]:
-                parts.append(f"  {r.get('position', '?')}. {r.get('driver', '?')} ({r.get('constructor', '')}) — {r.get('time', r.get('status', ''))}")
-
     return "\n".join(parts)
 
 
@@ -4334,15 +4302,6 @@ def fact_check_output(narrative: str, ctx_data: dict) -> str:
             for word in venue.split():
                 if len(word) > 3:
                     verified_names.add(word.lower())
-
-        # F1 driver names
-        for d in (ctx_data.get("driver_standings") or []):
-            driver_name = d.get("driver", "")
-            if driver_name:
-                verified_names.add(driver_name.lower())
-                for word in driver_name.split():
-                    if len(word) > 3:
-                        verified_names.add(word.lower())
 
     # Position check pattern
     position_re = re.compile(

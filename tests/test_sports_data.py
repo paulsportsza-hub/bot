@@ -37,11 +37,6 @@ class TestCuratedLists:
         assert "Arsenal" in epl
         assert "Liverpool" in epl
 
-    def test_tennis_players(self):
-        tennis = CURATED_LISTS.get("Tennis", [])
-        assert "Novak Djokovic" in tennis
-        assert "Carlos Alcaraz" in tennis
-
     def test_boxing_fighters(self):
         boxing = CURATED_LISTS.get("Boxing", [])
         assert "Canelo Alvarez" in boxing
@@ -96,9 +91,8 @@ class TestAliases:
         assert ALIASES["proteas"] == "South Africa"
         assert ALIASES["boks"] == "Springboks"
 
-    def test_tennis_aliases(self):
-        assert ALIASES["djoko"] == "Novak Djokovic"
-        assert ALIASES["carlitos"] == "Carlos Alcaraz"
+    def test_rugby_aliases(self):
+        assert ALIASES["boks"] == "Springboks"
 
 
 # ── Caching layer ────────────────────────────────────────
@@ -210,8 +204,8 @@ pytestmark = pytest.mark.asyncio
 async def test_top_teams_curated_fallback():
     """When no API data, returns curated list."""
     with patch("scripts.sports_data.fetch_teams_for_sport", new_callable=AsyncMock, return_value=[]):
-        result = await get_top_teams_for_sport("Tennis", sport_key=None)
-        assert "Novak Djokovic" in result
+        result = await get_top_teams_for_sport("Boxing", sport_key=None)
+        assert "Canelo Alvarez" in result
 
 
 async def test_top_teams_api_first():
@@ -224,5 +218,5 @@ async def test_top_teams_api_first():
 
 async def test_top_teams_limit():
     """Respects limit parameter."""
-    result = await get_top_teams_for_sport("Tennis", sport_key=None, limit=3)
+    result = await get_top_teams_for_sport("Boxing", sport_key=None, limit=3)
     assert len(result) <= 3

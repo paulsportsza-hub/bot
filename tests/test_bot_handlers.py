@@ -1329,21 +1329,19 @@ class TestEnrichedVerifiedContext:
         assert "+0.452" in result
         assert "Wins: 5" in result
 
-    def test_f1_constructor_standings(self):
-        """Verified context should include F1 constructor standings."""
+    def test_combat_sport_context(self):
+        """Verified context should handle combat sports."""
         ctx = {
             "data_available": True,
-            "sport": "f1",
-            "league": "Formula 1",
-            "data_source": "Jolpica",
-            "driver_standings": [{"position": 1, "driver": "Norris", "points": 120, "constructor": "McLaren", "wins": 3}],
-            "constructor_standings": [{"position": 1, "constructor": "McLaren", "points": 220}],
-            "home_team": {"name": "Norris"},
-            "away_team": {"name": "Verstappen"},
+            "sport": "combat",
+            "league": "UFC",
+            "data_source": "ESPN",
+            "home_team": {"name": "Du Plessis"},
+            "away_team": {"name": "Pereira"},
         }
         result = bot._format_verified_context(ctx)
-        assert "CONSTRUCTOR STANDINGS" in result
-        assert "McLaren" in result
+        assert "Du Plessis" in result
+        assert "Pereira" in result
 
 
 class TestSetupFallback:

@@ -56,7 +56,7 @@ SETTINGS_MORE = {
 # Sports selection: paginated, 3 per screen
 
 ONBOARDING_SPORTS_PAGES = [
-    # Page 1
+    # All 4 core sports fit in one page (WhatsApp allows 3 buttons max per message)
     {"buttons": [
         {"id": "ob_sport:soccer", "title": "Soccer"},
         {"id": "ob_sport:rugby", "title": "Rugby"},
@@ -64,15 +64,7 @@ ONBOARDING_SPORTS_PAGES = [
     ]},
     # Page 2
     {"buttons": [
-        {"id": "ob_sport:tennis", "title": "Tennis"},
-        {"id": "ob_sport:boxing", "title": "Boxing"},
-        {"id": "ob_sport:mma", "title": "MMA"},
-    ]},
-    # Page 3
-    {"buttons": [
-        {"id": "ob_sport:basketball", "title": "Basketball"},
-        {"id": "ob_sport:golf", "title": "Golf"},
-        {"id": "ob_sport:motorsport", "title": "More..."},
+        {"id": "ob_sport:combat", "title": "Combat Sports"},
     ]},
 ]
 

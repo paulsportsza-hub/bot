@@ -230,12 +230,6 @@ CURATED_LISTS: dict[str, list[str]] = {
         "Real Sociedad", "Real Betis", "Villarreal", "Girona",
         "Sevilla", "Valencia",
     ],
-    # ── Tennis ──
-    "Tennis": [
-        "Novak Djokovic", "Carlos Alcaraz", "Jannik Sinner",
-        "Daniil Medvedev", "Alexander Zverev", "Andrey Rublev",
-        "Holger Rune", "Stefanos Tsitsipas", "Taylor Fritz", "Casper Ruud",
-    ],
     # ── Boxing ──
     "Boxing": [
         "Oleksandr Usyk", "Tyson Fury", "Canelo Alvarez",
@@ -265,30 +259,6 @@ CURATED_LISTS: dict[str, list[str]] = {
         "South Africa", "India", "Australia", "England",
         "New Zealand", "Pakistan", "West Indies", "Sri Lanka",
         "Bangladesh", "Afghanistan",
-    ],
-    # ── Golf ──
-    "Golf": [
-        "Scottie Scheffler", "Rory McIlroy", "Jon Rahm",
-        "Viktor Hovland", "Xander Schauffele", "Patrick Cantlay",
-        "Collin Morikawa", "Ludvig Aberg", "Wyndham Clark", "Brooks Koepka",
-    ],
-    # ── Basketball — NBA ──
-    "Basketball": [
-        "Boston Celtics", "Denver Nuggets", "Milwaukee Bucks",
-        "Philadelphia 76ers", "Phoenix Suns", "LA Lakers",
-        "Golden State Warriors", "Miami Heat", "Dallas Mavericks", "LA Clippers",
-    ],
-    # ── American Football — NFL ──
-    "American Football": [
-        "Kansas City Chiefs", "San Francisco 49ers", "Baltimore Ravens",
-        "Dallas Cowboys", "Buffalo Bills", "Miami Dolphins",
-        "Detroit Lions", "Philadelphia Eagles", "Green Bay Packers", "Cincinnati Bengals",
-    ],
-    # ── Ice Hockey — NHL ──
-    "Ice Hockey": [
-        "Florida Panthers", "Edmonton Oilers", "Boston Bruins",
-        "Dallas Stars", "Colorado Avalanche", "New York Rangers",
-        "Carolina Hurricanes", "Vancouver Canucks", "Winnipeg Jets", "Toronto Maple Leafs",
     ],
 }
 
@@ -336,18 +306,6 @@ ALIASES: dict[str, str] = {
     "barca": "Barcelona", "fcb": "Barcelona", "blaugrana": "Barcelona",
     "madrid": "Real Madrid", "real": "Real Madrid", "los blancos": "Real Madrid",
     "atleti": "Atletico Madrid", "atletico": "Atletico Madrid",
-    # Tennis
-    "djoko": "Novak Djokovic", "nole": "Novak Djokovic", "djokovic": "Novak Djokovic",
-    "alcaraz": "Carlos Alcaraz", "carlitos": "Carlos Alcaraz",
-    "rafa": "Rafael Nadal", "nadal": "Rafael Nadal", "djoker": "Novak Djokovic",
-    "sinner": "Jannik Sinner",
-    "meddy": "Daniil Medvedev", "medvedev": "Daniil Medvedev",
-    "zverev": "Alexander Zverev", "sascha": "Alexander Zverev",
-    "tsitsipas": "Stefanos Tsitsipas", "stef": "Stefanos Tsitsipas",
-    "fritz": "Taylor Fritz",
-    "swiatek": "Iga Swiatek", "iga": "Iga Swiatek",
-    "sabalenka": "Aryna Sabalenka",
-    "gauff": "Coco Gauff", "coco": "Coco Gauff",
     # Boxing
     "canelo": "Canelo Alvarez",
     "tank": "Gervonta Davis", "tank davis": "Gervonta Davis",

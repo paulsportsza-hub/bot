@@ -7,6 +7,9 @@ class TestSportsStructure:
     def test_sports_not_empty(self):
         assert len(config.SPORTS) > 0
 
+    def test_exactly_four_sports(self):
+        assert len(config.SPORTS) == 4
+
     def test_all_sports_matches_sports_list(self):
         assert len(config.ALL_SPORTS) == len(config.SPORTS)
 
@@ -16,20 +19,17 @@ class TestSportsStructure:
             assert sport.label, "sport must have a label"
             assert sport.emoji, "sport must have an emoji"
             assert isinstance(sport.leagues, list)
-            assert sport.fav_type in ("team", "player", "fighter", "driver", "skip")
+            assert sport.fav_type in ("team", "player", "fighter")
 
     def test_sport_categories(self):
         keys = {s.key for s in config.SPORTS}
-        assert "soccer" in keys
-        assert "rugby" in keys
-        assert "cricket" in keys
-        assert "tennis" in keys
-        assert "boxing" in keys
-        assert "mma" in keys
-        assert "basketball" in keys
-        assert "golf" in keys
-        assert "motorsport" in keys
-        assert "horse_racing" in keys
+        assert keys == {"soccer", "rugby", "cricket", "combat"}
+
+    def test_combat_has_boxing_and_ufc(self):
+        combat = config.ALL_SPORTS["combat"]
+        lg_keys = [lg.key for lg in combat.leagues]
+        assert "boxing_major" in lg_keys
+        assert "ufc" in lg_keys
 
     def test_all_sports_unique_keys(self):
         keys = [s.key for s in config.SPORTS]
@@ -51,6 +51,12 @@ class TestSportsStructure:
             for lg in s.leagues:
                 assert config.LEAGUE_SPORT[lg.key] == s.key
 
+    def test_boxing_maps_to_combat(self):
+        assert config.LEAGUE_SPORT["boxing_major"] == "combat"
+
+    def test_ufc_maps_to_combat(self):
+        assert config.LEAGUE_SPORT["ufc"] == "combat"
+
     def test_sports_map_only_has_api_keys(self):
         """SPORTS_MAP should only contain leagues with real API keys."""
         for key, api_key in config.SPORTS_MAP.items():
@@ -67,11 +73,6 @@ class TestSportsStructure:
         lg_keys = [lg.key for lg in soccer.leagues]
         assert "epl" in lg_keys
 
-    def test_basketball_has_nba(self):
-        bball = config.ALL_SPORTS["basketball"]
-        lg_keys = [lg.key for lg in bball.leagues]
-        assert "nba" in lg_keys
-
     def test_rugby_has_urc(self):
         rugby = config.ALL_SPORTS["rugby"]
         lg_keys = [lg.key for lg in rugby.leagues]
@@ -82,28 +83,24 @@ class TestSportsStructure:
         lg_keys = [lg.key for lg in cricket.leagues]
         assert "ipl" in lg_keys
 
+    def test_no_removed_sports(self):
+        keys = {s.key for s in config.SPORTS}
+        for removed in ("tennis", "boxing", "mma", "basketball", "american_football", "golf", "motorsport", "horse_racing"):
+            assert removed not in keys
+
 
 class TestFavTypes:
     def test_soccer_is_team(self):
         assert config.ALL_SPORTS["soccer"].fav_type == "team"
 
-    def test_tennis_is_player(self):
-        assert config.ALL_SPORTS["tennis"].fav_type == "player"
+    def test_combat_is_fighter(self):
+        assert config.ALL_SPORTS["combat"].fav_type == "fighter"
 
-    def test_boxing_is_fighter(self):
-        assert config.ALL_SPORTS["boxing"].fav_type == "fighter"
+    def test_rugby_is_team(self):
+        assert config.ALL_SPORTS["rugby"].fav_type == "team"
 
-    def test_mma_is_fighter(self):
-        assert config.ALL_SPORTS["mma"].fav_type == "fighter"
-
-    def test_motorsport_is_driver(self):
-        assert config.ALL_SPORTS["motorsport"].fav_type == "driver"
-
-    def test_horse_racing_is_skip(self):
-        assert config.ALL_SPORTS["horse_racing"].fav_type == "skip"
-
-    def test_golf_is_player(self):
-        assert config.ALL_SPORTS["golf"].fav_type == "player"
+    def test_cricket_is_team(self):
+        assert config.ALL_SPORTS["cricket"].fav_type == "team"
 
 
 class TestFavLabels:
@@ -111,21 +108,17 @@ class TestFavLabels:
         sport = config.ALL_SPORTS["soccer"]
         assert "team" in config.fav_label(sport)
 
-    def test_player_label(self):
-        sport = config.ALL_SPORTS["tennis"]
-        assert "player" in config.fav_label(sport)
-
     def test_fighter_label(self):
-        sport = config.ALL_SPORTS["boxing"]
+        sport = config.ALL_SPORTS["combat"]
         assert "fighter" in config.fav_label(sport)
-
-    def test_driver_label(self):
-        sport = config.ALL_SPORTS["motorsport"]
-        assert "driver" in config.fav_label(sport)
 
     def test_plural_teams(self):
         sport = config.ALL_SPORTS["soccer"]
         assert "teams" in config.fav_label_plural(sport)
+
+    def test_plural_fighters(self):
+        sport = config.ALL_SPORTS["combat"]
+        assert "fighters" in config.fav_label_plural(sport)
 
 
 class TestTopTeams:
@@ -140,17 +133,11 @@ class TestTopTeams:
         assert "Arsenal" in config.TOP_TEAMS["epl"]
         assert "Liverpool" in config.TOP_TEAMS["epl"]
 
-    def test_nba_teams(self):
-        assert "Lakers" in config.TOP_TEAMS["nba"]
-
     def test_ufc_fighters(self):
         assert "Dricus Du Plessis" in config.TOP_TEAMS["ufc"]
 
-    def test_atp_players(self):
-        assert "Djokovic" in config.TOP_TEAMS["atp"]
-
-    def test_f1_drivers(self):
-        assert "Max Verstappen" in config.TOP_TEAMS["f1"]
+    def test_boxing_fighters(self):
+        assert "Canelo Alvarez" in config.TOP_TEAMS["boxing_major"]
 
 
 class TestTeamAliases:
@@ -169,8 +156,8 @@ class TestTeamAliases:
     def test_mma_aliases(self):
         assert config.TEAM_ALIASES["dricus"] == "Dricus Du Plessis"
 
-    def test_f1_aliases(self):
-        assert config.TEAM_ALIASES["max"] == "Max Verstappen"
+    def test_boxing_aliases(self):
+        assert config.TEAM_ALIASES["canelo"] == "Canelo Alvarez"
 
     def test_all_aliases_lowercase(self):
         for key in config.TEAM_ALIASES:
@@ -185,9 +172,6 @@ class TestSportDisplay:
         assert config.SPORT_DISPLAY["Soccer"]["emoji"] == "⚽"
         assert config.SPORT_DISPLAY["Soccer"]["entity"] == "team"
         assert config.SPORT_DISPLAY["Soccer"]["entities"] == "teams"
-
-    def test_tennis_display(self):
-        assert config.SPORT_DISPLAY["Tennis"]["entity"] == "player"
 
     def test_boxing_display(self):
         assert config.SPORT_DISPLAY["Boxing"]["entity"] == "fighter"
@@ -219,11 +203,14 @@ class TestSAPriorityGroups:
         for group in config.SA_PRIORITY_GROUPS:
             assert group in config.SPORT_DISPLAY, f"{group} not in SPORT_DISPLAY"
 
+    def test_exactly_five_groups(self):
+        assert len(config.SA_PRIORITY_GROUPS) == 5
+
 
 class TestSportHelpers:
     def test_get_sport_emoji_known(self):
         assert config.get_sport_emoji("Soccer") == "⚽"
-        assert config.get_sport_emoji("Tennis") == "🎾"
+        assert config.get_sport_emoji("Boxing") == "🥊"
 
     def test_get_sport_emoji_unknown(self):
         assert config.get_sport_emoji("Curling") == "🏅"
@@ -231,10 +218,6 @@ class TestSportHelpers:
     def test_get_entity_label_team(self):
         assert config.get_entity_label("Soccer") == "team"
         assert config.get_entity_label("Soccer", plural=True) == "teams"
-
-    def test_get_entity_label_player(self):
-        assert config.get_entity_label("Tennis") == "player"
-        assert config.get_entity_label("Tennis", plural=True) == "players"
 
     def test_get_entity_label_fighter(self):
         assert config.get_entity_label("Boxing") == "fighter"

@@ -51,7 +51,7 @@ async def get_picks_for_user(
     5. Return top N picks
 
     Args:
-        league_keys: Internal league keys (e.g. ["epl", "nba"])
+        league_keys: Internal league keys (e.g. ["epl", "psl"])
         risk_profile: "conservative", "moderate", or "aggressive"
         max_picks: Maximum picks to return
         bankroll: User's bankroll in ZAR (defaults to BANKROLL_DEFAULT)

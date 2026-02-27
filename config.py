@@ -200,8 +200,6 @@ def get_affiliate_url(event_id: str | None = None) -> str:
 #   "team"    → "favourite team"
 #   "player"  → "favourite player"
 #   "fighter" → "favourite fighter"
-#   "driver"  → "favourite driver or team"
-#   "skip"    → skip favourite step entirely (e.g. horse racing)
 
 @dataclass
 class LeagueDef:
@@ -248,43 +246,10 @@ SPORTS: list[SportDef] = [
         LeagueDef(key="big_bash", label="Big Bash", api_key="cricket_big_bash"),
         LeagueDef(key="t20_wc", label="T20 World Cup", api_key="cricket_t20_world_cup"),
     ]),
-    # ── Tennis 🎾 ─────────────────────────────────────────
-    SportDef(key="tennis", label="Tennis", emoji="🎾", fav_type="player", leagues=[
-        LeagueDef(key="atp", label="ATP Tour"),
-        LeagueDef(key="wta", label="WTA Tour"),
-        LeagueDef(key="grand_slams", label="Grand Slams"),
-    ]),
-    # ── Boxing 🥊 ─────────────────────────────────────────
-    SportDef(key="boxing", label="Boxing", emoji="🥊", fav_type="fighter", leagues=[
+    # ── Combat Sports 🥊 ─────────────────────────────────
+    SportDef(key="combat", label="Combat Sports", emoji="🥊", fav_type="fighter", leagues=[
         LeagueDef(key="boxing_major", label="Major Bouts"),
-    ]),
-    # ── MMA / UFC 🥋 ─────────────────────────────────────
-    SportDef(key="mma", label="UFC / MMA", emoji="🥋", fav_type="fighter", leagues=[
         LeagueDef(key="ufc", label="UFC Events", api_key="mma_mixed_martial_arts"),
-    ]),
-    # ── Basketball 🏀 ────────────────────────────────────
-    SportDef(key="basketball", label="Basketball", emoji="🏀", fav_type="team", leagues=[
-        LeagueDef(key="nba", label="NBA", api_key="basketball_nba"),
-        LeagueDef(key="euroleague", label="EuroLeague", api_key="basketball_euroleague"),
-    ]),
-    # ── American Football 🏈 ─────────────────────────────
-    SportDef(key="american_football", label="American Football", emoji="🏈", fav_type="team", leagues=[
-        LeagueDef(key="nfl", label="NFL", api_key="americanfootball_nfl"),
-    ]),
-    # ── Golf ⛳ ───────────────────────────────────────────
-    SportDef(key="golf", label="Golf", emoji="⛳", fav_type="player", leagues=[
-        LeagueDef(key="pga", label="PGA Tour"),
-        LeagueDef(key="dp_world", label="DP World Tour"),
-        LeagueDef(key="golf_majors", label="Majors", api_key="golf_masters_tournament_winner"),
-    ]),
-    # ── Motorsport 🏎️ ────────────────────────────────────
-    SportDef(key="motorsport", label="Motorsport", emoji="🏎️", fav_type="driver", leagues=[
-        LeagueDef(key="f1", label="Formula 1"),
-        LeagueDef(key="motogp", label="MotoGP"),
-    ]),
-    # ── Horse Racing 🐎 ──────────────────────────────────
-    SportDef(key="horse_racing", label="Horse Racing", emoji="🐎", fav_type="skip", leagues=[
-        LeagueDef(key="sa_horse_racing", label="SA Horse Racing"),
     ]),
 ]
 
@@ -320,7 +285,6 @@ def fav_label(sport: SportDef) -> str:
         "team": "favourite team",
         "player": "favourite player",
         "fighter": "favourite fighter",
-        "driver": "favourite driver or team",
     }.get(sport.fav_type, "favourite")
 
 
@@ -330,7 +294,6 @@ def fav_label_plural(sport: SportDef) -> str:
         "team": "favourite teams",
         "player": "favourite players",
         "fighter": "favourite fighters",
-        "driver": "favourite drivers or teams",
     }.get(sport.fav_type, "favourites")
 
 
@@ -424,19 +387,7 @@ TOP_TEAMS: dict[str, list[str]] = {
         "South Africa", "India", "Australia",
         "England", "West Indies", "Pakistan",
     ],
-    # ── Tennis ──
-    "atp": [
-        "Djokovic", "Alcaraz", "Sinner", "Medvedev",
-        "Zverev", "Rublev", "Ruud", "Fritz",
-        "De Minaur", "Tsitsipas", "Draper", "Shelton",
-    ],
-    "wta": [
-        "Sabalenka", "Swiatek", "Gauff", "Rybakina",
-        "Pegula", "Zheng", "Jabeur", "Keys",
-        "Ostapenko", "Muchova",
-    ],
-    "grand_slams": [],  # uses ATP + WTA players
-    # ── Boxing ──
+    # ── Combat Sports ──
     "boxing_major": [
         "Canelo Alvarez", "Oleksandr Usyk", "Terence Crawford",
         "Naoya Inoue", "Artur Beterbiev", "Dmitry Bivol",
@@ -450,43 +401,6 @@ TOP_TEAMS: dict[str, list[str]] = {
         "Dricus Du Plessis", "Max Holloway",
         "Charles Oliveira", "Alexander Volkanovski",
         "Merab Dvalishvili",
-    ],
-    # ── Basketball ──
-    "nba": [
-        "Lakers", "Celtics", "Warriors", "Nuggets",
-        "Bucks", "76ers", "Heat", "Suns",
-        "Knicks", "Mavericks", "Cavaliers", "Thunder",
-    ],
-    "euroleague": [
-        "Real Madrid", "Barcelona", "Olympiacos",
-        "Fenerbahce", "Panathinaikos", "Anadolu Efes",
-    ],
-    # ── American Football ──
-    "nfl": [
-        "Chiefs", "49ers", "Eagles", "Bills",
-        "Cowboys", "Ravens", "Lions", "Dolphins",
-        "Jets", "Packers", "Bengals", "Steelers",
-    ],
-    # ── Golf ──
-    "pga": [
-        "Scottie Scheffler", "Rory McIlroy", "Jon Rahm",
-        "Xander Schauffele", "Collin Morikawa",
-        "Viktor Hovland", "Patrick Cantlay",
-        "Wyndham Clark", "Ludvig Aberg", "Brooks Koepka",
-    ],
-    "dp_world": [],  # uses PGA players
-    "golf_majors": [],  # uses PGA players
-    # ── Motorsport ──
-    "f1": [
-        "Max Verstappen", "Lewis Hamilton", "Charles Leclerc",
-        "Lando Norris", "Carlos Sainz", "Oscar Piastri",
-        "George Russell", "Fernando Alonso",
-        "Red Bull", "Mercedes", "Ferrari", "McLaren",
-    ],
-    "motogp": [
-        "Francesco Bagnaia", "Jorge Martin", "Marc Marquez",
-        "Enea Bastianini", "Brad Binder",
-        "Ducati", "Aprilia", "KTM",
     ],
 }
 
@@ -558,12 +472,6 @@ TEAM_ALIASES: dict[str, str] = {
     "proteas": "South Africa",
     "blackcaps": "New Zealand",
     "windies": "West Indies",
-    # Tennis
-    "nole": "Djokovic", "novak": "Djokovic", "djoker": "Djokovic",
-    "carlitos": "Alcaraz",
-    "rafa": "Nadal",
-    "iga": "Swiatek",
-    "coco": "Gauff",
     # Boxing
     "canelo": "Canelo Alvarez",
     "tank": "Gervonta Davis",
@@ -576,11 +484,6 @@ TEAM_ALIASES: dict[str, str] = {
     "do bronx": "Charles Oliveira",
     "blessed": "Max Holloway",
     "suga": "Sean O'Malley",
-    # F1
-    "max": "Max Verstappen", "verstappen": "Max Verstappen",
-    "lewis": "Lewis Hamilton", "hamilton": "Lewis Hamilton",
-    "charles": "Charles Leclerc", "leclerc": "Charles Leclerc",
-    "lando": "Lando Norris", "norris": "Lando Norris",
 }
 
 
@@ -588,17 +491,11 @@ TEAM_ALIASES: dict[str, str] = {
 
 SPORT_DISPLAY: dict[str, dict[str, str]] = {
     "Soccer":               {"emoji": "⚽", "entity": "team",    "entities": "teams"},
-    "Tennis":               {"emoji": "🎾", "entity": "player",  "entities": "players"},
     "Boxing":               {"emoji": "🥊", "entity": "fighter", "entities": "fighters"},
     "Mixed Martial Arts":   {"emoji": "🥋", "entity": "fighter", "entities": "fighters"},
     "Rugby Union":          {"emoji": "🏉", "entity": "team",    "entities": "teams"},
     "Rugby League":         {"emoji": "🏉", "entity": "team",    "entities": "teams"},
     "Cricket":              {"emoji": "🏏", "entity": "team",    "entities": "teams"},
-    "Golf":                 {"emoji": "⛳", "entity": "player",  "entities": "players"},
-    "Basketball":           {"emoji": "🏀", "entity": "team",    "entities": "teams"},
-    "American Football":    {"emoji": "🏈", "entity": "team",    "entities": "teams"},
-    "Ice Hockey":           {"emoji": "🏒", "entity": "team",    "entities": "teams"},
-    "Baseball":             {"emoji": "⚾", "entity": "team",    "entities": "teams"},
 }
 
 SA_PRIORITY_GROUPS: list[str] = [
@@ -607,13 +504,6 @@ SA_PRIORITY_GROUPS: list[str] = [
     "Cricket",
     "Boxing",
     "Mixed Martial Arts",
-    "Tennis",
-    "Golf",
-    "Basketball",
-    "Rugby League",
-    "American Football",
-    "Ice Hockey",
-    "Baseball",
 ]
 
 
@@ -642,26 +532,9 @@ LEAGUE_EXAMPLES: dict[str, str] = {
     "ipl": "e.g. Mumbai Indians, CSK, RCB",
     "big_bash": "e.g. Sydney Sixers, Perth Scorchers",
     "t20_wc": "e.g. South Africa, India, England",
-    # Tennis
-    "atp": "e.g. Djokovic, Alcaraz, Sinner",
-    "wta": "e.g. Sabalenka, Swiatek, Gauff",
-    "grand_slams": "e.g. Djokovic, Alcaraz, Sabalenka",
-    # Boxing
+    # Combat Sports
     "boxing_major": "e.g. Canelo, Usyk, Crawford",
-    # MMA
     "ufc": "e.g. Islam, Pereira, Dricus, Jones",
-    # Basketball
-    "nba": "e.g. Lakers, Celtics, Warriors",
-    "euroleague": "e.g. Real Madrid, Barcelona",
-    # American Football
-    "nfl": "e.g. Chiefs, 49ers, Eagles",
-    # Golf
-    "pga": "e.g. Scheffler, McIlroy, Rahm",
-    "dp_world": "e.g. McIlroy, Hovland, Rahm",
-    "golf_majors": "e.g. Scheffler, McIlroy",
-    # Motorsport
-    "f1": "e.g. Verstappen, Hamilton, Leclerc",
-    "motogp": "e.g. Bagnaia, Martin, Marquez",
 }
 
 
@@ -698,13 +571,6 @@ TEAM_ABBREVIATIONS: dict[str, str] = {
     "South Africa": "RSA", "New Zealand": "NZL", "Australia": "AUS",
     "England": "ENG", "France": "FRA", "Ireland": "IRE",
     "Scotland": "SCO", "Wales": "WAL", "Italy": "ITA", "Argentina": "ARG",
-    # Basketball
-    "Lakers": "LAL", "Celtics": "BOS", "Warriors": "GSW", "Nuggets": "DEN",
-    "Bucks": "MIL", "76ers": "PHI", "Heat": "MIA", "Suns": "PHX",
-    "Knicks": "NYK", "Mavericks": "DAL", "Cavaliers": "CLE", "Thunder": "OKC",
-    # NFL
-    "Chiefs": "KC", "49ers": "SF", "Eagles": "PHI", "Bills": "BUF",
-    "Cowboys": "DAL", "Ravens": "BAL", "Lions": "DET", "Dolphins": "MIA",
 }
 
 
