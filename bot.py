@@ -2862,6 +2862,8 @@ def _get_broadcast_line(
         import sys
         if "/home/paulsportsza" not in sys.path:
             sys.path.insert(0, "/home/paulsportsza")
+        if "/home/paulsportsza/scrapers" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza/scrapers")
         from scrapers.broadcast_scraper import get_broadcast_info
         info = get_broadcast_info(
             home_team=home_team,
@@ -4325,6 +4327,14 @@ def fact_check_output(narrative: str, ctx_data: dict) -> str:
                 if h2h_name:
                     verified_names.add(h2h_name.lower())
 
+        # Venue name is verified
+        venue = ctx_data.get("venue", "")
+        if venue:
+            verified_names.add(venue.lower())
+            for word in venue.split():
+                if len(word) > 3:
+                    verified_names.add(word.lower())
+
         # F1 driver names
         for d in (ctx_data.get("driver_standings") or []):
             driver_name = d.get("driver", "")
@@ -4372,7 +4382,13 @@ def fact_check_output(narrative: str, ctx_data: dict) -> str:
                     continue
                 if any(h in name_lower for h in ("the setup", "the edge", "the risk",
                                                   "verdict", "bookmaker odds",
-                                                  "south africa", "net run")):
+                                                  "south africa", "net run",
+                                                  "cape town", "new zealand")):
+                    continue
+                # Skip if it ends with a place suffix (stadiums, not people)
+                if any(name_lower.endswith(s) for s in (" road", " park", " stadium",
+                                                         " arena", " ground", " oval",
+                                                         " circuit", " gardens")):
                     continue
                 # This looks like an unverified person name
                 log.warning("Stripped unverified name '%s': %s", name, line[:80])
@@ -4543,6 +4559,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
         import sys as _sys
         if "/home/paulsportsza" not in _sys.path:
             _sys.path.insert(0, "/home/paulsportsza")
+        # scrapers/ dir needed for bare imports inside scrapers (coach_fetcher, broadcast_matcher)
+        if "/home/paulsportsza/scrapers" not in _sys.path:
+            _sys.path.insert(0, "/home/paulsportsza/scrapers")
         from scrapers.match_context_fetcher import get_match_context
 
         sport_key = config.LEAGUE_SPORT.get(target_league, "")
