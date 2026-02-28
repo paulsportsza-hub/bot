@@ -330,9 +330,13 @@ TEAM_CELEBRATIONS: dict[str, str] = {
     "Arsenal": "Come on you Gunners! 🔴⚪",
     "Liverpool": "YNWA! 🔴",
     "Man City": "Cityzens! 🩵",
+    "Manchester City": "Cityzens! 🩵",
     "Man United": "Glory Glory! 🔴😈",
+    "Manchester United": "Glory Glory! 🔴😈",
     "Chelsea": "Up the Blues! 🔵",
     "Spurs": "COYS! ⚪",
+    "Tottenham Hotspur": "COYS! ⚪",
+    "Tottenham": "COYS! ⚪",
     "Newcastle": "Toon Army! ⬛⬜",
     "Aston Villa": "Up the Villa! 🦁",
     # La Liga
@@ -361,11 +365,16 @@ TEAM_CELEBRATIONS: dict[str, str] = {
     "Italy": "Forza Azzurri! 🇮🇹",
     "Fiji": "Bula! 🇫🇯",
     "Japan": "Brave Blossoms! 🇯🇵",
-    # Rugby — club teams
+    # Rugby — club teams (short + sponsored names for alias compatibility)
     "Bulls": "Loftus roars! 🐂",
+    "Vodacom Bulls": "Loftus roars! 🐂",
     "Stormers": "Cape storm! ⛈️",
+    "DHL Stormers": "Cape storm! ⛈️",
     "Sharks": "Durban vibes! 🦈",
+    "Hollywoodbets Sharks": "Durban vibes! 🦈",
     "Lions": "Ellis Park! 🦁",
+    "Emirates Lions": "Ellis Park! 🦁",
+    "Springboks": "Go Bokke! 🇿🇦",
     "Crusaders": "Red and black! 🔴⚫",
     "Blues": "Auckland! 🔵",
     "Leinster": "The boys in blue! 🔵",
@@ -1515,10 +1524,11 @@ async def _show_edge_explainer(query, ob: dict) -> None:
     """Show the Edge Rating explainer screen during onboarding."""
     text = (
         "<b>How Your Edge Works</b>\n\n"
-        "Our Edge-AI cross-references odds from 5+ SA bookmakers, "
-        "live form data, historical performance, tipster consensus "
-        "from 4 prediction sources, and real-time match conditions "
-        "— all to find the moments where the bookmakers got it wrong.\n\n"
+        "Our Edge-AI cross-references odds from ALL the major SA bookmakers, "
+        "live data on player form and injury status, historical performance, "
+        "tipster consensus from multiple prediction sources, and real-time "
+        "match conditions — all to find the moments where the bookmakers "
+        "got it wrong.\n\n"
         "When we spot a gap between what the bookies think and what "
         "our AI calculates, that's your Edge.\n\n"
         "💎 <b>Diamond Edge</b> — When you see this, you MOVE. Extremely rare, high confidence.\n"
@@ -1867,18 +1877,21 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
                 )
             else:
                 ob["step"] = "edge_explainer"
-                # Send edge explainer as a new message
+                # Send edge explainer as a new message (same gold standard as _show_edge_explainer)
                 text = (
                     "<b>How Your Edge Works</b>\n\n"
-                    "Our Edge-AI scans odds across SA bookmakers in real time "
-                    "and flags when the price is better than it should be.\n\n"
+                    "Our Edge-AI cross-references odds from ALL the major SA bookmakers, "
+                    "live data on player form and injury status, historical performance, "
+                    "tipster consensus from multiple prediction sources, and real-time "
+                    "match conditions — all to find the moments where the bookmakers "
+                    "got it wrong.\n\n"
+                    "When we spot a gap between what the bookies think and what "
+                    "our AI calculates, that's your Edge.\n\n"
                     "💎 <b>Diamond Edge</b> — When you see this, you MOVE. Extremely rare, high confidence.\n"
                     "🥇 <b>Golden Edge</b> — Strong value. These are the bets that build bankrolls.\n"
                     "🥈 <b>Silver Edge</b> — Solid edge. The numbers say there's value here.\n"
                     "🥉 <b>Bronze Edge</b> — Small but positive. Worth considering.\n\n"
-                    "Higher Edge = bigger gap between the bookmaker price "
-                    "and what our Edge-AI calculates as the true probability.\n\n"
-                    "<i>Pro tip: When 💎 Diamond or 🥇 Gold appears, act fast — edges don't last.</i>"
+                    "<i>Pro tip: Focus on 💎 Diamond and 🥇 Golden — act fast, edges don't last.</i>"
                 )
                 markup = InlineKeyboardMarkup([
                     [InlineKeyboardButton("Got it ✅", callback_data="ob_nav:edge_done")],
@@ -2269,7 +2282,7 @@ async def _show_betway_guide(update: Update) -> None:
     # Edge Ratings section (always shown first)
     text = (
         "📊 <b>Edge Ratings Explained</b>\n\n"
-        "Our AI compares odds from 5+ SA bookmakers and "
+        "Our Edge-AI compares odds from all the major SA bookmakers and "
         "calculates the expected value (EV) of every bet. "
         "The Edge Rating tells you how strong the value is:\n\n"
         "💎 <b>Diamond Edge</b> — Very high expected value\n"
@@ -2881,6 +2894,78 @@ def _get_broadcast_line(
         return ""
 
 
+def _get_broadcast_details(
+    home_team: str = "",
+    away_team: str = "",
+    league_key: str = "",
+) -> dict:
+    """Return broadcast display + kickoff time from DStv schedule.
+
+    Queries broadcast_schedule table directly for full start_time data.
+
+    Returns:
+        {"broadcast": "📺 SS PSL (DStv 202)", "kickoff": "Sat 1 Mar · 17:30"}
+        Empty strings when no data found.
+    """
+    result: dict[str, str] = {"broadcast": "", "kickoff": ""}
+    try:
+        import sqlite3
+        import sys
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        if "/home/paulsportsza" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza")
+        if "/home/paulsportsza/scrapers" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza/scrapers")
+        from scrapers.broadcast_matcher import fuzzy_match_broadcast
+
+        tz = ZoneInfo(config.TZ)
+        now = datetime.now(tz)
+        today = now.strftime("%Y-%m-%d")
+        week_ahead = (now + timedelta(days=7)).strftime("%Y-%m-%d")
+
+        db_path = "/home/paulsportsza/scrapers/odds.db"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM broadcast_schedule "
+            "WHERE broadcast_date BETWEEN ? AND ? AND is_live = 1 "
+            "ORDER BY start_time ASC",
+            (today, week_ahead),
+        ).fetchall()
+        conn.close()
+
+        matches = fuzzy_match_broadcast(rows, home_team, away_team)
+        if matches:
+            best = matches[0]
+            # Extract kickoff from start_time
+            start_time_str = best["start_time"]
+            if start_time_str:
+                result["kickoff"] = _format_kickoff_display(start_time_str)
+
+            # Build broadcast display
+            ch_short = best["channel_short"]
+            ch_num = best["dstv_number"]
+            result["broadcast"] = f"\U0001f4fa {ch_short} (DStv {ch_num})"
+
+            # Check for free-to-air option
+            for row in matches:
+                if row["is_free_to_air"]:
+                    free_short = row["channel_short"]
+                    free_num = row["dstv_number"]
+                    result["broadcast"] += f" | FREE on {free_short} (DStv {free_num})"
+                    break
+        else:
+            # Fallback: league-level match via existing helper
+            result["broadcast"] = _get_broadcast_line(
+                home_team=home_team, away_team=away_team,
+                league_key=league_key, match_date=today,
+            )
+    except Exception:
+        pass
+    return result
+
+
 def _get_flag_prefixes(home: str, away: str) -> tuple[str, str]:
     """Return (home_flag, away_flag) with both-or-nothing rule.
 
@@ -3302,7 +3387,7 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
 
     lines = [
         header,
-        f"<i>Scanned {len(DB_LEAGUES)} leagues across 5 SA bookmakers.</i>",
+        f"<i>Scanned {len(DB_LEAGUES)} leagues across all major SA bookmakers.</i>",
         "",
     ]
 
@@ -3339,17 +3424,20 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
         hf, af = _get_flag_prefixes(home_raw, away_raw)
 
         league_display = tip.get("league", "")
-        kickoff = _format_kickoff_display(tip["commence_time"]) if tip.get("commence_time") else ""
-        time_line = f"     🏆 {league_display}"
-        if kickoff and kickoff != "TBC":
-            time_line += f" · ⏰ {kickoff}"
 
-        # Broadcast info (compact: appended to time_line)
-        broadcast = _get_broadcast_line(
+        # Broadcast details: kickoff + channel from DStv schedule
+        bc_data = _get_broadcast_details(
             home_team=home_raw, away_team=away_raw,
             league_key=tip.get("league_key", ""),
-            match_date=tip.get("commence_time", "")[:10],
         )
+        kickoff = bc_data.get("kickoff", "")
+        if not kickoff and tip.get("commence_time"):
+            kickoff = _format_kickoff_display(tip["commence_time"])
+        broadcast = bc_data.get("broadcast", "")
+
+        time_line = f"     \U0001f3c6 {league_display}"
+        if kickoff and kickoff != "TBC":
+            time_line += f" \u00b7 \u23f0 {kickoff}"
         if broadcast:
             time_line += f"\n     {broadcast}"
 
@@ -4895,6 +4983,13 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         runner_ups = get_runner_up_odds(odds_by_bookmaker, best_bk.get("bookmaker_key", ""))
         edge = tip.get("display_tier", tip.get("edge_rating", ""))
 
+        # Look up kickoff time + broadcast channel from DStv schedule
+        bc_data = _get_broadcast_details(
+            home_team=tip.get("home_team", ""),
+            away_team=tip.get("away_team", ""),
+            league_key=tip.get("league_key", ""),
+        )
+
         # Use edge renderer for rich tip card
         text = render_tip_with_odds(
             match=tip,
@@ -4903,6 +4998,8 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             best_bookmaker=best_bk,
             runner_ups=runner_ups,
             predicted_outcome=tip.get("outcome", ""),
+            kickoff_override=bc_data.get("kickoff", ""),
+            broadcast_line=bc_data.get("broadcast", ""),
         )
 
         # AI narrative explaining why this tip has value

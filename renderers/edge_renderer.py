@@ -39,6 +39,8 @@ def render_tip_with_odds(
     best_bookmaker: dict,
     runner_ups: list[dict] | None = None,
     predicted_outcome: str = "",
+    kickoff_override: str = "",
+    broadcast_line: str = "",
 ) -> str:
     """Render a single tip card with multi-bookmaker odds.
 
@@ -49,6 +51,8 @@ def render_tip_with_odds(
         best_bookmaker: dict from affiliate_service.select_best_bookmaker()
         runner_ups: list from affiliate_service.get_runner_up_odds()
         predicted_outcome: human-readable outcome string (e.g. "Chiefs to Win")
+        kickoff_override: pre-formatted kickoff string (e.g. "Sat 1 Mar · 17:30")
+        broadcast_line: pre-formatted broadcast string (e.g. "📺 SS PSL (DStv 202)")
 
     Returns:
         HTML-formatted tip string for Telegram.
@@ -75,15 +79,17 @@ def render_tip_with_odds(
     sport_emoji = match.get("sport_emoji", "\u26bd")
     lines.append(f"{sport_emoji} <b>{hf}{home} vs {af}{away}</b>")
 
-    # League + kickoff
+    # League
     league = match.get("league", "")
-    kickoff = _format_kickoff(match.get("commence_time"))
-    if league and kickoff:
-        lines.append(f"\U0001f3c6 {league} \u2014 {kickoff}")
-    elif league:
+    kickoff = kickoff_override or _format_kickoff(match.get("commence_time"))
+    if league:
         lines.append(f"\U0001f3c6 {league}")
-    elif kickoff:
+    # Kickoff on separate line
+    if kickoff:
         lines.append(f"\U0001f4c5 {kickoff}")
+    # Broadcast on separate line
+    if broadcast_line:
+        lines.append(broadcast_line)
 
     lines.append("")  # blank line
 

@@ -760,7 +760,7 @@ async def test_renderer_compliance():
     )
     card_checks = [
         ("Kaizer Chiefs vs Orlando Pirates" in rendered, "Team names in card"),
-        ("GOLD EDGE" in rendered, "GOLD EDGE label in card"),
+        ("GOLDEN EDGE" in rendered, "GOLDEN EDGE label in card"),
         ("\U0001f947" in rendered, "Gold emoji in card (🥇)"),
         ("2.15" in rendered, "Best odds shown"),
         ("Hollywoodbets" in rendered, "Best bookmaker shown"),
