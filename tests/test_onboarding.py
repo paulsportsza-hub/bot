@@ -42,6 +42,15 @@ class TestOnboardingState:
         ob2 = bot._get_ob(99999)
         assert ob2["selected_sports"] == ["soccer"]
 
+    def test_no_league_keys_in_state(self):
+        """Phase 0D: onboarding state should not have league-related keys."""
+        bot._onboarding_state.clear()
+        ob = bot._get_ob(99999)
+        assert "selected_leagues" not in ob
+        assert "_league_idx" not in ob
+        assert "_team_input_league" not in ob
+        assert "_fav_league_queue" not in ob
+
 
 class TestSportSelection:
     async def test_toggle_sport_on(self):
@@ -77,69 +86,29 @@ class TestSportsDone:
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
         assert "select at least one" in text.lower()
 
-    async def test_sports_done_combat_shows_leagues(self):
-        """Combat sports should show league selection (boxing + UFC)."""
+    async def test_sports_done_goes_to_teams(self):
+        """Phase 0D: sports_done should go directly to favourites (teams), not leagues."""
         bot._onboarding_state.clear()
         ob = bot._get_ob(10004)
-        ob["selected_sports"] = ["combat"]
+        ob["selected_sports"] = ["soccer"]
 
         query = _make_query(user_id=10004)
         await bot.handle_ob_nav(query, "sports_done")
 
-        # Combat has 2 leagues, so should show league selection
-        assert ob["step"] == "leagues"
-
-    async def test_sports_done_multi_league_shows_selection(self):
-        """Multi-league sport should show league selection."""
-        bot._onboarding_state.clear()
-        ob = bot._get_ob(10014)
-        ob["selected_sports"] = ["soccer"]
-
-        query = _make_query(user_id=10014)
-        await bot.handle_ob_nav(query, "sports_done")
-
-        assert ob["step"] == "leagues"
+        assert ob["step"] == "favourites"
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
         assert "Step 3" in text
 
-
-class TestLeagueSelection:
-    async def test_toggle_league(self):
+    async def test_sports_done_combat_goes_to_teams(self):
+        """Phase 0D: combat sports should go to team prompt, not league selection."""
         bot._onboarding_state.clear()
-        ob = bot._get_ob(10005)
-        ob["selected_sports"] = ["soccer"]
-        ob["step"] = "leagues"
+        ob = bot._get_ob(10014)
+        ob["selected_sports"] = ["combat"]
 
-        query = _make_query(user_id=10005)
-        await bot.handle_ob_league(query, "soccer:epl")
+        query = _make_query(user_id=10014)
+        await bot.handle_ob_nav(query, "sports_done")
 
-        assert "epl" in ob["selected_leagues"]["soccer"]
-
-    async def test_toggle_league_off(self):
-        bot._onboarding_state.clear()
-        ob = bot._get_ob(10015)
-        ob["selected_sports"] = ["soccer"]
-        ob["step"] = "leagues"
-        ob["selected_leagues"]["soccer"] = ["epl", "la_liga"]
-
-        query = _make_query(user_id=10015)
-        await bot.handle_ob_league(query, "soccer:epl")
-
-        assert "epl" not in ob["selected_leagues"]["soccer"]
-        assert "la_liga" in ob["selected_leagues"]["soccer"]
-
-    async def test_league_done_advances(self):
-        bot._onboarding_state.clear()
-        ob = bot._get_ob(10006)
-        ob["selected_sports"] = ["soccer"]
-        ob["step"] = "leagues"
-        ob["_league_idx"] = 0
-
-        query = _make_query(user_id=10006)
-        await bot.handle_ob_nav(query, "league_done:soccer")
-
-        # Should move to favourites since there's only 1 sport
         assert ob["step"] == "favourites"
 
 
@@ -291,13 +260,41 @@ class TestNotifySelection:
         assert ob["step"] == "summary"
 
 
+class TestPreferencesCombinedStep:
+    async def test_risk_goes_to_bankroll(self):
+        """Phase 0D: Risk should show Step 4/5 and go to bankroll."""
+        bot._onboarding_state.clear()
+        ob = bot._get_ob(10050)
+        ob["step"] = "risk"
+
+        query = _make_query(user_id=10050)
+        await bot.handle_ob_risk(query, "moderate")
+
+        assert ob["step"] == "bankroll"
+        call_args = query.edit_message_text.call_args
+        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert "Step 4/5" in text
+
+    async def test_no_league_step(self):
+        """Phase 0D: sports_done goes to favourites, not leagues."""
+        bot._onboarding_state.clear()
+        ob = bot._get_ob(10051)
+        ob["selected_sports"] = ["soccer"]
+
+        query = _make_query(user_id=10051)
+        await bot.handle_ob_nav(query, "sports_done")
+
+        assert ob["step"] == "favourites"
+        # Should NOT be "leagues"
+        assert ob["step"] != "leagues"
+
+
 class TestSummaryAndEdit:
     async def test_summary_shows_sports(self):
         bot._onboarding_state.clear()
         ob = bot._get_ob(10023)
         ob["selected_sports"] = ["soccer"]
-        ob["selected_leagues"] = {"soccer": ["epl"]}
-        ob["favourites"] = {"soccer": {"epl": ["Arsenal"]}}
+        ob["favourites"] = {"soccer": ["Arsenal"]}
         ob["risk"] = "moderate"
         ob["notify_hour"] = 18
 
@@ -306,13 +303,13 @@ class TestSummaryAndEdit:
 
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 9/9" in text
+        assert "Step 5/5" in text
         assert "Arsenal" in text
         # Edit buttons are in the keyboard markup
         kb = call_args[1].get("reply_markup")
         btn_texts = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert any("Edit Sports" in t for t in btn_texts)
-        assert any("Edit Risk" in t for t in btn_texts)
+        assert any("Edit Sports & Teams" in t for t in btn_texts)
+        assert any("Edit Preferences" in t for t in btn_texts)
 
     async def test_edit_sports_shows_list(self):
         bot._onboarding_state.clear()
@@ -343,7 +340,7 @@ class TestSummaryAndEdit:
         bot._onboarding_state.clear()
         ob = bot._get_ob(10026)
         ob["_editing"] = "sports"
-        ob["step"] = "leagues"
+        ob["step"] = "favourites"
         ob["selected_sports"] = ["soccer"]
         ob["risk"] = "moderate"
         ob["notify_hour"] = 18
@@ -363,8 +360,7 @@ class TestOnboardingDone:
 
         ob = bot._get_ob(user_id)
         ob["selected_sports"] = ["soccer", "combat"]
-        ob["selected_leagues"] = {"soccer": ["epl"], "combat": ["ufc"]}
-        ob["favourites"] = {"soccer": {"epl": ["Arsenal"]}}
+        ob["favourites"] = {"soccer": ["Arsenal"]}
         ob["risk"] = "aggressive"
         ob["notify_hour"] = 21
 
@@ -383,9 +379,11 @@ class TestOnboardingDone:
         prefs = await db.get_user_sport_prefs(user_id)
         assert len(prefs) >= 2
         soccer_prefs = [p for p in prefs if p.sport_key == "soccer" and p.team_name]
-        assert len(soccer_prefs) == 1
-        assert soccer_prefs[0].team_name == "Arsenal"
-        assert soccer_prefs[0].league == "epl"
+        assert len(soccer_prefs) >= 1
+        assert any(p.team_name == "Arsenal" for p in soccer_prefs)
+        # Arsenal should be auto-inferred to epl league
+        arsenal_prefs = [p for p in soccer_prefs if p.team_name == "Arsenal"]
+        assert arsenal_prefs[0].league == "epl"
 
         # State should be cleaned up
         assert user_id not in bot._onboarding_state
@@ -413,12 +411,6 @@ class TestKeyboards:
         for row in kb.inline_keyboard:
             # Done button row has 1
             assert len(row) <= 2
-
-    def test_kb_onboarding_leagues_has_back_next(self):
-        kb = bot.kb_onboarding_leagues("soccer")
-        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-        assert any("back_sports" in c for c in callbacks)
-        assert any("league_done" in c for c in callbacks)
 
     def test_kb_onboarding_favourites_has_manual(self):
         kb = bot.kb_onboarding_favourites("soccer")

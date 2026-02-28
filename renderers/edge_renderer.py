@@ -17,14 +17,14 @@ EDGE_EMOJIS: dict[str, str] = {
 
 EDGE_LABELS: dict[str, str] = {
     "diamond": "DIAMOND EDGE",
-    "gold": "GOLD EDGE",
+    "gold": "GOLDEN EDGE",
     "silver": "SILVER EDGE",
     "bronze": "BRONZE EDGE",
 }
 
 
 def render_edge_badge(rating: str) -> str:
-    """Returns e.g. '💎 DIAMOND EDGE' or '🥇 GOLD EDGE'."""
+    """Returns e.g. '💎 DIAMOND EDGE' or '🥇 GOLDEN EDGE'."""
     emoji = EDGE_EMOJIS.get(rating, "")
     label = EDGE_LABELS.get(rating, "")
     if emoji and label:

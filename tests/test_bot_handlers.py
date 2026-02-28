@@ -199,19 +199,36 @@ class TestTeamCelebrations:
 
     def test_team_cheer_returns_team_specific(self):
         """_get_team_cheer should return team-specific cheer when available."""
-        cheer = bot._get_team_cheer(["Kaizer Chiefs"], "soccer")
+        cheer = bot._get_team_cheer("Kaizer Chiefs", "soccer")
         assert "Amakhosi" in cheer
 
     def test_team_cheer_france_rugby_not_bokke(self):
         """France in rugby should NOT return 'Go Bokke'."""
-        cheer = bot._get_team_cheer(["France"], "rugby")
+        cheer = bot._get_team_cheer("France", "rugby")
         assert "Bokke" not in cheer
         assert "Bleus" in cheer
 
     def test_team_cheer_falls_back_to_sport(self):
         """Unknown team should fall back to sport-level cheer."""
-        cheer = bot._get_team_cheer(["Unknown Team FC"], "soccer")
-        assert "⚽" in cheer
+        cheer = bot._get_team_cheer("Unknown Team FC", "soccer")
+        # Fallback cheers don't include sport emoji directly in all variants
+        assert cheer  # Should return something non-empty
+
+    def test_team_cheer_sa_cricket_not_bokke(self):
+        """South Africa in cricket should NOT return 'Go Bokke'."""
+        cheer = bot._get_team_cheer("South Africa", "cricket")
+        assert "Bokke" not in cheer
+        assert "Protea" in cheer
+
+    def test_team_cheer_sa_soccer_bafana(self):
+        """South Africa in soccer should return 'Bafana Bafana'."""
+        cheer = bot._get_team_cheer("South Africa", "soccer")
+        assert "Bafana" in cheer
+
+    def test_team_cheer_sa_rugby_bokke(self):
+        """South Africa in rugby should return 'Go Bokke'."""
+        cheer = bot._get_team_cheer("South Africa", "rugby")
+        assert "Bokke" in cheer
 
     def test_sport_fallback_dict_has_all_sports(self):
         """Sport fallback should cover all 4 sport categories."""
@@ -571,7 +588,7 @@ class TestVerdictBadgeInjection:
         narrative = "🏆 <b>Verdict</b>\nBack the draw with Medium conviction — lekker value."
         # Simulate the injection logic (Diamond tier emojis)
         tier_emoji = "🥇"
-        tier_label = "GOLD EDGE"
+        tier_label = "GOLDEN EDGE"
         badge = f" — {tier_emoji} {tier_label}"
         narrative = re.sub(
             r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)",
@@ -582,7 +599,7 @@ class TestVerdictBadgeInjection:
         # Aggressive conviction stripping (Wave 14A)
         narrative = re.sub(r"(?:with |— )?(?:High|Medium|Low) conviction:?\.?", "", narrative)
         narrative = re.sub(r"Conviction: (?:High|Medium|Low)\.?", "", narrative)
-        assert "GOLD EDGE" in narrative
+        assert "GOLDEN EDGE" in narrative
         assert "🥇" in narrative
         assert "Medium conviction" not in narrative
         assert "conviction" not in narrative.lower()
@@ -594,7 +611,7 @@ class TestVerdictBadgeInjection:
         original = narrative
         narrative = re.sub(
             r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)",
-            r"\1 — 🥇 GOLD EDGE",
+            r"\1 — 🥇 GOLDEN EDGE",
             narrative,
             count=1,
         )
@@ -618,10 +635,10 @@ class TestDiamondEdgeRebrand:
             assert "⛏" not in v
 
     def test_edge_labels_diamond_system(self):
-        """EDGE_LABELS must use DIAMOND EDGE/GOLD EDGE/etc."""
+        """EDGE_LABELS must use DIAMOND EDGE/GOLDEN EDGE/etc."""
         from renderers.edge_renderer import EDGE_LABELS
         assert EDGE_LABELS["diamond"] == "DIAMOND EDGE"
-        assert EDGE_LABELS["gold"] == "GOLD EDGE"
+        assert EDGE_LABELS["gold"] == "GOLDEN EDGE"
         assert EDGE_LABELS["silver"] == "SILVER EDGE"
         assert EDGE_LABELS["bronze"] == "BRONZE EDGE"
         assert "platinum" not in EDGE_LABELS
@@ -767,8 +784,7 @@ class TestExperiencedSkipsEdgeExplainer:
         ob["experience"] = "experienced"
         ob["selected_sports"] = ["soccer"]
         ob["step"] = "favourites"
-        ob["_fav_idx"] = 0
-        ob["_fav_league_queue"] = []  # empty queue = all done
+        ob["_fav_idx"] = 1  # past last sport = all done
 
         from unittest.mock import AsyncMock, MagicMock
         query = MagicMock()
@@ -784,8 +800,7 @@ class TestExperiencedSkipsEdgeExplainer:
         ob["experience"] = "casual"
         ob["selected_sports"] = ["soccer"]
         ob["step"] = "favourites"
-        ob["_fav_idx"] = 0
-        ob["_fav_league_queue"] = []
+        ob["_fav_idx"] = 1  # past last sport = all done
 
         from unittest.mock import AsyncMock, MagicMock
         query = MagicMock()

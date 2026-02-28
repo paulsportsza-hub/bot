@@ -88,7 +88,7 @@ class TestExperienceOnboarding:
 
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 2/9" in text
+        assert "Step 2/5" in text
         assert "sports" in text.lower()
 
     async def test_cmd_start_shows_experience_first(self, test_db):
@@ -105,7 +105,7 @@ class TestExperienceOnboarding:
 
         call_args = mock_update.message.reply_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 1/9" in text
+        assert "Step 1/5" in text
         assert "experience" in text.lower()
 
     async def test_onboarding_done_saves_experience(self, test_db):
@@ -116,7 +116,7 @@ class TestExperienceOnboarding:
         ob = bot._get_ob(user_id)
         ob["experience"] = "newbie"
         ob["selected_sports"] = ["soccer"]
-        ob["selected_leagues"] = {"soccer": ["epl"]}
+
         ob["favourites"] = {}
         ob["risk"] = "conservative"
         ob["notify_hour"] = 7
@@ -140,7 +140,7 @@ class TestExperienceOnboarding:
         ob = bot._get_ob(user_id)
         ob["experience"] = "experienced"
         ob["selected_sports"] = ["soccer"]
-        ob["selected_leagues"] = {"soccer": ["epl"]}
+
         ob["favourites"] = {}
         ob["risk"] = "aggressive"
         ob["notify_hour"] = 18
@@ -165,7 +165,7 @@ class TestExperienceOnboarding:
         ob = bot._get_ob(user_id)
         ob["experience"] = "newbie"
         ob["selected_sports"] = ["soccer"]
-        ob["selected_leagues"] = {"soccer": ["epl"]}
+
         ob["favourites"] = {}
         ob["risk"] = "conservative"
         ob["notify_hour"] = 7
@@ -395,7 +395,7 @@ class TestMenuHandlers:
         assert ob["step"] == "experience"
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 1/9" in text
+        assert "Step 1/5" in text
 
 
 # ── Priority 3: Experience-Adapted Pick Cards ────────────────

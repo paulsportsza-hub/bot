@@ -418,6 +418,55 @@ TOP_TEAMS: dict[str, list[str]] = {
 }
 
 
+# ── Reverse lookup: team name → list of league keys ─────
+TEAM_TO_LEAGUES: dict[str, list[str]] = {}
+for _lk, _ts in TOP_TEAMS.items():
+    for _t in _ts:
+        TEAM_TO_LEAGUES.setdefault(_t, []).append(_lk)
+
+
+# ── National team → leagues (sport-aware) ────────────────
+# National teams like "South Africa" appear in both rugby and cricket.
+# This dict disambiguates by sport key.
+NATIONAL_TEAM_LEAGUES: dict[str, dict[str, list[str]]] = {
+    "rugby": {
+        "South Africa": ["international_rugby", "rugby_champ"],
+        "New Zealand": ["international_rugby", "rugby_champ"],
+        "Australia": ["international_rugby", "rugby_champ"],
+        "Argentina": ["international_rugby", "rugby_champ"],
+        "England": ["international_rugby", "six_nations"],
+        "France": ["international_rugby", "six_nations"],
+        "Ireland": ["international_rugby", "six_nations"],
+        "Scotland": ["international_rugby", "six_nations"],
+        "Wales": ["international_rugby", "six_nations"],
+        "Italy": ["international_rugby", "six_nations"],
+        "Fiji": ["international_rugby"],
+        "Japan": ["international_rugby"],
+    },
+    "cricket": {
+        "South Africa": ["test_cricket", "odis", "t20i", "t20_wc"],
+        "India": ["test_cricket", "odis", "t20i", "t20_wc"],
+        "Australia": ["test_cricket", "odis", "t20i"],
+        "England": ["test_cricket", "odis", "t20i"],
+        "New Zealand": ["test_cricket", "odis", "t20i"],
+        "Pakistan": ["test_cricket", "odis", "t20i"],
+        "Sri Lanka": ["odis", "t20i"],
+        "Bangladesh": ["odis"],
+        "West Indies": ["test_cricket", "odis", "t20i", "t20_wc"],
+        "Afghanistan": ["odis", "t20i"],
+    },
+}
+
+
+# ── Sport-level examples for team prompts (Phase 0D) ─────
+SPORT_EXAMPLES: dict[str, str] = {
+    "soccer": "e.g. Chiefs, Arsenal, Barcelona, Sundowns",
+    "rugby": "e.g. South Africa, Bulls, Stormers, Ireland",
+    "cricket": "e.g. South Africa, MI Cape Town, Mumbai Indians",
+    "combat": "e.g. Dricus, Canelo, Islam, Pereira",
+}
+
+
 # ── Team / Player Aliases (for fuzzy matching) ──────────
 # Maps lowercase alias → canonical name.
 
@@ -491,8 +540,11 @@ TEAM_ALIASES: dict[str, str] = {
     "fury": "Tyson Fury",
     # MMA
     "ddp": "Dricus Du Plessis", "dricus": "Dricus Du Plessis",
-    "drikus": "Dricus Du Plessis", "du plessis": "Dricus Du Plessis",
-    "stillknocks": "Dricus Du Plessis",
+    "drikus": "Dricus Du Plessis", "dreikus": "Dricus Du Plessis",
+    "drikus du plessis": "Dricus Du Plessis", "du plessis": "Dricus Du Plessis",
+    "du plesis": "Dricus Du Plessis", "duplessis": "Dricus Du Plessis",
+    "stillknocks": "Dricus Du Plessis", "stilknocks": "Dricus Du Plessis",
+    "stillnocks": "Dricus Du Plessis",
     "poatan": "Alex Pereira", "pereira": "Alex Pereira",
     "bones": "Jon Jones", "jon jones": "Jon Jones",
     "do bronx": "Charles Oliveira",

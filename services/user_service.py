@@ -13,6 +13,26 @@ import config
 import db
 
 
+def _infer_leagues_for_team(team: str, sport_key: str) -> list[str]:
+    """Auto-infer league keys for a team within a specific sport.
+
+    1. Check NATIONAL_TEAM_LEAGUES[sport_key][team] first (sport-specific)
+    2. Check TEAM_TO_LEAGUES[team] filtered by LEAGUE_SPORT[lg] == sport_key
+    3. Returns empty list if no mapping found
+    """
+    # 1. Sport-specific national team mapping
+    national = config.NATIONAL_TEAM_LEAGUES.get(sport_key, {})
+    if team in national:
+        return national[team]
+
+    # 2. Generic reverse lookup filtered by sport
+    all_leagues = config.TEAM_TO_LEAGUES.get(team, [])
+    if all_leagues:
+        return [lg for lg in all_leagues if config.LEAGUE_SPORT.get(lg) == sport_key]
+
+    return []
+
+
 def classify_archetype(
     experience: str, risk: str, num_sports: int,
 ) -> tuple[str, float]:
@@ -123,34 +143,37 @@ async def get_profile_data(user_id: int) -> dict[str, Any]:
 async def persist_onboarding(user_id: int, ob: dict) -> tuple[str, float]:
     """Save all onboarding data to DB and classify archetype.
 
+    Favourites are now flat lists per sport: ob["favourites"][sk] = [name, ...].
+    Leagues are auto-inferred from team names using TEAM_TO_LEAGUES and
+    NATIONAL_TEAM_LEAGUES for sport-specific national team disambiguation.
+
     Returns (archetype, engagement_score).
     """
     await db.clear_user_sport_prefs(user_id)
 
     for sk in ob["selected_sports"]:
-        leagues = ob["selected_leagues"].get(sk, [])
-        favs_dict = ob["favourites"].get(sk, {})
+        favs = ob["favourites"].get(sk, [])
 
-        if isinstance(favs_dict, list):
-            favs_dict = {"": favs_dict}
+        # Handle legacy dict-of-dicts format
+        if isinstance(favs, dict):
+            flat: list[str] = []
+            for teams in favs.values():
+                flat.extend(teams)
+            favs = flat
 
-        if leagues:
-            for lg_key in leagues:
-                teams = favs_dict.get(lg_key, [])
-                if teams:
-                    for team in teams:
+        if favs:
+            for team in favs:
+                # Auto-infer leagues for this team
+                inferred_leagues = _infer_leagues_for_team(team, sk)
+                if inferred_leagues:
+                    for lg_key in inferred_leagues:
                         await db.save_sport_pref(user_id, sk, league=lg_key, team_name=team)
                 else:
-                    await db.save_sport_pref(user_id, sk, league=lg_key)
-        else:
-            all_teams: list[str] = []
-            for teams in favs_dict.values():
-                all_teams.extend(teams)
-            if all_teams:
-                for team in all_teams:
+                    # No league mapping found — save without league
                     await db.save_sport_pref(user_id, sk, team_name=team)
-            else:
-                await db.save_sport_pref(user_id, sk)
+        else:
+            # No teams for this sport — just save the sport preference
+            await db.save_sport_pref(user_id, sk)
 
     if ob["risk"]:
         await db.update_user_risk(user_id, ob["risk"])

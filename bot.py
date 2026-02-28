@@ -82,8 +82,8 @@ log = logging.getLogger("mzansiedge")
 claude = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
 
 # ── Onboarding state machine ─────────────────────────────
-# Steps: experience → sports → leagues → favourites → risk → bankroll → notify → summary
-ONBOARD_STEPS = ("experience", "sports", "leagues", "favourites", "risk", "bankroll", "notify", "summary")
+# Steps: experience → sports → favourites → edge_explainer → risk → bankroll → notify → summary
+ONBOARD_STEPS = ("experience", "sports", "favourites", "edge_explainer", "risk", "bankroll", "notify", "summary")
 
 # Per-user in-memory onboarding state
 _onboarding_state: dict[int, dict] = {}
@@ -201,20 +201,16 @@ def _get_ob(user_id: int) -> dict:
             "step": "experience",
             "experience": None,         # experienced / casual / newbie
             "selected_sports": [],      # category keys: ["soccer", "rugby"]
-            "selected_leagues": {},     # sport_key → [league_key, ...]
-            "favourites": {},           # sport_key → {league_key: [name, ...], ...}
+            "favourites": {},           # sport_key → [name, ...] (flat list)
             "risk": None,
             "bankroll": None,
             "notify_hour": None,
-            "_league_idx": 0,
-            "_fav_idx": 0,
+            "_fav_idx": 0,             # indexes into selected_sports
             "_fav_manual": False,       # in manual input mode
             "_fav_manual_sport": None,  # which sport we're inputting for
             "_editing": None,           # None / "sports" / "risk" / "sport:{key}"
             "_suggestions": [],         # fuzzy match suggestions
             "_team_input_sport": None,  # sport key for text-based team input
-            "_team_input_league": None, # league key for text-based team input
-            "_fav_league_queue": [],    # leagues to prompt for teams
         }
     return _onboarding_state[user_id]
 
@@ -322,73 +318,95 @@ def _abbreviate_league(label: str) -> str:
 
 TEAM_CELEBRATIONS: dict[str, str] = {
     # SA PSL
-    "Kaizer Chiefs": "Amakhosi! ⚽",
-    "Orlando Pirates": "Bucs on fire! ⚽",
-    "Mamelodi Sundowns": "Masandawana! ⚽",
-    "Cape Town City": "Mother City! ⚽",
-    "Stellenbosch": "Stellies rising! ⚽",
-    "AmaZulu": "Usuthu! ⚽",
-    "SuperSport United": "Matsatsantsa! ⚽",
-    "Sekhukhune United": "Babina Noko! ⚽",
+    "Kaizer Chiefs": "Amakhosi! 🟡⚫",
+    "Orlando Pirates": "Bucs on fire! ☠️",
+    "Mamelodi Sundowns": "Masandawana! 🌞",
+    "Cape Town City": "Mother City! 🔵",
+    "Stellenbosch": "Stellies rising! 🍷",
+    "AmaZulu": "Usuthu! 🟢",
+    "SuperSport United": "Matsatsantsa! 🔵",
+    "Sekhukhune United": "Babina Noko! 🟤",
     # EPL
-    "Arsenal": "Come on you Gunners! ⚽",
-    "Liverpool": "YNWA! ⚽",
-    "Man City": "Cityzens! ⚽",
-    "Man United": "Glory Glory! ⚽",
-    "Chelsea": "Up the Blues! ⚽",
-    "Spurs": "COYS! ⚽",
-    "Newcastle": "Toon Army! ⚽",
-    "Aston Villa": "Up the Villa! ⚽",
+    "Arsenal": "Come on you Gunners! 🔴⚪",
+    "Liverpool": "YNWA! 🔴",
+    "Man City": "Cityzens! 🩵",
+    "Man United": "Glory Glory! 🔴😈",
+    "Chelsea": "Up the Blues! 🔵",
+    "Spurs": "COYS! ⚪",
+    "Newcastle": "Toon Army! ⬛⬜",
+    "Aston Villa": "Up the Villa! 🦁",
     # La Liga
-    "Real Madrid": "Hala Madrid! ⚽",
-    "Barcelona": "Forca Barca! ⚽",
-    "Atletico Madrid": "Aupa Atleti! ⚽",
+    "Real Madrid": "Hala Madrid! ⚪",
+    "Barcelona": "Visca Barça! 🔵🔴",
+    "Atletico Madrid": "Aupa Atleti! 🔴⚪",
     # Bundesliga
-    "Bayern Munich": "Mia san Mia! ⚽",
-    "Borussia Dortmund": "Heja BVB! ⚽",
+    "Bayern Munich": "Mia san Mia! 🔴",
+    "Borussia Dortmund": "Heja BVB! 🟡⚫",
     # Serie A
-    "Juventus": "Fino alla fine! ⚽",
-    "AC Milan": "Forza Milan! ⚽",
-    "Inter Milan": "Forza Inter! ⚽",
+    "Juventus": "Fino alla fine! ⬛⬜",
+    "AC Milan": "Forza Milan! 🔴⚫",
+    "Inter Milan": "Forza Inter! 🔵⚫",
     # Ligue 1
-    "PSG": "Ici c'est Paris! ⚽",
-    # Rugby — international teams
-    "South Africa": "Go Bokke! 🏉",
-    "New Zealand": "Ka mate! 🏉",
-    "England": "Swing low! 🏉",
-    "France": "Allez les Bleus! 🏉",
-    "Ireland": "Ireland's call! 🏉",
-    "Wales": "Mae hen wlad! 🏉",
-    "Scotland": "Flower of Scotland! 🏉",
-    "Australia": "Wallabies! 🏉",
-    "Argentina": "Los Pumas! 🏉",
-    "Italy": "Forza Azzurri! 🏉",
-    "Fiji": "Bula! 🏉",
-    "Japan": "Brave Blossoms! 🏉",
+    "PSG": "Ici c'est Paris! 🔵🔴",
+    # Rugby — international teams (default celebrations)
+    "South Africa": "Go Bokke! 🇿🇦",
+    "New Zealand": "Ka mate! 🇳🇿",
+    "England": "Swing low! 🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+    "France": "Allez les Bleus! 🇫🇷",
+    "Ireland": "Ireland's call! 🇮🇪",
+    "Wales": "Mae hen wlad! 🏴󠁧󠁢󠁷󠁬󠁳󠁿",
+    "Scotland": "Flower of Scotland! 🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+    "Australia": "Wallabies! 🇦🇺",
+    "Argentina": "Los Pumas! 🇦🇷",
+    "Italy": "Forza Azzurri! 🇮🇹",
+    "Fiji": "Bula! 🇫🇯",
+    "Japan": "Brave Blossoms! 🇯🇵",
     # Rugby — club teams
-    "Bulls": "Loftus roars! 🏉",
-    "Stormers": "Cape storm! 🏉",
-    "Sharks": "Durban vibes! 🏉",
-    "Lions": "Ellis Park! 🏉",
-    "Crusaders": "Red and black! 🏉",
-    "Blues": "Auckland! 🏉",
-    "Leinster": "The boys in blue! 🏉",
-    "Munster": "Stand up and fight! 🏉",
-    # Cricket
-    "Proteas": "Protea Fire! 🏏",
-    "India": "Chak de! 🏏",
-    "MI Cape Town": "Cape Town! 🏏",
-    "Joburg Super Kings": "Super Kings! 🏏",
-    "Paarl Royals": "Royals! 🏏",
-    "Mumbai Indians": "Duniya hila denge! 🏏",
-    "Chennai Super Kings": "Whistle Podu! 🏏",
-    "RCB": "Ee sala cup namde! 🏏",
+    "Bulls": "Loftus roars! 🐂",
+    "Stormers": "Cape storm! ⛈️",
+    "Sharks": "Durban vibes! 🦈",
+    "Lions": "Ellis Park! 🦁",
+    "Crusaders": "Red and black! 🔴⚫",
+    "Blues": "Auckland! 🔵",
+    "Leinster": "The boys in blue! 🔵",
+    "Munster": "Stand up and fight! 🔴",
+    # Cricket (default — franchise teams)
+    "Proteas": "Protea Fire! 🔥🏏",
+    "India": "Chak de! 🇮🇳",
+    "MI Cape Town": "Cape Town! 🔵",
+    "Joburg Super Kings": "Super Kings! 🟡",
+    "Paarl Royals": "Royals! 💜",
+    "Mumbai Indians": "Duniya hila denge! 🔵",
+    "Chennai Super Kings": "Whistle Podu! 🟡",
+    "RCB": "Ee sala cup namde! 🔴",
     # Combat
-    "Dricus Du Plessis": "Stillknocks! 🥊",
-    "Alex Pereira": "Poatan! 🥊",
-    "Jon Jones": "Bones! 🥊",
-    "Islam Makhachev": "Alhamdulillah! 🥊",
-    "Canelo Alvarez": "Viva Canelo! 🥊",
+    "Dricus Du Plessis": "Stillknocks! 🇿🇦",
+    "Alex Pereira": "Poatan! 🇧🇷",
+    "Jon Jones": "Bones! 💀",
+    "Islam Makhachev": "Alhamdulillah! 🦅",
+    "Canelo Alvarez": "Viva Canelo! 🇲🇽",
+}
+
+# Sport-specific celebration overrides for national teams that appear in multiple sports
+_SPORT_CELEBRATIONS: dict[str, dict[str, str]] = {
+    "cricket": {
+        "South Africa": "Protea Fire! 🔥🏏",
+        "England": "Come on England! 🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+        "Australia": "Aussie Aussie Aussie! 🇦🇺",
+        "India": "Chak de India! 🇮🇳",
+        "New Zealand": "Black Caps! 🇳🇿",
+        "West Indies": "Calypso! 🌴",
+        "Pakistan": "Cornered Tigers! 🇵🇰",
+        "Sri Lanka": "Lions! 🇱🇰",
+        "Bangladesh": "Bengal Tigers! 🇧🇩",
+    },
+    "soccer": {
+        "South Africa": "Bafana Bafana! 🇿🇦",
+        "England": "Three Lions! 🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+        "France": "Allez les Bleus! 🇫🇷",
+        "Argentina": "Vamos Argentina! 🇦🇷",
+        "Italy": "Forza Azzurri! 🇮🇹",
+    },
 }
 
 _SPORT_CHEERS_FALLBACK: dict[str, list[str]] = {
@@ -399,12 +417,22 @@ _SPORT_CHEERS_FALLBACK: dict[str, list[str]] = {
 }
 
 
-def _get_team_cheer(matched: list[str], sport_key: str) -> str:
-    """Pick a celebration for matched teams. Team-specific first, sport fallback."""
+def _get_team_cheer(team: str, sport_key: str) -> str:
+    """Get celebration for a specific team within a sport context.
+
+    Checks sport-specific overrides first (e.g. South Africa in cricket
+    returns 'Protea Fire!' not 'Go Bokke!'), then falls back to the
+    generic TEAM_CELEBRATIONS dict.
+    """
+    # 1. Check sport-specific overrides for national teams
+    sport_overrides = _SPORT_CELEBRATIONS.get(sport_key, {})
+    if team in sport_overrides:
+        return sport_overrides[team]
+    # 2. Check generic celebrations
+    if team in TEAM_CELEBRATIONS:
+        return TEAM_CELEBRATIONS[team]
+    # 3. Fallback
     import random as _rng
-    for team in matched:
-        if team in TEAM_CELEBRATIONS:
-            return TEAM_CELEBRATIONS[team]
     fallback = _SPORT_CHEERS_FALLBACK.get(sport_key, ["Lekker! 🏅"])
     return _rng.choice(fallback)
 
@@ -573,27 +601,6 @@ def kb_onboarding_sports(selected: list[str] | None = None) -> InlineKeyboardMar
     return InlineKeyboardMarkup(rows)
 
 
-def kb_onboarding_leagues(sport_key: str, selected: list[str] | None = None) -> InlineKeyboardMarkup:
-    """League selection for a specific sport category."""
-    selected = selected or []
-    sport = config.ALL_SPORTS.get(sport_key)
-    if not sport:
-        return back_button("ob_nav:back_sports")
-
-    rows: list[list[InlineKeyboardButton]] = []
-    for lg in sport.leagues:
-        tick = "✅ " if lg.key in selected else ""
-        rows.append([InlineKeyboardButton(
-            f"{tick}{lg.label}", callback_data=f"ob_league:{sport_key}:{lg.key}",
-        )])
-
-    rows.append([
-        InlineKeyboardButton("« Back", callback_data="ob_nav:back_sports"),
-        InlineKeyboardButton("Next »", callback_data=f"ob_nav:league_done:{sport_key}"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
 def kb_onboarding_favourites(sport_key: str, selected: list[str] | None = None) -> InlineKeyboardMarkup:
     """Multi-select favourite teams/players for a sport."""
     selected = selected or []
@@ -654,12 +661,12 @@ def kb_onboarding_notify() -> InlineKeyboardMarkup:
 def kb_onboarding_bankroll() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("R500", callback_data="ob_bankroll:500"),
-            InlineKeyboardButton("R1,000", callback_data="ob_bankroll:1000"),
+            InlineKeyboardButton("R50", callback_data="ob_bankroll:50"),
+            InlineKeyboardButton("R200", callback_data="ob_bankroll:200"),
         ],
         [
-            InlineKeyboardButton("R2,000", callback_data="ob_bankroll:2000"),
-            InlineKeyboardButton("R5,000", callback_data="ob_bankroll:5000"),
+            InlineKeyboardButton("R500", callback_data="ob_bankroll:500"),
+            InlineKeyboardButton("R1,000", callback_data="ob_bankroll:1000"),
         ],
         [InlineKeyboardButton("🤷 Not sure — skip", callback_data="ob_bankroll:skip")],
         [InlineKeyboardButton("✏️ Custom amount", callback_data="ob_bankroll:custom")],
@@ -708,7 +715,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
             Let's set up your profile in a few quick steps.
 
-            <b>Step 1/9:</b> What's your betting experience?
+            <b>Step 1/5:</b> What's your betting experience?
         """)
         await update.message.reply_text(
             text, parse_mode=ParseMode.HTML,
@@ -861,8 +868,6 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await handle_ob_sport(query, action)
     elif prefix == "ob_nav":
         await handle_ob_nav(query, action)
-    elif prefix == "ob_league":
-        await handle_ob_league(query, action)
     elif prefix == "ob_risk":
         await handle_ob_risk(query, action)
     elif prefix == "ob_bankroll":
@@ -983,31 +988,22 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     elif prefix == "ob_restart":
         await handle_ob_restart(query)
     elif prefix == "ob_fav_retry":
-        # Re-prompt for team input for this sport/league
+        # Re-prompt for team input for this sport
         user_id = query.from_user.id
         ob_state = _get_ob(user_id)
         sport_key = action
-        league_key = ob_state.get("_team_input_league")
         ob_state["_team_input_sport"] = sport_key
-        ob_state["_team_input_league"] = league_key
         sport = config.ALL_SPORTS.get(sport_key)
         emoji = sport.emoji if sport else "🏅"
         entity = config.fav_label(sport) if sport else "favourite"
-        if league_key:
-            lg = config.ALL_LEAGUES.get(league_key)
-            league_label = lg.label if lg else league_key
-            text = (
-                f"<b>{emoji} {league_label} — try again</b>\n\n"
-                f"Type your {entity}s separated by commas.\n"
-                f"<i>Tip: Use full names or common nicknames.</i>"
-            )
-        else:
-            sport_label = sport.label if sport else sport_key
-            text = (
-                f"<b>{emoji} {sport_label} — try again</b>\n\n"
-                f"Type your {entity}s separated by commas.\n"
-                f"<i>Tip: Use full names or common nicknames.</i>"
-            )
+        sport_label = sport.label if sport else sport_key
+        example = config.SPORT_EXAMPLES.get(sport_key, "")
+        example_line = f"\n<i>{example}</i>" if example else ""
+        text = (
+            f"<b>{emoji} {sport_label} — try again</b>\n\n"
+            f"Type your {entity}s separated by commas.{example_line}\n"
+            f"<i>Tip: Use full names or common nicknames.</i>"
+        )
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
@@ -1173,7 +1169,7 @@ async def handle_ob_experience(query, level: str) -> None:
     ob["step"] = "sports"
 
     text = textwrap.dedent("""\
-        <b>Step 2/9: Select your sports</b>
+        <b>Step 2/5: Select your sports</b>
 
         Tap to toggle. Hit <b>Done</b> when ready.
     """)
@@ -1194,7 +1190,7 @@ async def handle_ob_sport(query, sport_key: str) -> None:
         ob["selected_sports"].append(sport_key)
 
     text = textwrap.dedent("""\
-        <b>Step 2/9: Select your sports</b>
+        <b>Step 2/5: Select your sports</b>
 
         Tap to toggle. Hit <b>Done</b> when ready.
     """)
@@ -1218,14 +1214,14 @@ async def handle_ob_nav(query, action: str) -> None:
             )
             return
         analytics_track(user_id, "onboarding_pick_sports", {"sports": list(ob["selected_sports"])})
-        # Move to leagues — start with first sport
-        ob["step"] = "leagues"
-        ob["_league_idx"] = 0
-        await _show_league_step(query, ob)
+        # Skip leagues — go directly to team prompts
+        ob["step"] = "favourites"
+        ob["_fav_idx"] = 0
+        await _show_next_team_prompt(query, ob)
 
     elif action == "back_experience":
         ob["step"] = "experience"
-        text = "<b>Step 1/9:</b> What's your betting experience?"
+        text = "<b>Step 1/5:</b> What's your betting experience?"
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=kb_onboarding_experience(),
@@ -1233,47 +1229,47 @@ async def handle_ob_nav(query, action: str) -> None:
 
     elif action == "back_sports":
         ob["step"] = "sports"
-        text = "<b>Step 2/9: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+        text = "<b>Step 2/5: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=kb_onboarding_sports(ob["selected_sports"]),
         )
 
     elif action == "edge_done":
-        # Edge explainer acknowledged — move to risk
+        # Edge explainer acknowledged — move to preferences (risk)
         ob["step"] = "risk"
-        text = "<b>Step 6/9: Risk profile</b>\n\nHow aggressive should your tips be?"
+        text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=kb_onboarding_risk(),
         )
 
     elif action == "back_edge":
-        # Back from edge explainer → last favourites step
+        # Back from edge explainer → last sport's team prompt
         ob["step"] = "favourites"
-        queue = ob.get("_fav_league_queue", [])
-        if queue:
-            ob["_fav_idx"] = max(0, len(queue) - 1)
+        sports = ob["selected_sports"]
+        if sports:
+            ob["_fav_idx"] = max(0, len(sports) - 1)
             await _show_next_team_prompt(query, ob)
         else:
             ob["step"] = "sports"
-            text = "<b>Step 2/9: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+            text = "<b>Step 2/5: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
             await query.edit_message_text(
                 text, parse_mode=ParseMode.HTML,
                 reply_markup=kb_onboarding_sports(ob["selected_sports"]),
             )
 
     elif action == "back_risk":
-        # Back from risk → edge explainer (or favourites for experienced)
+        # Back from risk → edge explainer (or last team prompt for experienced)
         if ob.get("experience") == "experienced":
             ob["step"] = "favourites"
-            queue = ob.get("_fav_league_queue", [])
-            if queue:
-                ob["_fav_idx"] = max(0, len(queue) - 1)
+            sports = ob["selected_sports"]
+            if sports:
+                ob["_fav_idx"] = max(0, len(sports) - 1)
                 await _show_next_team_prompt(query, ob)
             else:
                 ob["step"] = "sports"
-                text = "<b>Step 2/9: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+                text = "<b>Step 2/5: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
                 await query.edit_message_text(
                     text, parse_mode=ParseMode.HTML,
                     reply_markup=kb_onboarding_sports(ob["selected_sports"]),
@@ -1283,19 +1279,19 @@ async def handle_ob_nav(query, action: str) -> None:
             await _show_edge_explainer(query, ob)
 
     elif action == "back_bankroll":
-        # Back from bankroll → risk
+        # Back from bankroll → risk (within Step 4)
         ob["step"] = "risk"
-        text = "<b>Step 6/9: Risk profile</b>\n\nHow aggressive should your tips be?"
+        text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
             reply_markup=kb_onboarding_risk(),
         )
 
     elif action == "back_notify":
-        # Back from notify → bankroll
+        # Back from notify → bankroll (within Step 4)
         ob["step"] = "bankroll"
         text = (
-            "<b>Step 7/9: Weekly bankroll</b>\n\n"
+            "<b>Step 4/5: Your preferences — Weekly bankroll</b>\n\n"
             "How much do you set aside for betting each week?"
         )
         await query.edit_message_text(
@@ -1303,15 +1299,11 @@ async def handle_ob_nav(query, action: str) -> None:
             reply_markup=kb_onboarding_bankroll(),
         )
 
-    elif action.startswith("league_done:"):
-        sport_key = action.split(":", 1)[1]
-        await _advance_league_step(query, ob)
-
     elif action == "favourites_done":
         # Experienced users skip edge explainer
         if ob.get("experience") == "experienced":
             ob["step"] = "risk"
-            text = "<b>Step 6/9: Risk profile</b>\n\nHow aggressive should your tips be?"
+            text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
             await query.edit_message_text(
                 text, parse_mode=ParseMode.HTML,
                 reply_markup=kb_onboarding_risk(),
@@ -1333,7 +1325,7 @@ async def handle_ob_nav(query, action: str) -> None:
         name = h(query.from_user.first_name or "")
         text = (
             f"<b>🔄 Starting fresh, {name}!</b>\n\n"
-            "<b>Step 1/9:</b> What's your betting experience?"
+            "<b>Step 1/5:</b> What's your betting experience?"
         )
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
@@ -1341,100 +1333,25 @@ async def handle_ob_nav(query, action: str) -> None:
         )
 
 
-async def _show_league_step(query, ob: dict) -> None:
-    """Show league selection for the current sport, auto-selecting single-league sports."""
-    idx = ob.get("_league_idx", 0)
-    sports = ob["selected_sports"]
-
-    while idx < len(sports):
-        sport_key = sports[idx]
-        sport = config.ALL_SPORTS.get(sport_key)
-        if not sport:
-            idx += 1
-            ob["_league_idx"] = idx
-            continue
-
-        # AUTO-SELECT: If sport has only 1 league, auto-select and skip
-        if len(sport.leagues) == 1:
-            ob["selected_leagues"][sport_key] = [sport.leagues[0].key]
-            idx += 1
-            ob["_league_idx"] = idx
-            continue
-
-        # Show league selection for this sport
-        text = f"<b>Step 3/9: Select leagues for {sport.emoji} {sport.label}</b>\n\nTap to toggle."
-        existing = ob["selected_leagues"].get(sport_key, [])
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_leagues(sport_key, existing),
-        )
-        return
-
-    # All leagues done — move to favourites
-    ob["step"] = "favourites"
-    ob["_fav_idx"] = 0
-    await _show_fav_step(query, ob)
-
-
-async def _advance_league_step(query, ob: dict) -> None:
-    """Move to next sport's leagues or to favourites step."""
-    ob["_league_idx"] = ob.get("_league_idx", 0) + 1
-
-    # Check if editing a single sport
-    editing = ob.get("_editing")
-    if editing and editing.startswith("sport:"):
-        edit_sport = editing.split(":", 1)[1]
-        sport = config.ALL_SPORTS.get(edit_sport)
-        if sport and sport.fav_type != "skip":
-            # Build league queue for this sport and show text input
-            leagues = ob["selected_leagues"].get(edit_sport, [])
-            queue: list[tuple[str, str | None]] = [(edit_sport, lk) for lk in leagues] if leagues else [(edit_sport, None)]
-            ob["_fav_league_queue"] = queue
-            ob["_fav_idx"] = 0
-            ob["step"] = "favourites"
-            await _show_next_team_prompt(query, ob)
-            return
-        ob["_editing"] = None
-        ob["step"] = "summary"
-        await _show_summary(query, ob)
-        return
-
-    await _show_league_step(query, ob)
-
-
-async def _show_fav_step(query, ob: dict) -> None:
-    """Build queue of leagues to prompt for teams, then show first prompt."""
-    # Build the full queue of (sport_key, league_key) pairs to prompt
-    queue: list[tuple[str, str | None]] = []
-    for sk in ob["selected_sports"]:
-        sport = config.ALL_SPORTS.get(sk)
-        if not sport or sport.fav_type == "skip":
-            continue
-        leagues = ob["selected_leagues"].get(sk, [])
-        if leagues:
-            for lk in leagues:
-                queue.append((sk, lk))
-        else:
-            # Sports without league selection (shouldn't happen, but just in case)
-            queue.append((sk, None))
-
-    ob["_fav_league_queue"] = queue
-    ob["_fav_idx"] = 0
-    await _show_next_team_prompt(query, ob)
-
-
 async def _show_next_team_prompt(query, ob: dict) -> None:
-    """Show the text-input prompt for the next league in the queue."""
-    queue = ob.get("_fav_league_queue", [])
+    """Show the text-input prompt for the next sport in selected_sports."""
+    sports = ob["selected_sports"]
     idx = ob.get("_fav_idx", 0)
 
-    if idx >= len(queue):
-        # All leagues done — experienced users skip edge explainer
+    # Skip sports with fav_type == "skip"
+    while idx < len(sports):
+        sport = config.ALL_SPORTS.get(sports[idx])
+        if sport and sport.fav_type != "skip":
+            break
+        idx += 1
+        ob["_fav_idx"] = idx
+
+    if idx >= len(sports):
+        # All sports done — experienced users skip edge explainer
         ob["_team_input_sport"] = None
-        ob["_team_input_league"] = None
         if ob.get("experience") == "experienced":
             ob["step"] = "risk"
-            text = "<b>Step 6/9: Risk profile</b>\n\nHow aggressive should your tips be?"
+            text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
             await query.edit_message_text(
                 text, parse_mode=ParseMode.HTML,
                 reply_markup=kb_onboarding_risk(),
@@ -1444,39 +1361,24 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
             await _show_edge_explainer(query, ob)
         return
 
-    sport_key, league_key = queue[idx]
+    sport_key = sports[idx]
     sport = config.ALL_SPORTS.get(sport_key)
     emoji = sport.emoji if sport else "🏅"
     entity = config.fav_label(sport) if sport else "favourite"
+    sport_label = sport.label if sport else sport_key
 
     # Set state for text input
     ob["step"] = "favourites"
     ob["_team_input_sport"] = sport_key
-    ob["_team_input_league"] = league_key
 
-    # Fix 4: Knockout/tournament context hint
-    _KNOCKOUT_LEAGUES: set[str] = {"ucl", "t20_wc", "rwc", "international_rugby"}
-    if league_key:
-        lg = config.ALL_LEAGUES.get(league_key)
-        league_label = lg.label if lg else league_key
-        example = config.LEAGUE_EXAMPLES.get(league_key, "")
-        example_line = f"\n<i>{example}</i>\n" if example else ""
-        tournament_hint = ""
-        if league_key in _KNOCKOUT_LEAGUES:
-            tournament_hint = "\n🏆 <i>Tournament format — pick any team you support.</i>\n"
-        text = (
-            f"<b>Step 4/9: {emoji} {league_label} — who do you follow?</b>\n\n"
-            f"Type your {entity}s separated by commas.\n"
-            f"Max 5 per league.{example_line}{tournament_hint}\n"
-            f"Or type <b>skip</b> to move on."
-        )
-    else:
-        sport_label = sport.label if sport else sport_key
-        text = (
-            f"<b>Step 4/9: {emoji} {sport_label} — who do you follow?</b>\n\n"
-            f"Type your {entity}s separated by commas.\n"
-            f"Max 5. Or type <b>skip</b> to move on."
-        )
+    example = config.SPORT_EXAMPLES.get(sport_key, "")
+    example_line = f"\n<i>{example}</i>\n" if example else ""
+    text = (
+        f"<b>Step 3/5: {emoji} {sport_label} — who do you follow?</b>\n\n"
+        f"Type your {entity}s separated by commas.\n"
+        f"Max 5 per sport.{example_line}\n"
+        f"Or type <b>skip</b> to move on."
+    )
 
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
@@ -1490,36 +1392,8 @@ def _fav_step_text(sport: config.SportDef) -> str:
     """Build the text for the favourites step."""
     label = config.fav_label(sport)
     return (
-        f"<b>Step 4/9: Select your {label}s for {sport.emoji} {sport.label}</b>\n\n"
+        f"<b>Step 3/5: Select your {label}s for {sport.emoji} {sport.label}</b>\n\n"
         f"Type names separated by commas, or tap Skip."
-    )
-
-
-async def handle_ob_league(query, action: str) -> None:
-    """Toggle a league selection."""
-    user_id = query.from_user.id
-    ob = _get_ob(user_id)
-
-    parts = action.split(":", 1)
-    sport_key = parts[0]
-    league_key = parts[1] if len(parts) > 1 else ""
-
-    if sport_key not in ob["selected_leagues"]:
-        ob["selected_leagues"][sport_key] = []
-
-    leagues = ob["selected_leagues"][sport_key]
-    if league_key in leagues:
-        leagues.remove(league_key)
-    else:
-        leagues.append(league_key)
-
-    sport = config.ALL_SPORTS.get(sport_key)
-    label = sport.label if sport else sport_key
-    emoji = sport.emoji if sport else "🏅"
-    text = f"<b>Step 3/9: Select leagues for {emoji} {label}</b>\n\nTap to toggle."
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_leagues(sport_key, leagues),
     )
 
 
@@ -1550,7 +1424,7 @@ async def handle_ob_fav(query, action: str) -> None:
         favs.append(name)
 
     sport = config.ALL_SPORTS.get(sport_key)
-    text = _fav_step_text(sport) if sport else "<b>Step 4/9</b>"
+    text = _fav_step_text(sport) if sport else "<b>Step 3/5</b>"
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
         reply_markup=kb_onboarding_favourites(sport_key, favs),
@@ -1570,7 +1444,7 @@ async def handle_ob_fav_manual(query, sport_key: str) -> None:
     sport_name = sport.label if sport else sport_key
 
     text = (
-        f"<b>Step 4/9: Type your {label} for {emoji} {sport_name}</b>\n\n"
+        f"<b>Step 3/5: Type your {label} for {emoji} {sport_name}</b>\n\n"
         f"Type a name and send it. I'll try to match it."
     )
     await query.edit_message_text(
@@ -1582,13 +1456,12 @@ async def handle_ob_fav_manual(query, sport_key: str) -> None:
 
 
 async def handle_ob_fav_done(query, sport_key: str) -> None:
-    """Done with favourites for this sport/league, advance to next."""
+    """Done with favourites for this sport, advance to next."""
     user_id = query.from_user.id
     ob = _get_ob(user_id)
     ob["_fav_manual"] = False
     ob["_fav_manual_sport"] = None
     ob["_team_input_sport"] = None
-    ob["_team_input_league"] = None
     analytics_track(user_id, "onboarding_pick_teams", {"sport": sport_key})
 
     # Check if editing a single sport
@@ -1631,7 +1504,7 @@ async def handle_ob_fav_suggest(query, action: str) -> None:
 
     # Show favourites with the new selection
     sport = config.ALL_SPORTS.get(sport_key)
-    text = _fav_step_text(sport) if sport else "<b>Step 4/9</b>"
+    text = _fav_step_text(sport) if sport else "<b>Step 3/5</b>"
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
         reply_markup=kb_onboarding_favourites(sport_key, ob["favourites"][sport_key]),
@@ -1641,16 +1514,18 @@ async def handle_ob_fav_suggest(query, action: str) -> None:
 async def _show_edge_explainer(query, ob: dict) -> None:
     """Show the Edge Rating explainer screen during onboarding."""
     text = (
-        "<b>Step 5/9: How Your Edge Works</b>\n\n"
-        "Our Edge-AI scans odds across SA bookmakers in real time "
-        "and flags when the price is better than it should be.\n\n"
+        "<b>How Your Edge Works</b>\n\n"
+        "Our Edge-AI cross-references odds from 5+ SA bookmakers, "
+        "live form data, historical performance, tipster consensus "
+        "from 4 prediction sources, and real-time match conditions "
+        "— all to find the moments where the bookmakers got it wrong.\n\n"
+        "When we spot a gap between what the bookies think and what "
+        "our AI calculates, that's your Edge.\n\n"
         "💎 <b>Diamond Edge</b> — When you see this, you MOVE. Extremely rare, high confidence.\n"
-        "🥇 <b>Gold Edge</b> — Strong value. These are the bets that build bankrolls.\n"
+        "🥇 <b>Golden Edge</b> — Strong value. These are the bets that build bankrolls.\n"
         "🥈 <b>Silver Edge</b> — Solid edge. The numbers say there's value here.\n"
         "🥉 <b>Bronze Edge</b> — Small but positive. Worth considering.\n\n"
-        "Higher Edge = bigger gap between the bookmaker price "
-        "and what our Edge-AI calculates as the true probability.\n\n"
-        "<i>Pro tip: When 💎 Diamond or 🥇 Gold appears, act fast — edges don't last.</i>"
+        "<i>Pro tip: Focus on 💎 Diamond and 🥇 Golden — act fast, edges don't last.</i>"
     )
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("Got it ✅", callback_data="ob_nav:edge_done")],
@@ -1677,7 +1552,7 @@ async def handle_ob_risk(query, risk_key: str) -> None:
 
     ob["step"] = "bankroll"
     text = (
-        "<b>Step 7/9: Weekly bankroll</b>\n\n"
+        "<b>Step 4/5: Your preferences — Weekly bankroll</b>\n\n"
         "How much do you set aside for betting each week?\n\n"
         "This helps me size my stake suggestions.\n"
         "<i>You can change this anytime in /settings.</i>"
@@ -1716,7 +1591,7 @@ async def handle_ob_bankroll(query, value: str) -> None:
         ob["step"] = "bankroll_custom"
         ob["_bankroll_custom"] = True
         await query.edit_message_text(
-            "<b>Step 7/9: Custom bankroll</b>\n\n"
+            "<b>Step 4/5: Custom bankroll</b>\n\n"
             "Type your weekly bankroll amount in Rands.\n"
             "<i>e.g. 750 or 3000</i>",
             parse_mode=ParseMode.HTML,
@@ -1729,7 +1604,7 @@ async def handle_ob_bankroll(query, value: str) -> None:
         ob["step"] = "bankroll"
         ob.pop("_bankroll_custom", None)
         text = (
-            "<b>Step 7/9: Weekly bankroll</b>\n\n"
+            "<b>Step 4/5: Your preferences — Weekly bankroll</b>\n\n"
             "How much do you set aside for betting each week?"
         )
         await query.edit_message_text(
@@ -1744,7 +1619,7 @@ async def handle_ob_bankroll(query, value: str) -> None:
             ob["bankroll"] = None
 
     ob["step"] = "notify"
-    text = "<b>Step 8/9: Daily picks notification</b>\n\nWhen do you want your daily tips?"
+    text = "<b>Step 4/5: Your preferences — Daily picks notification</b>\n\nWhen do you want your daily tips?"
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
         reply_markup=kb_onboarding_notify(),
@@ -1758,43 +1633,19 @@ async def _show_summary(query, ob: dict) -> None:
         sport = config.ALL_SPORTS.get(sk)
         emoji = sport.emoji if sport else "🏅"
         sport_label = sport.label if sport else sk
-        leagues = ob["selected_leagues"].get(sk, [])
-        favs_dict = ob["favourites"].get(sk, {})
 
-        # Flatten favourites: league_key → [names]
-        if isinstance(favs_dict, list):
-            # Legacy format: flat list
-            all_teams = favs_dict
-            league_teams: dict[str, list[str]] = {"": all_teams}
-        else:
-            league_teams = favs_dict
-
-        league_labels_map: dict[str, str] = {}
-        if sport:
-            for lg in sport.leagues:
-                league_labels_map[lg.key] = _abbreviate_league(lg.label)
+        # Favourites is now a flat list per sport
+        favs = ob["favourites"].get(sk, [])
+        if isinstance(favs, dict):
+            # Legacy dict-of-dicts — flatten
+            flat: list[str] = []
+            for teams in favs.values():
+                flat.extend(teams)
+            favs = flat
 
         sports_lines.append(f"{emoji} <b>{sport_label}</b>")
-
-        if len(leagues) <= 1 or not any(league_teams.values()):
-            # Single league or no teams — compact format
-            all_t: list[str] = []
-            for teams in league_teams.values():
-                all_t.extend(teams)
-            if all_t:
-                sports_lines.append(f"  {', '.join(all_t)}")
-            elif leagues:
-                league_names = [league_labels_map.get(lk, lk) for lk in leagues]
-                sports_lines.append(f"  {', '.join(league_names)}")
-        else:
-            # Multiple leagues — show per-league
-            for lk in leagues:
-                lg_label = league_labels_map.get(lk, lk)
-                teams = league_teams.get(lk, [])
-                if teams:
-                    sports_lines.append(f"  {lg_label}: {', '.join(teams)}")
-                else:
-                    sports_lines.append(f"  {lg_label}")
+        if favs:
+            sports_lines.append(f"  {', '.join(favs)}")
         sports_lines.append("")  # blank line between sports
 
     # Strip emoji from risk label — e.g. "⚖️ Moderate" → "Moderate"
@@ -1814,8 +1665,8 @@ async def _show_summary(query, ob: dict) -> None:
     exp = ob.get("experience") or "casual"
 
     text = (
-        "<b>Step 9/9: Your profile summary</b>\n\n"
-        f"🎯 Experience: {exp_labels.get(exp, exp)}\n\n"
+        "<b>Step 5/5: Your profile summary</b>\n\n"
+        f"🎯 <b>Experience:</b> {exp_labels.get(exp, exp)}\n\n"
         + "\n".join(sports_lines)
         + f"\n⚖️ <b>Risk:</b> {risk_label}\n"
         f"💰 <b>Bankroll:</b> {bankroll_str}\n"
@@ -1825,8 +1676,8 @@ async def _show_summary(query, ob: dict) -> None:
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🚀 Let's go!", callback_data="ob_done:finish")],
-        [InlineKeyboardButton("✏️ Edit Sports & Favourites", callback_data="ob_edit:sports")],
-        [InlineKeyboardButton("⚙️ Edit Risk & Notifications", callback_data="ob_edit:risk")],
+        [InlineKeyboardButton("✏️ Edit Sports & Teams", callback_data="ob_edit:sports")],
+        [InlineKeyboardButton("⚙️ Edit Preferences", callback_data="ob_edit:risk")],
     ])
     await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
@@ -1877,7 +1728,7 @@ async def handle_ob_edit(query, action: str) -> None:
     ob = _get_ob(user_id)
 
     if action == "sports":
-        # Show list of selected sports as buttons for re-editing
+        # Show list of selected sports as buttons for re-editing teams
         rows: list[list[InlineKeyboardButton]] = []
         for sk in ob["selected_sports"]:
             sport = config.ALL_SPORTS.get(sk)
@@ -1887,57 +1738,38 @@ async def handle_ob_edit(query, action: str) -> None:
                     callback_data=f"ob_edit:sport:{sk}",
                 )])
         rows.append([InlineKeyboardButton("« Back to summary", callback_data="ob_summary:show")])
-        text = "<b>✏️ Edit which sport?</b>\n\nTap a sport to re-edit its leagues and favourites."
+        text = "<b>✏️ Edit which sport?</b>\n\nTap a sport to re-edit its teams."
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
 
     elif action.startswith("sport:"):
-        # Re-edit a specific sport's leagues & teams
+        # Re-edit a specific sport's teams — go straight to team text input
         sport_key = action.split(":", 1)[1]
         ob["_editing"] = f"sport:{sport_key}"
         sport = config.ALL_SPORTS.get(sport_key)
-        if not sport:
+        if not sport or sport.fav_type == "skip":
             ob["_editing"] = None
             await _show_summary(query, ob)
             return
 
-        # If single league, skip to team text input
-        if len(sport.leagues) == 1:
-            ob["selected_leagues"][sport_key] = [sport.leagues[0].key]
-            if sport.fav_type != "skip":
-                lk = sport.leagues[0].key
-                ob["_team_input_sport"] = sport_key
-                ob["_team_input_league"] = lk
-                ob["step"] = "favourites"
-                entity = config.fav_label(sport)
-                lg = config.ALL_LEAGUES.get(lk)
-                league_label = lg.label if lg else lk
-                text = (
-                    f"<b>{sport.emoji} {league_label} — who do you follow?</b>\n\n"
-                    f"Type your {entity}s separated by commas.\n"
-                    f"Max 5. Or type <b>skip</b> to move on."
-                )
-                await query.edit_message_text(
-                    text, parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("⏭ Skip", callback_data=f"ob_fav_done:{sport_key}")],
-                    ]),
-                )
-            else:
-                ob["_editing"] = None
-                ob["step"] = "summary"
-                await _show_summary(query, ob)
-            return
-
-        # Show league selection
-        existing = ob["selected_leagues"].get(sport_key, [])
-        text = f"<b>Edit leagues for {sport.emoji} {sport.label}</b>\n\nTap to toggle."
+        ob["_team_input_sport"] = sport_key
+        ob["step"] = "favourites"
+        entity = config.fav_label(sport)
+        example = config.SPORT_EXAMPLES.get(sport_key, "")
+        example_line = f"\n<i>{example}</i>" if example else ""
+        text = (
+            f"<b>{sport.emoji} {sport.label} — who do you follow?</b>\n\n"
+            f"Type your {entity}s separated by commas.{example_line}\n"
+            f"Max 5. Or type <b>skip</b> to move on."
+        )
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_leagues(sport_key, existing),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏭ Skip", callback_data=f"ob_fav_done:{sport_key}")],
+            ]),
         )
 
     elif action == "risk":
-        # Re-edit risk + notification
+        # Re-edit risk → bankroll → notify chain
         ob["_editing"] = "risk"
         ob["step"] = "risk"
         text = "<b>🎯 Change Risk Profile</b>\n\nSelect your risk tolerance:"
@@ -1970,39 +1802,6 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = query.from_user
     name = h(user.first_name or "champ")
 
-    # Big welcome message with story quiz CTA
-    # Generate a personalised welcome via Claude Haiku
-    sports_list = []
-    prefs = await db.get_user_sport_prefs(user_id)
-    if prefs:
-        sports_list = list({p.sport_key for p in prefs if p.sport_key})
-    sport_str = ", ".join(sports_list) if sports_list else "sports"
-
-    welcome_personal = ""
-    try:
-        from anthropic import AsyncAnthropic
-        _client = AsyncAnthropic()
-        _resp = await _client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=120,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Write a 2-sentence personalised welcome for {name} who just signed up "
-                    f"to MzansiEdge, a South African sports betting AI assistant. "
-                    f"They follow: {sport_str}. "
-                    f"Experience: {experience}. "
-                    "Be warm, use SA flair (lekker, sharp, eish). No emojis. "
-                    "Address them by name."
-                ),
-            }],
-        )
-        welcome_personal = _resp.content[0].text.strip()
-    except Exception as exc:
-        log.debug("Welcome personalisation failed: %s", exc)
-
-    personal_line = f"\n\n<i>{h(welcome_personal)}</i>" if welcome_personal else ""
-
     text = (
         f"🎉 <b>Welcome to MzansiEdge, {name}!</b>\n\n"
         "You're in. Your Edge is live.\n\n"
@@ -2013,7 +1812,7 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "find value bets, and tell you exactly where the Edge is.\n\n"
         "🔔 <b>Edge Alerts</b> — Daily picks, game day alerts, "
         "market movers, live scores — choose what updates you want "
-        f"so I know exactly how to keep you in the game.{personal_line}"
+        "so I know exactly how to keep you in the game."
     )
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
@@ -2039,46 +1838,68 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
     from scripts.sports_data import fuzzy_match_team as sd_fuzzy, ALIASES as SD_ALIASES
 
     sport_key = ob["_team_input_sport"]
-    league_key = ob["_team_input_league"]
     raw = update.message.text.strip()
 
     # Handle skip
     if raw.lower() in ("skip", "none", "n/a"):
         ob["_team_input_sport"] = None
-        ob["_team_input_league"] = None
         ob["_fav_idx"] = ob.get("_fav_idx", 0) + 1
         # Need to send a new message since we can't edit user's text message
-        queue = ob.get("_fav_league_queue", [])
+        sports = ob["selected_sports"]
         idx = ob["_fav_idx"]
-        if idx >= len(queue):
-            ob["step"] = "risk"
-            await update.message.reply_text(
-                "<b>Step 6/9: Risk profile</b>\n\nHow aggressive should your tips be?",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb_onboarding_risk(),
-            )
+
+        # Skip sports with fav_type == "skip"
+        while idx < len(sports):
+            _sport = config.ALL_SPORTS.get(sports[idx])
+            if _sport and _sport.fav_type != "skip":
+                break
+            idx += 1
+            ob["_fav_idx"] = idx
+
+        if idx >= len(sports):
+            # All sports done — go to edge explainer or risk
+            if ob.get("experience") == "experienced":
+                ob["step"] = "risk"
+                await update.message.reply_text(
+                    "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=kb_onboarding_risk(),
+                )
+            else:
+                ob["step"] = "edge_explainer"
+                # Send edge explainer as a new message
+                text = (
+                    "<b>How Your Edge Works</b>\n\n"
+                    "Our Edge-AI scans odds across SA bookmakers in real time "
+                    "and flags when the price is better than it should be.\n\n"
+                    "💎 <b>Diamond Edge</b> — When you see this, you MOVE. Extremely rare, high confidence.\n"
+                    "🥇 <b>Golden Edge</b> — Strong value. These are the bets that build bankrolls.\n"
+                    "🥈 <b>Silver Edge</b> — Solid edge. The numbers say there's value here.\n"
+                    "🥉 <b>Bronze Edge</b> — Small but positive. Worth considering.\n\n"
+                    "Higher Edge = bigger gap between the bookmaker price "
+                    "and what our Edge-AI calculates as the true probability.\n\n"
+                    "<i>Pro tip: When 💎 Diamond or 🥇 Gold appears, act fast — edges don't last.</i>"
+                )
+                markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Got it ✅", callback_data="ob_nav:edge_done")],
+                    [InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_edge")],
+                ])
+                await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         else:
-            _sk, _lk = queue[idx]
+            _sk = sports[idx]
             ob["_team_input_sport"] = _sk
-            ob["_team_input_league"] = _lk
             sport = config.ALL_SPORTS.get(_sk)
             emoji = sport.emoji if sport else "🏅"
             entity = config.fav_label(sport) if sport else "favourite"
-            if _lk:
-                lg = config.ALL_LEAGUES.get(_lk)
-                league_label = lg.label if lg else _lk
-                text = (
-                    f"<b>Step 4/9: {emoji} {league_label} — who do you follow?</b>\n\n"
-                    f"Type your {entity}s separated by commas.\n"
-                    f"Max 5. Or type <b>skip</b> to move on."
-                )
-            else:
-                sport_label = sport.label if sport else _sk
-                text = (
-                    f"<b>Step 4/9: {emoji} {sport_label} — who do you follow?</b>\n\n"
-                    f"Type your {entity}s separated by commas.\n"
-                    f"Max 5. Or type <b>skip</b> to move on."
-                )
+            sport_label = sport.label if sport else _sk
+            example = config.SPORT_EXAMPLES.get(_sk, "")
+            example_line = f"\n<i>{example}</i>\n" if example else ""
+            text = (
+                f"<b>Step 3/5: {emoji} {sport_label} — who do you follow?</b>\n\n"
+                f"Type your {entity}s separated by commas.\n"
+                f"Max 5 per sport.{example_line}\n"
+                f"Or type <b>skip</b> to move on."
+            )
             await update.message.reply_text(
                 text, parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
@@ -2096,7 +1917,7 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
         )
         return
 
-    # Fix 7: Detect league names typed as team input
+    # Detect league names typed as team input
     _LEAGUE_NAME_ALIASES: set[str] = {
         "ucl", "champions league", "epl", "premier league", "psl",
         "la liga", "bundesliga", "serie a", "ligue 1", "mls",
@@ -2107,38 +1928,26 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
     }
     league_inputs = [n for n in raw_names if n.lower().strip() in _LEAGUE_NAME_ALIASES]
     if league_inputs:
-        lg = config.ALL_LEAGUES.get(league_key)
-        league_label = lg.label if lg else league_key
+        sport = config.ALL_SPORTS.get(sport_key)
+        sport_label = sport.label if sport else sport_key
         await update.message.reply_text(
             f"That looks like a league name, not a team!\n\n"
-            f"You're selecting teams for <b>{h(league_label)}</b>.\n"
+            f"You're selecting teams for <b>{h(sport_label)}</b>.\n"
             f"Try typing team or player names instead.",
             parse_mode=ParseMode.HTML,
         )
         return
 
-    # Enforce max 5 per league
+    # Enforce max 5 per sport
     if len(raw_names) > 5:
         await update.message.reply_text(
-            "⚠️ Max 5 per league! I'll use your first 5.",
+            "⚠️ Max 5 per sport! I'll use your first 5.",
             parse_mode=ParseMode.HTML,
         )
         raw_names = raw_names[:5]
 
-    # Fix 8: League-specific excluded teams
-    _LEAGUE_EXCLUSIONS: dict[str, set[str]] = {
-        "six_nations": {"south africa", "new zealand", "australia", "argentina",
-                        "fiji", "japan", "samoa", "tonga", "georgia", "romania"},
-        "rugby_champ": {"england", "france", "ireland", "scotland", "wales", "italy"},
-    }
-    excluded = _LEAGUE_EXCLUSIONS.get(league_key, set())
-
-    # Build known names list: TOP_TEAMS for this league + curated lists
-    known_names: list[str] = []
-    if league_key:
-        known_names = list(config.TOP_TEAMS.get(league_key, []))
-    if not known_names:
-        known_names = _get_all_teams_for_sport(sport_key)
+    # Build known names list from all leagues in this sport
+    known_names = _get_all_teams_for_sport(sport_key)
 
     # Also include alias targets in the known names
     alias_names = set(SD_ALIASES.values())
@@ -2149,31 +1958,12 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
     for name in raw_names:
         name_lower = name.lower().strip()
 
-        # Fix 8: Check league exclusions before matching
-        if name_lower in excluded:
-            lg = config.ALL_LEAGUES.get(league_key)
-            league_label = lg.label if lg else league_key
-            unmatched.append(f"{name} (not in {league_label})")
-            continue
-
         # 1. Check alias first
         if name_lower in SD_ALIASES:
-            canonical = SD_ALIASES[name_lower]
-            if canonical.lower() in excluded:
-                lg = config.ALL_LEAGUES.get(league_key)
-                league_label = lg.label if lg else league_key
-                unmatched.append(f"{canonical} (not in {league_label})")
-                continue
-            matched.append(canonical)
+            matched.append(SD_ALIASES[name_lower])
             continue
         if name_lower in config.TEAM_ALIASES:
-            canonical = config.TEAM_ALIASES[name_lower]
-            if canonical.lower() in excluded:
-                lg = config.ALL_LEAGUES.get(league_key)
-                league_label = lg.label if lg else league_key
-                unmatched.append(f"{canonical} (not in {league_label})")
-                continue
-            matched.append(canonical)
+            matched.append(config.TEAM_ALIASES[name_lower])
             continue
 
         # 2. Fuzzy match against known names
@@ -2193,28 +1983,23 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
 
         unmatched.append(name)
 
-    # Build confirmation message with sport emoji + SA flavour
+    # Build confirmation message with per-team celebration lines
     sport = config.ALL_SPORTS.get(sport_key)
     s_emoji = sport.emoji if sport else "🏅"
 
-    cheer = _get_team_cheer(matched, sport_key)
-
     lines: list[str] = []
     if matched:
-        lines.append(f"{s_emoji} <b>Matched:</b>")
         for m in matched:
-            lines.append(f"  ✅ {h(m)}")
+            cheer = _get_team_cheer(m, sport_key)
+            lines.append(f"✅ {h(m)} — {cheer}")
     if unmatched:
-        lines.append("")
-        lines.append("<b>Couldn't match:</b>")
         for u in unmatched:
-            lines.append(f"  ❌ {h(u)}")
+            lines.append(f"❌ {h(u)} (not matched)")
         lines.append("")
         lines.append("<i>These will be skipped. You can add them later in /settings.</i>")
 
     if not matched:
-        # Fix 6: League-specific error tips
-        example = config.LEAGUE_EXAMPLES.get(league_key, "")
+        example = config.SPORT_EXAMPLES.get(sport_key, "")
         tip_line = f"\n\n<i>Tip: {example}</i>" if example else (
             "\n\n<i>Tip: Use full names like \"Manchester United\" or common "
             "nicknames like \"Chiefs\", \"Barca\", \"Spurs\".</i>"
@@ -2225,19 +2010,24 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
         )
         return
 
-    # Save matched teams to favourites
-    if sport_key not in ob["favourites"]:
-        ob["favourites"][sport_key] = {}
-    fav_key = league_key or "_general"
-    ob["favourites"][sport_key][fav_key] = matched
+    # Save matched teams to favourites (flat list per sport)
+    ob["favourites"][sport_key] = matched
 
-    # Show confirmation with buttons + SA cheer
+    # Show confirmation — sport emoji header, neutral summary line
     entity_word = config.fav_label(sport).replace("favourite ", "") if sport else "team"
     entity_plural = entity_word + "s" if len(matched) != 1 else entity_word
-    msg = "\n".join(lines)
+    _pick_headers = {
+        "soccer": "Nice picks!",
+        "rugby": "Nice picks!",
+        "cricket": "Nice picks!",
+        "combat": "War room loaded!",
+    }
+    pick_header = _pick_headers.get(sport_key, "Nice picks!")
+    team_lines = "\n".join(lines)
     await update.message.reply_text(
-        f"{msg}\n\n"
-        f"<b>{len(matched)} {entity_plural} added.</b> {cheer}",
+        f"{s_emoji} {pick_header}\n\n"
+        f"{team_lines}\n\n"
+        f"<b>{len(matched)} {entity_plural} added.</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Continue", callback_data=f"ob_fav_done:{sport_key}")],
@@ -2485,7 +2275,7 @@ async def _show_betway_guide(update: Update) -> None:
         "💎 <b>Diamond Edge</b> — Very high expected value\n"
         "   Exceptional. The bookmakers have seriously\n"
         "   mispriced this. Rare — you might see 1-2 a week.\n\n"
-        "🥇 <b>Gold Edge</b> — High expected value\n"
+        "🥇 <b>Golden Edge</b> — High expected value\n"
         "   Strong value. Our AI found a meaningful gap\n"
         "   between the odds offered and fair probability.\n\n"
         "🥈 <b>Silver Edge</b> — Moderate expected value\n"
@@ -3369,6 +3159,13 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
     top_tips = all_tips[:10]
     _assign_display_tiers(top_tips)
 
+    # Re-sort by tier (diamond first) then EV descending within each tier
+    _tier_sort_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
+    top_tips.sort(key=lambda t: (
+        _tier_sort_order.get(t.get("display_tier", "bronze"), 9),
+        -t.get("ev", 0),
+    ))
+
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time()}
     return top_tips
 
@@ -3509,7 +3306,28 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
         "",
     ]
 
+    # Group page tips by tier for sectioned display
+    _TIER_ORDER = ["diamond", "gold", "silver", "bronze"]
+    _TIER_HEADERS = {
+        "diamond": "💎 <b>DIAMOND EDGE</b>",
+        "gold": "🥇 <b>GOLDEN EDGE</b>",
+        "silver": "🥈 <b>SILVER EDGE</b>",
+        "bronze": "🥉 <b>BRONZE EDGE</b>",
+    }
+    current_tier: str | None = None
+
     for i, tip in enumerate(page_tips, start + 1):
+        # Tier header when tier changes
+        tier = tip.get("display_tier", tip.get("edge_rating", "bronze"))
+        if tier != current_tier:
+            current_tier = tier
+            tier_header = _TIER_HEADERS.get(tier, "")
+            if tier_header:
+                lines.append(tier_header)
+                lines.append("")
+
+        tier_emoji = EDGE_EMOJIS.get(tier, "🥉")
+
         sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
         home_raw = tip.get("home_team", "")
         away_raw = tip.get("away_team", "")
@@ -3519,8 +3337,6 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
         bk_name = h(tip.get("bookmaker", ""))
 
         hf, af = _get_flag_prefixes(home_raw, away_raw)
-        badge = render_edge_badge(tip.get("display_tier", tip.get("edge_rating", "")))
-        badge_suffix = f" {badge}" if badge else ""
 
         league_display = tip.get("league", "")
         kickoff = _format_kickoff_display(tip["commence_time"]) if tip.get("commence_time") else ""
@@ -3539,9 +3355,9 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
 
         bk_part = f" ({bk_name})" if bk_name else ""
         lines.append(
-            f"<b>[{i}]</b> {sport_emoji} <b>{hf}{home} vs {af}{away}</b>{badge_suffix}\n"
+            f"<b>[{i}]</b> {sport_emoji} <b>{hf}{home} vs {af}{away}</b>\n"
             f"{time_line}\n"
-            f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b>{bk_part} · EV +{tip['ev']}%"
+            f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b>{bk_part} · EV +{tip['ev']}% {tier_emoji}"
         )
         lines.append("")
 
@@ -3647,7 +3463,7 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             ob.pop("_bankroll_custom", None)
             ob["step"] = "notify"
             await update.message.reply_text(
-                "<b>Step 8/9: Daily picks notification</b>\n\nWhen do you want your daily tips?",
+                "<b>Step 4/5: Your preferences — Daily picks notification</b>\n\nWhen do you want your daily tips?",
                 parse_mode=ParseMode.HTML,
                 reply_markup=kb_onboarding_notify(),
             )
@@ -3671,10 +3487,9 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
 
         if match:
             if sport_key not in ob["favourites"]:
-                ob["favourites"][sport_key] = {}
-            ob["favourites"].setdefault(sport_key, {}).setdefault("_manual", [])
-            if match not in ob["favourites"][sport_key].get("_manual", []):
-                ob["favourites"][sport_key].setdefault("_manual", []).append(match)
+                ob["favourites"][sport_key] = []
+            if match not in ob["favourites"][sport_key]:
+                ob["favourites"][sport_key].append(match)
             ob["_fav_manual"] = False
             ob["_fav_manual_sport"] = None
             await update.message.reply_text(
@@ -3694,9 +3509,8 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             )
         else:
             if sport_key not in ob["favourites"]:
-                ob["favourites"][sport_key] = {}
-            ob["favourites"].setdefault(sport_key, {}).setdefault("_manual", [])
-            ob["favourites"][sport_key]["_manual"].append(text_input)
+                ob["favourites"][sport_key] = []
+            ob["favourites"][sport_key].append(text_input)
             ob["_fav_manual"] = False
             ob["_fav_manual_sport"] = None
             await update.message.reply_text(
@@ -5661,12 +5475,12 @@ async def handle_settings(query, action: str) -> None:
         )
         kb = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("R500", callback_data="settings:set_bankroll:500"),
-                InlineKeyboardButton("R1,000", callback_data="settings:set_bankroll:1000"),
+                InlineKeyboardButton("R50", callback_data="settings:set_bankroll:50"),
+                InlineKeyboardButton("R200", callback_data="settings:set_bankroll:200"),
             ],
             [
-                InlineKeyboardButton("R2,000", callback_data="settings:set_bankroll:2000"),
-                InlineKeyboardButton("R5,000", callback_data="settings:set_bankroll:5000"),
+                InlineKeyboardButton("R500", callback_data="settings:set_bankroll:500"),
+                InlineKeyboardButton("R1,000", callback_data="settings:set_bankroll:1000"),
             ],
             [InlineKeyboardButton("↩️ Back", callback_data="settings:home")],
         ])
@@ -5783,7 +5597,7 @@ async def handle_ob_restart(query) -> None:
     text = textwrap.dedent(f"""\
         <b>🇿🇦 Let's set up your profile!</b>
 
-        <b>Step 1/9:</b> What's your betting experience?
+        <b>Step 1/5:</b> What's your betting experience?
     """)
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
@@ -5799,7 +5613,7 @@ async def handle_ob_fav_back(query, sport_key: str) -> None:
     ob["_fav_manual_sport"] = None
 
     sport = config.ALL_SPORTS.get(sport_key)
-    text = _fav_step_text(sport) if sport else "<b>Step 4/9</b>"
+    text = _fav_step_text(sport) if sport else "<b>Step 3/5</b>"
     existing = ob["favourites"].get(sport_key, [])
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,

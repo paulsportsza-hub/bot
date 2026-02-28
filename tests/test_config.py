@@ -186,7 +186,12 @@ class TestTeamAliases:
     def test_mma_aliases(self):
         assert config.TEAM_ALIASES["dricus"] == "Dricus Du Plessis"
         assert config.TEAM_ALIASES["drikus"] == "Dricus Du Plessis"
+        assert config.TEAM_ALIASES["dreikus"] == "Dricus Du Plessis"
         assert config.TEAM_ALIASES["du plessis"] == "Dricus Du Plessis"
+        assert config.TEAM_ALIASES["du plesis"] == "Dricus Du Plessis"
+        assert config.TEAM_ALIASES["duplessis"] == "Dricus Du Plessis"
+        assert config.TEAM_ALIASES["stilknocks"] == "Dricus Du Plessis"
+        assert config.TEAM_ALIASES["stillnocks"] == "Dricus Du Plessis"
 
     def test_boxing_aliases(self):
         assert config.TEAM_ALIASES["canelo"] == "Canelo Alvarez"
@@ -289,3 +294,29 @@ class TestRiskProfiles:
         m = config.RISK_PROFILES["moderate"]["kelly_fraction"]
         a = config.RISK_PROFILES["aggressive"]["kelly_fraction"]
         assert c < m < a
+
+
+class TestTeamToLeagues:
+    def test_team_to_leagues_not_empty(self):
+        assert len(config.TEAM_TO_LEAGUES) > 0
+
+    def test_arsenal_maps_to_epl(self):
+        assert "epl" in config.TEAM_TO_LEAGUES["Arsenal"]
+
+    def test_bulls_in_multiple_leagues(self):
+        leagues = config.TEAM_TO_LEAGUES["Bulls"]
+        assert "urc" in leagues
+        assert "currie_cup" in leagues
+
+    def test_national_team_leagues_structure(self):
+        assert "rugby" in config.NATIONAL_TEAM_LEAGUES
+        assert "cricket" in config.NATIONAL_TEAM_LEAGUES
+        assert "South Africa" in config.NATIONAL_TEAM_LEAGUES["rugby"]
+        assert "South Africa" in config.NATIONAL_TEAM_LEAGUES["cricket"]
+
+    def test_sport_examples_exist(self):
+        assert len(config.SPORT_EXAMPLES) == 4
+        assert "soccer" in config.SPORT_EXAMPLES
+        assert "rugby" in config.SPORT_EXAMPLES
+        assert "cricket" in config.SPORT_EXAMPLES
+        assert "combat" in config.SPORT_EXAMPLES
