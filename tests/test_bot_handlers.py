@@ -157,7 +157,7 @@ class TestStickyKeyboard:
         """Sticky keyboard has correct labels."""
         kb = bot.get_main_keyboard()
         labels = [btn.text for row in kb.keyboard for btn in row]
-        assert "⚽ Your Games" in labels
+        assert "⚽ My Matches" in labels
         assert "💎 Top Edge Picks" in labels
         assert "📖 Guide" in labels
         assert "👤 Profile" in labels

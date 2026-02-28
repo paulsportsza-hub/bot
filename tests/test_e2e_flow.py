@@ -1,4 +1,4 @@
-"""E2E flow tests — Telethon-based integration tests for Your Games + Hot Tips.
+"""E2E flow tests — Telethon-based integration tests for My Matches + Hot Tips.
 
 Uses Telethon to send commands to the live bot and verify responses.
 Requires: TELETHON_SESSION env var or saved session file, running bot instance.
@@ -125,7 +125,7 @@ async def test_sticky_keyboard_layout(client: TelegramClient) -> TestResult:
             return TestResult("sticky_keyboard_layout", False, "No reply keyboard found", time.time() - start)
 
         labels = get_reply_keyboard_labels(kb_msg)
-        expected = ["⚽ Your Games", "🔥 Hot Tips", "📖 Guide", "👤 Profile", "⚙️ Settings", "❓ Help"]
+        expected = ["⚽ My Matches", "🔥 Hot Tips", "📖 Guide", "👤 Profile", "⚙️ Settings", "❓ Help"]
 
         for exp in expected:
             if exp not in labels:
@@ -137,20 +137,20 @@ async def test_sticky_keyboard_layout(client: TelegramClient) -> TestResult:
 
 
 async def test_your_games_default_view(client: TelegramClient) -> TestResult:
-    """Verify 'Your Games' shows the all-games default view."""
+    """Verify 'My Matches' shows the all-games default view."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "⚽ Your Games", wait=8)
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=8)
 
-        # Find the Your Games message
+        # Find the My Matches message
         yg_msg = None
         for msg in msgs:
-            if msg.text and "Your Games" in msg.text:
+            if msg.text and "My Matches" in msg.text:
                 yg_msg = msg
                 break
 
         if not yg_msg:
-            return TestResult("your_games_default", False, "No 'Your Games' message found", time.time() - start)
+            return TestResult("your_games_default", False, "No 'My Matches' message found", time.time() - start)
 
         # Should have sport filter buttons or game buttons
         has_buttons = yg_msg.reply_markup is not None
@@ -161,7 +161,7 @@ async def test_your_games_default_view(client: TelegramClient) -> TestResult:
 
         return TestResult(
             "your_games_default", True,
-            f"Your Games view loaded with buttons. Has menu: {has_menu_btn}",
+            f"My Matches view loaded with buttons. Has menu: {has_menu_btn}",
             time.time() - start,
         )
     except Exception as e:
@@ -172,16 +172,16 @@ async def test_your_games_sport_filter(client: TelegramClient) -> TestResult:
     """Verify tapping a sport emoji button shows sport-specific view."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "⚽ Your Games", wait=8)
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=8)
 
         yg_msg = None
         for msg in msgs:
-            if msg.text and "Your Games" in msg.text and msg.reply_markup:
+            if msg.text and "My Matches" in msg.text and msg.reply_markup:
                 yg_msg = msg
                 break
 
         if not yg_msg:
-            return TestResult("sport_filter", False, "No 'Your Games' message found", time.time() - start)
+            return TestResult("sport_filter", False, "No 'My Matches' message found", time.time() - start)
 
         # Look for sport emoji buttons in inline markup
         if not isinstance(yg_msg.reply_markup, ReplyInlineMarkup):
@@ -219,16 +219,16 @@ async def test_your_games_pagination(client: TelegramClient) -> TestResult:
     """Verify pagination works when there are many games."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "⚽ Your Games", wait=8)
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=8)
 
         yg_msg = None
         for msg in msgs:
-            if msg.text and "Your Games" in msg.text and msg.reply_markup:
+            if msg.text and "My Matches" in msg.text and msg.reply_markup:
                 yg_msg = msg
                 break
 
         if not yg_msg:
-            return TestResult("pagination", False, "No 'Your Games' message found", time.time() - start)
+            return TestResult("pagination", False, "No 'My Matches' message found", time.time() - start)
 
         # Check for pagination buttons (Next ➡️)
         has_next = has_inline_button(yg_msg, "Next")
@@ -319,17 +319,17 @@ async def test_game_breakdown_betway_button(client: TelegramClient) -> TestResul
     """Verify game breakdown shows Betway button."""
     start = time.time()
     try:
-        # First get Your Games
-        msgs = await send_and_wait(client, "⚽ Your Games", wait=8)
+        # First get My Matches
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=8)
 
         yg_msg = None
         for msg in msgs:
-            if msg.text and "Your Games" in msg.text and msg.reply_markup:
+            if msg.text and "My Matches" in msg.text and msg.reply_markup:
                 yg_msg = msg
                 break
 
         if not yg_msg:
-            return TestResult("game_breakdown", False, "No 'Your Games' message found", time.time() - start)
+            return TestResult("game_breakdown", False, "No 'My Matches' message found", time.time() - start)
 
         # Try to click a game button [1], [2], etc.
         if not isinstance(yg_msg.reply_markup, ReplyInlineMarkup):

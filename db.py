@@ -542,3 +542,10 @@ async def get_onboarded_count() -> int:
             select(func.count(User.id)).where(User.onboarding_done == True)  # noqa: E712
         )
         return result.scalar_one()
+
+
+async def get_all_sport_prefs() -> list[UserSportPref]:
+    """Get ALL sport prefs across all users (for migrations)."""
+    async with async_session() as s:
+        result = await s.execute(select(UserSportPref))
+        return list(result.scalars().all())

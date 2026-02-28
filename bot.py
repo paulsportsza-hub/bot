@@ -99,25 +99,26 @@ _team_edit_state: dict[int, dict] = {}
 # Always-visible bottom keyboard (separate from inline keyboards)
 
 _KEYBOARD_LABELS = [
-    "⚽ Your Games", "💎 Top Edge Picks", "📖 Guide",
+    "⚽ My Matches", "💎 Top Edge Picks", "📖 Guide",
     "👤 Profile", "⚙️ Settings", "❓ Help",
 ]
 
 # Legacy labels kept for transition — users with cached keyboards may still send these
 _LEGACY_LABELS = {
     "🎯 Today's Picks": "hot_tips",         # old picks → Top Edge Picks
-    "📅 Schedule": "your_games",             # old schedule → Your Games
+    "📅 Schedule": "your_games",             # old schedule → My Matches
     "🔴 Live Games": "live_games",           # old keyboard → Live Games
     "📊 My Stats": "stats",                  # old keyboard → Profile
     "📖 Betway Guide": "guide",              # old keyboard → Guide
     "🔥 Hot Tips": "hot_tips",               # old Hot Tips → Top Edge Picks
+    "⚽ Your Games": "your_games",           # old Your Games → My Matches
 }
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Return the persistent 2×3 reply keyboard."""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("⚽ Your Games"), KeyboardButton("💎 Top Edge Picks"), KeyboardButton("📖 Guide")],
+            [KeyboardButton("⚽ My Matches"), KeyboardButton("💎 Top Edge Picks"), KeyboardButton("📖 Guide")],
             [KeyboardButton("👤 Profile"), KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")],
         ],
         resize_keyboard=True,
@@ -452,7 +453,7 @@ def kb_main() -> InlineKeyboardMarkup:
     """Main persistent menu — every sub-screen navigates back here."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0"),
+            InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0"),
             InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
         ],
         [
@@ -762,7 +763,7 @@ HELP_TEXT = textwrap.dedent("""\
     /help — This message
 
     <b>Bottom keyboard</b>
-    ⚽ <b>Your Games</b> — Personalised 7-day schedule with Edge-AI markers
+    ⚽ <b>My Matches</b> — Personalised 7-day schedule with Edge-AI markers
     💎 <b>Top Edge Picks</b> — Best value bets across all sports
     📖 <b>Guide</b> — Step-by-step Betway betting guide
     👤 <b>Profile</b> — Your sports, teams, and preferences
@@ -860,7 +861,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if action == "main":
             await handle_menu(query, "home")
         elif action == "schedule":
-            # Legacy nav:schedule → redirect to Your Games
+            # Legacy nav:schedule → redirect to My Matches
             user_id = query.from_user.id
             text, markup = await _render_your_games_all(user_id)
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
@@ -1816,7 +1817,7 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"🎉 <b>Welcome to MzansiEdge, {name}!</b>\n\n"
         "You're in. Your Edge is live.\n\n"
         "Here's what I can do for you:\n\n"
-        "⚽ <b>Your Games</b> — Your personalised 7-day schedule with "
+        "⚽ <b>My Matches</b> — Your personalised 7-day schedule with "
         "Edge-AI indicators on every game.\n\n"
         "💎 <b>Top Edge Picks</b> — I scan odds across bookmakers, "
         "find value bets, and tell you exactly where the Edge is.\n\n"
@@ -2158,7 +2159,7 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     if legacy == "hot_tips":
         text = "💎 Top Edge Picks"
     elif legacy == "your_games":
-        text = "⚽ Your Games"
+        text = "⚽ My Matches"
     elif legacy == "live_games":
         await _show_live_games(update, user_id)
         return
@@ -2168,7 +2169,7 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     elif legacy == "guide":
         text = "📖 Guide"
 
-    if text == "⚽ Your Games":
+    if text == "⚽ My Matches":
         db_user = await db.get_user(user_id)
         if not db_user or not db_user.onboarding_done:
             await update.message.reply_text(
@@ -2214,7 +2215,7 @@ async def _show_live_games(update: Update, user_id: int) -> None:
         await update.message.reply_text(
             "🔴 <b>Live Games</b>\n\n"
             "You're not following any live games yet.\n\n"
-            "Use ⚽ <b>Your Games</b> to find games, tap one for tips, "
+            "Use ⚽ <b>My Matches</b> to find games, tap one for tips, "
             "then hit <b>🔔 Follow this game</b> to get live updates.",
             parse_mode=ParseMode.HTML,
         )
@@ -2230,7 +2231,7 @@ async def _show_live_games(update: Update, user_id: int) -> None:
             f"🔕 Unfollow {sub.home_team} vs {sub.away_team}",
             callback_data=f"unsubscribe:{sub.event_id}",
         )])
-    buttons.append([InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")])
+    buttons.append([InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")])
 
     await update.message.reply_text(
         "\n".join(lines), parse_mode=ParseMode.HTML,
@@ -2328,7 +2329,7 @@ async def _show_betway_guide(update: Update) -> None:
     )
 
 
-# ── Your Games — all-games default + sport-specific 7-day view ──
+# ── My Matches — all-games default + sport-specific 7-day view ──
 
 
 def _parse_date(commence_time: str):
@@ -2378,7 +2379,7 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
 async def _render_your_games_all(
     user_id: int, page: int = 0, sport_filter: str | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """Your Games — all games (or filtered to one sport) sorted by edge.
+    """My Matches — all games (or filtered to one sport) sorted by edge.
 
     sport_filter: if set, only show matches for that sport_key (inline re-render).
     """
@@ -2398,40 +2399,40 @@ async def _render_your_games_all(
 
     if not league_keys:
         text = (
-            "⚽ <b>Your Games</b>\n\n"
-            "No leagues selected! Set up your sports first."
+            "⚽ <b>My Matches</b>\n\n"
+            "No teams set up yet! Add your favourite teams to see their matches."
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚙️ Edit Sports", callback_data="settings:sports")],
+            [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
+            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
         ])
         return text, markup
 
     if not games:
-        # Check if the user only follows leagues without API data
-        keyless = [
-            config.ALL_LEAGUES[lk].label
-            for lk in league_keys
-            if lk in config.ALL_LEAGUES and not config.SPORTS_MAP.get(lk)
-        ]
-        if keyless and len(keyless) == len(league_keys):
-            extra = (
-                "\n\nYour leagues (<i>" + ", ".join(keyless) + "</i>) "
-                "don't have live odds data yet. "
-                "Try adding a league like EPL, PSL, or URC for full coverage."
-            )
-        elif keyless:
-            extra = (
-                "\n\n<i>Note: " + ", ".join(keyless) +
-                " don't have live odds data yet.</i>"
-            )
+        lines = ["⚽ <b>My Matches</b>\n", "No live matches for your teams right now.\n"]
+
+        # Show next upcoming fixtures from broadcast schedule
+        next_fixtures = _get_next_fixtures_for_teams(user_teams)
+        if next_fixtures:
+            lines.append("\U0001f5d3\ufe0f <b>Next up:</b>")
+            for fx in next_fixtures:
+                parts = [f"\u2022 {h(fx['home'])} vs {h(fx['away'])}"]
+                if fx.get("kickoff"):
+                    parts.append(f" \u2014 {fx['kickoff']}")
+                if fx.get("league"):
+                    parts.append(f" \u00b7 {h(fx['league'])}")
+                lines.append("".join(parts))
+            lines.append("")
         else:
-            extra = "\nCheck back later or add more teams in Settings."
-        text = (
-            "⚽ <b>Your Games</b>\n\n"
-            "No upcoming games found for your teams."
-            + extra
-        )
+            lines.append(
+                "No upcoming fixtures found for your teams. "
+                "This can happen during off-season breaks.\n"
+            )
+
+        lines.append("\U0001f48e Meanwhile, check today\u2019s best edges across all sports:")
+
+        text = "\n".join(lines)
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
@@ -2469,9 +2470,9 @@ async def _render_your_games_all(
         sport_def = config.ALL_SPORTS.get(sport_filter)
         sport_label = sport_def.label if sport_def else sport_filter
         sport_emoji = sport_def.emoji if sport_def else "🏅"
-        title = f"{sport_emoji} <b>Your Games — {sport_label}</b>"
+        title = f"{sport_emoji} <b>My Matches — {sport_label}</b>"
     else:
-        title = "⚽ <b>Your Games</b>"
+        title = "⚽ <b>My Matches</b>"
 
     # Empty state after filter
     if not sorted_games:
@@ -2616,7 +2617,7 @@ def _build_sport_filter_row(
 async def _render_your_games_sport(
     user_id: int, sport_key: str, day_offset: int = 0, page: int = 0,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """Sport-specific Your Games view with 7-day navigation."""
+    """Sport-specific My Matches view with 7-day navigation."""
     from datetime import datetime as dt_cls, timedelta
     from zoneinfo import ZoneInfo
 
@@ -2964,6 +2965,98 @@ def _get_broadcast_details(
     except Exception:
         pass
     return result
+
+
+def _get_next_fixtures_for_teams(
+    user_teams: set[str], limit: int = 3,
+) -> list[dict]:
+    """Find the next upcoming fixtures for any of the user's teams.
+
+    Queries broadcast_schedule for upcoming live broadcasts matching user's teams.
+    Returns list of {"home": str, "away": str, "kickoff": str, "league": str}
+    sorted by start_time ascending.
+    """
+    if not user_teams:
+        return []
+    try:
+        import sqlite3
+        import sys
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        if "/home/paulsportsza" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza")
+        if "/home/paulsportsza/scrapers" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza/scrapers")
+
+        tz = ZoneInfo(config.TZ)
+        now = datetime.now(tz)
+        today = now.strftime("%Y-%m-%d")
+        month_ahead = (now + timedelta(days=30)).strftime("%Y-%m-%d")
+
+        db_path = "/home/paulsportsza/scrapers/odds.db"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT programme_title, home_team, away_team, start_time, league "
+            "FROM broadcast_schedule "
+            "WHERE broadcast_date BETWEEN ? AND ? AND is_live = 1 "
+            "ORDER BY start_time ASC",
+            (today, month_ahead),
+        ).fetchall()
+        conn.close()
+
+        # Match broadcasts to user's teams (case-insensitive)
+        teams_lower = {t.lower() for t in user_teams}
+        fixtures: list[dict] = []
+        seen: set[str] = set()
+
+        for row in rows:
+            home = row["home_team"] or ""
+            away = row["away_team"] or ""
+            title = row["programme_title"] or ""
+
+            # Check if any user team matches home or away
+            matched = False
+            for team_lower in teams_lower:
+                if (team_lower in home.lower() or team_lower in away.lower()
+                        or team_lower in title.lower()):
+                    matched = True
+                    break
+
+            if not matched:
+                continue
+
+            # Deduplicate by home+away+date
+            dedup_key = f"{home.lower()}_{away.lower()}_{(row['start_time'] or '')[:10]}"
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+
+            # Format kickoff
+            kickoff = ""
+            if row["start_time"]:
+                kickoff = _format_kickoff_display(row["start_time"])
+
+            # League display — use full name from config if possible
+            league_raw = row["league"] or ""
+            league_display = league_raw
+            for lg in config.ALL_LEAGUES.values():
+                if lg.key == league_raw.lower().replace(" ", "_"):
+                    league_display = lg.label
+                    break
+
+            if home and away:
+                fixtures.append({
+                    "home": home, "away": away,
+                    "kickoff": kickoff, "league": league_display,
+                })
+
+            if len(fixtures) >= limit:
+                break
+
+        return fixtures
+    except Exception:
+        return []
 
 
 def _get_flag_prefixes(home: str, away: str) -> tuple[str, str]:
@@ -3374,7 +3467,7 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
             "💎 <b>Top Edge Picks</b>\n\nNo edges found right now — the market is efficient.\n"
             "Check back when more games open!",
             InlineKeyboardMarkup([
-                [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+                [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
             ]),
         )
@@ -3476,7 +3569,7 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
     # Action buttons
     buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="hot:go")])
     buttons.append([
-        InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0"),
+        InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0"),
         InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
     ])
 
@@ -3805,7 +3898,7 @@ async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
 # ── /schedule — Upcoming games ───────────────────────────
 
 async def cmd_schedule(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Legacy /schedule → redirects to Your Games."""
+    """Legacy /schedule → redirects to My Matches."""
     user_id = update.effective_user.id
     db_user = await db.get_user(user_id)
 
@@ -3972,12 +4065,26 @@ async def _build_schedule(user_id: int, page: int = 0) -> tuple[str, InlineKeybo
     games = await _fetch_schedule_games(user_id)
 
     if not games:
-        text = (
-            "📅 <b>No upcoming games found</b>\n\n"
-            "None of your followed teams have scheduled games right now. "
-            "Check back later or add more teams in /settings."
-        )
+        lines = [
+            "📅 <b>No upcoming games found</b>\n",
+            "Your teams don\u2019t have live matches right now. "
+            "Check back closer to matchday.\n",
+        ]
+
+        next_fixtures = _get_next_fixtures_for_teams(user_teams)
+        if next_fixtures:
+            lines.append("\U0001f5d3\ufe0f <b>Next up:</b>")
+            for fx in next_fixtures:
+                parts = [f"\u2022 {h(fx['home'])} vs {h(fx['away'])}"]
+                if fx.get("kickoff"):
+                    parts.append(f" \u2014 {fx['kickoff']}")
+                if fx.get("league"):
+                    parts.append(f" \u00b7 {h(fx['league'])}")
+                lines.append("".join(parts))
+
+        text = "\n".join(lines)
         markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
         ])
@@ -4880,7 +4987,7 @@ def _build_game_buttons(
             )])
 
     # Buttons 3-4: Navigation
-    buttons.append([InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")])
+    buttons.append([InlineKeyboardButton("↩️ Back to My Matches", callback_data="yg:all:0")])
     buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
     return buttons
@@ -4939,7 +5046,7 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             "⚠️ Tip data expired. Tap the game again for fresh analysis.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to Your Games", callback_data="yg:all:0")],
+                [InlineKeyboardButton("↩️ Back to My Matches", callback_data="yg:all:0")],
             ]),
         )
         return
@@ -5351,7 +5458,7 @@ async def _save_story_prefs(query, chat_id: int, user_id: int) -> None:
         text, parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
-            [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+            [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
             [InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")],
         ]),
     )
@@ -5839,7 +5946,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
-                    [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+                    [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 ]),
             )
         except Exception as exc:
@@ -5871,7 +5978,7 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
-                    [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+                    [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 ]),
             )
         else:
@@ -6059,7 +6166,7 @@ async def _run_webhook_server(app_instance) -> None:
                         parse_mode=ParseMode.HTML,
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
-                            [InlineKeyboardButton("⚽ Your Games", callback_data="yg:all:0")],
+                            [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                         ]),
                     )
                 except Exception as exc:
@@ -6105,6 +6212,15 @@ async def _post_init(app_instance) -> None:
         await ensure_active_guide()
     except Exception as exc:
         log.warning("Could not pre-publish guide: %s", exc)
+
+    # Backfill bonus leagues for existing users with national teams
+    try:
+        from services.user_service import backfill_bonus_leagues
+        added = await backfill_bonus_leagues()
+        if added:
+            log.info("Backfilled %d bonus league prefs at startup", added)
+    except Exception as exc:
+        log.warning("Bonus league backfill failed: %s", exc)
 
     # Schedule morning teaser notifications — runs every hour on the hour
     # Checks SAST hour against each user's preferred notification_hour
@@ -6214,7 +6330,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_button))
 
     # Persistent reply keyboard taps (must be BEFORE freetext_handler)
-    _kb_pattern = r"^(⚽ Your Games|💎 Top Edge Picks|🔥 Hot Tips|📖 Guide|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule)$"
+    _kb_pattern = r"^(⚽ My Matches|⚽ Your Games|💎 Top Edge Picks|🔥 Hot Tips|📖 Guide|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule)$"
     app.add_handler(MessageHandler(filters.Regex(_kb_pattern), handle_keyboard_tap))
 
     # Free-text chat (also handles favourite input during onboarding)

@@ -458,6 +458,28 @@ NATIONAL_TEAM_LEAGUES: dict[str, dict[str, list[str]]] = {
 }
 
 
+# ── Bonus domestic leagues for national teams (Phase 0F) ──
+# When a user follows a national team, also auto-add the domestic franchise
+# league where that country's players compete at club level.
+NATIONAL_TEAM_BONUS_LEAGUES: dict[str, dict[str, list[str]]] = {
+    "rugby": {
+        "South Africa": ["urc", "currie_cup"],
+        "New Zealand": ["super_rugby"],
+        "Australia": ["super_rugby"],
+        "Argentina": ["super_rugby"],
+        "Ireland": ["urc"],
+        "Scotland": ["urc"],
+        "Wales": ["urc"],
+        "Italy": ["urc"],
+    },
+    "cricket": {
+        "South Africa": ["csa_cricket"],
+        "India": ["ipl"],
+        "Australia": ["big_bash"],
+    },
+}
+
+
 # ── Sport-level examples for team prompts (Phase 0D) ─────
 SPORT_EXAMPLES: dict[str, str] = {
     "soccer": "e.g. Chiefs, Arsenal, Barcelona, Sundowns",

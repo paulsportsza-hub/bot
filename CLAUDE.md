@@ -1622,3 +1622,59 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Phase 0D-FIX)
 - Tests: 408 passing, 0 failures
+
+## Phase 0E — Game Time + Channel on Edge Pick Detail (28 Feb 2026)
+
+### `_get_broadcast_details()` Helper (bot.py)
+- Queries `broadcast_schedule` table in odds.db directly for upcoming matches (today + 7 days)
+- Uses `fuzzy_match_broadcast()` from `broadcast_matcher.py` for team name matching
+- Extracts `start_time` (full ISO timestamp) → formatted via `_format_kickoff_display()`
+- Builds channel display from `channel_short` + `dstv_number`
+- Includes free-to-air fallback
+- Falls back to `_get_broadcast_line()` for league-level matches
+- Returns `{"broadcast": "📺 SS PSL (DStv 202)", "kickoff": "Sat 1 Mar · 17:30"}`
+
+### `render_tip_with_odds()` — New Optional Params (edge_renderer.py)
+- `kickoff_override: str = ""` — pre-formatted kickoff string, takes priority over `match.commence_time`
+- `broadcast_line: str = ""` — pre-formatted broadcast string
+- League, kickoff, broadcast now on separate lines (was `🏆 League — kickoff` on one line)
+
+### Tip Detail View (bot.py — `handle_tip_detail()`)
+- Calls `_get_broadcast_details()` before `render_tip_with_odds()`
+- Passes `kickoff_override` and `broadcast_line` to renderer
+- Detail card now shows: edge badge, match header, league, 📅 kickoff, 📺 channel, best odds, narrative
+
+### List View (bot.py — `_build_hot_tips_page()`)
+- Replaced `_get_broadcast_line()` with `_get_broadcast_details()`
+- Kickoff time for DB-sourced tips (odds.db has no commence_time) now populated from broadcast_schedule
+- Format: `🏆 League · ⏰ kickoff` + `📺 channel` on next line
+
+### Test Status (Phase 0E)
+- Tests: 496 passing, 0 failures
+
+## Phase 0F — Rename + Empty State + Bonus Leagues (28 Feb 2026)
+
+### FIX 1: "Your Games" → "My Matches" Rename
+- All user-facing strings changed: sticky keyboard, headers, buttons, help text
+- Internal handler names unchanged (`your_games`, `_render_your_games_all`, etc.)
+- `_LEGACY_LABELS` maps old `"⚽ Your Games"` → `"your_games"` for cached keyboards
+- Regex pattern in `main()` includes both old and new labels
+- Tests updated: test_bot_handlers.py, test_day1.py, test_e2e_flow.py
+
+### FIX 2: Empty State Improvements
+- **No live matches state** (`_render_your_games_all`): Shows "No live matches for your teams right now." + next 3 upcoming fixtures from broadcast_schedule + "Top Edge Picks" button
+- **Schedule empty state**: Same pattern — next fixtures + Top Edge Picks button
+- **`_get_next_fixtures_for_teams()`**: New helper querying broadcast_schedule for upcoming live broadcasts matching user's teams. Returns up to 3 fixtures with full league names, kickoff dates.
+- Removed ALL "add a league" / "try adding a league" messages (league step removed in Phase 0D)
+
+### FIX 3: National Team Bonus Leagues
+- `config.NATIONAL_TEAM_BONUS_LEAGUES` — maps sport → national team → domestic franchise leagues
+  - Rugby: SA→URC+Currie Cup, NZ/AU/ARG→Super Rugby, IRE/SCO/WAL/ITA→URC
+  - Cricket: SA→CSA/SA20, India→IPL, Australia→Big Bash
+- `_infer_leagues_for_team()` in user_service.py now appends bonus leagues after standard inference
+- `backfill_bonus_leagues()` in user_service.py — retroactive migration for existing users
+- Called at bot startup in `_post_init()` — scans all sport prefs, adds missing bonus league rows
+- `db.get_all_sport_prefs()` helper added for migration queries
+
+### Test Status (Phase 0F)
+- Tests: 496 passing, 0 failures

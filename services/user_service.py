@@ -18,19 +18,25 @@ def _infer_leagues_for_team(team: str, sport_key: str) -> list[str]:
 
     1. Check NATIONAL_TEAM_LEAGUES[sport_key][team] first (sport-specific)
     2. Check TEAM_TO_LEAGUES[team] filtered by LEAGUE_SPORT[lg] == sport_key
-    3. Returns empty list if no mapping found
+    3. Append NATIONAL_TEAM_BONUS_LEAGUES (domestic franchise leagues)
+    4. Returns empty list if no mapping found
     """
     # 1. Sport-specific national team mapping
     national = config.NATIONAL_TEAM_LEAGUES.get(sport_key, {})
     if team in national:
-        return national[team]
+        leagues = list(national[team])
+    else:
+        # 2. Generic reverse lookup filtered by sport
+        all_leagues = config.TEAM_TO_LEAGUES.get(team, [])
+        leagues = [lg for lg in all_leagues if config.LEAGUE_SPORT.get(lg) == sport_key]
 
-    # 2. Generic reverse lookup filtered by sport
-    all_leagues = config.TEAM_TO_LEAGUES.get(team, [])
-    if all_leagues:
-        return [lg for lg in all_leagues if config.LEAGUE_SPORT.get(lg) == sport_key]
+    # 3. Add bonus domestic leagues for national teams
+    bonus = config.NATIONAL_TEAM_BONUS_LEAGUES.get(sport_key, {}).get(team, [])
+    for lg in bonus:
+        if lg not in leagues:
+            leagues.append(lg)
 
-    return []
+    return leagues
 
 
 def classify_archetype(
@@ -193,6 +199,43 @@ async def persist_onboarding(user_id: int, ob: dict) -> tuple[str, float]:
     await db.set_onboarding_done(user_id)
 
     return archetype, eng_score
+
+
+async def backfill_bonus_leagues() -> int:
+    """Retroactively add bonus domestic leagues for existing users with national teams.
+
+    Scans all sport prefs. For each national team that has bonus leagues defined
+    in NATIONAL_TEAM_BONUS_LEAGUES, checks if the user already has a pref row
+    for that bonus league + team. If not, creates one.
+
+    Returns the number of bonus prefs added.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    all_prefs = await db.get_all_sport_prefs()
+
+    # Build lookup: (user_id, sport_key, league, team_name) → exists
+    existing = set()
+    for p in all_prefs:
+        if p.team_name and p.league:
+            existing.add((p.user_id, p.sport_key, p.league, p.team_name))
+
+    added = 0
+    for p in all_prefs:
+        if not p.team_name:
+            continue
+        bonus = config.NATIONAL_TEAM_BONUS_LEAGUES.get(p.sport_key, {}).get(p.team_name, [])
+        for lg in bonus:
+            key = (p.user_id, p.sport_key, lg, p.team_name)
+            if key not in existing:
+                await db.save_sport_pref(p.user_id, p.sport_key, league=lg, team_name=p.team_name)
+                existing.add(key)
+                added += 1
+
+    if added:
+        log.info("Backfilled %d bonus league prefs for national teams", added)
+    return added
 
 
 async def get_user_league_keys(user_id: int) -> list[str]:

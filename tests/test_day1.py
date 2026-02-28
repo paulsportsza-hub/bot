@@ -229,7 +229,7 @@ class TestPersistentMenu:
         kb = bot.kb_main()
         buttons = [btn for row in kb.inline_keyboard for btn in row]
         labels = [b.text for b in buttons]
-        assert any("Your Games" in l for l in labels)
+        assert any("My Matches" in l for l in labels)
         assert any("Top Edge Picks" in l for l in labels)
 
     def test_kb_main_has_my_bets(self):
