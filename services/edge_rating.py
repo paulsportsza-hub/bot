@@ -8,8 +8,21 @@ from __future__ import annotations
 
 import logging
 import statistics
+import sys
+import os
 
 log = logging.getLogger("mzansiedge.edge")
+
+# Import integrity guardrails
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+try:
+    from scrapers.odds_integrity import cap_ev, validate_tier
+except ImportError:
+    # Graceful fallback if scrapers not available (e.g. in test env)
+    def cap_ev(ev, tier, bk_count):
+        return ev, ""
+    def validate_tier(tier, bk_count):
+        return tier
 
 
 class EdgeRating:
@@ -117,6 +130,34 @@ def calculate_edge_score(
         + _value_detection(odds_snapshots, model_prediction)
         + _market_breadth(odds_snapshots)
     )
+
+
+def apply_guardrails(
+    tier: str,
+    ev: float,
+    bk_count: int,
+) -> tuple[str, float | None, str]:
+    """Apply EV cap and tier validation guardrails.
+
+    Args:
+        tier: raw edge rating tier from calculate_edge_rating()
+        ev: expected value as fraction (e.g. 0.15 for 15%)
+        bk_count: number of bookmakers offering this match
+
+    Returns:
+        (adjusted_tier, adjusted_ev_or_None, reason)
+        If adjusted_ev is None, the tip should be excluded entirely.
+    """
+    # Step 1: Validate tier against BK count (may downgrade)
+    adjusted_tier = validate_tier(tier, bk_count)
+
+    # Step 2: Cap EV for the (potentially downgraded) tier
+    adjusted_ev, reason = cap_ev(ev, adjusted_tier, bk_count)
+
+    if adjusted_tier != tier and not reason:
+        reason = f"Tier downgraded: {tier} → {adjusted_tier} ({bk_count} BKs)"
+
+    return adjusted_tier, adjusted_ev, reason
 
 
 def _bookmaker_consensus(snapshots: list[dict], predicted_outcome: str) -> float:
