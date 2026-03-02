@@ -3954,6 +3954,7 @@ async def cmd_schedule(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def _fetch_schedule_games(user_id: int) -> list[dict]:
     """Fetch and cache schedule events for a user. Returns sorted event list."""
     from scripts.sports_data import fetch_events_for_league
+    from services.odds_service import LEAGUE_MARKET_TYPE
 
     prefs = await db.get_user_sport_prefs(user_id)
     user_teams: set[str] = set()
@@ -3963,8 +3964,24 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
             user_teams.add(pref.team_name.lower())
         if pref.league:
             league_keys.add(pref.league)
+        elif pref.team_name:
+            # Infer league for prefs with league=None (e.g. "Manchester United" → epl)
+            # Try exact name first, then resolve via TEAM_ALIASES
+            team_name = pref.team_name
+            inferred = config.TEAM_TO_LEAGUES.get(team_name, [])
+            if not inferred:
+                # Resolve alias: "Manchester United" → "Man United" → TEAM_TO_LEAGUES
+                canonical = config.TEAM_ALIASES.get(team_name.lower(), "")
+                if canonical:
+                    inferred = config.TEAM_TO_LEAGUES.get(canonical, [])
+            sport_key = pref.sport_key or ""
+            for ilk in inferred:
+                if not sport_key or config.LEAGUE_SPORT.get(ilk) == sport_key:
+                    league_keys.add(ilk)
 
     all_events: list[dict] = []
+    # Track normalised match_ids to deduplicate across Odds API + DB sources
+    seen_match_ids: set[str] = set()
     leagues_with_api_events: set[str] = set()
     for lk in league_keys:
         # Skip leagues without an Odds API key — no data to fetch
@@ -3985,6 +4002,11 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
                 or not user_teams
             )
             if is_relevant:
+                # Compute normalised match_id for cross-source dedup
+                norm_mid = odds_svc.build_match_id(home, away, event.get("commence_time", ""))
+                if norm_mid in seen_match_ids:
+                    continue
+                seen_match_ids.add(norm_mid)
                 all_events.append({**event, "league_key": lk, "sport_emoji": sport_emoji})
 
     # Supplement with odds.db for leagues with no Odds API events
@@ -3993,7 +4015,6 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
         "ucl": "champions_league", "t20_wc": "t20_world_cup",
         "csa_cricket": "sa20", "boxing_major": "boxing",
     }
-    from services.odds_service import LEAGUE_MARKET_TYPE
 
     # Collect DB league keys to query (mapped from config keys)
     db_league_queries: list[tuple[str, str, str]] = []  # (config_key, db_key, sport_key)
@@ -4004,7 +4025,6 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
         sk = _DB_LEAGUE_SPORT.get(db_key, config.LEAGUE_SPORT.get(lk, ""))
         db_league_queries.append((lk, db_key, sk))
 
-    seen_ids = {e.get("id") for e in all_events}
     for config_key, db_key, sport_key in db_league_queries:
         try:
             market_type = LEAGUE_MARKET_TYPE.get(db_key, "1x2")
@@ -4015,9 +4035,9 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
         sport_emoji = sport.emoji if sport else "🏅"
         for match in db_matches:
             mid = match["match_id"]
-            if mid in seen_ids:
+            if mid in seen_match_ids:
                 continue
-            seen_ids.add(mid)
+            seen_match_ids.add(mid)
             home_display = _display_team_name(match.get("home_team", "?"))
             away_display = _display_team_name(match.get("away_team", "?"))
             is_relevant = (
