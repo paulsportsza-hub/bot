@@ -1,10 +1,15 @@
-"""Odds service — queries the Dataminer's odds_snapshots table for multi-bookmaker odds.
+"""Odds service — queries the Dataminer's odds.db for multi-bookmaker odds.
 
-Schema (from /home/paulsportsza/scrapers/db_schema.sql):
-    odds_snapshots (
-        id, bookmaker, match_id, home_team, away_team, league, sport, market_type,
-        home_odds, draw_odds, away_odds, over_odds, under_odds, scraped_at, source_url, created_at
-    )
+Two tables used:
+    odds_latest — maintained by scrapers, only active matches, auto-expired.
+        (match_id, bookmaker, market_type, home_odds, draw_odds, away_odds,
+         over_odds, under_odds, first_seen, last_seen, last_changed, change_count)
+    odds_snapshots — append-only history, has league/team metadata.
+        (id, bookmaker, match_id, home_team, away_team, league, sport, market_type,
+         home_odds, draw_odds, away_odds, over_odds, under_odds, scraped_at, ...)
+
+Query strategy: odds_latest for current odds (guaranteed fresh), odds_snapshots for
+metadata (home_team, away_team, league) and historical movement.
 
 match_id format: normalised composite key e.g. "kaizer_chiefs_vs_orlando_pirates_2026-02-28"
 bookmaker keys: "hollywoodbets", "supabets" (lowercase)
@@ -55,8 +60,18 @@ def build_match_id(home_team: str, away_team: str, commence_time: str) -> str:
 # Column mapping for each market type → list of (outcome_key, column_name) pairs
 MARKET_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "1x2": [("home", "home_odds"), ("draw", "draw_odds"), ("away", "away_odds")],
+    "match_winner": [("home", "home_odds"), ("away", "away_odds")],  # 2-way (combat/cricket)
     "over_under_2.5": [("over", "over_odds"), ("under", "under_odds")],
     "btts": [("yes", "home_odds"), ("no", "away_odds")],  # home_odds=Yes, away_odds=No
+}
+
+# Map league key → primary market type for that league
+LEAGUE_MARKET_TYPE: dict[str, str] = {
+    "ufc": "match_winner",
+    "boxing": "match_winner",
+    "t20_world_cup": "match_winner",
+    "test_cricket": "match_winner",
+    "sa20": "match_winner",
 }
 
 
@@ -65,6 +80,9 @@ async def get_best_odds(
     market_type: str = "1x2",
 ) -> dict:
     """Returns latest odds for a match across all bookmakers, sorted by best value.
+
+    Uses odds_latest for current odds (fast primary-key lookup) and
+    odds_snapshots for metadata (home_team, away_team, league).
 
     Args:
         match_id: Normalised composite key (e.g. "kaizer_chiefs_vs_orlando_pirates_2026-02-28")
@@ -111,38 +129,40 @@ async def get_best_odds(
         async with aiosqlite.connect(ODDS_DB_PATH) as conn:
             conn.row_factory = aiosqlite.Row
 
-            # Get the latest snapshot per bookmaker for this match + market
-            query = """
-                SELECT bookmaker, home_team, away_team, league,
-                       home_odds, draw_odds, away_odds, over_odds, under_odds, scraped_at
-                FROM odds_snapshots o1
+            # Get current odds from odds_latest (one row per bookmaker, guaranteed fresh)
+            odds_query = """
+                SELECT bookmaker, home_odds, draw_odds, away_odds,
+                       over_odds, under_odds, last_seen
+                FROM odds_latest
                 WHERE match_id = ? AND market_type = ?
-                AND scraped_at = (
-                    SELECT MAX(o2.scraped_at)
-                    FROM odds_snapshots o2
-                    WHERE o2.match_id = o1.match_id
-                    AND o2.bookmaker = o1.bookmaker
-                    AND o2.market_type = o1.market_type
-                )
-                ORDER BY scraped_at DESC
             """
-            async with conn.execute(query, (match_id, market_type)) as cursor:
+            async with conn.execute(odds_query, (match_id, market_type)) as cursor:
                 rows = await cursor.fetchall()
 
             if not rows:
                 return result
 
+            # Get metadata (home_team, away_team, league) from odds_snapshots
+            meta_query = """
+                SELECT home_team, away_team, league
+                FROM odds_snapshots
+                WHERE match_id = ?
+                ORDER BY scraped_at DESC LIMIT 1
+            """
+            async with conn.execute(meta_query, (match_id,)) as cursor:
+                meta = await cursor.fetchone()
+
+            if meta:
+                result["home_team"] = meta["home_team"]
+                result["away_team"] = meta["away_team"]
+                result["league"] = meta["league"]
+
             bookmakers = set()
             latest_ts = None
 
-            # Populate metadata from first row
-            result["home_team"] = rows[0]["home_team"]
-            result["away_team"] = rows[0]["away_team"]
-            result["league"] = rows[0]["league"]
-
             for row in rows:
                 bookmaker = row["bookmaker"]
-                ts = row["scraped_at"]
+                ts = row["last_seen"]
                 bookmakers.add(bookmaker)
                 if latest_ts is None or ts > latest_ts:
                     latest_ts = ts
@@ -170,7 +190,7 @@ async def get_best_odds(
             result["bookmaker_count"] = len(bookmakers)
 
     except Exception as exc:
-        log.warning("Failed to query odds_snapshots for match %s: %s", match_id, exc)
+        log.warning("Failed to query odds for match %s: %s", match_id, exc)
 
     return result
 
@@ -180,7 +200,11 @@ async def get_all_matches(
     league: str | None = None,
     limit: int = 100,
 ) -> list[dict]:
-    """Returns latest odds for all matches, optionally filtered by league.
+    """Returns latest odds for all active matches, optionally filtered by league.
+
+    Uses odds_latest as the source of truth for active match_ids (scrapers
+    auto-expire stale matches from this table). Joins to odds_snapshots only
+    when a league filter is needed (odds_latest has no league column).
 
     Each entry has the same structure as get_best_odds() output.
     """
@@ -193,19 +217,24 @@ async def get_all_matches(
         async with aiosqlite.connect(ODDS_DB_PATH) as conn:
             conn.row_factory = aiosqlite.Row
 
-            # Get distinct match_ids with latest scrape
+            # Get active match_ids from odds_latest (only current matches)
             if league:
+                # JOIN to odds_snapshots for league metadata (odds_latest has no league col)
                 query = """
-                    SELECT DISTINCT match_id FROM odds_snapshots
-                    WHERE market_type = ? AND league = ? COLLATE NOCASE
-                    ORDER BY scraped_at DESC LIMIT ?
+                    SELECT DISTINCT ol.match_id
+                    FROM odds_latest ol
+                    INNER JOIN odds_snapshots os
+                        ON ol.match_id = os.match_id
+                        AND os.league = ? COLLATE NOCASE
+                    WHERE ol.market_type = ?
+                    LIMIT ?
                 """
-                params = (market_type, league, limit)
+                params = (league, market_type, limit)
             else:
                 query = """
-                    SELECT DISTINCT match_id FROM odds_snapshots
+                    SELECT DISTINCT match_id FROM odds_latest
                     WHERE market_type = ?
-                    ORDER BY scraped_at DESC LIMIT ?
+                    LIMIT ?
                 """
                 params = (market_type, limit)
 
@@ -335,6 +364,23 @@ async def detect_line_movement(
         "magnitude": magnitude,
         "hours": hours,
     }
+
+
+async def get_match_league(match_id: str) -> str | None:
+    """Get league for a match_id from odds_snapshots metadata."""
+    match_id = normalise_match_id(match_id)
+    if not Path(ODDS_DB_PATH).exists():
+        return None
+    try:
+        async with aiosqlite.connect(ODDS_DB_PATH) as conn:
+            async with conn.execute(
+                "SELECT league FROM odds_snapshots WHERE match_id = ? LIMIT 1",
+                (match_id,),
+            ) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else None
+    except Exception:
+        return None
 
 
 async def get_db_stats() -> dict:

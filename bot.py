@@ -2839,10 +2839,20 @@ _hot_tips_cache: dict[str, dict] = {}  # "global" → {"tips": [...], "ts": floa
 HOT_TIPS_CACHE_TTL = 900  # 15 minutes
 
 # Leagues available in our scrapers DB (odds.db)
-DB_LEAGUES = ["psl", "epl", "champions_league"]
+DB_LEAGUES = [
+    "psl", "epl", "champions_league",
+    "super_rugby", "six_nations", "urc",
+    "t20_world_cup", "test_cricket", "sa20",
+    "ufc", "boxing",
+]
 
 # Display name helpers for odds.db normalised keys
-_LEAGUE_DISPLAY = {"psl": "PSL", "epl": "EPL", "champions_league": "Champions League"}
+_LEAGUE_DISPLAY = {
+    "psl": "PSL", "epl": "EPL", "champions_league": "Champions League",
+    "super_rugby": "Super Rugby", "six_nations": "Six Nations", "urc": "URC",
+    "t20_world_cup": "T20 World Cup", "test_cricket": "Test Cricket", "sa20": "SA20",
+    "ufc": "UFC", "boxing": "Boxing",
+}
 _BK_DISPLAY = {
     "hollywoodbets": "Hollywoodbets", "betway": "Betway",
     "supabets": "SupaBets", "sportingbet": "Sportingbet", "gbets": "GBets",
@@ -3261,7 +3271,9 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
 
     for league in DB_LEAGUES:
         try:
-            matches = await odds_svc.get_all_matches(market_type="1x2", league=league)
+            from services.odds_service import LEAGUE_MARKET_TYPE
+            market_type = LEAGUE_MARKET_TYPE.get(league, "1x2")
+            matches = await odds_svc.get_all_matches(market_type=market_type, league=league)
 
             for match in matches:
                 # Need 2+ bookmakers for meaningful edge calculation
@@ -3325,7 +3337,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                 all_tips.append({
                     "event_id": event_id,
                     "match_id": match["match_id"],  # Original DB key for lookups
-                    "sport_key": "soccer",
+                    "sport_key": config.LEAGUE_SPORT.get(league, "soccer"),
                     "home_team": home_display,
                     "away_team": away_display,
                     "commence_time": "",  # odds.db doesn't store kickoff times
@@ -3939,6 +3951,7 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
             league_keys.add(pref.league)
 
     all_events: list[dict] = []
+    leagues_with_api_events: set[str] = set()
     for lk in league_keys:
         # Skip leagues without an Odds API key — no data to fetch
         if not config.SPORTS_MAP.get(lk):
@@ -3947,6 +3960,8 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
         sport = config.ALL_SPORTS.get(sport_key)
         sport_emoji = sport.emoji if sport else "🏅"
         events = await fetch_events_for_league(lk)
+        if events:
+            leagues_with_api_events.add(lk)
         for event in events:
             home = event.get("home_team", "")
             away = event.get("away_team", "")
@@ -3957,6 +3972,44 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
             )
             if is_relevant:
                 all_events.append({**event, "league_key": lk, "sport_emoji": sport_emoji})
+
+    # Supplement with odds.db for leagues with no Odds API events
+    for lk in league_keys:
+        if lk in leagues_with_api_events:
+            continue
+        try:
+            db_matches = await odds_svc.get_all_matches(market_type="1x2", league=lk)
+        except Exception:
+            continue
+        sport_key = config.LEAGUE_SPORT.get(lk, "")
+        sport = config.ALL_SPORTS.get(sport_key)
+        sport_emoji = sport.emoji if sport else "🏅"
+        seen_ids = {e.get("id") for e in all_events}
+        for match in db_matches:
+            mid = match["match_id"]
+            if mid in seen_ids:
+                continue
+            home_display = _display_team_name(match.get("home_team", "?"))
+            away_display = _display_team_name(match.get("away_team", "?"))
+            is_relevant = (
+                home_display.lower() in user_teams
+                or away_display.lower() in user_teams
+                or not user_teams
+            )
+            if not is_relevant:
+                continue
+            # Extract date from match_id (format: team_vs_team_YYYY-MM-DD)
+            parts = mid.rsplit("_", 1)
+            date_str = parts[-1] if len(parts) > 1 and len(parts[-1]) == 10 else ""
+            all_events.append({
+                "id": mid,
+                "home_team": home_display,
+                "away_team": away_display,
+                "commence_time": f"{date_str}T00:00:00Z" if date_str else "",
+                "league_key": lk,
+                "sport_emoji": sport_emoji,
+                "sport_key": sport_key,
+            })
 
     all_events.sort(key=lambda e: e.get("commence_time", ""))
     # Cache for pagination
@@ -5174,7 +5227,7 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             "⚠️ Tip data expired. Tap the game again for fresh analysis.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to My Matches", callback_data="yg:all:0")],
+                [InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:go")],
             ]),
         )
         return
