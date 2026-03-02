@@ -76,7 +76,7 @@ def render_tip_with_odds(
         af += " "
     else:
         hf = af = ""
-    sport_emoji = match.get("sport_emoji", "\u26bd")
+    sport_emoji = match.get("sport_emoji", "\U0001f3c5")
     lines.append(f"{sport_emoji} <b>{hf}{home} vs {af}{away}</b>")
 
     # League

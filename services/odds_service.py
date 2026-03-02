@@ -75,6 +75,69 @@ LEAGUE_MARKET_TYPE: dict[str, str] = {
 }
 
 
+def _correct_swapped_odds(
+    raw_odds: list[dict], side_a: str, side_b: str,
+) -> list[dict]:
+    """Detect and correct bookmakers with home/away odds swapped.
+
+    For 2-way markets (match_winner), if the majority of bookmakers agree
+    that side_a < side_b (side_a is the favourite), but a bookmaker has
+    side_a > side_b, that bookmaker likely has the teams swapped.
+    We swap that bookmaker's odds to match the consensus.
+    """
+    # Count how many bookmakers have side_a < side_b (a is favourite)
+    a_fav = 0
+    b_fav = 0
+    for entry in raw_odds:
+        val_a = entry.get(side_a) or 0
+        val_b = entry.get(side_b) or 0
+        if val_a <= 0 or val_b <= 0:
+            continue
+        if val_a < val_b:
+            a_fav += 1
+        elif val_b < val_a:
+            b_fav += 1
+
+    total = a_fav + b_fav
+    if total < 2:
+        return raw_odds  # Not enough data to determine consensus
+
+    # Determine consensus: which side is the favourite?
+    # Need clear majority (>60%) to trigger swap correction
+    if a_fav > b_fav and a_fav / total >= 0.6:
+        consensus_fav = side_a  # side_a should have lower odds (favourite)
+    elif b_fav > a_fav and b_fav / total >= 0.6:
+        consensus_fav = side_b
+    else:
+        return raw_odds  # No clear consensus
+
+    corrected = []
+    for entry in raw_odds:
+        val_a = entry.get(side_a) or 0
+        val_b = entry.get(side_b) or 0
+        if val_a <= 0 or val_b <= 0:
+            corrected.append(entry)
+            continue
+
+        needs_swap = (
+            (consensus_fav == side_a and val_a > val_b)
+            or (consensus_fav == side_b and val_b > val_a)
+        )
+        if needs_swap:
+            log.info(
+                "Swap correction: %s has %s=%.2f/%s=%.2f → swapped (consensus: %s is favourite)",
+                entry["bookmaker"], side_a, val_a, side_b, val_b, consensus_fav,
+            )
+            fixed = dict(entry)
+            fixed[side_a] = val_b
+            fixed[side_b] = val_a
+            corrected.append(fixed)
+        else:
+            corrected.append(entry)
+
+    return corrected
+
+
 async def get_best_odds(
     match_id: str,
     market_type: str = "1x2",
@@ -160,16 +223,33 @@ async def get_best_odds(
             bookmakers = set()
             latest_ts = None
 
+            # Collect raw odds per bookmaker first (for swap detection)
+            raw_odds: list[dict] = []
             for row in rows:
-                bookmaker = row["bookmaker"]
-                ts = row["last_seen"]
+                entry = {
+                    "bookmaker": row["bookmaker"],
+                    "last_seen": row["last_seen"],
+                }
+                for outcome_key, col_name in columns:
+                    entry[outcome_key] = row[col_name]
+                raw_odds.append(entry)
+
+            # Detect and correct home/away swaps for 2-way markets
+            # If majority of bookmakers agree on which side is the favourite,
+            # a bookmaker with inverted odds has home/away swapped
+            if market_type == "match_winner" and len(raw_odds) >= 2:
+                raw_odds = _correct_swapped_odds(raw_odds, "home", "away")
+
+            for entry in raw_odds:
+                bookmaker = entry["bookmaker"]
+                ts = entry["last_seen"]
                 bookmakers.add(bookmaker)
                 if latest_ts is None or ts > latest_ts:
                     latest_ts = ts
 
-                # Extract odds for each outcome column
-                for outcome_key, col_name in columns:
-                    odds_val = row[col_name]
+                # Extract odds for each outcome
+                for outcome_key, _col_name in columns:
+                    odds_val = entry.get(outcome_key)
                     if odds_val is None or odds_val <= 0:
                         continue
 
@@ -398,7 +478,7 @@ async def get_db_stats() -> dict:
                 stats["bookmaker_count"] = (await cur.fetchone())[0]
             async with conn.execute("SELECT MAX(scraped_at) FROM odds_snapshots") as cur:
                 stats["latest_scrape"] = (await cur.fetchone())[0] or "N/A"
-            async with conn.execute("SELECT COUNT(DISTINCT match_id) FROM odds_snapshots WHERE market_type='1x2'") as cur:
+            async with conn.execute("SELECT COUNT(DISTINCT match_id) FROM odds_snapshots WHERE market_type IN ('1x2', 'match_winner')") as cur:
                 stats["match_count"] = (await cur.fetchone())[0]
     except Exception as exc:
         log.warning("Failed to get DB stats: %s", exc)

@@ -2859,6 +2859,14 @@ _BK_DISPLAY = {
     "wsb": "World Sports Betting", "playabets": "PlayaBets",
     "supersportbet": "SuperSportBet",
 }
+# Map DB league keys to sport category keys (supplements config.LEAGUE_SPORT
+# for scraper league keys that don't match config league keys)
+_DB_LEAGUE_SPORT: dict[str, str] = {
+    "psl": "soccer", "epl": "soccer", "champions_league": "soccer",
+    "super_rugby": "rugby", "six_nations": "rugby", "urc": "rugby",
+    "t20_world_cup": "cricket", "test_cricket": "cricket", "sa20": "cricket",
+    "ufc": "combat", "boxing": "combat",
+}
 
 
 def _display_team_name(key: str) -> str:
@@ -3268,6 +3276,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
         return cache_entry["tips"]
 
     all_tips: list[dict] = []
+    seen_match_ids: set[str] = set()  # Deduplicate matches across leagues
 
     for league in DB_LEAGUES:
         try:
@@ -3276,6 +3285,11 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
             matches = await odds_svc.get_all_matches(market_type=market_type, league=league)
 
             for match in matches:
+                # Deduplicate: same match_id can appear in multiple leagues
+                if match["match_id"] in seen_match_ids:
+                    continue
+                seen_match_ids.add(match["match_id"])
+
                 # Need 2+ bookmakers for meaningful edge calculation
                 if match.get("bookmaker_count", 0) < 2:
                     continue
@@ -3337,7 +3351,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                 all_tips.append({
                     "event_id": event_id,
                     "match_id": match["match_id"],  # Original DB key for lookups
-                    "sport_key": config.LEAGUE_SPORT.get(league, "soccer"),
+                    "sport_key": _DB_LEAGUE_SPORT.get(league, config.LEAGUE_SPORT.get(league, "soccer")),
                     "home_team": home_display,
                     "away_team": away_display,
                     "commence_time": "",  # odds.db doesn't store kickoff times
@@ -3974,21 +3988,36 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
                 all_events.append({**event, "league_key": lk, "sport_emoji": sport_emoji})
 
     # Supplement with odds.db for leagues with no Odds API events
+    # Map config league keys → DB league keys (scrapers use different keys)
+    _CONFIG_TO_DB_LEAGUE: dict[str, str] = {
+        "ucl": "champions_league", "t20_wc": "t20_world_cup",
+        "csa_cricket": "sa20", "boxing_major": "boxing",
+    }
+    from services.odds_service import LEAGUE_MARKET_TYPE
+
+    # Collect DB league keys to query (mapped from config keys)
+    db_league_queries: list[tuple[str, str, str]] = []  # (config_key, db_key, sport_key)
     for lk in league_keys:
         if lk in leagues_with_api_events:
             continue
+        db_key = _CONFIG_TO_DB_LEAGUE.get(lk, lk)  # Map or use as-is
+        sk = _DB_LEAGUE_SPORT.get(db_key, config.LEAGUE_SPORT.get(lk, ""))
+        db_league_queries.append((lk, db_key, sk))
+
+    seen_ids = {e.get("id") for e in all_events}
+    for config_key, db_key, sport_key in db_league_queries:
         try:
-            db_matches = await odds_svc.get_all_matches(market_type="1x2", league=lk)
+            market_type = LEAGUE_MARKET_TYPE.get(db_key, "1x2")
+            db_matches = await odds_svc.get_all_matches(market_type=market_type, league=db_key)
         except Exception:
             continue
-        sport_key = config.LEAGUE_SPORT.get(lk, "")
         sport = config.ALL_SPORTS.get(sport_key)
         sport_emoji = sport.emoji if sport else "🏅"
-        seen_ids = {e.get("id") for e in all_events}
         for match in db_matches:
             mid = match["match_id"]
             if mid in seen_ids:
                 continue
+            seen_ids.add(mid)
             home_display = _display_team_name(match.get("home_team", "?"))
             away_display = _display_team_name(match.get("away_team", "?"))
             is_relevant = (
@@ -4006,7 +4035,7 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
                 "home_team": home_display,
                 "away_team": away_display,
                 "commence_time": f"{date_str}T00:00:00Z" if date_str else "",
-                "league_key": lk,
+                "league_key": config_key,
                 "sport_emoji": sport_emoji,
                 "sport_key": sport_key,
             })
@@ -4810,9 +4839,13 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     commence_time = target_event.get("commence_time", "")
     db_match_id = odds_svc.build_match_id(home, away, commence_time)
     db_match = None
+    # Determine correct market type for this league (cricket/combat use match_winner)
+    from services.odds_service import LEAGUE_MARKET_TYPE
+    _game_db_league = _CONFIG_TO_DB_LEAGUE.get(target_league, target_league) if target_league else ""
+    _game_market = LEAGUE_MARKET_TYPE.get(_game_db_league, "1x2")
     if db_match_id:
         try:
-            db_match = await odds_svc.get_best_odds(db_match_id, "1x2")
+            db_match = await odds_svc.get_best_odds(db_match_id, _game_market)
         except Exception:
             db_match = None
 
@@ -5252,13 +5285,17 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         tip.get("commence_time", ""),
     )
 
+    # Determine correct market type for this tip's league
+    from services.odds_service import LEAGUE_MARKET_TYPE
+    _tip_market = LEAGUE_MARKET_TYPE.get(tip.get("league_key", ""), "1x2")
+
     if pre_fetched_odds:
         # DB path: use pre-fetched odds, query DB only for freshness timestamp
         odds_by_bookmaker = pre_fetched_odds
-        odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
+        odds_result = await odds_svc.get_best_odds(match_id, _tip_market) if match_id else {}
     else:
         # Legacy API path: query scrapers DB for multi-bookmaker data
-        odds_result = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
+        odds_result = await odds_svc.get_best_odds(match_id, _tip_market) if match_id else {}
         outcome_key = tip.get("outcome", "").lower()
         _oc_map = {"home team": "home", "away team": "away", "draw": "draw"}
         mapped_key = _oc_map.get(outcome_key, outcome_key)
@@ -5385,19 +5422,29 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
     hf, af = _get_flag_prefixes(home_raw, away_raw)
 
     # Fetch full match data with all outcomes from odds.db
-    db_match = await odds_svc.get_best_odds(match_id, "1x2") if match_id else {}
+    # Determine correct market type from tip's league_key (cricket/combat use match_winner)
+    from services.odds_service import LEAGUE_MARKET_TYPE
+    _cmp_league = tip.get("league_key", "") or tip.get("league", "")
+    _cmp_market = LEAGUE_MARKET_TYPE.get(_cmp_league, "1x2")
+    db_match = await odds_svc.get_best_odds(match_id, _cmp_market) if match_id else {}
     outcomes = db_match.get("outcomes", {}) if db_match else {}
 
     if not outcomes:
         await query.answer("No multi-bookmaker data available for this match.", show_alert=True)
         return
 
-    # Build all-markets comparison: Home / Draw / Away
-    _outcome_labels = {
-        "home": ("🏠", f"{home} (Home Win)"),
-        "draw": ("🤝", "Draw"),
-        "away": ("🏟️", f"{away} (Away Win)"),
-    }
+    # Build outcome labels appropriate for market type
+    if _cmp_market == "match_winner":
+        _outcome_labels = {
+            "home": ("🏠", f"{home}"),
+            "away": ("🏟️", f"{away}"),
+        }
+    else:
+        _outcome_labels = {
+            "home": ("🏠", f"{home} (Home Win)"),
+            "draw": ("🤝", "Draw"),
+            "away": ("🏟️", f"{away} (Away Win)"),
+        }
     lines = [
         f"📊 <b>Odds Comparison</b>",
         f"<b>{hf}{home} vs {af}{away}</b>",
