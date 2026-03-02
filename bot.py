@@ -2593,21 +2593,29 @@ async def _render_your_games_all(
         away = h(away_raw)
         emoji = event.get("sport_emoji", "🏅")
         event_id = event.get("id", "")
+        league_key = event.get("league_key", "")
         hf, af = _get_flag_prefixes(home_raw, away_raw)
         home_display = f"<b>{hf}{home}</b>" if home.lower() in user_teams else f"{hf}{home}"
         away_display = f"<b>{af}{away}</b>" if away.lower() in user_teams else f"{af}{away}"
         edge_marker = " 🔥" if edge_events.get(event_id) else ""
         lines.append(f"<b>[{idx}]</b> {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
 
+        # League line
+        league_name = _get_league_display(league_key, home_raw, away_raw)
+        if league_name:
+            lines.append(f"     \U0001f3c6 {league_name}")
+
         # Broadcast info (compact line under match)
         _bc_date = event.get("commence_time", "")[:10] if event.get("commence_time") else ""
         _bc_line = _get_broadcast_line(
             home_team=home_raw, away_team=away_raw,
-            league_key=event.get("league_key", ""),
+            league_key=league_key,
             match_date=_bc_date,
         )
         if _bc_line:
             lines.append(f"     {_bc_line}")
+
+        lines.append("")  # blank line between games
 
     text = "\n".join(lines)
 
@@ -2750,11 +2758,29 @@ async def _render_your_games_sport(
         home = event.get("home_team", "?")
         away = event.get("away_team", "?")
         event_id = event.get("id", "")
+        league_key = event.get("league_key", "")
         hf, af = _get_flag_prefixes(home, away)
         home_display = f"<b>{hf}{home}</b>" if home.lower() in user_teams else f"{hf}{home}"
         away_display = f"<b>{af}{away}</b>" if away.lower() in user_teams else f"{af}{away}"
         edge_marker = " 🔥" if edge_events.get(event_id) else ""
         lines.append(f"<b>[{idx}]</b> {sport_emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
+
+        # League line
+        league_name = _get_league_display(league_key, home, away)
+        if league_name:
+            lines.append(f"     \U0001f3c6 {league_name}")
+
+        # Broadcast info
+        _bc_date = event.get("commence_time", "")[:10] if event.get("commence_time") else ""
+        _bc_line = _get_broadcast_line(
+            home_team=home, away_team=away,
+            league_key=league_key,
+            match_date=_bc_date,
+        )
+        if _bc_line:
+            lines.append(f"     {_bc_line}")
+
+        lines.append("")  # blank line between games
 
     text = "\n".join(lines)
 
@@ -2900,13 +2926,61 @@ DB_LEAGUES = [
     "ufc", "boxing",
 ]
 
-# Display name helpers for odds.db normalised keys
-_LEAGUE_DISPLAY = {
-    "psl": "PSL", "epl": "EPL", "champions_league": "Champions League",
-    "super_rugby": "Super Rugby", "six_nations": "Six Nations", "urc": "URC",
-    "t20_world_cup": "T20 World Cup", "test_cricket": "Test Cricket", "sa20": "SA20",
-    "ufc": "UFC", "boxing": "Boxing",
+# User-friendly league display names (covers both config keys and DB keys)
+LEAGUE_DISPLAY_NAMES: dict[str, str] = {
+    # Soccer
+    "psl": "Premiership (PSL)",
+    "epl": "Premier League",
+    "champions_league": "Champions League",
+    "ucl": "Champions League",
+    "la_liga": "La Liga",
+    "bundesliga": "Bundesliga",
+    "serie_a": "Serie A",
+    "ligue_1": "Ligue 1",
+    "mls": "MLS",
+    # Rugby
+    "urc": "United Rugby Championship",
+    "super_rugby": "Super Rugby Pacific",
+    "six_nations": "Six Nations",
+    "currie_cup": "Currie Cup",
+    "international_rugby": "International Rugby",
+    "rugby_champ": "Rugby Championship",
+    # Cricket
+    "t20_world_cup": "T20 World Cup",
+    "t20_wc": "T20 World Cup",
+    "sa20": "SA20",
+    "csa_cricket": "SA20",
+    "ipl": "IPL",
+    "big_bash": "Big Bash League",
+    "test_cricket": "Test Series",
+    "odis": "ODI Series",
+    "t20i": "T20I Series",
+    # Combat
+    "ufc": "UFC",
+    "boxing": "Boxing",
+    "boxing_major": "Boxing",
 }
+
+
+def _get_league_display(league_key: str, home_team: str = "", away_team: str = "") -> str:
+    """Return user-friendly league name, with bilateral series context when applicable."""
+    base = LEAGUE_DISPLAY_NAMES.get(league_key, league_key.replace("_", " ").title())
+    if league_key in ("test_cricket", "odis", "t20i", "international_rugby") and home_team and away_team:
+        return f"{base}: {home_team} vs {away_team}"
+    return base
+
+
+def _simplify_broadcast(raw: str) -> str:
+    """Simplify '📺 SS PSL (DStv 202)' → '📺 DStv 202'."""
+    if not raw:
+        return raw
+    parts = re.findall(r"DStv (\d+)", raw)
+    if not parts:
+        return raw
+    result = f"\U0001f4fa DStv {parts[0]}"
+    if len(parts) > 1:
+        result += f" | FREE DStv {parts[1]}"
+    return result
 _BK_DISPLAY = {
     "hollywoodbets": "Hollywoodbets", "betway": "Betway",
     "supabets": "SupaBets", "sportingbet": "Sportingbet", "gbets": "GBets",
@@ -2955,7 +3029,7 @@ def _get_broadcast_line(
     """Return broadcast display string from DStv schedule data.
 
     Calls the synchronous get_broadcast_info() from the scrapers module.
-    Returns pre-formatted display like '📺 SS EPL (DStv 203)' or empty string.
+    Returns simplified display like '📺 DStv 203' or empty string.
     """
     try:
         import sys
@@ -2970,7 +3044,8 @@ def _get_broadcast_line(
             league=league_key,
             match_date=match_date,
         )
-        return info.get("display", "") or ""
+        raw = info.get("display", "") or ""
+        return _simplify_broadcast(raw)
     except Exception:
         return ""
 
@@ -3024,17 +3099,15 @@ def _get_broadcast_details(
             if start_time_str:
                 result["kickoff"] = _format_kickoff_display(start_time_str)
 
-            # Build broadcast display
-            ch_short = best["channel_short"]
+            # Build broadcast display (simplified: just DStv number)
             ch_num = best["dstv_number"]
-            result["broadcast"] = f"\U0001f4fa {ch_short} (DStv {ch_num})"
+            result["broadcast"] = f"\U0001f4fa DStv {ch_num}"
 
             # Check for free-to-air option
             for row in matches:
                 if row["is_free_to_air"]:
-                    free_short = row["channel_short"]
                     free_num = row["dstv_number"]
-                    result["broadcast"] += f" | FREE on {free_short} (DStv {free_num})"
+                    result["broadcast"] += f" | FREE DStv {free_num}"
                     break
         else:
             # Fallback: league-level match via existing helper
@@ -3468,7 +3541,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                     "kelly": 0,  # Not calculated for DB tips
                     "edge_rating": edge,
                     "edge_score": edge_score,
-                    "league": _LEAGUE_DISPLAY.get(league, league.upper()),
+                    "league": _get_league_display(league, home_display, away_display),
                     "league_key": league,
                     "odds_by_bookmaker": odds_by_bk,
                     "sharp_confidence": sharp_confidence,
@@ -4221,10 +4294,28 @@ def _render_schedule_page(
         home = h(home_raw)
         away = h(away_raw)
         emoji = event.get("sport_emoji", "🏅")
+        league_key = event.get("league_key", "")
         hf, af = _get_flag_prefixes(home_raw, away_raw)
         home_display = f"<b>{hf}{home}</b>" if home.lower() in user_teams else f"{hf}{home}"
         away_display = f"<b>{af}{away}</b>" if away.lower() in user_teams else f"{af}{away}"
         lines.append(f"<b>[{idx}]</b> {emoji} {event_time}  {home_display} vs {away_display}")
+
+        # League line
+        league_name = _get_league_display(league_key, home_raw, away_raw)
+        if league_name:
+            lines.append(f"     \U0001f3c6 {league_name}")
+
+        # Broadcast info
+        _bc_date = event.get("commence_time", "")[:10] if event.get("commence_time") else ""
+        _bc_line = _get_broadcast_line(
+            home_team=home_raw, away_team=away_raw,
+            league_key=league_key,
+            match_date=_bc_date,
+        )
+        if _bc_line:
+            lines.append(f"     {_bc_line}")
+
+        lines.append("")  # blank line between games
 
     text = "\n".join(lines)
 
@@ -5259,19 +5350,22 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
                     count=1,
                 )
 
-    # Broadcast info for header
+    # League + Broadcast info for header
     _bc_date = commence_time[:10] if commence_time else ""
     broadcast_line = _get_broadcast_line(
         home_team=home_raw, away_team=away_raw,
         league_key=target_league or "",
         match_date=_bc_date,
     )
+    league_display = _get_league_display(target_league or "", home_raw, away_raw)
 
     # Build message — AI narrative first, then odds
     lines = [
         f"🎯 <b>{hf}{home} vs {af}{away}</b>",
         f"⏰ {kickoff}",
     ]
+    if league_display:
+        lines.append(f"\U0001f3c6 {league_display}")
     if broadcast_line:
         lines.append(broadcast_line)
     lines.append("")
