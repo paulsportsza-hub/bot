@@ -60,8 +60,8 @@ from services.analytics import track as analytics_track
 from services.stitch_service import stitch as stitch_service
 from services.edge_rating import EdgeRating, calculate_edge_rating, calculate_edge_score, apply_guardrails
 from services import odds_service as odds_svc
-from services.affiliate_service import get_affiliate_url, select_best_bookmaker, get_runner_up_odds
-from renderers.edge_renderer import render_edge_badge, render_tip_with_odds, render_tip_button_label, render_odds_comparison, EDGE_EMOJIS, EDGE_LABELS
+from services.affiliate_service import get_affiliate_url, select_best_bookmaker, get_runner_up_odds, get_cta_label
+from renderers.edge_renderer import render_edge_badge, render_tip_with_odds, render_odds_comparison, EDGE_EMOJIS, EDGE_LABELS
 
 # ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
 from logging.handlers import RotatingFileHandler
@@ -1745,6 +1745,16 @@ async def format_profile_summary(user_id: int) -> str:
     lines.append(f"💰 <b>Bankroll:</b> {data['bankroll_str']}")
     lines.append(f"🔔 <b>Daily picks:</b> {data['notify_str']}")
 
+    # CLV summary — only shown when data exists
+    try:
+        from scrapers.sharp.clv_tracker import format_clv_summary
+        clv_7d = format_clv_summary(days=7)
+        if clv_7d and "No CLV data" not in clv_7d:
+            lines.append("")
+            lines.append(f"📈 <b>Edge Performance:</b> {clv_7d}")
+    except Exception:
+        pass  # CLV module not available or DB issue — silently skip
+
     return "\n".join(lines)
 
 
@@ -2350,12 +2360,22 @@ async def _show_betway_guide(update: Update) -> None:
 
 
 def _parse_date(commence_time: str):
-    """Parse commence_time string to SAST datetime. Returns None on failure."""
+    """Parse commence_time string to SAST datetime. Returns None on failure.
+
+    Handles:
+    - UTC timestamps ending in 'Z' → converted to SAST
+    - Timezone-aware ISO strings → converted to SAST
+    - Naive timestamps (no TZ info) → treated as already SAST (broadcast_schedule stores SAST)
+    """
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
     try:
+        tz = ZoneInfo(config.TZ)
         ct = dt_cls.fromisoformat(commence_time.replace("Z", "+00:00"))
-        return ct.astimezone(ZoneInfo(config.TZ))
+        if ct.tzinfo is None:
+            # Naive datetime — assume it's already in SAST (e.g. from broadcast_schedule)
+            ct = ct.replace(tzinfo=tz)
+        return ct.astimezone(tz)
     except Exception:
         return None
 
@@ -2560,7 +2580,7 @@ async def _render_your_games_all(
                     lines.append("")
                 current_date_label = date_label
                 lines.append(f"<b>{date_label}</b>")
-            event_time = ct_sa.strftime("%H:%M")
+            event_time = ct_sa.strftime("%H:%M") + " SAST"
         else:
             event_time = ""
             if current_date_label != "TBC":
@@ -2726,7 +2746,7 @@ async def _render_your_games_sport(
 
     for idx, event in enumerate(page_games, page * per_page + 1):
         ct_sa = event.get("_ct_sa")
-        event_time = ct_sa.strftime("%H:%M") if ct_sa else ""
+        event_time = (ct_sa.strftime("%H:%M") + " SAST") if ct_sa else ""
         home = event.get("home_team", "?")
         away = event.get("away_team", "?")
         event_id = event.get("id", "")
@@ -3234,6 +3254,36 @@ def _build_tip_narrative(tip: dict) -> str:
     return " ".join(parts)
 
 
+# Sharp source → user-friendly display name
+_SHARP_SOURCE_DISPLAY: dict[str, str] = {
+    "pinnacle": "Pinnacle benchmark",
+    "betfair_ex_uk": "Betfair Exchange",
+    "betfair_exchange_oai": "Betfair Exchange",
+    "sbobet_oai": "SBOBET benchmark",
+    "betfair_ex_eu": "Betfair Exchange EU",
+    "matchbook": "Matchbook",
+    "pinnacle_oai": "Pinnacle benchmark",
+    "shin_weighted": "SA bookmaker consensus",
+    "shin_basic": "SA bookmaker estimate",
+    "naive_median": "SA bookmaker median",
+    "sa_consensus": "SA bookmaker consensus",
+}
+
+
+def _format_confidence_badge(confidence: str, source: str = "") -> str:
+    """Format a confidence badge for display.
+
+    Returns a short inline badge, e.g. '🎯 Sharp Edge' or '📊 SA Consensus'.
+    Returns '' for low confidence (omit from display).
+    """
+    if confidence == "high":
+        source_name = _SHARP_SOURCE_DISPLAY.get(source, "Sharp benchmark")
+        return f"🎯 <i>{source_name}</i>"
+    elif confidence == "medium":
+        return "📊 <i>SA bookmaker consensus</i>"
+    return ""  # Low confidence — omit
+
+
 def _format_freshness(minutes_ago: int) -> str:
     """Smart freshness display — only show when impressive."""
     if minutes_ago <= 5:
@@ -3388,6 +3438,21 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                                    "draw": "Draw"}
                 outcome_label = _outcome_labels.get(predicted_outcome, predicted_outcome)
 
+                # Sharp confidence from Dataminer edge_helper
+                sharp_confidence = "low"
+                sharp_source = "sa_consensus"
+                try:
+                    from scrapers.betfair.edge_helper import calculate_edge as dm_calc_edge
+                    dm_edge = dm_calc_edge(
+                        match["match_id"], predicted_outcome, best_odds,
+                        league=league, sport=_DB_LEAGUE_SPORT.get(league, "soccer"),
+                    )
+                    if dm_edge:
+                        sharp_confidence = dm_edge.get("confidence", "low")
+                        sharp_source = dm_edge.get("source", "sa_consensus")
+                except Exception:
+                    pass  # Graceful fallback — show tip without confidence
+
                 all_tips.append({
                     "event_id": event_id,
                     "match_id": match["match_id"],  # Original DB key for lookups
@@ -3406,6 +3471,8 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                     "league": _LEAGUE_DISPLAY.get(league, league.upper()),
                     "league_key": league,
                     "odds_by_bookmaker": odds_by_bk,
+                    "sharp_confidence": sharp_confidence,
+                    "sharp_source": sharp_source,
                 })
         except Exception as exc:
             log.warning("Hot tips DB scan error for %s: %s", league, exc)
@@ -3428,7 +3495,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
 
 
 def _format_kickoff_display(commence_time: str) -> str:
-    """Format commence time as 'Today 19:30' or 'Wed 26 Feb, 15:00'."""
+    """Format commence time as 'Today 19:30 SAST' or 'Wed 04 Mar, 15:00 SAST'."""
     ct_sa = _parse_date(commence_time)
     if not ct_sa:
         return "TBC"
@@ -3437,10 +3504,10 @@ def _format_kickoff_display(commence_time: str) -> str:
     now = dt_cls.now(ZoneInfo(config.TZ))
     today = now.date()
     if ct_sa.date() == today:
-        return f"Today {ct_sa.strftime('%H:%M')}"
+        return f"Today {ct_sa.strftime('%H:%M')} SAST"
     if ct_sa.date() == today + timedelta(days=1):
-        return f"Tomorrow {ct_sa.strftime('%H:%M')}"
-    return ct_sa.strftime("%a %d %b, %H:%M")
+        return f"Tomorrow {ct_sa.strftime('%H:%M')} SAST"
+    return f"{ct_sa.strftime('%a %d %b, %H:%M')} SAST"
 
 
 async def _fetch_hot_tips_all_sports() -> list[dict]:
@@ -3614,10 +3681,15 @@ def _build_hot_tips_page(tips: list[dict], page: int = 0) -> tuple[str, InlineKe
             time_line += f"\n     {broadcast}"
 
         bk_part = f" ({bk_name})" if bk_name else ""
+        confidence_badge = _format_confidence_badge(
+            tip.get("sharp_confidence", ""), tip.get("sharp_source", ""),
+        )
+        confidence_line = f"\n     {confidence_badge}" if confidence_badge else ""
         lines.append(
             f"<b>[{i}]</b> {sport_emoji} <b>{hf}{home} vs {af}{away}</b>\n"
             f"{time_line}\n"
             f"     💰 {outcome} @ <b>{tip['odds']:.2f}</b>{bk_part} · EV +{tip['ev']}% {tier_emoji}"
+            f"{confidence_line}"
         )
         lines.append("")
 
@@ -4128,7 +4200,7 @@ def _render_schedule_page(
             ct = dt_cls.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
             ct_sa = ct.astimezone(sa_tz)
             event_date = ct_sa.date()
-            event_time = ct_sa.strftime("%H:%M")
+            event_time = ct_sa.strftime("%H:%M") + " SAST"
 
             if event_date == today:
                 date_header = "Today"
@@ -4837,6 +4909,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     """Generate AI betting tips for a specific game."""
     import time as _time
     from datetime import datetime as dt_cls
+    from zoneinfo import ZoneInfo
     from scripts.sports_data import fetch_events_for_league
     from scripts.odds_client import fetch_odds_cached, fair_probabilities, find_best_sa_odds, calculate_ev
 
@@ -4955,6 +5028,22 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             fair_prob = sum(implied_probs) / len(implied_probs)
             ev_pct = round((fair_prob * best_price - 1) * 100, 1) if best_price > 0 else 0
             _outcome_labels = {"home": home, "away": away, "draw": "Draw"}
+            # Sharp confidence lookup
+            _tip_confidence = "low"
+            _tip_source = "sa_consensus"
+            try:
+                from scrapers.betfair.edge_helper import calculate_edge as dm_calc_edge
+                _dm_res = dm_calc_edge(
+                    db_match_id, outcome_key, best_price,
+                    league=_game_db_league,
+                    sport=_DB_LEAGUE_SPORT.get(_game_db_league, "soccer"),
+                )
+                if _dm_res:
+                    _tip_confidence = _dm_res.get("confidence", "low")
+                    _tip_source = _dm_res.get("source", "sa_consensus")
+            except Exception:
+                pass
+
             tips.append({
                 "outcome": _outcome_labels.get(outcome_key, outcome_key),
                 "odds": best_price,
@@ -4967,6 +5056,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
                 "away_team": away,
                 "match_id": db_match_id,
                 "odds_by_bookmaker": dict(all_bk),
+                "sport_key": _DB_LEAGUE_SPORT.get(_game_db_league, "soccer"),
+                "sharp_confidence": _tip_confidence,
+                "sharp_source": _tip_source,
             })
 
     # Fallback to Odds API if odds.db had no data
@@ -5009,7 +5101,10 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
     # Parse kickoff time (needed for AI call regardless of odds)
     try:
         ct = dt_cls.fromisoformat(target_event["commence_time"].replace("Z", "+00:00"))
-        kickoff = ct.strftime("%a %d %b, %H:%M")
+        if ct.tzinfo is None:
+            ct = ct.replace(tzinfo=ZoneInfo(config.TZ))
+        ct_sa = ct.astimezone(ZoneInfo(config.TZ))
+        kickoff = ct_sa.strftime("%a %d %b, %H:%M") + " SAST"
     except Exception:
         kickoff = "TBC"
 
@@ -5212,6 +5307,16 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
             lines.append("No SA bookmaker odds available for this match yet.")
             lines.append("Check back closer to kickoff for odds!")
 
+        # Confidence badge for the best tip
+        if tips:
+            best_tip = max(tips, key=lambda t: t.get("ev", 0))
+            _conf = best_tip.get("sharp_confidence", "")
+            _src = best_tip.get("sharp_source", "")
+            conf_badge = _format_confidence_badge(_conf, _src)
+            if conf_badge:
+                lines.append("")
+                lines.append(conf_badge)
+
     msg = "\n".join(lines)
 
     # ── Cache the full analysis (1-hour TTL) ──
@@ -5262,8 +5367,9 @@ def _build_game_buttons(
                 tier = EdgeRating.BRONZE
             tier_emoji = EDGE_EMOJIS.get(tier, "")
 
+            bk_key = (best_bk or {}).get("bookmaker_key", "")
             bk_name = (best_bk or {}).get("bookmaker_name", config.get_active_display_name())
-            aff_url = (best_bk or {}).get("affiliate_url", "") or config.get_affiliate_url(event_id)
+            aff_url = (best_bk or {}).get("affiliate_url", "") or get_affiliate_url(bk_key, match_id=match_id)
             outcome = best_ev_tip["outcome"]
             odds_val = best_ev_tip["odds"]
 
@@ -5273,11 +5379,14 @@ def _build_game_buttons(
             else:
                 buttons.append([InlineKeyboardButton(cta_text, callback_data="tip:affiliate_soon")])
         else:
-            # No positive EV — generic fallback
+            # No positive EV — generic fallback with deep link
             active_bk = config.get_active_bookmaker()
-            bk_url = config.get_affiliate_url(event_id) or active_bk.get("website_url", "")
+            bk_key = config.ACTIVE_BOOKMAKER
+            match_id = tips[0].get("match_id", event_id) if tips else event_id
+            bk_url = get_affiliate_url(bk_key, match_id=match_id) or active_bk.get("website_url", "")
+            cta_label = get_cta_label(active_bk["short_name"], match_id=match_id, bookmaker_key=bk_key)
             buttons.append([InlineKeyboardButton(
-                f"📲 View odds on {active_bk['short_name']} →", url=bk_url,
+                f"📲 {cta_label}", url=bk_url,
             )])
 
         # Button 2: Compare All Odds (only when multi-bookmaker data exists)
@@ -5422,6 +5531,16 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         narrative = _build_tip_narrative(tip)
         text += f"\n\n{narrative}"
 
+        # Sharp confidence indicator
+        sharp_conf = tip.get("sharp_confidence", "")
+        sharp_src = tip.get("sharp_source", "")
+        if sharp_conf and sharp_conf != "low":
+            source_display = _SHARP_SOURCE_DISPLAY.get(sharp_src, "")
+            if sharp_conf == "high" and source_display:
+                text += f"\n\n🎯 <b>Edge source:</b> {source_display}"
+            elif sharp_conf == "medium":
+                text += "\n\n📊 <b>Edge source:</b> SA bookmaker consensus"
+
         # Smart freshness indicator
         last_updated = odds_result.get("last_updated")
         if last_updated:
@@ -5440,22 +5559,23 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     buttons: list[list[InlineKeyboardButton]] = []
 
     if best_bk and best_bk.get("affiliate_url"):
-        # Dynamic CTA with best-odds bookmaker
-        cta_label = render_tip_button_label(best_bk)
+        # Dynamic CTA with best-odds bookmaker + deep link
+        bk_key = best_bk.get("bookmaker_key", "")
+        bk_name = best_bk.get("bookmaker_name", "")
+        cta_label = get_cta_label(bk_name, match_id=match_id, bookmaker_key=bk_key,
+                                  sport=tip.get("sport_key", ""))
         buttons.append([InlineKeyboardButton(f"📲 {cta_label}", url=best_bk["affiliate_url"])])
     else:
-        # Fallback to active bookmaker
+        # Fallback to active bookmaker with deep link
         active_bk = config.get_active_bookmaker()
-        affiliate_url = active_bk.get("affiliate_base_url", "")
-        bk_url = affiliate_url or active_bk.get("website_url", "")
+        bk_key = config.ACTIVE_BOOKMAKER
+        bk_url = get_affiliate_url(bk_key, match_id=match_id) or active_bk.get("website_url", "")
+        cta_label = get_cta_label(active_bk["display_name"], match_id=match_id, bookmaker_key=bk_key)
         if bk_url:
-            buttons.append([InlineKeyboardButton(
-                f"📲 Place on {active_bk['display_name']} →", url=bk_url,
-            )])
+            buttons.append([InlineKeyboardButton(f"📲 {cta_label}", url=bk_url)])
         else:
             buttons.append([InlineKeyboardButton(
-                f"📲 Place on {active_bk['display_name']} →",
-                callback_data="tip:affiliate_soon",
+                f"📲 {cta_label}", callback_data="tip:affiliate_soon",
             )])
 
     # Odds comparison button (only if multi-bookmaker data available)
@@ -5572,7 +5692,7 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
         best_odds = oc_data.get("best_odds", 0)
         if not best_bk_key:
             continue
-        aff_url = get_affiliate_url(best_bk_key)
+        aff_url = get_affiliate_url(best_bk_key, match_id=match_id)
         if not aff_url:
             continue
         bk_name = _display_bookmaker_name(best_bk_key)

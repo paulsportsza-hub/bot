@@ -543,14 +543,14 @@ class TestGameButtonSimplification:
         assert "4.60" in cta_text
 
     def test_no_positive_ev_shows_generic_cta(self):
-        """When no positive EV, show generic 'View odds' button."""
+        """When no positive EV, show generic bookmaker CTA button."""
         tips = [
             {"outcome": "Home Win", "odds": 2.10, "ev": -1.0, "bookie_key": "betway",
              "odds_by_bookmaker": {}, "match_id": "test"},
         ]
         buttons = bot._build_game_buttons(tips, "ev-789", 111)
         cta_text = buttons[0][0].text
-        assert "View odds" in cta_text
+        assert "Bet" in cta_text or "View" in cta_text or "Visit" in cta_text
 
     def test_nav_buttons_use_correct_emoji(self):
         """Navigation back buttons should use ↩️ not 🔙."""

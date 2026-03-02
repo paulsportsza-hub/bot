@@ -149,7 +149,7 @@ def render_odds_comparison(odds_by_bookmaker: dict[str, float], predicted_outcom
 
 
 def _format_kickoff(commence_time) -> str:
-    """Format commence_time as 'Sat 1 Mar, 15:00' in SAST."""
+    """Format commence_time as 'Sat 1 Mar, 15:00 SAST'."""
     if not commence_time:
         return ""
 
@@ -165,5 +165,8 @@ def _format_kickoff(commence_time) -> str:
     else:
         return str(commence_time)
 
+    if dt_obj.tzinfo is None:
+        # Naive datetime — treat as already SAST (e.g. broadcast_schedule)
+        dt_obj = dt_obj.replace(tzinfo=tz)
     local = dt_obj.astimezone(tz)
-    return local.strftime("%a %-d %b, %H:%M")
+    return f"{local.strftime('%a %-d %b, %H:%M')} SAST"
