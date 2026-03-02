@@ -43,6 +43,8 @@ async def get_schedule(user_id: int, max_events: int = 10) -> dict[str, Any]:
 
     all_events: list[dict] = []
     for lk in league_keys:
+        if not config.SPORTS_MAP.get(lk):
+            continue  # Skip leagues without an Odds API key
         sport_key = config.LEAGUE_SPORT.get(lk, "")
         sport = config.ALL_SPORTS.get(sport_key)
         sport_emoji = sport.emoji if sport else "\U0001f3c5"
@@ -141,6 +143,8 @@ async def get_game_tips_data(
     target_event = None
     target_league = None
     for lk in league_keys:
+        if not config.SPORTS_MAP.get(lk):
+            continue  # Skip leagues without an Odds API key
         events = await fetch_events_for_league(lk)
         for event in events:
             if event.get("id") == event_id:

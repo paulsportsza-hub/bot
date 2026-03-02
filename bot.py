@@ -28,6 +28,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -850,10 +851,26 @@ async def cmd_tip(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass  # Stale callback — "Query is too old"
 
     data = query.data or ""
     prefix, _, action = data.partition(":")
+
+    try:
+        await _dispatch_button(query, ctx, prefix, action)
+    except BadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            return  # User clicked same button twice — ignore
+        log.warning("BadRequest in on_button(%s): %s", data, exc)
+    except Exception:
+        log.exception("Unhandled error in on_button(%s)", data)
+
+
+async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
+    """Route callback button presses to the appropriate handler."""
 
     if prefix == "noop":
         return
@@ -2372,7 +2389,24 @@ def _get_sport_emoji_for_api_key(api_key: str) -> str:
 
 async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     """Show the default all-games view."""
-    text, markup = await _render_your_games_all(user_id)
+    # Show loading message while fetching schedule data
+    loading = await update.message.reply_text(
+        "⚽ Loading your matches\u2026",
+        parse_mode=ParseMode.HTML,
+    )
+    stop_spinner = asyncio.Event()
+    spinner_task = asyncio.create_task(
+        _run_spinner(loading, "Loading your matches", stop_spinner),
+    )
+    try:
+        text, markup = await _render_your_games_all(user_id)
+    finally:
+        stop_spinner.set()
+        await spinner_task
+    try:
+        await loading.delete()
+    except Exception:
+        pass
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
@@ -2866,6 +2900,12 @@ _DB_LEAGUE_SPORT: dict[str, str] = {
     "super_rugby": "rugby", "six_nations": "rugby", "urc": "rugby",
     "t20_world_cup": "cricket", "test_cricket": "cricket", "sa20": "cricket",
     "ufc": "combat", "boxing": "combat",
+}
+
+# Map config league keys → DB league keys (scrapers use different keys)
+_CONFIG_TO_DB_LEAGUE: dict[str, str] = {
+    "ucl": "champions_league", "t20_wc": "t20_world_cup",
+    "csa_cricket": "sa20", "boxing_major": "boxing",
 }
 
 
@@ -3660,6 +3700,7 @@ async def _do_hot_tips_flow(chat_id: int, bot) -> None:
 async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle free text — team input during onboarding OR AI chat."""
     user = update.effective_user
+    raw_text = update.message.text or ""
     ob = _onboarding_state.get(user.id)
 
     # Settings team edit (check before onboarding)
@@ -3774,7 +3815,7 @@ DOTS = [".", "..", "..."]
 
 
 async def _run_spinner(message, text: str, stop_event: asyncio.Event) -> None:
-    """Edit message every 0.5s with rotating emoji + dots. Runs until stop_event is set."""
+    """Edit message every 1.5s with rotating emoji + dots. Runs until stop_event is set."""
     frame = 0
     while not stop_event.is_set():
         emoji = SPORT_EMOJIS[frame % 4]
@@ -3785,7 +3826,7 @@ async def _run_spinner(message, text: str, stop_event: asyncio.Event) -> None:
             pass  # Ignore edit conflicts (message unchanged, rate limits)
         frame += 1
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=0.5)
+            await asyncio.wait_for(stop_event.wait(), timeout=1.5)
         except asyncio.TimeoutError:
             pass
 
@@ -4010,12 +4051,6 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
                 all_events.append({**event, "league_key": lk, "sport_emoji": sport_emoji})
 
     # Supplement with odds.db for leagues with no Odds API events
-    # Map config league keys → DB league keys (scrapers use different keys)
-    _CONFIG_TO_DB_LEAGUE: dict[str, str] = {
-        "ucl": "champions_league", "t20_wc": "t20_world_cup",
-        "csa_cricket": "sa20", "boxing_major": "boxing",
-    }
-
     # Collect DB league keys to query (mapped from config keys)
     db_league_queries: list[tuple[str, str, str]] = []  # (config_key, db_key, sport_key)
     for lk in league_keys:
@@ -4824,15 +4859,51 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int) -> None:
 
     target_event = None
     target_league = None
-    for lk in league_keys:
-        events = await fetch_events_for_league(lk)
-        for event in events:
-            if event.get("id") == event_id:
-                target_event = event
-                target_league = lk
-                break
-        if target_event:
+
+    # 1) Check schedule cache first (covers both Odds API and DB-sourced events)
+    cached_games = _schedule_cache.get(user_id, [])
+    for ev in cached_games:
+        if ev.get("id") == event_id:
+            target_event = ev
+            target_league = ev.get("league_key")
             break
+
+    # 2) If not in cache, search Odds API (only for leagues WITH an api_key)
+    if not target_event:
+        for lk in league_keys:
+            if not config.SPORTS_MAP.get(lk):
+                continue  # Skip keyless leagues — no Odds API data
+            events = await fetch_events_for_league(lk)
+            for event in events:
+                if event.get("id") == event_id:
+                    target_event = event
+                    target_league = lk
+                    break
+            if target_event:
+                break
+
+    # 3) If event_id looks like a DB match_id, build a pseudo-event from odds.db
+    if not target_event and "_vs_" in event_id:
+        try:
+            db_match = await odds_svc.get_best_odds(event_id, "1x2")
+            if not db_match:
+                db_match = await odds_svc.get_best_odds(event_id, "match_winner")
+            if db_match:
+                home_t = _display_team_name(db_match.get("home_team", "?"))
+                away_t = _display_team_name(db_match.get("away_team", "?"))
+                league_raw = db_match.get("league", "")
+                parts = event_id.rsplit("_", 1)
+                date_str = parts[-1] if len(parts) > 1 and len(parts[-1]) == 10 else ""
+                target_event = {
+                    "id": event_id,
+                    "home_team": home_t,
+                    "away_team": away_t,
+                    "commence_time": f"{date_str}T00:00:00Z" if date_str else "",
+                    "league_key": league_raw,
+                }
+                target_league = league_raw
+        except Exception:
+            pass
 
     if not target_event:
         await query.edit_message_text(
@@ -5907,15 +5978,45 @@ async def handle_settings(query, action: str) -> None:
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
     elif action == "risk":
         text = "<b>🎯 Change Risk Profile</b>\n\nSelect your risk tolerance:"
+        rows = []
+        for key, prof in config.RISK_PROFILES.items():
+            rows.append([InlineKeyboardButton(prof["label"], callback_data=f"settings:set_risk:{key}")])
+        rows.append([InlineKeyboardButton("↩️ Back", callback_data="settings:home")])
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_risk(),
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+    elif action.startswith("set_risk:"):
+        risk_key = action.split(":", 1)[1]
+        await db.update_user_risk(user_id, risk_key)
+        await query.edit_message_text(
+            f"✅ Risk profile updated to <b>{risk_key.title()}</b>.",
+            parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
         )
     elif action == "notify":
         text = "<b>⏰ Change Notification Time</b>\n\nWhen do you want daily picks?"
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🌅 7 AM", callback_data="settings:set_notify:7"),
+                InlineKeyboardButton("☀️ 12 PM", callback_data="settings:set_notify:12"),
+            ],
+            [
+                InlineKeyboardButton("🌆 6 PM", callback_data="settings:set_notify:18"),
+                InlineKeyboardButton("🌙 9 PM", callback_data="settings:set_notify:21"),
+            ],
+            [InlineKeyboardButton("↩️ Back", callback_data="settings:home")],
+        ])
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_notify(),
+            reply_markup=kb,
+        )
+    elif action.startswith("set_notify:"):
+        hour = int(action.split(":", 1)[1])
+        await db.update_user_notification_hour(user_id, hour)
+        labels = {7: "7 AM", 12: "12 PM", 18: "6 PM", 21: "9 PM"}
+        await query.edit_message_text(
+            f"✅ Notification time updated to <b>{labels.get(hour, str(hour))}</b>.",
+            parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
         )
     elif action == "bankroll":
         current = getattr(user, "bankroll", None)
