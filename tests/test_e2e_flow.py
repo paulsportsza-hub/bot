@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass
 
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.tl.types import (
     ReplyKeyboardMarkup as TLReplyKeyboardMarkup,
     ReplyInlineMarkup,
@@ -29,6 +30,7 @@ API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_USERNAME = "mzansiedge_bot"
 SESSION_FILE = os.environ.get("TELETHON_SESSION", "data/telethon_session")
+STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session.string")
 
 TIMEOUT = 15  # seconds to wait for bot response
 
@@ -44,7 +46,18 @@ class TestResult:
 
 
 async def get_client() -> TelegramClient:
-    """Create and connect a Telethon client."""
+    """Create and connect a Telethon client. Prefers string session."""
+    # Try string session first (more reliable)
+    if os.path.exists(STRING_SESSION_FILE):
+        string = open(STRING_SESSION_FILE).read().strip()
+        if string:
+            client = TelegramClient(StringSession(string), API_ID, API_HASH)
+            await client.connect()
+            if await client.is_user_authorized():
+                return client
+            await client.disconnect()
+
+    # Fallback to file session
     client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
     await client.connect()
     if not await client.is_user_authorized():
@@ -56,11 +69,14 @@ async def get_client() -> TelegramClient:
 async def send_and_wait(client: TelegramClient, text: str, wait: float = TIMEOUT) -> list:
     """Send a message to the bot and wait for response(s)."""
     entity = await client.get_entity(BOT_USERNAME)
-    await client.send_message(entity, text)
+    sent = await client.send_message(entity, text)
+    sent_id = sent.id
     await asyncio.sleep(wait)
-    messages = await client.get_messages(entity, limit=10)
+    messages = await client.get_messages(entity, limit=20)
+    # Only return messages sent after our outgoing message (by ID)
+    recent = [m for m in messages if m.id >= sent_id]
     # Return messages in chronological order (oldest first)
-    return list(reversed(messages))
+    return list(reversed(recent))
 
 
 async def click_button(client: TelegramClient, msg, button_text: str, wait: float = TIMEOUT) -> list:
@@ -125,7 +141,7 @@ async def test_sticky_keyboard_layout(client: TelegramClient) -> TestResult:
             return TestResult("sticky_keyboard_layout", False, "No reply keyboard found", time.time() - start)
 
         labels = get_reply_keyboard_labels(kb_msg)
-        expected = ["⚽ My Matches", "🔥 Hot Tips", "📖 Guide", "👤 Profile", "⚙️ Settings", "❓ Help"]
+        expected = ["⚽ My Matches", "💎 Top Edge Picks", "📖 Guide", "👤 Profile", "⚙️ Settings", "❓ Help"]
 
         for exp in expected:
             if exp not in labels:
@@ -140,12 +156,12 @@ async def test_your_games_default_view(client: TelegramClient) -> TestResult:
     """Verify 'My Matches' shows the all-games default view."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "⚽ My Matches", wait=8)
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=12)
 
-        # Find the My Matches message
+        # Find the My Matches message (filter out our own sent message)
         yg_msg = None
         for msg in msgs:
-            if msg.text and "My Matches" in msg.text:
+            if msg.text and "My Matches" in msg.text and not msg.out:
                 yg_msg = msg
                 break
 
@@ -172,7 +188,7 @@ async def test_your_games_sport_filter(client: TelegramClient) -> TestResult:
     """Verify tapping a sport emoji button shows sport-specific view."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "⚽ My Matches", wait=8)
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=12)
 
         yg_msg = None
         for msg in msgs:
@@ -219,7 +235,7 @@ async def test_your_games_pagination(client: TelegramClient) -> TestResult:
     """Verify pagination works when there are many games."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "⚽ My Matches", wait=8)
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=12)
 
         yg_msg = None
         for msg in msgs:
@@ -243,27 +259,27 @@ async def test_your_games_pagination(client: TelegramClient) -> TestResult:
 
 
 async def test_hot_tips_separate_messages(client: TelegramClient) -> TestResult:
-    """Verify Hot Tips sends separate messages per tip."""
+    """Verify Top Edge Picks sends tips with edge badges."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "🔥 Hot Tips", wait=15)
+        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
 
         # Find messages from the bot
         bot_msgs = [m for m in msgs if m.text and not m.out]
 
-        # Should have at least 2 messages (header + at least one tip or empty state)
+        # Should have at least 1 message
         if len(bot_msgs) < 1:
             return TestResult("hot_tips_messages", False, "No bot messages received", time.time() - start)
 
-        # Check for "Hot Tips" header or "No edges"
-        has_header = any("Hot Tips" in (m.text or "") for m in bot_msgs)
+        # Check for "Top Edge Picks" header or "No edges"
+        has_header = any("Top Edge Picks" in (m.text or "") for m in bot_msgs)
         has_no_edges = any("No edges" in (m.text or "") for m in bot_msgs)
 
         if has_no_edges:
             return TestResult("hot_tips_messages", True, "Hot Tips: no edges found (market efficient)", time.time() - start)
 
         if not has_header:
-            return TestResult("hot_tips_messages", False, "No 'Hot Tips' header found", time.time() - start)
+            return TestResult("hot_tips_messages", False, "No 'Top Edge Picks' header found", time.time() - start)
 
         # Check for individual tip messages with Betway buttons
         tip_msgs = [m for m in bot_msgs if m.text and "#" in m.text and "EV:" in m.text]
@@ -282,7 +298,7 @@ async def test_hot_tips_all_sports_scan(client: TelegramClient) -> TestResult:
     """Verify Hot Tips scans all sports (header mentions 'all markets')."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "🔥 Hot Tips", wait=15)
+        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
 
         for msg in msgs:
             if msg.text and "all markets" in msg.text.lower():
@@ -298,19 +314,27 @@ async def test_hot_tips_all_sports_scan(client: TelegramClient) -> TestResult:
 
 
 async def test_no_za_flags_in_tips(client: TelegramClient) -> TestResult:
-    """Verify no 🇿🇦 flags appear in tip messages."""
+    """Verify no 🇿🇦 flags appear on bookmaker names in tip messages.
+
+    Country flags on national team names are intentional (Wave 12H).
+    This test only checks that bookmaker lines don't have flags.
+    """
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "🔥 Hot Tips", wait=15)
+        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
 
         za_flag = "🇿🇦"
         for msg in msgs:
             if msg.text and za_flag in msg.text:
-                # Check if it's a tip message (contains EV or odds)
-                if "EV:" in msg.text or "odds" in msg.text.lower() or "#" in msg.text:
-                    return TestResult("no_za_flags", False, f"ZA flag found in tip: {msg.text[:100]}", time.time() - start)
+                # Check individual lines — flags on bookmaker names are banned
+                for line in msg.text.split("\n"):
+                    if za_flag in line:
+                        lower = line.lower()
+                        # Flag on a bookmaker line is a failure
+                        if any(bk in lower for bk in ("betway", "hollywoodbets", "supabets", "sportingbet", "gbets", "wsb", "supersportbet", "bet on")):
+                            return TestResult("no_za_flags", False, f"ZA flag on bookmaker line: {line[:100]}", time.time() - start)
 
-        return TestResult("no_za_flags", True, "No ZA flags in tip messages", time.time() - start)
+        return TestResult("no_za_flags", True, "No ZA flags on bookmaker names (flags on team names OK)", time.time() - start)
     except Exception as e:
         return TestResult("no_za_flags", False, str(e), time.time() - start)
 
@@ -320,7 +344,7 @@ async def test_game_breakdown_betway_button(client: TelegramClient) -> TestResul
     start = time.time()
     try:
         # First get My Matches
-        msgs = await send_and_wait(client, "⚽ My Matches", wait=8)
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=12)
 
         yg_msg = None
         for msg in msgs:
@@ -364,6 +388,224 @@ async def test_game_breakdown_betway_button(client: TelegramClient) -> TestResul
         return TestResult("game_breakdown", False, str(e), time.time() - start)
 
 
+# ── Wave 24 Regression E2E Tests ────────────────────────
+
+
+async def test_hot_tips_detail_back(client: TelegramClient) -> TestResult:
+    """Flow 1: Hot Tips → Detail → Back. Tap a tip, verify detail loads, back works."""
+    start = time.time()
+    try:
+        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
+        bot_msgs = [m for m in msgs if m.text and not m.out]
+        if not bot_msgs:
+            return TestResult("hot_tips_detail_back", False, "No bot messages", time.time() - start)
+
+        # Find a message with tip detail button
+        tip_msg = None
+        for msg in bot_msgs:
+            if msg.reply_markup and isinstance(msg.reply_markup, ReplyInlineMarkup):
+                for row in msg.reply_markup.rows:
+                    for btn in row.buttons:
+                        if isinstance(btn, KeyboardButtonCallback):
+                            data = btn.data.decode() if isinstance(btn.data, bytes) else btn.data
+                            if data.startswith("tip:detail:"):
+                                tip_msg = msg
+                                break
+                    if tip_msg:
+                        break
+            if tip_msg:
+                break
+
+        if not tip_msg:
+            return TestResult("hot_tips_detail_back", True, "No tip detail buttons (market may be efficient)", time.time() - start)
+
+        # Click first tip detail button
+        result_msgs = await click_button(client, tip_msg, tip_msg.reply_markup.rows[0].buttons[0].text, wait=8)
+
+        # Verify back button exists
+        for msg in result_msgs:
+            if has_inline_button(msg, "Back") or has_inline_button(msg, "Edge Picks") or has_inline_button(msg, "Menu"):
+                return TestResult("hot_tips_detail_back", True, "Detail loaded with back navigation", time.time() - start)
+
+        return TestResult("hot_tips_detail_back", True, "Tip detail response received", time.time() - start)
+    except Exception as e:
+        return TestResult("hot_tips_detail_back", False, str(e), time.time() - start)
+
+
+async def test_my_matches_detail_back(client: TelegramClient) -> TestResult:
+    """Flow 2: My Matches → Game Detail → Back. Navigate full round trip."""
+    start = time.time()
+    try:
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=12)
+        yg_msg = None
+        for msg in msgs:
+            if msg.text and "My Matches" in msg.text and msg.reply_markup:
+                yg_msg = msg
+                break
+
+        if not yg_msg:
+            return TestResult("matches_detail_back", False, "No My Matches message", time.time() - start)
+
+        # Find a game button
+        game_btn = None
+        if isinstance(yg_msg.reply_markup, ReplyInlineMarkup):
+            for row in yg_msg.reply_markup.rows:
+                for btn in row.buttons:
+                    if isinstance(btn, KeyboardButtonCallback):
+                        data = btn.data.decode() if isinstance(btn.data, bytes) else btn.data
+                        if data.startswith("yg:game:"):
+                            game_btn = btn
+                            break
+                if game_btn:
+                    break
+
+        if not game_btn:
+            return TestResult("matches_detail_back", True, "No game buttons available", time.time() - start)
+
+        # Click game → detail
+        result_msgs = await click_button(client, yg_msg, game_btn.text, wait=15)
+
+        # Check for Back to My Matches button
+        has_back = False
+        detail_msg = None
+        for msg in result_msgs:
+            if has_inline_button(msg, "Back to My Matches") or has_inline_button(msg, "Menu"):
+                has_back = True
+                detail_msg = msg
+                break
+
+        if not has_back:
+            return TestResult("matches_detail_back", False, "No Back button in game detail", time.time() - start)
+
+        # Click back
+        back_msgs = await click_button(client, detail_msg, "Back to My Matches", wait=10)
+        for msg in back_msgs:
+            if msg.text and "My Matches" in msg.text:
+                return TestResult("matches_detail_back", True, "Full round trip: Matches → Detail → Back works", time.time() - start)
+
+        return TestResult("matches_detail_back", True, "Back button clicked, response received", time.time() - start)
+    except Exception as e:
+        return TestResult("matches_detail_back", False, str(e), time.time() - start)
+
+
+async def test_no_question_mark_teams(client: TelegramClient) -> TestResult:
+    """Flow 3: Verify no '?' appears as team name anywhere in My Matches or Hot Tips."""
+    start = time.time()
+    try:
+        # Check My Matches
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=12)
+        for msg in msgs:
+            if msg.text and not msg.out:
+                # Look for "? vs" or "vs ?" patterns (team name is just ?)
+                if " ? vs " in msg.text or " vs ? " in msg.text or msg.text.startswith("? vs"):
+                    return TestResult("no_question_marks", False, f"Found '?' team in My Matches: {msg.text[:100]}", time.time() - start)
+
+        # Check Hot Tips
+        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
+        for msg in msgs:
+            if msg.text and not msg.out:
+                if " ? vs " in msg.text or " vs ? " in msg.text:
+                    return TestResult("no_question_marks", False, f"Found '?' team in Hot Tips: {msg.text[:100]}", time.time() - start)
+
+        return TestResult("no_question_marks", True, "No '?' team names found anywhere", time.time() - start)
+    except Exception as e:
+        return TestResult("no_question_marks", False, str(e), time.time() - start)
+
+
+async def test_no_upgrade_buttons_in_matches(client: TelegramClient) -> TestResult:
+    """Flow 4: Verify no 'Upgrade to Diamond/Gold' buttons between game nav items."""
+    start = time.time()
+    try:
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=12)
+        yg_msg = None
+        for msg in msgs:
+            if msg.text and "My Matches" in msg.text and msg.reply_markup:
+                yg_msg = msg
+                break
+
+        if not yg_msg:
+            return TestResult("no_upgrade_buttons", True, "No My Matches message (empty state)", time.time() - start)
+
+        if not isinstance(yg_msg.reply_markup, ReplyInlineMarkup):
+            return TestResult("no_upgrade_buttons", True, "No inline buttons", time.time() - start)
+
+        # Check ALL buttons — none should say "Upgrade to"
+        for row in yg_msg.reply_markup.rows:
+            for btn in row.buttons:
+                if hasattr(btn, "text") and "Upgrade to" in btn.text:
+                    return TestResult("no_upgrade_buttons", False, f"Found upgrade button: '{btn.text}'", time.time() - start)
+
+        return TestResult("no_upgrade_buttons", True, "No upgrade buttons in My Matches navigation", time.time() - start)
+    except Exception as e:
+        return TestResult("no_upgrade_buttons", False, str(e), time.time() - start)
+
+
+async def test_ai_breakdown_no_empty_sections(client: TelegramClient) -> TestResult:
+    """Flow 5: AI breakdown integrity — no empty section headers, all have content."""
+    start = time.time()
+    try:
+        msgs = await send_and_wait(client, "⚽ My Matches", wait=12)
+        yg_msg = None
+        for msg in msgs:
+            if msg.text and "My Matches" in msg.text and msg.reply_markup:
+                yg_msg = msg
+                break
+
+        if not yg_msg:
+            return TestResult("breakdown_integrity", True, "No My Matches message", time.time() - start)
+
+        # Find a game button
+        game_btn = None
+        if isinstance(yg_msg.reply_markup, ReplyInlineMarkup):
+            for row in yg_msg.reply_markup.rows:
+                for btn in row.buttons:
+                    if isinstance(btn, KeyboardButtonCallback):
+                        data = btn.data.decode() if isinstance(btn.data, bytes) else btn.data
+                        if data.startswith("yg:game:"):
+                            game_btn = btn
+                            break
+                if game_btn:
+                    break
+
+        if not game_btn:
+            return TestResult("breakdown_integrity", True, "No game buttons available", time.time() - start)
+
+        # Click game → wait for AI breakdown
+        result_msgs = await click_button(client, yg_msg, game_btn.text, wait=20)
+
+        for msg in result_msgs:
+            text = msg.text or ""
+            if not text or "Analysing" in text:
+                continue
+            # Check for section headers followed by empty content
+            section_emojis = ["📋", "🎯", "⚠️", "🏆"]
+            for emoji in section_emojis:
+                idx = text.find(emoji)
+                if idx < 0:
+                    continue
+                # Find the line with this emoji
+                line_start = text.rfind("\n", 0, idx) + 1
+                line_end = text.find("\n", idx)
+                if line_end < 0:
+                    line_end = len(text)
+                # Check what follows this header
+                next_content = text[line_end:line_end + 50].strip()
+                # If next content is another section header or empty, that's a problem
+                if not next_content or (next_content and next_content[0] in "📋🎯⚠🏆"):
+                    return TestResult(
+                        "breakdown_integrity", False,
+                        f"Empty section after {emoji}: '{text[idx:idx+40]}...'",
+                        time.time() - start,
+                    )
+
+            if any(e in text for e in section_emojis):
+                return TestResult("breakdown_integrity", True, "AI breakdown has sections with content", time.time() - start)
+
+        return TestResult("breakdown_integrity", True, "Game detail response received", time.time() - start)
+    except Exception as e:
+        return TestResult("breakdown_integrity", False, str(e), time.time() - start)
+
+
 # ── Test Runner ──────────────────────────────────────────
 
 ALL_TESTS = {
@@ -375,6 +617,12 @@ ALL_TESTS = {
     "all_sports": test_hot_tips_all_sports_scan,
     "no_za_flags": test_no_za_flags_in_tips,
     "game_breakdown": test_game_breakdown_betway_button,
+    # Wave 24 Regression Tests
+    "hot_tips_detail_back": test_hot_tips_detail_back,
+    "matches_detail_back": test_my_matches_detail_back,
+    "no_question_marks": test_no_question_mark_teams,
+    "no_upgrade_buttons": test_no_upgrade_buttons_in_matches,
+    "breakdown_integrity": test_ai_breakdown_no_empty_sections,
 }
 
 

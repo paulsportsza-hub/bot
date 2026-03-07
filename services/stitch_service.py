@@ -81,7 +81,7 @@ class StitchService:
     async def create_payment(
         self,
         user_id: int,
-        amount_cents: int = config.PREMIUM_PLAN_AMOUNT,
+        amount_cents: int = config.TIER_PRICES.get("gold", 9900),
         reference: str | None = None,
     ) -> dict[str, Any]:
         """Create a PaymentInitiationRequest via Stitch GraphQL.

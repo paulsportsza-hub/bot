@@ -174,22 +174,20 @@ def render_tip_detail(tip: dict, experience: str, bankroll: float | None = None)
         )
 
     elif experience == "newbie":
-        payout_20 = odds * 20
-        payout_50 = odds * 50
+        payout_300 = odds * 300
         return (
             f"\U0001f3af <b>{home} vs {away}</b>\n\n"
             f"\U0001f4cc Bet on: <b>{outcome}</b>\n"
             f"\U0001f4b0 Odds: <b>{odds:.2f}</b> at {bookie}\n\n"
-            f"\U0001f4b5 Bet R20 \u2192 get <b>R{payout_20:.0f}</b> back\n"
-            f"\U0001f4b5 Bet R50 \u2192 get <b>R{payout_50:.0f}</b> back\n\n"
-            f"\U0001f4a1 <i>Start small: R20-50 per bet while learning.</i>"
+            f"\U0001f4b0 R{payout_300:,.0f} return on R300\n\n"
+            f"\U0001f4a1 <i>Start small and build from there.</i>"
         )
 
     else:  # casual
-        payout_100 = odds * 100
+        payout_300 = odds * 300
         return (
             f"\U0001f3af <b>{home} vs {away}</b>\n\n"
             f"\U0001f4cc <b>{outcome}</b> @ {odds:.2f} ({bookie})\n"
             f"The AI found a <b>+{ev}%</b> edge \u2014 confidence {prob}%.\n\n"
-            f"\U0001f4b5 R100 bet pays <b>R{payout_100:.0f}</b>"
+            f"\U0001f4b0 R{payout_300:,.0f} return on R300"
         )

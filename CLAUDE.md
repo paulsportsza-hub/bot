@@ -1,5 +1,12 @@
 # MzansiEdge — CLAUDE.md
 
+## ⛔ CRITICAL — FIX ROOT CAUSES, NOT SYMPTOMS
+When you encounter a bug, error, or unexpected behaviour — trace it back to
+the root cause and fix it there. Do NOT patch over symptoms with workarounds,
+band-aids, or surface-level fixes. If you're not sure what the root cause is,
+investigate until you find it. Every fix must address WHY the problem happened,
+not just WHAT went wrong.
+
 ## Overview
 AI-powered sports betting Telegram bot for South Africa. Uses python-telegram-bot v20+ (PTB), Claude API for AI tips, The Odds API for live odds, and async SQLAlchemy for persistence.
 
@@ -638,6 +645,15 @@ The architecture separates concerns:
 - .co.za domain names for SA bookmaker display (no 🇿🇦 flags on bookmaker names)
 - Onboarding back buttons on every step except the first (experience)
 
+## NOTIFICATION CONTENT LAWS (LOCKED — 4 March 2026)
+
+1. **NO WIN GUARANTEES.** Never "guaranteed winner" or "sure bet." Use "edge," "value," "expected value."
+2. **SHOW LOSSES WITH SAME PROMINENCE AS WINS.** Every result notification includes season accuracy. Loss messages go out same as wins.
+3. **NO AGGRESSIVE CTAs AFTER LOSING STREAKS.** 3+ consecutive misses → suppress upgrade CTAs for 48 hours. Replace with educational/transparency messaging.
+4. **QUIET CONFIDENCE TONE.** Let numbers speak. No exclamation-heavy hype. One emoji per message section maximum.
+5. **RESPONSIBLE GAMBLING FOOTER.** "Bet responsibly. 18+ only." in monthly reports, trial messages, and re-engagement nudges. Not on every alert.
+6. **TRANSPARENCY IN LOSSES.** "The market was right on this one" — never hide or minimise a miss. This IS our competitive advantage.
+
 ## Verification
 ```bash
 # Run unit tests (E2E auto-excluded via pytest.ini)
@@ -648,6 +664,12 @@ pytest tests/test_onboarding.py -v
 
 # Start the bot
 python bot.py
+
+# Wave Completion Gate — run BEFORE any wave report
+python -m pytest tests/contracts/ tests/edge_accuracy/ tests/accuracy/ tests/snapshots/ -v --tb=short
+
+# Pre-merge gate
+bash scripts/pre_merge_check.sh
 ```
 
 ## E2E Testing (Playwright on Telegram Web)
@@ -1678,3 +1700,237 @@ A stale process running old code is invisible to unit tests and has caused multi
 
 ### Test Status (Phase 0F)
 - Tests: 496 passing, 0 failures
+
+## Wave 25 — Notification Conversion Engine + UX Polish (4 March 2026)
+
+### Anti-Fatigue Engine (25A)
+- `_can_send_notification(user_id)` — central gate for ALL proactive notifications. Checks mute status + daily push caps (bronze:3, gold:4, diamond:5).
+- `_after_send(user_id)` — increments push count after successful send. Called in all 5 existing cron jobs + 2 new jobs.
+- 6 new User columns: `last_active_at`, `nudge_sent_at`, `muted_until`, `daily_push_count`, `last_push_date`, `consecutive_misses`
+
+### /mute Command (25A)
+- `/mute` (default 24h), `/mute 48h`, `/mute week`, `/mute off` (unmute)
+- Aliases: `/unmute`, `/quiet`
+- `db.set_muted_until(user_id, until)` / `db.is_muted(user_id)`
+
+### last_active_at Tracking (25A)
+- `db.update_last_active(user_id)` called in `handle_keyboard_tap()` + `on_button()`
+- Covers all user interactions (sticky keyboard + inline buttons)
+
+### Re-engagement Nudge Job (25A)
+- `_reengagement_nudge_job()` — runs hourly, acts at 18:00 SAST
+- `db.get_inactive_users(hours=72, nudge_cooldown_days=7)` — inactive + cooldown query
+- Lighter tone after 2 consecutive unanswered nudges (14+ days)
+- Shows real settlement stats, never generic "come back!" messaging
+
+### Spoiler Tag Fix (25B)
+- `_build_hot_tips_page()` blurred section: actual bet data behind `<tg-spoiler>`, return amount visible, lock CTA visible
+- Fixed in `_format_monday_recap()` similarly
+
+### Portfolio Stat (25B)
+- `get_top_10_portfolio_return(days)` in `settlement.py` — R100 stake on each top hit
+- `_get_portfolio_line()` in bot.py — formatted portfolio line in 4 formatters
+
+### Post-Match Result Alerts (25C)
+- `user_edge_views` table: tracks which users viewed which edges (dedup on user+edge)
+- `db.log_edge_view()`, `db.get_edge_viewers()`, `db.get_edges_viewed_by_user()`
+- Edge view logging in `_do_hot_tips_flow()` + `handle_tip_detail()`
+- `get_recently_settled_since(hours)` in settlement.py
+- `_result_alerts_job()` — runs every 2h, tier-gated templates, bundling (>3), consecutive miss tracking, CTA suppression after 3+ misses
+
+### Cron Jobs (9 total)
+| Job | Interval | Description |
+|-----|----------|-------------|
+| morning_teaser | 1h | Morning tips at user's preferred hour |
+| weekend_preview | 1h | Weekend preview Fri 18:00 SAST |
+| monday_recap | 1h | Monday recap Mon 08:00 SAST |
+| monthly_report | 1h | Monthly report 1st of month |
+| trial_expiry | 1h | Trial expiry reminders |
+| live_scores | 5min | Live score polling |
+| broadcast_refresh | 12h | DStv broadcast data |
+| reengagement_nudge | 1h | Re-engagement at 18:00 SAST **(NEW)** |
+| result_alerts | 2h | Post-match result alerts **(NEW)** |
+
+### Test Status (Wave 25)
+- Tests: 649+ passing, 0 failures
+- New test files: test_wave25a.py (9), test_wave25b.py (4), test_wave25c.py (7)
+
+## Wave 26A — Mobile-First Hot Tips Redesign (5 March 2026)
+
+### Law 9 (MOBILE FIRST)
+Every screen scannable in 2-3 scrolls on 6-inch phone.
+
+### Hot Tips Cards — 3-Line Compact Format
+- 3 lines per card (was 7). No section headers, no per-card CTAs, no signal counts on list.
+- 4 access levels: full (odds+return), partial (same as full), blurred (return only), locked (lock message only)
+- `<tg-spoiler>` tags removed from blurred cards — replaced with return-only line.
+
+### Footer CTA
+- Single block for Bronze (locked count + portfolio + /subscribe), lighter for Gold (Diamond count), none for Diamond.
+- Losing streak override: `consecutive_misses >= 3` → educational footer instead of upgrade CTA.
+- `_build_hot_tips_page()` accepts `consecutive_misses: int = 0` parameter.
+
+### Buttons
+- 3-letter abbreviations via `config.abbreviate_team()` (not `_abbreviate_btn()`).
+- 🔒 icon for locked edges → `sub:plans`. Tier emoji for accessible → `edge:detail:{match_key}`.
+- 18 new `TEAM_ABBREVIATIONS` entries (SA PSL stragglers + cricket + rugby franchises).
+
+### Locked Detail View
+- `handle_tip_detail()`: blurred/locked edges show plan comparison (Diamond R199/mo, Gold R99/mo).
+- No bookmaker link, no Compare Odds for locked edges.
+- "Follow this game" button removed from accessible detail view.
+
+### Bookmaker Deep Link Gating
+- `_build_game_buttons()` accepts `user_tier` parameter.
+- ALL screens gated by `get_edge_access_level()` — blurred/locked = no URL button, shows "View Plans" instead.
+- Compare All Odds button only shown when at least one tip is accessible.
+
+### Morning Teasers — 3 Distinct Templates
+- **Bronze:** free picks list + locked count + upgrade CTA (gated by consecutive_misses)
+- **Gold:** top pick + Diamond FOMO (yesterday's Diamond hit rate) + NO View Plans button
+- **Diamond:** top pick + NO upgrade CTA + 2 buttons only
+
+### /qa Commands Added
+- `tips_bronze`, `tips_gold`, `tips_diamond` — triggers Hot Tips flow as specified tier
+
+### Test Status (Wave 26A)
+- Tests: 663 passing, 0 failures
+- New test file: test_wave26a.py (14 tests)
+
+## Wave 26A-FIX — Detail View Cleanup + List View Refinements (5 March 2026)
+
+### Game Breakdown Tier Gating
+- Game breakdown (AI narrative path) now fully tier-gated via `get_edge_access_level()`
+- `_gate_breakdown_sections()`: Setup free for all, Edge/Risk/Verdict show `🔒 Available on Gold.` for blurred/locked
+- `_gate_signal_display()`: 2-line summary for non-accessible tiers (no ❌ marks)
+- SA Bookmaker Odds: full for accessible, spoilered for blurred, hidden for locked
+- Single CTA footer: `━━━ 🔒 Unlock full analysis → /subscribe (R99/mo)` — no per-section /subscribe
+- `sanitize_ai_response()` step 1b: strips duplicate plain-text section headers
+
+### List View Refinements
+- Streak label: "N correct predictions in a row!" (win) / "Last N predictions missed — accuracy: X%" (loss)
+- Card line 1: sport emoji before teams, tier badge after: `[N] ⚽ Home vs Away 🥇`
+- Portfolio line shortened: "R100 on our top N → R{total} total return."
+- `HOT_TIPS_PAGE_SIZE = 4`, `GAMES_PER_PAGE = 4` (was 5)
+
+## Wave 27-UX — Hot Tips Layout Amendments (5 March 2026)
+
+### Header Block (UT-1, UT-2)
+- Title: `🔥 Top Edge Picks — {hit_rate}% Predicted Correctly (7D)` — 7-day hit rate from `get_edge_stats()`
+- Subline: `Scanned {N} leagues, {M} external resources and all major SA bookmakers.` — resource count from `get_db_stats()` total_rows
+- **LOCKED LAW:** Subline must say "all major SA bookmakers" — never a specific number
+- Third line: `✅ {N} Live Edges Found` — replaces streak badge (streak removed from this screen)
+- `_build_hot_tips_page()` accepts `hit_rate_7d: float = 0.0` and `resource_count: int = 0` parameters
+
+### Card Spacing (UT-3)
+- Double blank lines between cards (was single). All card-based list views must follow this standard.
+
+### Footer CTA Bold Hierarchy (UT-4, UT-5)
+- Bold key metric/label on each line, supporting detail in regular weight
+- `🔒 <b>N edges locked</b> — tier breakdown`
+- `📈 <b>R100 on our top N</b> → total return`
+- `🔑 Unlock all → /subscribe` (emoji-led CTA)
+- `🎁 <b>Founding Member:</b> pricing + countdown`
+- Extra blank line before and after `━━━` divider for breathing room
+
+### SA20 Date/Time (upstream issue)
+- SA20 professional T20 matches have no commence_time in odds_snapshots (scraper doesn't capture it)
+- DStv broadcast_schedule has "SCH SA20" (schools cricket) not professional SA20 — broadcast matcher mis-matches
+- Fallback: date extracted from match_id suffix (e.g. `team_vs_team_2026-03-05` → "Today" / "Wed 05 Mar")
+- Full fix requires Dataminer to add commence_time to odds pipeline or DStv to label SA20 matches distinctly
+
+### Universal Truths (locked standards)
+- UT-1: Every edge list header must show 7-day hit rate (when >= HIT_RATE_DISPLAY_THRESHOLD)
+- UT-2: Italicised scan breadth subline on every primary list view
+- UT-3: Double blank lines between cards on all card-based list views
+- UT-4: Footer CTA bold hierarchy — bold key metric, regular weight for supporting detail
+- UT-5: Every CTA line starts with relevant emoji
+
+## Wave 27-UX-FIX — Spacing Regression + Hit Rate Threshold (5 March 2026)
+
+### Spacing Fix
+- SPACING LAW (locked): Never more than `\n\n` anywhere in Hot Tips output
+- Between cards: one `lines.append("")` = `\n\n` via join (one visible blank line)
+- Before/after `━━━` divider: same — one blank line each side
+- Within footer CTA block: consecutive lines, no gaps
+
+### Hit Rate Threshold
+- `HIT_RATE_DISPLAY_THRESHOLD = 50` — only show hit rate in header when >= 50%
+- Below threshold: falls back to "{N} Live Edges Found" format
+- UT-1 amended: show hit rate only when >= threshold
+
+## Wave 29-P0 — AI Hallucination Zero Tolerance (5 March 2026)
+
+### ABSOLUTE RULES Prompt (LOCKED)
+- 7 numbered ABSOLUTE RULES + GOLDEN RULE in _build_analyst_prompt()
+- Form must match VERIFIED_DATA character-for-character
+- No style/tactic descriptions, no unverified names, no training-data facts
+
+### Fact-Checker Expansion (6 checks)
+- Form patterns (exact WDL match), positions, differentials, scores, style words, unverified names
+- >50% stripped → _build_programmatic_narrative() (rich prose fallback)
+- All modifications logged via log.warning()
+
+### Form Validation Pipeline
+- _format_verified_context() truncates form to games_played (ESPN returns stale 5-char forms for 3-game seasons)
+- Rugby always includes explicit W/D/L season record for cross-reference
+- _verify_form_claim() uses exact match for WDL patterns (not substring)
+
+### H2H Score Verification
+- _verify_scores() handles both "score" string and home_score/away_score dict formats
+
+## Wave 29-FIX — Two-Pass Narrative Architecture (5 March 2026)
+
+### Two-Pass System (LOCKED)
+- Pass 1: `build_verified_narrative()` builds pre-validated sentences from verified data (code only, no AI)
+- Pass 2: `_build_analyst_prompt()` — Claude receives sentences as IMMUTABLE CONTEXT, interprets meaning
+- Principle: "Code owns facts. AI owns analysis."
+
+### build_verified_narrative()
+- Input: ctx_data dict + tips list + enrichment block + sport
+- Output: dict of sentence arrays per section (setup/edge/risk/verdict)
+- Adapts to data availability: 1-4 sentences per section depending on what's available
+
+### _build_analyst_prompt() (replaces _build_game_analysis_prompt)
+- Identity: "You are an ANALYST, not a reporter"
+- IMMUTABLE CONTEXT block in user message — Claude must not alter facts
+- ABSOLUTE RULES + GOLDEN RULE retained from W29-P0
+- _build_game_analysis_prompt kept as backward-compat alias
+
+### Fallback Chain (updated)
+- Quality gate fails 3x → _build_programmatic_narrative() (rich prose)
+- fact_check >50% stripped → _build_programmatic_narrative() (rich prose)
+- _build_programmatic_narrative returns empty → _generate_minimal_setup() (last resort)
+
+## Wave 29-QA — Persistent /qa Tier Simulation (5 March 2026)
+
+### QA Tier Override System
+- `_QA_TIER_OVERRIDES: dict[int, str]` — in-memory override, cleared on restart
+- `get_effective_tier(user_id)` — wrapper that checks override first, then DB
+- All 27 `db.get_user_tier()` calls replaced with `get_effective_tier()`
+- `/qa set_bronze`, `/qa set_gold`, `/qa set_diamond` — persist until `/qa reset`
+- `/qa tips_*` now also persist tier override
+- `_qa_banner(user_id)` — "⚠️ QA Mode: Viewing as TIER" prepended to key outputs
+- Notification trigger functions use override instead of db.set_user_tier()
+- Admin-only (ADMIN_IDS gate)
+- TODO: Remove before launch
+
+## Wave 30-GATE — Game Breakdown Gate Leaks + Emoji Fix (6 March 2026)
+
+### Gate Leak Fixes
+- `_gate_breakdown_sections()` — preamble text before first section emoji now skipped for non-full access
+- `_build_game_buttons(edge_tier=)` — new parameter, single `get_edge_access_level()` check at top
+- CTA emoji uses authoritative `edge_tier` (not EV-computed) — matches Hot Tips display tier
+- No-positive-EV fallback now gated: blurred/locked → "View Plans" instead of deep link
+- Compare All Odds button hidden for blurred/locked access
+- `_analysis_cache` stores edge_tier in 4-tuple for cached path gating
+
+## Wave 30-FORM — Form String Truncation in Narrative Bullets (6 March 2026)
+
+### Form Truncation
+- `narrative_generator.py` — `generate_narrative()` accepts `home_gp`/`away_gp`, truncates `home_form_string`/`away_form_string` before bullet creation
+- `edge_v2.py` — `calculate_composite_edge()` passes through `home_gp`/`away_gp`
+- `form_analyser.py` — `format_form_for_narrative()` accepts `home_gp`/`away_gp`, truncates form_string + "(last N)" count
+- `bot.py` — `_truncate_form_bullets(bullets, match_ctx)` post-processes narrative bullets using `games_played` from ESPN standings
+- Applied at: AI prompt enrichment, user-facing display, `format_form_for_narrative()` call
+- Already truncated (W29-P0): `_format_verified_context()`, `build_verified_narrative()`

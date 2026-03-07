@@ -50,8 +50,8 @@ async def get_schedule(user_id: int, max_events: int = 10) -> dict[str, Any]:
         sport_emoji = sport.emoji if sport else "\U0001f3c5"
         events = await fetch_events_for_league(lk)
         for event in events:
-            home = event.get("home_team", "")
-            away = event.get("away_team", "")
+            home = event.get("home_team") or ""
+            away = event.get("away_team") or ""
             is_relevant = (
                 home.lower() in user_teams
                 or away.lower() in user_teams
@@ -89,8 +89,8 @@ async def get_schedule(user_id: int, max_events: int = 10) -> dict[str, Any]:
             date_header = "TBC"
             event_time = ""
 
-        home = event.get("home_team", "?")
-        away = event.get("away_team", "?")
+        home = event.get("home_team") or "TBD"
+        away = event.get("away_team") or "TBD"
         emoji = event.get("sport_emoji", "\U0001f3c5")
         event_id = event.get("id", str(idx))
 
@@ -157,8 +157,8 @@ async def get_game_tips_data(
     if not target_event:
         return {"ok": False, "reason": "not_found", "home": "?", "away": "?", "kickoff": "", "tips": [], "odds_context": ""}
 
-    home = target_event.get("home_team", "?")
-    away = target_event.get("away_team", "?")
+    home = target_event.get("home_team") or "TBD"
+    away = target_event.get("away_team") or "TBD"
 
     try:
         ct = datetime.fromisoformat(target_event["commence_time"].replace("Z", "+00:00"))

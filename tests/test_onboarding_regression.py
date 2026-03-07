@@ -9,7 +9,7 @@ DO NOT modify these tests to make failing code pass.
 If a test fails, FIX THE CODE, not the test.
 
 Protected elements:
-- 5-step flow structure (no step 6, no step X/9)
+- 6-step flow structure (Step 6 = Choose Your Plan, added Wave 19C)
 - Team-specific celebrations (not generic, not cross-sport)
 - Sport-context-aware national team celebrations (SA in cricket ≠ SA in rugby)
 - Edge explainer copy (gold standard — sells the algorithm)
@@ -50,34 +50,46 @@ from bot import (
 
 
 # ═══════════════════════════════════════════════════════════════════
-# GROUP 1: Flow Structure (5-step integrity)
+# GROUP 1: Flow Structure (6-step integrity)
 # ═══════════════════════════════════════════════════════════════════
 
 class TestFlowStructure:
-    """Onboarding must be exactly 5 steps — no more, no less.
+    """Onboarding must be exactly 6 steps — no more, no less.
 
+    Steps 1-5 = profile setup, Step 6 = Choose Your Plan (added Wave 19C).
     Prevents regression to the old 9-step flow or re-introduction of
     removed steps like league selection.
     """
 
-    def test_onboarding_is_5_steps(self):
-        """Step counter must show X/5, never X/9 or X/6."""
+    def test_onboarding_is_6_steps(self):
+        """Step counter must show X/6, never X/9 or X/7+."""
         source = Path("/home/paulsportsza/bot/bot.py").read_text()
-        # Must have Step X/5 references
-        step_5_refs = re.findall(r"Step \d/5", source)
-        assert len(step_5_refs) > 0, "No 'Step X/5' references found"
-        # Must NOT have Step X/6 or higher
-        step_6_refs = re.findall(r"Step \d/[6-9]", source)
-        assert len(step_6_refs) == 0, f"Found step counter > 5: {step_6_refs}"
+        # Must have Step X/6 references
+        step_6_refs = re.findall(r"Step \d/6", source)
+        assert len(step_6_refs) > 0, "No 'Step X/6' references found"
+        # Must NOT have Step X/7 or higher
+        step_7_refs = re.findall(r"Step \d/[7-9]", source)
+        assert len(step_7_refs) == 0, f"Found step counter > 6: {step_7_refs}"
         # Must NOT have old 9-step counter
         step_9_refs = re.findall(r"Step \d/9", source)
         assert len(step_9_refs) == 0, f"Found old 9-step counter: {step_9_refs}"
+        # Must NOT have old 5-step counter
+        step_5_refs = re.findall(r"Step \d/5", source)
+        assert len(step_5_refs) == 0, f"Found old 5-step counter: {step_5_refs}"
 
-    def test_all_5_steps_present(self):
-        """Steps 1/5 through 5/5 must all exist in the code."""
+    def test_all_6_steps_present(self):
+        """Steps 1/6 through 6/6 must all exist in the code."""
         source = Path("/home/paulsportsza/bot/bot.py").read_text()
-        for step in range(1, 6):
-            assert f"Step {step}/5" in source, f"Step {step}/5 missing from bot.py"
+        for step in range(1, 7):
+            assert f"Step {step}/6" in source, f"Step {step}/6 missing from bot.py"
+
+    def test_step_6_is_plan_picker(self):
+        """Step 6/6 must be the 'Choose Your Plan' screen with tier options."""
+        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        assert "Step 6/6: Choose Your Plan" in source, "Step 6 plan picker missing"
+        assert "ob_plan:bronze" in source, "Bronze option missing from plan step"
+        assert "ob_plan:gold" in source, "Gold option missing from plan step"
+        assert "ob_plan:diamond" in source, "Diamond option missing from plan step"
 
     def test_no_league_selection_step(self):
         """League selection was removed in Phase 0D. It must not return.

@@ -422,7 +422,7 @@ async def _do_onboarding(client, msgs):
         if result:
             record_pass("[onboarding] Bankroll set to R500")
 
-    # Step 8: Notification time → 6 PM
+    # Step 8: Notification time → 18:00
     await asyncio.sleep(2)
     msgs = await get_bot_response(client, wait=3, limit=5)
     notify_msg = find_msg_with_buttons(msgs)
@@ -431,7 +431,7 @@ async def _do_onboarding(client, msgs):
         log(f"  Notify screen: {notify_text[:100]}...")
         result = await click_callback(client, notify_msg, "ob_notify:18", wait=5)
         if not result:
-            result = await click_button(client, notify_msg, "6 PM", wait=5)
+            result = await click_button(client, notify_msg, "18:00", wait=5)
         if result:
             record_pass("[onboarding] Notification time set")
 

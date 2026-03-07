@@ -262,7 +262,7 @@ class TestNotifySelection:
 
 class TestPreferencesCombinedStep:
     async def test_risk_goes_to_bankroll(self):
-        """Phase 0D: Risk should show Step 4/5 and go to bankroll."""
+        """Phase 0D: Risk should show Step 4/6 and go to bankroll."""
         bot._onboarding_state.clear()
         ob = bot._get_ob(10050)
         ob["step"] = "risk"
@@ -273,7 +273,7 @@ class TestPreferencesCombinedStep:
         assert ob["step"] == "bankroll"
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 4/5" in text
+        assert "Step 4/6" in text
 
     async def test_no_league_step(self):
         """Phase 0D: sports_done goes to favourites, not leagues."""
@@ -303,7 +303,7 @@ class TestSummaryAndEdit:
 
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 5/5" in text
+        assert "Step 5/6" in text
         assert "Arsenal" in text
         # Edit buttons are in the keyboard markup
         kb = call_args[1].get("reply_markup")

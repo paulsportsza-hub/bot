@@ -18,18 +18,39 @@ ADMIN_IDS: list[int] = [int(i) for i in os.environ["ADMIN_IDS"].split(",")]
 ODDS_API_KEY: str = os.environ["ODDS_API_KEY"]
 ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 
-# ── Paystack (subscriptions — deprecated, replaced by Stitch) ─
-PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "")
-PAYSTACK_PUBLIC_KEY: str = os.environ.get("PAYSTACK_PUBLIC_KEY", "")
-PAYSTACK_BASE_URL: str = "https://api.paystack.co"
-PREMIUM_PLAN_AMOUNT: int = 4900  # R49.00 in cents
-PREMIUM_PLAN_NAME: str = "MzansiEdge Premium"
-
 # ── Stitch (subscriptions — active) ──────────────────────
 STITCH_CLIENT_ID: str = os.environ.get("STITCH_CLIENT_ID", "")
 STITCH_CLIENT_SECRET: str = os.environ.get("STITCH_CLIENT_SECRET", "")
 STITCH_WEBHOOK_SECRET: str = os.environ.get("STITCH_WEBHOOK_SECRET", "")
 STITCH_MOCK_MODE: bool = os.environ.get("STITCH_MOCK_MODE", "false").lower() == "true"
+
+# ── Subscription Tiers ───────────────────────────────────
+TIER_PRICES: dict[str, int] = {
+    "bronze": 0,         # Free
+    "gold": 9900,        # R99.00 in cents
+    "diamond": 19900,    # R199.00 in cents
+}
+TIER_NAMES: dict[str, str] = {
+    "bronze": "Bronze (Free)",
+    "gold": "Gold",
+    "diamond": "Diamond",
+}
+TIER_EMOJIS: dict[str, str] = {
+    "bronze": "\U0001f949",   # 🥉
+    "gold": "\U0001f947",     # 🥇
+    "diamond": "\U0001f48e",  # 💎
+}
+FOUNDING_MEMBER_PRICE: int = 69900  # R699.00/year in cents
+FOUNDING_MEMBER_DEADLINE_DAYS: int = 90  # days from launch
+LAUNCH_DATE: str = "2026-03-28"
+
+STITCH_PRODUCTS: dict[str, dict] = {
+    "gold_monthly": {"id": os.environ.get("STITCH_GOLD_MONTHLY_ID", ""), "tier": "gold", "price": 9900, "period": "monthly"},
+    "gold_annual": {"id": os.environ.get("STITCH_GOLD_ANNUAL_ID", ""), "tier": "gold", "price": 79900, "period": "annual"},
+    "diamond_monthly": {"id": os.environ.get("STITCH_DIAMOND_MONTHLY_ID", ""), "tier": "diamond", "price": 19900, "period": "monthly"},
+    "diamond_annual": {"id": os.environ.get("STITCH_DIAMOND_ANNUAL_ID", ""), "tier": "diamond", "price": 159900, "period": "annual"},
+    "founding_diamond": {"id": os.environ.get("STITCH_FOUNDING_ID", ""), "tier": "diamond", "price": 69900, "period": "annual", "founding": True},
+}
 
 # ── PostHog (analytics) ──────────────────────────────────
 POSTHOG_API_KEY: str = os.environ.get("POSTHOG_API_KEY", "")
@@ -674,6 +695,16 @@ TEAM_ABBREVIATIONS: dict[str, str] = {
     "South Africa": "RSA", "New Zealand": "NZL", "Australia": "AUS",
     "England": "ENG", "France": "FRA", "Ireland": "IRE",
     "Scotland": "SCO", "Wales": "WAL", "Italy": "ITA", "Argentina": "ARG",
+    # Additional SA PSL
+    "Richards Bay": "RBF", "TS Galaxy": "TSG", "Chippa United": "CPU",
+    "Royal AM": "RAM", "Polokwane City": "POL", "Golden Arrows": "ARR",
+    "Magesi": "MAG",
+    # Cricket international
+    "India": "IND", "Pakistan": "PAK", "West Indies": "WI",
+    "Bangladesh": "BAN", "Sri Lanka": "SLK",
+    # Rugby / Cricket franchises
+    "Western Force": "WFO", "Highlanders": "HIG", "Dolphins": "DOL",
+    "Titans": "TIT", "MI Cape Town": "MICT", "Paarl Royals": "PR",
 }
 
 

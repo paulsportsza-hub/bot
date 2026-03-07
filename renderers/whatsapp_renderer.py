@@ -117,13 +117,13 @@ def render_tip_detail(tip: dict, experience: str, bankroll: float | None = None)
     home = tip.get("home_team", "?")
     away = tip.get("away_team", "?")
 
-    payout_100 = odds * 100
+    payout_300 = odds * 300
 
     return (
         f"*{home} vs {away}*\n\n"
         f"Pick: *{outcome}* @ {odds:.2f} ({bookie})\n"
         f"Edge: +{ev}% | Confidence: {prob}%\n"
-        f"R100 bet pays R{payout_100:.0f}\n\n"
+        f"R{payout_300:,.0f} return on R300\n\n"
         "_Always gamble responsibly._"
     )
 

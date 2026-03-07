@@ -23,6 +23,21 @@ EDGE_LABELS: dict[str, str] = {
 }
 
 
+def render_result_emoji(result: str) -> str:
+    """Return emoji for edge result: hit/miss/pending."""
+    if result == "hit":
+        return "\u2705"  # ✅
+    elif result == "miss":
+        return "\u274c"  # ❌
+    return "\u23f3"  # ⏳
+
+
+def format_return(odds: float, stake: int = 300) -> str:
+    """Format return display with R300 stake base."""
+    return_amount = odds * stake
+    return f"\U0001f4b0 R{return_amount:,.0f} return on R{stake}"
+
+
 def render_edge_badge(rating: str) -> str:
     """Returns e.g. '💎 DIAMOND EDGE' or '🥇 GOLDEN EDGE'."""
     emoji = EDGE_EMOJIS.get(rating, "")
@@ -91,7 +106,7 @@ def render_tip_with_odds(
     if broadcast_line:
         lines.append(broadcast_line)
 
-    lines.append("")  # blank line
+    lines.append("")
 
     # Best odds line
     if best_bookmaker and best_bookmaker.get("odds"):

@@ -1,4 +1,4 @@
-"""Paystack subscription service for MzansiEdge Premium."""
+"""Paystack subscription service — DEPRECATED, replaced by Stitch."""
 
 from __future__ import annotations
 
@@ -14,8 +14,11 @@ import config
 
 log = logging.getLogger("mzansiedge.paystack")
 
-PAYSTACK_BASE = config.PAYSTACK_BASE_URL
-SECRET_KEY = config.PAYSTACK_SECRET_KEY
+PAYSTACK_BASE = getattr(config, "PAYSTACK_BASE_URL", "https://api.paystack.co")
+SECRET_KEY = getattr(config, "PAYSTACK_SECRET_KEY", "")
+# Legacy constants — Paystack is deprecated, kept for backwards compatibility
+_LEGACY_PLAN_AMOUNT = 4900
+_LEGACY_PLAN_NAME = "MzansiEdge Premium"
 
 
 def _headers() -> dict[str, str]:
@@ -61,8 +64,8 @@ async def ensure_plan() -> str:
     if result.get("status") and result.get("data"):
         for plan in result["data"]:
             if (
-                plan.get("name") == config.PREMIUM_PLAN_NAME
-                and plan.get("amount") == config.PREMIUM_PLAN_AMOUNT
+                plan.get("name") == _LEGACY_PLAN_NAME
+                and plan.get("amount") == _LEGACY_PLAN_AMOUNT
                 and plan.get("interval") == "monthly"
             ):
                 _plan_code = plan["plan_code"]
@@ -71,8 +74,8 @@ async def ensure_plan() -> str:
 
     # Create new plan
     result = await _post("/plan", {
-        "name": config.PREMIUM_PLAN_NAME,
-        "amount": config.PREMIUM_PLAN_AMOUNT,
+        "name": _LEGACY_PLAN_NAME,
+        "amount": _LEGACY_PLAN_AMOUNT,
         "interval": "monthly",
         "currency": "ZAR",
     })
@@ -93,7 +96,7 @@ async def initialize_transaction(
     plan_code = await ensure_plan()
     result = await _post("/transaction/initialize", {
         "email": email,
-        "amount": config.PREMIUM_PLAN_AMOUNT,
+        "amount": _LEGACY_PLAN_AMOUNT,
         "plan": plan_code,
         "currency": "ZAR",
         "metadata": {

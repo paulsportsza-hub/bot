@@ -379,8 +379,13 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     loading_msg = AsyncMock()
     mock_context.bot.send_message = AsyncMock(return_value=loading_msg)
 
+    # gate_edges passthrough — don't filter tips in unit tests
+    def _passthrough_gate(edges, user_id, user_tier, conn):
+        return edges, 999, None
+
     with patch("bot._fetch_hot_tips_from_db", new_callable=AsyncMock, return_value=mock_tips), \
-         patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=mock_tips):
+         patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=mock_tips), \
+         patch("bot.gate_edges", side_effect=_passthrough_gate):
         await bot.cmd_picks(mock_update, mock_context)
 
     # Hot Tips sends loading + single consolidated message via bot.send_message

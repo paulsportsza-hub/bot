@@ -373,10 +373,13 @@ class TestAIPrompt:
         assert "braai" in prompt
 
     def test_game_analysis_prompt_critical_rules(self):
-        """Prompt should contain rebalanced CRITICAL RULES."""
+        """Prompt should contain W29 ABSOLUTE RULES and two-pass IMMUTABLE CONTEXT."""
         prompt = bot._build_game_analysis_prompt("soccer")
-        assert "FACTUAL CLAIMS" in prompt
+        assert "ABSOLUTE RULES" in prompt
+        assert "GOLDEN RULE" in prompt
         assert "NARRATIVE & OPINION" in prompt
+        assert "IMMUTABLE CONTEXT" in prompt
+        assert "ANALYST" in prompt
 
     def test_game_analysis_prompt_conviction(self):
         """Prompt should ban conviction text."""
@@ -652,47 +655,46 @@ class TestDiamondEdgeRebrand:
 
 
 class TestThresholdRecalibration:
-    """Wave 14A: New EV thresholds — Diamond ≥15%, Gold ≥8%, Silver ≥4%, Bronze ≥1%."""
+    """W30-GATE: Button builder uses edge_tier param for emoji (not EV-computed)."""
 
-    def test_9pct_ev_is_gold_not_diamond(self):
-        """Leeds vs Man City draw at +9.3% EV should be Gold, not Diamond."""
+    def test_gold_edge_tier_shows_gold_emoji(self):
+        """Gold edge_tier should show 🥇 in CTA button."""
         tips = [
             {"outcome": "Draw", "odds": 4.60, "ev": 9.3, "bookie_key": "gbets",
              "odds_by_bookmaker": {"gbets": 4.60}, "match_id": "test"},
         ]
-        buttons = bot._build_game_buttons(tips, "ev-test", 111)
+        buttons = bot._build_game_buttons(tips, "ev-test", 111, edge_tier="gold")
         cta_text = buttons[0][0].text
-        # Should be 🥇 (Gold), not 💎 (Diamond)
         assert "🥇" in cta_text
         assert "💎" not in cta_text
 
-    def test_15pct_ev_is_diamond(self):
-        """EV ≥15% should be Diamond tier."""
+    def test_diamond_edge_tier_shows_diamond_emoji(self):
+        """Diamond edge_tier should show 💎 in CTA button."""
         tips = [
             {"outcome": "Home Win", "odds": 6.00, "ev": 16.0, "bookie_key": "hwb",
              "odds_by_bookmaker": {"hwb": 6.00}, "match_id": "test"},
         ]
-        buttons = bot._build_game_buttons(tips, "ev-test", 111)
+        buttons = bot._build_game_buttons(tips, "ev-test", 111, edge_tier="diamond")
         cta_text = buttons[0][0].text
         assert "💎" in cta_text
 
-    def test_4pct_ev_is_silver(self):
-        """EV ≥4% should be Silver tier."""
+    def test_silver_edge_tier_shows_silver_emoji(self):
+        """Silver edge_tier should show 🥈 in CTA button."""
         tips = [
             {"outcome": "Away Win", "odds": 2.10, "ev": 4.5, "bookie_key": "betway",
              "odds_by_bookmaker": {"betway": 2.10}, "match_id": "test"},
         ]
-        buttons = bot._build_game_buttons(tips, "ev-test", 111)
+        buttons = bot._build_game_buttons(tips, "ev-test", 111, edge_tier="silver")
         cta_text = buttons[0][0].text
         assert "🥈" in cta_text
 
-    def test_1pct_ev_is_bronze(self):
-        """EV ≥1% but <4% should be Bronze tier."""
+    def test_bronze_edge_tier_shows_bronze_emoji(self):
+        """Bronze edge_tier should show 🥉 in CTA button."""
         tips = [
             {"outcome": "Draw", "odds": 3.10, "ev": 2.0, "bookie_key": "supabets",
              "odds_by_bookmaker": {"supabets": 3.10}, "match_id": "test"},
         ]
-        buttons = bot._build_game_buttons(tips, "ev-test", 111)
+        buttons = bot._build_game_buttons(tips, "ev-test", 111, edge_tier="bronze")
         cta_text = buttons[0][0].text
         assert "🥉" in cta_text
 
@@ -1262,7 +1264,7 @@ class TestFactChecker:
 
     def test_keeps_verified_coach_names(self):
         """fact_check_output should allow names from VERIFIED_DATA coaches."""
-        narrative = "Under Nasreddine Nabi, Chiefs have improved.\nJose Riveiro's Pirates are relentless."
+        narrative = "Under Nasreddine Nabi, Chiefs have improved.\nJose Riveiro's Pirates are dangerous."
         result = bot.fact_check_output(narrative, self._CTX)
         assert "Nasreddine Nabi" in result
         assert "Jose Riveiro" in result
@@ -1286,6 +1288,138 @@ class TestFactChecker:
         assert bot.fact_check_output("", None) == ""
 
 
+# ── Wave 29-FIX: Two-Pass Narrative Architecture tests ──
+
+class TestBuildVerifiedNarrative:
+    """Test Pass 1: build_verified_narrative() sentence generation."""
+
+    _SPARSE_CTX = {
+        "data_available": True,
+        "home_team": {
+            "name": "Blues",
+            "league_position": 3,
+            "points": 8,
+            "games_played": 3,
+            "form": "LWL",
+            "record": {"wins": 1, "draws": 0, "losses": 2},
+        },
+        "away_team": {
+            "name": "Crusaders",
+            "league_position": 5,
+            "points": 7,
+            "games_played": 3,
+            "form": "WLL",
+            "record": {"wins": 1, "draws": 0, "losses": 2},
+        },
+    }
+
+    _RICH_CTX = {
+        "data_available": True,
+        "home_team": {
+            "name": "Arsenal",
+            "league_position": 2,
+            "points": 56,
+            "games_played": 25,
+            "form": "WWDWW",
+            "record": {"wins": 17, "draws": 5, "losses": 3},
+            "coach": "Mikel Arteta",
+            "top_scorer": {"name": "Bukayo Saka", "goals": 12},
+            "goals_per_game": 2.1,
+            "home_record": "W10 D2 L1",
+            "last_5": [
+                {"opponent": "Chelsea", "score": "3-1", "result": "W", "home_away": "home"},
+                {"opponent": "Man City", "score": "2-0", "result": "W", "home_away": "away"},
+            ],
+        },
+        "away_team": {
+            "name": "Liverpool",
+            "league_position": 1,
+            "points": 61,
+            "games_played": 25,
+            "form": "WWWWL",
+            "record": {"wins": 19, "draws": 4, "losses": 2},
+            "coach": "Arne Slot",
+            "top_scorer": {"name": "Mohamed Salah", "goals": 15},
+            "goals_per_game": 2.5,
+            "away_record": "W8 D3 L1",
+            "last_5": [
+                {"opponent": "Man United", "score": "2-1", "result": "W", "home_away": "away"},
+            ],
+        },
+        "head_to_head": [
+            {"home": "Arsenal", "away": "Liverpool", "score": "2-2", "date": "2025-10-27"},
+        ],
+        "venue": "Emirates Stadium",
+    }
+
+    _TIPS = [
+        {"outcome": "Arsenal", "odds": 2.40, "bookie": "Hollywoodbets", "prob": 45, "ev": 8.0},
+        {"outcome": "Draw", "odds": 3.20, "bookie": "Betway", "prob": 30, "ev": -4.0},
+    ]
+
+    def test_sparse_data_produces_sentences(self):
+        """Sparse early-season data should produce at least 1 sentence per section."""
+        result = bot.build_verified_narrative(self._SPARSE_CTX, self._TIPS, sport="rugby")
+        assert len(result["setup"]) >= 2  # at least position for both teams
+        assert len(result["edge"]) >= 1
+        assert len(result["risk"]) >= 1
+        assert len(result["verdict"]) >= 1
+        # Verify actual data is in sentences
+        setup_text = " ".join(result["setup"])
+        assert "Blues" in setup_text
+        assert "Crusaders" in setup_text
+        assert "LWL" in setup_text or "3rd" in setup_text
+
+    def test_rich_data_produces_more_sentences(self):
+        """Rich EPL data should produce 3+ Setup sentences with names."""
+        result = bot.build_verified_narrative(self._RICH_CTX, self._TIPS)
+        assert len(result["setup"]) >= 4  # positions + form + top scorers + h2h
+        setup_text = " ".join(result["setup"])
+        assert "Arsenal" in setup_text
+        assert "Liverpool" in setup_text
+        assert "Arteta" in setup_text or "Saka" in setup_text
+        assert "Emirates" in setup_text
+
+    def test_no_data_produces_fallback(self):
+        """No context data should still produce odds-only sentences."""
+        result = bot.build_verified_narrative({"data_available": False}, self._TIPS)
+        assert len(result["setup"]) >= 1
+        assert "Limited" in result["setup"][0]
+        assert len(result["edge"]) >= 1
+        assert "Arsenal" in " ".join(result["edge"])  # from tips
+
+    def test_no_tips_produces_no_odds_edge(self):
+        """No tips should produce a 'no odds' edge sentence."""
+        result = bot.build_verified_narrative(self._RICH_CTX, tips=None)
+        edge_text = " ".join(result["edge"])
+        assert "No odds" in edge_text or "no odds" in edge_text
+
+    def test_two_pass_user_message_format(self):
+        """Verify IMMUTABLE CONTEXT block appears in the expected format."""
+        result = bot.build_verified_narrative(self._RICH_CTX, self._TIPS)
+        # Simulate what _generate_game_tips does
+        parts = ["Match: Arsenal vs Liverpool", "Kickoff: Sat 08 Mar, 17:30 SAST"]
+        section_labels = [
+            ("setup", "SETUP FACTS"), ("edge", "EDGE FACTS"),
+            ("risk", "RISK FACTS"), ("verdict", "VERDICT FACTS"),
+        ]
+        has_any = any(result.get(s) for s, _ in section_labels)
+        assert has_any
+        parts.append("\n══ IMMUTABLE CONTEXT (verified — do not alter facts) ══")
+        for section, label in section_labels:
+            sentences = result.get(section, [])
+            if sentences:
+                parts.append(f"\n{label}:")
+                for s in sentences:
+                    parts.append(f"• {s}")
+        parts.append("\n══ END IMMUTABLE CONTEXT ══")
+        msg = "\n".join(parts)
+        assert "IMMUTABLE CONTEXT" in msg
+        assert "SETUP FACTS" in msg
+        assert "EDGE FACTS" in msg
+        assert "• Arsenal sit 2nd" in msg
+
+
 # ── Wave 17B: Dynamic prompt tests ──
 
 class TestDynamicPrompt:
@@ -1298,9 +1432,9 @@ class TestDynamicPrompt:
         assert "cricket match" in prompt
 
     def test_prompt_contains_critical_rules(self):
-        """Prompt should contain the rebalanced CRITICAL RULES."""
+        """Prompt should contain the W29 nuclear ABSOLUTE RULES."""
         prompt = bot._build_game_analysis_prompt("soccer")
-        assert "FACTUAL CLAIMS" in prompt
+        assert "ABSOLUTE RULES" in prompt
         assert "NARRATIVE & OPINION" in prompt
         assert "SPORT VALIDATION" in prompt
 
@@ -1315,14 +1449,14 @@ class TestDynamicPrompt:
         assert "try, scrum, lineout" in prompt
 
     def test_prompt_narrative_encouraged(self):
-        """Prompt should explicitly encourage narrative and personality."""
+        """Prompt should explicitly encourage narrative and opinion."""
         prompt = bot._build_game_analysis_prompt("soccer")
         assert "ENCOURAGED" in prompt
         assert "braai" in prompt
-        assert "personality" in prompt
+        assert "opinions" in prompt or "predictions" in prompt
 
     def test_prompt_coaches_allowed(self):
-        """Prompt should encourage referencing coaches by name from VERIFIED_DATA."""
+        """Prompt should encourage referencing coaches by name from IMMUTABLE CONTEXT."""
         prompt = bot._build_game_analysis_prompt("soccer")
         assert "coaches and players BY NAME" in prompt
 
@@ -1492,3 +1626,427 @@ class TestSetupFallback:
         output = "📋 <b>The Setup</b>\n\n🎯 <b>The Edge</b>\nOdds analysis."
         result = bot._ensure_setup_not_empty(output, {})
         assert result == output
+
+
+# ── Wave 29-QA: Persistent /qa Tier Simulation ──────────────────────
+
+
+class TestGetEffectiveTier:
+    """Tests for get_effective_tier() — QA tier override wrapper."""
+
+    @pytest.mark.asyncio
+    async def test_returns_override_when_set(self):
+        """Should return override tier when set in _QA_TIER_OVERRIDES."""
+        bot._QA_TIER_OVERRIDES[99999] = "diamond"
+        try:
+            result = await bot.get_effective_tier(99999)
+            assert result == "diamond"
+        finally:
+            bot._QA_TIER_OVERRIDES.pop(99999, None)
+
+    @pytest.mark.asyncio
+    async def test_falls_through_to_db_when_no_override(self):
+        """Should call db.get_user_tier when no override exists."""
+        bot._QA_TIER_OVERRIDES.pop(88888, None)
+        with patch("bot.db.get_user_tier", new_callable=AsyncMock, return_value="gold") as mock_db:
+            result = await bot.get_effective_tier(88888)
+            assert result == "gold"
+            mock_db.assert_awaited_once_with(88888)
+
+    @pytest.mark.asyncio
+    async def test_override_takes_priority_over_db(self):
+        """Override should take priority — db.get_user_tier should NOT be called."""
+        bot._QA_TIER_OVERRIDES[77777] = "gold"
+        try:
+            with patch("bot.db.get_user_tier", new_callable=AsyncMock) as mock_db:
+                result = await bot.get_effective_tier(77777)
+                assert result == "gold"
+                mock_db.assert_not_awaited()
+        finally:
+            bot._QA_TIER_OVERRIDES.pop(77777, None)
+
+
+class TestQaBanner:
+    """Tests for _qa_banner() — QA mode visual indicator."""
+
+    def test_returns_banner_when_override_active(self):
+        """Should return formatted banner when tier override is set."""
+        bot._QA_TIER_OVERRIDES[55555] = "diamond"
+        try:
+            result = bot._qa_banner(55555)
+            assert "QA Mode" in result
+            assert "DIAMOND" in result
+        finally:
+            bot._QA_TIER_OVERRIDES.pop(55555, None)
+
+    def test_returns_empty_when_no_override(self):
+        """Should return empty string when no override is set."""
+        bot._QA_TIER_OVERRIDES.pop(44444, None)
+        result = bot._qa_banner(44444)
+        assert result == ""
+
+    def test_banner_ends_with_double_newline(self):
+        """Banner should end with \\n\\n for spacing before content."""
+        bot._QA_TIER_OVERRIDES[33333] = "bronze"
+        try:
+            result = bot._qa_banner(33333)
+            assert result.endswith("\n\n")
+        finally:
+            bot._QA_TIER_OVERRIDES.pop(33333, None)
+
+
+class TestQaTierOverridePersistence:
+    """Tests for override persistence across calls."""
+
+    @pytest.mark.asyncio
+    async def test_override_persists_across_multiple_calls(self):
+        """Override should persist until explicitly cleared."""
+        bot._QA_TIER_OVERRIDES[66666] = "gold"
+        try:
+            r1 = await bot.get_effective_tier(66666)
+            r2 = await bot.get_effective_tier(66666)
+            assert r1 == "gold"
+            assert r2 == "gold"
+        finally:
+            bot._QA_TIER_OVERRIDES.pop(66666, None)
+
+    @pytest.mark.asyncio
+    async def test_override_cleared_by_pop(self):
+        """Popping the override should restore DB behavior."""
+        bot._QA_TIER_OVERRIDES[22222] = "diamond"
+        bot._QA_TIER_OVERRIDES.pop(22222, None)
+        with patch("bot.db.get_user_tier", new_callable=AsyncMock, return_value="bronze") as mock_db:
+            result = await bot.get_effective_tier(22222)
+            assert result == "bronze"
+            mock_db.assert_awaited_once()
+
+    def test_overrides_dict_is_empty_at_import(self):
+        """_QA_TIER_OVERRIDES should be empty (module-level dict clears on restart)."""
+        # Clean up any test state first
+        test_keys = [k for k in bot._QA_TIER_OVERRIDES if k >= 10000]
+        for k in test_keys:
+            bot._QA_TIER_OVERRIDES.pop(k, None)
+        # After cleanup, no test keys should remain
+        assert all(k < 10000 for k in bot._QA_TIER_OVERRIDES)
+
+
+# ── W30-GATE: Gate Leak Fixes ──
+
+
+class TestGateBreakdownPreambleLeak:
+    """W30-GATE: Preamble text before first section emoji must not leak."""
+
+    def test_preamble_stripped_for_non_full(self):
+        """Text before first 📋 must be stripped for locked users."""
+        narrative = (
+            "Here is my analysis of the match.\n\n"
+            "📋 <b>The Setup</b>\nSetup content.\n\n"
+            "🎯 <b>The Edge</b>\nEdge content.\n\n"
+            "⚠️ <b>The Risk</b>\nRisk content.\n\n"
+            "🏆 <b>Verdict</b>\nVerdict content."
+        )
+        result = bot._gate_breakdown_sections(narrative, "bronze", "gold")
+        assert "Here is my analysis" not in result
+        assert "Setup content" in result
+        assert "🔒" in result
+
+    def test_preamble_preserved_for_full_access(self):
+        """Full access returns narrative as-is (no gating)."""
+        narrative = (
+            "Preamble text.\n\n"
+            "📋 <b>The Setup</b>\nSetup content."
+        )
+        result = bot._gate_breakdown_sections(narrative, "diamond", "gold")
+        assert "Preamble text" in result
+
+    def test_no_preamble_works(self):
+        """Narrative starting directly with 📋 should work fine."""
+        narrative = (
+            "📋 <b>The Setup</b>\nSetup content.\n\n"
+            "🎯 <b>The Edge</b>\nEdge content."
+        )
+        result = bot._gate_breakdown_sections(narrative, "bronze", "gold")
+        assert "Setup content" in result
+        assert "🔒" in result
+
+
+class TestBuildGameButtonsGating:
+    """W30-GATE: Button builder must respect edge_tier for access checks."""
+
+    def test_bronze_user_gold_edge_gets_view_plans(self):
+        """Bronze user viewing Gold edge should see View Plans, not bookmaker link."""
+        tips = [
+            {"outcome": "Home Win", "odds": 2.50, "ev": 10.0, "bookie_key": "betway",
+             "odds_by_bookmaker": {"betway": 2.50}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(
+            tips, "gate-test", 111, user_tier="bronze", edge_tier="gold",
+        )
+        cta_text = buttons[0][0].text
+        assert "View Plans" in cta_text
+
+    def test_bronze_user_diamond_edge_gets_view_plans(self):
+        """Bronze user viewing Diamond edge should see View Plans."""
+        tips = [
+            {"outcome": "Draw", "odds": 5.00, "ev": 20.0, "bookie_key": "hwb",
+             "odds_by_bookmaker": {"hwb": 5.00}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(
+            tips, "gate-test", 111, user_tier="bronze", edge_tier="diamond",
+        )
+        cta_text = buttons[0][0].text
+        assert "View Plans" in cta_text
+
+    def test_gold_user_gold_edge_gets_cta(self):
+        """Gold user viewing Gold edge should see bookmaker CTA."""
+        tips = [
+            {"outcome": "Away Win", "odds": 3.00, "ev": 8.5, "bookie_key": "gbets",
+             "odds_by_bookmaker": {"gbets": 3.00}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(
+            tips, "gate-test", 111, user_tier="gold", edge_tier="gold",
+        )
+        cta_text = buttons[0][0].text
+        assert "Back" in cta_text
+        assert "View Plans" not in cta_text
+
+    def test_no_positive_ev_bronze_locked_gets_view_plans(self):
+        """No positive EV + locked access should show View Plans, not deep link."""
+        tips = [
+            {"outcome": "Home Win", "odds": 1.50, "ev": -2.0, "bookie_key": "betway",
+             "odds_by_bookmaker": {"betway": 1.50}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(
+            tips, "gate-test", 111, user_tier="bronze", edge_tier="diamond",
+        )
+        cta_text = buttons[0][0].text
+        assert "View Plans" in cta_text
+
+    def test_compare_odds_hidden_for_locked(self):
+        """Compare All Odds button should not appear for locked access."""
+        tips = [
+            {"outcome": "Home Win", "odds": 2.50, "ev": 10.0, "bookie_key": "betway",
+             "odds_by_bookmaker": {"betway": 2.50, "hwb": 2.40}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(
+            tips, "gate-test", 111, user_tier="bronze", edge_tier="diamond",
+        )
+        all_text = " ".join(b.text for row in buttons for b in row)
+        assert "Compare All Odds" not in all_text
+
+    def test_compare_odds_visible_for_full(self):
+        """Compare All Odds button should appear for full access."""
+        tips = [
+            {"outcome": "Home Win", "odds": 2.50, "ev": 10.0, "bookie_key": "betway",
+             "odds_by_bookmaker": {"betway": 2.50, "hwb": 2.40}, "match_id": "test"},
+        ]
+        buttons = bot._build_game_buttons(
+            tips, "gate-test", 111, user_tier="diamond", edge_tier="gold",
+        )
+        all_text = " ".join(b.text for row in buttons for b in row)
+        assert "Compare All Odds" in all_text
+
+
+# ── W30-FORM: Form string truncation tests ────────────────────────────────
+
+
+class TestTruncateFormBullets:
+    """W30-FORM: _truncate_form_bullets() truncates form strings to games_played."""
+
+    def test_truncates_home_form(self):
+        """Home form string truncated to games_played."""
+        bullets = ["\U0001f4ca Form supports pick (H: LWLWWWWWDL, A: WWD)"]
+        ctx = {"home_team": {"games_played": 3}, "away_team": {}}
+        result = bot._truncate_form_bullets(bullets, ctx)
+        assert "H: LWL" in result[0]
+        assert "LWLWWWWWDL" not in result[0]
+
+    def test_truncates_away_form(self):
+        """Away form string truncated to games_played."""
+        bullets = ["\U0001f4ca Form supports pick (H: WDL, A: LWLWWWWWDL)"]
+        ctx = {"home_team": {}, "away_team": {"games_played": 4}}
+        result = bot._truncate_form_bullets(bullets, ctx)
+        assert "A: LWLW" in result[0]
+        assert "LWLWWWWWDL" not in result[0]
+
+    def test_truncates_both(self):
+        """Both home and away truncated when both have games_played."""
+        bullets = ["\U0001f4ca Form supports pick (H: WWWWWWWWWW, A: LLLLLLLLLL)"]
+        ctx = {"home_team": {"games_played": 5}, "away_team": {"games_played": 3}}
+        result = bot._truncate_form_bullets(bullets, ctx)
+        assert "H: WWWWW" in result[0]
+        assert "A: LLL" in result[0]
+
+    def test_no_truncation_when_short(self):
+        """Form string shorter than games_played is not truncated."""
+        bullets = ["\U0001f4ca Form supports pick (H: WDL)"]
+        ctx = {"home_team": {"games_played": 5}, "away_team": {}}
+        result = bot._truncate_form_bullets(bullets, ctx)
+        assert "H: WDL" in result[0]
+
+    def test_no_truncation_without_context(self):
+        """No truncation when match context is None."""
+        bullets = ["\U0001f4ca Form supports pick (H: LWLWWWWWDL)"]
+        result = bot._truncate_form_bullets(bullets, None)
+        assert result == bullets
+
+    def test_no_truncation_without_games_played(self):
+        """No truncation when games_played is missing from context."""
+        bullets = ["\U0001f4ca Form supports pick (H: LWLWWWWWDL)"]
+        ctx = {"home_team": {"name": "Chiefs"}, "away_team": {"name": "Pirates"}}
+        result = bot._truncate_form_bullets(bullets, ctx)
+        assert "LWLWWWWWDL" in result[0]
+
+    def test_matches_played_fallback(self):
+        """Falls back to matches_played when games_played is missing."""
+        bullets = ["\U0001f4ca Form supports pick (H: LWLWWWWWDL)"]
+        ctx = {"home_team": {"matches_played": 4}, "away_team": {}}
+        result = bot._truncate_form_bullets(bullets, ctx)
+        assert "H: LWLW" in result[0]
+
+    def test_non_form_bullets_untouched(self):
+        """Non-form bullets are not modified."""
+        bullets = [
+            "\U0001f4b0 +5.2% edge at Hollywoodbets (2.50)",
+            "\U0001f4ca Form supports pick (H: WWWWWWWWWW)",
+            "\u2705 3/5 bookmakers show value",
+        ]
+        ctx = {"home_team": {"games_played": 3}, "away_team": {}}
+        result = bot._truncate_form_bullets(bullets, ctx)
+        assert result[0] == bullets[0]  # unchanged
+        assert "H: WWW" in result[1]    # truncated
+        assert result[2] == bullets[2]  # unchanged
+
+
+# ── Morning System Report tests ──────────────────────────────────────────
+
+
+class TestMorningReport:
+    """W34-MORNING: Daily morning system report for admin."""
+
+    @pytest.mark.asyncio
+    async def test_morning_report_has_all_sections(self):
+        with patch("bot.asyncio.to_thread") as mock_thread:
+            mock_thread.side_effect = [
+                # get_top_edges
+                [
+                    {"tier": "gold", "outcome": "home"},
+                    {"tier": "silver", "outcome": "draw"},
+                    {"tier": "bronze", "outcome": "away"},
+                ],
+                # check_sharp_data_freshness
+                {"healthy": True, "age_hours": 2.5, "row_count": 34000,
+                 "bookmakers": ["pinnacle", "betfair_ex_uk", "matchbook"]},
+                # get_edge_stats
+                {"total": 8, "hits": 5, "hit_rate": 62.5},
+                # get_top_10_portfolio_return
+                {"total_return": 1250.0, "count": 5},
+                # check_health
+                (True, []),
+            ]
+            text = await bot._build_morning_report()
+            assert "Morning Report" in text
+            assert "Edges:" in text
+            assert "3 live" in text
+            assert "Draw ratio:" in text
+            assert "Sharp data:" in text
+            assert "2.5h old" in text
+            assert "Yesterday:" in text
+            assert "62%" in text
+            assert "Portfolio:" in text
+            assert "R1,250" in text
+            assert "All systems healthy" in text
+            assert "Fact-checker:" in text
+            assert "Bot uptime:" in text
+
+    @pytest.mark.asyncio
+    async def test_morning_report_zero_settled(self):
+        with patch("bot.asyncio.to_thread") as mock_thread:
+            mock_thread.side_effect = [
+                [],  # no live edges
+                {"healthy": True, "age_hours": 1.0, "row_count": 100,
+                 "bookmakers": ["pinnacle"]},
+                {"total": 0, "hits": 0, "hit_rate": 0.0},
+                {"total_return": 0, "count": 0},
+                (True, []),
+            ]
+            text = await bot._build_morning_report()
+            assert "0 live" in text
+            assert "0 edges settled" in text
+            assert "0% hit rate" in text
+
+    @pytest.mark.asyncio
+    async def test_morning_report_health_alerts(self):
+        with patch("bot.asyncio.to_thread") as mock_thread:
+            mock_thread.side_effect = [
+                [{"tier": "bronze", "outcome": "home"}],
+                {"healthy": False, "age_hours": 15.0, "row_count": 100,
+                 "bookmakers": ["pinnacle"],
+                 "message": "Sharp data is 15.0h old"},
+                {"total": 3, "hits": 1, "hit_rate": 33.3},
+                {"total_return": 200, "count": 1},
+                (False, ["Hollywoodbets stale (3.5h)", "Supabets stale (4h)"]),
+            ]
+            text = await bot._build_morning_report()
+            assert "All systems healthy" not in text
+            assert "Sharp data" in text
+            assert "Hollywoodbets" in text
+
+    @pytest.mark.asyncio
+    async def test_morning_report_no_live_edges(self):
+        with patch("bot.asyncio.to_thread") as mock_thread:
+            mock_thread.side_effect = [
+                [],  # no edges
+                {"healthy": True, "age_hours": 0.5, "row_count": 34000,
+                 "bookmakers": ["pinnacle", "betfair_ex_uk"]},
+                {"total": 5, "hits": 3, "hit_rate": 60.0},
+                {"total_return": 800, "count": 3},
+                (True, []),
+            ]
+            text = await bot._build_morning_report()
+            assert "0 live" in text
+            assert "Draw ratio:</b> 0%" in text
+
+
+class TestW44Guards:
+    """W44-GUARDS: Pre-send validation constants and logic."""
+
+    def test_fallback_phrases_defined(self):
+        assert hasattr(bot, "_FALLBACK_PHRASES")
+        assert len(bot._FALLBACK_PHRASES) >= 3
+        assert "limited verified data" in bot._FALLBACK_PHRASES
+
+    def test_data_rich_leagues_defined(self):
+        assert hasattr(bot, "_DATA_RICH_LEAGUES")
+        assert "epl" in bot._DATA_RICH_LEAGUES
+        assert "psl" in bot._DATA_RICH_LEAGUES
+        assert "champions_league" in bot._DATA_RICH_LEAGUES
+
+    def test_guard_blocks_fallback_on_data_rich_league(self):
+        """Fallback phrases on EPL should be detected."""
+        msg = "Arsenal vs Chelsea\nLimited verified data available.\nBack Arsenal."
+        msg_lower = msg.lower()
+        blocked = next(
+            (p for p in bot._FALLBACK_PHRASES if p in msg_lower), None
+        )
+        assert blocked == "limited verified data"
+
+    def test_guard_allows_clean_breakdown(self):
+        """Clean breakdown with no fallback phrases should pass."""
+        msg = "Arsenal sit 2nd on 50 points.\nForm: WWDWW\nBack Arsenal win."
+        msg_lower = msg.lower()
+        blocked = next(
+            (p for p in bot._FALLBACK_PHRASES if p in msg_lower), None
+        )
+        assert blocked is None
+
+    def test_guard_allows_fallback_on_non_data_rich_league(self):
+        """Fallback phrases on non-data-rich leagues should NOT be blocked."""
+        target_league = "ufc"
+        assert target_league.lower().replace(" ", "_") not in bot._DATA_RICH_LEAGUES
+
+    def test_check_labels_has_breakdown_quality(self):
+        """CHECK_LABELS in _qa_health_check should include breakdown_quality."""
+        import inspect
+        src = inspect.getsource(bot._qa_health_check)
+        assert "breakdown_quality" in src

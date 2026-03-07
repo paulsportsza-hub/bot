@@ -16,3 +16,13 @@ env/
 .vscode/
 .idea/
 *.log
+*.log.*
+bot.log.*
+.hypothesis/
+.claude/
+.DS_Store
+Thumbs.db
+*.session
+*.session-journal
+node_modules/
+benchmark_models.py

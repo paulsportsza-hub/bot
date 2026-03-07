@@ -1,0 +1,41 @@
+{
+  "text": "🔥 <b>Top Edge Picks — 55% Predicted Correctly (7D)</b>\n<i>Scanned 11 leagues, 347,043 external resources and all major SA bookmakers.</i>\n<b>✅ 4 Live Edges Found</b>\n\n<b>[1]</b> ⚽ <b>Mamelodi Sundowns vs Kaizer Chiefs</b> 💎\n    PSL · Sat 10 Mar · 17:30\n    Our highest-conviction pick.\n\n<b>[2]</b> ⚽ <b>Arsenal vs Chelsea</b> 🥇\n    Premier League · Sat 10 Mar · 17:30\n    💰 R630 return on R300\n\n<b>[3]</b> 🏉 <b>Bulls vs Stormers</b> 🥇\n    URC · Sat 10 Mar · 17:30\n    💰 R495 return on R300\n\n<b>[4]</b> ⚽ <b>Liverpool vs Man City</b> 🥈\n    Premier League · Sat 10 Mar · 17:30\n    Draw @ 3.40 → R1,020 on R300\n\n━━━\n\n🔒 <b>3 edges locked</b> — 1 💎 · 2 🥇\n📈 <b>R100 on our top 5</b> → R487 total return\n🔑 Unlock all → /subscribe\n🎁 <b>Founding Member:</b> R699/yr Diamond — 8 days left",
+  "buttons": [
+    [
+      {
+        "text": "[1] ⚽ SUN v KC 🔒",
+        "callback_data": "sub:plans",
+        "url": ""
+      },
+      {
+        "text": "[2] ⚽ ARS v CHE 🔒",
+        "callback_data": "sub:plans",
+        "url": ""
+      }
+    ],
+    [
+      {
+        "text": "[3] 🏉 BUL v STO 🔒",
+        "callback_data": "sub:plans",
+        "url": ""
+      },
+      {
+        "text": "[4] ⚽ LIV v MCI 🥈",
+        "callback_data": "edge:detail:liverpool_vs_man_city_2026-03-10",
+        "url": ""
+      }
+    ],
+    [
+      {
+        "text": "⚽ My Matches",
+        "callback_data": "yg:all:0",
+        "url": ""
+      },
+      {
+        "text": "↩️ Menu",
+        "callback_data": "nav:main",
+        "url": ""
+      }
+    ]
+  ]
+}

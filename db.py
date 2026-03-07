@@ -47,12 +47,28 @@ class User(Base):
     preferred_platform: Mapped[str | None] = mapped_column(String(16))  # "telegram" | "whatsapp"
     # UX flags
     edge_tooltip_shown: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Paystack subscription
-    email: Mapped[str | None] = mapped_column(String(255))  # for Paystack
+    # Subscription
+    email: Mapped[str | None] = mapped_column(String(255))  # for Stitch
     subscription_status: Mapped[str | None] = mapped_column(String(32))  # "active" | "cancelled" | None
-    subscription_code: Mapped[str | None] = mapped_column(String(128))  # Paystack subscription code
-    plan_code: Mapped[str | None] = mapped_column(String(128))  # Paystack plan code
+    subscription_code: Mapped[str | None] = mapped_column(String(128))  # Stitch subscription code
+    plan_code: Mapped[str | None] = mapped_column(String(128))  # Stitch plan/product code
     subscription_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # Tier system
+    user_tier: Mapped[str | None] = mapped_column(String(32), default="bronze")  # "bronze" | "gold" | "diamond"
+    tier_expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    is_founding_member: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Reverse trial
+    trial_status: Mapped[str | None] = mapped_column(String(32))  # active/expired/restarted/none
+    trial_start_date: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    trial_end_date: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    trial_restart_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Wave 25A: Anti-fatigue + re-engagement
+    last_active_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    nudge_sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    muted_until: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    daily_push_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_push_date: Mapped[str | None] = mapped_column(String(10))  # YYYY-MM-DD
+    consecutive_misses: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class UserSportPref(Base):
@@ -114,6 +130,8 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
     # SQLite column migration for existing databases
     await _migrate_columns()
+    # Wave 25C: ensure user_edge_views table exists
+    await _ensure_edge_views_table()
 
 
 async def _migrate_columns() -> None:
@@ -146,6 +164,19 @@ async def _migrate_columns() -> None:
                 ("subscription_code", "NULL"),
                 ("plan_code", "NULL"),
                 ("subscription_started_at", "NULL"),
+                ("user_tier", "'bronze'"),
+                ("tier_expires_at", "NULL"),
+                ("is_founding_member", "0"),
+                ("trial_status", "NULL"),
+                ("trial_start_date", "NULL"),
+                ("trial_end_date", "NULL"),
+                ("trial_restart_used", "0"),
+                ("last_active_at", "NULL"),
+                ("nudge_sent_at", "NULL"),
+                ("muted_until", "NULL"),
+                ("daily_push_count", "0"),
+                ("last_push_date", "NULL"),
+                ("consecutive_misses", "0"),
             ]:
                 try:
                     await conn.execute(
@@ -156,6 +187,44 @@ async def _migrate_columns() -> None:
             await conn.commit()
     except Exception:
         pass  # DB file may not exist yet
+
+
+async def _ensure_edge_views_table() -> None:
+    """Create user_edge_views table if it doesn't exist (Wave 25C)."""
+    import aiosqlite
+    db_url = config.DATABASE_URL
+    if "sqlite" not in db_url:
+        return
+    db_path = db_url.split("///", 1)[-1] if "///" in db_url else None
+    if not db_path or db_path == ":memory:":
+        # For in-memory DBs, use engine directly
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql("""
+                CREATE TABLE IF NOT EXISTS user_edge_views (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    edge_id TEXT NOT NULL,
+                    edge_tier TEXT NOT NULL,
+                    viewed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, edge_id)
+                )
+            """)
+        return
+    try:
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.executescript("""
+                CREATE TABLE IF NOT EXISTS user_edge_views (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    edge_id TEXT NOT NULL,
+                    edge_tier TEXT NOT NULL,
+                    viewed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, edge_id)
+                );
+            """)
+            await conn.commit()
+    except Exception:
+        pass
 
 
 async def upsert_user(user_id: int, username: str | None, first_name: str | None) -> User:
@@ -463,6 +532,18 @@ async def deactivate_subscriptions_for_event(event_id: str) -> None:
         await s.commit()
 
 
+async def get_all_onboarded_users() -> list[User]:
+    """Get all active, onboarded users (for monthly broadcast)."""
+    async with async_session() as s:
+        result = await s.execute(
+            select(User).where(
+                User.onboarding_done == True,  # noqa: E712
+                User.is_active == True,  # noqa: E712
+            )
+        )
+        return list(result.scalars().all())
+
+
 async def get_users_for_notification(hour: int) -> list[User]:
     """Get onboarded users whose notification_hour matches and who want daily_picks."""
     import json
@@ -495,8 +576,10 @@ async def update_user_email(user_id: int, email: str) -> None:
 
 async def activate_subscription(
     user_id: int, subscription_code: str, plan_code: str,
+    user_tier: str = "gold",
+    tier_expires_at: dt.datetime | None = None,
 ) -> None:
-    """Mark user as subscribed after successful Paystack payment."""
+    """Mark user as subscribed after successful Stitch payment."""
     async with async_session() as s:
         user = await s.get(User, user_id)
         if user:
@@ -504,15 +587,19 @@ async def activate_subscription(
             user.subscription_code = subscription_code
             user.plan_code = plan_code
             user.subscription_started_at = dt.datetime.now(dt.timezone.utc)
+            user.user_tier = user_tier
+            user.tier_expires_at = tier_expires_at
             await s.commit()
 
 
 async def deactivate_subscription(user_id: int) -> None:
-    """Deactivate user subscription (cancelled or expired)."""
+    """Deactivate user subscription (cancelled or expired). Resets to bronze tier."""
     async with async_session() as s:
         user = await s.get(User, user_id)
         if user:
             user.subscription_status = "cancelled"
+            user.user_tier = "bronze"
+            user.tier_expires_at = None
             await s.commit()
 
 
@@ -524,10 +611,11 @@ async def get_user_by_email(email: str) -> User | None:
 
 
 def is_premium(user: User | None) -> bool:
-    """Check if a user has an active premium subscription."""
+    """Check if a user has an active paid subscription (Gold or Diamond)."""
     if not user:
         return False
-    return user.subscription_status == "active"
+    tier = getattr(user, "user_tier", None) or "bronze"
+    return tier in ("gold", "diamond")
 
 
 async def get_user_count() -> int:
@@ -549,3 +637,313 @@ async def get_all_sport_prefs() -> list[UserSportPref]:
     async with async_session() as s:
         result = await s.execute(select(UserSportPref))
         return list(result.scalars().all())
+
+
+# ── Tier helpers ─────────────────────────────────────────────
+
+
+async def get_user_tier(user_id: int) -> str:
+    """Return the user's subscription tier (default 'bronze')."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if not user:
+            return "bronze"
+        return getattr(user, "user_tier", None) or "bronze"
+
+
+async def set_user_tier(
+    user_id: int,
+    tier: str,
+    expires_at: dt.datetime | None = None,
+) -> None:
+    """Set a user's subscription tier and optional expiry."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.user_tier = tier
+            user.tier_expires_at = expires_at
+            if tier in ("gold", "diamond"):
+                user.subscription_status = "active"
+            await s.commit()
+
+
+async def set_founding_member(user_id: int, is_founding: bool = True) -> None:
+    """Mark or unmark a user as a founding member."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.is_founding_member = is_founding
+            await s.commit()
+
+
+async def get_founding_member_count() -> int:
+    """Count users who are founding members."""
+    async with async_session() as s:
+        result = await s.execute(
+            select(func.count(User.id)).where(
+                User.is_founding_member == True  # noqa: E712
+            )
+        )
+        return result.scalar_one()
+
+
+async def get_expired_paid_users() -> list[tuple[int, str]]:
+    """Return (user_id, user_tier) for paid users whose tier has expired."""
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    async with async_session() as s:
+        result = await s.execute(
+            select(User.id, User.user_tier).where(
+                User.user_tier.in_(["gold", "diamond"]),
+                User.tier_expires_at != None,  # noqa: E711
+                User.tier_expires_at < now,
+            )
+        )
+        return [(row[0], row[1]) for row in result.all()]
+
+
+# ── Trial helpers ────────────────────────────────────────────
+
+
+async def start_trial(user_id: int, days: int = 7) -> None:
+    """Activate Diamond trial for a new user."""
+    now = dt.datetime.now(dt.timezone.utc)
+    end = now + dt.timedelta(days=days)
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.user_tier = "diamond"
+            user.trial_status = "active"
+            user.trial_start_date = now
+            user.trial_end_date = end
+            await s.commit()
+
+
+async def expire_trial(user_id: int) -> None:
+    """Downgrade trial user to bronze."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.user_tier = "bronze"
+            user.trial_status = "expired"
+            await s.commit()
+
+
+async def restart_trial(user_id: int) -> bool:
+    """3-day Diamond restart. Returns True if successful, False if already used."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if not user or user.trial_restart_used:
+            return False
+        # Must have had a prior trial (expired or active)
+        if not user.trial_status or user.trial_status == "none":
+            return False
+        now = dt.datetime.now(dt.timezone.utc)
+        user.user_tier = "diamond"
+        user.trial_status = "restarted"
+        user.trial_start_date = now
+        user.trial_end_date = now + dt.timedelta(days=3)
+        user.trial_restart_used = True
+        await s.commit()
+        return True
+
+
+async def get_trial_users_at_day(day: int) -> list[User]:
+    """Get users whose trial started exactly `day` days ago."""
+    now = dt.datetime.now(dt.timezone.utc)
+    target_start = now - dt.timedelta(days=day)
+    window_start = target_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    window_end = window_start + dt.timedelta(days=1)
+    async with async_session() as s:
+        result = await s.execute(
+            select(User).where(
+                User.trial_status.in_(["active", "restarted"]),
+                User.trial_start_date >= window_start,
+                User.trial_start_date < window_end,
+            )
+        )
+        return list(result.scalars().all())
+
+
+async def get_expired_trial_users() -> list[User]:
+    """Get trial users whose trial_end_date has passed and haven't been downgraded."""
+    now = dt.datetime.now(dt.timezone.utc)
+    async with async_session() as s:
+        result = await s.execute(
+            select(User).where(
+                User.trial_status.in_(["active", "restarted"]),
+                User.trial_end_date != None,  # noqa: E711
+                User.trial_end_date < now,
+                User.subscription_status != "active",
+            )
+        )
+        return list(result.scalars().all())
+
+
+async def is_trial_active(user_id: int) -> bool:
+    """Check if user has an active trial."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if not user:
+            return False
+        if user.trial_status not in ("active", "restarted"):
+            return False
+        if user.trial_end_date is None:
+            return False
+        end = user.trial_end_date
+        now = dt.datetime.now(dt.timezone.utc)
+        # Handle naive datetimes from SQLite
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=dt.timezone.utc)
+        return end > now
+
+
+async def get_trial_stats(user_id: int) -> dict:
+    """Get trial usage stats for a user."""
+    detail_views = 0
+    try:
+        import sqlite3
+        conn = sqlite3.connect("/home/paulsportsza/scrapers/odds.db")
+        row = conn.execute(
+            "SELECT COUNT(*) FROM daily_tip_views WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        conn.close()
+        detail_views = row[0] if row else 0
+    except Exception:
+        pass
+
+    # Calculate days remaining
+    days_remaining = 0
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user and user.trial_end_date:
+            end = user.trial_end_date
+            now = dt.datetime.now(dt.timezone.utc)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=dt.timezone.utc)
+            delta = (end - now).days
+            days_remaining = max(0, delta)
+
+    return {"detail_views": detail_views, "days_remaining": days_remaining}
+
+
+# ── Wave 25A: Anti-fatigue + re-engagement helpers ────────────
+
+
+async def update_last_active(user_id: int) -> None:
+    """Set last_active_at = now() for a user."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.last_active_at = dt.datetime.now(dt.timezone.utc)
+            await s.commit()
+
+
+async def get_inactive_users(hours: int = 72, nudge_cooldown_days: int = 7) -> list[User]:
+    """Get onboarded, active users inactive for >= `hours` who haven't been nudged within `nudge_cooldown_days`."""
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(hours=hours)
+    cooldown_cutoff = now - dt.timedelta(days=nudge_cooldown_days)
+    async with async_session() as s:
+        result = await s.execute(
+            select(User).where(
+                User.onboarding_done == True,  # noqa: E712
+                User.is_active == True,  # noqa: E712
+                User.last_active_at != None,  # noqa: E711
+                User.last_active_at < cutoff,
+                # Nudge cooldown: never nudged OR nudged before cooldown
+                (User.nudge_sent_at == None) | (User.nudge_sent_at < cooldown_cutoff),  # noqa: E711
+            )
+        )
+        return list(result.scalars().all())
+
+
+async def set_muted_until(user_id: int, until_dt: dt.datetime | None) -> None:
+    """Set or clear the user's muted_until timestamp."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.muted_until = until_dt
+            await s.commit()
+
+
+async def is_muted(user_id: int) -> bool:
+    """Check if user is currently muted (muted_until > now)."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if not user or not user.muted_until:
+            return False
+        muted = user.muted_until
+        now = dt.datetime.now(dt.timezone.utc)
+        if muted.tzinfo is None:
+            muted = muted.replace(tzinfo=dt.timezone.utc)
+        return muted > now
+
+
+async def increment_push_count(user_id: int) -> None:
+    """Bump daily_push_count, resetting if the date has changed."""
+    today = dt.date.today().isoformat()
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            if user.last_push_date != today:
+                user.daily_push_count = 1
+                user.last_push_date = today
+            else:
+                user.daily_push_count = (user.daily_push_count or 0) + 1
+            await s.commit()
+
+
+async def get_push_count(user_id: int) -> int:
+    """Return today's push count (0 if new day or no user)."""
+    today = dt.date.today().isoformat()
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if not user:
+            return 0
+        if user.last_push_date != today:
+            return 0
+        return user.daily_push_count or 0
+
+
+async def update_consecutive_misses(user_id: int, count: int) -> None:
+    """Set the consecutive_misses counter."""
+    async with async_session() as s:
+        user = await s.get(User, user_id)
+        if user:
+            user.consecutive_misses = count
+            await s.commit()
+
+
+# ── Wave 25C: Edge view tracking helpers ─────────────────
+
+
+async def log_edge_view(user_id: int, edge_id: str, edge_tier: str) -> None:
+    """Record that a user viewed an edge. INSERT OR IGNORE (dedup on user+edge)."""
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            "INSERT OR IGNORE INTO user_edge_views (user_id, edge_id, edge_tier) VALUES (?, ?, ?)",
+            (user_id, edge_id, edge_tier),
+        )
+
+
+async def get_edge_viewers(edge_id: str) -> list[dict]:
+    """Get all users who viewed a specific edge."""
+    async with engine.connect() as conn:
+        result = await conn.exec_driver_sql(
+            "SELECT user_id, edge_tier, viewed_at FROM user_edge_views WHERE edge_id = ?",
+            (edge_id,),
+        )
+        return [{"user_id": row[0], "edge_tier": row[1], "viewed_at": row[2]} for row in result]
+
+
+async def get_edges_viewed_by_user(user_id: int, since_hours: int = 48) -> list[dict]:
+    """Get edges viewed by a user in the last N hours."""
+    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=since_hours)).isoformat()
+    async with engine.connect() as conn:
+        result = await conn.exec_driver_sql(
+            "SELECT edge_id, edge_tier, viewed_at FROM user_edge_views WHERE user_id = ? AND viewed_at > ?",
+            (user_id, cutoff),
+        )
+        return [{"edge_id": row[0], "edge_tier": row[1], "viewed_at": row[2]} for row in result]

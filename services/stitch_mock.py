@@ -30,7 +30,7 @@ class MockStitchService:
     async def create_payment(
         self,
         user_id: int,
-        amount_cents: int = 4900,
+        amount_cents: int = 9900,
         reference: str | None = None,
     ) -> dict[str, Any]:
         """Simulate payment creation. Returns a mock LinkPay checkout URL."""

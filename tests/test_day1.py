@@ -88,7 +88,7 @@ class TestExperienceOnboarding:
 
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 2/5" in text
+        assert "Step 2/6" in text
         assert "sports" in text.lower()
 
     async def test_cmd_start_shows_experience_first(self, test_db):
@@ -105,7 +105,7 @@ class TestExperienceOnboarding:
 
         call_args = mock_update.message.reply_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 1/5" in text
+        assert "Step 1/6" in text
         assert "experience" in text.lower()
 
     async def test_onboarding_done_saves_experience(self, test_db):
@@ -395,7 +395,7 @@ class TestMenuHandlers:
         assert ob["step"] == "experience"
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 1/5" in text
+        assert "Step 1/6" in text
 
 
 # ── Priority 3: Experience-Adapted Pick Cards ────────────────
@@ -422,8 +422,8 @@ class TestExperiencedPickCard:
 class TestCasualPickCard:
     def test_casual_has_payout(self):
         card = format_pick_card(SAMPLE_PICK, experience="casual")
-        assert "R100" in card
-        assert "R230" in card  # 2.30 * 100
+        assert "R300" in card
+        assert "R690" in card  # 2.30 * 300
 
     def test_casual_has_stake_hint(self):
         card = format_pick_card(SAMPLE_PICK, experience="casual")
@@ -445,15 +445,12 @@ class TestCasualPickCard:
 class TestNewbiePickCard:
     def test_newbie_has_rand_examples(self):
         card = format_pick_card(SAMPLE_PICK, experience="newbie")
-        assert "R20" in card
-        assert "R50" in card
+        assert "R300" in card
 
     def test_newbie_has_payout_calc(self):
         card = format_pick_card(SAMPLE_PICK, experience="newbie")
-        # 2.30 * 20 = 46
-        assert "R46" in card
-        # 2.30 * 50 = 115
-        assert "R115" in card
+        # 2.30 * 300 = 690
+        assert "R690" in card
 
     def test_newbie_bet_type_draw(self):
         card = format_pick_card(NEWBIE_PICK, experience="newbie")

@@ -92,9 +92,9 @@ ONBOARDING_BANKROLL = {
 ONBOARDING_NOTIFY = {
     "text": "When should we send daily picks?",
     "buttons": [
-        {"id": "ob_notify:7", "title": "Morning (7 AM)"},
-        {"id": "ob_notify:18", "title": "Evening (6 PM)"},
-        {"id": "ob_notify:21", "title": "Night (9 PM)"},
+        {"id": "ob_notify:7", "title": "Morning (07:00)"},
+        {"id": "ob_notify:18", "title": "Evening (18:00)"},
+        {"id": "ob_notify:21", "title": "Night (21:00)"},
     ],
 }
 

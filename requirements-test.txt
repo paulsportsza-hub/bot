@@ -1,0 +1,7 @@
+# Test dependencies — W46-INFRA
+# Install: pip install -r requirements-test.txt --break-system-packages
+hypothesis>=6.0
+syrupy>=4.0
+freezegun>=1.0
+factory-boy>=3.0
+pytest>=7.0

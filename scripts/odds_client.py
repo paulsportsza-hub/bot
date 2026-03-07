@@ -415,8 +415,8 @@ def _format_pick_casual(pick: ValueBet) -> str:
     if pick.is_sa_book:
         bk_display = pick.bookmaker
 
-    # Calculate payout for R100 bet
-    payout = pick.best_price * 100
+    # Calculate payout for R300 bet
+    payout = pick.best_price * 300
 
     # Suggested stake based on Kelly
     if pick.kelly_stake >= 0.05:
@@ -430,7 +430,7 @@ def _format_pick_casual(pick: ValueBet) -> str:
         f"{emoji} <b>{pick.home}</b> vs <b>{pick.away}</b>\n"
         f"   📌 We like: <b>{pick.outcome}</b>\n"
         f"   💰 Best odds: <b>{pick.best_price:.2f}</b> @ {bk_display}\n"
-        f"   💵 R100 bet pays <b>R{payout:.0f}</b>\n"
+        f"   💰 R{payout:,.0f} return on R300\n"
         f"   📈 Edge: <b>{pick.ev_pct:+.1f}%</b> above fair value | {pick.confidence}\n"
         f"   🔍 Suggested: <b>{stake_hint}</b>"
     )
@@ -445,9 +445,8 @@ def _format_pick_newbie(pick: ValueBet) -> str:
     if pick.is_sa_book:
         bk_display = pick.bookmaker
 
-    # Payout examples
-    payout_20 = pick.best_price * 20
-    payout_50 = pick.best_price * 50
+    # Payout example
+    payout_300 = pick.best_price * 300
 
     # Simple confidence label
     if "High" in pick.confidence:
@@ -469,8 +468,7 @@ def _format_pick_newbie(pick: ValueBet) -> str:
         f"{emoji} <b>{pick.home}</b> vs <b>{pick.away}</b>\n"
         f"   📌 Bet on: {bet_explain}\n"
         f"   💰 Odds: <b>{pick.best_price:.2f}</b> @ {bk_display}\n"
-        f"   💵 Bet R20 → get <b>R{payout_20:.0f}</b> back\n"
-        f"   💵 Bet R50 → get <b>R{payout_50:.0f}</b> back\n"
+        f"   💰 R{payout_300:,.0f} return on R300\n"
         f"   {pick.confidence} — {conf_explain}\n"
-        f"   🔍 <i>Start small: R20-50 per bet</i>"
+        f"   🔍 <i>Start small and build from there.</i>"
     )

@@ -128,7 +128,7 @@ async def get_profile_data(user_id: int) -> dict[str, Any]:
 
     # Notification hour
     hour = user.notification_hour if user else None
-    notify_map = {7: "Morning (7 AM)", 12: "Midday (12 PM)", 18: "Evening (6 PM)", 21: "Night (9 PM)"}
+    notify_map = {7: "Morning (07:00 SAST)", 12: "Midday (12:00 SAST)", 18: "Evening (18:00 SAST)", 21: "Night (21:00 SAST)"}
     notify_str = notify_map.get(hour, f"{hour}:00") if hour is not None else "Not set"
 
     return {
