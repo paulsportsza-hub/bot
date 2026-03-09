@@ -1934,3 +1934,300 @@ Every screen scannable in 2-3 scrolls on 6-inch phone.
 - `bot.py` — `_truncate_form_bullets(bullets, match_ctx)` post-processes narrative bullets using `games_played` from ESPN standings
 - Applied at: AI prompt enrichment, user-facing display, `format_form_for_narrative()` call
 - Already truncated (W29-P0): `_format_verified_context()`, `build_verified_narrative()`
+
+## Wave 69-VERIFY — Web Search Fact Verification (7 March 2026)
+
+### Web Search Integration (LOCKED)
+- `web_search_20250305` tool enabled on ALL Opus pre-gen calls (max_uses=2)
+- NOT enabled on live Haiku game breakdown (too slow for interactive use)
+- `_extract_text_from_response()` — handles multi-block responses (text + search results)
+- STEP 1 instruction in `_build_analyst_prompt()`: verify form, standings, news before writing
+
+### Three Verification Layers
+- Layer 1: Opus web search in pre-gen (real-time verification during generation)
+- Layer 2: `_verify_narrative_claims()` — Haiku cross-check after generation (full sweeps only)
+- Layer 3: `_narrative_health_check_job()` — spot-checks 2 cached narratives every 2 hours
+
+### England Form Fix (W69)
+- Cross-season form contamination: `build_verified_narrative()` now truncates form to games_played
+- Affects international tournaments (Six Nations, Rugby Championship) where form crosses seasons
+- `_format_verified_context()` already truncated; `build_verified_narrative()` was missing truncation
+
+## Wave 72-AUDIT — Definitive 20-Match Opus Audit (7 March 2026)
+
+### Bug Fixes
+- `_extract_text_from_response()` — added `block.text is not None` guard (web search blocks can have text=None)
+- `odds.db` switched from DELETE to WAL journal mode for concurrent access
+- Test added: None text block scenario in `test_extract_text_from_response`
+
+### Audit Results (W72)
+- 19/20 OK, 1 NO_DATA, 0 errors
+- Web search active (W69), fact-checker active, 0 empty sections
+- Banned phrase hits down from 11 (W65) to 8
+- Stale price flagging working correctly in 4 narratives
+
+## Wave 73-LAUNCH — Final Launch-Readiness Fixes + Sonnet Switch (7 March 2026)
+
+### Model Switch (LOCKED)
+- NARRATIVE_MODEL env var controls model for all narrative generation
+- Default: claude-sonnet-4-20250514 (was claude-opus-4-20250514)
+- Haiku retained for live game breakdown (speed) and health checks (cost)
+- opus_audit.py and pregenerate_narratives.py both read NARRATIVE_MODEL
+
+### Empty Verdict Fix
+- _ensure_verdict_not_empty() — catches <40 char Verdict sections
+- Signal-derived fallback: stale price → "verify", strong EV → "back", thin EV → "size conservatively"
+- _has_empty_sections() now checks Verdict (🏆→end) in addition to Setup and Risk
+
+### Programmatic Fallback Rewrite
+- _build_programmatic_narrative() Risk section: signal-derived (movement, tipster consensus)
+- Verdict section: stale-aware, confirming-signal-aware, no banned phrases
+- Zero banned phrases remain in programmatic fallback
+
+### Fact-Checker Nickname Whitelist
+- _KNOWN_TEAM_NICKNAMES set: ~45 team nicknames (EPL, European, SA PSL, rugby franchises, cricket)
+- Checked before unverified person name stripping in fact_check_output()
+
+### Web Search Coverage Fix
+- _build_analyst_prompt(mandatory_search=True) for pre-gen paths
+- Mandatory wording: "You MUST use web search... NON-NEGOTIABLE"
+- Conditional wording retained for live Haiku path (no web search tool)
+- max_uses increased from 2 to 3
+
+### Sonnet Benchmark (W73)
+- 8/10 OK, 2 NO_DATA (Six Nations — DB lock), 0 errors
+- 0 banned phrase hits (was 8 in W72)
+- Avg 660 tokens, avg 28.7s per match
+- Web search now fires on all matches (was 4/19 in W72)
+
+## Wave 79-PHASE2 — Code Owns Facts, AI Owns Analysis (8 March 2026)
+
+### Definitive Architecture (LOCKED)
+- Code builds Setup (W80-PROSE data-driven language maps) — zero hallucination
+- AI writes Edge + Risk ONLY (~200 tokens, focused prompt)
+- Code builds Verdict (signal-driven: stale-aware, confirming-signal-aware)
+- Assembly: _generate_narrative_v2() wires all three layers
+
+### AI Prompt (LOCKED)
+- _build_edge_risk_prompt() — focused ~60-line prompt for Edge + Risk only
+- max_tokens=512 (was 1024)
+- _build_analyst_prompt() kept for backward compat
+
+## Wave W80-PROSE — Natural Analyst Prose Templates (9 March 2026)
+
+### Setup Architecture (LOCKED — replaces W79 templates)
+- _build_setup_section_v2(ctx_data, tips, sport) — master builder
+- 17 functions where data dictates vocabulary (not fill-in-the-blank)
+- _match_pick() — MD5 hash ensures same match = same variation, different matches = different phrasing
+- _form_narrative() — 12 distinct patterns (streaks, recovery, draw-heavy, mixed/volatile)
+- _position_narrative() — 8 ranges: "top of the table" through "deep in trouble"
+- _h2h_hook() — <3 meetings: brief note; 3+ meetings: full narrative hook
+- _coach_ref_v2() — last-name-only in possessive/has_them styles (analyst convention)
+- _apply_sport_subs(text, sport) — post-assembly rugby/cricket terminology substitution
+- Backward-compat aliases kept for _build_edge/risk/verdict_from_signals (v2 underneath)
+
+### Deleted (W79 — fully replaced)
+_coach_ref, _form_adjective, _gpg_woven, _record_woven, _last_result_fragment,
+_last_result_impact, _h2h_verdict, _h2h_summary, _build_home/away_position_parts,
+_append_h2h, _build_setup_position/form/matchup/h2h, _build_setup_section
+
+## Wave W81-FACTCHECK — Stop Fact-Checker Destroying AI Edge/Risk (9 March 2026)
+
+### Fact-Checker Architecture (LOCKED)
+- _merge_continuation_lines(lines) — merges multi-line sentences before fact-checking.
+  A sentence = text until . ! ? — continuation lines are bundled with their parent.
+  Section headers (🎯⚠️📋🏆) always start new units.
+- fact_check_output() now strips whole SENTENCES not individual \n-separated lines.
+- _clean_fact_checked_output(text) — post-strip cleanup: orphaned commas, connectors, periods.
+- get_verified_injuries(home, away) — queries team_injuries table (rows within 2 days).
+  Player names injected into user_message as VERIFIED INJURY DATA block (Layer 1).
+  Also added to verified_names in fact_check_output() so checker doesn't strip them (Layer 2).
+
+### Bug Fixed (W81)
+- _build_setup_section stale reference in fact_check_output() last-resort fallback
+  → fixed to _build_setup_section_v2
+
+## Wave W81-HEALTH — Fix 5 Recurring Post-Deploy Validation Failures (9 March 2026)
+
+### Fixture-Aware Thresholds (LOCKED)
+- _is_slump_day() / _fixture_minimum() — Mon/Tue/Thu = 1 edge minimum; Fri-Sun/Wed = 3.
+  Applied in both post_deploy_validation.py and health_monitor.py.
+- GOLD_DIAMOND_MAX_GAP_HOURS raised to 48h (post-weekend cycles exceed 24h naturally).
+- check_settlement_pipeline() now distinguishes "match_results empty" from "pipeline stopped".
+  Alert text: "Results scraper missing data" vs "pipeline hasn't run".
+- settle_edges() logs WARNING when skipping (match_key not in match_results).
+
+### Pre-Gen Safeguards (LOCKED)
+- _REQUIRED_BOT_FUNCTIONS list + import validation in pregenerate_narratives.py startup.
+  Raises ImportError with function names if any wave renames a required export.
+- PID lock (fcntl) in pregenerate_narratives.py __main__ block.
+  Lock file: ~/logs/pregen.pid. Second concurrent invocation exits cleanly with code 0.
+
+### Pre-Gen Import Contract (LOCKED — W80+W81+MZANSI-EDGE-1D)
+- tests/contracts/test_imports.py::TestCriticalFunctions guards all critical bot exports.
+  Any rename of: _build_setup_section_v2, get_verified_injuries, _clean_fact_checked_output,
+  build_verified_narrative, fact_check_output → daily contract test fails before cron does.
+- NEVER test bot function availability with: python -c "import bot; asyncio.run(bot.fn())"
+  Sentry SDK initialises at import time — AttributeError/ImportError captured as a real event.
+  Use: grep -n "def fn_name" bot.py  OR  hasattr checks inside the test suite.
+
+## Wave W81-SCAFFOLD — Story Detection + Factual Scaffold (9 March 2026)
+
+### Three-Stage Prose Engine: Stage 1 Complete
+- _decide_team_story(pos, pts, form, home_rec, away_rec, gpg, is_home) → 10 story types
+  (title_push, fortress, crisis, recovery, momentum, inconsistent, draw_merchants, setback, anonymous, neutral)
+  Priority chain: title_push → fortress → crisis → recovery → momentum → inconsistent →
+  draw_merchants → setback → anonymous → neutral
+- _scaffold_last_result(team) — module-level helper extracted from _build_setup_section_v2
+- _build_verified_scaffold(ctx, edge_data, sport) — full factual scaffold:
+  SPORT/COMPETITION, HOME/AWAY story type + verified facts + H2H + EDGE + RISK FACTORS
+  Calls get_verified_injuries() for live injury data from team_injuries DB table
+- Wired into _generate_narrative_v2() as Stage 1: scaffold prepended to user_message
+  as "VERIFIED SCAFFOLD:" block when ctx_data and tips are both available
+- /qa scaffold <match_key> — admin debug command, prints raw scaffold for inspection
+- Stage 2 (W81-REWRITE) and Stage 3 (W81-VERIFY) are next briefs
+
+## Wave W81-CLEANUP — Story Type + Injuries + Exemplars Pre-Flight (9 March 2026)
+
+### _decide_team_story() Crisis Threshold (LOCKED)
+- Crisis threshold: pos >= 14 (was pos >= 16). Bottom-half relegation zone starts at 14th.
+- Belt-and-suspenders: pos >= 14 AND l >= 3 → crisis even if last result was a win.
+- Recovery guard: only fires when pos <= 13. pos >= 14 teams stay in crisis even after a bounce.
+- Anonymous range: 8 <= pos <= 13 (was 8 <= pos <= 14).
+
+### get_verified_injuries() Filter (LOCKED)
+- Excludes injury_status IN ('Missing Fixture', 'Unknown') from scaffold.
+  "Missing Fixture" is an API-Football artefact for squad-mapped players with no real record.
+
+### load_exemplars() (LOCKED)
+- _EXEMPLAR_FILE = data/prose_exemplars.json (relative to bot.py dir)
+- _EXEMPLAR_CACHE: global dict — populated on first call, reused thereafter
+- Graceful fallback: returns {"setup":{}, "edge":{}, "risk":{}, "verdict":{}} on any file error
+- prose_exemplars.json: 10 story types × 3 exemplars each, 4 top-level section keys
+
+## Wave W81-DBLOCK — SQLite "database is locked" Permanent Fix (9 March 2026)
+
+### Root Cause (LOCKED — DO NOT REPEAT)
+- log_edge_recommendation() had `except Exception` that swallowed sqlite3.OperationalError.
+  @_retry_on_locked decorator saw a normal False return and never retried. 792 Sentry events.
+- Fix: `except sqlite3.OperationalError: raise` added before broad except.
+  OperationalError now propagates to decorator which retries up to 5× with 0.25s initial backoff.
+- _RETRY_ATTEMPTS = 5 (was 3), _RETRY_BACKOFF = 0.25 (was 1.0)
+
+### Retry Architecture (LOCKED)
+- @_retry_on_locked catches OperationalError with "locked" — retries up to _RETRY_ATTEMPTS times
+- connect_odds_db() sets busy_timeout=30000 — SQLite waits 30s per attempt before raising
+- Combined: up to 5 attempts × 30s wait = 150s total tolerance for long scraper runs
+- DO NOT add broad except Exception inside @_retry_on_locked-decorated functions — it breaks retries
+
+### Health Monitor Tests (LOCKED — W81-HEALTH thresholds)
+- test_too_few_edges: must mock Saturday (weekday=5) to ensure peak-day threshold applies
+- test_stale_gold_alert: must use > 48h gap (GOLD_DIAMOND_MAX_GAP_HOURS=48 since W81-HEALTH)
+- check_settlement_pipeline: conn must remain open until match_results diagnostic query is done
+
+## Wave W81-COACHES — Coach Names Missing From Scaffolds (9 March 2026)
+
+### Root Cause (LOCKED — DO NOT REPEAT)
+- api_cache was checked BEFORE coaches.json. API-Football returns assistants/wrong coaches.
+  coaches.json (manually curated, last_updated 2026-02-26) must ALWAYS take priority.
+- Priority fix: `home_coach = _get_coach(...) or home_coach` — static wins when available.
+- Degraded response (DB lock): coaches now injected from static JSON in except block.
+
+### Coach Data Architecture (LOCKED)
+- Tier 1: coaches.json (manually curated, 42 soccer teams — ALL 20 EPL, full PSL, CL, La Liga)
+- Tier 2: api_cache (auto-populated, often wrong — treated as fallback for teams not in Tier 1)
+- Tier 3: API-Football live fetch (also often wrong — last resort)
+- Priority: Tier 1 wins when available. Tier 2/3 only for teams not in coaches.json.
+- "wolves" alias added to coaches.json (Wolverhampton Wanderers short name, no partial match).
+- coaches.json must be updated manually after every confirmed manager change.
+
+## Wave W81-SETTLE — Settlement Pipeline Fix (9 March 2026)
+
+### ISBets Ghost Fixture Pattern (LOCKED — DO NOT IGNORE)
+- Playabets + Supabets are ISBets clones — same backend, same ghost fixtures
+- ISBets pre-loads EPL fixtures with wrong dates AND wrong opponents weeks early
+- A match appearing ONLY in Playabets/Supabets = high ghost fixture risk
+- Three defences in settlement.py:
+  1. log_edge_recommendation(): skips ISBets-only fixtures at log time
+  2. settle_edges(): auto-voids ISBets-only edges after 3+ days no result
+  3. void_edge(): manual void for confirmed ghost fixtures
+- _ISBETS_BOOKMAKERS = {"playabets", "supabets"}, _GHOST_FIXTURE_DAYS = 3
+
+### _fuzzy_match_result() (LOCKED — ±5 days + aliases)
+- Extended to ±5 days (was ±1) to catch ISBets wrong-date fixtures
+- Uses _expand_team_key() for alias expansion (e.g. wolves→wolverhampton_wanderers)
+- _TEAM_ALIASES: 14 entries covering EPL short names + PSL canonical names
+- Root cause of wolves-liverpool non-settlement: %wolves% LIKE does NOT match wolverhampton_wanderers
+
+### void_edge() (NEW)
+- result='void', excluded from hit_rate/ROI/streak stats (queries use WHERE result IN ('hit','miss'))
+- match_score field stores reason (e.g. 'ghost_fixture_isbets')
+- Exported from settlement.py — import as: from scrapers.edge.settlement import void_edge
+
+## Wave W82-SPEC — NarrativeSpec + Evidence Classification (9 March 2026)
+
+### Architecture (LOCKED)
+- `narrative_spec.py` (bot/) — typed editorial spec module. Pure Python, no bot/Sentry deps at import time.
+- `NarrativeSpec` dataclass: 30 fields covering identity, context, edge thesis, evidence class, risk, verdict
+- `_classify_evidence(edge_data)` → (evidence_class, tone_band, verdict_action, verdict_sizing)
+  - Stale penalty: -1 effective support if stale >= 360 min (6h)
+  - Movement penalty: -1 effective support if movement == 'against'
+  - 0 effective → speculative/cautious; 1 → lean/moderate; 2-3 → supported/confident; 4+ (composite>=60 + EV>=5%) → conviction/strong
+- `TONE_BANDS`: 4 levels with allowed/banned phrase lists (cautious/moderate/confident/strong)
+- `_check_coherence(spec)`: 6 contradiction checks — returns violation list
+- `_enforce_coherence(spec)`: downgrade loop — strong→confident→moderate→cautious until coherent
+- `build_narrative_spec(ctx_data, edge_data, tips, sport)` — assembles full spec; lazy imports from bot.py
+- Contract tests: `tests/contracts/test_narrative_spec.py` (92 tests) + 9 guards in test_imports.py
+- `_LEAGUE_DISPLAY` duplicated from bot.py's `LEAGUE_DISPLAY_NAMES` — keep both in sync on league additions
+
+### Downgrade Termination Rule (LOCKED)
+- Downgrade stops when no violations fire (not necessarily at floor)
+- With 0 signals + strong tone: stops at moderate (lean verdict is not 'back'/'strong back')
+- To force floor (cautious): requires stale_minutes >= 720 as additional violation
+
+## Wave W82-RENDER — Deterministic Baseline Renderer (9 March 2026)
+
+### Architecture (LOCKED)
+- `_render_baseline(spec)` — assembles 4-section prose from NarrativeSpec. Zero AI. Zero API.
+- `_render_setup(spec)` — home para + away para + H2H bridge. OEI pattern.
+- `_render_edge(spec)` — 4 paths by evidence_class. All phrases comply with tone_band allowed/banned lists.
+- `_render_risk(spec)` — code-decided risk factors + sizing caveat. Always includes stake guidance.
+- `_render_verdict(spec)` — 4 paths by verdict_action. Tone-capped: never uses banned phrases.
+- `_render_team_para(name, coach, story_type, ...)` — MD5-deterministic template selection.
+  Same team name always gets same variant (3 per story type, 10 story types = 30 templates).
+- `_TEAM_TEMPLATES` — dispatch dict. Falls back to 'neutral' for unknown story types.
+- `_mk_variants(fn)` factory avoids Python closure-in-loop bug for template lambdas.
+
+### Away Pick Risk Factor (LOCKED)
+- Home advantage factor fires when `outcome == "away"` AND `confirming < 3`.
+- For conviction-level away picks (3+ signals), disadvantage is already in model probabilities.
+- Text: "Away side faces home crowd disadvantage — factor that in."
+
+### W82-RENDER Contract Guards (LOCKED)
+- `tests/contracts/test_imports.py::TestCriticalFunctions`: guards for _render_baseline, _render_setup, _render_edge, _render_verdict.
+- Any rename of these 4 functions → daily contract test fails before cron does.
+
+## Wave W82-WIRE — NarrativeSpec Pipeline Integration (9 March 2026)
+
+### Architecture (LOCKED)
+- `_generate_narrative_v2()` — 14-line body. Calls `build_narrative_spec()` → `_render_baseline()`. Zero LLM.
+- `pregenerate_narratives._generate_one()` — same pipeline. Layer 2 verification + HTML assembly preserved.
+- `_extract_edge_data(tips, home, away)` — normalises tip list into edge_data dict for build_narrative_spec().
+- `_extract_teams_from_tips(tips, home, away)` — extracts real names from match_key. Kills "Home take on Away".
+- "based on what you know" removed from `_generate_game_tips()`. No-odds path returns clean static string.
+- Old 3-stage AI rewrite (scaffold + exemplars + Sonnet + fact-checker) is dead code. Removed by W82-POLISH.
+
+### Dead Code (DO NOT RE-ENABLE)
+The following are bypassed but left in bot.py until future cleanup:
+`_build_verified_scaffold`, `_parse_story_types_from_scaffold`, `_build_rewrite_prompt`,
+`_verify_rewrite`, `_build_edge_risk_prompt`, `_build_signal_only_narrative`
+
+## Wave W82-POLISH — Constrained LLM Polish Pass (9 March 2026)
+
+### Architecture (LOCKED)
+- `_build_polish_prompt(baseline, spec, exemplars)` — constrained polish prompt. LLM may only improve flow, not analytical posture. Passes tone band allowed/banned lists, verdict action, 8 strict rules.
+- `_validate_polish(polished, baseline, spec)` → bool — 6 gates: banned phrases, 4 section headers, team names, bookmaker+odds, speculative contradictions, _quality_check().
+- `_generate_narrative_v2()`: live_tap=True → instant baseline, zero LLM. live_tap=False → baseline + Sonnet polish attempt. Polish FAIL → baseline served.
+- `pregenerate_narratives._generate_one()`: always attempts polish. Cache stores polished version when valid.
+- Both `_build_polish_prompt` and `_validate_polish` in `_REQUIRED_BOT_FUNCTIONS` — rename protection.
+- Sweep result: validator correctly caught "lock" (banned in moderate band) during live run.

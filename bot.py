@@ -13,8 +13,9 @@ except ImportError:
     sentry_sdk = None
 from dotenv import load_dotenv
 load_dotenv()
-if sentry_sdk:
-    sentry_sdk.init(dsn=os.getenv("SENTRY_DSN", ""))
+_SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+if sentry_sdk and _SENTRY_DSN:
+    sentry_sdk.init(dsn=_SENTRY_DSN)
 
 import asyncio
 import difflib
@@ -22,6 +23,7 @@ import logging
 import os
 import re
 import textwrap
+from hashlib import md5 as _md5
 from html import escape as h
 
 import anthropic
@@ -980,7 +982,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         elif action.startswith("game:"):
             # yg:game:{event_id} — show AI game breakdown
             event_id = action.split(":", 1)[1]
-            await _generate_game_tips(query, ctx, event_id, user_id)
+            await _generate_game_tips_safe(query, ctx, event_id, user_id)
     elif prefix == "hot":
         user_id = query.from_user.id
         if action in ("go", "show", "back"):
@@ -1027,12 +1029,106 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
     elif prefix == "edge":
         user_id = query.from_user.id
         if action.startswith("detail:"):
-            match_key = action.split(":", 1)[1]
-            # Tier gating: check daily tip limit before opening detail
+            match_key = _resolve_cb_key(action.split(":", 1)[1])
+
+            # ── INSTANT PATH: check both caches before any DB/API operations ──
+            import time as _edge_t
+            _ec = _analysis_cache.get(match_key)
+            _cached_content = None
+            if _ec:
+                if len(_ec) == 4:
+                    _c_msg, _c_tips, _c_edge_tier, _c_ts = _ec
+                else:
+                    _c_msg, _c_tips, _c_ts = _ec
+                    _c_edge_tier = "bronze"
+                if _edge_t.time() - _c_ts < _ANALYSIS_CACHE_TTL:
+                    _cached_content = {"html": _c_msg, "tips": _c_tips, "edge_tier": _c_edge_tier}
+
+            if not _cached_content:
+                # Persistent DB cache — skips event lookup, Odds API, spinner, ESPN fetch
+                try:
+                    _cached_content = await _get_cached_narrative(match_key)
+                    if _cached_content:
+                        _analysis_cache[match_key] = (
+                            _cached_content["html"], _cached_content["tips"],
+                            _cached_content["edge_tier"], _edge_t.time(),
+                        )
+                        _game_tips_cache[match_key] = _cached_content["tips"]
+                        log.info("PERF: edge:detail direct DB cache hit for %s", match_key)
+                except Exception:
+                    _cached_content = None
+
+            def _edge_upgrade_markup():
+                return InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
+                    [InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:go")],
+                    [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+                ])
+
+            if _cached_content:
+                _user_tier = await get_effective_tier(user_id)
+
+                # Tier LIMIT CHECK — run in thread (WAL read: non-blocking vs writers)
+                def _check_limit_sync():
+                    try:
+                        from db_connection import get_connection as _gc
+                        from tier_gate import check_tip_limit as _cl
+                        oc = _gc()
+                        try:
+                            can_v, _ = _cl(user_id, _user_tier, oc)
+                            return can_v
+                        finally:
+                            oc.close()
+                    except Exception as _ge:
+                        log.warning("Edge detail tier check failed: %s", _ge)
+                        return True  # Allow on error
+
+                _can_view = await asyncio.to_thread(_check_limit_sync)
+                if not _can_view:
+                    await query.edit_message_text(
+                        get_upgrade_message(_user_tier, context="tip"),
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=_edge_upgrade_markup(),
+                    )
+                    return
+
+                # RECORD VIEW in background — never delays serving cached content
+                if match_key:
+                    async def _record_view_bg():
+                        def _write():
+                            try:
+                                from db_connection import get_connection as _gc
+                                from tier_gate import record_view as _rv
+                                oc = _gc()
+                                try:
+                                    _rv(user_id, match_key, oc)
+                                finally:
+                                    oc.close()
+                            except Exception as _re:
+                                log.warning("Background record_view failed: %s", _re)
+                        await asyncio.to_thread(_write)
+                    asyncio.create_task(_record_view_bg())
+
+                # Serve from cache IMMEDIATELY
+                _game_tips_cache[match_key] = _cached_content["tips"]
+                _btns = _build_game_buttons(
+                    _cached_content["tips"], match_key, user_id,
+                    source="edge_picks", user_tier=_user_tier,
+                    edge_tier=_cached_content["edge_tier"],
+                )
+                _banner = _qa_banner(user_id)
+                _html = (_banner + _cached_content["html"]) if _banner else _cached_content["html"]
+                await query.edit_message_text(
+                    _html, parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(_btns),
+                )
+                return
+
+            # ── SLOW PATH: full generation (cache miss) ──────────────────────
             _user_tier = await get_effective_tier(user_id)
             try:
-                import sqlite3 as _sqlite3
-                _odds_conn = _sqlite3.connect("/home/paulsportsza/scrapers/odds.db")
+                from db_connection import get_connection as _get_conn
+                _odds_conn = _get_conn()
                 from tier_gate import check_tip_limit as _check_limit
                 _can_view, _remaining = _check_limit(user_id, _user_tier, _odds_conn)
                 if not _can_view:
@@ -1040,11 +1136,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _upgrade_text = get_upgrade_message(_user_tier, context="tip")
                     await query.edit_message_text(
                         _upgrade_text, parse_mode=ParseMode.HTML,
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
-                            [InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:go")],
-                            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-                        ]),
+                        reply_markup=_edge_upgrade_markup(),
                     )
                     return
                 if match_key:
@@ -1052,7 +1144,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _odds_conn.close()
             except Exception as _gate_err:
                 log.warning("Edge detail tier gate failed: %s", _gate_err)
-            await _generate_game_tips(query, ctx, match_key, user_id, source="edge_picks")
+            await _generate_game_tips_safe(query, ctx, match_key, user_id, source="edge_picks")
     elif prefix == "schedule":
         if action == "noop":
             return
@@ -1068,7 +1160,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         elif action.startswith("tips:"):
             event_id = action.split(":", 1)[1]
-            await _generate_game_tips(query, ctx, event_id, query.from_user.id)
+            await _generate_game_tips_safe(query, ctx, event_id, query.from_user.id)
     elif prefix == "tip":
         if action == "affiliate_soon":
             await query.answer("🔗 Betway.co.za link coming soon! Check back tomorrow.", show_alert=True)
@@ -2832,12 +2924,8 @@ async def _render_your_games_all(
     edge_events = await _check_edges_for_games(games)
     edge_info = _get_edge_info_for_games(games)
 
-    # Sort: edge games first, then by commence_time
-    def sort_key(g):
-        has_edge = 1 if edge_events.get(g.get("id", "")) else 0
-        return (-has_edge, g.get("commence_time", ""))
-
-    sorted_games = sorted(games, key=sort_key)
+    # Sort: chronological only (earliest kickoff first)
+    sorted_games = sorted(games, key=lambda g: g.get("commence_time", ""))
 
     # Build title
     if sport_filter:
@@ -2897,8 +2985,6 @@ async def _render_your_games_all(
             event_date = ct_sa.date()
             date_label = _format_date_label(event_date, now)
             if date_label != current_date_label:
-                if current_date_label is not None:
-                    lines.append("")
                 current_date_label = date_label
                 lines.append(f"<b>{date_label}</b>")
             event_time = ct_sa.strftime("%H:%M") + " SAST"
@@ -3531,10 +3617,10 @@ def _get_broadcast_details(
     """
     result: dict[str, str] = {"broadcast": "", "kickoff": ""}
     try:
-        import sqlite3
         import sys
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
+        from db_connection import get_connection as _get_conn
         if "/home/paulsportsza" not in sys.path:
             sys.path.insert(0, "/home/paulsportsza")
         if "/home/paulsportsza/scrapers" not in sys.path:
@@ -3547,8 +3633,7 @@ def _get_broadcast_details(
         week_ahead = (now + timedelta(days=7)).strftime("%Y-%m-%d")
 
         db_path = "/home/paulsportsza/scrapers/odds.db"
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = _get_conn(db_path)
         rows = conn.execute(
             "SELECT * FROM broadcast_schedule "
             "WHERE broadcast_date BETWEEN ? AND ? AND is_live = 1 "
@@ -3599,10 +3684,10 @@ def _get_next_fixtures_for_teams(
     if not user_teams:
         return []
     try:
-        import sqlite3
         import sys
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
+        from db_connection import get_connection as _get_conn
         if "/home/paulsportsza" not in sys.path:
             sys.path.insert(0, "/home/paulsportsza")
         if "/home/paulsportsza/scrapers" not in sys.path:
@@ -3614,8 +3699,7 @@ def _get_next_fixtures_for_teams(
         month_ahead = (now + timedelta(days=30)).strftime("%Y-%m-%d")
 
         db_path = "/home/paulsportsza/scrapers/odds.db"
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = _get_conn(db_path)
         rows = conn.execute(
             "SELECT programme_title, home_team, away_team, start_time, league "
             "FROM broadcast_schedule "
@@ -3941,6 +4025,7 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
                     market_type=mt,
                     sport=_DB_LEAGUE_SPORT.get(lg, "soccer"),
                     league=lg,
+                    _skip_log=True,
                 )
             except Exception as exc:
                 log.debug("Edge V2 failed for %s: %s", m["match_id"], exc)
@@ -4056,6 +4141,13 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
         _tier_sort_order.get(t.get("display_tier", "bronze"), 9),
         -t.get("ev", 0),
     ))
+
+    # W75-FIX: Tier mismatch warning log
+    for tip in top_tips:
+        v2_tier = (tip.get("edge_v2") or {}).get("tier")
+        display = tip.get("display_tier")
+        if v2_tier and display and v2_tier != display:
+            log.warning("TIER MISMATCH: %s v2=%s display=%s", tip.get("match_id"), v2_tier, display)
 
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time()}
     return top_tips
@@ -4376,7 +4468,7 @@ def _build_hot_tips_page(
         a_abbr = config.abbreviate_team(tip.get("away_team") or "TBD")
         if access in ("full", "partial"):
             _btn_tier = EDGE_EMOJIS.get(tip.get("display_tier", tip.get("edge_rating", "bronze")), "🥉")
-            cb = f"edge:detail:{match_key}"
+            cb = f"edge:detail:{_shorten_cb_key(match_key)}"
         else:
             _btn_tier = "🔒"
             cb = "sub:plans"
@@ -4442,8 +4534,8 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         if user_id:
             user_tier = await get_effective_tier(user_id)
             try:
-                import sqlite3 as _sqlite3
-                _odds_conn = _sqlite3.connect("/home/paulsportsza/scrapers/odds.db")
+                from db_connection import get_connection as _get_conn
+                _odds_conn = _get_conn()
                 _, remaining_views, _ = gate_edges(tips, user_id, user_tier, _odds_conn)
                 _odds_conn.close()
             except Exception as _gate_err:
@@ -4456,6 +4548,15 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         await loading.delete()
     except Exception:
         pass
+
+    # W75-FIX: Cache coverage logging
+    if tips:
+        _cached_count = 0
+        for _tip in tips:
+            _mk = _tip.get("match_id", "")
+            if _mk and _mk in _analysis_cache:
+                _cached_count += 1
+        log.info("CACHE COVERAGE: %d/%d edges have cached narratives", _cached_count, len(tips))
 
     # Fetch 7-day hit rate for header (Wave 27-UX)
     _hit_rate = 0.0
@@ -4607,7 +4708,7 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         )
         reply = resp.content[0].text
     except Exception as exc:
-        log.error("Claude chat error: %s", exc)
+        log.warning("Claude chat error: %s", exc)
         reply = "⚠️ Couldn't process that. Try again or use the menu buttons."
 
     # Edit the "Thinking..." message in-place with the response (no stale message)
@@ -5094,6 +5195,158 @@ _game_tips_cache: dict[str, list[dict]] = {}
 _ANALYSIS_CACHE_TTL = 3600
 _analysis_cache: dict[str, tuple[str, list[dict], float]] = {}
 
+# W79: Callback key shortening — Telegram limits callback_data to 64 bytes.
+# edge:detail:{key} = 13 + len(key). Max key length = 51 chars.
+_CB_MAX_KEY = 51
+_cb_key_map: dict[str, str] = {}  # short_hash → full_match_key
+
+
+def _shorten_cb_key(match_key: str) -> str:
+    """Return a callback-safe key (≤51 chars). Long keys get 10-char hash."""
+    if len(match_key) <= _CB_MAX_KEY:
+        return match_key
+    import hashlib
+    short = hashlib.md5(match_key.encode()).hexdigest()[:10]
+    _cb_key_map[short] = match_key
+    return short
+
+
+def _resolve_cb_key(key: str) -> str:
+    """Resolve a callback key back to the full match_key."""
+    return _cb_key_map.get(key, key)
+
+# ── W60-CACHE: Persistent narrative cache in odds.db ──────────
+_NARRATIVE_CACHE_TTL = 21600  # 6 hours in seconds
+_NARRATIVE_DB_PATH = "/home/paulsportsza/scrapers/odds.db"
+# W75-FIX: Cache miss uses Sonnet (not Haiku) for quality parity with pre-gen
+_NARRATIVE_MODEL = os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514")
+
+
+def _ensure_narrative_cache_table() -> None:
+    """Create narrative_cache table if it doesn't exist."""
+    from db_connection import get_connection
+    conn = get_connection(_NARRATIVE_DB_PATH)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS narrative_cache (
+                match_id TEXT PRIMARY KEY,
+                narrative_html TEXT NOT NULL,
+                model TEXT NOT NULL,
+                edge_tier TEXT NOT NULL,
+                tips_json TEXT NOT NULL,
+                odds_hash TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _compute_odds_hash(match_id: str) -> str:
+    """Compute MD5 hash of current odds snapshot for staleness detection."""
+    import hashlib
+    from db_connection import get_connection
+    conn = get_connection(_NARRATIVE_DB_PATH)
+    try:
+        rows = conn.execute(
+            "SELECT bookmaker, home_odds, draw_odds, away_odds "
+            "FROM odds_latest WHERE match_id = ? ORDER BY bookmaker",
+            (match_id,),
+        ).fetchall()
+        if not rows:
+            return ""
+        return hashlib.md5(str(rows).encode()).hexdigest()
+    finally:
+        conn.close()
+
+
+async def _get_cached_narrative(match_id: str) -> dict | None:
+    """Fetch cached narrative from persistent DB cache. Returns None if stale/expired."""
+    import json
+    from datetime import datetime, timezone
+    from db_connection import get_connection
+
+    def _fetch():
+        conn = get_connection(_NARRATIVE_DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at "
+                "FROM narrative_cache WHERE match_id = ?",
+                (match_id,),
+            ).fetchone()
+            if not row:
+                return None
+            html, model, tier, tips_json, stored_hash, expires_at = row
+            # Check TTL
+            try:
+                exp = datetime.fromisoformat(expires_at)
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > exp:
+                    return None  # Expired
+            except (ValueError, TypeError):
+                return None
+            return {
+                "html": _final_polish(_sanitise_jargon(_strip_preamble(html))),
+                "tips": json.loads(tips_json),
+                "edge_tier": tier,
+                "model": model,
+            }
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_fetch)
+
+
+async def _store_narrative_cache(
+    match_id: str, html: str, tips: list, edge_tier: str, model: str
+) -> None:
+    """Persist narrative to DB cache with 6hr TTL. Retries on DB lock."""
+    import json
+    import sqlite3
+    import time as _time
+    from datetime import datetime, timedelta, timezone
+    from db_connection import get_connection
+
+    def _store():
+        max_attempts = 3
+        backoff = 1.0
+        for attempt in range(1, max_attempts + 1):
+            conn = get_connection(_NARRATIVE_DB_PATH)
+            try:
+                now = datetime.now(timezone.utc)
+                expires = now + timedelta(seconds=_NARRATIVE_CACHE_TTL)
+                odds_hash = _compute_odds_hash(match_id)
+                conn.execute(
+                    "INSERT OR REPLACE INTO narrative_cache "
+                    "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
+                    "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        match_id, html, model, edge_tier,
+                        json.dumps(tips, default=str),
+                        odds_hash,
+                        now.isoformat(),
+                        expires.isoformat(),
+                    ),
+                )
+                conn.commit()
+                return  # Success
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < max_attempts:
+                    log.warning("DB lock on cache write for %s (attempt %d/%d), retrying in %.1fs",
+                                match_id, attempt, max_attempts, backoff)
+                    _time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    raise
+            finally:
+                conn.close()
+
+    await asyncio.to_thread(_store)
+
+
 # ── W44-GUARDS: Pre-send validation constants ──────────────
 # Fallback phrases that indicate empty/degraded data — must NEVER reach users on data-rich leagues
 _FALLBACK_PHRASES = [
@@ -5183,7 +5436,7 @@ def check_sport_terminology(narrative: str, sport: str) -> list[str]:
     return flags
 
 
-def _build_analyst_prompt(sport: str = "soccer", banned_terms: str = "") -> str:
+def _build_analyst_prompt(sport: str = "soccer", banned_terms: str = "", mandatory_search: bool = False) -> str:
     """Build the two-pass analyst prompt. Code owns facts; AI owns analysis."""
     contest = "fight" if sport in ("mma", "boxing", "combat") else "match"
     terms = SPORT_TERMINOLOGY.get(sport, SPORT_TERMINOLOGY["soccer"])
@@ -5200,10 +5453,32 @@ def _build_analyst_prompt(sport: str = "soccer", banned_terms: str = "") -> str:
             f"    - BANNED TERMS for {sport} (using ANY of these is an instant quality failure): "
             f"{', '.join(terms['banned_terms'])}\n"
         )
+    # W73-LAUNCH: Mandatory vs conditional web search instruction
+    if mandatory_search:
+        step1 = textwrap.dedent("""\
+        STEP 1 — MANDATORY WEB SEARCH VERIFICATION:
+        You MUST use web search before writing your analysis. Search for:
+        - Current form, recent results, and standings for both teams
+        - Any recent injuries, suspensions, or team news (last 48 hours)
+        This is NON-NEGOTIABLE. Your first action must be a web search.
+        If web search results CONTRADICT the IMMUTABLE CONTEXT below, trust web search
+        (it is more current) and note the discrepancy in your analysis.""")
+    else:
+        step1 = textwrap.dedent("""\
+        STEP 1 — VERIFY BEFORE WRITING:
+        If web search is available, use it to verify:
+        - Both teams' current season form and recent results
+        - Current league standings/positions
+        - Any recent injuries, suspensions, or team news (last 48 hours)
+        If web search results CONTRADICT the IMMUTABLE CONTEXT below, trust the web search
+        (it is more current) and note the discrepancy briefly in your analysis.
+        If web search is NOT available, proceed using the IMMUTABLE CONTEXT as-is.""")
     return textwrap.dedent(f"""\
     You are MzansiEdge, a sharp South African sports betting ANALYST.
     SPORT: {sport}
     You are analysing a {sport} {contest}. Use ONLY terminology appropriate for {sport}.
+
+    {step1}
 
     YOU ARE AN ANALYST, NOT A REPORTER. The facts have already been assembled for you
     in the IMMUTABLE CONTEXT section of the user message. Your job is to INTERPRET
@@ -5213,6 +5488,10 @@ def _build_analyst_prompt(sport: str = "soccer", banned_terms: str = "") -> str:
     IMMUTABLE CONTEXT RULES:
     - The bullet points under SETUP FACTS, EDGE FACTS, RISK FACTS, and VERDICT FACTS
       are pre-verified. Every number, name, and statistic in them is confirmed accurate.
+    - The SIGNAL DATA block (if present) contains the full Edge V2 composite analysis:
+      composite score, all 7 signal scores, confirming/contradicting counts, and red flags.
+      USE this data to enrich The Edge and The Risk sections. Reference specific signals
+      (e.g. "4 of 7 signals confirm", "market consensus is tight", "steam move detected").
     - You MUST weave these facts into your narrative. Do NOT drop any of them.
     - You MUST NOT alter, paraphrase with different numbers, or contradict them.
     - You MUST NOT introduce ANY new statistics, scores, records, or positions
@@ -5244,16 +5523,45 @@ def _build_analyst_prompt(sport: str = "soccer", banned_terms: str = "") -> str:
     Use ALL the facts provided — leave nothing on the table.
 
     🎯 <b>The Edge</b>
-    Interpret the EDGE FACTS. Add your opinion on value — why is this edge worth taking?
-    Reference the odds data and bookmaker divergence. 2-3 sentences.
+    Interpret the EDGE FACTS and SIGNAL DATA. Add your opinion on value — why is this edge
+    worth taking? Reference signal scores, confirming signal count, sharp benchmark, and
+    bookmaker divergence. 2-3 sentences.
 
     ⚠️ <b>The Risk</b>
-    Interpret the RISK FACTS. What could go wrong? Ground it in the data given.
-    1-2 sentences max.
+    Interpret the RISK FACTS and any red flags or contradicting signals from SIGNAL DATA.
+    What could go wrong? Ground it in the data given. 1-2 sentences max.
 
     🏆 <b>Verdict</b>
-    One sentence. Clear recommendation based on VERDICT FACTS. Do NOT include the
-    Edge tier badge (injected programmatically). Do NOT use the word "conviction".
+    One sentence. Name the specific bookmaker and price. Follow the VERDICT DECISION RULES
+    below in order — use the FIRST rule that matches:
+
+    VERDICT DECISION RULES:
+
+    1. If DEAD PRICE (⛔ 24+ hours stale):
+       → "Verify [bookmaker]'s live odds before acting — this [X]% edge was priced [N] hours ago and is likely gone."
+
+    2. If STALE PRICE (⚠️ 6-24 hours) AND 0 confirming signals:
+       → "The price edge looks real at [X]%, but [bookmaker]'s [N]-hour pricing delay and zero confirming signals suggest caution — check live odds first."
+
+    3. If 3+ confirming signals AND composite ≥45:
+       → "[Bookmaker]'s [odds] on [outcome] is the sharpest value on today's card — [N] signals confirm and the composite hits [score]/100."
+
+    4. If 2+ confirming signals OR composite ≥40:
+       → "[Bookmaker]'s [odds] sits [X]% above [sharp source]'s benchmark. [One specific supporting fact from the signal data]."
+
+    5. If clean price edge (no stale, no contradictions, <2 confirming):
+       → "[Bookmaker]'s [odds] on [outcome] offers [X]% over fair value. [Specific match context that supports or complicates the edge]."
+
+    6. If tipster consensus AND market movement BOTH oppose:
+       → "[Bookmaker]'s [odds] shows a [X]% price edge, but tipsters and market movement both point the other way — this is a pure price play, not a signal play."
+
+    VERDICT ABSOLUTE RULES:
+    - You MUST give a positive recommendation for at least SOME edges. Not every edge is a skip.
+    - "Watch, not back" is BANNED. "One to watch" is BANNED.
+    - A price edge IS a signal. Zero confirming signals with a clean price edge is still a valid recommendation (use Rule 5).
+    - MILD DELAY (ℹ️ 60-360 min) is NOT a reason to skip. Small SA bookmakers update slowly — this is normal.
+    - Every verdict MUST name the bookmaker and the specific price.
+    - Do NOT include the Edge tier badge (injected programmatically). Do NOT use the word "conviction".
 
     ABSOLUTE RULES — VIOLATING ANY OF THESE MAKES THE OUTPUT UNUSABLE:
 
@@ -5271,6 +5579,8 @@ def _build_analyst_prompt(sport: str = "soccer", banned_terms: str = "") -> str:
        - If the context is sparse, write a SHORT analysis. Do not fill gaps.
 
     4. NEVER MENTION ANY PERSON BY NAME unless they appear in IMMUTABLE CONTEXT.
+       This includes managers, coaches, players, and officials. If a coach's name
+       is NOT in the IMMUTABLE CONTEXT, do NOT guess or recall it from memory.
 
     5. NEVER DESCRIBE PLAYING STYLE OR TACTICS.
        - No "counter-attacking", "possession-based", "set-piece strength",
@@ -5280,7 +5590,22 @@ def _build_analyst_prompt(sport: str = "soccer", banned_terms: str = "") -> str:
        - "Early-season data is limited for this fixture."
        - Then focus on odds and market pricing.
 
+    7. EVERY SECTION MUST CONTAIN AT LEAST ONE SENTENCE.
+       - Setup: If you lack standings/form context, describe what the signals and odds
+         tell you about this match. NEVER leave Setup empty.
+       - Risk: If you lack specific risk context, identify the strongest counter-argument
+         from the signal data (e.g. stale pricing, thin market, form inconsistency).
+         NEVER leave Risk empty.
+
     THE GOLDEN RULE: If it is not in the IMMUTABLE CONTEXT or ODDS DATA, it does not exist.
+
+    CONTEXT FACTS RULES:
+    - If CONTEXT FACTS are provided, use them to inform your Setup and Risk analysis.
+      Attribute claims to their source (e.g. "Dolly ruled out (KickOff.com)").
+      Do NOT invent additional context beyond what CONTEXT FACTS and other FACTS sections provide.
+    - If no CONTEXT FACTS are available, use the signal data to build context
+      (form trends, injury differential, market movement direction).
+      NEVER leave Setup or Risk empty — there is always something to say from the signals.
 
     NARRATIVE & OPINION (ENCOURAGED — USE FREELY):
     - You ARE encouraged to form opinions, make predictions, assess value.
@@ -5312,8 +5637,29 @@ def _build_analyst_prompt(sport: str = "soccer", banned_terms: str = "") -> str:
     - Do NOT include conviction levels, confidence ratings, or probability percentages in the Verdict.
     - Keep paragraphs to 3-4 sentences max for mobile readability.
     - Telegram HTML only (<b>, <i> tags). No markdown.
-    - Do NOT include odds numbers or bookmaker names (shown separately below)
+    - Reference specific odds and bookmaker names when making your argument. Name the bookmaker offering best value and the exact price. Compare to the sharp benchmark price if available.
     - No disclaimers, no "gamble responsibly" — we handle that elsewhere
+
+    BANNED PHRASES (if your output contains any of these, it will be rejected and you must retry):
+    - "back the value where"
+    - "odds diverge"
+    - "form inconsistency is the"
+    - "both sides have something"
+    - "one bad half can flip"
+    - "proceed with caution"
+    - "value play"
+    - "grab it before"
+    - "before they wake up"
+    - "before they catch up"
+    - "before they realise"
+    - "before they adjust"
+    - "move fast"
+    - "won't last forever"
+    - "before they slash"
+    - "the numbers say value, but"
+    - "one to watch, not back"
+    - "this one to watch"
+    - "makes this one to watch"
 
     TONE:
     - Write like a sharp SA sports analyst at a braai — knowledgeable,
@@ -5322,6 +5668,60 @@ def _build_analyst_prompt(sport: str = "soccer", banned_terms: str = "") -> str:
     - Address the reader directly: "you", "your", not "one" or "the bettor".
     - If the data is thin, keep it shorter — don't pad with generic filler.
     """)
+
+
+# ── W69-VERIFY: Web search response helper ───────────────
+
+def _extract_text_from_response(resp) -> str:
+    """Extract concatenated text from Claude response (handles web search multi-block).
+
+    When web search tools are enabled, the response contains multiple content blocks:
+    TextBlock, ServerToolUseBlock, WebSearchToolResultBlock, TextBlock (with citations).
+    This extracts and concatenates all text blocks.
+    """
+    parts = []
+    for block in resp.content:
+        if hasattr(block, "text") and block.text is not None:
+            parts.append(block.text)
+    return "\n".join(parts) if parts else ""
+
+
+def _strip_preamble(raw: str) -> str:
+    """Discard everything before first section emoji.
+
+    W79-PHASE1: Catches ALL meta-commentary in one rule.
+    Claude sometimes outputs reasoning text before the actual analysis
+    (e.g. "Based on my web search findings..."). This strips it.
+    """
+    for marker in ("📋", "🎯", "⚠️", "🏆"):
+        idx = raw.find(marker)
+        if idx != -1:
+            if idx > 0:
+                log.warning("Stripped %d chars of preamble before %s", idx, marker)
+            return raw[idx:]
+    return raw
+
+
+# W69-VERIFY: Web search tool configuration for Opus pre-gen
+WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 3}
+
+# W69-VERIFY: Claim extraction patterns for Layer 2/3 verification
+_CLAIM_FORM_RE = re.compile(r'(?:form|form reads|recent form)\s+(?:reads?\s+)?([WDL]{2,})', re.IGNORECASE)
+_CLAIM_POS_RE = re.compile(r'sit\s+(\d+(?:st|nd|rd|th))\s+(?:on|with)\s+(\d+)\s+points?', re.IGNORECASE)
+_CLAIM_RECORD_RE = re.compile(r'W(\d+)\s*(?:D(\d+)\s*)?L(\d+)', re.IGNORECASE)
+
+
+def _extract_claims(text: str) -> list[str]:
+    """Extract verifiable factual claims from narrative text."""
+    claims = []
+    for m in _CLAIM_FORM_RE.finditer(text):
+        claims.append(f"Form: {m.group(1)}")
+    for m in _CLAIM_POS_RE.finditer(text):
+        claims.append(f"Position: {m.group(1)} on {m.group(2)} points")
+    for m in _CLAIM_RECORD_RE.finditer(text):
+        d = m.group(2) or "0"
+        claims.append(f"Record: W{m.group(1)} D{d} L{m.group(3)}")
+    return claims
 
 
 # ── Prompt leak protection ────────────────────────────────
@@ -5349,7 +5749,86 @@ PROMPT_LEAK_PATTERNS = [
     r'"You\s+may\s+ONLY\s+state\s+facts',
     r'If\s+a\s+fact\s+is\s+NOT\s+in',
     r'No\s+exceptions\.?"',
+    # W79-PHASE1: Web-search-era meta-commentary
+    r'Based\s+on\s+(?:my|the)\s+web\s+search',
+    r'I\s+have\s+current\s+updates\s+that\s+contradict',
+    r'The\s+searches\s+also\s+reveal',
+    r'I\s+notice\s+this\s+is\s+actually\s+a',
+    r'(?:However,?\s+)?according\s+to\s+my\s+instructions',
+    r'Let\s+me\s+(?:search\s+for|now\s+write)',
+    r'immutable\s+context',
+    r'as\s+indicated\s+in\s+my\s+instructions',
+    r'per\s+my\s+instructions',
+    r'I\s+was\s+instructed\s+to\s+analy[sz]e',
 ]
+
+# ── Banned phrase detection (W59-PROMPT) ────────────────────
+BANNED_NARRATIVE_PHRASES = [
+    "back the value where",
+    "odds diverge",
+    "form inconsistency is the",
+    "both sides have something",
+    "one bad half can flip",
+    "proceed with caution",
+    "value play",
+    # W64-VERDICT: urgency phrases that contradict stale price warnings
+    "grab it before",
+    "before they wake up",
+    "before they catch up",
+    "before they realise",
+    "before they adjust",
+    "move fast",
+    "won't last forever",
+    "before they slash",
+    # W67-CALIBRATE: "watch not back" formula phrases
+    "the numbers say value, but",
+    "one to watch, not back",
+    "this one to watch",
+    "makes this one to watch",
+]
+
+
+def _has_banned_patterns(narrative: str) -> bool:
+    """Return True if narrative contains any generic filler phrase."""
+    lower = narrative.lower()
+    return any(phrase in lower for phrase in BANNED_NARRATIVE_PHRASES)
+
+
+# W64-VERDICT: stale-rush urgency phrases for contradiction detection
+_RUSH_PHRASES = [
+    "grab it", "move fast", "lock it in", "before they",
+    "won't last", "take it before", "get on it", "act now",
+    "snap it up", "hurry",
+]
+
+
+def _check_stale_contradiction(narrative: str, edge_data: dict | None) -> bool:
+    """W64-VERDICT: Return True if narrative recommends rushing on a stale-priced edge."""
+    if not edge_data:
+        return False
+    if not edge_data.get("stale_warning") and not edge_data.get("stale_price") and edge_data.get("stale_minutes", 0) < 60:
+        return False
+    lower = narrative.lower()
+    return any(phrase in lower for phrase in _RUSH_PHRASES)
+
+
+# W67-CALIBRATE: Verdict balance check for pre-gen sweeps
+_SKIP_VERDICT_PHRASES = ["verify", "check live", "watch", "caution", "skip", "likely gone", "suggest caution"]
+
+
+def _check_verdict_balance(sweep_verdicts: list[str]) -> list[str]:
+    """Log warning if >60% of sweep verdicts are skip/caution recommendations."""
+    if not sweep_verdicts:
+        return sweep_verdicts
+    skip_count = sum(1 for v in sweep_verdicts if any(p in v.lower() for p in _SKIP_VERDICT_PHRASES))
+    skip_ratio = skip_count / len(sweep_verdicts)
+    if skip_ratio > 0.60:
+        log.warning(
+            "VERDICT BALANCE WARNING: %d/%d (%.0f%%) verdicts are skips.",
+            skip_count, len(sweep_verdicts), skip_ratio * 100,
+        )
+    return sweep_verdicts
+
 
 # Backward-compat alias — tests and debug dump reference the old name
 _build_game_analysis_prompt = _build_analyst_prompt
@@ -5819,6 +6298,144 @@ def _format_verified_context(ctx_data: dict) -> str:
     return "\n".join(parts)
 
 
+def _format_signal_data_for_prompt(edge: dict) -> str:
+    """Format Edge V2 signal data as structured text for the AI prompt.
+
+    Injects into IMMUTABLE CONTEXT so Claude can reference composite score,
+    signal breakdown, confirming/contradicting counts, and red flags.
+    """
+    if not edge:
+        return ""
+
+    signals = edge.get("signals", {})
+    if not signals:
+        return ""
+
+    lines = ["SIGNAL DATA (from Edge V2 composite analysis):"]
+
+    # Composite
+    tier = edge.get("tier", "N/A")
+    lines.append(
+        f"• Composite score: {edge.get('composite_score', 'N/A')}/100 (tier: {tier})"
+    )
+
+    # Signal 1: Price edge
+    pe = signals.get("price_edge", {})
+    if pe.get("available"):
+        sharp_src = pe.get("sharp_source") or edge.get("sharp_source") or "consensus"
+        sharp_prob = pe.get("sharp_prob") or pe.get("fair_prob") or 0
+        lines.append(
+            f"• Price edge: {edge.get('edge_pct', 0):.1f}% EV at "
+            f"{pe.get('best_bookmaker', 'N/A')} ({pe.get('best_odds', 'N/A')}), "
+            f"benchmarked against {sharp_src}"
+            + (f" (fair prob {sharp_prob:.0%})" if sharp_prob else "")
+        )
+    else:
+        lines.append("• Price edge: N/A")
+
+    # Signal 2: Market agreement
+    ma = signals.get("market_agreement", {})
+    if ma.get("available"):
+        lines.append(
+            f"• Market agreement: {ma.get('score', 0):.0f}/100 — "
+            f"{ma.get('agreeing_bookmakers', 0)}/{ma.get('total_bookmakers', 0)} "
+            f"bookmakers cluster within 3%"
+        )
+    else:
+        lines.append("• Market agreement: N/A")
+
+    # Signal 3: Line movement
+    mv = signals.get("movement", {})
+    if mv.get("available"):
+        mv_pct = mv.get("movement_pct", 0)
+        if mv.get("steam_confirms"):
+            mv_desc = "Steam move CONFIRMING this pick"
+        elif mv.get("steam_contradicts"):
+            mv_desc = "Steam move AGAINST this pick"
+        elif mv_pct > 0:
+            mv_desc = "Odds shortening (market moving towards this outcome)"
+        elif mv_pct < 0:
+            mv_desc = "Odds drifting (market moving away from this outcome)"
+        else:
+            mv_desc = "Stable — no significant movement"
+        lines.append(
+            f"• Line movement: {mv_desc} ({mv_pct:+.1f}% probability shift)"
+        )
+    else:
+        lines.append("• Line movement: N/A")
+
+    # Signal 4: Tipster consensus
+    tp = signals.get("tipster", {})
+    if tp.get("available"):
+        agrees = "backs" if tp.get("agrees_with_edge") else "opposes"
+        lines.append(
+            f"• Tipster consensus: {tp.get('n_sources', 0)}/{tp.get('total_sources', 0)} "
+            f"sources {agrees} this outcome (signal: {tp.get('score', 0):.0f}/100)"
+        )
+    else:
+        lines.append("• Tipster consensus: N/A")
+
+    # Signal 5: Injury differential
+    li = signals.get("lineup_injury", {})
+    if li.get("available"):
+        # Extract team names from match_key
+        mk = edge.get("match_key", "")
+        parts = mk.rsplit("_", 1)
+        home_label, away_label = "Home", "Away"
+        if len(parts) >= 2 and "_vs_" in parts[0]:
+            h, a = parts[0].split("_vs_", 1)
+            home_label = h.replace("_", " ").title()
+            away_label = a.replace("_", " ").title()
+        lines.append(
+            f"• Injury differential: {home_label} {li.get('home_injuries', 0)} injured "
+            f"vs {away_label} {li.get('away_injuries', 0)} injured"
+        )
+    else:
+        lines.append("• Injury differential: N/A")
+
+    # Signal 6: Form & H2H
+    fh = signals.get("form_h2h", {})
+    if fh.get("available"):
+        form_edge = fh.get("form_edge", "neutral")
+        home_form = fh.get("home_form_string", "")
+        away_form = fh.get("away_form_string", "")
+        form_parts = []
+        if home_form:
+            form_parts.append(f"home form {home_form}")
+        if away_form:
+            form_parts.append(f"away form {away_form}")
+        form_detail = ", ".join(form_parts) if form_parts else form_edge
+        lines.append(
+            f"• Form signal: {fh.get('score', 0):.0f}/100 — {form_detail}"
+        )
+    else:
+        lines.append("• Form signal: N/A")
+
+    # Signal 7: Weather
+    wt = signals.get("weather", {})
+    if wt.get("available"):
+        cond = wt.get("condition", "")
+        level = wt.get("overall_level", "low")
+        desc = f"{cond} ({level} impact)" if cond else f"{level} impact"
+        lines.append(
+            f"• Weather: {desc} (signal: {wt.get('score', 0):.0f}/100)"
+        )
+    else:
+        lines.append("• Weather: N/A")
+
+    # Confirming / contradicting
+    lines.append(
+        f"• Confirming signals: {edge.get('confirming_signals', 0)}/7 | "
+        f"Contradicting: {edge.get('contradicting_signals', 0)}/7"
+    )
+
+    # Red flags
+    flags = edge.get("red_flags", [])
+    lines.append(f"• Red flags: {', '.join(flags) if flags else 'None'}")
+
+    return "\n".join(lines)
+
+
 def validate_sport_context(narrative: str, sport: str) -> str:
     """Strip sport-inappropriate language from AI output using sport_terms.py.
 
@@ -5848,80 +6465,103 @@ def validate_sport_context(narrative: str, sport: str) -> str:
     return narrative.strip()
 
 
-def _ensure_setup_not_empty(output: str, ctx_data: dict, sport: str = "soccer") -> str:
-    """If The Setup section is empty or too short, inject a fallback from verified data."""
-    if not output or "📋" not in output:
-        return output
-    if not ctx_data or not ctx_data.get("data_available"):
-        return output
 
+# W79-PHASE2: _ensure_setup_not_empty removed — code-built Setup always populated
+
+
+def _ensure_risk_not_empty(
+    output: str, tips: list[dict] | None = None, sport: str = "soccer",
+) -> str:
+    """W63-EMPTY: If The Risk section is empty or too short, inject signal-based risk."""
+    if not output or "⚠️" not in output:
+        return output
     try:
-        setup_start = output.index("📋")
-        # Find the next section header
+        risk_start = output.index("⚠️")
         next_section = len(output)
-        for marker in ("🎯", "⚠️", "🏆"):
-            idx = output.find(marker, setup_start + 1)
+        for marker in ("🏆",):
+            idx = output.find(marker, risk_start + 1)
             if idx != -1 and idx < next_section:
                 next_section = idx
 
-        setup_content = output[setup_start:next_section].strip()
+        risk_content = output[risk_start:next_section].strip()
+        import re as _re_local
+        clean_content = _re_local.sub(r"<[^>]+>", "", risk_content).strip()
 
-        # If Setup is just the header with minimal content (< 80 chars = header + maybe 1 line)
-        if len(setup_content) < 80:
-            fallback_parts = []
-            for side in ("home_team", "away_team"):
-                team = ctx_data.get(side, {})
-                name = team.get("name", "?")
-                pos = team.get("league_position")
-                pts = team.get("points")
-                form = team.get("form", "")
-                coach = team.get("coach", "")
-                record = team.get("record", "")
-                wins = team.get("wins")
-                losses = team.get("losses")
-                games = team.get("played") or team.get("games_played")
-                goals_per = team.get("goals_per_game")
-                nrr = team.get("nrr")
+        if len(clean_content) < 40:
+            risk_parts = []
+            if tips:
+                for t in tips:
+                    v2 = t.get("edge_v2") or {}
+                    sigs = v2.get("signals", {})
+                    # Steam contradicts
+                    mv = sigs.get("movement", {})
+                    if mv.get("steam_contradicts"):
+                        risk_parts.append("Market professionals are moving against this pick — steam detected on the other side.")
+                    # Tipster disagrees
+                    tp = sigs.get("tipster", {})
+                    if tp.get("available") and not tp.get("agrees_with_edge"):
+                        n_src = tp.get("n_sources", 0)
+                        if n_src >= 2:
+                            risk_parts.append(f"{n_src} independent tipster sources favour the other outcome.")
+                    # Outlier risk
+                    ma = sigs.get("market_agreement", {})
+                    if ma.get("outlier_risk"):
+                        risk_parts.append("Only 1 bookmaker shows this value — the rest cluster around a lower price.")
+                    # Red flags
+                    for rf in v2.get("red_flags", []):
+                        rf_clean = rf.lstrip("\u26a0\ufe0f ").strip()
+                        if rf_clean:
+                            risk_parts.append(rf_clean)
+                    break
 
-                bits = []
-                if pos is not None and pts is not None:
-                    suffix = {1: "st", 2: "nd", 3: "rd"}.get(pos % 10 if pos % 100 not in (11, 12, 13) else 0, "th")
-                    games_str = f" from {games} games" if games else ""
-                    bits.append(f"{pos}{suffix} on {pts} points{games_str}")
-                if record:
-                    bits.append(f"record {record}")
-                elif wins is not None and losses is not None:
-                    bits.append(f"{wins}W-{losses}L")
-                if form:
-                    bits.append(f"form {form}")
-                if nrr is not None:
-                    bits.append(f"NRR {nrr:+.3f}")
-                if goals_per is not None:
-                    if sport == "cricket":
-                        bits.append(f"{goals_per:.1f} runs/innings")
-                    elif sport == "rugby":
-                        bits.append(f"{goals_per:.1f} points/game")
-                    else:
-                        bits.append(f"{goals_per:.1f} goals/game")
-                if coach:
-                    bits.append(f"under {coach}")
+            if not risk_parts:
+                # Sport-appropriate generic risk
+                if sport == "cricket":
+                    risk_parts.append("No specific risk signals detected — a single bad innings can change everything in this format.")
+                elif sport in ("mma", "boxing"):
+                    risk_parts.append("No specific risk signals detected — one round is all it takes in combat sports.")
+                elif sport == "rugby":
+                    risk_parts.append("No specific risk signals detected — discipline at the breakdown and set-piece execution could swing this.")
+                else:
+                    risk_parts.append("No specific risk signals detected — standard match variance applies.")
 
-                if bits:
-                    fallback_parts.append(f"{name}: {', '.join(bits)}.")
-
-            if fallback_parts:
-                fallback = "\n".join(fallback_parts)
-                # Replace the thin Setup with enriched version
-                output = (
-                    output[:setup_start]
-                    + f"📋 <b>The Setup</b>\n{fallback}\n\n"
-                    + output[next_section:]
-                )
-                log.info("Injected fallback Setup from verified data")
+            fallback = "\n".join(risk_parts)
+            output = (
+                output[:risk_start]
+                + f"⚠️ <b>The Risk</b>\n{fallback}\n\n"
+                + output[next_section:]
+            )
+            log.info("Injected fallback Risk from signal data")
     except (ValueError, IndexError):
         pass
-
     return output
+
+
+
+# W79-PHASE2: _ensure_verdict_not_empty removed — code-built Verdict always populated
+
+
+def _has_empty_sections(narrative: str) -> bool:
+    """W63-EMPTY: Detect empty Setup, Risk, or Verdict sections in narrative HTML."""
+    import re as _re_local
+    # (start_marker, end_marker) — None means "to end of string"
+    sections = [("📋", "🎯"), ("⚠️", "🏆"), ("🏆", None)]
+    for start_marker, end_marker in sections:
+        start = narrative.find(start_marker)
+        if start == -1:
+            continue
+        if end_marker:
+            end = narrative.find(end_marker, start + 1)
+            if end == -1:
+                end = len(narrative)
+        else:
+            end = len(narrative)
+        content = narrative[start:end]
+        clean = _re_local.sub(r"<[^>]+>", "", content).strip()
+        # Less than 30 chars means just the header with no real content
+        if len(clean) < 30:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -6085,6 +6725,10 @@ def build_verified_narrative(
     if has_ctx:
         home = ctx_data.get("home_team", {})
         away = ctx_data.get("away_team", {})
+        if not isinstance(home, dict):
+            home = {"name": home if isinstance(home, str) else "Home"}
+        if not isinstance(away, dict):
+            away = {"name": away if isinstance(away, str) else "Away"}
         home_name = home.get("name", "Home")
         away_name = away.get("name", "Away")
 
@@ -6113,6 +6757,9 @@ def build_verified_narrative(
 
             # Sentence: form + interpretation + latest result (W42-CONTEXT)
             form = team.get("form", "")
+            # W69-VERIFY: truncate form to current-season games_played
+            if form and gp and len(form) > gp:
+                form = form[:gp]
             last5 = team.get("last_5", [])
             form_interp = _interpret_form(form)
             if form and last5:
@@ -6190,8 +6837,55 @@ def build_verified_narrative(
             if stripped and any(kw in stripped.lower() for kw in ("injur", "absent", "doubt", "miss", "out for")):
                 setup.append(stripped)
 
+    # W63-EMPTY: When ESPN context is unavailable, generate Setup from signal data
     if not setup:
-        setup.append("Limited verified data is available for this fixture.")
+        # Extract team names from tips or enrichment
+        _home_name = "Home"
+        _away_name = "Away"
+        _league_display = ""
+        if tips:
+            for t in tips:
+                v2 = t.get("edge_v2") or {}
+                mk = v2.get("match_key", "")
+                if "_vs_" in mk:
+                    parts = mk.rsplit("_", 1)
+                    if len(parts) >= 2:
+                        h, a = parts[0].split("_vs_", 1)
+                        _home_name = h.replace("_", " ").title()
+                        _away_name = a.replace("_", " ").title()
+                _league_display = v2.get("league", "") or t.get("league", "")
+                break
+
+        # Opening sentence with what we know
+        if _league_display:
+            setup.append(f"{_home_name} face {_away_name} in {_league_display}.")
+        else:
+            setup.append(f"{_home_name} take on {_away_name}.")
+
+        # Form from Edge V2 signals
+        if tips:
+            for t in tips:
+                v2 = t.get("edge_v2") or {}
+                sigs = v2.get("signals", {})
+                fh = sigs.get("form_h2h", {})
+                if fh.get("available"):
+                    h_form = fh.get("home_form_string", "")
+                    a_form = fh.get("away_form_string", "")
+                    if h_form:
+                        setup.append(f"{_home_name} arrive with form reading {h_form}.")
+                    if a_form:
+                        setup.append(f"{_away_name}'s recent form reads {a_form}.")
+                # Injuries from signals
+                li = sigs.get("lineup_injury", {})
+                if li.get("available"):
+                    h_inj = li.get("home_injuries", 0)
+                    a_inj = li.get("away_injuries", 0)
+                    if h_inj or a_inj:
+                        setup.append(
+                            f"Injury watch: {_home_name} have {h_inj} player(s) out, "
+                            f"{_away_name} have {a_inj}."
+                        )
+                break  # only need data from first tip
 
     # ── EDGE SENTENCES ──
     if tips:
@@ -6229,10 +6923,55 @@ def build_verified_narrative(
             elif in_edge_signals and not stripped:
                 in_edge_signals = False
 
-    # ── RISK SENTENCES ──
+    # ── RISK SENTENCES (W59-PROMPT: signal-backed data) ──
+    # Extract Edge V2 signal data from best tip
+    _best_v2 = None
+    if tips:
+        _v2_tips = [t for t in tips if t.get("edge_v2")]
+        if _v2_tips:
+            _best_v2 = max(_v2_tips, key=lambda t: t.get("ev", 0)).get("edge_v2")
+
+    if _best_v2:
+        _sigs = _best_v2.get("signals", {})
+        _red_flags = _best_v2.get("red_flags", [])
+
+        # Steam contradicts — market moving against our pick
+        _mov = _sigs.get("movement", {})
+        if _mov.get("steam_contradicts"):
+            risk.append("Market professionals are moving against this pick — steam detected on the other side.")
+
+        # Tipster consensus disagrees
+        _tip_sig = _sigs.get("tipster", {})
+        if _tip_sig.get("available") and not _tip_sig.get("agrees_with_edge"):
+            _n_src = _tip_sig.get("n_sources", 0)
+            if _n_src >= 2:
+                risk.append(f"{_n_src} independent tipster sources favour the other outcome.")
+
+        # Stale price warning
+        if _best_v2.get("stale_warning"):
+            _stale_bk = _best_v2.get("best_bookmaker", "the best-odds bookmaker")
+            risk.append(f"The best odds from {_stale_bk} haven't moved recently while peers have adjusted — possible stale price.")
+
+        # Outlier risk — only 1 bookmaker shows value
+        _mkt = _sigs.get("market_agreement", {})
+        if _mkt.get("outlier_risk"):
+            risk.append("Only 1 bookmaker shows this value — the rest cluster around a lower price.")
+
+        # Red flags from edge calculation
+        for _rf in _red_flags:
+            # Strip emoji prefix for clean fact text
+            _rf_clean = _rf.lstrip("\u26a0\ufe0f ").strip()
+            if _rf_clean and _rf_clean not in " ".join(risk):
+                risk.append(_rf_clean)
+
+    # Form-based risks (from ESPN context)
     if has_ctx:
         home = ctx_data.get("home_team", {})
         away = ctx_data.get("away_team", {})
+        if not isinstance(home, dict):
+            home = {"name": home if isinstance(home, str) else "Home"}
+        if not isinstance(away, dict):
+            away = {"name": away if isinstance(away, str) else "Away"}
         h_form = home.get("form", "")
         a_form = away.get("form", "")
         home_name = home.get("name", "Home")
@@ -6241,7 +6980,7 @@ def build_verified_narrative(
         if h_form.count("L") >= 2 and tips:
             best_outcome = max(tips, key=lambda t: t.get("ev", 0)).get("outcome", "")
             if best_outcome and home_name.lower() in best_outcome.lower():
-                risk.append(f"{home_name}'s recent form ({h_form}) includes multiple losses — inconsistency is a concern.")
+                risk.append(f"{home_name}'s recent form ({h_form}) includes multiple losses.")
         if a_form.count("L") >= 2 and tips:
             best_outcome = max(tips, key=lambda t: t.get("ev", 0)).get("outcome", "")
             if best_outcome and away_name.lower() in best_outcome.lower():
@@ -6252,28 +6991,1894 @@ def build_verified_narrative(
             risk.append(f"{away_name}'s momentum makes them dangerous.")
 
     if not risk:
-        _period = _get_sport_term(sport, "period", "half")
+        # Sport-appropriate fallback — no banned phrases
         if sport == "cricket":
-            risk.append("Both sides have something to play for, and one bad innings can flip this result.")
+            risk.append("No specific risk signals detected — a single bad innings can change everything in this format.")
         elif sport in ("mma", "boxing"):
-            risk.append("Both fighters have something to prove, and one bad round can flip this result.")
+            risk.append("No specific risk signals detected — one round is all it takes in combat sports.")
+        elif sport == "rugby":
+            risk.append("No specific risk signals detected — discipline at the breakdown and set-piece execution could swing this.")
         else:
-            risk.append(f"Both sides have something to play for, and one bad {_period} can flip this result.")
+            risk.append("No specific risk signals detected — standard match variance applies.")
 
-    # ── VERDICT SENTENCE ──
+    # ── VERDICT SENTENCE (W59-PROMPT: enriched with specifics) ──
     if tips:
         best = max(tips, key=lambda t: t.get("ev", 0))
         ev = best.get("ev", 0)
+        _bk = best.get("bookie", "?")
+        _odds = best.get("odds", 0)
+        _outcome = best.get("outcome", "?")
+        _v2 = best.get("edge_v2") or {}
+        _edge_pct = _v2.get("edge_pct", ev) if _v2 else ev
+        _sharp_src = _v2.get("sharp_source", "consensus") if _v2 else "consensus"
+        _confirming = _v2.get("confirming_signals", 0) if _v2 else 0
         if ev > 2:
-            verdict.append(f"Back {best.get('outcome', '?')} at {best.get('odds', 0):.2f} for the value play.")
+            verdict.append(
+                f"Back {_outcome} at {_bk} ({_odds:.2f}), "
+                f"which sits {_edge_pct:.1f}% above {_sharp_src} benchmark. "
+                f"{_confirming}/7 signals confirm."
+            )
         elif ev > 0:
-            verdict.append(f"{best.get('outcome', '?')} at {best.get('odds', 0):.2f} is marginal value — proceed with caution.")
+            verdict.append(
+                f"{_outcome} at {_bk} ({_odds:.2f}) shows {_edge_pct:.1f}% edge "
+                f"vs {_sharp_src} — marginal but {_confirming}/7 signals align."
+            )
         else:
             verdict.append("No clear value here — consider sitting this one out.")
     else:
         verdict.append("Wait for more odds data before committing.")
 
     return {"setup": setup, "edge": edge, "risk": risk, "verdict": verdict}
+
+
+def _build_signal_only_narrative(
+    tips: list[dict] | None = None,
+    sport: str = "soccer",
+) -> str:
+    """W63-EMPTY: Build a complete narrative from signal/odds data when ESPN context is unavailable."""
+    if not tips:
+        return ""
+
+    # Extract team names from edge_v2 match_key
+    _home, _away = "Home", "Away"
+    _league = ""
+    _best = max(tips, key=lambda t: t.get("ev", 0))
+    v2 = _best.get("edge_v2") or {}
+    mk = v2.get("match_key", "")
+    if "_vs_" in mk:
+        parts = mk.rsplit("_", 1)
+        if len(parts) >= 2:
+            h, a = parts[0].split("_vs_", 1)
+            _home = h.replace("_", " ").title()
+            _away = a.replace("_", " ").title()
+    _league = v2.get("league", "") or _best.get("league", "")
+
+    sigs = v2.get("signals", {})
+    parts: list[str] = []
+
+    # ── Setup ──
+    setup_lines: list[str] = []
+    if _league:
+        setup_lines.append(f"{_home} face {_away} in {_league}.")
+    else:
+        setup_lines.append(f"{_home} take on {_away}.")
+
+    fh = sigs.get("form_h2h", {})
+    if fh.get("available"):
+        h_form = fh.get("home_form_string", "")
+        a_form = fh.get("away_form_string", "")
+        if h_form:
+            setup_lines.append(f"{_home} arrive with form reading {h_form}.")
+        if a_form:
+            setup_lines.append(f"{_away}'s recent form reads {a_form}.")
+
+    li = sigs.get("lineup_injury", {})
+    if li.get("available"):
+        h_inj = li.get("home_injuries", 0)
+        a_inj = li.get("away_injuries", 0)
+        if h_inj or a_inj:
+            setup_lines.append(f"Injury watch: {_home} have {h_inj} out, {_away} have {a_inj}.")
+
+    parts.append(f"📋 <b>The Setup</b>\n{' '.join(setup_lines)}")
+
+    # ── Edge ──
+    ev = _best.get("ev", 0)
+    outcome = _best.get("outcome", "?")
+    odds = _best.get("odds", 0)
+    bk = _best.get("bookie", "?")
+    if ev > 0:
+        edge_text = (
+            f"The best value sits with {outcome} at {odds:.2f} ({bk}), "
+            f"carrying a +{ev:.1f}% edge."
+        )
+    else:
+        edge_text = "The market has this priced efficiently with no significant value on either side."
+    parts.append(f"🎯 <b>The Edge</b>\n{edge_text}")
+
+    # ── Risk ──
+    risk_lines: list[str] = []
+    mv = sigs.get("movement", {})
+    if mv.get("steam_contradicts"):
+        risk_lines.append("Market professionals are moving against this pick.")
+    tp = sigs.get("tipster", {})
+    if tp.get("available") and not tp.get("agrees_with_edge"):
+        risk_lines.append(f"{tp.get('n_sources', 0)} tipster sources favour the other outcome.")
+    ma = sigs.get("market_agreement", {})
+    if ma.get("outlier_risk"):
+        risk_lines.append("Only 1 bookmaker shows this value.")
+    if not risk_lines:
+        if sport == "cricket":
+            risk_lines.append("No specific risk signals — a single bad innings can change everything.")
+        elif sport == "rugby":
+            risk_lines.append("No specific risk signals — discipline at the breakdown could swing this.")
+        else:
+            risk_lines.append("No specific risk signals detected — standard match variance applies.")
+    parts.append(f"⚠️ <b>The Risk</b>\n{' '.join(risk_lines)}")
+
+    # ── Verdict ──
+    _confirming = v2.get("confirming_signals", 0)
+    _composite = v2.get("composite_score", 0)
+    if ev > 2 and _confirming >= 3:
+        verdict = (
+            f"{bk}'s {odds:.2f} on {outcome} is the sharpest value on today's card — "
+            f"{_confirming} signals confirm and the composite hits {_composite:.0f}/100."
+        )
+    elif ev > 2:
+        verdict = (
+            f"Back {outcome} at {odds:.2f} on {bk} — "
+            f"+{ev:.1f}% above fair value with {_confirming} signal{'s' if _confirming != 1 else ''} confirming."
+        )
+    elif ev > 0:
+        verdict = (
+            f"{outcome} at {odds:.2f} on {bk} shows +{ev:.1f}% value — "
+            f"size conservatively."
+        )
+    else:
+        verdict = "No clear value here — consider sitting this one out."
+    parts.append(f"🏆 <b>Verdict</b>\n{verdict}")
+
+    return "\n\n".join(parts)
+
+
+# ── W80-PROSE: Natural Analyst Prose Templates (replaces W79 fill-in-the-blank) ──
+
+
+def _parse_record(record_str: str) -> tuple[int, int, int]:
+    """Parse 'W9 D3 L2' into (wins, draws, losses). Handles cricket 'W5 L3'."""
+    if not record_str:
+        return (0, 0, 0)
+    w = d_val = l = 0
+    for m in re.finditer(r'([WDL])(\d+)', record_str):
+        val = int(m.group(2))
+        if m.group(1) == 'W':
+            w = val
+        elif m.group(1) == 'D':
+            d_val = val
+        elif m.group(1) == 'L':
+            l = val
+    return (w, d_val, l)
+
+
+def _match_pick(home: str, away: str, options: list[str]) -> str:
+    """Deterministic pick from options based on match pairing.
+
+    Same match always gets the same choice, but different matches get different choices.
+    """
+    if not options:
+        return ""
+    h = int(_md5(f"{home}:{away}".encode()).hexdigest(), 16)
+    return options[h % len(options)]
+
+
+def _form_narrative(form: str, name: str, home_name: str, away_name: str) -> str:
+    """Return a narrative fragment about form. Never starts with team name.
+
+    Returns a COMPLETE thought. Does NOT end with a period — caller handles punctuation.
+    """
+    if not form:
+        return ""
+    w = form.count("W")
+    l = form.count("L")
+    d_val = form.count("D")
+    n = len(form)
+
+    # === Unbeaten ===
+    if l == 0 and w >= 4:
+        return f"an unbeaten run of {n} reads like a team hitting peak form"
+    if l == 0 and w >= 2:
+        return f"unbeaten in their last {n} — steady if not spectacular"
+
+    # === Winning streaks (check prefix for consecutive) ===
+    if n >= 4 and form[:4] == "WWWW":
+        return "four straight wins — this is a team in relentless form"
+    if n >= 3 and form[:3] == "WWW":
+        return "three straight wins have them flying"
+    if n >= 2 and form[:2] == "WW":
+        return "back-to-back wins suggest momentum is building"
+
+    # === Losing streaks ===
+    if n >= 4 and form[:4] == "LLLL":
+        return "four straight defeats tells you everything about where their heads are at"
+    if n >= 3 and form[:3] == "LLL":
+        return "three on the bounce — a side in freefall"
+    if n >= 2 and form[:2] == "LL":
+        return "consecutive defeats have the pressure mounting"
+
+    # === Recovery patterns ===
+    if form[0] == "W" and l >= 2:
+        return "that latest win will be a relief after a rough patch"
+    if form[0] == "L" and w >= 3:
+        return "that latest defeat interrupts what had been a strong run"
+    if form[0] == "L" and w >= 2:
+        return "that latest defeat takes some of the shine off an otherwise decent run"
+
+    # === Draw-heavy ===
+    if d_val >= 3:
+        return f"drawing machines lately — {d_val} stalemates from {n} suggests they're hard to beat but harder to back"
+
+    # === Mixed/volatile ===
+    if w >= 2 and l >= 2:
+        return _match_pick(home_name, away_name, [
+            "wins and losses in near equal measure — form offers no clear signal",
+            "inconsistent — hard to know which team turns up",
+            "a results sequence that screams inconsistency",
+        ])
+
+    return ""
+
+
+def _position_narrative(pos: int | None, pts: int | None, gp: int | None,
+                        sport: str) -> str:
+    """Describe league position like an analyst. Returns a clause, not a sentence."""
+    if pos is None or pts is None:
+        return ""
+    gp_str = f" from {gp} games" if gp else ""
+    if pos == 1:
+        return f"top of the table on {pts} points{gp_str}"
+    if pos == 2:
+        return f"breathing down the leaders' necks in {_ordinal(pos)} on {pts} points"
+    if pos <= 4:
+        return f"{_ordinal(pos)} on {pts} points — right in the mix{gp_str}"
+    if pos <= 8:
+        return f"mid-table in {_ordinal(pos)} on {pts} points{gp_str}"
+    if pos <= 12:
+        return f"{_ordinal(pos)} on {pts} points{gp_str} — neither here nor there"
+    if pos <= 15:
+        return f"languishing in {_ordinal(pos)} on {pts} points{gp_str}"
+    if pos <= 17:
+        return f"dangerously close to the drop in {_ordinal(pos)} on {pts} points"
+    return f"deep in trouble, {_ordinal(pos)} on just {pts} points"
+
+
+def _home_record_narrative(w: int, d_val: int, l: int, gpg: float | None,
+                           sport: str) -> str:
+    """Describe home record like an analyst. Returns a clause fragment."""
+    total = w + d_val + l
+    if total == 0:
+        return ""
+    rate = f"{gpg:.1f} {'points' if sport == 'rugby' else 'goals'} a game" if gpg else ""
+
+    if l == 0 and w >= 6:
+        return f"a perfect home record — {w} wins from {total} without defeat"
+    if l == 0:
+        return f"unbeaten at home — W{w} D{d_val} from {total}"
+    if l == 1 and w >= 8:
+        return f"a fortress — just one defeat in {total} home games"
+    if l <= 1 and w >= 6:
+        return f"formidable on their own patch, losing just {l} of {total}"
+    if l <= 2 and w >= 5:
+        if rate:
+            return f"solid at home — W{w} D{d_val} L{l}, {rate}"
+        return f"solid at home — W{w} D{d_val} L{l}"
+    if w > l:
+        return f"more wins than losses at home (W{w} D{d_val} L{l}) but hardly impregnable"
+    if l > w:
+        if rate:
+            return f"leaking at home — W{w} D{d_val} L{l}, {rate}"
+        return f"struggling at home — W{w} D{d_val} L{l}"
+    if rate:
+        return f"W{w} D{d_val} L{l} at home, {rate}"
+    return f"W{w} D{d_val} L{l} at home"
+
+
+def _away_record_narrative(w: int, d_val: int, l: int, gpg: float | None,
+                           sport: str) -> str:
+    """Describe away record like an analyst. Returns a clause fragment."""
+    total = w + d_val + l
+    if total == 0:
+        return ""
+    rate_word = "points" if sport == "rugby" else "goals"
+
+    if l <= 1 and w >= 6:
+        return f"dangerous travellers — W{w} D{d_val} L{l} on the road"
+    if l <= 2 and w >= 4:
+        return f"solid travellers at W{w} D{d_val} L{l}"
+    if w > l:
+        return f"W{w} D{d_val} L{l} on their travels — just about getting the job done"
+    if gpg is not None and gpg < 1.0:
+        return f"barely threatening away from home — W{w} D{d_val} L{l}, scraping {gpg:.1f} {rate_word} a game"
+    if l > w:
+        return f"vulnerable on the road at W{w} D{d_val} L{l}"
+    if gpg is not None:
+        return f"W{w} D{d_val} L{l} away, managing {gpg:.1f} {rate_word} a game"
+    return f"W{w} D{d_val} L{l} on the road"
+
+
+def _gpg_characterise(gpg: float | None, sport: str) -> str:
+    """Turn GPG into analyst language. Returns a fragment, not a sentence."""
+    if gpg is None:
+        return ""
+    if sport == "rugby":
+        if gpg >= 30:
+            return "putting teams to the sword"
+        if gpg >= 25:
+            return "finding the try line regularly"
+        if gpg >= 18:
+            return "ticking over nicely"
+        if gpg >= 12:
+            return "scoring enough to stay competitive"
+        return f"scraping just {gpg:.0f} points a game"
+    # Soccer / cricket
+    if gpg >= 2.5:
+        return "putting teams to the sword"
+    if gpg >= 2.0:
+        return "finding the net regularly"
+    if gpg >= 1.5:
+        return "ticking over nicely in front of goal"
+    if gpg >= 1.0:
+        return "scoring enough to stay competitive"
+    if gpg >= 0.5:
+        return f"barely scraping {gpg:.1f} goals a game"
+    return "virtually goalless"
+
+
+def _last_result_woven(last_result: str, form_char: str,
+                       home_name: str, away_name: str) -> str:
+    """Weave last result into narrative as a subordinate clause.
+
+    Never a standalone sentence. Returns '' if no last_result.
+    form_char is form[0] — 'W', 'L', or 'D'.
+    """
+    if not last_result:
+        return ""
+
+    positive = (form_char == "W")
+    neutral = (form_char == "D")
+
+    if positive:
+        options = [
+            f", with {last_result} the latest evidence",
+            f" — {last_result} keeping the feel-good factor alive",
+            f" after {last_result} most recently",
+        ]
+    elif neutral:
+        options = [
+            f", though {last_result} suggests they're hard to separate",
+            f" — {last_result} last time out the latest stalemate",
+        ]
+    else:
+        options = [
+            f", though {last_result} takes some of the shine off",
+            f" — but {last_result} last time out is a concern",
+            f", even if {last_result} suggests cracks are showing",
+        ]
+    return _match_pick(home_name, away_name, options)
+
+
+def _h2h_hook(h2h_count: int | None, h2h_away_wins: int | None,
+              h2h_latest: str | None, home_name: str, away_name: str) -> str:
+    """Build H2H as a narrative hook paragraph. Returns '' if insufficient data."""
+    if not h2h_count:
+        return ""
+    home_wins = h2h_count - (h2h_away_wins or 0)
+    aw = h2h_away_wins or 0
+
+    if h2h_count < 3:
+        # Small sample — just note the latest result
+        if h2h_latest:
+            return f"Their last meeting ended {h2h_latest}."
+        return ""
+    if aw == 0:
+        opener = f"History is one-sided — {home_name} have won all {h2h_count} recent meetings"
+    elif aw == 1 and h2h_count >= 4:
+        opener = f"History favours {home_name} — {home_wins} wins from the last {h2h_count}"
+    elif home_wins == 0:
+        opener = f"{away_name} own this fixture — {aw} wins from the last {h2h_count}"
+    elif home_wins <= 1 and h2h_count >= 4:
+        opener = f"{away_name} have dominated recent meetings — {aw} wins from {h2h_count}"
+    elif abs(home_wins - aw) <= 1:
+        opener = f"This has been a tight rivalry — {home_wins} wins to {aw} in the last {h2h_count} meetings"
+    elif home_wins > aw:
+        opener = f"{home_name} have had the edge recently — {home_wins} wins from {h2h_count}"
+    else:
+        opener = f"{away_name} have come out on top more often — {aw} wins from {h2h_count}"
+
+    if h2h_latest:
+        return f"{opener}, most recently {h2h_latest}."
+    return f"{opener}."
+
+
+def _coach_ref_v2(coach: str | None, team_name: str, style: str = "possessive") -> str:
+    """Natural coach reference. Falls back to team_name when no coach.
+
+    Styles:
+        "possessive" → "Carrick's United" / "United" (no coach)
+        "under"      → "under Michael Carrick" / "" (no coach)
+        "has_them"   → "Carrick has them" / "They sit" (no coach)
+    """
+    if not coach:
+        if style == "possessive":
+            return team_name
+        if style == "has_them":
+            return "They sit"
+        return ""
+    surname = coach.split()[-1]
+    if style == "possessive":
+        poss = f"{surname}'" if surname.endswith("s") else f"{surname}'s"
+        return f"{poss} {team_name}"
+    if style == "under":
+        return f"under {coach}"
+    if style == "has_them":
+        return f"{surname} has them"
+    return f"under {coach}"
+
+
+def _build_home_para(d: dict) -> str:
+    """Build home team paragraph. KEY RULE: never start 3+ sentences with team name."""
+    name = d["home_name"]
+    coach = d.get("home_coach")
+    pos = d.get("home_pos")
+    pts = d.get("home_pts")
+    gp = d.get("home_gp")
+    form = d.get("home_form", "")
+    record_str = d.get("home_record", "")
+    gpg = d.get("home_gpg")
+    last_result = d.get("home_last_result", "")
+    sport = d.get("sport", "soccer")
+    w, dr, l = _parse_record(record_str)
+
+    sentences = []
+
+    # Sentence 1: Coach + position (ALWAYS starts with coach's team or team name)
+    coach_poss = _coach_ref_v2(coach, name, "possessive")
+    pos_desc = _position_narrative(pos, pts, gp, sport)
+    if pos_desc:
+        sentences.append(f"{coach_poss} sit {pos_desc}.")
+    else:
+        verb = _match_pick(name, d["away_name"], ["head into this one", "line up here"])
+        sentences.append(f"{coach_poss} {verb}.")
+
+    # Sentence 2: Form (NEVER starts with team name — starts with form analysis)
+    if form:
+        form_desc = _form_narrative(form, name, d["home_name"], d["away_name"])
+        last_woven = _last_result_woven(last_result, form[0], d["home_name"], d["away_name"]) if last_result else ""
+        if form_desc:
+            sentences.append(f"Their {form} form? {form_desc.capitalize()}{last_woven}.")
+        elif last_result:
+            sentences.append(f"Last time out, {last_result}.")
+    elif last_result:
+        sentences.append(f"Last time out, {last_result}.")
+
+    # Sentence 3: Home record (NEVER starts with team name — leads with "On home turf")
+    total = w + dr + l
+    if total > 0:
+        rec_desc = _home_record_narrative(w, dr, l, gpg, sport)
+        if rec_desc:
+            sentences.append(f"On home turf, {rec_desc}.")
+    elif gpg is not None:
+        char = _gpg_characterise(gpg, sport)
+        if char:
+            sentences.append(f"At home, {char}.")
+
+    return " ".join(sentences)
+
+
+def _build_away_para(d: dict) -> str:
+    """Build away team paragraph. DIFFERENT structure from home paragraph."""
+    name = d["away_name"]
+    coach = d.get("away_coach")
+    pos = d.get("away_pos")
+    pts = d.get("away_pts")
+    gp = d.get("away_gp")
+    form = d.get("away_form", "")
+    record_str = d.get("away_record", "")
+    gpg = d.get("away_gpg")
+    last_result = d.get("away_last_result", "")
+    sport = d.get("sport", "soccer")
+    w, dr, l = _parse_record(record_str)
+
+    sentences = []
+
+    if form:
+        form_desc = _form_narrative(form, name, d["home_name"], d["away_name"])
+        # Sentence 1: DIFFERENT opener — transition into away team
+        coach_has = _coach_ref_v2(coach, name, "has_them")
+        pos_desc = _position_narrative(pos, pts, gp, sport)
+        if pos_desc:
+            transition = _match_pick(d["home_name"], d["away_name"], [
+                f"{name} are a different story.",
+                f"Then there's {name}.",
+                f"The visitors tell a different tale.",
+            ])
+            sentences.append(transition)
+            sentences.append(f"{coach_has} {pos_desc}.")
+        elif coach:
+            sentences.append(f"{name} arrive {_coach_ref_v2(coach, name, 'under')}.")
+        else:
+            sentences.append(f"{name} arrive with plenty to prove.")
+
+        # Sentence 2: Form (starts with "the form tells you...")
+        last_woven = _last_result_woven(last_result, form[0], d["home_name"], d["away_name"]) if last_result else ""
+        if form_desc:
+            sentences.append(f"The form tells you everything — {form_desc}{last_woven}.")
+        elif last_result:
+            sentences.append(f"Last time out, {last_result}.")
+    else:
+        # No form data — simpler opening
+        coach_poss = _coach_ref_v2(coach, name, "possessive")
+        pos_desc = _position_narrative(pos, pts, gp, sport)
+        if pos_desc:
+            sentences.append(f"{coach_poss} arrive {pos_desc}.")
+        else:
+            sentences.append(f"{name} arrive here.")
+
+    # Away record (leads with "On the road")
+    total = w + dr + l
+    if total > 0:
+        rec_desc = _away_record_narrative(w, dr, l, gpg, sport)
+        if rec_desc:
+            sentences.append(f"On the road, {rec_desc}.")
+    elif gpg is not None:
+        char = _gpg_characterise(gpg, sport)
+        if char:
+            sentences.append(f"Away from home, {char}.")
+
+    return " ".join(sentences)
+
+
+def _ordinal(n: int | None) -> str:
+    """Convert integer to ordinal string. Returns '' if None."""
+    if n is None:
+        return ""
+    suffix = {1: "st", 2: "nd", 3: "rd"}.get(
+        n % 10 if n % 100 not in (11, 12, 13) else 0, "th"
+    )
+    return f"{n}{suffix}"
+
+
+def _pos_word(pos: int | None) -> str:
+    """Return 'Third', 'Fourth' etc. for matchup openings. Kept for backward compat."""
+    _WORDS = {
+        1: "First", 2: "Second", 3: "Third", 4: "Fourth", 5: "Fifth",
+        6: "Sixth", 7: "Seventh", 8: "Eighth", 9: "Ninth", 10: "Tenth",
+        11: "Eleventh", 12: "Twelfth",
+    }
+    if pos is None:
+        return ""
+    return _WORDS.get(pos, _ordinal(pos))
+
+
+def _select_variation(
+    home_pos: int | None, away_pos: int | None,
+    home_pts: int | None, away_pts: int | None,
+    home_form: str, away_form: str,
+    h2h_count: int | None, h2h_away_wins: int | None,
+) -> str:
+    """Kept for backward compat — not used by v2 (variation is implicit in data-driven maps)."""
+    if h2h_count is not None and h2h_count >= 4 and h2h_away_wins is not None:
+        home_wins = h2h_count - h2h_away_wins
+        if h2h_away_wins <= 1 or home_wins <= 1:
+            return "h2h"
+    if (
+        home_pos is not None and away_pos is not None
+        and home_pts is not None and away_pts is not None
+        and abs(home_pos - away_pos) <= 3
+        and abs(home_pts - away_pts) <= 5
+    ):
+        return "matchup"
+    for form in [home_form, away_form]:
+        if form:
+            if form.count("W") >= 3 or form.count("L") >= 3:
+                return "form"
+    return "position"
+
+
+def _build_setup_section_v2(ctx_data: dict, tips: list[dict] | None = None,
+                            sport: str = "soccer") -> str:
+    """Build the complete Setup section as natural analyst prose.
+
+    W80-PROSE: Replaces _build_setup_section() from W79.
+    Uses language maps so the WORDS change based on the DATA.
+    """
+    if not ctx_data or not ctx_data.get("data_available"):
+        return ""
+
+    home = ctx_data.get("home_team", {})
+    away = ctx_data.get("away_team", {})
+    if not isinstance(home, dict):
+        home = {"name": home if isinstance(home, str) else "Home"}
+    if not isinstance(away, dict):
+        away = {"name": away if isinstance(away, str) else "Away"}
+
+    home_name = home.get("name", "Home")
+    away_name = away.get("name", "Away")
+
+    def _format_last_result(team: dict) -> str:
+        last5 = team.get("last_5", [])
+        if not last5:
+            return ""
+        latest = last5[0]
+        result = latest.get("result", "")
+        opp = latest.get("opponent", "")
+        score = latest.get("score", "")
+        loc = "at home" if latest.get("home_away") == "home" else "away"
+        if not (result and opp and score):
+            return ""
+        verb = {"W": "beating", "L": "losing to", "D": "drawing with"}.get(result, "facing")
+        return f"{verb} {opp} {score} {loc}"
+
+    def _format_record(team: dict, is_home: bool) -> str:
+        rec = team.get("home_record" if is_home else "away_record")
+        if rec and isinstance(rec, str):
+            return rec
+        record = team.get("record", {})
+        if isinstance(record, dict):
+            w = record.get("wins", 0)
+            d_val = record.get("draws", 0)
+            l_val = record.get("losses", 0)
+            if sport == "cricket":
+                return f"W{w} L{l_val}"
+            return f"W{w} D{d_val} L{l_val}"
+        return ""
+
+    # H2H data
+    h2h = ctx_data.get("head_to_head") or []
+    h2h_count = len(h2h) if h2h else None
+    h2h_away_wins = None
+    h2h_latest = None
+    if h2h:
+        h2h_away_wins = sum(
+            1 for g in h2h
+            if g.get("score", "0-0").split("-")[0].strip().isdigit()
+            and g.get("score", "0-0").split("-")[-1].strip().isdigit()
+            and (
+                (g.get("home") == away_name and int(g["score"].split("-")[0]) > int(g["score"].split("-")[-1]))
+                or (g.get("away") == away_name and int(g["score"].split("-")[-1]) > int(g["score"].split("-")[0]))
+            )
+        )
+        latest = h2h[0]
+        h2h_latest = (
+            f"{latest.get('home', '?')} {latest.get('score', '?')} "
+            f"{latest.get('away', '?')} ({latest.get('date', '?')})"
+        )
+
+    d = {
+        "home_name": home_name,
+        "away_name": away_name,
+        "home_pos": home.get("league_position"),
+        "away_pos": away.get("league_position"),
+        "home_pts": home.get("points"),
+        "away_pts": away.get("points"),
+        "home_gp": home.get("games_played") or home.get("matches_played"),
+        "away_gp": away.get("games_played") or away.get("matches_played"),
+        "home_coach": home.get("coach"),
+        "away_coach": away.get("coach"),
+        "home_form": (home.get("form") or "")[:home.get("games_played") or home.get("matches_played") or 5],
+        "away_form": (away.get("form") or "")[:away.get("games_played") or away.get("matches_played") or 5],
+        "home_record": _format_record(home, is_home=True),
+        "away_record": _format_record(away, is_home=False),
+        "home_gpg": home.get("goals_per_game"),
+        "away_gpg": away.get("goals_per_game"),
+        "home_last_result": _format_last_result(home),
+        "away_last_result": _format_last_result(away),
+        "h2h_count": h2h_count,
+        "h2h_away_wins": h2h_away_wins,
+        "h2h_latest": h2h_latest,
+        "sport": sport,
+        "competition": ctx_data.get("league", ""),
+        "venue": ctx_data.get("venue"),
+    }
+
+    paragraphs = []
+    paragraphs.append(_build_home_para(d))
+    paragraphs.append(_build_away_para(d))
+
+    h2h_para = _h2h_hook(h2h_count, h2h_away_wins, h2h_latest, home_name, away_name)
+    if h2h_para:
+        paragraphs.append(h2h_para)
+
+    return "\n\n".join(p for p in paragraphs if p)
+
+
+# ── W80-PROSE: Signal-Derived Verdict, Edge, Risk (v2 — natural analyst prose) ──
+
+
+def _build_verdict_from_signals_v2(tips: list[dict] | None,
+                                   home_name: str = "", away_name: str = "") -> str:
+    """Signal-derived Verdict — actionable and honest.
+
+    W80-PROSE: Replaces _build_verdict_from_signals() from W79.
+    """
+    if not tips:
+        return "Limited odds data — wait for more bookmaker prices before committing."
+
+    best = max(tips, key=lambda t: t.get("ev", 0))
+    v2 = best.get("edge_v2") or {}
+    bk = best.get("bookie") or best.get("bookmaker") or v2.get("best_bookmaker", "?")
+    outcome_raw = best.get("outcome", "?")
+    odds = best.get("odds", 0)
+    ev = best.get("ev", 0)
+    confirming = v2.get("confirming_signals", 0)
+    stale_min = v2.get("stale_minutes", 0)
+
+    outcome_map = {"home": home_name, "away": away_name, "draw": "the draw"}
+    outcome = outcome_map.get(outcome_raw, outcome_raw) if (home_name or away_name) else outcome_raw
+
+    if stale_min >= 1440:
+        return f"Check {bk}'s live odds first — this {ev:+.1f}% edge was priced {stale_min // 60} hours ago and is almost certainly gone."
+    if stale_min >= 360:
+        return f"The value at {odds:.2f} on {outcome} with {bk} looks real on paper, but the {stale_min // 60}-hour pricing delay means you need to verify before backing."
+    if confirming >= 4 and ev >= 5:
+        return f"Back {outcome} at {odds:.2f} on {bk} — {confirming} indicators confirm this {ev:+.1f}% edge. This is one of the stronger plays on today's card."
+    if confirming >= 2 and ev >= 3:
+        return f"{outcome} at {odds:.2f} on {bk} offers {ev:+.1f}% over fair value with {confirming} indicators backing it. Worth a confident stake."
+    if ev >= 5:
+        return f"{bk}'s {odds:.2f} on {outcome} is {ev:+.1f}% above fair — a clear edge worth backing even without full indicator support."
+    if ev >= 2:
+        return f"Thin value on {outcome} at {odds:.2f} with {bk} — {ev:+.1f}% above the line. Size conservatively."
+    if ev > 0:
+        return f"Marginal edge on {outcome} at {odds:.2f} with {bk} ({ev:+.1f}%). Not worth a significant stake."
+    return "No clear edge at current prices — sit this one out or wait for the market to settle."
+
+
+# Backward-compat alias
+def _build_verdict_from_signals(tips: list[dict] | None, home_team: str = "", away_team: str = "") -> str:
+    return _build_verdict_from_signals_v2(tips, home_name=home_team, away_name=away_team)
+
+
+def _build_edge_from_signals_v2(tips: list[dict] | None,
+                                home_name: str = "", away_name: str = "") -> str:
+    """Signal-derived Edge that reads like an analyst, not a database.
+
+    W80-PROSE: Replaces _build_edge_from_signals() from W79.
+    """
+    if not tips:
+        return "Limited odds data right now — check back closer to kickoff when more SA bookmakers have priced this up."
+
+    best = max(tips, key=lambda t: t.get("ev", 0))
+    ev = best.get("ev", 0)
+    outcome_raw = best.get("outcome", "?")
+    odds = best.get("odds", 0)
+    bk = best.get("bookie") or best.get("bookmaker", "?")
+
+    outcome_map = {"home": home_name, "away": away_name, "draw": "the draw"}
+    outcome = outcome_map.get(outcome_raw, outcome_raw) if (home_name or away_name) else outcome_raw
+
+    v2 = best.get("edge_v2") or {}
+    confirming = v2.get("confirming_signals", 0)
+    bk_count = v2.get("bookmaker_count", 0) or len(best.get("odds_by_bookmaker", {}))
+    stale_min = v2.get("stale_minutes", 0)
+
+    if ev <= 0:
+        return "The market has this one priced tight — no bookmaker is offering anything above fair value right now."
+
+    # Opening: words change based on EV size
+    if ev >= 10:
+        opening = f"{bk}'s {odds:.2f} on {outcome} stands out — {ev:.1f}% above where this should be priced."
+    elif ev >= 5:
+        opening = f"There's genuine value at {odds:.2f} on {outcome} with {bk} — the numbers put this {ev:.1f}% above fair."
+    elif ev >= 3:
+        opening = f"{bk}'s {odds:.2f} on {outcome} offers a {ev:.1f}% edge over fair value."
+    else:
+        opening = f"A slender {ev:.1f}% edge on {outcome} at {odds:.2f} with {bk}."
+
+    # Supporting evidence — only include when data supports it
+    support_parts = []
+    if confirming >= 4:
+        support_parts.append(f"{confirming} of our indicators back this play")
+    elif confirming >= 2:
+        support_parts.append(f"{confirming} indicators confirm the signal")
+    elif confirming == 1:
+        support_parts.append("one indicator backs this — limited but present")
+
+    if bk_count >= 4:
+        support_parts.append(f"{bk_count} SA bookmakers have priced this market")
+    elif bk_count == 1:
+        support_parts.append("Only 1 SA bookmaker has priced this — limited price confidence")
+
+    if stale_min >= 360:
+        hrs = stale_min // 60
+        support_parts.append(f"Note: {bk}'s price is {hrs} hours old — verify before placing")
+
+    if support_parts:
+        return f"{opening} {'. '.join(s.capitalize() for s in support_parts)}."
+    return opening
+
+
+# Backward-compat alias
+def _build_edge_from_signals(tips: list[dict] | None) -> str:
+    return _build_edge_from_signals_v2(tips)
+
+
+# ── W79-P3A: Jargon Sanitisation ──
+
+JARGON_REPLACEMENTS = {
+    "shin_consensus": "market consensus",
+    "shin consensus": "market consensus",
+    "sa_consensus": "SA bookmaker consensus",
+    "sa consensus": "SA bookmaker consensus",
+    "composite score": "overall rating",
+    "composite_score": "overall rating",
+    "composite": "overall",
+    "fair probability": "fair value",
+    "implied probability": "implied chance",
+    "confirming signals": "supporting indicators",
+    "confirming_signals": "supporting indicators",
+    "edge score": "overall rating",
+    "signal confirmation": "indicator confirmation",
+    "fair value benchmark": "fair value",
+    "sharp benchmark": "fair value",
+    "signal score": "overall rating",
+    "diamond tier": "top-tier",
+    "gold tier": "strong",
+    "silver tier": "moderate",
+    "bronze tier": "positive",
+    "diamond-tier": "top-tier",
+    "gold-tier": "strong",
+    "silver-tier": "moderate",
+    "bronze-tier": "positive",
+}
+
+
+def _sanitise_jargon(text: str) -> str:
+    """Replace internal technical jargon with user-friendly terms."""
+    for internal, display in JARGON_REPLACEMENTS.items():
+        text = text.replace(internal, display)
+        text = text.replace(internal.title(), display.title())
+    return text
+
+
+BOOKMAKER_CAPS = {
+    "gbets": "GBets",
+    "hollywoodbets": "Hollywoodbets",
+    "supabets": "Supabets",
+    "betway": "Betway",
+    "sportingbet": "Sportingbet",
+    "wsb": "WSB",
+    "playabets": "PlayaBets",
+    "supersportbet": "SuperSportBet",
+}
+
+
+def _final_polish(text: str, edge_data: dict | None = None) -> str:
+    """Final formatting cleanup applied to assembled narratives.
+
+    Fixes double possessives, singular/plural, orphaned periods,
+    mid-sentence line breaks, bookmaker capitalisation, date formatting,
+    redundant phrasing, and home/away → team name replacement.
+    """
+    # Fix double possessives: "Tandy's's" → "Tandy's"
+    text = re.sub(r"(\w+'s)'s\b", r"\1", text)
+
+    # Fix "1 points" → "1 point"
+    text = re.sub(r"\b1 points\b", "1 point", text)
+
+    # Fix orphaned periods on their own line
+    text = re.sub(r"\n\s*\.\s*", ". ", text)
+
+    # Fix random line breaks mid-sentence (lowercase after newline = continuation)
+    text = re.sub(r"\n\s+([a-z])", r" \1", text)
+
+    # Fix leading commas/periods
+    text = re.sub(r"\n\s*,\s*", ", ", text)
+
+    # Humanise ISO dates in parentheses: "(2025-04-05)" → "(April 2025)"
+    def _humanise_date(m):
+        try:
+            from datetime import datetime as _dt
+            dt = _dt.strptime(m.group(1), "%Y-%m-%d")
+            return f"({dt.strftime('%B %Y')})"
+        except Exception:
+            return m.group(0)
+    text = re.sub(r'\((\d{4}-\d{2}-\d{2})\)', _humanise_date, text)
+
+    # Fix "GBets's" → "GBets'" (names ending in s)
+    text = re.sub(r"(GBets|Supabets|PlayaBets)'s\b", r"\1'", text)
+
+    # Capitalise bookmaker names
+    for lower, proper in BOOKMAKER_CAPS.items():
+        text = re.sub(r"\b" + lower + r"\b", proper, text, flags=re.IGNORECASE)
+
+    # Replace "home"/"away"/"draw" with team names throughout
+    if edge_data:
+        home_name = edge_data.get("home_team", "")
+        away_name = edge_data.get("away_team", "")
+        outcome = edge_data.get("outcome", "")
+        outcome_team = edge_data.get("outcome_team", "")
+        # Verdict patterns — use outcome_team for the recommended outcome
+        if outcome_team:
+            text = re.sub(r"Back home at\b", f"Back {outcome_team} at", text)
+            text = re.sub(r"back home at\b", f"back {outcome_team} at", text)
+            text = re.sub(r"Back away at\b", f"Back {outcome_team} at", text)
+            text = re.sub(r"back away at\b", f"back {outcome_team} at", text)
+            # "on home" / "on away" in verdict
+            text = re.sub(r"\bon home\b", f"on {home_name}" if home_name else "on home", text)
+            text = re.sub(r"\bon away\b", f"on {away_name}" if away_name else "on away", text)
+        # SA Bookmaker Odds section: "home:", "away:", "draw:" labels
+        if home_name:
+            text = re.sub(r"(?m)^(\s*)home:", rf"\1{home_name}:", text)
+            text = re.sub(r"(?m)^(\s*)Home:", rf"\1{home_name}:", text)
+        if away_name:
+            text = re.sub(r"(?m)^(\s*)away:", rf"\1{away_name}:", text)
+            text = re.sub(r"(?m)^(\s*)Away:", rf"\1{away_name}:", text)
+        # Single-line odds: "home: <b>" pattern
+        text = re.sub(r"</b>\s*home:\s*<b>", f"</b> {home_name}: <b>" if home_name else "</b> home: <b>", text)
+        text = re.sub(r"</b>\s*away:\s*<b>", f"</b> {away_name}: <b>" if away_name else "</b> away: <b>", text)
+        text = re.sub(r"</b>\s*Home:\s*<b>", f"</b> {home_name}: <b>" if home_name else "</b> Home: <b>", text)
+        text = re.sub(r"</b>\s*Away:\s*<b>", f"</b> {away_name}: <b>" if away_name else "</b> Away: <b>", text)
+
+    # Strip remaining "signal" jargon in specific patterns
+    text = re.sub(r"\b(\d+) signal(?:s)? confirm(?:ing)?\b", r"\1 indicator\g<0>"[-12:], text)
+    text = re.sub(r"\b(\d+)\s+signal(?:s)?\s+confirm", r"\1 indicators confirm", text)
+    text = re.sub(r"\b(\d+)\s+signal\b", r"\1 indicator", text)
+    text = re.sub(r"\b(\d+)\s+signals\b", r"\1 indicators", text)
+    # "0/7 signal confirmation" etc
+    text = re.sub(r"(\d+/\d+)\s+signal\s+confirmation", r"\1 indicator confirmation", text)
+
+    # Clean up multiple spaces
+    text = re.sub(r"  +", " ", text)
+
+    # Clean broken AI sentences: "However, the, suggesting" → strip orphaned fragments
+    text = re.sub(r'\b(However|But|And|Yet|So), the,', r'\1,', text)
+    # Strip orphaned leading commas/periods at start of lines
+    text = re.sub(r'(?m)^\s*[,;]\s+', '', text)
+
+    # Clean up multiple newlines (keep max 2)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+# ── W80-PROSE: Sport-Specific Terminology Substitutions ──
+
+SPORT_SUBS = {
+    "rugby": {
+        "goals a game": "points a game",
+        "goals per game": "points per game",
+        "finding the net": "finding the try line",
+        "in front of goal": "with ball in hand",
+        "goalless": "scoreless",
+        "clean sheet": "keeping them scoreless",
+    },
+    "cricket": {
+        "goals a game": "runs per over",
+        "goals per game": "runs per over",
+        "finding the net": "finding the boundary",
+        "in front of goal": "with the bat",
+        "goalless": "scoreless",
+    },
+}
+
+
+def _apply_sport_subs(text: str, sport: str) -> str:
+    """Apply sport-specific word substitutions. Only for rugby and cricket."""
+    subs = SPORT_SUBS.get(sport, {})
+    for old, new in subs.items():
+        text = text.replace(old, new)
+    return text
+
+
+def _build_risk_from_signals_v2(
+    tips: list[dict] | None, ctx_data: dict | None = None, sport: str = "soccer",
+    home_name: str = "", away_name: str = "",
+) -> str:
+    """Signal-derived Risk that reads like honest analysis.
+
+    W80-PROSE: Replaces _build_risk_from_signals() from W79.
+    """
+    risks = []
+
+    home = (ctx_data or {}).get("home_team", {})
+    away = (ctx_data or {}).get("away_team", {})
+    if not isinstance(home, dict):
+        home = {}
+    if not isinstance(away, dict):
+        away = {}
+    h_name = home_name or home.get("name", "Home")
+    a_name = away_name or away.get("name", "Away")
+
+    if tips:
+        best = max(tips, key=lambda t: t.get("ev", 0))
+        v2 = best.get("edge_v2") or {}
+        sigs = v2.get("signals", {})
+
+        # Stale price
+        stale_min = v2.get("stale_minutes", 0)
+        bk = v2.get("best_bookmaker") or best.get("bookie", "")
+        if stale_min >= 360:
+            hrs = stale_min // 60
+            risks.append(
+                f"{bk}'s price hasn't moved in {hrs} hours while competitors have adjusted — "
+                f"this edge could vanish the moment they update."
+            )
+
+        # Movement against
+        mv = sigs.get("movement", {})
+        if mv.get("direction") == "against":
+            pct = abs(mv.get("movement_pct", 0))
+            if pct > 0:
+                risks.append(
+                    f"The market is drifting away from this outcome — odds have shortened {pct:.1f}% recently, "
+                    f"which usually means sharp money disagrees."
+                )
+            else:
+                risks.append("The market is drifting away from this outcome, which usually means sharp money disagrees.")
+
+        # Tipster disagreement
+        tipster = sigs.get("tipster", {})
+        against = tipster.get("against", 0)
+        if against >= 2:
+            risks.append(f"{against} tipster sources favour the other side — worth noting even if the price disagrees.")
+        elif tipster.get("consensus") and tipster["consensus"] < 0.4:
+            risks.append("Prediction sources are split on this one — tipster consensus is below 40%.")
+
+        # Zero confirming signals
+        confirming = v2.get("confirming_signals", 0)
+        if confirming == 0 and not risks:
+            risks.append(
+                "Not a single indicator backs this beyond the raw price — "
+                "this is a pure pricing edge with no supporting data."
+            )
+
+    # Form-based risks from ctx_data
+    if not risks:
+        h_form = home.get("form", "")
+        a_form = away.get("form", "")
+        if h_form and h_form[:3] == "WWW":
+            risks.append(
+                f"{h_name} at home in this kind of form is the kind of opponent that overturns "
+                f"edges on sheer momentum."
+            )
+        elif a_form and a_form[:3] == "WWW":
+            risks.append(
+                f"{a_name} in this kind of form is dangerous — momentum can override the numbers on the road."
+            )
+        elif h_form and a_form:
+            risks.append("Both sides' recent form suggests this is more competitive than the odds imply.")
+
+    # Home advantage fallback
+    if not risks:
+        poss = f"{h_name}'" if h_name.endswith("s") else f"{h_name}'s"
+        risks.append(f"{poss} home advantage could be the factor that overturns this edge.")
+
+    return " ".join(risks)
+
+
+# Backward-compat alias
+def _build_risk_from_signals(
+    tips: list[dict] | None, ctx_data: dict | None = None, sport: str = "soccer",
+) -> str:
+    return _build_risk_from_signals_v2(tips, ctx_data, sport)
+
+
+# ── W81-FACTCHECK: Verified Injury Data ──
+
+
+def get_verified_injuries(home: str, away: str) -> dict:
+    """Fetch confirmed/questionable absences from team_injuries table.
+
+    Returns {"home": ["Name (Status)", ...], "away": [...]} strings.
+    Only rows fetched within 2 days (freshness guard). Empty lists on failure.
+    """
+    try:
+        from db_connection import get_connection as _get_conn
+        conn = _get_conn(_NARRATIVE_DB_PATH)
+        result: dict[str, list[str]] = {}
+        for side, team in (("home", home), ("away", away)):
+            if not team:
+                result[side] = []
+                continue
+            rows = conn.execute(
+                "SELECT DISTINCT player_name, injury_status FROM team_injuries "
+                "WHERE LOWER(team) LIKE ? "
+                "AND fetched_at > datetime('now', '-2 days') "
+                "AND injury_status NOT IN ('Missing Fixture', 'Unknown') "
+                "ORDER BY player_name",
+                (f"%{team.lower().replace(' ', '%')}%",),
+            ).fetchall()
+            result[side] = [f"{r[0]} ({r[1]})" for r in rows]
+        conn.close()
+        return result
+    except Exception:
+        return {"home": [], "away": []}
+
+
+# ── W79-PHASE2: Focused AI Prompt (Edge + Risk ONLY) ──
+
+
+def _build_edge_risk_prompt(sport: str = "soccer", banned_terms: str = "", mandatory_search: bool = False) -> str:
+    """Build a focused prompt that asks Claude to write ONLY Edge and Risk sections.
+
+    W79-PHASE2: Code handles Setup and Verdict — AI writes only the analytical middle.
+    """
+    contest = "fight" if sport in ("mma", "boxing", "combat") else "match"
+    terms = SPORT_TERMINOLOGY.get(sport, SPORT_TERMINOLOGY["soccer"])
+
+    if mandatory_search:
+        step1 = textwrap.dedent("""\
+        STEP 1 — MANDATORY WEB SEARCH VERIFICATION:
+        You MUST use web search before writing. Search for current form, recent results,
+        injuries, and team news for both teams. This is NON-NEGOTIABLE.
+        If web search CONTRADICTS the IMMUTABLE CONTEXT, trust web search.""")
+    else:
+        step1 = textwrap.dedent("""\
+        STEP 1 — VERIFY BEFORE WRITING:
+        If web search is available, verify both teams' form, standings, and recent news.
+        If web search CONTRADICTS IMMUTABLE CONTEXT, trust web search.
+        If no web search, proceed using IMMUTABLE CONTEXT as-is.""")
+
+    return textwrap.dedent(f"""\
+    You are MzansiEdge, a sharp South African sports betting ANALYST.
+    SPORT: {sport}
+
+    {step1}
+
+    YOU ARE AN ANALYST. The facts are in IMMUTABLE CONTEXT. Your job: INTERPRET
+    what those facts mean for the bet. Add opinions, value assessments, narrative tension.
+
+    IMMUTABLE CONTEXT RULES:
+    - Bullet points under EDGE FACTS, RISK FACTS are pre-verified and accurate.
+    - SIGNAL DATA contains Edge V2 composite analysis. USE it to enrich your output.
+    - You MUST NOT alter, paraphrase with different numbers, or contradict facts.
+    - You MUST NOT introduce ANY new statistics not in IMMUTABLE CONTEXT.
+    - You MAY add connecting phrases, opinions, and analysis.
+
+    CRITICAL: Your response is shown directly to users. NEVER reference instructions,
+    prompts, data variables, or internal reasoning. NEVER mention "IMMUTABLE CONTEXT".
+
+    Write ONLY these TWO sections (NO Setup, NO Verdict — those are handled separately):
+
+    🎯 <b>The Edge</b>
+    Interpret the EDGE FACTS and SIGNAL DATA. Why is this edge worth taking?
+    Reference signal scores, confirming count, sharp benchmark, bookmaker divergence.
+    2-3 sentences.
+
+    ⚠️ <b>The Risk</b>
+    Interpret RISK FACTS and red flags from SIGNAL DATA. What could go wrong?
+    Ground it in data. 1-2 sentences max.
+
+    ABSOLUTE RULES:
+    1. EVERY STATISTIC MUST COME FROM IMMUTABLE CONTEXT.
+    2. NEVER EXTRAPOLATE BEYOND THE DATA.
+    3. NEVER USE TRAINING DATA FOR FACTS.
+    4. NEVER MENTION PERSON NAMES unless in IMMUTABLE CONTEXT.
+    5. NEVER DESCRIBE PLAYING STYLE OR TACTICS.
+    6. WHEN DATA IS SPARSE, keep it short — focus on odds and pricing.
+
+    THE GOLDEN RULE: If not in IMMUTABLE CONTEXT or ODDS DATA, it does not exist.
+
+    SPORT VALIDATION:
+    - This is a {sport} {contest}. Banned terms: {banned_terms if banned_terms else "none"}
+    - Ranking metric: {terms['ranking_metric']}
+    - Score units: {terms['score_unit']}
+
+    BANNED PHRASES:
+    "back the value where", "odds diverge", "proceed with caution", "value play",
+    "grab it before", "before they wake up", "move fast", "won't last forever",
+    "one to watch, not back", "this one to watch"
+
+    TONE: Sharp SA sports analyst at a braai. Punchy sentences. No waffle.
+    Address the reader directly: "you", "your". Use "lekker" sparingly.
+    """)
+
+
+# ── W81-SCAFFOLD: Story Detection + Factual Scaffold ──
+
+_EXEMPLAR_FILE = os.path.join(os.path.dirname(__file__), "data", "prose_exemplars.json")
+_EXEMPLAR_CACHE: dict = {}
+
+
+def load_exemplars() -> dict:
+    """Load prose exemplars JSON with graceful fallback on any error.
+
+    W81-CLEANUP: Called once at W81-REWRITE prompt build time. Cached in-process.
+    Returns {"setup": {...}, "edge": {...}, "risk": {...}, "verdict": {...}}.
+    """
+    global _EXEMPLAR_CACHE
+    if _EXEMPLAR_CACHE:
+        return _EXEMPLAR_CACHE
+    try:
+        import json as _json
+        with open(_EXEMPLAR_FILE) as fh:
+            data = _json.load(fh)
+        log.info(
+            "Loaded %d setup exemplar types from %s",
+            len(data.get("setup", {})),
+            _EXEMPLAR_FILE,
+        )
+        _EXEMPLAR_CACHE = data
+        return data
+    except Exception as exc:
+        log.error(
+            "Failed to load exemplars from %s: %s — using empty fallback",
+            _EXEMPLAR_FILE,
+            exc,
+        )
+        return {"setup": {}, "edge": {}, "risk": {}, "verdict": {}}
+
+
+# ── W81-REWRITE: Three-Stage Prose Engine helpers ──
+
+
+def _parse_story_types_from_scaffold(scaffold: str) -> tuple[str, str]:
+    """Parse HOME_STORY_TYPE and AWAY_STORY_TYPE from scaffold text.
+
+    Returns (home_story, away_story), defaulting to 'neutral' if not found.
+    """
+    home_story = "neutral"
+    away_story = "neutral"
+    for line in scaffold.splitlines():
+        if line.startswith("HOME_STORY_TYPE:"):
+            home_story = line.split(":", 1)[1].strip()
+        elif line.startswith("AWAY_STORY_TYPE:"):
+            away_story = line.split(":", 1)[1].strip()
+    return home_story, away_story
+
+
+def _get_exemplars_for_prompt(
+    home_story: str, away_story: str, edge_ev: float, sport: str
+) -> dict:
+    """Select exemplars for the rewrite prompt.
+
+    Selects 2 setup exemplars (prefer sport match), 1 edge exemplar by EV tier,
+    1 risk exemplar (opposing_case), 1 verdict exemplar by confidence.
+    Falls back gracefully when exemplar pool is empty.
+    """
+    exemplars = load_exemplars()
+
+    setup_pool = []
+    for story_type in [home_story, away_story]:
+        candidates = exemplars.get("setup", {}).get(story_type, [])
+        sport_match = [e["example"] for e in candidates if e.get("sport") == sport]
+        others = [e["example"] for e in candidates if e.get("sport") != sport]
+        setup_pool.extend(sport_match[:1] or others[:1])
+
+    edge_tier = "strong" if edge_ev >= 8 else "moderate" if edge_ev >= 3 else "thin"
+    edge_candidates = exemplars.get("edge", {}).get(edge_tier, [])
+    edge_ex = edge_candidates[0]["example"] if edge_candidates else ""
+
+    risk_candidates = exemplars.get("risk", {}).get("opposing_case", [])
+    risk_ex = risk_candidates[0]["example"] if risk_candidates else ""
+
+    verdict_tier = "strong_back" if edge_ev >= 8 else "cautious" if edge_ev >= 3 else "avoid"
+    verdict_candidates = exemplars.get("verdict", {}).get(verdict_tier, [])
+    verdict_ex = verdict_candidates[0]["example"] if verdict_candidates else ""
+
+    return {"setup": setup_pool[:2], "edge": edge_ex, "risk": risk_ex, "verdict": verdict_ex}
+
+
+def _build_rewrite_prompt(scaffold: str, exemplars: dict, sport: str) -> str:
+    """Build the system prompt for the full 4-section rewrite.
+
+    The LLM receives verified scaffold + exemplars and rewrites into flowing
+    professional prose using the OEI pattern. All 12 rules enforced.
+    """
+    setup_examples = "\n\n".join(
+        f'EXAMPLE {i+1}:\n"{ex}"' for i, ex in enumerate(exemplars["setup"])
+    ) if exemplars["setup"] else "(no setup examples available)"
+
+    return textwrap.dedent(f"""\
+    You are a sharp sports betting analyst writing previews for South African punters on MzansiEdge.
+
+    TASK: Rewrite the VERIFIED SCAFFOLD below into flowing, professional prose across 4 sections.
+
+    WRITING STYLE — imitate these examples exactly:
+
+    {setup_examples}
+
+    Edge example:
+    "{exemplars['edge']}"
+
+    Risk example:
+    "{exemplars['risk']}"
+
+    Verdict example:
+    "{exemplars['verdict']}"
+
+    RULES:
+    1. Observation-Evidence-Interpretation (OEI) pattern in EVERY paragraph:
+       - OBSERVATION: Your judgment call ("Arsenal look unstoppable")
+       - EVIDENCE: Data woven in or in parentheses ("unbeaten in five, WWWDD")
+       - INTERPRETATION: What it means ("winning ugly is still winning")
+    2. Form strings in PARENTHESES only — never as headlines, never "Their WWDWD form?"
+    3. W-D-L records EMBEDDED in sentences — never standalone
+    4. Stats FOLLOW observations — never precede them
+    5. ONLY use facts from the VERIFIED SCAFFOLD below. Add ZERO new facts.
+    6. You may reference player names ONLY if they appear in the Injuries section of the scaffold.
+    7. SA casual tone — SuperSport pundit, not academic paper. Like you're telling a mate about the match.
+    8. Edge section: explain WHY the value exists. Name the bookmaker, the odds, the EV%.
+    9. Risk section — argue AGAINST the bet from three angles:
+       (a) What favours the opposing outcome
+       (b) What market signals disagree with our edge
+       (c) An honest sizing/confidence caveat
+    10. Verdict: one decisive sentence. Name the bookmaker and odds. "Back it" or "sit this one out."
+    11. Start DIRECTLY with 📋 The Setup. No preamble. No meta-commentary.
+    12. Use {sport} terminology only.
+
+    VERIFIED SCAFFOLD:
+    {scaffold}
+
+    Write exactly 4 sections: 📋 The Setup, 🎯 The Edge, ⚠️ The Risk, 🏆 Verdict.
+    """)
+
+
+def _verify_rewrite(scaffold: str, rewritten: str, ctx_data: dict, edge_data: dict) -> bool:
+    """Stage 3 fact-check: verify essential facts survived LLM rewriting.
+
+    Requires ≥70% of checks to pass. Logs each missing fact.
+    Returns True if ≥70% pass, False otherwise.
+    """
+    checks: list[tuple[str, bool]] = []
+
+    # Team names (first word)
+    home_name = edge_data.get("home_team", "") or (
+        (ctx_data or {}).get("home_team", {}).get("name", "")
+        if isinstance((ctx_data or {}).get("home_team"), dict) else ""
+    )
+    away_name = edge_data.get("away_team", "") or (
+        (ctx_data or {}).get("away_team", {}).get("name", "")
+        if isinstance((ctx_data or {}).get("away_team"), dict) else ""
+    )
+
+    if home_name:
+        first_word = home_name.split()[0]
+        passed = first_word.lower() in rewritten.lower()
+        if not passed:
+            log.warning("Verify: home name '%s' missing from rewrite", first_word)
+        checks.append(("home_name", passed))
+
+    if away_name:
+        first_word = away_name.split()[0]
+        passed = first_word.lower() in rewritten.lower()
+        if not passed:
+            log.warning("Verify: away name '%s' missing from rewrite", first_word)
+        checks.append(("away_name", passed))
+
+    # Home position, points, form from ctx_data
+    home_ctx = (
+        (ctx_data or {}).get("home_team", {})
+        if isinstance((ctx_data or {}).get("home_team"), dict) else {}
+    )
+    away_ctx = (
+        (ctx_data or {}).get("away_team", {})
+        if isinstance((ctx_data or {}).get("away_team"), dict) else {}
+    )
+
+    home_pos = home_ctx.get("position")
+    if home_pos is not None:
+        passed = str(home_pos) in rewritten
+        if not passed:
+            log.warning("Verify: home position '%s' missing from rewrite", home_pos)
+        checks.append(("home_position", passed))
+
+    home_pts = home_ctx.get("points")
+    if home_pts is not None:
+        passed = str(home_pts) in rewritten
+        if not passed:
+            log.warning("Verify: home points '%s' missing from rewrite", home_pts)
+        checks.append(("home_points", passed))
+
+    home_form = home_ctx.get("form", "")
+    if home_form:
+        passed = home_form in rewritten
+        if not passed:
+            log.warning("Verify: home form '%s' missing from rewrite", home_form)
+        checks.append(("home_form", passed))
+
+    away_form = away_ctx.get("form", "")
+    if away_form:
+        passed = away_form in rewritten
+        if not passed:
+            log.warning("Verify: away form '%s' missing from rewrite", away_form)
+        checks.append(("away_form", passed))
+
+    # Bookmaker and odds
+    bookmaker = edge_data.get("best_bookmaker", "")
+    if bookmaker and bookmaker != "?":
+        passed = bookmaker.lower() in rewritten.lower()
+        if not passed:
+            log.warning("Verify: bookmaker '%s' missing from rewrite", bookmaker)
+        checks.append(("bookmaker", passed))
+
+    odds = edge_data.get("best_odds", 0)
+    if odds:
+        passed = f"{odds:.2f}" in rewritten or str(round(odds, 1)) in rewritten
+        if not passed:
+            log.warning("Verify: odds '%s' missing from rewrite", odds)
+        checks.append(("odds", passed))
+
+    # 4 section headers
+    for emoji, title in [("📋", "The Setup"), ("🎯", "The Edge"), ("⚠️", "The Risk"), ("🏆", "Verdict")]:
+        passed = emoji in rewritten
+        if not passed:
+            log.warning("Verify: section header '%s %s' missing from rewrite", emoji, title)
+        checks.append((f"header_{title}", passed))
+
+    if not checks:
+        return False
+
+    pass_count = sum(1 for _, v in checks if v)
+    pass_rate = pass_count / len(checks)
+    log.info("Verify: %d/%d checks passed (%.0f%%)", pass_count, len(checks), pass_rate * 100)
+    return pass_rate >= 0.70
+
+
+def _add_section_bold(text: str) -> str:
+    """Wrap section header titles in <b> tags (AI writes plain text, assembly expects bold)."""
+    for emoji, title in [("📋", "The Setup"), ("🎯", "The Edge"), ("⚠️", "The Risk"), ("🏆", "Verdict")]:
+        text = re.sub(
+            rf'{re.escape(emoji)}\s*(?:<b>)?{re.escape(title)}(?:</b>)?',
+            f'{emoji} <b>{title}</b>',
+            text,
+        )
+    return text
+
+
+def _quality_check(narrative: str) -> list[str]:
+    """Return a list of quality violation descriptions found in narrative.
+
+    W81-HOTFIX: Used after Stage 3 PASS — if any violations found, fall through
+    to template assembly rather than returning bad AI prose.
+    """
+    violations: list[str] = []
+    # Form string used as a headline/sentence opener
+    form_headline = re.search(
+        r'(?:^|\n)\s*(?:Their|The)\s+[WDL]{3,}\s+form', narrative
+    )
+    if form_headline:
+        violations.append(f"FORM_HEADLINE: {form_headline.group().strip()!r}")
+    # Standalone W-D-L record on its own line
+    standalone_record = re.search(
+        r'(?:^|\n)\s*W\d+\s+D\d+\s+L\d+\s*(?:\n|$)', narrative
+    )
+    if standalone_record:
+        violations.append(f"STANDALONE_RECORD: {standalone_record.group().strip()!r}")
+    # Generic team name placeholders survived to output
+    if "Home take on Away" in narrative or re.search(r'\bHome\s+vs\s+Away\b', narrative):
+        violations.append("GENERIC_TEAMS: placeholder names in output")
+    # Repeated boilerplate phrase (signals templated/degenerate output)
+    if narrative.lower().count("the latest evidence") >= 2:
+        violations.append("REPEATED_PHRASE: 'the latest evidence' appears 2+ times")
+    return violations
+
+
+def _dedup_sections(text: str) -> str:
+    """Strip any second occurrence of the Verdict (🏆) section.
+
+    W81-HOTFIX: Old cached narratives from pre-W81-REWRITE sometimes had a
+    duplicate Verdict because AI wrote one inside Edge+Risk and code appended
+    another. This guard applies to Stage 3 PASS output defensively.
+    """
+    first = text.find("🏆")
+    if first == -1:
+        return text
+    second = text.find("🏆", first + 1)
+    if second != -1:
+        log.warning("V2: Duplicate 🏆 Verdict section — truncating at second occurrence")
+        text = text[:second].rstrip()
+    return text
+
+
+def _decide_team_story(
+    pos: int | None,
+    pts: int | None,
+    form: str,
+    home_rec: tuple[int, int, int] | None,
+    away_rec: tuple[int, int, int] | None,
+    gpg: float | None,
+    is_home: bool,
+) -> str:
+    """Decide the narrative angle for this team based on data patterns.
+    Returns one of 10 story types."""
+    w = form.count("W") if form else 0
+    l = form.count("L") if form else 0
+    d = form.count("D") if form else 0
+
+    consec_w = len(form) - len(form.lstrip("W")) if form else 0
+    consec_l = len(form) - len(form.lstrip("L")) if form else 0
+
+    if pos and pos <= 2 and w >= 3:
+        return "title_push"
+    if is_home and home_rec and home_rec[2] <= 1 and home_rec[0] >= 6:
+        return "fortress"
+    if consec_l >= 3 or (pos and pos >= 14):
+        return "crisis"
+    # Belt-and-suspenders: bottom-half + losing majority = crisis even after a single win
+    if pos and pos >= 14 and l >= 3:
+        return "crisis"
+    if form and form[0] == "W" and l >= 2 and (pos is None or pos <= 13):
+        return "recovery"  # Only mid-table or higher — bottom-half teams still in crisis
+    if consec_w >= 2:
+        return "momentum"
+    if w >= 2 and l >= 2:
+        return "inconsistent"
+    if d >= 3:
+        return "draw_merchants"
+    if form and form[0] == "L" and w >= 2:
+        return "setback"
+    if pos and 8 <= pos <= 13:
+        return "anonymous"
+    return "neutral"
+
+
+def _scaffold_last_result(team: dict) -> str:
+    """Format the most recent result for scaffold output."""
+    last5 = team.get("last_5", [])
+    if not last5:
+        return ""
+    latest = last5[0]
+    result = latest.get("result", "")
+    opp = latest.get("opponent", "")
+    score = latest.get("score", "")
+    loc = "at home" if latest.get("home_away") == "home" else "away"
+    if not (result and opp and score):
+        return ""
+    verb = {"W": "beating", "L": "losing to", "D": "drawing with"}.get(result, "facing")
+    return f"{verb} {opp} {score} {loc}"
+
+
+def _build_verified_scaffold(ctx: dict, edge_data: dict, sport: str) -> str:
+    """Build the factual scaffold from verified data. Code-only, zero AI.
+
+    W81-SCAFFOLD: Output is structured text passed to the LLM in Stage 2.
+    Every fact is verified — the LLM must not add new facts.
+    """
+    home = ctx.get("home_team", {}) if isinstance(ctx.get("home_team"), dict) else {}
+    away = ctx.get("away_team", {}) if isinstance(ctx.get("away_team"), dict) else {}
+
+    home_name = home.get("name", edge_data.get("home_team", "Home"))
+    away_name = away.get("name", edge_data.get("away_team", "Away"))
+
+    home_rec = _parse_record(home.get("home_record", ""))
+    away_rec = _parse_record(away.get("away_record", ""))
+
+    home_story = _decide_team_story(
+        home.get("position"), home.get("points"), home.get("form", ""),
+        home_rec, None, home.get("goals_per_game"), is_home=True,
+    )
+    away_story = _decide_team_story(
+        away.get("position"), away.get("points"), away.get("form", ""),
+        None, away_rec, away.get("goals_per_game"), is_home=False,
+    )
+
+    home_last = _scaffold_last_result(home)
+    away_last = _scaffold_last_result(away)
+
+    injuries = get_verified_injuries(home_name, away_name)
+
+    lines: list[str] = []
+    lines.append(f"SPORT: {sport}")
+    lines.append(f"COMPETITION: {edge_data.get('league', ctx.get('league', 'Unknown'))}")
+    lines.append("")
+
+    lines.append(f"HOME_STORY_TYPE: {home_story}")
+    lines.append(f"HOME: {home_name}")
+    if home.get("coach"):
+        lines.append(f"  Coach: {home['coach']}")
+    if home.get("position") and home.get("points"):
+        lines.append(
+            f"  Position: {_ordinal(home['position'])} on {home['points']} points"
+            f" from {home.get('games_played', '?')} games"
+        )
+    if home.get("form"):
+        lines.append(f"  Form: {home['form']} (last {len(home['form'])} results)")
+    if home_last:
+        lines.append(f"  Last result: {home_last}")
+    if sum(home_rec) > 0:
+        lines.append(f"  Home record: W{home_rec[0]} D{home_rec[1]} L{home_rec[2]}")
+    if home.get("goals_per_game"):
+        lines.append(f"  Home GPG: {home['goals_per_game']:.1f}")
+    if injuries.get("home"):
+        lines.append(f"  Injuries: {', '.join(injuries['home'])}")
+    lines.append("")
+
+    lines.append(f"AWAY_STORY_TYPE: {away_story}")
+    lines.append(f"AWAY: {away_name}")
+    if away.get("coach"):
+        lines.append(f"  Coach: {away['coach']}")
+    if away.get("position") and away.get("points"):
+        lines.append(
+            f"  Position: {_ordinal(away['position'])} on {away['points']} points"
+            f" from {away.get('games_played', '?')} games"
+        )
+    if away.get("form"):
+        lines.append(f"  Form: {away['form']} (last {len(away['form'])} results)")
+    if away_last:
+        lines.append(f"  Last result: {away_last}")
+    if sum(away_rec) > 0:
+        lines.append(f"  Away record: W{away_rec[0]} D{away_rec[1]} L{away_rec[2]}")
+    if away.get("goals_per_game"):
+        lines.append(f"  Away GPG: {away['goals_per_game']:.1f}")
+    if injuries.get("away"):
+        lines.append(f"  Injuries: {', '.join(injuries['away'])}")
+    lines.append("")
+
+    h2h = ctx.get("head_to_head", [])
+    if h2h:
+        lines.append(f"H2H: {len(h2h)} meetings")
+        home_wins = sum(1 for m in h2h if m.get("home_score", 0) > m.get("away_score", 0))
+        away_wins = sum(1 for m in h2h if m.get("away_score", 0) > m.get("home_score", 0))
+        draws = len(h2h) - home_wins - away_wins
+        lines.append(
+            f"  {home_name} wins: {home_wins}, {away_name} wins: {away_wins}, Draws: {draws}"
+        )
+        if h2h[0]:
+            latest = h2h[0]
+            lines.append(
+                f"  Latest: {latest.get('home_team', '?')} "
+                f"{latest.get('home_score', '?')}-{latest.get('away_score', '?')} "
+                f"{latest.get('away_team', '?')} ({latest.get('date', '?')})"
+            )
+        lines.append("")
+
+    bk = edge_data.get("best_bookmaker", "?")
+    odds = edge_data.get("best_odds", 0)
+    ev = edge_data.get("edge_pct", 0)
+    outcome = edge_data.get("outcome", "?")
+    team = edge_data.get("outcome_team", outcome)
+    confirming = edge_data.get("confirming_signals", 0)
+    composite = edge_data.get("composite_score", 0)
+    bk_count = edge_data.get("bookmaker_count", 0)
+    market_agreement = edge_data.get("market_agreement", 0)
+    stale = edge_data.get("stale_minutes", 0)
+
+    lines.append(f"EDGE: {team} at {odds} with {bk}")
+    lines.append(f"  EV: +{ev:.1f}%")
+    lines.append(f"  Confirming signals: {confirming}/7")
+    lines.append(f"  Composite: {composite:.1f}/100")
+    lines.append(f"  SA bookmakers priced: {bk_count}")
+    lines.append(f"  Market agreement: {market_agreement:.0f}%")
+    if stale > 0:
+        lines.append(f"  Stale: {stale} minutes since last price update")
+    lines.append("")
+
+    lines.append("RISK FACTORS:")
+    has_specific_risk = False
+    if stale >= 360:
+        lines.append(f"  - Stale pricing: {bk} hasn't moved in {stale // 60} hours")
+        has_specific_risk = True
+    if confirming == 0:
+        lines.append("  - Zero confirming signals — pure price edge")
+        has_specific_risk = True
+    if edge_data.get("movement_direction") == "against":
+        lines.append("  - Market drifting against this outcome")
+        has_specific_risk = True
+    if edge_data.get("tipster_against", 0) >= 2:
+        lines.append(f"  - {edge_data['tipster_against']} tipster sources disagree")
+        has_specific_risk = True
+    if not has_specific_risk:
+        lines.append("  - Standard match variance applies")
+
+    return "\n".join(lines)
+
+
+# ── W79-PHASE2: Assembly Function ──
+
+
+def _extract_teams_from_tips(
+    tips: list[dict],
+    home_team: str = "",
+    away_team: str = "",
+) -> tuple[str, str]:
+    """Extract home/away names from match_key when not explicitly provided.
+
+    W82-WIRE Fix 6: eliminates 'Home take on Away' placeholder names.
+    """
+    for t in tips:
+        v2 = t.get("edge_v2") or {}
+        mk = v2.get("match_key", "")
+        if "_vs_" in mk:
+            parts = mk.rsplit("_", 1)[0]  # strip date suffix
+            if "_vs_" in parts:
+                h_raw, a_raw = parts.split("_vs_", 1)
+                home_team = home_team or h_raw.replace("_", " ").title()
+                away_team = away_team or a_raw.replace("_", " ").title()
+                break
+    return home_team, away_team
+
+
+def _extract_edge_data(
+    tips: list[dict],
+    home_team: str = "",
+    away_team: str = "",
+) -> dict:
+    """Extract normalised edge dict from tips for NarrativeSpec.
+
+    W82-WIRE: returns same shape as _edge_data_scaffold so
+    build_narrative_spec() receives all required fields.
+    """
+    if not tips:
+        return {"home_team": home_team, "away_team": away_team}
+    best = max(tips, key=lambda t: t.get("ev", 0))
+    v2 = best.get("edge_v2") or {}
+    sigs = v2.get("signals", {})
+    outcome_raw = best.get("outcome", "?")
+    if outcome_raw == "home":
+        outcome_team = home_team or best.get("home_team", "")
+    elif outcome_raw == "away":
+        outcome_team = away_team or best.get("away_team", "")
+    else:
+        outcome_team = outcome_raw
+    return {
+        "home_team": home_team,
+        "away_team": away_team,
+        "league": v2.get("league", "") or best.get("league", ""),
+        "best_bookmaker": best.get("bookmaker", best.get("bookie", "?")),
+        "best_odds": best.get("odds", 0),
+        "edge_pct": best.get("ev", 0),
+        "outcome": outcome_raw,
+        "outcome_team": outcome_team,
+        "confirming_signals": v2.get("confirming_signals", 0),
+        "composite_score": v2.get("composite_score", 0),
+        "bookmaker_count": v2.get("bookmaker_count", 0),
+        "market_agreement": (
+            sigs.get("market_agreement", {}).get("score", 0) * 100
+            if isinstance(sigs.get("market_agreement"), dict) else 0
+        ),
+        "stale_minutes": v2.get("stale_minutes", 0),
+        "movement_direction": sigs.get("movement", {}).get("direction", ""),
+        "tipster_against": sigs.get("tipster", {}).get("against_count", 0),
+    }
+
+
+def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
+    """Build constrained polish prompt. LLM may only improve flow.
+
+    W82-POLISH: the LLM cannot change analytical posture — only the words.
+    """
+    from narrative_spec import TONE_BANDS
+    band = TONE_BANDS[spec.tone_band]
+    setup_examples = "\n\n".join(
+        f'EXAMPLE: "{ex}"' for ex in exemplars.get("setup", [])[:2]
+    )
+    return (
+        f"You are polishing a sports betting preview for MzansiEdge, a South African platform.\n\n"
+        f"THE BASELINE TEXT BELOW IS ALREADY ACCURATE AND COMPLETE. Your job is ONLY to improve "
+        f"flow and readability. Make it sound like a sharp SA pundit talking to a mate about the match.\n\n"
+        f"BASELINE TEXT:\n{baseline}\n\n"
+        f"STYLE EXAMPLES (imitate this tone):\n{setup_examples}\n\n"
+        f"STRICT CONSTRAINTS — violating ANY of these means your output is REJECTED and the baseline serves instead:\n"
+        f"1. TONE BAND: {spec.tone_band}\n"
+        f"   ALLOWED phrases: {', '.join(band['allowed'][:5])}\n"
+        f"   BANNED phrases: {', '.join(band['banned'])}\n"
+        f"2. You MUST keep the same verdict strength. Do NOT upgrade \"{spec.verdict_action}\" to anything stronger.\n"
+        f"3. You MUST keep all team names, positions, points, form strings, bookmaker names, odds, and EV percentages EXACTLY as they appear in the baseline.\n"
+        f"4. You MUST keep all risk factors. Do NOT remove or soften them.\n"
+        f"5. Form strings belong in parentheses or woven into sentences — NEVER as standalone headlines.\n"
+        f"6. Follow the Observation-Evidence-Interpretation pattern in the Setup.\n"
+        f"7. Start directly with 📋 The Setup. No preamble. No meta-commentary.\n"
+        f"8. Keep all 4 section headers: 📋 The Setup, 🎯 The Edge, ⚠️ The Risk, 🏆 Verdict\n\n"
+        f"If you cannot improve the baseline without violating these constraints, return it UNCHANGED."
+    )
+
+
+def _validate_polish(polished: str, baseline: str, spec) -> bool:
+    """Validate polished output against NarrativeSpec constraints.
+
+    W82-POLISH: returns True if polish is safe to serve; False = serve baseline.
+    """
+    from narrative_spec import TONE_BANDS
+    band = TONE_BANDS[spec.tone_band]
+    polished_lower = polished.lower()
+
+    # 1. Banned phrases for this tone band
+    for phrase in band["banned"]:
+        if phrase.lower() in polished_lower:
+            log.warning("POLISH REJECT: banned phrase '%s' in %s band", phrase, spec.tone_band)
+            return False
+
+    # 2. All 4 section headers present
+    for header in ["📋", "🎯", "⚠️", "🏆"]:
+        if header not in polished:
+            log.warning("POLISH REJECT: missing section header %s", header)
+            return False
+
+    # 3. Essential facts survived — team names
+    if spec.home_name and spec.home_name.lower().split()[0] not in polished_lower:
+        log.warning("POLISH REJECT: home team '%s' missing", spec.home_name)
+        return False
+    if spec.away_name and spec.away_name.lower().split()[0] not in polished_lower:
+        log.warning("POLISH REJECT: away team '%s' missing", spec.away_name)
+        return False
+
+    # 4. Bookmaker + odds
+    if spec.bookmaker and spec.bookmaker.lower() not in polished_lower:
+        log.warning("POLISH REJECT: bookmaker '%s' missing", spec.bookmaker)
+        return False
+    if spec.odds and str(round(spec.odds, 2)) not in polished:
+        log.warning("POLISH REJECT: odds '%s' missing", spec.odds)
+        return False
+
+    # 5. Speculative edge → no strong language
+    if spec.evidence_class == "speculative":
+        strong = ["strong back", "confident", "clear edge", "must back", "genuine value", "supported edge"]
+        for phrase in strong:
+            if phrase in polished_lower:
+                log.warning("POLISH REJECT: speculative but strong phrase '%s'", phrase)
+                return False
+
+    # 6. Quality check (form-as-headline, standalone records, generic teams)
+    violations = _quality_check(polished)
+    if violations:
+        log.warning("POLISH REJECT: quality violations %s", violations)
+        return False
+
+    return True
+
+
+async def _generate_narrative_v2(
+    ctx_data: dict | None,
+    tips: list[dict] | None,
+    sport: str,
+    user_message: str = "",
+    banned_terms_str: str = "",
+    mandatory_search: bool = False,
+    home_team: str = "",
+    away_team: str = "",
+    live_tap: bool = False,
+) -> str:
+    """W82-POLISH: baseline first, then optional constrained LLM polish.
+
+    live_tap=True → instant baseline, zero LLM.
+    live_tap=False → baseline + polish attempt; serves baseline if polish fails.
+    """
+    from narrative_spec import build_narrative_spec, _render_baseline
+
+    # Extract real team names from match_key when not provided
+    if tips and (not home_team or not away_team):
+        home_team, away_team = _extract_teams_from_tips(tips, home_team, away_team)
+
+    # No edge data → clean fallback, no hallucination invitation
+    if not tips:
+        return "No current edge data available for this match. Check back closer to kickoff."
+
+    # Build spec → deterministic baseline (<100ms, zero API)
+    edge_data = _extract_edge_data(tips, home_team, away_team)
+    spec = build_narrative_spec(ctx_data, edge_data, tips, sport)
+    baseline = _render_baseline(spec)
+    baseline = _sanitise_jargon(baseline)
+    baseline = _apply_sport_subs(baseline, sport)
+    baseline = _final_polish(baseline, edge_data)
+
+    if live_tap:
+        return baseline  # Instant. No LLM.
+
+    # W82-POLISH: optional constrained LLM polish (pre-gen path only)
+    _match_label = f"{home_team} vs {away_team}" if home_team and away_team else "unknown"
+    try:
+        exemplars = _get_exemplars_for_prompt(
+            spec.home_story_type, spec.away_story_type, spec.ev_pct, sport
+        )
+        prompt = _build_polish_prompt(baseline, spec, exemplars)
+        resp = await claude.messages.create(
+            model=_NARRATIVE_MODEL,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=40.0,
+        )
+        polished = _strip_preamble(_extract_text_from_response(resp))
+        if polished and _validate_polish(polished, baseline, spec):
+            log.info("POLISH PASS for %s", _match_label)
+            polished = _sanitise_jargon(polished)
+            polished = _apply_sport_subs(polished, sport)
+            polished = _final_polish(polished, edge_data)
+            return polished
+        else:
+            log.warning("POLISH FAIL for %s — serving baseline", _match_label)
+    except Exception as exc:
+        log.warning("POLISH ERROR for %s: %s — serving baseline", _match_label, exc)
+
+    return baseline
 
 
 def _build_programmatic_narrative(
@@ -6287,226 +8892,45 @@ def _build_programmatic_narrative(
     breakdown. Every field from verified context is used. No hallucination
     possible because every word comes from data.
     """
+    # W79-PHASE2: Use code-built helpers for all sections
     if not ctx_data or not ctx_data.get("data_available"):
-        return ""
+        return _build_signal_only_narrative(tips, sport)
 
-    home = ctx_data.get("home_team", {})
-    away = ctx_data.get("away_team", {})
-    home_name = home.get("name", "Home")
-    away_name = away.get("name", "Away")
+    # Setup from UX templates (W80-PROSE v2)
+    setup = _build_setup_section_v2(ctx_data, tips, sport)
+    if not setup:
+        return _build_signal_only_narrative(tips, sport)
 
-    # ── Build Setup ──
-    setup_parts: list[str] = []
+    # Extract team names from ctx_data
+    _h_name = (ctx_data.get("home_team") or {}).get("name", "") or (ctx_data.get("home_team") or {}).get("team_name", "")
+    _a_name = (ctx_data.get("away_team") or {}).get("name", "") or (ctx_data.get("away_team") or {}).get("team_name", "")
 
-    def _ordinal(n: int) -> str:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(
-            n % 10 if n % 100 not in (11, 12, 13) else 0, "th")
-        return f"{n}{suffix}"
+    # Edge, Risk, Verdict from signal-driven helpers (W80-PROSE v2)
+    edge = _build_edge_from_signals_v2(tips, home_name=_h_name, away_name=_a_name)
+    risk = _build_risk_from_signals_v2(tips, ctx_data, sport, home_name=_h_name, away_name=_a_name)
+    verdict = _build_verdict_from_signals_v2(tips, home_name=_h_name, away_name=_a_name)
 
-    def _build_team_prose(team: dict, name: str, is_home: bool) -> str:
-        """Build a flowing narrative paragraph for one team."""
-        sentences: list[str] = []
-
-        # Sentence 1: position + coach
-        pos = team.get("league_position")
-        pts = team.get("points")
-        gp = team.get("games_played") or team.get("matches_played")
-        coach = team.get("coach")
-        if pos is not None and pts is not None:
-            gp_str = f" from {gp} games" if gp else ""
-            verb = "host this one" if is_home else "arrive"
-            coach_poss = f"{coach}'" if coach and coach.endswith("s") else f"{coach}'s"
-            coach_str = f", with {coach_poss} side" if coach else ""
-            sentences.append(
-                f"{name} {verb} sitting {_ordinal(pos)} on {pts} points{gp_str}{coach_str}."
-            )
-        elif team.get("wins") is not None:
-            sentences.append(f"{name} have {team['wins']}W-{team.get('losses', 0)}L so far.")
-        else:
-            sentences.append(f"{name} head into this one.")
-
-        # Sentence 2: form + latest result
-        form = team.get("form")
-        last5 = team.get("last_5", [])
-        if form and last5:
-            notable = last5[0]
-            score = notable.get("score", "")
-            opp = notable.get("opponent", "")
-            result = notable.get("result", "")
-            w_count = form.count("W")
-            l_count = form.count("L")
-            loc = "at home" if notable.get("home_away") == "home" else "away"
-
-            if w_count >= 3 and result == "W" and score and opp:
-                sentences.append(
-                    f"Form reads {form} — they're flying, most recently beating {opp} {score} {loc}."
-                )
-            elif l_count >= 3 and result == "L" and score and opp:
-                sentences.append(
-                    f"Form reads {form} — they're struggling, last going down {score} to {opp} {loc}."
-                )
-            elif score and opp:
-                result_verb = {"W": "beating", "L": "losing to", "D": "drawing with"}.get(result, "facing")
-                sentences.append(
-                    f"Recent form reads {form}, last time out {result_verb} {opp} {score} {loc}."
-                )
-            elif form:
-                sentences.append(f"Recent form reads {form}.")
-        elif form:
-            sentences.append(f"Recent form reads {form}.")
-
-        # Sentence 3: top scorer + scoring rate (sport-appropriate)
-        top_scorer = team.get("top_scorer")
-        gpg = team.get("goals_per_game")
-        _rate_label = (
-            "runs per innings" if sport == "cricket"
-            else "points per game" if sport == "rugby"
-            else "goals per game"
-        )
-        _score_label = (
-            "runs" if sport == "cricket"
-            else "points" if sport == "rugby"
-            else "goals"
-        )
-        if top_scorer and top_scorer.get("name") and gpg is not None:
-            g = top_scorer.get("goals", "")
-            goals_str = f" ({g} {_score_label})" if g else ""
-            sentences.append(
-                f"{top_scorer['name']} leads the attack{goals_str}, "
-                f"with the side averaging {gpg:.1f} {_rate_label}."
-            )
-        elif top_scorer and top_scorer.get("name"):
-            g = top_scorer.get("goals", "")
-            sentences.append(
-                f"{top_scorer['name']} leads the scoring"
-                + (f" with {g} {_score_label}." if g else ".")
-            )
-        elif gpg is not None:
-            sentences.append(f"They're averaging {gpg:.1f} {_rate_label}.")
-
-        # Sentence 4: home/away record
-        if is_home:
-            h_rec = team.get("home_record")
-            if h_rec:
-                sentences.append(f"At home, their record reads {h_rec}.")
-        else:
-            a_rec = team.get("away_record")
-            if a_rec:
-                sentences.append(f"On the road, their record reads {a_rec}.")
-
-        return " ".join(sentences)
-
-    # Home team prose
-    h_prose = _build_team_prose(home, home_name, is_home=True)
-    setup_parts.append(h_prose)
-
-    # Away team prose
-    a_prose = _build_team_prose(away, away_name, is_home=False)
-    setup_parts.append(a_prose)
-
-    # H2H
-    h2h = ctx_data.get("head_to_head") or []
-    if h2h:
-        h2h_count = len(h2h)
-        home_wins = sum(1 for g in h2h if g.get("home") == home_name and
-                        g.get("score", "").split("-")[0] > g.get("score", "").split("-")[-1])
-        away_wins_in_h2h = sum(1 for g in h2h if g.get("away") == away_name and
-                               g.get("score", "0-0").split("-")[-1] > g.get("score", "0-0").split("-")[0])
-        total_away_wins = sum(1 for g in h2h if
-                              (g.get("score", "0-0").split("-")[0].strip().isdigit() and
-                               g.get("score", "0-0").split("-")[-1].strip().isdigit() and
-                               ((g.get("home") == away_name and
-                                 int(g.get("score", "0-0").split("-")[0]) > int(g.get("score", "0-0").split("-")[-1])) or
-                                (g.get("away") == away_name and
-                                 int(g.get("score", "0-0").split("-")[-1]) > int(g.get("score", "0-0").split("-")[0])))))
-        latest = h2h[0]
-        setup_parts.append(
-            f"In their last {h2h_count} meetings, {away_name} have won {total_away_wins}. "
-            f"Most recent: {latest.get('home', '?')} {latest.get('score', '?')} {latest.get('away', '?')} "
-            f"({latest.get('date', '?')})."
-        )
-
-    # Venue
-    venue = ctx_data.get("venue")
-    if venue:
-        setup_parts.append(f"This one is at {venue}.")
-
-    # Injuries (from last_5 or separate data — check for KEY ABSENCES in ctx)
-    # Note: injuries might be in the enrichment block, not ctx_data
-
-    setup = " ".join(setup_parts)
-
-    # ── Build Edge ──
-    edge_parts: list[str] = []
+    # Build edge_data for _final_polish outcome→team name replacement
+    _edge_data = {"home_team": _h_name, "away_team": _a_name}
     if tips:
-        best_ev_tip = max(tips, key=lambda t: t.get("ev", 0))
-        ev = best_ev_tip.get("ev", 0)
-        outcome = best_ev_tip.get("outcome", "?")
-        odds = best_ev_tip.get("odds", 0)
-        bk = best_ev_tip.get("bookie", "?")
-        prob = best_ev_tip.get("prob", 0)
+        _best = max(tips, key=lambda t: t.get("ev", 0))
+        _outcome = _best.get("outcome", "")
+        _outcome_team = ""
+        if _outcome == "home":
+            _outcome_team = _h_name or _best.get("home_team", "") or (ctx_data or {}).get("home_team", {}).get("name", "")
+        elif _outcome == "away":
+            _outcome_team = _a_name or _best.get("away_team", "") or (ctx_data or {}).get("away_team", {}).get("name", "")
+        _edge_data["outcome"] = _outcome
+        _edge_data["outcome_team"] = _outcome_team
 
-        if ev > 0:
-            edge_parts.append(
-                f"The best value sits with {outcome} at {odds:.2f} ({bk}), "
-                f"carrying a +{ev:.1f}% edge against a {prob}% implied probability."
-            )
-            # Compare odds spread
-            if len(tips) > 1:
-                others = [t for t in tips if t is not best_ev_tip and t.get("ev", 0) > 0]
-                if others:
-                    other = others[0]
-                    edge_parts.append(
-                        f"{other.get('outcome', '?')} at {other.get('odds', 0):.2f} "
-                        f"also offers +{other.get('ev', 0):.1f}% EV."
-                    )
-        else:
-            edge_parts.append(
-                "The market has this priced efficiently with no significant value on either side."
-            )
-    else:
-        edge_parts.append("Limited odds data available — check back closer to kickoff.")
-
-    edge = " ".join(edge_parts)
-
-    # ── Build Risk ──
-    def _possessive(name: str) -> str:
-        return f"{name}'" if name.endswith("s") else f"{name}'s"
-
-    risk_parts: list[str] = []
-    h_form = home.get("form", "")
-    a_form = away.get("form", "")
-    if h_form and a_form:
-        if h_form.count("W") >= 3:
-            risk_parts.append(f"{_possessive(home_name)} strong home form could upset the odds.")
-        elif a_form.count("W") >= 3:
-            risk_parts.append(f"{_possessive(away_name)} momentum makes them dangerous on the road.")
-    if not risk_parts:
-        risk_parts.append(
-            "Both sides have something to play for, and one bad half can flip this result."
-        )
-
-    risk = " ".join(risk_parts)
-
-    # ── Build Verdict ──
-    verdict = ""
-    if tips:
-        best = max(tips, key=lambda t: t.get("ev", 0))
-        if best.get("ev", 0) > 2:
-            verdict = f"Back {best.get('outcome', '?')} at {best.get('odds', 0):.2f} for the value play."
-        elif best.get("ev", 0) > 0:
-            verdict = f"{best.get('outcome', '?')} at {best.get('odds', 0):.2f} is marginal value — proceed with caution."
-        else:
-            verdict = "No clear value here — consider sitting this one out."
-    else:
-        verdict = "Wait for more odds data before committing."
-
-    return (
+    assembled = (
         f"📋 <b>The Setup</b>\n{setup}\n\n"
         f"🎯 <b>The Edge</b>\n{edge}\n\n"
         f"⚠️ <b>The Risk</b>\n{risk}\n\n"
         f"🏆 <b>Verdict</b>\n{verdict}"
     )
+    assembled = _apply_sport_subs(assembled, sport)
+    return _final_polish(_sanitise_jargon(assembled), _edge_data)
 
 
 def _verify_form_claim(patterns: list[str], ctx_data: dict) -> bool:
@@ -6517,6 +8941,8 @@ def _verify_form_claim(patterns: list[str], ctx_data: dict) -> bool:
     verified_forms: set[str] = set()
     for side in ("home_team", "away_team"):
         team = ctx_data.get(side, {})
+        if not isinstance(team, dict):
+            continue
         form = team.get("form", "")
         gp = team.get("games_played") or team.get("matches_played") or 0
         if form:
@@ -6525,6 +8951,8 @@ def _verify_form_claim(patterns: list[str], ctx_data: dict) -> bool:
             if gp and len(form) > gp:
                 verified_forms.add(form[:gp].upper())
         record = team.get("record", {})
+        if not isinstance(record, dict):
+            record = {}
         wins = record.get("wins") if record else team.get("wins")
         losses = record.get("losses") if record else team.get("losses")
         draws = record.get("draws", 0) if record else team.get("draws", 0)
@@ -6550,6 +8978,8 @@ def _verify_form_claim(patterns: list[str], ctx_data: dict) -> bool:
             # Verify against any team's record
             for side in ("home_team", "away_team"):
                 team = ctx_data.get(side, {})
+                if not isinstance(team, dict):
+                    continue
                 gp = team.get("games_played") or team.get("matches_played") or 0
                 w = team.get("wins", 0)
                 if claimed_w == w and claimed_total <= gp:
@@ -6637,53 +9067,84 @@ def _verify_scores(score_patterns: list[str], ctx_data: dict) -> bool:
 _STYLE_WORDS = frozenset([
     "counter-attack", "counter-attacking", "possession-based", "set-piece",
     "parking the bus", "tiki-taka", "gegenpressing", "route one", "long ball",
-    "specialists", "scintillating", "relentless", "away specialists",
-    "home specialists", "dominant pack", "expansive", "high press",
-    "possession game", "target man", "direct play", "total football",
+    "away specialists", "home specialists", "dominant pack", "expansive",
+    "high press", "possession game", "target man", "direct play",
+    "total football",
 ])
 
 
-def _generate_minimal_setup(ctx_data: dict) -> str:
-    """Generate a safe, data-only Setup when verified data is insufficient."""
-    lines: list[str] = []
 
-    def _ordinal(n: int) -> str:
-        s = {1: "st", 2: "nd", 3: "rd"}.get(n % 10 if n % 100 not in (11, 12, 13) else 0, "th")
-        return f"{n}{s}"
+# W79-PHASE2: _generate_minimal_setup removed — replaced by _build_setup_section()
 
-    if ctx_data and ctx_data.get("data_available"):
-        for side in ("home_team", "away_team"):
-            team = ctx_data.get(side, {})
-            name = team.get("name", "?")
-            pos = team.get("league_position")
-            pts = team.get("points")
-            gp = team.get("games_played") or team.get("matches_played")
-            wins = team.get("wins")
-            losses = team.get("losses")
-            form = team.get("form", "")
 
-            parts: list[str] = []
-            if pos is not None and pts is not None:
-                parts.append(f"{name} sit {_ordinal(pos)} with {pts} points")
-                if gp:
-                    parts[-1] += f" from {gp} games"
-            if wins is not None and losses is not None:
-                parts.append(f"W{wins} L{losses}")
-            if form and gp:
-                form_v = form[:gp] if len(form) > gp else form
-                parts.append(f"form {form_v}")
-            if parts:
-                lines.append(". ".join(parts) + ".")
+# W73-LAUNCH: Known team nicknames that look like person names but should not be stripped
+_KNOWN_TEAM_NICKNAMES = {
+    # EPL
+    "the blues", "the reds", "the gunners", "the magpies",
+    "the toffees", "the villans", "the hammers", "the foxes",
+    "the saints", "the cherries", "the wolves", "the cottagers",
+    "the hornets", "the canaries", "the blades", "the owls",
+    "the baggies", "the hatters", "the bees", "the seagulls",
+    # European
+    "los blancos", "los merengues", "los colchoneros",
+    "the old lady", "the red devils", "die borussen",
+    "les parisiens", "the parisians", "die bayern", "the rossoneri",
+    # SA PSL
+    "the glamour boys", "the buccaneers", "the clever boys",
+    "the citizens", "usuthu", "amakhosi", "masandawana",
+    "richards bay", "betway premiership",
+    # Rugby franchise nicknames
+    "the brumbies", "the reds", "the waratahs", "the force",
+    "the highlanders", "the hurricanes", "the crusaders",
+    "the chiefs", "the blues", "the stormers", "the sharks",
+    "the bulls", "the lions",
+    # Rugby national
+    "the springboks", "the all blacks", "the wallabies",
+    "the pumas", "les bleus", "the cherry blossoms",
+    # Cricket
+    "the proteas", "the black caps", "the windies",
+    "the baggy greens", "the tigers",
+}
 
-        h2h = ctx_data.get("head_to_head") or []
-        if h2h:
-            recent = h2h[0]
-            lines.append(f"Last meeting: {recent.get('home', '?')} {recent.get('score', '?')} {recent.get('away', '?')} ({recent.get('date', '?')}).")
 
-    if not lines:
-        lines.append("Limited verified data is available for this fixture. Analysis is based on market pricing and bookmaker odds.")
+def _merge_continuation_lines(lines: list[str]) -> list[str]:
+    """Merge lines that continue a previous sentence into one unit.
 
-    return "\n".join(lines)
+    A line is a continuation if the previous line did NOT end with a sentence
+    terminator (. ! ?). Section headers (🎯⚠️📋🏆) always start a new unit.
+    Empty lines flush the current sentence and are preserved for formatting.
+
+    Before:  ["value —", "Onana missing,", ", becomes likely."]  → 3 separate
+    After:   ["value — Onana missing, , becomes likely."]         → 1 unit
+    """
+    sentences: list[str] = []
+    current: str = ""
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if current:
+                sentences.append(current)
+                current = ""
+            sentences.append("")
+            continue
+        # Section headers are always new sentence units
+        if re.match(r'^[📋🎯⚠️🏆]', stripped):
+            if current:
+                sentences.append(current)
+            current = stripped
+            continue
+        if current:
+            ends_sentence = current.rstrip().endswith(('.', '!', '?'))
+            if not ends_sentence:
+                current = current.rstrip() + " " + stripped
+            else:
+                sentences.append(current)
+                current = stripped
+        else:
+            current = stripped
+    if current:
+        sentences.append(current)
+    return sentences
 
 
 def fact_check_output(
@@ -6701,7 +9162,9 @@ def fact_check_output(
     if not narrative:
         return narrative
 
-    lines = narrative.split('\n')
+    # W81-FACTCHECK: merge continuation lines before checking so multi-line
+    # sentences are treated as a single unit (prevents orphaned fragments)
+    lines = _merge_continuation_lines(narrative.split('\n'))
     cleaned: list[str] = []
 
     # Extract verified names, positions, coaches, players from context
@@ -6791,6 +9254,19 @@ def fact_check_output(
             for word in venue.split():
                 if len(word) > 3:
                     verified_names.add(word.lower())
+
+        # W81-FACTCHECK: Add verified injury player names to allowed set
+        _inj_home = (ctx_data.get("home_team") or {}).get("name", "") if ctx_data else ""
+        _inj_away = (ctx_data.get("away_team") or {}).get("name", "") if ctx_data else ""
+        if _inj_home or _inj_away:
+            _inj_data = get_verified_injuries(_inj_home, _inj_away)
+            for _entry in _inj_data.get("home", []) + _inj_data.get("away", []):
+                _player = _entry.split(" (")[0].strip()
+                if _player:
+                    verified_names.add(_player.lower())
+                    for _word in _player.split():
+                        if len(_word) > 3:
+                            verified_names.add(_word.lower())
 
     # Position check pattern
     position_re = re.compile(
@@ -6895,10 +9371,17 @@ def fact_check_output(
                 # Skip if it's a known/verified name or section header
                 if name_lower in verified_names:
                     continue
-                # Check individual words — if ANY significant word is in verified names, allow
-                name_words = [w.lower() for w in name.split() if len(w) > 3]
-                if name_words and any(w in verified_names for w in name_words):
+                # W73-LAUNCH: Skip known team nicknames
+                if name_lower in _KNOWN_TEAM_NICKNAMES:
                     continue
+                # Check individual words — require MAJORITY of significant words verified
+                # W79: Tightened from any() to majority to prevent fabricated names
+                # that share one word with a verified name
+                name_words = [w.lower() for w in name.split() if len(w) > 3]
+                if name_words:
+                    verified_count = sum(1 for w in name_words if w in verified_names)
+                    if verified_count > len(name_words) / 2:
+                        continue
                 # Skip section headers, non-person phrases, and team names
                 _NON_PERSON = {
                     "the setup", "the edge", "the risk", "the draw",
@@ -6991,16 +9474,47 @@ def fact_check_output(
         fallback = _build_programmatic_narrative(ctx_data, tips, sport)
         if fallback:
             return fallback
-        # True last resort: minimal setup
-        minimal = _generate_minimal_setup(ctx_data)
+        # True last resort: use code-built setup + inline fallback
+        setup = _build_setup_section_v2(ctx_data, tips, sport) or "Analysis is based on current market pricing from SA bookmakers."
+        _lr_h = (ctx_data.get("home_team") or {}).get("name", "") if ctx_data else ""
+        _lr_a = (ctx_data.get("away_team") or {}).get("name", "") if ctx_data else ""
         return (
-            f"📋 <b>The Setup</b>\n{minimal}\n\n"
+            f"📋 <b>The Setup</b>\n{setup}\n\n"
             f"🎯 <b>The Edge</b>\nAnalysis is based on current market pricing from SA bookmakers.\n\n"
             f"⚠️ <b>The Risk</b>\nLimited verified data — treat odds-based analysis with caution.\n\n"
-            f"🏆 <b>Verdict</b>\nCheck the odds comparison below for the best value."
+            f"🏆 <b>Verdict</b>\n{_build_verdict_from_signals(tips, home_team=_lr_h, away_team=_lr_a)}"
         )
 
     return '\n'.join(cleaned)
+
+
+def _clean_fact_checked_output(text: str) -> str:
+    """Remove artifacts left after fact-checker strips content.
+
+    Cleans orphaned leading punctuation, orphaned connector words on their
+    own line, and orphaned periods. Collapses excessive blank lines.
+    Applied to AI Edge/Risk text after fact_check_output() runs.
+    """
+    if not text:
+        return text
+    # Remove orphaned leading comma/semicolon at start of any line
+    text = re.sub(r'(?m)^[ \t]*[,;][ \t]*', '', text)
+    # Remove lines that are ONLY orphaned connector words
+    text = re.sub(
+        r'(?m)^[ \t]*(while|and|but|or|however|although|though|yet|with)[ \t]*$',
+        '',
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Remove orphaned period-only lines
+    text = re.sub(r'(?m)^[ \t]*\.[ \t]*$', '', text)
+    # Collapse 3+ blank lines to 2
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+    # Ensure first content character is uppercase
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+    return text
 
 
 async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: str = "matches") -> None:
@@ -7013,9 +9527,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
     _perf_t0 = _time.time()
 
-    # Wave 26A: fetch user tier for bookmaker link gating
-    _ggt_tier = await get_effective_tier(user_id)
-
     # ── Check analysis cache first (1-hour TTL) ──
     cached = _analysis_cache.get(event_id)
     if cached:
@@ -7026,6 +9537,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             cached_msg, cached_tips, cached_ts = cached
             cached_edge_tier = "bronze"
         if _time.time() - cached_ts < _ANALYSIS_CACHE_TTL:
+            # Wave 26A: fetch user tier only when needed (after cache check)
+            _ggt_tier = await get_effective_tier(user_id)
             _game_tips_cache[event_id] = cached_tips
             buttons = _build_game_buttons(cached_tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=cached_edge_tier)
             await query.edit_message_text(
@@ -7033,6 +9546,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
             return
+
+    # Wave 26A: fetch user tier for bookmaker link gating (cache miss path)
+    _ggt_tier = await get_effective_tier(user_id)
 
     db_user = await db.get_user(user_id)
     prefs = await db.get_user_sport_prefs(user_id)
@@ -7232,11 +9748,48 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     tips: list[dict] = []
     commence_time = target_event.get("commence_time", "")
     db_match_id = odds_svc.build_match_id(home, away, commence_time)
+
+    # ── W60-CACHE: Check persistent narrative cache (survives restarts) ──
+    if db_match_id:
+        try:
+            _cached_db = await _get_cached_narrative(db_match_id)
+        except Exception:
+            _cached_db = None
+        if _cached_db:
+            # Populate in-memory cache too
+            _analysis_cache[event_id] = (
+                _cached_db["html"], _cached_db["tips"],
+                _cached_db["edge_tier"], _time.time(),
+            )
+            _game_tips_cache[event_id] = _cached_db["tips"]
+            _spinner_stop.set()
+            await _spinner_task
+            _ctx_task.cancel()
+            buttons = _build_game_buttons(
+                _cached_db["tips"], event_id, user_id,
+                source=source, user_tier=_ggt_tier,
+                edge_tier=_cached_db["edge_tier"],
+            )
+            _banner = _qa_banner(user_id)
+            _html = (_banner + _cached_db["html"]) if _banner else _cached_db["html"]
+            await query.edit_message_text(
+                _html, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            log.info(
+                "PERF: narrative_cache HIT (model=%s) for %s in %.1fs",
+                _cached_db["model"], db_match_id, _time.time() - _perf_t0,
+            )
+            return
+
     db_match = None
     # Determine correct market type for this league (cricket/combat use match_winner)
     from services.odds_service import LEAGUE_MARKET_TYPE
     _game_db_league = _CONFIG_TO_DB_LEAGUE.get(target_league, target_league) if target_league else ""
     _game_market = LEAGUE_MARKET_TYPE.get(_game_db_league, "1x2")
+    # W75-FIX: Sport-based fallback — cricket always uses match_winner
+    if _game_market == "1x2" and _DB_LEAGUE_SPORT.get(_game_db_league) == "cricket":
+        _game_market = "match_winner"
     if db_match_id:
         try:
             db_match = await odds_svc.get_best_odds(db_match_id, _game_market)
@@ -7362,10 +9915,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             for t in tips
         )
     else:
-        odds_context = (
-            "No odds data available for this match yet. "
-            "Provide general analysis based on what you know about these teams."
-        )
+        odds_context = "No current edge data available for this match."
 
     # ── Await ESPN context (was started in background before odds) ──
     _match_ctx = await _ctx_task
@@ -7406,8 +9956,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         if "/home/paulsportsza" not in _sys.path:
             _sys.path.insert(0, "/home/paulsportsza")
         from scrapers.form.form_analyser import format_form_for_narrative
-        import sqlite3 as _sqlite3
-        _form_conn = _sqlite3.connect("/home/paulsportsza/scrapers/odds.db")
+        from db_connection import get_connection as _get_conn
+        _form_conn = _get_conn()
         _home_key = home_raw.lower().replace(" ", "_")
         _away_key = away_raw.lower().replace(" ", "_")
         # W30-FORM: pass games_played from match context to truncate cross-season form strings
@@ -7460,9 +10010,17 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     _enrichment_block = "\n".join(_enrichment_parts) if _enrichment_parts else ""
     log.info("PERF: enrichment=%.1fs (since t0=%.1fs)", _time.time() - _perf_t1, _time.time() - _perf_t0)
 
+    # ── Google News RSS headlines (fallback context) ──
+    _news_headlines: list[dict] = []
+    try:
+        from scrapers.news.match_context import get_match_headlines
+        _news_headlines = get_match_headlines(home_raw, away_raw, _DB_LEAGUE_SPORT.get(_game_db_league, "soccer"))
+    except Exception as _news_err:
+        log.debug("News headline fetch failed: %s", _news_err)
+
     # ── Two-Pass Architecture: Pass 1 — build verified sentences ──
     narrative = ""
-    _sport_for_prompt = config.LEAGUE_SPORT.get(target_league, "soccer")
+    _sport_for_prompt = _DB_LEAGUE_SPORT.get(_game_db_league, config.LEAGUE_SPORT.get(target_league, "soccer"))
     # Refine "combat" to specific sport for prompt quality
     if _sport_for_prompt == "combat":
         if target_league and "ufc" in target_league.lower():
@@ -7487,7 +10045,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         ("risk", "RISK FACTS"), ("verdict", "VERDICT FACTS"),
     ]
     _has_any_sentences = any(_verified_sentences.get(s) for s, _ in _section_labels)
-    if _has_any_sentences:
+    # W59-SIGNALS: format signal data block from edge_v2
+    _signal_data_block = _format_signal_data_for_prompt(_best_edge_v2) if _best_edge_v2 else ""
+    if _has_any_sentences or _signal_data_block or _news_headlines:
         user_msg_parts.append("\n══ IMMUTABLE CONTEXT (verified — do not alter facts) ══")
         for section, label in _section_labels:
             sentences = _verified_sentences.get(section, [])
@@ -7495,6 +10055,64 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 user_msg_parts.append(f"\n{label}:")
                 for s in sentences:
                     user_msg_parts.append(f"• {s}")
+            # W59-SIGNALS: inject SIGNAL DATA after EDGE FACTS, before RISK FACTS
+            if section == "edge" and _signal_data_block:
+                user_msg_parts.append(f"\n{_signal_data_block}")
+        # W64-NEWS: Inject Google News headlines as CONTEXT FACTS
+        if _news_headlines:
+            user_msg_parts.append("\nCONTEXT FACTS (from verified news sources, last 48hrs):")
+            for _nh in _news_headlines:
+                user_msg_parts.append(
+                    f'• "{_nh["headline"]}" — {_nh["source"]}, {_nh["published"]}'
+                )
+        # W64-VERDICT: Stale price alert + verdict style hint
+        if _best_edge_v2:
+            _stale_flag = _best_edge_v2.get("stale_warning") or _best_edge_v2.get("stale_price")
+            _stale_min = _best_edge_v2.get("stale_minutes", 0)
+            _confirming = _best_edge_v2.get("confirming_signals", 0)
+            _sigs_v2 = _best_edge_v2.get("signals", {})
+            _mv_v2 = _sigs_v2.get("movement", {})
+            _mv_pct = _mv_v2.get("movement_pct", 0)
+
+            # W67-CALIBRATE: Graduated stale price tiers
+            _stale_bk = _best_edge_v2.get("best_bookmaker", "Unknown")
+            if _stale_min >= 1440:  # 24+ hours
+                user_msg_parts.append(
+                    f"\n⛔ DEAD PRICE: {_stale_bk}'s odds are {_stale_min // 60} hours old. "
+                    f"This price is almost certainly no longer available. "
+                    f"Verdict MUST recommend skipping or verifying."
+                )
+            elif _stale_min >= 360:  # 6-24 hours
+                user_msg_parts.append(
+                    f"\n⚠️ STALE PRICE: {_stale_bk}'s odds are {_stale_min // 60} hours behind peers. "
+                    f"Price may still exist but is at risk. Verdict should note the staleness "
+                    f"but can still recommend if other signals are strong."
+                )
+            elif _stale_min >= 60:  # 1-6 hours
+                user_msg_parts.append(
+                    f"\nℹ️ MILD DELAY: {_stale_bk}'s odds are {_stale_min} minutes behind peers. "
+                    f"This is within normal update windows for smaller bookmakers. "
+                    f"Do NOT treat this as a reason to skip."
+                )
+
+            # Signal-based verdict hints (only when no DEAD/STALE price)
+            if _stale_min < 360:
+                if _confirming >= 3:
+                    user_msg_parts.append(
+                        "VERDICT HINT: Strong signal confirmation — "
+                        "give a positive recommendation."
+                    )
+                elif _mv_pct and abs(_mv_pct) > 1.5:
+                    user_msg_parts.append(
+                        "VERDICT HINT: Clear market movement — "
+                        "reference the movement direction in your verdict."
+                    )
+            else:
+                user_msg_parts.append(
+                    "VERDICT STYLE HINT: Clean price edge — "
+                    "use Style 1 (price target)."
+                )
+
         user_msg_parts.append("\n══ END IMMUTABLE CONTEXT ══")
     user_msg_parts.append(f"\nOdds:\n{odds_context}")
     user_message = "\n".join(user_msg_parts)
@@ -7536,71 +10154,36 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         except ImportError:
             _banned_terms_str = ""
 
-        _system_prompt = _build_analyst_prompt(_sport_for_prompt, banned_terms=_banned_terms_str)
+        # ── W79-PHASE2: V2 narrative — code owns Setup+Verdict, AI owns Edge+Risk ──
+        log.info("Cache miss for %s — using V2 narrative pipeline", event_id)
+        try:
+            narrative = await _generate_narrative_v2(
+                ctx_data=_match_ctx,
+                tips=tips,
+                sport=_sport_for_prompt,
+                user_message=user_message,
+                banned_terms_str=_banned_terms_str,
+                mandatory_search=True,
+                home_team=home_raw,
+                away_team=away_raw,
+                live_tap=True,  # W81-HOTFIX: never block user tap on LLM call
+            )
+        except Exception as exc:
+            log.error("V2 narrative failed for %s: %s — using programmatic fallback", event_id, exc)
+            narrative = ""
 
-        # ── Claude call with quality-gate retry ──
-        # W54-SPEED: max 2 attempts (was 3), timeout 10s (was 15s)
-        _max_attempts = 2
-        for _attempt in range(1, _max_attempts + 1):
-            try:
-                _messages = [{"role": "user", "content": user_message}]
-                if _attempt >= 2:
-                    # Tell Claude its previous output was rejected
-                    _messages = [
-                        {"role": "user", "content": user_message},
-                        {"role": "assistant", "content": narrative},
-                        {"role": "user", "content": (
-                            "YOUR PREVIOUS OUTPUT WAS REJECTED BY OUR QUALITY SYSTEM.\n"
-                            "REASON: The Setup section was too terse or used a list format.\n"
-                            "REWRITE the ENTIRE analysis. Weave the IMMUTABLE CONTEXT facts into "
-                            "flowing prose — 2-4 sentences per section. The Edge section must NOT "
-                            "be empty — interpret the odds data. DO NOT repeat the same format."
-                        )},
-                    ]
-                resp = await claude.messages.create(
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=1024,
-                    system=_system_prompt,
-                    messages=_messages,
-                    timeout=10.0,  # W54-SPEED: 10s max (was 15s)
-                )
-                narrative = resp.content[0].text
-            except Exception as exc:
-                log.error("Claude game analysis error (attempt %d/%d): %s",
-                          _attempt, _max_attempts, exc)
-                narrative = ""
-                break
+        # V2 fallback chain: if V2 produced nothing usable, try programmatic
+        if not narrative or narrative.strip() == "NO_DATA":
+            narrative = _build_programmatic_narrative(_match_ctx, tips, _sport_for_prompt)
+            if narrative:
+                narrative = sanitize_ai_response(narrative)
 
-            if not narrative or narrative.strip() == "NO_DATA":
-                break
-
-            # Post-process before quality check
-            narrative = sanitize_ai_response(narrative)
-            sport_key = config.LEAGUE_SPORT.get(target_league, "")
-            narrative = validate_sport_context(narrative, sport_key)
-            _pre_fc = narrative
-            narrative = fact_check_output(narrative, _match_ctx, tips=tips, sport=_sport_for_prompt)
-            if narrative != _pre_fc:
-                log.warning("Fact-checker modified output for %s", event_id)
-            narrative = _ensure_setup_not_empty(narrative, _match_ctx, sport=_sport_for_prompt)
-
-            # ── Quality gate ──
-            _passed, _issues = _validate_breakdown(narrative, _match_ctx)
-            if _passed:
-                log.info("Quality gate PASSED on attempt %d/%d", _attempt, _max_attempts)
-                break
-            else:
-                log.warning("Quality gate FAILED attempt %d/%d: %s",
-                            _attempt, _max_attempts, _issues)
-                if _attempt == _max_attempts:
-                    # All attempts exhausted → use programmatic fallback
-                    log.warning("All %d Claude attempts failed quality gate — using programmatic fallback",
-                                _max_attempts)
-                    narrative = _build_programmatic_narrative(_match_ctx, tips, _sport_for_prompt)
-                    if narrative:
-                        narrative = sanitize_ai_response(narrative)
-                    break
-                # Otherwise loop to retry with rejection message
+        # Final safety net: check for empty sections
+        if narrative and _has_empty_sections(narrative):
+            log.warning("V2: Empty sections detected — using programmatic fallback")
+            _prog_fb = _build_programmatic_narrative(_match_ctx, tips, _sport_for_prompt)
+            if _prog_fb:
+                narrative = sanitize_ai_response(_prog_fb)
 
     _perf_t2 = _time.time()
     log.info("PERF: claude_call=%.1fs (since t0=%.1fs)", _perf_t2 - _perf_t1, _perf_t2 - _perf_t0)
@@ -7645,23 +10228,13 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 break
 
     # ── Inject Edge Rating badge into Verdict header ──
-    # Priority: hot tips cache display_tier → V2 tier → EV thresholds
+    # W75-FIX: edge_v2 tier is authoritative — no EV-threshold fallback
     if narrative and tips:
         tier = None
         if _cached_display_tier:
             tier = _cached_display_tier
         elif _best_edge_v2 and _best_edge_v2.get("tier"):
             tier = _best_edge_v2["tier"]
-        else:
-            best_ev = max((t["ev"] for t in tips), default=0)
-            if best_ev >= 15:
-                tier = EdgeRating.DIAMOND
-            elif best_ev >= 8:
-                tier = EdgeRating.GOLD
-            elif best_ev >= 4:
-                tier = EdgeRating.SILVER
-            elif best_ev >= 1:
-                tier = EdgeRating.BRONZE
         if tier:
             tier_emoji = EDGE_EMOJIS.get(tier, "")
             tier_label = EDGE_LABELS.get(tier, "")
@@ -7720,21 +10293,13 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         )
     else:
         # ── Determine edge tier for gating ──
-        # Priority: hot tips cache display_tier → V2 tier → EV thresholds
+        # W75-FIX: edge_v2 tier is authoritative — no EV-threshold fallback
         _breakdown_tier = await get_effective_tier(user_id)
         _edge_tier = "bronze"
         if _cached_display_tier:
             _edge_tier = _cached_display_tier
         elif _best_edge_v2 and _best_edge_v2.get("tier"):
             _edge_tier = _best_edge_v2["tier"]
-        elif tips:
-            _best_ev = max((t.get("ev", 0) for t in tips), default=0)
-            if _best_ev >= 15:
-                _edge_tier = "diamond"
-            elif _best_ev >= 8:
-                _edge_tier = "gold"
-            elif _best_ev >= 4:
-                _edge_tier = "silver"
 
         if narrative:
             # Gate narrative sections based on user tier vs edge tier
@@ -7753,6 +10318,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         from tier_gate import get_edge_access_level as _odds_access_fn
         _odds_access = _odds_access_fn(_breakdown_tier, _edge_tier)
 
+        # Map outcome labels to team names
+        _gt_outcome_map = {"home": home_raw, "away": away_raw, "draw": "Draw"}
         if tips:
             if _odds_access == "full":
                 # Full odds visible
@@ -7763,8 +10330,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 for tip in tips:
                     ev_ind = f"+{tip['ev']}%" if tip["ev"] > 0 else f"{tip['ev']}%"
                     value_marker = " 💰" if tip["ev"] > 2 else ""
+                    _gt_display_outcome = _gt_outcome_map.get(tip['outcome'], tip['outcome'])
                     lines.append(
-                        f"  {h(tip['outcome'])}: <b>{tip['odds']:.2f}</b> ({h(tip['bookie'])})\n"
+                        f"  {h(_gt_display_outcome)}: <b>{tip['odds']:.2f}</b> ({h(tip['bookie'])})\n"
                         f"    {tip['prob']}% · EV: {ev_ind}{value_marker}"
                     )
             elif _odds_access == "partial":
@@ -7772,9 +10340,10 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 lines.append("<b>SA Bookmaker Odds:</b>")
                 for tip in tips:
                     _ret_partial = tip["odds"] * 300 if tip.get("odds") else 0
+                    _gt_disp = _gt_outcome_map.get(tip['outcome'], tip['outcome'])
                     if _ret_partial:
                         lines.append(
-                            f"  {h(tip['outcome'])} @ {tip['odds']:.2f} → R{_ret_partial:,.0f} on R300"
+                            f"  {h(_gt_disp)} @ {tip['odds']:.2f} → R{_ret_partial:,.0f} on R300"
                         )
             elif _odds_access == "blurred":
                 # Blurred: return amount only, no odds/bookmaker
@@ -7877,6 +10446,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # ── Cache the full analysis (1-hour TTL) — only if narrative succeeded ──
     if narrative:
         _analysis_cache[event_id] = (msg, tips, _edge_tier, _time.time())
+        # W60-CACHE: Also persist to DB cache for cross-restart durability
+        if db_match_id:
+            try:
+                await _store_narrative_cache(db_match_id, msg, tips, _edge_tier, "sonnet")
+            except Exception as _cache_exc:
+                log.warning("Failed to persist narrative cache for %s: %s", db_match_id, _cache_exc)
 
     # QA banner
     _banner = _qa_banner(user_id)
@@ -7895,6 +10470,32 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         msg, parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
+    return
+
+# W75-FIX: Catch-all exception handler — attached to _generate_game_tips below
+
+
+async def _generate_game_tips_safe(query, ctx, event_id: str, user_id: int, source: str = "matches") -> None:
+    """Wrapper around _generate_game_tips that ensures spinner cleanup on any failure."""
+    try:
+        await _generate_game_tips(query, ctx, event_id, user_id, source=source)
+    except Exception as exc:
+        # BadRequest "not modified" means cached analysis was already displayed — not a real error
+        if "not modified" in str(exc).lower():
+            log.warning("Game tips cache hit — message already showing for %s", event_id)
+            return
+        log.error("Game tips generation failed for %s: %s", event_id, exc, exc_info=True)
+        # Best-effort spinner cleanup
+        try:
+            await query.edit_message_text(
+                "⚠️ Unable to load analysis. Please try again.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Retry", callback_data=f"edge:detail:{_shorten_cb_key(event_id)}")],
+                    [InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:back")],
+                ]),
+            )
+        except Exception:
+            pass
 
 
 def _build_game_buttons(
@@ -8049,8 +10650,8 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     # ── Tier gating: check daily tip limit ──────────────────
     _user_tier = await get_effective_tier(user_id)
     try:
-        import sqlite3 as _sqlite3
-        _odds_conn = _sqlite3.connect("/home/paulsportsza/scrapers/odds.db")
+        from db_connection import get_connection as _get_conn
+        _odds_conn = _get_conn()
         from tier_gate import check_tip_limit as _check_limit
         _can_view, _remaining = _check_limit(user_id, _user_tier, _odds_conn)
         if not _can_view:
@@ -11095,10 +13696,12 @@ _QA_COMMANDS = {
     "set_gold": "Persist Gold tier until /qa reset",
     "set_diamond": "Persist Diamond tier until /qa reset",
     "morning": "Trigger morning system report on demand",
+    "cache": "Show narrative cache stats",
     "health": "Check data pipeline health (sharp + SA bookmakers)",
     "validate": "Run full post-deploy validation suite",
     "list": "Show all available QA commands",
     "reset": "Restore tier and clear test state",
+    "scaffold": "Print raw verified scaffold for a match key (e.g. /qa scaffold arsenal_vs_everton_2026-03-14)",
 }
 
 
@@ -11229,11 +13832,51 @@ async def cmd_qa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             text = await _build_morning_report()
             await update.message.reply_text(text, parse_mode=ParseMode.HTML)
             return
+        elif cmd == "cache":
+            # W60-CACHE: Show narrative cache stats
+            from db_connection import get_connection as _sq_get
+            try:
+                _cc = _sq_get(_NARRATIVE_DB_PATH)
+                _total = _cc.execute("SELECT COUNT(*) FROM narrative_cache").fetchone()[0]
+                _by_model = _cc.execute(
+                    "SELECT model, COUNT(*) FROM narrative_cache GROUP BY model"
+                ).fetchall()
+                _expired = _cc.execute(
+                    "SELECT COUNT(*) FROM narrative_cache WHERE expires_at < datetime('now')"
+                ).fetchone()[0]
+                _newest = _cc.execute(
+                    "SELECT created_at FROM narrative_cache ORDER BY created_at DESC LIMIT 1"
+                ).fetchone()
+                _oldest = _cc.execute(
+                    "SELECT created_at FROM narrative_cache ORDER BY created_at ASC LIMIT 1"
+                ).fetchone()
+                _cc.close()
+                _model_lines = "\n".join(
+                    f"  {m}: <b>{c}</b>" for m, c in _by_model
+                ) if _by_model else "  (empty)"
+                _lines = [
+                    "\U0001f4be <b>Narrative Cache Stats</b>",
+                    f"Total cached: <b>{_total}</b>",
+                    f"Expired: {_expired}",
+                    f"By model:\n{_model_lines}",
+                ]
+                if _newest and _newest[0]:
+                    _lines.append(f"Newest: {_newest[0][:19]}")
+                if _oldest and _oldest[0]:
+                    _lines.append(f"Oldest: {_oldest[0][:19]}")
+            except Exception as _e:
+                _lines = [f"Cache stats error: {_e}"]
+            await update.message.reply_text("\n".join(_lines), parse_mode=ParseMode.HTML)
+            return
         elif cmd == "health":
             await _qa_health_check(update)
             return
         elif cmd == "validate":
             await _qa_run_validation(update)
+            return
+        elif cmd == "scaffold":
+            match_key = args[1] if len(args) > 1 else ""
+            await _qa_show_scaffold(update, match_key)
             return
         else:
             await update.message.reply_text(f"Unknown QA command: {cmd}\nUse /qa list")
@@ -11257,6 +13900,65 @@ async def cmd_qa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             _QA_TIER_OVERRIDES.pop(uid, None)
         await update.message.reply_text(f"❌ QA error: {exc}")
         log.warning("QA command %s failed: %s", cmd, exc)
+
+
+async def _qa_show_scaffold(update: Update, match_key: str) -> None:
+    """Print the raw verified scaffold for a match key. Admin debug tool."""
+    if not match_key:
+        await update.message.reply_text(
+            "Usage: /qa scaffold <match_key>\n"
+            "Example: /qa scaffold arsenal_vs_everton_2026-03-14"
+        )
+        return
+
+    await update.message.reply_text(f"🔍 Building scaffold for: <code>{match_key}</code>…", parse_mode=ParseMode.HTML)
+
+    try:
+        # Extract home/away from match key
+        if "_vs_" in match_key:
+            parts = match_key.rsplit("_", 1)[0]
+            h_raw, a_raw = parts.split("_vs_", 1)
+            home_raw = h_raw.replace("_", " ").title()
+            away_raw = a_raw.replace("_", " ").title()
+        else:
+            home_raw, away_raw = "Home", "Away"
+
+        # Fetch match context
+        from scrapers.match_context_fetcher import get_match_context
+        ctx = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: asyncio.run(get_match_context(home_raw, away_raw))
+        ) if False else None
+        try:
+            ctx = await get_match_context(home_raw, away_raw)
+        except Exception:
+            ctx = {"data_available": False}
+
+        # Build minimal edge_data from match key
+        edge_data = {
+            "home_team": home_raw,
+            "away_team": away_raw,
+            "league": match_key.rsplit("_", 1)[0].split("_vs_")[0].split("_")[-1] if "_" in match_key else "unknown",
+            "best_bookmaker": "N/A (scaffold debug)",
+            "best_odds": 0,
+            "edge_pct": 0,
+            "outcome": "home",
+            "outcome_team": home_raw,
+            "confirming_signals": 0,
+            "composite_score": 0,
+            "bookmaker_count": 0,
+            "market_agreement": 0,
+            "stale_minutes": 0,
+        }
+
+        scaffold = _build_verified_scaffold(ctx or {}, edge_data, "soccer")
+        # Telegram 4096 char limit — split if needed
+        msg = f"<pre>{scaffold[:3800]}</pre>"
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        if len(scaffold) > 3800:
+            await update.message.reply_text(f"<pre>{scaffold[3800:]}</pre>", parse_mode=ParseMode.HTML)
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Scaffold error: {exc}")
+        log.warning("QA scaffold failed for %s: %s", match_key, exc)
 
 
 async def _qa_health_check(update: Update) -> None:
@@ -11463,6 +14165,126 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
     except Exception as exc:
         log.warning("Edge pre-compute failed (%.1fs): %s", _t.time() - _start, exc)
+
+
+async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """W60-CACHE: Pre-generate narratives for live edges.
+
+    Runs hourly, gated to 04:00, 10:00, 16:00 UTC (06:00, 12:00, 18:00 SAST).
+    06:00 = Opus full sweep, 12:00/18:00 = Sonnet refresh sweep.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now_sast = datetime.now(ZoneInfo("Africa/Johannesburg"))
+    if now_sast.hour not in (6, 12, 18):
+        return
+
+    sweep = "full" if now_sast.hour == 6 else "refresh"
+    log.info("Starting narrative pre-generation (%s sweep, %02d:00 SAST)", sweep, now_sast.hour)
+
+    import time as _t
+    _start = _t.time()
+    try:
+        from scripts.pregenerate_narratives import main as pregen_main
+        await pregen_main(sweep)
+        log.info("Narrative pre-generation complete in %.1fs", _t.time() - _start)
+    except Exception as exc:
+        log.warning("Narrative pre-generation failed (%.1fs): %s", _t.time() - _start, exc)
+
+
+async def _narrative_health_check_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """W69-VERIFY Layer 3: Spot-check 2 random cached narratives every 2 hours.
+
+    Extracts factual claims, verifies via Haiku + web search, alerts admin on mismatches.
+    """
+    from db_connection import get_connection as _sql_get
+    import random as _rand
+
+    DB_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "..", "scrapers", "odds.db",
+    )
+    if not os.path.exists(DB_PATH):
+        return
+
+    try:
+        conn = _sql_get(DB_PATH)
+        rows = conn.execute(
+            "SELECT match_id, narrative_html FROM narrative_cache "
+            "WHERE expires_at > datetime('now') LIMIT 50"
+        ).fetchall()
+        conn.close()
+    except Exception as exc:
+        log.warning("Health check DB error: %s", exc)
+        return
+
+    if len(rows) < 2:
+        return
+
+    samples = _rand.sample(rows, min(2, len(rows)))
+
+    try:
+        _claude = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    except Exception:
+        return
+
+    for match_id, html in samples:
+        claims = _extract_claims(html)
+        if not claims:
+            continue
+
+        # Extract team names from match_id (e.g. "chiefs_vs_pirates_2026-03-08")
+        parts = match_id.rsplit("_", 1)
+        teams_part = parts[0] if len(parts) >= 2 else match_id
+        teams = teams_part.replace("_vs_", " vs ").replace("_", " ").title()
+
+        claims_text = "\n".join(f"- {c}" for c in claims)
+        try:
+            resp = await _claude.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                system=(
+                    f"You are a sports fact-checker. Verify these claims about {teams} "
+                    "using web search. Reply CONFIRMED or CONTRADICTED per claim."
+                ),
+                messages=[{"role": "user", "content": f"Verify:\n{claims_text}"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}],
+                timeout=30.0,
+            )
+            result = _extract_text_from_response(resp)
+            contradictions = [
+                line.strip() for line in result.split("\n")
+                if "CONTRADICTED" in line.upper()
+            ]
+            if contradictions:
+                alert = (
+                    f"⚠️ <b>Fact-check alert</b>\n"
+                    f"Match: {teams}\n"
+                    f"Issues: {len(contradictions)}\n"
+                )
+                for c in contradictions[:3]:
+                    alert += f"• {c}\n"
+                log.warning("Health check mismatch for %s: %s", match_id, contradictions)
+                # Alert admins
+                for admin_id in config.ADMIN_IDS:
+                    try:
+                        await ctx.bot.send_message(
+                            admin_id, alert, parse_mode=ParseMode.HTML,
+                        )
+                    except Exception:
+                        pass
+                # Invalidate cache entry
+                try:
+                    conn2 = _sql.connect(DB_PATH, timeout=30)
+                    conn2.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn2.commit()
+                    conn2.close()
+                    log.info("Invalidated cached narrative for %s", match_id)
+                except Exception:
+                    pass
+        except Exception as exc:
+            log.debug("Health check verify failed for %s: %s", match_id, exc)
 
 
 async def _morning_system_report(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -12152,6 +14974,13 @@ async def _post_init(app_instance) -> None:
     """Run on bot startup: init DB, publish guides, register commands, schedule jobs."""
     await db.init_db()
 
+    # W60-CACHE: Ensure narrative_cache table exists in odds.db
+    try:
+        _ensure_narrative_cache_table()
+        log.info("narrative_cache table ready")
+    except Exception as exc:
+        log.warning("Could not create narrative_cache table: %s", exc)
+
     # Pre-publish Betway Telegra.ph guide and wire URL into config
     try:
         from scripts.telegraph_guides import ensure_active_guide
@@ -12262,6 +15091,24 @@ async def _post_init(app_instance) -> None:
         )
         log.info("Scheduled edge pre-compute (every 15 min, first in 5s)")
 
+        # W60-CACHE: Narrative pre-generation — runs hourly, acts at 06/12/18 SAST
+        job_queue.run_repeating(
+            _narrative_pregenerate_job,
+            interval=3600,
+            first=_seconds_until_next_hour(),
+            name="narrative_pregenerate",
+        )
+        log.info("Scheduled narrative pre-generation (hourly, acts at 06/12/18 SAST)")
+
+        # W69-VERIFY Layer 3: Narrative health check — every 2 hours
+        job_queue.run_repeating(
+            _narrative_health_check_job,
+            interval=7200,  # 2 hours
+            first=300,  # 5 minutes after startup
+            name="narrative_health_check",
+        )
+        log.info("Scheduled narrative health check (every 2h)")
+
         # Post-deploy validation — runs once 30s after startup
         job_queue.run_once(
             _post_deploy_validation_job,
@@ -12302,16 +15149,34 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
 
     if os.path.exists(path):
         try:
-            old_pid = int(open(path).read().strip())
-            os.kill(old_pid, 0)  # check if process is alive
-            log.error("Another instance is already running (PID %d). Exiting.", old_pid)
-            raise SystemExit(1)
-        except (ProcessLookupError, ValueError):
-            # Stale PID file — previous process is dead
-            log.warning("Removing stale PID file (PID was %s).", open(path).read().strip())
-        except PermissionError:
-            log.error("Permission denied checking PID file at %s. Exiting.", path)
-            raise SystemExit(1)
+            pid_text = open(path).read().strip()
+            old_pid = int(pid_text)
+            # Check if the PID belongs to a python bot.py process (not a recycled PID)
+            try:
+                cmdline_path = f"/proc/{old_pid}/cmdline"
+                if os.path.exists(cmdline_path):
+                    cmdline = open(cmdline_path, "rb").read().decode("utf-8", errors="replace")
+                    if "bot.py" not in cmdline:
+                        log.warning("PID %d exists but is not bot.py (%s) — removing stale PID file.",
+                                    old_pid, cmdline[:60].replace("\x00", " "))
+                        os.remove(path)
+                    else:
+                        log.error("Another instance is already running (PID %d). Exiting.", old_pid)
+                        raise SystemExit(1)
+                else:
+                    # /proc/<pid> doesn't exist — process is dead
+                    log.warning("Removing stale PID file (PID was %s).", pid_text)
+                    os.remove(path)
+            except PermissionError:
+                log.error("Permission denied checking PID file at %s. Exiting.", path)
+                raise SystemExit(1)
+        except (ValueError, OSError):
+            # Corrupt PID file or other OS error — remove it
+            log.warning("Removing stale/corrupt PID file at %s.", path)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     try:
         with open(path, "w") as f:
