@@ -1287,6 +1287,44 @@ class TestFactChecker:
         assert bot.fact_check_output("", self._CTX) == ""
         assert bot.fact_check_output("", None) == ""
 
+    # ── W81-FACTCHECK: sentence-merge + cleanup + injury lookup ──
+
+    def test_multiline_sentence_stripped_as_unit(self):
+        """Multi-line sentence with unverified name is stripped as one unit — no orphaned comma."""
+        # "Unknown Player" is not in verified context; sentence spans two lines
+        narrative = "Unknown Player is expected to trouble,\nleading to a likely draw."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "Unknown Player" not in result
+        # No orphaned comma fragment at the start of any remaining line
+        assert not any(line.lstrip().startswith(",") for line in result.split("\n"))
+
+    def test_multiline_sentence_kept_as_unit(self):
+        """Multi-line sentence with only verified names survives fact-checking intact."""
+        # Ashley Du Preez is a verified top scorer in _CTX
+        narrative = "Ashley Du Preez shows great form,\npointing to a home win."
+        result = bot.fact_check_output(narrative, self._CTX)
+        assert "Ashley Du Preez" in result
+
+    def test_clean_fact_checked_output_orphaned_comma(self):
+        """_clean_fact_checked_output removes an orphaned leading comma."""
+        result = bot._clean_fact_checked_output(", the stalemate becomes likely.")
+        assert not result.startswith(",")
+        assert "stalemate" in result
+
+    def test_clean_fact_checked_output_orphaned_connector(self):
+        """_clean_fact_checked_output removes lines that are only connector words."""
+        text = "Strong form.\nwhile\nDraw expected."
+        result = bot._clean_fact_checked_output(text)
+        assert "Strong form" in result
+        assert "Draw expected" in result
+        non_empty = [ln.strip() for ln in result.split("\n") if ln.strip()]
+        assert not any(ln.lower() == "while" for ln in non_empty)
+
+    def test_get_verified_injuries_no_crash_empty_team(self):
+        """get_verified_injuries returns safe empty lists for empty team strings."""
+        result = bot.get_verified_injuries("", "")
+        assert result == {"home": [], "away": []}
+
 
 # ── Wave 29-FIX: Two-Pass Narrative Architecture tests ──
 
@@ -1381,10 +1419,12 @@ class TestBuildVerifiedNarrative:
         assert "Emirates" in setup_text
 
     def test_no_data_produces_fallback(self):
-        """No context data should still produce odds-only sentences."""
+        """No context data should still produce setup sentences from signal/odds data."""
         result = bot.build_verified_narrative({"data_available": False}, self._TIPS)
         assert len(result["setup"]) >= 1
-        assert "Limited" in result["setup"][0]
+        # W63-EMPTY: Setup now uses team names/form from tips instead of "Limited..."
+        setup_text = " ".join(result["setup"])
+        assert "take on" in setup_text or "face" in setup_text or "Home" in setup_text
         assert len(result["edge"]) >= 1
         assert "Arsenal" in " ".join(result["edge"])  # from tips
 
@@ -1590,42 +1630,7 @@ class TestEnrichedVerifiedContext:
         assert "Pereira" in result
 
 
-class TestSetupFallback:
-    """Test _ensure_setup_not_empty injects fallback when Setup is thin."""
-
-    def test_injects_fallback_when_empty(self):
-        """Should inject standings when Setup is just a header."""
-        output = "📋 <b>The Setup</b>\n\n🎯 <b>The Edge</b>\nGood value on draw."
-        ctx = {
-            "data_available": True,
-            "home_team": {"name": "Chiefs", "league_position": 5, "points": 28, "form": "WWLDW"},
-            "away_team": {"name": "Pirates", "league_position": 2, "points": 38},
-        }
-        result = bot._ensure_setup_not_empty(output, ctx)
-        assert "Chiefs" in result
-        assert "28 points" in result
-        assert "WWLDW" in result
-
-    def test_no_change_when_setup_has_content(self):
-        """Should not touch Setup when it already has rich content."""
-        output = (
-            "📋 <b>The Setup</b>\n"
-            "Chiefs sit 5th on 28 points with a streaky WWLDW form. Pirates are 2nd.\n\n"
-            "🎯 <b>The Edge</b>\nValue on the draw."
-        )
-        ctx = {
-            "data_available": True,
-            "home_team": {"name": "Chiefs", "league_position": 5, "points": 28},
-            "away_team": {"name": "Pirates", "league_position": 2, "points": 38},
-        }
-        result = bot._ensure_setup_not_empty(output, ctx)
-        assert result == output  # unchanged
-
-    def test_no_change_without_verified_data(self):
-        """Should not inject fallback when no verified data."""
-        output = "📋 <b>The Setup</b>\n\n🎯 <b>The Edge</b>\nOdds analysis."
-        result = bot._ensure_setup_not_empty(output, {})
-        assert result == output
+# W79-PHASE2: TestSetupFallback removed — _ensure_setup_not_empty no longer exists
 
 
 # ── Wave 29-QA: Persistent /qa Tier Simulation ──────────────────────
@@ -2050,3 +2055,582 @@ class TestW44Guards:
         import inspect
         src = inspect.getsource(bot._qa_health_check)
         assert "breakdown_quality" in src
+
+
+class TestNarrativeCache:
+    """W60-CACHE: Persistent narrative caching tests."""
+
+    def test_ensure_narrative_cache_table_creates_table(self, tmp_path):
+        """Table creation should succeed on a fresh DB."""
+        import sqlite3
+        db_path = str(tmp_path / "test_odds.db")
+        # Temporarily override the DB path
+        original = bot._NARRATIVE_DB_PATH
+        bot._NARRATIVE_DB_PATH = db_path
+        try:
+            bot._ensure_narrative_cache_table()
+            conn = sqlite3.connect(db_path)
+            tables = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='narrative_cache'"
+            ).fetchall()
+            conn.close()
+            assert len(tables) == 1
+        finally:
+            bot._NARRATIVE_DB_PATH = original
+
+    @pytest.mark.asyncio
+    async def test_store_and_retrieve_cached_narrative(self, tmp_path):
+        """Store a narrative, then retrieve it from cache."""
+        import sqlite3
+        db_path = str(tmp_path / "test_odds.db")
+        original = bot._NARRATIVE_DB_PATH
+        bot._NARRATIVE_DB_PATH = db_path
+
+        # Create both required tables
+        conn = sqlite3.connect(db_path)
+        conn.execute("""CREATE TABLE IF NOT EXISTS odds_latest (
+            match_id TEXT, bookmaker TEXT, home_odds REAL,
+            draw_odds REAL, away_odds REAL
+        )""")
+        conn.commit()
+        conn.close()
+
+        try:
+            bot._ensure_narrative_cache_table()
+            await bot._store_narrative_cache(
+                "chiefs_vs_sundowns_2026-03-08",
+                "<b>Test narrative</b>",
+                [{"outcome": "home", "odds": 2.5, "ev": 5.0}],
+                "gold",
+                "opus",
+            )
+            result = await bot._get_cached_narrative("chiefs_vs_sundowns_2026-03-08")
+            assert result is not None
+            assert result["html"] == "<b>Test narrative</b>"
+            assert result["model"] == "opus"
+            assert result["edge_tier"] == "gold"
+            assert len(result["tips"]) == 1
+        finally:
+            bot._NARRATIVE_DB_PATH = original
+
+    @pytest.mark.asyncio
+    async def test_expired_narrative_returns_none(self, tmp_path):
+        """Expired cache entries should return None."""
+        import sqlite3
+        from datetime import datetime, timedelta, timezone
+        db_path = str(tmp_path / "test_odds.db")
+        original = bot._NARRATIVE_DB_PATH
+        bot._NARRATIVE_DB_PATH = db_path
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("""CREATE TABLE IF NOT EXISTS odds_latest (
+            match_id TEXT, bookmaker TEXT, home_odds REAL,
+            draw_odds REAL, away_odds REAL
+        )""")
+        conn.commit()
+
+        try:
+            bot._ensure_narrative_cache_table()
+            # Insert with past expires_at
+            past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            conn.execute(
+                "INSERT INTO narrative_cache "
+                "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
+                "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("old_match", "<b>old</b>", "haiku", "bronze", "[]", "", past, past),
+            )
+            conn.commit()
+            conn.close()
+
+            result = await bot._get_cached_narrative("old_match")
+            assert result is None
+        finally:
+            bot._NARRATIVE_DB_PATH = original
+
+    def test_compute_odds_hash_empty(self, tmp_path):
+        """Hash of nonexistent match returns empty string."""
+        import sqlite3
+        db_path = str(tmp_path / "test_odds.db")
+        original = bot._NARRATIVE_DB_PATH
+        bot._NARRATIVE_DB_PATH = db_path
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("""CREATE TABLE IF NOT EXISTS odds_latest (
+            match_id TEXT, bookmaker TEXT, home_odds REAL,
+            draw_odds REAL, away_odds REAL
+        )""")
+        conn.commit()
+        conn.close()
+
+        try:
+            result = bot._compute_odds_hash("nonexistent_match")
+            assert result == ""
+        finally:
+            bot._NARRATIVE_DB_PATH = original
+
+    def test_qa_commands_includes_cache(self):
+        """The /qa cache command should be listed in _QA_COMMANDS."""
+        assert "cache" in bot._QA_COMMANDS
+
+
+class TestW63EmptySections:
+    """W63-EMPTY: Verify empty section detection and fallback injection."""
+
+    def test_has_empty_sections_detects_empty_setup(self):
+        narrative = "📋 <b>The Setup</b>\n\n🎯 <b>The Edge</b>\nSome edge text.\n⚠️ <b>The Risk</b>\nSome risk.\n🏆 <b>Verdict</b>\nBack X."
+        assert bot._has_empty_sections(narrative) is True
+
+    def test_has_empty_sections_passes_full_narrative(self):
+        narrative = (
+            "📋 <b>The Setup</b>\nArsenal sit 2nd on 56 points. Liverpool lead the table.\n\n"
+            "🎯 <b>The Edge</b>\nBest value: Arsenal at 2.40.\n\n"
+            "⚠️ <b>The Risk</b>\nNo specific risk signals detected.\n\n"
+            "🏆 <b>Verdict</b>\nBack Arsenal at 2.40 on Hollywoodbets — the numbers support the edge."
+        )
+        assert bot._has_empty_sections(narrative) is False
+
+    def test_ensure_risk_not_empty_fills_empty_risk(self):
+        narrative = (
+            "📋 <b>The Setup</b>\nArsenal face Liverpool.\n\n"
+            "🎯 <b>The Edge</b>\nBest value sits with Arsenal.\n\n"
+            "⚠️ <b>The Risk</b>\n\n"
+            "🏆 <b>Verdict</b>\nBack Arsenal."
+        )
+        result = bot._ensure_risk_not_empty(narrative, sport="soccer")
+        assert "standard match variance" in result
+
+    # W79-PHASE2: test_ensure_setup_not_empty_uses_signals removed
+
+    def test_build_verified_narrative_no_espn_uses_signals(self):
+        tips = [{"outcome": "Arsenal", "odds": 2.40, "bookie": "HWB", "prob": 45, "ev": 8.0, "edge_v2": {
+            "match_key": "arsenal_vs_liverpool_2026-03-08",
+            "league": "EPL",
+            "signals": {
+                "form_h2h": {"available": True, "home_form_string": "WWDWW", "away_form_string": "WDWWW"},
+                "lineup_injury": {"available": True, "home_injuries": 2, "away_injuries": 1},
+            },
+        }}]
+        result = bot.build_verified_narrative({"data_available": False}, tips)
+        setup_text = " ".join(result["setup"])
+        assert "Arsenal" in setup_text
+        assert "WWDWW" in setup_text
+        assert "2 player(s) out" in setup_text
+
+
+class TestW64VerdictFixes:
+    """W64-VERDICT: Stale contradiction detection + banned phrases."""
+
+    def test_new_banned_phrases_in_list(self):
+        """8 new urgency phrases added to BANNED_NARRATIVE_PHRASES."""
+        assert "grab it before" in bot.BANNED_NARRATIVE_PHRASES
+        assert "before they wake up" in bot.BANNED_NARRATIVE_PHRASES
+        assert "move fast" in bot.BANNED_NARRATIVE_PHRASES
+        assert "won't last forever" in bot.BANNED_NARRATIVE_PHRASES
+        assert "before they slash" in bot.BANNED_NARRATIVE_PHRASES
+
+    def test_has_banned_patterns_catches_new_phrases(self):
+        narrative = "Grab it before they wake up — HWB's 2.40 is great value."
+        assert bot._has_banned_patterns(narrative) is True
+
+    def test_has_banned_patterns_allows_clean_verdict(self):
+        narrative = "Hollywoodbets' 2.40 on Arsenal sits 9% above the sharp benchmark."
+        assert bot._has_banned_patterns(narrative) is False
+
+    def test_stale_contradiction_detected(self):
+        edge = {"stale_warning": True, "stale_minutes": 90}
+        narrative = "Take it before they adjust — HWB's 2.40 is the play."
+        assert bot._check_stale_contradiction(narrative, edge) is True
+
+    def test_stale_contradiction_not_triggered_without_stale(self):
+        edge = {"stale_warning": False, "stale_minutes": 10}
+        narrative = "Take it before they adjust — HWB's 2.40 is the play."
+        assert bot._check_stale_contradiction(narrative, edge) is False
+
+    def test_stale_contradiction_not_triggered_clean_verdict(self):
+        edge = {"stale_warning": True, "stale_minutes": 90}
+        narrative = "Check HWB's live odds before acting — the 2.40 may have already closed."
+        assert bot._check_stale_contradiction(narrative, edge) is False
+
+    def test_stale_contradiction_none_edge(self):
+        assert bot._check_stale_contradiction("any text", None) is False
+
+    def test_prompt_contains_verdict_decision_rules(self):
+        """W67: Verify 6 verdict decision rules in prompt."""
+        prompt = bot._build_analyst_prompt("soccer")
+        assert "VERDICT DECISION RULES" in prompt
+        assert "DEAD PRICE" in prompt
+        assert "STALE PRICE" in prompt
+        assert "3+ confirming signals" in prompt
+        assert "2+ confirming signals" in prompt
+        assert "clean price edge" in prompt
+        assert "tipster consensus AND market movement" in prompt
+        assert "VERDICT ABSOLUTE RULES" in prompt
+        assert "one to watch" in prompt.lower()
+        # W69-VERIFY: STEP 1 verification instruction
+        assert "STEP 1" in prompt
+        assert "VERIFY BEFORE WRITING" in prompt
+
+    def test_prompt_contains_new_banned_phrases(self):
+        prompt = bot._build_analyst_prompt("soccer")
+        assert "grab it before" in prompt
+        assert "before they wake up" in prompt
+
+    # ── W69-VERIFY Tests ──
+
+    def test_extract_text_from_response(self):
+        """W69: Verify text extraction from multi-block responses."""
+        class FakeTextBlock:
+            def __init__(self, t):
+                self.text = t
+        class FakeToolBlock:
+            pass  # No text attribute
+        class FakeResp:
+            def __init__(self, blocks):
+                self.content = blocks
+
+        # Single text block (normal response)
+        resp = FakeResp([FakeTextBlock("Hello world")])
+        assert bot._extract_text_from_response(resp) == "Hello world"
+
+        # Multi-block with tool blocks interspersed
+        resp = FakeResp([
+            FakeTextBlock("Part 1"),
+            FakeToolBlock(),
+            FakeTextBlock("Part 2"),
+        ])
+        assert bot._extract_text_from_response(resp) == "Part 1\nPart 2"
+
+        # Block with text=None (e.g. ServerToolUseBlock)
+        resp = FakeResp([FakeTextBlock(None), FakeTextBlock("After search")])
+        assert bot._extract_text_from_response(resp) == "After search"
+
+        # Empty response
+        resp = FakeResp([])
+        assert bot._extract_text_from_response(resp) == ""
+
+    def test_extract_claims(self):
+        """W69: Verify claim extraction from narrative text."""
+        text = (
+            "England sit 4th on 7 points from 3 games. "
+            "Form reads LLW after losses. "
+            "Record: W1 D0 L2 this season."
+        )
+        claims = bot._extract_claims(text)
+        assert any("LLW" in c for c in claims), f"Expected form claim, got {claims}"
+        assert any("4th" in c for c in claims), f"Expected position claim, got {claims}"
+        assert any("W1" in c for c in claims), f"Expected record claim, got {claims}"
+
+    def test_web_search_tool_config(self):
+        """W69: Verify WEB_SEARCH_TOOL configuration."""
+        assert bot.WEB_SEARCH_TOOL["type"] == "web_search_20250305"
+        assert bot.WEB_SEARCH_TOOL["name"] == "web_search"
+        assert bot.WEB_SEARCH_TOOL["max_uses"] == 3  # W73-LAUNCH: increased from 2
+
+    # ── W73-LAUNCH Tests ──
+
+    # W79-PHASE2: test_ensure_verdict_not_empty + test_ensure_verdict_with_stale removed
+
+    def test_programmatic_no_banned_phrases(self):
+        """W73: Programmatic fallback contains zero banned phrases."""
+        ctx_data = {
+            "data_available": True,
+            "home_team": {"name": "Arsenal", "form": "WWLWD", "league_position": 2, "points": 55, "games_played": 25},
+            "away_team": {"name": "Chelsea", "form": "WDLWL", "league_position": 5, "points": 42, "games_played": 25},
+        }
+        tips = [{
+            "outcome": "Home Win", "odds": 1.85, "ev": 3.5,
+            "bookmaker": "Hollywoodbets",
+            "edge_v2": {"confirming_signals": 2},
+        }]
+        narrative = bot._build_programmatic_narrative(ctx_data, tips, "soccer")
+        assert narrative, "Narrative should not be empty"
+        lower = narrative.lower()
+        for phrase in bot.BANNED_NARRATIVE_PHRASES:
+            assert phrase not in lower, f"Banned phrase '{phrase}' found in programmatic narrative"
+
+    def test_known_team_nicknames_not_stripped(self):
+        """W73: Fact-checker preserves known team nicknames."""
+        narrative = (
+            "📋 <b>The Setup</b>\n"
+            "The Blues have been dominant this season.\n"
+            "Los Blancos are chasing the title.\n\n"
+            "🎯 <b>The Edge</b>\nEdge text.\n\n"
+            "⚠️ <b>The Risk</b>\nRisk text.\n\n"
+            "🏆 <b>Verdict</b>\nVerdict text here with enough content."
+        )
+        ctx_data = {"data_available": True, "home_team": {"name": "Chelsea"}, "away_team": {"name": "Real Madrid"}}
+        result = bot.fact_check_output(narrative, ctx_data)
+        assert "The Blues" in result, "Nickname 'The Blues' should not be stripped"
+        assert "Los Blancos" in result, "Nickname 'Los Blancos' should not be stripped"
+
+    def test_narrative_model_env_var(self):
+        """W73: pregenerate MODELS dict reads NARRATIVE_MODEL env var."""
+        import importlib
+        import os
+        # The default (no env var) should be sonnet
+        # We can't easily test the env var in-process since the module is already loaded,
+        # but we can verify the current value is sonnet (not opus)
+        from scripts import pregenerate_narratives
+        for sweep_type, model_id in pregenerate_narratives.MODELS.items():
+            assert "opus" not in model_id, f"MODELS['{sweep_type}'] still uses Opus: {model_id}"
+            assert "sonnet" in model_id or os.environ.get("NARRATIVE_MODEL", "") in model_id
+
+    def test_mandatory_search_prompt(self):
+        """W73: mandatory_search=True produces mandatory web search instruction."""
+        prompt_mandatory = bot._build_analyst_prompt("soccer", mandatory_search=True)
+        assert "MUST use web search" in prompt_mandatory
+        assert "NON-NEGOTIABLE" in prompt_mandatory
+
+        prompt_default = bot._build_analyst_prompt("soccer", mandatory_search=False)
+        assert "If web search is available" in prompt_default
+        assert "NON-NEGOTIABLE" not in prompt_default
+
+
+# ── W81-HEALTH regression tests ──────────────────────────────────────────
+
+
+class TestW81Health:
+    """Regression tests for W81-HEALTH fixture-aware thresholds + pre-gen safeguards."""
+
+    def test_validate_bot_imports_passes(self):
+        """All _REQUIRED_BOT_FUNCTIONS exist in bot module — import validation passes."""
+        required = [
+            "build_verified_narrative",
+            "fact_check_output",
+            "_build_setup_section_v2",
+            "_clean_fact_checked_output",
+            "get_verified_injuries",
+        ]
+        missing = [fn for fn in required if not hasattr(bot, fn)]
+        assert missing == [], f"Missing bot functions: {missing}"
+
+    def test_settlement_skip_warning_present(self):
+        """settle_edges() has WARNING log for missing match_results case."""
+        import inspect
+        from scrapers.edge import settlement
+        src = inspect.getsource(settlement.settle_edges)
+        assert "warning" in src.lower()
+        assert "match_results" in src
+
+    def test_post_deploy_slump_day_is_monday(self):
+        """_is_slump_day returns True for Monday (weekday 0)."""
+        from datetime import datetime, timezone
+        monday = datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc)  # Mon 9 Mar 2026
+        with patch("tests.post_deploy_validation.datetime") as mock_dt:
+            mock_dt.now.return_value = monday
+            from tests.post_deploy_validation import _is_slump_day, _fixture_minimum
+            assert _is_slump_day() is True
+            assert _fixture_minimum() == 1
+
+    def test_post_deploy_peak_day_is_saturday(self):
+        """_is_slump_day returns False for Saturday (weekday 5) and minimum is 3."""
+        from datetime import datetime, timezone
+        saturday = datetime(2026, 3, 7, 12, 0, tzinfo=timezone.utc)  # Sat 7 Mar 2026
+        with patch("tests.post_deploy_validation.datetime") as mock_dt:
+            mock_dt.now.return_value = saturday
+            from tests.post_deploy_validation import _is_slump_day, _fixture_minimum
+            assert _is_slump_day() is False
+            assert _fixture_minimum() == 3
+
+
+# ── W81-SCAFFOLD regression tests ────────────────────────────────────────
+
+class TestW81Scaffold:
+    """Regression tests for _decide_team_story() and _build_verified_scaffold()."""
+
+    def test_title_push(self):
+        """Top-2 position with 3+ wins → title_push."""
+        from bot import _decide_team_story
+        assert _decide_team_story(1, 72, "WWWDD", None, None, 2.1, is_home=True) == "title_push"
+
+    def test_crisis_consecutive_losses(self):
+        """3+ consecutive losses → crisis."""
+        from bot import _decide_team_story
+        assert _decide_team_story(14, 20, "LLLWD", None, None, 0.8, is_home=False) == "crisis"
+
+    def test_crisis_relegation_zone(self):
+        """Position >= 14 → crisis regardless of form (threshold lowered in W81-CLEANUP)."""
+        from bot import _decide_team_story
+        assert _decide_team_story(18, 15, "WDWDL", None, None, 1.0, is_home=True) == "crisis"
+
+    def test_crisis_bottom_half_with_win(self):
+        """Bottom-half team (pos=14) that just won still gets crisis — Fix 1 (W81-CLEANUP)."""
+        from bot import _decide_team_story
+        # Chippa: 14th, WLLLD — crisis fires via pos>=14, not recovery (recovery guarded to pos<=13)
+        assert _decide_team_story(14, 20, "WLLLD", None, None, 0.8, is_home=False) == "crisis"
+
+    def test_recovery_mid_table_only(self):
+        """Mid-table team (pos<=13) that bounced back gets recovery — Fix 1 (W81-CLEANUP)."""
+        from bot import _decide_team_story
+        # 8th, WLLWW: form[0]='W', l=2, pos=8<=13 → recovery
+        assert _decide_team_story(8, 35, "WLLWW", None, None, 1.4, is_home=True) == "recovery"
+
+    def test_momentum(self):
+        """2+ consecutive wins → momentum."""
+        from bot import _decide_team_story
+        assert _decide_team_story(12, 40, "WWDWD", None, None, 1.5, is_home=True) == "momentum"
+
+    def test_inconsistent(self):
+        """Mix of 2+ wins and 2+ losses (not starting with W) → inconsistent."""
+        from bot import _decide_team_story
+        # "DWLWL": doesn't start with W (no recovery), consec_w=0 (no momentum), w>=2 and l>=2
+        assert _decide_team_story(8, 35, "DWLWL", None, None, 1.3, is_home=False) == "inconsistent"
+
+    def test_setback(self):
+        """Last result a loss but 2+ wins in form → setback."""
+        from bot import _decide_team_story
+        assert _decide_team_story(5, 45, "LWWD", None, None, 1.8, is_home=False) == "setback"
+
+    def test_neutral_fallback(self):
+        """No strong signal → neutral."""
+        from bot import _decide_team_story
+        assert _decide_team_story(None, None, "", None, None, None, is_home=True) == "neutral"
+
+    def test_scaffold_basic_structure(self):
+        """_build_verified_scaffold returns required sections."""
+        from bot import _build_verified_scaffold
+        ctx = {
+            "data_available": True,
+            "league": "English Premier League",
+            "home_team": {
+                "name": "Arsenal",
+                "position": 1,
+                "points": 72,
+                "games_played": 29,
+                "form": "WWWDD",
+                "goals_per_game": 2.3,
+                "home_record": "W9 D2 L3",
+                "last_5": [
+                    {"result": "W", "opponent": "Everton", "score": "2-0", "home_away": "home"}
+                ],
+            },
+            "away_team": {
+                "name": "Everton",
+                "position": 17,
+                "points": 20,
+                "games_played": 29,
+                "form": "LLLWD",
+                "goals_per_game": 0.9,
+                "away_record": "W1 D2 L11",
+            },
+            "head_to_head": [],
+        }
+        edge_data = {
+            "home_team": "Arsenal",
+            "away_team": "Everton",
+            "league": "epl",
+            "best_bookmaker": "Hollywoodbets",
+            "best_odds": 1.42,
+            "edge_pct": 8.3,
+            "outcome": "home",
+            "outcome_team": "Arsenal",
+            "confirming_signals": 4,
+            "composite_score": 72.0,
+            "bookmaker_count": 5,
+            "market_agreement": 85,
+            "stale_minutes": 0,
+        }
+        scaffold = _build_verified_scaffold(ctx, edge_data, "soccer")
+        assert "HOME_STORY_TYPE: title_push" in scaffold
+        assert "AWAY_STORY_TYPE: crisis" in scaffold
+        assert "Arsenal" in scaffold
+        assert "Everton" in scaffold
+        assert "EV: +8.3%" in scaffold
+        assert "Confirming signals: 4/7" in scaffold
+        assert "RISK FACTORS:" in scaffold
+
+    def test_scaffold_includes_h2h(self):
+        """Scaffold includes H2H section when meetings exist."""
+        from bot import _build_verified_scaffold
+        ctx = {
+            "home_team": {"name": "Home FC"},
+            "away_team": {"name": "Away FC"},
+            "head_to_head": [
+                {"home_team": "Home FC", "away_team": "Away FC",
+                 "home_score": 2, "away_score": 1, "date": "2025-10-01"},
+                {"home_team": "Away FC", "away_team": "Home FC",
+                 "home_score": 0, "away_score": 0, "date": "2025-04-15"},
+            ],
+        }
+        edge_data = {
+            "home_team": "Home FC", "away_team": "Away FC",
+            "best_bookmaker": "?", "best_odds": 0, "edge_pct": 0,
+            "outcome": "home", "outcome_team": "Home FC",
+            "confirming_signals": 0, "composite_score": 0,
+            "bookmaker_count": 0, "market_agreement": 0, "stale_minutes": 0,
+        }
+        scaffold = _build_verified_scaffold(ctx, edge_data, "soccer")
+        assert "H2H: 2 meetings" in scaffold
+
+    def test_scaffold_stale_risk_factor(self):
+        """Stale pricing >= 360 min appears in RISK FACTORS."""
+        from bot import _build_verified_scaffold
+        ctx = {"home_team": {"name": "A"}, "away_team": {"name": "B"}, "head_to_head": []}
+        edge_data = {
+            "home_team": "A", "away_team": "B",
+            "best_bookmaker": "Betway", "best_odds": 2.1, "edge_pct": 5.0,
+            "outcome": "home", "outcome_team": "A",
+            "confirming_signals": 0, "composite_score": 50, "bookmaker_count": 3,
+            "market_agreement": 60, "stale_minutes": 420,
+        }
+        scaffold = _build_verified_scaffold(ctx, edge_data, "soccer")
+        assert "Stale pricing" in scaffold
+        assert "7 hours" in scaffold
+
+    def test_scaffold_exported(self):
+        """_build_verified_scaffold and _decide_team_story are importable from bot."""
+        from bot import _build_verified_scaffold, _decide_team_story
+        assert callable(_build_verified_scaffold)
+        assert callable(_decide_team_story)
+
+    def test_load_exemplars_callable(self):
+        """load_exemplars() returns a dict with top-level keys — Fix 4 (W81-CLEANUP)."""
+        from bot import load_exemplars
+        data = load_exemplars()
+        assert isinstance(data, dict)
+        # Must have at least the setup key (graceful fallback returns empty setup dict)
+        assert "setup" in data
+
+
+# ── W81-COACHES regression tests ──────────────────────────────────────────
+
+class TestW81Coaches:
+    """Regression tests for W81-COACHES: coaches.json priority + degraded response."""
+
+    def _get_coach(self, *args):
+        import sys
+        sys.path.insert(0, "/home/paulsportsza/scrapers")
+        from match_context_fetcher import _get_coach
+        return _get_coach(*args)
+
+    def test_arsenal_coach_resolved(self):
+        """Arsenal coach resolves to Mikel Arteta from coaches.json."""
+        assert self._get_coach("arsenal", "epl", "soccer") == "Mikel Arteta"
+
+    def test_everton_coach_resolved(self):
+        """Everton coach resolves from coaches.json (not stale api_cache)."""
+        assert self._get_coach("everton", "epl", "soccer") == "David Moyes"
+
+    def test_wolves_alias_resolved(self):
+        """'wolves' short-name alias resolves to Vitor Pereira — W81-COACHES alias fix."""
+        assert self._get_coach("wolves", "epl", "soccer") == "Vitor Pereira"
+
+    def test_degraded_response_includes_coach(self):
+        """Degraded response (DB lock scenario) still includes coach from static JSON."""
+        import sys
+        sys.path.insert(0, "/home/paulsportsza/scrapers")
+        from match_context_fetcher import _get_coach, _degraded_response, LEAGUE_CONFIG
+        config = LEAGUE_CONFIG["epl"]
+        resp = _degraded_response(config, "arsenal", "everton", "database is locked")
+        # Simulate what get_match_context() now does on exception
+        resp["home_team"]["coach"] = _get_coach("arsenal", "epl", "soccer")
+        resp["away_team"]["coach"] = _get_coach("everton", "epl", "soccer")
+        assert resp["home_team"]["coach"] == "Mikel Arteta"
+        assert resp["away_team"]["coach"] == "David Moyes"
+
+    def test_static_json_priority_over_api_cache(self):
+        """coaches.json lookup returns a value even if called with underscore team name."""
+        # System uses manchester_united (underscore) as canonical key
+        assert self._get_coach("manchester_united", "epl", "soccer") == "Ruben Amorim"
+        # Static lookup must win over stale api_cache which had "Michael Carrick"
+        assert self._get_coach("chelsea", "epl", "soccer") == "Enzo Maresca"

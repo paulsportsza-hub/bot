@@ -19,7 +19,6 @@ from bot import (
     _validate_breakdown,
     _build_programmatic_narrative,
     _format_verified_context,
-    _ensure_setup_not_empty,
     sanitize_ai_response,
 )
 
@@ -301,17 +300,19 @@ class TestProgrammaticNarrative:
         assert "5th" in result or "48 points" in result
 
     def test_includes_coaches(self):
+        # W80-PROSE: last-name-only coach references ("Edwards'" / "Slot has them")
         result = _build_programmatic_narrative(RICH_CTX, SAMPLE_TIPS, "soccer")
-        assert "Rob Edwards" in result
+        assert "Edwards" in result
         assert "Slot" in result
 
     def test_includes_form(self):
         result = _build_programmatic_narrative(RICH_CTX, SAMPLE_TIPS, "soccer")
         assert "WLDDL" in result or "WWWLW" in result
 
-    def test_includes_top_scorer(self):
+    def test_includes_gpg(self):
+        # W80-PROSE: GPG expressed as "X a game" (analyst prose) not "per game"
         result = _build_programmatic_narrative(RICH_CTX, SAMPLE_TIPS, "soccer")
-        assert "Arokodare" in result or "Ekitike" in result
+        assert "a game" in result or "per game" in result
 
     def test_includes_odds_in_edge(self):
         result = _build_programmatic_narrative(RICH_CTX, SAMPLE_TIPS, "soccer")
@@ -322,9 +323,11 @@ class TestProgrammaticNarrative:
         result = _build_programmatic_narrative(RICH_CTX, SAMPLE_TIPS, "soccer")
         assert "2-1" in result or "meeting" in result.lower()
 
-    def test_includes_venue(self):
+    def test_includes_record(self):
+        # W79-PHASE2: venue names no longer in code-built Setup (AI owns context details)
+        # Instead, verify home/away record data is present
         result = _build_programmatic_narrative(RICH_CTX, SAMPLE_TIPS, "soccer")
-        assert "Molineux" in result
+        assert "home" in result.lower() or "road" in result.lower()
 
     def test_passes_own_quality_gate(self):
         """The programmatic fallback MUST pass the quality gate."""

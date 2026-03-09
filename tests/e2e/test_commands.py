@@ -118,6 +118,30 @@ class TestCallbackRouter:
         assert '"noop"' in source or "'noop'" in source
 
 
+def _make_freetext_update(text: str):
+    update = MagicMock()
+    update.effective_user = MagicMock()
+    update.effective_user.id = 999999
+    update.message = MagicMock()
+    update.message.text = text
+    update.message.reply_text = AsyncMock()
+    return update
+
+
+def _make_freetext_ctx():
+    ctx = MagicMock()
+    ctx.bot.send_message = AsyncMock()
+    return ctx
+
+
+_CLAUDE_PATCH = patch(
+    "bot.claude",
+    messages=AsyncMock(create=AsyncMock(return_value=MagicMock(
+        content=[MagicMock(text="Mock AI reply")],
+    ))),
+)
+
+
 class TestInputValidation:
     """Invalid input types don't crash the bot."""
 
@@ -125,18 +149,13 @@ class TestInputValidation:
     async def test_freetext_random_text(self):
         """Random text input is handled gracefully."""
         import bot
-        update = MagicMock()
-        update.effective_user = MagicMock()
-        update.effective_user.id = 999999
-        update.message = MagicMock()
-        update.message.text = "asdfghjkl random text that means nothing"
-        update.message.reply_text = AsyncMock()
-        ctx = MagicMock()
-        ctx.bot.send_message = AsyncMock()
+        update = _make_freetext_update("asdfghjkl random text that means nothing")
+        ctx = _make_freetext_ctx()
 
         # Should not raise
         try:
-            await bot.freetext_handler(update, ctx)
+            with _CLAUDE_PATCH:
+                await bot.freetext_handler(update, ctx)
         except Exception as e:
             # Some exceptions are OK (DB not available, etc) but no crashes
             assert not isinstance(e, (TypeError, AttributeError, KeyError)), (
@@ -147,17 +166,12 @@ class TestInputValidation:
     async def test_freetext_emoji_input(self):
         """Emoji-only input is handled gracefully."""
         import bot
-        update = MagicMock()
-        update.effective_user = MagicMock()
-        update.effective_user.id = 999999
-        update.message = MagicMock()
-        update.message.text = "😀🔥🏆🎯💎"
-        update.message.reply_text = AsyncMock()
-        ctx = MagicMock()
-        ctx.bot.send_message = AsyncMock()
+        update = _make_freetext_update("😀🔥🏆🎯💎")
+        ctx = _make_freetext_ctx()
 
         try:
-            await bot.freetext_handler(update, ctx)
+            with _CLAUDE_PATCH:
+                await bot.freetext_handler(update, ctx)
         except Exception as e:
             assert not isinstance(e, (TypeError, AttributeError, KeyError)), (
                 f"Handler crashed on emoji input: {e}"
@@ -167,17 +181,12 @@ class TestInputValidation:
     async def test_freetext_long_string(self):
         """Very long input string is handled gracefully."""
         import bot
-        update = MagicMock()
-        update.effective_user = MagicMock()
-        update.effective_user.id = 999999
-        update.message = MagicMock()
-        update.message.text = "A" * 5000
-        update.message.reply_text = AsyncMock()
-        ctx = MagicMock()
-        ctx.bot.send_message = AsyncMock()
+        update = _make_freetext_update("A" * 5000)
+        ctx = _make_freetext_ctx()
 
         try:
-            await bot.freetext_handler(update, ctx)
+            with _CLAUDE_PATCH:
+                await bot.freetext_handler(update, ctx)
         except Exception as e:
             assert not isinstance(e, (TypeError, AttributeError, KeyError)), (
                 f"Handler crashed on long string: {e}"

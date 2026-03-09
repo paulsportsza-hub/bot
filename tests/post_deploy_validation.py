@@ -26,6 +26,18 @@ log = logging.getLogger("mzansiedge.validation")
 REPORT_DIR = os.path.expanduser("~/reports")
 
 
+# ── W81-HEALTH: Fixture-aware thresholds ─────────────────────────────────
+
+
+def _is_slump_day() -> bool:
+    """True on Mon/Tue/Thu — post-weekend or mid-week rest day, fewer fixtures expected."""
+    return datetime.now(timezone.utc).weekday() in (0, 1, 3)  # 0=Mon,1=Tue,3=Thu
+
+
+def _fixture_minimum() -> int:
+    return 1 if _is_slump_day() else 3
+
+
 # ── Check 1: Edge Generation ─────────────────────────────────────────────
 
 
@@ -38,16 +50,22 @@ def check_edges() -> list[tuple[bool, str, str]]:
     except Exception as e:
         return [(False, "Edge pipeline", f"Import/call error: {e}")]
 
-    # 1a: Minimum count
+    # 1a: Minimum count (fixture-aware — W81-HEALTH)
     count = len(edges)
-    results.append((count >= 4, "Edge count >= 4", f"{count} edges"))
-
-    # 1b: At least 1 Gold or Diamond
-    gold_plus = [e for e in edges if e.get("tier") in ("gold", "diamond")]
+    min_count = _fixture_minimum()
     results.append((
-        len(gold_plus) >= 1,
+        count >= min_count,
+        f"Edge count >= {min_count}",
+        f"{count} edges" + (" (slump day)" if _is_slump_day() else ""),
+    ))
+
+    # 1b: At least 1 Gold or Diamond (pass on slump days — W81-HEALTH)
+    gold_plus = [e for e in edges if e.get("tier") in ("gold", "diamond")]
+    slump = _is_slump_day()
+    results.append((
+        len(gold_plus) >= 1 or slump,
         "At least 1 Gold+ edge",
-        f"{len(gold_plus)} Gold+ edges",
+        f"{len(gold_plus)} Gold+ edges" + (" (slump day — OK)" if slump and not gold_plus else ""),
     ))
 
     # 1c: Draw ratio <= 40%

@@ -802,8 +802,8 @@ async def get_trial_stats(user_id: int) -> dict:
     """Get trial usage stats for a user."""
     detail_views = 0
     try:
-        import sqlite3
-        conn = sqlite3.connect("/home/paulsportsza/scrapers/odds.db")
+        from db_connection import get_connection
+        conn = get_connection()
         row = conn.execute(
             "SELECT COUNT(*) FROM daily_tip_views WHERE user_id = ?",
             (user_id,),

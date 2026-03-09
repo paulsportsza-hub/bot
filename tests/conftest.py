@@ -10,6 +10,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Force test env before importing app modules
+os.environ["SENTRY_DSN"] = ""  # NEVER send test errors to production Sentry
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("ODDS_API_KEY", "test-odds-key")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
