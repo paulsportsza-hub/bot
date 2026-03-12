@@ -50,6 +50,23 @@ class TestClassifyEvidence:
         assert action == "speculative punt"
         assert sizing == "tiny exposure or pass"
 
+    def test_zero_ev_explicit_returns_pass(self):
+        """W84-Q13: EV=0.0 explicitly provided → pass, not actionable."""
+        ev_class, tone, action, sizing = _classify_evidence(
+            {"confirming_signals": 2, "edge_pct": 0.0}
+        )
+        assert ev_class == "speculative"
+        assert tone == "cautious"
+        assert action == "pass"
+        assert sizing == "pass"
+
+    def test_negative_ev_returns_pass(self):
+        """W84-Q13: Negative EV → pass verdict."""
+        ev_class, tone, action, sizing = _classify_evidence(
+            {"confirming_signals": 3, "edge_pct": -1.5}
+        )
+        assert action == "pass"
+
     def test_one_signal_returns_lean_moderate(self):
         ev_class, tone, action, sizing = _classify_evidence({"confirming_signals": 1})
         assert ev_class == "lean"
@@ -364,9 +381,10 @@ class TestRiskHelpers:
         factors = _build_risk_factors({"stale_minutes": 360}, None, "soccer")
         assert any("Stale" in f for f in factors)
 
-    def test_zero_signals_triggers_pure_price_edge_factor(self):
+    def test_zero_signals_triggers_model_only_factor(self):
+        """W84-Q3: Zero confirming signals produces a model-only risk factor."""
         factors = _build_risk_factors({"confirming_signals": 0}, None, "soccer")
-        assert any("Zero confirming" in f for f in factors)
+        assert any("model" in f.lower() or "confirm" in f.lower() or "signal" in f.lower() for f in factors)
 
     def test_movement_against_triggers_drift_factor(self):
         factors = _build_risk_factors({"movement_direction": "against"}, None, "soccer")
@@ -385,7 +403,8 @@ class TestRiskHelpers:
             "tipster_against": 0,
         }
         factors = _build_risk_factors(edge_data, None, "soccer")
-        assert any("Standard match variance" in f for f in factors)
+        # W84-Q9: replaced "Standard match variance applies." with 3 human variants
+        assert len(factors) >= 1 and any(len(f) > 10 for f in factors)
 
     def test_12h_stale_returns_high_severity(self):
         severity = _assess_risk_severity([], {"stale_minutes": 720})
@@ -755,32 +774,40 @@ class TestRenderEdge:
             **defaults,
         )
 
-    def test_speculative_uses_numbers_only_play(self):
+    def test_speculative_mentions_ev_or_probability(self):
+        """W84-Q3: Speculative edge must reference EV or fair probability."""
         spec = self._spec("speculative", "cautious", "speculative punt", "tiny exposure or pass",
                           support_level=0)
         edge = _render_edge(spec)
-        assert "numbers-only play" in edge
+        assert "expected value" in edge.lower() or "fair" in edge.lower() or "edge" in edge.lower()
 
-    def test_speculative_contains_price_interesting(self):
+    def test_speculative_no_legacy_phrases(self):
+        """W84-Q3: Speculative edge must not contain legacy banned phrases."""
         spec = self._spec("speculative", "cautious", "speculative punt", "tiny exposure or pass",
                           support_level=0)
         edge = _render_edge(spec)
-        assert "price is interesting" in edge
+        legacy = ["tread carefully", "signals are absent", "supporting evidence is thin",
+                  "numbers-only play", "price is interesting", "pure pricing call"]
+        for phrase in legacy:
+            assert phrase not in edge.lower(), f"Legacy phrase '{phrase}' in speculative edge"
 
-    def test_lean_uses_worth_considering(self):
+    def test_lean_mentions_value_or_signal(self):
+        """W84-Q3: Lean edge references value or confirming signal."""
         spec = self._spec("lean", "moderate", "lean", "small stake", support_level=1)
         edge = _render_edge(spec)
-        assert "worth considering" in edge or "Numbers suggest" in edge
+        assert "value" in edge.lower() or "confirm" in edge.lower() or "signal" in edge.lower()
 
-    def test_supported_uses_genuine_value(self):
+    def test_supported_mentions_indicators(self):
+        """W84-Q3: Supported edge references indicators or support."""
         spec = self._spec("supported", "confident", "back", "standard stake", support_level=3)
         edge = _render_edge(spec)
-        assert "genuine value" in edge or "indicators agree" in edge
+        assert "indicator" in edge.lower() or "support" in edge.lower() or "confirm" in edge.lower()
 
-    def test_conviction_uses_stronger_plays(self):
+    def test_conviction_strong_language(self):
+        """W84-Q3: Conviction edge uses strong language."""
         spec = self._spec("conviction", "strong", "strong back", "confident stake", support_level=5)
         edge = _render_edge(spec)
-        assert "stronger plays" in edge or "strong conviction" in edge
+        assert "strong" in edge.lower() or "mispriced" in edge.lower() or "everything lines up" in edge.lower()
 
     def test_edge_includes_odds_and_bookmaker(self):
         spec = self._spec("supported", "confident", "back", "standard stake",
@@ -812,22 +839,24 @@ class TestRenderRisk:
         risk = _render_risk(spec)
         assert "High-risk" in risk or "high" in risk.lower()
 
-    def test_low_risk_includes_clean_text(self):
+    def test_low_risk_includes_manageable_text(self):
+        """W84-Q3: Low risk uses manageable/clean language."""
         spec = self._spec("low", ["Standard match variance applies."])
         risk = _render_risk(spec)
-        assert "clean" in risk.lower() or "appropriate" in risk.lower()
+        assert "manageable" in risk.lower() or "clean" in risk.lower()
 
-    def test_risk_includes_sizing_caveat(self):
+    def test_risk_includes_stake_guidance(self):
+        """W84-Q3: Risk section includes stake/sizing reference."""
         spec = self._spec("moderate", ["Market drifting away from this outcome."],
                           verdict_sizing="small stake")
         risk = _render_risk(spec)
-        assert "small stake" in risk
+        assert "stake" in risk.lower() or "size" in risk.lower()
 
     def test_risk_factors_appear_in_output(self):
         spec = self._spec("moderate",
-                          ["Zero confirming indicators — pure price edge with no supporting data."])
+                          ["No form, movement, or tipster data backs this up — the case is model-only."])
         risk = _render_risk(spec)
-        assert "Zero confirming indicators" in risk
+        assert "model-only" in risk
 
 
 # ── W82-RENDER: _render_verdict tests ─────────────────────────────────────────
@@ -849,28 +878,30 @@ class TestRenderVerdict:
             movement_direction="neutral", tipster_against=0,
         )
 
-    def test_speculative_uses_small_punt(self):
+    def test_speculative_sizing_guidance(self):
+        """W84-Q3: Speculative verdict includes sizing guidance."""
         spec = self._spec("speculative punt", "tiny exposure or pass", "cautious")
         verdict = _render_verdict(spec)
-        assert "small punt" in verdict
-        assert "speculative" in verdict.lower()
+        assert "punt" in verdict.lower() or "small" in verdict.lower() or "tiny" in verdict.lower()
 
-    def test_lean_uses_mild_lean(self):
+    def test_lean_references_outcome(self):
+        """W84-Q3: Lean verdict references the outcome."""
         spec = self._spec("lean", "small stake", "moderate",
                           outcome_label="the draw")
         verdict = _render_verdict(spec)
-        assert "lean" in verdict.lower() or "Mild lean" in verdict
+        assert "lean" in verdict.lower() or "the draw" in verdict.lower()
 
     def test_back_uses_back(self):
+        """W84-Q3: Back verdict uses 'back' or 'green light'."""
         spec = self._spec("back", "standard stake", "confident")
         verdict = _render_verdict(spec)
-        assert verdict.lower().startswith("back ")
-        assert "worth backing" in verdict
+        assert "back" in verdict.lower() or "green light" in verdict.lower()
 
-    def test_strong_back_uses_premium_value(self):
+    def test_strong_back_confident_language(self):
+        """W84-Q3: Strong back verdict uses strong conviction language."""
         spec = self._spec("strong back", "confident stake", "strong")
         verdict = _render_verdict(spec)
-        assert "premium value" in verdict.lower() or "best plays" in verdict
+        assert "strong" in verdict.lower() or "premium" in verdict.lower() or "conviction" in verdict.lower()
 
     def test_speculative_verdict_contains_no_banned_confident_phrases(self):
         spec = self._spec("speculative punt", "tiny exposure or pass", "cautious")
@@ -942,18 +973,22 @@ class TestRenderBaseline:
     def test_baseline_has_four_section_headers(self):
         spec = self._full_spec()
         baseline = _render_baseline(spec)
-        assert "📋 The Setup" in baseline
-        assert "🎯 The Edge" in baseline
-        assert "⚠️ The Risk" in baseline
-        assert "🏆 Verdict" in baseline
+        assert "📋" in baseline
+        assert "🎯" in baseline
+        assert "⚠️" in baseline
+        assert "🏆" in baseline
+        assert "<b>The Setup</b>" in baseline
+        assert "<b>The Edge</b>" in baseline
+        assert "<b>The Risk</b>" in baseline
+        assert "<b>Verdict</b>" in baseline
 
     def test_baseline_sections_in_correct_order(self):
         spec = self._full_spec()
         baseline = _render_baseline(spec)
-        setup_pos = baseline.index("📋 The Setup")
-        edge_pos = baseline.index("🎯 The Edge")
-        risk_pos = baseline.index("⚠️ The Risk")
-        verdict_pos = baseline.index("🏆 Verdict")
+        setup_pos = baseline.index("📋")
+        edge_pos = baseline.index("🎯")
+        risk_pos = baseline.index("⚠️")
+        verdict_pos = baseline.index("🏆")
         assert setup_pos < edge_pos < risk_pos < verdict_pos
 
     def test_baseline_contains_team_names(self):

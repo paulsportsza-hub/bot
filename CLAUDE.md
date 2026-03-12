@@ -757,6 +757,15 @@ CLI agents push markdown reports to Notion via push-report script. Reports land 
     NOTION_TOKEN=(set in ~/.bashrc — do not commit)
     NOTION_DB_ID=a7cd424d700a4ab684ec10bd08c9948b
 
+### ⛔ NOTION TOKEN VALIDATION — ALWAYS CHECK BEFORE PUSHING
+Before running push-report, verify the token is live:
+    curl -s https://api.notion.com/v1/users/me -H "Authorization: Bearer $NOTION_TOKEN" -H "Notion-Version: 2022-06-28" | python3 -c "import sys,json; d=json.load(sys.stdin); print('OK' if d.get('object')=='user' else 'INVALID: '+d.get('message',''))"
+If INVALID: token has been rotated. Ask Ops Hub for the current NOTION_TOKEN and update:
+    sed -i 's|NOTION_TOKEN=".*"|NOTION_TOKEN="<new>"|' ~/.bashrc
+    sudo sed -i 's|NOTION_TOKEN=.*|NOTION_TOKEN=<new>|' /etc/environment
+    export NOTION_TOKEN="<new>"
+The push-report script silently returns ✅ even on auth failure — always verify with curl first.
+
 ### Usage
     push-report --agent QA --wave 9A /home/paulsportsza/reports/qa-wave9a-20260225-1527.md
     push-report --agent LeadDev --wave 9B --status "Action Taken" --title "Merge Complete" report.md
@@ -2231,3 +2240,685 @@ The following are bypassed but left in bot.py until future cleanup:
 - `pregenerate_narratives._generate_one()`: always attempts polish. Cache stores polished version when valid.
 - Both `_build_polish_prompt` and `_validate_polish` in `_REQUIRED_BOT_FUNCTIONS` — rename protection.
 - Sweep result: validator correctly caught "lock" (banned in moderate band) during live run.
+
+## Wave W83-OVERNIGHT — Instant Baseline + Signal Coverage Fix (9 March 2026)
+
+### Architecture (LOCKED)
+- `_edge_precompute_job()`: cache-miss tips now stored in `_game_tips_cache[match_id] = [_tip]`
+  so instant baseline path is armed for all hot tips after each 15-min precompute cycle.
+- `edge:detail` slow path: before `_generate_game_tips_safe()`, checks `_game_tips_cache` and
+  serves instant baseline via `_generate_narrative_v2(live_tap=True, ctx_data=None)` — zero
+  ESPN, zero LLM, zero DB writes. Falls through to full generation if baseline fails.
+- `test_signal_strength_bounded`: updated to skip `available=False` signals (`lineup_injury`
+  intentionally returns `None` strength for rugby/cricket — no injury data source exists).
+- Problem 2 (4 cached edges): confirmed weekend lull + stale filter — NOT a code bug.
+  `get_top_edges()` filters stale edges; `pregenerate_narratives` uses `get_top_edges()` → few edges on
+  Sunday night. Instant baseline bridges the gap. Full polish at next 06:00 SAST sweep.
+
+### Root Cause (LOCKED — DO NOT REPEAT)
+- `_generate_game_tips()` for `_vs_` events hits three sequential 30-second waits:
+  ESPN API timeout, `calculate_edge_v2()` DB ops, `_store_narrative_cache()` write retries.
+  Total = 123.6s. `live_tap=True` skips LLM but does NOT skip these waits.
+- Fix: pre-populate `_game_tips_cache` in `_edge_precompute_job()` for ALL hot tips (including
+  cache misses), then serve instant baseline on tap before ever calling `_generate_game_tips_safe()`.
+
+## Wave W84-P1D — Hot Tips Detail Serving Fix (10 March 2026)
+
+### Root Causes Fixed (LOCKED — DO NOT REPEAT)
+
+#### "Message is not modified" causes 31–123s slow opens
+- When user double-taps a tip or re-enters a detail they've already seen, `query.edit_message_text()` throws `BadRequest("Message is not modified")`.
+- Was caught by broad `except Exception` in instant baseline block → fell through to `_generate_game_tips_safe()` (ESPN+LLM slow path, 30–123s).
+- **Fix:** In `edge:detail` handler, catch "not modified" string in exception message and return early — never fall through:
+  ```python
+  if "not modified" in str(_ie_err).lower():
+      return  # Content already showing — success, not failure
+  ```
+
+#### `edge_v2=None` tips get wrong tone band despite Gold/Silver tier
+- `_load_tips_from_edge_results` (fast DB path) returns tips with `edge_v2=None`.
+- `_extract_edge_data` fell back to `confirming_signals=0` → `_classify_evidence` always returned "speculative/cautious" regardless of composite_score.
+- Gold tips rendered as "cautious speculation" while showing 🥇 badge — contradictory.
+- **Fix:** In `_extract_edge_data`, estimate `confirming_signals` from `edge_score` when `edge_v2=None`:
+  - `edge_score >= 70` → 3 signals (Diamond/confident)
+  - `edge_score >= 55` → 2 signals (Gold/moderate)
+  - `edge_score >= 40` → 1 signal (Silver/lean)
+  - `edge_score < 40`  → 0 signals (Bronze/cautious)
+
+#### Wrong-match content was test artifact (not bot bug)
+- Test used `"back" in text.lower()` which matched CTA "🥈 Back home @ 1.58 on Betway →" before nav "↩️ Back to Edge Picks".
+- URL button didn't change message → test timed out → left display in wrong state.
+- **Fix in test only:** `"edge picks" in text.lower() or text.strip().startswith("↩️ Back")`.
+
+### Test Results (W84-P1D)
+- Full unit suite: 1159 passed, 3 skipped, 0 failures
+- Contract tests: 261 passed
+- Live validation: 33/34 passed (1 timing flakiness, non-blocking)
+- Narrative validation: 54/56 passed (2 design mismatches, non-blocking)
+
+## Wave W84-MM1 — My Matches Cold-Path: DB-Independent (10 March 2026)
+
+### Architecture (LOCKED)
+- `_render_your_games_all()` accepts `skip_broadcast: bool = False`.
+  When True, skips all `odds.db` broadcast queries — safe during `_edge_precompute_job`.
+  Cold-path background task and `yg:all:` inline callback always pass `skip_broadcast=True`.
+  Warm-path direct taps (cache hit) still show broadcast info.
+- `_fetch_schedule_games()` DB gather (odds_svc.get_all_matches) has 2.5s timeout.
+  On timeout, falls back to Odds API file-cache data only. Logged as WARNING.
+- Cold-path deadline: 5.0s (was 3.5s). Well within 8s validation gate.
+- Pattern: first 5 opens during edge_precompute (95s startup window) serve degraded in
+  5.6–5.8s. Background task warms cache — subsequent opens are 0.8–0.9s full.
+
+### DO NOT
+- Add synchronous odds.db queries to `_render_your_games_all()` — they block threads.
+- Remove the `skip_broadcast` guard — broadcast queries cause lock contention.
+- Set the DB gather timeout > 3.0s — background task must complete within 5.0s deadline.
+
+## Wave W84-HT2 — Hot Tips Page/Detail Identity: Snapshot-Frozen (10 March 2026)
+
+### Architecture (LOCKED)
+- `_ht_page_state: dict[int, int]` — per-user last rendered page number (0-indexed)
+- `_ht_tips_snapshot: dict[int, list]` — per-user shallow copy of tips frozen at last render
+- Both dicts stored after EVERY list render: `_do_hot_tips_flow` (warm/fast/cold), `hot:page:N`, `hot:back`
+- `hot:page:N` reads snapshot first: `_ht_tips_snapshot.get(user_id) or _hot_tips_cache.get(...)`
+  This prevents identity drift when `_edge_precompute_job` refreshes global cache between renders.
+- Back callbacks are PAGE-ENCODED: `hot:back:{N}` (not bare `hot:back`)
+  `hot:back` handler parses N; renders snapshot at that page; updates `_ht_page_state`.
+- `_build_game_buttons(back_page=N)` — passes page number through for back callback encoding.
+  All `edge:detail` paths pass `back_page=_ht_page_state.get(user_id, 0)`.
+
+### DO NOT
+- Read `_hot_tips_cache["global"]["tips"]` directly in `hot:page:N` — always use snapshot first.
+- Use bare `hot:back` callback data — always encode page: `hot:back:{page}`.
+- Reset `_ht_tips_snapshot[user_id]` without also resetting `_ht_page_state[user_id]`.
+
+## Wave W84-ACC1 — Account Truth, QA Reset, View Accounting (10 March 2026)
+
+### Architecture (LOCKED)
+
+#### Entitlement Truth
+- `get_user_tier(user_id)` reconciles bronze tier with active subscription:
+  If `user_tier='bronze'` AND `subscription_status='active'`, derives tier from `plan_code`.
+  `_resolve_tier_from_subscription(user)` builds tier map from STITCH_PRODUCTS + "stitch_premium"→gold.
+  Returns derived tier; never mutates DB (read-only reconciliation).
+- `get_effective_tier(user_id)` checks `_QA_TIER_OVERRIDES` first, then calls `get_user_tier()`.
+  ALL product gates, /status, /billing, and notification paths use get_effective_tier().
+
+#### /qa reset
+- `/qa reset` clears ONLY `_QA_TIER_OVERRIDES` in-memory dict.
+- NEVER calls `db.set_user_tier()` — subscription state in DB is never touched by QA commands.
+- DB columns that /qa reset may update: daily_push_count, last_push_date, nudge_sent_at,
+  last_active_at, consecutive_misses, muted_until. All are QA/notification-state fields only.
+
+#### Daily View Accounting (edge_v2_helper.py)
+- `record_tip_view(user_id, match_key, conn)` is idempotent per (user, match_key, SAST day).
+  Same user + same match_key + same day → silently returns, no new row inserted.
+  Different fixture → new row inserted, counts toward daily limit.
+- `check_tip_limit()` uses `COUNT(DISTINCT match_key)` for Bronze users.
+  Defensive against old duplicate rows.
+
+### DO NOT
+- Add db.set_user_tier() calls to /qa reset — it destroys real subscription state.
+- Read user.user_tier directly for entitlement decisions — always use get_effective_tier().
+- Remove the _resolve_tier_from_subscription() reconciliation — without it, stale bronze
+  columns from pre-W84-ACC1 /qa reset will not heal automatically.
+- Use COUNT(*) in check_tip_limit — must be COUNT(DISTINCT match_key).
+
+## Wave W84-MM2 — My Matches Cold-Path DB Query Fix (11 March 2026)
+
+### Architecture (LOCKED)
+
+#### odds_snapshots Query Index Rule (LOCKED — DO NOT REVERT)
+- `get_all_matches(league=X)` queries `odds_snapshots` (543K+ rows) with an INNER JOIN.
+- `AND os.league = ?` — EXACT MATCH ONLY. Never add COLLATE NOCASE.
+  COLLATE NOCASE disables the `idx_odds_league_time` index → full table scan → 6+ seconds.
+  All league values in odds_snapshots are stored lowercase by scrapers — exact match is correct.
+- `idx_odds_league_time` index covers `(league, scraped_at)`. Exact match uses this index.
+  Query time: 0.001-0.9s (was 6+ seconds with COLLATE NOCASE on 543K rows).
+
+#### Cold-Path Delivery Hardening (_show_your_games)
+- None-guard: if `_render_your_games_all` raises exception, `_mm_result = [None, None]`.
+  Must check for None before calling `loading.edit_text()`.
+- Capped spinner wait: `asyncio.wait_for(asyncio.shield(spinner_task), timeout=2.0)`.
+  Prevents unbounded block when spinner is mid-Telegram-API call at timeout fire.
+- Explicit edit_text timeout: 3.0s cap on `loading.edit_text()`.
+  Prevents indefinite hang on Telegram API slowness.
+
+### DO NOT
+- Add `COLLATE NOCASE` to `get_all_matches()` JOIN query — it destroys index usage.
+- Remove the None-guard in `_show_your_games()` — silent failures were invisible before.
+- Change `asyncio.wait_for(asyncio.shield(spinner_task), timeout=2.0)` back to bare `await spinner_task`.
+
+## Wave W84-RT3 — Cold-Open Outlier + Persist Lock Warnings (11 March 2026)
+
+### Architecture (LOCKED)
+
+#### _show_your_games() Cold Path Budget (LOCKED — DO NOT REGRESS)
+- `_mm_timed_out = False` flag tracks whether the 5.0s render deadline fired.
+- On timeout path: `spinner_task.cancel()` immediately (0ms) → `reply_text` (no edit).
+  Total: 5.0s + ~0.1s = 5.1s max.
+- On success path: existing 2.0s spinner wait + 3.0s edit_text unchanged.
+- DO NOT merge the two paths — the timeout path must cancel spinner, not wait for it.
+
+#### _fetch_schedule_games() API Gather Timeout (LOCKED — DO NOT REMOVE)
+- `asyncio.wait_for(asyncio.gather(*[fetch_events_for_league(lk)...]), timeout=3.5)`
+- File-cached calls return in < 100ms. Cold fetches capped at 3.5s.
+- On timeout: empty results for all API leagues, DB-only fallback used.
+- Without this timeout, a single slow API call can consume the full 5.0s deadline.
+
+#### Narrative Cache Persist — Best-Effort, Short Timeout (LOCKED)
+- `_store_narrative_cache()`: single attempt with `get_connection(timeout_ms=3000)`.
+  No retry loop. `log.debug()` on lock (not `log.warning()`).
+- `_compute_odds_hash()`: also uses `get_connection(timeout_ms=3000)`.
+- The in-memory `_analysis_cache[event_id]` always has the narrative. DB persist
+  is for cross-restart resilience only — skipping one write is acceptable.
+- `db_connection.get_connection()` now accepts `timeout_ms` parameter (default: _BUSY_MS).
+  All non-critical background DB access should pass `timeout_ms=3000` or lower.
+
+### DO NOT
+- Merge the `_mm_timed_out` branches — the timeout path must not wait for spinner.
+- Remove the `asyncio.wait_for(..., timeout=3.5)` from the API gather.
+- Add retry logic back to `_store_narrative_cache()`.
+- Change lock failures in `_store_narrative_cache()` from `log.debug` to `log.warning`.
+
+## Wave W84-RT4 — Background View-Log Lock Cleanup (11 March 2026)
+
+### Architecture (LOCKED)
+
+#### Background record_view — 3s Timeout, debug on Lock (LOCKED)
+- `_record_view_bg()` and `_ib_record_view_bg()` in `edge:detail` handler:
+  `get_connection(timeout_ms=3000)` — not the default 30s.
+  `sqlite3.OperationalError` with "locked" → `log.debug()`, NOT `log.warning()`.
+  Any other error → `log.warning()`.
+  Background view-log is best-effort; idempotent guard prevents double-counting on retry.
+
+#### handle_tip_detail() Tier Gate — In Thread (LOCKED)
+- `check_tip_limit()` + `record_view()` + `get_connection()` are synchronous sqlite3 calls.
+  Moved to `asyncio.to_thread(_tip_gate_and_record)` with `timeout_ms=3000`.
+  Returns True (allow) on any `OperationalError` with "locked" or other exception —
+  never gate the user out due to DB pressure.
+
+#### View Persistence Architecture (LOCKED)
+- `daily_tip_views` (odds.db) — tracks per-user per-match daily view count.
+  Written by `record_tip_view()` in `scrapers/edge/edge_v2_helper.py`.
+  Idempotent: SELECT guard prevents INSERT if already recorded today for this fixture.
+- `user_edge_views` (bot's SQLAlchemy DB) — tracks user↔edge views for result alerts.
+  Written by `db.log_edge_view()` via aiosqlite — non-blocking, no lock risk.
+
+### DO NOT
+- Change `log.debug()` for locked errors in `_record_view_bg()` back to `log.warning()`.
+  Lock errors here are expected during scraper write windows — they are not failures.
+- Remove the `asyncio.to_thread()` from `handle_tip_detail()` tier gate.
+  `_get_conn()` + `record_view()` are synchronous — calling on event loop blocks it.
+- Use `get_connection()` without `timeout_ms=3000` for any best-effort background write.
+  Default is 30s — appropriate for critical path writes, not background analytics.
+
+## Wave W84-Q1 — Narrative Quality Floor (11 March 2026)
+
+### Architecture (LOCKED)
+
+#### Bold Section Headers (LOCKED)
+- `_render_baseline()` in `narrative_spec.py` produces `📋 <b>The Setup</b>` etc.
+  All 4 section headers use `<b>` tags in the baseline renderer.
+- `_build_edge_only_section()` in `bot.py` also uses bold section headers.
+- `_build_polish_prompt()` rules 7/8 reference `<b>`-tagged headers.
+- `sanitize_ai_response()` in the slow path also enforces bold headers.
+  All narrative paths now produce consistent bold section headers.
+
+#### MD5-Deterministic Variant Selection (LOCKED)
+- `_render_setup()` no-context path: 4 variants. `_pick(home+away, 4)` selects variant.
+  Same match → same variant. Different matches → diverse output. No LLM needed.
+- `_render_edge()` speculative path: 4 variants. All contain "expected value" + "tread carefully".
+- `_render_verdict()` speculative punt: 3 variants. All contain "small punt" + "speculative".
+- DO NOT replace with single-template strings — diversity is intentional and testable.
+
+#### Eliminated Phrases (BANNED — DO NOT RE-INTRODUCE)
+- "Limited pre-match context for this fixture — ... pure edge play driven by bookmaker pricing"
+- "This is a numbers-only play — ... thin on supporting signals"
+- "The price is interesting at ..."
+- "Zero confirming indicators — pure price edge with no supporting data."
+- In `_build_edge_only_section()`: "Limited pre-match context available for this fixture"
+  and "Numbers-only play — ... thin on supporting signals"
+
+### DO NOT
+- Remove `<b>` tags from section headers in `_render_baseline()` or `_build_edge_only_section()`.
+- Revert no-context / speculative variants to single-template strings.
+- Change "No confirming indicators" back to "Zero confirming indicators".
+
+## Wave W84-Q2 — Low-Context De-Templating + Header Guarantee (11 March 2026)
+
+### Architecture (LOCKED)
+
+#### `_strip_preamble()` — Fixture Header Preservation (LOCKED)
+- W84-Q2 fix: `🎯` is checked BEFORE `📋`.
+  Reason: cached HTML starts with `🎯 Home vs Away / 🏆 League / 📅 kickoff`.
+  Previously, checking `📋` first stripped the entire fixture header from all cached narratives.
+  DO NOT revert the marker order — `🎯` must come before `📋` in `_strip_preamble()`.
+  Logic: if `dart_idx < setup_idx`, return from `dart_idx`. Plain narratives (no fixture header)
+  still work correctly because `📋` appears before `🎯` in them.
+
+#### TONE_BANDS["cautious"] Banned Phrases (LOCKED)
+- Now includes: "numbers-only play", "thin support", "price is interesting",
+  "the numbers alone", "limited pre-match context", "pure price edge with no supporting data"
+- DO NOT move these back to "allowed". They are production-banned.
+- `_validate_polish()` enforces these against every LLM polish pass.
+
+#### Eliminated Phrases (BANNED — W84-Q1 + W84-Q2 combined)
+- "This is a numbers-only play — ..." (removed in W84-Q1)
+- "thin on supporting signals" (removed in W84-Q1)
+- "The price is interesting at ..." (removed in W84-Q1)
+- "Zero confirming indicators — ..." (W84-Q1 changed to "No confirming indicators")
+- "Pre-match context is limited here" (removed in W84-Q2)
+- "the numbers alone make this interesting" (removed in W84-Q2)
+- "pure price edge with no supporting data" (removed in W84-Q2)
+- "Not a single indicator backs this" (removed in W84-Q2)
+
+### DO NOT
+- Move any phrase from `TONE_BANDS["cautious"]["banned"]` to "allowed" without brief.
+- Revert `_strip_preamble()` marker order — `🎯` must be checked before `📋`.
+- Re-introduce "Pre-match context is limited here" in any setup path.
+
+## Wave W84-Q3 — Low-Context Narrative Differentiation + Legacy Phrase Purge (11 March 2026)
+
+### Architecture (LOCKED)
+
+#### Cached Narrative Banned-Phrase Gate (LOCKED)
+- `_get_cached_narrative()` calls `_has_banned_patterns()` on retrieved HTML.
+  Returns None (cache miss) when banned phrases found → forces re-generation.
+  DO NOT remove this check — it prevents stale cached narratives from serving legacy phrases.
+- `BANNED_NARRATIVE_PHRASES` includes all legacy speculative phrases.
+
+#### Low-Context Setup — 8 MD5-Deterministic Variants (LOCKED)
+- `_render_setup_no_context(spec)` replaces inline variants in `_render_setup()`.
+- 8 distinct analytical frames: sport-first, market-question, analyst-observation,
+  fixture-type, contrarian, direct-model, bookmaker-focused, clean-short.
+- Sport-specific texture varies by soccer/rugby/cricket/combat.
+- EV magnitude language adapts (slim < 2%, moderate 2-5%, high ≥ 5%).
+- DO NOT collapse back to fewer variants — diversity is the entire point.
+
+#### Multi-Variant Edge/Risk/Verdict (LOCKED)
+- Speculative Edge: 6 variants (was 4). Zero use of "tread carefully".
+- Lean Edge: 3 variants (was 1). Supported Edge: 3 variants (was 1). Conviction: 3 variants (was 1).
+- Speculative Verdict: 4 variants (was 3). Lean/Back/Strong: 3 variants each (was 1).
+- Risk confirming==0: 3 MD5-deterministic variants.
+- DO NOT reduce variant count or re-introduce single-template paths.
+
+#### Section Role Separation (LOCKED)
+- Setup = what kind of fixture context exists
+- Edge = what the price discrepancy is (numbers, bookmaker, fair probability)
+- Risk = what is missing / what could break it (no sizing guidance)
+- Verdict = sizing / confidence posture only
+- Risk section MUST NOT duplicate Verdict sizing string.
+
+#### TONE_BANDS["cautious"] — Expanded Banned List (LOCKED)
+- Now also bans: "supporting evidence is thin", "signals are absent", "no signal backing",
+  "signals don't confirm", "pricing edge without supporting signals", "the numbers speak louder",
+  "pure pricing call", "tread carefully", "conviction is limited"
+- "pricing play", "price-only play", "tread carefully" removed from allowed list.
+
+### DO NOT
+- Remove the `_has_banned_patterns()` check from `_get_cached_narrative()`.
+- Collapse low-context variants back to < 8.
+- Re-introduce "tread carefully" in any speculative Edge variant.
+- Add sizing guidance to Risk section (belongs in Verdict only).
+- Move any phrase from cautious banned back to allowed without brief.
+
+## Wave W84-MM3B/RT5 — My Matches Delivery Reliability (11 March 2026)
+
+### Root Causes Fixed (LOCKED — DO NOT REPEAT)
+
+#### `telegram.error.TimedOut` at loading message → silent no-response
+- Line `loading = await update.message.reply_text("⚽ Loading...")` was unprotected.
+  Any Telegram API timeout here raised an uncaught exception that propagated out of
+  `_show_your_games` entirely. User received zero response.
+- Fix: wrapped in `try/except` + `asyncio.wait_for(timeout=8.0)`. `loading` defaults
+  to `None`; failure is logged as WARNING and execution continues.
+
+#### spinner_task and loading.delete() assumed loading was not None
+- All downstream code (`spinner_task = asyncio.create_task(...)`, `loading.delete()`,
+  `loading.edit_text()`) assumed loading was a valid message object.
+- Fix: `spinner_task: asyncio.Task | None = None`; only created `if loading is not None`.
+  All references to spinner_task and loading guarded with `if X is not None`.
+
+#### Warm path reply_text and render unprotected
+- Line `text, markup = await _render_your_games_all(...)` (warm path): no timeout.
+  Line `await update.message.reply_text(...)` (warm path): no exception handling.
+- Fix: wrapped render in `asyncio.wait_for(timeout=10.0)` with fallback to `_FALLBACK_TEXT`.
+  Wrapped reply_text in `asyncio.wait_for(timeout=8.0)` with `except Exception` logged.
+
+#### Final reply_text fallback in success path unprotected
+- The `reply_text` on line 3121 (old numbering) — inside edit-failure branch — had no
+  try/except. Telegram failure here left user with only a deleted loading message.
+- Fix: wrapped in `asyncio.wait_for(timeout=8.0)` + `except Exception` logged as ERROR.
+
+### _show_your_games() Delivery Contract (LOCKED)
+Every My Matches tap must end in one of:
+- full list rendered and delivered
+- explicit degraded fallback (Retry card) delivered
+- error logged — never a silent no-response
+
+### DO NOT
+- Remove the try/except around `loading = await update.message.reply_text(...)`.
+  Telegram TimedOut here IS a known failure mode — must be caught.
+- Assume `loading` is not None after the cold-path initial send.
+  Always guard: `if loading is not None` before any `loading.*` call.
+- Assume `spinner_task` is not None. Check before `.cancel()` and before `wait_for`.
+- Remove `asyncio.wait_for(timeout=8.0)` from warm-path delivery.
+  Unprotected Telegram sends can stall indefinitely under network pressure.
+
+## Wave W84-Q4 — Premiumization + Header Completion (11 March 2026)
+
+### Header Completeness (LOCKED)
+- `handle_tip_detail()` — after `_get_broadcast_details()`, if kickoff is empty,
+  extracts date from `tip["match_id"]` (suffix `YYYY-MM-DD`).
+  DB-sourced tips (odds.db) have no `commence_time` but match_id always carries the date.
+  Returns: "Today", "Tomorrow", "Wed 26 Mar", or "26 Mar" depending on delta.
+- Logic: `tip["match_id"].rsplit("_", 1)` → if last part is 10 chars → `date.fromisoformat()`.
+- Falls through silently on ValueError — no kickoff shown rather than crashing.
+
+### Low-Context Narrative Quality (LOCKED)
+
+#### `_render_setup_no_context()` — 8 richer variants (W84-Q4)
+- Added `fp_str` and `market_implied` computed from `spec.fair_prob_pct` and `spec.odds`.
+- Each variant now leads with the analytical observation, not the data absence.
+- Price structure treated as evidence: {bk} implies X% vs our Y% = Z% gap.
+- Variants foreground: price structure, analytical thesis, pivot from limitation,
+  market mechanics, editorial observation, model-vs-market disagreement, bookmaker behaviour, clean decisive.
+- DO NOT revert to variants that lead with "No data available" or "Form data isn't available".
+  These feel apologetic and are banned from this function.
+
+#### Speculative `_render_edge()` — 6 richer variants (W84-Q4)
+- Each variant now explains the TYPE of gap (not just its size):
+  bookmaker pricing vs model probability, market mechanics in data-light markets,
+  what the divergence means for the bet thesis.
+- All variants still reference EV, fair probability, and bookmaker (test requirements).
+- All still avoid banned phrases from TONE_BANDS["cautious"].
+
+#### `_build_risk_factors()` confirming==0 — 3 richer variants (W84-Q4)
+- Variant 0: explains that model estimate is based on base rates, not current intelligence.
+- Variant 1: clarifies what CAN vs CANNOT be verified (the price gap vs what drives it).
+- Variant 2: distinguishes historical distributions from current team form.
+- All still contain "model", "confirm", or "signal" (test requirement at line 369).
+
+### DO NOT
+- Revert `_render_setup_no_context` variants to lead with "No data available" or "Form data isn't available".
+- Remove `fp_str` or `market_implied` from `_render_setup_no_context` — they add necessary texture.
+- Change the speculative edge variants to drop EV/fair-prob references (breaks test_speculative_mentions_ev_or_probability).
+- Add "tread carefully", "pure pricing call", "price is interesting" to any speculative variant (banned).
+
+## Wave W84-Q5 — Detail Header Completion + Low-Context De-Templating (11 March 2026)
+
+### Header Completeness — Root Cause Fixed (LOCKED)
+
+#### Bug: `edge:detail` instant baseline path missing kickoff + broadcast
+- Lines 1253-1258 (old) assembled header as: `🎯 match` + `🏆 league` only.
+- `_build_hot_tips_page()` computed kickoff + broadcast per tip but did NOT store them in the tip dict.
+- Instant baseline path had no access to the list-rendered metadata.
+- Fix: `_build_hot_tips_page()` now stores `tip["_bc_kickoff"]` and `tip["_bc_broadcast"]` after computing broadcast data.
+- Fix: instant baseline path reads `_it0.get("_bc_kickoff")` and `_it0.get("_bc_broadcast")` and adds `📅` + `📺` lines.
+
+#### Pattern: List render → Detail view header inheritance (LOCKED)
+- `_build_hot_tips_page()` MUST store `_bc_kickoff` and `_bc_broadcast` in each tip dict.
+- `edge:detail` instant baseline header MUST use these stored values.
+- `handle_tip_detail()` accessible path: checks `_bc_kickoff`/`_bc_broadcast` BEFORE `_get_broadcast_details()` fresh call.
+- `handle_tip_detail()` locked path: same check applied.
+- This ensures list and detail always show the same kickoff/broadcast data.
+
+### DO NOT
+- Remove `tip["_bc_kickoff"] = kickoff` from `_build_hot_tips_page()` — detail depends on it.
+- Add kickoff/broadcast to `edge:detail` instant baseline without reading from tip dict first.
+  Fresh `_get_broadcast_details()` call here would be synchronous DB access on the event loop.
+- Remove `_bc_kickoff`/`_bc_broadcast` inheritance guards from `handle_tip_detail()`.
+
+### Low-Context Narrative — Competition-Aware Framing (LOCKED)
+
+#### `_competition_category()` helper (narrative_spec.py — NEW)
+- Returns one of: "continental", "international", "club_rugby", "cricket", "combat", "league".
+- Categorises competition name string (case-insensitive) for contextual framing.
+- Used by `_render_setup_no_context()` to inject `_comp_context` — one sentence per category.
+
+#### `_render_setup_no_context()` — Competition-Aware Variants (W84-Q5)
+- Added `_cat = _competition_category(comp)` and `_comp_context` dict (6 category contexts).
+- Variants 0, 2: Lead with competition landscape first, then price as evidence.
+- Variant 1: Analytical question frame — "is the EV gap real or does the market know something?"
+- Variant 3: Bookmaker behaviour in THIS competition type (not generic).
+- Variant 5: Base-rate reasoning anchored to competition context.
+- Variant 6: Direct, honest, zero apology ("the analysis doesn't pretend otherwise").
+- Variant 7: "Market prices become the primary analytical input" — premium framing.
+- DO NOT revert variants to lead with data absence or remove `_comp_context`.
+
+#### Speculative `_render_edge()` — Analytically Distinct Variants (W84-Q5)
+- Variant 0: Calls the gap type explicitly ("what a base-rate mispricing looks like").
+- Variant 1: Bookmaker exposure management angle (why the line can sit wider than true prob).
+- Variant 3: "Calibration bet" framing — transparent about what the bet is actually on.
+- Variant 4: Resolution path — speculative edges either close pre-kickoff or hold.
+- Variant 5: Explicit bet posture — "small exposure, don't overcommit to an unconfirmed signal."
+- All variants still reference EV, fair probability, bookmaker (contract tests require it).
+
+## Wave W84-Q6 — My Matches Header Inheritance + Story Layer (11 March 2026)
+
+### My Matches Header Inheritance (LOCKED — DO NOT REVERT)
+- `_render_your_games_all()` stores `event["_mm_kickoff"]` and `event["_mm_broadcast"]` after computing them during list render.
+- `_generate_game_tips()` falls back to these after fresh `_get_broadcast_details()` call when DB lookup returns empty.
+- DO NOT remove the storage step — without it, detail headers drop kickoff/TV for all My Matches events.
+- DO NOT remove the fallback — without it, only broadcast_schedule DB hits show full headers in detail view.
+- Pattern: list render → store in event dict → detail inherits via `target_event.get("_mm_kickoff")`.
+
+### `_match_shape_note(comp_cat, fixture_type)` (LOCKED)
+- Genre description of what kind of game this typically is, based on competition category.
+- 6 categories: continental, international, club_rugby, cricket, combat, league.
+- Evidence-bounded: describes competition genre only — no team-specific facts, zero hallucination risk.
+- Added to `narrative_spec.py` after `_competition_category()`.
+- Woven into variants 1, 3, 5, 7 of `_render_setup_no_context()`.
+- DO NOT collapse variants back to analytical-only framing — match shape diversity is intentional.
+
+### `_render_setup_no_context()` — Story Layer (W84-Q6, variants 1/3/5/7)
+- Variant 1: Question frame + match shape ("what kind of fixture is this?")
+- Variant 3: Match shape + bookmaker behaviour (fixture character → why the gap exists)
+- Variant 5: Match shape leads (genre first → base-rate context follows)
+- Variant 7: Match shape + market price as primary input (alive, complete)
+- Variants 0, 2, 4, 6 unchanged — pure analytical framing for diversity.
+
+## Wave W84-Q7 — My Matches Header Injection (11 March 2026)
+
+### Root Cause (LOCKED — DO NOT REPEAT)
+- Narrative DB cache stores complete HTML including header block.
+- Pre-generated narratives (pregenerate_narratives.py) and cached entries generated before W84-Q6 had incomplete/stale headers.
+- Three early-return cache-hit paths served this HTML without rebuilding the header:
+  - **Path A** (pre-spinner DB hit): checked `_get_cached_narrative(_pre_mid)` before spinner
+  - **Path B** (W60-CACHE hit): checked `_get_cached_narrative(db_match_id)` after spinner
+  - **Path C** (`_vs_` early hit): for PSL/DB events on cold tap; `target_event` is None
+- W84-Q6's `_mm_broadcast` fallback worked only on the live generation path (no early return).
+  Cold-path users (`skip_broadcast=True`) always had `_mm_broadcast = ""` — fallback never fired.
+
+### Three New Helpers (bot.py — LOCKED)
+- `_teams_from_vs_event_id(event_id)` — parses `home_vs_away_YYYY-MM-DD` match_id format into display names. Used when `target_event` is None (Path C cold tap).
+- `_build_event_header(home_raw, away_raw, target_league, target_event)` — builds fresh header dict:
+  1. kickoff: from `commence_time` (rejects 02:00 SAST midnight-UTC PSL placeholders → "TBC")
+  2. kickoff fallback: `target_event["_mm_kickoff"]` if 02:00 SAST
+  3. broadcast: `target_event["_mm_broadcast"]` first (zero DB cost)
+  4. broadcast fallback: `_get_broadcast_details()` → `_get_broadcast_line()`
+- `_inject_narrative_header(html, home_raw, away_raw, kickoff, league_display, broadcast_line)` — replaces stale header in cached HTML.
+  Finds `📋` (Setup section marker) and replaces everything before it with fresh header lines.
+  Fallback: prepends header if no `📋` marker found.
+  Header line order: `🎯 Home vs Away`, `📅 kickoff`, `🏆 league`, `📺 broadcast`.
+
+### Application (LOCKED — all three cache-hit paths)
+- Each path calls `_build_event_header()` → `_inject_narrative_header()` before serving cached HTML.
+- Injected HTML stored in `_analysis_cache[event_id]` — in-memory cache also serves fresh headers.
+- Path C passes `target_league=""` and `target_event=None`; `_teams_from_vs_event_id()` provides team names.
+
+### DO NOT
+- Remove header injection from any of the three cache-hit paths — stale cache entries persist indefinitely.
+- Add `COLLATE NOCASE` to any `odds_snapshots` query (destroys index, see W84-MM2).
+- Let Path C skip `_inject_narrative_header()` because `target_event=None` — use `_teams_from_vs_event_id()` instead.
+- Revert `_build_event_header()` kickoff midnight-UTC rejection — PSL events store 00:00 UTC = 02:00 SAST as placeholder.
+
+## Wave W84-Q8 — Story Layer Premiumization (11 March 2026)
+
+### Goal
+Make thin cards (neutral/no-context) feel like a premium betting story, not a clinical model summary.
+Evidence-bounded: zero hallucinated team facts. All new language describes competition genre, not specific teams.
+
+### Changes (narrative_spec.py — LOCKED)
+
+#### `_plural(word)` helper
+- Irregular plural dict: `{"clash": "clashes", "match": "matches"}`
+- All fixture-type pluralisation uses `_plural()` — no `{word}s` direct concatenation.
+
+#### `_match_shape_note()` rewrite (W84-Q8)
+- Richer genre descriptions with tactical/competitive texture
+- Uses `_plural()` for fixture_type: "clashes", "fixtures", "matches" etc.
+- Continental: knockout stakes, cautious outcomes; International: squad selection uncertainty;
+  Club rugby: set-piece + territory, tight margins; Cricket: conditions + toss;
+  Combat: stylistic matchup flips market; League: squad quality + model-vs-market gaps
+
+#### `_render_setup_no_context()` — 4 new vocabulary dicts (LOCKED)
+All dicts use `_ft_pl = _plural(_fixture_type)` (never `{_fixture_type}s` directly):
+- `_game_character` — what this competition type produces as a contest (6 keys)
+- `_fixture_context` — pre-match picture for this competition type (6 keys)
+- `_sweat_note` — what to watch live, live sweat experience (6 keys)
+- `_price_char` — EV-magnitude-based price characterisation (4 levels: ≥8/≥4/≥2/else)
+- `_cat_display` — human-readable category name (converts "club_rugby" → "club rugby" etc.)
+- `_ev_noun` vs `_ev_label` split: `_ev_noun` = "moderate 3.8% expected value gap" (no article);
+  `_ev_label` = f"a {_ev_noun}". Use `_ev_noun` after "That/The"; `_ev_label` after ": " or verb.
+
+Variant frame distribution (8 MD5-deterministic variants):
+- V0: Game character leads → price
+- V1: Match shape + competition type → price
+- V2: Pre-match picture + price divergence
+- V3: Match shape + how bookmakers price this type
+- V4: Price character + direct editorial voice
+- V5: Match shape leads, price as supporting evidence
+- V6: Live sweat description + price
+- V7: Full immersive frame (game character + sweat + price)
+
+#### `_render_edge()` — enriched speculative variants
+- Betting texture added: "worth the exposure, not worth overloading", "measured-exposure play",
+  "small stake, open mind", "Size it like a speculative", "hold it lightly and watch the closing price"
+
+#### `_render_risk()` severity notes
+- high: "treat this as speculative or pass entirely"
+- moderate: "the edge doesn't disappear because of it"
+- low: "Risk profile is clean here. Execute with normal sizing."
+
+#### `_render_verdict()` — SA voice
+- Speculative: "Worth a unit", "Don't overcommit", "speculative angle — the price is right"
+- Lean: "enough signal to commit, not enough to go heavy", "hold it with a clear head"
+- Back/Strong: "indicators are doing their job", "depth of support most edges don't get"
+
+### DO NOT
+- Use `{_fixture_type}s` directly in any dict or f-string — always use `_ft_pl`.
+- Use `{_cat}` directly in user-facing text — use `{_cat_display}`.
+- Use `{_ev_label}` after "That/The/this" — it starts with "a" (article doubling).
+- Remove the `_cat_display` dict — "club_rugby" must never appear in rendered output.
+
+## Wave W84-Q9 — Hot Tips Header Lock + Story Premiumization (12 March 2026)
+
+### Root Cause: Hot Tips Header Regression (LOCKED — DO NOT REPEAT)
+
+Two distinct `edge:detail` paths, both missing header data:
+
+#### Cache-miss path (instant baseline)
+- `_edge_precompute_job()` populates `_game_tips_cache[match_key]` with fresh tip dicts
+  that have NO `_bc_kickoff`/`_bc_broadcast` (set only during `_build_hot_tips_page()`).
+- `edge:detail` read `_game_tips_cache` first → got precompute tips → empty header.
+- **Fix:** After reading `_instant_tips[0]`, enrich from `_ht_tips_snapshot[user_id]` first
+  (authoritative: mutated at list-render time), then fall back to `_format_kickoff_display(commence_time)`.
+
+#### Cache-hit path (pregenerated HTML)
+- `_inject_narrative_header()` (W84-Q7) was only wired to My Matches paths, not `edge:detail` cache-hit.
+- **Fix:** Before serving cached HTML in `edge:detail`, call `_inject_narrative_header()` using
+  tip metadata from cached content + snapshot enrichment + `commence_time` fallback.
+
+#### Header inheritance pattern (LOCKED — both Hot Tips paths)
+1. `_build_hot_tips_page()` stores `tip["_bc_kickoff"]` and `tip["_bc_broadcast"]` in each tip dict
+2. `edge:detail` cache-miss: reads snapshot → falls back to `commence_time` → builds header
+3. `edge:detail` cache-hit: reads cached content + snapshot → injects fresh header into HTML
+4. DO NOT use `_get_broadcast_details()` as primary in `edge:detail` instant-baseline path — sync DB on event loop.
+
+### Premiumization (narrative_spec.py — LOCKED)
+
+#### `_build_risk_factors()` default (LOCKED — W84-Q9)
+- Replaced "Standard match variance applies." with 3 MD5-deterministic human variants:
+  - V0: "No specific flags on this one — clean risk profile, size normally."
+  - V1: "Nothing obvious stands against this. The usual match-day variables apply."
+  - V2: "Price and signals are aligned. Typical match uncertainty is the main remaining variable."
+- Seed: `edge_data.get("home_team", "") + edge_data.get("away_team", "")`.
+- DO NOT revert — "Standard match variance applies." is a banned clinical phrase.
+
+#### Banned Phrases (LOCKED — do not re-introduce in any path)
+- "Standard match variance applies."
+- "competition-level averages" (in `_match_shape_note`, `_game_character`, `_fixture_context`)
+- "structural signal" / "structural gap" / "structural argument" / "structural difference"
+- "model-vs-market gaps" (in `_match_shape_note`, `_game_character`)
+- "cleanest signal available"
+- "most stable, if least specific, analytical input"
+- "base-rate positioning"
+- `"When {_cat_display} {_ft_pl} arrive..."` — causes "domestic league domestic league" repetition; use `"When {_ft_pl} like this arrive..."` instead.
+
+### Snapshot Test Fix (LOCKED)
+- `TestDetailView` tests use `_TIER_GATE_FOUNDING_PATCH = patch("tier_gate._founding_member_line", ...)`.
+- DO NOT use `_FOUNDING_PATCH` (patches `bot._founding_days_left`) — different code path from `tier_gate`.
+- Golden files updated to "8 days left" (stable mocked value).
+
+## Wave W84-Q16 — Low-Signal Posture Hardening (12 March 2026)
+
+### Banned Phrases (LOCKED — do not re-introduce in any path)
+- "this gap warrants the exposure"
+- "worth the exposure, not worth overloading"
+- "small unit only"
+- "worth a measured look"
+- "worth backing" (in any setup/edge context)
+
+### Rules (LOCKED)
+- Setup sections = analytical context only. Zero betting recommendations, implicit or explicit.
+- Speculative edge sections = describe the gap type and source. Never invite action.
+- Speculative verdicts default to monitor/pass posture. No "small unit", no "take the edge".
+- Lean edge sections end on engagement framing only ("size it carefully"), not bet endorsement.
+
+
+## Wave W84-RT6 — Bournemouth Stall + Man City Header Re-Lock (12 March 2026)
+
+### Root Causes Fixed (LOCKED — DO NOT REPEAT)
+
+#### Bournemouth My Matches stall — sync SQLite blocking asyncio
+- `_get_broadcast_details()` and `_get_broadcast_line()` are synchronous SQLite calls.
+  Calling them directly on the event loop inside `_generate_game_tips()` blocked asyncio
+  during DB lock windows. `asyncio.wait_for` cannot fire while the event loop is blocked.
+  Telegram connection went stale → final `query.edit_message_text()` failed with TimedOut.
+  Final delivery was unprotected (no try/except) → exception propagated to `_generate_game_tips_safe()`
+  → recovery handler silently caught → user stuck on "Analysing..." forever.
+- Fix 1: Both broadcast calls wrapped in `asyncio.to_thread()` with 3s/2s timeouts.
+- Fix 2: Final `query.edit_message_text()` wrapped in try/except → falls back to `reply_text`.
+- Fix 3: `_generate_game_tips_safe()` error recovery uses source-aware callbacks:
+  `source="matches"` → `yg:game:` + "Back to My Matches" (was always using Hot Tips callbacks).
+
+#### Man City header drops in Hot Tips detail — missing date fallback
+- After bot restart, `_ht_tips_snapshot[user_id]` is cleared.
+  CL tips in `_game_tips_cache` (from `_edge_precompute_job`) have no `_bc_kickoff`.
+  `commence_time=""` for all DB-sourced tips.
+  CL/UCL matches not in DStv `broadcast_schedule` → last-resort broadcast lookup returns empty.
+  No date-from-match_id fallback existed in the instant-baseline path.
+- Fix 4: Added date-from-match_id fallback after last-resort broadcast lookup.
+  Reads YYYY-MM-DD suffix from match_key → formats as "Today" / "Tomorrow" / "Wed 12 Mar".
+  Mirrors the same fallback in `_build_hot_tips_page()` (lines 5016-5034).
+
+### Architecture (LOCKED)
+- `asyncio.to_thread()` is REQUIRED for all synchronous SQLite calls inside async handlers.
+  Default `_BUSY_MS = 30,000ms` — any sync call during a scraper write window can block for
+  30 seconds, making `asyncio.wait_for` ineffective and stalling Telegram delivery.
+- DO NOT add bare sync `_get_broadcast_details()` / `_get_broadcast_line()` calls in any
+  async function — always use `asyncio.to_thread()` with a 3s or shorter timeout.
+- DO NOT leave final `query.edit_message_text()` unprotected in any breakdown flow.
+  Telegram API can time out even after content is ready — always have a `reply_text` fallback.
+- `_generate_game_tips_safe()` source parameter MUST be respected in error recovery callbacks.
+  My Matches taps use `source="matches"` → `yg:game:` + `yg:all:0`.
+  Hot Tips taps use `source="edge_picks"` → `edge:detail:` + `hot:back:N`.
+
+### Test Results (W84-RT6)
+- Full unit suite: 1161 passed, 3 skipped, 0 failures
+- Contract + snapshot tests: 263 passed
+- Live validation (w84_rt1): 9/10 (1 pre-existing)
+- Live validation (w84_p1): 33/34 (1 pre-existing timing flakiness)
+- Narrative validation: 54/56 (2 pre-existing)

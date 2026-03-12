@@ -21,15 +21,23 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
     "cautious": {
         "allowed": [
             "speculative price angle", "long-shot value only",
-            "numbers-only play", "thin support", "price is interesting",
-            "worth a small punt if you like the price",
-            "market may be right here", "tread carefully",
+            "monitor the line", "monitor for line movement",
+            "market may be right here",
         ],
         "banned": [
             "market has this wrong", "market completely wrong",
             "strong edge", "must back", "lock it in", "slam dunk",
             "huge value", "no-brainer", "confident", "clear edge",
             "obvious value", "one of the best plays",
+            "numbers-only play", "thin support", "price is interesting",
+            "the numbers alone", "limited pre-match context",
+            "pure price edge with no supporting data",
+            "supporting evidence is thin", "signals are absent",
+            "no signal backing", "signals don't confirm",
+            "pricing edge without supporting signals",
+            "the numbers speak louder",
+            "pure pricing call", "tread carefully",
+            "conviction is limited",
         ],
     },
     "moderate": {
@@ -143,6 +151,11 @@ def _classify_evidence(edge_data: dict) -> tuple[str, str, str, str]:
     stale = edge_data.get("stale_minutes", 0)
     movement = edge_data.get("movement_direction", "neutral")
 
+    # W84-Q13: Zero or negative EV — no actionable edge, always pass
+    # Gate only fires when edge_pct is explicitly provided and <= 0
+    if "edge_pct" in edge_data and ev <= 0:
+        return ("speculative", "cautious", "pass", "pass")
+
     # Penalties degrade effective support
     stale_penalty = 1 if stale >= 360 else 0      # 6+ hours stale
     movement_penalty = 1 if movement == "against" else 0
@@ -237,7 +250,17 @@ def _build_risk_factors(
     if stale >= 360:
         factors.append(f"Stale price — hasn't updated in {stale // 60}h, could shift before kickoff.")
     if confirming == 0:
-        factors.append("Zero confirming indicators — pure price edge with no supporting data.")
+        _seed = edge_data.get("home_team", "") + edge_data.get("away_team", "")
+        _v = _pick(_seed, 3)
+        _zero_confirm = [
+            # 0 — What model-only risk actually means
+            "No form, movement, or tipster consensus backs this up. The model's probability estimate works from the typical baseline for this fixture type — not from any current team intelligence.",
+            # 1 — What can and cannot be verified
+            "No confirming signals from any source. What the model can verify is the price gap itself; what it cannot verify is whether that gap reflects a real probability error or deliberate bookmaker positioning.",
+            # 2 — Specific about the uncertainty source
+            "No current form, market movement, or tipster data validates the edge. The model identifies a pricing discrepancy based on the available pricing data — not on what either team is doing right now.",
+        ]
+        factors.append(_zero_confirm[_v])
     if movement == "against":
         factors.append("Market drifting away from this outcome — sharp money may disagree.")
     if tipster_against >= 2:
@@ -245,7 +268,15 @@ def _build_risk_factors(
     if outcome == "away" and confirming < 3:
         factors.append("Away side faces home crowd disadvantage — factor that in.")
     if not factors:
-        factors.append("Standard match variance applies.")
+        # W84-Q9: Replace clinical "Standard match variance applies." with 3 human variants
+        _seed = edge_data.get("home_team", "") + edge_data.get("away_team", "")
+        _v = _pick(_seed, 3)
+        _default_factors = [
+            "No specific flags on this one — clean risk profile, size normally.",
+            "Nothing obvious stands against this. The usual match-day variables apply.",
+            "Price and signals are aligned. Typical match uncertainty is the main remaining variable.",
+        ]
+        factors.append(_default_factors[_v])
     return factors
 
 
@@ -361,6 +392,9 @@ def build_narrative_spec(
         get_verified_injuries,
     )
 
+    # W83-OVERNIGHT-FIX: guard against ctx_data=None (instant baseline path)
+    ctx_data = ctx_data or {}
+
     home = ctx_data.get("home_team", {}) if isinstance(ctx_data.get("home_team"), dict) else {}
     away = ctx_data.get("away_team", {}) if isinstance(ctx_data.get("away_team"), dict) else {}
 
@@ -386,6 +420,14 @@ def build_narrative_spec(
 
     # Fair probability — edge_v2 uses "fair_probability", pregen uses "fair_prob"
     fair_prob_raw = edge_data.get("fair_prob") or edge_data.get("fair_probability", 0)
+    # Back-calculate from EV + odds when direct probability is unavailable.
+    # Derived from definition: EV = fair_prob * odds - 1
+    # → fair_prob = (1 + ev_pct/100) / odds
+    if not fair_prob_raw:
+        _ev = edge_data.get("edge_pct", 0)
+        _odds = edge_data.get("best_odds", 0)
+        if _ev and _odds > 0:
+            fair_prob_raw = (1 + _ev / 100.0) / _odds
 
     spec = NarrativeSpec(
         home_name=home_name,
@@ -452,6 +494,12 @@ def _ordinal_r(n: int) -> str:
 def _pick(seed: str, n: int) -> int:
     """MD5-deterministic 0..n-1 index. Same team name = same template every time."""
     return int(hashlib.md5(seed.encode()).hexdigest(), 16) % n
+
+
+def _plural(word: str) -> str:
+    """Return the plural form of a fixture-type word."""
+    _irregulars = {"clash": "clashes", "match": "matches"}
+    return _irregulars.get(word, word + "s")
 
 
 def _coach_possessive(coach: str | None) -> str:
@@ -567,7 +615,7 @@ def _tmpl_fortress(
         hw_str = f" ({w}W {d}D {l}L at home)" if w + d + l > 0 else ""
         parts = [f"{name}'s home record tells its own story{hw_str} — opponents don't enjoy coming here."]
         if f:
-            parts.append(f"Current form: {f}.")
+            parts.append(f"Current form ({f}) backs that up.")
         if last:
             parts.append(last)
     elif v == 1:
@@ -575,11 +623,11 @@ def _tmpl_fortress(
         if w > 0:
             parts.append(f"{w} home wins show a unit that's hard to break down on their own patch.")
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) confirms the trend.")
     else:
         parts = [f"Home advantage is real for {name} — opponents come here knowing what's in store."]
         if f:
-            parts.append(f"Recent form: {f}.")
+            parts.append(f"Form ({f}) underlines the advantage.")
         if last:
             parts.append(last)
     if inj:
@@ -613,7 +661,7 @@ def _tmpl_crisis(
     else:
         parts = [f"It's been a difficult stretch for {name} — {ord_pos} in {comp}{pts_str}."]
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) reflects the pressure.")
         if last:
             parts.append(last)
     if inj:
@@ -636,7 +684,7 @@ def _tmpl_recovery(
         if last:
             parts.append(last)
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) shows the bounce-back beginning.")
     elif v == 1:
         parts = [f"There are signs of life from {poss} side after a difficult spell — {ord_pos} and trending up."]
         if f:
@@ -667,7 +715,7 @@ def _tmpl_momentum(
     if v == 0:
         parts = [f"{name} are in form right now — {ord_pos} and carrying genuine momentum."]
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) says it all.")
         if last:
             parts.append(last)
     elif v == 1:
@@ -733,7 +781,7 @@ def _tmpl_draw_merchants(
     if v == 0:
         parts = [f"{name} are built for attrition — {ord_pos} in {comp} with a draw-heavy profile{d_str}."]
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) captures their approach.")
         if last:
             parts.append(last)
     elif v == 1:
@@ -746,7 +794,7 @@ def _tmpl_draw_merchants(
         if gpg is not None and gpg < 1.5:
             parts.append(f"Averaging only {gpg:.1f} goals per game.")
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) tells the story.")
     if inj:
         parts.append(inj)
     return " ".join(p for p in parts if p)
@@ -765,7 +813,7 @@ def _tmpl_setback(
     if v == 0:
         parts = [f"{name} suffered a recent blip — {ord_pos} in {comp} but still in the mix."]
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) shows the blip, but no panic yet.")
         if last:
             parts.append(last)
     elif v == 1:
@@ -777,7 +825,7 @@ def _tmpl_setback(
     else:
         parts = [f"{name} are a side capable of better than their recent result suggests — {ord_pos} in {comp}."]
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) isn't the full story.")
         if last:
             parts.append(last)
     if inj:
@@ -805,7 +853,7 @@ def _tmpl_anonymous(
     elif v == 1:
         parts = [f"There's not much to shout about with {name} right now — {ord_pos}{pts_str} and quietly ticking along."]
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) — steady as she goes.")
     else:
         parts = [f"{poss} side sit {ord_pos} in {comp} — mid-table with no title ambitions or relegation worries."]
         if f:
@@ -834,9 +882,9 @@ def _tmpl_neutral(
     elif v == 1:
         parts = [f"{'Home side' if is_home else 'Visitors'} {name} line up with limited context available."]
         if f:
-            parts.append(f"Form: {f}.")
+            parts.append(f"Form ({f}) for what it's worth.")
     else:
-        parts = [f"{name} enter this fixture — the numbers speak louder than any pre-match narrative."]
+        parts = [f"{name} enter this fixture without a strong recent record to lean on."]
         if f:
             parts.append(f"Form reads {f}.")
     if inj:
@@ -897,10 +945,281 @@ def _render_team_para(
               injuries, competition, sport, is_home)
 
 
+def _competition_category(comp: str) -> str:
+    """W84-Q5: Categorise competition for contextual framing in low-context narratives."""
+    c = comp.lower()
+    if any(w in c for w in ["champions", "europa", "conference", "continental"]):
+        return "continental"
+    if any(w in c for w in ["six nations", "rugby championship", "rugby world cup"]):
+        return "international"
+    if any(w in c for w in ["urc", "super rugby", "currie cup", "premiership rugby"]):
+        return "club_rugby"
+    if any(w in c for w in ["sa20", "ipl", "big bash", "t20", "odi", "test match"]):
+        return "cricket"
+    if any(w in c for w in ["ufc", "boxing", "mma"]):
+        return "combat"
+    return "league"  # domestic league default
+
+
+def _match_shape_note(comp_cat: str, fixture_type: str) -> str:
+    """W84-Q6/Q8: Genre description — what kind of contest this type of game tends to produce.
+
+    Evidence-bounded: describes the competition genre only. No team-specific facts.
+    """
+    _ft_pl = _plural(fixture_type)
+    _shapes = {
+        "continental": (
+            f"European competition {_ft_pl} carry a different weight to league games — "
+            f"knockout stakes compress the scoring range and lift the value of cautious outcomes."
+        ),
+        "international": (
+            f"International {_ft_pl} carry squad selection uncertainty "
+            f"that can reshape the game plan right up to kickoff."
+        ),
+        "club_rugby": (
+            f"Club rugby is decided by set-piece discipline and territorial control — "
+            f"margins are tight, and a single dominant set-piece sequence can determine the outcome."
+        ),
+        "cricket": (
+            f"Cricket outcomes hinge on conditions and team selection "
+            f"that may not crystallise until just before the match."
+        ),
+        "combat": (
+            f"Combat {_ft_pl} are shaped as much by stylistic matchup as raw record — "
+            f"the right style clash can flip the market entirely, regardless of who's favourite."
+        ),
+        "league": (
+            f"Without current form data, these {_ft_pl} are priced primarily on market consensus — "
+            f"which is where implied probability and model probability tend to diverge most."
+        ),
+    }
+    return _shapes.get(comp_cat, "")
+
+
+def _render_setup_no_context(spec: NarrativeSpec) -> str:
+    """W84-Q8: Premiumized no-context Setup. 8 MD5-deterministic variants.
+
+    Each variant is a distinct angle on the fixture: competition character,
+    contest tension, pre-match picture, live sweat, price story. Evidence-bounded
+    — describes genre, competition type, and market mechanics only. No team facts.
+    """
+    comp = spec.competition or ""
+    comp_note = f" in {comp}" if comp else ""
+    h, a = spec.home_name, spec.away_name
+    outcome = spec.outcome_label or "this outcome"
+    odds_str = f"{spec.odds:.2f}" if spec.odds else ""
+    bk = spec.bookmaker or "the market"
+    sport = spec.sport or "soccer"
+
+    fp_str = f"{spec.fair_prob_pct:.0f}%" if spec.fair_prob_pct else "?"
+    market_implied = f"{round(100.0 / spec.odds):.0f}%" if spec.odds and spec.odds > 1 else "?"
+
+    _ev = spec.ev_pct
+    # _ev_noun: plain phrase without article ("moderate 3.8% expected value gap")
+    # _ev_label: with article — use where "a/an" precedes ("a moderate 3.8%...")
+    # Rule: use _ev_noun after "That/The/this"; use _ev_label elsewhere
+    _ev_noun = (
+        f"{_ev:.1f}% expected value gap" if _ev >= 5
+        else f"moderate {_ev:.1f}% expected value gap" if _ev >= 2
+        else f"{_ev:.1f}% expected value gap"
+    )
+    _ev_label = f"a {_ev_noun}"
+
+    _fixture_type = {
+        "soccer": "fixture", "rugby": "clash",
+        "cricket": "encounter", "combat": "bout",
+    }.get(sport, "match")
+
+    _cat = _competition_category(comp)
+    # W84-Q14: sport-aware override using contains check — sport_key is e.g.
+    # "cricket_test_match", "cricket_icc_world_cup", not just "cricket"
+    if _cat == "league" and "cricket" in sport:
+        _cat = "cricket"
+    elif _cat == "league" and ("rugby" in sport or sport in ("urc", "super_rugby")):
+        _cat = "club_rugby"
+    _match_shape = _match_shape_note(_cat, _fixture_type)
+
+    # W84-Q8: What this competition type typically produces as a contest
+    _ft_pl = _plural(_fixture_type)
+    _cat_display = {
+        "continental": "continental", "international": "international",
+        "club_rugby": "club rugby", "cricket": "cricket",
+        "combat": "combat sports", "league": "domestic league",
+    }.get(_cat, _cat)
+    _game_character = {
+        "continental": (
+            f"European competition {_ft_pl} have their own rhythm — "
+            f"tighter margins, fewer open exchanges, and more intrigue in patient outcomes."
+        ),
+        "international": (
+            f"International {_ft_pl} are shaped as much by what isn't confirmed "
+            f"pre-match as what is — squad selection is the dominant variable."
+        ),
+        "club_rugby": (
+            f"Club rugby at this level is a territory war — "
+            f"set-piece execution and breakdown discipline decide margins more reliably than individual talent."
+        ),
+        "cricket": (
+            f"Cricket at this level hinges on a narrow set of variables: "
+            f"conditions, team selection, and the toss — all of which firm up in the final hours."
+        ),
+        "combat": (
+            f"Combat sports markets are driven by narrative and matchup perception as much as record — "
+            f"which produces pricing divergences between opening and closing lines."
+        ),
+        "league": (
+            f"Domestic league {_ft_pl} without current form get priced on team identity — "
+            f"which is where the market tends to over- or under-value sides relative to what the data actually supports."
+        ),
+    }.get(_cat, "")
+
+    # W84-Q8: Pre-match picture for this competition type
+    _fixture_context = {
+        "continental": (
+            f"Pre-kickoff information in European ties is always partial — "
+            f"rotation decisions, tactical shape, and travel schedules create a soft pre-match price."
+        ),
+        "international": (
+            f"The pre-match picture for international {_ft_pl} is deliberately incomplete — "
+            f"coaches protect squad news, and the market works from the same uncertainty as everyone else."
+        ),
+        "club_rugby": (
+            f"Club rugby markets run on less data than domestic football — "
+            f"which means pricing gaps can hold longer before kickoff, "
+            f"and the line move carries more information than the opening price."
+        ),
+        "cricket": (
+            f"The pre-match picture crystallises late in cricket — "
+            f"conditions and final XI confirmation can reshape the entire market in the hour before the toss."
+        ),
+        "combat": (
+            f"Both corners have managed their pre-fight information carefully. "
+            f"The opening line reflects what's been said publicly — not necessarily the full picture."
+        ),
+        "league": (
+            f"Without form or movement data, this is priced on who these teams are — "
+            f"not what they're doing right now. That's the most honest read available."
+        ),
+    }.get(_cat, "")
+
+    # W84-Q8: What to watch live / what kind of sweat this is
+    _sweat_note = {
+        "continental": (
+            f"The team shape in the opening 20 minutes tells you whether the market "
+            f"priced the tactical intent correctly — watch how deep the away side defends."
+        ),
+        "international": (
+            f"Squad confirmation and early match tempo will tell you whether "
+            f"the pre-match price was anchored correctly."
+        ),
+        "club_rugby": (
+            f"First-quarter territory and set-piece outcomes are the leading indicators — "
+            f"they'll tell you whether the market's pre-match read is holding."
+        ),
+        "cricket": (
+            f"The toss and first session are the real first data points — "
+            f"they'll tell you whether the pre-match price deserved backing."
+        ),
+        "combat": (
+            f"The opening exchange tells you whether the stylistic matchup "
+            f"is playing out as the market modelled it."
+        ),
+        "league": (
+            f"The opening exchanges will tell you whether the pre-match price "
+            f"was well-anchored or wider than the match play deserves."
+        ),
+    }.get(_cat, "")
+
+    # W84-Q8: Character of the pricing gap (EV-based, direct)
+    _price_char = (
+        f"The line looks softer than it should at this price." if _ev >= 8
+        else f"There's a tick of value in the current price." if _ev >= 4
+        else f"A real tick of value in the current price." if _ev >= 2
+        else f"A slim model-identified edge in the opening line."
+    )
+
+    _v = _pick(h + a, 8)
+    _nc_variants = [
+        # 0 — Game character leads (what this competition type produces → then the price)
+        (
+            f"{h} vs {a}{comp_note}. "
+            f"{_game_character} "
+            f"{outcome} is priced at {odds_str} ({bk}) — our model reads {fp_str} fair probability. "
+            f"When there's no form to lean on, the price gap carries more weight. That {_ev_noun} is the model's read on this one."
+        ),
+        # 1 — Match shape + what kind of competition this is + price
+        (
+            f"{h} take on {a}{comp_note}. "
+            f"{_match_shape} "
+            f"{bk} has {outcome} at {odds_str} ({market_implied} implied); our model reads {fp_str}. "
+            f"That {_ev_noun} is the divergence — no form data to confirm it, but the price model flags it."
+        ),
+        # 2 — Pre-match picture + price divergence (why the gap might exist → the gap)
+        (
+            f"{h} vs {a}{comp_note}. "
+            f"{_fixture_context} "
+            f"The price on {outcome} — {odds_str} at {bk} ({market_implied} implied) — "
+            f"diverges from our {fp_str} estimate by {_ev_noun}."
+        ),
+        # 3 — Match shape + how bookmakers price this competition type
+        (
+            f"{h} take on {a}{comp_note}. "
+            f"{_match_shape} "
+            f"When {_ft_pl} like this arrive without current form data, "
+            f"the bookmaker's line is anchored to historical averages — not to what's happening right now. "
+            f"{bk} at {odds_str} on {outcome} vs our {fp_str}: {_ev_label}."
+        ),
+        # 4 — Price character + direct editorial voice (sharp punter framing)
+        (
+            f"{h} host {a}{comp_note}. "
+            f"{_price_char} "
+            f"{bk} at {odds_str} implies {market_implied} probability on {outcome}; "
+            f"our model reads {fp_str}. "
+            f"In a market priced on identity rather than current form, that {_ev_noun} is the sharpest read you'll get pre-kick."
+        ),
+        # 5 — Match shape leads, price as supporting evidence
+        (
+            f"{_match_shape} "
+            f"{h} vs {a}{comp_note}. "
+            f"{bk} has {outcome} at {odds_str} ({market_implied} implied); our model has {fp_str}. "
+            f"That {_ev_noun} is where the model and market disagree. This bet is the call on which one is right."
+        ),
+        # 6 — Live sweat description + price (what this bet feels like in-play)
+        (
+            f"{h} take on {a}{comp_note}. "
+            f"{_sweat_note} "
+            f"{bk} at {odds_str} on {outcome} — {market_implied} implied vs our {fp_str}. "
+            f"That {_ev_noun} is the pre-match case. The live {_fixture_type} either confirms it or doesn't."
+        ),
+        # 7 — Full immersive frame (game character + sweat + price — richest no-context card)
+        (
+            f"This {_fixture_type} between {h} and {a}{comp_note} fits a recognisable type. "
+            f"{_game_character} "
+            f"{_sweat_note} "
+            f"{bk} at {odds_str} on {outcome} vs our {fp_str}: {_ev_label}."
+        ),
+    ]
+    return _nc_variants[_v]
+
+
 def _render_setup(spec: NarrativeSpec) -> str:
     """4-8 sentence Setup section from verified NarrativeSpec data.
     OEI pattern: home paragraph → away paragraph → H2H bridge.
+
+    W84-P1E: When no standings/form data available (both neutral, no form),
+    produce a compact honest note rather than two thin boilerplate paragraphs.
     """
+    # No context — produce compact edge-focused setup instead of boilerplate
+    _no_context = (
+        spec.home_story_type == "neutral"
+        and spec.away_story_type == "neutral"
+        and not spec.home_form
+        and not spec.away_form
+        and spec.home_position is None
+        and spec.away_position is None
+    )
+    if _no_context:
+        return _render_setup_no_context(spec)
     home_para = _render_team_para(
         spec.home_name, spec.home_coach, spec.home_story_type,
         spec.home_position, spec.home_points, spec.home_form,
@@ -926,41 +1245,129 @@ def _render_edge(spec: NarrativeSpec) -> str:
     fp_str = f"{spec.fair_prob_pct:.0f}%" if spec.fair_prob_pct else "?"
     outcome = spec.outcome_label or "this outcome"
 
+    _seed = (spec.home_name or "") + (spec.away_name or "")
+
     if spec.evidence_class == "speculative":
-        return (
-            f"This is a numbers-only play. The price is interesting; the conviction isn't there yet. "
-            f"Fair probability at {fp_str}, available at {odds_str} with {bk} ({ev_str} edge). "
-            f"Thin support — the market may be right here."
-        )
+        _v = _pick(_seed, 6)
+        _spec_variants = [
+            # 0 — Gap analysis: what type of mispricing this looks like
+            (
+                f"The model reads {ev_str} expected value on {outcome} at {odds_str} with {bk}. "
+                f"Fair probability at {fp_str} vs the bookmaker's implied probability — "
+                f"the model puts this down to a pricing difference, not a confirmed signal. "
+                f"This is a price divergence without confirming signals — a model flag, not a confirmed edge."
+            ),
+            # 1 — Market exposure angle: what drives the gap
+            (
+                f"{outcome} at {odds_str} ({bk}) against a fair probability of {fp_str} gives {ev_str} edge. "
+                f"When bookmakers manage exposure on a less-modelled outcome, the line can sit wider than "
+                f"true probability warrants — which is what this gap looks like. "
+                f"Note whether it holds or closes before kickoff — that tells you how the market reads it."
+            ),
+            # 2 — Analytical posture: what the model is saying
+            (
+                f"Our model puts fair value at {fp_str} for {outcome} — "
+                f"{bk} is offering {odds_str}, which works out to {ev_str} expected value. "
+                f"The gap is consistent across the model's calculations. "
+                f"A measured-exposure play: you're backing the model's assessment against the bookmaker's."
+            ),
+            # 3 — What you're actually betting on (transparent, actionable)
+            (
+                f"A {ev_str} edge on {outcome} at {odds_str} with {bk}: "
+                f"the model estimates {fp_str} fair probability, the bookmaker implies less. "
+                f"The kind of bet where you back the model's pricing read against the bookmaker's "
+                f"for this competition type — small stake, open mind."
+            ),
+            # 4 — Price divergence + resolution path
+            (
+                f"The bookmaker line on {outcome} ({odds_str} at {bk}) implies a lower probability "
+                f"than our model's {fp_str} estimate — that's where the {ev_str} edge originates. "
+                f"Speculative edges like this either close pre-kickoff as the market corrects, "
+                f"or hold because the model has the better read. Treat exposure accordingly — if you take it at all."
+            ),
+            # 5 — Clean quantitative statement with bet posture
+            (
+                f"Expected value of {ev_str} on {outcome}: {bk} at {odds_str} vs our {fp_str} fair probability. "
+                f"A measurable gap between the price and our model's read. No specific intel, but the number is there. "
+                f"Small exposure — hold it lightly and watch the closing price."
+            ),
+        ]
+        return _spec_variants[_v]
+
     elif spec.evidence_class == "lean":
-        return (
-            f"Numbers suggest some value on {outcome}. "
-            f"Fair probability at {fp_str} vs the {odds_str} on offer at {bk} ({ev_str}). "
-            f"Worth considering at this price, though conviction is limited."
-        )
+        _v = _pick(_seed, 3)
+        _lean_variants = [
+            (
+                f"Some value showing on {outcome} — fair probability at {fp_str} "
+                f"vs {odds_str} on offer at {bk} ({ev_str}). "
+                f"One signal leans this way, which moves this above pure speculation. "
+                f"Enough signal to engage — size it carefully."
+            ),
+            (
+                f"The model sees {ev_str} on {outcome} at {odds_str} ({bk}), "
+                f"with one confirming indicator leaning in the same direction. "
+                f"Fair value at {fp_str} — enough to act on, not enough to go heavy."
+            ),
+            (
+                f"Fair probability at {fp_str} against {odds_str} at {bk} gives {ev_str} on {outcome}. "
+                f"There's a single supporting signal here — it lifts this into measured play territory. "
+                f"A step above a blind price bet."
+            ),
+        ]
+        return _lean_variants[_v]
+
     elif spec.evidence_class == "supported":
-        return (
-            f"Solid play — indicators agree on {outcome}. "
-            f"Fair probability at {fp_str} vs {odds_str} at {bk} ({ev_str}). "
-            f"Numbers and available indicators support this angle. Genuine value at current odds."
-        )
+        _v = _pick(_seed, 3)
+        _supp_variants = [
+            (
+                f"Multiple indicators agree on {outcome} — fair probability at {fp_str} "
+                f"vs {odds_str} at {bk} ({ev_str}). "
+                f"This has the depth of support that separates a proper edge from a price guess."
+            ),
+            (
+                f"This one has legs: {ev_str} expected value on {outcome} at {odds_str} ({bk}), "
+                f"with confirming indicators from form, movement, or tipster consensus. "
+                f"Fair value at {fp_str} — the case is solid at the current price."
+            ),
+            (
+                f"The edge on {outcome} at {odds_str} with {bk} ({ev_str}) isn't just model-driven — "
+                f"multiple data points confirm the gap. Fair probability at {fp_str}. "
+                f"One of the better-supported plays on the card."
+            ),
+        ]
+        return _supp_variants[_v]
+
     else:  # conviction
-        return (
-            f"One of the stronger plays on today's card. "
-            f"Multiple signals align behind {outcome} at {odds_str} with {bk} ({ev_str}). "
-            f"Fair probability at {fp_str} — strong conviction here, market looks mispriced."
-        )
+        _v = _pick(_seed, 3)
+        _conv_variants = [
+            (
+                f"One of the stronger plays today. Multiple signals align behind {outcome} "
+                f"at {odds_str} with {bk} ({ev_str}). "
+                f"Fair probability at {fp_str} — the market looks mispriced here."
+            ),
+            (
+                f"Strong conviction on {outcome}: {ev_str} expected value at {odds_str} ({bk}), "
+                f"backed by a cluster of confirming signals. "
+                f"Fair value at {fp_str} — this has the depth of support most edges don't get."
+            ),
+            (
+                f"Everything lines up on {outcome} — {ev_str} edge, {odds_str} at {bk}, "
+                f"fair probability at {fp_str}, and multiple confirming indicators. "
+                f"Premium value. The market has this wrong."
+            ),
+        ]
+        return _conv_variants[_v]
 
 
 def _render_risk(spec: NarrativeSpec) -> str:
-    """Risk section from code-decided risk factors plus a sizing caveat."""
+    """Risk section: what could go wrong + sizing guidance. Distinct from Edge (what's right)."""
     factors_text = " ".join(spec.risk_factors)
-    sizing = spec.verdict_sizing or "size accordingly"
+    # W84-Q8: More texture in severity notes — feels like a real risk assessment
     severity_note = {
-        "high": "High-risk profile — size down significantly or pass entirely.",
-        "moderate": f"Stake accordingly: {sizing}.",
-        "low": f"Risk profile is clean here. {_sentence_case(sizing)} is appropriate.",
-    }.get(spec.risk_severity, f"Stake accordingly: {sizing}.")
+        "high": "High-risk environment here — treat this as speculative or pass entirely.",
+        "moderate": "Factor that in — size accordingly, but it doesn't change the core argument.",
+        "low": "Risk profile is clean here. Execute with normal sizing.",
+    }.get(spec.risk_severity, "Size conservatively and keep your exposure tight.")
     return f"{factors_text} {severity_note}".strip()
 
 
@@ -972,30 +1379,93 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     action = spec.verdict_action
     sizing = spec.verdict_sizing
 
+    _seed = (spec.home_name or "") + (spec.away_name or "")
+
+    if action == "pass":
+        # W84-Q13: Zero/negative EV — never frame as actionable
+        return (
+            f"No positive expected value at current pricing — "
+            f"monitor for line movement or skip {outcome} until the price improves."
+        )
+
     if action == "speculative punt":
-        return (
-            f"Speculative punt only — worth a small punt if you like the price. "
-            f"{_sentence_case(outcome)} at {odds_str} with {bk}. "
-            f"Sizing: {sizing}."
-        )
+        _v = _pick(_seed, 4)
+        _sp_variants = [
+            # W84-Q15: Disciplined posture — no "worth a unit", no "take the edge"
+            (
+                f"The price is the only reason {outcome} ({bk} @ {odds_str}) is on the board — "
+                f"no confirming signal backs it. Only take it with minimal exposure and a clear head. "
+                f"{_sentence_case(sizing)}."
+            ),
+            (
+                f"If you back this at all, keep exposure very tight — {outcome} at {odds_str} ({bk}). "
+                f"Monitor the line before kickoff. {_sentence_case(sizing)}."
+            ),
+            (
+                f"A speculative angle on {outcome} at {odds_str} with {bk} — "
+                f"the price is right, the signals aren't there yet. Monitor the line before committing. {_sentence_case(sizing)}."
+            ),
+            (
+                f"Pass on this unless the price improves or a confirming signal emerges — "
+                f"{outcome} at {odds_str} ({bk}) has no signal support. "
+                f"Monitor the line, not the bet. {_sentence_case(sizing)}."
+            ),
+        ]
+        return _sp_variants[_v]
+
     elif action == "lean":
-        return (
-            f"Mild lean on {outcome} at {odds_str} ({bk}). "
-            f"Numbers suggest some value; back cautiously. "
-            f"Sizing: {sizing}."
-        )
+        _v = _pick(_seed, 3)
+        _lean_variants = [
+            (
+                f"Lean on {outcome} at {odds_str} ({bk}) — "
+                f"enough signal to commit, not enough to go heavy. {_sentence_case(sizing)}."
+            ),
+            (
+                f"A measured lean: {outcome} at {odds_str} with {bk}. "
+                f"Back it at a reasonable stake, hold it with a clear head. {_sentence_case(sizing)}."
+            ),
+            (
+                f"Cautious nod to {outcome} at {odds_str} ({bk}). "
+                f"One signal in the right direction — enough to act on. {_sentence_case(sizing)}."
+            ),
+        ]
+        return _lean_variants[_v]
+
     elif action == "back":
-        return (
-            f"Back {outcome} at {odds_str} with {bk}. "
-            f"Numbers and indicators agree — worth backing at this price. "
-            f"Sizing: {sizing}."
-        )
+        _v = _pick(_seed, 3)
+        _back_variants = [
+            (
+                f"Back {outcome} at {odds_str} with {bk} — "
+                f"the indicators are doing their job here. {_sentence_case(sizing)}."
+            ),
+            (
+                f"{outcome} at {odds_str} ({bk}) — back it. "
+                f"Multiple data points confirm the direction. {_sentence_case(sizing)}."
+            ),
+            (
+                f"This one gets the green light: {outcome} at {odds_str} with {bk}. "
+                f"Supported, priced right, worth a considered stake. {_sentence_case(sizing)}."
+            ),
+        ]
+        return _back_variants[_v]
+
     else:  # strong back
-        return (
-            f"Strong back on {outcome} at {odds_str} ({bk}). "
-            f"Premium value — one of the best plays on the card. "
-            f"Sizing: {sizing}."
-        )
+        _v = _pick(_seed, 3)
+        _strong_variants = [
+            (
+                f"Strong back on {outcome} at {odds_str} ({bk}) — "
+                f"this has the depth of support most edges don't get. {_sentence_case(sizing)}."
+            ),
+            (
+                f"Back {outcome} at {odds_str} with {bk} with conviction. "
+                f"Everything lines up — signals, price, model agreement. {_sentence_case(sizing)}."
+            ),
+            (
+                f"Premium play: {outcome} at {odds_str} ({bk}). "
+                f"The signals, the price, and the model all point the same way. {_sentence_case(sizing)}."
+            ),
+        ]
+        return _strong_variants[_v]
 
 
 def _render_baseline(spec: NarrativeSpec) -> str:
@@ -1005,8 +1475,8 @@ def _render_baseline(spec: NarrativeSpec) -> str:
     risk = _render_risk(spec)
     verdict = _render_verdict(spec)
     return (
-        f"📋 The Setup\n{setup}\n\n"
-        f"🎯 The Edge\n{edge}\n\n"
-        f"⚠️ The Risk\n{risk}\n\n"
-        f"🏆 Verdict\n{verdict}"
+        f"📋 <b>The Setup</b>\n{setup}\n\n"
+        f"🎯 <b>The Edge</b>\n{edge}\n\n"
+        f"⚠️ <b>The Risk</b>\n{risk}\n\n"
+        f"🏆 <b>Verdict</b>\n{verdict}"
     )

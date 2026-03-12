@@ -30,7 +30,11 @@ _RETRY_ATTEMPTS = 5        # W81-DBLOCK: was 3 — extra headroom for long scrap
 _RETRY_BACKOFF = 0.25      # W81-DBLOCK: was 1.0 — faster first retry
 
 
-def get_connection(db_path: str | None = None, readonly: bool = False) -> sqlite3.Connection:
+def get_connection(
+    db_path: str | None = None,
+    readonly: bool = False,
+    timeout_ms: int = _BUSY_MS,
+) -> sqlite3.Connection:
     """Open a SQLite database with WAL + busy_timeout enforced.
 
     ALWAYS use this instead of sqlite3.connect().
@@ -38,6 +42,9 @@ def get_connection(db_path: str | None = None, readonly: bool = False) -> sqlite
     Args:
         db_path: Path to SQLite database (default: scrapers/odds.db via MZANSI_DB_PATH)
         readonly: If True, opens in read-only URI mode (no writes possible)
+        timeout_ms: SQLite busy_timeout in milliseconds (default: _BUSY_MS = 30000).
+            Pass a shorter value (e.g. 3000) for best-effort background operations that
+            should give up quickly rather than block. The WAL guarantee still applies.
 
     Returns:
         sqlite3.Connection with WAL + busy_timeout + Row factory already set.
@@ -47,12 +54,12 @@ def get_connection(db_path: str | None = None, readonly: bool = False) -> sqlite
 
     if readonly:
         uri = f"file:{path}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True, timeout=_BUSY_MS / 1000)
+        conn = sqlite3.connect(uri, uri=True, timeout=timeout_ms / 1000)
     else:
-        conn = sqlite3.connect(path, timeout=_BUSY_MS / 1000)
+        conn = sqlite3.connect(path, timeout=timeout_ms / 1000)
 
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(f"PRAGMA busy_timeout={_BUSY_MS}")
+    conn.execute(f"PRAGMA busy_timeout={timeout_ms}")
     conn.row_factory = sqlite3.Row
     return conn
 

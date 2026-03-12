@@ -7,15 +7,31 @@
 from __future__ import annotations
 
 import os
+import socket as _socket
 try:
     import sentry_sdk
+    from sentry_sdk.integrations.logging import LoggingIntegration as _SentryLogging
 except ImportError:
     sentry_sdk = None
+    _SentryLogging = None
 from dotenv import load_dotenv
 load_dotenv()
 _SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+_SENTRY_ENV = os.getenv("SENTRY_ENVIRONMENT", "production")
+_SENTRY_RELEASE = os.getenv("SENTRY_RELEASE", "mzansiedge@d8a2c7d")
+_SENTRY_BOT_INSTANCE = f"{_socket.gethostname()}:{os.getpid()}"
 if sentry_sdk and _SENTRY_DSN:
-    sentry_sdk.init(dsn=_SENTRY_DSN)
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        environment=_SENTRY_ENV,
+        release=_SENTRY_RELEASE,
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+        attach_stacktrace=True,
+        max_breadcrumbs=50,
+        integrations=[_SentryLogging(level=30, event_level=40)] if _SentryLogging else [],
+    )
+    sentry_sdk.set_tag("bot_instance", _SENTRY_BOT_INSTANCE)
 
 import asyncio
 import difflib
@@ -85,6 +101,78 @@ _fh.setFormatter(_log_fmt)
 _root.addHandler(_fh)
 
 log = logging.getLogger("mzansiedge")
+
+
+# ── Sentry helpers ────────────────────────────────────────────────────────────
+
+def _sentry_tags(**kw) -> None:
+    """Attach tags to the current Sentry scope. No-ops when Sentry is disabled."""
+    if not sentry_sdk:
+        return
+    for k, v in kw.items():
+        if v is not None:
+            sentry_sdk.set_tag(k, str(v))
+
+
+def _sentry_user(user_id: int, tier: str = "") -> None:
+    """Set Sentry user context."""
+    if not sentry_sdk:
+        return
+    sentry_sdk.set_user({"id": str(user_id)})
+    if tier:
+        sentry_sdk.set_tag("user_tier", tier)
+
+
+class _SentryTx:
+    """Lightweight Sentry transaction helper: start on enter, finish on exit."""
+    def __init__(self, name: str, op: str):
+        self._txn = None
+        if sentry_sdk:
+            self._txn = sentry_sdk.start_transaction(name=name, op=op)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        if self._txn:
+            self._txn.finish()
+
+
+class _CronMonitor:
+    """Thin wrapper for Sentry cron check-ins — compatible with async code.
+
+    Usage:
+        _mon = _CronMonitor("my-slug")
+        _mon.begin()
+        try:
+            ...
+        except Exception as exc:
+            _mon.done(exc); raise
+        _mon.done()
+    """
+    def __init__(self, slug: str):
+        self._slug = slug
+        self._cm = None
+
+    def begin(self) -> None:
+        if sentry_sdk:
+            try:
+                self._cm = sentry_sdk.monitor(monitor_slug=self._slug)
+                self._cm.__enter__()
+            except Exception:
+                self._cm = None
+
+    def done(self, exc: BaseException | None = None) -> None:
+        if self._cm:
+            try:
+                if exc:
+                    self._cm.__exit__(type(exc), exc, exc.__traceback__)
+                else:
+                    self._cm.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._cm = None
+
 
 claude = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
 
@@ -970,7 +1058,23 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             pg = int(parts[1]) if len(parts) > 1 else 0
             sf = parts[2] if len(parts) > 2 else None
             _ut = await get_effective_tier(user_id)
-            text, markup = await _render_your_games_all(user_id, page=pg, sport_filter=sf, user_tier=_ut)
+            # W84-MM1: 5.0s deadline — skip_broadcast avoids odds.db lock during precompute
+            try:
+                text, markup = await asyncio.wait_for(
+                    _render_your_games_all(user_id, page=pg, sport_filter=sf, user_tier=_ut, skip_broadcast=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                log.warning("MM yg:all timeout for user %s", user_id)
+                text = (
+                    "⚽ <b>My Matches</b>\n\n"
+                    "⚙️ Still loading — tap Retry in a moment."
+                )
+                markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Retry", callback_data="yg:all:0")],
+                    [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                    [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+                ])
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         elif action.startswith("sport:"):
             # yg:sport:{key} → inline re-render with filter (Wave 15B)
@@ -985,14 +1089,58 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             await _generate_game_tips_safe(query, ctx, event_id, user_id)
     elif prefix == "hot":
         user_id = query.from_user.id
-        if action in ("go", "show", "back"):
+        if action in ("go", "show"):
             await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
+        elif action.startswith("back"):
+            # W84-HT2: hot:back:{page} — return to the exact page the user came from.
+            # Use per-user snapshot (frozen tips copy) to prevent drift when global cache refreshes.
+            _sentry_user(user_id)
+            _sentry_tags(flow="hot_tips_back", route="hot:back", cache_state="snapshot")
+            _bp_parts = action.split(":")
+            _back_page = int(_bp_parts[1]) if len(_bp_parts) > 1 and _bp_parts[1].isdigit() else 0
+            # Prefer user's snapshot (frozen at render time) over live global cache
+            _bt_tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
+            if _bt_tips:
+                _bt_tier = await get_effective_tier(user_id)
+                _bt_rv = 999
+                try:
+                    from db_connection import get_connection as _bt_conn
+                    _c = _bt_conn()
+                    _, _bt_rv, _ = gate_edges(_bt_tips, user_id, _bt_tier, _c)
+                    _c.close()
+                except Exception:
+                    pass
+                _bt_text, _bt_markup = _build_hot_tips_page(
+                    _bt_tips, page=_back_page, user_tier=_bt_tier,
+                    remaining_views=_bt_rv, user_id=user_id,
+                )
+                await query.edit_message_text(
+                    _bt_text, parse_mode=ParseMode.HTML, reply_markup=_bt_markup
+                )
+                _ht_page_state[user_id] = _back_page  # W84-HT2: keep state in sync
+            else:
+                # Cache cold — fallback to full flow
+                await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
+        elif action == "upgrade" or action.startswith("upgrade:"):
+            # W84-P0: Locked tip tapped — show upgrade prompt (never goes to Plans directly)
+            _upg_tier = await get_effective_tier(user_id)
+            _upg_text = get_upgrade_message(_upg_tier, context="tip")
+            _upg_parts = action.split(":")
+            _upg_pg = int(_upg_parts[1]) if len(_upg_parts) > 1 and _upg_parts[1].isdigit() else None
+            _upg_markup = InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                user_id,
+                primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
+                fallback_page=_upg_pg,
+            ))
+            await query.edit_message_text(_upg_text, parse_mode=ParseMode.HTML, reply_markup=_upg_markup)
         elif action.startswith("page:"):
             try:
                 page_num = int(action.split(":")[1])
             except (ValueError, IndexError):
                 page_num = 0
-            tips = _hot_tips_cache.get("global", {}).get("tips", [])
+            # W84-HT2: prefer user's snapshot over live cache — prevents identity drift
+            # when _edge_precompute_job refreshes global tips between renders
+            tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
             if tips:
                 _user_tier = await get_effective_tier(user_id)
                 # Wave 27-UX: fetch hit rate + resource count for header
@@ -1024,12 +1172,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     user_id=user_id,
                 )
                 await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                # W84-HT2: freeze page identity so detail back returns here
+                _ht_page_state[user_id] = page_num
+                _ht_tips_snapshot[user_id] = list(tips)
             else:
                 await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
     elif prefix == "edge":
         user_id = query.from_user.id
         if action.startswith("detail:"):
             match_key = _resolve_cb_key(action.split(":", 1)[1])
+            _sentry_user(user_id)
+            _sentry_tags(flow="edge_detail", route="edge:detail", match_id=match_key)
 
             # ── INSTANT PATH: check both caches before any DB/API operations ──
             import time as _edge_t
@@ -1059,11 +1212,11 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _cached_content = None
 
             def _edge_upgrade_markup():
-                return InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
-                    [InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:go")],
-                    [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-                ])
+                return InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                    user_id,
+                    match_key=match_key,
+                    primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
+                ))
 
             if _cached_content:
                 _user_tier = await get_effective_tier(user_id)
@@ -1096,14 +1249,23 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 if match_key:
                     async def _record_view_bg():
                         def _write():
+                            import sqlite3 as _sq
                             try:
                                 from db_connection import get_connection as _gc
                                 from tier_gate import record_view as _rv
-                                oc = _gc()
+                                # W84-RT4: 3s timeout — record_view writes daily_tip_views in odds.db.
+                                # Scraper writes can hold the lock briefly; 3s is ample for WAL mode.
+                                # No retry: view-log is best-effort, dedup prevents double-counting.
+                                oc = _gc(timeout_ms=3000)
                                 try:
                                     _rv(user_id, match_key, oc)
                                 finally:
                                     oc.close()
+                            except _sq.OperationalError as _re:
+                                if "locked" in str(_re).lower():
+                                    log.debug("Background record_view deferred (DB contention): %s", _re)
+                                else:
+                                    log.warning("Background record_view failed: %s", _re)
                             except Exception as _re:
                                 log.warning("Background record_view failed: %s", _re)
                         await asyncio.to_thread(_write)
@@ -1115,36 +1277,187 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _cached_content["tips"], match_key, user_id,
                     source="edge_picks", user_tier=_user_tier,
                     edge_tier=_cached_content["edge_tier"],
+                    back_page=_resolve_hot_tips_back_page(user_id, match_key),
                 )
+                _c_base_html = _cached_content["html"]
+                if _cached_content.get("tips"):
+                    _ct_header = await _resolve_hot_tip_header(
+                        match_key,
+                        user_id,
+                        seed_tip=_cached_content["tips"][0],
+                    )
+                    if _ct_header["home"] and _ct_header["away"]:
+                        _c_base_html = _inject_narrative_header(
+                            _c_base_html,
+                            _ct_header["home"],
+                            _ct_header["away"],
+                            _ct_header["kickoff"],
+                            _ct_header["league_display"],
+                            _ct_header["broadcast"],
+                        )
                 _banner = _qa_banner(user_id)
-                _html = (_banner + _cached_content["html"]) if _banner else _cached_content["html"]
+                _html = (_banner + _c_base_html) if _banner else _c_base_html
                 await query.edit_message_text(
                     _html, parse_mode=ParseMode.HTML,
                     reply_markup=InlineKeyboardMarkup(_btns),
                 )
                 return
 
-            # ── SLOW PATH: full generation (cache miss) ──────────────────────
+            # ── CACHE MISS PATH (W84-P1E: terminal, DB-independent) ──────────
             _user_tier = await get_effective_tier(user_id)
+            # Tier gate: check-only in thread (no blocking record_view — moved to bg)
             try:
-                from db_connection import get_connection as _get_conn
-                _odds_conn = _get_conn()
-                from tier_gate import check_tip_limit as _check_limit
-                _can_view, _remaining = _check_limit(user_id, _user_tier, _odds_conn)
+                def _check_limit_only():
+                    from db_connection import get_connection as _gc2
+                    from tier_gate import check_tip_limit as _cl2
+                    oc2 = _gc2()
+                    try:
+                        can_v, _ = _cl2(user_id, _user_tier, oc2)
+                        return can_v
+                    finally:
+                        oc2.close()
+                _can_view = await asyncio.to_thread(_check_limit_only)
                 if not _can_view:
-                    _odds_conn.close()
-                    _upgrade_text = get_upgrade_message(_user_tier, context="tip")
                     await query.edit_message_text(
-                        _upgrade_text, parse_mode=ParseMode.HTML,
+                        get_upgrade_message(_user_tier, context="tip"),
+                        parse_mode=ParseMode.HTML,
                         reply_markup=_edge_upgrade_markup(),
                     )
                     return
-                if match_key:
-                    record_view(user_id, match_key, _odds_conn)
-                _odds_conn.close()
             except Exception as _gate_err:
                 log.warning("Edge detail tier gate failed: %s", _gate_err)
-            await _generate_game_tips_safe(query, ctx, match_key, user_id, source="edge_picks")
+
+            # W84-P1E: _game_tips_cache first, then _hot_tips_cache as fallback
+            _instant_tips = _game_tips_cache.get(match_key)
+            if not _instant_tips:
+                _ht_tips = _hot_tips_cache.get("global", {}).get("tips", [])
+                _ht_match = next(
+                    (t for t in _ht_tips
+                     if t.get("match_id") == match_key or t.get("event_id") == match_key),
+                    None,
+                )
+                if _ht_match:
+                    _instant_tips = [_ht_match]
+                    _game_tips_cache[match_key] = _instant_tips
+
+            # W84-P1E: TERMINAL — serve from tip data, NEVER fall through to slow gen
+            if _instant_tips:
+                _it0 = _instant_tips[0]
+                _it_header = await _resolve_hot_tip_header(match_key, user_id, seed_tip=_it0)
+                _ih = _it_header["home"]
+                _ia = _it_header["away"]
+                _isport = _it0.get("sport_key", "soccer")
+                _ie_tier = _it0.get("display_tier", _it0.get("edge_rating", "bronze"))
+
+                # Build narrative — isolated try/except; build failure → edge-only fallback
+                try:
+                    _ibline = await _generate_narrative_v2(
+                        ctx_data=None, tips=_instant_tips, sport=_isport,
+                        home_team=_ih, away_team=_ia, live_tap=True,
+                    )
+                except Exception as _nb_err:
+                    log.warning("Instant narrative build error for %s: %s", match_key, _nb_err)
+                    _ibline = ""
+
+                # Header ALWAYS assembled — never skip fixture identity
+                _ilines = [f"🎯 <b>{h(_ih)} vs {h(_ia)}</b>"]
+                if _it_header["kickoff"]:
+                    _ilines.append(f"📅 {_it_header['kickoff']}")
+                if _it_header["league_display"]:
+                    _ilines.append(f"🏆 {_it_header['league_display']}")
+                if _it_header["broadcast"]:
+                    _ilines.append(_it_header["broadcast"])
+                _ilines.append("")
+
+                if _ibline and "No current edge data" not in _ibline:
+                    # Inject edge tier badge into verdict
+                    _ivpos = _ibline.rfind("🏆")
+                    _ivtext = _ibline[_ivpos:] if _ivpos >= 0 else ""
+                    if not any(p in _ivtext for p in ("Speculative punt", "Mild lean")):
+                        _ib_emoji = EDGE_EMOJIS.get(_ie_tier, "")
+                        _ib_label = EDGE_LABELS.get(_ie_tier, "")
+                        if _ib_emoji and _ib_label:
+                            _ibline = re.sub(
+                                r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)",
+                                rf"\1 — {_ib_emoji} {_ib_label}",
+                                _ibline, count=1,
+                            )
+                    _ilines.append(_ibline.lstrip("\n"))
+                else:
+                    # Narrative unavailable — concrete edge-only content (never boilerplate)
+                    _ilines.append(_build_edge_only_section(_instant_tips))
+
+                _ilines.append("")
+                _best_it = max(_instant_tips, key=lambda t: t.get("ev", 0))
+                _it_bk = _best_it.get("bookmaker", _best_it.get("bookie", ""))
+                _it_odds = _best_it.get("odds", 0)
+                _it_ev = _best_it.get("ev", 0)
+                _it_prob = _best_it.get("prob", 0)
+                _it_out = _best_it.get("outcome", "")
+                _it_ev_str = f"+{_it_ev:.1f}%" if _it_ev > 0 else f"{_it_ev:.1f}%"
+                _it_value_m = " 💰" if _it_ev > 2 else ""
+                _ilines.append("<b>SA Bookmaker Odds:</b>")
+                _ilines.append(
+                    f"  {h(_it_out)}: <b>{_it_odds:.2f}</b> ({h(_it_bk)})\n"
+                    f"    {_it_prob}% · EV: {_it_ev_str}{_it_value_m}"
+                )
+                _ihtml = "\n".join(_ilines)
+                _ihtml = re.sub(r'\n{3,}', '\n\n', _ihtml)
+                _ibtns = _build_game_buttons(
+                    _instant_tips, match_key, user_id,
+                    source="edge_picks", user_tier=_user_tier, edge_tier=_ie_tier,
+                    back_page=_resolve_hot_tips_back_page(user_id, match_key),
+                )
+                _ibanner = _qa_banner(user_id)
+                _ifinal = (_ibanner + _ihtml) if _ibanner else _ihtml
+
+                # TERMINAL serve — BadRequest("not modified") propagates to on_button (line 875)
+                # which already handles it correctly. Never fall through here.
+                await query.edit_message_text(
+                    _ifinal, parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(_ibtns),
+                )
+
+                # Background: record view + trigger pre-gen — never delay the response
+                async def _ib_record_view_bg():
+                    def _write():
+                        import sqlite3 as _sq
+                        try:
+                            from db_connection import get_connection as _gc3
+                            from tier_gate import record_view as _rv3
+                            # W84-RT4: 3s timeout — same reasoning as _record_view_bg above.
+                            oc3 = _gc3(timeout_ms=3000)
+                            try:
+                                _rv3(user_id, match_key, oc3)
+                            finally:
+                                oc3.close()
+                        except _sq.OperationalError as _re:
+                            if "locked" in str(_re).lower():
+                                log.debug("Background record_view deferred (DB contention): %s", _re)
+                            else:
+                                log.warning("Background record_view failed: %s", _re)
+                        except Exception as _re:
+                            log.warning("Background record_view failed: %s", _re)
+                    await asyncio.to_thread(_write)
+                asyncio.create_task(_ib_record_view_bg())
+                asyncio.create_task(_background_pregen_fill())
+                log.info("PERF: edge:detail INSTANT BASELINE terminal for %s", match_key)
+                return
+
+            # True cache miss: no tip data at all — serve static retry card
+            _mk_display = match_key.replace("_vs_", " vs ").replace("_", " ").title()
+            await query.edit_message_text(
+                f"🎯 <b>{h(_mk_display)}</b>\n\n⚙️ Loading odds data — tap again in a moment.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                    user_id,
+                    match_key=match_key,
+                    primary_button=InlineKeyboardButton(
+                        "🔄 Retry", callback_data=f"edge:detail:{_shorten_cb_key(match_key)}",
+                    ),
+                )),
+            )
+            log.warning("PERF: edge:detail NO TIP DATA for %s", match_key)
     elif prefix == "schedule":
         if action == "noop":
             return
@@ -2201,6 +2514,8 @@ async def handle_ob_summary(query, action: str) -> None:
 async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Persist onboarding data and route by experience level."""
     user_id = query.from_user.id
+    _sentry_user(user_id)
+    _sentry_tags(flow="onboarding", route="handle_ob_done")
     ob = _get_ob(user_id)
 
     # Delegate persistence to service layer
@@ -2817,31 +3132,147 @@ def _get_sport_emoji_for_api_key(api_key: str) -> str:
 
 async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     """Show the default all-games view."""
-    # Show loading message while fetching schedule data
-    loading = await update.message.reply_text(
-        "⚽ Loading your matches\u2026",
-        parse_mode=ParseMode.HTML,
+    _sentry_user(user_id)
+    _cache_state = "warm" if user_id in _schedule_cache else "cold"
+    _sentry_tags(flow="my_matches", route="_show_your_games", cache_state=_cache_state)
+    # W84-RT5: shared fallback used by both warm and cold paths
+    _FALLBACK_TEXT = (
+        "⚽ <b>My Matches</b>\n\n"
+        "⚙️ Still loading your schedule. Tap <b>Retry</b> in a moment."
     )
-    stop_spinner = asyncio.Event()
-    spinner_task = asyncio.create_task(
-        _run_spinner(loading, "Loading your matches", stop_spinner),
-    )
-    try:
+    _FALLBACK_MARKUP = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Retry", callback_data="yg:all:0")],
+        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+    ])
+
+    # W84-MM1: Warm path — cache key exists (even empty list = prefs resolved, no matches)
+    if user_id in _schedule_cache:
         _ut = await get_effective_tier(user_id)
-        text, markup = await _render_your_games_all(user_id, user_tier=_ut)
-    finally:
-        stop_spinner.set()
-        await spinner_task
+        try:
+            text, markup = await asyncio.wait_for(
+                _render_your_games_all(user_id, user_tier=_ut),
+                timeout=10.0,
+            )
+        except Exception as _we:
+            log.warning("MM warm render failed for user %s: %s", user_id, _we)
+            text, markup = _FALLBACK_TEXT, _FALLBACK_MARKUP
+        try:
+            await asyncio.wait_for(
+                update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup),
+                timeout=8.0,
+            )
+        except Exception as _de:
+            log.warning("MM warm delivery failed for user %s: %s", user_id, _de)
+        return
+
+    # W84-MM1/RT5: Cold path — strict 5s deadline, never leave user on spinner.
+    # Step 1: best-effort loading message — failure here must NOT abort the flow.
+    loading = None
     try:
-        await loading.delete()
-    except Exception:
-        pass
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        loading = await asyncio.wait_for(
+            update.message.reply_text("⚽ Loading your matches\u2026", parse_mode=ParseMode.HTML),
+            timeout=8.0,
+        )
+    except Exception as _le:
+        log.warning("MM: loading message failed for user %s: %s — continuing", user_id, _le)
+        # loading stays None; we will deliver via a fresh reply_text at the end
+
+    stop_spinner = asyncio.Event()
+    # W84-RT5: spinner only created when we have a loading message to edit
+    spinner_task: asyncio.Task | None = None
+    if loading is not None:
+        spinner_task = asyncio.create_task(
+            _run_spinner(loading, "Loading your matches", stop_spinner),
+        )
+    _ut = await get_effective_tier(user_id)
+
+    # Background render task — continues even if 5s deadline fires so next tap hits warm cache
+    _mm_result: list = [None, None]
+    _mm_done = asyncio.Event()
+
+    async def _do_cold_render() -> None:
+        try:
+            # W84-MM1: skip_broadcast=True — skips odds.db broadcast queries, eliminates lock
+            # contention with _edge_precompute_job. Broadcast shown after next warm-cache tap.
+            t, m = await _render_your_games_all(user_id, user_tier=_ut, skip_broadcast=True)
+            _mm_result[0], _mm_result[1] = t, m
+        except Exception as _mm_err:
+            log.warning("My Matches cold render error for user %s: %s", user_id, _mm_err)
+        finally:
+            _mm_done.set()
+
+    asyncio.create_task(_do_cold_render())
+    _mm_timed_out = False
+    try:
+        # W84-MM1: 5.0s deadline (well within 8s gate) — generous for API file-cache reads
+        await asyncio.wait_for(asyncio.shield(_mm_done.wait()), timeout=5.0)
+        text, markup = _mm_result[0], _mm_result[1]
+    except asyncio.TimeoutError:
+        _mm_timed_out = True
+        log.warning("MM cold-path timeout for user %s — serving degraded fallback", user_id)
+        text, markup = _FALLBACK_TEXT, _FALLBACK_MARKUP
+
+    stop_spinner.set()
+    # Guard against render exception returning None text
+    if text is None or markup is None:
+        _mm_timed_out = True
+        log.warning("MM cold render returned None for user %s — using fallback", user_id)
+        text, markup = _FALLBACK_TEXT, _FALLBACK_MARKUP
+
+    if _mm_timed_out:
+        # W84-RT3: 5.0s deadline already consumed. Cancel spinner now — don't wait up to
+        # 2.0s for its in-flight Telegram API call. Deliver via reply_text (no edit needed)
+        # so we skip the additional 3.0s edit_text timeout. Total budget: ~5.1s.
+        if spinner_task is not None:
+            spinner_task.cancel()
+            try:
+                await spinner_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        try:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except Exception:
+            pass
+        if loading is not None:
+            try:
+                await loading.delete()
+            except Exception:
+                pass
+    else:
+        # Success path: cap spinner wait (2.0s) then edit in place (3.0s)
+        if spinner_task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(spinner_task), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass  # Spinner has in-flight API call; proceed with delivery
+        if loading is not None:
+            # W84-MM1: Edit spinner in place with explicit timeout
+            try:
+                await asyncio.wait_for(
+                    loading.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=markup),
+                    timeout=3.0,
+                )
+                return  # Edit succeeded — done
+            except (asyncio.TimeoutError, Exception):
+                # Edit failed — clean up loading msg, fall through to fresh send below
+                try:
+                    await loading.delete()
+                except Exception:
+                    pass
+        # W84-RT5: loading was None (initial send failed) OR edit failed — send fresh message
+        try:
+            await asyncio.wait_for(
+                update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup),
+                timeout=8.0,
+            )
+        except Exception as _fe:
+            log.error("MM: final delivery failed for user %s: %s", user_id, _fe)
 
 
 async def _render_your_games_all(
     user_id: int, page: int = 0, sport_filter: str | None = None,
-    user_tier: str = "bronze",
+    user_tier: str = "bronze", skip_broadcast: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """My Matches — all games (or filtered to one sport) sorted by edge.
 
@@ -2920,8 +3351,9 @@ async def _render_your_games_all(
             if config.LEAGUE_SPORT.get(g.get("league_key", "")) == sport_filter
         ]
 
-    # Check edges + get edge tier info from hot tips cache
-    edge_events = await _check_edges_for_games(games)
+    # W84-P0: removed _check_edges_for_games() — it does per-league Odds API calls on every render.
+    # Edge info comes from hot tips cache via _get_edge_info_for_games() instead.
+    edge_events: dict[str, bool] = {}
     edge_info = _get_edge_info_for_games(games)
 
     # Sort: chronological only (earliest kickoff first)
@@ -2977,6 +3409,22 @@ async def _render_your_games_all(
     lines.append(" · ".join(summary))
     lines.append("")
 
+    # W84-MM1: Pre-fetch broadcast info in parallel — skip_broadcast=True bypasses odds.db
+    # during cold path / Retry to avoid lock contention with _edge_precompute_job.
+    if skip_broadcast or not page_games:
+        bc_infos: list[str] = [""] * len(page_games)
+    else:
+        bc_infos = await asyncio.gather(*[
+            asyncio.to_thread(
+                _get_broadcast_line,
+                home_team=ev.get("home_team") or "TBD",
+                away_team=ev.get("away_team") or "TBD",
+                league_key=ev.get("league_key", ""),
+                match_date=ev.get("commence_time", "")[:10] if ev.get("commence_time") else "",
+            )
+            for ev in page_games
+        ])
+
     # Group page games by date
     current_date_label = None
     for idx, event in enumerate(page_games, page * per_page + 1):
@@ -3030,15 +3478,15 @@ async def _render_your_games_all(
         if league_name:
             lines.append(f"     \U0001f3c6 {league_name}")
 
-        # Broadcast info (compact line under match)
-        _bc_date = event.get("commence_time", "")[:10] if event.get("commence_time") else ""
-        _bc_line = _get_broadcast_line(
-            home_team=home_raw, away_team=away_raw,
-            league_key=league_key,
-            match_date=_bc_date,
-        )
+        # Broadcast info (pre-fetched in parallel above)
+        _bc_line = bc_infos[idx - page * per_page - 1]
         if _bc_line:
             lines.append(f"     {_bc_line}")
+
+        # W84-Q6: Store computed header metadata for detail-view header inheritance.
+        # _generate_game_tips() reads these back from _schedule_cache[user_id] via target_event.
+        event["_mm_kickoff"] = event_time  # e.g. "16:00 SAST"
+        event["_mm_broadcast"] = _bc_line  # e.g. "📺 SS EPL (DStv 203)"
 
         lines.append("")  # blank line between games
 
@@ -3401,6 +3849,14 @@ HOT_TIPS_SCAN_SPORTS = [
 
 _hot_tips_cache: dict[str, dict] = {}  # "global" → {"tips": [...], "ts": float}
 HOT_TIPS_CACHE_TTL = 900  # 15 minutes
+_hot_tips_fetch_lock: asyncio.Lock | None = None  # W84-P1: prevents concurrent cold fetches
+
+# W84-HT2: Per-user Hot Tips page identity snapshot — freezes list/page on each render
+# so hot:back returns the user to the exact page and tip set they left.
+_ht_page_state: dict[int, int] = {}    # user_id → last rendered page number
+_ht_tips_snapshot: dict[int, list] = {}  # user_id → shallow copy of tips at last render
+_ht_detail_origin: dict[tuple[int, str], int] = {}  # (user_id, match_key) → source page
+_odds_compare_origin: dict[tuple[int, str], dict[str, object]] = {}  # (user_id, event_id) → source metadata
 
 # Leagues available in our scrapers DB (odds.db)
 DB_LEAGUES = [
@@ -3670,6 +4126,235 @@ def _get_broadcast_details(
     except Exception:
         pass
     return result
+
+
+def _teams_from_vs_event_id(event_id: str) -> tuple[str, str]:
+    """W84-Q7: Extract home/away display names from _vs_ match_id format.
+
+    e.g. 'mamelodi_sundowns_vs_sekhukhune_united_2026-03-14'
+          → ('Mamelodi Sundowns', 'Sekhukhune United')
+    """
+    parts = event_id.split("_vs_")
+    if len(parts) != 2:
+        return "Home", "Away"
+    home = parts[0].replace("_", " ").title()
+    away = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", parts[1]).replace("_", " ").title()
+    return home, away
+
+
+def _tip_matches_hot_key(tip: dict | None, match_key: str) -> bool:
+    """Return True when a tip payload maps to the requested Hot Tips detail key."""
+    if not tip or not match_key:
+        return False
+    if tip.get("match_key") == match_key:
+        return True
+    if tip.get("match_id") == match_key or tip.get("event_id") == match_key:
+        return True
+    edge_v2 = tip.get("edge_v2") or {}
+    return edge_v2.get("match_key") == match_key
+
+
+async def _resolve_hot_tip_header(
+    match_key: str,
+    user_id: int,
+    seed_tip: dict | None = None,
+) -> dict[str, str]:
+    """Resolve Hot Tips detail header metadata across list, cache, and fallback sources."""
+    candidates: list[dict] = []
+    if seed_tip:
+        candidates.append(seed_tip)
+
+    snap_tip = next(
+        (t for t in _ht_tips_snapshot.get(user_id, []) if _tip_matches_hot_key(t, match_key)),
+        None,
+    )
+    if snap_tip and snap_tip is not seed_tip:
+        candidates.append(snap_tip)
+
+    hot_tip = next(
+        (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if _tip_matches_hot_key(t, match_key)),
+        None,
+    )
+    if hot_tip and hot_tip is not seed_tip and hot_tip is not snap_tip:
+        candidates.append(hot_tip)
+
+    def _pick(key: str) -> str:
+        for cand in candidates:
+            value = cand.get(key)
+            if value:
+                return value
+        return ""
+
+    def _pick_edge_v2(key: str) -> str:
+        for cand in candidates:
+            edge_v2 = cand.get("edge_v2") or {}
+            value = edge_v2.get(key)
+            if value:
+                return value
+        return ""
+
+    resolved_key = (
+        _pick("match_key")
+        or _pick("match_id")
+        or _pick("event_id")
+        or _pick_edge_v2("match_key")
+        or match_key
+    )
+    home = _pick("home_team")
+    away = _pick("away_team")
+    if (not home or not away) and resolved_key:
+        home, away = _teams_from_vs_event_id(resolved_key)
+
+    league_key = _pick("league_key") or _pick_edge_v2("league")
+    league_display = (
+        _get_league_display(league_key, home, away)
+        or _pick("league")
+        or _pick("_bc_league")
+    )
+
+    kickoff = _pick("_bc_kickoff")
+    commence_time = _pick("commence_time")
+    if not kickoff and commence_time:
+        kickoff = _format_kickoff_display(commence_time)
+
+    broadcast = _pick("_bc_broadcast")
+    if (not kickoff or not broadcast) and home and away:
+        try:
+            bc_data = await asyncio.to_thread(
+                _get_broadcast_details,
+                home, away, league_key or "",
+            )
+            if not kickoff:
+                kickoff = bc_data.get("kickoff", "")
+            if not broadcast:
+                broadcast = bc_data.get("broadcast", "")
+        except Exception:
+            pass
+
+    if not kickoff and resolved_key:
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})$", resolved_key)
+        if date_match:
+            try:
+                from datetime import datetime as _dt_ht, timedelta as _td_ht
+                from zoneinfo import ZoneInfo as _ZI_ht
+                match_dt = _dt_ht.strptime(date_match.group(1), "%Y-%m-%d")
+                now_dt = _dt_ht.now(_ZI_ht(config.TZ))
+                today = now_dt.date()
+                if match_dt.date() == today:
+                    kickoff = "Today"
+                elif match_dt.date() == today + _td_ht(days=1):
+                    kickoff = "Tomorrow"
+                else:
+                    kickoff = match_dt.strftime("%a %d %b")
+            except Exception:
+                pass
+
+    return {
+        "match_key": resolved_key,
+        "home": home,
+        "away": away,
+        "kickoff": kickoff,
+        "league_display": league_display,
+        "broadcast": broadcast,
+    }
+
+
+def _build_event_header(
+    home_raw: str,
+    away_raw: str,
+    target_league: str,
+    target_event: "dict | None",
+) -> dict:
+    """W84-Q7: Build fresh header dict for game detail cache-hit paths.
+
+    Computes kickoff / league_display / broadcast_line from current data,
+    so cache-hit paths never serve stale header info.
+
+    Priority for kickoff:   commence_time → _mm_kickoff stored from list render
+    Priority for broadcast: _mm_broadcast (list render) → _get_broadcast_details() → _get_broadcast_line()
+    """
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+
+    commence = (target_event or {}).get("commence_time", "")
+
+    # Kickoff from commence_time; reject 02:00 SAST (midnight-UTC PSL placeholder)
+    kickoff = "TBC"
+    try:
+        ct = _dt.fromisoformat(commence.replace("Z", "+00:00"))
+        if ct.tzinfo is None:
+            ct = ct.replace(tzinfo=_ZI(config.TZ))
+        ct_sa = ct.astimezone(_ZI(config.TZ))
+        if not (ct_sa.hour == 2 and ct_sa.minute == 0):
+            kickoff = ct_sa.strftime("%a %-d %b, %H:%M") + " SAST"
+    except Exception:
+        pass
+    if kickoff == "TBC":
+        kickoff = (target_event or {}).get("_mm_kickoff") or "TBC"
+
+    # Broadcast — prefer stored list metadata (zero DB cost), then DB lookup
+    broadcast_line = (target_event or {}).get("_mm_broadcast") or ""
+    if not broadcast_line:
+        try:
+            bc = _get_broadcast_details(
+                home_team=home_raw, away_team=away_raw,
+                league_key=target_league or "",
+            )
+            broadcast_line = bc.get("broadcast", "")
+            # If broadcast DB knows a better kickoff, use it
+            if bc.get("kickoff") and bc["kickoff"] != "TBC" and kickoff == "TBC":
+                kickoff = bc["kickoff"]
+        except Exception:
+            pass
+    if not broadcast_line:
+        try:
+            bc_date = commence[:10] if commence else ""
+            broadcast_line = _get_broadcast_line(
+                home_team=home_raw, away_team=away_raw,
+                league_key=target_league or "", match_date=bc_date,
+            )
+        except Exception:
+            pass
+
+    return {
+        "kickoff": kickoff,
+        "league_display": _get_league_display(target_league or "", home_raw, away_raw),
+        "broadcast_line": broadcast_line,
+    }
+
+
+def _inject_narrative_header(
+    html: str,
+    home_raw: str,
+    away_raw: str,
+    kickoff: str,
+    league_display: str,
+    broadcast_line: str,
+) -> str:
+    """W84-Q7: Replace stale header block in cached narrative HTML with fresh data.
+
+    Finds the first narrative section marker (📋) and replaces everything
+    before it with a freshly-built header.  Handles missing markers gracefully.
+    """
+    hf, af = _get_flag_prefixes(home_raw, away_raw)
+    home_e = h(home_raw)
+    away_e = h(away_raw)
+    header_lines = [f"🎯 <b>{hf}{home_e} vs {af}{away_e}</b>"]
+    if kickoff and kickoff != "TBC":
+        header_lines.append(f"📅 {kickoff}")
+    if league_display:
+        header_lines.append(f"\U0001f3c6 {league_display}")
+    if broadcast_line:
+        header_lines.append(broadcast_line)
+    header_lines.append("")
+    header_text = "\n".join(header_lines)
+
+    for marker in ("📋 <b>The Setup</b>", "📋 The Setup", "📋"):
+        pos = html.find(marker)
+        if pos >= 0:
+            return header_text + html[pos:]
+    # No section marker — prepend header to full content
+    return header_text + "\n\n" + html
 
 
 def _get_next_fixtures_for_teams(
@@ -3978,6 +4663,105 @@ def _build_model_from_consensus(match: dict) -> dict:
     }
 
 
+def _load_tips_from_edge_results() -> list[dict]:
+    """W84-P1: Fast serving path — read pre-computed edges from edge_results table.
+
+    Called synchronously from asyncio.to_thread(). Single SQL query, ~5ms.
+    No edge computation needed — edges were logged by calculate_edge_v2() on
+    previous computation cycles.
+
+    Returns tips in same dict format as _fetch_hot_tips_from_db() for drop-in
+    use by _build_hot_tips_page(). Falls back gracefully on any error.
+    """
+    import re as _re_er
+    from datetime import date as _date_cls
+    try:
+        from scrapers.db_connect import connect_odds_db as _conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+        _conn = _conn_fn(_DB_PATH)
+        _conn.row_factory = lambda cursor, row: dict(
+            zip([col[0] for col in cursor.description], row)
+        )
+        _today = _date_cls.today().isoformat()
+        rows = _conn.execute("""
+            SELECT match_key, edge_tier, composite_score, bet_type,
+                   recommended_odds, bookmaker, predicted_ev, league, match_date
+            FROM edge_results
+            WHERE match_date >= ? AND result IS NULL
+            ORDER BY composite_score DESC
+            LIMIT 20
+        """, (_today,)).fetchall()
+        _conn.close()
+    except Exception as _e:
+        log.debug("_load_tips_from_edge_results DB read failed: %s", _e)
+        return []
+
+    tips: list[dict] = []
+    _tier_sort = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
+    for row in rows:
+        mk = row["match_key"] or ""
+        # Extract teams from match_key: "home_team_vs_away_team_2026-03-14"
+        mk_no_date = _re_er.sub(r"_\d{4}-\d{2}-\d{2}$", "", mk)
+        if "_vs_" in mk_no_date:
+            _home_raw, _away_raw = mk_no_date.split("_vs_", 1)
+        else:
+            _home_raw = _away_raw = mk_no_date
+        home_display = _display_team_name(_home_raw)
+        away_display = _display_team_name(_away_raw)
+
+        edge_tier = (row["edge_tier"] or "bronze").lower()
+        if edge_tier not in _tier_sort:
+            edge_tier = "bronze"
+
+        # predicted_ev is stored as percentage (e.g. 5.2 = 5.2%)
+        ev_pct = round(float(row["predicted_ev"] or 0), 1)
+        if ev_pct <= 0:
+            continue
+
+        league_key = (row["league"] or "").lower()
+        outcome_label = row["bet_type"] or "home"
+        # Normalise "Home Win"/"Away Win" back to outcome terms for sport_key lookup
+        if outcome_label == "Home Win":
+            outcome_raw = "home"
+        elif outcome_label == "Away Win":
+            outcome_raw = "away"
+        else:
+            outcome_raw = "draw"
+        _outcome_labels = {"home": home_display, "away": away_display, "draw": "Draw"}
+        outcome_display = _outcome_labels.get(outcome_raw, outcome_label)
+
+        tips.append({
+            "event_id": mk,
+            "match_id": mk,
+            "sport_key": _DB_LEAGUE_SPORT.get(league_key, config.LEAGUE_SPORT.get(league_key, "soccer")),
+            "home_team": home_display,
+            "away_team": away_display,
+            "commence_time": "",
+            "outcome": outcome_display,
+            "odds": float(row["recommended_odds"] or 0),
+            "bookmaker": _display_bookmaker_name(row["bookmaker"] or ""),
+            "ev": ev_pct,
+            "prob": 0,
+            "kelly": 0,
+            "edge_rating": edge_tier,
+            "display_tier": edge_tier,
+            "edge_score": float(row["composite_score"] or 0),
+            "league": _get_league_display(league_key, home_display, away_display),
+            "league_key": league_key,
+            "odds_by_bookmaker": {},
+            "sharp_confidence": "low",
+            "sharp_source": "edge_results",
+            "edge_v2": None,
+        })
+
+    # Sort: tier first, then EV descending
+    tips.sort(key=lambda t: (
+        _tier_sort.get(t["display_tier"], 9),
+        -t["ev"],
+    ))
+    return tips[:10]
+
+
 async def _fetch_hot_tips_from_db() -> list[dict]:
     """Fetch hot tips from Dataminer's odds.db — no external API needed.
 
@@ -3986,9 +4770,29 @@ async def _fetch_hot_tips_from_db() -> list[dict]:
     """
     import time
 
+    # Fast path: return cached if fresh (no lock needed — read-only check)
     cache_entry = _hot_tips_cache.get("global")
     if cache_entry and (time.time() - cache_entry["ts"]) < HOT_TIPS_CACHE_TTL:
         return cache_entry["tips"]
+
+    # W84-P1: Prevent concurrent cold fetches — only ONE computation at a time.
+    # If the precompute job is already running when a user taps Tips, the user's
+    # call waits here. When the lock releases, the cache is populated → fast return.
+    _lock = _hot_tips_fetch_lock
+    if _lock is not None:
+        async with _lock:
+            # Re-check after acquiring: another compute may have just finished
+            cache_entry = _hot_tips_cache.get("global")
+            if cache_entry and (time.time() - cache_entry["ts"]) < HOT_TIPS_CACHE_TTL:
+                return cache_entry["tips"]
+            return await _fetch_hot_tips_from_db_inner()
+    # Lock not yet initialised (called before _post_init) — compute directly
+    return await _fetch_hot_tips_from_db_inner()
+
+
+async def _fetch_hot_tips_from_db_inner() -> list[dict]:
+    """Inner computation — called only when lock is held. One cold fetch at a time."""
+    import time
 
     all_tips: list[dict] = []
     seen_match_ids: set[str] = set()  # Deduplicate matches across leagues
@@ -4363,6 +5167,11 @@ def _build_hot_tips_page(
                 except Exception:
                     pass
         broadcast_raw = bc_data.get("broadcast", "")
+        # W84-Q5/Q11: Store computed broadcast + league metadata in tip for detail-view header
+        # inheritance. edge:detail instant baseline path reads these back to complete the header.
+        tip["_bc_kickoff"] = kickoff
+        tip["_bc_broadcast"] = broadcast_raw
+        tip["_bc_league"] = league_display
 
         # Line 2: league · kickoff · DStv channel
         info_parts = [league_display]
@@ -4377,6 +5186,7 @@ def _build_hot_tips_page(
         info_line = " · ".join(info_parts)
 
         match_key = tip.get("match_id") or tip.get("event_id", "")
+        _remember_hot_tip_origin(user_id, match_key, page)
 
         if access in ("full", "partial"):
             # 3-line card: sport emoji + match + tier badge, info, outcome @ odds → return
@@ -4471,7 +5281,7 @@ def _build_hot_tips_page(
             cb = f"edge:detail:{_shorten_cb_key(match_key)}"
         else:
             _btn_tier = "🔒"
-            cb = "sub:plans"
+            cb = f"hot:upgrade:{page}"  # W84-P0: preserve source page on locked-tip upgrade flow
         label = f"[{idx}] {_btn_sport} {h_abbr} v {a_abbr} {_btn_tier}"
         row.append(InlineKeyboardButton(label, callback_data=cb))
         if len(row) == 2:
@@ -4500,6 +5310,92 @@ def _build_hot_tips_page(
 
 async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> None:
     """Core Hot Tips — fetch ALL tips, show tiered display (Wave 21)."""
+    if user_id:
+        _sentry_user(user_id)
+    _ht_cache_state = "warm" if _hot_tips_cache.get("global", {}).get("tips") else "cold"
+    _sentry_tags(flow="hot_tips", route="_do_hot_tips_flow", cache_state=_ht_cache_state)
+    # W84-P0: Warm path — serve from cache instantly, no spinner
+    _cached_tips = _hot_tips_cache.get("global", {}).get("tips", [])
+    if _cached_tips:
+        _wm_tier = "bronze"
+        _wm_rv = 999
+        if user_id:
+            _wm_tier = await get_effective_tier(user_id)
+            try:
+                from db_connection import get_connection as _get_conn
+                _wm_conn = _get_conn()
+                _, _wm_rv, _ = gate_edges(_cached_tips, user_id, _wm_tier, _wm_conn)
+                _wm_conn.close()
+            except Exception as _wm_err:
+                log.warning("Warm tips gate failed: %s", _wm_err)
+        _wm_consec = 0
+        if user_id:
+            try:
+                _wm_user = await db.get_user(user_id)
+                _wm_consec = getattr(_wm_user, "consecutive_misses", 0) or 0
+            except Exception:
+                pass
+        _wm_text, _wm_markup = _build_hot_tips_page(
+            _cached_tips, page=0, user_tier=_wm_tier,
+            remaining_views=_wm_rv, consecutive_misses=_wm_consec,
+            user_id=user_id or 0,
+        )
+        await bot.send_message(chat_id, _wm_text, parse_mode=ParseMode.HTML, reply_markup=_wm_markup)
+        # W84-HT2: freeze page identity at render time
+        if user_id:
+            _ht_page_state[user_id] = 0
+            _ht_tips_snapshot[user_id] = list(_cached_tips)
+        return
+
+    # W84-P1: Fast serving path — read pre-computed edges from edge_results table.
+    # This is a pure SQL SELECT (~5ms), zero edge computation, zero contention.
+    # Populated by previous precompute cycles that survive scraper writes.
+    _fast_tips = await asyncio.to_thread(_load_tips_from_edge_results)
+    if _fast_tips:
+        log.info("Cold path: serving %d tips from edge_results (fast path)", len(_fast_tips))
+        # Populate game_tips_cache for tap detail
+        for _ft in _fast_tips:
+            _fid = _ft.get("match_id", "")
+            if _fid:
+                _game_tips_cache[_fid] = [_ft]
+        # Populate in-memory cache (marked slightly stale so precompute replaces soon)
+        import time as _t_fast
+        _hot_tips_cache["global"] = {"tips": _fast_tips, "ts": _t_fast.time() - HOT_TIPS_CACHE_TTL + 120}
+
+        # Get user tier + remaining views for display
+        _fast_tier = "bronze"
+        _fast_rv = 999
+        if user_id:
+            _fast_tier = await get_effective_tier(user_id)
+            try:
+                from db_connection import get_connection as _get_conn
+                _fast_conn = _get_conn()
+                _, _fast_rv, _ = gate_edges(_fast_tips, user_id, _fast_tier, _fast_conn)
+                _fast_conn.close()
+            except Exception:
+                pass
+        _fast_consec = 0
+        if user_id:
+            try:
+                _fast_user = await db.get_user(user_id)
+                _fast_consec = getattr(_fast_user, "consecutive_misses", 0) or 0
+            except Exception:
+                pass
+        _fast_text, _fast_markup = _build_hot_tips_page(
+            _fast_tips, page=0, user_tier=_fast_tier,
+            remaining_views=_fast_rv, consecutive_misses=_fast_consec,
+            user_id=user_id or 0,
+        )
+        await bot.send_message(chat_id, _fast_text, parse_mode=ParseMode.HTML, reply_markup=_fast_markup)
+        # W84-HT2: freeze page identity at render time
+        if user_id:
+            _ht_page_state[user_id] = 0
+            _ht_tips_snapshot[user_id] = list(_fast_tips)
+        # Trigger background refresh so next tap gets freshly computed tips
+        asyncio.create_task(_fetch_hot_tips_from_db())
+        return
+
+    # Cold path: no edge_results available (very first run, new install) — show brief spinner
     loading = await bot.send_message(
         chat_id,
         "⚽ Scanning odds across all bookmakers.",
@@ -4549,13 +5445,30 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     except Exception:
         pass
 
-    # W75-FIX: Cache coverage logging
+    # W75-FIX: Cache coverage logging (checks memory first, DB as fallback)
     if tips:
         _cached_count = 0
+        _uncached_keys = []
         for _tip in tips:
             _mk = _tip.get("match_id", "")
-            if _mk and _mk in _analysis_cache:
-                _cached_count += 1
+            if _mk:
+                if _mk in _analysis_cache:
+                    _cached_count += 1
+                else:
+                    _uncached_keys.append(_mk)
+        # Check DB for any not in memory (async batch)
+        if _uncached_keys:
+            async def _count_db_hits():
+                _n = 0
+                for _k in _uncached_keys:
+                    try:
+                        if await _get_cached_narrative(_k):
+                            _n += 1
+                    except Exception:
+                        pass
+                return _n
+            _db_hits = await _count_db_hits()
+            _cached_count += _db_hits
         log.info("CACHE COVERAGE: %d/%d edges have cached narratives", _cached_count, len(tips))
 
     # Fetch 7-day hit rate for header (Wave 27-UX)
@@ -4593,6 +5506,10 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         user_id=user_id or 0,
     )
     await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    # W84-HT2: freeze page identity at render time (cold path)
+    if user_id:
+        _ht_page_state[user_id] = 0
+        _ht_tips_snapshot[user_id] = list(tips)
 
     # Wave 25C: log edge views for all visible tips
     if user_id and tips:
@@ -4944,31 +5861,48 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
     # Track normalised match_ids to deduplicate across Odds API + DB sources
     seen_match_ids: set[str] = set()
     leagues_with_api_events: set[str] = set()
-    for lk in league_keys:
-        # Skip leagues without an Odds API key — no data to fetch
-        if not config.SPORTS_MAP.get(lk):
-            continue
-        sport_key = config.LEAGUE_SPORT.get(lk, "")
-        sport = config.ALL_SPORTS.get(sport_key)
-        sport_emoji = sport.emoji if sport else "🏅"
-        events = await fetch_events_for_league(lk)
-        if events:
-            leagues_with_api_events.add(lk)
-        for event in events:
-            home = event.get("home_team") or ""
-            away = event.get("away_team") or ""
-            is_relevant = (
-                home.lower() in user_teams
-                or away.lower() in user_teams
-                or not user_teams
+
+    # W84-MM1: Fetch all API-backed leagues in PARALLEL (was sequential — each up to 30s)
+    # W84-RT3: Added 3.5s timeout — file cache hits return in <100ms; cold API fetches
+    # capped at 3.5s so a single slow call cannot push the cold-open past the 5.0s deadline.
+    api_league_list = [lk for lk in league_keys if config.SPORTS_MAP.get(lk)]
+    if api_league_list:
+        try:
+            api_results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[fetch_events_for_league(lk) for lk in api_league_list],
+                    return_exceptions=True,
+                ),
+                timeout=3.5,
             )
-            if is_relevant:
-                # Compute normalised match_id for cross-source dedup
-                norm_mid = odds_svc.build_match_id(home, away, event.get("commence_time", ""))
-                if norm_mid in seen_match_ids:
-                    continue
-                seen_match_ids.add(norm_mid)
-                all_events.append({**event, "league_key": lk, "sport_emoji": sport_emoji})
+        except asyncio.TimeoutError:
+            log.warning("MM _fetch_schedule_games: API gather timeout — proceeding with DB-only results")
+            api_results = [[] for _ in api_league_list]
+        for lk, events in zip(api_league_list, api_results):
+            if isinstance(events, BaseException):
+                log.warning("Events fetch failed for %s: %s", lk, events)
+                continue
+            if not events:
+                continue
+            leagues_with_api_events.add(lk)
+            sport_key = config.LEAGUE_SPORT.get(lk, "")
+            sport = config.ALL_SPORTS.get(sport_key)
+            sport_emoji = sport.emoji if sport else "🏅"
+            for event in events:
+                home = event.get("home_team") or ""
+                away = event.get("away_team") or ""
+                is_relevant = (
+                    home.lower() in user_teams
+                    or away.lower() in user_teams
+                    or not user_teams
+                )
+                if is_relevant:
+                    # Compute normalised match_id for cross-source dedup
+                    norm_mid = odds_svc.build_match_id(home, away, event.get("commence_time", ""))
+                    if norm_mid in seen_match_ids:
+                        continue
+                    seen_match_ids.add(norm_mid)
+                    all_events.append({**event, "league_key": lk, "sport_emoji": sport_emoji})
 
     # Supplement with odds.db for leagues with no Odds API events
     # Collect DB league keys to query (mapped from config keys)
@@ -4980,11 +5914,27 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
         sk = _DB_LEAGUE_SPORT.get(db_key, config.LEAGUE_SPORT.get(lk, ""))
         db_league_queries.append((lk, db_key, sk))
 
-    for config_key, db_key, sport_key in db_league_queries:
+    # W84-MM1: Fetch all DB leagues in PARALLEL with 2.5s timeout.
+    # Guards against odds.db lock contention during _edge_precompute_job startup (runs ~95s).
+    if db_league_queries:
         try:
-            market_type = LEAGUE_MARKET_TYPE.get(db_key, "1x2")
-            db_matches = await odds_svc.get_all_matches(market_type=market_type, league=db_key)
-        except Exception:
+            db_results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[odds_svc.get_all_matches(
+                        market_type=LEAGUE_MARKET_TYPE.get(db_key, "1x2"), league=db_key,
+                    ) for _, db_key, _ in db_league_queries],
+                    return_exceptions=True,
+                ),
+                timeout=2.5,
+            )
+        except asyncio.TimeoutError:
+            log.warning("MM _fetch_schedule_games: DB query timeout — using API-only results")
+            db_results = []
+    else:
+        db_results = []
+
+    for (config_key, db_key, sport_key), db_matches in zip(db_league_queries, db_results):
+        if isinstance(db_matches, BaseException):
             continue
         sport = config.ALL_SPORTS.get(sport_key)
         sport_emoji = sport.emoji if sport else "🏅"
@@ -5195,6 +6145,68 @@ _game_tips_cache: dict[str, list[dict]] = {}
 _ANALYSIS_CACHE_TTL = 3600
 _analysis_cache: dict[str, tuple[str, list[dict], float]] = {}
 
+
+def _build_edge_only_section(tips: list[dict]) -> str:
+    """W84-P1E: Concrete edge-only fallback when full narrative is unavailable.
+
+    Used when _generate_narrative_v2 fails or returns "No current edge data".
+    Always produces all 4 sections with real tip data — never empty boilerplate.
+    """
+    if not tips:
+        return (
+            "📋 <b>The Setup</b>\nNo odds data available for this fixture yet — "
+            "check back closer to kickoff.\n\n"
+            "🎯 <b>The Edge</b>\nCheck SA Bookmaker Odds below for the latest lines.\n\n"
+            "⚠️ <b>The Risk</b>\nNo signals available. Size conservatively.\n\n"
+            "🏆 <b>Verdict</b>\nVerify odds before committing."
+        )
+    best = max(tips, key=lambda t: t.get("ev", 0))
+    ev = best.get("ev", 0)
+    odds = best.get("odds", 0)
+    bk = best.get("bookmaker", best.get("bookie", "the market")) or "the market"
+    outcome = best.get("outcome", "")
+    prob = best.get("prob", 0)
+    ev_str = f"+{ev:.1f}%" if ev > 0 else f"{ev:.1f}%"
+    edge_score = best.get("edge_score", 0) or 0
+    if edge_score >= 70:
+        edge_desc = (
+            f"Strong edge detected — {ev_str} expected value on {h(outcome)}. "
+            f"Fair probability at {prob}% vs {odds:.2f} at {h(bk)}. "
+            f"Multiple indicators align here."
+        )
+        verdict = f"Back {h(outcome)} at {odds:.2f} with {h(bk)}."
+    elif edge_score >= 55:
+        edge_desc = (
+            f"Solid edge on {h(outcome)} — {ev_str} expected value. "
+            f"Fair probability at {prob}% vs {odds:.2f} at {h(bk)}."
+        )
+        verdict = f"Back {h(outcome)} at {odds:.2f} with {h(bk)}."
+    elif edge_score >= 40:
+        edge_desc = (
+            f"Some value on {h(outcome)} — {ev_str} expected value. "
+            f"Price of {odds:.2f} at {h(bk)} vs our {prob}% fair probability estimate."
+        )
+        verdict = f"Lean on {h(outcome)} at {odds:.2f}. Size conservatively."
+    else:
+        edge_desc = (
+            f"A pricing edge — {ev_str} expected value on {h(outcome)} at {odds:.2f} ({h(bk)}). "
+            f"No supporting signals; this is a model-only play."
+        )
+        verdict = "Small punt only if the price appeals — treat as speculative."
+    # Edge-score-aware setup text
+    if edge_score >= 55:
+        setup = "The model sees a supported edge here — multiple indicators line up."
+    elif edge_score >= 40:
+        setup = f"The model has flagged value on {h(outcome)} based on the bookmaker lines."
+    else:
+        setup = "Form data isn't available — this case rests entirely on the odds."
+    return (
+        f"📋 <b>The Setup</b>\n{setup}\n\n"
+        f"🎯 <b>The Edge</b>\n{edge_desc}\n\n"
+        f"⚠️ <b>The Risk</b>\nNo verified context to cross-check against. Size for uncertainty.\n\n"
+        f"🏆 <b>Verdict</b>\n{verdict}"
+    )
+
 # W79: Callback key shortening — Telegram limits callback_data to 64 bytes.
 # edge:detail:{key} = 13 + len(key). Max key length = 51 chars.
 _CB_MAX_KEY = 51
@@ -5214,6 +6226,82 @@ def _shorten_cb_key(match_key: str) -> str:
 def _resolve_cb_key(key: str) -> str:
     """Resolve a callback key back to the full match_key."""
     return _cb_key_map.get(key, key)
+
+
+def _remember_hot_tip_origin(user_id: int, match_key: str, page: int) -> None:
+    """Remember which Hot Tips page rendered a given match for this user."""
+    if user_id and match_key:
+        _ht_detail_origin[(user_id, match_key)] = max(page, 0)
+
+
+def _resolve_hot_tips_back_page(
+    user_id: int, match_key: str = "", fallback_page: int | None = None,
+) -> int:
+    """Resolve the exact Hot Tips list page to return to for a detail surface."""
+    if user_id and match_key:
+        stored_page = _ht_detail_origin.get((user_id, match_key))
+        if stored_page is not None:
+            return stored_page
+    if fallback_page is not None:
+        return max(fallback_page, 0)
+    return max(_ht_page_state.get(user_id, 0), 0)
+
+
+def _build_hot_tips_detail_rows(
+    user_id: int,
+    match_key: str = "",
+    primary_button: InlineKeyboardButton | None = None,
+    extra_rows: list[list[InlineKeyboardButton]] | None = None,
+    fallback_page: int | None = None,
+) -> list[list[InlineKeyboardButton]]:
+    """Build the normalized Hot Tips detail action surface."""
+    back_page = _resolve_hot_tips_back_page(user_id, match_key, fallback_page)
+    first_row: list[InlineKeyboardButton] = []
+    if primary_button is not None:
+        first_row.append(primary_button)
+    first_row.append(InlineKeyboardButton(
+        "↩️ Back to Edge Picks", callback_data=f"hot:back:{back_page}",
+    ))
+    rows = [first_row]
+    if extra_rows:
+        rows.extend(extra_rows)
+    rows.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
+    return rows
+
+
+def _remember_odds_compare_origin(
+    user_id: int,
+    event_id: str,
+    source: str,
+    *,
+    match_key: str = "",
+    back_page: int | None = None,
+) -> None:
+    """Remember where an odds-comparison screen should route back to."""
+    if not user_id or not event_id:
+        return
+    _odds_compare_origin[(user_id, event_id)] = {
+        "source": source,
+        "match_key": match_key,
+        "back_page": back_page,
+    }
+
+
+def _build_odds_compare_back_button(user_id: int, event_id: str) -> InlineKeyboardButton:
+    """Return the correct back button for an odds-comparison surface."""
+    origin = _odds_compare_origin.get((user_id, event_id), {})
+    if origin.get("source") == "edge_picks":
+        match_key = str(origin.get("match_key") or event_id)
+        fallback_page = origin.get("back_page")
+        back_page = _resolve_hot_tips_back_page(
+            user_id,
+            match_key,
+            fallback_page if isinstance(fallback_page, int) else None,
+        )
+        return InlineKeyboardButton(
+            "↩️ Back to Edge Picks", callback_data=f"hot:back:{back_page}",
+        )
+    return InlineKeyboardButton("↩️ Back to Game", callback_data=f"yg:game:{event_id}")
 
 # ── W60-CACHE: Persistent narrative cache in odds.db ──────────
 _NARRATIVE_CACHE_TTL = 21600  # 6 hours in seconds
@@ -5245,10 +6333,13 @@ def _ensure_narrative_cache_table() -> None:
 
 
 def _compute_odds_hash(match_id: str) -> str:
-    """Compute MD5 hash of current odds snapshot for staleness detection."""
+    """Compute MD5 hash of current odds snapshot for staleness detection.
+
+    W84-RT3: Uses 3s timeout — called from background persist thread, not critical path.
+    """
     import hashlib
     from db_connection import get_connection
-    conn = get_connection(_NARRATIVE_DB_PATH)
+    conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
     try:
         rows = conn.execute(
             "SELECT bookmaker, home_odds, draw_odds, away_odds "
@@ -5288,8 +6379,13 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                     return None  # Expired
             except (ValueError, TypeError):
                 return None
+            cleaned = _final_polish(_sanitise_jargon(_strip_preamble(html)))
+            # W84-Q3: Reject cached narratives containing legacy banned phrases
+            if _has_banned_patterns(cleaned):
+                log.warning("Rejecting cached narrative for %s — contains banned phrases", match_id)
+                return None
             return {
-                "html": _final_polish(_sanitise_jargon(_strip_preamble(html))),
+                "html": cleaned,
                 "tips": json.loads(tips_json),
                 "edge_tier": tier,
                 "model": model,
@@ -5303,46 +6399,49 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
 async def _store_narrative_cache(
     match_id: str, html: str, tips: list, edge_tier: str, model: str
 ) -> None:
-    """Persist narrative to DB cache with 6hr TTL. Retries on DB lock."""
+    """Persist narrative to DB cache with 6hr TTL.
+
+    W84-RT3: Best-effort, single-attempt with 3s timeout. The in-memory _analysis_cache
+    already holds the narrative for immediate serving. Persistent DB cache is for
+    cross-restart resilience only — missing one write is acceptable. No retry loop:
+    old retry with 30s busy_timeout + time.sleep(1.0/2.0) produced lock WARNINGs during
+    scraper write windows. With 3s timeout + no retry, contention is silent (DEBUG) and
+    the event loop is never blocked (runs in asyncio.to_thread).
+    """
     import json
     import sqlite3
-    import time as _time
     from datetime import datetime, timedelta, timezone
     from db_connection import get_connection
 
     def _store():
-        max_attempts = 3
-        backoff = 1.0
-        for attempt in range(1, max_attempts + 1):
-            conn = get_connection(_NARRATIVE_DB_PATH)
-            try:
-                now = datetime.now(timezone.utc)
-                expires = now + timedelta(seconds=_NARRATIVE_CACHE_TTL)
-                odds_hash = _compute_odds_hash(match_id)
-                conn.execute(
-                    "INSERT OR REPLACE INTO narrative_cache "
-                    "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
-                    "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        match_id, html, model, edge_tier,
-                        json.dumps(tips, default=str),
-                        odds_hash,
-                        now.isoformat(),
-                        expires.isoformat(),
-                    ),
-                )
-                conn.commit()
-                return  # Success
-            except sqlite3.OperationalError as e:
-                if "locked" in str(e).lower() and attempt < max_attempts:
-                    log.warning("DB lock on cache write for %s (attempt %d/%d), retrying in %.1fs",
-                                match_id, attempt, max_attempts, backoff)
-                    _time.sleep(backoff)
-                    backoff *= 2
-                else:
-                    raise
-            finally:
-                conn.close()
+        # W84-RT3: 3s timeout — WAL mode handles transient scraper locks up to 3s.
+        # If lock lasts longer (scraper bulk write), we skip this persist gracefully.
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+        try:
+            now = datetime.now(timezone.utc)
+            expires = now + timedelta(seconds=_NARRATIVE_CACHE_TTL)
+            odds_hash = _compute_odds_hash(match_id)
+            conn.execute(
+                "INSERT OR REPLACE INTO narrative_cache "
+                "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
+                "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    match_id, html, model, edge_tier,
+                    json.dumps(tips, default=str),
+                    odds_hash,
+                    now.isoformat(),
+                    expires.isoformat(),
+                ),
+            )
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                # Expected during scraper write windows — silent, not a failure
+                log.debug("Narrative cache persist deferred (DB contention) for %s: %s", match_id, e)
+            else:
+                log.warning("Narrative cache persist failed for %s: %s", match_id, e)
+        finally:
+            conn.close()
 
     await asyncio.to_thread(_store)
 
@@ -5687,13 +6786,24 @@ def _extract_text_from_response(resp) -> str:
 
 
 def _strip_preamble(raw: str) -> str:
-    """Discard everything before first section emoji.
+    """Discard AI meta-commentary before the first fixture or section emoji.
 
-    W79-PHASE1: Catches ALL meta-commentary in one rule.
-    Claude sometimes outputs reasoning text before the actual analysis
-    (e.g. "Based on my web search findings..."). This strips it.
+    W79-PHASE1: Original rule — strips reasoning text before the analysis.
+    W84-Q2: Checks 🎯 (fixture header) BEFORE 📋 (setup section).
+    Previously, 📋 was checked first which stripped the 🎯 fixture header
+    from cached narratives. Now: if 🎯 appears before 📋, we start there,
+    preserving the fixture header block. Plain narratives without a fixture
+    header still strip correctly (📋 appears before 🎯).
     """
-    for marker in ("📋", "🎯", "⚠️", "🏆"):
+    dart_idx = raw.find("🎯")
+    setup_idx = raw.find("📋")
+    # 🎯 appears before 📋 → fixture header present; preserve from 🎯
+    if dart_idx != -1 and (setup_idx == -1 or dart_idx < setup_idx):
+        if dart_idx > 0:
+            log.warning("Stripped %d chars of preamble before 🎯", dart_idx)
+        return raw[dart_idx:]
+    # No fixture header — strip to first section marker
+    for marker in ("📋", "⚠️", "🏆"):
         idx = raw.find(marker)
         if idx != -1:
             if idx > 0:
@@ -5785,6 +6895,41 @@ BANNED_NARRATIVE_PHRASES = [
     "one to watch, not back",
     "this one to watch",
     "makes this one to watch",
+    # W84-Q3: Legacy speculative phrases — must never appear in any served narrative
+    "this is a numbers-only play",
+    "thin on supporting signals",
+    "the price is interesting at",
+    "zero confirming indicators",
+    "pure price edge with no supporting data",
+    "numbers-only play",
+    "the numbers alone make this interesting",
+    "pre-match context is limited here",
+    "pure pricing call",
+    "the numbers speak louder",
+    # W84-Q14: Memo phrases from stale cache + zero-EV actionable framing
+    "worth a look at this price",
+    "size it like a punt and move on",
+    "account for that in your stake",
+    "competition-level reputation",
+    "structural argument",
+    "model's base-rate read",
+    "historical distributions",
+    "zero supporting indicators",
+    "priced on reputation alone",
+    "early momentum is the live signal",
+    "if the pre-match price was wrong, you'll see it in the first half hour",
+    # W84-Q15: Low-signal bet-forward phrases removed from source
+    "worth a unit at this price",
+    "take the edge, don't build",
+    "worth watching whether it narrows",
+    "size it like a speculative",
+    "worth a small punt if you like the price",
+    # W84-Q16: Remaining actionable language on speculative/fragile cards
+    "this gap warrants the exposure",
+    "worth the exposure, not worth overloading",
+    "small unit only",
+    "worth a measured look",
+    "worth backing",
 ]
 
 
@@ -8026,8 +9171,8 @@ def _build_risk_from_signals_v2(
         confirming = v2.get("confirming_signals", 0)
         if confirming == 0 and not risks:
             risks.append(
-                "Not a single indicator backs this beyond the raw price — "
-                "this is a pure pricing edge with no supporting data."
+                "The pricing model sees value here, but no confirming indicators back it up — "
+                "treat this as a price-only play."
             )
 
     # Form-based risks from ctx_data
@@ -8648,7 +9793,7 @@ def _build_verified_scaffold(ctx: dict, edge_data: dict, sport: str) -> str:
         lines.append(f"  - Stale pricing: {bk} hasn't moved in {stale // 60} hours")
         has_specific_risk = True
     if confirming == 0:
-        lines.append("  - Zero confirming signals — pure price edge")
+        lines.append("  - Zero confirming signals — model-only edge")
         has_specific_risk = True
     if edge_data.get("movement_direction") == "against":
         lines.append("  - Market drifting against this outcome")
@@ -8709,17 +9854,34 @@ def _extract_edge_data(
         outcome_team = away_team or best.get("away_team", "")
     else:
         outcome_team = outcome_raw
+    # W84-Q14: Use None-safe get so ev=0.0 (zero edge) maps to edge_pct=0.0 — not v2 fallback.
+    # This ensures zero-EV tips render the pass verdict, not a speculative punt.
+    _consensus_ev = best.get("ev")   # None if key absent; 0.0 if explicitly zero
+    _v2_ev = v2.get("edge_pct", 0)
+    # Consensus prob as 0-1 decimal (tip stores as integer percentage, e.g. 4 → 0.04)
+    _raw_prob = best.get("prob", 0)
+    # W84-P1D: When edge_v2 is absent (edge_results fast path), estimate confirming_signals
+    # from composite_score so narrative quality matches the displayed tier badge.
+    # Bronze(<40)→0, Silver(40-54)→1, Gold(55-69)→2, Diamond(70+)→3
+    _cs = best.get("edge_score", 0) or 0
+    if v2:
+        _confirming = v2.get("confirming_signals", 0)
+        _comp_score = v2.get("composite_score", 0)
+    else:
+        _confirming = 3 if _cs >= 70 else 2 if _cs >= 55 else 1 if _cs >= 40 else 0
+        _comp_score = _cs
     return {
         "home_team": home_team,
         "away_team": away_team,
         "league": v2.get("league", "") or best.get("league", ""),
         "best_bookmaker": best.get("bookmaker", best.get("bookie", "?")),
         "best_odds": best.get("odds", 0),
-        "edge_pct": best.get("ev", 0),
+        "edge_pct": _consensus_ev if _consensus_ev is not None else _v2_ev,
+        "fair_prob": _raw_prob / 100.0 if _raw_prob else 0.0,
         "outcome": outcome_raw,
         "outcome_team": outcome_team,
-        "confirming_signals": v2.get("confirming_signals", 0),
-        "composite_score": v2.get("composite_score", 0),
+        "confirming_signals": _confirming,
+        "composite_score": _comp_score,
         "bookmaker_count": v2.get("bookmaker_count", 0),
         "market_agreement": (
             sigs.get("market_agreement", {}).get("score", 0) * 100
@@ -8756,8 +9918,8 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         f"4. You MUST keep all risk factors. Do NOT remove or soften them.\n"
         f"5. Form strings belong in parentheses or woven into sentences — NEVER as standalone headlines.\n"
         f"6. Follow the Observation-Evidence-Interpretation pattern in the Setup.\n"
-        f"7. Start directly with 📋 The Setup. No preamble. No meta-commentary.\n"
-        f"8. Keep all 4 section headers: 📋 The Setup, 🎯 The Edge, ⚠️ The Risk, 🏆 Verdict\n\n"
+        f"7. Start directly with 📋 <b>The Setup</b>. No preamble. No meta-commentary.\n"
+        f"8. Keep all 4 section headers exactly: 📋 <b>The Setup</b>, 🎯 <b>The Edge</b>, ⚠️ <b>The Risk</b>, 🏆 <b>Verdict</b>\n\n"
         f"If you cannot improve the baseline without violating these constraints, return it UNCHANGED."
     )
 
@@ -9525,6 +10687,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     from scripts.sports_data import fetch_events_for_league
     from scripts.odds_client import fetch_odds_cached, fair_probabilities, find_best_sa_odds, calculate_ev
 
+    _sentry_user(user_id)
+    _sentry_tags(flow="game_breakdown", route="_generate_game_tips", match_id=event_id, write_path=source)
+
     _perf_t0 = _time.time()
 
     # ── Check analysis cache first (1-hour TTL) ──
@@ -9557,7 +10722,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     target_event = None
     target_league = None
 
-    # 1) Check schedule cache first (covers both Odds API and DB-sourced events)
+    # 1) Check schedule cache first (fast in-memory — covers all event types)
     cached_games = _schedule_cache.get(user_id, [])
     for ev in cached_games:
         if ev.get("id") == event_id:
@@ -9565,22 +10730,45 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             target_league = ev.get("league_key")
             break
 
-    # 2) If not in cache, search Odds API (only for leagues WITH an api_key)
-    if not target_event:
-        for lk in league_keys:
-            if not config.SPORTS_MAP.get(lk):
-                continue  # Skip keyless leagues — no Odds API data
-            events = await fetch_events_for_league(lk)
-            for event in events:
-                if event.get("id") == event_id:
-                    target_event = event
-                    target_league = lk
-                    break
-            if target_event:
-                break
-
-    # 3) If event_id looks like a DB match_id, build a pseudo-event from odds.db
+    # 2) If event_id is a DB match_id (contains _vs_), use DB path — skip Odds API loop.
+    #    PSL and other DB-sourced events use match_id as event_id so we can serve directly.
     if not target_event and "_vs_" in event_id:
+        # Check narrative cache immediately — serve without any further resolution
+        try:
+            _early_db_hit = await _get_cached_narrative(event_id)
+        except Exception:
+            _early_db_hit = None
+        if _early_db_hit:
+            # W84-Q7: Extract teams from event_id for header injection
+            # (target_event is None at this point — cold tap before My Matches loads)
+            _ea_home, _ea_away = _teams_from_vs_event_id(event_id)
+            _ea_hdr = _build_event_header(_ea_home, _ea_away, "", None)
+            _ea_html = _inject_narrative_header(
+                _early_db_hit["html"], _ea_home, _ea_away,
+                _ea_hdr["kickoff"], _ea_hdr["league_display"], _ea_hdr["broadcast_line"],
+            )
+            _analysis_cache[event_id] = (
+                _ea_html, _early_db_hit["tips"],
+                _early_db_hit["edge_tier"], _time.time(),
+            )
+            _game_tips_cache[event_id] = _early_db_hit["tips"]
+            buttons = _build_game_buttons(
+                _early_db_hit["tips"], event_id, user_id,
+                source=source, user_tier=_ggt_tier,
+                edge_tier=_early_db_hit["edge_tier"],
+            )
+            _banner = _qa_banner(user_id)
+            _html = (_banner + _ea_html) if _banner else _ea_html
+            await query.edit_message_text(
+                _html, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            log.info(
+                "PERF: narrative_cache EARLY HIT (model=%s) for %s in %.1fs",
+                _early_db_hit["model"], event_id, _time.time() - _perf_t0,
+            )
+            return
+        # No narrative cache hit — build pseudo-event from odds.db for full generation
         try:
             db_match = await odds_svc.get_best_odds(event_id, "1x2")
             if not db_match.get("outcomes"):
@@ -9601,6 +10789,20 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 target_league = league_raw
         except Exception:
             pass
+
+    # 3) If still not resolved, search Odds API (EPL/CL event IDs are Odds API UUIDs)
+    if not target_event:
+        for lk in league_keys:
+            if not config.SPORTS_MAP.get(lk):
+                continue  # Skip keyless leagues — no Odds API data
+            events = await fetch_events_for_league(lk)
+            for event in events:
+                if event.get("id") == event_id:
+                    target_event = event
+                    target_league = lk
+                    break
+            if target_event:
+                break
 
     if not target_event:
         _nf_buttons = [
@@ -9694,10 +10896,10 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
         _tbc_buttons = []
         if source == "edge_picks":
-            _tbc_buttons.append([InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:back")])
+            _tbc_buttons = _build_hot_tips_detail_rows(user_id, match_key=event_id)
         else:
             _tbc_buttons.append([InlineKeyboardButton("↩️ Back to My Matches", callback_data="yg:all:0")])
-        _tbc_buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
+            _tbc_buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
         await query.edit_message_text(
             "\n".join(_tbc_lines),
@@ -9710,7 +10912,41 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     away = h(away_raw)
     hf, af = _get_flag_prefixes(home_raw, away_raw)
 
-    # Start animated spinner on the existing message
+    # W84-P0: Check persistent narrative cache BEFORE starting spinner
+    _pre_ct = target_event.get("commence_time", "")
+    _pre_mid = odds_svc.build_match_id(home, away, _pre_ct)
+    if _pre_mid:
+        try:
+            _pre_cached = await _get_cached_narrative(_pre_mid)
+        except Exception:
+            _pre_cached = None
+        if _pre_cached:
+            # W84-Q7: Inject fresh header — cached HTML may have stale/missing kickoff+TV
+            _phdr = _build_event_header(home_raw, away_raw, target_league or "", target_event)
+            _p_html = _inject_narrative_header(
+                _pre_cached["html"], home_raw, away_raw,
+                _phdr["kickoff"], _phdr["league_display"], _phdr["broadcast_line"],
+            )
+            _analysis_cache[event_id] = (
+                _p_html, _pre_cached["tips"],
+                _pre_cached["edge_tier"], _time.time(),
+            )
+            _game_tips_cache[event_id] = _pre_cached["tips"]
+            _pre_buttons = _build_game_buttons(
+                _pre_cached["tips"], event_id, user_id,
+                source=source, user_tier=_ggt_tier,
+                edge_tier=_pre_cached["edge_tier"],
+            )
+            _pre_banner = _qa_banner(user_id)
+            _pre_html = (_pre_banner + _p_html) if _pre_banner else _p_html
+            await query.edit_message_text(
+                _pre_html, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(_pre_buttons),
+            )
+            log.info("PERF: yg:game pre-spinner DB cache hit for %s", event_id)
+            return
+
+    # Start animated spinner on the existing message (cache miss path only)
     _spinner_msg = query.message
     _spinner_stop = asyncio.Event()
     _spinner_task = asyncio.create_task(
@@ -9756,9 +10992,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         except Exception:
             _cached_db = None
         if _cached_db:
-            # Populate in-memory cache too
+            # W84-Q7: Inject fresh header — cached HTML may have stale/missing kickoff+TV
+            _bhdr = _build_event_header(home_raw, away_raw, target_league or "", target_event)
+            _b_html = _inject_narrative_header(
+                _cached_db["html"], home_raw, away_raw,
+                _bhdr["kickoff"], _bhdr["league_display"], _bhdr["broadcast_line"],
+            )
             _analysis_cache[event_id] = (
-                _cached_db["html"], _cached_db["tips"],
+                _b_html, _cached_db["tips"],
                 _cached_db["edge_tier"], _time.time(),
             )
             _game_tips_cache[event_id] = _cached_db["tips"]
@@ -9771,7 +11012,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 edge_tier=_cached_db["edge_tier"],
             )
             _banner = _qa_banner(user_id)
-            _html = (_banner + _cached_db["html"]) if _banner else _cached_db["html"]
+            _html = (_banner + _b_html) if _banner else _b_html
             await query.edit_message_text(
                 _html, parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -9822,6 +11063,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                     market_type=_game_market,
                     sport=_DB_LEAGUE_SPORT.get(_game_db_league, "soccer"),
                     league=_game_db_league,
+                    _skip_log=True,  # W84-P0: user reads must not trigger DB writes
                 )
                 if _tip_edge_v2:
                     _tip_confidence = _tip_edge_v2.get("confidence", "low")
@@ -9918,7 +11160,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         odds_context = "No current edge data available for this match."
 
     # ── Await ESPN context (was started in background before odds) ──
-    _match_ctx = await _ctx_task
+    # W84-RT1: cap context wait at 8s — busy_timeout=30s in match_context_fetcher
+    # would otherwise block the user on "Analysing..." for 30s during scraper write locks.
+    # asyncio.shield() ensures the task keeps running in background even after timeout.
+    try:
+        _match_ctx = await asyncio.wait_for(asyncio.shield(_ctx_task), timeout=8.0)
+    except asyncio.TimeoutError:
+        log.warning("Match context timed out (>8s) for %s vs %s — proceeding without", home_raw, away_raw)
+        _match_ctx = {}
     # Ensure league is in the context for neutral venue detection
     if _match_ctx and not _match_ctx.get("league") and target_league:
         _match_ctx["league"] = target_league
@@ -9951,24 +11200,32 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _enrichment_parts.append(f"  {b}")
 
     # Form data from Elo/results DB
+    # W84-RT2: get_connection() is synchronous — the underlying sqlite3 busy_timeout (30s) blocks
+    # the event loop if odds.db is locked. Run the entire form enrichment in a thread.
     try:
         import sys as _sys
         if "/home/paulsportsza" not in _sys.path:
             _sys.path.insert(0, "/home/paulsportsza")
-        from scrapers.form.form_analyser import format_form_for_narrative
-        from db_connection import get_connection as _get_conn
-        _form_conn = _get_conn()
-        _home_key = home_raw.lower().replace(" ", "_")
-        _away_key = away_raw.lower().replace(" ", "_")
-        # W30-FORM: pass games_played from match context to truncate cross-season form strings
-        _home_gp = (_match_ctx or {}).get("home_team", {}).get("games_played") or (_match_ctx or {}).get("home_team", {}).get("matches_played")
-        _away_gp = (_match_ctx or {}).get("away_team", {}).get("games_played") or (_match_ctx or {}).get("away_team", {}).get("matches_played")
-        _form_text = format_form_for_narrative(_home_key, _away_key, _game_db_league or "", _form_conn, home_gp=_home_gp, away_gp=_away_gp)
-        _form_conn.close()
+        from scrapers.form.form_analyser import format_form_for_narrative as _fmt_form
+        _fhk = home_raw.lower().replace(" ", "_")
+        _fak = away_raw.lower().replace(" ", "_")
+        _fhgp = (_match_ctx or {}).get("home_team", {}).get("games_played") or (_match_ctx or {}).get("home_team", {}).get("matches_played")
+        _fagp = (_match_ctx or {}).get("away_team", {}).get("games_played") or (_match_ctx or {}).get("away_team", {}).get("matches_played")
+        _fdb_league = _game_db_league or ""
+
+        def _form_in_thread():
+            from db_connection import get_connection as _gc_form
+            _fc = _gc_form()
+            try:
+                return _fmt_form(_fhk, _fak, _fdb_league, _fc, home_gp=_fhgp, away_gp=_fagp)
+            finally:
+                _fc.close()
+
+        _form_text = await asyncio.wait_for(asyncio.to_thread(_form_in_thread), timeout=4.0)
         if _form_text:
             _enrichment_parts.append(f"\n{_form_text}")
-    except Exception as _e:
-        log.debug("Form enrichment failed: %s", _e)
+    except (asyncio.TimeoutError, Exception) as _e:
+        log.debug("Form enrichment failed or timed out: %s", _e)
 
     # Injury/news data
     try:
@@ -10229,12 +11486,18 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
     # ── Inject Edge Rating badge into Verdict header ──
     # W75-FIX: edge_v2 tier is authoritative — no EV-threshold fallback
+    # W83-HOTFIX: speculative/lean verdict must never show a GOLDEN/DIAMOND badge
     if narrative and tips:
         tier = None
         if _cached_display_tier:
             tier = _cached_display_tier
         elif _best_edge_v2 and _best_edge_v2.get("tier"):
             tier = _best_edge_v2["tier"]
+        # Suppress badge when verdict contradicts tier (speculative/lean)
+        _vpos = narrative.rfind("🏆")
+        _vtext = narrative[_vpos:] if _vpos >= 0 else ""
+        if any(p in _vtext for p in ("Speculative punt", "Mild lean")):
+            tier = None
         if tier:
             tier_emoji = EDGE_EMOJIS.get(tier, "")
             tier_label = EDGE_LABELS.get(tier, "")
@@ -10248,21 +11511,42 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 )
 
     # League + Broadcast info for header — W50-TIER: use broadcast_schedule for real kickoff
-    _bc_details = _get_broadcast_details(
-        home_team=home_raw, away_team=away_raw,
-        league_key=target_league or "",
-    )
+    # W84-RT6: Both _get_broadcast_details and _get_broadcast_line are sync SQLite calls.
+    # Calling them directly on the event loop blocks asyncio.wait_for from firing during
+    # DB lock windows, causing Telegram to time out and the final edit to fail.
+    try:
+        _bc_details = await asyncio.wait_for(
+            asyncio.to_thread(lambda: _get_broadcast_details(
+                home_team=home_raw, away_team=away_raw,
+                league_key=target_league or "",
+            )),
+            timeout=3.0,
+        )
+    except Exception:
+        _bc_details = {}
     broadcast_line = _bc_details.get("broadcast", "")
     # Override midnight-UTC fallback with real broadcast kickoff when available
     if _bc_details.get("kickoff") and _bc_details["kickoff"] != "TBC":
         kickoff = _bc_details["kickoff"]
     if not broadcast_line:
         _bc_date = commence_time[:10] if commence_time else ""
-        broadcast_line = _get_broadcast_line(
-            home_team=home_raw, away_team=away_raw,
-            league_key=target_league or "",
-            match_date=_bc_date,
-        )
+        try:
+            broadcast_line = await asyncio.wait_for(
+                asyncio.to_thread(lambda: _get_broadcast_line(
+                    home_team=home_raw, away_team=away_raw,
+                    league_key=target_league or "",
+                    match_date=_bc_date,
+                )),
+                timeout=2.0,
+            )
+        except Exception:
+            broadcast_line = ""
+    # W84-Q6: Inherit header metadata from My Matches list render when DB lookup misses.
+    # target_event._mm_kickoff / _mm_broadcast are stored during _render_your_games_all().
+    if not broadcast_line and target_event and target_event.get("_mm_broadcast"):
+        broadcast_line = target_event["_mm_broadcast"]
+    if (not kickoff or kickoff == "TBC") and target_event and target_event.get("_mm_kickoff"):
+        kickoff = target_event["_mm_kickoff"]
     league_display = _get_league_display(target_league or "", home_raw, away_raw)
 
     # Build message — header block, then AI narrative, then odds
@@ -10446,12 +11730,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # ── Cache the full analysis (1-hour TTL) — only if narrative succeeded ──
     if narrative:
         _analysis_cache[event_id] = (msg, tips, _edge_tier, _time.time())
-        # W60-CACHE: Also persist to DB cache for cross-restart durability
-        if db_match_id:
-            try:
-                await _store_narrative_cache(db_match_id, msg, tips, _edge_tier, "sonnet")
-            except Exception as _cache_exc:
-                log.warning("Failed to persist narrative cache for %s: %s", db_match_id, _cache_exc)
 
     # QA banner
     _banner = _qa_banner(user_id)
@@ -10466,41 +11744,108 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # Build simplified buttons (North Star: 4 buttons max, Wave 26A: tier-gated, W30-GATE: edge_tier)
     buttons = _build_game_buttons(tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=_edge_tier)
 
-    await query.edit_message_text(
-        msg, parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
+    # W84-RT6: Wrap delivery — Telegram TimedOut on edit falls back to reply_text.
+    # Unprotected edit here was the last step failing after sync DB calls stalled the loop.
+    try:
+        await asyncio.wait_for(
+            query.edit_message_text(
+                msg, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            ),
+            timeout=8.0,
+        )
+    except Exception as _delivery_err:
+        if "not modified" not in str(_delivery_err).lower():
+            log.warning("Breakdown delivery via edit failed for %s: %s", event_id, _delivery_err)
+            try:
+                await query.message.reply_text(
+                    msg, parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+            except Exception as _reply_err:
+                log.error("Breakdown delivery failed completely for %s: %s", event_id, _reply_err)
+
+    # W84-RT1: DB cache persist is fire-and-forget — runs AFTER user sees content.
+    # Previous: await _store_narrative_cache() was BEFORE _spinner_stop.set() → up to 7s stall.
+    # Now: background task; retries happen silently without blocking the tap response.
+    if narrative and db_match_id:
+        async def _persist_narrative_bg():
+            try:
+                await _store_narrative_cache(db_match_id, msg, tips, _edge_tier, "sonnet")
+            except Exception as _cache_exc:
+                log.warning("Failed to persist narrative cache for %s: %s", db_match_id, _cache_exc)
+        asyncio.create_task(_persist_narrative_bg())
     return
 
 # W75-FIX: Catch-all exception handler — attached to _generate_game_tips below
 
 
+_BREAKDOWN_BUDGET_S = 18.0  # W84-RT2: hard wall on cold breakdown path
+
 async def _generate_game_tips_safe(query, ctx, event_id: str, user_id: int, source: str = "matches") -> None:
-    """Wrapper around _generate_game_tips that ensures spinner cleanup on any failure."""
+    """Wrapper around _generate_game_tips with end-to-end time budget and spinner cleanup."""
     try:
-        await _generate_game_tips(query, ctx, event_id, user_id, source=source)
+        # W84-RT2: End-to-end budget — belt-and-suspenders after fixing sync blocking calls.
+        # asyncio.wait_for can only cancel at the next await point, so this fires only once
+        # the event loop is free. With sync DB calls now in threads (RT2 fixes), the event
+        # loop stays unblocked and wait_for reliably enforces the budget.
+        await asyncio.wait_for(
+            _generate_game_tips(query, ctx, event_id, user_id, source=source),
+            timeout=_BREAKDOWN_BUDGET_S,
+        )
+    except asyncio.TimeoutError:
+        log.error("TIMEOUT: breakdown exceeded %.0fs for %s — serving fast fallback", _BREAKDOWN_BUDGET_S, event_id)
+        try:
+            await query.edit_message_text(
+                "⏳ Analysis is taking longer than expected.\n\nTap <b>Retry</b> to try again.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Retry", callback_data=f"yg:game:{event_id}")],
+                    [InlineKeyboardButton("↩️ Back", callback_data="yg:all:0")],
+                ]),
+            )
+        except Exception:
+            pass
     except Exception as exc:
         # BadRequest "not modified" means cached analysis was already displayed — not a real error
         if "not modified" in str(exc).lower():
             log.warning("Game tips cache hit — message already showing for %s", event_id)
             return
         log.error("Game tips generation failed for %s: %s", event_id, exc, exc_info=True)
-        # Best-effort spinner cleanup
+        # W84-RT6: Source-aware retry + back callbacks. My Matches → yg:game: + yg:all:0.
+        # Hot Tips → edge:detail: + hot:back:N. Old code always used Hot Tips callbacks
+        # regardless of source, leaving My Matches users with broken back navigation.
+        _retry_cb = f"yg:game:{event_id}" if source == "matches" else f"edge:detail:{_shorten_cb_key(event_id)}"
+        # Best-effort spinner cleanup — try edit first, fall back to reply_text
         try:
+            if source == "matches":
+                _err_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Retry", callback_data=_retry_cb)],
+                    [InlineKeyboardButton("↩️ Back to My Matches", callback_data="yg:all:0")],
+                ])
+            else:
+                _err_markup = InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                    user_id,
+                    match_key=event_id,
+                    primary_button=InlineKeyboardButton("🔄 Retry", callback_data=_retry_cb),
+                ))
             await query.edit_message_text(
                 "⚠️ Unable to load analysis. Please try again.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Retry", callback_data=f"edge:detail:{_shorten_cb_key(event_id)}")],
-                    [InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:back")],
-                ]),
+                reply_markup=_err_markup,
             )
         except Exception:
-            pass
+            try:
+                await query.message.reply_text(
+                    "⚠️ Unable to load analysis. Please try again.",
+                    reply_markup=_err_markup,
+                )
+            except Exception:
+                pass
 
 
 def _build_game_buttons(
     tips: list[dict], event_id: str, user_id: int, source: str = "matches",
-    user_tier: str = "diamond", edge_tier: str = "bronze",
+    user_tier: str = "diamond", edge_tier: str = "bronze", back_page: int = 0,
 ) -> list[list[InlineKeyboardButton]]:
     """Build simplified game breakdown buttons (North Star: recommend, compare, nav).
 
@@ -10510,6 +11855,9 @@ def _build_game_buttons(
     from tier_gate import get_edge_access_level as _gb_access
     _bet_access = _gb_access(user_tier, edge_tier)
     buttons: list[list[InlineKeyboardButton]] = []
+    primary_button: InlineKeyboardButton | None = None
+    compare_rows: list[list[InlineKeyboardButton]] = []
+    match_key = tips[0].get("match_id", event_id) if tips else event_id
 
     if tips:
         # Button 1: Recommended bet CTA — highest positive-EV outcome
@@ -10528,7 +11876,7 @@ def _build_game_buttons(
 
             if _bet_access in ("blurred", "locked"):
                 # Locked: show View Plans instead of bookmaker URL
-                buttons.append([InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")])
+                primary_button = InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")
             else:
                 bk_key = (best_bk or {}).get("bookmaker_key", "")
                 bk_name = (best_bk or {}).get("bookmaker_name", config.get_active_display_name())
@@ -10538,27 +11886,31 @@ def _build_game_buttons(
 
                 cta_text = f"{tier_emoji} Back {outcome} @ {odds_val:.2f} on {bk_name} →"
                 if aff_url:
-                    buttons.append([InlineKeyboardButton(cta_text, url=aff_url)])
+                    primary_button = InlineKeyboardButton(cta_text, url=aff_url)
                 else:
-                    buttons.append([InlineKeyboardButton(cta_text, callback_data="tip:affiliate_soon")])
+                    primary_button = InlineKeyboardButton(cta_text, callback_data="tip:affiliate_soon")
         else:
             # No positive EV — gate deep link by tier (W30-GATE)
             if _bet_access in ("blurred", "locked"):
-                buttons.append([InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")])
+                primary_button = InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")
             else:
                 active_bk = config.get_active_bookmaker()
                 bk_key = config.ACTIVE_BOOKMAKER
-                match_id = tips[0].get("match_id", event_id) if tips else event_id
+                match_id = match_key
                 bk_url = get_affiliate_url(bk_key, match_id=match_id) or active_bk.get("website_url", "")
                 cta_label = get_cta_label(active_bk["short_name"], match_id=match_id, bookmaker_key=bk_key)
-                buttons.append([InlineKeyboardButton(
+                primary_button = InlineKeyboardButton(
                     f"📲 {cta_label}", url=bk_url,
-                )])
+                )
 
         # Button 2: Compare All Odds (only when multi-bookmaker data and accessible)
         has_multi_bk = any(t.get("odds_by_bookmaker") for t in tips)
         if has_multi_bk and _bet_access in ("full", "partial"):
-            buttons.append([InlineKeyboardButton(
+            if source == "edge_picks":
+                _remember_odds_compare_origin(
+                    user_id, event_id, source, match_key=match_key, back_page=back_page,
+                )
+            compare_rows.append([InlineKeyboardButton(
                 "📊 Compare All Odds", callback_data=f"odds:compare:{event_id}",
             )])
 
@@ -10568,9 +11920,18 @@ def _build_game_buttons(
 
     # Navigation — contextual back button
     if source == "edge_picks":
-        buttons.append([InlineKeyboardButton("↩️ Back to Edge Picks", callback_data="hot:back")])
-    else:
-        buttons.append([InlineKeyboardButton("↩️ Back to My Matches", callback_data="yg:all:0")])
+        return _build_hot_tips_detail_rows(
+            user_id,
+            match_key=match_key,
+            primary_button=primary_button,
+            extra_rows=compare_rows,
+            fallback_page=back_page,
+        )
+
+    if primary_button is not None:
+        buttons.append([primary_button])
+    buttons.extend(compare_rows)
+    buttons.append([InlineKeyboardButton("↩️ Back to My Matches", callback_data="yg:all:0")])
     buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
     return buttons
@@ -10628,14 +11989,18 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         await query.edit_message_text(
             "⚠️ Tip data expired. Tap the game again for fresh analysis.",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:go")],
-            ]),
+            reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                query.from_user.id,
+                match_key=event_id,
+            )),
         )
         return
 
     tip = tips[tip_idx]
     user_id = query.from_user.id
+    _sentry_user(user_id)
+    _sentry_tags(flow="tip_detail", route="handle_tip_detail", event_id=event_id)
+    match_key = tip.get("match_id", "") or tip.get("event_id", "") or event_id
     db_user = await db.get_user(user_id)
     experience = (db_user.experience_level if db_user else None) or "casual"
     bankroll = getattr(db_user, "bankroll", None) if db_user else None
@@ -10649,30 +12014,48 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
 
     # ── Tier gating: check daily tip limit ──────────────────
     _user_tier = await get_effective_tier(user_id)
-    try:
-        from db_connection import get_connection as _get_conn
-        _odds_conn = _get_conn()
-        from tier_gate import check_tip_limit as _check_limit
-        _can_view, _remaining = _check_limit(user_id, _user_tier, _odds_conn)
-        if not _can_view:
-            _odds_conn.close()
-            _upgrade_text = get_upgrade_message(_user_tier, context="tip")
-            await query.edit_message_text(
-                _upgrade_text, parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
-                    [InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:go")],
-                    [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-                ]),
-            )
-            return
-        # Record this view for limit tracking
-        _match_key = tip.get("match_id", "") or tip.get("event_id", "")
-        if _match_key:
-            record_view(user_id, _match_key, _odds_conn)
-        _odds_conn.close()
-    except Exception as _gate_err:
-        log.warning("Tip detail tier gate failed: %s", _gate_err)
+    # W84-RT4: Move entire tier-gate block to asyncio.to_thread() — get_connection() is
+    # synchronous (sqlite3.connect with busy_timeout). Calling it on the event loop thread
+    # can freeze the loop for up to 30s if odds.db is locked by a scraper. Use 3s timeout
+    # (WAL mode handles transient scraper locks in < 1s). Allow on any lock/error.
+    _match_key_for_gate = tip.get("match_id", "") or tip.get("event_id", "")
+    _user_tier_for_gate = _user_tier
+
+    def _tip_gate_and_record():
+        import sqlite3 as _sq
+        try:
+            from db_connection import get_connection as _get_conn
+            from tier_gate import check_tip_limit as _check_limit
+            _odds_conn = _get_conn(timeout_ms=3000)
+            try:
+                _can_v, _ = _check_limit(user_id, _user_tier_for_gate, _odds_conn)
+                if _can_v and _match_key_for_gate:
+                    record_view(user_id, _match_key_for_gate, _odds_conn)
+                return _can_v
+            finally:
+                _odds_conn.close()
+        except _sq.OperationalError as _e:
+            if "locked" in str(_e).lower():
+                log.debug("Tip detail tier gate deferred (DB contention): %s", _e)
+            else:
+                log.warning("Tip detail tier gate failed: %s", _e)
+            return True  # Allow on lock — don't gate user out due to DB pressure
+        except Exception as _gate_err:
+            log.warning("Tip detail tier gate failed: %s", _gate_err)
+            return True  # Allow on error
+
+    _can_view = await asyncio.to_thread(_tip_gate_and_record)
+    if not _can_view:
+        _upgrade_text = get_upgrade_message(_user_tier, context="tip")
+        await query.edit_message_text(
+            _upgrade_text, parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                user_id,
+                match_key=match_key,
+                primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
+            )),
+        )
+        return
 
     # ── Wave 26A: Locked detail view gating ──────────────────
     from tier_gate import get_edge_access_level as _get_access
@@ -10690,6 +12073,11 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             home_team=tip.get("home_team", ""), away_team=tip.get("away_team", ""),
             league_key=tip.get("league_key", ""),
         )
+        # W84-Q5: Prefer metadata stored during list render (ensures header completeness)
+        if not _bc.get("kickoff") and tip.get("_bc_kickoff"):
+            _bc = {**_bc, "kickoff": tip["_bc_kickoff"]}
+        if not _bc.get("broadcast") and tip.get("_bc_broadcast"):
+            _bc = {**_bc, "broadcast": tip["_bc_broadcast"]}
         _ld_kickoff = _bc.get("kickoff", "") or _format_kickoff_display(tip.get("commence_time", ""))
         _ld_broadcast = _bc.get("broadcast", "")
         _ld_league = tip.get("league", "")
@@ -10711,9 +12099,11 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             _ld_text += f"\n🎁 Founding Member: R699/yr — {_fd} days left"
 
         _ld_buttons = [
-            [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
-            [InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:back")],
-            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+            * _build_hot_tips_detail_rows(
+                user_id,
+                match_key=match_key,
+                primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
+            ),
         ]
         await query.edit_message_text(
             _ld_text, parse_mode=ParseMode.HTML,
@@ -10765,6 +12155,35 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             away_team=tip.get("away_team") or "",
             league_key=tip.get("league_key", ""),
         )
+        # W84-Q5: Prefer metadata stored during list render for header completeness.
+        # _build_hot_tips_page stores _bc_kickoff/_bc_broadcast — these reflect the same
+        # DStv lookup that built the list card, ensuring list and detail are consistent.
+        if not bc_data.get("kickoff") and tip.get("_bc_kickoff"):
+            bc_data = {**bc_data, "kickoff": tip["_bc_kickoff"]}
+        if not bc_data.get("broadcast") and tip.get("_bc_broadcast"):
+            bc_data = {**bc_data, "broadcast": tip["_bc_broadcast"]}
+
+        # W84-Q4: If broadcast schedule has no kickoff time, extract date from match_id.
+        # DB-sourced tips (odds.db) have no commence_time but match_id ends in YYYY-MM-DD.
+        if not bc_data.get("kickoff") and tip.get("match_id"):
+            _mid_parts = tip["match_id"].rsplit("_", 1)
+            if len(_mid_parts) == 2 and len(_mid_parts[-1]) == 10:
+                try:
+                    from datetime import date as _date_cls
+                    _match_date = _date_cls.fromisoformat(_mid_parts[-1])
+                    _today_dt = _date_cls.today()
+                    _delta = (_match_date - _today_dt).days
+                    if _delta == 0:
+                        _kickoff_date = "Today"
+                    elif _delta == 1:
+                        _kickoff_date = "Tomorrow"
+                    elif 0 < _delta <= 6:
+                        _kickoff_date = _match_date.strftime("%a %d %b")
+                    else:
+                        _kickoff_date = _match_date.strftime("%d %b")
+                    bc_data = {**bc_data, "kickoff": _kickoff_date}
+                except (ValueError, TypeError):
+                    pass
 
         # Use edge renderer for rich tip card
         text = render_tip_with_odds(
@@ -10807,38 +12226,15 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         text = _format_tip_detail(tip, experience, bankroll)
         best_bk = None
 
-    buttons: list[list[InlineKeyboardButton]] = []
-
-    if best_bk and best_bk.get("affiliate_url"):
-        # Dynamic CTA with best-odds bookmaker + deep link
-        bk_key = best_bk.get("bookmaker_key", "")
-        bk_name = best_bk.get("bookmaker_name", "")
-        cta_label = get_cta_label(bk_name, match_id=match_id, bookmaker_key=bk_key,
-                                  sport=tip.get("sport_key", ""))
-        buttons.append([InlineKeyboardButton(f"📲 {cta_label}", url=best_bk["affiliate_url"])])
-    else:
-        # Fallback to active bookmaker with deep link
-        active_bk = config.get_active_bookmaker()
-        bk_key = config.ACTIVE_BOOKMAKER
-        bk_url = get_affiliate_url(bk_key, match_id=match_id) or active_bk.get("website_url", "")
-        cta_label = get_cta_label(active_bk["display_name"], match_id=match_id, bookmaker_key=bk_key)
-        if bk_url:
-            buttons.append([InlineKeyboardButton(f"📲 {cta_label}", url=bk_url)])
-        else:
-            buttons.append([InlineKeyboardButton(
-                f"📲 {cta_label}", callback_data="tip:affiliate_soon",
-            )])
-
-    # Odds comparison button (only if multi-bookmaker data available)
-    if odds_by_bookmaker and len(odds_by_bookmaker) > 1:
-        buttons.append([InlineKeyboardButton(
-            "📊 All Bookmaker Odds",
-            callback_data=f"odds:compare:{event_id}",
-        )])
-
-    # Wave 26A: removed "Follow this game" button from detail view
-    buttons.append([InlineKeyboardButton("💎 Back to Edge Picks", callback_data="hot:back")])
-    buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
+    buttons = _build_game_buttons(
+        [tip],
+        event_id,
+        user_id,
+        source="edge_picks",
+        user_tier=_user_tier,
+        edge_tier=_edge_tier,
+        back_page=_resolve_hot_tips_back_page(user_id, match_key),
+    )
 
     # First-time Edge Rating tooltip (shown once, only on Gold/Diamond)
     db_user = await db.get_user(user_id)
@@ -10956,7 +12352,7 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
             f"📲 {bk_name} — Best for {label} →", url=aff_url,
         )])
 
-    buttons.append([InlineKeyboardButton("↩️ Back to Game", callback_data=f"yg:game:{event_id}")])
+    buttons.append([_build_odds_compare_back_button(query.from_user.id, event_id)])
     buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
     await query.edit_message_text(
@@ -11872,10 +13268,14 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     now = dt_cls.now(ZoneInfo(config.TZ))
     current_hour = now.hour
     log.info("Morning teaser job running for hour=%d (SAST)", current_hour)
+    _mt_mon = _CronMonitor("morning-teaser")
+    _mt_mon.begin()
+    _sentry_tags(cron_job="morning-teaser", cron_hour_sast=str(current_hour))
 
     users = await db.get_users_for_notification(current_hour)
     if not users:
         log.info("No users to notify at hour=%d", current_hour)
+        _mt_mon.done()
         return
 
     # Fetch ALL tips once for all users (primary: odds.db, fallback: Odds API)
@@ -12069,6 +13469,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await _after_send(user.id)
         except Exception as exc:
             log.warning("Failed to send morning teaser to user %s: %s", user.id, exc)
+    _mt_mon.done()
 
 
 # ── Weekend Preview (Thursday 18:00 SAST) ─────────────────
@@ -12162,16 +13563,21 @@ async def _weekend_preview_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     log.info("Weekend Preview cron running")
+    _wp_mon = _CronMonitor("weekend-preview")
+    _wp_mon.begin()
+    _sentry_tags(cron_job="weekend-preview")
 
     try:
         *_, get_upcoming, _ = _get_settlement_funcs()
         upcoming = await asyncio.to_thread(get_upcoming, 3)
     except Exception as exc:
         log.warning("Weekend Preview: settlement data unavailable: %s", exc)
+        _wp_mon.done(exc)
         return
 
     if upcoming.get("total", 0) == 0:
         log.info("No upcoming edges for weekend preview — skipping")
+        _wp_mon.done()
         return
 
     users = await db.get_all_onboarded_users()
@@ -12199,6 +13605,7 @@ async def _weekend_preview_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass  # Silently skip blocked users
     log.info("Weekend Preview: sent to %d/%d users", sent, len(users))
+    _wp_mon.done()
 
 
 # ── Monday Recap (Monday 08:00 SAST) ───────────────────────
@@ -12383,6 +13790,9 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     log.info("Monday Recap cron running")
+    _mr_mon = _CronMonitor("monday-recap")
+    _mr_mon.begin()
+    _sentry_tags(cron_job="monday-recap")
 
     fri, sun = _get_last_weekend_range()
 
@@ -12391,10 +13801,12 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         settled = await asyncio.to_thread(get_settled, fri, sun)
     except Exception as exc:
         log.warning("Monday Recap: settlement data unavailable: %s", exc)
+        _mr_mon.done(exc)
         return
 
     if not settled:
         log.info("No settled edges for weekend recap — skipping")
+        _mr_mon.done()
         return
 
     users = await db.get_all_onboarded_users()
@@ -12431,6 +13843,7 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass  # Silently skip blocked users
     log.info("Monday Recap: sent to %d users", sent)
+    _mr_mon.done()
 
 
 # ── Monthly Edge Report ──────────────────────────────────
@@ -12447,6 +13860,9 @@ async def _monthly_report_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     log.info("Monthly edge report running for %s %d", now.strftime("%B"), now.year)
+    _mrep_mon = _CronMonitor("monthly-report")
+    _mrep_mon.begin()
+    _sentry_tags(cron_job="monthly-report")
 
     try:
         _ge, _, _gbh, _, *_ = _get_settlement_funcs()
@@ -12454,10 +13870,12 @@ async def _monthly_report_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         best_hits = await asyncio.to_thread(_gbh, 30, 3)
     except Exception as exc:
         log.warning("Monthly report: settlement data unavailable: %s", exc)
+        _mrep_mon.done(exc)
         return
 
     if stats.get("total", 0) == 0:
         log.info("Monthly report: no settled edges — skipping")
+        _mrep_mon.done()
         return
 
     from renderers.edge_renderer import EDGE_EMOJIS, format_return
@@ -12559,6 +13977,7 @@ async def _monthly_report_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass  # Silently skip blocked/unavailable users
     log.info("Monthly report: sent to %d/%d users", sent, len(users))
+    _mrep_mon.done()
 
 
 # ── Reverse Trial Cron ───────────────────────────────────
@@ -13325,6 +14744,9 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     - All (MISS): same prominence as wins, season accuracy always shown
     """
     log.info("Result alerts job running")
+    _ra_mon = _CronMonitor("settlement-pipeline")
+    _ra_mon.begin()
+    _sentry_tags(cron_job="settlement-pipeline")
 
     try:
         import sys
@@ -13333,6 +14755,7 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         from scrapers.edge.settlement import get_recently_settled_since, get_edge_stats
     except Exception as exc:
         log.warning("Result alerts: settlement import failed: %s", exc)
+        _ra_mon.done()
         return
 
     recently = await asyncio.to_thread(get_recently_settled_since, 2.5)
@@ -13487,6 +14910,7 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             pass  # Silently skip blocked users
 
     log.info("Result alerts: sent %d alerts to %d users", sent, len(user_alerts))
+    _ra_mon.done()
 
 
 # ── Wave 25A: /mute command ───────────────────────────────
@@ -13552,10 +14976,14 @@ async def _reengagement_nudge_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     log.info("Re-engagement nudge job running at 18:00 SAST")
+    _rn_mon = _CronMonitor("reengagement-nudge")
+    _rn_mon.begin()
+    _sentry_tags(cron_job="reengagement-nudge")
 
     inactive_users = await db.get_inactive_users(hours=72, nudge_cooldown_days=7)
     if not inactive_users:
         log.info("No inactive users to nudge")
+        _rn_mon.done()
         return
 
     # Fetch settlement stats once
@@ -13647,6 +15075,7 @@ async def _reengagement_nudge_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass  # Silently skip blocked users
     log.info("Re-engagement nudge: sent to %d/%d inactive users", sent, len(inactive_users))
+    _rn_mon.done()
 
 
 # ── QA Admin Command (TEMPORARY — TODO: Remove before launch) ──────────
@@ -13702,6 +15131,7 @@ _QA_COMMANDS = {
     "list": "Show all available QA commands",
     "reset": "Restore tier and clear test state",
     "scaffold": "Print raw verified scaffold for a match key (e.g. /qa scaffold arsenal_vs_everton_2026-03-14)",
+    "clear_mm_cache": "Clear My Matches schedule cache for a user ID (e.g. /qa clear_mm_cache 12345678), or self if no ID given",
 }
 
 
@@ -13724,8 +15154,9 @@ async def cmd_qa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if cmd == "reset":
+        # W84-ACC1: clear QA override ONLY — do NOT mutate real subscription tier.
+        # Previous bug: db.set_user_tier(uid, "bronze") overwrote paid users' tiers permanently.
         _QA_TIER_OVERRIDES.pop(uid, None)
-        await db.set_user_tier(uid, "bronze")
         await db.update_consecutive_misses(uid, 0)
         await db.set_muted_until(uid, None)
         import datetime as _dt
@@ -13737,7 +15168,21 @@ async def cmd_qa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 u.last_active_at = _dt.datetime.now(_dt.timezone.utc)
                 u.nudge_sent_at = None
                 await s.commit()
-        await update.message.reply_text("✅ Reset: tier=bronze, misses=0, mute=off, push count=0, QA override cleared")
+        await update.message.reply_text("✅ Reset: QA override cleared, misses=0, mute=off, push count=0\n(Subscription state preserved)")
+        return
+
+    if cmd == "clear_mm_cache":
+        # W84-RT1: clear _schedule_cache for a user so QA can force a true cold My Matches open.
+        # Usage: /qa clear_mm_cache 12345678 — clears for specified user
+        #        /qa clear_mm_cache — clears for self (the admin issuing the command)
+        _target_id = uid
+        if len(args) > 1 and args[1].isdigit():
+            _target_id = int(args[1])
+        if _target_id in _schedule_cache:
+            del _schedule_cache[_target_id]
+            await update.message.reply_text(f"✅ My Matches schedule cache cleared for user {_target_id}.\nNext ⚽ My Matches tap will be a true cold open.")
+        else:
+            await update.message.reply_text(f"ℹ️ No My Matches cache found for user {_target_id} (already cold or never warmed).")
         return
 
     if cmd in ("set_bronze", "set_gold", "set_diamond"):
@@ -14149,22 +15594,78 @@ async def _build_morning_report() -> str:
     return "\n".join(lines)
 
 
+async def _background_pregen_fill() -> None:
+    """W83-CACHE: Background narrative fill for hot tips with no cached narrative.
+
+    Called from _edge_precompute_job() when any hot tip is missing from narrative_cache.
+    Uses pregen 'refresh' mode which only generates for uncached edges (skips fresh ones).
+    PID lock in pregenerate_narratives prevents concurrent runs.
+    """
+    try:
+        from scripts.pregenerate_narratives import main as pregen_main
+        log.info("Background narrative fill: starting refresh sweep for uncached edges")
+        await pregen_main("refresh")
+        log.info("Background narrative fill: complete")
+    except Exception as exc:
+        log.warning("Background narrative fill failed: %s", exc)
+
+
 async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """W52-PERF: Pre-compute hot tips cache every 15 minutes.
 
     Users always hit cache — instant response. The heavy edge calculation
     runs here in the background, not on user requests.
+    Also pre-warms _analysis_cache with DB narratives so edge:detail is
+    served from memory (sub-ms) on first tap after restart.
     """
     import time as _t
     _start = _t.time()
+    _ep_mon = _CronMonitor("edge-precompute")
+    _ep_mon.begin()
+    _sentry_tags(cron_job="edge-precompute")
     try:
         tips = await _fetch_hot_tips_from_db()
         log.info(
             "Edge pre-compute: %d tips cached in %.1fs",
             len(tips), _t.time() - _start,
         )
+        # Pre-warm narrative cache: load DB narratives into _analysis_cache.
+        # After this runs (5s after startup), edge:detail is pure in-memory.
+        # Also tracks tips with NO cached narrative (not in memory AND not in DB)
+        # and fires a background refresh sweep to fill them.
+        _warmed = 0
+        _missing_keys = []
+        for _tip in tips:
+            _mk = _tip.get("match_id", "")
+            if _mk and _mk not in _analysis_cache:
+                try:
+                    _nc = await _get_cached_narrative(_mk)
+                    if _nc:
+                        _analysis_cache[_mk] = (
+                            _nc["html"], _nc["tips"],
+                            _nc["edge_tier"], _t.time(),
+                        )
+                        _game_tips_cache[_mk] = _nc["tips"]
+                        _warmed += 1
+                    else:
+                        _missing_keys.append(_mk)
+                        # W83-OVERNIGHT: pre-load tip data for instant baseline on tap
+                        _game_tips_cache[_mk] = [_tip]
+                except Exception:
+                    _missing_keys.append(_mk)
+        if _warmed:
+            log.info("Narrative pre-warm: %d narratives loaded into memory cache", _warmed)
+        if _missing_keys:
+            log.info(
+                "Narrative miss: %d/%d tips uncached — triggering background fill: %s",
+                len(_missing_keys), len(tips), _missing_keys,
+            )
+            import asyncio as _asyncio
+            _asyncio.create_task(_background_pregen_fill())
+        _ep_mon.done()
     except Exception as exc:
         log.warning("Edge pre-compute failed (%.1fs): %s", _t.time() - _start, exc)
+        _ep_mon.done(exc)
 
 
 async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -14177,11 +15678,14 @@ async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     from zoneinfo import ZoneInfo
 
     now_sast = datetime.now(ZoneInfo("Africa/Johannesburg"))
-    if now_sast.hour not in (6, 12, 18):
+    if now_sast.hour not in (6, 12, 18, 21):
         return
 
     sweep = "full" if now_sast.hour == 6 else "refresh"
     log.info("Starting narrative pre-generation (%s sweep, %02d:00 SAST)", sweep, now_sast.hour)
+    _np_mon = _CronMonitor("narrative-pregen")
+    _np_mon.begin()
+    _sentry_tags(cron_job="narrative-pregen", cron_sweep=sweep)
 
     import time as _t
     _start = _t.time()
@@ -14189,8 +15693,10 @@ async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         from scripts.pregenerate_narratives import main as pregen_main
         await pregen_main(sweep)
         log.info("Narrative pre-generation complete in %.1fs", _t.time() - _start)
+        _np_mon.done()
     except Exception as exc:
         log.warning("Narrative pre-generation failed (%.1fs): %s", _t.time() - _start, exc)
+        _np_mon.done(exc)
 
 
 async def _narrative_health_check_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -14335,6 +15841,9 @@ async def _qa_run_validation(update: Update) -> None:
 
 async def _post_deploy_validation_job(ctx) -> None:
     """Run post-deploy validation suite and send results to admins."""
+    _pdv_mon = _CronMonitor("post-deploy-validation")
+    _pdv_mon.begin()
+    _sentry_tags(cron_job="post-deploy-validation", bot_instance=_SENTRY_BOT_INSTANCE)
     try:
         import sys as _sys
         import importlib.util
@@ -14362,11 +15871,15 @@ async def _post_deploy_validation_job(ctx) -> None:
 
         if report["failures"]:
             log.warning("Post-deploy validation FAILED: %s", report["failures"])
+            if sentry_sdk:
+                sentry_sdk.set_context("validation", {"failures": report["failures"], "total": report["total"]})
         else:
             log.info("Post-deploy validation PASSED (%d/%d)",
                      report["pass_count"], report["total"])
+        _pdv_mon.done()
     except Exception as e:
         log.error("Post-deploy validation crashed: %s", e, exc_info=True)
+        _pdv_mon.done(e)
 
 
 async def _qa_trigger_teaser(ctx, uid: int, tier: str) -> None:
@@ -14972,6 +16485,8 @@ def _seconds_until_next_hour() -> float:
 
 async def _post_init(app_instance) -> None:
     """Run on bot startup: init DB, publish guides, register commands, schedule jobs."""
+    global _hot_tips_fetch_lock
+    _hot_tips_fetch_lock = asyncio.Lock()  # W84-P1: must be created inside async context
     await db.init_db()
 
     # W60-CACHE: Ensure narrative_cache table exists in odds.db
@@ -15201,6 +16716,21 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
     signal.signal(signal.SIGINT, _signal_handler)
 
 
+async def _post_shutdown(app_instance) -> None:
+    """Dispose the SQLAlchemy async engine on bot shutdown.
+
+    Fixes MZANSI-EDGE-11: aiosqlite worker threads outlive the event loop when
+    the bot is stopped. SQLAlchemy's connection pool holds open aiosqlite connections;
+    calling engine.dispose() drains the pool and signals the threads to finish
+    *before* asyncio closes the loop — eliminating the RuntimeError.
+    """
+    try:
+        await db.engine.dispose()
+        log.info("Database engine disposed cleanly on shutdown.")
+    except Exception as exc:
+        log.warning("Error disposing database engine on shutdown: %s", exc)
+
+
 def main() -> None:
     _acquire_pid_lock()
     log.info("Starting MzansiEdge bot…")
@@ -15208,6 +16738,8 @@ def main() -> None:
 
     # Initialise DB + register commands on startup
     app.post_init = _post_init
+    # Dispose async engine before event loop closes (fixes MZANSI-EDGE-11)
+    app.post_shutdown = _post_shutdown
 
     # Subscribe conversation handler (must be before general command handlers)
     subscribe_conv = ConversationHandler(

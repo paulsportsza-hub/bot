@@ -642,13 +642,40 @@ async def get_all_sport_prefs() -> list[UserSportPref]:
 # ── Tier helpers ─────────────────────────────────────────────
 
 
+def _resolve_tier_from_subscription(user: "User") -> str | None:
+    """If DB tier=bronze but subscription is active, derive tier from plan_code.
+
+    Handles the case where /qa reset or a webhook failure left user_tier='bronze'
+    while subscription_status='active'. Returns the derived tier or None.
+    """
+    sub_status = getattr(user, "subscription_status", None)
+    if sub_status != "active":
+        return None
+    plan = getattr(user, "plan_code", None) or ""
+    # Build tier map from STITCH_PRODUCTS + legacy plan codes
+    tier_map: dict[str, str] = {"stitch_premium": "gold"}
+    for pkey, pval in config.STITCH_PRODUCTS.items():
+        tier_map[pkey] = pval.get("tier", "gold")
+    return tier_map.get(plan) or None
+
+
 async def get_user_tier(user_id: int) -> str:
-    """Return the user's subscription tier (default 'bronze')."""
+    """Return the user's effective subscription tier (default 'bronze').
+
+    Reconciles user_tier with subscription_status: if user_tier='bronze' but
+    subscription_status='active', derives the correct tier from plan_code.
+    This prevents stale bronze state after /qa reset or webhook failures.
+    """
     async with async_session() as s:
         user = await s.get(User, user_id)
         if not user:
             return "bronze"
-        return getattr(user, "user_tier", None) or "bronze"
+        tier = getattr(user, "user_tier", None) or "bronze"
+        if tier == "bronze":
+            derived = _resolve_tier_from_subscription(user)
+            if derived in ("gold", "diamond"):
+                return derived
+        return tier
 
 
 async def set_user_tier(

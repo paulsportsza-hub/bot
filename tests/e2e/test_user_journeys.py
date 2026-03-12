@@ -81,8 +81,8 @@ class TestBronzeJourney:
         # Must have footer with /subscribe
         assert "/subscribe" in text
 
-    def test_bronze_locked_button_goes_to_plans(self):
-        """Locked edge button has sub:plans callback, not edge:detail."""
+    def test_bronze_locked_button_goes_to_upgrade(self):
+        """Locked/blurred edge button has hot:upgrade callback (shows upgrade prompt with Back)."""
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
@@ -95,8 +95,10 @@ class TestBronzeJourney:
             for btn in row
             if btn.callback_data
         ]
-        # Diamond edge (locked) button should route to sub:plans
-        assert "sub:plans" in callbacks
+        # W84-P0: locked/blurred edges route to hot:upgrade (shows upgrade prompt + Back button)
+        assert "hot:upgrade" in callbacks
+        # Accessible (silver/bronze) edges still route to edge:detail
+        assert any(cb.startswith("edge:detail:") for cb in callbacks)
 
     def test_bronze_never_sees_diamond_odds(self):
         """Bronze Hot Tips text never reveals diamond edge odds."""

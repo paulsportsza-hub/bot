@@ -75,10 +75,13 @@ class TestSignalCoverage:
         violations = []
         for edge in edges:
             for sig_name, sig_data in edge.get("signals", {}).items():
+                # Skip unavailable signals — None strength is intentional (no data source)
+                if not sig_data.get("available", True):
+                    continue
                 strength = sig_data.get("signal_strength")
                 if strength is None:
                     violations.append(
-                        f"{edge['match_key']}.{sig_name}: strength is None"
+                        f"{edge['match_key']}.{sig_name}: strength is None (but available=True)"
                     )
                 elif not (0 <= strength <= 1):
                     violations.append(

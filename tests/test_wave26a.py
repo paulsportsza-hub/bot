@@ -207,7 +207,8 @@ def test_no_bookmaker_link_locked(build_page):
         for btn in row:
             if "[1]" in (btn.text or ""):
                 assert btn.url is None, "Locked edge should not have URL button"
-                assert btn.callback_data == "sub:plans"
+                # W84-P0: locked edges use hot:upgrade (shows upgrade prompt with Back button)
+                assert btn.callback_data.startswith("hot:upgrade:")
 
 
 # ── Test 9: No Compare Odds button for locked edges ──

@@ -306,7 +306,7 @@ async def get_all_matches(
                     FROM odds_latest ol
                     INNER JOIN odds_snapshots os
                         ON ol.match_id = os.match_id
-                        AND os.league = ? COLLATE NOCASE
+                        AND os.league = ?
                     WHERE ol.market_type = ?
                     LIMIT ?
                 """

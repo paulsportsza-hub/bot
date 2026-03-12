@@ -127,6 +127,11 @@ def _load_or_create_golden(name: str, actual: dict) -> dict:
 _BROADCAST_PATCH = patch("bot._get_broadcast_details", return_value={"broadcast": "", "kickoff": "Sat 10 Mar · 17:30"})
 _PORTFOLIO_PATCH = patch("bot._get_portfolio_line", return_value="📈 <b>R100 on our top 5</b> → R487 total return")
 _FOUNDING_PATCH = patch("bot._founding_days_left", return_value=8)
+# W84-Q9: tier_gate computes founding days independently — patch at source for date-stability
+_TIER_GATE_FOUNDING_PATCH = patch(
+    "tier_gate._founding_member_line",
+    return_value="\n🎁 Founding Member: R699/yr Diamond — 8 days left",
+)
 
 
 # ── Tests ─────────────────────────────────────────────────────
@@ -271,17 +276,19 @@ class TestDetailView:
 
     def test_locked_detail_view(self):
         """Locked detail shows plan comparison, no bookmaker link."""
-        from tier_gate import get_edge_access_level, get_upgrade_message
-        access = get_edge_access_level("bronze", "diamond")
-        assert access == "locked"
-        msg = get_upgrade_message("bronze", context="diamond_edge")
+        with _TIER_GATE_FOUNDING_PATCH:
+            from tier_gate import get_edge_access_level, get_upgrade_message
+            access = get_edge_access_level("bronze", "diamond")
+            assert access == "locked"
+            msg = get_upgrade_message("bronze", context="diamond_edge")
         golden = _load_or_create_golden("detail_locked_bronze_diamond", {"text": msg})
         assert msg == golden["text"]
 
     def test_blurred_detail_view(self):
         """Blurred detail shows plan comparison for Gold edge."""
-        from tier_gate import get_upgrade_message
-        msg = get_upgrade_message("bronze", context="gold_edge")
+        with _TIER_GATE_FOUNDING_PATCH:
+            from tier_gate import get_upgrade_message
+            msg = get_upgrade_message("bronze", context="gold_edge")
         golden = _load_or_create_golden("detail_blurred_bronze_gold", {"text": msg})
         assert msg == golden["text"]
 

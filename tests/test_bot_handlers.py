@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
@@ -143,6 +144,119 @@ async def test_handle_menu_history_empty(test_db, mock_update, mock_context):
     call_args = query.edit_message_text.call_args
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
     assert "No tips recorded" in text
+
+
+class TestHotTipsHeaderRelock:
+    """W84-HT4: Hot Tips detail keeps list header metadata across detail paths."""
+
+    async def test_cache_hit_detail_uses_event_id_snapshot_header(self, mock_update, mock_context):
+        query = mock_update.callback_query
+        user_id = query.from_user.id
+        match_key = "chelsea_vs_newcastle_2026-03-14"
+
+        bot._analysis_cache.pop(match_key, None)
+        bot._game_tips_cache.pop(match_key, None)
+        bot._ht_tips_snapshot[user_id] = [{
+            "event_id": match_key,
+            "home_team": "Chelsea",
+            "away_team": "Newcastle United",
+            "league": "Premier League",
+            "league_key": "epl",
+            "_bc_kickoff": "Sat 14 Mar, 19:20 SAST",
+            "_bc_broadcast": "📺 DStv 208",
+            "_bc_league": "Premier League",
+        }]
+        bot._analysis_cache[match_key] = (
+            "🎯 <b>Old Header</b>\n\n📋 <b>The Setup</b>\nBody",
+            [{
+                "outcome": "home",
+                "odds": 1.85,
+                "bookie": "supabets",
+                "ev": 1.09,
+                "prob": 54.6,
+                "edge_v2": {"match_key": match_key, "league": "epl"},
+            }],
+            "bronze",
+            time.time(),
+        )
+
+        try:
+            with patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
+                 patch("db_connection.get_connection", return_value=MagicMock(close=MagicMock())), \
+                 patch("tier_gate.check_tip_limit", return_value=(True, 999)), \
+                 patch("bot._build_game_buttons", return_value=[]), \
+                 patch("bot._qa_banner", return_value=""), \
+                 patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
+                await bot._dispatch_button(query, mock_context, "edge", f"detail:{match_key}")
+
+            text = query.edit_message_text.call_args[0][0]
+            assert "🎯 <b>Chelsea vs Newcastle United</b>" in text
+            assert "📅 Sat 14 Mar, 19:20 SAST" in text
+            assert "🏆 Premier League" in text
+            assert "📺 DStv 208" in text
+        finally:
+            bot._analysis_cache.pop(match_key, None)
+            bot._game_tips_cache.pop(match_key, None)
+            bot._ht_tips_snapshot.pop(user_id, None)
+
+    async def test_instant_detail_uses_global_hot_tips_header(self, mock_update, mock_context):
+        query = mock_update.callback_query
+        match_key = "west_ham_vs_manchester_city_2026-03-14"
+
+        bot._analysis_cache.pop(match_key, None)
+        bot._game_tips_cache[match_key] = [{
+            "outcome": "away",
+            "odds": 1.72,
+            "bookmaker": "sportingbet",
+            "ev": 1.18,
+            "prob": 58.8,
+            "sport_key": "soccer_epl",
+            "display_tier": "bronze",
+            "edge_rating": "bronze",
+            "edge_v2": {"match_key": match_key, "league": "epl"},
+        }]
+        bot._hot_tips_cache["global"] = {
+            "tips": [{
+                "match_id": match_key,
+                "event_id": match_key,
+                "home_team": "West Ham",
+                "away_team": "Manchester City",
+                "league": "Premier League",
+                "league_key": "epl",
+                "_bc_kickoff": "Sat 14 Mar, 21:50 SAST",
+                "_bc_broadcast": "📺 DStv 203",
+                "_bc_league": "Premier League",
+                "sport_key": "soccer_epl",
+                "outcome": "Manchester City",
+                "odds": 1.72,
+                "ev": 1.18,
+                "prob": 58.8,
+                "display_tier": "bronze",
+                "edge_rating": "bronze",
+            }],
+            "ts": time.time(),
+        }
+
+        try:
+            with patch("bot._get_cached_narrative", new_callable=AsyncMock, return_value=None), \
+                 patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
+                 patch("db_connection.get_connection", return_value=MagicMock(close=MagicMock())), \
+                 patch("tier_gate.check_tip_limit", return_value=(True, 999)), \
+                 patch("bot._generate_narrative_v2", new_callable=AsyncMock, return_value="📋 <b>The Setup</b>\nBody\n\n🏆 <b>Verdict</b>\nLean."), \
+                 patch("bot._build_game_buttons", return_value=[]), \
+                 patch("bot._qa_banner", return_value=""), \
+                 patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
+                await bot._dispatch_button(query, mock_context, "edge", f"detail:{match_key}")
+
+            text = query.edit_message_text.call_args[0][0]
+            assert "🎯 <b>West Ham vs Manchester City</b>" in text
+            assert "📅 Sat 14 Mar, 21:50 SAST" in text
+            assert "🏆 Premier League" in text
+            assert "📺 DStv 203" in text
+        finally:
+            bot._analysis_cache.pop(match_key, None)
+            bot._game_tips_cache.pop(match_key, None)
+            bot._hot_tips_cache.pop("global", None)
 
 
 class TestStickyKeyboard:
@@ -433,6 +547,51 @@ class TestOddsComparisonBackButton:
         # Cleanup
         del bot._game_tips_cache[event_id]
 
+    @pytest.mark.asyncio
+    async def test_hot_tips_origin_uses_back_to_edge_picks(self, test_db, mock_update):
+        """Hot Tips odds comparison routes back to the originating Hot Tips list page."""
+        query = mock_update.callback_query
+        query.from_user.id = 4242
+        event_id = "hot-edge-123"
+
+        bot._game_tips_cache[event_id] = [{
+            "outcome": "Home Win",
+            "odds": 2.10,
+            "bookie": "Betway",
+            "bookie_key": "betway",
+            "ev": 5.0,
+            "prob": 55,
+            "event_id": event_id,
+            "home_team": "South Africa",
+            "away_team": "England",
+            "match_id": event_id,
+            "odds_by_bookmaker": {"betway": 2.10, "hollywoodbets": 2.15},
+        }]
+        bot._remember_hot_tip_origin(query.from_user.id, event_id, 1)
+        bot._remember_odds_compare_origin(
+            query.from_user.id, event_id, "edge_picks", match_key=event_id, back_page=1,
+        )
+
+        mock_db_result = {
+            "outcomes": {
+                "home": {"best_odds": 2.15, "best_bookmaker": "hollywoodbets", "all_bookmakers": {"betway": 2.10, "hollywoodbets": 2.15}},
+                "draw": {"best_odds": 3.50, "best_bookmaker": "gbets", "all_bookmakers": {"betway": 3.40, "gbets": 3.50}},
+                "away": {"best_odds": 1.80, "best_bookmaker": "supabets", "all_bookmakers": {"betway": 1.75, "supabets": 1.80}},
+            },
+        }
+        try:
+            with patch("services.odds_service.get_best_odds", new_callable=AsyncMock, return_value=mock_db_result):
+                await bot._handle_odds_comparison(query, event_id)
+
+            markup = query.edit_message_text.call_args[1]["reply_markup"]
+            button_data = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+            assert "hot:back:1" in button_data
+            assert f"yg:game:{event_id}" not in button_data
+        finally:
+            bot._game_tips_cache.pop(event_id, None)
+            bot._odds_compare_origin.pop((query.from_user.id, event_id), None)
+            bot._ht_detail_origin.pop((query.from_user.id, event_id), None)
+
 
 class TestOddsComparisonAllMarkets:
     """BUG-023: Odds comparison should show all 3 markets."""
@@ -568,6 +727,21 @@ class TestGameButtonSimplification:
                 if btn.callback_data and btn.text and "Back" in btn.text:
                     assert "↩️" in btn.text
                     assert "🔙" not in btn.text
+
+    def test_hot_tips_detail_buttons_keep_back_on_primary_row(self):
+        """Hot Tips detail keeps CTA and Back together on the first action row."""
+        tips = [
+            {"outcome": "Draw", "odds": 4.60, "ev": 8.0, "bookie_key": "gbets",
+             "odds_by_bookmaker": {"gbets": 4.60, "betway": 4.30}, "match_id": "hot-test"},
+        ]
+        buttons = bot._build_game_buttons(
+            tips, "hot-test", 111, source="edge_picks", back_page=2,
+        )
+        first_row = buttons[0]
+        assert len(first_row) == 2
+        assert "Back" in first_row[1].text
+        assert first_row[1].callback_data == "hot:back:2"
+        assert any("Compare All Odds" in btn.text for row in buttons for btn in row)
 
 
 class TestAnalysisCache:

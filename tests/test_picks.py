@@ -349,7 +349,10 @@ async def test_cmd_picks_no_prefs(test_db, mock_update, mock_context):
     loading_msg = AsyncMock()
     mock_context.bot.send_message = AsyncMock(return_value=loading_msg)
 
-    with patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=[]):
+    # W84-P1: also patch fast path so cold path is exercised; clear cache to avoid warm-path contamination
+    with patch("bot._hot_tips_cache", {}), \
+         patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=[]), \
+         patch("bot._load_tips_from_edge_results", return_value=[]):
         await bot.cmd_picks(mock_update, mock_context)
 
     # Hot Tips sends via bot.send_message (loading + empty state)
@@ -383,8 +386,11 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     def _passthrough_gate(edges, user_id, user_tier, conn):
         return edges, 999, None
 
-    with patch("bot._fetch_hot_tips_from_db", new_callable=AsyncMock, return_value=mock_tips), \
+    # W84-P1: also patch fast path so cold path is exercised with mock_tips; clear cache to avoid warm-path contamination
+    with patch("bot._hot_tips_cache", {}), \
+         patch("bot._fetch_hot_tips_from_db", new_callable=AsyncMock, return_value=mock_tips), \
          patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=mock_tips), \
+         patch("bot._load_tips_from_edge_results", return_value=[]), \
          patch("bot.gate_edges", side_effect=_passthrough_gate):
         await bot.cmd_picks(mock_update, mock_context)
 
