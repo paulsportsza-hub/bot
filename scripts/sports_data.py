@@ -156,7 +156,10 @@ async def fetch_events_for_league(league_key: str) -> list[dict]:
     Cached for 2 hours. Uses /events endpoint (does NOT count against odds quota).
     """
     # Map internal league key → Odds API key
-    api_key = config.SPORTS_MAP.get(league_key, league_key)
+    api_key = config.SPORTS_MAP.get(league_key)
+    if api_key is None:
+        log.info("Skipping events fetch for unsupported league %s", league_key)
+        return []
     cache_key = f"events_{api_key}"
     cached = _read_cache(cache_key, ttl_hours=2)
     if cached:

@@ -242,7 +242,7 @@ SPORTS: list[SportDef] = [
     # ── Soccer ⚽ ─────────────────────────────────────────
     SportDef(key="soccer", label="Soccer", emoji="⚽", fav_type="team", leagues=[
         LeagueDef(key="epl", label="Premier League", api_key="soccer_epl"),
-        LeagueDef(key="psl", label="PSL", api_key="soccer_south_africa_psl"),
+        LeagueDef(key="psl", label="PSL", api_key=None),
         LeagueDef(key="la_liga", label="La Liga", api_key="soccer_spain_la_liga"),
         LeagueDef(key="bundesliga", label="Bundesliga", api_key="soccer_germany_bundesliga"),
         LeagueDef(key="serie_a", label="Serie A", api_key="soccer_italy_serie_a"),

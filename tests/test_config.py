@@ -68,6 +68,12 @@ class TestSportsStructure:
         lg_keys = [lg.key for lg in soccer.leagues]
         assert "psl" in lg_keys
 
+    def test_psl_has_no_api_key(self):
+        assert config.ALL_LEAGUES["psl"].api_key is None
+
+    def test_psl_not_in_sports_map(self):
+        assert "psl" not in config.SPORTS_MAP
+
     def test_soccer_has_epl(self):
         soccer = config.ALL_SPORTS["soccer"]
         lg_keys = [lg.key for lg in soccer.leagues]

@@ -15,6 +15,7 @@ from scripts.sports_data import (
     CURATED_LISTS,
     _read_cache,
     _write_cache,
+    fetch_events_for_league,
     fuzzy_match_team,
     get_top_teams_for_sport,
 )
@@ -220,3 +221,13 @@ async def test_top_teams_limit():
     """Respects limit parameter."""
     result = await get_top_teams_for_sport("Boxing", sport_key=None, limit=3)
     assert len(result) <= 3
+
+
+async def test_fetch_events_for_league_unsupported_league_skips_http():
+    """Unsupported leagues should fail closed and never attempt a dead API path."""
+    with patch("scripts.sports_data.config.SPORTS_MAP", {}, create=False), \
+         patch("scripts.sports_data.httpx.AsyncClient") as client_cls:
+        result = await fetch_events_for_league("psl")
+
+    assert result == []
+    client_cls.assert_not_called()
