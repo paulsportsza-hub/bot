@@ -259,6 +259,141 @@ class TestHotTipsHeaderRelock:
             bot._hot_tips_cache.pop("global", None)
 
 
+class TestHotTipsModelOnlyIntegrity:
+    async def test_build_hot_tips_page_stamps_model_only_metadata(self):
+        tip = {
+            "match_id": "arsenal_vs_chelsea_2026-03-14",
+            "event_id": "arsenal_vs_chelsea_2026-03-14",
+            "home_team": "Arsenal",
+            "away_team": "Chelsea",
+            "league": "Premier League",
+            "league_key": "epl",
+            "sport_key": "soccer_epl",
+            "display_tier": "gold",
+            "edge_rating": "gold",
+            "outcome": "Arsenal",
+            "odds": 2.15,
+            "ev": 6.4,
+            "prob": 49.0,
+            "edge_v2": {
+                "match_key": "arsenal_vs_chelsea_2026-03-14",
+                "confirming_signals": 0,
+                "signals": {
+                    "market_agreement": {"available": True, "signal_strength": 0.42},
+                    "movement": {"available": True, "signal_strength": 0.33},
+                },
+            },
+        }
+
+        text, _ = bot._build_hot_tips_page([tip], user_id=123)
+
+        assert "[MODEL ONLY]" in text
+        assert tip["_ht_model_only"] is True
+        assert tip["_ht_confirming_signals"] == 0
+        assert tip["_ht_total_signals"] == 2
+
+    async def test_cache_hit_detail_preserves_model_only_banner_and_strips_badge(self, mock_update, mock_context):
+        query = mock_update.callback_query
+        user_id = query.from_user.id
+        match_key = "arsenal_vs_chelsea_2026-03-14"
+
+        bot._analysis_cache[match_key] = (
+            "🎯 <b>Old Header</b>\n\n📋 <b>The Setup</b>\nSupported copy.\n\n🏆 <b>Verdict</b> — 🥇 Gold\nWorth a confident stake.",
+            [{
+                "match_id": match_key,
+                "event_id": match_key,
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "outcome": "Arsenal",
+                "odds": 2.15,
+                "bookie": "Betway",
+                "ev": 6.4,
+                "prob": 49.0,
+                "display_tier": "gold",
+                "edge_rating": "gold",
+                "edge_v2": {"match_key": match_key, "confirming_signals": 2},
+            }],
+            "gold",
+            time.time(),
+        )
+        bot._ht_tips_snapshot[user_id] = [{
+            "match_id": match_key,
+            "event_id": match_key,
+            "home_team": "Arsenal",
+            "away_team": "Chelsea",
+            "league": "Premier League",
+            "league_key": "epl",
+            "_bc_kickoff": "Sat 14 Mar, 18:30 SAST",
+            "_bc_broadcast": "📺 DStv 203",
+            "_bc_league": "Premier League",
+            "_ht_model_only": True,
+            "_ht_confirming_signals": 0,
+            "_ht_total_signals": 2,
+        }]
+
+        try:
+            with patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
+                 patch("db_connection.get_connection", return_value=MagicMock(close=MagicMock())), \
+                 patch("tier_gate.check_tip_limit", return_value=(True, 999)), \
+                 patch("bot._build_game_buttons", return_value=[]), \
+                 patch("bot._qa_banner", return_value=""), \
+                 patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
+                await bot._dispatch_button(query, mock_context, "edge", f"detail:{match_key}")
+
+            text = query.edit_message_text.call_args[0][0]
+            assert "<b>[MODEL ONLY]</b> No confirming signals behind this price." in text
+            assert "🏆 <b>Verdict</b> — 🥇 Gold" not in text
+        finally:
+            bot._analysis_cache.pop(match_key, None)
+            bot._game_tips_cache.pop(match_key, None)
+            bot._ht_tips_snapshot.pop(user_id, None)
+
+    async def test_instant_detail_keeps_supported_card_unlabeled(self, mock_update, mock_context):
+        query = mock_update.callback_query
+        match_key = "liverpool_vs_brighton_2026-03-14"
+
+        bot._analysis_cache.pop(match_key, None)
+        bot._game_tips_cache[match_key] = [{
+            "match_id": match_key,
+            "event_id": match_key,
+            "home_team": "Liverpool",
+            "away_team": "Brighton",
+            "league": "Premier League",
+            "league_key": "epl",
+            "sport_key": "soccer_epl",
+            "display_tier": "gold",
+            "edge_rating": "gold",
+            "outcome": "Liverpool",
+            "odds": 1.85,
+            "bookmaker": "Hollywoodbets",
+            "ev": 4.8,
+            "prob": 57.0,
+            "edge_v2": {
+                "match_key": match_key,
+                "confirming_signals": 2,
+                "tier": "gold",
+            },
+        }]
+
+        try:
+            with patch("bot._get_cached_narrative", new_callable=AsyncMock, return_value=None), \
+                 patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
+                 patch("db_connection.get_connection", return_value=MagicMock(close=MagicMock())), \
+                 patch("tier_gate.check_tip_limit", return_value=(True, 999)), \
+                 patch("bot._generate_narrative_v2", new_callable=AsyncMock, return_value="📋 <b>The Setup</b>\nBody\n\n🏆 <b>Verdict</b>\nLean."), \
+                 patch("bot._build_game_buttons", return_value=[]), \
+                 patch("bot._qa_banner", return_value=""), \
+                 patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
+                await bot._dispatch_button(query, mock_context, "edge", f"detail:{match_key}")
+
+            text = query.edit_message_text.call_args[0][0]
+            assert "[MODEL ONLY]" not in text
+            assert "🏆 <b>Verdict</b> — 🥇 GOLDEN EDGE" in text
+        finally:
+            bot._analysis_cache.pop(match_key, None)
+            bot._game_tips_cache.pop(match_key, None)
+
+
 class TestStickyKeyboard:
     def test_get_main_keyboard_shape(self):
         """Sticky keyboard should be 2 rows of 3."""

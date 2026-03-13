@@ -1220,6 +1220,16 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
             if _cached_content:
                 _user_tier = await get_effective_tier(user_id)
+                _detail_model_state = _resolve_hot_tip_model_state(
+                    match_key,
+                    user_id,
+                    seed_tip=_cached_content["tips"][0] if _cached_content.get("tips") else None,
+                    tips=_cached_content.get("tips"),
+                )
+                _aligned_tips = _apply_hot_tip_model_state(
+                    _cached_content.get("tips"),
+                    _detail_model_state,
+                )
 
                 # Tier LIMIT CHECK — run in thread (WAL read: non-blocking vs writers)
                 def _check_limit_sync():
@@ -1272,19 +1282,19 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     asyncio.create_task(_record_view_bg())
 
                 # Serve from cache IMMEDIATELY
-                _game_tips_cache[match_key] = _cached_content["tips"]
+                _game_tips_cache[match_key] = _aligned_tips
                 _btns = _build_game_buttons(
-                    _cached_content["tips"], match_key, user_id,
+                    _aligned_tips, match_key, user_id,
                     source="edge_picks", user_tier=_user_tier,
                     edge_tier=_cached_content["edge_tier"],
                     back_page=_resolve_hot_tips_back_page(user_id, match_key),
                 )
                 _c_base_html = _cached_content["html"]
-                if _cached_content.get("tips"):
+                if _aligned_tips:
                     _ct_header = await _resolve_hot_tip_header(
                         match_key,
                         user_id,
-                        seed_tip=_cached_content["tips"][0],
+                        seed_tip=_aligned_tips[0],
                     )
                     if _ct_header["home"] and _ct_header["away"]:
                         _c_base_html = _inject_narrative_header(
@@ -1295,6 +1305,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                             _ct_header["league_display"],
                             _ct_header["broadcast"],
                         )
+                _c_base_html = _apply_hot_tip_detail_honesty(
+                    _c_base_html,
+                    _detail_model_state,
+                )
                 _banner = _qa_banner(user_id)
                 _html = (_banner + _c_base_html) if _banner else _c_base_html
                 await query.edit_message_text(
@@ -1342,6 +1356,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
             # W84-P1E: TERMINAL — serve from tip data, NEVER fall through to slow gen
             if _instant_tips:
+                _detail_model_state = _resolve_hot_tip_model_state(
+                    match_key,
+                    user_id,
+                    seed_tip=_instant_tips[0],
+                    tips=_instant_tips,
+                )
+                _instant_tips = _apply_hot_tip_model_state(_instant_tips, _detail_model_state)
                 _it0 = _instant_tips[0]
                 _it_header = await _resolve_hot_tip_header(match_key, user_id, seed_tip=_it0)
                 _ih = _it_header["home"]
@@ -1368,12 +1389,18 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 if _it_header["broadcast"]:
                     _ilines.append(_it_header["broadcast"])
                 _ilines.append("")
+                if _detail_model_state["model_only"]:
+                    _ilines.append("<b>[MODEL ONLY]</b> No confirming signals behind this price.")
+                    _ilines.append("")
 
                 if _ibline and "No current edge data" not in _ibline:
                     # Inject edge tier badge into verdict
                     _ivpos = _ibline.rfind("🏆")
                     _ivtext = _ibline[_ivpos:] if _ivpos >= 0 else ""
-                    if not any(p in _ivtext for p in ("Speculative punt", "Mild lean")):
+                    if (
+                        not _detail_model_state["model_only"]
+                        and not any(p in _ivtext for p in ("Speculative punt", "Mild lean"))
+                    ):
                         _ib_emoji = EDGE_EMOJIS.get(_ie_tier, "")
                         _ib_label = EDGE_LABELS.get(_ie_tier, "")
                         if _ib_emoji and _ib_label:
@@ -1402,6 +1429,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     f"    {_it_prob}% · EV: {_it_ev_str}{_it_value_m}"
                 )
                 _ihtml = "\n".join(_ilines)
+                _ihtml = _apply_hot_tip_detail_honesty(_ihtml, _detail_model_state)
                 _ihtml = re.sub(r'\n{3,}', '\n\n', _ihtml)
                 _ibtns = _build_game_buttons(
                     _instant_tips, match_key, user_id,
@@ -3831,6 +3859,21 @@ def _get_edge_info_for_games(games: list[dict]) -> dict[str, dict]:
     return result
 
 
+def _edge_signal_meta(edge_v2: dict | None) -> tuple[int, int, bool]:
+    """Return (confirming, total_signals, model_only) for an Edge V2 payload."""
+    edge_v2 = edge_v2 or {}
+    signals = edge_v2.get("signals", {}) or {}
+    total = sum(1 for s in signals.values() if s.get("available"))
+    confirming = edge_v2.get("confirming_signals")
+    if confirming is None:
+        confirming = sum(
+            1 for s in signals.values()
+            if s.get("available") and s.get("signal_strength", 0) >= 0.65
+        )
+    confirming = int(confirming or 0)
+    return confirming, total, confirming == 0
+
+
 # ── Hot Tips — all-sports value bet scanner ───────────────
 
 # Comprehensive list of Odds API sport keys to scan across all markets
@@ -4257,6 +4300,127 @@ async def _resolve_hot_tip_header(
         "league_display": league_display,
         "broadcast": broadcast,
     }
+
+
+def _resolve_hot_tip_model_state(
+    match_key: str,
+    user_id: int,
+    seed_tip: dict | None = None,
+    tips: list[dict] | None = None,
+) -> dict[str, int | bool | str]:
+    """Resolve authoritative Hot Tips model-only state for a detail surface."""
+    candidates: list[dict] = []
+
+    snap_tip = next(
+        (t for t in _ht_tips_snapshot.get(user_id, []) if _tip_matches_hot_key(t, match_key)),
+        None,
+    )
+    if snap_tip:
+        candidates.append(snap_tip)
+
+    hot_tip = next(
+        (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if _tip_matches_hot_key(t, match_key)),
+        None,
+    )
+    if hot_tip and hot_tip is not snap_tip:
+        candidates.append(hot_tip)
+
+    if seed_tip and seed_tip is not snap_tip and seed_tip is not hot_tip:
+        candidates.append(seed_tip)
+
+    if tips:
+        matched_tips = [t for t in tips if _tip_matches_hot_key(t, match_key)]
+        if not matched_tips:
+            matched_tips = list(tips)
+        candidates.extend(
+            t for t in matched_tips
+            if t is not snap_tip and t is not hot_tip and t is not seed_tip
+        )
+
+    for cand in candidates:
+        if "_ht_model_only" in cand:
+            confirming = int(cand.get("_ht_confirming_signals") or 0)
+            total = int(cand.get("_ht_total_signals") or 0)
+            return {
+                "model_only": bool(cand.get("_ht_model_only")),
+                "confirming": confirming,
+                "total_signals": total,
+                "source": "hot_tips_render",
+            }
+
+    for cand in candidates:
+        confirming, total, model_only = _edge_signal_meta(cand.get("edge_v2"))
+        if model_only or total or cand.get("edge_v2"):
+            return {
+                "model_only": model_only,
+                "confirming": confirming,
+                "total_signals": total,
+                "source": "edge_v2",
+            }
+
+    return {
+        "model_only": False,
+        "confirming": 0,
+        "total_signals": 0,
+        "source": "none",
+    }
+
+
+def _apply_hot_tip_model_state(
+    tips: list[dict] | None,
+    model_state: dict[str, int | bool | str],
+) -> list[dict]:
+    """Overlay authoritative Hot Tips model-only state onto the detail tips."""
+    if not tips:
+        return []
+
+    aligned = list(tips)
+    best_idx = max(range(len(aligned)), key=lambda i: aligned[i].get("ev", 0))
+    best_tip = dict(aligned[best_idx])
+    edge_v2 = dict(best_tip.get("edge_v2") or {})
+
+    best_tip["_ht_model_only"] = bool(model_state.get("model_only"))
+    best_tip["_ht_confirming_signals"] = int(model_state.get("confirming") or 0)
+    best_tip["_ht_total_signals"] = int(model_state.get("total_signals") or 0)
+
+    if best_tip["_ht_model_only"]:
+        edge_v2["confirming_signals"] = 0
+    elif "confirming_signals" not in edge_v2 and best_tip["_ht_confirming_signals"]:
+        edge_v2["confirming_signals"] = best_tip["_ht_confirming_signals"]
+
+    if not edge_v2.get("tier"):
+        tier = best_tip.get("display_tier", best_tip.get("edge_rating", ""))
+        if tier:
+            edge_v2["tier"] = tier
+
+    if edge_v2:
+        best_tip["edge_v2"] = edge_v2
+
+    aligned[best_idx] = best_tip
+    return aligned
+
+
+def _apply_hot_tip_detail_honesty(
+    text: str,
+    model_state: dict[str, int | bool | str],
+) -> str:
+    """Keep Hot Tips detail truth cues aligned with authoritative model-only state."""
+    if not text or not model_state.get("model_only"):
+        return text
+
+    text = re.sub(
+        r"(🏆\s*(?:<b>)?Verdict(?:</b>)?)\s*—\s*[^\n]+",
+        r"\1",
+        text,
+        count=1,
+    )
+    banner = "<b>[MODEL ONLY]</b> No confirming signals behind this price."
+    if "[MODEL ONLY]" in text:
+        return text
+    split_at = text.find("\n\n")
+    if split_at >= 0:
+        return f"{text[:split_at]}\n\n{banner}{text[split_at:]}"
+    return f"{text}\n\n{banner}"
 
 
 def _build_event_header(
@@ -5133,6 +5297,11 @@ def _build_hot_tips_page(
 
         tier_emoji = EDGE_EMOJIS.get(edge_tier, "🥉")
         sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
+        _confirming, _total_signals, _model_only = _edge_signal_meta(tip.get("edge_v2"))
+        tip["_ht_model_only"] = _model_only
+        tip["_ht_confirming_signals"] = _confirming
+        tip["_ht_total_signals"] = _total_signals
+        _model_tag = " [MODEL ONLY]" if _model_only else ""
         home_raw = tip.get("home_team") or ""
         away_raw = tip.get("away_team") or ""
         home = h(home_raw)
@@ -5197,7 +5366,7 @@ def _build_hot_tips_page(
             odds_str = f"{odds_val:.2f}" if odds_val else ""
             line3 = f"    {outcome} @ {odds_str} → {ret_str} on R300" if odds_val else f"    {outcome}"
             lines.append(
-                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}\n"
+                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}\n"
                 f"    {info_line}\n"
                 f"{line3}"
             )
@@ -5207,14 +5376,14 @@ def _build_hot_tips_page(
             ret_amount = odds_val * 300 if odds_val else 0
             ret_str = f"R{ret_amount:,.0f}" if ret_amount else "R?"
             lines.append(
-                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}\n"
+                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}\n"
                 f"    {info_line}\n"
                 f"    💰 {ret_str} return on R300"
             )
         else:
             # Locked: sport emoji + match + tier badge, info, lock message
             lines.append(
-                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}\n"
+                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}\n"
                 f"    {info_line}\n"
                 f"    Our highest-conviction pick."
             )
