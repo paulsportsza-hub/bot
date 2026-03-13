@@ -12069,10 +12069,20 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         _sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
         _ld_home = h(tip.get("home_team", ""))
         _ld_away = h(tip.get("away_team", ""))
-        _bc = _get_broadcast_details(
-            home_team=tip.get("home_team", ""), away_team=tip.get("away_team", ""),
-            league_key=tip.get("league_key", ""),
-        )
+        # W84-RT-R2: _get_broadcast_details() is a sync SQLite call — wrap in to_thread
+        # so it never blocks the asyncio event loop during scraper write windows.
+        try:
+            _bc = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _get_broadcast_details,
+                    home_team=tip.get("home_team", ""),
+                    away_team=tip.get("away_team", ""),
+                    league_key=tip.get("league_key", ""),
+                ),
+                timeout=3.0,
+            )
+        except Exception:
+            _bc = {}
         # W84-Q5: Prefer metadata stored during list render (ensures header completeness)
         if not _bc.get("kickoff") and tip.get("_bc_kickoff"):
             _bc = {**_bc, "kickoff": tip["_bc_kickoff"]}
@@ -12150,11 +12160,19 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         edge = tip.get("display_tier", tip.get("edge_rating", ""))
 
         # Look up kickoff time + broadcast channel from DStv schedule
-        bc_data = _get_broadcast_details(
-            home_team=tip.get("home_team") or "",
-            away_team=tip.get("away_team") or "",
-            league_key=tip.get("league_key", ""),
-        )
+        # W84-RT-R2: sync SQLite call → wrapped in to_thread to keep event loop unblocked.
+        try:
+            bc_data = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _get_broadcast_details,
+                    home_team=tip.get("home_team") or "",
+                    away_team=tip.get("away_team") or "",
+                    league_key=tip.get("league_key", ""),
+                ),
+                timeout=3.0,
+            )
+        except Exception:
+            bc_data = {}
         # W84-Q5: Prefer metadata stored during list render for header completeness.
         # _build_hot_tips_page stores _bc_kickoff/_bc_broadcast — these reflect the same
         # DStv lookup that built the list card, ensuring list and detail are consistent.
@@ -16657,54 +16675,100 @@ async def _post_init(app_instance) -> None:
     ])
 
 
+_PID_LOCK_FD: int | None = None  # module-level so fd stays open (flock held for process lifetime)
+
+
 def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
-    """Ensure only one bot instance runs at a time via PID file lock."""
+    """Ensure only one bot instance runs at a time.
+
+    Uses fcntl.flock(LOCK_EX | LOCK_NB) on the PID file for atomic singleton
+    enforcement.  The file descriptor is kept open at module level (_PID_LOCK_FD)
+    so the kernel-held lock persists for the lifetime of the process.  On exit
+    (atexit, SIGTERM, SIGINT) the file is removed before the fd is closed, so a
+    racing restart sees an absent file rather than a stale-locked one.
+    """
     import atexit
+    import fcntl
     import signal
 
-    if os.path.exists(path):
+    global _PID_LOCK_FD
+
+    # Open (or create) the PID file before locking so we always have an fd.
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except PermissionError:
+        log.error("Permission denied opening PID file at %s. Exiting.", path)
+        raise SystemExit(1)
+
+    # Attempt atomic exclusive non-blocking lock.
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        # Another process holds the lock.  Read the PID for a helpful message.
         try:
-            pid_text = open(path).read().strip()
-            old_pid = int(pid_text)
-            # Check if the PID belongs to a python bot.py process (not a recycled PID)
+            existing = os.read(fd, 32).decode().strip()
+        except OSError:
+            existing = "unknown"
+        os.close(fd)
+        log.error(
+            "Another instance already holds the singleton lock (PID %s). Exiting.",
+            existing,
+        )
+        raise SystemExit(1)
+
+    # We hold the lock.  Check whether a stale PID file from a crashed process
+    # (that never held the flock) listed a still-running bot.py process.
+    try:
+        old_text = os.pread(fd, 32, 0).decode().strip()
+        if old_text:
             try:
+                old_pid = int(old_text)
                 cmdline_path = f"/proc/{old_pid}/cmdline"
                 if os.path.exists(cmdline_path):
                     cmdline = open(cmdline_path, "rb").read().decode("utf-8", errors="replace")
-                    if "bot.py" not in cmdline:
-                        log.warning("PID %d exists but is not bot.py (%s) — removing stale PID file.",
-                                    old_pid, cmdline[:60].replace("\x00", " "))
-                        os.remove(path)
+                    if "bot.py" in cmdline:
+                        # Soft PID check says something is running — but we hold the
+                        # flock so that process doesn't.  Log and continue.
+                        log.warning(
+                            "Stale PID file referenced PID %d which appears live "
+                            "(cmdline: %s). Lock acquired; overwriting.",
+                            old_pid,
+                            cmdline[:60].replace("\x00", " "),
+                        )
                     else:
-                        log.error("Another instance is already running (PID %d). Exiting.", old_pid)
-                        raise SystemExit(1)
+                        log.info("Stale PID file (PID %d, not bot.py) — overwriting.", old_pid)
                 else:
-                    # /proc/<pid> doesn't exist — process is dead
-                    log.warning("Removing stale PID file (PID was %s).", pid_text)
-                    os.remove(path)
-            except PermissionError:
-                log.error("Permission denied checking PID file at %s. Exiting.", path)
-                raise SystemExit(1)
-        except (ValueError, OSError):
-            # Corrupt PID file or other OS error — remove it
-            log.warning("Removing stale/corrupt PID file at %s.", path)
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+                    log.info("Stale PID file (PID %d, process gone) — overwriting.", old_pid)
+            except (ValueError, OSError):
+                log.info("Corrupt/unreadable PID file — overwriting.")
+    except OSError:
+        pass
 
+    # Write our PID into the locked file (truncate first).
     try:
-        with open(path, "w") as f:
-            f.write(str(os.getpid()))
-    except PermissionError:
-        log.error("Permission denied writing PID file at %s. Exiting.", path)
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, str(os.getpid()).encode())
+    except OSError as exc:
+        log.error("Failed to write PID file: %s. Exiting.", exc)
+        os.close(fd)
         raise SystemExit(1)
 
+    _PID_LOCK_FD = fd  # keep fd open → lock held for process lifetime
+
     def _cleanup_pid() -> None:
+        global _PID_LOCK_FD
         try:
             os.remove(path)
         except FileNotFoundError:
             pass
+        if _PID_LOCK_FD is not None:
+            try:
+                fcntl.flock(_PID_LOCK_FD, fcntl.LOCK_UN)
+                os.close(_PID_LOCK_FD)
+            except OSError:
+                pass
+            _PID_LOCK_FD = None
 
     atexit.register(_cleanup_pid)
 
@@ -16714,6 +16778,63 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
 
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
+
+
+def _log_startup_truth() -> None:
+    """Log a compact truth block at startup so freshness is always verifiable.
+
+    Emitted immediately after the singleton lock is acquired.  Contains:
+      - PID and start timestamp
+      - git commit SHA (HEAD)
+      - bot.py mtime (confirms code on disk matches what Python loaded)
+      - singleton lock acquisition status
+    Sentry also captures this as a structured event so duplicate-instance
+    and stale-process incidents are surfaced in the dashboard.
+    """
+    import subprocess
+
+    pid = os.getpid()
+    bot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")
+    try:
+        mtime = os.stat(bot_path).st_mtime
+        import datetime as _dt
+        mtime_str = _dt.datetime.utcfromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S UTC")
+    except OSError:
+        mtime_str = "unavailable"
+
+    try:
+        git_sha = subprocess.check_output(
+            ["git", "-C", os.path.dirname(bot_path), "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        ).decode().strip()
+    except Exception:
+        git_sha = "unknown"
+
+    lock_status = "HELD" if _PID_LOCK_FD is not None else "NOT HELD (soft PID only)"
+
+    truth_lines = [
+        f"=== MzansiEdge Startup Truth ===",
+        f"  PID          : {pid}",
+        f"  git SHA      : {git_sha}",
+        f"  bot.py mtime : {mtime_str}",
+        f"  singleton    : flock {lock_status}",
+        f"================================",
+    ]
+    for line in truth_lines:
+        log.info(line)
+
+    if sentry_sdk:
+        sentry_sdk.capture_message(
+            "bot_startup",
+            level="info",
+            extras={
+                "pid": pid,
+                "git_sha": git_sha,
+                "bot_mtime": mtime_str,
+                "lock_status": lock_status,
+            },
+        )
 
 
 async def _post_shutdown(app_instance) -> None:
@@ -16733,6 +16854,7 @@ async def _post_shutdown(app_instance) -> None:
 
 def main() -> None:
     _acquire_pid_lock()
+    _log_startup_truth()
     log.info("Starting MzansiEdge bot…")
     app = Application.builder().token(config.BOT_TOKEN).build()
 

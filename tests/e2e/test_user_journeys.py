@@ -95,8 +95,8 @@ class TestBronzeJourney:
             for btn in row
             if btn.callback_data
         ]
-        # W84-P0: locked/blurred edges route to hot:upgrade (shows upgrade prompt + Back button)
-        assert "hot:upgrade" in callbacks
+        # W84-P0: locked/blurred edges route to hot:upgrade:{page} (page-encoded since W84-HT2)
+        assert any(cb.startswith("hot:upgrade") for cb in callbacks)
         # Accessible (silver/bronze) edges still route to edge:detail
         assert any(cb.startswith("edge:detail:") for cb in callbacks)
 
