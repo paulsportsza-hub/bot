@@ -428,18 +428,25 @@ async def test_cmd_admin_non_admin_ignored(test_db, mock_update, mock_context):
     mock_update.message.reply_text.assert_not_called()
 
 
-async def test_handle_picks_go(test_db, mock_update, mock_context):
-    """picks:go callback should trigger picks flow."""
+@pytest.mark.parametrize("action", ["go", "today"])
+async def test_handle_picks_legacy_callbacks_redirect_to_hot_tips(
+    test_db, mock_update, mock_context, action
+):
+    """Legacy picks callbacks should redirect into Hot Tips."""
     await db.upsert_user(77779, "picker3", "Picker3")
     query = mock_update.callback_query
     query.from_user.id = 77779
     query.message.chat_id = 77779
 
-    no_picks_result = {
-        "ok": False, "picks": [], "total_events": 0, "total_markets": 0,
-        "total_scanned": 0, "quota_remaining": "499", "errors": None,
-    }
-    with patch("bot.get_picks_for_user", new_callable=AsyncMock, return_value=no_picks_result):
-        await bot.handle_picks(query, mock_context, "go")
+    with (
+        patch("bot._do_hot_tips_flow", new_callable=AsyncMock) as hot_tips_flow,
+        patch("bot._do_picks_flow", new_callable=AsyncMock) as picks_flow,
+    ):
+        await bot.handle_picks(query, mock_context, action)
 
-    assert mock_context.bot.send_message.call_count >= 1
+    hot_tips_flow.assert_awaited_once_with(
+        chat_id=77779,
+        bot=mock_context.bot,
+        user_id=77779,
+    )
+    picks_flow.assert_not_called()

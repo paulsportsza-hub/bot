@@ -6091,7 +6091,7 @@ async def cmd_picks(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_picks(query, ctx: ContextTypes.DEFAULT_TYPE, action: str) -> None:
     """Callback handler for picks:go and picks:today buttons."""
     if action in ("go", "today"):
-        await _do_picks_flow(
+        await _do_hot_tips_flow(
             chat_id=query.message.chat_id,
             bot=ctx.bot,
             user_id=query.from_user.id,
