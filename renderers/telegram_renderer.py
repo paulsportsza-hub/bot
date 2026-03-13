@@ -82,8 +82,7 @@ def render_picks_header(data: dict[str, Any]) -> str:
         f"\U0001f4b0 <b>Found {len(picks)} value bet{'s' if len(picks) != 1 else ''}!</b>\n\n"
         f"\U0001f4ca Scanned {data['total_events']} events | "
         f"{data['total_markets']} markets\n"
-        f"\u2696\ufe0f Risk: {data['risk_label']}\n"
-        f"<i>API quota: {data.get('quota_remaining', '?')} remaining</i>"
+        f"\u2696\ufe0f Risk: {data['risk_label']}"
     )
 
 
@@ -94,18 +93,15 @@ def render_no_picks(data: dict[str, Any]) -> str:
         return (
             "\U0001f4ed <b>No value bets found right now</b>\n\n"
             f"Scanned {data['total_events']} events across your leagues.\n\n"
-            "This means bookmaker odds are fair \u2014 no easy edges today.\n"
-            "Check back later! We scan markets throughout the day.\n\n"
-            f"<i>API quota: {data.get('quota_remaining', '?')} remaining</i>"
+            "Nothing cleared the board yet.\n"
+            "Check back later - we keep scanning through the day."
         )
     return (
         "\U0001f4ed <b>No value bets found right now</b>\n\n"
         f"Scanned {data['total_events']} events | "
         f"{data['total_markets']} markets\n\n"
-        f"No edges meeting your {data['risk_label']} profile.\n"
-        "This is the AI protecting your bankroll \u2014 "
-        "check back when more markets open or adjust your risk in /settings.\n\n"
-        f"<i>API quota: {data.get('quota_remaining', '?')} remaining</i>"
+        f"Nothing clears your {data['risk_label']} profile right now.\n"
+        "Check back when more markets open or adjust your risk in /settings."
     )
 
 

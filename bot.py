@@ -4071,6 +4071,172 @@ def _truncate_form_bullets(bullets: list[str], match_ctx: dict | None) -> list[s
     return result
 
 
+def _normalize_fixture_token(value: str) -> str:
+    """Normalise team/league labels for loose fixture matching."""
+    import re
+
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def _derive_pref_targets(prefs: list) -> tuple[set[str], set[str]]:
+    """Return (team_names, league_keys) from stored sport preferences."""
+    user_teams: set[str] = set()
+    league_keys: set[str] = set()
+
+    for pref in prefs:
+        if pref.team_name:
+            user_teams.add(pref.team_name)
+        if pref.league:
+            league_keys.add(pref.league)
+            continue
+        if not pref.team_name:
+            continue
+
+        inferred = config.TEAM_TO_LEAGUES.get(pref.team_name, [])
+        if not inferred:
+            canonical = config.TEAM_ALIASES.get(pref.team_name.lower(), "")
+            if canonical:
+                inferred = config.TEAM_TO_LEAGUES.get(canonical, [])
+        sport_key = pref.sport_key or ""
+        for league_key in inferred:
+            if not sport_key or config.LEAGUE_SPORT.get(league_key) == sport_key:
+                league_keys.add(league_key)
+
+    return user_teams, league_keys
+
+
+def _format_fixture_broadcast(channel_short: str = "", dstv_number: str = "") -> str:
+    """Build a compact broadcast label for fixture preview surfaces."""
+    channel_short = (channel_short or "").strip()
+    dstv_number = (dstv_number or "").strip()
+    if channel_short and dstv_number:
+        return f"📺 {channel_short} (DStv {dstv_number})"
+    if dstv_number:
+        return f"📺 DStv {dstv_number}"
+    if channel_short:
+        return f"📺 {channel_short}"
+    return ""
+
+
+async def _get_user_fixture_preview(
+    user_id: int,
+    limit: int = 3,
+    days_ahead: int = 7,
+) -> list[dict]:
+    """Return up to `limit` relevant upcoming fixtures for a user from broadcast_schedule."""
+    prefs = await db.get_user_sport_prefs(user_id)
+    user_teams, league_keys = _derive_pref_targets(prefs)
+    if not user_teams and not league_keys:
+        return []
+
+    try:
+        import sys
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        from db_connection import get_connection as _get_conn
+
+        if "/home/paulsportsza" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza")
+        if "/home/paulsportsza/scrapers" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza/scrapers")
+
+        tz = ZoneInfo(config.TZ)
+        today = datetime.now(tz).date()
+        horizon = today + timedelta(days=max(days_ahead, 1))
+
+        conn = _get_conn("/home/paulsportsza/scrapers/odds.db")
+        rows = conn.execute(
+            "SELECT programme_title, channel_short, dstv_number, broadcast_date, "
+            "start_time, league, home_team, away_team "
+            "FROM broadcast_schedule "
+            "WHERE broadcast_date BETWEEN ? AND ? AND is_live = 1 "
+            "ORDER BY start_time ASC",
+            (today.isoformat(), horizon.isoformat()),
+        ).fetchall()
+        conn.close()
+
+        team_tokens = {_normalize_fixture_token(team) for team in user_teams if team}
+        league_tokens: set[str] = set()
+        for league_key in league_keys:
+            league_tokens.add(_normalize_fixture_token(league_key))
+            league_def = config.ALL_LEAGUES.get(league_key)
+            if league_def:
+                league_tokens.add(_normalize_fixture_token(league_def.label))
+
+        fixtures: list[dict] = []
+        seen: set[str] = set()
+        for row in rows:
+            home = row["home_team"] or ""
+            away = row["away_team"] or ""
+            title = row["programme_title"] or ""
+            if not home or not away:
+                continue
+
+            home_norm = _normalize_fixture_token(home)
+            away_norm = _normalize_fixture_token(away)
+            title_norm = _normalize_fixture_token(title)
+            league_raw = row["league"] or ""
+            league_norm = _normalize_fixture_token(league_raw)
+
+            team_match = any(
+                token and (token in home_norm or token in away_norm or token in title_norm)
+                for token in team_tokens
+            )
+            league_match = any(
+                token and (token == league_norm or token in league_norm or league_norm in token)
+                for token in league_tokens
+            )
+            if not (team_match or league_match):
+                continue
+
+            dedup_key = f"{home_norm}_{away_norm}_{(row['broadcast_date'] or '')}"
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+
+            league_display = league_raw
+            for league_def in config.ALL_LEAGUES.values():
+                norm_key = _normalize_fixture_token(league_def.key)
+                norm_label = _normalize_fixture_token(league_def.label)
+                if league_norm in (norm_key, norm_label) or norm_label in league_norm:
+                    league_display = league_def.label
+                    break
+
+            fixtures.append({
+                "home": home,
+                "away": away,
+                "kickoff": _format_kickoff_display(row["start_time"] or ""),
+                "league": league_display,
+                "broadcast": _format_fixture_broadcast(
+                    row["channel_short"] or "",
+                    str(row["dstv_number"] or ""),
+                ),
+            })
+            if len(fixtures) >= limit:
+                break
+
+        return fixtures
+    except Exception:
+        return []
+
+
+def _format_fixture_preview_lines(fixtures: list[dict], heading: str) -> list[str]:
+    """Render a compact fixture preview block."""
+    lines = [f"🗓️ <b>{heading}</b>"]
+    for fixture in fixtures[:3]:
+        lines.append(f"• <b>{h(fixture.get('home', ''))} vs {h(fixture.get('away', ''))}</b>")
+        meta: list[str] = []
+        if fixture.get("kickoff"):
+            meta.append(f"⏰ {h(fixture['kickoff'])}")
+        if fixture.get("league"):
+            meta.append(h(fixture["league"]))
+        if meta:
+            lines.append("  " + " · ".join(meta))
+        if fixture.get("broadcast"):
+            lines.append(f"  {h(fixture['broadcast'])}")
+    return lines
+
+
 def _get_broadcast_line(
     home_team: str = "",
     away_team: str = "",
@@ -4959,6 +5125,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
     import time
 
     all_tips: list[dict] = []
+    near_miss_tips: list[dict] = []
     seen_match_ids: set[str] = set()  # Deduplicate matches across leagues
 
     # W52-PERF: Collect all matches first, then calculate edges in parallel
@@ -5008,6 +5175,8 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         if isinstance(_v2_result, Exception):
             _v2_result = None
 
+        hidden_candidate = False
+
         if _v2_result and _v2_result.get("tier"):
             # Use V2 results
             predicted_outcome = _v2_result["outcome"]
@@ -5028,10 +5197,9 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
                 match["match_id"], model["outcome"],
             )
             edge = calculate_edge_rating(snapshots, model, movement)
-            if edge == EdgeRating.HIDDEN:
-                continue
             predicted_outcome = model["outcome"]
-            edge_tier = str(edge)  # EdgeRating enum → string
+            hidden_candidate = edge == EdgeRating.HIDDEN
+            edge_tier = "bronze" if hidden_candidate else str(edge)
             composite_score = calculate_edge_score(snapshots, model, movement)
             edge_pct = 0
             sharp_confidence = "low"
@@ -5050,6 +5218,41 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         consensus_prob = sum(implied_probs) / len(implied_probs) if implied_probs else 0
         ev_pct = round((consensus_prob * best_odds - 1) * 100, 1) if best_odds > 0 and consensus_prob > 0 else 0
 
+        event_id = match["match_id"]
+        home_display = _display_team_name(match.get("home_team") or "TBD")
+        away_display = _display_team_name(match.get("away_team") or "TBD")
+        _outcome_labels = {"home": home_display, "away": away_display, "draw": "Draw"}
+        outcome_label = _outcome_labels.get(predicted_outcome, predicted_outcome)
+        base_tip = {
+            "event_id": event_id,
+            "match_id": match["match_id"],
+            "sport_key": _DB_LEAGUE_SPORT.get(league, config.LEAGUE_SPORT.get(league, "soccer")),
+            "home_team": home_display,
+            "away_team": away_display,
+            "commence_time": "",
+            "outcome": outcome_label,
+            "odds": best_odds,
+            "bookmaker": _display_bookmaker_name(best_bk_key),
+            "prob": round(consensus_prob * 100) if consensus_prob else 0,
+            "kelly": 0,
+            "league": _get_league_display(league, home_display, away_display),
+            "league_key": league,
+            "odds_by_bookmaker": odds_by_bk,
+            "sharp_confidence": sharp_confidence,
+            "sharp_source": sharp_source,
+            "edge_v2": _v2_result,
+        }
+
+        if hidden_candidate or (0 < ev_pct < 1.0):
+            near_miss_tips.append({
+                **base_tip,
+                "ev": ev_pct,
+                "edge_rating": edge_tier,
+                "display_tier": edge_tier,
+                "edge_score": composite_score,
+            })
+            continue
+
         if ev_pct < 1.0:
             continue  # Minimum EV threshold
 
@@ -5063,37 +5266,22 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         )
         if adj_ev is None:
             log.debug("Tip excluded by guardrails: %s (%s)", match["match_id"], gr_reason)
+            near_miss_tips.append({
+                **base_tip,
+                "ev": ev_pct,
+                "edge_rating": edge_tier,
+                "display_tier": edge_tier,
+                "edge_score": composite_score,
+            })
             continue
         ev_pct = round(adj_ev * 100, 1)
         edge_tier = str(adj_tier)
 
-        event_id = match["match_id"]
-        home_display = _display_team_name(match.get("home_team") or "TBD")
-        away_display = _display_team_name(match.get("away_team") or "TBD")
-        _outcome_labels = {"home": home_display, "away": away_display, "draw": "Draw"}
-        outcome_label = _outcome_labels.get(predicted_outcome, predicted_outcome)
-
         all_tips.append({
-            "event_id": event_id,
-            "match_id": match["match_id"],
-            "sport_key": _DB_LEAGUE_SPORT.get(league, config.LEAGUE_SPORT.get(league, "soccer")),
-            "home_team": home_display,
-            "away_team": away_display,
-            "commence_time": "",
-            "outcome": outcome_label,
-            "odds": best_odds,
-            "bookmaker": _display_bookmaker_name(best_bk_key),
+            **base_tip,
             "ev": ev_pct,
-            "prob": round(consensus_prob * 100) if consensus_prob else 0,
-            "kelly": 0,
             "edge_rating": edge_tier,
             "edge_score": composite_score,
-            "league": _get_league_display(league, home_display, away_display),
-            "league_key": league,
-            "odds_by_bookmaker": odds_by_bk,
-            "sharp_confidence": sharp_confidence,
-            "sharp_source": sharp_source,
-            "edge_v2": _v2_result,
         })
 
     # Sort by edge score descending, take top 10
@@ -5117,7 +5305,13 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         if v2_tier and display and v2_tier != display:
             log.warning("TIER MISMATCH: %s v2=%s display=%s", tip.get("match_id"), v2_tier, display)
 
-    _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time()}
+    near_miss_tips.sort(key=lambda t: (-t.get("edge_score", 0), -t.get("ev", 0)))
+    thin_state = {
+        "state": "none" if top_tips else ("below_threshold" if near_miss_tips else "no_tips"),
+        "candidate_count": len(near_miss_tips),
+        "weaker_tip": near_miss_tips[0] if near_miss_tips else None,
+    }
+    _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time(), "thin_slate": thin_state}
     return top_tips
 
 
@@ -5148,6 +5342,7 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
         return cache_entry["tips"]
 
     all_tips: list[dict] = []
+    near_miss_tips: list[dict] = []
 
     for sport_key in HOT_TIPS_SCAN_SPORTS:
         try:
@@ -5167,8 +5362,6 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
                     if prob <= 0:
                         continue
                     ev_pct = calculate_ev(entry.price, prob)
-                    if ev_pct < 2.0:
-                        continue
 
                     # Build odds snapshots from all bookmakers for edge rating
                     odds_snaps = []
@@ -5191,10 +5384,7 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
                     }
 
                     edge = calculate_edge_rating(odds_snaps, model_pred)
-                    if edge == EdgeRating.HIDDEN:
-                        continue  # Filter out low-confidence tips
-
-                    all_tips.append({
+                    tip = {
                         "event_id": event.get("id", ""),
                         "sport_key": sport_key,
                         "home_team": event.get("home_team") or "TBD",
@@ -5207,7 +5397,13 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
                         "prob": round(prob * 100),
                         "kelly": round(calc_kelly(entry.price, prob, fraction=0.5) * 100, 1),
                         "edge_rating": edge,
-                    })
+                    }
+                    if edge == EdgeRating.HIDDEN or (0 < ev_pct < 2.0):
+                        if ev_pct > 0:
+                            near_miss_tips.append(tip | {"edge_rating": "bronze"})
+                        continue  # Filter out low-confidence tips
+
+                    all_tips.append(tip)
         except Exception as exc:
             log.warning("Hot tips scan error for %s: %s", sport_key, exc)
             continue
@@ -5217,7 +5413,13 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
     all_tips.sort(key=lambda t: (_rating_order.get(t.get("edge_rating", ""), 9), -t["ev"]))
     top_tips = all_tips[:10]
 
-    _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time()}
+    near_miss_tips.sort(key=lambda t: (-t.get("ev", 0), -t.get("prob", 0)))
+    thin_state = {
+        "state": "none" if top_tips else ("below_threshold" if near_miss_tips else "no_tips"),
+        "candidate_count": len(near_miss_tips),
+        "weaker_tip": near_miss_tips[0] if near_miss_tips else None,
+    }
+    _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time(), "thin_slate": thin_state}
     return top_tips
 
 
@@ -5234,6 +5436,9 @@ def _build_hot_tips_page(
     hit_rate_7d: float = 0.0,
     resource_count: int = 0,
     user_id: int = 0,
+    thin_slate_mode: str = "no_tips",
+    thin_slate_fixtures: list[dict] | None = None,
+    thin_slate_weaker_tip: dict | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build text + keyboard for a single page of hot tips (max 4 per page).
 
@@ -5251,9 +5456,43 @@ def _build_hot_tips_page(
     page_tips = tips[start:end]
 
     if not page_tips:
+        thin_slate_fixtures = thin_slate_fixtures or []
+        lines = ["💎 <b>Top Edge Picks</b>"]
+        if thin_slate_mode == "below_threshold":
+            lines.extend([
+                "",
+                "No Gold or Diamond-grade edges have cleared our bar yet.",
+                "A couple of early leans are forming, but nothing belongs on the main card yet.",
+            ])
+            if thin_slate_weaker_tip:
+                weaker_odds = thin_slate_weaker_tip.get("odds", 0) or 0
+                lines.extend([
+                    "",
+                    "👀 <b>Watchlist</b>",
+                    (
+                        f"{_get_sport_emoji_for_api_key(thin_slate_weaker_tip.get('sport_key', ''))} "
+                        f"<b>{h(thin_slate_weaker_tip.get('home_team', ''))} vs "
+                        f"{h(thin_slate_weaker_tip.get('away_team', ''))}</b> — "
+                        f"{h(thin_slate_weaker_tip.get('outcome', 'Lean'))} @ {weaker_odds:.2f}"
+                    ),
+                    "<i>Worth monitoring, but not strong enough to post as a main edge yet.</i>",
+                ])
+        else:
+            lines.extend([
+                "",
+                "It's a thin slate right now, so there is nothing premium to post yet.",
+            ])
+        if thin_slate_fixtures:
+            lines.append("")
+            lines.extend(_format_fixture_preview_lines(thin_slate_fixtures, "Up Next"))
+        else:
+            lines.extend([
+                "",
+                "A lighter board today, but we will keep tracking prices as markets open.",
+            ])
+        lines.extend(["", "<i>Scanning for edges - check again closer to kickoff.</i>"])
         return (
-            "💎 <b>Top Edge Picks</b>\n\nNo edges found right now — the market is efficient.\n"
-            "Check back when more games open!",
+            "\n".join(lines),
             InlineKeyboardMarkup([
                 [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
@@ -5667,12 +5906,19 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         except Exception:
             pass
 
-    # Show ALL tips with tiered display — no blocking, no empty state from gating
+    # Show ALL tips with tiered display — thin-slate fallback adds fixtures when no edge clears the bar
+    thin_slate = (_hot_tips_cache.get("global") or {}).get("thin_slate", {})
+    thin_slate_fixtures = []
+    if not tips and user_id:
+        thin_slate_fixtures = await _get_user_fixture_preview(user_id, limit=3, days_ahead=7)
     text, markup = _build_hot_tips_page(
         tips, page=0, user_tier=user_tier, remaining_views=remaining_views,
         consecutive_misses=_consec_misses,
         hit_rate_7d=_hit_rate, resource_count=_res_count,
         user_id=user_id or 0,
+        thin_slate_mode=thin_slate.get("state", "no_tips"),
+        thin_slate_fixtures=thin_slate_fixtures,
+        thin_slate_weaker_tip=thin_slate.get("weaker_tip"),
     )
     await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
     # W84-HT2: freeze page identity at render time (cold path)
@@ -5932,19 +6178,16 @@ async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
             text = (
                 "📭 <b>No value bets found right now</b>\n\n"
                 f"Scanned {result['total_events']} events across your leagues.\n\n"
-                "This means bookmaker odds are fair — no easy edges today.\n"
-                "Check back later! We scan markets throughout the day.\n\n"
-                f"<i>API quota: {result.get('quota_remaining', '?')} remaining</i>"
+                "Nothing cleared the board yet.\n"
+                "Check back later - we keep scanning through the day."
             )
         else:
             text = (
                 "📭 <b>No value bets found right now</b>\n\n"
                 f"Scanned {result['total_events']} events | "
                 f"{result['total_markets']} markets\n\n"
-                f"No edges meeting your {risk_label} profile.\n"
-                "This is the AI protecting your bankroll — "
-                "check back when more markets open or adjust your risk in /settings.\n\n"
-                f"<i>API quota: {result.get('quota_remaining', '?')} remaining</i>"
+                f"Nothing clears your {risk_label} profile right now.\n"
+                "Check back when more markets open or adjust your risk in /settings."
             )
         await bot.send_message(
             chat_id, text, parse_mode=ParseMode.HTML,
@@ -5960,8 +6203,7 @@ async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
         f"💰 <b>Found {len(picks)} value bet{'s' if len(picks) != 1 else ''}!</b>\n\n"
         f"📊 Scanned {result['total_events']} events | "
         f"{result['total_markets']} markets\n"
-        f"⚖️ Risk: {profile['label']}\n"
-        f"<i>API quota: {result.get('quota_remaining', '?')} remaining</i>",
+        f"⚖️ Risk: {profile['label']}",
         parse_mode=ParseMode.HTML,
     )
 
@@ -13520,12 +13762,22 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 results_block = "\n".join(r_lines) + "\n"
 
             if not tips:
-                teaser = (
-                    f"☀️ <b>Good morning!</b>\n\n"
-                    f"{results_block}"
-                    "No value bets found yet today — the market is tight.\n"
-                    "Check back later or browse your games!"
-                )
+                fixtures = await _get_user_fixture_preview(user.id, limit=3, days_ahead=1)
+                lines = ["☀️ <b>Good morning!</b>"]
+                if results_block:
+                    lines.extend(["", results_block.strip()])
+                lines.append("")
+                if fixtures:
+                    lines.extend(_format_fixture_preview_lines(fixtures, "Today's Slate"))
+                    lines.extend(["", "<i>Scanning for edges - check back around kickoff.</i>"])
+                else:
+                    lines.extend([
+                        "🗓️ <b>Today's Slate</b>",
+                        "It's a lighter card this morning, so we are tracking markets as they take shape.",
+                        "",
+                        "<i>We will keep scanning and surface anything worth your time before kickoff.</i>",
+                    ])
+                teaser = "\n".join(lines)
                 await ctx.bot.send_message(
                     chat_id=user.id, text=teaser, parse_mode=ParseMode.HTML,
                     reply_markup=InlineKeyboardMarkup([
@@ -13739,6 +13991,19 @@ def _format_weekend_preview(upcoming: dict, user_tier: str) -> str:
     return "\n".join(lines)
 
 
+def _format_weekend_fixture_preview(fixtures: list[dict]) -> str:
+    """Fallback weekend preview when fixtures exist but no strong edges do."""
+    lines = [
+        "🗓️ <b>Weekend Preview</b>",
+        "",
+        "It's a thinner board so far, but these are the fixtures on deck.",
+        "",
+    ]
+    lines.extend(_format_fixture_preview_lines(fixtures, "This Weekend"))
+    lines.extend(["", "<i>We are still scanning prices and will post premium edges if they open up.</i>"])
+    return "\n".join(lines)
+
+
 async def _weekend_preview_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Thursday 18:00 SAST: send tier-segmented weekend preview to all onboarded users."""
     from datetime import datetime as dt_cls
@@ -13762,11 +14027,6 @@ async def _weekend_preview_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _wp_mon.done(exc)
         return
 
-    if upcoming.get("total", 0) == 0:
-        log.info("No upcoming edges for weekend preview — skipping")
-        _wp_mon.done()
-        return
-
     users = await db.get_all_onboarded_users()
     log.info("Weekend Preview: sending to %d users", len(users))
     sent = 0
@@ -13777,7 +14037,13 @@ async def _weekend_preview_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 continue
 
             user_tier = await get_effective_tier(user.id)
-            text = _format_weekend_preview(upcoming, user_tier)
+            if upcoming.get("total", 0) > 0:
+                text = _format_weekend_preview(upcoming, user_tier)
+            else:
+                fixtures = await _get_user_fixture_preview(user.id, limit=3, days_ahead=5)
+                if not fixtures:
+                    continue
+                text = _format_weekend_fixture_preview(fixtures)
 
             buttons = [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]]
             if user_tier in ("bronze", "gold"):
@@ -13966,6 +14232,19 @@ def _format_monday_recap(settled: list[dict], user_tier: str) -> str:
     return "\n".join(lines)
 
 
+def _format_week_ahead_preview(fixtures: list[dict]) -> str:
+    """Fallback Monday push when there are no settled results yet."""
+    lines = [
+        "📅 <b>Week Ahead</b>",
+        "",
+        "No weekend results have settled yet, so here is the next run of fixtures on your radar.",
+        "",
+    ]
+    lines.extend(_format_fixture_preview_lines(fixtures, "Coming Up"))
+    lines.extend(["", "<i>We will keep scanning and publish edges as the week builds.</i>"])
+    return "\n".join(lines)
+
+
 async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Monday 08:00 SAST: send weekend recap to Bronze and Gold users."""
     from datetime import datetime as dt_cls
@@ -13991,11 +14270,6 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _mr_mon.done(exc)
         return
 
-    if not settled:
-        log.info("No settled edges for weekend recap — skipping")
-        _mr_mon.done()
-        return
-
     users = await db.get_all_onboarded_users()
     log.info("Monday Recap: sending to %d users (excl. Diamond)", len(users))
     sent = 0
@@ -14010,7 +14284,13 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if user_tier == "diamond":
                 continue
 
-            text = _format_monday_recap(settled, user_tier)
+            if settled:
+                text = _format_monday_recap(settled, user_tier)
+            else:
+                fixtures = await _get_user_fixture_preview(user.id, limit=3, days_ahead=7)
+                if not fixtures:
+                    continue
+                text = _format_week_ahead_preview(fixtures)
             if not text:
                 continue
 
@@ -16118,13 +16398,23 @@ async def _qa_trigger_teaser(ctx, uid: int, tier: str) -> None:
         results_block = "\n".join(r_lines) + "\n"
 
     if not tips:
-        teaser = (
-            f"☀️ <b>Good morning!</b>\n\n"
-            f"{results_block}"
-            "No value bets found yet today — the market is tight.\n"
-            "Check back later or browse your games!\n\n"
-            f"🧪 <i>QA: {tier} tier teaser</i>"
-        )
+        fixtures = await _get_user_fixture_preview(uid, limit=3, days_ahead=1)
+        lines = ["☀️ <b>Good morning!</b>"]
+        if results_block:
+            lines.extend(["", results_block.strip()])
+        lines.append("")
+        if fixtures:
+            lines.extend(_format_fixture_preview_lines(fixtures, "Today's Slate"))
+            lines.extend(["", "<i>Scanning for edges - check back around kickoff.</i>"])
+        else:
+            lines.extend([
+                "🗓️ <b>Today's Slate</b>",
+                "It's a lighter card this morning, so we are tracking markets as they take shape.",
+                "",
+                "<i>We will keep scanning and surface anything worth your time before kickoff.</i>",
+            ])
+        lines.extend(["", f"🧪 <i>QA: {tier} tier teaser</i>"])
+        teaser = "\n".join(lines)
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],

@@ -133,8 +133,7 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "telegram": (
             "\U0001f4b0 <b>Found {count} value bet{s}!</b>\n\n"
             "\U0001f4ca Scanned {events} events | {markets} markets\n"
-            "\u2696\ufe0f Risk: {risk}\n"
-            "<i>API quota: {quota} remaining</i>"
+            "\u2696\ufe0f Risk: {risk}"
         ),
         "whatsapp": (
             "Found {count} value bet{s}!\n\n"
@@ -146,9 +145,8 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "telegram": (
             "\U0001f4ed <b>No value bets found right now</b>\n\n"
             "Scanned {events} events across your leagues.\n\n"
-            "This means bookmaker odds are fair \u2014 no easy edges today.\n"
-            "Check back later! We scan markets throughout the day.\n\n"
-            "<i>API quota: {quota} remaining</i>"
+            "Nothing cleared the board yet.\n"
+            "Check back later - we keep scanning through the day."
         ),
         "whatsapp": (
             "No value bets found right now.\n\n"
@@ -160,10 +158,8 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "telegram": (
             "\U0001f4ed <b>No value bets found right now</b>\n\n"
             "Scanned {events} events | {markets} markets\n\n"
-            "No edges meeting your {risk} profile.\n"
-            "This is the AI protecting your bankroll \u2014 "
-            "check back when more markets open or adjust your risk in /settings.\n\n"
-            "<i>API quota: {quota} remaining</i>"
+            "Nothing clears your {risk} profile right now.\n"
+            "Check back when more markets open or adjust your risk in /settings."
         ),
         "whatsapp": (
             "No value bets found right now.\n\n"
