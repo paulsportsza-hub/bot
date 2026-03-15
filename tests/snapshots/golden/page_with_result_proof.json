@@ -1,0 +1,41 @@
+{
+  "text": "🔥 <b>Top Edge Picks — 4 Live Edges Found</b>\n<i>Scanned 11 leagues, 347,043 external resources and all major SA bookmakers.</i>\n<b>Last 10:</b> ✅❌✅✅❌✅❌✅✅❌ · <b>7D ROI:</b> -4.2%\n<b>✅ 4 Live Edges Found</b>\n\n📊 <b>Yesterday:</b> 1/2 hit (50%)\nTop hit: ⚽ Kaizer Chiefs vs Orlando Pirates 🥇 ✅ @ 2.10 · Return R210\n\n<b>[1]</b> ⚽ <b>Mamelodi Sundowns vs Kaizer Chiefs</b> 💎 [MODEL ONLY]\n    PSL · Sat 10 Mar · 17:30\n    Sundowns @ 1.85 → R555 on R300\n\n<b>[2]</b> ⚽ <b>Arsenal vs Chelsea</b> 🥇 [MODEL ONLY]\n    Premier League · Sat 10 Mar · 17:30\n    Arsenal @ 2.10 → R630 on R300\n\n<b>[3]</b> 🏉 <b>Bulls vs Stormers</b> 🥇 [MODEL ONLY]\n    URC · Sat 10 Mar · 17:30\n    Bulls @ 1.65 → R495 on R300\n\n<b>[4]</b> ⚽ <b>Liverpool vs Man City</b> 🥈 [MODEL ONLY]\n    Premier League · Sat 10 Mar · 17:30\n    Draw @ 3.40 → R1,020 on R300\n\n━━━ <b>Recent Results</b>\n\n<b>✅ HIT</b> ⚽ <b>Kaizer Chiefs vs Orlando Pirates</b> 🥇\n    Premiership (PSL) · Fri 13 Mar\n    Kaizer Chiefs @ 2.10 · Return R210\n\n<b>❌ MISS</b> ⚽ <b>Mamelodi Sundowns vs Cape Town City</b> 🥉\n    Premiership (PSL) · Fri 13 Mar\n    Cape Town City @ 1.80 · Return R0\n",
+  "buttons": [
+    [
+      {
+        "text": "[1] ⚽ SUN v KC 💎",
+        "callback_data": "edge:detail:sundowns_vs_chiefs_2026-03-10",
+        "url": ""
+      },
+      {
+        "text": "[2] ⚽ ARS v CHE 🥇",
+        "callback_data": "edge:detail:arsenal_vs_chelsea_2026-03-10",
+        "url": ""
+      }
+    ],
+    [
+      {
+        "text": "[3] 🏉 BUL v STO 🥇",
+        "callback_data": "edge:detail:bulls_vs_stormers_2026-03-10",
+        "url": ""
+      },
+      {
+        "text": "[4] ⚽ LIV v MCI 🥈",
+        "callback_data": "edge:detail:liverpool_vs_man_city_2026-03-10",
+        "url": ""
+      }
+    ],
+    [
+      {
+        "text": "⚽ My Matches",
+        "callback_data": "yg:all:0",
+        "url": ""
+      },
+      {
+        "text": "↩️ Menu",
+        "callback_data": "nav:main",
+        "url": ""
+      }
+    ]
+  ]
+}

@@ -1110,9 +1110,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _c.close()
                 except Exception:
                     pass
+                _bt_proof = await _get_hot_tips_result_proof()
                 _bt_text, _bt_markup = _build_hot_tips_page(
                     _bt_tips, page=_back_page, user_tier=_bt_tier,
                     remaining_views=_bt_rv, user_id=user_id,
+                    hit_rate_7d=((_bt_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
+                    last_10_results=_bt_proof.get("last_10_results"),
+                    roi_7d=_bt_proof.get("roi_7d"),
+                    recently_settled=_bt_proof.get("recently_settled"),
+                    yesterday_results=_bt_proof.get("yesterday_results"),
                 )
                 await query.edit_message_text(
                     _bt_text, parse_mode=ParseMode.HTML, reply_markup=_bt_markup
@@ -1143,14 +1149,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
             if tips:
                 _user_tier = await get_effective_tier(user_id)
-                # Wave 27-UX: fetch hit rate + resource count for header
-                _pg_hr = 0.0
-                try:
-                    _pgs, *_ = _get_settlement_funcs()
-                    _pg_stats = await asyncio.to_thread(_pgs, 7)
-                    _pg_hr = (_pg_stats.get("hit_rate", 0) or 0) * 100
-                except Exception:
-                    pass
+                _pg_proof = await _get_hot_tips_result_proof()
+                _pg_hr = (_pg_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100
                 _pg_res = 0
                 try:
                     from services.odds_service import get_db_stats as _pg_db_stats
@@ -1170,6 +1170,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     consecutive_misses=_page_consec,
                     hit_rate_7d=_pg_hr, resource_count=_pg_res,
                     user_id=user_id,
+                    last_10_results=_pg_proof.get("last_10_results"),
+                    roi_7d=_pg_proof.get("roi_7d"),
+                    recently_settled=_pg_proof.get("recently_settled"),
+                    yesterday_results=_pg_proof.get("yesterday_results"),
                 )
                 await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
                 # W84-HT2: freeze page identity so detail back returns here
@@ -1309,6 +1313,19 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _c_base_html,
                     _detail_model_state,
                 )
+                _proof = await _get_hot_tips_result_proof()
+                _detail_tier = _cached_content["edge_tier"]
+                if _aligned_tips:
+                    _detail_tier = _aligned_tips[0].get(
+                        "display_tier",
+                        _aligned_tips[0].get("edge_rating", _detail_tier),
+                    )
+                _track_record_line = _format_tier_track_record_line(
+                    _proof.get("stats_7d", {}),
+                    _detail_tier,
+                )
+                if _track_record_line:
+                    _c_base_html += f"\n\n{_track_record_line}"
                 _banner = _qa_banner(user_id)
                 _html = (_banner + _c_base_html) if _banner else _c_base_html
                 await query.edit_message_text(
@@ -1428,6 +1445,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     f"  {h(_it_out)}: <b>{_it_odds:.2f}</b> ({h(_it_bk)})\n"
                     f"    {_it_prob}% · EV: {_it_ev_str}{_it_value_m}"
                 )
+                _proof = await _get_hot_tips_result_proof()
+                _track_record_line = _format_tier_track_record_line(
+                    _proof.get("stats_7d", {}),
+                    _ie_tier,
+                )
+                if _track_record_line:
+                    _ilines.extend(["", _track_record_line])
                 _ihtml = "\n".join(_ilines)
                 _ihtml = _apply_hot_tip_detail_honesty(_ihtml, _detail_model_state)
                 _ihtml = re.sub(r'\n{3,}', '\n\n', _ihtml)
@@ -3892,6 +3916,8 @@ HOT_TIPS_SCAN_SPORTS = [
 
 _hot_tips_cache: dict[str, dict] = {}  # "global" → {"tips": [...], "ts": float}
 HOT_TIPS_CACHE_TTL = 900  # 15 minutes
+_hot_tips_result_proof_cache: dict[str, dict] = {}  # "global" → {"data": {...}, "ts": float}
+HOT_TIPS_RESULT_PROOF_CACHE_TTL = 300  # 5 minutes
 _hot_tips_fetch_lock: asyncio.Lock | None = None  # W84-P1: prevents concurrent cold fetches
 
 # W84-HT2: Per-user Hot Tips page identity snapshot — freezes list/page on each render
@@ -4792,6 +4818,10 @@ def _get_flag_prefixes(home: str, away: str) -> tuple[str, str]:
 
 
 HOT_TIPS_PAGE_SIZE = 4
+RESULT_PROOF_LAST_10_COUNT = 10
+HOT_TIPS_RECENT_SETTLED_LIMIT = 3
+HOT_TIPS_RECENT_SETTLED_HOURS = 36
+DETAIL_TRACK_RECORD_MIN_SETTLED = 3
 HIT_RATE_DISPLAY_THRESHOLD = 50  # Only show hit rate in header when >= this %
 
 
@@ -5007,18 +5037,35 @@ def _load_tips_from_edge_results() -> list[dict]:
     from datetime import date as _date_cls
     try:
         from scrapers.db_connect import connect_odds_db as _conn_fn
-        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+        from scrapers.edge.edge_config import (
+            DB_PATH as _DB_PATH,
+            MAX_PRODUCTION_EDGE_PCT as _MAX_PRODUCTION_EDGE_PCT,
+            MAX_RECOMMENDED_ODDS as _MAX_RECOMMENDED_ODDS,
+        )
         _conn = _conn_fn(_DB_PATH)
         _conn.row_factory = lambda cursor, row: dict(
             zip([col[0] for col in cursor.description], row)
         )
         _today = _date_cls.today().isoformat()
         rows = _conn.execute("""
-            SELECT match_key, edge_tier, composite_score, bet_type,
-                   recommended_odds, bookmaker, predicted_ev, league, match_date
-            FROM edge_results
-            WHERE match_date >= ? AND result IS NULL
-            ORDER BY composite_score DESC
+            SELECT e.match_key, e.edge_tier, e.composite_score, e.bet_type,
+                   e.recommended_odds, e.bookmaker, e.predicted_ev, e.league, e.match_date
+            FROM edge_results e
+            WHERE e.match_date >= ? AND e.result IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM edge_results newer
+                  WHERE newer.match_key = e.match_key
+                    AND newer.result IS NULL
+                    AND (
+                        COALESCE(newer.recommended_at, '') > COALESCE(e.recommended_at, '')
+                        OR (
+                            COALESCE(newer.recommended_at, '') = COALESCE(e.recommended_at, '')
+                            AND newer.id > e.id
+                        )
+                    )
+              )
+            ORDER BY e.composite_score DESC
             LIMIT 20
         """, (_today,)).fetchall()
         _conn.close()
@@ -5045,7 +5092,11 @@ def _load_tips_from_edge_results() -> list[dict]:
 
         # predicted_ev is stored as percentage (e.g. 5.2 = 5.2%)
         ev_pct = round(float(row["predicted_ev"] or 0), 1)
-        if ev_pct <= 0:
+        if (
+            ev_pct <= 0
+            or ev_pct > _MAX_PRODUCTION_EDGE_PCT
+            or float(row["recommended_odds"] or 0) > _MAX_RECOMMENDED_ODDS
+        ):
             continue
 
         league_key = (row["league"] or "").lower()
@@ -5147,6 +5198,11 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             log.warning("Hot tips DB scan error for %s: %s", league, exc)
             continue
 
+    from scrapers.edge.edge_config import (
+        MAX_PRODUCTION_EDGE_PCT as _MAX_PRODUCTION_EDGE_PCT,
+        MAX_RECOMMENDED_ODDS as _MAX_RECOMMENDED_ODDS,
+    )
+
     # W52-PERF: Run all edge calculations concurrently (semaphore limits DB contention)
     _edge_sem = asyncio.Semaphore(4)
 
@@ -5212,6 +5268,8 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         odds_by_bk = outcome_data.get("all_bookmakers", {})
         best_odds = v2_best_odds or outcome_data.get("best_odds", 0)
         best_bk_key = v2_best_bk or outcome_data.get("best_bookmaker", "")
+        if best_odds > _MAX_RECOMMENDED_ODDS:
+            continue
 
         # Calculate EV from consensus
         implied_probs = [1.0 / o for o in odds_by_bk.values() if o and o > 1]
@@ -5255,6 +5313,16 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
 
         if ev_pct < 1.0:
             continue  # Minimum EV threshold
+
+        if ev_pct > _MAX_PRODUCTION_EDGE_PCT:
+            near_miss_tips.append({
+                **base_tip,
+                "ev": ev_pct,
+                "edge_rating": edge_tier,
+                "display_tier": edge_tier,
+                "edge_score": composite_score,
+            })
+            continue
 
         # Apply EV cap guardrails
         bk_count = match.get("bookmaker_count", 0)
@@ -5439,6 +5507,10 @@ def _build_hot_tips_page(
     thin_slate_mode: str = "no_tips",
     thin_slate_fixtures: list[dict] | None = None,
     thin_slate_weaker_tip: dict | None = None,
+    last_10_results: list[str] | None = None,
+    roi_7d: float | None = None,
+    recently_settled: list[dict] | None = None,
+    yesterday_results: list[dict] | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build text + keyboard for a single page of hot tips (max 4 per page).
 
@@ -5447,6 +5519,16 @@ def _build_hot_tips_page(
     """
     from tier_gate import get_edge_access_level
     from renderers.edge_renderer import format_return as _fmt_ret
+
+    last_10_results = [r for r in (last_10_results or []) if r in ("hit", "miss")]
+    recently_settled = [
+        edge for edge in (recently_settled or [])
+        if edge.get("result") in ("hit", "miss")
+    ][:HOT_TIPS_RECENT_SETTLED_LIMIT]
+    yesterday_results = [
+        edge for edge in (yesterday_results or [])
+        if edge.get("result") in ("hit", "miss")
+    ]
 
     total = len(tips)
     total_pages = max((total + HOT_TIPS_PAGE_SIZE - 1) // HOT_TIPS_PAGE_SIZE, 1)
@@ -5514,10 +5596,19 @@ def _build_hot_tips_page(
     _banner = _qa_banner(user_id) if user_id else ""
     lines = [f"{_banner}{header}" if _banner else header, subline]
 
+    track_record_line = _format_hot_tips_track_record_line(last_10_results, roi_7d)
+    if track_record_line:
+        lines.append(track_record_line)
+
     # Third header line: live edge count (Wave 27-UX replaces streak badge)
     lines.append(f"<b>✅ {total} Live Edge{"s" if total != 1 else ""} Found</b>")
 
     lines.append("")
+
+    yesterday_lines = _build_hot_tips_yesterday_lines(yesterday_results)
+    if yesterday_lines:
+        lines.extend(yesterday_lines)
+        lines.append("")
 
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
@@ -5635,6 +5726,11 @@ def _build_hot_tips_page(
         # - NEVER more than \n\n anywhere in Hot Tips output
         lines.append("")  # → produces \n\n via join (one blank line between cards)
 
+    if recently_settled:
+        lines.append("━━━ <b>Recent Results</b>")
+        lines.append("")
+        lines.extend(_build_recently_settled_lines(recently_settled))
+
     # ── Footer CTA (W27-UX-FIX: tight spacing, bold hierarchy) ──
     locked_total = diamond_locked + gold_locked
     if user_tier == "bronze" and locked_total > 0:
@@ -5743,10 +5839,16 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
                 _wm_consec = getattr(_wm_user, "consecutive_misses", 0) or 0
             except Exception:
                 pass
+        _wm_proof = await _get_hot_tips_result_proof()
         _wm_text, _wm_markup = _build_hot_tips_page(
             _cached_tips, page=0, user_tier=_wm_tier,
             remaining_views=_wm_rv, consecutive_misses=_wm_consec,
+            hit_rate_7d=((_wm_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
             user_id=user_id or 0,
+            last_10_results=_wm_proof.get("last_10_results"),
+            roi_7d=_wm_proof.get("roi_7d"),
+            recently_settled=_wm_proof.get("recently_settled"),
+            yesterday_results=_wm_proof.get("yesterday_results"),
         )
         await bot.send_message(chat_id, _wm_text, parse_mode=ParseMode.HTML, reply_markup=_wm_markup)
         # W84-HT2: freeze page identity at render time
@@ -5789,10 +5891,16 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
                 _fast_consec = getattr(_fast_user, "consecutive_misses", 0) or 0
             except Exception:
                 pass
+        _fast_proof = await _get_hot_tips_result_proof()
         _fast_text, _fast_markup = _build_hot_tips_page(
             _fast_tips, page=0, user_tier=_fast_tier,
             remaining_views=_fast_rv, consecutive_misses=_fast_consec,
+            hit_rate_7d=((_fast_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
             user_id=user_id or 0,
+            last_10_results=_fast_proof.get("last_10_results"),
+            roi_7d=_fast_proof.get("roi_7d"),
+            recently_settled=_fast_proof.get("recently_settled"),
+            yesterday_results=_fast_proof.get("yesterday_results"),
         )
         await bot.send_message(chat_id, _fast_text, parse_mode=ParseMode.HTML, reply_markup=_fast_markup)
         # W84-HT2: freeze page identity at render time
@@ -5879,14 +5987,8 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _cached_count += _db_hits
         log.info("CACHE COVERAGE: %d/%d edges have cached narratives", _cached_count, len(tips))
 
-    # Fetch 7-day hit rate for header (Wave 27-UX)
-    _hit_rate = 0.0
-    try:
-        _get_stats, *_ = _get_settlement_funcs()
-        _stats_7d = await asyncio.to_thread(_get_stats, 7)
-        _hit_rate = (_stats_7d.get("hit_rate", 0) or 0) * 100
-    except Exception:
-        pass
+    _result_proof = await _get_hot_tips_result_proof()
+    _hit_rate = (_result_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100
 
     # Fetch resource count (total odds snapshots) for header (Wave 27-UX)
     _res_count = 0
@@ -5919,6 +6021,10 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         thin_slate_mode=thin_slate.get("state", "no_tips"),
         thin_slate_fixtures=thin_slate_fixtures,
         thin_slate_weaker_tip=thin_slate.get("weaker_tip"),
+        last_10_results=_result_proof.get("last_10_results"),
+        roi_7d=_result_proof.get("roi_7d"),
+        recently_settled=_result_proof.get("recently_settled"),
+        yesterday_results=_result_proof.get("yesterday_results"),
     )
     await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
     # W84-HT2: freeze page identity at render time (cold path)
@@ -12655,6 +12761,14 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         text = _format_tip_detail(tip, experience, bankroll)
         best_bk = None
 
+    _proof = await _get_hot_tips_result_proof()
+    _track_record_line = _format_tier_track_record_line(
+        _proof.get("stats_7d", {}),
+        _edge_tier,
+    )
+    if _track_record_line:
+        text += f"\n\n{_track_record_line}"
+
     buttons = _build_game_buttons(
         [tip],
         event_id,
@@ -13467,6 +13581,246 @@ _RESULTS_VISIBLE_TIERS: dict[str, set[str]] = {
     "gold": {"bronze", "silver", "gold"},
     "diamond": {"bronze", "silver", "gold", "diamond"},
 }
+
+
+def _split_match_key_teams(match_key: str) -> tuple[str, str]:
+    """Return display-ready home/away names from a match_key."""
+    if not match_key:
+        return "", ""
+    parts = match_key.rsplit("_", 1)
+    teams_part = parts[0] if len(parts) == 2 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", parts[1]) else match_key
+    if "_vs_" not in teams_part:
+        return "", ""
+    home_key, away_key = teams_part.split("_vs_", 1)
+    return _display_team_name(home_key), _display_team_name(away_key)
+
+
+def _format_match_display(match_key: str) -> str:
+    """Convert a match_key into 'Home vs Away' display text."""
+    home, away = _split_match_key_teams(match_key)
+    if home and away:
+        return f"{home} vs {away}"
+    return match_key.replace("_vs_", " vs ").replace("_", " ").title()
+
+
+def _format_currency_amount(value: float | int | None) -> str:
+    """Format a numeric Rand amount cleanly."""
+    if value is None:
+        return ""
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if amount.is_integer():
+        return f"R{amount:,.0f}"
+    return f"R{amount:,.2f}"
+
+
+def _format_settled_match_day(match_date: str) -> str:
+    """Format a match_date relative to the bot timezone."""
+    if not match_date:
+        return "Settled"
+    from datetime import datetime as _dt_cls, timedelta as _td
+    from zoneinfo import ZoneInfo as _ZI
+
+    try:
+        match_day = _dt_cls.strptime(match_date, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return match_date
+
+    today_local = _dt_cls.now(_ZI(config.TZ)).date()
+    if match_day == today_local:
+        return "Today"
+    if match_day == today_local - _td(days=1):
+        return "Yesterday"
+    return match_day.strftime("%a %d %b")
+
+
+def _resolve_settled_pick_label(edge: dict) -> str:
+    """Return the pick label for a settled edge."""
+    bet_type = edge.get("bet_type", "")
+    home, away = _split_match_key_teams(edge.get("match_key", ""))
+    if bet_type == "Home Win" and home:
+        return home
+    if bet_type == "Away Win" and away:
+        return away
+    return bet_type or ""
+
+
+def _format_hot_tips_track_record_line(last_10_results: list[str], roi_7d: float | None) -> str:
+    """Build the Hot Tips header track-record line."""
+    parts: list[str] = []
+    if len(last_10_results) >= RESULT_PROOF_LAST_10_COUNT:
+        sequence = "".join("✅" if result == "hit" else "❌" for result in last_10_results[:RESULT_PROOF_LAST_10_COUNT])
+        parts.append(f"<b>Last 10:</b> {sequence}")
+    if roi_7d is not None:
+        parts.append(f"<b>7D ROI:</b> {roi_7d:+.1f}%")
+    return " · ".join(parts)
+
+
+def _build_hot_tips_yesterday_lines(yesterday_results: list[dict]) -> list[str]:
+    """Build the Yesterday block shown above Hot Tips cards."""
+    if not yesterday_results:
+        return []
+
+    total = len(yesterday_results)
+    hits = [edge for edge in yesterday_results if edge.get("result") == "hit"]
+    hit_count = len(hits)
+    hit_rate = round(hit_count / total * 100) if total > 0 else 0
+
+    lines = [f"📊 <b>Yesterday:</b> {hit_count}/{total} hit ({hit_rate}%)"]
+    if hits:
+        top_hit = max(
+            hits,
+            key=lambda edge: (
+                edge.get("actual_return") or 0,
+                edge.get("recommended_odds") or 0,
+            ),
+        )
+        sport_emoji = _SPORT_EMOJIS_MAP.get(top_hit.get("sport", "soccer"), "🏅")
+        tier_emoji = EDGE_EMOJIS.get(top_hit.get("edge_tier", "bronze"), "")
+        top_line = f"Top hit: {sport_emoji} {h(_format_match_display(top_hit.get('match_key', '')))} {tier_emoji} ✅"
+        odds = top_hit.get("recommended_odds", 0) or 0
+        if odds > 0:
+            top_line += f" @ {odds:.2f}"
+        actual_return = _format_currency_amount(top_hit.get("actual_return"))
+        if actual_return:
+            top_line += f" · Return {actual_return}"
+        lines.append(top_line)
+    else:
+        lines.append(f"All {total} missed yesterday.")
+    return lines
+
+
+def _build_recently_settled_lines(recently_settled: list[dict]) -> list[str]:
+    """Build informational recently settled cards for Hot Tips."""
+    lines: list[str] = []
+    for edge in recently_settled[:HOT_TIPS_RECENT_SETTLED_LIMIT]:
+        result = edge.get("result", "")
+        if result not in ("hit", "miss"):
+            continue
+        badge = "✅ HIT" if result == "hit" else "❌ MISS"
+        sport_emoji = _SPORT_EMOJIS_MAP.get(edge.get("sport", "soccer"), "🏅")
+        tier_emoji = EDGE_EMOJIS.get(edge.get("edge_tier", "bronze"), "")
+        match_display = h(_format_match_display(edge.get("match_key", "")))
+        league_display = ""
+        if edge.get("league"):
+            try:
+                league_display = _get_league_display(str(edge.get("league", "")).lower())
+            except Exception:
+                league_display = str(edge.get("league", ""))
+        info_parts = [part for part in (league_display, _format_settled_match_day(edge.get("match_date", ""))) if part]
+        pick_label = _resolve_settled_pick_label(edge)
+        odds = edge.get("recommended_odds", 0) or 0
+        detail_parts = []
+        if pick_label:
+            detail = h(pick_label)
+            if odds > 0:
+                detail += f" @ {odds:.2f}"
+            detail_parts.append(detail)
+        elif odds > 0:
+            detail_parts.append(f"@ {odds:.2f}")
+        actual_return = _format_currency_amount(edge.get("actual_return"))
+        if actual_return:
+            detail_parts.append(f"Return {actual_return}")
+
+        lines.append(f"<b>{badge}</b> {sport_emoji} <b>{match_display}</b> {tier_emoji}")
+        if info_parts:
+            lines.append(f"    {' · '.join(info_parts)}")
+        if detail_parts:
+            lines.append(f"    {' · '.join(detail_parts)}")
+        lines.append("")
+    return lines
+
+
+def _format_tier_track_record_line(stats_7d: dict, edge_tier: str) -> str:
+    """Build the tier-specific 7-day track-record line for detail views."""
+    tier_stats = (stats_7d or {}).get("by_tier", {}).get(edge_tier, {})
+    total = tier_stats.get("total", 0) or 0
+    if total < DETAIL_TRACK_RECORD_MIN_SETTLED:
+        return ""
+    hits = tier_stats.get("hits", 0) or 0
+    hit_rate = (tier_stats.get("hit_rate", 0) or 0) * 100
+    tier_emoji = EDGE_EMOJIS.get(edge_tier, "")
+    return f"📊 7D track record: {tier_emoji} {edge_tier.title()} edges hit <b>{hit_rate:.0f}%</b> ({hits}/{total} settled)"
+
+
+def _load_hot_tips_result_proof_sync() -> dict:
+    """Load Hot Tips result-proof data from existing settlement helpers."""
+    from datetime import datetime as _dt_cls, timedelta as _td
+    from zoneinfo import ZoneInfo as _ZI
+    import sys
+
+    proof = {
+        "stats_7d": {
+            "total": 0,
+            "hits": 0,
+            "misses": 0,
+            "hit_rate": 0.0,
+            "avg_ev": 0.0,
+            "avg_return": 0.0,
+            "roi": 0.0,
+            "by_tier": {},
+            "by_sport": {},
+            "period_days": 7,
+        },
+        "roi_7d": None,
+        "last_10_results": [],
+        "recently_settled": [],
+        "yesterday_results": [],
+    }
+
+    try:
+        get_edge_stats, get_recent_settled, *_rest, get_settled_in_range = _get_settlement_funcs()
+        stats_7d = get_edge_stats(7) or proof["stats_7d"]
+        proof["stats_7d"] = stats_7d
+        if stats_7d.get("total", 0) > 0:
+            proof["roi_7d"] = stats_7d.get("roi", 0.0)
+
+        recent_for_sequence = get_recent_settled(RESULT_PROOF_LAST_10_COUNT * 2)
+        last_10_results = [
+            edge.get("result")
+            for edge in recent_for_sequence
+            if edge.get("result") in ("hit", "miss")
+        ][:RESULT_PROOF_LAST_10_COUNT]
+        if len(last_10_results) >= RESULT_PROOF_LAST_10_COUNT:
+            proof["last_10_results"] = last_10_results
+
+        yesterday_local = (_dt_cls.now(_ZI(config.TZ)).date() - _td(days=1)).isoformat()
+        proof["yesterday_results"] = [
+            edge for edge in get_settled_in_range(yesterday_local, yesterday_local)
+            if edge.get("result") in ("hit", "miss")
+        ]
+    except Exception as exc:
+        log.debug("Hot Tips result-proof stats unavailable: %s", exc)
+
+    try:
+        if "/home/paulsportsza" not in sys.path:
+            sys.path.insert(0, "/home/paulsportsza")
+        from scrapers.edge.settlement import get_recently_settled_since
+
+        proof["recently_settled"] = [
+            edge
+            for edge in get_recently_settled_since(HOT_TIPS_RECENT_SETTLED_HOURS)
+            if edge.get("result") in ("hit", "miss")
+        ][:HOT_TIPS_RECENT_SETTLED_LIMIT]
+    except Exception as exc:
+        log.debug("Hot Tips recent settled data unavailable: %s", exc)
+
+    return proof
+
+
+async def _get_hot_tips_result_proof() -> dict:
+    """Return cached Hot Tips result-proof data."""
+    import time as _time
+
+    cache_entry = _hot_tips_result_proof_cache.get("global")
+    if cache_entry and (_time.time() - cache_entry["ts"]) < HOT_TIPS_RESULT_PROOF_CACHE_TTL:
+        return cache_entry["data"]
+
+    proof = await asyncio.to_thread(_load_hot_tips_result_proof_sync)
+    _hot_tips_result_proof_cache["global"] = {"data": proof, "ts": _time.time()}
+    return proof
 
 
 def _format_results_text(
@@ -16965,6 +17319,16 @@ async def _post_init(app_instance) -> None:
     global _hot_tips_fetch_lock
     _hot_tips_fetch_lock = asyncio.Lock()  # W84-P1: must be created inside async context
     await db.init_db()
+
+    try:
+        from scrapers.edge.settlement import run_live_edge_hygiene
+        hygiene_summary = run_live_edge_hygiene()
+        if hygiene_summary["voided"] or hygiene_summary["deduped"]:
+            log.info("Live edge hygiene applied at startup: %s", hygiene_summary)
+        else:
+            log.info("Live edge hygiene check completed: no stale live rows")
+    except Exception as exc:
+        log.warning("Live edge hygiene failed at startup: %s", exc)
 
     # W60-CACHE: Ensure narrative_cache table exists in odds.db
     try:

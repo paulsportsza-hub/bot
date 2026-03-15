@@ -284,6 +284,134 @@ class TestHotTipsHeader:
         assert "predictions in a row" not in text
 
 
+class TestHotTipsResultProof:
+    _TIP = {
+        "home_team": "A", "away_team": "B", "outcome": "A",
+        "odds": 1.50, "ev": 3.0, "sport_key": "", "display_tier": "bronze",
+        "commence_time": "2026-03-04T10:00:00+02:00", "league": "PSL",
+        "league_key": "psl", "match_id": "a_vs_b_2026-03-04", "event_id": "a_vs_b_2026-03-04",
+    }
+
+    def test_track_record_header_shows_last_10_and_negative_roi(self):
+        import bot
+        text, _ = bot._build_hot_tips_page(
+            [self._TIP],
+            page=0,
+            user_tier="diamond",
+            hit_rate_7d=38.0,
+            last_10_results=["hit", "miss", "hit", "hit", "miss", "hit", "miss", "hit", "hit", "miss"],
+            roi_7d=-4.2,
+        )
+        assert "Last 10:" in text
+        assert "✅❌✅✅❌✅❌✅✅❌" in text
+        assert "7D ROI:" in text
+        assert "-4.2%" in text
+
+    def test_track_record_header_omits_sequence_under_10_settled(self):
+        import bot
+        text, _ = bot._build_hot_tips_page(
+            [self._TIP],
+            page=0,
+            user_tier="diamond",
+            last_10_results=["hit", "miss", "hit"],
+            roi_7d=1.5,
+        )
+        assert "Last 10:" not in text
+        assert "7D ROI:" in text
+        assert "+1.5%" in text
+
+    def test_recently_settled_badges_are_informational_only(self):
+        import bot
+        recent = [
+            {
+                "match_key": "chiefs_vs_pirates_2026-03-13",
+                "sport": "soccer",
+                "league": "psl",
+                "edge_tier": "gold",
+                "bet_type": "Home Win",
+                "recommended_odds": 2.10,
+                "actual_return": 210.0,
+                "result": "hit",
+                "match_date": "2026-03-13",
+            },
+            {
+                "match_key": "sundowns_vs_city_2026-03-13",
+                "sport": "soccer",
+                "league": "psl",
+                "edge_tier": "bronze",
+                "bet_type": "Away Win",
+                "recommended_odds": 1.80,
+                "actual_return": 0.0,
+                "result": "miss",
+                "match_date": "2026-03-13",
+            },
+        ]
+        text, markup = bot._build_hot_tips_page(
+            [self._TIP],
+            page=0,
+            user_tier="diamond",
+            recently_settled=recent,
+        )
+        assert "Recent Results" in text
+        assert "✅ HIT" in text
+        assert "❌ MISS" in text
+        callbacks = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+            if getattr(btn, "callback_data", "")
+        ]
+        assert sum(1 for cb in callbacks if cb.startswith("edge:detail:")) == 1
+
+    def test_yesterday_all_misses_use_honest_language(self):
+        import bot
+        yesterday = [
+            {
+                "match_key": "chiefs_vs_pirates_2026-03-13",
+                "sport": "soccer",
+                "league": "psl",
+                "edge_tier": "gold",
+                "recommended_odds": 2.10,
+                "actual_return": 0.0,
+                "result": "miss",
+            },
+            {
+                "match_key": "sundowns_vs_city_2026-03-13",
+                "sport": "soccer",
+                "league": "psl",
+                "edge_tier": "bronze",
+                "recommended_odds": 1.80,
+                "actual_return": 0.0,
+                "result": "miss",
+            },
+        ]
+        text, _ = bot._build_hot_tips_page(
+            [self._TIP],
+            page=0,
+            user_tier="diamond",
+            yesterday_results=yesterday,
+        )
+        assert "Yesterday:" in text
+        assert "0/2 hit (0%)" in text
+        assert "All 2 missed yesterday." in text
+
+    def test_tier_track_record_line_requires_sufficient_sample(self):
+        import bot
+        line = bot._format_tier_track_record_line(
+            {"by_tier": {"gold": {"total": 6, "hits": 4, "hit_rate": 0.667}}},
+            "gold",
+        )
+        assert "Gold edges hit" in line
+        assert "67%" in line
+        assert "(4/6 settled)" in line
+
+        no_line = bot._format_tier_track_record_line(
+            {"by_tier": {"gold": {"total": 2, "hits": 2, "hit_rate": 1.0}}},
+            "gold",
+        )
+        assert no_line == ""
+
+
 # ── W28: Freemium Gate Access Level Tests ─────────────────
 
 

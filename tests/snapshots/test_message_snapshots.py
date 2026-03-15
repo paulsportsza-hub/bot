@@ -100,6 +100,31 @@ def _sample_tips() -> list[dict]:
     ]
 
 
+def _make_settled_edge(
+    match_key: str,
+    *,
+    result: str = "hit",
+    edge_tier: str = "gold",
+    league: str = "psl",
+    sport: str = "soccer",
+    bet_type: str = "Home Win",
+    recommended_odds: float = 2.10,
+    actual_return: float = 210.0,
+    match_date: str = "2026-03-13",
+) -> dict:
+    return {
+        "match_key": match_key,
+        "result": result,
+        "edge_tier": edge_tier,
+        "league": league,
+        "sport": sport,
+        "bet_type": bet_type,
+        "recommended_odds": recommended_odds,
+        "actual_return": actual_return,
+        "match_date": match_date,
+    }
+
+
 def _snapshot_data(text: str, markup) -> dict:
     """Serialise text + InlineKeyboardMarkup to a comparable dict."""
     buttons = []
@@ -154,6 +179,49 @@ class TestHotTipsHeader:
         assert actual["text"] == golden["text"], (
             f"Header snapshot mismatch.\n\nACTUAL:\n{actual['text']}\n\nGOLDEN:\n{golden['text']}"
         )
+
+
+class TestResultProofHotTips:
+    """Snapshot: Hot Tips page with track-record proof, yesterday block, and settled badges."""
+
+    def test_page_with_result_proof(self):
+        with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
+            from bot import _build_hot_tips_page
+            tips = _sample_tips()[:4]
+            text, markup = _build_hot_tips_page(
+                tips,
+                page=0,
+                user_tier="diamond",
+                hit_rate_7d=38.0,
+                resource_count=347043,
+                last_10_results=["hit", "miss", "hit", "hit", "miss", "hit", "miss", "hit", "hit", "miss"],
+                roi_7d=-4.2,
+                recently_settled=[
+                    _make_settled_edge("kaizer_chiefs_vs_orlando_pirates_2026-03-13"),
+                    _make_settled_edge(
+                        "mamelodi_sundowns_vs_cape_town_city_2026-03-13",
+                        result="miss",
+                        edge_tier="bronze",
+                        bet_type="Away Win",
+                        recommended_odds=1.80,
+                        actual_return=0.0,
+                    ),
+                ],
+                yesterday_results=[
+                    _make_settled_edge("kaizer_chiefs_vs_orlando_pirates_2026-03-13"),
+                    _make_settled_edge(
+                        "mamelodi_sundowns_vs_cape_town_city_2026-03-13",
+                        result="miss",
+                        edge_tier="bronze",
+                        bet_type="Away Win",
+                        recommended_odds=1.80,
+                        actual_return=0.0,
+                    ),
+                ],
+            )
+        actual = _snapshot_data(text, markup)
+        golden = _load_or_create_golden("page_with_result_proof", actual)
+        assert actual["text"] == golden["text"]
 
     def test_header_below_threshold(self):
         """Header with hit rate < 50% shows edge count instead."""
