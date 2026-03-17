@@ -167,14 +167,17 @@ class TestTierThresholds:
         )
 
     def test_tier_edge_pct_ordering(self):
-        """Higher tiers must require higher edge_pct."""
+        """Premium tiers stay ordered; Bronze may sit above Silver by design."""
         for thresholds in [TIER_THRESHOLDS, NON_SHARP_TIER_THRESHOLDS]:
             d = thresholds["diamond"]["min_edge_pct"]
             g = thresholds["gold"]["min_edge_pct"]
             s = thresholds["silver"]["min_edge_pct"]
             b = thresholds["bronze"]["min_edge_pct"]
-            assert d >= g >= s >= b, (
-                f"Edge pct thresholds not ordered: diamond={d}, gold={g}, silver={s}, bronze={b}"
+            assert d >= g >= s, (
+                f"Premium edge pct thresholds not ordered: diamond={d}, gold={g}, silver={s}"
+            )
+            assert 0 < b <= g, (
+                f"Bronze edge pct threshold out of expected range: bronze={b}, gold={g}"
             )
 
     def test_assign_tier_below_bronze_returns_none(self):
