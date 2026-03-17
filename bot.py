@@ -848,32 +848,251 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 HELP_TEXT = textwrap.dedent("""\
     <b>MzansiEdge — Help</b>
 
-    <b>Commands</b>
-    /start — Onboarding / Main menu
+    <b>Key commands</b>
+    /start — Start onboarding or reopen your main flow
     /menu — Main menu
-    /picks — Hot tips (best value bets)
-    /schedule — Your games (personalised schedule)
-    /odds — Quick odds overview
-    /tip — Get an AI prediction
+    /picks — <b>Top Edge Picks</b>
+    /schedule — <b>My Matches</b>
+    /results — <b>Edge Tracker</b> (7D / 30D results)
+    /track — Same as /results
+    /settings — Your preferences
+    /subscribe — Plans and upgrades
     /help — This message
 
-    <b>Bottom keyboard</b>
-    ⚽ <b>My Matches</b> — Personalised 7-day schedule with Edge-AI markers
-    💎 <b>Top Edge Picks</b> — Best value bets across all sports
-    📖 <b>Guide</b> — Step-by-step Betway betting guide
-    👤 <b>Profile</b> — Your sports, teams, and preferences
-    ⚙️ <b>Settings</b> — Edit sports, risk, Edge Alerts
-    ❓ <b>Help</b> — This message
+    <b>Sticky keyboard</b>
+    ⚽ <b>My Matches</b> — Your personalised fixture feed with Edge markers
+    💎 <b>Top Edge Picks</b> — The strongest live value spots we have found
+    📖 <b>Guide</b> — Detailed explanations for ratings, signals, value, and bookmaker setup
+    👤 <b>Profile</b> — Your teams, sports, and shortcuts into Edge Tracker
+    ⚙️ <b>Settings</b> — Risk, bankroll, alerts, and sports
+    ❓ <b>Help</b> — This screen
 
-    <b>How the Edge works</b>
-    Our Edge-AI scans live odds across SA bookmakers,
-    calculates true probabilities, and flags when the
-    price is better than it should be.
+    <b>Quick orientation</b>
+    • <b>Top Edge Picks</b> shows the live opportunities
+    • <b>My Matches</b> helps you follow the games you care about
+    • <b>Edge Tracker</b> shows how posted edges have actually settled
+
+    Tap <b>📖 Guide</b> for detailed explanations of what the product is showing you.
 """)
 
 
+GUIDE_TOPICS: list[tuple[str, str]] = [
+    ("edge_ratings", "💎 Edge Ratings — What do tiers mean?"),
+    ("signals", "📶 Signals — What confirms a pick?"),
+    ("track_record", "📈 Track Record — How to read our results"),
+    ("method", "🎯 How Edge-AI Works — Our method"),
+    ("value101", "💰 Value Betting 101 — EV in simple terms"),
+    ("bookmaker", "🏦 Bookmaker Quick Start — Place your first bet"),
+]
+
+
+def kb_help(back_target: str = "menu:home") -> InlineKeyboardMarkup:
+    """Help surface with a direct bridge into the guide."""
+    rows = [[InlineKeyboardButton("📖 Guide", callback_data="guide:menu")]]
+    if back_target == "menu:home":
+        rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home")])
+    else:
+        rows.append([
+            InlineKeyboardButton("↩️ Back", callback_data=back_target),
+            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _build_guide_menu_surface() -> tuple[str, InlineKeyboardMarkup]:
+    """Return the interactive guide hub entry screen."""
+    text = textwrap.dedent("""\
+        📖 <b>Guide</b>
+
+        Your explanation hub for everything users see in <b>💎 Top Edge Picks</b>,
+        match detail, <b>⚽ My Matches</b>, and <b>📊 Edge Tracker</b>.
+
+        Pick a topic:
+    """)
+    rows = [
+        [InlineKeyboardButton(label, callback_data=f"guide:{topic_key}")]
+        for topic_key, label in GUIDE_TOPICS
+    ]
+    rows.append([InlineKeyboardButton("↩️ Back to Menu", callback_data="menu:home")])
+    return text, InlineKeyboardMarkup(rows)
+
+
+def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarkup]:
+    """Return a guide topic page tied to current product surfaces."""
+    active_bk = config.get_active_bookmaker()
+    guide_url = active_bk.get("guide_url", "")
+    bookmaker_name = active_bk.get("short_name", "Betway")
+
+    topic_map: dict[str, tuple[str, list[list[InlineKeyboardButton]]]] = {
+        "edge_ratings": (
+            textwrap.dedent("""\
+                💎 <b>Edge Ratings — What the tiers mean</b>
+
+                The badge tells you how strong the value case looks after our price and signal checks.
+
+                💎 <b>Diamond</b>
+                Rare, highest-conviction opportunities. These are the premium edges users watch first.
+
+                🥇 <b>Gold</b>
+                Strong value with clear support around the price.
+
+                🥈 <b>Silver</b>
+                Good value, but with less separation or less support than Gold.
+
+                🥉 <b>Bronze</b>
+                Positive edge, just lighter. Treat it as a lean, not a guarantee.
+
+                <b>Where you see it</b>
+                • On <b>💎 Top Edge Picks</b>, each match carries a tier badge.
+                • On detail screens, the same tier tells you how premium that edge is.
+                • Higher tiers are usually rarer and deserve more attention, not blind staking.
+            """),
+            [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]],
+        ),
+        "signals": (
+            textwrap.dedent("""\
+                📶 <b>Signals — What confirms a pick?</b>
+
+                A price edge starts the case. Signals show how much support sits behind it.
+
+                <b>What the meter means</b>
+                • More filled bars like <code>▰▰▰▱</code> = stronger support
+                • Fewer bars = mixed or weak support
+                • <b>3/7 signals aligned</b> means 3 available checks backed that side
+
+                <b>The signals you are indirectly seeing</b>
+                • Price edge
+                • Market agreement
+                • Line movement
+                • Form &amp; H2H
+                • Tipster split
+                • Lineup / injury
+                • Weather
+
+                <b>Where it shows up</b>
+                • In <b>Top Edge Picks</b>, you see compact hints like aligned signals
+                • In detail, you see <b>Signal Breakdown</b> or <b>Signal Snapshot</b>
+                • If a pick is marked <b>model-only</b>, the price is doing most of the work
+            """),
+            [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]],
+        ),
+        "track_record": (
+            textwrap.dedent("""\
+                📈 <b>Track Record — How to read our results</b>
+
+                Open <b>/results</b> or tap <b>📊 Edge Tracker</b> to see how posted edges have actually settled.
+
+                <b>What the numbers mean</b>
+                • <b>Hit rate</b> = the share of settled picks that won
+                • <b>ROI</b> = profit or loss relative to stake, not just win count
+                • <b>Streak</b> = the current run of hits or misses
+                • <b>Recent results</b> = the latest settled edges so users can inspect the run
+
+                <b>How to use it well</b>
+                • Check both <b>7-day</b> and <b>30-day</b> views
+                • Do not judge only by one streak
+                • A good hit rate with poor ROI can still be mediocre
+
+                Edge Tracker is the trust surface: it is there so users can audit outcomes, not just read claims.
+            """),
+            [[InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7")]],
+        ),
+        "method": (
+            textwrap.dedent("""\
+                🎯 <b>How Edge-AI Works — Our method</b>
+
+                <b>1. Scan the market</b>
+                We pull live odds across the leagues we cover and compare major SA bookmaker prices.
+
+                <b>2. Price the match</b>
+                We compare the bookmaker number to our model/reference view and look for mispriced odds.
+
+                <b>3. Rank the edge</b>
+                We attach a tier, signal context, and detail so you can see where the case is strongest.
+
+                <b>What the product does</b>
+                • Finds value spots
+                • Explains the case in plain language
+                • Tracks settled outcomes afterward
+
+                <b>What it does not do</b>
+                • Guarantee winners
+                • Know late news before the market reacts
+                • Freeze a price after a pick is posted
+
+                Always re-check the live odds before betting. The edge is about price, not certainty.
+            """),
+            [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]],
+        ),
+        "value101": (
+            textwrap.dedent("""\
+                💰 <b>Value Betting 101 — EV in simple terms</b>
+
+                Value is about price, not just who wins.
+
+                <b>Simple money example</b>
+                If a bet really has a 55% chance and the book offers <b>2.20</b>, a R100 bet has an average value of about <b>R121</b>. That is positive EV.
+
+                If the same bet is only priced at <b>1.80</b>, that R100 is a bad deal over time even if it wins tonight.
+
+                <b>What that means</b>
+                • <b>Positive EV</b> = the odds are better than the true chance suggests
+                • <b>Negative EV</b> = you are overpaying for the bet
+                • A value bet can still lose today
+                • A bad bet can still win today
+
+                <b>Top Edge Picks</b> is built to find the better prices, not guaranteed winners.
+            """),
+            [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]],
+        ),
+        "bookmaker": (
+            textwrap.dedent(f"""\
+                🏦 <b>Bookmaker Quick Start — Place your first bet</b>
+
+                <b>1. Open the right book</b>
+                Use the guide below or the <b>🎰 Bookmakers</b> screen to reach the live bookmaker flow.
+
+                <b>2. Find the exact market</b>
+                Match the game, outcome, and price shown in <b>Top Edge Picks</b> or detail.
+
+                <b>3. Re-check the live odds</b>
+                Prices move. If the number has shortened hard, the edge may be smaller or gone.
+
+                <b>4. Keep the first stake small</b>
+                Use your bankroll plan, not emotion.
+
+                <b>5. Track what happened</b>
+                Use <b>/results</b> and <b>📊 Edge Tracker</b> to learn over time.
+
+                <i>Current setup: MzansiEdge surfaces the active {h(bookmaker_name)} guide and bookmaker links, but you should always verify the live slip before placing the bet.</i>
+            """),
+            [
+                [InlineKeyboardButton("🎰 Bookmakers", callback_data="affiliate:compare")],
+                [InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7")],
+            ],
+        ),
+    }
+
+    if topic_key not in topic_map:
+        return _build_guide_menu_surface()
+
+    text, rows = topic_map[topic_key]
+    buttons = [list(row) for row in rows]
+    if topic_key == "bookmaker" and guide_url:
+        buttons.insert(0, [InlineKeyboardButton(f"📖 Open {bookmaker_name} Guide", url=guide_url)])
+    buttons.append([
+        InlineKeyboardButton("↩️ Back to Guide", callback_data="guide:menu"),
+        InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
+    ])
+    return text, InlineKeyboardMarkup(buttons)
+
+
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+    await update.message.reply_text(
+        HELP_TEXT,
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_help(),
+    )
 
 
 # ── /settings ─────────────────────────────────────────────
@@ -995,6 +1214,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         return
     elif prefix == "menu":
         await handle_menu(query, action)
+    elif prefix == "guide":
+        await handle_guide(query, action)
     elif prefix == "sport":
         await handle_sport(query, action)
     elif prefix == "ai":
@@ -1686,7 +1907,11 @@ async def handle_menu(query, action: str) -> None:
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
 
     elif action == "help":
-        await query.edit_message_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+        await query.edit_message_text(
+            HELP_TEXT,
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_help(),
+        )
 
     elif action == "history":
         tips = await db.get_recent_tips(limit=5)
@@ -1704,6 +1929,22 @@ async def handle_menu(query, action: str) -> None:
                 lines.append("")
             text = "\n".join(lines)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+
+
+# ── Sport / odds handlers ────────────────────────────────
+
+async def handle_guide(query, action: str) -> None:
+    """Handle guide:* callbacks as a single edit-in-place education hub."""
+    if action == "menu":
+        text, markup = _build_guide_menu_surface()
+    else:
+        text, markup = _build_guide_topic_surface(action)
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=markup,
+        disable_web_page_preview=True,
+    )
 
 
 # ── Sport / odds handlers ────────────────────────────────
@@ -2628,7 +2869,10 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text, parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔔 Set Up Edge Alerts", callback_data="story:start")],
-            [InlineKeyboardButton("💎 Show Me Top Edge Picks", callback_data="hot:go")],
+            [
+                InlineKeyboardButton("💎 Show Me Top Edge Picks", callback_data="hot:go"),
+                InlineKeyboardButton("📖 How It Works", callback_data="guide:menu"),
+            ],
             [InlineKeyboardButton("⏭️ Skip for Now", callback_data="nav:main")],
         ]),
     )
@@ -3005,7 +3249,11 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             "⚙️ <b>Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
         )
     elif text == "❓ Help":
-        await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+        await update.message.reply_text(
+            HELP_TEXT,
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_help(),
+        )
 
 
 async def _show_live_games(update: Update, user_id: int) -> None:
@@ -3078,55 +3326,12 @@ async def _show_profile(update: Update, user_id: int) -> None:
 
 
 async def _show_betway_guide(update: Update) -> None:
-    """Show the betting guide with Edge Ratings section and Betway guide link."""
-    active_bk = config.get_active_bookmaker()
-    guide_url = active_bk.get("guide_url", "")
-
-    # Edge Ratings section (always shown first)
-    text = (
-        "📊 <b>Edge Ratings Explained</b>\n\n"
-        "Our Edge-AI compares odds from all the major SA bookmakers and "
-        "calculates the expected value (EV) of every bet. "
-        "The Edge Rating tells you how strong the value is:\n\n"
-        "💎 <b>Diamond Edge</b> — Very high expected value\n"
-        "   Exceptional. The bookmakers have seriously\n"
-        "   mispriced this. Rare — you might see 1-2 a week.\n\n"
-        "🥇 <b>Golden Edge</b> — High expected value\n"
-        "   Strong value. Our AI found a meaningful gap\n"
-        "   between the odds offered and fair probability.\n\n"
-        "🥈 <b>Silver Edge</b> — Moderate expected value\n"
-        "   Solid. Good odds available at one or more\n"
-        "   SA bookmakers.\n\n"
-        "🥉 <b>Bronze Edge</b> — Positive expected value\n"
-        "   Marginal. A slight positive edge exists.\n"
-        "   Proceed with smaller stakes.\n\n"
-        "💡 <i>Tip: Focus on Gold and Diamond tips for "
-        "the best risk-adjusted returns.</i>"
-    )
-
-    # Betway guide section
-    if guide_url:
-        text += (
-            "\n\n─────────────────────\n\n"
-            f"📖 <b>{active_bk['short_name']} Betting Guide</b>\n\n"
-            f"New to {active_bk['short_name']}? Our step-by-step guide covers everything "
-            "from creating your account to placing your first bet."
-        )
-        buttons = [[InlineKeyboardButton(f"📖 Open {active_bk['short_name']} Guide →", url=guide_url)]]
-    else:
-        text += (
-            "\n\n─────────────────────\n\n"
-            f"📖 <b>{active_bk['short_name']} Betting Guide</b>\n\n"
-            f"Our step-by-step {active_bk['short_name']} guide is coming soon!"
-        )
-        buttons = [[InlineKeyboardButton(
-            f"📲 Visit {active_bk['short_name']}.co.za →",
-            url=active_bk.get("website_url", "https://www.betway.co.za"),
-        )]]
-
+    """Show the interactive guide hub from the sticky keyboard."""
+    text, markup = _build_guide_menu_surface()
     await update.message.reply_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(buttons),
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=markup,
         disable_web_page_preview=True,
     )
 

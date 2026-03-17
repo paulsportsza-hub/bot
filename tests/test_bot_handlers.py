@@ -104,7 +104,16 @@ async def test_cmd_help(mock_update, mock_context):
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
     assert "Help" in text
     assert "/start" in text
+    assert "/results" in text
+    assert "Top Edge Picks" in text
+    assert "My Matches" in text
+    assert "Tap <b>📖 Guide</b>" in text
+    assert "Hot tips" not in text
+    assert "Your games" not in text
     assert "HTML" in call_args[1].get("parse_mode", "")
+    markup = call_args[1]["reply_markup"]
+    button_data = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+    assert "guide:menu" in button_data
 
 
 async def test_cmd_odds(mock_update, mock_context):
@@ -161,6 +170,82 @@ async def test_handle_menu_help(test_db, mock_update, mock_context):
     call_args = query.edit_message_text.call_args
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
     assert "Help" in text
+
+
+async def test_show_guide_hub_surface(mock_update):
+    """Guide entry should open the interactive topic hub."""
+    await bot._show_betway_guide(mock_update)
+
+    call_args = mock_update.message.reply_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "📖 <b>Guide</b>" in text
+    assert "Pick a topic" in text
+
+    markup = call_args[1]["reply_markup"]
+    button_data = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+    assert button_data == [
+        "guide:edge_ratings",
+        "guide:signals",
+        "guide:track_record",
+        "guide:method",
+        "guide:value101",
+        "guide:bookmaker",
+        "menu:home",
+    ]
+
+
+async def test_dispatch_button_routes_guide_topic(mock_update, mock_context):
+    """guide:* callbacks should render topic pages by editing the same message."""
+    query = mock_update.callback_query
+
+    await bot._dispatch_button(query, mock_context, "guide", "signals")
+
+    call_args = query.edit_message_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "Signals — What confirms a pick?" in text
+    assert "Signal Breakdown" in text
+
+    markup = call_args[1]["reply_markup"]
+    button_data = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+    assert "hot:go" in button_data
+    assert "guide:menu" in button_data
+    assert "menu:home" in button_data
+
+
+async def test_handle_ob_done_includes_how_it_works_cta(test_db):
+    """Onboarding completion keeps primary CTAs and adds guide continuity."""
+    user_id = 98765
+    bot._onboarding_state.clear()
+    ob = bot._get_ob(user_id)
+    ob["experience"] = "casual"
+
+    query = MagicMock()
+    query.from_user = MagicMock()
+    query.from_user.id = user_id
+    query.from_user.first_name = "Tester"
+    query.message = MagicMock()
+    query.message.chat_id = user_id
+    query.edit_message_text = AsyncMock()
+
+    mock_ctx = MagicMock()
+    mock_ctx.bot = MagicMock()
+    mock_ctx.bot.send_message = AsyncMock()
+
+    with patch.object(bot, "persist_onboarding", new=AsyncMock()), \
+         patch.object(bot, "analytics_track"), \
+         patch.object(bot.db, "is_trial_active", new=AsyncMock(return_value=True)), \
+         patch.object(bot.db, "get_user", new=AsyncMock(return_value=SimpleNamespace(
+             trial_status="active",
+             subscription_status="inactive",
+         ))):
+        await bot.handle_ob_done(query, mock_ctx)
+
+    markup = query.edit_message_text.call_args[1]["reply_markup"]
+    button_data = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+    assert "story:start" in button_data
+    assert "hot:go" in button_data
+    assert "guide:menu" in button_data
+    assert "nav:main" in button_data
 
 
 async def test_handle_menu_history_empty(test_db, mock_update, mock_context):
