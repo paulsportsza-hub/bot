@@ -170,55 +170,74 @@ def _founding_member_line() -> str:
     return ""
 
 
-def get_upgrade_message(user_tier: str, context: str = "tip") -> str:
+def get_upgrade_message(user_tier: str, context: str = "tip", proof_line: str = "") -> str:
     """Build a tier-appropriate upgrade prompt message.
 
     Args:
         user_tier: current user tier
         context: "tip" for tip limit, "edge" for locked edge content,
                  "gold_edge" for Gold-locked edge, "diamond_edge" for Diamond-locked
+        proof_line: optional recent settlement proof shown ahead of the subscribe CTA
     """
     tier = user_tier.lower().strip()
     fm = _founding_member_line()
 
+    def _with_proof(message: str) -> str:
+        if not proof_line:
+            return message
+        marker = "\n\n/subscribe — View plans"
+        if marker in message:
+            return message.replace(marker, f"\n{proof_line}{marker}")
+        return f"{message}\n\n{proof_line}"
+
     if tier == "bronze":
         if context == "tip":
-            return (
+            return _with_proof(
+                (
                 "🔒 <b>You've used your 3 free detail views for today.</b>\n\n"
                 "You can still browse all edges in the list.\n\n"
                 "🥇 <b>Upgrade to Gold</b> for unlimited detail views, "
                 "real-time edges, and full AI breakdowns.\n"
                 f"💰 R99/mo or R799/yr (save 33%){fm}\n\n"
                 "/subscribe — View plans"
+                )
             )
         if context == "gold_edge":
-            return (
+            return _with_proof(
+                (
                 "🔒 <b>This is a 🥇 Gold Edge</b>\n\n"
                 "Unlock full odds, AI breakdown, and signal analysis.\n\n"
                 f"🥇 <b>Gold: R99/mo or R799/yr (save 33%)</b>{fm}\n\n"
                 "/subscribe — View plans"
+                )
             )
         if context == "diamond_edge":
-            return (
+            return _with_proof(
+                (
                 "🔒 <b>This is a 💎 Diamond Edge</b>\n\n"
                 "Our highest-conviction picks with sharp money flow "
                 "and line movement analysis.\n\n"
                 f"💎 <b>Diamond: R199/mo or R1,599/yr (save 33%)</b>{fm}\n\n"
                 "/subscribe — View plans"
+                )
             )
-        return (
+        return _with_proof(
+            (
             "🔒 This edge is available on a higher tier.\n\n"
             f"🥇 <b>Upgrade to Gold</b> to unlock all edges.{fm}\n\n"
             "/subscribe — View plans"
+            )
         )
 
     if tier == "gold":
-        return (
+        return _with_proof(
+            (
             "🔒 This is a 💎 <b>Diamond</b> feature.\n\n"
             "Upgrade to Diamond for line movement alerts, "
             "sharp money indicators, and CLV tracking.\n\n"
             f"💎 <b>Diamond: R199/mo or R1,599/yr (save 33%)</b>{fm}\n\n"
             "/subscribe — View plans"
+            )
         )
 
     return ""  # Diamond users see everything

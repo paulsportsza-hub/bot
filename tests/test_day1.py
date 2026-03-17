@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -225,32 +226,22 @@ class TestDBResetProfile:
 # ── Priority 2: Persistent Menu System ──────────────────────
 
 class TestPersistentMenu:
-    def test_kb_main_has_your_games_and_hot_tips(self):
+    def test_kb_main_matches_premium_working_layout(self):
         kb = bot.kb_main()
-        buttons = [btn for row in kb.inline_keyboard for btn in row]
-        labels = [b.text for b in buttons]
-        assert any("My Matches" in l for l in labels)
-        assert any("Top Edge Picks" in l for l in labels)
+        rows = [[btn.text for btn in row] for row in kb.inline_keyboard]
+        assert rows == [
+            ["⚽ My Matches", "💎 Top Edge Picks"],
+            ["📊 Edge Tracker", "📖 Guide"],
+            ["⚙️ Settings"],
+        ]
 
-    def test_kb_main_has_my_bets(self):
+    def test_kb_main_drops_retired_inline_surfaces(self):
         kb = bot.kb_main()
         labels = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert any("My Bets" in l for l in labels)
-
-    def test_kb_main_has_my_teams(self):
-        kb = bot.kb_main()
-        labels = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert any("My Teams" in l for l in labels)
-
-    def test_kb_main_has_stats(self):
-        kb = bot.kb_main()
-        labels = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert any("Stats" in l for l in labels)
-
-    def test_kb_main_has_bookmakers(self):
-        kb = bot.kb_main()
-        labels = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert any("Bookmakers" in l for l in labels)
+        assert "💰 My Bets" not in labels
+        assert "🏟️ My Teams" not in labels
+        assert "📈 Stats" not in labels
+        assert "🎰 Bookmakers" not in labels
 
     def test_kb_main_has_settings(self):
         kb = bot.kb_main()
@@ -268,18 +259,8 @@ class TestPersistentMenu:
         assert any("Back" in l for l in labels)
         assert any("Main Menu" in l for l in labels)
 
-    def test_kb_bets_has_navigation(self):
-        kb = bot.kb_bets()
-        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-        assert "menu:home" in callbacks
-
     def test_kb_teams_has_navigation(self):
         kb = bot.kb_teams()
-        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-        assert "menu:home" in callbacks
-
-    def test_kb_stats_has_navigation(self):
-        kb = bot.kb_stats()
         callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
         assert "menu:home" in callbacks
 
@@ -294,19 +275,32 @@ class TestPersistentMenu:
         assert "menu:home" in callbacks
 
     def test_all_sub_menus_max_2_per_row(self):
-        for kb_fn in (bot.kb_bets, bot.kb_teams, bot.kb_stats, bot.kb_bookmakers, bot.kb_settings):
+        for kb_fn in (bot.kb_teams, bot.kb_bookmakers, bot.kb_settings):
             kb = kb_fn()
             for row in kb.inline_keyboard:
                 assert len(row) <= 2, f"{kb_fn.__name__} has row with {len(row)} buttons"
 
 
 class TestMenuHandlers:
-    async def test_handle_bets_active(self, test_db):
+    async def test_dispatch_button_routes_stale_bets_to_main_menu(self, test_db):
+        query = _make_query(user_id=40000)
+        await bot._dispatch_button(query, MagicMock(), "bets", "history")
+        call_args = query.edit_message_text.call_args
+        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert "Main Menu" in text
+        markup = call_args[1]["reply_markup"]
+        labels = [btn.text for row in markup.inline_keyboard for btn in row]
+        assert "📊 Edge Tracker" in labels
+
+    async def test_handle_bets_redirects_stale_callbacks_to_main_menu(self, test_db):
         query = _make_query(user_id=40001)
         await bot.handle_bets(query, "active")
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "My Bets" in text
+        assert "Main Menu" in text
+        markup = call_args[1]["reply_markup"]
+        labels = [btn.text for row in markup.inline_keyboard for btn in row]
+        assert "📊 Edge Tracker" in labels
 
     async def test_handle_teams_view_no_teams(self, test_db):
         await db.upsert_user(40002, "no_teams", "NoTeams")
@@ -325,12 +319,47 @@ class TestMenuHandlers:
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
         assert "Arsenal" in text
 
-    async def test_handle_stats_overview(self, test_db):
+    async def test_handle_stats_overview_redirects_to_edge_tracker(self, test_db):
         query = _make_query(user_id=40004)
-        await bot.handle_stats_menu(query, "overview")
+        markup = MagicMock()
+        with patch.object(bot, "_render_results_surface", new=AsyncMock(return_value=("EDGE TRACKER", markup))):
+            await bot.handle_stats_menu(query, "overview")
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Stats" in text
+        assert text == "EDGE TRACKER"
+        assert call_args[1]["reply_markup"] is markup
+
+    async def test_dispatch_button_routes_stale_stats_to_edge_tracker(self, test_db):
+        query = _make_query(user_id=40008)
+        markup = MagicMock()
+        with patch.object(bot, "_render_results_surface", new=AsyncMock(return_value=("EDGE TRACKER", markup))):
+            await bot._dispatch_button(query, MagicMock(), "stats", "leaderboard")
+        call_args = query.edit_message_text.call_args
+        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert text == "EDGE TRACKER"
+        assert call_args[1]["reply_markup"] is markup
+
+    async def test_legacy_my_stats_keyboard_tap_redirects_to_edge_tracker(self, test_db):
+        user_id = 40009
+        update = MagicMock()
+        update.message = MagicMock()
+        update.message.text = "📊 My Stats"
+        update.message.reply_text = AsyncMock()
+        update.effective_user = MagicMock()
+        update.effective_user.id = user_id
+        update.effective_chat = MagicMock()
+        update.effective_chat.id = user_id
+        markup = MagicMock()
+
+        with patch.object(bot.db, "update_last_active", new=AsyncMock()), \
+             patch.object(bot.db, "get_user", new=AsyncMock(return_value=SimpleNamespace(onboarding_done=True))), \
+             patch.object(bot, "_render_results_surface", new=AsyncMock(return_value=("EDGE TRACKER", markup))):
+            await bot.handle_keyboard_tap(update, MagicMock())
+
+        call_args = update.message.reply_text.call_args
+        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert text == "EDGE TRACKER"
+        assert call_args[1]["reply_markup"] is markup
 
     async def test_handle_affiliate_sa(self, test_db):
         query = _make_query(user_id=40005)

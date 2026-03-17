@@ -103,11 +103,9 @@ ONBOARDING_NOTIFY = {
 
 TELEGRAM_KEYBOARD_AUDIT = {
     # function_name: (total_buttons, needs_wa_adaptation)
-    "kb_main": (7, True),
+    "kb_main": (5, True),
     "kb_nav": (2, False),
-    "kb_bets": (4, True),
     "kb_teams": (4, True),
-    "kb_stats": (4, True),
     "kb_bookmakers": (4, True),
     "kb_settings": (8, True),
     "back_button": (1, False),

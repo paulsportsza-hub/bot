@@ -44,7 +44,50 @@ def _make_tip(
     event_id: str = "mamelodi_sundowns_vs_kaizer_chiefs_2026-03-10",
     commence_time: str = "2026-03-10T15:00:00Z",
     bookmaker: str = "hollywoodbets",
+    edge_v2: dict | None = None,
 ) -> dict:
+    edge_v2 = edge_v2 or {
+        "match_key": match_id,
+        "tier": display_tier,
+        "composite_score": 63.0 if display_tier in ("gold", "diamond") else 46.0,
+        "confirming_signals": 4 if display_tier in ("gold", "diamond") else 2,
+        "contradicting_signals": 1 if display_tier in ("gold", "diamond") else 0,
+        "edge_pct": ev,
+        "best_bookmaker": bookmaker,
+        "best_odds": odds,
+        "signals": {
+            "price_edge": {
+                "available": True,
+                "signal_strength": 0.82,
+                "edge_pct": ev,
+                "best_odds": odds,
+                "best_bookmaker": bookmaker,
+                "sharp_source": "pinnacle",
+            },
+            "market_agreement": {
+                "available": True,
+                "signal_strength": 0.71,
+                "agreeing_bookmakers": 4,
+                "total_bookmakers": 6,
+            },
+            "movement": {
+                "available": True,
+                "signal_strength": 0.69,
+                "movement_pct": 2.4,
+                "steam_confirms": True,
+                "n_bks_moving": 3,
+            },
+            "form_h2h": {
+                "available": True,
+                "signal_strength": 0.66,
+                "home_form_string": "WWDLW",
+                "away_form_string": "LDWWW",
+            },
+            "tipster": {"available": False, "signal_strength": 0.5},
+            "lineup_injury": {"available": False, "signal_strength": 0.5},
+            "weather": {"available": False, "signal_strength": 0.5},
+        },
+    }
     return {
         "home_team": home,
         "away_team": away,
@@ -61,6 +104,7 @@ def _make_tip(
         "commence_time": commence_time,
         "bookmaker": bookmaker,
         "odds_by_bookmaker": {bookmaker: odds},
+        "edge_v2": edge_v2,
     }
 
 

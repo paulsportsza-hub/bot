@@ -25,6 +25,9 @@ _FOUNDING_PATCH = patch("bot._founding_days_left", return_value=8)
 
 
 def _make_tip(display_tier: str = "gold", **kw) -> dict:
+    odds = kw.get("odds", 2.00)
+    bookmaker = kw.get("bookmaker", "hollywoodbets")
+    ev = kw.get("ev", 5.0)
     defaults = {
         "home_team": "Team A",
         "away_team": "Team B",
@@ -40,6 +43,39 @@ def _make_tip(display_tier: str = "gold", **kw) -> dict:
         "event_id": f"team_a_vs_team_b_{display_tier}_2026-03-10",
         "commence_time": "2026-03-10T15:00:00Z",
         "bookmaker": "hollywoodbets",
+        "edge_v2": {
+            "match_key": f"team_a_vs_team_b_{display_tier}_2026-03-10",
+            "tier": display_tier,
+            "composite_score": 58.0,
+            "confirming_signals": 3,
+            "signals": {
+                "price_edge": {
+                    "available": True,
+                    "signal_strength": 0.8,
+                    "edge_pct": ev,
+                    "best_odds": odds,
+                    "best_bookmaker": bookmaker,
+                },
+                "market_agreement": {
+                    "available": True,
+                    "signal_strength": 0.7,
+                    "agreeing_bookmakers": 4,
+                    "total_bookmakers": 5,
+                },
+                "movement": {
+                    "available": True,
+                    "signal_strength": 0.68,
+                    "movement_pct": 1.8,
+                    "steam_confirms": True,
+                },
+                "form_h2h": {
+                    "available": True,
+                    "signal_strength": 0.66,
+                    "home_form_string": "WWDLW",
+                    "away_form_string": "LDWWW",
+                },
+            },
+        },
     }
     defaults.update(kw)
     return defaults

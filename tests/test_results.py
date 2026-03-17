@@ -411,6 +411,120 @@ class TestHotTipsResultProof:
         )
         assert no_line == ""
 
+    def test_header_fallback_uses_settlement_summary_when_track_record_line_empty(self):
+        import bot
+
+        edge_summary = {
+            "has_data": True,
+            "total": 34,
+            "hits": 23,
+            "hit_rate_pct": 67.6,
+            "roi": 12.1,
+        }
+        text, _ = bot._build_hot_tips_page(
+            [self._TIP],
+            page=0,
+            user_tier="diamond",
+            last_10_results=["hit", "miss", "hit"],
+            roi_7d=None,
+            edge_tracker_summary=edge_summary,
+        )
+
+        assert "📊 7D: 23/34 hit (68%)" in text
+
+    def test_footer_proof_line_and_results_button_are_discoverable(self):
+        import bot
+
+        locked_tip = dict(self._TIP, display_tier="gold", edge_rating="gold")
+        edge_summary = {
+            "has_data": True,
+            "total": 34,
+            "hits": 23,
+            "hit_rate_pct": 67.6,
+            "roi": 12.1,
+        }
+        text, markup = bot._build_hot_tips_page(
+            [locked_tip],
+            page=0,
+            user_tier="bronze",
+            edge_tracker_summary=edge_summary,
+        )
+
+        assert "📊 Last 7D: 23/34 hit (68%) · ROI +12.1%" in text
+        assert text.index("📊 Last 7D: 23/34 hit (68%) · ROI +12.1%") < text.index("🔑 Unlock all → /subscribe")
+        callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
+        assert "results:7" in callbacks
+
+    def test_footer_proof_line_omits_cleanly_when_no_settlement_data(self):
+        import bot
+
+        locked_tip = dict(self._TIP, display_tier="gold", edge_rating="gold")
+        text, _ = bot._build_hot_tips_page(
+            [locked_tip],
+            page=0,
+            user_tier="bronze",
+            edge_tracker_summary=bot._empty_edge_tracker_summary(),
+        )
+
+        assert "0/0" not in text
+        assert "📊 Last 7D:" not in text
+
+
+class TestProfileEdgePerformance:
+    @pytest.mark.asyncio
+    async def test_profile_shows_edge_performance_and_tracker_button(self):
+        import bot
+
+        profile_data = {
+            "experience_label": "Experienced",
+            "sports": [],
+            "risk_label": "Moderate",
+            "bankroll_str": "R500/week",
+            "notify_str": "Daily",
+        }
+        edge_summary = {
+            "has_data": True,
+            "hits": 23,
+            "total": 34,
+            "hit_rate_pct": 67.6,
+            "roi": 12.1,
+            "streak": {"type": "win", "count": 4},
+        }
+        update = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        with patch("bot.get_profile_data", new=AsyncMock(return_value=profile_data)), \
+             patch("bot._get_edge_tracker_summary", new=AsyncMock(return_value=edge_summary)):
+            summary = await bot.format_profile_summary(123)
+            await bot._show_profile(update, 123)
+
+        assert "📊 <b>Edge Performance (7D)</b>" in summary
+        assert "✅ <b>23/34</b> hit (68%)" in summary
+        assert "💰 ROI: <b>+12.1%</b>" in summary
+        assert "🔥 Streak: <b>4 wins</b>" in summary
+
+        markup = update.message.reply_text.call_args.kwargs["reply_markup"]
+        callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
+        assert "results:7" in callbacks
+
+    @pytest.mark.asyncio
+    async def test_profile_omits_edge_performance_when_no_settlement_data(self):
+        import bot
+
+        profile_data = {
+            "experience_label": "Experienced",
+            "sports": [],
+            "risk_label": "Moderate",
+            "bankroll_str": "R500/week",
+            "notify_str": "Daily",
+        }
+
+        with patch("bot.get_profile_data", new=AsyncMock(return_value=profile_data)), \
+             patch("bot._get_edge_tracker_summary", new=AsyncMock(return_value=bot._empty_edge_tracker_summary())):
+            summary = await bot.format_profile_summary(123)
+
+        assert "Edge Performance (7D)" not in summary
+
 
 # ── W28: Freemium Gate Access Level Tests ─────────────────
 

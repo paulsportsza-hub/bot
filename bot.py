@@ -203,7 +203,7 @@ _LEGACY_LABELS = {
     "🎯 Today's Picks": "hot_tips",         # old picks → Top Edge Picks
     "📅 Schedule": "your_games",             # old schedule → My Matches
     "🔴 Live Games": "live_games",           # old keyboard → Live Games
-    "📊 My Stats": "stats",                  # old keyboard → Profile
+    "📊 My Stats": "results",                # old keyboard → Edge Tracker
     "📖 Betway Guide": "guide",              # old keyboard → Guide
     "🔥 Hot Tips": "hot_tips",               # old Hot Tips → Top Edge Picks
     "⚽ Your Games": "your_games",           # old Your Games → My Matches
@@ -552,12 +552,8 @@ def kb_main() -> InlineKeyboardMarkup:
             InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
         ],
         [
-            InlineKeyboardButton("💰 My Bets", callback_data="bets:active"),
-            InlineKeyboardButton("🏟️ My Teams", callback_data="teams:view"),
-        ],
-        [
-            InlineKeyboardButton("📈 Stats", callback_data="stats:overview"),
-            InlineKeyboardButton("🎰 Bookmakers", callback_data="affiliate:compare"),
+            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
+            InlineKeyboardButton("📖 Guide", callback_data="guide:menu"),
         ],
         [InlineKeyboardButton("⚙️ Settings", callback_data="settings:home")],
     ])
@@ -573,32 +569,10 @@ def kb_nav(back_target: str = "menu:home") -> InlineKeyboardMarkup:
     ])
 
 
-def kb_bets() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Active Bets", callback_data="bets:active")],
-        [InlineKeyboardButton("📜 Bet History", callback_data="bets:history")],
-        [
-            InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
-            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
-        ],
-    ])
-
-
 def kb_teams() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👀 View My Teams", callback_data="teams:view")],
         [InlineKeyboardButton("✏️ Edit Teams", callback_data="teams:edit")],
-        [
-            InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
-            InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
-        ],
-    ])
-
-
-def kb_stats() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Overview", callback_data="stats:overview")],
-        [InlineKeyboardButton("🏆 Leaderboard", callback_data="stats:leaderboard")],
         [
             InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
             InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
@@ -1331,7 +1305,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _c.close()
                 except Exception:
                     pass
-                _bt_proof = await _get_hot_tips_result_proof()
+                _bt_proof, _bt_summary = await asyncio.gather(
+                    _get_hot_tips_result_proof(),
+                    _get_edge_tracker_summary(7),
+                )
                 _bt_text, _bt_markup = _build_hot_tips_page(
                     _bt_tips, page=_back_page, user_tier=_bt_tier,
                     remaining_views=_bt_rv, user_id=user_id,
@@ -1340,6 +1317,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     roi_7d=_bt_proof.get("roi_7d"),
                     recently_settled=_bt_proof.get("recently_settled"),
                     yesterday_results=_bt_proof.get("yesterday_results"),
+                    edge_tracker_summary=_bt_summary,
                 )
                 await query.edit_message_text(
                     _bt_text, parse_mode=ParseMode.HTML, reply_markup=_bt_markup
@@ -1351,11 +1329,60 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         elif action == "upgrade" or action.startswith("upgrade:"):
             # W84-P0: Locked tip tapped — show upgrade prompt (never goes to Plans directly)
             _upg_tier = await get_effective_tier(user_id)
-            _upg_text = get_upgrade_message(_upg_tier, context="tip")
+            _upg_summary = await _get_edge_tracker_summary(7)
             _upg_parts = action.split(":")
+            _upg_key = _resolve_cb_key(_upg_parts[1]) if len(_upg_parts) > 1 else ""
             _upg_pg = int(_upg_parts[1]) if len(_upg_parts) > 1 and _upg_parts[1].isdigit() else None
+            _upg_tip = next(
+                (t for t in (_ht_tips_snapshot.get(user_id) or []) if _tip_matches_hot_key(t, _upg_key)),
+                None,
+            ) or next(
+                (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if _tip_matches_hot_key(t, _upg_key)),
+                None,
+            )
+            _upg_text = get_upgrade_message(
+                _upg_tier,
+                context="tip",
+                proof_line=_format_edge_tracker_record_line(_upg_summary),
+            )
+            if _upg_tip and _upg_key and not _upg_parts[1].isdigit():
+                _upg_header = await _resolve_hot_tip_header(_upg_key, user_id, seed_tip=_upg_tip)
+                _upg_edge_tier = _upg_tip.get("display_tier", _upg_tip.get("edge_rating", "premium"))
+                _upg_access = "locked"
+                _upg_teaser = _build_signal_detail_block(
+                    _upg_tip.get("edge_v2"),
+                    user_tier=_upg_tier,
+                    edge_tier=_upg_edge_tier,
+                    access_level=_upg_access,
+                    home_team=_upg_header.get("home", ""),
+                    away_team=_upg_header.get("away", ""),
+                )
+                _upg_lines = [
+                    f"🔒 <b>{str(_upg_edge_tier).title()} Edge — Locked</b>",
+                    "",
+                ]
+                if _upg_header.get("home") and _upg_header.get("away"):
+                    _upg_lines.append(
+                        f"{_get_sport_emoji_for_api_key(_upg_tip.get('sport_key', ''))} "
+                        f"<b>{h(_upg_header['home'])} vs {h(_upg_header['away'])}</b>"
+                    )
+                    _meta_parts = [p for p in (
+                        _upg_header.get("league_display", ""),
+                        _upg_header.get("kickoff", ""),
+                    ) if p]
+                    if _meta_parts:
+                        _upg_lines.append(f"🏆 {' · '.join(_meta_parts)}")
+                    if _upg_header.get("broadcast"):
+                        _upg_lines.append(_upg_header["broadcast"])
+                    _upg_lines.append("")
+                if _upg_teaser:
+                    _upg_lines.append(_upg_teaser)
+                    _upg_lines.append("")
+                _upg_lines.append(_upg_text)
+                _upg_text = "\n".join(_upg_lines)
             _upg_markup = InlineKeyboardMarkup(_build_hot_tips_detail_rows(
                 user_id,
+                match_key=_upg_key,
                 primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
                 fallback_page=_upg_pg,
             ))
@@ -1370,7 +1397,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
             if tips:
                 _user_tier = await get_effective_tier(user_id)
-                _pg_proof = await _get_hot_tips_result_proof()
+                _pg_proof, _pg_summary = await asyncio.gather(
+                    _get_hot_tips_result_proof(),
+                    _get_edge_tracker_summary(7),
+                )
                 _pg_hr = (_pg_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100
                 _pg_res = 0
                 try:
@@ -1395,6 +1425,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     roi_7d=_pg_proof.get("roi_7d"),
                     recently_settled=_pg_proof.get("recently_settled"),
                     yesterday_results=_pg_proof.get("yesterday_results"),
+                    edge_tracker_summary=_pg_summary,
                 )
                 await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
                 # W84-HT2: freeze page identity so detail back returns here
@@ -1473,8 +1504,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
                 _can_view = await asyncio.to_thread(_check_limit_sync)
                 if not _can_view:
+                    _limit_summary = await _get_edge_tracker_summary(7)
                     await query.edit_message_text(
-                        get_upgrade_message(_user_tier, context="tip"),
+                        get_upgrade_message(
+                            _user_tier,
+                            context="tip",
+                            proof_line=_format_edge_tracker_record_line(_limit_summary),
+                        ),
                         parse_mode=ParseMode.HTML,
                         reply_markup=_edge_upgrade_markup(),
                     )
@@ -1541,12 +1577,23 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         "display_tier",
                         _aligned_tips[0].get("edge_rating", _detail_tier),
                     )
+                from tier_gate import get_edge_access_level as _cached_signal_access
+                _signal_block = _build_signal_detail_block(
+                    (_aligned_tips[0] if _aligned_tips else {}).get("edge_v2"),
+                    user_tier=_user_tier,
+                    edge_tier=_detail_tier,
+                    access_level=_cached_signal_access(_user_tier, _detail_tier),
+                    home_team=_ct_header["home"] if _aligned_tips else "",
+                    away_team=_ct_header["away"] if _aligned_tips else "",
+                )
                 _track_record_line = _format_tier_track_record_line(
                     _proof.get("stats_7d", {}),
                     _detail_tier,
                 )
                 if _track_record_line:
                     _c_base_html += f"\n\n{_track_record_line}"
+                if _signal_block:
+                    _c_base_html += f"\n\n{_signal_block}"
                 _banner = _qa_banner(user_id)
                 _html = (_banner + _c_base_html) if _banner else _c_base_html
                 await query.edit_message_text(
@@ -1570,8 +1617,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         oc2.close()
                 _can_view = await asyncio.to_thread(_check_limit_only)
                 if not _can_view:
+                    _limit_summary = await _get_edge_tracker_summary(7)
                     await query.edit_message_text(
-                        get_upgrade_message(_user_tier, context="tip"),
+                        get_upgrade_message(
+                            _user_tier,
+                            context="tip",
+                            proof_line=_format_edge_tracker_record_line(_limit_summary),
+                        ),
                         parse_mode=ParseMode.HTML,
                         reply_markup=_edge_upgrade_markup(),
                     )
@@ -1673,6 +1725,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 if _track_record_line:
                     _ilines.extend(["", _track_record_line])
+                from tier_gate import get_edge_access_level as _instant_signal_access
+                _signal_block = _build_signal_detail_block(
+                    _it0.get("edge_v2"),
+                    user_tier=_user_tier,
+                    edge_tier=_ie_tier,
+                    access_level=_instant_signal_access(_user_tier, _ie_tier),
+                    home_team=_ih,
+                    away_team=_ia,
+                )
+                if _signal_block:
+                    _ilines.extend(["", _signal_block])
                 _ihtml = "\n".join(_ilines)
                 _ihtml = _apply_hot_tip_detail_honesty(_ihtml, _detail_model_state)
                 _ihtml = re.sub(r'\n{3,}', '\n\n', _ihtml)
@@ -1760,18 +1823,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         # results:7 or results:30 toggle
         days = int(action) if action.isdigit() else 7
         user_id = query.from_user.id
-        user_tier = await get_effective_tier(user_id)
-        try:
-            get_edge_stats, get_recent_settled, _, get_streak, *_ = _get_settlement_funcs()
-            stats = await asyncio.to_thread(get_edge_stats, days)
-            recent = await asyncio.to_thread(get_recent_settled, 10)
-            streak = await asyncio.to_thread(get_streak)
-            text = _format_results_text(stats, recent, streak, days, user_tier)
-            markup = _build_results_buttons(days, user_tier)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-        except Exception as exc:
-            log.warning("Results callback failed: %s", exc)
-            await query.answer("Results unavailable right now", show_alert=True)
+        text, markup = await _render_results_surface(user_id, days=days)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
     elif prefix == "subscribe":
         await handle_subscribe(query, action)
     elif prefix == "unsubscribe":
@@ -2723,13 +2776,27 @@ async def format_profile_summary(user_id: int) -> str:
     lines.append(f"💰 <b>Bankroll:</b> {data['bankroll_str']}")
     lines.append(f"🔔 <b>Daily picks:</b> {data['notify_str']}")
 
+    edge_summary = await _get_edge_tracker_summary(7)
+    if edge_summary.get("has_data"):
+        lines.append("")
+        lines.append("📊 <b>Edge Performance (7D)</b>")
+        lines.append(
+            f"✅ <b>{edge_summary['hits']}/{edge_summary['total']}</b> hit "
+            f"({edge_summary['hit_rate_pct']:.0f}%)"
+        )
+        if edge_summary.get("roi") is not None:
+            lines.append(f"💰 ROI: <b>{float(edge_summary['roi']):+.1f}%</b>")
+        streak_line = _format_edge_tracker_streak_line(edge_summary.get("streak"))
+        if streak_line:
+            lines.append(streak_line)
+
     # CLV summary — only shown when data exists
     try:
         from scrapers.sharp.clv_tracker import format_clv_summary
         clv_7d = format_clv_summary(days=7)
         if clv_7d and "No CLV data" not in clv_7d:
             lines.append("")
-            lines.append(f"📈 <b>Edge Performance:</b> {clv_7d}")
+            lines.append(f"📈 <b>CLV (7D):</b> {clv_7d}")
     except Exception:
         pass  # CLV module not available or DB issue — silently skip
 
@@ -3209,7 +3276,7 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     elif legacy == "live_games":
         await _show_live_games(update, user_id)
         return
-    elif legacy == "stats":
+    elif legacy == "results":
         await _show_stats_overview(update, user_id)
         return
     elif legacy == "guide":
@@ -3290,7 +3357,7 @@ async def _show_live_games(update: Update, user_id: int) -> None:
 
 
 async def _show_stats_overview(update: Update, user_id: int) -> None:
-    """Show user-facing stats overview."""
+    """Compatibility shim for legacy stats entry points."""
     db_user = await db.get_user(user_id)
     if not db_user or not db_user.onboarding_done:
         await update.message.reply_text(
@@ -3298,28 +3365,18 @@ async def _show_stats_overview(update: Update, user_id: int) -> None:
             parse_mode=ParseMode.HTML,
         )
         return
-
-    archetype = db_user.archetype or "casual_fan"
-    exp = db_user.experience_level or "casual"
-    score = db_user.engagement_score or 5.0
-    bankroll = db_user.bankroll
-
-    lines = ["📊 <b>Your Stats</b>\n"]
-    lines.append(f"🎯 Profile: <b>{archetype.replace('_', ' ').title()}</b>")
-    lines.append(f"📈 Engagement: <b>{score:.0f}/10</b>")
-    if bankroll:
-        lines.append(f"💰 Bankroll: <b>R{bankroll:,.0f}/week</b>")
-
-    await update.message.reply_text(
-        "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb_nav(),
-    )
+    text, markup = await _render_results_surface(user_id, days=7)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def _show_profile(update: Update, user_id: int) -> None:
     """Show user profile summary from the sticky keyboard."""
     summary = await format_profile_summary(user_id)
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚙️ Edit Profile", callback_data="settings:home")],
+        [
+            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
+            InlineKeyboardButton("⚙️ Edit Profile", callback_data="settings:home"),
+        ],
         [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
     ])
     await update.message.reply_text(summary, parse_mode=ParseMode.HTML, reply_markup=buttons)
@@ -4432,6 +4489,425 @@ def _edge_signal_meta(edge_v2: dict | None) -> tuple[int, int, bool]:
     return confirming, total, confirming == 0
 
 
+_SIGNAL_RENDER_ORDER = [
+    ("price_edge", "Price edge"),
+    ("form_h2h", "Form & H2H"),
+    ("movement", "Movement"),
+    ("market_agreement", "Market agreement"),
+    ("tipster", "Tipster"),
+    ("lineup_injury", "Lineup / injury"),
+    ("weather", "Weather"),
+]
+_SIGNAL_CONFIRM_THRESHOLD = 0.65
+_SIGNAL_CONTRADICT_THRESHOLD = 0.35
+_HOT_TIPS_SECTION_DESCRIPTORS = {
+    EdgeRating.DIAMOND: "Our highest-conviction calls",
+    EdgeRating.GOLD: "Strong value, clear signals",
+    EdgeRating.SILVER: "Solid value, cleaner spots",
+    EdgeRating.BRONZE: "Early value, worth a look",
+}
+_HOT_TIPS_SIGNAL_HINT_LABELS = {
+    "price_edge": "Price edge",
+    "form_h2h": "form",
+    "movement": "movement",
+    "market_agreement": "market",
+    "tipster": "tipster",
+    "lineup_injury": "team news",
+    "weather": "conditions",
+}
+_HOT_TIPS_HOOK_HEADLINES = {
+    EdgeRating.DIAMOND: {
+        "price_edge+movement": "Bookmaker mispricing",
+        "price_edge+market_agreement": "Market still off the number",
+        "form_h2h+movement": "Signals piling up",
+        "price_edge+form_h2h": "Price and form both lean this way",
+        "default": "Premium edge stack",
+    },
+    EdgeRating.GOLD: {
+        "price_edge+movement": "Strong value case",
+        "price_edge+market_agreement": "Clear market support",
+        "price_edge+form_h2h": "Form-backed value",
+        "movement+form_h2h": "Signals lining up",
+        "default": "Supported edge case",
+    },
+}
+
+
+def _signal_meter(strength: float | None) -> str:
+    """Render a compact 4-step strength meter for a signal."""
+    if strength is None:
+        return "▱▱▱▱"
+    if strength >= 0.75:
+        filled = 4
+    elif strength >= _SIGNAL_CONFIRM_THRESHOLD:
+        filled = 3
+    elif strength <= _SIGNAL_CONTRADICT_THRESHOLD:
+        filled = 1
+    else:
+        filled = 2
+    return ("▰" * filled) + ("▱" * (4 - filled))
+
+
+def _signal_strength_label(strength: float | None) -> str:
+    """Map raw signal strength to a compact user-facing label."""
+    if strength is None:
+        return "Limited"
+    if strength >= 0.75:
+        return "Strong"
+    if strength >= _SIGNAL_CONFIRM_THRESHOLD:
+        return "Support"
+    if strength <= _SIGNAL_CONTRADICT_THRESHOLD:
+        return "Weak"
+    return "Mixed"
+
+
+def _human_join(parts: list[str]) -> str:
+    """Join short display labels with natural punctuation."""
+    parts = [p for p in parts if p]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
+    return f"{', '.join(parts[:-1])}, and {parts[-1]}"
+
+
+def _signal_gloss(
+    signal_key: str,
+    signal_data: dict,
+    edge_v2: dict,
+    home_team: str = "",
+    away_team: str = "",
+) -> str:
+    """Build a match-specific gloss from existing edge_v2 signal metadata."""
+    if signal_key == "price_edge":
+        edge_pct = signal_data.get("edge_pct", edge_v2.get("edge_pct", 0)) or 0
+        best_odds = signal_data.get("best_odds", edge_v2.get("best_odds", 0)) or 0
+        bookmaker = signal_data.get("best_bookmaker", edge_v2.get("best_bookmaker", ""))
+        if edge_pct and bookmaker and best_odds:
+            gloss = f"+{edge_pct:.1f}% edge at {bookmaker} {best_odds:.2f}"
+        elif edge_pct:
+            gloss = f"+{edge_pct:.1f}% edge"
+        elif bookmaker and best_odds:
+            gloss = f"{bookmaker} {best_odds:.2f}"
+        else:
+            gloss = ""
+        sharp_src = signal_data.get("sharp_source") or edge_v2.get("sharp_source")
+        if sharp_src:
+            gloss = f"{gloss} vs {sharp_src}".strip()
+        return gloss
+
+    if signal_key == "form_h2h":
+        home_form = signal_data.get("home_form_string", "")
+        away_form = signal_data.get("away_form_string", "")
+        form_parts = []
+        if home_form:
+            form_parts.append(f"{home_team or 'Home'} {home_form}")
+        if away_form:
+            form_parts.append(f"{away_team or 'Away'} {away_form}")
+        return " · ".join(form_parts) or "recent form and H2H context"
+
+    if signal_key == "movement":
+        if signal_data.get("steam_confirms"):
+            mover = signal_data.get("n_bks_moving") or signal_data.get("biggest_mover")
+            if isinstance(mover, int) and mover > 0:
+                return f"steam confirms across {mover} books"
+            if mover:
+                return f"steam confirms via {mover}"
+            return "steam confirms this side"
+        if signal_data.get("steam_contradicts"):
+            mover = signal_data.get("n_bks_moving") or signal_data.get("biggest_mover")
+            if isinstance(mover, int) and mover > 0:
+                return f"market moved against this side across {mover} books"
+            if mover:
+                return f"market moved against this side via {mover}"
+            return "market moved against this side"
+        movement_pct = signal_data.get("movement_pct")
+        if movement_pct is not None:
+            if movement_pct > 0:
+                return f"{movement_pct:+.1f}% toward this outcome"
+            if movement_pct < 0:
+                return f"{movement_pct:+.1f}% away from this outcome"
+            return "price has held steady"
+        return "line movement context"
+
+    if signal_key == "market_agreement":
+        agreeing = signal_data.get("agreeing_bookmakers", 0)
+        total = signal_data.get("total_bookmakers", 0)
+        if agreeing and total:
+            gloss = f"{agreeing}/{total} books clustered"
+            if signal_data.get("outlier_risk"):
+                gloss += " with one outlier"
+            return gloss
+        if signal_data.get("outlier_risk"):
+            return "price looks isolated"
+        return "bookmaker clustering"
+
+    if signal_key == "tipster":
+        n_sources = signal_data.get("n_sources", 0)
+        total_sources = signal_data.get("total_sources", 0)
+        if signal_data.get("agrees_with_edge"):
+            if total_sources:
+                return f"{n_sources}/{total_sources} sources back this side"
+            if n_sources:
+                return f"{n_sources} sources back this side"
+        elif n_sources:
+            if total_sources:
+                return f"{n_sources}/{total_sources} sources oppose it"
+            return f"{n_sources} sources oppose it"
+        consensus = signal_data.get("consensus")
+        if consensus is not None:
+            return f"consensus at {consensus * 100:.0f}%"
+        return "prediction-source split"
+
+    if signal_key == "lineup_injury":
+        home_inj = signal_data.get("home_injuries", 0)
+        away_inj = signal_data.get("away_injuries", 0)
+        if home_inj or away_inj:
+            return f"{home_team or 'Home'} {home_inj} out · {away_team or 'Away'} {away_inj} out"
+        return "team news is stable"
+
+    if signal_key == "weather":
+        condition = signal_data.get("condition", "")
+        level = signal_data.get("overall_level", "")
+        if condition and level:
+            return f"{condition} · {level} impact"
+        if condition:
+            return condition
+        if level:
+            return f"{level} impact"
+        return "match conditions noted"
+
+    return ""
+
+
+def _extract_signal_rows(
+    edge_v2: dict | None,
+    home_team: str = "",
+    away_team: str = "",
+) -> list[dict[str, str | float | None]]:
+    """Normalise available signal families for compact rendering."""
+    edge_v2 = edge_v2 or {}
+    signals = edge_v2.get("signals", {}) or {}
+    rows: list[dict[str, str | float | None]] = []
+    for signal_key, label in _SIGNAL_RENDER_ORDER:
+        signal_data = signals.get(signal_key)
+        if not isinstance(signal_data, dict) or not signal_data.get("available"):
+            continue
+        strength = signal_data.get("signal_strength")
+        rows.append({
+            "key": signal_key,
+            "label": label,
+            "strength": strength,
+            "meter": _signal_meter(strength),
+            "strength_label": _signal_strength_label(strength),
+            "gloss": _signal_gloss(signal_key, signal_data, edge_v2, home_team, away_team),
+        })
+    return rows
+
+
+def _signal_mode(user_tier: str, edge_tier: str, access_level: str | None = None) -> str:
+    """Resolve signal-detail display mode from tier and access."""
+    if access_level in ("blurred", "locked"):
+        return "teaser"
+    return "summary" if str(user_tier).lower().strip() == "bronze" else "full"
+
+
+def _format_signal_count_hint(confirming: int, total: int, model_only: bool = False) -> str:
+    """Return a compact card hint for Hot Tips list items."""
+    if total > 0:
+        return f"{confirming}/{total} signals aligned"
+    if model_only:
+        return "model-only signal view"
+    return ""
+
+
+def _format_hot_tips_section_header(edge_tier: str, count: int) -> str:
+    """Render a compact section label for the current page's tier cluster."""
+    tier_key = str(edge_tier or EdgeRating.BRONZE).lower().strip()
+    emoji = EDGE_EMOJIS.get(tier_key, "🥉")
+    label = EDGE_LABELS.get(tier_key, "EDGE")
+    descriptor = _HOT_TIPS_SECTION_DESCRIPTORS.get(tier_key, "Worth a look")
+    return (
+        f"{emoji} <b>{label}</b> — {count} pick{'s' if count != 1 else ''} · {descriptor}"
+    )
+
+
+def _format_hot_tips_signal_hint(
+    confirming: int,
+    total: int,
+    model_only: bool = False,
+    *,
+    edge_tier: str = "",
+    signal_rows: list[dict[str, str | float | None]] | None = None,
+) -> str:
+    """Upgrade Diamond/Gold card hints while preserving legacy hints elsewhere."""
+    tier_key = str(edge_tier or "").lower().strip()
+    if tier_key not in (EdgeRating.DIAMOND, EdgeRating.GOLD):
+        return _format_signal_count_hint(confirming, total, model_only)
+
+    ranked_labels: list[str] = []
+    for row in signal_rows or []:
+        label = _HOT_TIPS_SIGNAL_HINT_LABELS.get(str(row.get("key") or ""), "")
+        if label and label not in ranked_labels:
+            ranked_labels.append(label)
+        if len(ranked_labels) == 3:
+            break
+
+    if len(ranked_labels) >= 2:
+        return f"{' + '.join(ranked_labels)} aligned"
+    if total > 0:
+        return f"{confirming}/{total} signals aligned"
+    if model_only:
+        return "Model edge carrying the case"
+    return ""
+
+
+def _hot_tips_hook_headline(edge_tier: str, signal_rows: list[dict[str, str | float | None]]) -> str:
+    """Pick an editorial headline for premium list cards from existing signals only."""
+    tier_key = str(edge_tier or "").lower().strip()
+    patterns = _HOT_TIPS_HOOK_HEADLINES.get(tier_key, {})
+    if not patterns:
+        return ""
+
+    keys = [str(row.get("key") or "") for row in signal_rows[:4]]
+    preferred_pairs = [
+        ("price_edge", "movement"),
+        ("price_edge", "market_agreement"),
+        ("price_edge", "form_h2h"),
+        ("movement", "form_h2h"),
+    ]
+    for left, right in preferred_pairs:
+        if left in keys and right in keys:
+            return patterns.get(f"{left}+{right}") or patterns.get(f"{right}+{left}") or patterns.get("default", "")
+    return patterns.get("default", "")
+
+
+def _format_hot_tips_premium_hook(
+    tip: dict,
+    *,
+    edge_tier: str,
+    access_level: str,
+    confirming: int,
+    total: int,
+    model_only: bool,
+    signal_rows: list[dict[str, str | float | None]],
+) -> str:
+    """Render the extra context line for Diamond/Gold cards."""
+    tier_key = str(edge_tier or "").lower().strip()
+    if tier_key not in (EdgeRating.DIAMOND, EdgeRating.GOLD):
+        return ""
+
+    emoji = EDGE_EMOJIS.get(tier_key, "🥇")
+    headline = _hot_tips_hook_headline(edge_tier, signal_rows)
+    signal_hint = _format_hot_tips_signal_hint(
+        confirming,
+        total,
+        model_only,
+        edge_tier=edge_tier,
+        signal_rows=signal_rows,
+    )
+
+    parts = [f"{emoji} {headline}" if headline else emoji]
+    if signal_hint:
+        parts.append(signal_hint)
+
+    if access_level in ("full", "partial"):
+        ev_value = tip.get("ev")
+        try:
+            ev_float = float(ev_value)
+        except (TypeError, ValueError):
+            ev_float = 0.0
+        if ev_float:
+            parts.append(f"{ev_float:+.1f}% EV")
+
+    return " · ".join(part for part in parts if part)
+
+
+def _build_signal_detail_block(
+    edge_v2: dict | None,
+    *,
+    user_tier: str,
+    edge_tier: str = "",
+    access_level: str | None = None,
+    home_team: str = "",
+    away_team: str = "",
+) -> str:
+    """Render tier-gated signal transparency for tip detail surfaces."""
+    edge_v2 = edge_v2 or {}
+    signals = edge_v2.get("signals", {}) or {}
+    if not signals and not edge_v2:
+        return ""
+
+    confirming, total, model_only = _edge_signal_meta(edge_v2)
+    composite = edge_v2.get("composite_score")
+    rows = _extract_signal_rows(edge_v2, home_team, away_team)
+    mode = _signal_mode(user_tier, edge_tier or edge_v2.get("tier", ""), access_level)
+    summary_bits = []
+    if total > 0:
+        summary_bits.append(f"{confirming}/{total} aligned")
+    if composite not in (None, ""):
+        try:
+            summary_bits.append(f"Composite {float(composite):.0f}/100")
+        except (TypeError, ValueError):
+            pass
+
+    if mode == "full":
+        lines = ["📡 <b>Signal Breakdown</b>"]
+        if summary_bits:
+            lines.append(" · ".join(summary_bits))
+        if rows:
+            for row in rows:
+                gloss = str(row["gloss"] or "").strip()
+                detail = f" — {h(gloss)}" if gloss else ""
+                lines.append(
+                    f"• <b>{row['label']}</b> {row['meter']} {row['strength_label']}{detail}"
+                )
+        elif model_only:
+            lines.append("• Price is doing most of the work here — no supporting signals aligned.")
+        else:
+            lines.append("• Signal metadata is limited on this match, so the price edge is carrying the case.")
+        return "\n".join(lines)
+
+    if mode == "summary":
+        lines = ["📡 <b>Signal Snapshot</b>"]
+        if summary_bits:
+            lines.append(" · ".join(summary_bits))
+        support_labels = [
+            str(row["label"]).lower()
+            for row in rows
+            if isinstance(row.get("strength"), (int, float))
+            and float(row["strength"]) >= _SIGNAL_CONFIRM_THRESHOLD
+        ][:3]
+        if support_labels:
+            lines.append(f"Best support: {_human_join(support_labels)}.")
+        elif model_only:
+            lines.append("This is mostly a price-led play with limited support around it.")
+        elif rows:
+            top_row = max(
+                rows,
+                key=lambda row: float(row.get("strength") or 0),
+            )
+            lines.append(f"Signal picture is mixed; {str(top_row['label']).lower()} is doing the heaviest lifting.")
+        else:
+            lines.append("Signal metadata is limited on this match.")
+        return "\n".join(lines)
+
+    teaser_labels = [str(row["label"]).lower() for row in rows[:3]]
+    lines = ["📡 <b>Signal Preview</b>"]
+    if total > 0:
+        lines.append(f"{total} checks sit behind this premium edge.")
+    elif rows:
+        lines.append("A deeper signal map sits behind this premium edge.")
+    else:
+        lines.append("This premium edge includes deeper signal context.")
+    if teaser_labels:
+        lines.append(f"Price, market and team-context checks are ready: {_human_join(teaser_labels)}.")
+    lines.append("Unlock to see which signals aligned and how strong they were.")
+    return "\n".join(lines)
+
+
 # ── Hot Tips — all-sports value bet scanner ───────────────
 
 # Comprehensive list of Odds API sport keys to scan across all markets
@@ -4452,6 +4928,10 @@ _hot_tips_cache: dict[str, dict] = {}  # "global" → {"tips": [...], "ts": floa
 HOT_TIPS_CACHE_TTL = 900  # 15 minutes
 _hot_tips_result_proof_cache: dict[str, dict] = {}  # "global" → {"data": {...}, "ts": float}
 HOT_TIPS_RESULT_PROOF_CACHE_TTL = 300  # 5 minutes
+_edge_tracker_summary_cache: dict[str, dict] = {}  # "{days}" → {"data": {...}, "ts": float}
+EDGE_TRACKER_SUMMARY_CACHE_TTL = 300  # 5 minutes
+EDGE_TRACKER_SUMMARY_TIMEOUT_S = 1.5
+EDGE_TRACKER_RECENT_LIMIT = 10
 _hot_tips_fetch_lock: asyncio.Lock | None = None  # W84-P1: prevents concurrent cold fetches
 
 # W84-HT2: Per-user Hot Tips page identity snapshot — freezes list/page on each render
@@ -6045,6 +6525,7 @@ def _build_hot_tips_page(
     roi_7d: float | None = None,
     recently_settled: list[dict] | None = None,
     yesterday_results: list[dict] | None = None,
+    edge_tracker_summary: dict | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build text + keyboard for a single page of hot tips (max 4 per page).
 
@@ -6133,6 +6614,14 @@ def _build_hot_tips_page(
     track_record_line = _format_hot_tips_track_record_line(last_10_results, roi_7d)
     if track_record_line:
         lines.append(track_record_line)
+    else:
+        fallback_track_record_line = _format_edge_tracker_record_line(
+            edge_tracker_summary,
+            label="📊 7D",
+            include_roi=False,
+        )
+        if fallback_track_record_line:
+            lines.append(fallback_track_record_line)
 
     # Third header line: live edge count (Wave 27-UX replaces streak badge)
     lines.append(f"<b>✅ {total} Live Edge{"s" if total != 1 else ""} Found</b>")
@@ -6148,10 +6637,20 @@ def _build_hot_tips_page(
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
     diamond_locked = 0
     gold_locked = 0
+    page_tier_counts: dict[str, int] = {}
+    for tip in page_tips:
+        tier_key = str(tip.get("display_tier", tip.get("edge_rating", EdgeRating.BRONZE))).lower().strip()
+        page_tier_counts[tier_key] = page_tier_counts.get(tier_key, 0) + 1
+    last_section_tier = ""
 
     for i, tip in enumerate(page_tips, start + 1):
-        edge_tier = tip.get("display_tier", tip.get("edge_rating", "bronze"))
+        edge_tier = str(tip.get("display_tier", tip.get("edge_rating", "bronze"))).lower().strip()
         access = get_edge_access_level(user_tier, edge_tier)
+
+        if edge_tier != last_section_tier:
+            lines.append(_format_hot_tips_section_header(edge_tier, page_tier_counts.get(edge_tier, 0)))
+            lines.append("")
+            last_section_tier = edge_tier
 
         # Count locked/blurred for footer
         if access == "locked" and edge_tier == "diamond":
@@ -6221,6 +6720,29 @@ def _build_hot_tips_page(
         match_key = tip.get("match_id") or tip.get("event_id", "")
         _remember_hot_tip_origin(user_id, match_key, page)
 
+        _signal_hint = _format_signal_count_hint(_confirming, _total_signals, _model_only)
+        _signal_rows = _extract_signal_rows(tip.get("edge_v2"), home_raw, away_raw)
+        _premium_hook = _format_hot_tips_premium_hook(
+            tip,
+            edge_tier=edge_tier,
+            access_level=access,
+            confirming=_confirming,
+            total=_total_signals,
+            model_only=_model_only,
+            signal_rows=_signal_rows,
+        )
+        _premium_signal_hint = _format_hot_tips_signal_hint(
+            _confirming,
+            _total_signals,
+            _model_only,
+            edge_tier=edge_tier,
+            signal_rows=_signal_rows,
+        )
+        _signal_hint_suffix = ""
+        if not _premium_hook:
+            _signal_hint = _premium_signal_hint or _signal_hint
+            _signal_hint_suffix = f" · {_signal_hint}" if _signal_hint else ""
+
         if access in ("full", "partial"):
             # 3-line card: sport emoji + match + tier badge, info, outcome @ odds → return
             outcome = h(tip.get("outcome", ""))
@@ -6228,29 +6750,42 @@ def _build_hot_tips_page(
             ret_amount = odds_val * 300 if odds_val else 0
             ret_str = f"R{ret_amount:,.0f}" if ret_amount else ""
             odds_str = f"{odds_val:.2f}" if odds_val else ""
-            line3 = f"    {outcome} @ {odds_str} → {ret_str} on R300" if odds_val else f"    {outcome}"
-            lines.append(
-                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}\n"
-                f"    {info_line}\n"
-                f"{line3}"
+            line3 = (
+                f"    {outcome} @ {odds_str} → {ret_str} on R300{_signal_hint_suffix}"
+                if odds_val else
+                f"    {outcome}{_signal_hint_suffix}"
             )
+            card_lines = [
+                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}",
+                f"    {info_line}",
+            ]
+            if _premium_hook:
+                card_lines.append(f"    {_premium_hook}")
+            card_lines.append(line3)
+            lines.append("\n".join(card_lines))
         elif access == "blurred":
             # 3-line card: sport emoji + match + tier badge, info, return only
             odds_val = tip.get("odds", 0)
             ret_amount = odds_val * 300 if odds_val else 0
             ret_str = f"R{ret_amount:,.0f}" if ret_amount else "R?"
-            lines.append(
-                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}\n"
-                f"    {info_line}\n"
-                f"    💰 {ret_str} return on R300"
-            )
+            card_lines = [
+                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}",
+                f"    {info_line}",
+            ]
+            if _premium_hook:
+                card_lines.append(f"    {_premium_hook}")
+            card_lines.append(f"    💰 {ret_str} return on R300{_signal_hint_suffix}")
+            lines.append("\n".join(card_lines))
         else:
             # Locked: sport emoji + match + tier badge, info, lock message
-            lines.append(
-                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}\n"
-                f"    {info_line}\n"
-                f"    Our highest-conviction pick."
-            )
+            card_lines = [
+                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}",
+                f"    {info_line}",
+            ]
+            if _premium_hook:
+                card_lines.append(f"    {_premium_hook}")
+            card_lines.append("    Our highest-conviction pick.")
+            lines.append("\n".join(card_lines))
 
         tip_buttons.append((i, match_key, access))
         # SPACING LAW (locked 5 March 2026):
@@ -6267,6 +6802,7 @@ def _build_hot_tips_page(
 
     # ── Footer CTA (W27-UX-FIX: tight spacing, bold hierarchy) ──
     locked_total = diamond_locked + gold_locked
+    footer_proof_line = _format_edge_tracker_record_line(edge_tracker_summary)
     if user_tier == "bronze" and locked_total > 0:
         if consecutive_misses >= 3:
             # Card loop already left one "" → \n\n before divider
@@ -6290,6 +6826,8 @@ def _build_hot_tips_page(
             lines.append(f"🔒 <b>{locked_total} edges locked</b>{lock_detail}")
             if portfolio:
                 lines.append(portfolio)
+            if footer_proof_line:
+                lines.append(footer_proof_line)
             lines.append("🔑 Unlock all → /subscribe")
             fd = _founding_days_left()
             if fd > 0:
@@ -6301,6 +6839,8 @@ def _build_hot_tips_page(
         lines.append(
             f'💎 <b>{diamond_locked} Diamond pick{"s" if diamond_locked != 1 else ""} locked</b>'
         )
+        if footer_proof_line:
+            lines.append(footer_proof_line)
         lines.append("🔑 Upgrade → /subscribe")
     # Diamond: no footer
 
@@ -6319,7 +6859,7 @@ def _build_hot_tips_page(
             cb = f"edge:detail:{_shorten_cb_key(match_key)}"
         else:
             _btn_tier = "🔒"
-            cb = f"hot:upgrade:{page}"  # W84-P0: preserve source page on locked-tip upgrade flow
+            cb = f"hot:upgrade:{_shorten_cb_key(match_key)}"
         label = f"[{idx}] {_btn_sport} {h_abbr} v {a_abbr} {_btn_tier}"
         row.append(InlineKeyboardButton(label, callback_data=cb))
         if len(row) == 2:
@@ -6336,6 +6876,8 @@ def _build_hot_tips_page(
         nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"hot:page:{page + 1}"))
     if nav:
         buttons.append(nav)
+
+    buttons.append([InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7")])
 
     # Action buttons
     buttons.append([
@@ -6373,7 +6915,10 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
                 _wm_consec = getattr(_wm_user, "consecutive_misses", 0) or 0
             except Exception:
                 pass
-        _wm_proof = await _get_hot_tips_result_proof()
+        _wm_proof, _wm_summary = await asyncio.gather(
+            _get_hot_tips_result_proof(),
+            _get_edge_tracker_summary(7),
+        )
         _wm_text, _wm_markup = _build_hot_tips_page(
             _cached_tips, page=0, user_tier=_wm_tier,
             remaining_views=_wm_rv, consecutive_misses=_wm_consec,
@@ -6383,6 +6928,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             roi_7d=_wm_proof.get("roi_7d"),
             recently_settled=_wm_proof.get("recently_settled"),
             yesterday_results=_wm_proof.get("yesterday_results"),
+            edge_tracker_summary=_wm_summary,
         )
         await bot.send_message(chat_id, _wm_text, parse_mode=ParseMode.HTML, reply_markup=_wm_markup)
         # W84-HT2: freeze page identity at render time
@@ -6425,7 +6971,10 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
                 _fast_consec = getattr(_fast_user, "consecutive_misses", 0) or 0
             except Exception:
                 pass
-        _fast_proof = await _get_hot_tips_result_proof()
+        _fast_proof, _fast_summary = await asyncio.gather(
+            _get_hot_tips_result_proof(),
+            _get_edge_tracker_summary(7),
+        )
         _fast_text, _fast_markup = _build_hot_tips_page(
             _fast_tips, page=0, user_tier=_fast_tier,
             remaining_views=_fast_rv, consecutive_misses=_fast_consec,
@@ -6435,6 +6984,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             roi_7d=_fast_proof.get("roi_7d"),
             recently_settled=_fast_proof.get("recently_settled"),
             yesterday_results=_fast_proof.get("yesterday_results"),
+            edge_tracker_summary=_fast_summary,
         )
         await bot.send_message(chat_id, _fast_text, parse_mode=ParseMode.HTML, reply_markup=_fast_markup)
         # W84-HT2: freeze page identity at render time
@@ -6521,7 +7071,10 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _cached_count += _db_hits
         log.info("CACHE COVERAGE: %d/%d edges have cached narratives", _cached_count, len(tips))
 
-    _result_proof = await _get_hot_tips_result_proof()
+    _result_proof, _edge_tracker_summary = await asyncio.gather(
+        _get_hot_tips_result_proof(),
+        _get_edge_tracker_summary(7),
+    )
     _hit_rate = (_result_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100
 
     # Fetch resource count (total odds snapshots) for header (Wave 27-UX)
@@ -6559,6 +7112,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         roi_7d=_result_proof.get("roi_7d"),
         recently_settled=_result_proof.get("recently_settled"),
         yesterday_results=_result_proof.get("yesterday_results"),
+        edge_tracker_summary=_edge_tracker_summary,
     )
     await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
     # W84-HT2: freeze page identity at render time (cold path)
@@ -13097,7 +13651,12 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
 
     _can_view = await asyncio.to_thread(_tip_gate_and_record)
     if not _can_view:
-        _upgrade_text = get_upgrade_message(_user_tier, context="tip")
+        _upgrade_summary = await _get_edge_tracker_summary(7)
+        _upgrade_text = get_upgrade_message(
+            _user_tier,
+            context="tip",
+            proof_line=_format_edge_tracker_record_line(_upgrade_summary),
+        )
         await query.edit_message_text(
             _upgrade_text, parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
@@ -13151,7 +13710,22 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         _ld_text += "\n"
         if _ld_broadcast:
             _ld_text += f"{_ld_broadcast}\n"
-        _ld_text += f"\nThis is a {_tier_name}-tier pick with our highest conviction.\n\n"
+        _ld_teaser = _build_signal_detail_block(
+            tip.get("edge_v2"),
+            user_tier=_user_tier,
+            edge_tier=_edge_tier,
+            access_level=_access_level,
+            home_team=tip.get("home_team", ""),
+            away_team=tip.get("away_team", ""),
+        )
+        _ld_text += f"\nThis is a {_tier_name}-tier pick with our highest conviction.\n"
+        if _ld_teaser:
+            _ld_text += f"\n{_ld_teaser}\n"
+        _ld_text += "\n"
+        _locked_summary = await _get_edge_tracker_summary(7)
+        _locked_proof_line = _format_edge_tracker_record_line(_locked_summary)
+        if _locked_proof_line:
+            _ld_text += f"{_locked_proof_line}\n\n"
         _ld_text += "💎 <b>Diamond — R199/mo</b>\nFull access to every edge, including Diamond picks with sharp money data.\n\n"
         _ld_text += "🥇 <b>Gold — R99/mo</b>\nUnlimited tip details, Gold + Silver + Bronze edges with full AI analysis.\n\n"
         _ld_text += "💰 <b>R799/yr Diamond</b> (save 33%)"
@@ -13302,6 +13876,16 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     )
     if _track_record_line:
         text += f"\n\n{_track_record_line}"
+    _signal_block = _build_signal_detail_block(
+        tip.get("edge_v2"),
+        user_tier=_user_tier,
+        edge_tier=_edge_tier,
+        access_level=_access_level,
+        home_team=tip.get("home_team", ""),
+        away_team=tip.get("away_team", ""),
+    )
+    if _signal_block:
+        text += f"\n\n{_signal_block}"
 
     buttons = _build_game_buttons(
         [tip],
@@ -13635,31 +14219,12 @@ async def _save_story_prefs(query, chat_id: int, user_id: int) -> None:
 # ── Sub-menu handlers ────────────────────────────────────
 
 async def handle_bets(query, action: str) -> None:
-    """Handle bets:* callbacks."""
-    if action == "active":
-        text = (
-            "<b>💰 My Bets</b>\n\n"
-            "No active bets yet.\n\n"
-            "Tap <b>📊 Daily Briefing</b> to find today's value bets!"
-        )
-    elif action == "history":
-        tips = await db.get_recent_tips(limit=5)
-        if not tips:
-            text = "<b>📜 Bet History</b>\n\nNo bets recorded yet."
-        else:
-            lines = ["<b>📜 Recent Bets</b>\n"]
-            for t in tips:
-                icon = {"win": "✅", "loss": "❌"}.get(t.result, "⏳")
-                lines.append(
-                    f"{icon} <b>{h(t.match)}</b>\n"
-                    f"   {h(t.prediction)}"
-                    + (f" @ {t.odds:.2f}" if t.odds else "")
-                )
-                lines.append("")
-            text = "\n".join(lines)
-    else:
-        text = "<b>💰 My Bets</b>"
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_bets())
+    """Compatibility shim for stale bets:* callbacks."""
+    try:
+        await query.answer("My Bets has been retired. Use the working menu below.")
+    except Exception:
+        pass
+    await handle_menu(query, "home")
 
 
 async def handle_teams(query, action: str) -> None:
@@ -13774,30 +14339,15 @@ async def handle_teams(query, action: str) -> None:
 
 
 async def handle_stats_menu(query, action: str) -> None:
-    """Handle stats:* callbacks."""
-    if action == "overview":
-        tips = await db.get_recent_tips(limit=100)
-        total = len(tips)
-        wins = sum(1 for t in tips if t.result == "win")
-        losses = sum(1 for t in tips if t.result == "loss")
-        pending = sum(1 for t in tips if t.result is None or t.result == "pending")
-        win_rate = f"{wins / (wins + losses) * 100:.0f}%" if (wins + losses) > 0 else "N/A"
-        text = textwrap.dedent(f"""\
-            <b>📈 Stats Overview</b>
-
-            📝 Total tips: <b>{total}</b>
-            ✅ Wins: <b>{wins}</b> | ❌ Losses: <b>{losses}</b>
-            ⏳ Pending: <b>{pending}</b>
-            🎯 Win rate: <b>{win_rate}</b>
-        """)
-    elif action == "leaderboard":
-        text = (
-            "<b>🏆 Leaderboard</b>\n\n"
-            "Coming soon! Track your performance against other users."
-        )
-    else:
-        text = "<b>📈 Stats</b>"
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_stats())
+    """Compatibility shim for stale stats:* callbacks."""
+    if action in {"overview", "leaderboard"}:
+        try:
+            await query.answer("Stats now live under Edge Tracker.")
+        except Exception:
+            pass
+    user_id = query.from_user.id
+    text, markup = await _render_results_surface(user_id, days=7)
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def handle_affiliate(query, action: str) -> None:
@@ -14192,6 +14742,133 @@ def _format_hot_tips_track_record_line(last_10_results: list[str], roi_7d: float
     return " · ".join(parts)
 
 
+def _empty_edge_tracker_summary(days: int = 7) -> dict:
+    """Return a default trust-summary payload for Edge Tracker surfaces."""
+    return {
+        "loaded": False,
+        "has_data": False,
+        "days": days,
+        "stats": {"total": 0, "hits": 0, "hit_rate": 0.0, "roi": None, "period_days": days},
+        "recent": [],
+        "streak": {},
+        "total": 0,
+        "hits": 0,
+        "hit_rate": 0.0,
+        "hit_rate_pct": 0.0,
+        "roi": None,
+    }
+
+
+def _build_edge_tracker_summary(
+    stats: dict | None,
+    recent: list[dict] | None,
+    streak: dict | None,
+    days: int = 7,
+) -> dict:
+    """Normalise cached settlement stats for trust surfaces and the full tracker."""
+    summary = _empty_edge_tracker_summary(days)
+    stats = stats or {}
+    recent = recent or []
+    streak = streak or {}
+
+    total = int(stats.get("total", 0) or 0)
+    hits = int(stats.get("hits", 0) or 0)
+    hit_rate = float(stats.get("hit_rate", 0.0) or 0.0)
+    if total > 0 and hit_rate <= 0:
+        hit_rate = hits / total
+    roi = None
+    if total > 0:
+        roi = float(stats.get("roi", 0.0) or 0.0)
+
+    summary.update({
+        "loaded": True,
+        "has_data": total > 0,
+        "stats": stats,
+        "recent": [edge for edge in recent if edge.get("result") in ("hit", "miss")],
+        "streak": streak,
+        "total": total,
+        "hits": hits,
+        "hit_rate": hit_rate,
+        "hit_rate_pct": hit_rate * 100,
+        "roi": roi,
+    })
+    return summary
+
+
+def _load_edge_tracker_summary_sync(days: int = 7) -> dict:
+    """Read settlement stats for trust surfaces using the existing sync helpers only."""
+    try:
+        get_edge_stats, get_recent_settled, _, get_streak, *_ = _get_settlement_funcs()
+        stats = get_edge_stats(days) or {}
+        recent = get_recent_settled(EDGE_TRACKER_RECENT_LIMIT) or []
+        streak = get_streak() or {}
+        return _build_edge_tracker_summary(stats, recent, streak, days)
+    except Exception as exc:
+        log.debug("Edge tracker summary unavailable for %sd: %s", days, exc)
+        return _empty_edge_tracker_summary(days)
+
+
+async def _get_edge_tracker_summary(days: int = 7) -> dict:
+    """Return a cached Edge Tracker trust summary with timeout protection."""
+    import time as _time
+
+    cache_key = str(days)
+    cache_entry = _edge_tracker_summary_cache.get(cache_key)
+    if cache_entry and (_time.time() - cache_entry["ts"]) < EDGE_TRACKER_SUMMARY_CACHE_TTL:
+        return cache_entry["data"]
+
+    try:
+        summary = await asyncio.wait_for(
+            asyncio.to_thread(_load_edge_tracker_summary_sync, days),
+            timeout=EDGE_TRACKER_SUMMARY_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        log.debug("Edge tracker summary timed out for %sd", days)
+        return _empty_edge_tracker_summary(days)
+    except Exception as exc:
+        log.debug("Edge tracker summary failed for %sd: %s", days, exc)
+        return _empty_edge_tracker_summary(days)
+
+    _edge_tracker_summary_cache[cache_key] = {"data": summary, "ts": _time.time()}
+    return summary
+
+
+def _format_edge_tracker_record_line(
+    summary: dict | None,
+    *,
+    label: str = "📊 Last 7D",
+    include_roi: bool = True,
+) -> str:
+    """Format a compact trust-proof line and omit cleanly when no settled data exists."""
+    summary = summary or {}
+    total = int(summary.get("total", 0) or 0)
+    hits = int(summary.get("hits", 0) or 0)
+    if total <= 0:
+        return ""
+
+    rate = float(summary.get("hit_rate_pct", 0.0) or 0.0)
+    line = f"{label}: {hits}/{total} hit ({rate:.0f}%)"
+    roi = summary.get("roi")
+    if include_roi and roi is not None:
+        line += f" · ROI {float(roi):+.1f}%"
+    return line
+
+
+def _format_edge_tracker_streak_line(streak: dict | None) -> str:
+    """Format the current streak for compact profile display."""
+    streak = streak or {}
+    count = int(streak.get("count", 0) or 0)
+    if count <= 0:
+        return ""
+
+    streak_type = str(streak.get("type", "") or "").lower()
+    if streak_type == "loss":
+        noun = "loss" if count == 1 else "losses"
+        return f"📉 Streak: <b>{count} {noun}</b>"
+    noun = "win" if count == 1 else "wins"
+    return f"🔥 Streak: <b>{count} {noun}</b>"
+
+
 def _build_hot_tips_yesterday_lines(yesterday_results: list[dict]) -> list[str]:
     """Build the Yesterday block shown above Hot Tips cards."""
     if not yesterday_results:
@@ -14492,28 +15169,33 @@ def _build_results_buttons(days: int, user_tier: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+async def _render_results_surface(user_id: int, days: int = 7) -> tuple[str, InlineKeyboardMarkup]:
+    """Render Edge Tracker text + markup for commands, callbacks, and legacy redirects."""
+    user_tier = await get_effective_tier(user_id)
+    summary = await _get_edge_tracker_summary(days)
+    if not summary.get("loaded"):
+        return (
+            "📊 <b>Edge Tracker</b>\n\nResults tracking is being set up. Check back soon!",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")],
+            ]),
+        )
+
+    text = _format_results_text(
+        summary.get("stats", {}),
+        summary.get("recent", []),
+        summary.get("streak", {}),
+        days,
+        user_tier,
+    )
+    analytics_track(user_id, "results_viewed", {"period": days})
+    return text, _build_results_buttons(days, user_tier)
+
+
 async def cmd_results(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """/results or /track — show edge performance stats."""
     user_id = update.effective_user.id
-    user_tier = await get_effective_tier(user_id)
-    days = 7
-
-    try:
-        get_edge_stats, get_recent_settled, _, get_streak, *_ = _get_settlement_funcs()
-        stats = await asyncio.to_thread(get_edge_stats, days)
-        recent = await asyncio.to_thread(get_recent_settled, 10)
-        streak = await asyncio.to_thread(get_streak)
-    except Exception as exc:
-        log.warning("Settlement data unavailable: %s", exc)
-        await update.message.reply_text(
-            "📊 <b>Edge Tracker</b>\n\nResults tracking is being set up. Check back soon!",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    text = _format_results_text(stats, recent, streak, days, user_tier)
-    markup = _build_results_buttons(days, user_tier)
-    analytics_track(user_id, "results_viewed", {"period": days})
+    text, markup = await _render_results_surface(user_id, days=7)
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 

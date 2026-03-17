@@ -114,7 +114,7 @@ def test_card_3_lines_full(build_page):
 # ── Test 2: Blurred card has return only ──
 
 def test_card_3_lines_blurred(build_page):
-    """Blurred card (Bronze viewing Gold): return line, no odds/outcome/bookmaker."""
+    """Blurred Gold card adds context but keeps odds/outcome/bookmaker hidden."""
     text, _ = build_page(tips=SAMPLE_TIPS, user_tier="bronze")
     # Gold tip (index 2) is blurred for bronze
     card_block = ""
@@ -127,6 +127,8 @@ def test_card_3_lines_blurred(build_page):
             break
         elif in_card:
             card_block += "\n" + line
+    assert "Supported edge case" in card_block
+    assert "Model edge carrying the case" in card_block
     assert "💰" in card_block
     assert "R300" in card_block
     # Should NOT have outcome name or bookmaker
@@ -138,7 +140,7 @@ def test_card_3_lines_blurred(build_page):
 # ── Test 3: Locked card has lock message ──
 
 def test_card_3_lines_locked(build_page):
-    """Locked card (Bronze viewing Diamond): 'Our highest-conviction pick.'"""
+    """Locked Diamond card adds premium context without leaking odds or pick details."""
     text, _ = build_page(tips=SAMPLE_TIPS, user_tier="bronze")
     # Diamond tip (index 1) is locked for bronze
     card_block = ""
@@ -151,21 +153,23 @@ def test_card_3_lines_locked(build_page):
             break
         elif in_card:
             card_block += "\n" + line
+    assert "Premium edge stack" in card_block
+    assert "Model edge carrying the case" in card_block
     assert "highest-conviction" in card_block
     # No odds or return amount
     assert "1.50" not in card_block
     assert "R199/mo" not in card_block  # No per-card upgrade CTA
 
 
-# ── Test 4: No section headers ──
+# ── Test 4: Rich section headers ──
 
-def test_no_section_headers(build_page):
-    """Output has no DIAMOND EDGE, GOLDEN EDGE, SILVER EDGE, BRONZE EDGE headers."""
+def test_richer_section_headers(build_page):
+    """Output groups cards under richer tier-aware section headers."""
     text, _ = build_page(tips=SAMPLE_TIPS, user_tier="diamond")
-    assert "DIAMOND EDGE" not in text
-    assert "GOLDEN EDGE" not in text
-    assert "SILVER EDGE" not in text
-    assert "BRONZE EDGE" not in text
+    assert "💎 <b>DIAMOND EDGE</b> — 1 pick · Our highest-conviction calls" in text
+    assert "🥇 <b>GOLDEN EDGE</b> — 1 pick · Strong value, clear signals" in text
+    assert "🥈 <b>SILVER EDGE</b> — 1 pick · Solid value, cleaner spots" in text
+    assert "🥉 <b>BRONZE EDGE</b> — 1 pick · Early value, worth a look" in text
 
 
 # ── Test 5: No per-card CTA ──

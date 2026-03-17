@@ -212,6 +212,35 @@ async def test_dispatch_button_routes_guide_topic(mock_update, mock_context):
     assert "menu:home" in button_data
 
 
+async def test_dispatch_button_routes_stale_bets_to_main_menu(mock_update, mock_context):
+    query = mock_update.callback_query
+    query.from_user.first_name = "User"
+
+    await bot._dispatch_button(query, mock_context, "bets", "active")
+
+    call_args = query.edit_message_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "Main Menu" in text
+
+    markup = call_args[1]["reply_markup"]
+    labels = [btn.text for row in markup.inline_keyboard for btn in row]
+    assert "📊 Edge Tracker" in labels
+    assert "💰 My Bets" not in labels
+
+
+async def test_dispatch_button_routes_stale_stats_to_edge_tracker(mock_update, mock_context):
+    query = mock_update.callback_query
+    markup = MagicMock()
+
+    with patch.object(bot, "_render_results_surface", new=AsyncMock(return_value=("EDGE TRACKER", markup))):
+        await bot._dispatch_button(query, mock_context, "stats", "leaderboard")
+
+    call_args = query.edit_message_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert text == "EDGE TRACKER"
+    assert call_args[1]["reply_markup"] is markup
+
+
 async def test_handle_ob_done_includes_how_it_works_cta(test_db):
     """Onboarding completion keeps primary CTAs and adds guide continuity."""
     user_id = 98765
@@ -659,6 +688,31 @@ class TestStickyKeyboard:
     def test_legacy_hot_tips_label_maps(self):
         """Old 'Hot Tips' keyboard label maps to hot_tips route."""
         assert bot._LEGACY_LABELS.get("🔥 Hot Tips") == "hot_tips"
+
+    def test_legacy_my_stats_label_maps_to_results(self):
+        assert bot._LEGACY_LABELS.get("📊 My Stats") == "results"
+
+
+async def test_handle_keyboard_tap_legacy_my_stats_redirects_to_edge_tracker(test_db, mock_context):
+    user_id = 123321
+    await db.upsert_user(user_id, "legacy_stats", "Legacy Stats")
+    await db.set_onboarding_done(user_id)
+
+    update = MagicMock()
+    update.effective_user = MagicMock()
+    update.effective_user.id = user_id
+    update.message = MagicMock()
+    update.message.text = "📊 My Stats"
+    update.message.reply_text = AsyncMock()
+
+    markup = MagicMock()
+    with patch.object(bot, "_render_results_surface", new=AsyncMock(return_value=("EDGE TRACKER", markup))):
+        await bot.handle_keyboard_tap(update, mock_context)
+
+    call_args = update.message.reply_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert text == "EDGE TRACKER"
+    assert call_args[1]["reply_markup"] is markup
 
 
 class TestSpinner:

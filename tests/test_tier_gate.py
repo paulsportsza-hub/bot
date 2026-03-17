@@ -343,6 +343,15 @@ class TestUpgradeMessage:
         msg = get_upgrade_message("gold")
         assert "Diamond" in msg
 
+    def test_proof_line_is_inserted_before_subscribe(self):
+        from tier_gate import get_upgrade_message
+
+        proof_line = "📊 Last 7D: 23/34 hit (68%) · ROI +12.1%"
+        msg = get_upgrade_message("bronze", context="diamond_edge", proof_line=proof_line)
+
+        assert proof_line in msg
+        assert msg.index(proof_line) < msg.index("/subscribe")
+
     def test_diamond_empty(self):
         from tier_gate import get_upgrade_message
 
