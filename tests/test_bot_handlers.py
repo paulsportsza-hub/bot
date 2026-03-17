@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -1507,6 +1509,347 @@ class TestSportFilterInline:
         assert "no cricket" in text.lower()
 
         del bot._schedule_cache[user_id]
+
+
+class TestMyMatchesPremiumCards:
+    @pytest.mark.asyncio
+    async def test_cached_match_card_context_reads_schedule_and_standings(self, tmp_path):
+        db_path = tmp_path / "odds.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE team_api_ids (team_name TEXT, league TEXT, espn_id TEXT, espn_display_name TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE api_cache (cache_key TEXT PRIMARY KEY, data TEXT, fetched_at TEXT, expires_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO team_api_ids (team_name, league, espn_id, espn_display_name) VALUES (?, ?, ?, ?)",
+            [
+                ("chiefs", "psl", "1", "Chiefs"),
+                ("pirates", "psl", "2", "Pirates"),
+            ],
+        )
+
+        standings_payload = {
+            "children": [{
+                "standings": {
+                    "entries": [
+                        {"team": {"id": "1"}, "stats": [{"name": "rank", "value": 3}]},
+                        {"team": {"id": "2"}, "stats": [{"name": "rank", "value": 12}]},
+                    ],
+                },
+            }],
+        }
+        schedule_home = {
+            "events": [
+                {
+                    "date": "2026-03-05T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "1"}, "score": {"value": 2}, "homeAway": "home"},
+                            {"team": {"id": "9"}, "score": {"value": 1}, "homeAway": "away"},
+                        ],
+                    }],
+                },
+                {
+                    "date": "2026-03-04T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "1"}, "score": {"value": 1}, "homeAway": "away"},
+                            {"team": {"id": "9"}, "score": {"value": 0}, "homeAway": "home"},
+                        ],
+                    }],
+                },
+                {
+                    "date": "2026-03-03T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "1"}, "score": {"value": 1}, "homeAway": "home"},
+                            {"team": {"id": "9"}, "score": {"value": 1}, "homeAway": "away"},
+                        ],
+                    }],
+                },
+                {
+                    "date": "2026-03-02T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "1"}, "score": {"value": 0}, "homeAway": "away"},
+                            {"team": {"id": "9"}, "score": {"value": 2}, "homeAway": "home"},
+                        ],
+                    }],
+                },
+                {
+                    "date": "2026-03-01T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "1"}, "score": {"value": 3}, "homeAway": "home"},
+                            {"team": {"id": "9"}, "score": {"value": 1}, "homeAway": "away"},
+                        ],
+                    }],
+                },
+            ],
+        }
+        schedule_away = {
+            "events": [
+                {
+                    "date": "2026-03-05T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "2"}, "score": {"value": 0}, "homeAway": "home"},
+                            {"team": {"id": "8"}, "score": {"value": 1}, "homeAway": "away"},
+                        ],
+                    }],
+                },
+                {
+                    "date": "2026-03-04T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "2"}, "score": {"value": 1}, "homeAway": "away"},
+                            {"team": {"id": "8"}, "score": {"value": 1}, "homeAway": "home"},
+                        ],
+                    }],
+                },
+                {
+                    "date": "2026-03-03T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "2"}, "score": {"value": 3}, "homeAway": "home"},
+                            {"team": {"id": "8"}, "score": {"value": 2}, "homeAway": "away"},
+                        ],
+                    }],
+                },
+                {
+                    "date": "2026-03-02T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "2"}, "score": {"value": 2}, "homeAway": "away"},
+                            {"team": {"id": "8"}, "score": {"value": 1}, "homeAway": "home"},
+                        ],
+                    }],
+                },
+                {
+                    "date": "2026-03-01T15:00:00Z",
+                    "competitions": [{
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"team": {"id": "2"}, "score": {"value": 0}, "homeAway": "home"},
+                            {"team": {"id": "8"}, "score": {"value": 2}, "homeAway": "away"},
+                        ],
+                    }],
+                },
+            ],
+        }
+        conn.executemany(
+            "INSERT INTO api_cache (cache_key, data, fetched_at, expires_at) VALUES (?, ?, ?, ?)",
+            [
+                ("standings:psl:2025", json.dumps(standings_payload), "2026-03-01T00:00:00+00:00", "2099-01-01T00:00:00+00:00"),
+                ("schedule:psl:1", json.dumps(schedule_home), "2026-03-01T00:00:00+00:00", "2099-01-01T00:00:00+00:00"),
+                ("schedule:psl:2", json.dumps(schedule_away), "2026-03-01T00:00:00+00:00", "2099-01-01T00:00:00+00:00"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        with patch.object(bot, "_NARRATIVE_DB_PATH", str(db_path)):
+            ctx = await bot._get_cached_match_card_context([
+                {"id": "m1", "home_team": "Chiefs", "away_team": "Pirates", "league_key": "psl"},
+            ], {})
+
+        assert ctx["m1"]["home_form"] == "WWDLW"
+        assert ctx["m1"]["away_form"] == "LDWWL"
+        assert ctx["m1"]["home_position"] == 3
+        assert ctx["m1"]["away_position"] == 12
+
+    @pytest.mark.asyncio
+    async def test_render_full_context_card_with_edge_preview(self, test_db):
+        user_id = 51001
+        event_id = "mm-premium-1"
+        bot._schedule_cache[user_id] = [{
+            "id": event_id,
+            "home_team": "Chiefs",
+            "away_team": "Pirates",
+            "commence_time": "2026-03-15T15:00:00Z",
+            "sport_emoji": "⚽",
+            "league_key": "psl",
+        }]
+        bot._hot_tips_cache["global"] = {
+            "tips": [{
+                "event_id": event_id,
+                "home_team": "Chiefs",
+                "away_team": "Pirates",
+                "display_tier": "diamond",
+                "edge_rating": "diamond",
+                "outcome": "Chiefs",
+                "odds": 2.40,
+                "edge_v2": {
+                    "tier": "diamond",
+                    "signals": {
+                        "form_h2h": {
+                            "available": True,
+                            "home_form_string": "WWDLW",
+                            "away_form_string": "LDWWL",
+                        },
+                    },
+                },
+            }],
+            "ts": time.time(),
+        }
+
+        try:
+            with patch.object(
+                db, "get_user_sport_prefs", new_callable=AsyncMock,
+                return_value=[MagicMock(team_name="Chiefs", league="psl")],
+            ), patch.object(
+                bot, "_get_cached_match_card_context", new_callable=AsyncMock,
+                return_value={event_id: {
+                    "home_form": "WWDLW",
+                    "away_form": "LDWWL",
+                    "home_position": 3,
+                    "away_position": 12,
+                }},
+            ):
+                text, markup = await bot._render_your_games_all(
+                    user_id, user_tier="diamond", skip_broadcast=True,
+                )
+
+            assert "📈 WWDLW · LDWWL" in text
+            assert "📊 3rd vs 12th" in text
+            assert "💎 Chiefs to win @ 2.40 → R720 on R300" in text
+            button_data = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+            assert f"yg:game:{event_id}" in button_data
+        finally:
+            bot._schedule_cache.pop(user_id, None)
+            bot._hot_tips_cache.pop("global", None)
+
+    @pytest.mark.asyncio
+    async def test_render_partial_context_omits_incomplete_lines(self, test_db):
+        user_id = 51002
+        event_id = "mm-premium-2"
+        bot._hot_tips_cache.pop("global", None)
+        bot._schedule_cache[user_id] = [{
+            "id": event_id,
+            "home_team": "Arsenal",
+            "away_team": "Chelsea",
+            "commence_time": "2026-03-15T17:00:00Z",
+            "sport_emoji": "⚽",
+            "league_key": "epl",
+        }]
+
+        try:
+            with patch.object(
+                db, "get_user_sport_prefs", new_callable=AsyncMock,
+                return_value=[MagicMock(team_name="Arsenal", league="epl")],
+            ), patch.object(
+                bot, "_get_cached_match_card_context", new_callable=AsyncMock,
+                return_value={event_id: {
+                    "home_form": "WWDLW",
+                    "away_form": "LDWWL",
+                    "home_position": 3,
+                }},
+            ):
+                text, _ = await bot._render_your_games_all(
+                    user_id, user_tier="diamond", skip_broadcast=True,
+                )
+
+            assert "📈 WWDLW · LDWWL" in text
+            assert "📊" not in text
+            assert "→ R" not in text
+        finally:
+            bot._schedule_cache.pop(user_id, None)
+
+    @pytest.mark.asyncio
+    async def test_render_no_extra_context_falls_back_cleanly(self, test_db):
+        user_id = 51003
+        event_id = "mm-premium-3"
+        bot._hot_tips_cache.pop("global", None)
+        bot._schedule_cache[user_id] = [{
+            "id": event_id,
+            "home_team": "Bulls",
+            "away_team": "Stormers",
+            "commence_time": "2026-03-15T19:00:00Z",
+            "sport_emoji": "🏉",
+            "league_key": "urc",
+        }]
+
+        try:
+            with patch.object(
+                db, "get_user_sport_prefs", new_callable=AsyncMock,
+                return_value=[MagicMock(team_name="Bulls", league="urc")],
+            ), patch.object(
+                bot, "_get_cached_match_card_context", new_callable=AsyncMock,
+                return_value={event_id: {}},
+            ):
+                text, _ = await bot._render_your_games_all(
+                    user_id, user_tier="diamond", skip_broadcast=True,
+                )
+
+            assert "Bulls" in text
+            assert "Stormers" in text
+            assert "📈" not in text
+            assert "📊" not in text
+            assert "→ R" not in text
+            assert "/subscribe" not in text
+        finally:
+            bot._schedule_cache.pop(user_id, None)
+
+    @pytest.mark.asyncio
+    async def test_render_locked_edge_preview_stays_compact(self, test_db):
+        user_id = 51004
+        event_id = "mm-premium-4"
+        bot._schedule_cache[user_id] = [{
+            "id": event_id,
+            "home_team": "Chiefs",
+            "away_team": "Pirates",
+            "commence_time": "2026-03-15T15:00:00Z",
+            "sport_emoji": "⚽",
+            "league_key": "psl",
+        }]
+        bot._hot_tips_cache["global"] = {
+            "tips": [{
+                "event_id": event_id,
+                "home_team": "Chiefs",
+                "away_team": "Pirates",
+                "display_tier": "diamond",
+                "edge_rating": "diamond",
+                "outcome": "Chiefs",
+                "odds": 2.40,
+                "edge_v2": {"tier": "diamond", "signals": {}},
+            }],
+            "ts": time.time(),
+        }
+
+        try:
+            with patch.object(
+                db, "get_user_sport_prefs", new_callable=AsyncMock,
+                return_value=[MagicMock(team_name="Chiefs", league="psl")],
+            ), patch.object(
+                bot, "_get_cached_match_card_context", new_callable=AsyncMock,
+                return_value={event_id: {
+                    "home_form": "WWDLW",
+                    "away_form": "LDWWL",
+                    "home_position": 3,
+                    "away_position": 12,
+                }},
+            ):
+                text, _ = await bot._render_your_games_all(
+                    user_id, user_tier="bronze", skip_broadcast=True,
+                )
+
+            assert "🔒 Diamond edge detected — /subscribe" in text
+            assert "Chiefs to win @" not in text
+            assert "@ 2.40" not in text
+        finally:
+            bot._schedule_cache.pop(user_id, None)
+            bot._hot_tips_cache.pop("global", None)
 
 
 class TestMultiBookmakerDirectory:

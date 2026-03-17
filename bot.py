@@ -3476,6 +3476,7 @@ async def _render_your_games_all(
             )
             for ev in page_games
         ])
+    card_context = await _get_cached_match_card_context(page_games, edge_info)
 
     # Group page games by date
     current_date_label = None
@@ -3504,6 +3505,7 @@ async def _render_your_games_all(
         hf, af = _get_flag_prefixes(home_raw, away_raw)
         home_display = f"<b>{hf}{home}</b>" if home.lower() in user_teams else f"{hf}{home}"
         away_display = f"<b>{af}{away}</b>" if away.lower() in user_teams else f"{af}{away}"
+        ctx = card_context.get(event_id, {})
 
         # Edge badge — use detailed info from hot tips cache if available
         _ei = edge_info.get(event_id)
@@ -3518,17 +3520,24 @@ async def _render_your_games_all(
             edge_marker = ""
         lines.append(f"<b>[{idx}]</b> {emoji} {event_time}  {home_display} vs {away_display}{edge_marker}")
 
-        # Edge badge line — show tier label for games with edge info
-        if _ei:
-            from renderers.edge_renderer import EDGE_LABELS
-            _label = EDGE_LABELS.get(_ei["display_tier"], "")
-            if _label:
-                lines.append(f"     {EDGE_EMOJIS.get(_ei['display_tier'], '')} <b>{_label}</b> detected")
-
         # League line
         league_name = _get_league_display(league_key, home_raw, away_raw)
         if league_name:
             lines.append(f"     \U0001f3c6 {league_name}")
+
+        home_form = ctx.get("home_form", "")
+        away_form = ctx.get("away_form", "")
+        if home_form and away_form:
+            lines.append(f"     📈 {home_form} · {away_form}")
+
+        home_pos = _ordinal_mm(ctx.get("home_position"))
+        away_pos = _ordinal_mm(ctx.get("away_position"))
+        if home_pos and away_pos:
+            lines.append(f"     📊 {home_pos} vs {away_pos}")
+
+        preview_line = _format_my_matches_edge_preview(_ei, user_tier, home_raw, away_raw)
+        if preview_line:
+            lines.append(f"     {preview_line}")
 
         # Broadcast info (pre-fetched in parallel above)
         _bc_line = bc_infos[idx - page * per_page - 1]
@@ -3836,11 +3845,330 @@ async def _check_edges_for_games(games: list[dict]) -> dict[str, bool]:
     return edge_map
 
 
+def _ordinal_mm(n: int | None) -> str:
+    """Return a compact ordinal label for My Matches cards."""
+    if not isinstance(n, int) or n <= 0:
+        return ""
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _compact_recent_form(form: str, limit: int = 5) -> str:
+    """Return a clean W/D/L form snippet capped to the recent window."""
+    cleaned = "".join(ch for ch in str(form or "").upper() if ch in {"W", "D", "L"})
+    return cleaned[:limit]
+
+
+def _parse_cached_score(score_val) -> int:
+    """Parse score values from cached ESPN schedule payloads."""
+    if isinstance(score_val, dict):
+        score_val = score_val.get("value", score_val.get("displayValue", 0))
+    try:
+        return int(float(score_val))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _derive_form_from_cached_schedule(
+    schedule_data: dict | None,
+    team_id: str,
+    limit: int = 5,
+) -> str:
+    """Build a recent W/D/L string from cached team schedule data only."""
+    if not schedule_data or not team_id:
+        return ""
+
+    completed: list[tuple[str, str]] = []
+    for event in (schedule_data.get("events") or []):
+        comp = ((event.get("competitions") or [{}]) or [{}])[0]
+        status = ((comp.get("status") or {}).get("type") or {})
+        if not status.get("completed"):
+            continue
+
+        team_comp = None
+        opp_comp = None
+        for competitor in (comp.get("competitors") or []):
+            if str((competitor.get("team") or {}).get("id") or "") == str(team_id):
+                team_comp = competitor
+            else:
+                opp_comp = competitor
+
+        if not team_comp or not opp_comp:
+            continue
+
+        team_score = _parse_cached_score(team_comp.get("score"))
+        opp_score = _parse_cached_score(opp_comp.get("score"))
+        if team_score > opp_score:
+            result = "W"
+        elif team_score < opp_score:
+            result = "L"
+        else:
+            result = "D"
+        completed.append((event.get("date") or "", result))
+
+    completed.sort(key=lambda item: item[0], reverse=True)
+    return "".join(result for _, result in completed[:limit])
+
+
+def _extract_rank_map_from_standings_payload(payload: dict | None) -> dict[str, int]:
+    """Extract team-id → rank map from cached standings payloads."""
+    if not payload:
+        return {}
+
+    rank_map: dict[str, int] = {}
+    entry_groups: list[list[dict]] = []
+
+    top_entries = ((payload.get("standings") or {}).get("entries") or [])
+    if top_entries:
+        entry_groups.append(top_entries)
+
+    for child in (payload.get("children") or []):
+        entries = ((child.get("standings") or {}).get("entries") or [])
+        if entries:
+            entry_groups.append(entries)
+
+    for entries in entry_groups:
+        for entry in entries:
+            team_id = str((entry.get("team") or {}).get("id") or "")
+            if not team_id:
+                continue
+            rank = None
+            for stat in (entry.get("stats") or []):
+                if stat.get("name") != "rank":
+                    continue
+                value = stat.get("value", stat.get("displayValue"))
+                try:
+                    rank = int(float(value))
+                except (TypeError, ValueError):
+                    rank = None
+                break
+            if rank:
+                rank_map[team_id] = rank
+
+    return rank_map
+
+
+def _format_my_matches_edge_preview(
+    edge_match: dict | None,
+    user_tier: str,
+    home_team: str,
+    away_team: str,
+) -> str:
+    """Render a single premium edge preview line for My Matches cards."""
+    if not edge_match:
+        return ""
+
+    from tier_gate import get_edge_access_level
+
+    tip = edge_match.get("tip") or {}
+    edge_tier = str(edge_match.get("edge_tier") or edge_match.get("display_tier") or "bronze")
+    access = get_edge_access_level(user_tier, edge_tier)
+
+    if access in ("blurred", "locked"):
+        locked_tier = str(edge_match.get("display_tier") or edge_tier or "premium").title()
+        return f"🔒 {locked_tier} edge detected — /subscribe"
+
+    odds_val = tip.get("odds")
+    if odds_val in (None, 0):
+        odds_val = ((tip.get("edge_v2") or {}).get("best_odds") or 0)
+    try:
+        odds_val = float(odds_val or 0)
+    except (TypeError, ValueError):
+        odds_val = 0.0
+    if odds_val <= 1.0:
+        return ""
+
+    outcome_raw = str(tip.get("outcome") or tip.get("recommended_outcome") or "").strip()
+    outcome_key = outcome_raw.lower()
+    if outcome_key in {"home", "1"}:
+        outcome_label = f"{home_team} to win"
+    elif outcome_key in {"away", "2"}:
+        outcome_label = f"{away_team} to win"
+    elif outcome_key == "draw":
+        outcome_label = "Draw"
+    elif outcome_key == home_team.lower():
+        outcome_label = f"{outcome_raw} to win"
+    elif outcome_key == away_team.lower():
+        outcome_label = f"{outcome_raw} to win"
+    else:
+        outcome_label = outcome_raw or "Edge"
+
+    tier_emoji = EDGE_EMOJIS.get(edge_match.get("display_tier", edge_tier), "🔥")
+    ret_amount = odds_val * 300
+    return f"{tier_emoji} {h(outcome_label)} @ {odds_val:.2f} → R{ret_amount:,.0f} on R300"
+
+
+async def _get_cached_match_card_context(
+    games: list[dict],
+    edge_info: dict[str, dict],
+) -> dict[str, dict]:
+    """Read form + position context from existing caches only.
+
+    Sources:
+    - Hot Tips cache match payloads already matched by _get_edge_info_for_games()
+    - odds.db api_cache schedule/standings rows
+    - odds.db team_api_ids for team → ESPN ID mapping
+
+    This helper is read-only. It does not call match_context_fetcher and performs
+    no network I/O or DB writes.
+    """
+    if not games:
+        return {}
+
+    def _load() -> dict[str, dict]:
+        import json
+        from datetime import datetime, timezone
+        from db_connection import get_connection as _get_conn
+
+        def _team_key(name: str) -> str:
+            return (name or "").strip().lower()
+
+        def _is_fresh(expires_at: str) -> bool:
+            try:
+                expires = datetime.fromisoformat(expires_at)
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                return datetime.now(timezone.utc) <= expires
+            except (TypeError, ValueError):
+                return False
+
+        def _league_from_standings_cache_key(cache_key: str) -> str:
+            parts = cache_key.split(":")
+            if len(parts) >= 3 and parts[1] == "cricket":
+                return parts[2]
+            return parts[1] if len(parts) >= 2 else ""
+
+        context: dict[str, dict] = {}
+        for game in games:
+            event_id = game.get("id", "")
+            tip = (edge_info.get(event_id) or {}).get("tip") or {}
+            form_signal = ((tip.get("edge_v2") or {}).get("signals") or {}).get("form_h2h") or {}
+            context[event_id] = {
+                "home_form": _compact_recent_form(form_signal.get("home_form_string", "")),
+                "away_form": _compact_recent_form(form_signal.get("away_form_string", "")),
+            }
+
+        league_keys = sorted({g.get("league_key", "") for g in games if g.get("league_key")})
+        if not league_keys:
+            return context
+
+        conn = _get_conn(_NARRATIVE_DB_PATH, timeout_ms=1500)
+        try:
+            placeholders = ",".join("?" for _ in league_keys)
+            team_rows = conn.execute(
+                f"SELECT LOWER(team_name), league, espn_id, LOWER(COALESCE(espn_display_name, '')) "
+                f"FROM team_api_ids WHERE league IN ({placeholders})",
+                tuple(league_keys),
+            ).fetchall()
+
+            team_ids: dict[tuple[str, str], str] = {}
+            for team_name, league, espn_id, espn_display_name in team_rows:
+                if team_name:
+                    team_ids[(league, team_name)] = str(espn_id)
+                if espn_display_name:
+                    team_ids.setdefault((league, espn_display_name), str(espn_id))
+
+            needed_schedule_keys: set[str] = set()
+            needed_standings_leagues: set[str] = set()
+            for game in games:
+                event_id = game.get("id", "")
+                league = game.get("league_key", "")
+                home_id = team_ids.get((league, _team_key(game.get("home_team") or "")))
+                away_id = team_ids.get((league, _team_key(game.get("away_team") or "")))
+                if home_id and not context[event_id].get("home_form"):
+                    needed_schedule_keys.add(f"schedule:{league}:{home_id}")
+                if away_id and not context[event_id].get("away_form"):
+                    needed_schedule_keys.add(f"schedule:{league}:{away_id}")
+                if home_id or away_id:
+                    needed_standings_leagues.add(league)
+
+            schedule_cache: dict[str, dict] = {}
+            if needed_schedule_keys:
+                schedule_placeholders = ",".join("?" for _ in needed_schedule_keys)
+                rows = conn.execute(
+                    f"SELECT cache_key, data, expires_at FROM api_cache "
+                    f"WHERE cache_key IN ({schedule_placeholders})",
+                    tuple(sorted(needed_schedule_keys)),
+                ).fetchall()
+                for cache_key, data, expires_at in rows:
+                    if not _is_fresh(expires_at):
+                        continue
+                    try:
+                        schedule_cache[cache_key] = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+
+            standings_cache: dict[str, dict[str, int]] = {}
+            if needed_standings_leagues:
+                clauses: list[str] = []
+                params: list[str] = []
+                for league in sorted(needed_standings_leagues):
+                    for pattern in (
+                        f"standings:{league}",
+                        f"standings:{league}:%",
+                        f"standings:cricket:{league}",
+                        f"standings:cricket:{league}:%",
+                    ):
+                        clauses.append("cache_key LIKE ?")
+                        params.append(pattern)
+                rows = conn.execute(
+                    f"SELECT cache_key, data, expires_at FROM api_cache WHERE {' OR '.join(clauses)}",
+                    tuple(params),
+                ).fetchall()
+                for cache_key, data, expires_at in rows:
+                    if not _is_fresh(expires_at):
+                        continue
+                    try:
+                        payload = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    league = _league_from_standings_cache_key(cache_key)
+                    if not league:
+                        continue
+                    standings_cache.setdefault(league, {}).update(
+                        _extract_rank_map_from_standings_payload(payload)
+                    )
+
+            for game in games:
+                event_id = game.get("id", "")
+                league = game.get("league_key", "")
+                home_id = team_ids.get((league, _team_key(game.get("home_team") or "")))
+                away_id = team_ids.get((league, _team_key(game.get("away_team") or "")))
+
+                if home_id and not context[event_id].get("home_form"):
+                    context[event_id]["home_form"] = _compact_recent_form(
+                        _derive_form_from_cached_schedule(
+                            schedule_cache.get(f"schedule:{league}:{home_id}"),
+                            home_id,
+                        )
+                    )
+                if away_id and not context[event_id].get("away_form"):
+                    context[event_id]["away_form"] = _compact_recent_form(
+                        _derive_form_from_cached_schedule(
+                            schedule_cache.get(f"schedule:{league}:{away_id}"),
+                            away_id,
+                        )
+                    )
+
+                rank_map = standings_cache.get(league, {})
+                if home_id and home_id in rank_map:
+                    context[event_id]["home_position"] = rank_map[home_id]
+                if away_id and away_id in rank_map:
+                    context[event_id]["away_position"] = rank_map[away_id]
+
+        finally:
+            conn.close()
+
+        return context
+
+    return await asyncio.to_thread(_load)
+
+
 def _get_edge_info_for_games(games: list[dict]) -> dict[str, dict]:
     """Cross-reference My Matches games with hot tips cache to get edge tier + signal info.
 
     Returns dict of event_id → {"display_tier": str, "edge_tier": str,
-    "confirming": int, "total_signals": int} or empty dict if no match found.
+    "confirming": int, "total_signals": int, "tip": dict} or empty dict if no match found.
     """
     cache_entry = _hot_tips_cache.get("global")
     if not cache_entry or not cache_entry.get("tips"):
@@ -3879,6 +4207,7 @@ def _get_edge_info_for_games(games: list[dict]) -> dict[str, dict]:
             "edge_tier": edge_v2.get("tier", display_tier),
             "confirming": confirming,
             "total_signals": total,
+            "tip": tip,
         }
     return result
 
