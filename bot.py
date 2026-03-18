@@ -3349,9 +3349,9 @@ async def format_profile_summary(user_id: int, *, surface: str = "settings") -> 
 
 async def _build_profile_buttons(user_id: int) -> InlineKeyboardMarkup:
     """Build tier-aware Profile buttons that keep the surface useful as a home base."""
-    user = await db.get_user(user_id)
+    user_tier = await get_effective_tier(user_id)
     trial_active = await db.is_trial_active(user_id)
-    is_paid = bool(user and db.is_premium(user) and not trial_active)
+    is_paid = user_tier in {"gold", "diamond"} and not trial_active
 
     rows = [
         [
