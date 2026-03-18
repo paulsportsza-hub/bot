@@ -2092,6 +2092,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         user_id = query.from_user.id
         text, markup = await _render_results_surface(user_id, days=days)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif prefix == "profile":
+        if action == "home":
+            text, markup = await _render_profile_home_surface(query.from_user.id)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
     elif prefix == "subscribe":
         await handle_subscribe(query, action)
     elif prefix == "unsubscribe":
@@ -2112,6 +2116,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         elif action == "plans":
             user_tier = await get_effective_tier(query.from_user.id)
             text, markup = _subscribe_plan_text(user_tier)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        elif action == "billing":
+            text, markup = await _render_profile_plan_surface(query.from_user.id)
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         elif action.startswith("tier:"):
             plan_code = action.split(":", 1)[1]
@@ -3010,14 +3017,254 @@ async def _handle_ob_plan(query, action: str, ctx) -> None:
 
 # ── Profile summary helper ────────────────────────────────
 
-async def format_profile_summary(user_id: int) -> str:
-    """Build a clean, well-spaced profile summary string.
+def _profile_now_utc():
+    """Return the current UTC time for profile rendering helpers."""
+    import datetime as _dt
 
-    Uses the service layer for data, renders as Telegram HTML.
-    Used in: /settings home, My Teams view, after edits.
-    """
-    data = await get_profile_data(user_id)
+    return _dt.datetime.now(_dt.timezone.utc)
 
+
+def _coerce_profile_dt(value):
+    """Normalise DB datetimes to timezone-aware UTC datetimes."""
+    import datetime as _dt
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=_dt.timezone.utc)
+    return value.astimezone(_dt.timezone.utc)
+
+
+def _format_profile_date(value) -> str:
+    """Format a datetime for compact profile display."""
+    from zoneinfo import ZoneInfo
+
+    dt_value = _coerce_profile_dt(value)
+    if not dt_value:
+        return ""
+    return dt_value.astimezone(ZoneInfo(config.TZ)).strftime("%d %b %Y")
+
+
+def _profile_elapsed_days(value, *, now=None) -> int | None:
+    """Return inclusive elapsed days from a stored datetime."""
+    dt_value = _coerce_profile_dt(value)
+    if not dt_value:
+        return None
+    now_value = now or _profile_now_utc()
+    return max(1, (now_value.date() - dt_value.date()).days + 1)
+
+
+def _profile_remaining_days(value, *, now=None) -> int | None:
+    """Return remaining days, rounded up, for compact countdown copy."""
+    import math
+
+    dt_value = _coerce_profile_dt(value)
+    if not dt_value:
+        return None
+    now_value = now or _profile_now_utc()
+    remaining = (dt_value - now_value).total_seconds() / 86400
+    return max(0, math.ceil(remaining))
+
+
+def _profile_trial_progress(user, *, now=None) -> tuple[int, int, int] | None:
+    """Return (current_day, total_days, days_remaining) for an active trial."""
+    import math
+
+    start = _coerce_profile_dt(getattr(user, "trial_start_date", None))
+    end = _coerce_profile_dt(getattr(user, "trial_end_date", None))
+    if not start or not end:
+        return None
+    total_days = max(1, math.ceil((end - start).total_seconds() / 86400))
+    days_remaining = _profile_remaining_days(end, now=now)
+    if days_remaining is None:
+        return None
+    current_day = min(total_days, max(1, total_days - days_remaining + 1))
+    return current_day, total_days, days_remaining
+
+
+def _collect_profile_teams(sport: dict) -> list[str]:
+    """Flatten team names for a compact per-sport line."""
+    teams: list[str] = []
+    for league in sport.get("leagues", []):
+        teams.extend(league.get("teams", []))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for team in teams:
+        if team not in seen:
+            deduped.append(team)
+            seen.add(team)
+    return deduped
+
+
+def _compact_profile_sport_lines(sports: list[dict]) -> list[str]:
+    """Render followed sports as concise one-line rows."""
+    if not sports:
+        return [
+            "No teams saved yet.",
+            "Use <b>Edit Profile</b> to add the clubs and leagues you care about.",
+        ]
+
+    lines: list[str] = []
+    for sport in sports:
+        teams = _collect_profile_teams(sport)
+        if teams:
+            preview = ", ".join(teams[:4])
+            extra = len(teams) - 4
+            if extra > 0:
+                preview += f" +{extra} more"
+            lines.append(f"{sport['emoji']} <b>{sport['label']}</b> — {preview}")
+        else:
+            lines.append(f"{sport['emoji']} <b>{sport['label']}</b>")
+    return lines
+
+
+def _get_profile_focus_sport(sports: list[dict]) -> str:
+    """Pick the user's strongest followed sport from saved preferences."""
+    top_label = ""
+    top_score = -1
+    for sport in sports:
+        team_count = len(_collect_profile_teams(sport))
+        league_count = len(sport.get("leagues", []))
+        score = team_count * 10 + league_count
+        if score > top_score:
+            top_score = score
+            top_label = sport["label"]
+    return top_label
+
+
+def _build_profile_identity_block(user, user_tier: str, trial_active: bool) -> list[str]:
+    """Render the premium identity block shown at the top of Profile."""
+    now = _profile_now_utc()
+
+    if trial_active:
+        progress = _profile_trial_progress(user, now=now)
+        headline = "💎 <b>Diamond Trial</b>"
+        if progress:
+            current_day, total_days, days_remaining = progress
+            headline = f"💎 <b>Diamond Trial — Day {current_day} of {total_days}</b>"
+        lines = [headline]
+        started = _format_profile_date(getattr(user, "trial_start_date", None) or getattr(user, "joined_at", None))
+        if started:
+            lines.append(f"📅 Started: <b>{started}</b>")
+        if progress:
+            _, _, days_remaining = progress
+            lines.append(f"⏳ <b>{days_remaining} day{'s' if days_remaining != 1 else ''} left</b>")
+        else:
+            lines.append("⏳ Trial time remaining is active.")
+        return lines
+
+    if user_tier == "gold":
+        lines = ["🥇 <b>Gold Member</b>"]
+    elif user_tier == "diamond":
+        lines = ["💎 <b>Diamond Member</b>"]
+    else:
+        return [
+            "🥉 <b>Bronze (Free)</b>",
+            "Your free home base for followed teams, Edge Tracker, and daily edge access.",
+        ]
+
+    member_since = getattr(user, "subscription_started_at", None) or getattr(user, "joined_at", None)
+    member_since_label = "Member since" if getattr(user, "subscription_started_at", None) else "Joined"
+    member_since_str = _format_profile_date(member_since)
+    if member_since_str:
+        lines.append(f"📅 {member_since_label}: <b>{member_since_str}</b>")
+    days_as_member = _profile_elapsed_days(member_since, now=now)
+    if days_as_member:
+        lines.append(f"🕒 <b>{days_as_member} day{'s' if days_as_member != 1 else ''} as a member</b>")
+    if getattr(user, "is_founding_member", False):
+        lines.append("🎁 <b>Founding Member</b>")
+    return lines
+
+
+def _build_profile_engagement_section(data: dict, edge_views: dict) -> list[str]:
+    """Render personal engagement stats from existing user state."""
+    lines = ["📈 <b>Your Activity</b>"]
+
+    total_views = int(edge_views.get("total_edge_views", 0) or 0)
+    recent_views = int(edge_views.get("recent_edge_views", 0) or 0)
+    days_with_mzansiedge = edge_views.get("days_with_mzansiedge")
+    focus_sport = _get_profile_focus_sport(data.get("sports", []))
+    has_real_activity = total_views > 0 or recent_views > 0 or bool(focus_sport)
+
+    stat_lines: list[str] = []
+    if total_views > 0:
+        stat_lines.append(f"👀 <b>Edges seen:</b> {total_views}")
+    if recent_views > 0:
+        stat_lines.append(f"⚡ <b>This week:</b> {recent_views} edge{'s' if recent_views != 1 else ''}")
+    if days_with_mzansiedge and has_real_activity:
+        stat_lines.append(f"📆 <b>With MzansiEdge:</b> {days_with_mzansiedge} day{'s' if days_with_mzansiedge != 1 else ''}")
+    if focus_sport:
+        stat_lines.append(f"🎯 <b>Main focus:</b> {h(focus_sport)}")
+
+    if stat_lines:
+        lines.extend(stat_lines)
+    else:
+        if days_with_mzansiedge:
+            lines.append(f"📆 <b>With MzansiEdge:</b> {days_with_mzansiedge} day{'s' if days_with_mzansiedge != 1 else ''}")
+        lines.append("You're just getting started.")
+        lines.append("Open <b>Top Edge Picks</b> and your activity will start filling out here.")
+    return lines
+
+
+def _build_profile_performance_section(edge_summary: dict, edge_views: dict) -> list[str]:
+    """Render the personal 7-day Edge Performance block."""
+    lines = ["📊 <b>Your Edge Performance (7D)</b>"]
+    recent_views = int(edge_views.get("recent_edge_views", 0) or 0)
+
+    if edge_summary.get("has_data"):
+        if recent_views > 0:
+            lines.append(
+                f"You've seen <b>{recent_views}</b> edge{'s' if recent_views != 1 else ''} this week. "
+                f"<b>{edge_summary['hits']}/{edge_summary['total']}</b> hit so far on the tracked board "
+                f"({edge_summary['hit_rate_pct']:.0f}%)."
+            )
+        else:
+            lines.append(
+                f"The tracked board has gone <b>{edge_summary['hits']}/{edge_summary['total']}</b> over the last 7 days "
+                f"({edge_summary['hit_rate_pct']:.0f}%)."
+            )
+        if edge_summary.get("roi") is not None:
+            lines.append(f"💰 <b>7D ROI:</b> {float(edge_summary['roi']):+.1f}%")
+        streak_line = _format_edge_tracker_streak_line(edge_summary.get("streak"))
+        if streak_line:
+            lines.append(streak_line)
+    else:
+        if recent_views > 0:
+            lines.append("Your recent edges are still settling. This section will fill in as results land.")
+        else:
+            lines.append("No settled 7-day results yet.")
+            lines.append("Explore a few edge picks and this section will start tracking your record.")
+
+    return lines
+
+
+def _build_profile_setup_section(data: dict) -> list[str]:
+    """Render the user's current setup as a compact identity summary."""
+    lines = [
+        "⚙️ <b>Your Setup</b>",
+        f"🎯 <b>Experience:</b> {h(data['experience_label'])}",
+        f"⚖️ <b>Risk:</b> {h(data['risk_label'])}",
+    ]
+    if data.get("bankroll_str") and data["bankroll_str"] != "Not set":
+        lines.append(f"💰 <b>Bankroll:</b> {h(data['bankroll_str'])}")
+    if data.get("notify_str") and data["notify_str"] != "Not set":
+        lines.append(f"🔔 <b>Daily picks:</b> {h(data['notify_str'])}")
+    return lines
+
+
+def _build_profile_following_section(data: dict) -> list[str]:
+    """Render followed teams and leagues for the premium Profile surface."""
+    return ["🏟️ <b>Following</b>", *_compact_profile_sport_lines(data.get("sports", []))]
+
+
+def _join_profile_sections(sections: list[list[str]]) -> str:
+    """Join profile sections with consistent separators and spacing."""
+    rendered = ["\n".join(section) for section in sections if section]
+    return "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(rendered)
+
+
+def _build_settings_profile_summary(data: dict, edge_summary: dict) -> str:
+    """Build the shared summary used by Settings home and edit flows."""
     lines = ["📋 <b>Your MzansiEdge Profile</b>\n"]
     lines.append(f"🎯 <b>Experience:</b> {data['experience_label']}\n")
 
@@ -3043,7 +3290,6 @@ async def format_profile_summary(user_id: int) -> str:
     lines.append(f"💰 <b>Bankroll:</b> {data['bankroll_str']}")
     lines.append(f"🔔 <b>Daily picks:</b> {data['notify_str']}")
 
-    edge_summary = await _get_edge_tracker_summary(7)
     if edge_summary.get("has_data"):
         lines.append("")
         lines.append("📊 <b>Edge Performance (7D)</b>")
@@ -3057,7 +3303,6 @@ async def format_profile_summary(user_id: int) -> str:
         if streak_line:
             lines.append(streak_line)
 
-    # CLV summary — only shown when data exists
     try:
         from scrapers.sharp.clv_tracker import format_clv_summary
         clv_7d = format_clv_summary(days=7)
@@ -3065,9 +3310,135 @@ async def format_profile_summary(user_id: int) -> str:
             lines.append("")
             lines.append(f"📈 <b>CLV (7D):</b> {clv_7d}")
     except Exception:
-        pass  # CLV module not available or DB issue — silently skip
+        pass
 
     return "\n".join(lines)
+
+
+async def _build_profile_home_summary(user_id: int, data: dict) -> str:
+    """Build the premium Profile home surface using existing state only."""
+    user = await db.get_user(user_id)
+    user_tier = await get_effective_tier(user_id)
+    trial_active = await db.is_trial_active(user_id)
+    edge_summary = await _get_edge_tracker_summary(7)
+    edge_views = await db.get_profile_engagement_stats(user_id)
+
+    first_name = (getattr(user, "first_name", None) or "").strip()
+    title = (
+        f"👤 <b>{h(first_name)}'s MzansiEdge Profile</b>"
+        if first_name else
+        "👤 <b>Your MzansiEdge Profile</b>"
+    )
+    return _join_profile_sections([
+        [title, *_build_profile_identity_block(user, user_tier, trial_active)],
+        _build_profile_engagement_section(data, edge_views),
+        _build_profile_performance_section(edge_summary, edge_views),
+        _build_profile_setup_section(data),
+        _build_profile_following_section(data),
+    ])
+
+
+async def format_profile_summary(user_id: int, *, surface: str = "settings") -> str:
+    """Build a profile summary string for Settings or the premium Profile home."""
+    data = await get_profile_data(user_id)
+    if surface == "profile":
+        return await _build_profile_home_summary(user_id, data)
+    edge_summary = await _get_edge_tracker_summary(7)
+    return _build_settings_profile_summary(data, edge_summary)
+
+
+async def _build_profile_buttons(user_id: int) -> InlineKeyboardMarkup:
+    """Build tier-aware Profile buttons that keep the surface useful as a home base."""
+    user = await db.get_user(user_id)
+    trial_active = await db.is_trial_active(user_id)
+    is_paid = bool(user and db.is_premium(user) and not trial_active)
+
+    rows = [
+        [
+            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
+            InlineKeyboardButton("⚙️ Edit Profile", callback_data="settings:home"),
+        ],
+        [
+            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+            InlineKeyboardButton("📋 My Plan" if is_paid else "✨ View Plans", callback_data="sub:billing" if is_paid else "sub:plans"),
+        ],
+        [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+async def _render_profile_home_surface(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Return the premium Profile text and its hub buttons."""
+    return await format_profile_summary(user_id, surface="profile"), await _build_profile_buttons(user_id)
+
+
+async def _render_profile_plan_surface(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Return the billing/status surface reached from Profile."""
+    db_user = await db.get_user(user_id)
+    user_tier = await get_effective_tier(user_id)
+    trial_active = await db.is_trial_active(user_id)
+    tier_emoji = config.TIER_EMOJIS.get(user_tier, "🥉")
+    tier_name = config.TIER_NAMES.get(user_tier, user_tier.title())
+
+    if trial_active:
+        progress = _profile_trial_progress(db_user, now=_profile_now_utc())
+        title = "💎 <b>Diamond Trial</b>"
+        if progress:
+            current_day, total_days, days_remaining = progress
+            title = f"💎 <b>Diamond Trial — Day {current_day} of {total_days}</b>"
+            remaining_line = f"\n⏳ <b>{days_remaining} day{'s' if days_remaining != 1 else ''} left</b>"
+        else:
+            remaining_line = ""
+        started = _format_profile_date(getattr(db_user, "trial_start_date", None))
+        started_line = f"\n📅 Started: <b>{started}</b>" if started else ""
+        text = (
+            f"{title}"
+            f"{started_line}"
+            f"{remaining_line}\n\n"
+            "You're exploring full Diamond access right now."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Back to Profile", callback_data="profile:home")],
+        ])
+        return text, markup
+
+    if user_tier in ("gold", "diamond"):
+        started = ""
+        if db_user and db_user.subscription_started_at:
+            started = f"\n📅 Member since: {db_user.subscription_started_at.strftime('%d %b %Y')}"
+        expires = ""
+        if db_user and getattr(db_user, "tier_expires_at", None):
+            expires = f"\n⏰ Renews: {db_user.tier_expires_at.strftime('%d %b %Y')}"
+        founding = ""
+        if db_user and getattr(db_user, "is_founding_member", False):
+            founding = "\n🎁 Founding Member"
+        plan = ""
+        if db_user and getattr(db_user, "plan_code", None):
+            plan = f"\n📋 Plan: {db_user.plan_code}"
+
+        text = (
+            f"{tier_emoji} <b>MzansiEdge {tier_name} — Billing</b>\n"
+            f"\nStatus: ✅ Active{started}{expires}{founding}{plan}\n\n"
+            "To change or cancel your plan, use the buttons below."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬆️ Change Plan", callback_data="sub:plans")],
+            [InlineKeyboardButton("❌ Cancel Subscription", callback_data="sub:cancel_confirm")],
+            [InlineKeyboardButton("↩️ Back to Profile", callback_data="profile:home")],
+        ])
+        return text, markup
+
+    text = (
+        "🥉 <b>MzansiEdge Bronze (Free)</b>\n\n"
+        "No active subscription. Use /subscribe to view plans."
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+        [InlineKeyboardButton("↩️ Back to Profile", callback_data="profile:home")],
+    ])
+    return text, markup
 
 
 # ── Summary edit handlers ─────────────────────────────────
@@ -3662,14 +4033,7 @@ async def _show_stats_overview(update: Update, user_id: int) -> None:
 
 async def _show_profile(update: Update, user_id: int) -> None:
     """Show user profile summary from the sticky keyboard."""
-    summary = await format_profile_summary(user_id)
-    buttons = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
-            InlineKeyboardButton("⚙️ Edit Profile", callback_data="settings:home"),
-        ],
-        [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-    ])
+    summary, buttons = await _render_profile_home_surface(user_id)
     await update.message.reply_text(summary, parse_mode=ParseMode.HTML, reply_markup=buttons)
 
 

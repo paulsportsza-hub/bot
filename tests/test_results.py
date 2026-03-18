@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -472,15 +474,21 @@ class TestHotTipsResultProof:
 
 class TestProfileEdgePerformance:
     @pytest.mark.asyncio
-    async def test_profile_shows_edge_performance_and_tracker_button(self):
+    async def test_profile_shows_paid_identity_stats_and_hub_buttons(self):
         import bot
 
         profile_data = {
             "experience_label": "Experienced",
-            "sports": [],
+            "sports": [
+                {
+                    "label": "Soccer",
+                    "emoji": "⚽",
+                    "leagues": [{"label": "PSL", "teams": ["Chiefs", "Sundowns", "Pirates"]}],
+                },
+            ],
             "risk_label": "Moderate",
-            "bankroll_str": "R500/week",
-            "notify_str": "Daily",
+            "bankroll_str": "R500",
+            "notify_str": "Morning (07:00 SAST)",
         }
         edge_summary = {
             "has_data": True,
@@ -492,38 +500,169 @@ class TestProfileEdgePerformance:
         }
         update = MagicMock()
         update.message.reply_text = AsyncMock()
+        user = SimpleNamespace(
+            first_name="Mpho",
+            joined_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            subscription_started_at=datetime(2026, 2, 10, tzinfo=timezone.utc),
+            trial_start_date=None,
+            trial_end_date=None,
+            is_founding_member=False,
+            user_tier="gold",
+        )
 
         with patch("bot.get_profile_data", new=AsyncMock(return_value=profile_data)), \
+             patch("bot.db.get_user", new=AsyncMock(return_value=user)), \
+             patch("bot.db.is_trial_active", new=AsyncMock(return_value=False)), \
+             patch("bot.get_effective_tier", new=AsyncMock(return_value="gold")), \
+             patch("bot.db.get_profile_engagement_stats", new=AsyncMock(return_value={"total_edge_views": 18, "recent_edge_views": 4, "days_with_mzansiedge": 46})), \
              patch("bot._get_edge_tracker_summary", new=AsyncMock(return_value=edge_summary)):
-            summary = await bot.format_profile_summary(123)
+            summary = await bot.format_profile_summary(123, surface="profile")
             await bot._show_profile(update, 123)
 
-        assert "📊 <b>Edge Performance (7D)</b>" in summary
-        assert "✅ <b>23/34</b> hit (68%)" in summary
-        assert "💰 ROI: <b>+12.1%</b>" in summary
+        assert "🥇 <b>Gold Member</b>" in summary
+        assert "📈 <b>Your Activity</b>" in summary
+        assert "👀 <b>Edges seen:</b> 18" in summary
+        assert "📆 <b>With MzansiEdge:</b> 46 days" in summary
+        assert "📊 <b>Your Edge Performance (7D)</b>" in summary
+        assert "You've seen <b>4</b> edges this week. <b>23/34</b> hit so far on the tracked board (68%)." in summary
+        assert "💰 <b>7D ROI:</b> +12.1%" in summary
         assert "🔥 Streak: <b>4 wins</b>" in summary
 
         markup = update.message.reply_text.call_args.kwargs["reply_markup"]
+        labels = [b.text for row in markup.inline_keyboard for b in row]
         callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
+        assert "📋 My Plan" in labels
+        assert "💎 Top Edge Picks" in labels
         assert "results:7" in callbacks
+        assert "sub:billing" in callbacks
 
     @pytest.mark.asyncio
-    async def test_profile_omits_edge_performance_when_no_settlement_data(self):
+    async def test_profile_shows_trial_identity_and_low_data_guidance(self):
+        import bot
+
+        profile_data = {
+            "experience_label": "I'm new to betting",
+            "sports": [],
+            "risk_label": "Conservative",
+            "bankroll_str": "Not set",
+            "notify_str": "Not set",
+        }
+        now = datetime.now(timezone.utc)
+        user = SimpleNamespace(
+            first_name="Lebo",
+            joined_at=now - timedelta(days=1),
+            subscription_started_at=None,
+            trial_start_date=now - timedelta(days=2),
+            trial_end_date=now + timedelta(days=5),
+            is_founding_member=False,
+            user_tier="diamond",
+        )
+        update = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        with patch("bot.get_profile_data", new=AsyncMock(return_value=profile_data)), \
+             patch("bot.db.get_user", new=AsyncMock(return_value=user)), \
+             patch("bot.db.is_trial_active", new=AsyncMock(return_value=True)), \
+             patch("bot.get_effective_tier", new=AsyncMock(return_value="diamond")), \
+             patch("bot.db.get_profile_engagement_stats", new=AsyncMock(return_value={"total_edge_views": 0, "recent_edge_views": 0, "days_with_mzansiedge": 2})), \
+             patch("bot._get_edge_tracker_summary", new=AsyncMock(return_value=bot._empty_edge_tracker_summary())):
+            summary = await bot.format_profile_summary(123, surface="profile")
+            await bot._show_profile(update, 123)
+
+        assert "💎 <b>Diamond Trial — Day" in summary
+        assert "day" in summary.lower()
+        assert "You're just getting started." in summary
+        assert "No settled 7-day results yet." in summary
+        assert "No teams saved yet." in summary
+        assert "Not set" not in summary
+
+        markup = update.message.reply_text.call_args.kwargs["reply_markup"]
+        labels = [b.text for row in markup.inline_keyboard for b in row]
+        assert "✨ View Plans" in labels
+        assert "📋 My Plan" not in labels
+
+    @pytest.mark.asyncio
+    async def test_profile_shows_bronze_identity_and_plan_cta(self):
+        import bot
+
+        profile_data = {
+            "experience_label": "I bet sometimes",
+            "sports": [{"label": "Soccer", "emoji": "⚽", "leagues": [{"label": "EPL", "teams": ["Arsenal"]}]}],
+            "risk_label": "Moderate",
+            "bankroll_str": "Not set",
+            "notify_str": "Morning (07:00 SAST)",
+        }
+        user = SimpleNamespace(
+            first_name="Anele",
+            joined_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+            subscription_started_at=None,
+            trial_start_date=None,
+            trial_end_date=None,
+            is_founding_member=False,
+            user_tier="bronze",
+        )
+        update = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        with patch("bot.get_profile_data", new=AsyncMock(return_value=profile_data)), \
+             patch("bot.db.get_user", new=AsyncMock(return_value=user)), \
+             patch("bot.db.is_trial_active", new=AsyncMock(return_value=False)), \
+             patch("bot.get_effective_tier", new=AsyncMock(return_value="bronze")), \
+             patch("bot.db.get_profile_engagement_stats", new=AsyncMock(return_value={"total_edge_views": 3, "recent_edge_views": 1, "days_with_mzansiedge": 18})), \
+             patch("bot._get_edge_tracker_summary", new=AsyncMock(return_value=bot._empty_edge_tracker_summary())):
+            summary = await bot.format_profile_summary(123, surface="profile")
+            await bot._show_profile(update, 123)
+
+        assert "🥉 <b>Bronze (Free)</b>" in summary
+        assert "✨ View Plans" in [b.text for row in update.message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard for b in row]
+
+    @pytest.mark.asyncio
+    async def test_settings_summary_stays_on_shared_compact_renderer(self):
         import bot
 
         profile_data = {
             "experience_label": "Experienced",
             "sports": [],
             "risk_label": "Moderate",
-            "bankroll_str": "R500/week",
-            "notify_str": "Daily",
+            "bankroll_str": "R500",
+            "notify_str": "Morning (07:00 SAST)",
+        }
+        edge_summary = {
+            "has_data": True,
+            "hits": 10,
+            "total": 14,
+            "hit_rate_pct": 71.4,
+            "roi": 8.2,
+            "streak": {"type": "win", "count": 3},
         }
 
         with patch("bot.get_profile_data", new=AsyncMock(return_value=profile_data)), \
-             patch("bot._get_edge_tracker_summary", new=AsyncMock(return_value=bot._empty_edge_tracker_summary())):
+             patch("bot._get_edge_tracker_summary", new=AsyncMock(return_value=edge_summary)):
             summary = await bot.format_profile_summary(123)
 
-        assert "Edge Performance (7D)" not in summary
+        assert "📋 <b>Your MzansiEdge Profile</b>" in summary
+        assert "🥇 <b>Gold Member</b>" not in summary
+        assert "📈 <b>Engagement</b>" not in summary
+        assert "📊 <b>Edge Performance (7D)</b>" in summary
+
+    @pytest.mark.asyncio
+    async def test_profile_plan_callback_routes_to_plan_surface(self):
+        import bot
+
+        query = MagicMock()
+        query.from_user.id = 123
+        query.edit_message_text = AsyncMock()
+        ctx = MagicMock()
+        markup = MagicMock()
+
+        with patch("bot._render_profile_plan_surface", new=AsyncMock(return_value=("plan text", markup))):
+            await bot._dispatch_button(query, ctx, "sub", "billing")
+
+        query.edit_message_text.assert_awaited_once_with(
+            "plan text",
+            parse_mode=bot.ParseMode.HTML,
+            reply_markup=markup,
+        )
 
 
 # ── W28: Freemium Gate Access Level Tests ─────────────────

@@ -986,3 +986,44 @@ async def get_edges_viewed_by_user(user_id: int, since_hours: int = 48) -> list[
             (user_id, cutoff),
         )
         return [{"edge_id": row[0], "edge_tier": row[1], "viewed_at": row[2]} for row in result]
+
+
+async def get_user_edge_view_summary(user_id: int, since_hours: int = 168) -> dict[str, int]:
+    """Return total and recent edge-view counts from the existing user_edge_views table."""
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=since_hours)
+    cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+    async with engine.connect() as conn:
+        result = await conn.exec_driver_sql(
+            """
+            SELECT
+                COUNT(*) AS total_views,
+                COALESCE(SUM(CASE WHEN viewed_at >= ? THEN 1 ELSE 0 END), 0) AS recent_views
+            FROM user_edge_views
+            WHERE user_id = ?
+            """,
+            (cutoff_str, user_id),
+        )
+        row = result.fetchone()
+    return {
+        "total_views": int((row[0] if row else 0) or 0),
+        "recent_views": int((row[1] if row else 0) or 0),
+    }
+
+
+async def get_profile_engagement_stats(user_id: int, recent_days: int = 7) -> dict[str, int | None]:
+    """Return profile engagement stats from existing user and edge-view tables."""
+    view_summary = await get_user_edge_view_summary(user_id, since_hours=recent_days * 24)
+    user = await get_user(user_id)
+
+    days_with_mzansiedge: int | None = None
+    if user and getattr(user, "joined_at", None):
+        joined_at = user.joined_at
+        if joined_at.tzinfo is None:
+            joined_at = joined_at.replace(tzinfo=dt.timezone.utc)
+        days_with_mzansiedge = max(1, (dt.datetime.now(dt.timezone.utc) - joined_at).days + 1)
+
+    return {
+        "total_edge_views": int(view_summary.get("total_views", 0) or 0),
+        "recent_edge_views": int(view_summary.get("recent_views", 0) or 0),
+        "days_with_mzansiedge": days_with_mzansiedge,
+    }
