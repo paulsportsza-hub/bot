@@ -189,6 +189,9 @@ _story_state: dict[int, dict] = {}
 # Per-user settings team edit state
 _team_edit_state: dict[int, dict] = {}
 
+# Per-user in-progress settings sports edits
+_settings_sports_state: dict[int, dict] = {}
+
 
 # ── Persistent Reply Keyboard ──────────────────────────────
 # Always-visible bottom keyboard (separate from inline keyboards)
@@ -574,7 +577,7 @@ def kb_teams() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("👀 View My Teams", callback_data="teams:view")],
         [InlineKeyboardButton("✏️ Edit Teams", callback_data="teams:edit")],
         [
-            InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
+            InlineKeyboardButton("↩️ Back", callback_data="settings:home"),
             InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
         ],
     ])
@@ -629,8 +632,7 @@ def kb_settings() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎯 Risk Profile", callback_data="settings:risk")],
         [InlineKeyboardButton("💰 Bankroll", callback_data="settings:bankroll")],
-        [InlineKeyboardButton("⏰ Notifications", callback_data="settings:notify")],
-        [InlineKeyboardButton("🔔 Edge Alerts", callback_data="settings:story")],
+        [InlineKeyboardButton("🔔 Notifications", callback_data="settings:notify")],
         [InlineKeyboardButton("⚽ My Sports", callback_data="settings:sports")],
         [InlineKeyboardButton("🔄 Reset Profile", callback_data="settings:reset")],
         [
@@ -644,6 +646,271 @@ def back_button(target: str = "menu:home") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("« Back", callback_data=target)]]
     )
+
+
+def _snapshot_sport_prefs(prefs: list) -> list[dict[str, str | None]]:
+    """Capture sport prefs so settings edits can be discarded cleanly."""
+    return [
+        {
+            "sport_key": pref.sport_key,
+            "league": pref.league,
+            "team_name": pref.team_name,
+        }
+        for pref in prefs
+    ]
+
+
+def _selected_sports_from_prefs(prefs: list) -> list[str]:
+    """Return selected sport keys in configured display order."""
+    selected_keys = {pref.sport_key for pref in prefs if getattr(pref, "sport_key", None)}
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for sport in config.SPORTS:
+        if sport.key in selected_keys:
+            ordered.append(sport.key)
+            seen.add(sport.key)
+    for pref in prefs:
+        sport_key = getattr(pref, "sport_key", None)
+        if sport_key and sport_key not in seen:
+            ordered.append(sport_key)
+            seen.add(sport_key)
+    return ordered
+
+
+async def _get_settings_sports_state(user_id: int) -> dict:
+    """Load or reuse the in-progress settings sports state."""
+    state = _settings_sports_state.get(user_id)
+    if state is not None:
+        return state
+
+    prefs = await db.get_user_sport_prefs(user_id)
+    state = {
+        "selected_sports": _selected_sports_from_prefs(prefs),
+        "original_prefs": _snapshot_sport_prefs(prefs),
+    }
+    _settings_sports_state[user_id] = state
+    return state
+
+
+async def _restore_sport_prefs(user_id: int, prefs_snapshot: list[dict[str, str | None]]) -> None:
+    """Replace a user's sport prefs with a stored snapshot."""
+    await db.clear_user_sport_prefs(user_id)
+    for pref in prefs_snapshot:
+        await db.save_sport_pref(
+            user_id,
+            pref["sport_key"] or "",
+            league=pref["league"],
+            team_name=pref["team_name"],
+        )
+
+
+async def _discard_settings_sports_state(user_id: int) -> None:
+    """Discard in-progress settings sports edits and restore the original prefs."""
+    state = _settings_sports_state.pop(user_id, None)
+    if state is not None:
+        await _restore_sport_prefs(user_id, state.get("original_prefs", []))
+
+    team_state = _team_edit_state.get(user_id)
+    if team_state and team_state.get("source") == "settings":
+        _team_edit_state.pop(user_id, None)
+
+
+def _build_settings_sports_text(
+    selected_sports: list[str], prefs: list, error: str | None = None,
+) -> str:
+    """Render the inline sports settings screen."""
+    lines: list[str] = ["<b>⚽ My Sports</b>\n"]
+    if error:
+        lines.append(f"⚠️ {error}\n")
+    lines.append("Tap to toggle sports. Use the edit buttons below to update teams without redoing onboarding.\n")
+
+    if selected_sports:
+        lines.append("<b>Selected now:</b>")
+        for sport_key in selected_sports:
+            sport = config.ALL_SPORTS.get(sport_key)
+            emoji = sport.emoji if sport else "🏅"
+            label = sport.label if sport else sport_key
+            team_count = len({pref.team_name for pref in prefs if pref.sport_key == sport_key and pref.team_name})
+            if sport and team_count:
+                lines.append(f"{emoji} <b>{label}</b> — {team_count} {config.fav_label_plural(sport)}")
+            elif sport:
+                lines.append(f"{emoji} <b>{label}</b> — no {config.fav_label_plural(sport)} set yet")
+            else:
+                lines.append(f"{emoji} <b>{label}</b>")
+    else:
+        lines.append("Select at least one sport to keep your feed personalized.")
+
+    lines.append("")
+    lines.append("Tap Done to save, or Back to cancel.")
+
+    return "\n".join(lines)
+
+
+def _build_settings_sports_keyboard(
+    selected_sports: list[str], prefs: list,
+) -> InlineKeyboardMarkup:
+    """Inline sports toggle surface for settings."""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+
+    for sport in config.SPORTS:
+        tick = "✅ " if sport.key in selected_sports else ""
+        row.append(InlineKeyboardButton(
+            f"{tick}{sport.emoji} {sport.label}",
+            callback_data=f"settings:toggle_sport:{sport.key}",
+        ))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+
+    team_counts = {
+        sport_key: len({pref.team_name for pref in prefs if pref.sport_key == sport_key and pref.team_name})
+        for sport_key in selected_sports
+    }
+    for sport_key in selected_sports:
+        sport = config.ALL_SPORTS.get(sport_key)
+        if not sport or sport.fav_type == "skip":
+            continue
+        noun = config.fav_label_plural(sport).replace("favourite ", "")
+        count = team_counts.get(sport_key, 0)
+        suffix = f" ({count})" if count else ""
+        rows.append([InlineKeyboardButton(
+            f"✏️ {sport.emoji} Edit {sport.label} {noun}{suffix}",
+            callback_data=f"settings:edit_teams:{sport_key}",
+        )])
+
+    if selected_sports:
+        rows.append([
+            InlineKeyboardButton("✅ Done", callback_data="settings:sports_done"),
+            InlineKeyboardButton("↩️ Back", callback_data="settings:home"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton("↩️ Back", callback_data="settings:home")])
+
+    return InlineKeyboardMarkup(rows)
+
+
+def _build_settings_notifications_text(user, notify_prefs: dict) -> str:
+    """Render the consolidated notifications settings screen."""
+    hour = getattr(user, "notification_hour", None) if user else None
+    labels = {7: "07:00 SAST", 12: "12:00 SAST", 18: "18:00 SAST", 21: "21:00 SAST"}
+    hour_label = labels.get(hour, "Not set")
+
+    pref_labels = [
+        ("daily_picks", "Daily AI picks"),
+        ("game_day_alerts", "Game day alerts"),
+        ("weekly_recap", "Weekly recap"),
+        ("edu_tips", "Education tips"),
+        ("market_movers", "Market movers"),
+        ("bankroll_updates", "Bankroll updates"),
+        ("live_scores", "Live scores"),
+    ]
+
+    lines = [
+        "<b>🔔 Notifications</b>\n",
+        f"⏰ Daily picks time: <b>{hour_label}</b>\n",
+        "Tap a time below, then toggle any alert type on or off.\n",
+        "<b>Alert types:</b>",
+    ]
+    for key, label in pref_labels:
+        status = "✅" if notify_prefs.get(key, False) else "❌"
+        lines.append(f"{status} {label}")
+    return "\n".join(lines)
+
+
+def _build_settings_notifications_keyboard(user, notify_prefs: dict) -> InlineKeyboardMarkup:
+    """Notification time picker and type toggles on one settings surface."""
+    current_hour = getattr(user, "notification_hour", None) if user else None
+
+    def _time_label(hour: int, emoji: str) -> str:
+        tick = "✅ " if current_hour == hour else ""
+        return f"{tick}{emoji} {hour:02d}:00"
+
+    rows = [
+        [
+            InlineKeyboardButton(_time_label(7, "🌅"), callback_data="settings:set_notify:7"),
+            InlineKeyboardButton(_time_label(12, "☀️"), callback_data="settings:set_notify:12"),
+        ],
+        [
+            InlineKeyboardButton(_time_label(18, "🌆"), callback_data="settings:set_notify:18"),
+            InlineKeyboardButton(_time_label(21, "🌙"), callback_data="settings:set_notify:21"),
+        ],
+    ]
+
+    for key, label in [
+        ("daily_picks", "📊 Daily AI Picks"),
+        ("game_day_alerts", "🏟️ Game Day Alerts"),
+        ("weekly_recap", "📈 Weekly Recap"),
+        ("edu_tips", "🎓 Education Tips"),
+        ("market_movers", "📉 Market Movers"),
+        ("bankroll_updates", "💰 Bankroll Updates"),
+        ("live_scores", "⚡ Live Scores"),
+    ]:
+        status = "✅" if notify_prefs.get(key, False) else "❌"
+        rows.append([InlineKeyboardButton(
+            f"{status} {label}",
+            callback_data=f"settings:toggle_notify:{key}",
+        )])
+
+    rows.append([InlineKeyboardButton("↩️ Back", callback_data="settings:home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _build_settings_team_keyboard(sport_key: str, prefs: list) -> InlineKeyboardMarkup:
+    """League picker for editing teams from settings."""
+    sport = config.ALL_SPORTS.get(sport_key)
+    rows: list[list[InlineKeyboardButton]] = []
+    if sport:
+        for league in sport.leagues:
+            teams = sorted({
+                pref.team_name for pref in prefs
+                if pref.sport_key == sport_key and pref.league == league.key and pref.team_name
+            })
+            suffix = f" ({len(teams)})" if teams else ""
+            prefix = "✅ " if teams else ""
+            rows.append([InlineKeyboardButton(
+                f"{prefix}{league.label}{suffix}",
+                callback_data=f"settings:edit_league:{sport_key}:{league.key}",
+            )])
+    rows.append([InlineKeyboardButton("↩️ Back", callback_data="settings:sports")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _render_settings_team_editor(
+    user_id: int, sport_key: str, notice: str | None = None,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the settings team-edit screen for one sport."""
+    prefs = await db.get_user_sport_prefs(user_id)
+    sport = config.ALL_SPORTS.get(sport_key)
+    emoji = sport.emoji if sport else "🏅"
+    label = sport.label if sport else sport_key
+    plural = config.fav_label_plural(sport) if sport else "favourites"
+
+    lines: list[str] = []
+    if notice:
+        lines.append(notice)
+        lines.append("")
+    lines.append(f"<b>✏️ {emoji} {label}</b>\n")
+    lines.append(f"Choose a league to update your {plural}.\n")
+
+    if sport:
+        has_existing = False
+        for league in sport.leagues:
+            teams = sorted({
+                pref.team_name for pref in prefs
+                if pref.sport_key == sport_key and pref.league == league.key and pref.team_name
+            })
+            if teams:
+                has_existing = True
+                lines.append(f"<b>{league.label}:</b> {', '.join(h(team) for team in teams)}")
+        if not has_existing:
+            lines.append("No teams set for this sport yet.")
+    else:
+        lines.append("No teams set for this sport yet.")
+
+    return "\n".join(lines), _build_settings_team_keyboard(sport_key, prefs)
 
 
 # ── Onboarding keyboards ─────────────────────────────────
@@ -3174,10 +3441,22 @@ async def _handle_settings_team_edit(update: Update, ctx) -> bool:
     raw = update.message.text.strip()
     if raw.lower() in ("cancel", "back"):
         _team_edit_state.pop(user_id, None)
-        await update.message.reply_text(
-            "Cancelled. Use the menu to continue.",
-            parse_mode=ParseMode.HTML, reply_markup=kb_teams(),
-        )
+        if state.get("source") == "settings":
+            text, markup = await _render_settings_team_editor(
+                user_id,
+                state["sport_key"],
+                notice="<b>Cancelled.</b>",
+            )
+            await update.message.reply_text(
+                text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+        else:
+            await update.message.reply_text(
+                "Cancelled. Use the menu to continue.",
+                parse_mode=ParseMode.HTML, reply_markup=kb_teams(),
+            )
         return True
 
     sk = state["sport_key"]
@@ -3239,17 +3518,29 @@ async def _handle_settings_team_edit(update: Update, ctx) -> bool:
 
     _team_edit_state.pop(user_id, None)
 
-    lines: list[str] = ["<b>Updated!</b>\n"]
+    lines: list[str] = ["<b>Updated!</b>"]
     for m in matched:
-        lines.append(f"  ✅ {h(m)}")
+        lines.append(f"✅ {h(m)}")
     if unmatched:
         lines.append("")
         for u in unmatched:
-            lines.append(f"  ❌ {h(u)} (skipped)")
+            lines.append(f"❌ {h(u)} (skipped)")
 
-    await update.message.reply_text(
-        "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb_teams(),
-    )
+    if state.get("source") == "settings":
+        text, markup = await _render_settings_team_editor(
+            user_id,
+            sk,
+            notice="\n".join(lines),
+        )
+        await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    else:
+        await update.message.reply_text(
+            "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb_teams(),
+        )
     return True
 
 
@@ -14237,7 +14528,7 @@ async def handle_teams(query, action: str) -> None:
             text = (
                 "<b>🏟️ My Teams</b>\n\n"
                 "No favourite teams set yet.\n"
-                "Use /start to redo onboarding and pick your teams."
+                "Open My Sports in Settings to add or change them."
             )
         else:
             from collections import defaultdict
@@ -14281,7 +14572,7 @@ async def handle_teams(query, action: str) -> None:
 
         if not leagues_with_prefs:
             await query.edit_message_text(
-                "<b>✏️ Edit Teams</b>\n\nNo leagues set up yet. Use /start to get set up.",
+                "<b>✏️ Edit Teams</b>\n\nNo leagues set up yet. Open My Sports in Settings to add them.",
                 parse_mode=ParseMode.HTML, reply_markup=kb_teams(),
             )
             return
@@ -14371,8 +14662,20 @@ async def handle_settings(query, action: str) -> None:
     """Handle settings:* callbacks."""
     user_id = query.from_user.id
     user = await db.get_user(user_id)
+    in_sports_flow = (
+        action == "sports"
+        or action == "sports_done"
+        or action.startswith("toggle_sport:")
+        or action.startswith("edit_teams:")
+        or action.startswith("edit_league:")
+    )
+
+    if user_id in _settings_sports_state and not in_sports_flow:
+        await _discard_settings_sports_state(user_id)
+        user = await db.get_user(user_id)
 
     if action == "home":
+        await _discard_settings_sports_state(user_id)
         text = await format_profile_summary(user_id)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
     elif action == "risk":
@@ -14392,30 +14695,22 @@ async def handle_settings(query, action: str) -> None:
             f"✅ Risk profile updated to <b>{risk_key.title()}</b>.",
             parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
         )
-    elif action == "notify":
-        text = "<b>⏰ Change Notification Time</b>\n\nWhen do you want daily picks?"
-        kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🌅 07:00", callback_data="settings:set_notify:7"),
-                InlineKeyboardButton("☀️ 12:00", callback_data="settings:set_notify:12"),
-            ],
-            [
-                InlineKeyboardButton("🌆 18:00", callback_data="settings:set_notify:18"),
-                InlineKeyboardButton("🌙 21:00", callback_data="settings:set_notify:21"),
-            ],
-            [InlineKeyboardButton("↩️ Back", callback_data="settings:home")],
-        ])
+    elif action in {"notify", "story"}:
+        notify_prefs = db.get_notification_prefs(user)
         await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb,
+            _build_settings_notifications_text(user, notify_prefs),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_settings_notifications_keyboard(user, notify_prefs),
         )
     elif action.startswith("set_notify:"):
         hour = int(action.split(":", 1)[1])
         await db.update_user_notification_hour(user_id, hour)
-        labels = {7: "07:00 SAST", 12: "12:00 SAST", 18: "18:00 SAST", 21: "21:00 SAST"}
+        user = await db.get_user(user_id)
+        notify_prefs = db.get_notification_prefs(user)
         await query.edit_message_text(
-            f"✅ Notification time updated to <b>{labels.get(hour, str(hour))}</b>.",
-            parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
+            _build_settings_notifications_text(user, notify_prefs),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_settings_notifications_keyboard(user, notify_prefs),
         )
     elif action == "bankroll":
         current = getattr(user, "bankroll", None)
@@ -14445,11 +14740,114 @@ async def handle_settings(query, action: str) -> None:
             parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
         )
     elif action == "sports":
-        text = (
-            "<b>⚽ Change Sports</b>\n\n"
-            "Use /start to redo onboarding and update your sports."
+        state = await _get_settings_sports_state(user_id)
+        prefs = await db.get_user_sport_prefs(user_id)
+        await query.edit_message_text(
+            _build_settings_sports_text(state["selected_sports"], prefs),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_settings_sports_keyboard(state["selected_sports"], prefs),
         )
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
+    elif action.startswith("toggle_sport:"):
+        sport_key = action.split(":", 1)[1]
+        state = await _get_settings_sports_state(user_id)
+        selected_sports = state["selected_sports"]
+        if sport_key in selected_sports:
+            selected_sports.remove(sport_key)
+        else:
+            selected_sports.append(sport_key)
+            order = {sport.key: idx for idx, sport in enumerate(config.SPORTS)}
+            selected_sports.sort(key=lambda key: order.get(key, len(order)))
+        prefs = await db.get_user_sport_prefs(user_id)
+        await query.edit_message_text(
+            _build_settings_sports_text(selected_sports, prefs),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_settings_sports_keyboard(selected_sports, prefs),
+        )
+    elif action == "sports_done":
+        state = await _get_settings_sports_state(user_id)
+        selected_sports = state["selected_sports"]
+        prefs = await db.get_user_sport_prefs(user_id)
+        if not selected_sports:
+            await query.edit_message_text(
+                _build_settings_sports_text(selected_sports, prefs, error="Please select at least one sport."),
+                parse_mode=ParseMode.HTML,
+                reply_markup=_build_settings_sports_keyboard(selected_sports, prefs),
+            )
+            return
+
+        await db.clear_user_sport_prefs(user_id)
+        for sport_key in selected_sports:
+            sport_prefs = [pref for pref in prefs if pref.sport_key == sport_key]
+            if sport_prefs:
+                for pref in sport_prefs:
+                    await db.save_sport_pref(
+                        user_id,
+                        sport_key,
+                        league=pref.league,
+                        team_name=pref.team_name,
+                    )
+            else:
+                await db.save_sport_pref(user_id, sport_key)
+
+        _settings_sports_state.pop(user_id, None)
+        team_state = _team_edit_state.get(user_id)
+        if team_state and team_state.get("source") == "settings":
+            _team_edit_state.pop(user_id, None)
+        await handle_settings(query, "home")
+        return
+    elif action.startswith("edit_teams:"):
+        sport_key = action.split(":", 1)[1]
+        state = await _get_settings_sports_state(user_id)
+        if sport_key not in state["selected_sports"]:
+            prefs = await db.get_user_sport_prefs(user_id)
+            await query.edit_message_text(
+                _build_settings_sports_text(
+                    state["selected_sports"],
+                    prefs,
+                    error="Select a sport before editing its teams.",
+                ),
+                parse_mode=ParseMode.HTML,
+                reply_markup=_build_settings_sports_keyboard(state["selected_sports"], prefs),
+            )
+            return
+
+        text, markup = await _render_settings_team_editor(user_id, sport_key)
+        await query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    elif action.startswith("edit_league:"):
+        parts = action.split(":", 2)
+        if len(parts) < 3:
+            return
+        sport_key, league_key = parts[1], parts[2]
+        sport = config.ALL_SPORTS.get(sport_key)
+        emoji = sport.emoji if sport else "🏅"
+        entity = config.fav_label(sport) if sport else "favourite"
+        league = config.ALL_LEAGUES.get(league_key)
+        league_label = league.label if league else league_key
+        example = config.LEAGUE_EXAMPLES.get(league_key, "")
+        example_line = f"\n<i>{example}</i>\n" if example else ""
+
+        _team_edit_state[user_id] = {
+            "sport_key": sport_key,
+            "league_key": league_key,
+            "source": "settings",
+        }
+        text = (
+            f"<b>✏️ {emoji} {league_label} — edit {entity}s</b>\n\n"
+            f"Type your {entity}s separated by commas.{example_line}\n"
+            f"This will replace your current selections.\n"
+            f"Or type <b>cancel</b> to go back."
+        )
+        await query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("↩️ Cancel", callback_data=f"settings:edit_teams:{sport_key}")],
+            ]),
+        )
     elif action == "reset":
         text = textwrap.dedent("""\
             <b>⚠️ Reset your profile?</b>
@@ -14466,6 +14864,10 @@ async def handle_settings(query, action: str) -> None:
         ])
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
     elif action == "reset:confirm":
+        _settings_sports_state.pop(user_id, None)
+        team_state = _team_edit_state.get(user_id)
+        if team_state and team_state.get("source") == "settings":
+            _team_edit_state.pop(user_id, None)
         await db.reset_user_profile(user_id)
         _onboarding_state.pop(user_id, None)
         text = textwrap.dedent("""\
@@ -14478,56 +14880,16 @@ async def handle_settings(query, action: str) -> None:
             [InlineKeyboardButton("🚀 Start onboarding", callback_data="ob_restart:go")],
         ])
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
-    elif action == "story":
-        # Notification preferences toggle view
-        notify_prefs = db.get_notification_prefs(user)
-        lines_text = "📖 <b>Your Notifications</b>\n\nTap to toggle:\n"
-        buttons: list[list[InlineKeyboardButton]] = []
-        for key, label in [
-            ("daily_picks", "📊 Daily AI Picks"),
-            ("game_day_alerts", "🏟️ Game Day Alerts"),
-            ("weekly_recap", "📈 Weekly Recap"),
-            ("edu_tips", "🎓 Education Tips"),
-            ("market_movers", "📉 Market Movers"),
-            ("bankroll_updates", "💰 Bankroll Updates"),
-            ("live_scores", "⚡ Live Scores"),
-        ]:
-            status = "✅" if notify_prefs.get(key, False) else "❌"
-            buttons.append([InlineKeyboardButton(
-                f"{status} {label}",
-                callback_data=f"settings:toggle_notify:{key}",
-            )])
-        buttons.append([InlineKeyboardButton("↩️ Back", callback_data="settings:home")])
-        await query.edit_message_text(
-            lines_text, parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
     elif action.startswith("toggle_notify:"):
         key = action.split(":", 1)[1]
         notify_prefs = db.get_notification_prefs(user)
         notify_prefs[key] = not notify_prefs.get(key, False)
         await db.update_notification_prefs(user_id, notify_prefs)
-        # Re-show the notification settings
-        lines_text = "📖 <b>Your Notifications</b>\n\nTap to toggle:\n"
-        buttons_list: list[list[InlineKeyboardButton]] = []
-        for k, label in [
-            ("daily_picks", "📊 Daily AI Picks"),
-            ("game_day_alerts", "🏟️ Game Day Alerts"),
-            ("weekly_recap", "📈 Weekly Recap"),
-            ("edu_tips", "🎓 Education Tips"),
-            ("market_movers", "📉 Market Movers"),
-            ("bankroll_updates", "💰 Bankroll Updates"),
-            ("live_scores", "⚡ Live Scores"),
-        ]:
-            status = "✅" if notify_prefs.get(k, False) else "❌"
-            buttons_list.append([InlineKeyboardButton(
-                f"{status} {label}",
-                callback_data=f"settings:toggle_notify:{k}",
-            )])
-        buttons_list.append([InlineKeyboardButton("↩️ Back", callback_data="settings:home")])
+        user = await db.get_user(user_id)
         await query.edit_message_text(
-            lines_text, parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(buttons_list),
+            _build_settings_notifications_text(user, notify_prefs),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_settings_notifications_keyboard(user, notify_prefs),
         )
     else:
         await query.edit_message_text("<b>⚙️ Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings())

@@ -87,6 +87,18 @@ async def test_clear_user_sport_prefs(test_db):
     assert len(prefs) == 0
 
 
+async def test_clear_user_sport(test_db):
+    await db.upsert_user(901, "ivy2", "Ivy2")
+    await db.save_sport_pref(901, "soccer", league="epl", team_name="Arsenal")
+    await db.save_sport_pref(901, "rugby", league="urc", team_name="Bulls")
+
+    await db.clear_user_sport(901, "soccer")
+
+    prefs = await db.get_user_sport_prefs(901)
+    assert len(prefs) == 1
+    assert prefs[0].sport_key == "rugby"
+
+
 async def test_save_tip(test_db):
     tip = await db.save_tip("epl", "Arsenal vs Chelsea", "Arsenal win", odds=2.1)
     assert tip.id is not None

@@ -320,6 +320,18 @@ async def clear_user_sport_prefs(user_id: int) -> None:
         await s.commit()
 
 
+async def clear_user_sport(user_id: int, sport_key: str) -> None:
+    """Delete all saved prefs for a single sport."""
+    async with async_session() as s:
+        await s.execute(
+            delete(UserSportPref).where(
+                UserSportPref.user_id == user_id,
+                UserSportPref.sport_key == sport_key,
+            )
+        )
+        await s.commit()
+
+
 async def clear_user_league_teams(user_id: int, sport_key: str, league_key: str) -> None:
     """Delete team prefs for a specific league while keeping the league pref itself."""
     async with async_session() as s:

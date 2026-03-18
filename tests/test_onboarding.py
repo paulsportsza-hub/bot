@@ -464,8 +464,10 @@ class TestKeyboards:
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
         assert any("Start Again" in t for t in texts)
 
-    def test_kb_settings_has_edge_alerts(self):
-        """Settings keyboard uses Edge Alerts branding."""
+    def test_kb_settings_has_single_notifications_entry(self):
+        """Settings keyboard exposes one consolidated notifications entry."""
         kb = bot.kb_settings()
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert any("Edge Alerts" in t for t in texts)
+        assert texts.count("🔔 Notifications") == 1
+        assert not any("Edge Alerts" in t for t in texts)
+        assert not any("⏰ Notifications" in t for t in texts)

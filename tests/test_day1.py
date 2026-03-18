@@ -262,6 +262,7 @@ class TestPersistentMenu:
     def test_kb_teams_has_navigation(self):
         kb = bot.kb_teams()
         callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        assert "settings:home" in callbacks
         assert "menu:home" in callbacks
 
     def test_kb_bookmakers_has_navigation(self):
@@ -390,6 +391,109 @@ class TestMenuHandlers:
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
         assert "Profile" in text or "Settings" in text
         assert "Risk" in text or "risk" in text
+
+    async def test_handle_settings_notify_is_consolidated(self, test_db):
+        user_id = 40070
+        await db.upsert_user(user_id, "notify_user", "NotifyUser")
+        await db.update_user_notification_hour(user_id, 18)
+        query = _make_query(user_id=user_id)
+
+        await bot.handle_settings(query, "notify")
+
+        call_args = query.edit_message_text.call_args
+        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert "Notifications" in text
+        assert "Daily picks time" in text
+        assert "Alert types" in text
+        callbacks = [
+            btn.callback_data
+            for row in call_args[1]["reply_markup"].inline_keyboard
+            for btn in row
+        ]
+        assert "settings:set_notify:18" in callbacks
+        assert "settings:toggle_notify:daily_picks" in callbacks
+        assert "settings:home" in callbacks
+
+    async def test_handle_settings_sports_renders_inline_editor(self, test_db):
+        user_id = 40071
+        await db.upsert_user(user_id, "sports_user", "SportsUser")
+        await db.save_sport_pref(user_id, "soccer", league="epl", team_name="Arsenal")
+        query = _make_query(user_id=user_id)
+        bot._settings_sports_state.clear()
+
+        await bot.handle_settings(query, "sports")
+
+        call_args = query.edit_message_text.call_args
+        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert "My Sports" in text
+        assert "redo onboarding" not in text
+        callbacks = [
+            btn.callback_data
+            for row in call_args[1]["reply_markup"].inline_keyboard
+            for btn in row
+        ]
+        assert "settings:toggle_sport:soccer" in callbacks
+        assert "settings:sports_done" in callbacks
+        assert "settings:edit_teams:soccer" in callbacks
+
+    async def test_handle_settings_sports_done_filters_selected_sports(self, test_db):
+        user_id = 40072
+        await db.upsert_user(user_id, "sports_done", "SportsDone")
+        await db.save_sport_pref(user_id, "soccer", league="epl", team_name="Arsenal")
+        await db.save_sport_pref(user_id, "rugby", league="urc", team_name="Bulls")
+        query = _make_query(user_id=user_id)
+        bot._settings_sports_state.clear()
+        bot._team_edit_state.clear()
+
+        await bot.handle_settings(query, "sports")
+        await bot.handle_settings(query, "toggle_sport:rugby")
+        await bot.handle_settings(query, "toggle_sport:cricket")
+        await bot.handle_settings(query, "sports_done")
+
+        prefs = await db.get_user_sport_prefs(user_id)
+        sport_keys = [pref.sport_key for pref in prefs]
+        assert "soccer" in sport_keys
+        assert "cricket" in sport_keys
+        assert "rugby" not in sport_keys
+        assert any(pref.team_name == "Arsenal" for pref in prefs)
+        assert any(pref.sport_key == "cricket" and pref.team_name is None for pref in prefs)
+
+    async def test_handle_settings_edit_teams_stays_in_settings_context(self, test_db):
+        user_id = 40073
+        await db.upsert_user(user_id, "team_edit", "TeamEdit")
+        await db.save_sport_pref(user_id, "soccer", league="epl", team_name="Arsenal")
+        query = _make_query(user_id=user_id)
+        bot._settings_sports_state.clear()
+
+        await bot.handle_settings(query, "sports")
+        await bot.handle_settings(query, "edit_teams:soccer")
+
+        call_args = query.edit_message_text.call_args
+        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+        assert "Arsenal" in text
+        callbacks = [
+            btn.callback_data
+            for row in call_args[1]["reply_markup"].inline_keyboard
+            for btn in row
+        ]
+        assert "settings:edit_league:soccer:epl" in callbacks
+        assert "settings:sports" in callbacks
+
+    async def test_handle_settings_home_discards_unsaved_sports_changes(self, test_db):
+        user_id = 40074
+        await db.upsert_user(user_id, "sports_back", "SportsBack")
+        await db.save_sport_pref(user_id, "soccer", league="epl", team_name="Arsenal")
+        query = _make_query(user_id=user_id)
+        bot._settings_sports_state.clear()
+
+        await bot.handle_settings(query, "sports")
+        await db.save_sport_pref(user_id, "cricket", league="sa20", team_name="MI Cape Town")
+        await bot.handle_settings(query, "home")
+
+        prefs = await db.get_user_sport_prefs(user_id)
+        sport_keys = {pref.sport_key for pref in prefs}
+        assert sport_keys == {"soccer"}
+        assert all(pref.team_name != "MI Cape Town" for pref in prefs)
 
     async def test_handle_settings_reset_shows_warning(self, test_db):
         await db.upsert_user(40008, "reset_user", "ResetUser")
