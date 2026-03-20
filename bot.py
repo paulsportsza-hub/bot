@@ -9163,6 +9163,8 @@ BANNED_NARRATIVE_PHRASES = [
     "pure price edge with no supporting data",
     "numbers-only play",
     "the numbers alone make this interesting",
+    "keeps the stake size measured",
+    "let that shape the stake",
     "pre-match context is limited here",
     "pure pricing call",
     "the numbers speak louder",
@@ -9191,6 +9193,109 @@ BANNED_NARRATIVE_PHRASES = [
     "worth a measured look",
     "worth backing",
 ]
+
+
+_INJURY_FETCH_LOOKBACK_DAYS = 2
+_INJURY_NARRATIVE_MAX_AGE_DAYS = 21
+
+_H2H_SECTION_RE = re.compile(r"Head to head:\s*([^\n]+)", re.IGNORECASE)
+_H2H_REFERENCE_RE = re.compile(
+    r"\b(?:head\s+to\s+head|last\s+meeting|last\s+met|meetings?\b|h2h\b)",
+    re.IGNORECASE,
+)
+_H2H_RECORD_RE = re.compile(r"\b\d+W\b.*\b\d+D\b.*\b\d+L\b", re.IGNORECASE)
+
+
+def _extract_rendered_h2h_summary(narrative: str) -> str:
+    """Return the rendered H2H summary body without its leading label."""
+    if not narrative:
+        return ""
+    match = _H2H_SECTION_RE.search(narrative)
+    if not match:
+        return ""
+    return match.group(1).strip().rstrip(".")
+
+
+def _contains_h2h_claim(narrative: str) -> bool:
+    """Return True when narrative contains any H2H-style prose."""
+    if not narrative:
+        return False
+    plain = re.sub(r"<[^>]+>", " ", narrative)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    if _H2H_REFERENCE_RE.search(plain):
+        return True
+    return bool(_H2H_RECORD_RE.search(plain) and "meeting" in plain.lower())
+
+
+def _is_h2h_polish_safe(polished: str, spec) -> bool:
+    """Return True when polished H2H copy matches verified spec data or is omitted."""
+    expected = (getattr(spec, "h2h_summary", "") or "").strip().rstrip(".")
+    rendered = _extract_rendered_h2h_summary(polished)
+
+    if rendered:
+        return bool(expected) and rendered == expected
+
+    if not _contains_h2h_claim(polished):
+        return True
+
+    return False
+
+
+def _parse_narrative_timestamp(value: str | None):
+    """Parse SQLite/ISO timestamp strings to UTC datetimes."""
+    if not value:
+        return None
+
+    from datetime import datetime, timezone
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+
+    dt_value = None
+    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            if fmt is None:
+                dt_value = datetime.fromisoformat(raw)
+            else:
+                dt_value = datetime.strptime(raw, fmt)
+            break
+        except ValueError:
+            continue
+
+    if dt_value is None:
+        return None
+    if dt_value.tzinfo is None:
+        return dt_value.replace(tzinfo=timezone.utc)
+    return dt_value.astimezone(timezone.utc)
+
+
+def _is_injury_record_current_for_narrative(
+    fixture_date: str | None,
+    fetched_at: str | None,
+    *,
+    now=None,
+) -> bool:
+    """Return True when an injury row is fresh enough for narrative use."""
+    from datetime import datetime, timedelta, timezone
+
+    now = now or datetime.now(timezone.utc)
+    fetched_dt = _parse_narrative_timestamp(fetched_at)
+    fixture_dt = _parse_narrative_timestamp(fixture_date)
+
+    if not fetched_dt or (now - fetched_dt) > timedelta(days=_INJURY_FETCH_LOOKBACK_DAYS):
+        return False
+
+    if not fixture_dt:
+        return True
+
+    max_age = timedelta(days=_INJURY_NARRATIVE_MAX_AGE_DAYS)
+    if fixture_dt >= now:
+        return (fixture_dt - now) <= max_age
+    return (now - fixture_dt) <= max_age
 
 
 def _has_banned_patterns(narrative: str) -> bool:
@@ -11473,7 +11578,10 @@ def get_verified_injuries(home: str, away: str) -> dict:
     """Fetch confirmed/questionable absences from team_injuries table.
 
     Returns {"home": ["Name (Status)", ...], "away": [...]} strings.
-    Only rows fetched within 2 days (freshness guard). Empty lists on failure.
+    Narrative safety rule:
+    - fetched within 2 days
+    - linked fixture within +/-21 days when fixture_date exists
+    Older rows are omitted from narrative use. Empty lists on failure.
     """
     try:
         from db_connection import get_connection as _get_conn
@@ -11484,14 +11592,23 @@ def get_verified_injuries(home: str, away: str) -> dict:
                 result[side] = []
                 continue
             rows = conn.execute(
-                "SELECT DISTINCT player_name, injury_status FROM team_injuries "
+                "SELECT player_name, injury_status, fixture_date, fetched_at FROM team_injuries "
                 "WHERE LOWER(team) LIKE ? "
-                "AND fetched_at > datetime('now', '-2 days') "
                 "AND injury_status NOT IN ('Missing Fixture', 'Unknown') "
-                "ORDER BY player_name",
+                "ORDER BY fetched_at DESC, fixture_date DESC, player_name ASC",
                 (f"%{team.lower().replace(' ', '%')}%",),
             ).fetchall()
-            result[side] = [f"{r[0]} ({r[1]})" for r in rows]
+            seen_players: set[str] = set()
+            safe_rows: list[str] = []
+            for player_name, injury_status, fixture_date, fetched_at in rows:
+                player_key = str(player_name or "").strip().lower()
+                if not player_key or player_key in seen_players:
+                    continue
+                if not _is_injury_record_current_for_narrative(fixture_date, fetched_at):
+                    continue
+                safe_rows.append(f"{player_name} ({injury_status})")
+                seen_players.add(player_key)
+            result[side] = safe_rows
         conn.close()
         return result
     except Exception:
@@ -12179,7 +12296,9 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         f"5. Form strings belong in parentheses or woven into sentences — NEVER as standalone headlines.\n"
         f"6. Follow the Observation-Evidence-Interpretation pattern in the Setup.\n"
         f"7. Start directly with 📋 <b>The Setup</b>. No preamble. No meta-commentary.\n"
-        f"8. Keep all 4 section headers exactly: 📋 <b>The Setup</b>, 🎯 <b>The Edge</b>, ⚠️ <b>The Risk</b>, 🏆 <b>Verdict</b>\n\n"
+        f"8. Keep all 4 section headers exactly: 📋 <b>The Setup</b>, 🎯 <b>The Edge</b>, ⚠️ <b>The Risk</b>, 🏆 <b>Verdict</b>\n"
+        f"9. If the baseline includes a 'Head to head:' line, keep that H2H sentence VERBATIM or delete it entirely. Do NOT rewrite H2H counts, last-meeting records, or W/D/L summaries. If the baseline has no H2H line, do NOT add H2H prose.\n"
+        f"10. Platform blacklist is enforced at validation time. Do NOT use banned filler such as: let that shape the stake, keeps the stake size measured, worth a measured look, grab it before.\n\n"
         f"If you cannot improve the baseline without violating these constraints, return it UNCHANGED."
     )
 
@@ -12193,13 +12312,19 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
     band = TONE_BANDS[spec.tone_band]
     polished_lower = polished.lower()
 
-    # 1. Banned phrases for this tone band
+    # 1. Global banned phrases
+    for phrase in BANNED_NARRATIVE_PHRASES:
+        if phrase.lower() in polished_lower:
+            log.warning("POLISH REJECT: global banned phrase '%s'", phrase)
+            return False
+
+    # 2. Banned phrases for this tone band
     for phrase in band["banned"]:
         if phrase.lower() in polished_lower:
             log.warning("POLISH REJECT: banned phrase '%s' in %s band", phrase, spec.tone_band)
             return False
 
-    # 2. All 4 section headers present
+    # 3. All 4 section headers present
     for header in ["📋", "🎯", "⚠️", "🏆"]:
         if header not in polished:
             log.warning("POLISH REJECT: missing section header %s", header)
@@ -12213,7 +12338,7 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
         log.warning("POLISH REJECT: away team '%s' missing", spec.away_name)
         return False
 
-    # 4. Bookmaker + odds
+    # 5. Bookmaker + odds
     if spec.bookmaker and spec.bookmaker.lower() not in polished_lower:
         log.warning("POLISH REJECT: bookmaker '%s' missing", spec.bookmaker)
         return False
@@ -12221,7 +12346,12 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
         log.warning("POLISH REJECT: odds '%s' missing", spec.odds)
         return False
 
-    # 5. Speculative edge → no strong language
+    # 6. Verified H2H claims must survive unchanged or be omitted
+    if not _is_h2h_polish_safe(polished, spec):
+        log.warning("POLISH REJECT: H2H copy changed or introduced beyond verified spec")
+        return False
+
+    # 7. Speculative edge → no strong language
     if spec.evidence_class == "speculative":
         strong = ["strong back", "confident", "clear edge", "must back", "genuine value", "supported edge"]
         for phrase in strong:
@@ -12229,7 +12359,7 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
                 log.warning("POLISH REJECT: speculative but strong phrase '%s'", phrase)
                 return False
 
-    # 6. Quality check (form-as-headline, standalone records, generic teams)
+    # 8. Quality check (form-as-headline, standalone records, generic teams)
     violations = _quality_check(polished)
     if violations:
         log.warning("POLISH REJECT: quality violations %s", violations)
