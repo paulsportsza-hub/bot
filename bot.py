@@ -8573,7 +8573,7 @@ _NARRATIVE_MODEL = os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514")
 def _ensure_narrative_cache_table() -> None:
     """Create narrative_cache table if it doesn't exist."""
     from db_connection import get_connection
-    conn = get_connection(_NARRATIVE_DB_PATH)
+    conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
     try:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS narrative_cache (
@@ -8587,6 +8587,45 @@ def _ensure_narrative_cache_table() -> None:
                 expires_at TIMESTAMP NOT NULL
             )
         """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+
+def _ensure_shadow_narratives_table() -> None:
+    """Create shadow_narratives table for Phase B shadow-only storage."""
+    from db_connection import get_connection
+
+    conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS shadow_narratives (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_key TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                prompt_text TEXT NOT NULL,
+                raw_draft TEXT NOT NULL,
+                verified_draft TEXT,
+                verification_report TEXT NOT NULL,
+                verification_passed BOOLEAN NOT NULL,
+                w82_baseline TEXT NOT NULL,
+                w82_polished TEXT,
+                richness_score TEXT NOT NULL,
+                model TEXT NOT NULL,
+                duration_ms INTEGER,
+                token_count INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                scored_quality REAL,
+                scored_accuracy REAL,
+                scored_value REAL,
+                scorer_notes TEXT
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_shadow_narratives_match_key_created_at "
+            "ON shadow_narratives(match_key, created_at DESC)"
+        )
         conn.commit()
     finally:
         conn.close()
@@ -19405,7 +19444,9 @@ async def _post_init(app_instance) -> None:
     # W60-CACHE: Ensure narrative_cache table exists in odds.db
     try:
         _ensure_narrative_cache_table()
+        _ensure_shadow_narratives_table()
         log.info("narrative_cache table ready")
+        log.info("shadow_narratives table ready")
     except Exception as exc:
         log.warning("Could not create narrative_cache table: %s", exc)
 
