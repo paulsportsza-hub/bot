@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import time
 
@@ -30,12 +31,30 @@ _bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_bot_dir, ".env"))
 
 import anthropic
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+from evidence_pack import (
+    _build_h2h_injection,
+    build_evidence_pack,
+    _inject_h2h_sentence,
+    _build_sharp_injection,
+    _strip_model_generated_h2h_references,
+    _inject_sharp_sentence,
+    _strip_model_generated_sharp_references,
+    _suppress_shadow_banned_phrases,
+    format_evidence_prompt,
+    serialise_evidence_pack,
+    verify_shadow_narrative,
 )
+
+# Configure the pregenerate logger directly rather than root via basicConfig.
+# bot.py (imported below) adds its own handlers to root — basicConfig would
+# add a duplicate, causing every log line to appear 2-3 times.
 log = logging.getLogger("pregenerate")
+if not log.handlers and not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+log.setLevel(logging.INFO)
 
 # Model IDs
 MODELS = {
@@ -43,6 +62,12 @@ MODELS = {
     "refresh": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514"),
     "uncached_only": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514"),
 }
+SHADOW_MODEL = os.environ.get(
+    "NARRATIVE_SHADOW_MODEL",
+    os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514"),
+)
+# W84-CONFIRM-1: W84 is now the permanent default generation path.
+# The W84_SERVE env-var gate has been removed — W84 always serves.
 
 # Import narrative functions from bot.py (safe — guarded by __name__ == __main__)
 import bot
@@ -69,9 +94,11 @@ from bot import (
     _get_cached_narrative,
     _store_narrative_cache,
     _ensure_narrative_cache_table,
+    _ensure_shadow_narratives_table,
     _check_verdict_balance,
     _extract_text_from_response,
     _strip_preamble,
+    _store_shadow_narrative,
     _sanitise_jargon,
     _final_polish,
     WEB_SEARCH_TOOL,
@@ -108,16 +135,273 @@ if _missing:
     )
 
 
-async def _get_match_context(home: str, away: str, league: str, sport: str) -> dict:
-    """Fetch ESPN match context for a match."""
+# BASELINE-FIX: match-level dedup — tracks matches currently being generated.
+# Prevents the same match being generated twice in concurrent calls to main().
+# Module-level so it persists across multiple main() invocations within a process.
+_in_progress_matches: set[str] = set()
+
+_RUNTIME_SCHEMA_REQUIREMENTS = {
+    "narrative_cache": {
+        "match_id",
+        "narrative_html",
+        "model",
+        "edge_tier",
+        "tips_json",
+        "odds_hash",
+        "created_at",
+        "expires_at",
+        "evidence_json",
+        "narrative_source",
+    },
+    "shadow_narratives": {
+        "match_key",
+        "evidence_json",
+        "prompt_text",
+        "raw_draft",
+        "verification_report",
+        "verification_passed",
+        "w82_baseline",
+        "model",
+        "created_at",
+    },
+}
+
+
+def _scraper_lock_file() -> str:
+    return os.environ.get("PREGEN_SCRAPER_LOCK_FILE", "/tmp/mzansi_scraper.lock")
+
+
+def _scraper_wait_seconds() -> float:
+    return float(os.environ.get("PREGEN_SCRAPER_WAIT_SECONDS", "720"))
+
+
+def _scraper_wait_poll_seconds() -> float:
+    return float(os.environ.get("PREGEN_SCRAPER_WAIT_POLL_SECONDS", "5"))
+
+
+def _is_active_process(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _active_scraper_lock_pid(lock_file: str | None = None) -> int | None:
+    path = lock_file or _scraper_lock_file()
+    try:
+        with open(path) as fh:
+            raw = fh.read().strip()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        pid = int(raw)
+    except ValueError:
+        return None
+    return pid if _is_active_process(pid) else None
+
+
+def _pregen_enrichment_live_safe() -> tuple[bool, int | None]:
+    """Always use read-only enrichment during pregen to eliminate DB write contention.
+
+    W84-LOCKFIX: Previously this only checked /tmp/mzansi_scraper.lock, but 7+
+    other cron processes write to odds.db without that lock file (sharp benchmark,
+    closing_capture, clv_tracker, settlement, lineups, integrity, bot edge_v2).
+    The lock-file check had a TOCTOU race even for the one writer it did cover.
+
+    Fix: unconditionally return live_safe=True.  Pregen reads from api_cache
+    (coach/ESPN data) but never writes.  Cache misses produce slightly thinner
+    narratives for ONE cycle; the next run (or a user tap) populates the cache.
+    This eliminates ALL write contention from pregen enrichment → odds.db.
+    """
+    return True, _active_scraper_lock_pid()
+
+
+async def _wait_for_scraper_writer_window() -> bool:
+    """Serialize pregen startup behind the scraper lock to avoid writer collisions."""
+    active_pid = _active_scraper_lock_pid()
+    if active_pid is None:
+        return True
+
+    wait_seconds = max(_scraper_wait_seconds(), 0.0)
+    poll_seconds = max(_scraper_wait_poll_seconds(), 0.1)
+    deadline = time.monotonic() + wait_seconds
+    log.warning(
+        "Scraper writer lock active via %s (PID %s) — delaying pregen startup up to %.0fs",
+        _scraper_lock_file(),
+        active_pid,
+        wait_seconds,
+    )
+    while time.monotonic() < deadline:
+        await asyncio.sleep(poll_seconds)
+        active_pid = _active_scraper_lock_pid()
+        if active_pid is None:
+            log.info("Scraper writer lock cleared — proceeding with pregen startup")
+            return True
+
+    log.warning(
+        "Scraper writer lock still active after %.0fs (PID %s) — deferring this sweep safely",
+        wait_seconds,
+        active_pid,
+    )
+    return False
+
+
+def _validate_pregen_runtime_schema(db_path: str | None = None) -> None:
+    """Read-only schema validation for runtime sweeps.
+
+    Runtime pregen must not perform DDL/migrations. If required columns are absent,
+    this should fail fast and surface a deploy-time schema issue instead of trying to
+    alter tables while other writers are active.
+    """
+    path = db_path or bot._NARRATIVE_DB_PATH
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1.0)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        missing_tables: list[str] = []
+        missing_columns: list[str] = []
+        for table_name, required_columns in _RUNTIME_SCHEMA_REQUIREMENTS.items():
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+                (table_name,),
+            ).fetchone()
+            if row is None:
+                missing_tables.append(table_name)
+                continue
+            cols = {
+                result[1]
+                for result in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            }
+            missing = sorted(required_columns - cols)
+            if missing:
+                missing_columns.append(f"{table_name}: {', '.join(missing)}")
+        if missing_tables or missing_columns:
+            problems = []
+            if missing_tables:
+                problems.append(f"missing tables: {', '.join(sorted(missing_tables))}")
+            if missing_columns:
+                problems.append(f"missing columns: {'; '.join(missing_columns)}")
+            raise RuntimeError(
+                "Runtime pregen schema validation failed; run the narrative cache migration "
+                f"outside the sweep hot path ({'; '.join(problems)})"
+            )
+    finally:
+        conn.close()
+
+
+def _canonical_context_team_key(name: str) -> str:
+    """Resolve a display/raw team name to the canonical odds key for context reads."""
+    if not name:
+        return ""
+    try:
+        from scrapers.odds_normaliser import normalise_key
+        from scrapers.utils.team_mapper import normalise_team as mapper_normalise
+
+        candidate = name.strip()
+        if "_" in candidate:
+            key = candidate.lower()
+        else:
+            key = mapper_normalise(candidate)
+        return normalise_key(key)
+    except Exception:
+        return name.lower().replace(" ", "_")
+
+
+def _needs_pregen_context_lift(ctx: dict) -> bool:
+    """Retry once in pregen when context would still collapse to thin/no-context prose."""
+    if not ctx or not ctx.get("data_available"):
+        return True
+
+    def _has_setup_signal(team: dict) -> bool:
+        return bool(
+            team.get("league_position")
+            or team.get("position")
+            or team.get("form")
+            or team.get("last_5")
+            or team.get("top_scorer")
+        )
+
+    home = ctx.get("home_team") or {}
+    away = ctx.get("away_team") or {}
+    return not (_has_setup_signal(home) or _has_setup_signal(away))
+
+
+def _context_fetch_attempts(
+    home: str,
+    away: str,
+    *,
+    home_key: str = "",
+    away_key: str = "",
+) -> list[tuple[str, str]]:
+    """Build one or two deterministic pregen-only context lookup attempts."""
+    attempts: list[tuple[str, str]] = []
+
+    primary = (
+        _canonical_context_team_key(home_key or home),
+        _canonical_context_team_key(away_key or away),
+    )
+    if all(primary):
+        attempts.append(primary)
+
+    fallback = (
+        home.lower().replace(" ", "_"),
+        away.lower().replace(" ", "_"),
+    )
+    if all(fallback) and fallback not in attempts:
+        attempts.append(fallback)
+
+    return attempts
+
+
+async def _get_match_context(
+    home: str,
+    away: str,
+    league: str,
+    sport: str,
+    *,
+    home_key: str = "",
+    away_key: str = "",
+) -> dict:
+    """Fetch ESPN match context for a match with one pregenerate-only thin-context retry."""
     try:
         from scrapers.match_context_fetcher import get_match_context
-        return await get_match_context(
-            home_team=home.lower().replace(" ", "_"),
-            away_team=away.lower().replace(" ", "_"),
-            league=league,
-            sport=sport,
-        )
+
+        attempts = _context_fetch_attempts(home, away, home_key=home_key, away_key=away_key)
+        last_ctx: dict = {}
+        for idx, (home_candidate, away_candidate) in enumerate(attempts):
+            live_safe, scraper_pid = _pregen_enrichment_live_safe()
+            if live_safe:
+                log.info(
+                    "Scraper writer lock active (PID %s) — using read-only enrichment for %s vs %s",
+                    scraper_pid,
+                    home,
+                    away,
+                )
+            ctx = await get_match_context(
+                home_team=home_candidate,
+                away_team=away_candidate,
+                league=league,
+                sport=sport,
+                live_safe=live_safe,
+            )
+            last_ctx = ctx
+            if not _needs_pregen_context_lift(ctx):
+                return ctx
+            if idx + 1 < len(attempts):
+                log.info(
+                    "Pregen thin-context lift retry for %s vs %s via %s vs %s",
+                    home,
+                    away,
+                    home_candidate,
+                    away_candidate,
+                )
+        return last_ctx
     except Exception as exc:
         log.warning("Match context fetch failed for %s vs %s: %s", home, away, exc)
         return {}
@@ -215,6 +499,264 @@ async def _verify_narrative_claims(
         return []
 
 
+def _shadow_token_count(resp) -> int:
+    usage = getattr(resp, "usage", None)
+    if not usage:
+        return 0
+    return int(getattr(usage, "input_tokens", 0) or 0) + int(getattr(usage, "output_tokens", 0) or 0)
+
+
+# ── BASELINE-FIX: Data Source Alignment ──
+# Ensures narrative verdict bookmaker+price matches the SA Bookmaker Odds table.
+# Both must read from odds.db (single source of truth), not stale edge_results.
+
+_VALID_BK_DISPLAY = {
+    "hollywoodbets", "betway", "supabets", "sportingbet",
+    "gbets", "world sports betting", "playabets", "supersportbet",
+}
+
+
+async def _refresh_edge_from_odds_db(edge: dict) -> dict:
+    """Refresh bookmaker+price from odds.db so narrative and odds table agree.
+
+    edge_results stores pre-computed edges that may be stale.  odds.db
+    (odds_latest) has the current best price.  This ensures the same price
+    feeds both the narrative verdict and the SA Bookmaker Odds display.
+
+    Updates edge dict in place and returns it.
+    """
+    match_key = edge.get("match_key", "")
+    outcome = edge.get("recommended_outcome") or edge.get("outcome", "")
+    if not match_key or not outcome:
+        return edge
+
+    try:
+        from services.odds_service import get_best_odds
+        best = await get_best_odds(match_key)
+        outcomes = best.get("outcomes", {})
+        outcome_data = outcomes.get(outcome, {})
+        if not outcome_data:
+            log.debug("BASELINE-FIX: no odds.db data for %s outcome=%s", match_key, outcome)
+            return edge
+
+        fresh_odds = outcome_data.get("best_odds", 0)
+        fresh_bk_key = outcome_data.get("best_bookmaker", "")
+
+        if fresh_odds <= 1.0 or not fresh_bk_key:
+            return edge
+
+        fresh_bk_display = bot._display_bookmaker_name(fresh_bk_key)
+
+        # Recalculate EV with the fresh price
+        fair_prob = edge.get("fair_probability") or edge.get("fair_prob", 0)
+        if fair_prob and fair_prob > 0:
+            fresh_ev = round((fresh_odds * fair_prob - 1) * 100, 2)
+        else:
+            fresh_ev = edge.get("edge_pct", 0)
+
+        old_bk = edge.get("best_bookmaker", "?")
+        old_odds = edge.get("best_odds", 0)
+        if old_bk != fresh_bk_display or abs(old_odds - fresh_odds) > 0.005:
+            log.info(
+                "BASELINE-FIX: refreshed %s: %s@%.2f → %s@%.2f (EV %.1f%% → %.1f%%)",
+                match_key, old_bk, old_odds, fresh_bk_display, fresh_odds,
+                edge.get("edge_pct", 0), fresh_ev,
+            )
+        edge["best_odds"] = fresh_odds
+        edge["best_bookmaker"] = fresh_bk_display
+        edge["edge_pct"] = fresh_ev
+        edge["ev"] = fresh_ev
+        # Store the raw key for downstream code that may need it
+        edge["best_bookmaker_key"] = fresh_bk_key
+    except Exception as exc:
+        log.warning("BASELINE-FIX: failed to refresh odds for %s: %s", match_key, exc)
+
+    return edge
+
+
+def _verdict_bookmaker_aligned(narrative: str, bk_display: str, odds: float) -> bool:
+    """Check that the verdict section references the correct bookmaker+price.
+
+    Returns True if the verdict contains both the expected bookmaker name and
+    the expected odds value (within 0.03 tolerance).
+    """
+    if not narrative or not bk_display:
+        return True  # Nothing to check
+    verdict_start = narrative.find("\U0001f3c6")  # 🏆
+    if verdict_start == -1:
+        return True  # No verdict section — nothing to misalign
+    verdict_text = narrative[verdict_start:]
+    verdict_lower = verdict_text.lower()
+
+    # Check bookmaker name present
+    if bk_display.lower() not in verdict_lower:
+        return False
+
+    # Check odds value present (within 0.03 tolerance)
+    if odds and odds > 1.0:
+        odds_str = f"{odds:.2f}"
+        if odds_str in verdict_text:
+            return True
+        # Tolerance check: extract all decimal numbers from verdict
+        import re as _re
+        found_prices = _re.findall(r'\d+\.\d{2}', verdict_text)
+        return any(abs(float(p) - odds) <= 0.03 for p in found_prices)
+
+    return True
+
+
+def _realign_verdict_bookmaker(
+    narrative: str,
+    correct_bk: str,
+    correct_odds: float,
+    all_bk_displays: set[str] | None = None,
+) -> str:
+    """Replace wrong bookmaker+price in verdict section with correct values.
+
+    Scans the verdict section for any SA bookmaker display name that doesn't
+    match correct_bk and replaces it, along with the adjacent price.
+    """
+    if not narrative or not correct_bk or not correct_odds:
+        return narrative
+    verdict_start = narrative.find("\U0001f3c6")  # 🏆
+    if verdict_start == -1:
+        return narrative
+
+    import re as _re
+
+    verdict_section = narrative[verdict_start:]
+    prefix = narrative[:verdict_start]
+
+    bk_names = all_bk_displays or {
+        "Hollywoodbets", "Betway", "SupaBets", "Sportingbet",
+        "GBets", "World Sports Betting", "PlayaBets", "SuperSportBet",
+    }
+    correct_odds_str = f"{correct_odds:.2f}"
+
+    fixed = verdict_section
+    for bk_name in bk_names:
+        if bk_name.lower() == correct_bk.lower():
+            continue
+        if bk_name.lower() not in fixed.lower():
+            continue
+        # Replace patterns: "BkName @ X.XX", "at X.XX (BkName)", "at X.XX with BkName",
+        # "X.XX (BkName)", "(BkName @ X.XX)", "with BkName"
+        # Use case-insensitive replacement of the bookmaker name
+        bk_pattern = _re.escape(bk_name)
+        fixed = _re.sub(bk_pattern, correct_bk, fixed, flags=_re.IGNORECASE)
+
+    # Now fix any remaining wrong price adjacent to the correct bookmaker
+    # Pattern: "correct_bk @ X.XX" or "X.XX (correct_bk)" etc.
+    bk_esc = _re.escape(correct_bk)
+    # Replace "BK @ WRONG_PRICE" with "BK @ CORRECT_PRICE"
+    fixed = _re.sub(
+        rf'({bk_esc}\s*@\s*)\d+\.\d{{2}}',
+        rf'\g<1>{correct_odds_str}',
+        fixed,
+        flags=_re.IGNORECASE,
+    )
+    # Replace "at WRONG_PRICE (BK)" or "at WRONG_PRICE with BK"
+    fixed = _re.sub(
+        rf'(at\s+)\d+\.\d{{2}}(\s*(?:\(|with)\s*{bk_esc})',
+        rf'\g<1>{correct_odds_str}\2',
+        fixed,
+        flags=_re.IGNORECASE,
+    )
+    # Replace "WRONG_PRICE (BK)"
+    fixed = _re.sub(
+        rf'\d+\.\d{{2}}(\s*\(\s*{bk_esc}\s*\))',
+        rf'{correct_odds_str}\1',
+        fixed,
+        flags=_re.IGNORECASE,
+    )
+
+    return prefix + fixed
+
+
+def _raw_outcome_from_serving_tip(tip: dict) -> str:
+    """Convert live serving labels back into edge outcome keys."""
+    outcome = str(tip.get("outcome") or "").strip().lower()
+    home = str(tip.get("home_team") or "").strip().lower()
+    away = str(tip.get("away_team") or "").strip().lower()
+    if outcome == "draw":
+        return "draw"
+    if outcome and outcome == home:
+        return "home"
+    if outcome and outcome == away:
+        return "away"
+    return outcome or "home"
+
+
+def _edge_from_serving_tip(tip: dict) -> dict | None:
+    """Rebuild an edge-shaped dict from the live edge_results serving row."""
+    match_key = tip.get("match_id") or tip.get("event_id") or ""
+    if not match_key:
+        return None
+
+    home = tip.get("home_team", "")
+    away = tip.get("away_team", "")
+    raw_outcome = _raw_outcome_from_serving_tip(tip)
+    tip_for_edge = dict(tip)
+    tip_for_edge["outcome"] = raw_outcome
+    tip_for_edge["bookie"] = tip.get("bookmaker", tip.get("bookie", "?"))
+
+    edge_data = bot._extract_edge_data([tip_for_edge], home_team=home, away_team=away)
+    league = tip.get("league_key") or edge_data.get("league") or ""
+    movement_direction = edge_data.get("movement_direction", "")
+    tipster_against = edge_data.get("tipster_against", 0)
+    market_agreement = float(edge_data.get("market_agreement", 0) or 0) / 100.0
+    signals = {}
+    if movement_direction:
+        signals["movement"] = {"direction": movement_direction}
+    if tipster_against:
+        signals["tipster"] = {"against_count": tipster_against}
+    if market_agreement:
+        signals["market_agreement"] = {"score": market_agreement}
+
+    return {
+        "match_key": match_key,
+        "home_team": home,
+        "away_team": away,
+        "league": league,
+        "sport": tip.get("sport_key", config.LEAGUE_SPORT.get(league, "soccer")),
+        "recommended_outcome": raw_outcome,
+        "outcome": raw_outcome,
+        "best_odds": edge_data.get("best_odds", tip.get("odds", 0)),
+        "best_bookmaker": edge_data.get("best_bookmaker", tip.get("bookmaker", "?")),
+        "edge_pct": edge_data.get("edge_pct", tip.get("ev", 0)),
+        "fair_probability": edge_data.get("fair_prob", 0.0),
+        "composite_score": edge_data.get("composite_score", tip.get("edge_score", 0)),
+        "confirming_signals": edge_data.get("confirming_signals", 0),
+        "contradicting_signals": edge_data.get("contradicting_signals", 0),
+        "bookmaker_count": edge_data.get("bookmaker_count", 0),
+        "stale_minutes": edge_data.get("stale_minutes", 0),
+        "signals": signals,
+        "tier": tip.get("display_tier") or tip.get("edge_rating") or "bronze",
+        "sharp_source": tip.get("sharp_source", "edge_results"),
+        "commence_time": tip.get("commence_time", ""),
+    }
+
+
+def _load_shadow_pregen_edges(limit: int = 100) -> list[dict]:
+    """Shadow pregen must use the same authoritative edge_results source as serving."""
+    try:
+        serving_tips = bot._load_tips_from_edge_results(limit=limit)
+    except Exception as exc:
+        log.error("Failed to load live edge_results tips for shadow pregen: %s", exc)
+        return []
+
+    edges: list[dict] = []
+    for tip in serving_tips:
+        edge = _edge_from_serving_tip(tip)
+        if not edge:
+            continue
+        if not edge.get("best_odds") or edge.get("edge_pct", 0) <= 0:
+            continue
+        edges.append(edge)
+    return edges
+
+
+
 async def _generate_one(
     edge: dict,
     model_id: str,
@@ -229,15 +771,16 @@ async def _generate_one(
     match_key = edge.get("match_key", "")
     home = edge.get("home_team", "")
     away = edge.get("away_team", "")
+    home_key = ""
+    away_key = ""
 
     # Parse team names from match_key if not provided (edge_v2 dicts omit them)
-    if not home or not away:
-        # match_key format: "team_a_vs_team_b_YYYY-MM-DD"
-        parts = match_key.rsplit("_", 1)[0] if "_" in match_key else match_key
-        if "_vs_" in parts:
-            home_raw, away_raw = parts.split("_vs_", 1)
-            home = home or home_raw.replace("_", " ").title()
-            away = away or away_raw.replace("_", " ").title()
+    # match_key format: "team_a_vs_team_b_YYYY-MM-DD"
+    parts = match_key.rsplit("_", 1)[0] if "_" in match_key else match_key
+    if "_vs_" in parts:
+        home_key, away_key = parts.split("_vs_", 1)
+        home = home or bot._display_team_name(home_key)
+        away = away or bot._display_team_name(away_key)
 
     league = edge.get("league", "")
     sport = edge.get("sport", "soccer")
@@ -250,13 +793,34 @@ async def _generate_one(
         elif "box" in league.lower():
             sport = "boxing"
 
+    # BASELINE-FIX: Refresh bookmaker+price from odds.db before building tips/spec.
+    # This ensures narrative verdict and SA Bookmaker Odds table use the same source.
+    edge = await _refresh_edge_from_odds_db(edge)
+
     # 1. Match context
-    ctx = await _get_match_context(home, away, league, sport)
+    ctx = await _get_match_context(
+        home,
+        away,
+        league,
+        sport,
+        home_key=home_key,
+        away_key=away_key,
+    )
+    evidence_pack = await build_evidence_pack(
+        match_key,
+        edge,
+        sport,
+        league,
+        espn_ctx=ctx,
+        home_team=home,
+        away_team=away,
+    )
+    evidence_json = serialise_evidence_pack(evidence_pack)
 
     # 2. Build tips from edge data
     # edge_v2 uses "edge_pct"/"outcome"/"fair_probability"; normalise field names
     tips = []
-    ev = edge.get("ev") or edge.get("edge_pct", 0)
+    ev = bot._normalise_edge_pct_contract(edge.get("ev"), edge.get("edge_pct", 0))
     if ev > 0:
         fair_prob = edge.get("fair_prob") or edge.get("fair_probability", 0)
         tips.append({
@@ -297,7 +861,11 @@ async def _generate_one(
 
     # 4. NarrativeSpec → deterministic baseline (W82-WIRE)
     narrative = ""
+    w82_baseline = ""
+    w82_polished = None
     spec = None
+    narrative_source = "w82"
+    served_model = model_label
     try:
         from narrative_spec import build_narrative_spec, _render_baseline
         spec = build_narrative_spec(ctx, _pregen_edge_data, tips, sport)
@@ -305,35 +873,67 @@ async def _generate_one(
         narrative = _sanitise_jargon(narrative)
         narrative = _apply_sport_subs(narrative, sport)
         narrative = _final_polish(narrative, _pregen_edge_data)
+        w82_baseline = narrative
         log.info("Pregen W82-WIRE: baseline rendered for %s", match_key)
     except Exception as exc:
         log.error("Pregen W82-WIRE: baseline failed for %s: %s", match_key, exc)
         narrative = ""
 
-    # 5. W82-POLISH: optional constrained LLM polish (pre-gen always attempts)
-    if narrative and spec is not None:
+    # 5. W84-CONFIRM-1: W84 is the permanent default generation path.
+    # W82 baseline is always computed first and remains the per-row fallback.
+    if narrative and spec is not None and evidence_pack is not None:
         try:
-            exemplars = _get_exemplars_for_prompt(
-                spec.home_story_type, spec.away_story_type, ev, sport
-            )
-            prompt = _build_polish_prompt(narrative, spec, exemplars)
+            prompt_text = format_evidence_prompt(evidence_pack, spec)
             resp = await claude.messages.create(
-                model=model_id,
-                max_tokens=1024,
-                messages=[{"role": "user", "content": prompt}],
-                timeout=40.0,
+                model=SHADOW_MODEL,
+                max_tokens=1200,
+                messages=[{"role": "user", "content": prompt_text}],
+                timeout=45.0,
             )
-            polished = _strip_preamble(_extract_text_from_response(resp))
-            if polished and _validate_polish(polished, narrative, spec):
-                log.info("POLISH PASS for %s", match_key)
-                polished = _sanitise_jargon(polished)
-                polished = _apply_sport_subs(polished, sport)
-                polished = _final_polish(polished, _pregen_edge_data)
-                narrative = polished
+            model_draft = _strip_preamble(_extract_text_from_response(resp)).strip()
+            sanitized_draft = sanitize_ai_response(model_draft)
+            sanitized_draft = _strip_model_generated_h2h_references(sanitized_draft)
+            sanitized_draft = _strip_model_generated_sharp_references(sanitized_draft)
+            sanitized_draft = _suppress_shadow_banned_phrases(sanitized_draft)
+            h2h_sentence = _build_h2h_injection(evidence_pack, spec)
+            if h2h_sentence:
+                sanitized_draft = _inject_h2h_sentence(sanitized_draft, h2h_sentence)
+            sharp_sentence = _build_sharp_injection(evidence_pack, spec)
+            if sharp_sentence:
+                sanitized_draft = _inject_sharp_sentence(sanitized_draft, sharp_sentence)
+            passed, report = verify_shadow_narrative(sanitized_draft, evidence_pack, spec)
+            if passed:
+                candidate = report.get("sanitized_draft") or sanitized_draft
+                # BASELINE-FIX: Verify verdict bookmaker+price matches tip data
+                _tip_bk = tips[0]["bookie"] if tips else ""
+                _tip_odds = tips[0]["odds"] if tips else 0
+                if _verdict_bookmaker_aligned(candidate, _tip_bk, _tip_odds):
+                    narrative = candidate
+                    narrative_source = "w84"
+                    served_model = "opus" if "opus" in SHADOW_MODEL else "sonnet"
+                    log.info("W84 SERVED for %s", match_key)
+                else:
+                    # Attempt to realign before falling back
+                    realigned = _realign_verdict_bookmaker(candidate, _tip_bk, _tip_odds)
+                    if _verdict_bookmaker_aligned(realigned, _tip_bk, _tip_odds):
+                        narrative = realigned
+                        narrative_source = "w84"
+                        served_model = "opus" if "opus" in SHADOW_MODEL else "sonnet"
+                        log.info(
+                            "W84 SERVED (realigned) for %s: verdict → %s@%.2f",
+                            match_key, _tip_bk, _tip_odds,
+                        )
+                    else:
+                        log.warning(
+                            "W84 VERDICT MISMATCH for %s: verdict has wrong bookmaker/price "
+                            "(expected %s@%.2f) — serving W82 fallback",
+                            match_key, _tip_bk, _tip_odds,
+                        )
             else:
-                log.warning("POLISH FAIL for %s — serving baseline", match_key)
+                reasons = "; ".join(report.get("rejection_reasons", [])[:3]) or "verification failed"
+                log.warning("W84 VERIFY FAIL for %s: %s — serving W82 fallback", match_key, reasons)
         except Exception as exc:
-            log.warning("POLISH ERROR for %s: %s — serving baseline", match_key, exc)
+            log.warning("W84 ERROR for %s: %s — serving W82 fallback", match_key, exc)
 
     if not narrative or narrative.strip() == "NO_DATA":
         return {"match_key": match_key, "success": False, "duration": time.time() - t0}
@@ -354,6 +954,24 @@ async def _generate_one(
                             narrative = narrative.replace(line, "")
                             break
             narrative = re.sub(r'\n{3,}', '\n\n', narrative)
+
+    # BASELINE-FIX: Final verdict alignment enforcement.
+    # After all post-processing (Layer 2 etc.), ensure the narrative still has
+    # the correct bookmaker+price matching the odds table tip data.
+    if narrative and tips:
+        _final_bk = tips[0]["bookie"]
+        _final_odds = tips[0]["odds"]
+        if not _verdict_bookmaker_aligned(narrative, _final_bk, _final_odds):
+            narrative = _realign_verdict_bookmaker(narrative, _final_bk, _final_odds)
+            if not _verdict_bookmaker_aligned(narrative, _final_bk, _final_odds):
+                # Realignment failed — fall back to W82 baseline which is guaranteed correct
+                if w82_baseline:
+                    log.warning(
+                        "BASELINE-FIX: final alignment failed for %s — reverting to W82 baseline",
+                        match_key,
+                    )
+                    narrative = w82_baseline
+                    narrative_source = "w82"
 
     # 8. Build the full HTML message (simplified — no user-specific gating)
     from html import escape as h
@@ -412,9 +1030,26 @@ async def _generate_one(
     # 9. Return cache-write data (caller batch-writes after all generation)
     duration = time.time() - t0
     return {
-        "match_key": match_key, "success": True, "model": model_label,
+        "match_key": match_key, "success": True, "model": served_model,
         "duration": duration, "narrative": narrative,
-        "_cache": {"match_id": match_key, "html": msg, "tips": tips, "edge_tier": edge_tier, "model": model_label},
+        "_cache": {
+            "match_id": match_key,
+            "html": msg,
+            "tips": tips,
+            "edge_tier": edge_tier,
+            "model": served_model,
+            "evidence_json": evidence_json,
+            "narrative_source": narrative_source,
+            "_shadow": {
+                "match_key": match_key,
+                "pack": evidence_pack,
+                "spec": spec,
+                "evidence_json": evidence_json,
+                "w82_baseline": w82_baseline or narrative,
+                "w82_polished": w82_polished,
+                "richness_score": evidence_pack.richness_score,
+            },
+        },
     }
 
 
@@ -423,6 +1058,7 @@ async def _verify_and_fill_cache(
     model_id: str,
     claude: anthropic.AsyncAnthropic,
     sweep: str,
+    shadow_tasks: list[asyncio.Task] | None = None,
 ) -> None:
     """Post-sweep: verify all edges have cache entries, fill gaps.
 
@@ -455,7 +1091,13 @@ async def _verify_and_fill_cache(
                 pw = result["_cache"]
                 try:
                     await _store_narrative_cache(
-                        pw["match_id"], pw["html"], pw["tips"], pw["edge_tier"], pw["model"]
+                        pw["match_id"],
+                        pw["html"],
+                        pw["tips"],
+                        pw["edge_tier"],
+                        pw["model"],
+                        evidence_json=pw.get("evidence_json"),
+                        narrative_source=pw.get("narrative_source", "w82"),
                     )
                     log.info("  -> Gap filled for %s", mk)
                 except Exception as store_exc:
@@ -481,18 +1123,21 @@ async def main(sweep: str) -> None:
     """Run the pre-generation sweep."""
     model_id = MODELS.get(sweep, MODELS["refresh"])
     model_label = "Opus" if sweep == "full" else "Sonnet"
-    log.info("Starting %s sweep with %s (%s)", sweep, model_label, model_id)
+    log.info(
+        "Starting %s sweep with %s (%s)",
+        sweep,
+        model_label,
+        model_id,
+    )
 
-    # Ensure table exists
-    _ensure_narrative_cache_table()
-
-    # Get all live edges
-    try:
-        from scrapers.edge.edge_v2_helper import get_top_edges
-        edges = await asyncio.to_thread(get_top_edges, n=100)
-    except Exception as exc:
-        log.error("Failed to get edges: %s", exc)
+    if not await _wait_for_scraper_writer_window():
         return
+
+    # Runtime sweeps validate schema read-only; deploy/startup migration must happen elsewhere.
+    _validate_pregen_runtime_schema()
+
+    # Shadow pregen must track the same edge reality the live bot serves.
+    edges = await asyncio.to_thread(_load_shadow_pregen_edges, 100)
 
     if not edges:
         log.info("No live edges found — nothing to pre-generate")
@@ -518,7 +1163,15 @@ async def main(sweep: str) -> None:
     # Initialize Claude client
     claude = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-    results = {"success": 0, "failed": 0, "skipped": 0, "total_duration": 0.0}
+    results = {
+        "success": 0,
+        "failed": 0,
+        "skipped": 0,
+        "dropped": 0,  # BASELINE-FIX: match-level dedup drops
+        "total_duration": 0.0,
+        "w84_served": 0,
+        "w82_fallback": 0,
+    }
     sweep_verdicts: list[str] = []
     pending_writes: list[dict] = []  # W79-P3D: collect cache writes, batch after generation
 
@@ -531,6 +1184,13 @@ async def main(sweep: str) -> None:
             results["skipped"] += 1
             continue
 
+        # BASELINE-FIX: match-level dedup — drop if already being generated
+        if mk in _in_progress_matches:
+            log.info("DROP: %s — already in progress (duplicate edge in sweep)", mk)
+            results["dropped"] += 1
+            continue
+        _in_progress_matches.add(mk)
+
         log.info("[%d/%d] Generating narrative for %s (%s)...", i, len(edges), mk, model_label)
 
         try:
@@ -541,6 +1201,10 @@ async def main(sweep: str) -> None:
                 # Collect cache write for batch
                 if result.get("_cache"):
                     pending_writes.append(result["_cache"])
+                    if result["_cache"].get("narrative_source") == "w84":
+                        results["w84_served"] += 1
+                    else:
+                        results["w82_fallback"] += 1
                 # W67-CALIBRATE: collect verdict for balance check
                 narr = result.get("narrative", "")
                 if narr and "Verdict" in narr:
@@ -553,6 +1217,9 @@ async def main(sweep: str) -> None:
         except Exception as exc:
             results["failed"] += 1
             log.error("  -> ERROR for %s: %s", mk, exc)
+        finally:
+            # BASELINE-FIX: always release match slot, even on failure
+            _in_progress_matches.discard(mk)
 
         # Rate limit: 1s between calls
         if i < len(edges):
@@ -565,7 +1232,13 @@ async def main(sweep: str) -> None:
         for pw in pending_writes:
             try:
                 await _store_narrative_cache(
-                    pw["match_id"], pw["html"], pw["tips"], pw["edge_tier"], pw["model"]
+                    pw["match_id"],
+                    pw["html"],
+                    pw["tips"],
+                    pw["edge_tier"],
+                    pw["model"],
+                    evidence_json=pw.get("evidence_json"),
+                    narrative_source=pw.get("narrative_source", "w82"),
                 )
                 write_ok += 1
             except Exception as exc:
@@ -583,13 +1256,23 @@ async def main(sweep: str) -> None:
         "\n=== Sweep Complete ===\n"
         "Mode: %s (%s)\n"
         "Total: %d edges\n"
-        "Success: %d\n"
+        "Generated: %d\n"
         "Failed: %d\n"
-        "Skipped: %d\n"
+        "Skipped (no odds): %d\n"
+        "Dropped (duplicate): %d\n"
+        "W84 served: %d\n"
+        "W82 fallback: %d\n"
         "Total time: %.1fs\n"
         "Avg per edge: %.1fs",
-        sweep, model_label, len(edges),
-        results["success"], results["failed"], results["skipped"],
+        sweep,
+        model_label,
+        len(edges),
+        results["success"],
+        results["failed"],
+        results["skipped"],
+        results["dropped"],
+        results["w84_served"],
+        results["w82_fallback"],
         results["total_duration"],
         results["total_duration"] / max(len(edges), 1),
     )

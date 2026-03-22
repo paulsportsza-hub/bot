@@ -35,6 +35,7 @@ if sentry_sdk and _SENTRY_DSN:
 
 import asyncio
 import difflib
+import json
 import logging
 import os
 import re
@@ -2104,6 +2105,19 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         if action.startswith("verify:"):
             reference = action.split(":", 1)[1]
             await _handle_sub_verify(query, reference)
+        elif action.startswith("founding_continue:"):
+            plan_code = action.split(":", 1)[1]
+            _subscribe_state[query.from_user.id] = {
+                "plan_code": plan_code,
+                "disclosure_seen": True,
+                "awaiting_email": True,
+            }
+            await query.edit_message_text(
+                "🎁 <b>Founding Member — R699/year Diamond</b>\n\n"
+                "Please enter your <b>email address</b> below.\n"
+                "<i>(Used for payment confirmation — never shared.)</i>",
+                parse_mode=ParseMode.HTML,
+            )
         elif action == "cancel":
             _subscribe_state.pop(query.from_user.id, None)
             await query.edit_message_text(
@@ -2986,8 +3000,23 @@ async def _handle_ob_plan(query, action: str, ctx) -> None:
             ]),
         )
     elif action == "founding":
-        # Founding member — go directly to subscribe flow
-        _subscribe_state[user_id] = {"plan_code": "founding_diamond", "from_onboarding": True}
+        disclosure_text, _ = await _build_founding_disclosure_surface()
+        remaining_slots = await db.get_remaining_founding_slots()
+        rows = []
+        if remaining_slots > 0:
+            rows.append([InlineKeyboardButton("✅ Continue to Checkout", callback_data="ob_plan:founding_continue")])
+        rows.append([InlineKeyboardButton("↩️ Back", callback_data="ob_nav:plan")])
+        await query.edit_message_text(
+            disclosure_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+    elif action == "founding_continue":
+        _subscribe_state[user_id] = {
+            "plan_code": "founding_diamond",
+            "from_onboarding": True,
+            "disclosure_seen": True,
+        }
         _subscribe_state[user_id]["awaiting_email"] = True
         await query.edit_message_text(
             "🎁 <b>Founding Member — R699/year Diamond</b>\n\n"
@@ -2995,7 +3024,6 @@ async def _handle_ob_plan(query, action: str, ctx) -> None:
             "<i>(Used for payment confirmation — never shared.)</i>",
             parse_mode=ParseMode.HTML,
         )
-        # Complete onboarding in background (they're already profiled)
         await persist_onboarding(user_id, ob)
         _onboarding_state.pop(user_id, None)
     elif action.startswith("sub:"):
@@ -6692,7 +6720,7 @@ def _build_model_from_consensus(match: dict) -> dict:
     }
 
 
-def _load_tips_from_edge_results() -> list[dict]:
+def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
     """W84-P1: Fast serving path — read pre-computed edges from edge_results table.
 
     Called synchronously from asyncio.to_thread(). Single SQL query, ~5ms.
@@ -6735,8 +6763,8 @@ def _load_tips_from_edge_results() -> list[dict]:
                     )
               )
             ORDER BY e.composite_score DESC
-            LIMIT 20
-        """, (_today,)).fetchall()
+            LIMIT ?
+        """, (_today, max(int(limit or 10), 1) * 2)).fetchall()
         _conn.close()
     except Exception as _e:
         log.debug("_load_tips_from_edge_results DB read failed: %s", _e)
@@ -6809,7 +6837,7 @@ def _load_tips_from_edge_results() -> list[dict]:
         _tier_sort.get(t["display_tier"], 9),
         -t["ev"],
     ))
-    return tips[:10]
+    return tips[: max(int(limit or 10), 1)]
 
 
 async def _fetch_hot_tips_from_db() -> list[dict]:
@@ -8414,8 +8442,7 @@ def _build_edge_only_section(tips: list[dict]) -> str:
     """
     if not tips:
         return (
-            "📋 <b>The Setup</b>\nNo odds data available for this fixture yet — "
-            "check back closer to kickoff.\n\n"
+            "📋 <b>The Setup</b>\nThis fixture is still waiting for enough verified detail to take on a fuller shape.\n\n"
             "🎯 <b>The Edge</b>\nCheck SA Bookmaker Odds below for the latest lines.\n\n"
             "⚠️ <b>The Risk</b>\nNo signals available. Size conservatively.\n\n"
             "🏆 <b>Verdict</b>\nVerify odds before committing."
@@ -8455,11 +8482,11 @@ def _build_edge_only_section(tips: list[dict]) -> str:
         verdict = "Small punt only if the price appeals — treat as speculative."
     # Edge-score-aware setup text
     if edge_score >= 55:
-        setup = "The model sees a supported edge here — multiple indicators line up."
+        setup = "This fixture looks like one that will declare its character early rather than hand it over before kickoff."
     elif edge_score >= 40:
-        setup = f"The model has flagged value on {h(outcome)} based on the bookmaker lines."
+        setup = "The opening phase should matter here, because the contest still has to establish its own rhythm."
     else:
-        setup = "Form data isn't available — this case rests entirely on the odds."
+        setup = "This shapes up as the sort of fixture where the game itself has to set the tone before anything else."
     return (
         f"📋 <b>The Setup</b>\n{setup}\n\n"
         f"🎯 <b>The Edge</b>\n{edge_desc}\n\n"
@@ -8583,14 +8610,26 @@ def _ensure_narrative_cache_table() -> None:
                 edge_tier TEXT NOT NULL,
                 tips_json TEXT NOT NULL,
                 odds_hash TEXT NOT NULL,
+                evidence_json TEXT,
+                narrative_source TEXT NOT NULL DEFAULT 'w82',
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 expires_at TIMESTAMP NOT NULL
             )
         """)
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(narrative_cache)").fetchall()
+        }
+        if "evidence_json" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN evidence_json TEXT")
+        if "narrative_source" not in cols:
+            conn.execute(
+                "ALTER TABLE narrative_cache "
+                "ADD COLUMN narrative_source TEXT NOT NULL DEFAULT 'w82'"
+            )
         conn.commit()
     finally:
         conn.close()
-
 
 
 def _ensure_shadow_narratives_table() -> None:
@@ -8631,6 +8670,46 @@ def _ensure_shadow_narratives_table() -> None:
         conn.close()
 
 
+def _cleanup_expired_narrative_cache_rows(limit: int | None = None) -> int:
+    """Delete expired narrative cache rows in one narrow hygiene sweep."""
+    from datetime import datetime, timezone
+    from db_connection import get_connection
+
+    conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+    try:
+        rows = conn.execute(
+            "SELECT match_id, expires_at FROM narrative_cache ORDER BY expires_at ASC"
+        ).fetchall()
+        now = datetime.now(timezone.utc)
+        expired_ids: list[str] = []
+        for match_id, expires_at in rows:
+            try:
+                exp = datetime.fromisoformat(expires_at)
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                expired_ids.append(match_id)
+                continue
+            if exp < now:
+                expired_ids.append(match_id)
+
+        if limit is not None:
+            expired_ids = expired_ids[:int(limit)]
+
+        if not expired_ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in expired_ids)
+        cur = conn.execute(
+            f"DELETE FROM narrative_cache WHERE match_id IN ({placeholders})",
+            expired_ids,
+        )
+        conn.commit()
+        return cur.rowcount if cur.rowcount is not None else len(expired_ids)
+    finally:
+        conn.close()
+
+
 def _compute_odds_hash(match_id: str) -> str:
     """Compute MD5 hash of current odds snapshot for staleness detection.
 
@@ -8655,20 +8734,22 @@ def _compute_odds_hash(match_id: str) -> str:
 async def _get_cached_narrative(match_id: str) -> dict | None:
     """Fetch cached narrative from persistent DB cache. Returns None if stale/expired."""
     import json
+    import sqlite3
     from datetime import datetime, timezone
     from db_connection import get_connection
 
     def _fetch():
-        conn = get_connection(_NARRATIVE_DB_PATH)
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
         try:
             row = conn.execute(
-                "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at "
+                "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
+                "evidence_json, narrative_source "
                 "FROM narrative_cache WHERE match_id = ?",
                 (match_id,),
             ).fetchone()
             if not row:
                 return None
-            html, model, tier, tips_json, stored_hash, expires_at = row
+            html, model, tier, tips_json, stored_hash, expires_at, evidence_json, narrative_source = row
             # Check TTL
             try:
                 exp = datetime.fromisoformat(expires_at)
@@ -8679,15 +8760,62 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
             except (ValueError, TypeError):
                 return None
             cleaned = _final_polish(_sanitise_jargon(_strip_preamble(html)))
+            parsed_tips = json.loads(tips_json)
+            stale_setup_reasons = _find_stale_setup_patterns(cleaned)
+            if stale_setup_reasons:
+                log.warning(
+                    "Rejecting cached narrative for %s — stale Setup cache: %s",
+                    match_id,
+                    ", ".join(stale_setup_reasons),
+                )
+                try:
+                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.commit()
+                except sqlite3.OperationalError as exc:
+                    log.debug("Deferred stale Setup cache delete for %s: %s", match_id, exc)
+                return None
+            if _has_stale_setup_context_claims(cleaned, evidence_json):
+                log.warning(
+                    "Rejecting cached narrative for %s — stale Setup context claims",
+                    match_id,
+                )
+                try:
+                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.commit()
+                except sqlite3.OperationalError as exc:
+                    log.debug("Deferred stale context cache delete for %s: %s", match_id, exc)
+                return None
             # W84-Q3: Reject cached narratives containing legacy banned phrases
             if _has_banned_patterns(cleaned):
                 log.warning("Rejecting cached narrative for %s — contains banned phrases", match_id)
+                try:
+                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.commit()
+                except sqlite3.OperationalError as exc:
+                    log.debug("Deferred banned cache delete for %s: %s", match_id, exc)
+                return None
+            if _has_empty_sections(cleaned):
+                log.warning("Rejecting cached narrative for %s — contains empty section", match_id)
+                try:
+                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.commit()
+                except sqlite3.OperationalError as exc:
+                    log.debug("Deferred empty-section cache delete for %s: %s", match_id, exc)
+                return None
+            if _has_stale_h2h_summary(cleaned, parsed_tips, evidence_json):
+                log.warning("Rejecting cached narrative for %s — stale H2H summary mismatch", match_id)
+                try:
+                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.commit()
+                except sqlite3.OperationalError as exc:
+                    log.debug("Deferred stale H2H cache delete for %s: %s", match_id, exc)
                 return None
             return {
                 "html": cleaned,
-                "tips": json.loads(tips_json),
+                "tips": parsed_tips,
                 "edge_tier": tier,
                 "model": model,
+                "narrative_source": narrative_source or "w82",
             }
         finally:
             conn.close()
@@ -8696,7 +8824,13 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
 
 
 async def _store_narrative_cache(
-    match_id: str, html: str, tips: list, edge_tier: str, model: str
+    match_id: str,
+    html: str,
+    tips: list,
+    edge_tier: str,
+    model: str,
+    evidence_json: str | None = None,
+    narrative_source: str = "w82",
 ) -> None:
     """Persist narrative to DB cache with 6hr TTL.
 
@@ -8723,11 +8857,14 @@ async def _store_narrative_cache(
             conn.execute(
                 "INSERT OR REPLACE INTO narrative_cache "
                 "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
-                "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "evidence_json, narrative_source, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     match_id, html, model, edge_tier,
                     json.dumps(tips, default=str),
                     odds_hash,
+                    evidence_json,
+                    narrative_source,
                     now.isoformat(),
                     expires.isoformat(),
                 ),
@@ -8743,6 +8880,91 @@ async def _store_narrative_cache(
             conn.close()
 
     await asyncio.to_thread(_store)
+
+
+async def _store_narrative_evidence(match_id: str, evidence_json: str) -> bool:
+    """Best-effort update of evidence_json for an existing narrative cache row."""
+    import sqlite3
+    from db_connection import get_connection
+
+    def _store() -> bool:
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+        try:
+            cur = conn.execute(
+                "UPDATE narrative_cache SET evidence_json = ? WHERE match_id = ?",
+                (evidence_json, match_id),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                log.debug("Narrative evidence persist deferred (DB contention) for %s: %s", match_id, e)
+                return False
+            log.warning("Narrative evidence persist failed for %s: %s", match_id, e)
+            return False
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_store)
+
+
+async def _store_shadow_narrative(
+    *,
+    match_key: str,
+    evidence_json: str,
+    prompt_text: str,
+    raw_draft: str,
+    verified_draft: str | None,
+    verification_report: str,
+    verification_passed: bool,
+    w82_baseline: str,
+    w82_polished: str | None,
+    richness_score: str,
+    model: str,
+    duration_ms: int | None = None,
+    token_count: int | None = None,
+) -> bool:
+    """Persist a shadow narrative row. Shadow failures never affect live serving."""
+    import sqlite3
+    from db_connection import get_connection
+
+    def _store() -> bool:
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+        try:
+            conn.execute(
+                "INSERT INTO shadow_narratives ("
+                "match_key, evidence_json, prompt_text, raw_draft, verified_draft, "
+                "verification_report, verification_passed, w82_baseline, w82_polished, "
+                "richness_score, model, duration_ms, token_count"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    match_key,
+                    evidence_json,
+                    prompt_text,
+                    raw_draft,
+                    verified_draft,
+                    verification_report,
+                    int(bool(verification_passed)),
+                    w82_baseline,
+                    w82_polished,
+                    richness_score,
+                    model,
+                    duration_ms,
+                    token_count,
+                ),
+            )
+            conn.commit()
+            return True
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                log.debug("Shadow narrative persist deferred (DB contention) for %s: %s", match_key, e)
+                return False
+            log.warning("Shadow narrative persist failed for %s: %s", match_key, e)
+            return False
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_store)
 
 
 # ── W44-GUARDS: Pre-send validation constants ──────────────
@@ -9233,16 +9455,141 @@ BANNED_NARRATIVE_PHRASES = [
     "worth backing",
 ]
 
-
 _INJURY_FETCH_LOOKBACK_DAYS = 2
 _INJURY_NARRATIVE_MAX_AGE_DAYS = 21
 
+_SETUP_SECTION_RE = re.compile(
+    r'📋\s*(?:<b>)?The Setup(?:</b>)?\s*(.*?)(?=\n\s*[🎯⚠️🏆]\s*(?:<b>)?(?:The Edge|The Risk|Verdict)(?:</b>)?|\Z)',
+    re.IGNORECASE | re.DOTALL,
+)
+_SETUP_STALE_BOOKMAKER_RE = re.compile(
+    r"\b(?:gbets|hollywoodbets|supabets|betway|sportingbet|wsb|playabets|supersportbet|world sports betting)\b",
+    re.IGNORECASE,
+)
+_SETUP_STALE_DECIMAL_RE = re.compile(r"\b\d+\.\d{1,2}\b")
+_SETUP_STALE_PRICE_CUE_RE = re.compile(
+    r"\b(?:expected value|fair value|fair probability|implied probability|implied chance|model reads|bookmaker|odds|price|priced|implied)\b",
+    re.IGNORECASE,
+)
+_SETUP_STALE_PRICE_NUMBER_RE = re.compile(
+    r"\b(?:the|at|on)\s+\d+\.\d{1,2}\b",
+    re.IGNORECASE,
+)
+_SETUP_STALE_APOLOGY_PHRASES = (
+    "limited context available",
+    "for what it's worth",
+    "without a strong recent record to lean on",
+    "limited context to work with",
+)
+_SETUP_STALE_PROBABILITY_PHRASES = (
+    "expected value",
+    "fair probability",
+    "fair value",
+    "implied probability",
+    "implied chance",
+    "model reads",
+)
 _H2H_SECTION_RE = re.compile(r"Head to head:\s*([^\n]+)", re.IGNORECASE)
 _H2H_REFERENCE_RE = re.compile(
-    r"\b(?:head\s+to\s+head|last\s+meeting|last\s+met|meetings?\b|h2h\b)",
+    r"\b(?:"
+    r"head[\s-]+to[\s-]+head|"
+    r"last\s+meeting|"
+    r"last\s+met|"
+    r"met\s+\d+\s+times|"
+    r"\d+\s+meetings?\b|"
+    r"(?:recent|previous|past|last)\s+meetings?\b|"
+    r"between\s+(?:these|the)\s+(?:sides|teams)|"
+    r"history\s+between|"
+    r"record\s+against|"
+    r"h2h\b"
+    r")",
     re.IGNORECASE,
 )
 _H2H_RECORD_RE = re.compile(r"\b\d+W\b.*\b\d+D\b.*\b\d+L\b", re.IGNORECASE)
+_H2H_STREAK_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"head[\s-]+to[\s-]+head|"
+    r"h2h|"
+    r"last\s+meeting|"
+    r"last\s+met|"
+    r"met\s+\d+\s+times|"
+    r"\d+\s+meetings?\b|"
+    r"(?:recent|previous|past|last)\s+meetings?\b|"
+    r"between\s+(?:these|the)\s+(?:sides|teams)|"
+    r"history\s+between|"
+    r"record\s+against"
+    r")\b",
+    re.IGNORECASE,
+)
+_H2H_STREAK_IMPLICATION_RE = re.compile(
+    r"\b(?:straight|consecutive)\s+(?:draws|wins|losses)\b|\b(?:draws?|wins?|losses?)\s+on\s+the\s+bounce\b",
+    re.IGNORECASE,
+)
+_H2H_ABSENCE_RE = re.compile(
+    r"\b(?:"
+    r"no\s+(?:verified\s+)?(?:head[\s-]+to[\s-]+head|h2h)\s+(?:history|data)(?:\s+available)?|"
+    r"without\s+(?:verified\s+)?(?:head[\s-]+to[\s-]+head|h2h)\s+(?:history|data)|"
+    r"missing\s+(?:verified\s+)?(?:head[\s-]+to[\s-]+head|h2h)\s+(?:history|data)|"
+    r"no\s+(?:verified\s+)?(?:head[\s-]+to[\s-]+head|h2h)\s+block(?:\s+available)?|"
+    r"without\s+(?:verified\s+)?(?:head[\s-]+to[\s-]+head|h2h)\s+block|"
+    r"without\s+verified\s+h2h\s+history|"
+    r"missing\s+(?:recent\s+)?meeting\s+data|"
+    r"(?:recent\s+)?meeting\s+data\s+(?:is\s+)?(?:missing|unavailable|not\s+verified)|"
+    r"no\s+(?:verified\s+)?meeting\s+history|"
+    r"flying\s+blind\s+on\s+(?:recent\s+)?meetings?|"
+    r"(?:history|meeting\s+data)\s+(?:is\s+)?(?:unavailable|not\s+verified)"
+    r")\b",
+    re.IGNORECASE,
+)
+_SETUP_CONTEXT_MAX_STALE_MINUTES = 48 * 60
+_STALE_SETUP_CONTEXT_RE = re.compile(
+    r"\b(?:form reads?|recent form|this season|mid-table|table|fortress|level is rising|showing signs of life|rough patch|bounce-back|trending up|title case|relegation)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_setup_section(narrative: str) -> str:
+    """Return the Setup section body from a rendered narrative, if present."""
+    if not narrative:
+        return ""
+    match = _SETUP_SECTION_RE.search(narrative)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _find_stale_setup_patterns(narrative: str) -> list[str]:
+    """Return targeted stale-Setup reasons found in a cached narrative."""
+    setup = _extract_setup_section(narrative)
+    if not setup:
+        return []
+
+    setup_plain = re.sub(r"<[^>]+>", " ", setup)
+    setup_plain = re.sub(r"\s+", " ", setup_plain).strip()
+    setup_lower = setup_plain.lower()
+    reasons: list[str] = []
+
+    if _SETUP_STALE_BOOKMAKER_RE.search(setup_plain):
+        reasons.append("bookmaker_in_setup")
+
+    if any(phrase in setup_lower for phrase in _SETUP_STALE_PROBABILITY_PHRASES):
+        reasons.append("pricing_language_in_setup")
+
+    if any(phrase in setup_lower for phrase in _SETUP_STALE_APOLOGY_PHRASES):
+        reasons.append("apology_language_in_setup")
+
+    has_decimal = _SETUP_STALE_DECIMAL_RE.search(setup_plain)
+    has_price_context = (
+        _SETUP_STALE_BOOKMAKER_RE.search(setup_plain)
+        or _SETUP_STALE_PRICE_CUE_RE.search(setup_plain)
+        or _SETUP_STALE_PRICE_NUMBER_RE.search(setup_plain)
+    )
+    is_metric_phrase = re.search(r"\b(?:goals?|points?|runs?)\s+per\s+game\b|\bper\s+game\b", setup_plain, re.IGNORECASE)
+    if has_decimal and has_price_context and not is_metric_phrase:
+        reasons.append("odds_in_setup")
+
+    # Preserve reason order while collapsing overlaps.
+    return list(dict.fromkeys(reasons))
 
 
 def _extract_rendered_h2h_summary(narrative: str) -> str:
@@ -9255,29 +9602,113 @@ def _extract_rendered_h2h_summary(narrative: str) -> str:
     return match.group(1).strip().rstrip(".")
 
 
+def _plain_narrative_text(narrative: str) -> str:
+    """Collapse rendered HTML narrative into plain text for guardrail checks."""
+    if not narrative:
+        return ""
+    plain = re.sub(r"<[^>]+>", " ", narrative)
+    return re.sub(r"\s+", " ", plain).strip()
+
+
 def _contains_h2h_claim(narrative: str) -> bool:
     """Return True when narrative contains any H2H-style prose."""
     if not narrative:
         return False
-    plain = re.sub(r"<[^>]+>", " ", narrative)
-    plain = re.sub(r"\s+", " ", plain).strip()
-    if _H2H_REFERENCE_RE.search(plain):
+    plain = _plain_narrative_text(narrative)
+    chunks = [
+        chunk.strip()
+        for chunk in re.split(r"[\n\r]+|(?<=[.!?])\s+", plain)
+        if chunk.strip()
+    ]
+    for chunk in chunks:
+        if _H2H_ABSENCE_RE.search(chunk):
+            continue
+        if _H2H_REFERENCE_RE.search(chunk):
+            return True
+        if _H2H_STREAK_IMPLICATION_RE.search(chunk) and _H2H_STREAK_CONTEXT_RE.search(chunk):
+            return True
+        lower_chunk = chunk.lower()
+        if _H2H_RECORD_RE.search(chunk) and (
+            re.search(r"\b(?:head[\s-]+to[\s-]+head|h2h)\b", lower_chunk)
+            or re.search(r"\b(?:\d+\s+meetings?|recent\s+meetings?|last\s+meeting)\b", lower_chunk)
+        ):
+            return True
+    return False
+
+
+def _strip_verified_h2h_line(narrative: str, expected_summary: str) -> str:
+    """Remove the exact verified labelled H2H line so leftovers can be checked."""
+    if not narrative or not expected_summary:
+        return narrative
+    pattern = re.compile(
+        rf"Head to head:\s*{re.escape(expected_summary)}\.?",
+        re.IGNORECASE,
+    )
+    return pattern.sub(" ", narrative)
+
+
+def _has_unverified_h2h_claim(narrative: str, expected_summary: str) -> bool:
+    """Return True when H2H copy appears outside the exact verified summary."""
+    expected = (expected_summary or "").strip().rstrip(".")
+    rendered = _extract_rendered_h2h_summary(narrative)
+    if rendered:
+        if not expected or rendered != expected:
+            return True
+    residual = _strip_verified_h2h_line(_plain_narrative_text(narrative), expected)
+    return _contains_h2h_claim(residual)
+
+
+def _setup_contains_form_or_team_state_claim(narrative: str) -> bool:
+    """Return True when Setup asserts form, trend, or current season state."""
+    setup = _extract_setup_section(narrative)
+    if not setup:
+        return False
+    setup_plain = _plain_narrative_text(setup)
+    if _CLAIM_FORM_RE.search(setup_plain):
         return True
-    return bool(_H2H_RECORD_RE.search(plain) and "meeting" in plain.lower())
+    if re.search(r"\b[WDL]{3,6}\b", setup_plain):
+        return True
+    if _CLAIM_POS_RE.search(setup_plain):
+        return True
+    if re.search(r"\b\d+(?:st|nd|rd|th)\b.*\bpoints?\b", setup_plain, re.IGNORECASE):
+        return True
+    return bool(_STALE_SETUP_CONTEXT_RE.search(setup_plain))
+
+
+def _extract_cached_espn_stale_minutes(evidence_json: str | None) -> float | None:
+    """Return cached ESPN context age in minutes when evidence metadata is present."""
+    if not evidence_json:
+        return None
+    try:
+        payload = json.loads(evidence_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    espn_context = payload.get("espn_context") or {}
+    provenance = espn_context.get("provenance") or {}
+    stale_minutes = provenance.get("stale_minutes")
+    try:
+        return float(stale_minutes)
+    except (TypeError, ValueError):
+        fetched_at = provenance.get("fetched_at")
+        fetched_dt = _parse_narrative_timestamp(fetched_at)
+        if not fetched_dt:
+            return None
+        from datetime import datetime, timezone
+        return max(0.0, (datetime.now(timezone.utc) - fetched_dt).total_seconds() / 60.0)
+
+
+def _has_stale_setup_context_claims(narrative: str, evidence_json: str | None) -> bool:
+    """Invalidate cached narratives that still lean on stale Setup form/state copy."""
+    stale_minutes = _extract_cached_espn_stale_minutes(evidence_json)
+    if stale_minutes is None or stale_minutes <= _SETUP_CONTEXT_MAX_STALE_MINUTES:
+        return False
+    return _setup_contains_form_or_team_state_claim(narrative)
 
 
 def _is_h2h_polish_safe(polished: str, spec) -> bool:
     """Return True when polished H2H copy matches verified spec data or is omitted."""
     expected = (getattr(spec, "h2h_summary", "") or "").strip().rstrip(".")
-    rendered = _extract_rendered_h2h_summary(polished)
-
-    if rendered:
-        return bool(expected) and rendered == expected
-
-    if not _contains_h2h_claim(polished):
-        return True
-
-    return False
+    return not _has_unverified_h2h_claim(polished, expected)
 
 
 def _parse_narrative_timestamp(value: str | None):
@@ -9337,10 +9768,120 @@ def _is_injury_record_current_for_narrative(
     return (now - fixture_dt) <= max_age
 
 
+def _expected_h2h_summary_from_evidence(evidence_json: str | None) -> str:
+    """Build the expected H2H summary from evidence_json when available."""
+    if not evidence_json:
+        return ""
+    try:
+        payload = json.loads(evidence_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
+
+    h2h_block = payload.get("h2h") or {}
+    summary_text = str(h2h_block.get("summary_text") or "").strip()
+    if not summary_text:
+        return ""
+
+    matches = h2h_block.get("matches") or []
+    latest_score = ""
+    if matches:
+        latest_score = str((matches[0] or {}).get("score") or "").strip()
+
+    expected = summary_text
+    if latest_score:
+        expected += f", and the last meeting finished {latest_score}"
+    return expected.rstrip(".")
+
+
+def _expected_h2h_summary_from_tips(tips: list[dict] | None) -> str:
+    """Build the expected H2H summary from source values in tips_json."""
+    if not tips:
+        return ""
+    from narrative_spec import _build_h2h_summary  # type: ignore[import]
+
+    home_team, away_team = _extract_teams_from_tips(tips, "", "")
+    edge_data = _extract_edge_data(tips, home_team, away_team)
+    summary = _build_h2h_summary({}, edge_data, home_team)
+    return summary.strip().rstrip(".")
+
+
+def _has_stale_h2h_summary(
+    narrative: str,
+    tips: list[dict] | None,
+    evidence_json: str | None = None,
+) -> bool:
+    """Return True when a cached H2H line disagrees with current source counts.
+
+    When evidence_json is stored alongside the narrative and the rendered H2H
+    line matches the expected summary from that evidence, the narrative is
+    authoritative — skip the residual scan to prevent rejection loops for
+    same-day matches where LLM prose may contain H2H-adjacent language.
+    """
+    evidence_expected = _expected_h2h_summary_from_evidence(evidence_json)
+    if evidence_expected:
+        rendered = _extract_rendered_h2h_summary(narrative)
+        # Evidence is stored with the narrative — if the injected H2H line
+        # matches the evidence, the narrative is consistent. No loop.
+        if rendered and rendered.rstrip(".") == evidence_expected.rstrip("."):
+            return False
+        # If rendered H2H exists but disagrees with stored evidence, stale.
+        if rendered:
+            return True
+        # No rendered H2H line but evidence says there should be one — not stale
+        # (the narrative may legitimately omit H2H if injection was skipped).
+        return False
+    # No stored evidence — fall back to tips-based comparison.
+    expected = _expected_h2h_summary_from_tips(tips)
+    return _has_unverified_h2h_claim(narrative, expected)
+
+
 def _has_banned_patterns(narrative: str) -> bool:
     """Return True if narrative contains any generic filler phrase."""
     lower = narrative.lower()
     return any(phrase in lower for phrase in BANNED_NARRATIVE_PHRASES)
+
+
+def _invalidate_stale_setup_cache_entries(
+    match_ids: list[str] | None = None,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, object]]:
+    """Delete cached narratives whose Setup section still contains legacy banned copy."""
+    import sqlite3
+    from db_connection import get_connection
+
+    conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+    try:
+        sql = "SELECT match_id, narrative_html FROM narrative_cache"
+        params: list[object] = []
+        if match_ids:
+            placeholders = ",".join("?" for _ in match_ids)
+            sql += f" WHERE match_id IN ({placeholders})"
+            params.extend(match_ids)
+        sql += " ORDER BY created_at DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+
+        rows = conn.execute(sql, params).fetchall()
+        invalidated: list[dict[str, object]] = []
+        for match_id, narrative_html in rows:
+            cleaned = _final_polish(_sanitise_jargon(_strip_preamble(narrative_html)))
+            reasons = _find_stale_setup_patterns(cleaned)
+            if not reasons:
+                continue
+            try:
+                conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+            except sqlite3.OperationalError as exc:
+                log.warning("Stale Setup cache delete deferred for %s: %s", match_id, exc)
+                continue
+            invalidated.append({"match_id": match_id, "reasons": reasons})
+
+        if invalidated:
+            conn.commit()
+        return invalidated
+    finally:
+        conn.close()
 
 
 # W64-VERDICT: stale-rush urgency phrases for contradiction detection
@@ -10086,8 +10627,34 @@ def _ensure_risk_not_empty(
     return output
 
 
-
-# W79-PHASE2: _ensure_verdict_not_empty removed — code-built Verdict always populated
+def _ensure_verdict_not_empty(
+    output: str,
+    tips: list[dict] | None = None,
+    home_name: str = "",
+    away_name: str = "",
+) -> str:
+    """Inject signal-built Verdict text if the Verdict section is empty."""
+    if not output or "🏆" not in output:
+        return output
+    try:
+        verdict_start = output.index("🏆")
+        verdict_chunk = output[verdict_start:].strip()
+        clean_content = re.sub(r"<[^>]+>", "", verdict_chunk).strip()
+        if len(clean_content) >= 30:
+            return output
+        fallback = _build_verdict_from_signals_v2(
+            tips,
+            home_name=home_name,
+            away_name=away_name,
+        )
+        if not fallback:
+            return output
+        header_end = output.find("\n", verdict_start)
+        if header_end == -1:
+            return f"{output}\n{fallback}".strip()
+        return output[:header_end + 1] + fallback
+    except (ValueError, IndexError):
+        return output
 
 
 def _has_empty_sections(narrative: str) -> bool:
@@ -10311,20 +10878,7 @@ def build_verified_narrative(
                 form = form[:gp]
             last5 = team.get("last_5", [])
             form_interp = _interpret_form(form)
-            if form and last5:
-                latest = last5[0]
-                opp = latest.get("opponent", "")
-                score = latest.get("score", "")
-                result = latest.get("result", "")
-                loc = "at home" if latest.get("home_away") == "home" else "away"
-                if score and opp:
-                    result_verb = {"W": "beating", "L": "losing to", "D": "drawing with"}.get(result, "facing")
-                    setup.append(
-                        f"Form reads {form} {form_interp}, last time out {result_verb} {opp} {score} {loc}."
-                    )
-                else:
-                    setup.append(f"Recent form reads {form} {form_interp}.")
-            elif form:
+            if form:
                 setup.append(f"Recent form reads {form} {form_interp}.")
 
             # Sentence: top scorer + scoring rate (sport-appropriate)
@@ -10558,7 +11112,7 @@ def build_verified_narrative(
         _odds = best.get("odds", 0)
         _outcome = best.get("outcome", "?")
         _v2 = best.get("edge_v2") or {}
-        _edge_pct = _v2.get("edge_pct", ev) if _v2 else ev
+        _edge_pct = _normalise_edge_pct_contract(ev, _v2.get("edge_pct", 0) if _v2 else None)
         _sharp_src = _v2.get("sharp_source", "consensus") if _v2 else "consensus"
         _confirming = _v2.get("confirming_signals", 0) if _v2 else 0
         if ev > 2:
@@ -11153,18 +11707,7 @@ def _build_setup_section_v2(ctx_data: dict, tips: list[dict] | None = None,
     away_name = away.get("name", "Away")
 
     def _format_last_result(team: dict) -> str:
-        last5 = team.get("last_5", [])
-        if not last5:
-            return ""
-        latest = last5[0]
-        result = latest.get("result", "")
-        opp = latest.get("opponent", "")
-        score = latest.get("score", "")
-        loc = "at home" if latest.get("home_away") == "home" else "away"
-        if not (result and opp and score):
-            return ""
-        verb = {"W": "beating", "L": "losing to", "D": "drawing with"}.get(result, "facing")
-        return f"{verb} {opp} {score} {loc}"
+        return ""
 
     def _format_record(team: dict, is_home: bool) -> str:
         rec = team.get("home_record" if is_home else "away_record")
@@ -11481,6 +12024,12 @@ def _final_polish(text: str, edge_data: dict | None = None) -> str:
     text = re.sub(r'\b(However|But|And|Yet|So), the,', r'\1,', text)
     # Strip orphaned leading commas/periods at start of lines
     text = re.sub(r'(?m)^\s*[,;]\s+', '', text)
+    text = re.sub(
+        r"it doesn't change the core (?:argument|math|case)\.?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
 
     # Clean up multiple newlines (keep max 2)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -11612,8 +12161,62 @@ def _build_risk_from_signals(
 
 # ── W81-FACTCHECK: Verified Injury Data ──
 
+_INJURY_TEAM_SUFFIX_TOKENS = {
+    "afc", "athletic", "cf", "city", "club", "fc", "hotspur", "rover", "rovers",
+    "sc", "town", "united", "wanderers",
+}
 
-def get_verified_injuries(home: str, away: str) -> dict:
+
+def _injury_normalise_team(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _injury_team_base_tokens(value: str) -> list[str]:
+    tokens = [token for token in _injury_normalise_team(value).split() if token]
+    if len(tokens) > 1 and tokens[-1] in _INJURY_TEAM_SUFFIX_TOKENS:
+        return tokens[:-1]
+    return tokens
+
+
+def _injury_team_matches(row_team: str, requested_team: str) -> bool:
+    row_norm = _injury_normalise_team(row_team)
+    req_norm = _injury_normalise_team(requested_team)
+    if not row_norm or not req_norm:
+        return False
+    if row_norm == req_norm:
+        return True
+
+    row_base = [token for token in _injury_team_base_tokens(row_team) if token]
+    req_base = [token for token in _injury_team_base_tokens(requested_team) if token]
+    if row_base and req_base and row_base == req_base:
+        return True
+    if len(req_base) == 1:
+        return len(row_base) == 1 and row_base[0] == req_base[0]
+    if req_base and " ".join(req_base) == row_norm:
+        return True
+    if row_base and " ".join(row_base) == req_norm:
+        return True
+    return False
+
+
+def _injury_league_matches_sport(league: str, sport: str | None) -> bool:
+    if not sport:
+        return True
+    league_key = str(league or "").strip().lower()
+    return (
+        config.LEAGUE_SPORT.get(league_key) == sport
+        or _DB_LEAGUE_SPORT.get(league_key) == sport
+    )
+
+
+def get_verified_injuries(
+    home: str,
+    away: str,
+    *,
+    sport: str | None = None,
+    league: str | None = None,
+    db_path: str | None = None,
+) -> dict:
     """Fetch confirmed/questionable absences from team_injuries table.
 
     Returns {"home": ["Name (Status)", ...], "away": [...]} strings.
@@ -11624,22 +12227,26 @@ def get_verified_injuries(home: str, away: str) -> dict:
     """
     try:
         from db_connection import get_connection as _get_conn
-        conn = _get_conn(_NARRATIVE_DB_PATH)
+        conn = _get_conn(db_path or _NARRATIVE_DB_PATH)
         result: dict[str, list[str]] = {}
         for side, team in (("home", home), ("away", away)):
             if not team:
                 result[side] = []
                 continue
             rows = conn.execute(
-                "SELECT player_name, injury_status, fixture_date, fetched_at FROM team_injuries "
-                "WHERE LOWER(team) LIKE ? "
-                "AND injury_status NOT IN ('Missing Fixture', 'Unknown') "
-                "ORDER BY fetched_at DESC, fixture_date DESC, player_name ASC",
-                (f"%{team.lower().replace(' ', '%')}%",),
+                "SELECT league, team, player_name, injury_status, fixture_date, fetched_at FROM team_injuries "
+                "WHERE injury_status NOT IN ('Missing Fixture', 'Unknown') "
+                "ORDER BY fetched_at DESC, fixture_date DESC, player_name ASC"
             ).fetchall()
             seen_players: set[str] = set()
             safe_rows: list[str] = []
-            for player_name, injury_status, fixture_date, fetched_at in rows:
+            for row_league, row_team, player_name, injury_status, fixture_date, fetched_at in rows:
+                if league and str(row_league or "").strip().lower() != str(league or "").strip().lower():
+                    continue
+                if not _injury_league_matches_sport(str(row_league or ""), sport):
+                    continue
+                if not _injury_team_matches(str(row_team or ""), team):
+                    continue
                 player_key = str(player_name or "").strip().lower()
                 if not player_key or player_key in seen_players:
                     continue
@@ -11652,6 +12259,60 @@ def get_verified_injuries(home: str, away: str) -> dict:
         return result
     except Exception:
         return {"home": [], "away": []}
+
+
+def _format_verified_injuries_for_narrative(
+    home: str,
+    away: str,
+    *,
+    sport: str | None = None,
+    league: str | None = None,
+    db_path: str | None = None,
+) -> str:
+    injuries = get_verified_injuries(
+        home,
+        away,
+        sport=sport,
+        league=league,
+        db_path=db_path,
+    )
+    lines: list[str] = []
+    for side, team in (("home", home), ("away", away)):
+        entries = [entry for entry in (injuries.get(side) or []) if entry]
+        label = str(team or "").strip() or side
+        if entries:
+            lines.append(f"{label}: {', '.join(entries)}")
+        else:
+            lines.append(f"{label}: No current injuries or absences.")
+    return "\n".join(lines)
+
+
+def _format_routed_injuries_for_narrative(
+    match_key: str,
+    home: str,
+    away: str,
+    *,
+    sport: str | None = None,
+    league: str | None = None,
+    db_path: str | None = None,
+) -> str:
+    league_key = str(league or "").strip().lower()
+    if sport == "soccer" and league_key == "psl" and str(match_key or "").strip():
+        try:
+            from scrapers.news.news_helper import format_injuries_for_narrative
+
+            text = format_injuries_for_narrative(match_key, db_path=db_path or _NARRATIVE_DB_PATH)
+            if text:
+                return text
+        except Exception:
+            pass
+    return _format_verified_injuries_for_narrative(
+        home,
+        away,
+        sport=sport,
+        league=league,
+        db_path=db_path,
+    )
 
 
 # ── W79-PHASE2: Focused AI Prompt (Edge + Risk ONLY) ──
@@ -12073,19 +12734,8 @@ def _decide_team_story(
 
 
 def _scaffold_last_result(team: dict) -> str:
-    """Format the most recent result for scaffold output."""
-    last5 = team.get("last_5", [])
-    if not last5:
-        return ""
-    latest = last5[0]
-    result = latest.get("result", "")
-    opp = latest.get("opponent", "")
-    score = latest.get("score", "")
-    loc = "at home" if latest.get("home_away") == "home" else "away"
-    if not (result and opp and score):
-        return ""
-    verb = {"W": "beating", "L": "losing to", "D": "drawing with"}.get(result, "facing")
-    return f"{verb} {opp} {score} {loc}"
+    """Recent-result prose is disabled unless a stricter verified source exists."""
+    return ""
 
 
 def _build_verified_scaffold(ctx: dict, edge_data: dict, sport: str) -> str:
@@ -12242,10 +12892,38 @@ def _extract_teams_from_tips(
             parts = mk.rsplit("_", 1)[0]  # strip date suffix
             if "_vs_" in parts:
                 h_raw, a_raw = parts.split("_vs_", 1)
-                home_team = home_team or h_raw.replace("_", " ").title()
-                away_team = away_team or a_raw.replace("_", " ").title()
+                home_team = home_team or _display_team_name(h_raw)
+                away_team = away_team or _display_team_name(a_raw)
                 break
     return home_team, away_team
+
+
+def _normalise_edge_pct_contract(
+    primary_value: float | int | str | None,
+    fallback_value: float | int | str | None = None,
+) -> float:
+    """Return edge_pct in percentage points, repairing decimal-vs-percent mismatches."""
+
+    def _coerce(value) -> float | None:
+        if value in ("", None):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    primary = _coerce(primary_value)
+    fallback = _coerce(fallback_value)
+
+    if primary is None:
+        return fallback or 0.0
+    if fallback is None:
+        return primary
+    if primary and abs(primary) < 1 and abs(fallback) >= 1:
+        ratio = abs(fallback / primary)
+        if 50 <= ratio <= 150:
+            return fallback
+    return primary
 
 
 def _extract_edge_data(
@@ -12258,6 +12936,8 @@ def _extract_edge_data(
     W82-WIRE: returns same shape as _edge_data_scaffold so
     build_narrative_spec() receives all required fields.
     """
+    home_team = _display_team_name(home_team) if home_team else ""
+    away_team = _display_team_name(away_team) if away_team else ""
     if not tips:
         return {"home_team": home_team, "away_team": away_team}
     best = max(tips, key=lambda t: t.get("ev", 0))
@@ -12274,17 +12954,22 @@ def _extract_edge_data(
     # This ensures zero-EV tips render the pass verdict, not a speculative punt.
     _consensus_ev = best.get("ev")   # None if key absent; 0.0 if explicitly zero
     _v2_ev = v2.get("edge_pct", 0)
+    _display_ev = _normalise_edge_pct_contract(_consensus_ev, _v2_ev)
     # Consensus prob as 0-1 decimal (tip stores as integer percentage, e.g. 4 → 0.04)
     _raw_prob = best.get("prob", 0)
     # W84-P1D: When edge_v2 is absent (edge_results fast path), estimate confirming_signals
     # from composite_score so narrative quality matches the displayed tier badge.
     # Bronze(<40)→0, Silver(40-54)→1, Gold(55-69)→2, Diamond(70+)→3
     _cs = best.get("edge_score", 0) or 0
+    h2h_signal = sigs.get("form_h2h", {}) if isinstance(sigs.get("form_h2h"), dict) else {}
+    tipster_signal = sigs.get("tipster", {}) if isinstance(sigs.get("tipster"), dict) else {}
     if v2:
         _confirming = v2.get("confirming_signals", 0)
+        _contradicting = v2.get("contradicting_signals", 0)
         _comp_score = v2.get("composite_score", 0)
     else:
         _confirming = 3 if _cs >= 70 else 2 if _cs >= 55 else 1 if _cs >= 40 else 0
+        _contradicting = 0
         _comp_score = _cs
     return {
         "home_team": home_team,
@@ -12292,11 +12977,12 @@ def _extract_edge_data(
         "league": v2.get("league", "") or best.get("league", ""),
         "best_bookmaker": best.get("bookmaker", best.get("bookie", "?")),
         "best_odds": best.get("odds", 0),
-        "edge_pct": _consensus_ev if _consensus_ev is not None else _v2_ev,
+        "edge_pct": _display_ev,
         "fair_prob": _raw_prob / 100.0 if _raw_prob else 0.0,
         "outcome": outcome_raw,
         "outcome_team": outcome_team,
         "confirming_signals": _confirming,
+        "contradicting_signals": _contradicting,
         "composite_score": _comp_score,
         "bookmaker_count": v2.get("bookmaker_count", 0),
         "market_agreement": (
@@ -12305,7 +12991,13 @@ def _extract_edge_data(
         ),
         "stale_minutes": v2.get("stale_minutes", 0),
         "movement_direction": sigs.get("movement", {}).get("direction", ""),
-        "tipster_against": sigs.get("tipster", {}).get("against_count", 0),
+        "tipster_against": tipster_signal.get("against_count", tipster_signal.get("against", 0)),
+        "tipster_agrees": tipster_signal.get("agrees_with_edge") if tipster_signal.get("available") else None,
+        "tipster_available": bool(tipster_signal.get("available")),
+        "h2h_total": h2h_signal.get("h2h_total"),
+        "h2h_a_wins": h2h_signal.get("h2h_a_wins"),
+        "h2h_b_wins": h2h_signal.get("h2h_b_wins"),
+        "h2h_draws": h2h_signal.get("h2h_draws"),
     }
 
 
@@ -12318,6 +13010,13 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
     band = TONE_BANDS[spec.tone_band]
     setup_examples = "\n\n".join(
         f'EXAMPLE: "{ex}"' for ex in exemplars.get("setup", [])[:2]
+    )
+    freshness_rule = (
+        "10. VERIFIED setup context is stale or not explicit enough for current form / season-state copy. "
+        "Do NOT add or strengthen claims about recent form, momentum, table position, points, home/away trend, "
+        "or 'this season' team state. Keep Setup neutral and evidence-bounded.\n"
+        if not getattr(spec, "context_is_fresh", True)
+        else ""
     )
     return (
         f"You are polishing a sports betting preview for MzansiEdge, a South African platform.\n\n"
@@ -12336,8 +13035,9 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         f"6. Follow the Observation-Evidence-Interpretation pattern in the Setup.\n"
         f"7. Start directly with 📋 <b>The Setup</b>. No preamble. No meta-commentary.\n"
         f"8. Keep all 4 section headers exactly: 📋 <b>The Setup</b>, 🎯 <b>The Edge</b>, ⚠️ <b>The Risk</b>, 🏆 <b>Verdict</b>\n"
-        f"9. If the baseline includes a 'Head to head:' line, keep that H2H sentence VERBATIM or delete it entirely. Do NOT rewrite H2H counts, last-meeting records, or W/D/L summaries. If the baseline has no H2H line, do NOT add H2H prose.\n"
-        f"10. Platform blacklist is enforced at validation time. Do NOT use banned filler such as: let that shape the stake, keeps the stake size measured, worth a measured look, grab it before.\n\n"
+        f"9. If the baseline includes a 'Head to head:' line, keep that H2H sentence VERBATIM or delete it entirely. Do NOT rewrite H2H counts, last-meeting records, or W/D/L summaries. If the baseline has no H2H line, do NOT add H2H prose anywhere else either.\n"
+        f"{freshness_rule}"
+        f"11. Platform blacklist is enforced at validation time. Do NOT use banned filler such as: let that shape the stake, keeps the stake size measured, worth a measured look, grab it before.\n\n"
         f"If you cannot improve the baseline without violating these constraints, return it UNCHANGED."
     )
 
@@ -12369,7 +13069,7 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
             log.warning("POLISH REJECT: missing section header %s", header)
             return False
 
-    # 3. Essential facts survived — team names
+    # 4. Essential facts survived — team names
     if spec.home_name and spec.home_name.lower().split()[0] not in polished_lower:
         log.warning("POLISH REJECT: home team '%s' missing", spec.home_name)
         return False
@@ -12388,6 +13088,11 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
     # 6. Verified H2H claims must survive unchanged or be omitted
     if not _is_h2h_polish_safe(polished, spec):
         log.warning("POLISH REJECT: H2H copy changed or introduced beyond verified spec")
+        return False
+
+    # 6b. Stale setup context must stay neutral — no fresh-form/team-state invention
+    if not getattr(spec, "context_is_fresh", True) and _setup_contains_form_or_team_state_claim(polished):
+        log.warning("POLISH REJECT: stale Setup context was upgraded into form/team-state claims")
         return False
 
     # 7. Speculative edge → no strong language
@@ -12440,6 +13145,12 @@ async def _generate_narrative_v2(
     baseline = _sanitise_jargon(baseline)
     baseline = _apply_sport_subs(baseline, sport)
     baseline = _final_polish(baseline, edge_data)
+    baseline = _ensure_verdict_not_empty(
+        baseline,
+        tips=tips,
+        home_name=spec.home_name,
+        away_name=spec.away_name,
+    )
 
     if live_tap:
         return baseline  # Instant. No LLM.
@@ -12463,6 +13174,12 @@ async def _generate_narrative_v2(
             polished = _sanitise_jargon(polished)
             polished = _apply_sport_subs(polished, sport)
             polished = _final_polish(polished, edge_data)
+            polished = _ensure_verdict_not_empty(
+                polished,
+                tips=tips,
+                home_name=spec.home_name,
+                away_name=spec.away_name,
+            )
             return polished
         else:
             log.warning("POLISH FAIL for %s — serving baseline", _match_label)
@@ -12998,7 +13715,7 @@ def fact_check_output(
                     "orlando pirates", "kaizer chiefs",
                     "cape town city", "golden arrows",
                     "royal pari", "santos laguna",
-                    "eden gardens", "lord cricket",
+                    "lord cricket",
                     # National team nicknames
                     "black caps", "proteas", "baggy greens",
                     "spring boks", "springboks", "all blacks",
@@ -13007,13 +13724,22 @@ def fact_check_output(
                     "blue bulls", "golden lions", "free state",
                     # Famous venues / stadiums
                     "old trafford", "anfield", "stamford bridge",
-                    "emirates stadium", "etihad stadium", "elland road",
+                    "emirates stadium", "emirates", "etihad stadium",
+                    "elland road", "selhurst park", "city ground",
                     "villa park", "goodison park", "st james",
                     "tottenham hotspur stadium", "london stadium",
+                    "craven cottage", "carrow road", "molineux",
+                    "turf moor", "vicarage road", "bramall lane",
+                    "portman road", "kenilworth road", "the amex",
+                    "amex stadium", "gtech community",
+                    "santiago bernabeu", "camp nou", "san siro",
+                    "allianz arena", "parc des princes", "signal iduna",
                     "moses mabhida", "loftus versfeld", "fnb stadium",
                     "ellis park", "dhl stadium", "wanderers stadium",
                     "twickenham", "principality stadium", "murrayfield",
                     "cape town stadium", "newlands cricket",
+                    "aviva stadium", "stade de france",
+                    "eden gardens", "the oval", "lords",
                     # SA bookmaker names
                     "world sports betting", "world sports", "hollywoodbets",
                     "sportingbet", "supersportbet", "super sport bet",
@@ -13658,8 +14384,13 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
     # Injury/news data
     try:
-        from scrapers.news.news_helper import format_injuries_for_narrative
-        _injury_text = format_injuries_for_narrative(db_match_id or "")
+        _injury_text = _format_routed_injuries_for_narrative(
+            db_match_id or "",
+            home_raw,
+            away_raw,
+            sport=_DB_LEAGUE_SPORT.get(_game_db_league, "soccer"),
+            league=_game_db_league or target_league,
+        )
         if _injury_text:
             _enrichment_parts.append(f"\n{_injury_text}")
     except Exception as _e:
@@ -15480,6 +16211,8 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     count = await db.get_user_count()
     onboarded = await db.get_onboarded_count()
     tips = await db.get_recent_tips(limit=100)
+    founding_summary = await db.get_payment_summary()
+    recent_founding = await db.get_recent_founding_payments(limit=5)
     wins = sum(1 for t in tips if t.result == "win")
     losses = sum(1 for t in tips if t.result == "loss")
     pending = sum(1 for t in tips if t.result is None or t.result == "pending")
@@ -15496,6 +16229,14 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             latest_display = latest[:19]
     else:
         latest_display = "N/A"
+
+    founding_lines = []
+    for payment in recent_founding:
+        slot = f"#{payment.founding_slot_number}" if payment.founding_slot_number else "—"
+        founding_lines.append(
+            f"• u{payment.user_id} · {payment.status} · slot {slot} · {payment.provider_reference}"
+        )
+    recent_founding_block = "\n".join(founding_lines) if founding_lines else "• none yet"
 
     text = textwrap.dedent(f"""\
         <b>🔧 Admin Dashboard</b>
@@ -15514,6 +16255,14 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         👥 Users: <b>{count}</b> (onboarded: {onboarded})
         📝 Tips: <b>{len(tips)}</b>
         ✅ Wins: <b>{wins}</b> | ❌ Losses: <b>{losses}</b> | ⏳ Pending: <b>{pending}</b>
+
+        <b>🎁 Founding Members</b>
+        Sold: <b>{founding_summary['sold']}</b> / {config.FOUNDING_MEMBER_SLOTS}
+        Remaining: <b>{founding_summary['remaining']}</b>
+        Pending webhook: <b>{founding_summary['pending']}</b>
+        Refund pending: <b>{founding_summary['refund_pending']}</b>
+        Recent founding payments:
+        {recent_founding_block}
     """)
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -17115,7 +17864,7 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
     """Verify payment after user clicks 'I've Paid'."""
     user_id = query.from_user.id
     await query.edit_message_text(
-        "⏳ <i>Verifying your payment…</i>", parse_mode=ParseMode.HTML,
+        "⏳ <i>Checking payment status…</i>", parse_mode=ParseMode.HTML,
     )
 
     try:
@@ -17123,24 +17872,63 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
         status = result.get("status", "")
 
         if status == "success":
-            await db.activate_subscription(user_id, payment_id, "stitch_premium")
-            analytics_track(user_id, "subscription_confirmed", {"plan": "premium", "method": "manual_verify"})
-
-            await query.edit_message_text(
-                "✅ <b>Payment confirmed!</b>\n\n"
-                "Welcome to MzansiEdge Premium! "
-                "You now get AI-powered tips daily.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
-                    [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
-                ]),
-            )
+            if config.STITCH_MOCK_MODE:
+                event = await stitch_service.build_mock_webhook_event(
+                    payment_id,
+                    status="complete",
+                    event_id=f"mock-verify-{payment_id}",
+                )
+                outcome = await _process_stitch_event(event)
+                analytics_track(user_id, "subscription_confirmed", {
+                    "plan": "founding_diamond",
+                    "method": "mock_webhook",
+                    "outcome": outcome.get("outcome", "unknown"),
+                })
+                if outcome.get("outcome") in {"confirmed", "already_founding_member"}:
+                    slot_number = int(outcome.get("slot_number") or 0)
+                    text = (
+                        _founding_confirmation_text(slot_number)
+                        if slot_number else
+                        "✅ <b>Payment confirmed!</b>\n\nYour access is active now."
+                    )
+                    await query.edit_message_text(
+                        text,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                            [InlineKeyboardButton("📋 Status", callback_data="sub:billing")],
+                        ]),
+                    )
+                elif outcome.get("outcome") == "no_slot_available":
+                    await query.edit_message_text(
+                        _founding_no_slot_text(),
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("📋 Status", callback_data="sub:billing")],
+                            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+                        ]),
+                    )
+                else:
+                    await query.edit_message_text(
+                        _pending_webhook_text(status),
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 Check Again", callback_data=f"sub:verify:{payment_id}")],
+                            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+                        ]),
+                    )
+            else:
+                await query.edit_message_text(
+                    _pending_webhook_text(status),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Check Again", callback_data=f"sub:verify:{payment_id}")],
+                        [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+                    ]),
+                )
         else:
             await query.edit_message_text(
-                f"⏳ <b>Payment not yet confirmed</b>\n\n"
-                f"Status: <code>{status or 'pending'}</code>\n\n"
-                "If you've completed payment, wait a moment and try again.",
+                _pending_webhook_text(status),
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Check Again", callback_data=f"sub:verify:{payment_id}")],
@@ -17196,10 +17984,212 @@ async def _receive_feedback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
 def _founding_days_left() -> int:
     """Return days remaining in the Founding Member window (0 if expired)."""
     import datetime as _dt
-    launch = _dt.date.fromisoformat(config.LAUNCH_DATE)
-    deadline = launch + _dt.timedelta(days=config.FOUNDING_MEMBER_DEADLINE_DAYS)
+    deadline = _dt.date.fromisoformat(config.FOUNDING_REFUND_DEADLINE)
     remaining = (deadline - _dt.date.today()).days
     return max(remaining, 0)
+
+
+def _founding_launch_date_label() -> str:
+    import datetime as _dt
+
+    return _dt.date.fromisoformat(config.LAUNCH_DATE).strftime("%d %B %Y")
+
+
+def _founding_terms_line() -> str:
+    if config.FOUNDING_TERMS_URL:
+        return (
+            f'📄 Terms: <a href="{h(config.FOUNDING_TERMS_URL)}">'
+            f"{h(config.FOUNDING_TERMS_TITLE)}</a>"
+        )
+    return f"📄 Terms: {h(config.FOUNDING_TERMS_TITLE)}"
+
+
+async def _build_founding_disclosure_surface() -> tuple[str, InlineKeyboardMarkup]:
+    sold = await db.get_founding_member_count()
+    remaining = max(config.FOUNDING_MEMBER_SLOTS - sold, 0)
+    sold_out_line = ""
+    if remaining == 0:
+        sold_out_line = (
+            "\n⚠️ <b>All founding slots are currently sold out.</b>\n"
+            "Do not continue unless support tells you a slot is being released.\n"
+        )
+    text = (
+        "🎁 <b>Founding Member Checkout</b>\n\n"
+        "You are buying:\n"
+        f"• 1 year of 💎 Diamond access for <b>R{config.FOUNDING_MEMBER_PRICE // 100}</b>\n"
+        "• Immediate Diamond access once payment is confirmed\n"
+        f"• One of the first <b>{config.FOUNDING_MEMBER_SLOTS}</b> founding slots\n\n"
+        "Before you continue:\n"
+        f"• Official launch date: <b>{_founding_launch_date_label()}</b>\n"
+        "• Your founding price is preserved only while you stay continuously subscribed\n"
+        "• If you cancel, you lose the founding price and rejoin at the then-current public price\n"
+        f"• Full refund before <b>{_founding_launch_date_label()}</b>\n"
+        f"• No refunds after <b>{_founding_launch_date_label()}</b>\n\n"
+        f"📊 Slots: <b>{sold}</b> sold · <b>{remaining}</b> remaining\n"
+        f"{sold_out_line}"
+        f"{_founding_terms_line()}\n\n"
+        "Continue only if you understand these terms."
+    )
+    rows = []
+    if config.FOUNDING_TERMS_URL:
+        rows.append([InlineKeyboardButton("📄 View Terms", url=config.FOUNDING_TERMS_URL)])
+    if remaining > 0:
+        rows.append([InlineKeyboardButton("✅ Continue to Checkout", callback_data="sub:founding_continue:founding_diamond")])
+    rows.append([InlineKeyboardButton("↩️ Back to Plans", callback_data="sub:plans")])
+    return text, InlineKeyboardMarkup(rows)
+
+
+def _payment_ready_text(plan_code: str, reference: str) -> str:
+    product = config.STITCH_PRODUCTS.get(plan_code, {})
+    tier_name = config.TIER_NAMES.get(product.get("tier", "gold"), "Gold")
+    if product.get("founding"):
+        return (
+            "💳 <b>Founding Member Payment Ready</b>\n\n"
+            "Complete checkout below. Your founding slot is only assigned when the webhook confirms payment.\n\n"
+            f"<i>Reference: <code>{reference}</code></i>"
+        )
+    return (
+        f"💳 <b>Payment Ready — {tier_name}!</b>\n\n"
+        "Tap below to complete your subscription.\n\n"
+        f"<i>Reference: <code>{reference}</code></i>"
+    )
+
+
+def _payment_ready_markup(payment_url: str, payment_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 Pay Now →", url=payment_url)],
+        [InlineKeyboardButton("✅ I've Paid — Check Status", callback_data=f"sub:verify:{payment_id}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="sub:cancel")],
+    ])
+
+
+def _founding_confirmation_text(slot_number: int) -> str:
+    return (
+        "✅ <b>Founding Member confirmed!</b>\n\n"
+        f"🎁 Your founding slot: <b>#{slot_number}</b>\n"
+        "💎 Diamond access is active right now.\n"
+        f"💰 Price locked: <b>R{config.FOUNDING_MEMBER_PRICE // 100}/year</b> while you stay continuously subscribed.\n\n"
+        "Use /status any time to view your founding access."
+    )
+
+
+def _founding_no_slot_text() -> str:
+    return (
+        "⚠️ <b>Payment received, but founding slots are full</b>\n\n"
+        "We did not assign a founding slot.\n"
+        "Your payment is marked for refund review and the team will follow up.\n\n"
+        "Webhook confirmation was received, but no access was activated."
+    )
+
+
+def _pending_webhook_text(payment_status: str) -> str:
+    return (
+        "⏳ <b>Payment received, waiting for webhook confirmation</b>\n\n"
+        f"Provider status: <code>{payment_status or 'pending'}</code>\n\n"
+        "Your access will only update after the webhook confirms payment."
+    )
+
+
+async def _notify_payment_outcome(send_message, outcome: dict[str, object]) -> None:
+    user_id = outcome.get("user_id")
+    if not user_id:
+        return
+    if outcome.get("outcome") in {"confirmed", "already_founding_member"}:
+        slot_number = int(outcome.get("slot_number") or 0)
+        if slot_number:
+            text = _founding_confirmation_text(slot_number)
+        else:
+            text = (
+                "✅ <b>Payment confirmed!</b>\n\n"
+                "Your paid access is active now. Use /status to see your plan."
+            )
+    elif outcome.get("outcome") == "no_slot_available":
+        text = _founding_no_slot_text()
+    elif outcome.get("outcome") == "cancelled":
+        text = (
+            "⚠️ <b>Payment cancelled</b>\n\n"
+            "No founding slot was assigned. Use /founding to try again if slots remain."
+        )
+    elif outcome.get("outcome") == "failed":
+        text = (
+            "⚠️ <b>Payment failed</b>\n\n"
+            "No access changes were made. Use /founding to try again."
+        )
+    else:
+        return
+
+    await send_message(
+        chat_id=int(user_id),
+        text=text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("📋 My Status", callback_data="sub:billing")],
+        ]) if outcome.get("outcome") in {"confirmed", "already_founding_member"} else None,
+    )
+
+
+def _derive_plan_code_from_reference(reference: str) -> str:
+    parts = reference.split("-")
+    if len(parts) >= 4:
+        return "-".join(parts[2:-1])
+    if len(parts) >= 3:
+        return "-".join(parts[2:])
+    return ""
+
+
+def _map_webhook_state(event: dict) -> tuple[str, str]:
+    event_type = event.get("type", "")
+    if event_type in {"payment.cancelled", "subscription.cancelled"}:
+        return "cancelled", "cancelled"
+    if event_type == "payment.failed":
+        return "failed", "failed"
+    if event_type in {"payment.expired", "subscription.expired"}:
+        return "expired", "expired"
+    return "confirmed", "active"
+
+
+async def _process_stitch_event(event: dict) -> dict[str, object]:
+    data = event.get("data", {})
+    provider_payment_id = data.get("id", "")
+    provider_reference = data.get("beneficiaryReference", "")
+    external_ref = data.get("externalReference", "")
+    provider_event_id = event.get("id")
+    plan_code = _derive_plan_code_from_reference(provider_reference)
+
+    payment = None
+    if provider_reference:
+        payment = await db.get_payment_by_reference("stitch", provider_reference)
+    if not payment and provider_payment_id:
+        payment = await db.get_payment_by_provider_payment_id("stitch", provider_payment_id)
+
+    if payment:
+        plan_code = payment.plan_code
+        provider_reference = payment.provider_reference
+
+    if not provider_reference:
+        provider_reference = f"stitch-{external_ref or provider_payment_id}"
+
+    amount_obj = data.get("amount", {})
+    amount_quantity = amount_obj.get("quantity", "0")
+    try:
+        amount_cents = int(round(float(amount_quantity) * 100))
+    except (TypeError, ValueError):
+        amount_cents = payment.amount_cents if payment else 0
+
+    event_status, billing_status = _map_webhook_state(event)
+    outcome = await db.apply_payment_event(
+        provider="stitch",
+        provider_reference=provider_reference,
+        provider_payment_id=provider_payment_id,
+        provider_event_id=provider_event_id,
+        plan_code=plan_code or "founding_diamond",
+        amount_cents=amount_cents,
+        event_status=event_status,
+        billing_status=billing_status,
+        raw_event=json.dumps(event, sort_keys=True),
+    )
+    return outcome
 
 
 def _subscribe_plan_text(user_tier: str = "bronze") -> tuple[str, InlineKeyboardMarkup]:
@@ -17277,6 +18267,39 @@ async def _handle_sub_tier(query, plan_code: str) -> None:
         )
         return
 
+    db_user = await db.get_user(user_id)
+    if product.get("founding") and db_user and getattr(db_user, "is_founding_member", False):
+        slot_number = getattr(db_user, "founding_slot_number", None)
+        await query.edit_message_text(
+            _founding_confirmation_text(int(slot_number or 0)),
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                [InlineKeyboardButton("📋 Status", callback_data="sub:billing")],
+            ]),
+        )
+        return
+
+    if product.get("founding"):
+        remaining = await db.get_remaining_founding_slots()
+        if remaining == 0:
+            await query.edit_message_text(
+                "⏰ <b>Founding slots are sold out</b>\n\n"
+                "The first 100 founding places have been taken.\n"
+                "Use /subscribe to see the current public plans.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+                    [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+                ]),
+            )
+            return
+        text, markup = await _build_founding_disclosure_surface()
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        _subscribe_state[user_id] = {"plan_code": plan_code, "disclosure_seen": True}
+        analytics_track(user_id, "founding_disclosure_shown", {"plan": plan_code})
+        return
+
     tier_name = config.TIER_NAMES.get(product["tier"], product["tier"].title())
     price_display = f"R{product['price'] // 100:,}/{product['period'][:2]}"
     _subscribe_state[user_id] = {"plan_code": plan_code}
@@ -17316,34 +18339,63 @@ async def _handle_sub_email(update: Update, user_id: int) -> bool:
     product = config.STITCH_PRODUCTS.get(plan_code, {})
     amount = product.get("price", 9900)
 
+    db_user = await db.get_user(user_id)
+    if product.get("founding") and db_user and getattr(db_user, "is_founding_member", False):
+        await update.message.reply_text(
+            _founding_confirmation_text(int(getattr(db_user, "founding_slot_number", 0) or 0)),
+            parse_mode=ParseMode.HTML,
+        )
+        _subscribe_state.pop(user_id, None)
+        return True
+
+    existing_payment = await db.get_open_payment_for_user(user_id, plan_code)
+    if existing_payment and existing_payment.checkout_url and existing_payment.provider_payment_id:
+        state["payment_id"] = existing_payment.provider_payment_id
+        state["payment_reference"] = existing_payment.provider_reference
+        await update.message.reply_text(
+            _payment_ready_text(plan_code, existing_payment.provider_reference),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_payment_ready_markup(
+                existing_payment.checkout_url,
+                existing_payment.provider_payment_id,
+            ),
+        )
+        return True
+
     loading = await update.message.reply_text(
         "⏳ <i>Setting up your payment…</i>", parse_mode=ParseMode.HTML,
     )
 
     try:
-        ref = f"mze-{user_id}-{plan_code}"
+        ref = f"mze-{user_id}-{plan_code}-{os.urandom(3).hex()}"
         result = await stitch_service.create_payment(user_id, amount_cents=amount, reference=ref)
         payment_url = result["payment_url"]
         payment_id = result["payment_id"]
         reference = result["reference"]
         state["payment_id"] = payment_id
+        state["payment_reference"] = reference
+
+        await db.create_payment_record(
+            user_id=user_id,
+            plan_code=plan_code,
+            amount_cents=amount,
+            provider_reference=reference,
+            provider="stitch",
+            provider_payment_id=payment_id,
+            checkout_url=payment_url,
+            is_founding=bool(product.get("founding")),
+            billing_status="awaiting_webhook",
+        )
 
         try:
             await loading.delete()
         except Exception:
             pass
 
-        tier_name = config.TIER_NAMES.get(product.get("tier", "gold"), "Gold")
         await update.message.reply_text(
-            f"💳 <b>Payment Ready — {tier_name}!</b>\n\n"
-            f"Tap below to complete your subscription.\n\n"
-            f"<i>Reference: <code>{reference}</code></i>",
+            _payment_ready_text(plan_code, reference),
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 Pay Now →", url=payment_url)],
-                [InlineKeyboardButton("✅ I've Paid — Verify", callback_data=f"sub:verify:{payment_id}")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="sub:cancel")],
-            ]),
+            reply_markup=_payment_ready_markup(payment_url, payment_id),
         )
     except Exception as exc:
         log.error("Stitch payment init error: %s", exc)
@@ -17384,6 +18436,8 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_tier = await get_effective_tier(user_id)
     tier_emoji = config.TIER_EMOJIS.get(user_tier, "🥉")
     tier_name = config.TIER_NAMES.get(user_tier, user_tier.title())
+    open_founding_payment = await db.get_open_payment_for_user(user_id, "founding_diamond")
+    remaining_slots = await db.get_remaining_founding_slots()
 
     if user_tier in ("gold", "diamond"):
         started = ""
@@ -17391,19 +18445,34 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             started = f"\n📅 Member since: <b>{db_user.subscription_started_at.strftime('%d %b %Y')}</b>"
         founding = ""
         if db_user and getattr(db_user, "is_founding_member", False):
-            founding = "\n🎁 <b>Founding Member</b>"
+            founding = (
+                "\n🎁 <b>Founding Member</b>"
+                f"\n🔢 Slot: <b>#{getattr(db_user, 'founding_slot_number', '—')}</b>"
+                f"\n💰 Price: <b>R{(getattr(db_user, 'founding_price_cents', 0) or config.FOUNDING_MEMBER_PRICE) // 100}/year</b>"
+            )
         await update.message.reply_text(
             f"{tier_emoji} <b>MzansiEdge {tier_name}</b>\n\n"
-            f"Status: ✅ <b>Active</b>{started}{founding}\n\n"
+            f"Status: ✅ <b>Active</b>{started}{founding}\n"
+            f"\n📅 Launch date: <b>{_founding_launch_date_label()}</b>"
+            f"\n📊 Founding slots remaining: <b>{remaining_slots}</b>\n\n"
             f"You're getting full access to Edge-AI tips and alerts.",
             parse_mode=ParseMode.HTML,
         )
     else:
+        founding_line = ""
+        if open_founding_payment:
+            founding_line = (
+                "\n\n🎁 <b>Founding checkout pending</b>\n"
+                "We are waiting for webhook confirmation before access updates."
+            )
         await update.message.reply_text(
             "🥉 <b>MzansiEdge Bronze (Free)</b>\n\n"
             "Status: 🥉 <b>Free tier</b>\n\n"
+            f"🎁 Founding slots remaining: <b>{remaining_slots}</b>\n"
+            f"📅 Launch date: <b>{_founding_launch_date_label()}</b>\n\n"
             "Upgrade to Gold or Diamond for unlimited tips.\n"
-            "Use /subscribe to view plans.",
+            "Use /subscribe to view plans."
+            f"{founding_line}",
             parse_mode=ParseMode.HTML,
         )
 
@@ -17456,6 +18525,7 @@ async def cmd_billing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_tier = await get_effective_tier(user_id)
     tier_emoji = config.TIER_EMOJIS.get(user_tier, "🥉")
     tier_name = config.TIER_NAMES.get(user_tier, user_tier.title())
+    open_founding_payment = await db.get_open_payment_for_user(user_id, "founding_diamond")
 
     if user_tier in ("gold", "diamond"):
         started = ""
@@ -17466,14 +18536,20 @@ async def cmd_billing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             expires = f"\n⏰ Renews: {db_user.tier_expires_at.strftime('%d %b %Y')}"
         founding = ""
         if db_user and getattr(db_user, "is_founding_member", False):
-            founding = "\n🎁 Founding Member"
+            founding = (
+                "\n🎁 Founding Member"
+                f"\n🔢 Slot: #{getattr(db_user, 'founding_slot_number', '—')}"
+            )
         plan = ""
         if db_user and getattr(db_user, "plan_code", None):
             plan = f"\n📋 Plan: {db_user.plan_code}"
+        billing_state = ""
+        if db_user and getattr(db_user, "billing_status", None):
+            billing_state = f"\n🧾 Billing: {db_user.billing_status}"
 
         await update.message.reply_text(
             f"{tier_emoji} <b>MzansiEdge {tier_name} — Billing</b>\n"
-            f"\nStatus: ✅ Active{started}{expires}{founding}{plan}\n\n"
+            f"\nStatus: ✅ Active{started}{expires}{founding}{plan}{billing_state}\n\n"
             "To change or cancel your plan, use the buttons below.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
@@ -17483,9 +18559,16 @@ async def cmd_billing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             ]),
         )
     else:
+        pending_note = ""
+        if open_founding_payment:
+            pending_note = (
+                "\n\n🎁 Founding checkout pending.\n"
+                "Webhook confirmation is still outstanding."
+            )
         await update.message.reply_text(
             "🥉 <b>MzansiEdge Bronze (Free)</b>\n\n"
-            "No active subscription. Use /subscribe to view plans.",
+            "No active subscription. Use /subscribe to view plans."
+            f"{pending_note}",
             parse_mode=ParseMode.HTML,
         )
 
@@ -17498,9 +18581,17 @@ async def cmd_founding(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if db_user and getattr(db_user, "is_founding_member", False):
         await update.message.reply_text(
-            "🎁 <b>You're a Founding Member!</b>\n\n"
-            "Thank you for being one of the first to believe in MzansiEdge.\n"
-            "You have full 💎 Diamond access for a year at R699.",
+            _founding_confirmation_text(int(getattr(db_user, "founding_slot_number", 0) or 0)),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    remaining_slots = await db.get_remaining_founding_slots()
+    if remaining_slots == 0:
+        await update.message.reply_text(
+            "⏰ <b>Founding slots are sold out</b>\n\n"
+            "The first 100 founding places have been taken.\n"
+            "Use /subscribe to see the current public plans.",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -17515,15 +18606,18 @@ async def cmd_founding(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text(
-        "🎁 <b>Founding Member Deal</b>\n\n"
-        "💎 <b>Full Diamond access for R699/year</b>\n"
-        "<i>(normally R199/month = R2,388/year)</i>\n\n"
-        "You get everything:\n"
-        "• Unlimited tips · Real-time edges\n"
-        "• Full AI breakdowns · Line movement\n"
-        "• Sharp money · CLV tracking\n\n"
-        f"⏰ <b>Only {founding_left} days left!</b>\n"
-        "This deal won't come back.",
+        (
+            "🎁 <b>Founding Member Deal</b>\n\n"
+            f"💎 <b>Full Diamond access for R{config.FOUNDING_MEMBER_PRICE // 100}/year</b>\n"
+            "<i>(normally R199/month = R2,388/year)</i>\n\n"
+            "You get everything:\n"
+            "• Unlimited tips · Real-time edges\n"
+            "• Full AI breakdowns · Line movement\n"
+            "• Sharp money · CLV tracking\n\n"
+            f"📊 <b>{remaining_slots}</b> founding slots remaining\n"
+            f"⏰ <b>Only {founding_left} days left until {_founding_launch_date_label()}</b>\n"
+            f"{_founding_terms_line()}"
+        ),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🎁 Claim Founding Member Deal", callback_data="sub:tier:founding_diamond")],
@@ -17538,122 +18632,52 @@ async def _run_webhook_server(app_instance) -> None:
     """Start a small aiohttp server to receive Stitch webhooks."""
     from aiohttp import web
 
+    async def handle_founding_success(request: web.Request) -> web.Response:
+        html = (
+            "<html><body style='font-family: sans-serif; padding: 32px;'>"
+            "<h1>Founding payment received</h1>"
+            "<p>This page does not activate access.</p>"
+            "<p><strong>Webhook confirmation is the source of truth.</strong> "
+            "Your Telegram confirmation and /status will update after the webhook is processed.</p>"
+            "<p>If Telegram does not update shortly, open the bot and use /status.</p>"
+            "</body></html>"
+        )
+        return web.Response(text=html, content_type="text/html")
+
     async def handle_stitch_webhook(request: web.Request) -> web.Response:
         body = await request.read()
         headers = dict(request.headers)
 
-        if not stitch_service.verify_webhook(headers, body):
+        if not config.STITCH_MOCK_MODE and not stitch_service.verify_webhook(headers, body):
             log.warning("Invalid Stitch webhook signature")
             return web.Response(status=400)
 
         event = stitch_service.parse_webhook_event(body)
         event_type = event.get("type", "")
-        data = event.get("data", {})
-
         log.info("Stitch webhook: %s", event_type)
 
-        if event_type in ("payment.complete", "subscription.created", "subscription.renewed"):
-            payment_id = data.get("id", "")
-            external_ref = data.get("externalReference", "")
-            user_id = int(external_ref) if external_ref and external_ref.isdigit() else None
+        outcome = await _process_stitch_event(event)
+        user_id = outcome.get("user_id")
+        if user_id and event_type in ("payment.complete", "subscription.created", "subscription.renewed"):
+            analytics_track(int(user_id), "subscription_confirmed", {
+                "plan": "founding_diamond",
+                "outcome": outcome.get("outcome", "unknown"),
+            })
+        elif user_id and event_type in ("payment.cancelled", "subscription.cancelled"):
+            analytics_track(int(user_id), "subscription_cancelled")
+        elif user_id and event_type == "payment.failed":
+            analytics_track(int(user_id), "payment_failed")
 
-            if user_id:
-                # Resolve tier from user's pending subscribe state or beneficiaryReference
-                state = _subscribe_state.pop(user_id, {})
-                plan_code = state.get("plan_code", "")
-                # Also check beneficiaryReference which contains plan_code
-                ben_ref = data.get("beneficiaryReference", "")
-                if not plan_code and ben_ref:
-                    # Reference format: mze-{user_id}-{plan_code}
-                    parts = ben_ref.rsplit("-", 1)
-                    if len(parts) == 2:
-                        plan_code = parts[1]
-
-                product = config.STITCH_PRODUCTS.get(plan_code, {})
-                tier = product.get("tier", "gold")
-                is_founding = product.get("founding", False)
-                period = product.get("period", "monthly")
-
-                # Calculate expiry
-                import datetime as _dt
-                now = _dt.datetime.now(_dt.timezone.utc)
-                if period == "annual":
-                    expires = now + _dt.timedelta(days=365)
-                else:
-                    expires = now + _dt.timedelta(days=30)
-
-                await db.activate_subscription(
-                    user_id, payment_id, plan_code or "stitch_premium",
-                    user_tier=tier, tier_expires_at=expires,
-                )
-                if is_founding:
-                    await db.set_founding_member(user_id, True)
-
-                tier_emoji = config.TIER_EMOJIS.get(tier, "🥇")
-                tier_name = config.TIER_NAMES.get(tier, tier.title())
-                founding_line = "\n🎁 <b>Founding Member</b> — thank you for believing early!" if is_founding else ""
-
-                analytics_track(user_id, "subscription_confirmed", {"plan": plan_code, "tier": tier})
-                try:
-                    await app_instance.bot.send_message(
-                        chat_id=user_id,
-                        text=(
-                            f"✅ <b>Welcome to MzansiEdge {tier_emoji} {tier_name}!</b>\n\n"
-                            f"Your subscription is now active.{founding_line}\n\n"
-                            "Use 💎 <b>Top Edge Picks</b> to see today's value bets!"
-                        ),
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
-                            [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
-                        ]),
-                    )
-                except Exception as exc:
-                    log.warning("Failed to notify user %s of subscription: %s", user_id, exc)
-
-        elif event_type in ("payment.cancelled", "subscription.cancelled"):
-            external_ref = data.get("externalReference", "")
-            user_id = int(external_ref) if external_ref and external_ref.isdigit() else None
-            if user_id:
-                await db.deactivate_subscription(user_id)
-                analytics_track(user_id, "subscription_cancelled")
-                try:
-                    await app_instance.bot.send_message(
-                        chat_id=user_id,
-                        text=(
-                            "😔 <b>Subscription cancelled</b>\n\n"
-                            "You've been moved to 🥉 Bronze (free tier).\n"
-                            "Your tips and matches are still here — just limited.\n\n"
-                            "Use /subscribe any time to re-subscribe."
-                        ),
-                        parse_mode=ParseMode.HTML,
-                    )
-                except Exception:
-                    pass
-
-        elif event_type == "payment.failed":
-            external_ref = data.get("externalReference", "")
-            user_id = int(external_ref) if external_ref and external_ref.isdigit() else None
-            if user_id:
-                analytics_track(user_id, "payment_failed")
-                try:
-                    await app_instance.bot.send_message(
-                        chat_id=user_id,
-                        text=(
-                            "⚠️ <b>Payment failed</b>\n\n"
-                            "Your subscription payment didn't go through.\n"
-                            "Your current tier stays active for 3 days.\n\n"
-                            "Use /subscribe to update your payment method."
-                        ),
-                        parse_mode=ParseMode.HTML,
-                    )
-                except Exception:
-                    pass
+        try:
+            await _notify_payment_outcome(app_instance.bot.send_message, outcome)
+        except Exception as exc:
+            log.warning("Failed to send payment outcome notification: %s", exc)
 
         return web.Response(status=200, text="OK")
 
     webhook_app = web.Application()
     webhook_app.router.add_post("/webhook/stitch", handle_stitch_webhook)
+    webhook_app.router.add_get("/founding-success", handle_founding_success)
 
     runner = web.AppRunner(webhook_app)
     await runner.setup()
@@ -18526,20 +19550,39 @@ async def _build_morning_report() -> str:
     return "\n".join(lines)
 
 
+# ── W84-RUNTIME-DEDUPE-1: single-flight guards ──────────────────────────
+# Only ONE pregen sweep may run at a time (bot-internal).
+# Only ONE edge_precompute cycle may run at a time.
+_pregen_lock = asyncio.Lock()
+_pregen_active = False   # BASELINE-FIX: single-flight flag — set before lock acquisition, no TOCTOU
+_precompute_lock = asyncio.Lock()
+_precompute_active = False  # BASELINE-FIX: replaces .locked() TOCTOU in _edge_precompute_job
+
+
 async def _background_pregen_fill() -> None:
     """W83-CACHE: Background narrative fill for hot tips with no cached narrative.
 
     Called from _edge_precompute_job() when any hot tip is missing from narrative_cache.
     Uses pregen 'refresh' mode which only generates for uncached edges (skips fresh ones).
-    PID lock in pregenerate_narratives prevents concurrent runs.
+    BASELINE-FIX: single-flight via _pregen_active bool set BEFORE lock acquisition.
+    No yield point between check and set — TOCTOU-free by construction.
     """
+    global _pregen_active
+    if _pregen_active:
+        log.info("Pregen [background]: DROPPED — sweep already active")
+        return
+    _pregen_active = True  # Set synchronously before any await — no race window
     try:
-        from scripts.pregenerate_narratives import main as pregen_main
-        log.info("Background narrative fill: starting refresh sweep for uncached edges")
-        await pregen_main("refresh")
-        log.info("Background narrative fill: complete")
+        async with _pregen_lock:
+            log.info("Pregen [background]: started (source=background_fill)")
+            from scripts.pregenerate_narratives import main as pregen_main
+            await pregen_main("refresh")
+            log.info("Pregen [background]: complete")
     except Exception as exc:
-        log.warning("Background narrative fill failed: %s", exc)
+        log.warning("Pregen [background]: failed — %s", exc)
+    finally:
+        _pregen_active = False
+        log.info("Pregen [background]: released")
 
 
 async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -18549,55 +19592,113 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     runs here in the background, not on user requests.
     Also pre-warms _analysis_cache with DB narratives so edge:detail is
     served from memory (sub-ms) on first tap after restart.
+    BASELINE-FIX: single-flight via _precompute_active bool — eliminates .locked() TOCTOU.
     """
-    import time as _t
-    _start = _t.time()
-    _ep_mon = _CronMonitor("edge-precompute")
-    _ep_mon.begin()
-    _sentry_tags(cron_job="edge-precompute")
+    global _precompute_active
+    if _precompute_active:
+        log.info("Edge pre-compute: DROPPED — previous cycle still running")
+        return
+    _precompute_active = True  # Set synchronously before any await — no race window
     try:
-        tips = await _fetch_hot_tips_from_db()
-        log.info(
-            "Edge pre-compute: %d tips cached in %.1fs",
-            len(tips), _t.time() - _start,
-        )
-        # Pre-warm narrative cache: load DB narratives into _analysis_cache.
-        # After this runs (5s after startup), edge:detail is pure in-memory.
-        # Also tracks tips with NO cached narrative (not in memory AND not in DB)
-        # and fires a background refresh sweep to fill them.
-        _warmed = 0
-        _missing_keys = []
-        for _tip in tips:
-            _mk = _tip.get("match_id", "")
-            if _mk and _mk not in _analysis_cache:
-                try:
-                    _nc = await _get_cached_narrative(_mk)
-                    if _nc:
-                        _analysis_cache[_mk] = (
-                            _nc["html"], _nc["tips"],
-                            _nc["edge_tier"], _t.time(),
-                        )
-                        _game_tips_cache[_mk] = _nc["tips"]
-                        _warmed += 1
-                    else:
-                        _missing_keys.append(_mk)
-                        # W83-OVERNIGHT: pre-load tip data for instant baseline on tap
-                        _game_tips_cache[_mk] = [_tip]
-                except Exception:
-                    _missing_keys.append(_mk)
-        if _warmed:
-            log.info("Narrative pre-warm: %d narratives loaded into memory cache", _warmed)
-        if _missing_keys:
+        async with _precompute_lock:
+            import time as _t
+            _start = _t.time()
+            _ep_mon = _CronMonitor("edge-precompute")
+            _ep_mon.begin()
+            _sentry_tags(cron_job="edge-precompute")
+            tips = await _fetch_hot_tips_from_db()
             log.info(
-                "Narrative miss: %d/%d tips uncached — triggering background fill: %s",
-                len(_missing_keys), len(tips), _missing_keys,
+                "Edge pre-compute: %d tips cached in %.1fs",
+                len(tips), _t.time() - _start,
             )
-            import asyncio as _asyncio
-            _asyncio.create_task(_background_pregen_fill())
-        _ep_mon.done()
+            # Pre-warm narrative cache: load DB narratives into _analysis_cache.
+            # After this runs (5s after startup), edge:detail is pure in-memory.
+            # Also tracks tips with NO cached narrative (not in memory AND not in DB)
+            # and fires a background refresh sweep to fill them.
+            _warmed = 0
+            _missing_keys = []
+            for _tip in tips:
+                _mk = _tip.get("match_id", "")
+                if _mk and _mk not in _analysis_cache:
+                    try:
+                        _nc = await _get_cached_narrative(_mk)
+                        if _nc:
+                            _analysis_cache[_mk] = (
+                                _nc["html"], _nc["tips"],
+                                _nc["edge_tier"], _t.time(),
+                            )
+                            _game_tips_cache[_mk] = _nc["tips"]
+                            _warmed += 1
+                        else:
+                            _missing_keys.append(_mk)
+                            # W83-OVERNIGHT: pre-load tip data for instant baseline on tap
+                            _game_tips_cache[_mk] = [_tip]
+                    except Exception:
+                        _missing_keys.append(_mk)
+            if _warmed:
+                log.info("Narrative pre-warm: %d narratives loaded into memory cache", _warmed)
+            _evidence_stored = 0
+            if tips:
+                from evidence_pack import build_evidence_pack, serialise_evidence_pack
+
+                _evidence_sem = asyncio.Semaphore(3)
+
+                async def _build_and_store_evidence(_tip: dict) -> bool:
+                    _mk = _tip.get("match_id", "")
+                    if not _mk:
+                        return False
+                    _edge = (_tip.get("edge_v2") or {}).copy()
+                    if not _edge:
+                        _edge = {
+                            "match_key": _mk,
+                            "league": _tip.get("league_key", ""),
+                            "sport": _tip.get("sport_key", "soccer"),
+                            "best_bookmaker": _tip.get("bookmaker", ""),
+                            "best_odds": _tip.get("odds", 0),
+                            "edge_pct": _tip.get("ev", 0),
+                            "fair_probability": (_tip.get("prob", 0) or 0) / 100.0,
+                            "outcome": _tip.get("outcome", ""),
+                            "confirming_signals": 0,
+                            "contradicting_signals": 0,
+                            "signals": {},
+                            "tier": _tip.get("display_tier", _tip.get("edge_rating", "bronze")),
+                        }
+                    async with _evidence_sem:
+                        try:
+                            _pack = await build_evidence_pack(
+                                _mk,
+                                _edge,
+                                _tip.get("sport_key", "soccer"),
+                                _tip.get("league_key", ""),
+                                home_team=_tip.get("home_team", ""),
+                                away_team=_tip.get("away_team", ""),
+                            )
+                            return await _store_narrative_evidence(_mk, serialise_evidence_pack(_pack))
+                        except Exception as exc:
+                            log.debug("Evidence pack build skipped for %s: %s", _mk, exc)
+                            return False
+
+                _evidence_results = await asyncio.gather(
+                    *[_build_and_store_evidence(_tip) for _tip in tips],
+                    return_exceptions=False,
+                )
+                _evidence_stored = sum(1 for result in _evidence_results if result)
+                if _evidence_stored:
+                    log.info("Evidence pack refresh: stored for %d/%d hot tips", _evidence_stored, len(tips))
+            if _missing_keys:
+                log.info(
+                    "Narrative miss: %d/%d tips uncached — triggering background fill: %s",
+                    len(_missing_keys), len(tips), _missing_keys,
+                )
+                import asyncio as _asyncio
+                _asyncio.create_task(_background_pregen_fill())
+            _ep_mon.done()
     except Exception as exc:
         log.warning("Edge pre-compute failed (%.1fs): %s", _t.time() - _start, exc)
         _ep_mon.done(exc)
+    finally:
+        _precompute_active = False
+        log.info("Edge pre-compute: released")
 
 
 async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -18614,21 +19715,34 @@ async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     sweep = "full" if now_sast.hour == 6 else "refresh"
-    log.info("Starting narrative pre-generation (%s sweep, %02d:00 SAST)", sweep, now_sast.hour)
-    _np_mon = _CronMonitor("narrative-pregen")
-    _np_mon.begin()
-    _sentry_tags(cron_job="narrative-pregen", cron_sweep=sweep)
 
-    import time as _t
-    _start = _t.time()
+    # BASELINE-FIX: single-flight via _pregen_active bool set BEFORE lock — TOCTOU-free.
+    # No yield point between check and set, so no race window exists.
+    global _pregen_active
+    if _pregen_active:
+        log.info("Pregen [job]: DROPPED — sweep already active (source=job)")
+        return
+    _pregen_active = True  # Set synchronously before any await — no race window
     try:
-        from scripts.pregenerate_narratives import main as pregen_main
-        await pregen_main(sweep)
-        log.info("Narrative pre-generation complete in %.1fs", _t.time() - _start)
-        _np_mon.done()
-    except Exception as exc:
-        log.warning("Narrative pre-generation failed (%.1fs): %s", _t.time() - _start, exc)
-        _np_mon.done(exc)
+        async with _pregen_lock:
+            log.info("Pregen [job]: started (%s sweep, %02d:00 SAST)", sweep, now_sast.hour)
+            _np_mon = _CronMonitor("narrative-pregen")
+            _np_mon.begin()
+            _sentry_tags(cron_job="narrative-pregen", cron_sweep=sweep)
+
+            import time as _t
+            _start = _t.time()
+            try:
+                from scripts.pregenerate_narratives import main as pregen_main
+                await pregen_main(sweep)
+                log.info("Pregen [job]: complete in %.1fs", _t.time() - _start)
+                _np_mon.done()
+            except Exception as exc:
+                log.warning("Pregen [job]: failed (%.1fs): %s", _t.time() - _start, exc)
+                _np_mon.done(exc)
+    finally:
+        _pregen_active = False
+        log.info("Pregen [job]: released (source=job)")
 
 
 async def _narrative_health_check_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -19442,13 +20556,24 @@ async def _post_init(app_instance) -> None:
         log.warning("Live edge hygiene failed at startup: %s", exc)
 
     # W60-CACHE: Ensure narrative_cache table exists in odds.db
-    try:
-        _ensure_narrative_cache_table()
-        _ensure_shadow_narratives_table()
-        log.info("narrative_cache table ready")
-        log.info("shadow_narratives table ready")
-    except Exception as exc:
-        log.warning("Could not create narrative_cache table: %s", exc)
+    # W84-LOCKFIX: retry up to 3 times with 2s sleep — startup often collides with cron writers
+    for _nc_attempt in range(3):
+        try:
+            _ensure_narrative_cache_table()
+            _ensure_shadow_narratives_table()
+            log.info("narrative_cache table ready")
+            log.info("shadow_narratives table ready")
+            _expired_removed = _cleanup_expired_narrative_cache_rows(limit=500)
+            if _expired_removed:
+                log.info("Narrative cache hygiene removed %d expired rows", _expired_removed)
+            break
+        except Exception as exc:
+            if _nc_attempt < 2:
+                log.warning("narrative_cache table creation attempt %d/3 failed (retrying in 2s): %s", _nc_attempt + 1, exc)
+                import time as _nc_time
+                _nc_time.sleep(2)
+            else:
+                log.warning("Could not create narrative_cache table after 3 attempts: %s", exc)
 
     # Pre-publish Betway Telegra.ph guide and wire URL into config
     try:
