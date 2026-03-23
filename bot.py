@@ -6808,6 +6808,8 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         _outcome_labels = {"home": home_display, "away": away_display, "draw": "Draw"}
         outcome_display = _outcome_labels.get(outcome_raw, outcome_label)
 
+        _raw_bk_key = (row["bookmaker"] or "").strip().lower()
+        _rec_odds = float(row["recommended_odds"] or 0)
         tips.append({
             "event_id": mk,
             "match_id": mk,
@@ -6816,8 +6818,9 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             "away_team": away_display,
             "commence_time": "",
             "outcome": outcome_display,
-            "odds": float(row["recommended_odds"] or 0),
-            "bookmaker": _display_bookmaker_name(row["bookmaker"] or ""),
+            "odds": _rec_odds,
+            "bookmaker": _display_bookmaker_name(_raw_bk_key),
+            "bookmaker_key": _raw_bk_key,
             "ev": ev_pct,
             "prob": 0,
             "kelly": 0,
@@ -6826,7 +6829,9 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             "edge_score": float(row["composite_score"] or 0),
             "league": _get_league_display(league_key, home_display, away_display),
             "league_key": league_key,
-            "odds_by_bookmaker": {},
+            # Populate with the recommended bookmaker so CTA buttons show
+            # the correct bookmaker instead of falling back to Betway.
+            "odds_by_bookmaker": {_raw_bk_key: _rec_odds} if _raw_bk_key and _rec_odds > 0 else {},
             "sharp_confidence": "low",
             "sharp_source": "edge_results",
             "edge_v2": None,
@@ -12200,12 +12205,6 @@ def _injury_team_matches(row_team: str, requested_team: str) -> bool:
     req_base = [token for token in _injury_team_base_tokens(requested_team) if token]
     if row_base and req_base and row_base == req_base:
         return True
-    if len(req_base) == 1:
-        return len(row_base) == 1 and row_base[0] == req_base[0]
-    if req_base and " ".join(req_base) == row_norm:
-        return True
-    if row_base and " ".join(row_base) == req_norm:
-        return True
     return False
 
 
@@ -15062,9 +15061,19 @@ def _build_game_buttons(
                 # Locked: show View Plans instead of bookmaker URL
                 primary_button = InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")
             else:
-                bk_key = (best_bk or {}).get("bookmaker_key", "")
-                bk_name = (best_bk or {}).get("bookmaker_name", config.get_active_display_name())
-                aff_url = (best_bk or {}).get("affiliate_url", "") or get_affiliate_url(bk_key, match_id=match_id)
+                bk_key = (best_bk or {}).get("bookmaker_key") or ""
+                aff_url = (best_bk or {}).get("affiliate_url") or ""
+                # R4-BUILD-01: Fallback to tip-level bookmaker when select_best_bookmaker
+                # returns empty (e.g. edge_results tips with no odds_by_bookmaker).
+                if not bk_key:
+                    bk_key = best_ev_tip.get("bookmaker_key") or best_ev_tip.get("bookie_key") or ""
+                # Always use _display_bookmaker_name for canonical display name — this
+                # handles keys like "wsb" → "World Sports Betting" correctly.
+                bk_name = _display_bookmaker_name(bk_key) if bk_key else ""
+                if not bk_name:
+                    bk_name = best_ev_tip.get("bookmaker") or best_ev_tip.get("bookie") or config.get_active_display_name()
+                if not aff_url:
+                    aff_url = get_affiliate_url(bk_key, match_id=match_id) if bk_key else ""
                 outcome = best_ev_tip["outcome"]
                 odds_val = best_ev_tip["odds"]
 
@@ -15072,7 +15081,16 @@ def _build_game_buttons(
                 if aff_url:
                     primary_button = InlineKeyboardButton(cta_text, url=aff_url)
                 else:
-                    primary_button = InlineKeyboardButton(cta_text, callback_data="tip:affiliate_soon")
+                    # R4-BUILD-01: Always generate a CTA — use bookmaker homepage as fallback.
+                    _fallback_url = ""
+                    if bk_key:
+                        _sa = config.SA_BOOKMAKERS.get(bk_key)
+                        _aff = config.BOOKMAKER_AFFILIATES.get(bk_key)
+                        _fallback_url = (_aff or {}).get("base_url", "") or (_sa or {}).get("website_url", "")
+                    if _fallback_url:
+                        primary_button = InlineKeyboardButton(cta_text, url=_fallback_url)
+                    else:
+                        primary_button = InlineKeyboardButton(cta_text, callback_data="tip:affiliate_soon")
         else:
             # No positive EV — gate deep link by tier (W30-GATE)
             if _bet_access in ("blurred", "locked"):
@@ -15356,6 +15374,14 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         mapped_key = _oc_map.get(outcome_key, outcome_key)
         outcome_data = odds_result.get("outcomes", {}).get(mapped_key, {})
         odds_by_bookmaker = outcome_data.get("all_bookmakers", {})
+
+    # R4-BUILD-01: If no multi-bookmaker data from any source, construct from tip's
+    # own bookmaker_key + odds so the detail view shows the correct bookmaker CTA.
+    if not odds_by_bookmaker:
+        _tip_bk = tip.get("bookmaker_key") or tip.get("bookie_key") or ""
+        _tip_odds = tip.get("odds", 0)
+        if _tip_bk and _tip_odds > 0:
+            odds_by_bookmaker = {_tip_bk: _tip_odds}
 
     if odds_by_bookmaker:
         # Multi-bookmaker: select best odds with affiliate link
