@@ -1,0 +1,327 @@
+from __future__ import annotations
+
+import os
+import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+sys.path.insert(0, "/home/paulsportsza/bot")
+sys.path.insert(0, "/home/paulsportsza")
+sys.path.insert(0, "/home/paulsportsza/scrapers")
+os.chdir("/home/paulsportsza/bot")
+
+import bot
+import narrative_spec
+import scripts.pregenerate_narratives as pregen
+
+
+def _edge() -> dict:
+    return {
+        "match_key": "arsenal_vs_bournemouth_2026-03-21",
+        "home_team": "Arsenal",
+        "away_team": "Bournemouth",
+        "league": "Premier League",
+        "sport": "soccer",
+        "commence_time": "2026-03-21 15:00 UTC",
+        "best_odds": 2.10,
+        "best_bookmaker": "Betway",
+        "edge_pct": 5.2,
+        "fair_probability": 0.52,
+        "recommended_outcome": "home",
+        "outcome": "home",
+        "tier": "silver",
+        "confirming_signals": 2,
+        "composite_score": 58.0,
+        "bookmaker_count": 2,
+        "signals": {"movement": {"direction": "neutral"}},
+        "stale_minutes": 5,
+    }
+
+
+def _baseline_text() -> str:
+    return (
+        "📋 <b>The Setup</b>\n"
+        "Arsenal host Bournemouth here.\n\n"
+        "🎯 <b>The Edge</b>\n"
+        "Betway have Arsenal at 2.10.\n\n"
+        "⚠️ <b>The Risk</b>\n"
+        "Standard variance applies.\n\n"
+        "🏆 <b>Verdict</b>\n"
+        "Lean Arsenal at Betway 2.10."
+    )
+
+
+def _w84_text() -> str:
+    return (
+        "📋 <b>The Setup</b>\n"
+        "W84 setup.\n\n"
+        "🎯 <b>The Edge</b>\n"
+        "Betway have Arsenal at 2.10.\n\n"
+        "⚠️ <b>The Risk</b>\n"
+        "W84 risk.\n\n"
+        "🏆 <b>Verdict</b>\n"
+        "Back the Arsenal win at 2.10 with Betway."
+    )
+
+
+class _FakeMessages:
+    async def create(self, **kwargs):
+        return {"content": "unused"}
+
+
+class _FakeClaude:
+    def __init__(self):
+        self.messages = _FakeMessages()
+
+
+def _patch_generate_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pregen, "_refresh_edge_from_odds_db", AsyncMock(side_effect=lambda e: e))
+    monkeypatch.setattr(pregen, "_get_match_context", AsyncMock(return_value={"data_available": True}))
+    monkeypatch.setattr(
+        pregen,
+        "build_evidence_pack",
+        AsyncMock(return_value=SimpleNamespace(richness_score="high")),
+    )
+    monkeypatch.setattr(pregen, "serialise_evidence_pack", lambda pack: '{"ok": true}')
+    monkeypatch.setattr(
+        narrative_spec,
+        "build_narrative_spec",
+        lambda ctx, edge_data, tips, sport: SimpleNamespace(
+            home_story_type="momentum",
+            away_story_type="crisis",
+        ),
+    )
+    monkeypatch.setattr(narrative_spec, "_render_baseline", lambda spec: _baseline_text())
+    monkeypatch.setattr(pregen, "sanitize_ai_response", lambda text: text)
+    monkeypatch.setattr(pregen, "_strip_model_generated_h2h_references", lambda text: text)
+    monkeypatch.setattr(pregen, "_strip_model_generated_sharp_references", lambda text: text)
+    monkeypatch.setattr(pregen, "_suppress_shadow_banned_phrases", lambda text: text)
+    monkeypatch.setattr(pregen, "_build_h2h_injection", lambda pack, spec: "")
+    monkeypatch.setattr(pregen, "_build_sharp_injection", lambda pack, spec: "")
+    monkeypatch.setattr(pregen, "_inject_h2h_sentence", lambda text, sentence: text)
+    monkeypatch.setattr(pregen, "_inject_sharp_sentence", lambda text, sentence: text)
+    monkeypatch.setattr(pregen, "_extract_text_from_response", lambda resp: _w84_text())
+    monkeypatch.setattr(pregen, "_get_exemplars_for_prompt", lambda *args, **kwargs: [])
+    monkeypatch.setattr(pregen, "_build_polish_prompt", lambda *args, **kwargs: "prompt")
+    monkeypatch.setattr(pregen, "_validate_polish", lambda polished, baseline, spec: True)
+
+
+@pytest.mark.asyncio
+async def test_cache_table_adds_narrative_source_column(tmp_path) -> None:
+    db_path = str(tmp_path / "cache.db")
+    original = bot._NARRATIVE_DB_PATH
+    bot._NARRATIVE_DB_PATH = db_path
+    try:
+        bot._ensure_narrative_cache_table()
+        import sqlite3
+
+        conn = sqlite3.connect(db_path)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(narrative_cache)").fetchall()}
+        conn.close()
+        assert "narrative_source" in cols
+    finally:
+        bot._NARRATIVE_DB_PATH = original
+
+
+@pytest.mark.asyncio
+async def test_cache_round_trips_narrative_source(tmp_path) -> None:
+    import sqlite3
+
+    db_path = str(tmp_path / "cache.db")
+    original = bot._NARRATIVE_DB_PATH
+    bot._NARRATIVE_DB_PATH = db_path
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS odds_latest ("
+        "match_id TEXT, bookmaker TEXT, home_odds REAL, draw_odds REAL, away_odds REAL)"
+    )
+    conn.commit()
+    conn.close()
+    try:
+        bot._ensure_narrative_cache_table()
+        await bot._store_narrative_cache(
+            "arsenal_vs_bournemouth_2026-03-21",
+            "<b>Test</b>",
+            [{"outcome": "home", "odds": 2.1, "ev": 5.2}],
+            "silver",
+            "sonnet",
+            narrative_source="w84",
+        )
+        cached = await bot._get_cached_narrative("arsenal_vs_bournemouth_2026-03-21")
+        assert cached is not None
+        assert cached["narrative_source"] == "w84"
+    finally:
+        bot._NARRATIVE_DB_PATH = original
+
+
+@pytest.mark.asyncio
+async def test_generate_one_serves_w84_when_verify_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_generate_dependencies(monkeypatch)
+
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec: "prompt")
+    monkeypatch.setattr(
+        pregen,
+        "verify_shadow_narrative",
+        lambda draft, pack, spec: (True, {"sanitized_draft": _w84_text()}),
+    )
+
+    result = await pregen._generate_one(_edge(), "claude-sonnet", _FakeClaude())
+
+    assert result["success"] is True
+    assert result["_cache"]["narrative_source"] == "w84"
+    assert "Back the Arsenal win at 2.10 with Betway" in result["narrative"]
+
+
+@pytest.mark.asyncio
+async def test_generate_one_falls_back_to_w82_when_verify_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_generate_dependencies(monkeypatch)
+
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec: "prompt")
+    monkeypatch.setattr(
+        pregen,
+        "verify_shadow_narrative",
+        lambda draft, pack, spec: (False, {"rejection_reasons": ["bad h2h"]}),
+    )
+
+    result = await pregen._generate_one(_edge(), "claude-sonnet", _FakeClaude())
+
+    assert result["success"] is True
+    assert result["_cache"]["narrative_source"] == "w82"
+    assert "Lean Arsenal at Betway 2.10." in result["narrative"]
+
+
+@pytest.mark.asyncio
+async def test_generate_one_falls_back_to_w82_on_w84_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_generate_dependencies(monkeypatch)
+
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec: "prompt")
+
+    async def _boom(**kwargs):
+        raise RuntimeError("anthropic down")
+
+    claude = _FakeClaude()
+    monkeypatch.setattr(claude.messages, "create", _boom)
+
+    result = await pregen._generate_one(_edge(), "claude-sonnet", claude)
+
+    assert result["success"] is True
+    assert result["_cache"]["narrative_source"] == "w82"
+    assert "Lean Arsenal at Betway 2.10." in result["narrative"]
+
+
+@pytest.mark.asyncio
+async def test_verify_and_fill_cache_fills_gaps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """W84-CONFIRM-1: verify_and_fill_cache fills gaps without shadow tasks."""
+    monkeypatch.setattr(pregen, "_get_cached_narrative", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        pregen,
+        "_generate_one",
+        AsyncMock(
+            return_value={
+                "success": True,
+                "_cache": {
+                    "match_id": "arsenal_vs_bournemouth_2026-03-21",
+                    "html": "<b>x</b>",
+                    "tips": [],
+                    "edge_tier": "silver",
+                    "model": "sonnet",
+                    "narrative_source": "w84",
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(pregen, "_store_narrative_cache", AsyncMock())
+
+    await pregen._verify_and_fill_cache([_edge()], "claude-sonnet", _FakeClaude(), "full")
+
+
+@pytest.mark.asyncio
+async def test_main_runs_w84_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """W84-CONFIRM-1: main() always runs W84 generation (no env-var gate)."""
+    monkeypatch.setattr(pregen, "_wait_for_scraper_writer_window", AsyncMock(return_value=True))
+    monkeypatch.setattr(pregen, "_validate_pregen_runtime_schema", lambda db_path=None: None)
+    monkeypatch.setattr(pregen, "_load_shadow_pregen_edges", lambda limit=100: [_edge()])
+    monkeypatch.setattr(pregen, "_get_cached_narrative", AsyncMock(return_value=None))
+    monkeypatch.setattr(pregen, "_store_narrative_cache", AsyncMock())
+    monkeypatch.setattr(pregen, "_verify_and_fill_cache", AsyncMock())
+    monkeypatch.setattr(pregen, "_check_verdict_balance", lambda verdicts: None)
+    monkeypatch.setattr(pregen.anthropic, "AsyncAnthropic", lambda api_key=None: _FakeClaude())
+
+    async def _generate_one(*args, **kwargs):
+        return {
+            "success": True,
+            "duration": 0.01,
+            "narrative": _w84_text(),
+            "_cache": {
+                "match_id": "arsenal_vs_bournemouth_2026-03-21",
+                "html": "<b>x</b>",
+                "tips": [],
+                "edge_tier": "silver",
+                "model": "sonnet",
+                "evidence_json": "{}",
+                "narrative_source": "w84",
+            },
+        }
+
+    monkeypatch.setattr(pregen, "_generate_one", _generate_one)
+
+    await pregen.main("full")
+
+
+@pytest.mark.asyncio
+async def test_get_cached_narrative_preserves_w84_h2h_from_evidence(tmp_path) -> None:
+    import json
+    import sqlite3
+
+    db_path = str(tmp_path / "cache.db")
+    original = bot._NARRATIVE_DB_PATH
+    bot._NARRATIVE_DB_PATH = db_path
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS odds_latest ("
+        "match_id TEXT, bookmaker TEXT, home_odds REAL, draw_odds REAL, away_odds REAL)"
+    )
+    conn.execute(
+        "INSERT INTO odds_latest (match_id, bookmaker, home_odds, draw_odds, away_odds) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("stellenbosch_vs_chippa_united_2026-03-21", "Betway", 2.10, 3.10, 3.40),
+    )
+    conn.commit()
+    conn.close()
+
+    try:
+        bot._ensure_narrative_cache_table()
+        evidence_json = json.dumps(
+            {
+                "h2h": {
+                    "summary_text": "2 meetings: Stellenbosch 1W 1D 0L",
+                    "matches": [{"score": "0-0"}],
+                }
+            }
+        )
+        await bot._store_narrative_cache(
+            "stellenbosch_vs_chippa_united_2026-03-21",
+            (
+                "📋 <b>The Setup</b>\n"
+                "Head to head: 2 meetings: Stellenbosch 1W 1D 0L, and the last meeting finished 0-0.\n\n"
+                "🎯 <b>The Edge</b>\n"
+                "Betway have Stellenbosch at 2.10.\n\n"
+                "⚠️ <b>The Risk</b>\n"
+                "Variance still matters.\n\n"
+                "🏆 <b>Verdict</b>\n"
+                "Lean Stellenbosch at Betway 2.10."
+            ),
+            [{"outcome": "home", "odds": 2.1, "ev": 3.8}],
+            "silver",
+            "sonnet",
+            evidence_json=evidence_json,
+            narrative_source="w84",
+        )
+
+        cached = await bot._get_cached_narrative("stellenbosch_vs_chippa_united_2026-03-21")
+        assert cached is not None
+        assert cached["narrative_source"] == "w84"
+    finally:
+        bot._NARRATIVE_DB_PATH = original
