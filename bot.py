@@ -2080,7 +2080,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             await _generate_game_tips_safe(query, ctx, event_id, query.from_user.id)
     elif prefix == "tip":
         if action == "affiliate_soon":
-            await query.answer("🔗 Betway.co.za link coming soon! Check back tomorrow.", show_alert=True)
+            # Legacy placeholder — should no longer appear after R6-BUILD-01.
+            # Redirect to active bookmaker website as graceful fallback.
+            await query.answer(f"🔗 Opening {config.get_active_display_name()}...", show_alert=False)
         else:
             await handle_tip_detail(query, ctx, action)
     elif prefix == "odds":
@@ -6699,6 +6701,27 @@ def _build_model_from_consensus(match: dict) -> dict:
     }
 
 
+def _tier_from_composite(composite: float) -> str:
+    """Re-derive display tier from composite score using locked thresholds.
+
+    R6-BUILD-02: DB edge_tier may be stale (stored when Gold threshold was lower).
+    Always re-derive from composite_score for consistent list-view tier display.
+
+    Thresholds (locked — R6-BUILD-02, mirrors edge_config.TIER_THRESHOLDS):
+        Diamond >= 52
+        Gold    >= 40
+        Silver  >= 38
+        Bronze  <  38 (floor for any tip that passed production filters)
+    """
+    if composite >= 52:
+        return "diamond"
+    if composite >= 40:
+        return "gold"
+    if composite >= 38:
+        return "silver"
+    return "bronze"
+
+
 def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
     """W84-P1: Fast serving path — read pre-computed edges from edge_results table.
 
@@ -6762,9 +6785,10 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         home_display = _display_team_name(_home_raw)
         away_display = _display_team_name(_away_raw)
 
-        edge_tier = (row["edge_tier"] or "bronze").lower()
-        if edge_tier not in _tier_sort:
-            edge_tier = "bronze"
+        # R6-BUILD-02: Re-derive tier from composite_score — DB edge_tier may be
+        # stale (logged when Gold threshold was lower than the current 40).
+        # composite_score is always fresh and authoritative for display tier.
+        edge_tier = _tier_from_composite(float(row["composite_score"] or 0))
 
         # predicted_ev is stored as percentage (e.g. 5.2 = 5.2%)
         ev_pct = round(float(row["predicted_ev"] or 0), 1)
@@ -13180,6 +13204,25 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
             log.warning("POLISH REJECT: hallucinated person names %s", _hallucinated)
             return False
 
+    # 13. R6-BUILD-02: EV-to-staking floor
+    # Polish must not show weaker staking than the EV level justifies.
+    # Scans the Verdict section only — weak phrases elsewhere are not a concern.
+    # R4-BUILD-03 already sets the correct spec.verdict_sizing, but the LLM can
+    # override it. This gate catches that substitution before it reaches users.
+    _ev_val = float(getattr(spec, "ev_pct", 0) or 0)
+    if _ev_val >= 7.0:
+        # EV ≥7%: "Small stake", "tiny exposure", or "speculative" must NOT appear
+        # in the Verdict section. These imply low-confidence posture for a high-EV pick.
+        _verdict_start = polished.find("🏆")
+        _verdict_text = polished[_verdict_start:].lower() if _verdict_start >= 0 else polished_lower
+        _weak_staking_terms = ("small stake", "tiny exposure", "speculative punt")
+        for _ws in _weak_staking_terms:
+            if _ws in _verdict_text:
+                log.warning(
+                    "POLISH REJECT: weak staking '%s' in verdict for EV %.1f%%", _ws, _ev_val
+                )
+                return False
+
     return True
 
 
@@ -15136,16 +15179,16 @@ def _build_game_buttons(
                 if aff_url:
                     primary_button = InlineKeyboardButton(cta_text, url=aff_url)
                 else:
-                    # R4-BUILD-01: Always generate a CTA — use bookmaker homepage as fallback.
+                    # R6-BUILD-01: Always generate a URL CTA — never use tip:affiliate_soon.
                     _fallback_url = ""
                     if bk_key:
                         _sa = config.SA_BOOKMAKERS.get(bk_key)
                         _aff = config.BOOKMAKER_AFFILIATES.get(bk_key)
                         _fallback_url = (_aff or {}).get("base_url", "") or (_sa or {}).get("website_url", "")
-                    if _fallback_url:
-                        primary_button = InlineKeyboardButton(cta_text, url=_fallback_url)
-                    else:
-                        primary_button = InlineKeyboardButton(cta_text, callback_data="tip:affiliate_soon")
+                    if not _fallback_url:
+                        # Last resort: use active bookmaker's website URL
+                        _fallback_url = config.get_active_website_url()
+                    primary_button = InlineKeyboardButton(cta_text, url=_fallback_url)
         else:
             # No positive EV — gate deep link by tier (W30-GATE)
             if _bet_access in ("blurred", "locked"):

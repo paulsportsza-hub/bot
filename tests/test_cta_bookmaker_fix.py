@@ -1,9 +1,13 @@
-"""Tests for R4-BUILD-01: CTA Button Bookmaker Mismatch Fix.
+"""Tests for R4-BUILD-01 + R6-BUILD-01: CTA Button Bookmaker Fix.
 
 Verifies:
   1. _load_tips_from_edge_results populates odds_by_bookmaker from edge data
   2. _build_game_buttons uses tip-level bookmaker when select_best_bookmaker returns empty
   3. Every card with a valid edge generates a CTA button (no missing CTAs)
+  4. (R6-BUILD-01) No SA bookmaker resolves to tip:affiliate_soon
+  5. (R6-BUILD-01) All SA bookmakers have working URLs via get_affiliate_url
+  6. (R6-BUILD-01) PlayaBets is in BOOKMAKER_AFFILIATES
+  7. (R6-BUILD-01) All SA_BOOKMAKERS entries have active: True
 """
 from __future__ import annotations
 
@@ -173,3 +177,130 @@ def test_build_game_buttons_no_none_in_cta():
     for row in buttons:
         for btn in row:
             assert "None" not in btn.text, f"CTA contains 'None': {btn.text}"
+
+
+# ── Part C: R6-BUILD-01 — No SA bookmaker resolves to affiliate_soon ──
+
+
+def test_r6_all_sa_bookmakers_in_affiliates_config():
+    """Every SA bookmaker with a scraper must be in BOOKMAKER_AFFILIATES."""
+    import config
+
+    scraped_bookmakers = [
+        "hollywoodbets", "supabets", "betway", "sportingbet",
+        "gbets", "wsb", "playabets", "supersportbet",
+    ]
+    for bk in scraped_bookmakers:
+        assert bk in config.BOOKMAKER_AFFILIATES, \
+            f"{bk} missing from BOOKMAKER_AFFILIATES"
+        assert config.BOOKMAKER_AFFILIATES[bk]["base_url"], \
+            f"{bk} has empty base_url in BOOKMAKER_AFFILIATES"
+
+
+def test_r6_all_sa_bookmakers_active():
+    """All SA_BOOKMAKERS entries must have active: True."""
+    import config
+
+    scraped_bookmakers = [
+        "hollywoodbets", "supabets", "betway", "sportingbet",
+        "gbets", "wsb", "playabets", "supersportbet",
+    ]
+    for bk in scraped_bookmakers:
+        assert bk in config.SA_BOOKMAKERS, f"{bk} missing from SA_BOOKMAKERS"
+        assert config.SA_BOOKMAKERS[bk]["active"] is True, \
+            f"{bk} has active=False in SA_BOOKMAKERS"
+        assert config.SA_BOOKMAKERS[bk]["website_url"], \
+            f"{bk} has empty website_url in SA_BOOKMAKERS"
+
+
+def test_r6_get_affiliate_url_returns_url_for_all_sa_bookmakers():
+    """get_affiliate_url must return a non-empty URL for every SA bookmaker."""
+    from services.affiliate_service import get_affiliate_url
+
+    scraped_bookmakers = [
+        "hollywoodbets", "supabets", "betway", "sportingbet",
+        "gbets", "wsb", "playabets", "supersportbet",
+    ]
+    for bk in scraped_bookmakers:
+        url = get_affiliate_url(bk)
+        assert url, f"get_affiliate_url('{bk}') returned empty URL"
+        assert url.startswith("https://"), \
+            f"get_affiliate_url('{bk}') returned invalid URL: {url}"
+
+
+def test_r6_no_affiliate_soon_for_any_sa_bookmaker():
+    """_build_game_buttons must never produce tip:affiliate_soon for any SA bookmaker."""
+    import bot
+    from bot import _build_game_buttons
+
+    all_sa_bookmakers = {
+        "hollywoodbets": "Hollywoodbets",
+        "supabets": "SupaBets",
+        "betway": "Betway",
+        "sportingbet": "Sportingbet",
+        "gbets": "GBets",
+        "wsb": "World Sports Betting",
+        "playabets": "PlayaBets",
+        "supersportbet": "SuperSportBet",
+    }
+    for bk_key, bk_name in all_sa_bookmakers.items():
+        tips = [{
+            "event_id": f"test_vs_test_{bk_key}",
+            "match_id": f"test_vs_test_{bk_key}",
+            "outcome": "Home Win",
+            "odds": 2.50,
+            "ev": 4.0,
+            "bookmaker": bk_name,
+            "bookmaker_key": bk_key,
+            "odds_by_bookmaker": {bk_key: 2.50},
+            "edge_v2": None,
+            "display_tier": "gold",
+            "edge_rating": "gold",
+        }]
+        buttons = _build_game_buttons(
+            tips, f"test_vs_test_{bk_key}", 12345,
+            source="edge_picks", user_tier="diamond", edge_tier="gold",
+        )
+        for row in buttons:
+            for btn in row:
+                assert getattr(btn, "callback_data", "") != "tip:affiliate_soon", \
+                    f"tip:affiliate_soon found for {bk_name} ({bk_key})"
+
+
+def test_r6_no_affiliate_soon_with_empty_odds_by_bookmaker():
+    """Even with empty odds_by_bookmaker, CTA must use bookmaker_key fallback — never affiliate_soon."""
+    import bot
+    from bot import _build_game_buttons
+
+    all_sa_bookmakers = {
+        "hollywoodbets": "Hollywoodbets",
+        "supabets": "SupaBets",
+        "betway": "Betway",
+        "sportingbet": "Sportingbet",
+        "gbets": "GBets",
+        "wsb": "World Sports Betting",
+        "playabets": "PlayaBets",
+        "supersportbet": "SuperSportBet",
+    }
+    for bk_key, bk_name in all_sa_bookmakers.items():
+        tips = [{
+            "event_id": f"test_vs_test_{bk_key}",
+            "match_id": f"test_vs_test_{bk_key}",
+            "outcome": "Home Win",
+            "odds": 2.50,
+            "ev": 4.0,
+            "bookmaker": bk_name,
+            "bookmaker_key": bk_key,
+            "odds_by_bookmaker": {},  # Empty — worst case fallback path
+            "edge_v2": None,
+            "display_tier": "gold",
+            "edge_rating": "gold",
+        }]
+        buttons = _build_game_buttons(
+            tips, f"test_vs_test_{bk_key}", 12345,
+            source="edge_picks", user_tier="diamond", edge_tier="gold",
+        )
+        for row in buttons:
+            for btn in row:
+                assert getattr(btn, "callback_data", "") != "tip:affiliate_soon", \
+                    f"tip:affiliate_soon found for {bk_name} ({bk_key}) with empty odds_by_bookmaker"

@@ -142,7 +142,7 @@ class TestGoldJourney:
         assert get_edge_access_level("gold", "diamond") == "blurred"
 
     def test_gold_tips_page(self):
-        """Gold tips page shows odds for Gold edges, locks Diamond."""
+        """Gold tips page shows odds for Gold edges, blurs Diamond."""
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
@@ -151,10 +151,11 @@ class TestGoldJourney:
             )
         # Gold edge (Bulls vs Stormers) should show odds
         assert "1.65" in text
-        # Diamond edge (Arsenal vs Chelsea) should be locked
-        assert "Our highest-conviction pick." in text
-        # Footer mentions Diamond locked count
-        assert "Diamond" in text or "💎" in text
+        # Diamond edge (Arsenal vs Chelsea) should be blurred — odds hidden, return shown
+        assert "1.85" not in text  # Diamond odds masked for Gold users
+        assert "return on R300" in text  # Blurred card shows return only
+        # Diamond section header exists in the page
+        assert "💎" in text
 
     def test_gold_no_subscribe_in_accessible_buttons(self):
         """Gold user's accessible edge buttons go to edge:detail, not sub:plans."""

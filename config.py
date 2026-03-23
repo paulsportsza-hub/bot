@@ -176,6 +176,13 @@ BOOKMAKER_AFFILIATES: dict[str, dict] = {
         "status": "pending_approval",
         "deep_link_template": None,
     },
+    "playabets": {
+        "name": "PlayaBets",
+        "affiliate_code": None,
+        "base_url": "https://www.playabets.co.za",
+        "status": "pending_approval",
+        "deep_link_template": None,
+    },
 }
 
 # ── SA Bookmakers (whitelisted for user-facing odds) ──────
@@ -197,7 +204,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "website_url": "https://www.sportingbet.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
-        "active": False,
+        "active": True,
     },
     "10bet": {
         "display_name": "10Bet.co.za",
@@ -205,7 +212,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "website_url": "https://www.10bet.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
-        "active": False,
+        "active": True,
     },
     "playabets": {
         "display_name": "PlayaBets.co.za",
@@ -213,7 +220,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "website_url": "https://www.playabets.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
-        "active": False,
+        "active": True,
     },
     "supabets": {
         "display_name": "SupaBets.co.za",
@@ -221,7 +228,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "website_url": "https://www.supabets.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
-        "active": False,
+        "active": True,
     },
     "hollywoodbets": {
         "display_name": "Hollywoodbets.net",
@@ -229,7 +236,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "website_url": "https://www.hollywoodbets.net",
         "guide_url": "",
         "affiliate_base_url": "",
-        "active": False,
+        "active": True,
     },
     "gbets": {
         "display_name": "GBets.co.za",
@@ -237,7 +244,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "website_url": "https://www.gbets.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
-        "active": False,
+        "active": True,
     },
     "wsb": {
         "display_name": "WSB.co.za",
@@ -245,7 +252,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "website_url": "https://www.wsb.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
-        "active": False,
+        "active": True,
     },
     "supersportbet": {
         "display_name": "SuperSportBet.co.za",
@@ -253,7 +260,7 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "website_url": "https://www.supersportbet.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
-        "active": False,
+        "active": True,
     },
 }
 

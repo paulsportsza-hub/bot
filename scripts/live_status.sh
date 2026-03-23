@@ -163,8 +163,8 @@ echo ""
 
 # ── Claude/Codex instances ───────────────────────────────────
 bold "AGENT PROCESSES"
-CLAUDE_COUNT=$(pgrep -c -f "claude" 2>/dev/null || echo 0)
-CODEX_COUNT=$(pgrep -c -f "codex" 2>/dev/null || echo 0)
+CLAUDE_COUNT=$(pgrep -f "claude" 2>/dev/null | wc -l | tr -d ' ')
+CODEX_COUNT=$(pgrep -f "codex" 2>/dev/null | wc -l | tr -d ' ')
 TOTAL_AGENTS=$((CLAUDE_COUNT + CODEX_COUNT))
 CLAUDE_MEM=$(ps aux | grep claude | grep -v grep | awk '{sum += $6} END {print int(sum/1024)}')
 CODEX_MEM=$(ps aux | grep codex | grep -v grep | awk '{sum += $6} END {print int(sum/1024)}')
