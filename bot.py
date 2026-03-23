@@ -13030,7 +13030,12 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         f"1. TONE BAND: {spec.tone_band}\n"
         f"   ALLOWED phrases: {', '.join(band['allowed'][:5])}\n"
         f"   BANNED phrases: {', '.join(band['banned'])}\n"
-        f"2. You MUST keep the same verdict strength. Do NOT upgrade \"{spec.verdict_action}\" to anything stronger.\n"
+        f"2. Do NOT change the verdict action phrase. Preserve the EXACT staking language "
+        f"(e.g. '2-unit play', '1-unit starter', 'small-stake speculative'). Do NOT soften, "
+        f"upgrade, or rephrase staking terms. The verdict action \"{spec.verdict_action}\" must appear verbatim.\n"
+        f"   Do NOT change the sizing classification. If the input says \"{spec.verdict_sizing}\", "
+        f"the output must say \"{spec.verdict_sizing}\". Do NOT substitute with vague language "
+        f"like 'consider' or 'worth a look'.\n"
         f"3. You MUST keep all team names, positions, points, form strings, bookmaker names, odds, and EV percentages EXACTLY as they appear in the baseline.\n"
         f"4. You MUST keep all risk factors. Do NOT remove or soften them.\n"
         f"5. Form strings belong in parentheses or woven into sentences — NEVER as standalone headlines.\n"
@@ -13111,6 +13116,70 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
         log.warning("POLISH REJECT: quality violations %s", violations)
         return False
 
+    # 9. R5-BUILD-01: verdict_sizing preservation
+    _sizing_val = (spec.verdict_sizing or "").lower()
+    if _sizing_val and _sizing_val != "pass" and _sizing_val in baseline.lower():
+        if _sizing_val not in polished_lower:
+            log.warning("POLISH REJECT: verdict_sizing '%s' removed by polish", spec.verdict_sizing)
+            return False
+
+    # 10. R5-BUILD-01: verdict_action preservation
+    _action_val = (spec.verdict_action or "").lower()
+    if _action_val and _action_val != "pass":
+        # Multi-word actions (e.g. "speculative punt", "strong back"): exact phrase
+        if len(_action_val.split()) > 1 and _action_val in baseline.lower():
+            if _action_val not in polished_lower:
+                log.warning("POLISH REJECT: verdict_action '%s' removed by polish", spec.verdict_action)
+                return False
+        # Single-word actions ("lean", "back"): check within verdict section only
+        elif len(_action_val.split()) == 1:
+            _bl_verdict = baseline[baseline.find("🏆"):].lower() if "🏆" in baseline else ""
+            _pl_verdict = polished[polished.find("🏆"):].lower() if "🏆" in polished else ""
+            if _action_val in _bl_verdict and _action_val not in _pl_verdict:
+                log.warning("POLISH REJECT: verdict_action '%s' removed from verdict", spec.verdict_action)
+                return False
+
+    # 11. R5-BUILD-01: template structural diversity — reject homogenised openers
+    _setup_idx = polished.find("📋")
+    if _setup_idx != -1:
+        _after_header = polished[_setup_idx:]
+        _nl = _after_header.find("\n")
+        if _nl != -1:
+            _first_para = _after_header[_nl:].strip()
+            _HOMOGENISED = [
+                re.compile(r'^In the \w+ (?:matchup|fixture|clash)', re.IGNORECASE),
+                re.compile(r'^Looking at (?:the|this) \w+ (?:fixture|match|clash)', re.IGNORECASE),
+                re.compile(r'^When it comes to', re.IGNORECASE),
+                re.compile(r'^This \w+ (?:matchup|fixture|clash)', re.IGNORECASE),
+                re.compile(r'^Turning (?:our )?attention to', re.IGNORECASE),
+                re.compile(r'^As we (?:look|turn) ', re.IGNORECASE),
+            ]
+            for _pat in _HOMOGENISED:
+                if _pat.match(_first_para):
+                    log.warning("POLISH REJECT: homogenised opener %r", _first_para[:60])
+                    return False
+
+    # 12. R5-BUILD-01: player→team validity — reject hallucinated person names
+    _NAME_RE = re.compile(r'\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})+)\b')
+    _baseline_names = set(_NAME_RE.findall(baseline))
+    _polished_names = set(_NAME_RE.findall(polished))
+    _new_names = _polished_names - _baseline_names
+    if _new_names:
+        _valid = set()
+        for _person in filter(None, [spec.home_coach, spec.away_coach]):
+            _valid.add(_person.strip())
+        for _inj_list in [spec.injuries_home, spec.injuries_away]:
+            for _inj in _inj_list:
+                _valid.add(_inj.strip())
+        for _entity in filter(None, [spec.home_name, spec.away_name,
+                                     spec.bookmaker, spec.competition]):
+            _valid.add(_entity.strip())
+        _hallucinated = {n for n in _new_names
+                         if not any(n in v or v in n for v in _valid)}
+        if _hallucinated:
+            log.warning("POLISH REJECT: hallucinated person names %s", _hallucinated)
+            return False
+
     return True
 
 
@@ -13156,6 +13225,13 @@ async def _generate_narrative_v2(
 
     if live_tap:
         return baseline  # Instant. No LLM.
+
+    # R5-BUILD-01 Fix 3: W82 narratives bypass polish entirely.
+    # W82 deterministic output is template-diverse by design — the polish pass
+    # adds risk (staking language rewrites, template homogenisation, player name
+    # hallucination) with no upside. When a future non-W82 narrative source is
+    # added, gate this return on narrative_source != "w82".
+    return baseline
 
     # W82-POLISH: optional constrained LLM polish (pre-gen path only)
     _match_label = f"{home_team} vs {away_team}" if home_team and away_team else "unknown"
