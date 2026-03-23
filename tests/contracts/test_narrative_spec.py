@@ -68,14 +68,18 @@ class TestClassifyEvidence:
         assert action == "pass"
 
     def test_one_signal_returns_lean_moderate(self):
-        ev_class, tone, action, sizing = _classify_evidence({"confirming_signals": 1})
-        assert ev_class == "lean"
-        assert tone == "moderate"
-        assert action == "lean"
-        assert sizing == "small stake"
+        ev_class, tone, action, sizing = _classify_evidence(
+            {"confirming_signals": 1, "edge_pct": 3.0}
+        )
+        assert ev_class == "speculative"
+        assert tone == "cautious"
+        assert action == "speculative punt"
+        assert sizing == "tiny exposure or pass"
 
     def test_three_signals_returns_supported_confident(self):
-        ev_class, tone, action, sizing = _classify_evidence({"confirming_signals": 3})
+        ev_class, tone, action, sizing = _classify_evidence(
+            {"confirming_signals": 3, "edge_pct": 5.0}
+        )
         assert ev_class == "supported"
         assert tone == "confident"
         assert action == "back"
@@ -87,15 +91,16 @@ class TestClassifyEvidence:
             "composite_score": 65,
             "edge_pct": 6,
         })
-        assert ev_class == "conviction"
-        assert tone == "strong"
-        assert action == "strong back"
-        assert sizing == "confident stake"
+        assert ev_class == "supported"
+        assert tone == "confident"
+        assert action == "back"
+        assert sizing == "standard stake"
 
     def test_two_signals_eight_hour_stale_returns_lean_moderate(self):
-        """2 signals - 1 stale penalty (8h >= 6h) = 1 effective → lean, moderate."""
+        """2 signals - 1 stale penalty (8h >= 6h) = 1 effective → downgrade one EV bucket."""
         ev_class, tone, action, sizing = _classify_evidence({
             "confirming_signals": 2,
+            "edge_pct": 5.0,
             "stale_minutes": 480,  # 8 hours
         })
         assert ev_class == "lean"
@@ -107,19 +112,22 @@ class TestClassifyEvidence:
         """Stale penalty kicks in at exactly 360 minutes."""
         ev_class_with_stale, _, _, _ = _classify_evidence({
             "confirming_signals": 1,
+            "edge_pct": 3.0,
             "stale_minutes": 360,
         })
         ev_class_no_stale, _, _, _ = _classify_evidence({
             "confirming_signals": 1,
+            "edge_pct": 3.0,
             "stale_minutes": 359,
         })
         assert ev_class_with_stale == "speculative"   # 1 - 1 stale = 0 effective
-        assert ev_class_no_stale == "lean"            # no penalty at 359
+        assert ev_class_no_stale == "speculative"     # EV bucket 2-4 downgraded by low support
 
     def test_movement_against_applies_penalty(self):
         """Movement against applies -1 penalty to effective support."""
         ev_class, tone, _, _ = _classify_evidence({
             "confirming_signals": 1,
+            "edge_pct": 3.0,
             "movement_direction": "against",
         })
         assert ev_class == "speculative"   # 1 - 1 movement = 0 effective
@@ -145,6 +153,39 @@ class TestClassifyEvidence:
         })
         assert ev_class == "supported"
         assert tone == "confident"
+
+    def test_sub_two_percent_ev_is_always_speculative(self):
+        ev_class, tone, action, sizing = _classify_evidence({
+            "confirming_signals": 4,
+            "edge_pct": 1.2,
+            "composite_score": 70,
+        })
+        assert ev_class == "speculative"
+        assert tone == "cautious"
+        assert action == "speculative punt"
+        assert sizing == "tiny exposure or pass"
+
+    def test_zero_signals_cap_high_ev_at_speculative(self):
+        ev_class, tone, action, sizing = _classify_evidence({
+            "confirming_signals": 0,
+            "edge_pct": 8.5,
+            "composite_score": 75,
+        })
+        assert ev_class == "speculative"
+        assert tone == "cautious"
+        assert action == "speculative punt"
+        assert sizing == "tiny exposure or pass"
+
+    def test_high_ev_with_two_signals_shifts_down_one_tier(self):
+        ev_class, tone, action, sizing = _classify_evidence({
+            "confirming_signals": 2,
+            "edge_pct": 7.4,
+            "composite_score": 63,
+        })
+        assert ev_class == "supported"
+        assert tone == "confident"
+        assert action == "back"
+        assert sizing == "standard stake"
 
     def test_missing_keys_default_to_speculative(self):
         """Empty dict → all defaults → 0 effective → speculative."""
@@ -473,6 +514,33 @@ class TestLabelHelpers:
         assert "1D" in summary
         assert "1L" in summary
 
+    def test_build_h2h_summary_prefers_edge_data_counts(self):
+        summary = _build_h2h_summary(
+            {"head_to_head": [{"home_score": 0, "away_score": 0}]},
+            {
+                "h2h_total": 5,
+                "h2h_a_wins": 3,
+                "h2h_b_wins": 2,
+                "h2h_draws": 0,
+            },
+            home_name="West Ham",
+        )
+        assert summary == "5 meetings: West Ham 3W 0D 2L"
+
+    def test_build_h2h_summary_parses_espn_score_strings(self):
+        summary = _build_h2h_summary(
+            {
+                "head_to_head": [
+                    {"home": "Arsenal", "away": "Bournemouth", "score": "2-1"},
+                    {"home": "Bournemouth", "away": "Arsenal", "score": "1-1"},
+                    {"home": "Bournemouth", "away": "Arsenal", "score": "0-2"},
+                ]
+            },
+            {},
+            home_name="Arsenal",
+        )
+        assert summary == "3 meetings: Arsenal 2W 1D 0L"
+
     def test_build_h2h_summary_empty(self):
         assert _build_h2h_summary({}) == ""
         assert _build_h2h_summary(None) == ""
@@ -581,10 +649,10 @@ class TestRepresentativeSpecs:
         assert spec.verdict_action == "back"
         assert spec.verdict_sizing == "standard stake"
 
-    def test_edge_3_six_nations_draw_conviction(self):
+    def test_edge_3_six_nations_draw_supported(self):
         """
         Edge: England vs Ireland Draw | 5 signals | composite 72 | EV +6.8%
-        Expected: conviction / strong
+        Expected: supported / confident under the 7% sizing floor
         """
         edge_data = {
             "home_team": "England",
@@ -621,10 +689,10 @@ class TestRepresentativeSpecs:
         )
         spec = _enforce_coherence(spec)
 
-        assert spec.evidence_class == "conviction"
-        assert spec.tone_band == "strong"
-        assert spec.verdict_action == "strong back"
-        assert spec.verdict_sizing == "confident stake"
+        assert spec.evidence_class == "supported"
+        assert spec.tone_band == "confident"
+        assert spec.verdict_action == "back"
+        assert spec.verdict_sizing == "standard stake"
         assert spec.competition == "Six Nations"
 
 
@@ -820,7 +888,7 @@ class TestRenderEdge:
 # ── W82-RENDER: _render_risk tests ────────────────────────────────────────────
 
 class TestRenderRisk:
-    """_render_risk() incorporates risk factors and sizing caveat."""
+    """_render_risk() stays uncertainty-only and leaves staking to Verdict."""
 
     def _spec(self, risk_severity, risk_factors, verdict_sizing="standard stake"):
         return NarrativeSpec(
@@ -845,12 +913,13 @@ class TestRenderRisk:
         risk = _render_risk(spec)
         assert "manageable" in risk.lower() or "clean" in risk.lower()
 
-    def test_risk_includes_stake_guidance(self):
-        """W84-Q3: Risk section includes stake/sizing reference."""
+    def test_risk_does_not_include_stake_guidance(self):
+        """Risk section must not duplicate Verdict stake language."""
         spec = self._spec("moderate", ["Market drifting away from this outcome."],
                           verdict_sizing="small stake")
         risk = _render_risk(spec)
-        assert "stake" in risk.lower() or "size" in risk.lower()
+        assert "stake" not in risk.lower()
+        assert "size" not in risk.lower()
 
     def test_risk_factors_appear_in_output(self):
         spec = self._spec("moderate",

@@ -474,7 +474,7 @@ class TestHotTipsResultProof:
 
 class TestProfileEdgePerformance:
     @pytest.mark.asyncio
-    async def test_profile_shows_paid_identity_stats_and_hub_buttons(self):
+    async def test_profile_shows_paid_identity_stats_and_hub_buttons_for_effective_gold_user(self):
         import bot
 
         profile_data = {
@@ -507,11 +507,12 @@ class TestProfileEdgePerformance:
             trial_start_date=None,
             trial_end_date=None,
             is_founding_member=False,
-            user_tier="gold",
+            user_tier="bronze",
         )
 
         with patch("bot.get_profile_data", new=AsyncMock(return_value=profile_data)), \
              patch("bot.db.get_user", new=AsyncMock(return_value=user)), \
+             patch("bot.db.is_premium", side_effect=AssertionError("Profile CTA should use effective tier, not db.is_premium")), \
              patch("bot.db.is_trial_active", new=AsyncMock(return_value=False)), \
              patch("bot.get_effective_tier", new=AsyncMock(return_value="gold")), \
              patch("bot.db.get_profile_engagement_stats", new=AsyncMock(return_value={"total_edge_views": 18, "recent_edge_views": 4, "days_with_mzansiedge": 46})), \
@@ -535,6 +536,7 @@ class TestProfileEdgePerformance:
         assert "💎 Top Edge Picks" in labels
         assert "results:7" in callbacks
         assert "sub:billing" in callbacks
+        assert "sub:plans" not in callbacks
 
     @pytest.mark.asyncio
     async def test_profile_shows_trial_identity_and_low_data_guidance(self):
@@ -578,8 +580,11 @@ class TestProfileEdgePerformance:
 
         markup = update.message.reply_text.call_args.kwargs["reply_markup"]
         labels = [b.text for row in markup.inline_keyboard for b in row]
+        callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
         assert "✨ View Plans" in labels
         assert "📋 My Plan" not in labels
+        assert "sub:plans" in callbacks
+        assert "sub:billing" not in callbacks
 
     @pytest.mark.asyncio
     async def test_profile_shows_bronze_identity_and_plan_cta(self):
@@ -614,7 +619,12 @@ class TestProfileEdgePerformance:
             await bot._show_profile(update, 123)
 
         assert "🥉 <b>Bronze (Free)</b>" in summary
-        assert "✨ View Plans" in [b.text for row in update.message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard for b in row]
+        labels = [b.text for row in update.message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard for b in row]
+        callbacks = [b.callback_data for row in update.message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard for b in row]
+        assert "✨ View Plans" in labels
+        assert "📋 My Plan" not in labels
+        assert "sub:plans" in callbacks
+        assert "sub:billing" not in callbacks
 
     @pytest.mark.asyncio
     async def test_settings_summary_stays_on_shared_compact_renderer(self):

@@ -33,6 +33,11 @@ class EdgeRating:
     HIDDEN = "hidden"      # Below 40% — NOT shown to users
 
 
+_DIAMOND_GATE_MAX_SCORE = 84.9
+_DIAMOND_MIN_BOOKMAKERS = 3
+_VALID_MOVEMENT_DIRECTIONS = {"shortening", "drifting", "stable"}
+
+
 def _safe_odds(snapshot: dict) -> float | None:
     """Extract odds from a snapshot, returning None if missing or invalid."""
     val = snapshot.get("odds")
@@ -68,39 +73,7 @@ def calculate_edge_rating(
     Returns:
         EdgeRating string constant (diamond/gold/silver/bronze/hidden)
     """
-    if not odds_snapshots:
-        odds_snapshots = []
-    if not model_prediction:
-        model_prediction = {}
-
-    scores: list[float] = []
-
-    # Factor 1: Bookmaker consensus (0-25 points)
-    consensus_score = _bookmaker_consensus(odds_snapshots, model_prediction.get("outcome", ""))
-    scores.append(consensus_score)
-
-    # Factor 2: Model alignment (0-25 points)
-    alignment_score = _model_alignment(odds_snapshots, model_prediction)
-    scores.append(alignment_score)
-
-    # Factor 3: Line movement (0-20 points)
-    movement_score = _line_movement_score(line_movement, model_prediction.get("outcome", ""))
-    scores.append(movement_score)
-
-    # Factor 4: Value detection (0-20 points)
-    value_score = _value_detection(odds_snapshots, model_prediction)
-    scores.append(value_score)
-
-    # Factor 5: Market breadth (0-10 points)
-    breadth_score = _market_breadth(odds_snapshots)
-    scores.append(breadth_score)
-
-    total = sum(scores)
-
-    log.debug(
-        "Edge scores: consensus=%.1f alignment=%.1f movement=%.1f value=%.1f breadth=%.1f total=%.1f",
-        *scores, total,
-    )
+    total = calculate_edge_score(odds_snapshots, model_prediction, line_movement)
 
     if total >= 85:
         return EdgeRating.DIAMOND
@@ -123,13 +96,15 @@ def calculate_edge_score(
         odds_snapshots = []
     if not model_prediction:
         model_prediction = {}
-    return (
-        _bookmaker_consensus(odds_snapshots, model_prediction.get("outcome", ""))
-        + _model_alignment(odds_snapshots, model_prediction)
-        + _line_movement_score(line_movement, model_prediction.get("outcome", ""))
-        + _value_detection(odds_snapshots, model_prediction)
-        + _market_breadth(odds_snapshots)
+
+    scores = _score_components(odds_snapshots, model_prediction, line_movement)
+    total = _apply_diamond_no_data_gate(sum(scores), odds_snapshots, model_prediction, line_movement)
+
+    log.debug(
+        "Edge scores: consensus=%.1f alignment=%.1f movement=%.1f value=%.1f breadth=%.1f total=%.1f",
+        *scores, total,
     )
+    return total
 
 
 def apply_guardrails(
@@ -158,6 +133,91 @@ def apply_guardrails(
         reason = f"Tier downgraded: {tier} → {adjusted_tier} ({bk_count} BKs)"
 
     return adjusted_tier, adjusted_ev, reason
+
+
+def _score_components(
+    odds_snapshots: list[dict],
+    model_prediction: dict,
+    line_movement: dict | None,
+) -> list[float]:
+    predicted_outcome = model_prediction.get("outcome", "")
+    return [
+        _bookmaker_consensus(odds_snapshots, predicted_outcome),
+        _model_alignment(odds_snapshots, model_prediction),
+        _line_movement_score(line_movement, predicted_outcome),
+        _value_detection(odds_snapshots, model_prediction),
+        _market_breadth(odds_snapshots),
+    ]
+
+
+def _apply_diamond_no_data_gate(
+    total: float,
+    odds_snapshots: list[dict],
+    model_prediction: dict,
+    line_movement: dict | None,
+) -> float:
+    """Clamp incomplete data scenarios below Diamond.
+
+    Diamond is reserved for fully supported edges. Neutral defaults for
+    missing movement data or partial market snapshots should not unlock
+    the top tier.
+    """
+    if total < 85:
+        return total
+    if _has_complete_diamond_inputs(odds_snapshots, model_prediction, line_movement):
+        return total
+    return min(total, _DIAMOND_GATE_MAX_SCORE)
+
+
+def _has_complete_diamond_inputs(
+    snapshots: list[dict],
+    prediction: dict,
+    movement: dict | None,
+) -> bool:
+    predicted_outcome = prediction.get("outcome", "")
+    if not predicted_outcome:
+        return False
+
+    confidence = _safe_probability(prediction.get("confidence"))
+    implied_prob = _safe_probability(prediction.get("implied_prob"))
+    if confidence is None or implied_prob is None:
+        return False
+
+    valid_outcomes = {
+        snap.get("outcome")
+        for snap in snapshots
+        if snap.get("outcome") and _safe_odds(snap) is not None
+    }
+    if len(valid_outcomes) < 2:
+        return False
+
+    valid_bookmakers = {
+        snap.get("bookmaker")
+        for snap in snapshots
+        if snap.get("bookmaker")
+        and snap.get("outcome") == predicted_outcome
+        and _safe_odds(snap) is not None
+    }
+    if len(valid_bookmakers) < _DIAMOND_MIN_BOOKMAKERS:
+        return False
+
+    if not isinstance(movement, dict):
+        return False
+    if movement.get("direction") not in _VALID_MOVEMENT_DIRECTIONS:
+        return False
+
+    return True
+
+
+def _safe_probability(value: object) -> float | None:
+    """Return a probability in [0, 1], else None."""
+    try:
+        prob = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 0.0 <= prob <= 1.0:
+        return prob
+    return None
 
 
 def _bookmaker_consensus(snapshots: list[dict], predicted_outcome: str) -> float:

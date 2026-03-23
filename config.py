@@ -10,6 +10,41 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+BOT_ROOT = Path(__file__).resolve().parent
+
+
+def _resolve_sqlite_url(raw_url: str | None) -> str:
+    """Anchor relative SQLite URLs to the bot repo so DB resolution is cwd-safe."""
+    default_path = BOT_ROOT / "data" / "mzansiedge.db"
+    candidate = raw_url or f"sqlite+aiosqlite:///{default_path.as_posix()}"
+
+    for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
+        if not candidate.startswith(prefix):
+            continue
+        target = candidate[len(prefix):]
+        path_part, sep, suffix = target.partition("?")
+        if path_part == ":memory:" or path_part.startswith("/"):
+            return candidate
+        absolute_path = (BOT_ROOT / path_part).resolve()
+        resolved_target = absolute_path.as_posix()
+        if sep:
+            resolved_target = f"{resolved_target}?{suffix}"
+        return f"{prefix}{resolved_target}"
+
+    return candidate
+
+
+def _sqlite_path_from_url(db_url: str) -> Path | None:
+    """Return the absolute SQLite path for file-backed SQLite URLs."""
+    for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
+        if not db_url.startswith(prefix):
+            continue
+        target = db_url[len(prefix):].partition("?")[0]
+        if target == ":memory:":
+            return None
+        return Path(target)
+    return None
+
 # ── Telegram ───────────────────────────────────────────────
 BOT_TOKEN: str = os.environ["BOT_TOKEN"]
 ADMIN_IDS: list[int] = [int(i) for i in os.environ["ADMIN_IDS"].split(",")]
@@ -22,7 +57,8 @@ ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 STITCH_CLIENT_ID: str = os.environ.get("STITCH_CLIENT_ID", "")
 STITCH_CLIENT_SECRET: str = os.environ.get("STITCH_CLIENT_SECRET", "")
 STITCH_WEBHOOK_SECRET: str = os.environ.get("STITCH_WEBHOOK_SECRET", "")
-STITCH_MOCK_MODE: bool = os.environ.get("STITCH_MOCK_MODE", "false").lower() == "true"
+STITCH_MOCK_MODE: bool = os.environ.get("STITCH_MOCK_MODE", "true").lower() == "true"
+STITCH_REDIRECT_URI: str = os.environ.get("STITCH_REDIRECT_URI", "")
 
 # ── Subscription Tiers ───────────────────────────────────
 TIER_PRICES: dict[str, int] = {
@@ -41,8 +77,14 @@ TIER_EMOJIS: dict[str, str] = {
     "diamond": "\U0001f48e",  # 💎
 }
 FOUNDING_MEMBER_PRICE: int = 69900  # R699.00/year in cents
-FOUNDING_MEMBER_DEADLINE_DAYS: int = 90  # days from launch
-LAUNCH_DATE: str = "2026-03-28"
+FOUNDING_MEMBER_SLOTS: int = 100
+LAUNCH_DATE: str = "2026-04-27"
+FOUNDING_REFUND_DEADLINE: str = LAUNCH_DATE
+FOUNDING_TERMS_TITLE: str = os.environ.get(
+    "FOUNDING_TERMS_TITLE",
+    "MzansiEdge Founding Member Terms",
+)
+FOUNDING_TERMS_URL: str = os.environ.get("FOUNDING_TERMS_URL", "")
 
 STITCH_PRODUCTS: dict[str, dict] = {
     "gold_monthly": {"id": os.environ.get("STITCH_GOLD_MONTHLY_ID", ""), "tier": "gold", "price": 9900, "period": "monthly"},
@@ -58,9 +100,8 @@ POSTHOG_HOST: str = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
 POSTHOG_PERSONAL_API_KEY: str = os.environ.get("POSTHOG_PERSONAL_API_KEY", "")
 
 # ── Database ───────────────────────────────────────────────
-DATABASE_URL: str = os.environ.get(
-    "DATABASE_URL", "sqlite+aiosqlite:///data/mzansiedge.db"
-)
+DATABASE_URL: str = _resolve_sqlite_url(os.environ.get("DATABASE_URL"))
+DATABASE_PATH: Path | None = _sqlite_path_from_url(DATABASE_URL)
 
 # ── Timezone ───────────────────────────────────────────────
 TZ: str = os.environ.get("TZ", "Africa/Johannesburg")
@@ -70,8 +111,11 @@ ODDS_BASE_URL = "https://api.the-odds-api.com/v4"
 ODDS_API_BASE = ODDS_BASE_URL  # alias used by scripts/sports_data.py
 
 # ── Paths ──────────────────────────────────────────────────
-DATA_DIR = Path("data")
+DATA_DIR = BOT_ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
+
+# ── Bankroll defaults ──────────────────────────────────────
+DEFAULT_BANKROLL: float = 1000.0
 
 # ── Risk profiles ─────────────────────────────────────────
 RISK_PROFILES: dict[str, dict] = {

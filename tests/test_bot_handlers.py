@@ -811,9 +811,9 @@ class TestLeagueExamples:
 
 
 class TestEdgeBranding:
-    def test_help_text_uses_edge_ai(self):
-        """HELP_TEXT should mention Edge-AI."""
-        assert "Edge-AI" in bot.HELP_TEXT
+    def test_help_text_uses_edge_branding(self):
+        """HELP_TEXT should use Edge branding (Edge Picks, Edge Tracker, etc.)."""
+        assert "Edge" in bot.HELP_TEXT
 
     def test_help_text_uses_top_edge_picks(self):
         """HELP_TEXT should use 'Top Edge Picks' not 'Hot Tips'."""
@@ -3141,6 +3141,86 @@ class TestW63EmptySections:
         assert "standard match variance" in result
 
     # W79-PHASE2: test_ensure_setup_not_empty_uses_signals removed
+
+    def test_ensure_verdict_not_empty_fills_empty_verdict(self):
+        narrative = (
+            "📋 <b>The Setup</b>\nArsenal face Liverpool.\n\n"
+            "🎯 <b>The Edge</b>\nBest value sits with Arsenal.\n\n"
+            "⚠️ <b>The Risk</b>\nNo major red flags.\n\n"
+            "🏆 <b>Verdict</b>\n"
+        )
+        tips = [{
+            "outcome": "home",
+            "odds": 2.40,
+            "bookie": "Hollywoodbets",
+            "ev": 8.0,
+            "edge_v2": {"confirming_signals": 3, "stale_minutes": 0},
+        }]
+        result = bot._ensure_verdict_not_empty(
+            narrative,
+            tips=tips,
+            home_name="Arsenal",
+            away_name="Liverpool",
+        )
+        assert "Arsenal" in result
+        assert "2.40" in result
+        assert "Hollywoodbets" in result
+
+    def test_has_stale_h2h_summary_detects_inverted_cached_line(self):
+        narrative = (
+            "📋 <b>The Setup</b>\n"
+            "Head to head: 5 meetings: Aston Villa 0W 5D 0L.\n\n"
+            "🎯 <b>The Edge</b>\nSome edge text.\n\n"
+            "⚠️ <b>The Risk</b>\nSome risk.\n\n"
+            "🏆 <b>Verdict</b>\nBack Aston Villa."
+        )
+        tips = [{
+            "outcome": "home",
+            "odds": 2.03,
+            "bookie": "Supabets",
+            "ev": 2.0,
+            "edge_v2": {
+                "match_key": "aston_villa_vs_west_ham_2026-03-22",
+                "league": "epl",
+                "signals": {
+                    "form_h2h": {
+                        "h2h_total": 5,
+                        "h2h_a_wins": 3,
+                        "h2h_b_wins": 0,
+                        "h2h_draws": 2,
+                    },
+                },
+            },
+        }]
+        assert bot._has_stale_h2h_summary(narrative, tips) is True
+
+    def test_has_stale_h2h_summary_allows_correct_line(self):
+        narrative = (
+            "📋 <b>The Setup</b>\n"
+            "Head to head: 5 meetings: Aston Villa 3W 2D 0L.\n\n"
+            "🎯 <b>The Edge</b>\nSome edge text.\n\n"
+            "⚠️ <b>The Risk</b>\nSome risk.\n\n"
+            "🏆 <b>Verdict</b>\nBack Aston Villa."
+        )
+        tips = [{
+            "outcome": "home",
+            "odds": 2.03,
+            "bookie": "Supabets",
+            "ev": 2.0,
+            "edge_v2": {
+                "match_key": "aston_villa_vs_west_ham_2026-03-22",
+                "league": "epl",
+                "signals": {
+                    "form_h2h": {
+                        "h2h_total": 5,
+                        "h2h_a_wins": 3,
+                        "h2h_b_wins": 0,
+                        "h2h_draws": 2,
+                    },
+                },
+            },
+        }]
+        assert bot._has_stale_h2h_summary(narrative, tips) is False
 
     def test_build_verified_narrative_no_espn_uses_signals(self):
         tips = [{"outcome": "Arsenal", "odds": 2.40, "bookie": "HWB", "prob": 45, "ev": 8.0, "edge_v2": {

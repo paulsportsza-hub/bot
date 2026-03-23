@@ -12,6 +12,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# ── Exclusive lock — prevent overlapping QA runs ────────────
+LOCK_FILE="/tmp/mzansiedge_qa.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo "BLOCKED: Another QA/test run is already in progress."
+    exit 1
+fi
+echo "$$" >&9
+
 # Activate venv if available
 if [ -f .venv/bin/activate ]; then
     source .venv/bin/activate

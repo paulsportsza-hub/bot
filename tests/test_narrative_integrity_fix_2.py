@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 import bot
 from narrative_spec import NarrativeSpec, _render_baseline
@@ -126,6 +127,17 @@ def test_validate_polish_rejects_fabricated_h2h_rewrite() -> None:
     assert bot._validate_polish(polished, baseline, spec) is False
 
 
+def test_validate_polish_rejects_h2h_prose_outside_labelled_line() -> None:
+    spec = _make_spec()
+    baseline = _render_baseline(spec)
+    polished = baseline.replace(
+        "Standard match variance applies.",
+        "That head-to-head record of five straight draws is hard to ignore.",
+    )
+
+    assert bot._validate_polish(polished, baseline, spec) is False
+
+
 def test_validate_polish_allows_h2h_omission_when_not_rewritten() -> None:
     spec = _make_spec()
     baseline = _render_baseline(spec)
@@ -134,9 +146,36 @@ def test_validate_polish_allows_h2h_omission_when_not_rewritten() -> None:
     assert bot._validate_polish(polished, baseline, spec) is True
 
 
+def test_validate_polish_rejects_stale_form_claim_when_context_is_not_fresh() -> None:
+    spec = _make_spec(
+        home_story_type="neutral",
+        away_story_type="neutral",
+        home_position=None,
+        away_position=None,
+        home_points=None,
+        away_points=None,
+        home_form="",
+        away_form="",
+        context_is_fresh=False,
+        context_freshness_hours=72.0,
+    )
+    baseline = _render_baseline(spec)
+    polished = baseline.replace(
+        "📋 <b>The Setup</b>\n",
+        "📋 <b>The Setup</b>\nArsenal have turned this ground into a fortress this season and Form reads WWWDL. ",
+    )
+
+    assert bot._validate_polish(polished, baseline, spec) is False
+
+
 def test_get_verified_injuries_omits_stale_fixture_rows(tmp_path) -> None:
     db_path = str(tmp_path / "test_odds.db")
     _init_injury_db(db_path)
+
+    now = datetime.now(timezone.utc)
+    fresh_fixture = (now + timedelta(days=1)).strftime("%Y-%m-%dT15:00:00+00:00")
+    stale_fixture = (now - timedelta(days=60)).strftime("%Y-%m-%dT15:00:00+00:00")
+    recent_fetch = (now - timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
 
     conn = sqlite3.connect(db_path)
     conn.executemany(
@@ -152,8 +191,8 @@ def test_get_verified_injuries_omits_stale_fixture_rows(tmp_path) -> None:
                 "Fresh Player",
                 "Hamstring",
                 "Questionable",
-                "2026-03-22T15:00:00+00:00",
-                "2026-03-20 06:00:00",
+                fresh_fixture,
+                recent_fetch,
             ),
             (
                 "epl",
@@ -161,8 +200,8 @@ def test_get_verified_injuries_omits_stale_fixture_rows(tmp_path) -> None:
                 "Stale Player",
                 "Knee",
                 "Questionable",
-                "2026-01-04T15:00:00+00:00",
-                "2026-03-20 06:00:00",
+                stale_fixture,
+                recent_fetch,
             ),
         ],
     )
@@ -184,6 +223,12 @@ def test_format_injuries_for_narrative_omits_stale_fixture_rows(tmp_path) -> Non
     db_path = str(tmp_path / "test_odds.db")
     _init_injury_db(db_path)
 
+    now = datetime.now(timezone.utc)
+    fresh_fixture = (now + timedelta(days=1)).strftime("%Y-%m-%dT15:00:00+00:00")
+    stale_fixture = (now - timedelta(days=60)).strftime("%Y-%m-%dT15:00:00+00:00")
+    recent_fetch = (now - timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+    match_date = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+
     conn = sqlite3.connect(db_path)
     conn.executemany(
         """
@@ -198,8 +243,8 @@ def test_format_injuries_for_narrative_omits_stale_fixture_rows(tmp_path) -> Non
                 "Current Absence",
                 "Hamstring",
                 "Missing Fixture",
-                "2026-03-22T15:00:00+00:00",
-                "2026-03-20 06:00:00",
+                fresh_fixture,
+                recent_fetch,
             ),
             (
                 "psl",
@@ -207,8 +252,8 @@ def test_format_injuries_for_narrative_omits_stale_fixture_rows(tmp_path) -> Non
                 "Old Absence",
                 "Ankle",
                 "Missing Fixture",
-                "2026-01-05T15:00:00+00:00",
-                "2026-03-20 06:00:00",
+                stale_fixture,
+                recent_fetch,
             ),
         ],
     )
@@ -216,10 +261,117 @@ def test_format_injuries_for_narrative_omits_stale_fixture_rows(tmp_path) -> Non
     conn.close()
 
     text = news_helper.format_injuries_for_narrative(
-        "kaizer_chiefs_vs_orlando_pirates_2026-03-22",
+        f"kaizer_chiefs_vs_orlando_pirates_{match_date}",
         db_path=db_path,
     )
 
     assert "Current Absence" in text
     assert "Old Absence" not in text
 
+
+def test_get_verified_injuries_is_sport_aware_for_chiefs_name_collision(tmp_path) -> None:
+    db_path = str(tmp_path / "test_odds.db")
+    _init_injury_db(db_path)
+
+    now = datetime.now(timezone.utc)
+    fresh_fixture = (now + timedelta(days=1)).strftime("%Y-%m-%dT15:00:00+00:00")
+    recent_fetch = (now - timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = sqlite3.connect(db_path)
+    conn.executemany(
+        """
+        INSERT INTO team_injuries
+        (league, team, player_name, injury_reason, injury_status, fixture_date, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "psl",
+                "Kaizer Chiefs",
+                "Mduduzi Shabalala",
+                "Hamstring",
+                "Questionable",
+                fresh_fixture,
+                recent_fetch,
+            ),
+            (
+                "super_rugby",
+                "Chiefs",
+                "Damian McKenzie",
+                "Knee",
+                "Questionable",
+                fresh_fixture,
+                recent_fetch,
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    original = bot._NARRATIVE_DB_PATH
+    bot._NARRATIVE_DB_PATH = db_path
+    try:
+        result = bot.get_verified_injuries(
+            "Brumbies",
+            "Chiefs",
+            sport="rugby",
+            league="super_rugby",
+        )
+    finally:
+        bot._NARRATIVE_DB_PATH = original
+
+    assert result["home"] == []
+    assert result["away"] == ["Damian McKenzie (Questionable)"]
+
+
+def test_format_routed_injuries_for_narrative_uses_verified_path_outside_psl(tmp_path) -> None:
+    db_path = str(tmp_path / "test_odds.db")
+    _init_injury_db(db_path)
+
+    now = datetime.now(timezone.utc)
+    fresh_fixture = (now + timedelta(days=1)).strftime("%Y-%m-%dT15:00:00+00:00")
+    recent_fetch = (now - timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = sqlite3.connect(db_path)
+    conn.executemany(
+        """
+        INSERT INTO team_injuries
+        (league, team, player_name, injury_reason, injury_status, fixture_date, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "psl",
+                "Kaizer Chiefs",
+                "Mduduzi Shabalala",
+                "Hamstring",
+                "Questionable",
+                fresh_fixture,
+                recent_fetch,
+            ),
+            (
+                "super_rugby",
+                "Chiefs",
+                "Damian McKenzie",
+                "Knee",
+                "Questionable",
+                fresh_fixture,
+                recent_fetch,
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    text = bot._format_routed_injuries_for_narrative(
+        "",
+        "Brumbies",
+        "Chiefs",
+        sport="rugby",
+        league="super_rugby",
+        db_path=db_path,
+    )
+
+    assert "Damian McKenzie (Questionable)" in text
+    assert "Mduduzi Shabalala" not in text
+    assert "Brumbies: No current injuries or absences." in text

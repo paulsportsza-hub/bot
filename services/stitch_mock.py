@@ -83,17 +83,47 @@ class MockStitchService:
             "raw_status": raw,
         }
 
+    async def get_payment(self, payment_id: str) -> dict[str, Any]:
+        """Return stored mock payment metadata."""
+        return dict(_mock_payments.get(payment_id, {}))
+
+    async def simulate_webhook_event(
+        self,
+        payment_id: str,
+        *,
+        status: str = "complete",
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Build a mock Stitch webhook using stored payment metadata."""
+        stored = _mock_payments.get(payment_id, {})
+        user_id = int(stored.get("user_id", 0))
+        amount_cents = int(stored.get("amount_cents", 0))
+        reference = stored.get("reference", payment_id)
+        return simulate_webhook_payload(
+            payment_id=payment_id,
+            user_id=user_id,
+            status=status,
+            amount_cents=amount_cents,
+            reference=reference,
+            event_id=event_id,
+        )
+
 
 def simulate_webhook_payload(
     payment_id: str,
     user_id: int,
     status: str = "complete",
+    *,
+    amount_cents: int = 0,
+    reference: str | None = None,
+    event_id: str | None = None,
 ) -> dict[str, Any]:
     """Generate a mock Stitch webhook payload for testing.
 
     Matches the structure Stitch sends via Svix webhooks.
     """
     return {
+        "id": event_id or f"mock-event-{payment_id}-{status}",
         "type": "payment.complete" if status == "complete" else "payment.cancelled",
         "data": {
             "id": payment_id,
@@ -105,6 +135,7 @@ def simulate_webhook_payload(
                 ),
             },
             "externalReference": str(user_id),
-            "amount": {"quantity": "49.00", "currency": "ZAR"},
+            "beneficiaryReference": reference or payment_id,
+            "amount": {"quantity": f"{amount_cents / 100:.2f}", "currency": "ZAR"},
         },
     }

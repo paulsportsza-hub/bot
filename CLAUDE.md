@@ -655,20 +655,42 @@ The architecture separates concerns:
 6. **TRANSPARENCY IN LOSSES.** "The market was right on this one" — never hide or minimise a miss. This IS our competitive advantage.
 
 ## Verification
-```bash
-# Run unit tests (E2E auto-excluded via pytest.ini)
-pytest tests/ -x -q
 
-# Run specific test file
-pytest tests/test_onboarding.py -v
+### Safe QA Runner (MANDATORY — QA-SAFE-1)
+All test runs MUST use `scripts/qa_safe.sh`. Direct `pytest` invocations are
+blocked by a Claude PreToolUse hook. The safe wrapper enforces:
+- Exclusive flock — only ONE test run at a time (prevents swarm starvation)
+- 5-minute wall-clock timeout (override: `QA_TIMEOUT=600`)
+- nice +15 / ionice idle — lowest CPU/IO priority (protects live bot + scrapers)
+- 30-second per-test timeout via pytest-timeout
+
+```bash
+# Full unit suite (bounded, fail-fast)
+bash scripts/qa_safe.sh
+
+# Layer-specific runs
+bash scripts/qa_safe.sh contracts        # Layer 1: contract tests
+bash scripts/qa_safe.sh edge_accuracy    # Layer 2: edge accuracy
+bash scripts/qa_safe.sh accuracy         # Layer 3: historical accuracy
+bash scripts/qa_safe.sh snapshots        # Layer 4: snapshot tests
+bash scripts/qa_safe.sh e2e             # Layer 5: E2E user journeys
+
+# Wave Completion Gate (Layers 1-4)
+bash scripts/qa_safe.sh gate
+
+# Specific test file
+bash scripts/qa_safe.sh tests/test_config.py
+
+# Pass extra pytest args after --
+bash scripts/qa_safe.sh contracts -- -k "test_foo" -v
+
+# Verbose mode
+QA_VERBOSE=1 bash scripts/qa_safe.sh contracts
 
 # Start the bot
 python bot.py
 
-# Wave Completion Gate — run BEFORE any wave report
-python -m pytest tests/contracts/ tests/edge_accuracy/ tests/accuracy/ tests/snapshots/ -v --tb=short
-
-# Pre-merge gate
+# Pre-merge gate (also flock-protected)
 bash scripts/pre_merge_check.sh
 ```
 

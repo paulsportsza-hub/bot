@@ -15,6 +15,7 @@ import json
 import logging
 import time
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import aiohttp
 
@@ -39,6 +40,18 @@ class StitchService:
 
     def _is_mock(self) -> bool:
         return config.STITCH_MOCK_MODE
+
+    @staticmethod
+    def build_checkout_url(payment_url: str) -> str:
+        """Append a whitelisted Stitch redirect URI when configured."""
+        redirect_uri = config.STITCH_REDIRECT_URI.strip()
+        if not redirect_uri:
+            return payment_url
+
+        parsed = urlparse(payment_url)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query["redirect_uri"] = redirect_uri
+        return urlunparse(parsed._replace(query=urlencode(query)))
 
     async def get_client_token(self) -> str:
         """Fetch OAuth2 client token with client_paymentrequest scope.
@@ -91,7 +104,9 @@ class StitchService:
         """
         if self._is_mock():
             from services.stitch_mock import MockStitchService
-            return await MockStitchService().create_payment(user_id, amount_cents, reference)
+            result = await MockStitchService().create_payment(user_id, amount_cents, reference)
+            result["payment_url"] = self.build_checkout_url(result["payment_url"])
+            return result
 
         import uuid
         if not reference:
@@ -149,7 +164,7 @@ class StitchService:
 
                 pir = body["data"]["clientPaymentInitiationRequestCreate"]["paymentInitiationRequest"]
                 result = {
-                    "payment_url": pir["url"],
+                    "payment_url": self.build_checkout_url(pir["url"]),
                     "payment_id": pir["id"],
                     "reference": reference,
                 }
@@ -256,6 +271,22 @@ class StitchService:
             return json.loads(body)
         except json.JSONDecodeError:
             return {}
+
+    async def build_mock_webhook_event(
+        self,
+        payment_id: str,
+        *,
+        status: str = "complete",
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a mock webhook event through the same provider facade."""
+        from services.stitch_mock import MockStitchService
+
+        return await MockStitchService().simulate_webhook_event(
+            payment_id,
+            status=status,
+            event_id=event_id,
+        )
 
 
 # Module-level singleton

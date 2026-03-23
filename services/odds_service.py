@@ -28,6 +28,7 @@ import aiosqlite
 
 # Allow importing from scrapers directory (shared with Dataminer)
 sys.path.insert(0, "/home/paulsportsza")
+from scrapers.odds_integrity import filter_outlier_prices
 from scrapers.odds_normaliser import normalise_key, normalise_match_id
 from scrapers.utils.team_mapper import normalise_team as _mapper_normalise
 
@@ -254,18 +255,32 @@ async def get_best_odds(
                     if odds_val is None or odds_val <= 0:
                         continue
 
-                    if outcome_key not in result["outcomes"]:
-                        result["outcomes"][outcome_key] = {
-                            "best_odds": odds_val,
-                            "best_bookmaker": bookmaker,
+                    result["outcomes"].setdefault(
+                        outcome_key,
+                        {
+                            "best_odds": 0.0,
+                            "best_bookmaker": "",
                             "all_bookmakers": {},
-                        }
-
+                        },
+                    )
                     result["outcomes"][outcome_key]["all_bookmakers"][bookmaker] = odds_val
 
-                    if odds_val > result["outcomes"][outcome_key]["best_odds"]:
-                        result["outcomes"][outcome_key]["best_odds"] = odds_val
-                        result["outcomes"][outcome_key]["best_bookmaker"] = bookmaker
+            for outcome_key, outcome_data in list(result["outcomes"].items()):
+                all_prices = list(outcome_data.get("all_bookmakers", {}).items())
+                clean_prices, _outliers = filter_outlier_prices(
+                    all_prices,
+                    match_id=match_id,
+                    selection=outcome_key,
+                )
+                if not clean_prices:
+                    del result["outcomes"][outcome_key]
+                    continue
+
+                clean_bookmakers = {bookmaker: price for bookmaker, price in clean_prices}
+                best_bookmaker, best_odds = max(clean_prices, key=lambda item: item[1])
+                outcome_data["all_bookmakers"] = clean_bookmakers
+                outcome_data["best_bookmaker"] = best_bookmaker
+                outcome_data["best_odds"] = best_odds
 
             result["last_updated"] = latest_ts
             result["bookmaker_count"] = len(bookmakers)

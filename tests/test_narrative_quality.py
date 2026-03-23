@@ -219,6 +219,12 @@ class TestEvidenceVerdictCoherence:
         verdict = _extract_section(_render_baseline(spec), "🏆")
         assert "back" in verdict.lower() or "green light" in verdict.lower()
 
+    def test_supported_verdict_drops_generic_multiple_data_points_line(self):
+        spec = _make_spec(confirming_signals=3, contradicting_signals=1, ev_pct=5.0, composite_score=55)
+        verdict = _extract_section(_render_baseline(spec), "🏆").lower()
+        assert "multiple data points confirm the direction" not in verdict
+        assert "3 supporting indicators" in verdict or "3 supporting indicators sit behind it" in verdict
+
     def test_conviction_strong_language(self):
         """W84-Q3: 5 signals + composite 65 + EV 6% → strong conviction language in verdict."""
         spec = _make_spec(
@@ -250,6 +256,13 @@ class TestEvidenceVerdictCoherence:
             confirming_signals=5, ev_pct=6.0, composite_score=65, tipster_against=2,
         )
         assert spec.tone_band != "strong"
+
+    def test_all_evidence_classes_render_nonempty_verdict(self):
+        """Every evidence class must render a Verdict section with content."""
+        for confirming in [0, 1, 3, 5]:
+            spec = _make_spec(confirming_signals=confirming)
+            verdict = _extract_section(_render_baseline(spec), "🏆")
+            assert len(verdict) > 25, f"Verdict too short for {confirming} confirming signals"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -373,6 +386,13 @@ class TestRiskIntegrity:
                              "confident stake", "pass", "size down"]
             ), f"No sizing guidance found for {confirming} confirming signals"
 
+    def test_risk_removes_core_argument_filler(self):
+        spec = _make_spec(risk_severity="moderate")
+        risk = _extract_section(_render_baseline(spec), "⚠️").lower()
+        assert "core argument" not in risk
+        assert "core math" not in risk
+        assert "stake size measured" not in risk
+
     def test_away_pick_low_support_mentions_home_advantage(self):
         """Away picks with 1 signal must mention home advantage in Risk."""
         spec = _make_spec(
@@ -479,6 +499,34 @@ class TestEdgeSection:
         spec = _make_spec(confirming_signals=3, ev_pct=5.0)
         edge = _extract_section(_render_baseline(spec), "🎯")
         assert "indicator" in edge.lower() or "support" in edge.lower() or "confirm" in edge.lower()
+
+    def test_edge_uses_exact_support_balance_for_mixed_signal_case(self):
+        spec = _make_spec(
+            confirming_signals=2,
+            contradicting_signals=1,
+            tipster_available=False,
+        )
+        edge = _extract_section(_render_baseline(spec), "🎯").lower()
+        assert "2 supporting indicators back it, with 1 pushing the other way" in edge
+        assert "multiple indicators agree" not in edge
+        assert "stand above a pure price guess" not in edge
+
+    def test_edge_does_not_claim_tipster_consensus_when_against(self):
+        spec = _make_spec(
+            confirming_signals=3,
+            contradicting_signals=1,
+            tipster_available=True,
+            tipster_agrees=False,
+        )
+        edge = _extract_section(_render_baseline(spec), "🎯").lower()
+        assert "tipster consensus leans the same way" not in edge
+        assert "tipster consensus all point the same direction" not in edge
+        assert "tipster consensus is not on the same side" in edge
+
+    def test_supported_edge_drops_repeated_better_supported_shell(self):
+        spec = _make_spec(confirming_signals=3, contradicting_signals=1, ev_pct=5.0)
+        edge = _extract_section(_render_baseline(spec), "🎯").lower()
+        assert "one of the better-supported plays on the card" not in edge
 
     def test_conviction_edge_strong_language(self):
         """W84-Q3: Conviction evidence class → edge uses strong confident language."""

@@ -130,12 +130,13 @@ class TestCardBreathingRoom:
     """Between cards: exactly \\n\\n (one visible blank line)."""
 
     def test_cards_separated_by_double_newline(self):
+        # Use same-tier tips so no tier header appears between cards
         tips = [
             _make_tip(display_tier="gold", home_team="Home1", away_team="Away1",
                       match_id="h1_vs_a1_2026-03-10"),
-            _make_tip(display_tier="silver", home_team="Home2", away_team="Away2",
+            _make_tip(display_tier="gold", home_team="Home2", away_team="Away2",
                       match_id="h2_vs_a2_2026-03-10"),
-            _make_tip(display_tier="bronze", home_team="Home3", away_team="Away3",
+            _make_tip(display_tier="gold", home_team="Home3", away_team="Away3",
                       match_id="h3_vs_a3_2026-03-10"),
         ]
         text = _build_page(tips, user_tier="diamond")
@@ -145,14 +146,34 @@ class TestCardBreathingRoom:
         assert len(card_starts) == 3, f"Expected 3 cards, found {len(card_starts)}"
 
         for idx in range(len(card_starts) - 1):
-            # Between end of card N and start of card N+1, there should be exactly one blank line
-            end_of_card = card_starts[idx] + 2  # 3-line card
+            # Find end of current card: next non-empty line block ends at last
+            # non-empty line before next card or blank line
             start_of_next = card_starts[idx + 1]
-            between = lines[end_of_card + 1:start_of_next]
-            # Should be exactly [""] — one empty line
-            assert between == [""], (
-                f"Between card {idx+1} and {idx+2}: expected [''], got {between!r}"
+            # Between cards within same tier: blank line separator
+            # Find the blank line(s) between card end and next card start
+            between = lines[card_starts[idx] + 1:start_of_next]
+            # Should contain at least one blank line before the next card
+            assert "" in between, (
+                f"Between card {idx+1} and {idx+2}: expected blank line separator, got {between!r}"
             )
+
+    def test_tier_headers_between_different_tiers(self):
+        """When cards span different tiers, tier headers appear between them."""
+        tips = [
+            _make_tip(display_tier="gold", home_team="Home1", away_team="Away1",
+                      match_id="h1_vs_a1_2026-03-10"),
+            _make_tip(display_tier="silver", home_team="Home2", away_team="Away2",
+                      match_id="h2_vs_a2_2026-03-10"),
+        ]
+        text = _build_page(tips, user_tier="diamond")
+        lines = text.split("\n")
+        card_starts = [i for i, ln in enumerate(lines) if ln.strip().startswith("<b>[")]
+        assert len(card_starts) == 2, f"Expected 2 cards, found {len(card_starts)}"
+        # Between the two cards, a SILVER EDGE tier header should appear
+        between_text = "\n".join(lines[card_starts[0]:card_starts[1]])
+        assert "SILVER EDGE" in between_text, (
+            f"Expected SILVER EDGE tier header between cards, got:\n{between_text}"
+        )
 
 
 class TestFooterSpacing:

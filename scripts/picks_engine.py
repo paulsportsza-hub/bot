@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 SHARP_BOOKS = {"pinnacle", "betfair_ex_eu", "matchbook"}
 
 # Default bankroll for stake calculations (ZAR)
-BANKROLL_DEFAULT = 6000.0
+BANKROLL_DEFAULT = config.DEFAULT_BANKROLL
 
 # Minimum bet in ZAR
 MIN_STAKE = 10.0
@@ -121,9 +121,11 @@ async def get_picks_for_user(
                 if ev_pct < min_ev:
                     continue
 
-                ks = kelly_stake(best["odds"], true_prob, fraction=kelly_frac)
-                stake = ks * bankroll
-                stake = min(stake, bankroll * max_stake_pct)
+                stake = _calculate_capped_stake(
+                    best["odds"], true_prob, bankroll,
+                    kelly_fraction=kelly_frac,
+                    max_stake_pct=max_stake_pct,
+                )
                 if stake < MIN_STAKE:
                     continue
 
@@ -155,9 +157,11 @@ async def get_picks_for_user(
                 if ev_pct < min_ev:
                     continue
 
-                ks = kelly_stake(best["odds"], true_prob, fraction=kelly_frac)
-                stake = ks * bankroll
-                stake = min(stake, bankroll * max_stake_pct)
+                stake = _calculate_capped_stake(
+                    best["odds"], true_prob, bankroll,
+                    kelly_fraction=kelly_frac,
+                    max_stake_pct=max_stake_pct,
+                )
                 if stake < MIN_STAKE:
                     continue
 
@@ -222,6 +226,20 @@ def _build_pick(
         "all_odds": best["all_odds"][:5],
         "confidence_label": ev_confidence(ev_pct),
     }
+
+
+def _calculate_capped_stake(
+    odds: float,
+    true_prob: float,
+    bankroll: float,
+    *,
+    kelly_fraction: float,
+    max_stake_pct: float,
+) -> float:
+    """Return a Kelly-sized stake capped to the configured bankroll limit."""
+    ks = kelly_stake(odds, true_prob, fraction=kelly_fraction)
+    stake = ks * bankroll
+    return min(stake, bankroll * max_stake_pct)
 
 
 def _best_for_outcome(

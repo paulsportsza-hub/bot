@@ -5,3 +5,4 @@ syrupy>=4.0
 freezegun>=1.0
 factory-boy>=3.0
 pytest>=7.0
+pytest-timeout>=2.0
