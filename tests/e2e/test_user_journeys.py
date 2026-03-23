@@ -127,7 +127,7 @@ class TestBronzeJourney:
 
 
 class TestGoldJourney:
-    """Gold user: full access to Gold edges, Diamond locked."""
+    """Gold user: full access to Gold edges, Diamond blurred."""
 
     def test_gold_sees_gold_odds(self):
         """Gold user can see Gold edge odds (full access)."""
@@ -136,10 +136,10 @@ class TestGoldJourney:
         assert get_edge_access_level("gold", "silver") == "full"
         assert get_edge_access_level("gold", "bronze") == "full"
 
-    def test_gold_diamond_locked(self):
-        """Gold user sees Diamond edges as locked."""
+    def test_gold_diamond_blurred(self):
+        """Gold user sees Diamond edges as blurred."""
         from tier_gate import get_edge_access_level
-        assert get_edge_access_level("gold", "diamond") == "locked"
+        assert get_edge_access_level("gold", "diamond") == "blurred"
 
     def test_gold_tips_page(self):
         """Gold tips page shows odds for Gold edges, locks Diamond."""

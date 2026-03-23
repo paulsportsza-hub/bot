@@ -77,7 +77,7 @@ def get_edge_access_level(user_tier: str, edge_tier: str) -> str:
         "full" — user has full access
         "partial" — odds visible, breakdown gated (Bronze viewing Silver)
         "blurred" — odds/bookmaker masked (Bronze viewing Gold)
-        "locked" — existence only (Bronze viewing Diamond, Gold viewing Diamond)
+        "locked" — existence only (Bronze viewing Diamond)
     """
     tier = user_tier.lower().strip()
     edge = edge_tier.lower().strip()
@@ -86,7 +86,7 @@ def get_edge_access_level(user_tier: str, edge_tier: str) -> str:
         return "full"
     if tier == "gold":
         if edge == "diamond":
-            return "locked"
+            return "blurred"
         return "full"
     # Bronze
     if edge == "bronze":

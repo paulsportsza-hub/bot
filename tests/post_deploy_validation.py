@@ -117,7 +117,7 @@ def check_gates() -> list[tuple[bool, str, str]]:
         ("bronze", "diamond", "locked"),
         ("gold", "bronze", "full"),
         ("gold", "gold", "full"),
-        ("gold", "diamond", "locked"),
+        ("gold", "diamond", "blurred"),
         ("diamond", "bronze", "full"),
         ("diamond", "gold", "full"),
         ("diamond", "diamond", "full"),

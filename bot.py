@@ -6522,27 +6522,6 @@ DETAIL_TRACK_RECORD_MIN_SETTLED = 3
 HIT_RATE_DISPLAY_THRESHOLD = 50  # Only show hit rate in header when >= this %
 
 
-def _assign_display_tiers(tips: list[dict]) -> None:
-    """Assign percentile-based display tiers for UX diversity.
-
-    Raw edge_score and edge_rating are preserved for analytics.
-    display_tier is used for rendering badges.
-    """
-    if not tips:
-        return
-    tips.sort(key=lambda t: t.get("edge_score", 0), reverse=True)
-    n = len(tips)
-    for i, tip in enumerate(tips):
-        pct = i / max(n - 1, 1)  # 0.0 = best, 1.0 = worst
-        if pct <= 0.1:
-            tip["display_tier"] = EdgeRating.DIAMOND
-        elif pct <= 0.35:
-            tip["display_tier"] = EdgeRating.GOLD
-        elif pct <= 0.65:
-            tip["display_tier"] = EdgeRating.SILVER
-        else:
-            tip["display_tier"] = EdgeRating.BRONZE
-
 
 def _build_tip_narrative(tip: dict) -> str:
     """Build a compelling narrative explaining WHY this tip has value."""

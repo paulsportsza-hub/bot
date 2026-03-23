@@ -55,7 +55,7 @@ class TestTierGateMatrix:
         ("diamond", "silver", "full"),
         ("diamond", "bronze", "full"),
         # Gold sees gold and below, diamond locked
-        ("gold", "diamond", "locked"),
+        ("gold", "diamond", "blurred"),
         ("gold", "gold", "full"),
         ("gold", "silver", "full"),
         ("gold", "bronze", "full"),
