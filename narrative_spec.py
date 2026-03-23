@@ -1338,6 +1338,10 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
             f"{h} host {a}{comp_note} in a rugby spot that is more likely to turn on exits, pressure, and repeat control than open chaos.",
             f"{h} against {a}{comp_note} has the profile of a rugby {fixture_type} where field-position control can dictate the conversation for long stretches.",
             f"This rugby clash between {h} and {a}{comp_note} looks built around discipline, restarts, and set-piece control before anything flashy arrives.",
+            f"{h} against {a}{comp_note} shapes up as a club rugby {fixture_type} where gainline battles and set-piece dominance should determine which side controls the tempo.",
+            f"{h} host {a}{comp_note} in a rugby spot likely to hinge on the kicking game — who wins field-position and who pins the opposition in the corners.",
+            f"This rugby clash between {h} and {a}{comp_note} may be decided in the final quarter, where bench impact and repeat control after turnovers become the decisive factor.",
+            f"{h} vs {a}{comp_note} looks like a contest decided by exits, pressure management, and which side holds its discipline when the scoreboard gets tight.",
         ],
         "cricket": [
             f"{h} vs {a}{comp_note} has the profile of a cricket contest likely to be shaped by conditions and tempo rather than constant swings.",
@@ -1428,13 +1432,14 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
     price_variants = price_map[ev_band][signal_band]
     close_variants = close_map[score_band]
 
-    # Include odds and ev as integers in seeds so different fixtures with the same
-    # team names and score band still produce diverse variants (R6-BUILD-03c).
-    _odds_int = str(int(round(odds * 100)))
-    _ev_int = str(int(round(ev * 10)))
-    scene = scene_variants[_pick(f"{h}|{a}|{_odds_int}|{_ev_int}|scene", len(scene_variants))]
+    # R7-BUILD-03: Use raw float precision and competition key in seeds to reduce
+    # collision rate for same-team rugby fixtures across different leagues/odds.
+    # Replacing int-truncated odds/ev with f"{:.4f}" adds per-fixture diversity.
+    _odds_str = f"{odds:.4f}"
+    _ev_str = f"{ev:.4f}"
+    scene = scene_variants[_pick(f"{h}|{a}|{comp}|{_odds_str}|{_ev_str}|scene", len(scene_variants))]
     price = price_variants[_pick(f"{h}|{a}|{cat}|{ev_band}|{signal_band}|price", len(price_variants))]
-    close = close_variants[_pick(f"{h}|{a}|{_odds_int}|{_ev_int}|{score_band}|close", len(close_variants))]
+    close = close_variants[_pick(f"{h}|{a}|{comp}|{_odds_str}|{_ev_str}|{score_band}|close", len(close_variants))]
     return f"{scene} {price} {close}"
 
 
