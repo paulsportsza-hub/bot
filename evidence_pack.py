@@ -11,6 +11,7 @@ from typing import Any
 from scrapers.db_connect import connect_odds_db_readonly
 from scrapers.odds_integrity import filter_outlier_prices
 from scrapers.odds_normaliser import display_name as _display_team_name
+from scrapers.utils.roster_validation import player_belongs_to_match_teams as _player_belongs_to_match_teams
 
 ODDS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scrapers", "odds.db")
 ENRICHMENT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scrapers", "enrichment.db")
@@ -646,6 +647,7 @@ def _fetch_news(
     away_name: str,
     league: str,
     sport: str,
+    team_rosters: dict[str, list[str]] | None = None,
 ) -> NewsBlock:
     now = datetime.now(timezone.utc)
     patterns_home = _keyword_patterns(home_key, home_name)
@@ -701,6 +703,11 @@ def _fetch_news(
         article.pop("_dedupe_key", None)
 
     articles = _filter_injury_news_articles(articles, verified_injured, team_aliases)
+    # Fix 1: filter headlines containing players from the opposing team
+    if team_rosters:
+        articles = _filter_cross_team_player_contamination(
+            articles, home_name, away_name, patterns_home, patterns_away, team_rosters
+        )
     articles.sort(
         key=lambda item: item.get("published_at") or item.get("scraped_at") or "",
         reverse=True,
@@ -1025,6 +1032,7 @@ async def build_evidence_pack(
         timeout=2.0,
         fallback=SAOddsBlock(provenance=_empty_source("odds_latest", error="timeout")),
     )
+    _news_rosters = _extract_rosters_from_espn(ctx, home_name, away_name)
     news_task = _run_with_timeout(
         _fetch_news,
         home_key,
@@ -1033,6 +1041,7 @@ async def build_evidence_pack(
         away_name,
         league,
         sport,
+        _news_rosters or None,
         timeout=2.0,
         fallback=NewsBlock(provenance=_empty_source("news_articles", error="timeout")),
     )
@@ -2107,6 +2116,142 @@ def _extract_title_injury_names(title: str) -> list[str]:
     return names
 
 
+# Broader injury-context headline patterns (Fix 2)
+_INJURY_CONTEXT_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\bchatter\s+(?:around|about|surrounding|regarding)\s+([A-Z][A-Za-z\'\-\.]+(?:\s+[A-Z][A-Za-z\'\-\.]+)?)\b"),
+    re.compile(r"\bupdate\s+on\s+([A-Z][A-Za-z\'\-\.]+(?:\s+[A-Z][A-Za-z\'\-\.]+)?)\b"),
+    re.compile(r"\bconcern\s+(?:over|about|surrounding|regarding)\s+([A-Z][A-Za-z\'\-\.]+(?:\s+[A-Z][A-Za-z\'\-\.]+)?)\b"),
+    re.compile(r"\b([A-Z][A-Za-z\'\-\.]+(?:\s+[A-Z][A-Za-z\'\-\.]+)?)\s+injury\s+update\b"),
+    re.compile(r"\b([A-Z][A-Za-z\'\-\.]+(?:\s+[A-Z][A-Za-z\'\-\.]+)?)\s+(?:scare|fitness\s+doubt|fitness\s+concern|injury\s+worry)\b"),
+]
+
+
+def _extract_contextual_player_names(title: str) -> list[str]:
+    """Extract player names using broader injury-context patterns (e.g. 'chatter around X')."""
+    names: list[str] = []
+    for pattern in _INJURY_CONTEXT_PATTERNS:
+        for match in pattern.finditer(str(title or "")):
+            name = match.group(1).strip()
+            if re.match(r"[A-Z][A-Za-z'.-]+", name):
+                names.append(name)
+    # Dedup preserving order
+    seen: set[str] = set()
+    deduped = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            deduped.append(n)
+    return deduped
+
+
+def _player_in_roster(player_name: str, roster: list[str]) -> bool:
+    """Return True if player_name matches any entry in roster using the same matching logic
+    as player_belongs_to_match_teams (accent-tolerant, last-name-first-initial matching)."""
+    if not roster:
+        return False
+    # Route through the public helper by using a single dummy team so both
+    # home_roster and away_roster resolve to the target roster.
+    _DUMMY = "dummy_roster_check_only"
+    return _player_belongs_to_match_teams(
+        player_name, _DUMMY, _DUMMY,
+        team_rosters={_DUMMY: roster},
+    )
+
+
+def _filter_cross_team_player_contamination(
+    articles: list[dict[str, Any]],
+    home_name: str,
+    away_name: str,
+    patterns_home: list[str],
+    patterns_away: list[str],
+    team_rosters: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    """Filter injury articles that mention players exclusively from the opposing team.
+
+    An article is considered contaminated when:
+    - It matched only ONE team's keyword patterns (i.e. was fetched for that team), AND
+    - It contains a player name that is in the OPPOSING team's roster, AND
+    - That player name is NOT in the article team's own roster.
+    """
+    home_roster = team_rosters.get(home_name) or []
+    away_roster = team_rosters.get(away_name) or []
+    if not home_roster or not away_roster:
+        return articles  # No usable rosters — skip check (be permissive)
+
+    filtered: list[dict[str, Any]] = []
+    for article in articles:
+        title = str(article.get("title") or "").strip()
+        lower = title.lower()
+
+        # Only injury-related articles are candidates for contamination
+        if not (article.get("has_injury_mentions") or "injur" in lower):
+            filtered.append(article)
+            continue
+
+        matches_home = any(p in lower for p in patterns_home)
+        matches_away = any(p in lower for p in patterns_away)
+
+        # Mentions both teams → legitimate cross-coverage, keep
+        if matches_home and matches_away:
+            filtered.append(article)
+            continue
+
+        # Extract player names using both extraction methods
+        names = _extract_title_injury_names(title) + _extract_contextual_player_names(title)
+        if not names:
+            filtered.append(article)
+            continue
+
+        contaminated = False
+        for name in names:
+            if matches_home and not matches_away:
+                # Article tagged for HOME — flag if player is in AWAY roster but not HOME roster
+                in_away = _player_in_roster(name, away_roster)
+                in_home = _player_in_roster(name, home_roster)
+                if in_away and not in_home:
+                    contaminated = True
+                    break
+            elif matches_away and not matches_home:
+                # Article tagged for AWAY — flag if player is in HOME roster but not AWAY roster
+                in_home = _player_in_roster(name, home_roster)
+                in_away = _player_in_roster(name, away_roster)
+                if in_home and not in_away:
+                    contaminated = True
+                    break
+
+        if not contaminated:
+            filtered.append(article)
+
+    return filtered
+
+
+def _extract_rosters_from_espn(
+    ctx: dict[str, Any],
+    home_name: str,
+    away_name: str,
+) -> dict[str, list[str]]:
+    """Build a {team_name: [player_names]} roster dict from ESPN context for contamination checks."""
+    rosters: dict[str, list[str]] = {}
+    if not ctx:
+        return rosters
+
+    for side_key, team_name in (("home_team", home_name), ("away_team", away_name)):
+        side = ctx.get(side_key) or {}
+        players: list[str] = []
+        for scorer in side.get("top_scorers", []) or []:
+            name = scorer.get("name", "") if isinstance(scorer, dict) else scorer
+            if name:
+                players.append(str(name))
+        for player in side.get("key_players", []) or []:
+            name = player.get("name", "") if isinstance(player, dict) else player
+            if name:
+                players.append(str(name))
+        if players:
+            rosters[team_name] = players
+
+    return rosters
+
+
 def _filter_injury_news_articles(
     articles: list[dict[str, Any]],
     verified_injured: set[str],
@@ -2120,13 +2265,16 @@ def _filter_injury_news_articles(
         if not (article.get("has_injury_mentions") or "injur" in lower):
             filtered.append(article)
             continue
+        # Combine standard + broader contextual name extraction (Fix 2)
         title_names = _extract_title_injury_names(title)
-        if not title_names:
+        contextual_names = _extract_contextual_player_names(title)
+        all_names = title_names + [n for n in contextual_names if n not in title_names]
+        if not all_names:
             filtered.append(article)
             continue
         invalid = [
             name
-            for name in title_names
+            for name in all_names
             if _normalise_name_phrase(name) not in team_exclusions
             if not _match_verified_name(name, verified_injured, allow_single_token=True)
         ]
