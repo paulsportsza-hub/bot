@@ -171,16 +171,39 @@ class TestClassifyEvidence:
             "edge_pct": 8.5,
             "composite_score": 75,
         })
-        assert ev_class == "speculative"
-        assert tone == "cautious"
-        assert action == "speculative punt"
-        assert sizing == "tiny exposure or pass"
+        assert ev_class == "supported"
+        assert tone == "confident"
+        assert action == "back"
+        assert sizing == "standard stake"
 
     def test_high_ev_with_two_signals_shifts_down_one_tier(self):
         ev_class, tone, action, sizing = _classify_evidence({
             "confirming_signals": 2,
             "edge_pct": 7.4,
             "composite_score": 63,
+        })
+        assert ev_class == "supported"
+        assert tone == "confident"
+        assert action == "back"
+        assert sizing == "standard stake"
+
+    def test_high_ev_with_one_signal_keeps_standard_stake_floor(self):
+        ev_class, tone, action, sizing = _classify_evidence({
+            "confirming_signals": 1,
+            "edge_pct": 10.0,
+            "composite_score": 48,
+        })
+        assert ev_class == "supported"
+        assert tone == "confident"
+        assert action == "back"
+        assert sizing == "standard stake"
+
+    def test_high_ev_with_stale_and_adverse_movement_keeps_standard_stake_floor(self):
+        ev_class, tone, action, sizing = _classify_evidence({
+            "confirming_signals": 2,
+            "edge_pct": 9.3,
+            "stale_minutes": 480,
+            "movement_direction": "against",
         })
         assert ev_class == "supported"
         assert tone == "confident"

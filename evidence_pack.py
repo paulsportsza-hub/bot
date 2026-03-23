@@ -10,6 +10,7 @@ from typing import Any
 
 from scrapers.db_connect import connect_odds_db_readonly
 from scrapers.odds_integrity import filter_outlier_prices
+from scrapers.odds_normaliser import display_name as _display_team_name
 
 ODDS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scrapers", "odds.db")
 ENRICHMENT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scrapers", "enrichment.db")
@@ -203,10 +204,7 @@ def _parse_match_key(match_key: str) -> tuple[str, str]:
 
 
 def _display_name(team_key: str) -> str:
-    if not team_key:
-        return ""
-    words = team_key.replace("_", " ").split()
-    return " ".join(word.upper() if len(word) <= 3 else word.capitalize() for word in words)
+    return _display_team_name(team_key) if team_key else ""
 
 
 def _keyword_patterns(team_key: str, display_name: str) -> list[str]:
@@ -641,11 +639,20 @@ def _build_h2h_from_espn(ctx: dict[str, Any] | None, home_name: str, away_name: 
     )
 
 
-def _fetch_news(home_key: str, away_key: str, home_name: str, away_name: str, sport: str) -> NewsBlock:
+def _fetch_news(
+    home_key: str,
+    away_key: str,
+    home_name: str,
+    away_name: str,
+    league: str,
+    sport: str,
+) -> NewsBlock:
     now = datetime.now(timezone.utc)
     patterns_home = _keyword_patterns(home_key, home_name)
     patterns_away = _keyword_patterns(away_key, away_name)
     articles: list[dict[str, Any]] = []
+    verified_injured: set[str] = set()
+    team_aliases = _build_simple_team_aliases(home_key, away_key, home_name, away_name)
 
     def _add_article(article: dict[str, Any]) -> None:
         key = article.get("url") or f"{article.get('source')}::{article.get('title')}"
@@ -663,6 +670,9 @@ def _fetch_news(home_key: str, away_key: str, home_name: str, away_name: str, sp
         try:
             conn.row_factory = sqlite3.Row
             if db_kind == "odds":
+                verified_injured = _fetch_verified_injury_names(
+                    conn, home_key, away_key, home_name, away_name, league, sport
+                )
                 rows = conn.execute(
                     "SELECT title, source, url, published_at, scraped_at, has_injury_mentions "
                     "FROM news_articles ORDER BY COALESCE(published_at, scraped_at) DESC LIMIT 250"
@@ -690,6 +700,7 @@ def _fetch_news(home_key: str, away_key: str, home_name: str, away_name: str, sp
     for article in articles:
         article.pop("_dedupe_key", None)
 
+    articles = _filter_injury_news_articles(articles, verified_injured, team_aliases)
     articles.sort(
         key=lambda item: item.get("published_at") or item.get("scraped_at") or "",
         reverse=True,
@@ -927,6 +938,7 @@ def _fetch_injuries(
             item
             for item in (_safe_row_dict(row) for row in api_rows)
             if _league_matches_sport(str(item.get("league") or ""), sport)
+            if str(item.get("injury_status") or "").strip() not in {"Missing Fixture", "Unknown"}
         ]
         home_injuries = [item for item in news_items if item.get("team_key") == home_key]
         away_injuries = [item for item in news_items if item.get("team_key") == away_key]
@@ -1019,6 +1031,7 @@ async def build_evidence_pack(
         away_key,
         home_name,
         away_name,
+        league,
         sport,
         timeout=2.0,
         fallback=NewsBlock(provenance=_empty_source("news_articles", error="timeout")),
@@ -2013,15 +2026,114 @@ def _team_name_matches_requested(row_team: str, requested_team: str) -> bool:
     if row_base and req_base and row_base == req_base:
         return True
 
-    if len(req_base) == 1:
-        return len(row_base) == 1 and row_base[0] == req_base[0]
-
-    if req_base and " ".join(req_base) == row_norm:
-        return True
-    if row_base and " ".join(row_base) == req_norm:
-        return True
-
     return False
+
+
+def _build_simple_team_aliases(
+    home_key: str,
+    away_key: str,
+    home_name: str,
+    away_name: str,
+) -> dict[str, set[str]]:
+    aliases = {"home": set(), "away": set()}
+    for side, values in {
+        "home": [home_key, home_name],
+        "away": [away_key, away_name],
+    }.items():
+        for value in values:
+            aliases[side] |= _team_reference_variants(str(value or ""))
+    return aliases
+
+
+def _fetch_verified_injury_names(
+    conn: sqlite3.Connection,
+    home_key: str,
+    away_key: str,
+    home_name: str,
+    away_name: str,
+    league: str,
+    sport: str,
+) -> set[str]:
+    verified: set[str] = set()
+    now = datetime.now(timezone.utc).isoformat()
+
+    extracted_rows = conn.execute(
+        "SELECT player_name, team_key, extracted_at, expires_at "
+        "FROM extracted_injuries "
+        "WHERE team_key IN (?, ?) AND (expires_at IS NULL OR expires_at > ?)",
+        (home_key, away_key, now),
+    ).fetchall()
+    for row in extracted_rows:
+        if not _is_current_narrative_injury(extracted_at=row["extracted_at"]):
+            continue
+        _add_name_variants(verified, row["player_name"], min_token_len=3)
+
+    api_rows = conn.execute(
+        "SELECT league, team, player_name, injury_status, fixture_date, fetched_at "
+        "FROM team_injuries "
+        "WHERE (? = '' OR league = ?) "
+        "AND injury_status NOT IN ('Missing Fixture', 'Unknown') "
+        "ORDER BY fetched_at DESC LIMIT 80",
+        (league, league),
+    ).fetchall()
+    for row in api_rows:
+        if not _league_matches_sport(str(row["league"] or ""), sport):
+            continue
+        team = str(row["team"] or "")
+        if not (
+            _team_name_matches_requested(team, home_name)
+            or _team_name_matches_requested(team, away_name)
+        ):
+            continue
+        if not _is_current_narrative_injury(
+            fixture_date=row["fixture_date"],
+            fetched_at=row["fetched_at"],
+        ):
+            continue
+        _add_name_variants(verified, row["player_name"], min_token_len=3)
+    return verified
+
+
+def _extract_title_injury_names(title: str) -> list[str]:
+    head = re.split(r"\s[-:|]\s", str(title or "").strip(), maxsplit=1)[0]
+    names = []
+    for raw in re.split(r",|\band\b", head):
+        cleaned = str(raw or "").strip()
+        if not cleaned:
+            continue
+        if not re.fullmatch(r"[A-Z][A-Za-z'’.-]+(?:\s+[A-Z][A-Za-z'’.-]+){0,2}", cleaned):
+            continue
+        names.append(cleaned)
+    return names
+
+
+def _filter_injury_news_articles(
+    articles: list[dict[str, Any]],
+    verified_injured: set[str],
+    team_aliases: dict[str, set[str]],
+) -> list[dict[str, Any]]:
+    team_exclusions = _build_injury_team_exclusions(team_aliases)
+    filtered: list[dict[str, Any]] = []
+    for article in articles:
+        title = str(article.get("title") or "").strip()
+        lower = title.lower()
+        if not (article.get("has_injury_mentions") or "injur" in lower):
+            filtered.append(article)
+            continue
+        title_names = _extract_title_injury_names(title)
+        if not title_names:
+            filtered.append(article)
+            continue
+        invalid = [
+            name
+            for name in title_names
+            if _normalise_name_phrase(name) not in team_exclusions
+            if not _match_verified_name(name, verified_injured, allow_single_token=True)
+        ]
+        if invalid:
+            continue
+        filtered.append(article)
+    return filtered
 
 
 def _text_chunks(text: str) -> list[str]:
