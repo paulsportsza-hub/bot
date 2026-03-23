@@ -162,6 +162,20 @@ BOOKMAKER_AFFILIATES: dict[str, dict] = {
         "status": "pending_approval",
         "deep_link_template": None,
     },
+    "wsb": {
+        "name": "WSB",
+        "affiliate_code": None,
+        "base_url": "https://www.wsb.co.za",
+        "status": "pending_approval",
+        "deep_link_template": None,
+    },
+    "supersportbet": {
+        "name": "SuperSportBet",
+        "affiliate_code": None,
+        "base_url": "https://www.supersportbet.co.za",
+        "status": "pending_approval",
+        "deep_link_template": None,
+    },
 }
 
 # ── SA Bookmakers (whitelisted for user-facing odds) ──────
@@ -221,6 +235,22 @@ SA_BOOKMAKERS: dict[str, dict] = {
         "display_name": "GBets.co.za",
         "short_name": "GBets",
         "website_url": "https://www.gbets.co.za",
+        "guide_url": "",
+        "affiliate_base_url": "",
+        "active": False,
+    },
+    "wsb": {
+        "display_name": "WSB.co.za",
+        "short_name": "WSB",
+        "website_url": "https://www.wsb.co.za",
+        "guide_url": "",
+        "affiliate_base_url": "",
+        "active": False,
+    },
+    "supersportbet": {
+        "display_name": "SuperSportBet.co.za",
+        "short_name": "SuperSportBet",
+        "website_url": "https://www.supersportbet.co.za",
         "guide_url": "",
         "affiliate_base_url": "",
         "active": False,
