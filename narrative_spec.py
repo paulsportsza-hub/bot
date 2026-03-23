@@ -1406,14 +1406,21 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
         "premium": [
             f"That leaves a premium-grade market read on a fixture where the structure matters as much as the names.",
             f"The cleaner angle here is to trust the market shape and keep the language as composed as the setup.",
+            f"The market architecture here is clean enough to let the price do the talking without embellishment.",
+            f"A premium read on a fixture where the pricing signal is the headline, not the supporting cast.",
         ],
         "solid": [
             f"That keeps the focus on execution and price discipline rather than on borrowed narrative.",
             f"It is a solid setup for a measured read, with the market doing enough of the explanatory work.",
+            f"A workable, proportionate read — the market has done its job and the price reflects it.",
+            f"Solid pricing context, no need to overreach — trust the signal and stay market-led.",
         ],
         "thin": [
             f"That is why the setup needs restraint: the frame is usable, but not rich enough for swagger.",
-            f"The right read is compact and market-literate, because the available detail stops short of a full story.",
+            f"The right read is compact and market-literate — trust the pricing structure and let it carry the weight.",
+            f"Thin context calls for a proportionate play — a market-led position without an oversold case behind it.",
+            f"The analytical posture here is disciplined: lean on the price, size conservatively, and stay proportionate.",
+            f"A market-led read is the sharpest call here — what the odds say matters more than what the surrounding data confirms.",
         ],
     }
 
@@ -1421,9 +1428,13 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
     price_variants = price_map[ev_band][signal_band]
     close_variants = close_map[score_band]
 
-    scene = scene_variants[_pick(f"{h}|{a}|scene", len(scene_variants))]
+    # Include odds and ev as integers in seeds so different fixtures with the same
+    # team names and score band still produce diverse variants (R6-BUILD-03c).
+    _odds_int = str(int(round(odds * 100)))
+    _ev_int = str(int(round(ev * 10)))
+    scene = scene_variants[_pick(f"{h}|{a}|{_odds_int}|{_ev_int}|scene", len(scene_variants))]
     price = price_variants[_pick(f"{h}|{a}|{cat}|{ev_band}|{signal_band}|price", len(price_variants))]
-    close = close_variants[_pick(f"{h}|{a}|{score_band}|close", len(close_variants))]
+    close = close_variants[_pick(f"{h}|{a}|{_odds_int}|{_ev_int}|{score_band}|close", len(close_variants))]
     return f"{scene} {price} {close}"
 
 

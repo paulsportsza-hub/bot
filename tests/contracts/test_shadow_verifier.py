@@ -553,9 +553,10 @@ def test_h11_accepts_approximate_sharp_price_without_treating_percentages_as_odd
 
 
 def test_h11_accepts_deterministic_injected_sharp_sentence() -> None:
+    # R6-BUILD-03c: injection now uses generic "Sharp market pricing" — no bookmaker name
     draft = _draft(
         "Arsenal sit 2nd on 61 points with form WWWDL.",
-        "Betway have Arsenal at 2.10 and the edge is still there. Sharp benchmark Pinnacle has home at 2.02.",
+        "Betway have Arsenal at 2.10 and the edge is still there. Sharp market pricing has home at 2.02.",
         verdict="Lean Arsenal at Betway 2.10.",
     )
 

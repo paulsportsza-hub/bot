@@ -84,6 +84,9 @@ def test_united_rugby_championship_no_context_setup_uses_rugby_frame() -> None:
         or "middle third" in lowered
         or "field-position" in lowered
         or "composure" in lowered
+        or "repeat control" in lowered
+        or "exits, pressure" in lowered
+        or "discipline, restarts" in lowered
     )
 
 

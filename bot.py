@@ -13148,6 +13148,17 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
             return False
 
     # 10. R5-BUILD-01: verdict_action preservation
+    # (gate 11 below)
+
+    # 11. R6-BUILD-03c: sharp bookmaker names must never appear in user-facing text
+    _SHARP_NAME_FILTER = re.compile(
+        r"\b(pinnacle|betfair(?:\s+exchange)?|matchbook|smarkets|sharp\s+benchmark|sharp\s+book)\b",
+        re.IGNORECASE,
+    )
+    if _SHARP_NAME_FILTER.search(polished):
+        log.warning("POLISH REJECT: sharp bookmaker name found in polished output")
+        return False
+
     _action_val = (spec.verdict_action or "").lower()
     if _action_val and _action_val != "pass":
         # Multi-word actions (e.g. "speculative punt", "strong back"): exact phrase

@@ -455,7 +455,7 @@ def test_build_sharp_injection_uses_locked_snippet_for_recommended_outcome() -> 
     )
     spec = SimpleNamespace(outcome="home", evidence_class="lean", tone_band="moderate")
 
-    assert evidence_pack._build_sharp_injection(pack, spec) == "Sharp benchmark Pinnacle has home at 2.02."
+    assert evidence_pack._build_sharp_injection(pack, spec) == "Sharp market pricing has home at 2.02."
 
 
 def test_build_sharp_injection_returns_empty_when_no_safe_snippet_exists() -> None:
@@ -542,9 +542,9 @@ def test_inject_sharp_sentence_adds_sentence_inside_edge_section() -> None:
         "🏆 <b>Verdict</b>\nLean Arsenal at Betway 2.10."
     )
 
-    injected = evidence_pack._inject_sharp_sentence(draft, "Sharp benchmark Pinnacle has home at 2.02.")
+    injected = evidence_pack._inject_sharp_sentence(draft, "Sharp market pricing has home at 2.02.")
 
-    assert "🎯 <b>The Edge</b>\nBetway have Arsenal at 2.10 and the price still looks playable. Sharp benchmark Pinnacle has home at 2.02." in injected
+    assert "🎯 <b>The Edge</b>\nBetway have Arsenal at 2.10 and the price still looks playable. Sharp market pricing has home at 2.02." in injected
     assert "⚠️ <b>The Risk</b>" in injected
 
 
