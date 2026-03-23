@@ -87,6 +87,49 @@ def test_united_rugby_championship_no_context_setup_uses_rugby_frame() -> None:
     )
 
 
+def test_no_context_setup_drops_known_repetition_phrases() -> None:
+    text = _render_setup_no_context(_make_no_context_spec())
+    lowered = text.lower()
+
+    banned = [
+        "club rugby at this level",
+        "the competition itself gives the fixture enough structure",
+        "takes its character from control rather than noise",
+        "mid-table and on a roll",
+    ]
+    for phrase in banned:
+        assert phrase not in lowered
+
+
+def test_no_context_setup_varies_by_market_state() -> None:
+    base = _make_no_context_spec(competition="Premier League", sport="soccer")
+    price_only = _render_setup_no_context(
+        _make_no_context_spec(
+            competition=base.competition,
+            sport=base.sport,
+            support_level=0,
+            ev_pct=1.2,
+            odds=3.45,
+            composite_score=49.0,
+        )
+    )
+    multi_signal = _render_setup_no_context(
+        _make_no_context_spec(
+            competition=base.competition,
+            sport=base.sport,
+            support_level=3,
+            ev_pct=7.8,
+            odds=1.74,
+            composite_score=61.0,
+        )
+    )
+
+    assert price_only != multi_signal
+    assert "no support stack" in price_only.lower() or "only a narrow edge" in price_only.lower()
+    assert "multiple signals" in multi_signal.lower() or "signal count" in multi_signal.lower()
+    assert "short favourite" in multi_signal.lower() or "clear favourite" in multi_signal.lower()
+
+
 def test_neutral_template_drops_apology_language_and_interprets_form() -> None:
     text = _render_team_para(
         "Brentford",
@@ -108,6 +151,29 @@ def test_neutral_template_drops_apology_language_and_interprets_form() -> None:
     assert "for what it's worth" not in lowered
     assert "without a strong recent record to lean on" not in lowered
     assert "Form reads W-D-L-D-W" in text
+
+
+def test_momentum_template_with_unknown_position_drops_mid_table_shorthand() -> None:
+    text = _render_team_para(
+        "Paris Saint-Germain",
+        "Luis Enrique",
+        "momentum",
+        None,
+        None,
+        "WWDWD",
+        "",
+        2.1,
+        "",
+        [],
+        "Champions League",
+        "soccer",
+        True,
+    )
+    lowered = text.lower()
+
+    assert "mid-table" not in lowered
+    assert "on a roll" not in lowered
+    assert "champions league" in lowered
 
 
 def test_thin_context_setup_gets_bridge_sentence() -> None:

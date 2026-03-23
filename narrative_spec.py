@@ -187,10 +187,11 @@ def _classify_evidence(edge_data: dict) -> tuple[str, str, str, str]:
     movement_penalty = 1 if movement == "against" else 0
     effective = max(0, support - stale_penalty - movement_penalty)
 
-    if effective == 0:
-        return _profile(0)
-
     bucket = _bucket_from_ev(ev)
+    if effective == 0:
+        if ev > 7.0:
+            return _profile(2)
+        return _profile(0)
 
     # Fewer confirming signals should always make the posture more conservative.
     if effective <= 1:
@@ -200,6 +201,10 @@ def _classify_evidence(edge_data: dict) -> tuple[str, str, str, str]:
 
     # A strong verdict still needs both the EV and the broader support to back it up.
     if bucket >= 3 and (composite < 60 or effective < 3):
+        bucket = 2
+
+    # R4-BUILD-03: >7% EV must never render below the standard-stake floor.
+    if ev > 7.0 and bucket < 2:
         bucket = 2
 
     return _profile(bucket)
@@ -937,22 +942,23 @@ def _tmpl_momentum(
     f = _form_br(form)
     poss = _coach_possessive(coach)
     ord_pos = _pos_phrase(pos)
+    pos_ref = f"{ord_pos} in {comp}" if pos is not None else f"moving well in {comp}"
     last = _last_sent(name, last_result)
     inj = _injuries_sent(injuries)
     if v == 0:
-        parts = [f"{name} are in form right now — {ord_pos} and carrying genuine momentum."]
+        parts = [f"{name} are in form right now — {pos_ref} and carrying genuine momentum."]
         if f:
             parts.append(f"Form ({f}) says it all.")
         if last:
             parts.append(last)
     elif v == 1:
-        parts = [f"Hard to ignore the form of {poss} side — {ord_pos} and on a roll."]
+        parts = [f"Hard to ignore the form of {poss} side — {pos_ref} rather than drifting."]
         if f:
             parts.append(f"A {f} sequence has given them real confidence.")
         if gpg and gpg > 1.5:
             parts.append(f"Scoring at {gpg:.1f} per game right now.")
     else:
-        parts = [f"{name} have hit their stride — {ord_pos} and not looking like stopping."]
+        parts = [f"{name} have hit their stride — {pos_ref} and not looking like stopping."]
         if f:
             parts.append(f"Form reads {f}.")
         if last:
@@ -1072,7 +1078,10 @@ def _tmpl_anonymous(
     inj = _injuries_sent(injuries)
     pts_str = f" on {pts} points" if pts else ""
     if v == 0:
-        parts = [f"{name} sit {ord_pos} in {comp}{pts_str} — steady mid-table with no strong narrative either way."]
+        if pos is not None:
+            parts = [f"{name} sit {ord_pos} in {comp}{pts_str} — steady with no strong narrative either way."]
+        else:
+            parts = [f"{name} come into this without a loud storyline in {comp}, which keeps the read market-first."]
         if f:
             parts.append(f"Form reads {f}.")
         if last:
@@ -1082,7 +1091,10 @@ def _tmpl_anonymous(
         if f:
             parts.append(f"Form ({f}) — steady as she goes.")
     else:
-        parts = [f"{poss} side sit {ord_pos} in {comp} — mid-table with no title ambitions or relegation worries."]
+        if pos is not None:
+            parts = [f"{poss} side sit {ord_pos} in {comp} — outside both extremes and without a dominant storyline."]
+        else:
+            parts = [f"{poss} side do not bring an obvious standings story into this {comp} spot, so the match has to be read through the number."]
         if f:
             parts.append(f"Form reads {f}.")
         if last:
@@ -1281,54 +1293,138 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
     elif cat == "league" and ("rugby" in sport or sport in ("urc", "super_rugby")):
         cat = "club_rugby"
 
-    scene = {
-        "continental": (
-            f"Continental {fixture_type_plural} like this usually settle into a controlled rhythm before either side opens up."
-        ),
-        "international": (
-            f"International {fixture_type_plural} are shaped by selection, travel, and game-state management as much as raw talent."
-        ),
-        "club_rugby": (
-            f"Club rugby at this level is usually decided by territory, set-piece pressure, and which side owns the middle third."
-        ),
-        "cricket": (
-            f"Cricket at this level is often framed by conditions, tempo, and one decisive passage rather than constant momentum."
-        ),
-        "combat": (
-            f"These bouts are usually defined by range, discipline, and who establishes the matchup on their own terms first."
-        ),
-        "league": (
-            f"Domestic league {fixture_type_plural} like this tend to reveal their shape through rhythm and territory before the scoreboard opens up."
-        ),
-    }[cat]
-    tension = {
-        "continental": "That usually puts extra weight on the first clean opening rather than on early chaos.",
-        "international": "The pre-match picture stays broad until the contest itself tells you what sort of night it wants to be.",
-        "club_rugby": "That usually makes the first quarter feel like a field-position argument before anything else.",
-        "cricket": "The first stretch matters because the tempo of the game tends to settle there.",
-        "combat": "The tone is often set early, then carried through the rest of the contest.",
-        "league": "That gives the opening phase extra importance, because the pattern of the game is likely to declare itself early.",
-    }[cat]
-    frame = {
-        "continental": "The competition itself gives the fixture enough structure without needing to overstate the occasion.",
-        "international": "That leaves the occasion itself doing a lot of the scene-setting before the details fill in.",
-        "club_rugby": "It sets up as the sort of matchup where composure is likely to travel further than flair.",
-        "cricket": "It sets the scene for a contest that should be read through control and timing rather than volume alone.",
-        "combat": "It is the kind of matchup where small positional wins can end up defining the whole story.",
-        "league": "That leaves this as a recognisable league spot: familiar stakes, but a match that still has to declare its own texture.",
-    }[cat]
+    ev = float(spec.ev_pct or 0.0)
+    support = max(0, int(spec.support_level or 0))
+    odds = float(spec.odds or 0.0)
+    composite = float(spec.composite_score or 0.0)
 
-    variants = [
-        f"{h} vs {a}{comp_note}. {scene} {frame}",
-        f"{h} host {a}{comp_note}. {scene} {tension}",
-        f"{h} take on {a}{comp_note}. {frame} {tension}",
-        f"This {fixture_type} between {h} and {a}{comp_note} already feels shaped by the competition around it. {scene} {tension}",
-        f"{h} and {a} meet{comp_note} in the kind of {fixture_type} that usually takes its character from control rather than noise. {frame} {tension}",
-        f"{h} vs {a}{comp_note} has a clear competition frame even before the finer detail arrives. {scene} {frame}",
-        f"{h} face {a}{comp_note}. {tension} {frame}",
-        f"{h} against {a}{comp_note}. {scene} {tension}",
-    ]
-    return variants[_pick(h + a, len(variants))]
+    price_band = (
+        "short favourite" if odds and odds < 1.8 else
+        "clear favourite" if odds and odds < 2.15 else
+        "live underdog" if odds and odds >= 3.2 else
+        "competitive price point"
+    )
+    ev_band = (
+        "confident" if ev >= 7.0 else
+        "cautious" if ev < 2.0 else
+        "balanced"
+    )
+    signal_band = (
+        "price_only" if support == 0 else
+        "multi_signal" if support >= 2 else
+        "single_signal"
+    )
+    score_band = (
+        "premium" if composite >= 60.0 else
+        "solid" if composite >= 52.0 else
+        "thin"
+    )
+
+    scene_map = {
+        "continental": [
+            f"{h} vs {a}{comp_note} lands with the slower, more strategic feel these continental {fixture_type_plural} usually bring.",
+            f"{h} host {a}{comp_note} in a continental spot that normally rewards control before ambition.",
+            f"{h} against {a}{comp_note} looks like the sort of continental tie where structure matters before the game starts to stretch.",
+            f"This continental {fixture_type} between {h} and {a}{comp_note} should be read through tempo and control rather than headline noise.",
+        ],
+        "international": [
+            f"{h} vs {a}{comp_note} sits in the kind of international window where management often matters as much as momentum.",
+            f"{h} face {a}{comp_note} in an international spot that can stay opaque until the contest itself settles.",
+            f"{h} and {a} meet{comp_note} with the usual international variables around selection, travel, and in-game adjustment.",
+            f"This international {fixture_type} between {h} and {a}{comp_note} carries more uncertainty around match shape than a routine league date.",
+        ],
+        "club_rugby": [
+            f"{h} vs {a}{comp_note} sets up as a club-rugby contest where territory and set-piece ownership should do the heavy lifting.",
+            f"{h} host {a}{comp_note} in a rugby spot that is more likely to turn on exits, pressure, and repeat control than open chaos.",
+            f"{h} against {a}{comp_note} has the profile of a rugby {fixture_type} where field-position control can dictate the conversation for long stretches.",
+            f"This rugby clash between {h} and {a}{comp_note} looks built around discipline, restarts, and set-piece control before anything flashy arrives.",
+        ],
+        "cricket": [
+            f"{h} vs {a}{comp_note} has the profile of a cricket contest likely to be shaped by conditions and tempo rather than constant swings.",
+            f"{h} host {a}{comp_note} in a cricket spot where one controlled phase can matter more than long spells of pressure.",
+            f"{h} against {a}{comp_note} reads like the sort of cricket encounter where timing and game management should outrank noise.",
+            f"This cricket encounter between {h} and {a}{comp_note} is more about control points and pace-setting than dramatic momentum.",
+        ],
+        "combat": [
+            f"{h} vs {a}{comp_note} looks like a bout where range discipline and stylistic leverage should decide the terms.",
+            f"{h} face {a}{comp_note} in a matchup that is likely to hinge on positioning before it hinges on aggression.",
+            f"{h} against {a}{comp_note} has the feel of a fight where one side establishing the geometry early could shape everything after that.",
+            f"This bout between {h} and {a}{comp_note} reads as a technical matchup first and an emotional one second.",
+        ],
+        "league": [
+            f"{h} vs {a}{comp_note} sits in a familiar league frame, but one that should reveal itself through rhythm before it reveals itself on the scoreboard.",
+            f"{h} host {a}{comp_note} in a domestic spot where territory, game pace, and first control tend to matter more than noise around kickoff.",
+            f"{h} against {a}{comp_note} looks like the sort of league {fixture_type} that takes shape once one side settles into its preferred tempo.",
+            f"This league {fixture_type} between {h} and {a}{comp_note} should be judged through pattern and control before any bigger story gets attached to it.",
+        ],
+    }
+    price_map = {
+        "confident": {
+            "price_only": [
+                f"The market still leans hard enough toward the number to make the {price_band} central to the read, even without broader support.",
+                f"This is still a price-led angle: the number is doing the work, not a stack of external signals.",
+            ],
+            "single_signal": [
+                f"There is some support around the price, but the main point is that the number still looks firmer than the surrounding noise.",
+                f"One confirming signal helps, yet the price remains the real engine of the case.",
+            ],
+            "multi_signal": [
+                f"With multiple signals behind it and a stronger-than-usual edge, this is the sort of {price_band} market position that can be stated more cleanly.",
+                f"The signal count gives this {price_band} more authority, so the setup does not need to lean on theatre.",
+            ],
+        },
+        "balanced": {
+            "price_only": [
+                f"It still reads as a {price_band} call first, which keeps the discipline on the number rather than on any invented story.",
+                f"The angle is mainly in the price architecture, so the right tone is measured rather than promotional.",
+            ],
+            "single_signal": [
+                f"The case is respectable rather than emphatic: one signal, a workable number, and no need to oversell it.",
+                f"There is enough there to keep it live, but not enough to pretend this is a runaway read.",
+            ],
+            "multi_signal": [
+                f"The support is real, but the edge still belongs in the disciplined bucket rather than the loud one.",
+                f"More than one signal sharpens the view, although this still looks like a controlled market read rather than a statement play.",
+            ],
+        },
+        "cautious": {
+            "price_only": [
+                f"With no support stack and only a narrow edge, this is the kind of {price_band} that asks for restraint.",
+                f"The number keeps it on the board, but only just; no support stack means this stays in caution territory rather than conviction territory.",
+            ],
+            "single_signal": [
+                f"There is a hint of support, but the edge is slim enough that the market should still be treated carefully.",
+                f"One signal stops it from being purely numbers-led, though not by enough to remove the caution.",
+            ],
+            "multi_signal": [
+                f"Multiple signals are doing more work than the edge size, which makes this more about respecting the line than pressing it.",
+                f"Multiple signals keep it credible, but the margin is still narrow and should be handled that way.",
+            ],
+        },
+    }
+    close_map = {
+        "premium": [
+            f"That leaves a premium-grade market read on a fixture where the structure matters as much as the names.",
+            f"The cleaner angle here is to trust the market shape and keep the language as composed as the setup.",
+        ],
+        "solid": [
+            f"That keeps the focus on execution and price discipline rather than on borrowed narrative.",
+            f"It is a solid setup for a measured read, with the market doing enough of the explanatory work.",
+        ],
+        "thin": [
+            f"That is why the setup needs restraint: the frame is usable, but not rich enough for swagger.",
+            f"The right read is compact and market-literate, because the available detail stops short of a full story.",
+        ],
+    }
+
+    scene_variants = scene_map[cat]
+    price_variants = price_map[ev_band][signal_band]
+    close_variants = close_map[score_band]
+
+    scene = scene_variants[_pick(f"{h}|{a}|scene", len(scene_variants))]
+    price = price_variants[_pick(f"{h}|{a}|{cat}|{ev_band}|{signal_band}|price", len(price_variants))]
+    close = close_variants[_pick(f"{h}|{a}|{score_band}|close", len(close_variants))]
+    return f"{scene} {price} {close}"
 
 
 def _render_setup_bridge(spec: NarrativeSpec) -> str:
