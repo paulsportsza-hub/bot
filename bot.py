@@ -9453,6 +9453,16 @@ BANNED_NARRATIVE_PHRASES = [
     "small unit only",
     "worth a measured look",
     "worth backing",
+    # BASELINE-FIX: UCL league-phase contamination — Claude generates
+    # "knockout football" for all UCL matches, but league-phase matches
+    # are NOT knockouts. Banned globally since even knockout-stage
+    # narratives should describe match dynamics, not format labels.
+    "knockout football",
+    "knockout stakes",
+    "knockout stage",
+    "knockout tie",
+    "knockout clash",
+    "knockout encounter",
 ]
 
 _INJURY_FETCH_LOOKBACK_DAYS = 2
@@ -12233,11 +12243,25 @@ def get_verified_injuries(
             if not team:
                 result[side] = []
                 continue
-            rows = conn.execute(
-                "SELECT league, team, player_name, injury_status, fixture_date, fetched_at FROM team_injuries "
+            # BASELINE-FIX: Filter by team in SQL to prevent cross-team
+            # contamination (e.g. Ekitike/PSG bleeding into Liverpool context).
+            # Old query fetched ALL injuries and filtered in Python — loose
+            # token matching in _injury_team_matches() caused false positives.
+            team_norm = _injury_normalise_team(team)
+            team_sql_patterns = [f"%{team_norm}%"]
+            # Also try base tokens for common names (e.g. "Chiefs" for "Kaizer Chiefs")
+            base_tokens = _injury_team_base_tokens(team)
+            if base_tokens and " ".join(base_tokens) != team_norm:
+                team_sql_patterns.append(f"%{' '.join(base_tokens)}%")
+            like_clauses = " OR ".join("LOWER(team) LIKE ?" for _ in team_sql_patterns)
+            sql = (
+                "SELECT league, team, player_name, injury_status, fixture_date, fetched_at "
+                "FROM team_injuries "
                 "WHERE injury_status NOT IN ('Missing Fixture', 'Unknown') "
+                f"AND ({like_clauses}) "
                 "ORDER BY fetched_at DESC, fixture_date DESC, player_name ASC"
-            ).fetchall()
+            )
+            rows = conn.execute(sql, team_sql_patterns).fetchall()
             seen_players: set[str] = set()
             safe_rows: list[str] = []
             for row_league, row_team, player_name, injury_status, fixture_date, fetched_at in rows:

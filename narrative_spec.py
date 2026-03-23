@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
 
@@ -70,6 +71,8 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
     },
 }
 
+_SETUP_CONTEXT_MAX_AGE_HOURS = 48.0
+
 
 # ── NarrativeSpec Dataclass ───────────────────────────────────────────────────
 
@@ -116,6 +119,7 @@ class NarrativeSpec:
 
     # Evidence classification (THE KEY INNOVATION)
     support_level: int = 0                # 0-7 confirming signals
+    contradicting_signals: int = 0        # opposing signals tracked for copy discipline
     evidence_class: str = "speculative"   # speculative / lean / supported / conviction
     tone_band: str = "cautious"           # cautious / moderate / confident / strong
 
@@ -131,6 +135,10 @@ class NarrativeSpec:
     stale_minutes: int = 0
     movement_direction: str = "neutral"   # "for" / "against" / "neutral"
     tipster_against: int = 0
+    tipster_agrees: bool | None = None
+    tipster_available: bool = False
+    context_freshness_hours: float | None = None
+    context_is_fresh: bool = True
 
     # Raw scaffold (for LLM grounding in Stage 3)
     scaffold: str = ""
@@ -156,26 +164,45 @@ def _classify_evidence(edge_data: dict) -> tuple[str, str, str, str]:
     if "edge_pct" in edge_data and ev <= 0:
         return ("speculative", "cautious", "pass", "pass")
 
+    def _bucket_from_ev(ev_pct: float) -> int:
+        if ev_pct < 2.0:
+            return 0
+        if ev_pct < 4.0:
+            return 1
+        if ev_pct < 7.0:
+            return 2
+        return 3
+
+    def _profile(bucket: int) -> tuple[str, str, str, str]:
+        profiles = [
+            ("speculative", "cautious", "speculative punt", "tiny exposure or pass"),
+            ("lean", "moderate", "lean", "small stake"),
+            ("supported", "confident", "back", "standard stake"),
+            ("conviction", "strong", "strong back", "confident stake"),
+        ]
+        return profiles[max(0, min(bucket, len(profiles) - 1))]
+
     # Penalties degrade effective support
     stale_penalty = 1 if stale >= 360 else 0      # 6+ hours stale
     movement_penalty = 1 if movement == "against" else 0
     effective = max(0, support - stale_penalty - movement_penalty)
 
     if effective == 0:
-        return ("speculative", "cautious",
-                "speculative punt", "tiny exposure or pass")
-    elif effective == 1:
-        return ("lean", "moderate",
-                "lean", "small stake")
-    elif effective <= 3:
-        return ("supported", "confident",
-                "back", "standard stake")
-    else:  # 4+
-        if composite >= 60 and ev >= 5:
-            return ("conviction", "strong",
-                    "strong back", "confident stake")
-        return ("supported", "confident",
-                "back", "standard stake")
+        return _profile(0)
+
+    bucket = _bucket_from_ev(ev)
+
+    # Fewer confirming signals should always make the posture more conservative.
+    if effective <= 1:
+        bucket -= 1
+    elif effective <= 2 and bucket >= 3:
+        bucket -= 1
+
+    # A strong verdict still needs both the EV and the broader support to back it up.
+    if bucket >= 3 and (composite < 60 or effective < 3):
+        bucket = 2
+
+    return _profile(bucket)
 
 
 # ── Contradiction Guards ───────────────────────────────────────────────────────
@@ -272,7 +299,7 @@ def _build_risk_factors(
         _seed = edge_data.get("home_team", "") + edge_data.get("away_team", "")
         _v = _pick(_seed, 3)
         _default_factors = [
-            "No specific flags on this one — clean risk profile, size normally.",
+            "No specific flags on this one — clean risk profile on paper.",
             "Nothing obvious stands against this. The usual match-day variables apply.",
             "Price and signals are aligned. Typical match uncertainty is the main remaining variable.",
         ]
@@ -357,17 +384,166 @@ def _build_outcome_label(
     return outcome
 
 
-def _build_h2h_summary(ctx_data: dict | None) -> str:
-    """Build concise H2H summary from ctx_data head_to_head list."""
+def _build_h2h_summary(
+    ctx_data: dict | None,
+    edge_data: dict | None = None,
+    home_name: str = "",
+) -> str:
+    """Build concise H2H summary, preferring edge_v2 counts when present."""
+    edge_data = edge_data or {}
+    h2h_total = edge_data.get("h2h_total")
+    home_wins = edge_data.get("h2h_a_wins")
+    away_wins = edge_data.get("h2h_b_wins")
+    draws = edge_data.get("h2h_draws")
+
+    h2h_counts = (h2h_total, home_wins, away_wins, draws)
+    if all(value is not None for value in h2h_counts):
+        try:
+            total_i = int(h2h_total)
+            home_i = int(home_wins)
+            away_i = int(away_wins)
+            draws_i = int(draws)
+        except (TypeError, ValueError):
+            total_i = home_i = away_i = draws_i = 0
+        if total_i > 0 and home_i >= 0 and away_i >= 0 and draws_i >= 0 and (home_i + away_i + draws_i) == total_i:
+            prefix = f"{home_name} " if home_name else ""
+            return f"{total_i} meetings: {prefix}{home_i}W {draws_i}D {away_i}L".strip()
+
     if not ctx_data:
         return ""
     h2h = ctx_data.get("head_to_head", [])
     if not h2h:
         return ""
-    home_wins = sum(1 for m in h2h if m.get("home_score", 0) > m.get("away_score", 0))
-    away_wins = sum(1 for m in h2h if m.get("away_score", 0) > m.get("home_score", 0))
-    draws = len(h2h) - home_wins - away_wins
-    return f"{len(h2h)} meetings: {home_wins}W {draws}D {away_wins}L"
+
+    def _score_pair(match: dict) -> tuple[int | None, int | None]:
+        home_score = match.get("home_score")
+        away_score = match.get("away_score")
+        try:
+            if home_score is not None and away_score is not None:
+                return int(home_score), int(away_score)
+        except (TypeError, ValueError):
+            pass
+        score = str(match.get("score") or "")
+        parsed = re.search(r"(\d+)\s*-\s*(\d+)", score)
+        if parsed:
+            return int(parsed.group(1)), int(parsed.group(2))
+        return None, None
+
+    def _matches_team(label: str, expected: str) -> bool:
+        clean_label = re.sub(r"[^a-z0-9]+", " ", str(label or "").lower()).strip()
+        clean_expected = re.sub(r"[^a-z0-9]+", " ", str(expected or "").lower()).strip()
+        return bool(clean_label and clean_expected and clean_label == clean_expected)
+
+    home_wins = away_wins = draws = 0
+    for match in h2h:
+        winner = str(match.get("winner") or "").strip()
+        if winner.lower() == "draw":
+            draws += 1
+            continue
+        if winner:
+            if home_name and _matches_team(winner, home_name):
+                home_wins += 1
+            else:
+                away_wins += 1
+            continue
+
+        home_score, away_score = _score_pair(match)
+        if home_score is None or away_score is None:
+            continue
+        if home_score == away_score:
+            draws += 1
+            continue
+        match_home = str(match.get("home") or match.get("home_team") or "")
+        match_away = str(match.get("away") or match.get("away_team") or "")
+        if home_name and _matches_team(match_home, home_name):
+            if home_score > away_score:
+                home_wins += 1
+            else:
+                away_wins += 1
+        elif home_name and _matches_team(match_away, home_name):
+            if away_score > home_score:
+                home_wins += 1
+            else:
+                away_wins += 1
+        elif home_score > away_score:
+            home_wins += 1
+        else:
+            away_wins += 1
+    prefix = f"{home_name} " if home_name else ""
+    total = home_wins + draws + away_wins
+    if total <= 0:
+        return ""
+    return f"{total} meetings: {prefix}{home_wins}W {draws}D {away_wins}L".strip()
+
+
+def _parse_context_timestamp(value: str | None) -> datetime | None:
+    """Parse context freshness timestamps to UTC datetimes."""
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _get_setup_context_freshness_hours(ctx_data: dict | None) -> float | None:
+    """Return setup-context age in hours, or None when freshness is unavailable."""
+    if not ctx_data or not ctx_data.get("data_available"):
+        return None
+    freshness_dt = _parse_context_timestamp(ctx_data.get("data_freshness"))
+    if freshness_dt is None:
+        return None
+    return max(0.0, (datetime.now(timezone.utc) - freshness_dt).total_seconds() / 3600.0)
+
+
+def _is_setup_context_fresh(
+    ctx_data: dict | None,
+    *,
+    freshness_hours: float | None = None,
+) -> bool:
+    """Only allow form / season-state copy when freshness is explicit and recent."""
+    if not ctx_data or not ctx_data.get("data_available"):
+        return False
+    if freshness_hours is None:
+        freshness_hours = _get_setup_context_freshness_hours(ctx_data)
+    return freshness_hours is not None and freshness_hours <= _SETUP_CONTEXT_MAX_AGE_HOURS
+
+
+def _filter_team_setup_context(team: dict, *, fresh: bool) -> dict:
+    """Strip stale season-state fields while preserving identity/context basics."""
+    if fresh:
+        return team
+    filtered = dict(team)
+    for key in (
+        "position",
+        "league_position",
+        "points",
+        "games_played",
+        "matches_played",
+        "form",
+        "record",
+        "home_record",
+        "away_record",
+        "goals_per_game",
+        "goal_difference",
+        "goals_for",
+        "goals_against",
+        "conceded_per_game",
+        "last_5",
+        "last_result",
+        "top_scorer",
+        "key_players",
+    ):
+        filtered.pop(key, None)
+    return filtered
 
 
 # ── Main Builder ───────────────────────────────────────────────────────────────
@@ -397,6 +573,13 @@ def build_narrative_spec(
 
     home = ctx_data.get("home_team", {}) if isinstance(ctx_data.get("home_team"), dict) else {}
     away = ctx_data.get("away_team", {}) if isinstance(ctx_data.get("away_team"), dict) else {}
+    context_freshness_hours = _get_setup_context_freshness_hours(ctx_data)
+    context_is_fresh = _is_setup_context_fresh(
+        ctx_data,
+        freshness_hours=context_freshness_hours,
+    )
+    home_setup = _filter_team_setup_context(home, fresh=context_is_fresh)
+    away_setup = _filter_team_setup_context(away, fresh=context_is_fresh)
 
     home_name = home.get("name", edge_data.get("home_team", "Home"))
     away_name = away.get("name", edge_data.get("away_team", "Away"))
@@ -409,14 +592,19 @@ def build_narrative_spec(
     risk_severity = _assess_risk_severity(risk_factors, edge_data)
 
     # Parse home/away records for _decide_team_story
-    home_rec = _parse_record(home.get("home_record", ""))
-    away_rec = _parse_record(away.get("away_record", ""))
+    home_rec = _parse_record(home_setup.get("home_record", ""))
+    away_rec = _parse_record(away_setup.get("away_record", ""))
 
     # Build scaffold (reuse W81-SCAFFOLD)
     scaffold = _build_verified_scaffold(ctx_data, edge_data, sport)
 
     # Verified injuries
-    injuries = get_verified_injuries(home_name, away_name)
+    injuries = get_verified_injuries(
+        home_name,
+        away_name,
+        sport=sport,
+        league=str(edge_data.get("league") or edge_data.get("league_key") or ""),
+    )
 
     # Fair probability — edge_v2 uses "fair_probability", pregen uses "fair_prob"
     fair_prob_raw = edge_data.get("fair_prob") or edge_data.get("fair_probability", 0)
@@ -435,24 +623,24 @@ def build_narrative_spec(
         competition=_humanise_league(edge_data.get("league", "")),
         sport=sport,
         home_story_type=_decide_team_story(
-            home.get("position"), home.get("points"), home.get("form", ""),
-            home_rec, None, home.get("goals_per_game"), is_home=True,
+            home_setup.get("position"), home_setup.get("points"), home_setup.get("form", ""),
+            home_rec, None, home_setup.get("goals_per_game"), is_home=True,
         ),
         away_story_type=_decide_team_story(
-            away.get("position"), away.get("points"), away.get("form", ""),
-            None, away_rec, away.get("goals_per_game"), is_home=False,
+            away_setup.get("position"), away_setup.get("points"), away_setup.get("form", ""),
+            None, away_rec, away_setup.get("goals_per_game"), is_home=False,
         ),
-        home_coach=home.get("coach"),
-        away_coach=away.get("coach"),
-        home_position=home.get("position"),
-        away_position=away.get("position"),
-        home_points=home.get("points"),
-        away_points=away.get("points"),
-        home_form=home.get("form", ""),
-        away_form=away.get("form", ""),
-        home_last_result=_scaffold_last_result(home),
-        away_last_result=_scaffold_last_result(away),
-        h2h_summary=_build_h2h_summary(ctx_data),
+        home_coach=home_setup.get("coach"),
+        away_coach=away_setup.get("coach"),
+        home_position=home_setup.get("position"),
+        away_position=away_setup.get("position"),
+        home_points=home_setup.get("points"),
+        away_points=away_setup.get("points"),
+        home_form=home_setup.get("form", ""),
+        away_form=away_setup.get("form", ""),
+        home_last_result="",
+        away_last_result="",
+        h2h_summary=_build_h2h_summary(ctx_data, edge_data, home_name),
         injuries_home=injuries.get("home", []),
         injuries_away=injuries.get("away", []),
         outcome=edge_data.get("outcome", ""),
@@ -463,6 +651,7 @@ def build_narrative_spec(
         fair_prob_pct=round(float(fair_prob_raw) * 100, 1) if fair_prob_raw else 0.0,
         composite_score=edge_data.get("composite_score", 0),
         support_level=edge_data.get("confirming_signals", 0),
+        contradicting_signals=edge_data.get("contradicting_signals", 0),
         evidence_class=ev_class,
         tone_band=tone,
         risk_factors=risk_factors,
@@ -472,6 +661,10 @@ def build_narrative_spec(
         stale_minutes=edge_data.get("stale_minutes", 0),
         movement_direction=edge_data.get("movement_direction", "neutral"),
         tipster_against=edge_data.get("tipster_against", 0),
+        tipster_agrees=edge_data.get("tipster_agrees"),
+        tipster_available=edge_data.get("tipster_available", False),
+        context_freshness_hours=context_freshness_hours,
+        context_is_fresh=context_is_fresh,
         scaffold=scaffold,
     )
 
@@ -558,6 +751,40 @@ def _sentence_case(text: str) -> str:
     if not text:
         return text
     return text[0].upper() + text[1:]
+
+
+def _support_balance_line(spec: NarrativeSpec) -> str:
+    """Return count-aware support wording for Edge/Verdict copy."""
+    support = max(0, spec.support_level)
+    opposing = max(0, spec.contradicting_signals)
+    if support <= 0:
+        return "No confirming indicators line up behind this yet."
+    if support == 1 and opposing <= 0:
+        return "1 supporting signal lines up behind the price."
+    if support == 1:
+        return f"1 supporting signal backs it, with {opposing} pushing the other way."
+    if opposing <= 0:
+        return (
+            f"{support} supporting indicator{'s' if support != 1 else ''} line up behind the price."
+        )
+    return (
+        f"{support} supporting indicator{'s' if support != 1 else ''} back it, "
+        f"with {opposing} pushing the other way."
+    )
+
+
+def _verdict_support_line(spec: NarrativeSpec) -> str:
+    """Return shorter count-aware support wording for Verdict copy."""
+    support = max(0, spec.support_level)
+    opposing = max(0, spec.contradicting_signals)
+    if support <= 0:
+        return ""
+    if opposing <= 0:
+        return f"{support} supporting indicator{'s' if support != 1 else ''} sit behind the call."
+    return (
+        f"{support} supporting indicator{'s' if support != 1 else ''} sit behind it, "
+        f"with {opposing} pushing back."
+    )
 
 
 # ── Story-type template functions (10 types × 3 variants) ─────────────────────
@@ -870,23 +1097,37 @@ def _tmpl_neutral(
     form: str, record: str, gpg: float | None, last_result: str,
     injuries: list[str], comp: str, sport: str, is_home: bool,
 ) -> str:
-    f = _form_br(form)
+    form_note = _form_outlook(form)
     last = _last_sent(name, last_result)
     inj = _injuries_sent(injuries)
+    ord_pos = _pos_phrase(pos)
+    venue_note = "at home" if is_home else "away from home"
     if v == 0:
-        parts = [f"{name} come into this {'at home' if is_home else 'on the road'}."]
-        if f:
-            parts.append(f"Form reads {f}.")
-        if last:
-            parts.append(last)
+        parts = [f"{name} come into this {venue_note} without a dominant narrative around them."]
+        if form_note:
+            parts.append(form_note)
+        elif pos is not None:
+            parts.append(f"They sit {ord_pos} in {comp}, which keeps them in the middle of the wider picture.")
+        else:
+            parts.append("The read on them is still forming ahead of kickoff.")
     elif v == 1:
-        parts = [f"{'Home side' if is_home else 'Visitors'} {name} line up with limited context available."]
-        if f:
-            parts.append(f"Form ({f}) for what it's worth.")
+        parts = [f"{name} look like one of those sides you assess by the latest run rather than the badge."]
+        if form_note:
+            parts.append(form_note)
+        elif pos is not None:
+            parts.append(f"{ord_pos} in {comp} tells you they are competitive without yet defining the season.")
+        else:
+            parts.append("There is no clear surge or collapse attached to them coming into this fixture.")
     else:
-        parts = [f"{name} enter this fixture without a strong recent record to lean on."]
-        if f:
-            parts.append(f"Form reads {f}.")
+        parts = [f"{name} arrive with enough uncertainty around them to keep this fixture interesting."]
+        if form_note:
+            parts.append(form_note)
+        elif pos is not None:
+            parts.append(f"{ord_pos} in {comp} is steady ground, but not a position that settles every question.")
+        else:
+            parts.append("They enter this one without a clean trend in either direction.")
+    if last:
+        parts.append(last)
     if inj:
         parts.append(inj)
     return " ".join(p for p in parts if p)
@@ -947,13 +1188,13 @@ def _render_team_para(
 
 def _competition_category(comp: str) -> str:
     """W84-Q5: Categorise competition for contextual framing in low-context narratives."""
-    c = comp.lower()
-    if any(w in c for w in ["champions", "europa", "conference", "continental"]):
-        return "continental"
+    c = re.sub(r"[_-]+", " ", comp.lower()).strip()
+    if any(w in c for w in ["united rugby championship", "urc", "super rugby", "currie cup", "premiership rugby"]):
+        return "club_rugby"
     if any(w in c for w in ["six nations", "rugby championship", "rugby world cup"]):
         return "international"
-    if any(w in c for w in ["urc", "super rugby", "currie cup", "premiership rugby"]):
-        return "club_rugby"
+    if any(w in c for w in ["champions league", "uefa champions", "europa league", "conference league", "continental cup"]):
+        return "continental"
     if any(w in c for w in ["sa20", "ipl", "big bash", "t20", "odi", "test match"]):
         return "cricket"
     if any(w in c for w in ["ufc", "boxing", "mma"]):
@@ -970,7 +1211,7 @@ def _match_shape_note(comp_cat: str, fixture_type: str) -> str:
     _shapes = {
         "continental": (
             f"European competition {_ft_pl} carry a different weight to league games — "
-            f"knockout stakes compress the scoring range and lift the value of cautious outcomes."
+            f"the stakes shift the tempo and lift the value of cautious outcomes."
         ),
         "international": (
             f"International {_ft_pl} carry squad selection uncertainty "
@@ -989,217 +1230,114 @@ def _match_shape_note(comp_cat: str, fixture_type: str) -> str:
             f"the right style clash can flip the market entirely, regardless of who's favourite."
         ),
         "league": (
-            f"Without current form data, these {_ft_pl} are priced primarily on market consensus — "
-            f"which is where implied probability and model probability tend to diverge most."
+            f"Without current form data, these {_ft_pl} tend to take their shape from rhythm, territory, "
+            f"and which side settles first once the contest gets moving."
         ),
     }
     return _shapes.get(comp_cat, "")
 
 
-def _render_setup_no_context(spec: NarrativeSpec) -> str:
-    """W84-Q8: Premiumized no-context Setup. 8 MD5-deterministic variants.
+def _form_outlook(form: str) -> str:
+    """Turn a form string into a short analyst-style read."""
+    f = _form_br(form)
+    if not f:
+        return ""
 
-    Each variant is a distinct angle on the fixture: competition character,
-    contest tension, pre-match picture, live sweat, price story. Evidence-bounded
-    — describes genre, competition type, and market mechanics only. No team facts.
-    """
+    wins = form.count("W")
+    losses = form.count("L")
+    draws = form.count("D")
+
+    if wins >= 4:
+        return f"Form reads {f} — that is a side carrying genuine rhythm."
+    if losses >= 4:
+        return f"Form reads {f} — too many setbacks to call this stable."
+    if wins > losses + 1:
+        return f"Form reads {f} — enough to suggest their level is rising."
+    if losses > wins + 1:
+        return f"Form reads {f} — the shape is still uneven."
+    if draws >= 3 and wins <= 1 and losses <= 1:
+        return f"Form reads {f} — a run built on tight margins rather than momentum."
+    return f"Form reads {f} — mixed enough to keep the picture open."
+
+
+def _render_setup_no_context(spec: NarrativeSpec) -> str:
+    """Scene-setting fallback when both teams arrive without usable match context."""
     comp = spec.competition or ""
     comp_note = f" in {comp}" if comp else ""
     h, a = spec.home_name, spec.away_name
-    outcome = spec.outcome_label or "this outcome"
-    odds_str = f"{spec.odds:.2f}" if spec.odds else ""
-    bk = spec.bookmaker or "the market"
     sport = spec.sport or "soccer"
 
-    fp_str = f"{spec.fair_prob_pct:.0f}%" if spec.fair_prob_pct else "?"
-    market_implied = f"{round(100.0 / spec.odds):.0f}%" if spec.odds and spec.odds > 1 else "?"
-
-    _ev = spec.ev_pct
-    # _ev_noun: plain phrase without article ("moderate 3.8% expected value gap")
-    # _ev_label: with article — use where "a/an" precedes ("a moderate 3.8%...")
-    # Rule: use _ev_noun after "That/The/this"; use _ev_label elsewhere
-    _ev_noun = (
-        f"{_ev:.1f}% expected value gap" if _ev >= 5
-        else f"moderate {_ev:.1f}% expected value gap" if _ev >= 2
-        else f"{_ev:.1f}% expected value gap"
-    )
-    _ev_label = f"a {_ev_noun}"
-
-    _fixture_type = {
-        "soccer": "fixture", "rugby": "clash",
-        "cricket": "encounter", "combat": "bout",
+    fixture_type = {
+        "soccer": "fixture",
+        "rugby": "clash",
+        "cricket": "encounter",
+        "combat": "bout",
     }.get(sport, "match")
+    fixture_type_plural = _plural(fixture_type)
 
-    _cat = _competition_category(comp)
-    # W84-Q14: sport-aware override using contains check — sport_key is e.g.
-    # "cricket_test_match", "cricket_icc_world_cup", not just "cricket"
-    if _cat == "league" and "cricket" in sport:
-        _cat = "cricket"
-    elif _cat == "league" and ("rugby" in sport or sport in ("urc", "super_rugby")):
-        _cat = "club_rugby"
-    _match_shape = _match_shape_note(_cat, _fixture_type)
+    cat = _competition_category(comp)
+    if cat == "league" and "cricket" in sport:
+        cat = "cricket"
+    elif cat == "league" and ("rugby" in sport or sport in ("urc", "super_rugby")):
+        cat = "club_rugby"
 
-    # W84-Q8: What this competition type typically produces as a contest
-    _ft_pl = _plural(_fixture_type)
-    _cat_display = {
-        "continental": "continental", "international": "international",
-        "club_rugby": "club rugby", "cricket": "cricket",
-        "combat": "combat sports", "league": "domestic league",
-    }.get(_cat, _cat)
-    _game_character = {
+    scene = {
         "continental": (
-            f"European competition {_ft_pl} have their own rhythm — "
-            f"tighter margins, fewer open exchanges, and more intrigue in patient outcomes."
+            f"Continental {fixture_type_plural} like this usually settle into a controlled rhythm before either side opens up."
         ),
         "international": (
-            f"International {_ft_pl} are shaped as much by what isn't confirmed "
-            f"pre-match as what is — squad selection is the dominant variable."
+            f"International {fixture_type_plural} are shaped by selection, travel, and game-state management as much as raw talent."
         ),
         "club_rugby": (
-            f"Club rugby at this level is a territory war — "
-            f"set-piece execution and breakdown discipline decide margins more reliably than individual talent."
+            f"Club rugby at this level is usually decided by territory, set-piece pressure, and which side owns the middle third."
         ),
         "cricket": (
-            f"Cricket at this level hinges on a narrow set of variables: "
-            f"conditions, team selection, and the toss — all of which firm up in the final hours."
+            f"Cricket at this level is often framed by conditions, tempo, and one decisive passage rather than constant momentum."
         ),
         "combat": (
-            f"Combat sports markets are driven by narrative and matchup perception as much as record — "
-            f"which produces pricing divergences between opening and closing lines."
+            f"These bouts are usually defined by range, discipline, and who establishes the matchup on their own terms first."
         ),
         "league": (
-            f"Domestic league {_ft_pl} without current form get priced on team identity — "
-            f"which is where the market tends to over- or under-value sides relative to what the data actually supports."
+            f"Domestic league {fixture_type_plural} like this tend to reveal their shape through rhythm and territory before the scoreboard opens up."
         ),
-    }.get(_cat, "")
+    }[cat]
+    tension = {
+        "continental": "That usually puts extra weight on the first clean opening rather than on early chaos.",
+        "international": "The pre-match picture stays broad until the contest itself tells you what sort of night it wants to be.",
+        "club_rugby": "That usually makes the first quarter feel like a field-position argument before anything else.",
+        "cricket": "The first stretch matters because the tempo of the game tends to settle there.",
+        "combat": "The tone is often set early, then carried through the rest of the contest.",
+        "league": "That gives the opening phase extra importance, because the pattern of the game is likely to declare itself early.",
+    }[cat]
+    frame = {
+        "continental": "The competition itself gives the fixture enough structure without needing to overstate the occasion.",
+        "international": "That leaves the occasion itself doing a lot of the scene-setting before the details fill in.",
+        "club_rugby": "It sets up as the sort of matchup where composure is likely to travel further than flair.",
+        "cricket": "It sets the scene for a contest that should be read through control and timing rather than volume alone.",
+        "combat": "It is the kind of matchup where small positional wins can end up defining the whole story.",
+        "league": "That leaves this as a recognisable league spot: familiar stakes, but a match that still has to declare its own texture.",
+    }[cat]
 
-    # W84-Q8: Pre-match picture for this competition type
-    _fixture_context = {
-        "continental": (
-            f"Pre-kickoff information in European ties is always partial — "
-            f"rotation decisions, tactical shape, and travel schedules create a soft pre-match price."
-        ),
-        "international": (
-            f"The pre-match picture for international {_ft_pl} is deliberately incomplete — "
-            f"coaches protect squad news, and the market works from the same uncertainty as everyone else."
-        ),
-        "club_rugby": (
-            f"Club rugby markets run on less data than domestic football — "
-            f"which means pricing gaps can hold longer before kickoff, "
-            f"and the line move carries more information than the opening price."
-        ),
-        "cricket": (
-            f"The pre-match picture crystallises late in cricket — "
-            f"conditions and final XI confirmation can reshape the entire market in the hour before the toss."
-        ),
-        "combat": (
-            f"Both corners have managed their pre-fight information carefully. "
-            f"The opening line reflects what's been said publicly — not necessarily the full picture."
-        ),
-        "league": (
-            f"Without form or movement data, this is priced on who these teams are — "
-            f"not what they're doing right now. That's the most honest read available."
-        ),
-    }.get(_cat, "")
-
-    # W84-Q8: What to watch live / what kind of sweat this is
-    _sweat_note = {
-        "continental": (
-            f"The team shape in the opening 20 minutes tells you whether the market "
-            f"priced the tactical intent correctly — watch how deep the away side defends."
-        ),
-        "international": (
-            f"Squad confirmation and early match tempo will tell you whether "
-            f"the pre-match price was anchored correctly."
-        ),
-        "club_rugby": (
-            f"First-quarter territory and set-piece outcomes are the leading indicators — "
-            f"they'll tell you whether the market's pre-match read is holding."
-        ),
-        "cricket": (
-            f"The toss and first session are the real first data points — "
-            f"they'll tell you whether the pre-match price deserved backing."
-        ),
-        "combat": (
-            f"The opening exchange tells you whether the stylistic matchup "
-            f"is playing out as the market modelled it."
-        ),
-        "league": (
-            f"The opening exchanges will tell you whether the pre-match price "
-            f"was well-anchored or wider than the match play deserves."
-        ),
-    }.get(_cat, "")
-
-    # W84-Q8: Character of the pricing gap (EV-based, direct)
-    _price_char = (
-        f"The line looks softer than it should at this price." if _ev >= 8
-        else f"There's a tick of value in the current price." if _ev >= 4
-        else f"A real tick of value in the current price." if _ev >= 2
-        else f"A slim model-identified edge in the opening line."
-    )
-
-    _v = _pick(h + a, 8)
-    _nc_variants = [
-        # 0 — Game character leads (what this competition type produces → then the price)
-        (
-            f"{h} vs {a}{comp_note}. "
-            f"{_game_character} "
-            f"{outcome} is priced at {odds_str} ({bk}) — our model reads {fp_str} fair probability. "
-            f"When there's no form to lean on, the price gap carries more weight. That {_ev_noun} is the model's read on this one."
-        ),
-        # 1 — Match shape + what kind of competition this is + price
-        (
-            f"{h} take on {a}{comp_note}. "
-            f"{_match_shape} "
-            f"{bk} has {outcome} at {odds_str} ({market_implied} implied); our model reads {fp_str}. "
-            f"That {_ev_noun} is the divergence — no form data to confirm it, but the price model flags it."
-        ),
-        # 2 — Pre-match picture + price divergence (why the gap might exist → the gap)
-        (
-            f"{h} vs {a}{comp_note}. "
-            f"{_fixture_context} "
-            f"The price on {outcome} — {odds_str} at {bk} ({market_implied} implied) — "
-            f"diverges from our {fp_str} estimate by {_ev_noun}."
-        ),
-        # 3 — Match shape + how bookmakers price this competition type
-        (
-            f"{h} take on {a}{comp_note}. "
-            f"{_match_shape} "
-            f"When {_ft_pl} like this arrive without current form data, "
-            f"the bookmaker's line is anchored to historical averages — not to what's happening right now. "
-            f"{bk} at {odds_str} on {outcome} vs our {fp_str}: {_ev_label}."
-        ),
-        # 4 — Price character + direct editorial voice (sharp punter framing)
-        (
-            f"{h} host {a}{comp_note}. "
-            f"{_price_char} "
-            f"{bk} at {odds_str} implies {market_implied} probability on {outcome}; "
-            f"our model reads {fp_str}. "
-            f"In a market priced on identity rather than current form, that {_ev_noun} is the sharpest read you'll get pre-kick."
-        ),
-        # 5 — Match shape leads, price as supporting evidence
-        (
-            f"{_match_shape} "
-            f"{h} vs {a}{comp_note}. "
-            f"{bk} has {outcome} at {odds_str} ({market_implied} implied); our model has {fp_str}. "
-            f"That {_ev_noun} is where the model and market disagree. This bet is the call on which one is right."
-        ),
-        # 6 — Live sweat description + price (what this bet feels like in-play)
-        (
-            f"{h} take on {a}{comp_note}. "
-            f"{_sweat_note} "
-            f"{bk} at {odds_str} on {outcome} — {market_implied} implied vs our {fp_str}. "
-            f"That {_ev_noun} is the pre-match case. The live {_fixture_type} either confirms it or doesn't."
-        ),
-        # 7 — Full immersive frame (game character + sweat + price — richest no-context card)
-        (
-            f"This {_fixture_type} between {h} and {a}{comp_note} fits a recognisable type. "
-            f"{_game_character} "
-            f"{_sweat_note} "
-            f"{bk} at {odds_str} on {outcome} vs our {fp_str}: {_ev_label}."
-        ),
+    variants = [
+        f"{h} vs {a}{comp_note}. {scene} {frame}",
+        f"{h} host {a}{comp_note}. {scene} {tension}",
+        f"{h} take on {a}{comp_note}. {frame} {tension}",
+        f"This {fixture_type} between {h} and {a}{comp_note} already feels shaped by the competition around it. {scene} {tension}",
+        f"{h} and {a} meet{comp_note} in the kind of {fixture_type} that usually takes its character from control rather than noise. {frame} {tension}",
+        f"{h} vs {a}{comp_note} has a clear competition frame even before the finer detail arrives. {scene} {frame}",
+        f"{h} face {a}{comp_note}. {tension} {frame}",
+        f"{h} against {a}{comp_note}. {scene} {tension}",
     ]
-    return _nc_variants[_v]
+    return variants[_pick(h + a, len(variants))]
+
+
+def _render_setup_bridge(spec: NarrativeSpec) -> str:
+    """Light connector for thin context-rich setups."""
+    comp_note = f" in {spec.competition}" if spec.competition else ""
+    return (
+        f"That gives {spec.home_name} vs {spec.away_name}{comp_note} a clear shape before kickoff, "
+        f"even if neither side arrives with a completely settled profile."
+    )
 
 
 def _render_setup(spec: NarrativeSpec) -> str:
@@ -1207,9 +1345,9 @@ def _render_setup(spec: NarrativeSpec) -> str:
     OEI pattern: home paragraph → away paragraph → H2H bridge.
 
     W84-P1E: When no standings/form data available (both neutral, no form),
-    produce a compact honest note rather than two thin boilerplate paragraphs.
+    produce a compact scene-setting note rather than two thin boilerplate paragraphs.
     """
-    # No context — produce compact edge-focused setup instead of boilerplate
+    # No context — produce compact fixture framing instead of price-analysis boilerplate.
     _no_context = (
         spec.home_story_type == "neutral"
         and spec.away_story_type == "neutral"
@@ -1220,6 +1358,7 @@ def _render_setup(spec: NarrativeSpec) -> str:
     )
     if _no_context:
         return _render_setup_no_context(spec)
+
     home_para = _render_team_para(
         spec.home_name, spec.home_coach, spec.home_story_type,
         spec.home_position, spec.home_points, spec.home_form,
@@ -1233,7 +1372,11 @@ def _render_setup(spec: NarrativeSpec) -> str:
         spec.injuries_away, spec.competition, spec.sport, is_home=False,
     )
     h2h = _h2h_bridge(spec.h2h_summary, spec.home_name, spec.away_name)
-    parts = [p for p in [home_para, away_para, h2h] if p]
+    bridge = ""
+    combined_len = len(home_para) + len(away_para)
+    if home_para and away_para and not h2h and combined_len < 320:
+        bridge = _render_setup_bridge(spec)
+    parts = [p for p in [home_para, away_para, bridge, h2h] if p]
     return "\n".join(parts)
 
 
@@ -1246,6 +1389,12 @@ def _render_edge(spec: NarrativeSpec) -> str:
     outcome = spec.outcome_label or "this outcome"
 
     _seed = (spec.home_name or "") + (spec.away_name or "")
+    support_line = _support_balance_line(spec)
+    tipster_line = ""
+    if spec.tipster_available and spec.tipster_agrees is True:
+        tipster_line = " Tipster consensus leans the same way."
+    elif spec.tipster_available and spec.tipster_agrees is False:
+        tipster_line = " Tipster consensus is not on the same side."
 
     if spec.evidence_class == "speculative":
         _v = _pick(_seed, 6)
@@ -1298,20 +1447,20 @@ def _render_edge(spec: NarrativeSpec) -> str:
         _v = _pick(_seed, 3)
         _lean_variants = [
             (
-                f"Some value showing on {outcome} — fair probability at {fp_str} "
-                f"vs {odds_str} on offer at {bk} ({ev_str}). "
-                f"One signal leans this way, which moves this above pure speculation. "
-                f"Enough signal to engage — size it carefully."
+                f"{bk} is a shade longer than our line on {outcome}: "
+                f"{odds_str} on offer against a {fp_str} fair read ({ev_str}). "
+                f"{support_line} Enough there to engage, not enough to get carried away."
+                f"{tipster_line}"
             ),
             (
-                f"The model sees {ev_str} on {outcome} at {odds_str} ({bk}), "
-                f"with one confirming indicator leaning in the same direction. "
-                f"Fair value at {fp_str} — enough to act on, not enough to go heavy."
+                f"{outcome} is not a huge edge, but {bk}'s {odds_str} is still better than our number. "
+                f"{support_line} Fair value sits around {fp_str}, so the play is live without being loud."
+                f"{tipster_line}"
             ),
             (
-                f"Fair probability at {fp_str} against {odds_str} at {bk} gives {ev_str} on {outcome}. "
-                f"There's a single supporting signal here — it lifts this into measured play territory. "
-                f"A step above a blind price bet."
+                f"{ev_str} sits on {outcome} because the current {odds_str} at {bk} is still a touch loose "
+                f"against our {fp_str} fair line. {support_line} That makes it measured rather than speculative."
+                f"{tipster_line}"
             ),
         ]
         return _lean_variants[_v]
@@ -1320,19 +1469,21 @@ def _render_edge(spec: NarrativeSpec) -> str:
         _v = _pick(_seed, 3)
         _supp_variants = [
             (
-                f"Multiple indicators agree on {outcome} — fair probability at {fp_str} "
-                f"vs {odds_str} at {bk} ({ev_str}). "
-                f"This has the depth of support that separates a proper edge from a price guess."
+                f"{bk} is still offering more than our line on {outcome}: "
+                f"{odds_str} against a {fp_str} fair read ({ev_str}). "
+                f"{support_line} That gives the edge a real base without pretending it is spotless."
+                f"{tipster_line}"
             ),
             (
-                f"This one has legs: {ev_str} expected value on {outcome} at {odds_str} ({bk}), "
-                f"with confirming indicators from form, movement, or tipster consensus. "
-                f"Fair value at {fp_str} — the case is solid at the current price."
+                f"The price has room on {outcome}: {bk} sits at {odds_str} while our fair line is closer to {fp_str}. "
+                f"{support_line} The case is solid at the current number."
+                f"{tipster_line}"
             ),
             (
-                f"The edge on {outcome} at {odds_str} with {bk} ({ev_str}) isn't just model-driven — "
-                f"multiple data points confirm the gap. Fair probability at {fp_str}. "
-                f"One of the better-supported plays on the card."
+                f"{ev_str} on {outcome} is not living on the model alone. "
+                f"{support_line} With {bk} still at {odds_str} versus a {fp_str} fair line, "
+                f"the edge has enough underneath it to be taken seriously."
+                f"{tipster_line}"
             ),
         ]
         return _supp_variants[_v]
@@ -1341,34 +1492,35 @@ def _render_edge(spec: NarrativeSpec) -> str:
         _v = _pick(_seed, 3)
         _conv_variants = [
             (
-                f"One of the stronger plays today. Multiple signals align behind {outcome} "
-                f"at {odds_str} with {bk} ({ev_str}). "
+                f"One of the stronger plays today. {support_line} "
+                f"{outcome} is {odds_str} with {bk} ({ev_str}). "
                 f"Fair probability at {fp_str} — the market looks mispriced here."
+                f"{tipster_line}"
             ),
             (
                 f"Strong conviction on {outcome}: {ev_str} expected value at {odds_str} ({bk}), "
-                f"backed by a cluster of confirming signals. "
+                f"backed by {support_line.lower()} "
                 f"Fair value at {fp_str} — this has the depth of support most edges don't get."
+                f"{tipster_line}"
             ),
             (
-                f"Everything lines up on {outcome} — {ev_str} edge, {odds_str} at {bk}, "
-                f"fair probability at {fp_str}, and multiple confirming indicators. "
-                f"Premium value. The market has this wrong."
+                f"{support_line} {ev_str} edge on {outcome} at {odds_str} with {bk}, "
+                f"fair probability at {fp_str}. Premium value without needing to overstate the picture. "
+                f"The market still looks mispriced."
+                f"{tipster_line}"
             ),
         ]
         return _conv_variants[_v]
 
 
 def _render_risk(spec: NarrativeSpec) -> str:
-    """Risk section: what could go wrong + sizing guidance. Distinct from Edge (what's right)."""
+    """Risk section: uncertainty only. Stake posture belongs in Verdict."""
     factors_text = " ".join(spec.risk_factors)
-    # W84-Q8: More texture in severity notes — feels like a real risk assessment
-    severity_note = {
-        "high": "High-risk environment here — treat this as speculative or pass entirely.",
-        "moderate": "Factor that in — size accordingly, but it doesn't change the core argument.",
-        "low": "Risk profile is clean here. Execute with normal sizing.",
-    }.get(spec.risk_severity, "Size conservatively and keep your exposure tight.")
-    return f"{factors_text} {severity_note}".strip()
+    if spec.risk_severity == "high":
+        return f"{factors_text} High-risk profile here — several things can still break against the call.".strip()
+    if spec.risk_severity == "low":
+        return f"{factors_text} Clean risk profile, but ordinary match variance still applies.".strip()
+    return (factors_text.strip() or "Ordinary match uncertainty is the main thing left to respect.").strip()
 
 
 def _render_verdict(spec: NarrativeSpec) -> str:
@@ -1378,6 +1530,7 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     bk = spec.bookmaker or "the market"
     action = spec.verdict_action
     sizing = spec.verdict_sizing
+    support_line = _verdict_support_line(spec)
 
     _seed = (spec.home_name or "") + (spec.away_name or "")
 
@@ -1436,15 +1589,15 @@ def _render_verdict(spec: NarrativeSpec) -> str:
         _back_variants = [
             (
                 f"Back {outcome} at {odds_str} with {bk} — "
-                f"the indicators are doing their job here. {_sentence_case(sizing)}."
+                f"{support_line or 'the case is there at the current number.'} {_sentence_case(sizing)}."
             ),
             (
-                f"{outcome} at {odds_str} ({bk}) — back it. "
-                f"Multiple data points confirm the direction. {_sentence_case(sizing)}."
+                f"{outcome} at {odds_str} ({bk}) is backable here. "
+                f"{support_line or 'The price still does enough to justify the play.'} {_sentence_case(sizing)}."
             ),
             (
                 f"This one gets the green light: {outcome} at {odds_str} with {bk}. "
-                f"Supported, priced right, worth a considered stake. {_sentence_case(sizing)}."
+                f"{support_line or 'Supported and priced right.'} {_sentence_case(sizing)}."
             ),
         ]
         return _back_variants[_v]
