@@ -552,8 +552,9 @@ def test_h11_accepts_approximate_sharp_price_without_treating_percentages_as_odd
     assert report["hard_checks"]["ev_probability_values"]["passed"] is True
 
 
-def test_h11_accepts_deterministic_injected_sharp_sentence() -> None:
-    # R6-BUILD-03c: injection now uses generic "Sharp market pricing" — no bookmaker name
+def test_h11_rejects_deterministic_injected_sharp_sentence() -> None:
+    # R7-BUILD-02: "Sharp market pricing" is now in BANNED_NARRATIVE_PHRASES —
+    # verify_shadow_narrative must reject narratives containing this phrase.
     draft = _draft(
         "Arsenal sit 2nd on 61 points with form WWWDL.",
         "Betway have Arsenal at 2.10 and the edge is still there. Sharp market pricing has home at 2.02.",
@@ -562,8 +563,7 @@ def test_h11_accepts_deterministic_injected_sharp_sentence() -> None:
 
     passed, report = evidence_pack.verify_shadow_narrative(draft, _make_pack(), _make_spec())
 
-    assert passed is True
-    assert report["hard_checks"]["sharp_prices_traceable"]["passed"] is True
+    assert passed is False
 
 
 def test_h11_accepts_rounded_sharp_price_inside_narrow_tolerance() -> None:

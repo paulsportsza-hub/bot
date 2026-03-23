@@ -1532,7 +1532,7 @@ def _render_edge(spec: NarrativeSpec) -> str:
                 f"A {ev_str} edge on {outcome} at {odds_str} with {bk}: "
                 f"the model estimates {fp_str} fair probability, the bookmaker implies less. "
                 f"The kind of bet where you back the model's pricing read against the bookmaker's "
-                f"for this competition type — small stake, open mind."
+                f"for this competition type — open mind."
             ),
             # 4 — Price divergence + resolution path
             (
@@ -1640,6 +1640,10 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     support_line = _verdict_support_line(spec)
 
     _seed = (spec.home_name or "") + (spec.away_name or "")
+
+    # R7-BUILD-02: P1-STAKING-FLOOR — EV >= 7% must never render "small"/"tiny" sizing
+    if spec.ev_pct >= 7.0 and sizing in ("tiny exposure or pass", "small stake"):
+        sizing = "standard stake"
 
     if action == "pass":
         # W84-Q13: Zero/negative EV — never frame as actionable

@@ -1837,6 +1837,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _c_base_html = _apply_hot_tip_detail_honesty(
                     _c_base_html,
                     _detail_model_state,
+                    user_id=user_id,
                 )
                 _proof = await _get_hot_tips_result_proof()
                 _detail_tier = _cached_content["edge_tier"]
@@ -1947,7 +1948,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 if _it_header["broadcast"]:
                     _ilines.append(_it_header["broadcast"])
                 _ilines.append("")
-                if _detail_model_state["model_only"]:
+                if _detail_model_state["model_only"] and user_id in config.ADMIN_IDS:
                     _ilines.append("<b>[MODEL ONLY]</b> No confirming signals behind this price.")
                     _ilines.append("")
 
@@ -2005,7 +2006,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 if _signal_block:
                     _ilines.extend(["", _signal_block])
                 _ihtml = "\n".join(_ilines)
-                _ihtml = _apply_hot_tip_detail_honesty(_ihtml, _detail_model_state)
+                _ihtml = _apply_hot_tip_detail_honesty(_ihtml, _detail_model_state, user_id=user_id)
                 _ihtml = re.sub(r'\n{3,}', '\n\n', _ihtml)
                 _ibtns = _build_game_buttons(
                     _instant_tips, match_key, user_id,
@@ -6294,6 +6295,7 @@ def _apply_hot_tip_model_state(
 def _apply_hot_tip_detail_honesty(
     text: str,
     model_state: dict[str, int | bool | str],
+    user_id: int = 0,
 ) -> str:
     """Keep Hot Tips detail truth cues aligned with authoritative model-only state."""
     if not text or not model_state.get("model_only"):
@@ -6305,6 +6307,9 @@ def _apply_hot_tip_detail_honesty(
         text,
         count=1,
     )
+    # R7-BUILD-02: P1-MODEL-ONLY — only show [MODEL ONLY] banner to admins
+    if user_id not in config.ADMIN_IDS:
+        return text
     banner = "<b>[MODEL ONLY]</b> No confirming signals behind this price."
     if "[MODEL ONLY]" in text:
         return text
@@ -6741,6 +6746,7 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             MAX_PRODUCTION_EDGE_PCT as _MAX_PRODUCTION_EDGE_PCT,
             MAX_RECOMMENDED_ODDS as _MAX_RECOMMENDED_ODDS,
         )
+        from scrapers.edge.tier_engine import assign_tier as _assign_tier
         _conn = _conn_fn(_DB_PATH)
         _conn.row_factory = lambda cursor, row: dict(
             zip([col[0] for col in cursor.description], row)
@@ -6785,10 +6791,13 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         home_display = _display_team_name(_home_raw)
         away_display = _display_team_name(_away_raw)
 
-        # R6-BUILD-02: Re-derive tier from composite_score — DB edge_tier may be
-        # stale (logged when Gold threshold was lower than the current 40).
-        # composite_score is always fresh and authoritative for display tier.
-        edge_tier = _tier_from_composite(float(row["composite_score"] or 0))
+        # R7-BUILD-01: Use canonical assign_tier() which enforces all three criteria
+        # (min_composite, min_edge_pct, min_confirming) — not just composite score.
+        # A tip with composite=45 but edge_pct=2.5% is Silver, not Gold (gold needs ≥3%).
+        _composite = float(row["composite_score"] or 0)
+        _ev_for_tier = float(row["predicted_ev"] or 0)
+        _confirming_est = 3 if _composite >= 70 else (2 if _composite >= 55 else (1 if _composite >= 40 else 0))
+        edge_tier = _assign_tier(_composite, _ev_for_tier, _confirming_est, red_flags=[]) or "bronze"
 
         # predicted_ev is stored as percentage (e.g. 5.2 = 5.2%)
         ev_pct = round(float(row["predicted_ev"] or 0), 1)
@@ -6825,7 +6834,7 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             "bookmaker": _display_bookmaker_name(_raw_bk_key),
             "bookmaker_key": _raw_bk_key,
             "ev": ev_pct,
-            "prob": 0,
+            "prob": round(((1 + ev_pct / 100.0) / _rec_odds) * 100) if ev_pct > 0 and _rec_odds > 1.0 else 0,
             "kelly": 0,
             "edge_rating": edge_tier,
             "display_tier": edge_tier,
@@ -7355,7 +7364,8 @@ def _build_hot_tips_page(
         tip["_ht_model_only"] = _model_only
         tip["_ht_confirming_signals"] = _confirming
         tip["_ht_total_signals"] = _total_signals
-        _model_tag = " [MODEL ONLY]" if _model_only else ""
+        # R7-BUILD-02: P1-MODEL-ONLY — only visible to admins
+        _model_tag = " [MODEL ONLY]" if (_model_only and user_id in config.ADMIN_IDS) else ""
         home_raw = tip.get("home_team") or ""
         away_raw = tip.get("away_team") or ""
         home = h(home_raw)
@@ -9471,6 +9481,8 @@ BANNED_NARRATIVE_PHRASES = [
     "knockout tie",
     "knockout clash",
     "knockout encounter",
+    # R7-BUILD-02: P1-SHARP-REFERENCE — sharp book reference must never appear in user-facing narratives
+    "Sharp market pricing",
 ]
 
 _INJURY_FETCH_LOOKBACK_DAYS = 2
@@ -12048,6 +12060,9 @@ def _final_polish(text: str, edge_data: dict | None = None) -> str:
         text,
         flags=re.IGNORECASE,
     )
+
+    # R7-BUILD-02: P1-SHARP-REFERENCE — strip sharp book injection from cached/live narratives
+    text = re.sub(r"Sharp market pricing has .+? at \d+\.\d+\.\s?", "", text)
 
     # Clean up multiple newlines (keep max 2)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -15491,6 +15506,12 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         _tip_odds = tip.get("odds", 0)
         if _tip_bk and _tip_odds > 0:
             odds_by_bookmaker = {_tip_bk: _tip_odds}
+
+    # R7-BUILD-01: Write enriched odds_by_bookmaker back to tip dict so that
+    # _build_game_buttons() receives the correct data for affiliate URL resolution.
+    # Without this, _build_game_buttons reads the stale/sparse original and falls
+    # back to the global Betway default URL instead of the correct bookmaker.
+    tip["odds_by_bookmaker"] = odds_by_bookmaker
 
     if odds_by_bookmaker:
         # Multi-bookmaker: select best odds with affiliate link
