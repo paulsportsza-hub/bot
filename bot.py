@@ -1737,29 +1737,45 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
             # R9-BUILD-03: Cache invalidation — reject cached narrative when its outcome
             # doesn't match what the user saw in the list (snapshot).
-            # "home"/"away" raw values = stale pre-display-name cache → regenerate.
-            # Team-name mismatch = wrong outcome was baked in → regenerate.
+            # R11-BUILD-02 Fix A: Map positional labels ("home"/"away") to team names
+            # before comparison. The cache stores positional labels; the snapshot stores
+            # team display names. Without mapping, every single cache lookup was busted.
+            # Option B: Skip check entirely when evidence_json is present — the narrative
+            # was generated with verified data and the outcome was correct at generation time.
             if _cached_content and _cached_content.get("tips"):
-                _r9_snap_chk = next(
-                    (t for t in _ht_tips_snapshot.get(user_id, [])
-                     if _tip_matches_hot_key(t, match_key)),
-                    None,
+                # R11-BUILD-02 Option B: evidence-backed narratives are trusted
+                _r9_skip = _cached_content.get("narrative_source") in ("w82", "polish") or bool(
+                    _cached_content.get("evidence_json")
                 )
+                _r9_snap_chk = None
+                if not _r9_skip:
+                    _r9_snap_chk = next(
+                        (t for t in _ht_tips_snapshot.get(user_id, [])
+                         if _tip_matches_hot_key(t, match_key)),
+                        None,
+                    )
                 if _r9_snap_chk:
                     _cac_out = (_cached_content["tips"][0].get("outcome") or "").strip().lower()
                     _sna_out = (_r9_snap_chk.get("outcome") or "").strip().lower()
-                    _raw = _cac_out in ("home", "away")
+                    # R11-BUILD-02 Option A: resolve positional labels to team names
+                    # so "home" is compared as the actual home team name.
+                    if _cac_out in ("home", "away", "draw"):
+                        _r9_home = (_r9_snap_chk.get("home_team") or "").strip().lower()
+                        _r9_away = (_r9_snap_chk.get("away_team") or "").strip().lower()
+                        _pos_map = {"home": _r9_home, "away": _r9_away, "draw": "draw"}
+                        _cac_out_resolved = _pos_map.get(_cac_out, _cac_out)
+                    else:
+                        _cac_out_resolved = _cac_out
                     _mismatch = (
-                        _cac_out and _sna_out and not _raw
-                        and _cac_out != _sna_out
-                        and _cac_out not in _sna_out
-                        and _sna_out not in _cac_out
+                        _cac_out_resolved and _sna_out
+                        and _cac_out_resolved != _sna_out
+                        and _cac_out_resolved not in _sna_out
+                        and _sna_out not in _cac_out_resolved
                     )
-                    if _raw or _mismatch:
+                    if _mismatch:
                         log.info(
-                            "R9-BUILD-03: Cache busted %s — cached='%s' snap='%s'%s",
-                            match_key, _cac_out, _sna_out,
-                            " (raw)" if _raw else " (mismatch)",
+                            "R9-BUILD-03: Cache busted %s — cached='%s'(resolved='%s') snap='%s'",
+                            match_key, _cac_out, _cac_out_resolved, _sna_out,
                         )
                         _analysis_cache.pop(match_key, None)
                         _cached_content = None
@@ -6877,13 +6893,19 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         home_display = _display_team_name(_home_raw)
         away_display = _display_team_name(_away_raw)
 
-        # R7-BUILD-01: Use canonical assign_tier() which enforces all three criteria
-        # (min_composite, min_edge_pct, min_confirming) — not just composite score.
-        # A tip with composite=45 but edge_pct=2.5% is Silver, not Gold (gold needs ≥3%).
+        # R11-BUILD-02 Fix B: Use DB's edge_tier directly — it was computed by the full
+        # V2 pipeline including data-presence gates and signal analysis. Re-computing
+        # with assign_tier() here used estimated confirming signals and missed the
+        # data-presence gate, causing tier divergence from what V2 originally assigned.
+        # Fallback to assign_tier() only when DB tier is null (legacy rows).
         _composite = float(row["composite_score"] or 0)
         _ev_for_tier = float(row["predicted_ev"] or 0)
         _confirming_est = 3 if _composite >= 70 else (2 if _composite >= 55 else (1 if _composite >= 40 else 0))
-        edge_tier = _assign_tier(_composite, _ev_for_tier, _confirming_est, red_flags=[]) or "bronze"
+        _db_tier = (row.get("edge_tier") or "").strip().lower()
+        if _db_tier in ("diamond", "gold", "silver", "bronze"):
+            edge_tier = _db_tier
+        else:
+            edge_tier = _assign_tier(_composite, _ev_for_tier, _confirming_est, red_flags=[]) or "bronze"
 
         # predicted_ev is stored as percentage (e.g. 5.2 = 5.2%)
         ev_pct = round(float(row["predicted_ev"] or 0), 1)
@@ -7457,6 +7479,11 @@ def _build_hot_tips_page(
     if yesterday_lines:
         lines.extend(yesterday_lines)
         lines.append("")
+
+    # R11-BUILD-02 Fix C: Filter out tips whose EV has gone negative since caching.
+    # Odds movement can push a previously-positive edge below zero. Showing negative
+    # EV tips as "Top Edge Picks" destroys trust.
+    page_tips = [t for t in page_tips if (t.get("ev") or 0) > 0]
 
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
