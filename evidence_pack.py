@@ -397,6 +397,17 @@ def _build_edge_state(edge_result: dict[str, Any] | None) -> EdgeStateBlock:
     form_h2h = signals.get("form_h2h") or {}
     weather = signals.get("weather") or {}
 
+    # R12-OVERNIGHT: Normalise edge_pct to percentage points.
+    # edge_results may store decimal form (0.05) or percentage (5.0).
+    # Detect: if edge_pct is between 0 and 1 exclusive AND a fallback "ev" or
+    # "predicted_ev" field is >= 1, the decimal form is likely wrong.
+    raw_edge_pct = float(edge_result.get("edge_pct") or 0.0)
+    ev_fallback = float(edge_result.get("ev") or edge_result.get("predicted_ev") or 0.0)
+    if 0 < abs(raw_edge_pct) < 1 and abs(ev_fallback) >= 1:
+        ratio = abs(ev_fallback / raw_edge_pct) if raw_edge_pct else 0
+        if 50 <= ratio <= 150:
+            raw_edge_pct = ev_fallback
+
     return EdgeStateBlock(
         provenance=EvidenceSource(
             available=bool(edge_result),
@@ -406,7 +417,7 @@ def _build_edge_state(edge_result: dict[str, Any] | None) -> EdgeStateBlock:
         ),
         composite_score=float(edge_result.get("composite_score") or 0.0),
         edge_tier=edge_result.get("tier") or edge_result.get("edge_tier") or "bronze",
-        edge_pct=float(edge_result.get("edge_pct") or 0.0),
+        edge_pct=raw_edge_pct,
         outcome=edge_result.get("outcome") or "",
         fair_probability=float(edge_result.get("fair_probability") or edge_result.get("fair_prob") or 0.0),
         confirming_signals=int(edge_result.get("confirming_signals") or 0),
@@ -1681,13 +1692,13 @@ def format_evidence_prompt(pack: EvidencePack, spec) -> str:
         "You write like a mate at the braai who actually knows the numbers: punchy, direct,",
         "occasionally irreverent, but always evidence-grounded. You never bluff.",
         "",
-        "RULES (violation = output rejected):",
-        "1. Every factual claim must trace to the EVIDENCE PACK below.",
-        "2. You may interpret and prioritise, but only from the evidence provided.",
-        "3. You must NOT invent facts, statistics, names, or events not in the evidence pack.",
-        "4. You must NOT use general sports knowledge, memory, or training-data knowledge.",
+        "RULES (violation = AUTOMATIC REJECTION — no exceptions):",
+        "1. Every factual claim must trace to a specific field in the EVIDENCE PACK below.",
+        "2. You may interpret and prioritise, but ONLY from the evidence provided.",
+        "3. You must NOT invent, fabricate, or infer ANY facts, statistics, standings, form records, points tallies, goals-per-game figures, win/draw/loss records, coaches, player names, or events that are not EXPLICITLY present in the evidence pack. This is the #1 failure mode — fabricating plausible-sounding data when a source is missing.",
+        "4. You must NOT use general sports knowledge, memory, or training-data knowledge to fill gaps.",
         "5. You must NOT imply stronger support than the evidence warrants.",
-        "6. If a source is missing, say so cleanly instead of filling the gap.",
+        "6. If a source is listed under [EVIDENCE NOT AVAILABLE], you MUST NOT reference ANY data from that source — not even plausible guesses. Pivot to what IS available instead.",
         "7. You must respect the TONE BAND and VERDICT CONSTRAINTS below.",
         "8. The phrase 'value play' is banned. Do NOT use it anywhere.",
         "9. Do NOT mention Pinnacle, Betfair, Matchbook, Smarkets, or any sharp bookmaker prices. Sharp context is injected separately.",
@@ -1705,10 +1716,49 @@ def format_evidence_prompt(pack: EvidencePack, spec) -> str:
     for title, body in sections:
         prompt_parts.extend(["", f"[{title}]", body])
 
+    # Build explicit anti-hallucination block for unavailable sources
+    _espn_unavailable = any("ESPN" in item for item in unavailable)
+    _injury_unavailable = any("INJURY" in item.upper() for item in unavailable)
+    _news_unavailable = any("NEWS" in item.upper() for item in unavailable)
+
+    hallucination_guard_lines: list[str] = []
+    if _espn_unavailable:
+        hallucination_guard_lines.extend([
+            "• ESPN STANDINGS & FORM is NOT available. You MUST NOT mention:",
+            "  league positions, points tallies, form strings (W/D/L sequences),",
+            "  goals per game, season records, or coaches from this source.",
+            "  Any fabricated standing/form data = AUTOMATIC REJECTION.",
+        ])
+    if _injury_unavailable:
+        hallucination_guard_lines.extend([
+            "• INJURY REPORT is NOT available. You MUST NOT name injured players",
+            "  or reference squad availability.",
+        ])
+    if _news_unavailable:
+        hallucination_guard_lines.extend([
+            "• NEWS HEADLINES is NOT available. You MUST NOT reference recent",
+            "  team news, transfers, or pre-match storylines.",
+        ])
+
     prompt_parts.extend([
         "",
         "[EVIDENCE NOT AVAILABLE]",
         "\n".join(f"- {item}" for item in unavailable),
+    ])
+
+    if hallucination_guard_lines:
+        prompt_parts.extend([
+            "",
+            "⛔ CRITICAL ANTI-HALLUCINATION GUARD:",
+            "The above sources are genuinely missing — not redacted. DO NOT fill the gap",
+            "with plausible-sounding data from your training knowledge.",
+        ] + hallucination_guard_lines + [
+            "",
+            "Focus your narrative on what IS in the evidence pack: odds structure,",
+            "edge analysis, line movements, and any other available sources.",
+        ])
+
+    prompt_parts.extend([
         "",
         "───────────── CONSTRAINTS ─────────────",
         "",

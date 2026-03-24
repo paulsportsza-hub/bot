@@ -9086,6 +9086,31 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except sqlite3.OperationalError as exc:
                     log.debug("Deferred stale context cache delete for %s: %s", match_id, exc)
                 return None
+            # R12-OVERNIGHT: Reject cached narratives missing ESPN data for ESPN-covered leagues.
+            # Leagues like epl, psl, champions_league have ESPN data. If a narrative was cached
+            # without it (espn_context.data_available=false), force regeneration.
+            _ESPN_COVERED_LEAGUES = {"psl", "epl", "champions_league", "la_liga", "serie_a", "bundesliga", "ligue_1"}
+            if evidence_json:
+                try:
+                    _ej = json.loads(evidence_json) if isinstance(evidence_json, str) else evidence_json
+                    _espn_ctx = _ej.get("espn_context", {})
+                    _espn_avail = _espn_ctx.get("data_available", False)
+                    # Extract league from evidence or match_id
+                    _ej_league = _ej.get("league", "")
+                    if not _espn_avail and _ej_league in _ESPN_COVERED_LEAGUES:
+                        log.warning(
+                            "Rejecting cached narrative for %s — ESPN data unavailable for ESPN-covered league %s",
+                            match_id, _ej_league,
+                        )
+                        try:
+                            conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                            conn.commit()
+                        except sqlite3.OperationalError as exc:
+                            log.debug("Deferred ESPN cache delete for %s: %s", match_id, exc)
+                        return None
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    pass
+
             # W84-Q3: Reject cached narratives containing legacy banned phrases
             if _has_banned_patterns(cleaned):
                 log.warning("Rejecting cached narrative for %s — contains banned phrases", match_id)
