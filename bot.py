@@ -1750,10 +1750,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             # Option B: Skip check entirely when evidence_json is present — the narrative
             # was generated with verified data and the outcome was correct at generation time.
             if _cached_content and _cached_content.get("tips"):
-                # R11-BUILD-02 Option B: evidence-backed narratives are trusted
-                _r9_skip = _cached_content.get("narrative_source") in ("w82", "polish") or bool(
-                    _cached_content.get("evidence_json")
-                )
+                # Option B DISABLED — all narratives are "w82" so this was a blanket bypass.
+                # The outcome comparison at lines 1764-1788 is the ONLY safety net against
+                # list↔detail divergence. It must always run.
+                _r9_skip = False
                 _r9_snap_chk = None
                 if not _r9_skip:
                     _r9_snap_chk = next(
@@ -6907,7 +6907,7 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         # Fallback to assign_tier() only when DB tier is null (legacy rows).
         _composite = float(row["composite_score"] or 0)
         _ev_for_tier = float(row["predicted_ev"] or 0)
-        _confirming_est = 3 if _composite >= 70 else (2 if _composite >= 55 else (1 if _composite >= 40 else 0))
+        _confirming_est = 3 if _composite >= 70 else (2 if _composite >= 55 else (1 if _composite >= 35 else 0))
         _db_tier = (row.get("edge_tier") or "").strip().lower()
         if _db_tier in ("diamond", "gold", "silver", "bronze"):
             edge_tier = _db_tier
@@ -8654,6 +8654,80 @@ _schedule_cache: dict[int, list[dict]] = {}
 
 # Cache for game tips (event_id → list of tip dicts)
 _game_tips_cache: dict[str, list[dict]] = {}
+
+# R12-BUILD-02: Authoritative outcomes from edge_results.bet_type — refreshed each precompute cycle.
+_er_outcomes_cache: dict[str, str] = {}  # match_key → "home"/"away"/"draw"
+
+
+def _canonicalize_tip_outcome(match_key: str, tip: dict) -> dict:
+    """Align tip outcome to edge_results.bet_type if available."""
+    _er_outcome = _er_outcomes_cache.get(match_key)
+    if not _er_outcome:
+        return tip  # No edge_results row yet, keep V2 outcome
+    # Normalise edge_results bet_type to positional format
+    _norm = _er_outcome.lower().replace(" win", "").strip()
+    if _norm == "draw":
+        _canon = "draw"
+    elif _norm == "home":
+        _canon = "home"
+    elif _norm == "away":
+        _canon = "away"
+    else:
+        return tip  # Unknown format, don't modify
+    if tip.get("outcome") != _canon:
+        tip = dict(tip)  # shallow copy to avoid mutating shared dict
+        tip["outcome"] = _canon
+    return tip
+
+
+def _refresh_er_outcomes_cache() -> None:
+    """R12-BUILD-02: Batch-refresh _er_outcomes_cache from edge_results table."""
+    global _er_outcomes_cache
+    try:
+        from scrapers.db_connect import connect_odds_db as _conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+        from datetime import date as _date_cls
+        _conn = _conn_fn(_DB_PATH)
+        _conn.row_factory = lambda cursor, row: dict(
+            zip([col[0] for col in cursor.description], row)
+        )
+        _today = _date_cls.today().isoformat()
+        _rows = _conn.execute("""
+            SELECT e.match_key, e.bet_type
+            FROM edge_results e
+            WHERE e.match_date >= ? AND e.result IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM edge_results newer
+                  WHERE newer.match_key = e.match_key
+                    AND newer.result IS NULL
+                    AND (
+                        COALESCE(newer.recommended_at, '') > COALESCE(e.recommended_at, '')
+                        OR (
+                            COALESCE(newer.recommended_at, '') = COALESCE(e.recommended_at, '')
+                            AND newer.id > e.id
+                        )
+                    )
+              )
+        """, (_today,)).fetchall()
+        _new_cache: dict[str, str] = {}
+        for _row in _rows:
+            _mk = _row["match_key"] or ""
+            _bt = (_row["bet_type"] or "").strip()
+            if _mk and _bt:
+                if _bt == "Home Win":
+                    _new_cache[_mk] = "home"
+                elif _bt == "Away Win":
+                    _new_cache[_mk] = "away"
+                elif _bt.lower() in ("home", "away", "draw"):
+                    _new_cache[_mk] = _bt.lower()
+                else:
+                    _new_cache[_mk] = "draw"
+        _conn.close()
+        _er_outcomes_cache = _new_cache
+        log.debug("R12-BUILD-02: refreshed _er_outcomes_cache with %d entries", len(_new_cache))
+    except Exception as _exc:
+        log.debug("R12-BUILD-02: _er_outcomes_cache refresh failed: %s", _exc)
+
 
 # Cache for full game analysis (event_id → (html, tips, timestamp))
 # TTL: 1 hour. Avoids re-calling Claude on "Back to Game" navigation.
@@ -20076,6 +20150,8 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             _ep_mon = _CronMonitor("edge-precompute")
             _ep_mon.begin()
             _sentry_tags(cron_job="edge-precompute")
+            # R12-BUILD-02: Refresh authoritative outcomes before any cache writes
+            await asyncio.to_thread(_refresh_er_outcomes_cache)
             tips = await _fetch_hot_tips_from_db()
             log.info(
                 "Edge pre-compute: %d tips cached in %.1fs",
@@ -20099,12 +20175,16 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                                 _nc.get("narrative_source"),
                                 _t.time(),
                             )
-                            _game_tips_cache[_mk] = _nc["tips"]
+                            # R12-BUILD-02: Canonicalize cached narrative tips
+                            _game_tips_cache[_mk] = [
+                                _canonicalize_tip_outcome(_mk, t) for t in _nc["tips"]
+                            ]
                             _warmed += 1
                         else:
                             _missing_keys.append(_mk)
                             # W83-OVERNIGHT: pre-load tip data for instant baseline on tap
-                            _game_tips_cache[_mk] = [_tip]
+                            # R12-BUILD-02: Canonicalize precompute tips
+                            _game_tips_cache[_mk] = [_canonicalize_tip_outcome(_mk, _tip)]
                     except Exception:
                         _missing_keys.append(_mk)
             if _warmed:
