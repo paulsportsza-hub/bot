@@ -1795,8 +1795,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 if _r9_snap and _r9_snap.get("odds_by_bookmaker") and _aligned_tips:
                     _r9_rec = dict(_r9_snap)
                     _r9_rec["edge_v2"] = _aligned_tips[0].get("edge_v2") or _r9_snap.get("edge_v2")
-                    _r9_rec["display_tier"] = _aligned_tips[0].get(
-                        "display_tier", _r9_rec.get("display_tier", "bronze")
+                    # R10-BUILD-02: Take display_tier from snapshot (same data the list used),
+                    # not from the cached narrative which may be stale or from a different render.
+                    _r9_rec["display_tier"] = _r9_snap.get(
+                        "display_tier", _aligned_tips[0].get("display_tier", "bronze")
                     )
                     for _r9_f in ("_ht_model_only", "_ht_confirming_signals", "_ht_total_signals"):
                         if _r9_f in _aligned_tips[0]:
@@ -1948,18 +1950,32 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             except Exception as _gate_err:
                 log.warning("Edge detail tier gate failed: %s", _gate_err)
 
-            # W84-P1E: _game_tips_cache first, then _hot_tips_cache as fallback
-            _instant_tips = _game_tips_cache.get(match_key)
-            if not _instant_tips:
-                _ht_tips = _hot_tips_cache.get("global", {}).get("tips", [])
-                _ht_match = next(
-                    (t for t in _ht_tips
-                     if t.get("match_id") == match_key or t.get("event_id") == match_key),
-                    None,
-                )
-                if _ht_match:
-                    _instant_tips = [_ht_match]
-                    _game_tips_cache[match_key] = _instant_tips
+            # R10-BUILD-02: Snapshot-first — use the SAME data the list rendered from.
+            # _ht_tips_snapshot[user_id] is frozen at list-render time and contains the
+            # exact tip dicts that generated the list cards, guaranteeing list-detail
+            # consistency for outcome, tier, EV, and bookmaker.
+            _snap_tip = next(
+                (t for t in _ht_tips_snapshot.get(user_id, [])
+                 if _tip_matches_hot_key(t, match_key)),
+                None,
+            )
+            if _snap_tip:
+                _instant_tips = [_snap_tip]
+                log.info("R10: snapshot-first for %s user %s", match_key, user_id)
+            else:
+                # Fallback: _game_tips_cache or global cache (snapshot empty = bot restart)
+                _instant_tips = _game_tips_cache.get(match_key)
+                if not _instant_tips:
+                    _ht_tips = _hot_tips_cache.get("global", {}).get("tips", [])
+                    _ht_match = next(
+                        (t for t in _ht_tips
+                         if t.get("match_id") == match_key or t.get("event_id") == match_key),
+                        None,
+                    )
+                    if _ht_match:
+                        _instant_tips = [_ht_match]
+                        _game_tips_cache[match_key] = _instant_tips
+                log.info("R10: no snapshot for %s user %s, using cache fallback", match_key, user_id)
 
             # W84-P1E: TERMINAL — serve from tip data, NEVER fall through to slow gen
             if _instant_tips:
@@ -5745,6 +5761,19 @@ _BK_DISPLAY = {
     "supabets": "SupaBets", "sportingbet": "Sportingbet", "gbets": "GBets",
     "wsb": "World Sports Betting", "playabets": "PlayaBets",
     "supersportbet": "SuperSportBet",
+}
+# R10-BUILD-02: Bookmaker base URLs for affiliate fallback chain.
+# Priority: deep link → affiliate URL → SA_BOOKMAKERS website_url → BOOKMAKER_BASE_URLS.
+# NEVER fall back to betway.co.za for a non-Betway bookmaker.
+BOOKMAKER_BASE_URLS: dict[str, str] = {
+    "hollywoodbets": "https://www.hollywoodbets.net",
+    "supabets": "https://www.supabets.co.za",
+    "playabets": "https://www.playabets.co.za",
+    "betway": "https://www.betway.co.za",
+    "sportingbet": "https://www.sportingbet.co.za",
+    "wsb": "https://www.worldsportsbetting.co.za",
+    "gbets": "https://www.gbets.co.za",
+    "supersportbet": "https://www.supersportbet.co.za",
 }
 # Map DB league keys to sport category keys (supplements config.LEAGUE_SPORT
 # for scraper league keys that don't match config league keys)
@@ -15332,11 +15361,12 @@ def _build_game_buttons(
                         _aff = config.BOOKMAKER_AFFILIATES.get(bk_key)
                         _fallback_url = (_aff or {}).get("base_url", "") or (_sa or {}).get("website_url", "")
                     if not _fallback_url:
-                        # Last resort: use active bookmaker's website URL
-                        _fallback_url = config.get_active_website_url()
+                        # R10-BUILD-02: Last resort — use bookmaker's own base URL, never betway for non-Betway.
+                        _fallback_url = BOOKMAKER_BASE_URLS.get(bk_key, config.get_active_website_url())
                         log.warning(
-                            "R9: CTA URL last-resort fired — no affiliate/base URL for bookmaker '%s', using active config URL",
+                            "R10: CTA URL last-resort fired for '%s' → %s",
                             bk_key,
+                            _fallback_url,
                         )
                     primary_button = InlineKeyboardButton(cta_text, url=_fallback_url)
         else:
