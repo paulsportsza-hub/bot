@@ -2736,6 +2736,13 @@ def _build_accepted_percentage_values(pack: EvidencePack, refs: dict[str, Any]) 
 
     if pack.edge_state and pack.edge_state.provenance.available:
         _add_percentage_variants(accepted["direct"], pack.edge_state.edge_pct)
+        # R12-BUILD-03 Fix 1b: Also accept absolute value of EV (Sonnet drops sign)
+        try:
+            _ev_pct_f = float(pack.edge_state.edge_pct)
+            if _ev_pct_f < 0:
+                _add_percentage_variants(accepted["direct"], abs(_ev_pct_f))
+        except (TypeError, ValueError):
+            pass
         fair_prob_pct = float(pack.edge_state.fair_probability or 0.0)
         if fair_prob_pct:
             if fair_prob_pct <= 1.0:

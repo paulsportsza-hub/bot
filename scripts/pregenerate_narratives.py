@@ -916,6 +916,24 @@ async def _generate_one(
                 sanitized_draft = _realign_verdict_bookmaker(
                     sanitized_draft, _fix2_bk, float(_fix2_odds)
                 )
+                # Fix 2b: If realign didn't fix it, force-inject bk@price into verdict
+                if not _verdict_bookmaker_aligned(sanitized_draft, _fix2_bk, float(_fix2_odds)):
+                    import re as _re2
+                    _v_start = sanitized_draft.find("\U0001f3c6")  # 🏆
+                    if _v_start != -1:
+                        _v_section = sanitized_draft[_v_start:]
+                        _odds_str = f"{float(_fix2_odds):.2f}"
+                        # Find any "@ X.XX" or "at X.XX" pattern and replace with correct values
+                        _v_fixed = _re2.sub(
+                            r'(?:\b\w[\w\s]*?)\s*@\s*\d+\.\d{2}',
+                            f'{_fix2_bk} @ {_odds_str}',
+                            _v_section,
+                            count=1,
+                        )
+                        if _v_fixed == _v_section:
+                            # No @ pattern found — append recommendation
+                            _v_fixed = _v_section.rstrip() + f" ({_fix2_bk} @ {_odds_str})"
+                        sanitized_draft = sanitized_draft[:_v_start] + _v_fixed
 
             passed, report = verify_shadow_narrative(sanitized_draft, evidence_pack, spec)
             if passed:
