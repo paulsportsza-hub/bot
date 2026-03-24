@@ -1735,6 +1735,35 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 except Exception:
                     _cached_content = None
 
+            # R9-BUILD-03: Cache invalidation — reject cached narrative when its outcome
+            # doesn't match what the user saw in the list (snapshot).
+            # "home"/"away" raw values = stale pre-display-name cache → regenerate.
+            # Team-name mismatch = wrong outcome was baked in → regenerate.
+            if _cached_content and _cached_content.get("tips"):
+                _r9_snap_chk = next(
+                    (t for t in _ht_tips_snapshot.get(user_id, [])
+                     if _tip_matches_hot_key(t, match_key)),
+                    None,
+                )
+                if _r9_snap_chk:
+                    _cac_out = (_cached_content["tips"][0].get("outcome") or "").strip().lower()
+                    _sna_out = (_r9_snap_chk.get("outcome") or "").strip().lower()
+                    _raw = _cac_out in ("home", "away")
+                    _mismatch = (
+                        _cac_out and _sna_out and not _raw
+                        and _cac_out != _sna_out
+                        and _cac_out not in _sna_out
+                        and _sna_out not in _cac_out
+                    )
+                    if _raw or _mismatch:
+                        log.info(
+                            "R9-BUILD-03: Cache busted %s — cached='%s' snap='%s'%s",
+                            match_key, _cac_out, _sna_out,
+                            " (raw)" if _raw else " (mismatch)",
+                        )
+                        _analysis_cache.pop(match_key, None)
+                        _cached_content = None
+
             def _edge_upgrade_markup():
                 return InlineKeyboardMarkup(_build_hot_tips_detail_rows(
                     user_id,
@@ -1754,6 +1783,25 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _cached_content.get("tips"),
                     _detail_model_state,
                 )
+
+                # R9-BUILD-02: Reconcile cached tips to snapshot outcome/bookmaker data.
+                # Pregen tips lack bookmaker_key + odds_by_bookmaker → wrong CTA URL + no
+                # Compare Odds button. The snapshot tip (from _load_tips_from_edge_results)
+                # has correct fields. Preserve edge_v2 + tier from cached narrative.
+                _r9_snap = next(
+                    (t for t in _ht_tips_snapshot.get(user_id, []) if _tip_matches_hot_key(t, match_key)),
+                    None,
+                )
+                if _r9_snap and _r9_snap.get("odds_by_bookmaker") and _aligned_tips:
+                    _r9_rec = dict(_r9_snap)
+                    _r9_rec["edge_v2"] = _aligned_tips[0].get("edge_v2") or _r9_snap.get("edge_v2")
+                    _r9_rec["display_tier"] = _aligned_tips[0].get(
+                        "display_tier", _r9_rec.get("display_tier", "bronze")
+                    )
+                    for _r9_f in ("_ht_model_only", "_ht_confirming_signals", "_ht_total_signals"):
+                        if _r9_f in _aligned_tips[0]:
+                            _r9_rec[_r9_f] = _aligned_tips[0][_r9_f]
+                    _aligned_tips = [_r9_rec]
 
                 # Tier LIMIT CHECK — run in thread (WAL read: non-blocking vs writers)
                 def _check_limit_sync():
@@ -2013,6 +2061,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _instant_tips, match_key, user_id,
                     source="edge_picks", user_tier=_user_tier, edge_tier=_ie_tier,
                     back_page=_resolve_hot_tips_back_page(user_id, match_key),
+                    selected_outcome=_it0.get("outcome"),  # R9-BUILD-03
                 )
                 _ibanner = _qa_banner(user_id)
                 _ifinal = (_ibanner + _ihtml) if _ibanner else _ihtml
@@ -6807,6 +6856,13 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             or ev_pct > _MAX_PRODUCTION_EDGE_PCT
             or float(row["recommended_odds"] or 0) > _MAX_RECOMMENDED_ODDS
         ):
+            continue
+
+        # P1-PASS-IN-LIST: R9-BUILD-03 — exclude speculative-punt tips from Top Edge Picks.
+        # confirming_est==0 + ev<=7% → _classify_evidence() returns "speculative punt",
+        # which can render "Monitor the line but pass" or "Pass on this" in the detail view.
+        # These tips should never appear in Top Edge Picks — they don't recommend a bet.
+        if _confirming_est == 0 and ev_pct <= 7.0:
             continue
 
         league_key = (row["league"] or "").lower()
@@ -15094,7 +15150,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     log.info("PERF: TOTAL _generate_game_tips=%.1fs for %s", _time.time() - _perf_t0, event_id)
 
     # Build simplified buttons (North Star: 4 buttons max, Wave 26A: tier-gated, W30-GATE: edge_tier)
-    buttons = _build_game_buttons(tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=_edge_tier)
+    buttons = _build_game_buttons(tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=_edge_tier, selected_outcome=_selected_outcome)  # R9-BUILD-03
 
     # W84-RT6: Wrap delivery — Telegram TimedOut on edit falls back to reply_text.
     # Unprotected edit here was the last step failing after sync DB calls stalled the loop.
@@ -15198,11 +15254,13 @@ async def _generate_game_tips_safe(query, ctx, event_id: str, user_id: int, sour
 def _build_game_buttons(
     tips: list[dict], event_id: str, user_id: int, source: str = "matches",
     user_tier: str = "diamond", edge_tier: str = "bronze", back_page: int = 0,
+    selected_outcome: str | None = None,
 ) -> list[list[InlineKeyboardButton]]:
     """Build simplified game breakdown buttons (North Star: recommend, compare, nav).
 
     Wave 26A: bookmaker URL buttons gated by user_tier vs edge_tier.
     Wave 30-GATE: edge_tier passed explicitly (not derived from tips).
+    R9-BUILD-03: selected_outcome aligns CTA with the narrative's outcome.
     """
     from tier_gate import get_edge_access_level as _gb_access
     _bet_access = _gb_access(user_tier, edge_tier)
@@ -15212,12 +15270,29 @@ def _build_game_buttons(
     match_key = tips[0].get("match_id", event_id) if tips else event_id
 
     if tips:
-        # Button 1: Recommended bet CTA — highest positive-EV outcome
-        best_ev_tip = max(
-            (t for t in tips if t["ev"] > 0),
-            key=lambda t: t["ev"],
-            default=None,
-        )
+        # Button 1: Recommended bet CTA — prefer selected_outcome, fallback to highest-EV
+        # R9-BUILD-03: selected_outcome keeps the CTA aligned with the narrative verdict.
+        if selected_outcome:
+            _sel_lo = selected_outcome.lower()
+            _matched_tip = next(
+                (t for t in tips if t.get("ev", 0) > 0 and (
+                    _sel_lo == (t.get("outcome") or "").lower()
+                    or _sel_lo in (t.get("outcome") or "").lower()
+                    or (t.get("outcome") or "").lower() in _sel_lo
+                )),
+                None,
+            )
+            best_ev_tip = _matched_tip or max(
+                (t for t in tips if t.get("ev", 0) > 0),
+                key=lambda t: t["ev"],
+                default=None,
+            )
+        else:
+            best_ev_tip = max(
+                (t for t in tips if t["ev"] > 0),
+                key=lambda t: t["ev"],
+                default=None,
+            )
         if best_ev_tip:
             odds_by_bk = best_ev_tip.get("odds_by_bookmaker", {})
             match_id = best_ev_tip.get("match_id", "")
