@@ -899,13 +899,14 @@ async def _generate_one(
             sanitized_draft = sanitize_ai_response(model_draft)
             sanitized_draft = _strip_model_generated_h2h_references(sanitized_draft)
             sanitized_draft = _strip_model_generated_sharp_references(sanitized_draft)
-            sanitized_draft = _suppress_shadow_banned_phrases(sanitized_draft)
             h2h_sentence = _build_h2h_injection(evidence_pack, spec)
             if h2h_sentence:
                 sanitized_draft = _inject_h2h_sentence(sanitized_draft, h2h_sentence)
             sharp_sentence = _build_sharp_injection(evidence_pack, spec)
             if sharp_sentence:
                 sanitized_draft = _inject_sharp_sentence(sanitized_draft, sharp_sentence)
+            # R12-BUILD-03 Fix 3b: Suppress AFTER all injections (belt-and-suspenders)
+            sanitized_draft = _suppress_shadow_banned_phrases(sanitized_draft)
 
             # R12-BUILD-03 Fix 2: Force-inject correct verdict bookmaker+odds
             # BEFORE verify, so the verifier sees the correct data.

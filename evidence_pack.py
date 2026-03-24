@@ -1364,7 +1364,8 @@ def _build_sharp_injection(pack: EvidencePack, spec) -> str:
     selection_key = str(selection or "").strip().lower()
     if selection_key != preferred_outcome:
         return ""
-    return f"Sharp market pricing has {selection_key} at {price}."
+    # R12-BUILD-03 Fix 3b: "Sharp market pricing" is a banned phrase — use "Market pricing"
+    return f"Market pricing has {selection_key} at {price}."
 
 
 def _build_h2h_injection(pack: EvidencePack, spec) -> str:
