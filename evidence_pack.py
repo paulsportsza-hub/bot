@@ -1249,6 +1249,83 @@ def _format_edge_section(pack: EvidencePack) -> tuple[str | None, str | None]:
     return "\n".join(lines), None
 
 
+def _format_elo_section(pack: EvidencePack) -> tuple[str | None, str | None]:
+    """R12-OVERNIGHT: Surface Elo ratings for team strength context."""
+    try:
+        from scrapers.db_connect import connect_odds_db
+        conn = connect_odds_db("/home/paulsportsza/scrapers/odds.db")
+        home_key = pack.match_key.split("_vs_")[0] if "_vs_" in pack.match_key else ""
+        away_key = pack.match_key.split("_vs_")[1].rsplit("_", 1)[0] if "_vs_" in pack.match_key else ""
+        if not home_key or not away_key:
+            conn.close()
+            return None, "ELO RATINGS: Could not parse team keys from match_key."
+        home_row = conn.execute(
+            "SELECT rating, matches_played FROM elo_ratings WHERE team = ? AND sport = ?",
+            (home_key, pack.sport),
+        ).fetchone()
+        away_row = conn.execute(
+            "SELECT rating, matches_played FROM elo_ratings WHERE team = ? AND sport = ?",
+            (away_key, pack.sport),
+        ).fetchone()
+        conn.close()
+        if not home_row and not away_row:
+            return None, "ELO RATINGS: No Elo data for either team."
+        lines = []
+        if home_row:
+            lines.append(f"Home ({home_key.replace('_', ' ').title()}): rating {home_row[0]:.0f} ({home_row[1]} matches)")
+        if away_row:
+            lines.append(f"Away ({away_key.replace('_', ' ').title()}): rating {away_row[0]:.0f} ({away_row[1]} matches)")
+        if home_row and away_row:
+            diff = home_row[0] - away_row[0]
+            lines.append(f"Rating gap: {abs(diff):.0f} points {'(home stronger)' if diff > 0 else '(away stronger)'}")
+            # Rough win probability from Elo
+            expected = 1 / (1 + 10 ** (-diff / 400))
+            lines.append(f"Elo-implied home win probability: {expected * 100:.1f}%")
+        return "\n".join(lines), None
+    except Exception:
+        return None, "ELO RATINGS: Elo lookup failed."
+
+
+def _format_tipster_section(pack: EvidencePack) -> tuple[str | None, str | None]:
+    """R12-OVERNIGHT: Surface tipster consensus data."""
+    try:
+        from scrapers.db_connect import connect_odds_db
+        conn = connect_odds_db("/home/paulsportsza/scrapers/tipsters/tipster_predictions.db")
+        home_key = pack.match_key.split("_vs_")[0].replace("_", " ") if "_vs_" in pack.match_key else ""
+        away_key = pack.match_key.split("_vs_")[1].rsplit("_", 1)[0].replace("_", " ") if "_vs_" in pack.match_key else ""
+        if not home_key or not away_key:
+            conn.close()
+            return None, "TIPSTER CONSENSUS: Could not parse team names."
+        # Match by fuzzy team names and recent date
+        rows = conn.execute(
+            """SELECT source, predicted_winner, home_win_pct, draw_pct, away_win_pct,
+                      confidence, pick_summary
+               FROM predictions
+               WHERE LOWER(home_team) LIKE ? AND LOWER(away_team) LIKE ?
+                 AND match_date >= date('now', '-7 days')
+               ORDER BY scraped_at DESC""",
+            (f"%{home_key.lower()}%", f"%{away_key.lower()}%"),
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return None, "TIPSTER CONSENSUS: No tipster predictions found for this match."
+        lines = [f"Sources checked: {len(rows)}"]
+        winner_votes: dict[str, int] = {}
+        for row in rows:
+            source, winner, hw, dp, aw, conf, summary = row
+            if winner:
+                winner_votes[winner] = winner_votes.get(winner, 0) + 1
+            conf_str = f" (confidence {conf:.0f}%)" if conf else ""
+            lines.append(f"- {source}: predicts {winner or 'n/a'}{conf_str}")
+        if winner_votes:
+            top_pick = max(winner_votes, key=winner_votes.get)  # type: ignore[arg-type]
+            agreement = winner_votes[top_pick]
+            lines.append(f"Consensus: {agreement}/{len(rows)} sources back {top_pick}")
+        return "\n".join(lines), None
+    except Exception:
+        return None, "TIPSTER CONSENSUS: Tipster data lookup failed."
+
+
 def _format_espn_section(pack: EvidencePack, spec) -> tuple[str | None, str | None]:
     block = pack.espn_context
     if not block or not block.provenance.available or not block.data_available:
@@ -1669,6 +1746,8 @@ def format_evidence_prompt(pack: EvidencePack, spec) -> str:
         ("SA BOOKMAKER ODDS", _format_sa_odds_section),
         ("EDGE ANALYSIS", _format_edge_section),
         ("ESPN STANDINGS & FORM", lambda p: _format_espn_section(p, spec)),
+        ("ELO RATINGS", _format_elo_section),
+        ("TIPSTER CONSENSUS", _format_tipster_section),
         ("HEAD TO HEAD", lambda p: _format_h2h_placeholder(p, spec)),
         ("SHARP BENCHMARK LINES", _format_sharp_placeholder),
         ("LINE MOVEMENTS", _format_movements_section),
@@ -1788,7 +1867,8 @@ def format_evidence_prompt(pack: EvidencePack, spec) -> str:
         "",
         "📋 <b>The Setup</b>",
         "2-4 sentences. Set the scene using standings, form, coaches, injuries, and news.",
-        "If ESPN data is unavailable, say so honestly and pivot to what is available.",
+        "If ESPN data is unavailable, pivot to available data: Elo ratings, tipster consensus, line movements, odds structure.",
+        "Use Elo ratings for team strength context (e.g. 'rated 150 points higher'). Use tipster consensus for signal alignment (e.g. '3 of 5 tipsters back this').",
         "",
         "🎯 <b>The Edge</b>",
         "2-3 sentences. Explain the pricing gap using edge analysis and SA bookmaker pricing only.",
