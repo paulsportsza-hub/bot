@@ -1897,6 +1897,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         _aligned_tips[0].get("edge_rating", _detail_tier),
                     )
                 from tier_gate import get_edge_access_level as _cached_signal_access
+                # R11-BUILD-01 Fix B: Tier-gate cached AI-enriched narratives.
+                # Without this, Bronze users hitting a cached Gold/Diamond card see
+                # the full narrative ungated — a paywall integrity issue.
+                # Uses stored _detail_tier (from snapshot), not recomputed.
+                if _cached_signal_access(_user_tier, _detail_tier) != "full":
+                    _c_base_html = _gate_breakdown_sections(
+                        _c_base_html, _user_tier, _detail_tier,
+                    )
                 _signal_block = _build_signal_detail_block(
                     (_aligned_tips[0] if _aligned_tips else {}).get("edge_v2"),
                     user_tier=_user_tier,
@@ -8937,7 +8945,14 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except sqlite3.OperationalError as exc:
                     log.debug("Deferred empty-section cache delete for %s: %s", match_id, exc)
                 return None
-            if _has_stale_h2h_summary(cleaned, parsed_tips, evidence_json):
+            # R11-BUILD-01 Fix A (Option B): Freshness guard — skip H2H validation
+            # when evidence_json is present. The narrative already passed the TTL
+            # check above, so it was generated within the last 6 hours. H2H data is
+            # historical — it cannot change between generation and read. When evidence
+            # was stored with the narrative, the H2H line was built from that evidence
+            # at generation time and is authoritative.
+            _skip_h2h = bool(evidence_json)
+            if not _skip_h2h and _has_stale_h2h_summary(cleaned, parsed_tips, evidence_json):
                 log.warning("Rejecting cached narrative for %s — stale H2H summary mismatch", match_id)
                 try:
                     conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))

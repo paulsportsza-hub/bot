@@ -940,6 +940,15 @@ async def _generate_one(
         except Exception as exc:
             log.warning("W84 ERROR for %s: %s — serving W82 fallback", match_key, exc)
 
+    # R11-BUILD-01 Fix A (Option A): Inject H2H into W82 fallback.
+    # _inject_h2h_sentence() was only applied inside the W84 path above. When W84
+    # fails verification, the W82 baseline lacks the last-score suffix, causing
+    # _has_stale_h2h_summary() to reject the cached entry on read (loop).
+    if narrative and narrative_source == "w82" and evidence_pack is not None and spec is not None:
+        _w82_h2h = _build_h2h_injection(evidence_pack, spec)
+        if _w82_h2h:
+            narrative = _inject_h2h_sentence(narrative, _w82_h2h)
+
     if not narrative or narrative.strip() == "NO_DATA":
         return {"match_key": match_key, "success": False, "duration": time.time() - t0}
 
