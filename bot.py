@@ -15418,6 +15418,10 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     if narrative and db_match_id:
         async def _persist_narrative_bg():
             try:
+                # R12-BUILD-03 Fix 6: Don't overwrite W84 pregen entries from My Matches path
+                _existing_nc = await _get_cached_narrative(db_match_id)
+                if _existing_nc and _existing_nc.get("narrative_source") == "w84":
+                    return  # W84 pregen already cached — preserve it
                 await _store_narrative_cache(db_match_id, msg, tips, _edge_tier, "sonnet")
             except Exception as _cache_exc:
                 log.warning("Failed to persist narrative cache for %s: %s", db_match_id, _cache_exc)

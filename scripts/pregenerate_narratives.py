@@ -906,6 +906,17 @@ async def _generate_one(
             sharp_sentence = _build_sharp_injection(evidence_pack, spec)
             if sharp_sentence:
                 sanitized_draft = _inject_sharp_sentence(sanitized_draft, sharp_sentence)
+
+            # R12-BUILD-03 Fix 2: Force-inject correct verdict bookmaker+odds
+            # BEFORE verify, so the verifier sees the correct data.
+            # Sonnet substitutes wrong bookmaker ~40% of the time for unusual names.
+            _fix2_bk = tips[0]["bookie"] if tips else ""
+            _fix2_odds = tips[0]["odds"] if tips else 0
+            if _fix2_bk and _fix2_odds:
+                sanitized_draft = _realign_verdict_bookmaker(
+                    sanitized_draft, _fix2_bk, float(_fix2_odds)
+                )
+
             passed, report = verify_shadow_narrative(sanitized_draft, evidence_pack, spec)
             if passed:
                 candidate = report.get("sanitized_draft") or sanitized_draft

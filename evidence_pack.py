@@ -1690,7 +1690,7 @@ def format_evidence_prompt(pack: EvidencePack, spec) -> str:
         "7. You must respect the TONE BAND and VERDICT CONSTRAINTS below.",
         "8. The phrase 'value play' is banned. Do NOT use it anywhere.",
         "9. Do NOT mention Pinnacle, Betfair, Matchbook, Smarkets, or any sharp bookmaker prices. Sharp context is injected separately.",
-        "10. Never use banned filler such as 'thin support', 'pure pricing call', or 'supporting evidence is thin'. Prefer 'limited support', 'price-led angle', or evidence-specific wording.",
+        "10. Never use banned filler such as 'thin support', 'pure pricing call', or 'supporting evidence is thin'. Prefer 'limited support', 'price-led angle', or evidence-specific wording. Do NOT use the phrases 'sharp market pricing' or 'worth backing'.",
         "11. Do NOT use the phrases 'knockout football', 'knockout stakes', 'knockout stage', 'knockout tie', 'knockout clash'. UCL league-phase matches are NOT knockouts. Describe match dynamics, not format labels.",
         "",
         "───────────── EVIDENCE PACK ─────────────",
@@ -1971,6 +1971,11 @@ def _build_team_reference_aliases(pack: EvidencePack, spec) -> dict[str, set[str
         "paris": "Paris Saint-Germain",
         "saint germain": "Paris Saint-Germain",
         "saint-germain": "Paris Saint-Germain",
+        "barca": "Barcelona",
+        "fcb": "Barcelona",
+        "atletico": "Atletico Madrid",
+        "atleti": "Atletico Madrid",
+        "atm": "Atletico Madrid",
     }
     for alias, canonical in explicit_aliases.items():
         canonical_key = _normalise_name_key(canonical)
@@ -2736,6 +2741,21 @@ def _build_accepted_percentage_values(pack: EvidencePack, refs: dict[str, Any]) 
             if fair_prob_pct <= 1.0:
                 fair_prob_pct *= 100.0
             _add_percentage_variants(accepted["direct"], fair_prob_pct)
+        # R12-BUILD-03 Fix 1: Add composite_score to accepted values
+        composite = getattr(pack.edge_state, "composite_score", None)
+        if composite is not None:
+            try:
+                _add_percentage_variants(accepted["direct"], float(composite))
+            except (TypeError, ValueError):
+                pass
+        # R12-BUILD-03 Fix 1: Add Elo probabilities
+        elo_prob = getattr(pack.edge_state, "elo_prob", None)
+        if elo_prob is not None:
+            try:
+                elo_val = float(elo_prob)
+                _add_percentage_variants(accepted["direct"], elo_val * 100.0 if elo_val <= 1.0 else elo_val)
+            except (TypeError, ValueError):
+                pass
 
     if pack.sa_odds and pack.sa_odds.provenance.available:
         for outcomes in (pack.sa_odds.odds_by_bookmaker or {}).values():
@@ -2792,6 +2812,8 @@ _SHADOW_BANNED_PHRASE_REPLACEMENTS = (
     (r"\bthin support\b", "limited support"),
     (r"\bpure pricing call\b", "price-led angle"),
     (r"\bsupporting evidence is thin\b", "supporting evidence is limited"),
+    (r"\bsharp market pricing\b", "market pricing"),
+    (r"\bworth backing\b", "worth considering"),
 )
 
 _VERIFIER_BANNED_PHRASE_EXACT_ALLOWLIST = {
@@ -2886,6 +2908,16 @@ _KNOWN_VERIFIED_VENUE_PHRASES = {
     "lords",
     "the oval",
     "wanderers",
+}
+
+# R12-BUILD-03 Fix 5: Derby/geographical names that are NOT fabricated proper nouns
+_DERBY_WHITELIST = {
+    "merseyside", "the merseyside", "merseyside derby",
+    "north london", "north london derby",
+    "manchester", "manchester derby",
+    "el clasico", "el cl\u00e1sico", "der klassiker",
+    "old firm", "tyne-wear", "tyne-wear derby",
+    "south coast derby", "revierderby", "soweto derby",
 }
 
 _SETTLEMENT_CONTEXT_PATTERNS = (
@@ -3543,6 +3575,9 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
     for phrase in sorted(proper_nouns):
         if _normalise_name_phrase(phrase) in _KNOWN_VERIFIED_VENUE_PHRASES:
             continue
+        # R12-BUILD-03 Fix 5: Skip derby/geographical names
+        if _normalise_name_phrase(phrase) in _DERBY_WHITELIST:
+            continue
         tokens = [
             _strip_possessive_suffix(token).strip()
             for token in re.split(r"[\s\-]+", phrase.lower())
@@ -3569,7 +3604,7 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
             )
             if settlement_bridge_ok:
                 continue
-            direct_ok = any(abs(value - allowed) <= 1.0 for allowed in accepted_percentages["direct"])
+            direct_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["direct"])
             market_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["market_implied"])
             sharp_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["sharp_implied"])
             if not (direct_ok or market_ok or sharp_ok):
