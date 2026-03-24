@@ -2599,6 +2599,9 @@ def _build_verified_names(
 ) -> set[str]:
     verified: set[str] = set(verified_coaches) | set(verified_injured)
 
+    # R12-OVERNIGHT: "Elo" is a system concept used in evidence packs, not a person name
+    verified.add("elo")
+
     coach_first_names: dict[str, int] = {}
     for value in (
         getattr(spec, "home_name", ""),
@@ -2894,6 +2897,24 @@ def _build_accepted_percentage_values(pack: EvidencePack, refs: dict[str, Any]) 
                 _add_percentage_variants(accepted["direct"], elo_val * 100.0 if elo_val <= 1.0 else elo_val)
             except (TypeError, ValueError):
                 pass
+
+    # R12-OVERNIGHT: Add Elo-section computed probabilities from DB (these appear in evidence prompt)
+    if pack.match_key and "_vs_" in pack.match_key:
+        try:
+            from scrapers.db_connect import connect_odds_db
+            _elo_conn = connect_odds_db("/home/paulsportsza/scrapers/odds.db")
+            _hk = pack.match_key.split("_vs_")[0]
+            _ak = pack.match_key.split("_vs_")[1].rsplit("_", 1)[0]
+            _hr = _elo_conn.execute("SELECT rating FROM elo_ratings WHERE team = ? AND sport = ?", (_hk, pack.sport)).fetchone()
+            _ar = _elo_conn.execute("SELECT rating FROM elo_ratings WHERE team = ? AND sport = ?", (_ak, pack.sport)).fetchone()
+            _elo_conn.close()
+            if _hr and _ar:
+                _diff = _hr[0] - _ar[0]
+                _elo_exp = 1 / (1 + 10 ** (-_diff / 400))
+                _add_percentage_variants(accepted["direct"], _elo_exp * 100.0)
+                _add_percentage_variants(accepted["direct"], (1 - _elo_exp) * 100.0)
+        except Exception:
+            pass
 
     if pack.sa_odds and pack.sa_odds.provenance.available:
         for outcomes in (pack.sa_odds.odds_by_bookmaker or {}).values():
