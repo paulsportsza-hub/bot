@@ -1934,6 +1934,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _ibline = await _generate_narrative_v2(
                         ctx_data=None, tips=_instant_tips, sport=_isport,
                         home_team=_ih, away_team=_ia, live_tap=True,
+                        selected_outcome=_it0.get("outcome"),
                     )
                 except Exception as _nb_err:
                     log.warning("Instant narrative build error for %s: %s", match_key, _nb_err)
@@ -12971,17 +12972,44 @@ def _extract_edge_data(
     tips: list[dict],
     home_team: str = "",
     away_team: str = "",
+    selected_outcome: str | None = None,
 ) -> dict:
     """Extract normalised edge dict from tips for NarrativeSpec.
 
     W82-WIRE: returns same shape as _edge_data_scaffold so
     build_narrative_spec() receives all required fields.
+
+    R9-BUILD-01: When selected_outcome is provided, filter to the tip the
+    user tapped instead of re-picking max-EV (which diverges in 3-way markets).
     """
     home_team = _display_team_name(home_team) if home_team else ""
     away_team = _display_team_name(away_team) if away_team else ""
     if not tips:
         return {"home_team": home_team, "away_team": away_team}
-    best = max(tips, key=lambda t: t.get("ev", 0))
+
+    # R9-BUILD-01: Respect the outcome the user selected from the list view.
+    if selected_outcome:
+        _sel_lower = selected_outcome.lower()
+        _matched = None
+        for _t in tips:
+            _t_out = (_t.get("outcome") or "").lower()
+            if _t_out == _sel_lower or _sel_lower in _t_out or _t_out in _sel_lower:
+                _matched = _t
+                break
+        if _matched:
+            _max_ev_tip = max(tips, key=lambda t: t.get("ev", 0))
+            if _matched is not _max_ev_tip and _max_ev_tip.get("outcome") != _matched.get("outcome"):
+                log.info(
+                    "R9: outcome locked to '%s' (EV %.1f%%) — max-EV would have picked '%s' (EV %.1f%%)",
+                    _matched.get("outcome"), _matched.get("ev", 0),
+                    _max_ev_tip.get("outcome"), _max_ev_tip.get("ev", 0),
+                )
+            best = _matched
+        else:
+            log.warning("R9: selected_outcome '%s' not found in tips — falling back to max-EV", selected_outcome)
+            best = max(tips, key=lambda t: t.get("ev", 0))
+    else:
+        best = max(tips, key=lambda t: t.get("ev", 0))
     v2 = best.get("edge_v2") or {}
     sigs = v2.get("signals", {})
     outcome_raw = best.get("outcome", "?")
@@ -12998,6 +13026,11 @@ def _extract_edge_data(
     _display_ev = _normalise_edge_pct_contract(_consensus_ev, _v2_ev)
     # Consensus prob as 0-1 decimal (tip stores as integer percentage, e.g. 4 → 0.04)
     _raw_prob = best.get("prob", 0)
+    # R9-BUILD-01: If prob is zero but EV > 0 and odds > 1, derive implied prob from odds.
+    # Prevents "fair_prob=0" in NarrativeSpec when edge_results path omits prob field.
+    if not _raw_prob and best.get("ev", 0) > 0 and best.get("odds", 0) > 1.0:
+        _raw_prob = round(100.0 / best["odds"])
+        log.info("R9: zero prob recovered via implied odds (odds=%.2f → prob=%d%%)", best["odds"], _raw_prob)
     # W84-P1D: When edge_v2 is absent (edge_results fast path), estimate confirming_signals
     # from composite_score so narrative quality matches the displayed tier badge.
     # Bronze(<40)→0, Silver(40-54)→1, Gold(55-69)→2, Diamond(70+)→3
@@ -13262,6 +13295,7 @@ async def _generate_narrative_v2(
     home_team: str = "",
     away_team: str = "",
     live_tap: bool = False,
+    selected_outcome: str | None = None,
 ) -> str:
     """W82-POLISH: baseline first, then optional constrained LLM polish.
 
@@ -13279,7 +13313,7 @@ async def _generate_narrative_v2(
         return "No current edge data available for this match. Check back closer to kickoff."
 
     # Build spec → deterministic baseline (<100ms, zero API)
-    edge_data = _extract_edge_data(tips, home_team, away_team)
+    edge_data = _extract_edge_data(tips, home_team, away_team, selected_outcome=selected_outcome)
     spec = build_narrative_spec(ctx_data, edge_data, tips, sport)
     baseline = _render_baseline(spec)
     baseline = _sanitise_jargon(baseline)
@@ -14718,6 +14752,16 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         except ImportError:
             _banned_terms_str = ""
 
+        # ── R9-BUILD-01: Resolve which outcome the user tapped from the list ──
+        # _ht_tips_snapshot[user_id] is frozen at list-render time; each entry has the
+        # exact outcome the user saw. Use it to prevent _extract_edge_data re-picking.
+        _selected_outcome: str | None = None
+        for _snap_tip in _ht_tips_snapshot.get(user_id, []):
+            _snap_key = _snap_tip.get("match_key") or _snap_tip.get("event_id", "")
+            if _snap_key == event_id:
+                _selected_outcome = _snap_tip.get("outcome")
+                break
+
         # ── W79-PHASE2: V2 narrative — code owns Setup+Verdict, AI owns Edge+Risk ──
         log.info("Cache miss for %s — using V2 narrative pipeline", event_id)
         try:
@@ -14731,6 +14775,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 home_team=home_raw,
                 away_team=away_raw,
                 live_tap=True,  # W81-HOTFIX: never block user tap on LLM call
+                selected_outcome=_selected_outcome,
             )
         except Exception as exc:
             log.error("V2 narrative failed for %s: %s — using programmatic fallback", event_id, exc)
@@ -15214,6 +15259,10 @@ def _build_game_buttons(
                     if not _fallback_url:
                         # Last resort: use active bookmaker's website URL
                         _fallback_url = config.get_active_website_url()
+                        log.warning(
+                            "R9: CTA URL last-resort fired — no affiliate/base URL for bookmaker '%s', using active config URL",
+                            bk_key,
+                        )
                     primary_button = InlineKeyboardButton(cta_text, url=_fallback_url)
         else:
             # No positive EV — gate deep link by tier (W30-GATE)
