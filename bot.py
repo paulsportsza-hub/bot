@@ -1713,13 +1713,18 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _ec = _analysis_cache.get(match_key)
             _cached_content = None
             if _ec:
-                if len(_ec) == 4:
+                # R12-BUILD-01 Fix 2: 5-tuple includes narrative_source for Option B
+                if len(_ec) == 5:
+                    _c_msg, _c_tips, _c_edge_tier, _c_source, _c_ts = _ec
+                elif len(_ec) == 4:
                     _c_msg, _c_tips, _c_edge_tier, _c_ts = _ec
+                    _c_source = None
                 else:
                     _c_msg, _c_tips, _c_ts = _ec
                     _c_edge_tier = "bronze"
+                    _c_source = None
                 if _edge_t.time() - _c_ts < _ANALYSIS_CACHE_TTL:
-                    _cached_content = {"html": _c_msg, "tips": _c_tips, "edge_tier": _c_edge_tier}
+                    _cached_content = {"html": _c_msg, "tips": _c_tips, "edge_tier": _c_edge_tier, "narrative_source": _c_source}
 
             if not _cached_content:
                 # Persistent DB cache — skips event lookup, Odds API, spinner, ESPN fetch
@@ -1728,7 +1733,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     if _cached_content:
                         _analysis_cache[match_key] = (
                             _cached_content["html"], _cached_content["tips"],
-                            _cached_content["edge_tier"], _edge_t.time(),
+                            _cached_content["edge_tier"],
+                            _cached_content.get("narrative_source"),
+                            _edge_t.time(),
                         )
                         _game_tips_cache[match_key] = _cached_content["tips"]
                         log.info("PERF: edge:detail direct DB cache hit for %s", match_key)
@@ -7064,6 +7071,55 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         MAX_RECOMMENDED_ODDS as _MAX_RECOMMENDED_ODDS,
     )
 
+    # R12-BUILD-01 Fix 1: Batch-load authoritative outcomes from edge_results so the
+    # display outcome matches what narratives were generated against. This eliminates
+    # divergence between the list path (which used live V2 outcome) and the detail
+    # path (which uses edge_results.bet_type for narrative cache lookup).
+    _er_outcomes: dict[str, str] = {}  # match_key → "home"/"away"/"draw"
+    if match_jobs:
+        try:
+            from scrapers.db_connect import connect_odds_db as _er_conn_fn
+            from scrapers.edge.edge_config import DB_PATH as _ER_DB_PATH
+            from datetime import date as _er_date_cls
+            _er_conn = _er_conn_fn(_ER_DB_PATH)
+            _er_conn.row_factory = lambda cursor, row: dict(
+                zip([col[0] for col in cursor.description], row)
+            )
+            _er_today = _er_date_cls.today().isoformat()
+            _er_rows = _er_conn.execute("""
+                SELECT e.match_key, e.bet_type
+                FROM edge_results e
+                WHERE e.match_date >= ? AND e.result IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM edge_results newer
+                      WHERE newer.match_key = e.match_key
+                        AND newer.result IS NULL
+                        AND (
+                            COALESCE(newer.recommended_at, '') > COALESCE(e.recommended_at, '')
+                            OR (
+                                COALESCE(newer.recommended_at, '') = COALESCE(e.recommended_at, '')
+                                AND newer.id > e.id
+                            )
+                        )
+                  )
+            """, (_er_today,)).fetchall()
+            for _er_row in _er_rows:
+                _er_mk = _er_row["match_key"] or ""
+                _er_bt = (_er_row["bet_type"] or "").strip()
+                if _er_mk and _er_bt:
+                    # Normalise "Home Win"/"Away Win" → "home"/"away"/"draw"
+                    if _er_bt == "Home Win":
+                        _er_outcomes[_er_mk] = "home"
+                    elif _er_bt == "Away Win":
+                        _er_outcomes[_er_mk] = "away"
+                    elif _er_bt.lower() in ("home", "away", "draw"):
+                        _er_outcomes[_er_mk] = _er_bt.lower()
+                    else:
+                        _er_outcomes[_er_mk] = "draw"
+            _er_conn.close()
+        except Exception as _er_exc:
+            log.debug("R12-BUILD-01: edge_results outcome lookup failed: %s", _er_exc)
+
     # W52-PERF: Run all edge calculations concurrently (semaphore limits DB contention)
     _edge_sem = asyncio.Semaphore(4)
 
@@ -7095,8 +7151,11 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         hidden_candidate = False
 
         if _v2_result and _v2_result.get("tier"):
-            # Use V2 results
-            predicted_outcome = _v2_result["outcome"]
+            # Use V2 results — but prefer authoritative outcome from edge_results
+            # R12-BUILD-01 Fix 1: edge_results.bet_type is the same source the cold
+            # path and narrative cache use. Live V2 may pick a different outcome as
+            # odds shift, causing list↔detail divergence and false cache busts.
+            predicted_outcome = _er_outcomes.get(match["match_id"]) or _v2_result["outcome"]
             edge_tier = _v2_result["tier"]
             composite_score = _v2_result["composite_score"]
             edge_pct = _v2_result["edge_pct"]
@@ -7392,6 +7451,9 @@ def _build_hot_tips_page(
         if edge.get("result") in ("hit", "miss")
     ]
 
+    # R12-BUILD-01 Fix 3: Filter negative EV BEFORE pagination so the count
+    # in the header matches the number of rendered cards.
+    tips = [t for t in tips if (t.get("ev") or 0) > 0]
     total = len(tips)
     total_pages = max((total + HOT_TIPS_PAGE_SIZE - 1) // HOT_TIPS_PAGE_SIZE, 1)
     page = max(0, min(page, total_pages - 1))
@@ -7479,11 +7541,6 @@ def _build_hot_tips_page(
     if yesterday_lines:
         lines.extend(yesterday_lines)
         lines.append("")
-
-    # R11-BUILD-02 Fix C: Filter out tips whose EV has gone negative since caching.
-    # Odds movement can push a previously-positive edge below zero. Showing negative
-    # EV tips as "Top Edge Picks" destroys trust.
-    page_tips = [t for t in page_tips if (t.get("ev") or 0) > 0]
 
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
@@ -14243,7 +14300,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             )
             _analysis_cache[event_id] = (
                 _ea_html, _early_db_hit["tips"],
-                _early_db_hit["edge_tier"], _time.time(),
+                _early_db_hit["edge_tier"],
+                _early_db_hit.get("narrative_source"),
+                _time.time(),
             )
             _game_tips_cache[event_id] = _early_db_hit["tips"]
             buttons = _build_game_buttons(
@@ -14423,7 +14482,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             )
             _analysis_cache[event_id] = (
                 _p_html, _pre_cached["tips"],
-                _pre_cached["edge_tier"], _time.time(),
+                _pre_cached["edge_tier"],
+                _pre_cached.get("narrative_source"),
+                _time.time(),
             )
             _game_tips_cache[event_id] = _pre_cached["tips"]
             _pre_buttons = _build_game_buttons(
@@ -14494,7 +14555,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             )
             _analysis_cache[event_id] = (
                 _b_html, _cached_db["tips"],
-                _cached_db["edge_tier"], _time.time(),
+                _cached_db["edge_tier"],
+                _cached_db.get("narrative_source"),
+                _time.time(),
             )
             _game_tips_cache[event_id] = _cached_db["tips"]
             _spinner_stop.set()
@@ -15239,7 +15302,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
     # ── Cache the full analysis (1-hour TTL) — only if narrative succeeded ──
     if narrative:
-        _analysis_cache[event_id] = (msg, tips, _edge_tier, _time.time())
+        _analysis_cache[event_id] = (msg, tips, _edge_tier, "w82", _time.time())
 
     # QA banner
     _banner = _qa_banner(user_id)
@@ -20032,7 +20095,9 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                         if _nc:
                             _analysis_cache[_mk] = (
                                 _nc["html"], _nc["tips"],
-                                _nc["edge_tier"], _t.time(),
+                                _nc["edge_tier"],
+                                _nc.get("narrative_source"),
+                                _t.time(),
                             )
                             _game_tips_cache[_mk] = _nc["tips"]
                             _warmed += 1
