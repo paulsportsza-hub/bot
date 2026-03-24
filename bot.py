@@ -6852,7 +6852,6 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             ORDER BY e.composite_score DESC
             LIMIT ?
         """, (_today, max(int(limit or 10), 1) * 2)).fetchall()
-        _conn.close()
     except Exception as _e:
         log.debug("_load_tips_from_edge_results DB read failed: %s", _e)
         return []
@@ -6934,6 +6933,38 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             "sharp_source": "edge_results",
             "edge_v2": None,
         })
+        # R10-BUILD-01: Multi-BK enrichment — populate odds_by_bookmaker from odds_snapshots
+        _tip_market = "match_winner" if tips[-1]["sport_key"] in ("cricket", "combat") else "1x2"
+        try:
+            _snap_rows = _conn.execute("""
+                SELECT bookmaker, home_odds, draw_odds, away_odds
+                FROM odds_snapshots
+                WHERE match_id = ? AND market_type = ?
+                  AND scraped_at >= datetime('now', '-6 hours')
+                ORDER BY scraped_at DESC
+            """, (mk, _tip_market)).fetchall()
+            if _snap_rows:
+                _bk_dict: dict = {}
+                for _sr in _snap_rows:
+                    _bk = _sr.get("bookmaker") if isinstance(_sr, dict) else _sr[0]
+                    if not _bk or _bk in _bk_dict:
+                        continue
+                    _h = _sr.get("home_odds") if isinstance(_sr, dict) else _sr[1]
+                    _d = _sr.get("draw_odds") if isinstance(_sr, dict) else _sr[2]
+                    _a = _sr.get("away_odds") if isinstance(_sr, dict) else _sr[3]
+                    _o = _h if outcome_raw == "home" else (_a if outcome_raw == "away" else _d)
+                    if _o and float(_o) > 1.0:
+                        _bk_dict[_bk] = float(_o)
+                if _bk_dict:
+                    tips[-1]["odds_by_bookmaker"] = _bk_dict
+        except Exception:
+            pass  # Keep single-BK fallback
+
+    # R10-BUILD-01: Close connection now that enrichment loop is complete
+    try:
+        _conn.close()
+    except Exception:
+        pass
 
     # Sort: tier first, then EV descending
     tips.sort(key=lambda t: (
