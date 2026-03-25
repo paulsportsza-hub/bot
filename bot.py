@@ -1758,6 +1758,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 # The outcome comparison at lines 1764-1788 is the ONLY safety net against
                 # list↔detail divergence. It must always run.
                 _r9_skip = False
+                # R15-BUILD-01 Fix 3: seed snapshot from edge_results after bot restart
+                if not _ht_tips_snapshot.get(user_id):
+                    try:
+                        _seed_tips = await asyncio.to_thread(_load_tips_from_edge_results, 50)
+                        if _seed_tips:
+                            _ht_tips_snapshot[user_id] = list(_seed_tips)
+                    except Exception:
+                        pass
                 _r9_snap_chk = None
                 if not _r9_skip:
                     _r9_snap_chk = next(
@@ -7167,7 +7175,9 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             # R12-BUILD-01 Fix 1: edge_results.bet_type is the same source the cold
             # path and narrative cache use. Live V2 may pick a different outcome as
             # odds shift, causing list↔detail divergence and false cache busts.
-            predicted_outcome = _er_outcomes.get(match["match_id"]) or _v2_result["outcome"]
+            predicted_outcome = _er_outcomes.get(match["match_id"])
+            if not predicted_outcome:
+                continue  # R15-BUILD-01 Fix 1: no authoritative outcome from edge_results — skip
             edge_tier = _v2_result["tier"]
             composite_score = _v2_result["composite_score"]
             edge_pct = _v2_result["edge_pct"]
@@ -20234,6 +20244,9 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             # R12-BUILD-02: Refresh authoritative outcomes before any cache writes
             await asyncio.to_thread(_refresh_er_outcomes_cache)
             tips = await _fetch_hot_tips_from_db()
+            # R15-BUILD-01 Fix 2: re-sync outcome cache so _canonicalize_tip_outcome
+            # uses the same edge_results snapshot that _fetch_hot_tips_from_db_inner used
+            await asyncio.to_thread(_refresh_er_outcomes_cache)
             log.info(
                 "Edge pre-compute: %d tips cached in %.1fs",
                 len(tips), _t.time() - _start,
