@@ -21,14 +21,14 @@ def _init_cache_db(db_path: str) -> None:
     conn.close()
 
 
-def _insert_cache_row(db_path: str, match_id: str, html: str) -> None:
+def _insert_cache_row(db_path: str, match_id: str, html: str, *, narrative_source: str = "w84") -> None:
     conn = sqlite3.connect(db_path)
     now = datetime.now(timezone.utc)
     expires = now + timedelta(hours=6)
     conn.execute(
         "INSERT INTO narrative_cache "
-        "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, created_at, expires_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, created_at, expires_at, narrative_source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             match_id,
             html,
@@ -38,6 +38,7 @@ def _insert_cache_row(db_path: str, match_id: str, html: str) -> None:
             "",
             now.isoformat(),
             expires.isoformat(),
+            narrative_source,
         ),
     )
     conn.commit()

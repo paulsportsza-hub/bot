@@ -7210,7 +7210,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
                 match["match_id"], model["outcome"],
             )
             edge = calculate_edge_rating(snapshots, model, movement)
-            predicted_outcome = model["outcome"]
+            predicted_outcome = _er_outcomes.get(match["match_id"]) or model["outcome"]
             hidden_candidate = edge == EdgeRating.HIDDEN
             edge_tier = "bronze" if hidden_candidate else str(edge)
             composite_score = calculate_edge_score(snapshots, model, movement)
@@ -9117,30 +9117,31 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 return None
             cleaned = _final_polish(_sanitise_jargon(_strip_preamble(html)))
             parsed_tips = json.loads(tips_json)
-            stale_setup_reasons = _find_stale_setup_patterns(cleaned)
-            if stale_setup_reasons:
-                log.warning(
-                    "Rejecting cached narrative for %s — stale Setup cache: %s",
-                    match_id,
-                    ", ".join(stale_setup_reasons),
-                )
-                try:
-                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
-                    conn.commit()
-                except sqlite3.OperationalError as exc:
-                    log.debug("Deferred stale Setup cache delete for %s: %s", match_id, exc)
-                return None
-            if _has_stale_setup_context_claims(cleaned, evidence_json):
-                log.warning(
-                    "Rejecting cached narrative for %s — stale Setup context claims",
-                    match_id,
-                )
-                try:
-                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
-                    conn.commit()
-                except sqlite3.OperationalError as exc:
-                    log.debug("Deferred stale context cache delete for %s: %s", match_id, exc)
-                return None
+            if narrative_source != "w82":
+                stale_setup_reasons = _find_stale_setup_patterns(cleaned)
+                if stale_setup_reasons:
+                    log.warning(
+                        "Rejecting cached narrative for %s — stale Setup cache: %s",
+                        match_id,
+                        ", ".join(stale_setup_reasons),
+                    )
+                    try:
+                        conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                        conn.commit()
+                    except sqlite3.OperationalError as exc:
+                        log.debug("Deferred stale Setup cache delete for %s: %s", match_id, exc)
+                    return None
+                if _has_stale_setup_context_claims(cleaned, evidence_json):
+                    log.warning(
+                        "Rejecting cached narrative for %s — stale Setup context claims",
+                        match_id,
+                    )
+                    try:
+                        conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                        conn.commit()
+                    except sqlite3.OperationalError as exc:
+                        log.debug("Deferred stale context cache delete for %s: %s", match_id, exc)
+                    return None
             # R12-OVERNIGHT: Reject cached narratives missing ESPN data for ESPN-covered leagues
             # when the match is within 7 days (ESPN has data for near-term matches).
             # Far-future matches (>7 days) legitimately lack ESPN data — don't reject those.
