@@ -1784,13 +1784,20 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         and _sna_out not in _cac_out_resolved
                     )
                     if _mismatch:
-                        # R11-BUILD-03: Log-only — W84 narrative is far more valuable than W82
-                        # template. Only bust cache for extreme mismatches (entirely different match).
+                        # R14-BUILD-01: Bust cache — narrative must discuss the SAME team the
+                        # button bets on. W84+ NarrativeSpec produces rich prose instantly so
+                        # regenerating is not a quality regression.
                         log.info(
-                            "R11-BUILD-03: Outcome mismatch logged (no bust) %s — "
-                            "cached='%s'(resolved='%s') snap='%s'",
-                            match_key, _cac_out, _cac_out_resolved, _sna_out,
+                            "R14-BUILD-01: Outcome mismatch → busting cache for %s — "
+                            "cached='%s' snap='%s'",
+                            match_key, _cac_out_resolved, _sna_out,
                         )
+                        # 1. Delete from DB cache
+                        await _delete_narrative_cache(match_key)
+                        # 2. Clear in-memory cache
+                        _analysis_cache.pop(match_key, None)
+                        # 3. Force regeneration via cache-miss path below
+                        _cached_content = None
 
             def _edge_upgrade_markup():
                 return InlineKeyboardMarkup(_build_hot_tips_detail_rows(
@@ -8902,7 +8909,7 @@ def _build_odds_compare_back_button(user_id: int, event_id: str) -> InlineKeyboa
     return InlineKeyboardButton("↩️ Back to Game", callback_data=f"yg:game:{event_id}")
 
 # ── W60-CACHE: Persistent narrative cache in odds.db ──────────
-_NARRATIVE_CACHE_TTL = 21600  # 6 hours in seconds
+_NARRATIVE_CACHE_TTL = 7200  # 2 hours in seconds (R14-BUILD-01: reduced from 6h)
 _NARRATIVE_DB_PATH = "/home/paulsportsza/scrapers/odds.db"
 # W75-FIX: Cache miss uses Sonnet (not Haiku) for quality parity with pre-gen
 _NARRATIVE_MODEL = os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514")
@@ -9234,6 +9241,27 @@ async def _store_narrative_cache(
             conn.close()
 
     await asyncio.to_thread(_store)
+
+
+async def _delete_narrative_cache(match_id: str) -> None:
+    """Delete a cached narrative by match_id (e.g. on outcome mismatch — R14-BUILD-01)."""
+    import sqlite3
+    from db_connection import get_connection
+
+    def _delete():
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+        try:
+            conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                log.debug("Narrative cache delete deferred (DB contention) for %s: %s", match_id, e)
+            else:
+                log.warning("Narrative cache delete failed for %s: %s", match_id, e)
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_delete)
 
 
 async def _store_narrative_evidence(match_id: str, evidence_json: str) -> bool:
