@@ -6988,7 +6988,12 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             "odds_by_bookmaker": {_raw_bk_key: _rec_odds} if _raw_bk_key and _rec_odds > 0 else {},
             "sharp_confidence": "low",
             "sharp_source": "edge_results",
-            "edge_v2": None,
+            "edge_v2": {
+                "composite_score": float(row.get("composite_score") or 0),
+                "edge_pct": float(row.get("predicted_ev") or row.get("edge_pct") or 0),
+                "outcome": row.get("bet_type", "home"),
+                "confidence_signals": int(row.get("confidence_signals") or 0),
+            },
         })
         # R10-BUILD-01: Multi-BK enrichment — populate odds_by_bookmaker from odds_snapshots
         _tip_market = "match_winner" if tips[-1]["sport_key"] in ("cricket", "combat") else "1x2"
