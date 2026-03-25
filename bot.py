@@ -1912,6 +1912,16 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     back_page=_resolve_hot_tips_back_page(user_id, match_key),
                 )
                 _c_base_html = _cached_content["html"]
+                # R15-BUILD-01: Reconcile narrative EV to match list (edge_results) EV.
+                # Pregenerated narratives recalculate EV from current odds, causing
+                # detail to show higher EV than list. Snapshot EV is authoritative.
+                if _aligned_tips and (_aligned_tips[0].get("ev") or 0) > 0:
+                    _snap_ev = float(_aligned_tips[0]["ev"])
+                    _c_base_html = re.sub(
+                        r'[+-]?\d+\.\d+(%\s*expected value)',
+                        f'+{_snap_ev:.1f}\\1',
+                        _c_base_html,
+                    )
                 if _aligned_tips:
                     _ct_header = await _resolve_hot_tip_header(
                         match_key,
@@ -7573,6 +7583,19 @@ def _build_hot_tips_page(
     if yesterday_lines:
         lines.extend(yesterday_lines)
         lines.append("")
+
+    # R15-BUILD-02: Derive display_tier from composite_score thresholds
+    # instead of trusting DB's edge_tier which may be stale.
+    for tip in page_tips:
+        _cs = tip.get("edge_score", 0) or 0
+        if _cs >= 52:
+            tip["display_tier"] = "diamond"
+        elif _cs >= 40:
+            tip["display_tier"] = "gold"
+        elif _cs >= 38:
+            tip["display_tier"] = "silver"
+        elif _cs >= 15:
+            tip["display_tier"] = "bronze"
 
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
