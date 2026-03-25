@@ -687,6 +687,24 @@ def _raw_outcome_from_serving_tip(tip: dict) -> str:
     return outcome or "home"
 
 
+def _normalise_outcome_label(outcome: str, home_team: str = "", away_team: str = "") -> str:
+    """Normalise team-name labels and raw outcome values to home/away/draw keys."""
+    value = str(outcome or "").strip().lower()
+    if not value:
+        return ""
+
+    if value in {"home", "away", "draw"}:
+        return value
+
+    home = str(home_team or "").strip().lower()
+    away = str(away_team or "").strip().lower()
+    if value == home:
+        return "home"
+    if value == away:
+        return "away"
+    return value
+
+
 def _edge_from_serving_tip(tip: dict) -> dict | None:
     """Rebuild an edge-shaped dict from the live edge_results serving row."""
     match_key = tip.get("match_id") or tip.get("event_id") or ""
@@ -1196,6 +1214,30 @@ async def main(sweep: str) -> None:
             mk = edge.get("match_key", "")
             cached = await _get_cached_narrative(mk)
             if not cached:
+                filtered.append(edge)
+                continue
+
+            cached_tips = cached.get("tips") or []
+            if not cached_tips:
+                continue
+
+            cached_outcome = _normalise_outcome_label(
+                cached_tips[0].get("outcome"),
+                edge.get("home_team", ""),
+                edge.get("away_team", ""),
+            )
+            edge_outcome = _normalise_outcome_label(
+                edge.get("recommended_outcome") or edge.get("outcome", ""),
+                edge.get("home_team", ""),
+                edge.get("away_team", ""),
+            )
+            if cached_outcome and edge_outcome and cached_outcome != edge_outcome:
+                log.info(
+                    "R14-BUILD-02: Outcome divergence for %s: cached=%s, current=%s -> regenerating",
+                    mk,
+                    cached_outcome,
+                    edge_outcome,
+                )
                 filtered.append(edge)
         log.info("%s mode: %d/%d edges need regeneration", sweep, len(filtered), len(edges))
         edges = filtered
