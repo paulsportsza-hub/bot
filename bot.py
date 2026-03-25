@@ -7002,7 +7002,7 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
                 "composite_score": float(row.get("composite_score") or 0),
                 "edge_pct": float(row.get("predicted_ev") or row.get("edge_pct") or 0),
                 "outcome": row.get("bet_type", "home"),
-                "confidence_signals": int(row.get("confidence_signals") or 0),
+                "confirming_signals": _confirming_est,
             },
         })
         # R10-BUILD-01: Multi-BK enrichment — populate odds_by_bookmaker from odds_snapshots
