@@ -1660,9 +1660,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 page_num = int(action.split(":")[1])
             except (ValueError, IndexError):
                 page_num = 0
-            # W84-HT2: prefer user's snapshot over live cache — prevents identity drift
-            # when _edge_precompute_job refreshes global tips between renders
-            tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
+            # R7-BUILD-03: On page 0, always refresh snapshot from live cache (first entry point).
+            # On page 1+, ONLY use existing snapshot — never fall back to live cache (identity lock).
+            if page_num == 0:
+                _live = _hot_tips_cache.get("global", {}).get("tips", [])
+                if _live:
+                    _ht_tips_snapshot[user_id] = list(_live)
+            tips = _ht_tips_snapshot.get(user_id, [])
             if tips:
                 _user_tier = await get_effective_tier(user_id)
                 _pg_proof, _pg_summary = await asyncio.gather(
@@ -1697,8 +1701,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
                 # W84-HT2: freeze page identity so detail back returns here
+                # R7-BUILD-03: snapshot already seeded on page 0 — do not re-assign here
                 _ht_page_state[user_id] = page_num
-                _ht_tips_snapshot[user_id] = list(tips)
             else:
                 await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
     elif prefix == "edge":
@@ -1780,12 +1784,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         and _sna_out not in _cac_out_resolved
                     )
                     if _mismatch:
+                        # R11-BUILD-03: Log-only — W84 narrative is far more valuable than W82
+                        # template. Only bust cache for extreme mismatches (entirely different match).
                         log.info(
-                            "R9-BUILD-03: Cache busted %s — cached='%s'(resolved='%s') snap='%s'",
+                            "R11-BUILD-03: Outcome mismatch logged (no bust) %s — "
+                            "cached='%s'(resolved='%s') snap='%s'",
                             match_key, _cac_out, _cac_out_resolved, _sna_out,
                         )
-                        _analysis_cache.pop(match_key, None)
-                        _cached_content = None
 
             def _edge_upgrade_markup():
                 return InlineKeyboardMarkup(_build_hot_tips_detail_rows(
@@ -12137,7 +12142,10 @@ def _build_setup_section_v2(ctx_data: dict, tips: list[dict] | None = None,
     paragraphs.append(_build_away_para(d))
 
     h2h_para = _h2h_hook(h2h_count, h2h_away_wins, h2h_latest, home_name, away_name)
-    if h2h_para:
+    # R9-BUILD-03: Skip if narrative already contains H2H content (Path 1 via _h2h_bridge).
+    _assembled = "\n\n".join(p for p in paragraphs if p)
+    _h2h_already = bool(re.search(r"head to head:|meetings:|h2h", _assembled, re.IGNORECASE))
+    if h2h_para and not _h2h_already:
         paragraphs.append(h2h_para)
 
     return "\n\n".join(p for p in paragraphs if p)
