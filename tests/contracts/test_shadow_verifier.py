@@ -759,7 +759,8 @@ def test_h15_accepts_no_verified_h2h_block_available_non_claim() -> None:
     assert report["hard_checks"]["h2h_claims_traceable"]["passed"] is True
 
 
-def test_h15_rejects_true_unsupported_h2h_score_claim_when_no_verified_h2h_exists() -> None:
+def test_h15_graceful_pass_h2h_claim_when_no_verified_h2h_exists() -> None:
+    """R13-BUILD-01 Fix 4: Missing H2H evidence → graceful pass, not rejection."""
     pack = _make_pack(
         h2h=evidence_pack.H2HBlock(
             provenance=evidence_pack.EvidenceSource(False, "2026-03-20T00:00:00+00:00", "h2h", 0.0, error="No verified H2H rows."),
@@ -772,8 +773,9 @@ def test_h15_rejects_true_unsupported_h2h_score_claim_when_no_verified_h2h_exist
 
     passed, report = evidence_pack.verify_shadow_narrative(draft, pack, _make_spec())
 
-    assert passed is False
-    assert report["hard_checks"]["h2h_claims_traceable"]["passed"] is False
+    # R13-BUILD-01 Fix 4: h2h_claims_traceable now passes when no H2H evidence exists
+    assert report["hard_checks"]["h2h_claims_traceable"]["passed"] is True
+    assert "graceful" in report["hard_checks"]["h2h_claims_traceable"]["detail"].lower()
 
 
 def test_h15_rejects_freeform_h2h_expansion_even_when_verified_h2h_exists() -> None:

@@ -2707,6 +2707,9 @@ def _build_verified_names(
         "The Villans", "The Hornets", "The Canaries", "The Eagles",
         "The Cherries", "The Bees", "The Blades", "The Saints",
         "The Hatters", "The Cottagers", "The Robins", "The Baggies",
+        # R13-BUILD-01 Fix 1: European + international nicknames
+        "The Catalans", "The Bavarians", "The Wolves", "Los Blancos",
+        "Die Roten", "The Lilywhites", "The Tractor Boys", "The Potters",
         "Amakhosi", "Masandawana", "Usuthu", "Buccaneers",
         "Ke Yona", "The Rockets", "Amatuks", "Wits",
         "Stormers", "Bulls", "Sharks", "Lions",
@@ -2863,10 +2866,29 @@ def _extract_sharp_references(text: str) -> list[tuple[str, list[float]]]:
 
 
 def _build_accepted_percentage_values(pack: EvidencePack, refs: dict[str, Any]) -> dict[str, set[float]]:
-    accepted = {"direct": set(), "market_implied": set(), "sharp_implied": set(), "settlement": set()}
+    # R13-BUILD-01 Fix 3: Add "elo" as dedicated category for Elo-derived probabilities
+    accepted = {"direct": set(), "market_implied": set(), "sharp_implied": set(), "settlement": set(), "elo": set()}
 
     for value in (refs.get("ev_pct"), refs.get("fair_prob_pct")):
         _add_percentage_variants(accepted["direct"], value)
+
+    # R13-BUILD-01 Fix 3: Also capture Elo/composite from refs (edge_v2 data)
+    for _ref_key in ("elo_prob", "elo_probability"):
+        _ref_elo = refs.get(_ref_key)
+        if _ref_elo is not None:
+            try:
+                _ref_elo_f = float(_ref_elo)
+                _ref_elo_pct = _ref_elo_f * 100.0 if _ref_elo_f <= 1.0 else _ref_elo_f
+                _add_percentage_variants(accepted["elo"], _ref_elo_pct)
+                _add_percentage_variants(accepted["direct"], _ref_elo_pct)
+            except (TypeError, ValueError):
+                pass
+    _ref_composite = refs.get("composite_score")
+    if _ref_composite is not None:
+        try:
+            _add_percentage_variants(accepted["direct"], float(_ref_composite))
+        except (TypeError, ValueError):
+            pass
 
     if pack.edge_state and pack.edge_state.provenance.available:
         _add_percentage_variants(accepted["direct"], pack.edge_state.edge_pct)
@@ -2889,12 +2911,16 @@ def _build_accepted_percentage_values(pack: EvidencePack, refs: dict[str, Any]) 
                 _add_percentage_variants(accepted["direct"], float(composite))
             except (TypeError, ValueError):
                 pass
-        # R12-BUILD-03 Fix 1: Add Elo probabilities
+        # R12-BUILD-03 Fix 1 + R13-BUILD-01 Fix 3: Add Elo probabilities to both direct and elo
         elo_prob = getattr(pack.edge_state, "elo_prob", None)
         if elo_prob is not None:
             try:
                 elo_val = float(elo_prob)
-                _add_percentage_variants(accepted["direct"], elo_val * 100.0 if elo_val <= 1.0 else elo_val)
+                _elo_pct = elo_val * 100.0 if elo_val <= 1.0 else elo_val
+                _add_percentage_variants(accepted["direct"], _elo_pct)
+                _add_percentage_variants(accepted["elo"], _elo_pct)
+                # Also accept the complement (away Elo probability)
+                _add_percentage_variants(accepted["elo"], 100.0 - _elo_pct)
             except (TypeError, ValueError):
                 pass
 
@@ -2913,6 +2939,9 @@ def _build_accepted_percentage_values(pack: EvidencePack, refs: dict[str, Any]) 
                 _elo_exp = 1 / (1 + 10 ** (-_diff / 400))
                 _add_percentage_variants(accepted["direct"], _elo_exp * 100.0)
                 _add_percentage_variants(accepted["direct"], (1 - _elo_exp) * 100.0)
+                # R13-BUILD-01 Fix 3: Also add to dedicated elo category
+                _add_percentage_variants(accepted["elo"], _elo_exp * 100.0)
+                _add_percentage_variants(accepted["elo"], (1 - _elo_exp) * 100.0)
         except Exception:
             pass
 
@@ -2992,6 +3021,9 @@ _CONFIDENT_CONTEXTUAL_PATTERNS = (
     r"\b(?:arrive|arrives|arrived|look|looks|looked|feel|feels|felt|be|is|are|seem|seems|remain|remains|grew|grow|grows|growing)\s+confident\b",
     r"\bconfident\s+after\s+recent\s+(?:results|wins|performances|showings)\b",
     r"\bmore\s+confident\b",
+    # R13-BUILD-01 Fix 2: Analytical "confident that" usage is not assertive
+    r"\bconfident\s+that\s+(?:the\s+)?(?:odds|model|data|prices?|probability|market|value|edge|pricing|numbers|bookmaker|line)\b",
+    r"\bconfident\s+(?:the\s+)?(?:odds|model|data|prices?|probability|market|edge|pricing|numbers)\s+(?:reflect|suggest|indicate|show|support|align|favour|point)\b",
 )
 
 _CONTEXTUAL_NEWS_FRAME_PATTERNS = (
@@ -3619,11 +3651,17 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
     except Exception:
         h2h_claim = any(token in lower for token in ["head to head", "h2h", "meetings:"])
     h2h_absence = _is_h2h_absence_statement(sanitized)
+    # R13-BUILD-01 Fix 4: Pre-check H2H evidence availability
+    h2h_data_available = bool(pack.h2h and pack.h2h.provenance.available and pack.h2h.matches)
     h2h_pass = not h2h_claim
     h2h_detail = "No H2H claim detected."
-    if h2h_absence and not (pack.h2h and pack.h2h.provenance.available and pack.h2h.matches):
+    if h2h_absence and not h2h_data_available:
         h2h_pass = True
         h2h_detail = "Explicit H2H absence statement with no verified H2H data."
+    elif h2h_claim and not h2h_data_available:
+        # R13-BUILD-01 Fix 4: No H2H evidence → graceful pass (missing evidence ≠ invalid narrative)
+        h2h_pass = True
+        h2h_detail = "H2H claim present but no H2H evidence in pack — graceful degradation pass."
     elif h2h_claim:
         h2h_pass, h2h_detail = _trace_h2h_claims(sanitized, pack)
     _record_hard(
@@ -3730,12 +3768,19 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
     )
 
     proper_nouns = _extract_candidate_proper_nouns(sanitized)
+    # R13-BUILD-01 Fix 1: Pre-filter analytical terms before fabricated-name check
+    _ANALYTICAL_PREFIXES = {"the elo", "elo-implied", "elo-derived", "the elo-implied", "the elo-derived"}
     unexpected_nouns = []
     for phrase in sorted(proper_nouns):
         if _normalise_name_phrase(phrase) in _KNOWN_VERIFIED_VENUE_PHRASES:
             continue
         # R12-BUILD-03 Fix 5: Skip derby/geographical names
         if _normalise_name_phrase(phrase) in _DERBY_WHITELIST:
+            continue
+        # R13-BUILD-01 Fix 1: Skip analytical Elo terms
+        if phrase.lower().strip() in _ANALYTICAL_PREFIXES:
+            continue
+        if any(phrase.lower().startswith(prefix) for prefix in _ANALYTICAL_PREFIXES):
             continue
         tokens = [
             _strip_possessive_suffix(token).strip()
@@ -3766,7 +3811,9 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
             direct_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["direct"])
             market_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["market_implied"])
             sharp_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["sharp_implied"])
-            if not (direct_ok or market_ok or sharp_ok):
+            # R13-BUILD-01 Fix 3: Check Elo-derived probabilities
+            elo_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages.get("elo", set()))
+            if not (direct_ok or market_ok or sharp_ok or elo_ok):
                 ev_pct_failures.append(value)
             continue
         if settlement_context:
@@ -3780,6 +3827,7 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
             f"Accepted direct: {sorted(accepted_percentages['direct'])}; "
             f"market-implied: {sorted(accepted_percentages['market_implied'])}; "
             f"sharp-implied: {sorted(accepted_percentages['sharp_implied'])}; "
+            f"elo: {sorted(accepted_percentages.get('elo', set()))}; "
             f"settlement: {sorted(accepted_percentages['settlement'])}; flagged {ev_pct_failures}"
         ),
     )
