@@ -1650,6 +1650,11 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     if spec.ev_pct >= 7.0 and sizing in ("tiny exposure or pass", "small stake"):
         sizing = "standard stake"
 
+    # The verification layer bans "confident" in rendered copy, so keep the
+    # internal sizing label but render a neutral synonym.
+    if sizing == "confident stake":
+        sizing = "full stake"
+
     if action == "pass":
         # W84-Q13: Zero/negative EV — never frame as actionable
         return (
@@ -1687,15 +1692,15 @@ def _render_verdict(spec: NarrativeSpec) -> str:
         _lean_variants = [
             (
                 f"Lean on {outcome} at {odds_str} ({bk}) — "
-                f"enough signal to commit, not enough to go heavy. {_sentence_case(sizing)}."
+                f"there is enough support to keep it in play, not enough to press. {_sentence_case(sizing)}."
             ),
             (
                 f"A measured lean: {outcome} at {odds_str} with {bk}. "
-                f"Back it at a reasonable stake, hold it with a clear head. {_sentence_case(sizing)}."
+                f"Keep stakes controlled and stay proportionate with the edge. {_sentence_case(sizing)}."
             ),
             (
                 f"Cautious nod to {outcome} at {odds_str} ({bk}). "
-                f"One signal in the right direction — enough to act on. {_sentence_case(sizing)}."
+                f"One signal points the right way, so it is worth tracking without overstating the case. {_sentence_case(sizing)}."
             ),
         ]
         return _lean_variants[_v]

@@ -1011,6 +1011,27 @@ class TestRenderVerdict:
                 f"Banned phrase {phrase!r} found in strong back verdict"
             )
 
+    def test_lean_verdict_avoids_verifier_boundary_phrases(self):
+        spec = self._spec("lean", "small stake", "moderate", outcome_label="the draw")
+        verdict = _render_verdict(spec).lower()
+        for phrase in ("worth backing", "solid play", "strong back", "premium value"):
+            assert phrase not in verdict, (
+                f"Verifier boundary phrase {phrase!r} found in lean verdict"
+            )
+
+    def test_rendered_verdict_never_emits_confident(self):
+        for action, sizing, tone in (
+            ("speculative punt", "tiny exposure or pass", "cautious"),
+            ("lean", "small stake", "moderate"),
+            ("back", "standard stake", "confident"),
+            ("strong back", "confident stake", "strong"),
+        ):
+            spec = self._spec(action, sizing, tone)
+            verdict = _render_verdict(spec).lower()
+            assert "confident" not in verdict, (
+                f"Rendered verdict for {action!r} leaked banned 'confident' wording"
+            )
+
 
 # ── W82-RENDER: _render_baseline structure tests ──────────────────────────────
 
