@@ -7191,10 +7191,14 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         if best_odds > _MAX_RECOMMENDED_ODDS:
             continue
 
-        # Calculate EV from consensus
-        implied_probs = [1.0 / o for o in odds_by_bk.values() if o and o > 1]
-        consensus_prob = sum(implied_probs) / len(implied_probs) if implied_probs else 0
-        ev_pct = round((consensus_prob * best_odds - 1) * 100, 1) if best_odds > 0 and consensus_prob > 0 else 0
+        # Fix 5: EV Consistency — use V2 benchmark-calibrated edge_pct as primary;
+        # fall back to naive consensus calculation only when V2 is unavailable.
+        if _v2_result and _v2_result.get("tier"):
+            ev_pct = edge_pct  # From _v2_result["edge_pct"] set above
+        else:
+            implied_probs = [1.0 / o for o in odds_by_bk.values() if o and o > 1]
+            consensus_prob = sum(implied_probs) / len(implied_probs) if implied_probs else 0
+            ev_pct = round((consensus_prob * best_odds - 1) * 100, 1) if best_odds > 0 and consensus_prob > 0 else 0
 
         event_id = match["match_id"]
         home_display = _display_team_name(match.get("home_team") or "TBD")
@@ -7453,7 +7457,8 @@ def _build_hot_tips_page(
 
     # R12-BUILD-01 Fix 3: Filter negative EV BEFORE pagination so the count
     # in the header matches the number of rendered cards.
-    tips = [t for t in tips if (t.get("ev") or 0) > 0]
+    # Fix 8: Also gate composite_score >= 40 (Bronze threshold) — sub-threshold cards never show.
+    tips = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 40]
     total = len(tips)
     total_pages = max((total + HOT_TIPS_PAGE_SIZE - 1) // HOT_TIPS_PAGE_SIZE, 1)
     page = max(0, min(page, total_pages - 1))
@@ -13356,18 +13361,18 @@ def _extract_edge_data(
     if not _raw_prob and best.get("ev", 0) > 0 and best.get("odds", 0) > 1.0:
         _raw_prob = round(100.0 / best["odds"])
         log.info("R9: zero prob recovered via implied odds (odds=%.2f → prob=%d%%)", best["odds"], _raw_prob)
-    # W84-P1D: When edge_v2 is absent (edge_results fast path), estimate confirming_signals
-    # from composite_score so narrative quality matches the displayed tier badge.
-    # Bronze(<40)→0, Silver(40-54)→1, Gold(55-69)→2, Diamond(70+)→3
     _cs = best.get("edge_score", 0) or 0
     h2h_signal = sigs.get("form_h2h", {}) if isinstance(sigs.get("form_h2h"), dict) else {}
     tipster_signal = sigs.get("tipster", {}) if isinstance(sigs.get("tipster"), dict) else {}
     if v2:
-        _confirming = v2.get("confirming_signals", 0)
+        # Fix 6: Use _edge_signal_meta() dynamic count as single source of truth.
+        # Ensures [MODEL ONLY] badge, "N supporting indicators", and Signal Breakdown all agree.
+        _confirming, _, _ = _edge_signal_meta(v2)
         _contradicting = v2.get("contradicting_signals", 0)
         _comp_score = v2.get("composite_score", 0)
     else:
-        _confirming = 3 if _cs >= 70 else 2 if _cs >= 55 else 1 if _cs >= 40 else 0
+        # Fix 6: When edge_v2 is absent, signal count is unknown — set 0, never guess.
+        _confirming = 0
         _contradicting = 0
         _comp_score = _cs
     return {
