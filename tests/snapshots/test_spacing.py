@@ -28,6 +28,12 @@ def _make_tip(display_tier: str = "gold", **kw) -> dict:
     odds = kw.get("odds", 2.00)
     bookmaker = kw.get("bookmaker", "hollywoodbets")
     ev = kw.get("ev", 5.0)
+    edge_score = {
+        "diamond": 62.0,
+        "gold": 46.0,
+        "silver": 39.0,
+        "bronze": 22.0,
+    }.get(display_tier, 40.0)
     defaults = {
         "home_team": "Team A",
         "away_team": "Team B",
@@ -39,6 +45,7 @@ def _make_tip(display_tier: str = "gold", **kw) -> dict:
         "ev": 5.0,
         "display_tier": display_tier,
         "edge_rating": display_tier,
+        "edge_score": edge_score,
         "match_id": f"team_a_vs_team_b_{display_tier}_2026-03-10",
         "event_id": f"team_a_vs_team_b_{display_tier}_2026-03-10",
         "commence_time": "2026-03-10T15:00:00Z",
@@ -46,7 +53,7 @@ def _make_tip(display_tier: str = "gold", **kw) -> dict:
         "edge_v2": {
             "match_key": f"team_a_vs_team_b_{display_tier}_2026-03-10",
             "tier": display_tier,
-            "composite_score": 58.0,
+            "composite_score": edge_score,
             "confirming_signals": 3,
             "signals": {
                 "price_edge": {
@@ -162,17 +169,17 @@ class TestCardBreathingRoom:
         tips = [
             _make_tip(display_tier="gold", home_team="Home1", away_team="Away1",
                       match_id="h1_vs_a1_2026-03-10"),
-            _make_tip(display_tier="silver", home_team="Home2", away_team="Away2",
+            _make_tip(display_tier="diamond", home_team="Home2", away_team="Away2",
                       match_id="h2_vs_a2_2026-03-10"),
         ]
         text = _build_page(tips, user_tier="diamond")
         lines = text.split("\n")
         card_starts = [i for i, ln in enumerate(lines) if ln.strip().startswith("<b>[")]
         assert len(card_starts) == 2, f"Expected 2 cards, found {len(card_starts)}"
-        # Between the two cards, a SILVER EDGE tier header should appear
+        # Between the two cards, a DIAMOND EDGE tier header should appear
         between_text = "\n".join(lines[card_starts[0]:card_starts[1]])
-        assert "SILVER EDGE" in between_text, (
-            f"Expected SILVER EDGE tier header between cards, got:\n{between_text}"
+        assert "DIAMOND EDGE" in between_text, (
+            f"Expected DIAMOND EDGE tier header between cards, got:\n{between_text}"
         )
 
 

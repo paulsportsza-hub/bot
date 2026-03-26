@@ -46,10 +46,16 @@ def _make_tip(
     bookmaker: str = "hollywoodbets",
     edge_v2: dict | None = None,
 ) -> dict:
+    edge_score = {
+        "diamond": 62.0,
+        "gold": 46.0,
+        "silver": 39.0,
+        "bronze": 22.0,
+    }.get(display_tier, 40.0)
     edge_v2 = edge_v2 or {
         "match_key": match_id,
         "tier": display_tier,
-        "composite_score": 63.0 if display_tier in ("gold", "diamond") else 46.0,
+        "composite_score": edge_score,
         "confirming_signals": 4 if display_tier in ("gold", "diamond") else 2,
         "contradicting_signals": 1 if display_tier in ("gold", "diamond") else 0,
         "edge_pct": ev,
@@ -99,6 +105,7 @@ def _make_tip(
         "ev": ev,
         "display_tier": display_tier,
         "edge_rating": display_tier,
+        "edge_score": edge_score,
         "match_id": match_id,
         "event_id": event_id,
         "commence_time": commence_time,
@@ -184,9 +191,9 @@ def _snapshot_data(text: str, markup) -> dict:
 def _load_or_create_golden(name: str, actual: dict) -> dict:
     """Load golden file or create it on first run. Returns golden data."""
     path = GOLDEN_DIR / f"{name}.json"
-    if path.exists():
+    if path.exists() and os.environ.get("UPDATE_JSON_SNAPSHOTS") != "1":
         return json.loads(path.read_text())
-    # First run: create golden file
+    # First run or explicit refresh: create golden file
     path.write_text(json.dumps(actual, indent=2, ensure_ascii=False) + "\n")
     return actual
 

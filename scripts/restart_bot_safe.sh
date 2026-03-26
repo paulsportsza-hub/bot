@@ -16,7 +16,7 @@
 set -euo pipefail
 
 BOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SESSION_NAME="mzansiedgebot"
+SESSION_NAME="bot"
 CHECK_ONLY=0
 
 for arg in "$@"; do
