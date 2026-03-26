@@ -1848,6 +1848,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                             _r9_rec[_r9_f] = _aligned_tips[0][_r9_f]
                     _aligned_tips = [_r9_rec]
 
+                # BYPASS-FIX-A.1: Write snapshot EV into edge_v2 so signal block reads consistent value
+                if _aligned_tips:
+                    _bfa1_tip = _aligned_tips[0]
+                    _bfa1_ev = _bfa1_tip.get("ev")
+                    if _bfa1_ev is not None:
+                        _bfa1_ev2 = _bfa1_tip.get("edge_v2") or {}
+                        _bfa1_ev2["edge_pct"] = float(_bfa1_ev)
+                        _bfa1_tip["edge_v2"] = _bfa1_ev2
+
                 # Tier LIMIT CHECK — run in thread (WAL read: non-blocking vs writers)
                 def _check_limit_sync():
                     try:
@@ -1904,13 +1913,26 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     asyncio.create_task(_record_view_bg())
 
                 # D-ADD-5 / RENDER-FIX6: Reconcile _detail_tier BEFORE button build so that
-                # buttons and gating always use the same tier value.
-                _detail_tier = _cached_content["edge_tier"]
+                # buttons and gating always use the same tier value. (BYPASS-FIX-A.3 added)
+                _detail_tier = _cached_content.get("edge_tier", "bronze")
                 if _aligned_tips:
-                    _detail_tier = _aligned_tips[0].get(
-                        "display_tier",
-                        _aligned_tips[0].get("edge_rating", _detail_tier),
-                    )
+                    _bfa3_tip = _aligned_tips[0]
+                    _bfa3_tier = _bfa3_tip.get("display_tier") or _bfa3_tip.get("edge_rating")
+                    if _bfa3_tier:
+                        _detail_tier = _bfa3_tier
+                    elif _bfa3_tip.get("edge_v2"):
+                        # BYPASS-FIX-A.3: Derive tier from composite when cache lacks tier fields
+                        _bfa3_ev2 = _bfa3_tip["edge_v2"]
+                        _bfa3_cs = float(_bfa3_ev2.get("composite_score", 0) or 0)
+                        _bfa3_ev = float(_bfa3_ev2.get("edge_pct", 0) or 0)
+                        _bfa3_conf = int(_bfa3_ev2.get("confirming_signals", 0) or 0)
+                        try:
+                            from scrapers.edge.tier_engine import assign_tier as _bfa3_at
+                            _bfa3_derived = _bfa3_at(_bfa3_cs, _bfa3_ev, _bfa3_conf, red_flags=[])
+                            if _bfa3_derived:
+                                _detail_tier = _bfa3_derived
+                        except Exception:
+                            pass
 
                 # Serve from cache IMMEDIATELY
                 _game_tips_cache[match_key] = _aligned_tips
@@ -5722,6 +5744,11 @@ def _build_signal_detail_block(
                 lines.append(
                     f"• <b>{row['label']}</b> {row['meter']} {row['strength_label']}{detail}"
                 )
+        elif confirming > 0:
+            # BYPASS-FIX-A.2: edge_v2 has confirming count but no signal-level detail
+            lines.append(f"• {confirming} supporting signal{'s' if confirming != 1 else ''} aligned with this edge.")
+            if confirming >= 2:
+                lines.append("• Multiple independent indicators confirm value in this price.")
         elif model_only:
             lines.append("• Price is doing most of the work here — no supporting signals aligned.")
         else:
@@ -5740,6 +5767,9 @@ def _build_signal_detail_block(
         ][:3]
         if support_labels:
             lines.append(f"Best support: {_human_join(support_labels)}.")
+        elif confirming > 0:
+            # BYPASS-FIX-A.2: confirming count available but no per-signal detail
+            lines.append(f"{confirming} signal{'s' if confirming != 1 else ''} aligned with this edge.")
         elif model_only:
             lines.append("This is mostly a price-led play with limited support around it.")
         elif rows:
