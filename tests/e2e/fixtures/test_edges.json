@@ -1,0 +1,166 @@
+[
+  {
+    "match_id": "arsenal_vs_chelsea_diamond_2026-03-29",
+    "event_id": "arsenal_vs_chelsea_diamond_2026-03-29",
+    "home_team": "Arsenal",
+    "away_team": "Chelsea",
+    "league": "Premier League",
+    "league_key": "epl",
+    "sport_key": "soccer_epl",
+    "commence_time": "2026-03-29T15:30:00Z",
+    "outcome": "Arsenal",
+    "odds": 1.85,
+    "bookmaker": "Hollywoodbets",
+    "bookmaker_key": "hollywoodbets",
+    "odds_by_bookmaker": {
+      "hollywoodbets": 1.85,
+      "betway": 1.8,
+      "supabets": 1.79
+    },
+    "ev": 9.6,
+    "prob": 61,
+    "kelly": 4.1,
+    "edge_rating": "diamond",
+    "display_tier": "diamond",
+    "edge_score": 62,
+    "edge_v2": {
+      "confirming_signals": 3
+    }
+  },
+  {
+    "match_id": "bulls_vs_stormers_gold_2026-03-29",
+    "event_id": "bulls_vs_stormers_gold_2026-03-29",
+    "home_team": "Bulls",
+    "away_team": "Stormers",
+    "league": "United Rugby Championship",
+    "league_key": "urc",
+    "sport_key": "rugby_union",
+    "commence_time": "2026-03-29T17:30:00Z",
+    "outcome": "Bulls",
+    "odds": 2.15,
+    "bookmaker": "Betway",
+    "bookmaker_key": "betway",
+    "odds_by_bookmaker": {
+      "betway": 2.15,
+      "hollywoodbets": 2.1,
+      "gbets": 2.08
+    },
+    "ev": 6.1,
+    "prob": 52,
+    "kelly": 3.4,
+    "edge_rating": "gold",
+    "display_tier": "gold",
+    "edge_score": 46,
+    "edge_v2": {
+      "confirming_signals": 2
+    }
+  },
+  {
+    "match_id": "lions_vs_sharks_gold_2026-03-29",
+    "event_id": "lions_vs_sharks_gold_2026-03-29",
+    "home_team": "Lions",
+    "away_team": "Sharks",
+    "league": "United Rugby Championship",
+    "league_key": "urc",
+    "sport_key": "rugby_union",
+    "commence_time": "2026-03-29T19:45:00Z",
+    "outcome": "Sharks",
+    "odds": 2.4,
+    "bookmaker": "GBets",
+    "bookmaker_key": "gbets",
+    "odds_by_bookmaker": {
+      "gbets": 2.4,
+      "betway": 2.32
+    },
+    "ev": 4.8,
+    "prob": 48,
+    "kelly": 2.7,
+    "edge_rating": "gold",
+    "display_tier": "gold",
+    "edge_score": 44,
+    "edge_v2": {
+      "confirming_signals": 2
+    }
+  },
+  {
+    "match_id": "orlando_pirates_vs_sundowns_silver_2026-03-30",
+    "event_id": "orlando_pirates_vs_sundowns_silver_2026-03-30",
+    "home_team": "Orlando Pirates",
+    "away_team": "Mamelodi Sundowns",
+    "league": "PSL",
+    "league_key": "psl",
+    "sport_key": "soccer_south_africa_psl",
+    "commence_time": "2026-03-30T17:00:00Z",
+    "outcome": "Orlando Pirates",
+    "odds": 3.2,
+    "bookmaker": "Betway",
+    "bookmaker_key": "betway",
+    "odds_by_bookmaker": {
+      "betway": 3.2,
+      "hollywoodbets": 3.1
+    },
+    "ev": 3.2,
+    "prob": 39,
+    "kelly": 1.8,
+    "edge_rating": "silver",
+    "display_tier": "silver",
+    "edge_score": 40,
+    "edge_v2": {
+      "confirming_signals": 1
+    }
+  },
+  {
+    "match_id": "proteas_vs_australia_bronze_2026-03-30",
+    "event_id": "proteas_vs_australia_bronze_2026-03-30",
+    "home_team": "South Africa",
+    "away_team": "Australia",
+    "league": "ODI Series",
+    "league_key": "odi",
+    "sport_key": "cricket",
+    "commence_time": "2026-03-30T09:00:00Z",
+    "outcome": "South Africa",
+    "odds": 2.8,
+    "bookmaker": "Supabets",
+    "bookmaker_key": "supabets",
+    "odds_by_bookmaker": {
+      "supabets": 2.8,
+      "betway": 2.74
+    },
+    "ev": 1.9,
+    "prob": 36,
+    "kelly": 1.1,
+    "edge_rating": "bronze",
+    "display_tier": "bronze",
+    "edge_score": 40,
+    "edge_v2": {
+      "confirming_signals": 1
+    }
+  },
+  {
+    "match_id": "chiefs_vs_amazulu_diamond_2026-03-31",
+    "event_id": "chiefs_vs_amazulu_diamond_2026-03-31",
+    "home_team": "Kaizer Chiefs",
+    "away_team": "AmaZulu",
+    "league": "PSL",
+    "league_key": "psl",
+    "sport_key": "soccer_south_africa_psl",
+    "commence_time": "2026-03-31T18:00:00Z",
+    "outcome": "Kaizer Chiefs",
+    "odds": 2.05,
+    "bookmaker": "Betway",
+    "bookmaker_key": "betway",
+    "odds_by_bookmaker": {
+      "betway": 2.05,
+      "hollywoodbets": 2.0
+    },
+    "ev": 8.1,
+    "prob": 57,
+    "kelly": 3.9,
+    "edge_rating": "diamond",
+    "display_tier": "diamond",
+    "edge_score": 58,
+    "edge_v2": {
+      "confirming_signals": 3
+    }
+  }
+]

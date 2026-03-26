@@ -15610,6 +15610,35 @@ async def _generate_game_tips_safe(query, ctx, event_id: str, user_id: int, sour
                 pass
 
 
+def _select_best_bookmaker_for_outcome(
+    odds_by_bk: dict[str, dict[str, float]],
+    outcome: str,
+) -> tuple[str | None, float | None]:
+    """Select the bookmaker with the best odds for a specific outcome.
+
+    REGFIX-04: Fixes CTA/odds mismatch where the button pointed to a bookmaker
+    with best Away odds when the card recommended a Home win.
+
+    Args:
+        odds_by_bk: {"gbets": {"home": 5.00, "draw": 4.60, "away": 1.52}, ...}
+        outcome: "home", "draw", or "away"
+
+    Returns:
+        (best_bookmaker_name, best_odds) or (None, None) if no bookmaker has
+        odds for this outcome.
+    """
+    best_bk, best_price = None, float("-inf")
+    for bk, markets in odds_by_bk.items():
+        price = markets.get(outcome) if isinstance(markets, dict) else None
+        if price is None:
+            continue
+        if price > best_price:
+            best_bk, best_price = bk, price
+    if best_bk is None:
+        return (None, None)
+    return (best_bk, best_price)
+
+
 def _build_game_buttons(
     tips: list[dict], event_id: str, user_id: int, source: str = "matches",
     user_tier: str = "diamond", edge_tier: str = "bronze", back_page: int = 0,
@@ -15655,7 +15684,26 @@ def _build_game_buttons(
         if best_ev_tip:
             odds_by_bk = best_ev_tip.get("odds_by_bookmaker", {})
             match_id = best_ev_tip.get("match_id", "")
-            best_bk = select_best_bookmaker(odds_by_bk, user_id, match_id) if odds_by_bk else {}
+
+            # REGFIX-04: Select bookmaker based on the RECOMMENDED outcome, not globally.
+            # Normalise display team name to positional key for nested-dict lookup.
+            _out_raw = (best_ev_tip.get("outcome") or "").lower()
+            _home_n = (best_ev_tip.get("home_team") or "").lower()
+            _away_n = (best_ev_tip.get("away_team") or "").lower()
+            if _out_raw in ("home", "1") or (_home_n and _out_raw == _home_n):
+                _outcome_key = "home"
+            elif _out_raw in ("away", "2") or (_away_n and _out_raw == _away_n):
+                _outcome_key = "away"
+            elif _out_raw == "draw":
+                _outcome_key = "draw"
+            else:
+                _outcome_key = _out_raw
+            _rec_bk_key, _ = _select_best_bookmaker_for_outcome(odds_by_bk, _outcome_key)
+            if _rec_bk_key:
+                best_bk = {"bookmaker_key": _rec_bk_key, "affiliate_url": ""}
+            else:
+                # Flat-format dict (already outcome-specific) — use existing selector.
+                best_bk = select_best_bookmaker(odds_by_bk, user_id, match_id) if odds_by_bk else {}
 
             # Use authoritative edge_tier for badge (W30-GATE)
             tier_emoji = EDGE_EMOJIS.get(edge_tier, "🥉")

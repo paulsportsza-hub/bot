@@ -31,6 +31,7 @@ _bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_bot_dir, ".env"))
 
 import anthropic
+from validators.sport_context import validate_sport_text  # REGFIX-03 wiring
 from evidence_pack import (
     _build_h2h_injection,
     build_evidence_pack,
@@ -1034,6 +1035,22 @@ async def _generate_one(
                     )
                     narrative = w82_baseline
                     narrative_source = "w82"
+
+    # REGFIX-03 WIRED: Validate Sonnet-generated (W84) narrative against sport's
+    # banned-term dictionary BEFORE it reaches narrative_cache.
+    # Failure mode 3 (cricket described as "African football") can only originate
+    # in the W84 AI path — W82 baseline is code-generated and contamination-free.
+    if narrative and narrative_source == "w84":
+        _sv_valid, _sv_banned = validate_sport_text(narrative, sport)
+        if not _sv_valid:
+            log.warning(
+                "SPORT VALIDATOR BLOCKED: %s narrative for %s contained banned terms %s"
+                " — falling back to W82 template",
+                sport, match_key, _sv_banned,
+            )
+            if w82_baseline:
+                narrative = w82_baseline
+                narrative_source = "w82"
 
     # 8. Build the full HTML message (simplified — no user-specific gating)
     from html import escape as h

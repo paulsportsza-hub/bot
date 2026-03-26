@@ -18,12 +18,21 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
 os.environ.setdefault("ADMIN_IDS", "123456")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-_BROADCAST_PATCH = patch("bot._get_broadcast_details", return_value={"broadcast": "", "kickoff": "Sat 10 Mar · 17:30"})
+_BROADCAST_PATCH = patch(
+    "bot._get_broadcast_details",
+    return_value={"broadcast": "", "kickoff": "Sat 10 Mar · 17:30"},
+)
 _PORTFOLIO_PATCH = patch("bot._get_portfolio_line", return_value="")
 _FOUNDING_PATCH = patch("bot._founding_days_left", return_value=8)
 
 
 def _make_tip(display_tier: str = "gold", **kw) -> dict:
+    edge_score = {
+        "diamond": 62,
+        "gold": 45,
+        "silver": 39,
+        "bronze": 20,
+    }.get(display_tier, 45)
     defaults = {
         "home_team": "Mamelodi Sundowns",
         "away_team": "Kaizer Chiefs",
@@ -40,6 +49,8 @@ def _make_tip(display_tier: str = "gold", **kw) -> dict:
         "commence_time": "2026-03-10T15:00:00Z",
         "bookmaker": "hollywoodbets",
         "odds_by_bookmaker": {"hollywoodbets": 2.10},
+        "edge_score": edge_score,
+        "edge_v2": {"confirming_signals": 2},
     }
     defaults.update(kw)
     return defaults
@@ -48,25 +59,29 @@ def _make_tip(display_tier: str = "gold", **kw) -> dict:
 class TestTierGateMatrix:
     """Exhaustive tier gate matrix — every combination returns expected level."""
 
-    @pytest.mark.parametrize("user_tier,edge_tier,expected", [
-        # Diamond sees everything
-        ("diamond", "diamond", "full"),
-        ("diamond", "gold", "full"),
-        ("diamond", "silver", "full"),
-        ("diamond", "bronze", "full"),
-        # Gold sees gold and below, diamond locked
-        ("gold", "diamond", "blurred"),
-        ("gold", "gold", "full"),
-        ("gold", "silver", "full"),
-        ("gold", "bronze", "full"),
-        # Bronze: complex gating
-        ("bronze", "diamond", "locked"),
-        ("bronze", "gold", "blurred"),
-        ("bronze", "silver", "partial"),
-        ("bronze", "bronze", "full"),
-    ])
+    @pytest.mark.parametrize(
+        "user_tier,edge_tier,expected",
+        [
+            # Diamond sees everything
+            ("diamond", "diamond", "full"),
+            ("diamond", "gold", "full"),
+            ("diamond", "silver", "full"),
+            ("diamond", "bronze", "full"),
+            # Gold sees gold and below, diamond locked
+            ("gold", "diamond", "blurred"),
+            ("gold", "gold", "full"),
+            ("gold", "silver", "full"),
+            ("gold", "bronze", "full"),
+            # Bronze: complex gating
+            ("bronze", "diamond", "locked"),
+            ("bronze", "gold", "blurred"),
+            ("bronze", "silver", "partial"),
+            ("bronze", "bronze", "full"),
+        ],
+    )
     def test_access_level(self, user_tier, edge_tier, expected):
         from tier_gate import get_edge_access_level
+
         assert get_edge_access_level(user_tier, edge_tier) == expected
 
 
@@ -78,6 +93,7 @@ class TestBronzeNeverSeesPaidData:
         tip = _make_tip("diamond", odds=1.85)
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             text, _ = _build_hot_tips_page([tip], page=0, user_tier="bronze")
         # The card should NOT contain odds value
         assert "1.85" not in text
@@ -88,26 +104,48 @@ class TestBronzeNeverSeesPaidData:
         tip = _make_tip("gold", odds=2.50)
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             text, _ = _build_hot_tips_page([tip], page=0, user_tier="bronze")
         # Blurred card shows return but not specific odds
         assert "@ 2.50" not in text
 
     def test_bronze_silver_sees_odds(self):
-        """Bronze viewing Silver edge: partial access = odds visible."""
+        """Bronze viewing Silver edge via detail CTA still gets a real bookmaker link."""
+        from bot import _build_game_buttons
+
         tip = _make_tip("silver", odds=3.20)
-        with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
-            from bot import _build_hot_tips_page
-            text, _ = _build_hot_tips_page([tip], page=0, user_tier="bronze")
-        # Partial access = odds visible (same as full)
-        assert "3.20" in text
+        rows = _build_game_buttons(
+            [tip],
+            event_id=tip["event_id"],
+            user_id=1,
+            source="edge_picks",
+            user_tier="bronze",
+            edge_tier="silver",
+            selected_outcome=tip["outcome"],
+        )
+        assert rows[0][0].text.startswith("🥈 Back Sundowns @ 3.20")
+        assert rows[0][0].url
 
     def test_bronze_multi_page_no_leak(self):
         """Bronze can paginate without seeing locked data."""
-        tips = [_make_tip(t, match_id=f"{t}_{i}_2026-03-10", odds=1.5 + i * 0.5)
-                for i, t in enumerate(["diamond", "gold", "silver", "bronze",
-                                       "diamond", "gold", "silver", "bronze"])]
+        tips = [
+            _make_tip(t, match_id=f"{t}_{i}_2026-03-10", odds=1.5 + i * 0.5)
+            for i, t in enumerate(
+                [
+                    "diamond",
+                    "gold",
+                    "silver",
+                    "bronze",
+                    "diamond",
+                    "gold",
+                    "silver",
+                    "bronze",
+                ]
+            )
+        ]
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             # Page 1
             text1, _ = _build_hot_tips_page(tips, page=0, user_tier="bronze")
             # Page 2
@@ -120,7 +158,7 @@ class TestBronzeNeverSeesPaidData:
                 if "Our highest-conviction pick" in line:
                     # This is a locked card — should not have odds nearby
                     idx = lines.index(line)
-                    block = "\n".join(lines[max(0, idx-2):idx+1])
+                    block = "\n".join(lines[max(0, idx - 2) : idx + 1])
                     # Must not contain "@ X.XX" pattern
                     odds_pattern = re.findall(r"@ \d+\.\d+", block)
                     assert not odds_pattern, (
@@ -134,6 +172,7 @@ class TestGateConsistency:
     def test_same_edge_same_gate(self):
         """get_edge_access_level is deterministic — calling twice gives same result."""
         from tier_gate import get_edge_access_level
+
         for user_tier in ("bronze", "gold", "diamond"):
             for edge_tier in ("diamond", "gold", "silver", "bronze"):
                 result1 = get_edge_access_level(user_tier, edge_tier)
@@ -143,18 +182,23 @@ class TestGateConsistency:
     def test_user_can_access_matches_full(self):
         """user_can_access_edge returns True iff access is 'full'."""
         from tier_gate import user_can_access_edge, get_edge_access_level
+
         for user_tier in ("bronze", "gold", "diamond"):
             for edge_tier in ("diamond", "gold", "silver", "bronze"):
                 can = user_can_access_edge(user_tier, edge_tier)
                 access = get_edge_access_level(user_tier, edge_tier)
                 if access == "full":
-                    assert can, f"{user_tier}/{edge_tier}: full access but can_access=False"
+                    assert can, (
+                        f"{user_tier}/{edge_tier}: full access but can_access=False"
+                    )
                 elif access == "partial":
                     # Bronze viewing silver: partial means odds visible but breakdown gated
                     # user_can_access_edge returns True for bronze/silver
                     pass  # Don't assert — partial is a special case
                 else:
-                    assert not can, f"{user_tier}/{edge_tier}: {access} but can_access=True"
+                    assert not can, (
+                        f"{user_tier}/{edge_tier}: {access} but can_access=True"
+                    )
 
 
 class TestBreakdownGating:
@@ -163,6 +207,7 @@ class TestBreakdownGating:
     def test_full_access_returns_full_narrative(self):
         """Diamond viewing any edge gets full narrative back."""
         from bot import _gate_breakdown_sections
+
         narrative = (
             "📋 <b>The Setup</b>\nArsenal are in fine form.\n\n"
             "🎯 <b>The Edge</b>\nValue on the draw.\n\n"
@@ -175,6 +220,7 @@ class TestBreakdownGating:
     def test_bronze_gold_edge_gated(self):
         """Bronze viewing Gold edge: Setup free, Edge/Risk/Verdict locked."""
         from bot import _gate_breakdown_sections
+
         narrative = (
             "📋 <b>The Setup</b>\nArsenal are in fine form.\n\n"
             "🎯 <b>The Edge</b>\nValue on the draw.\n\n"
@@ -197,26 +243,31 @@ class TestUpgradeMessages:
 
     def test_bronze_tip_limit(self):
         from tier_gate import get_upgrade_message
+
         msg = get_upgrade_message("bronze", context="tip")
         assert "3 free detail views" in msg
         assert "/subscribe" in msg
 
     def test_bronze_gold_edge(self):
         from tier_gate import get_upgrade_message
+
         msg = get_upgrade_message("bronze", context="gold_edge")
         assert "Gold Edge" in msg
 
     def test_bronze_diamond_edge(self):
         from tier_gate import get_upgrade_message
+
         msg = get_upgrade_message("bronze", context="diamond_edge")
         assert "Diamond Edge" in msg
 
     def test_gold_gets_diamond_upgrade(self):
         from tier_gate import get_upgrade_message
+
         msg = get_upgrade_message("gold", context="edge")
         assert "Diamond" in msg
 
     def test_diamond_no_upgrade(self):
         from tier_gate import get_upgrade_message
+
         msg = get_upgrade_message("diamond", context="edge")
         assert msg == ""  # Diamond sees everything

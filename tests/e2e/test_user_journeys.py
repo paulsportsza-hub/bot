@@ -7,9 +7,7 @@ All tests use controlled data (no live API/DB calls).
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("ODDS_API_KEY", "test-odds-key")
@@ -19,6 +17,12 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 
 def _make_tip(display_tier: str = "gold", **kw) -> dict:
+    edge_score = {
+        "diamond": 62,
+        "gold": 45,
+        "silver": 39,
+        "bronze": 20,
+    }.get(display_tier, 45)
     defaults = {
         "home_team": "Mamelodi Sundowns",
         "away_team": "Kaizer Chiefs",
@@ -35,6 +39,8 @@ def _make_tip(display_tier: str = "gold", **kw) -> dict:
         "commence_time": "2026-03-10T15:00:00Z",
         "bookmaker": "hollywoodbets",
         "odds_by_bookmaker": {"hollywoodbets": 2.10},
+        "edge_score": edge_score,
+        "edge_v2": {"confirming_signals": 2},
     }
     defaults.update(kw)
     return defaults
@@ -43,18 +49,45 @@ def _make_tip(display_tier: str = "gold", **kw) -> dict:
 def _multi_tier_tips() -> list[dict]:
     """Tips spanning all 4 tiers."""
     return [
-        _make_tip("diamond", home_team="Arsenal", away_team="Chelsea",
-                  match_id="ars_vs_che_2026-03-10", odds=1.85, ev=16.0),
-        _make_tip("gold", home_team="Bulls", away_team="Stormers",
-                  match_id="bul_vs_sto_2026-03-10", odds=1.65, ev=9.0),
-        _make_tip("silver", home_team="Liverpool", away_team="Spurs",
-                  match_id="liv_vs_spu_2026-03-10", odds=2.40, ev=5.0),
-        _make_tip("bronze", home_team="Pirates", away_team="Stellenbosch",
-                  match_id="pir_vs_ste_2026-03-10", odds=2.80, ev=1.5),
+        _make_tip(
+            "diamond",
+            home_team="Arsenal",
+            away_team="Chelsea",
+            match_id="ars_vs_che_2026-03-10",
+            odds=1.85,
+            ev=16.0,
+        ),
+        _make_tip(
+            "gold",
+            home_team="Bulls",
+            away_team="Stormers",
+            match_id="bul_vs_sto_2026-03-10",
+            odds=1.65,
+            ev=9.0,
+        ),
+        _make_tip(
+            "silver",
+            home_team="Liverpool",
+            away_team="Spurs",
+            match_id="liv_vs_spu_2026-03-10",
+            odds=2.40,
+            ev=5.0,
+        ),
+        _make_tip(
+            "bronze",
+            home_team="Pirates",
+            away_team="Stellenbosch",
+            match_id="pir_vs_ste_2026-03-10",
+            odds=2.80,
+            ev=1.5,
+        ),
     ]
 
 
-_BROADCAST_PATCH = patch("bot._get_broadcast_details", return_value={"broadcast": "", "kickoff": "Sat 10 Mar · 17:30"})
+_BROADCAST_PATCH = patch(
+    "bot._get_broadcast_details",
+    return_value={"broadcast": "", "kickoff": "Sat 10 Mar · 17:30"},
+)
 _PORTFOLIO_PATCH = patch("bot._get_portfolio_line", return_value="")
 _FOUNDING_PATCH = patch("bot._founding_days_left", return_value=8)
 
@@ -65,6 +98,7 @@ class TestBronzeJourney:
     def test_bronze_sees_locked_edges(self):
         """Bronze user sees 🔒 on Diamond edges."""
         from tier_gate import get_edge_access_level
+
         assert get_edge_access_level("bronze", "diamond") == "locked"
         assert get_edge_access_level("bronze", "gold") == "blurred"
 
@@ -73,8 +107,11 @@ class TestBronzeJourney:
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             text, markup = _build_hot_tips_page(
-                tips, page=0, user_tier="bronze",
+                tips,
+                page=0,
+                user_tier="bronze",
             )
         # Must have lock line for diamond edge
         assert "Our highest-conviction pick." in text
@@ -86,8 +123,11 @@ class TestBronzeJourney:
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             _, markup = _build_hot_tips_page(
-                tips, page=0, user_tier="bronze",
+                tips,
+                page=0,
+                user_tier="bronze",
             )
         callbacks = [
             btn.callback_data
@@ -97,16 +137,19 @@ class TestBronzeJourney:
         ]
         # W84-P0: locked/blurred edges route to hot:upgrade:{page} (page-encoded since W84-HT2)
         assert any(cb.startswith("hot:upgrade") for cb in callbacks)
-        # Accessible (silver/bronze) edges still route to edge:detail
-        assert any(cb.startswith("edge:detail:") for cb in callbacks)
+        # Gold/Diamond remain visible; sub-threshold Silver/Bronze do not appear in the list
+        assert not any(cb.startswith("edge:detail:") for cb in callbacks)
 
     def test_bronze_never_sees_diamond_odds(self):
         """Bronze Hot Tips text never reveals diamond edge odds."""
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             text, _ = _build_hot_tips_page(
-                tips, page=0, user_tier="bronze",
+                tips,
+                page=0,
+                user_tier="bronze",
             )
         # Diamond tip (Arsenal vs Chelsea, odds=1.85) should NOT show odds
         # The locked card should show "Our highest-conviction pick." not "@ 1.85"
@@ -115,12 +158,15 @@ class TestBronzeJourney:
             if "Arsenal" in line or "Chelsea" in line:
                 # Find the card block for this edge
                 idx = lines.index(line)
-                card_block = "\n".join(lines[idx:idx+4])
-                assert "1.85" not in card_block, f"Diamond odds leaked to bronze: {card_block}"
+                card_block = "\n".join(lines[idx : idx + 4])
+                assert "1.85" not in card_block, (
+                    f"Diamond odds leaked to bronze: {card_block}"
+                )
 
     def test_bronze_upgrade_message(self):
         """Bronze locked detail shows plan comparison."""
         from tier_gate import get_upgrade_message
+
         msg = get_upgrade_message("bronze", context="diamond_edge")
         assert "Diamond" in msg
         assert "/subscribe" in msg
@@ -132,6 +178,7 @@ class TestGoldJourney:
     def test_gold_sees_gold_odds(self):
         """Gold user can see Gold edge odds (full access)."""
         from tier_gate import get_edge_access_level
+
         assert get_edge_access_level("gold", "gold") == "full"
         assert get_edge_access_level("gold", "silver") == "full"
         assert get_edge_access_level("gold", "bronze") == "full"
@@ -139,6 +186,7 @@ class TestGoldJourney:
     def test_gold_diamond_blurred(self):
         """Gold user sees Diamond edges as blurred."""
         from tier_gate import get_edge_access_level
+
         assert get_edge_access_level("gold", "diamond") == "blurred"
 
     def test_gold_tips_page(self):
@@ -146,8 +194,11 @@ class TestGoldJourney:
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             text, markup = _build_hot_tips_page(
-                tips, page=0, user_tier="gold",
+                tips,
+                page=0,
+                user_tier="gold",
             )
         # Gold edge (Bulls vs Stormers) should show odds
         assert "1.65" in text
@@ -162,8 +213,11 @@ class TestGoldJourney:
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             _, markup = _build_hot_tips_page(
-                tips, page=0, user_tier="gold",
+                tips,
+                page=0,
+                user_tier="gold",
             )
         callbacks = [
             btn.callback_data
@@ -171,9 +225,9 @@ class TestGoldJourney:
             for btn in row
             if btn.callback_data
         ]
-        # Gold/Silver/Bronze edges should use edge:detail
+        # Only the Gold edge clears the current list threshold and stays directly accessible
         detail_callbacks = [cb for cb in callbacks if cb.startswith("edge:detail:")]
-        assert len(detail_callbacks) >= 3  # Gold + Silver + Bronze
+        assert len(detail_callbacks) == 1
 
 
 class TestDiamondJourney:
@@ -182,6 +236,7 @@ class TestDiamondJourney:
     def test_diamond_full_access_all_tiers(self):
         """Diamond has full access to every edge tier."""
         from tier_gate import get_edge_access_level
+
         for tier in ("diamond", "gold", "silver", "bronze"):
             assert get_edge_access_level("diamond", tier) == "full"
 
@@ -190,8 +245,11 @@ class TestDiamondJourney:
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             text, markup = _build_hot_tips_page(
-                tips, page=0, user_tier="diamond",
+                tips,
+                page=0,
+                user_tier="diamond",
             )
         assert "🔒" not in text
         assert "Our highest-conviction pick." not in text
@@ -201,8 +259,11 @@ class TestDiamondJourney:
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             text, markup = _build_hot_tips_page(
-                tips, page=0, user_tier="diamond",
+                tips,
+                page=0,
+                user_tier="diamond",
             )
         assert "/subscribe" not in text
         assert "━━━" not in text
@@ -213,29 +274,41 @@ class TestDiamondJourney:
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             _, markup = _build_hot_tips_page(
-                tips, page=0, user_tier="diamond",
+                tips,
+                page=0,
+                user_tier="diamond",
             )
         edge_buttons = [
             btn.callback_data
             for row in markup.inline_keyboard
             for btn in row
-            if btn.callback_data and (btn.callback_data.startswith("edge:") or btn.callback_data == "sub:plans")
+            if btn.callback_data
+            and (
+                btn.callback_data.startswith("edge:")
+                or btn.callback_data == "sub:plans"
+            )
         ]
         # All should be edge:detail, none should be sub:plans
         for cb in edge_buttons:
-            assert cb.startswith("edge:detail:"), f"Diamond button goes to {cb}, not edge:detail"
+            assert cb.startswith("edge:detail:"), (
+                f"Diamond button goes to {cb}, not edge:detail"
+            )
 
     def test_diamond_sees_all_odds(self):
         """Diamond sees odds on every card."""
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
+
             text, _ = _build_hot_tips_page(
-                tips, page=0, user_tier="diamond",
+                tips,
+                page=0,
+                user_tier="diamond",
             )
-        # All tips should show odds values
+        # Only Diamond and Gold edges clear the current Hot Tips threshold.
         assert "1.85" in text  # Diamond edge
         assert "1.65" in text  # Gold edge
-        assert "2.40" in text  # Silver edge
-        assert "2.80" in text  # Bronze edge
+        assert "2.40" not in text
+        assert "2.80" not in text
