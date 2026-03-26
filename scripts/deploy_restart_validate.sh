@@ -67,6 +67,12 @@ echo "=== STEP 7: Write ledger entry ==="
 entry="$(date -Is) PASS old=$old_pid new=$new_pid sha=$new_sha"
 echo "$entry" | tee -a "$LEDGER"
 
+# Step 8: Post deploy entry to Notion Release Ledger (non-blocking)
+echo ""
+echo "=== STEP 8: Notion Release Ledger ==="
+WAVE_ID="${WAVE_ID:-}"
+$BOT_DIR/.venv/bin/python "$BOT_DIR/scripts/notify_notion_deploy.py" "PASS" "$WAVE_ID" || echo "WARN: Notion ledger write failed (non-blocking)"
+
 echo ""
 echo "========================================"
 echo "  DEPLOY SUCCEEDED"
