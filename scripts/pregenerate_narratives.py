@@ -369,7 +369,46 @@ async def _get_match_context(
     home_key: str = "",
     away_key: str = "",
 ) -> dict:
-    """Fetch ESPN match context for a match with one pregenerate-only thin-context retry."""
+    """Fetch match context: API-Football primary (soccer), ESPN fallback.
+
+    CLEAN-DATA-v2: Uses sport-specific fetchers as primary data source.
+    Falls back to ESPN when fetcher unavailable or returns thin context.
+    """
+    # ── Primary: Sport-specific fetcher (API-Football for soccer) ─────
+    if sport in ("soccer", "football"):
+        try:
+            from fetchers import get_fetcher
+            from fetchers.base_fetcher import ensure_schema
+
+            fetcher = get_fetcher("soccer")
+            live_safe, scraper_pid = _pregen_enrichment_live_safe()
+            if live_safe:
+                log.info(
+                    "Scraper writer lock active (PID %s) — read-only enrichment for %s vs %s",
+                    scraper_pid, home, away,
+                )
+
+            # Build match_key for cache lookup
+            h_key = _canonical_context_team_key(home_key or home) or home.lower().replace(" ", "_")
+            a_key = _canonical_context_team_key(away_key or away) or away.lower().replace(" ", "_")
+            match_key = f"{h_key}_vs_{a_key}"
+
+            ctx = await fetcher.fetch_and_cache(
+                match_key=match_key,
+                home_team=h_key,
+                away_team=a_key,
+                league=league,
+                sport="soccer",
+                live_safe=live_safe,
+            )
+            if ctx and not _needs_pregen_context_lift(ctx):
+                log.info("API-Football context hit for %s vs %s", home, away)
+                return ctx
+            log.info("API-Football context thin for %s vs %s — trying ESPN fallback", home, away)
+        except Exception as exc:
+            log.warning("Fetcher failed for %s vs %s: %s — falling back to ESPN", home, away, exc)
+
+    # ── Fallback: ESPN (all sports) ───────────────────────────────────
     try:
         from scrapers.match_context_fetcher import get_match_context
 

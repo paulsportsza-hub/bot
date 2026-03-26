@@ -171,6 +171,8 @@ async def test_get_match_context_uses_readonly_mode_while_scraper_lock_active(mo
         }
 
     monkeypatch.setattr(pregen, "_pregen_enrichment_live_safe", lambda: (True, 4242))
+    # Disable API-Football fetcher so ESPN fallback path is exercised
+    monkeypatch.setitem(sys.modules, "fetchers", None)
     fake_module = ModuleType("scrapers.match_context_fetcher")
     fake_module.get_match_context = _fake_get_match_context
     monkeypatch.setitem(sys.modules, "scrapers.match_context_fetcher", fake_module)
@@ -195,6 +197,8 @@ async def test_get_match_context_preserves_write_capable_mode_when_unlocked(monk
         }
 
     monkeypatch.setattr(pregen, "_pregen_enrichment_live_safe", lambda: (False, None))
+    # Disable API-Football fetcher so ESPN fallback path is exercised
+    monkeypatch.setitem(sys.modules, "fetchers", None)
     fake_module = ModuleType("scrapers.match_context_fetcher")
     fake_module.get_match_context = _fake_get_match_context
     monkeypatch.setitem(sys.modules, "scrapers.match_context_fetcher", fake_module)
