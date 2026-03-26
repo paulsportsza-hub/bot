@@ -1903,12 +1903,21 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         await asyncio.to_thread(_write)
                     asyncio.create_task(_record_view_bg())
 
+                # D-ADD-5 / RENDER-FIX6: Reconcile _detail_tier BEFORE button build so that
+                # buttons and gating always use the same tier value.
+                _detail_tier = _cached_content["edge_tier"]
+                if _aligned_tips:
+                    _detail_tier = _aligned_tips[0].get(
+                        "display_tier",
+                        _aligned_tips[0].get("edge_rating", _detail_tier),
+                    )
+
                 # Serve from cache IMMEDIATELY
                 _game_tips_cache[match_key] = _aligned_tips
                 _btns = _build_game_buttons(
                     _aligned_tips, match_key, user_id,
                     source="edge_picks", user_tier=_user_tier,
-                    edge_tier=_cached_content["edge_tier"],
+                    edge_tier=_detail_tier,
                     back_page=_resolve_hot_tips_back_page(user_id, match_key),
                 )
                 _c_base_html = _cached_content["html"]
@@ -1928,6 +1937,27 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         user_id,
                         seed_tip=_aligned_tips[0],
                     )
+                    # RENDER-FIX7: Header fallback when snapshot is cleared (e.g., after bot restart)
+                    if not _ct_header.get("kickoff"):
+                        try:
+                            _f7_bc = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    _get_broadcast_details,
+                                    _ct_header.get("home", ""),
+                                    _ct_header.get("away", ""),
+                                ),
+                                timeout=2.0,
+                            )
+                            if _f7_bc.get("kickoff"):
+                                _ct_header = {**_ct_header, "kickoff": _f7_bc["kickoff"]}
+                            if not _ct_header.get("broadcast") and _f7_bc.get("broadcast"):
+                                _ct_header = {**_ct_header, "broadcast": _f7_bc["broadcast"]}
+                        except Exception:
+                            pass
+                        if not _ct_header.get("kickoff") and match_key:
+                            _f7_dm = re.search(r'(\d{4}-\d{2}-\d{2})', match_key)
+                            if _f7_dm:
+                                _ct_header = {**_ct_header, "kickoff": _f7_dm.group(1)}
                     if _ct_header["home"] and _ct_header["away"]:
                         _c_base_html = _inject_narrative_header(
                             _c_base_html,
@@ -1943,12 +1973,6 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     user_id=user_id,
                 )
                 _proof = await _get_hot_tips_result_proof()
-                _detail_tier = _cached_content["edge_tier"]
-                if _aligned_tips:
-                    _detail_tier = _aligned_tips[0].get(
-                        "display_tier",
-                        _aligned_tips[0].get("edge_rating", _detail_tier),
-                    )
                 from tier_gate import get_edge_access_level as _cached_signal_access
                 # R11-BUILD-01 Fix B: Tier-gate cached AI-enriched narratives.
                 # Without this, Bronze users hitting a cached Gold/Diamond card see
@@ -2049,6 +2073,27 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _instant_tips = _apply_hot_tip_model_state(_instant_tips, _detail_model_state)
                 _it0 = _instant_tips[0]
                 _it_header = await _resolve_hot_tip_header(match_key, user_id, seed_tip=_it0)
+                # RENDER-FIX7: Header fallback when snapshot is cleared (e.g., after bot restart)
+                if not _it_header.get("kickoff"):
+                    try:
+                        _f7_bc = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                _get_broadcast_details,
+                                _it_header.get("home", ""),
+                                _it_header.get("away", ""),
+                            ),
+                            timeout=2.0,
+                        )
+                        if _f7_bc.get("kickoff"):
+                            _it_header = {**_it_header, "kickoff": _f7_bc["kickoff"]}
+                        if not _it_header.get("broadcast") and _f7_bc.get("broadcast"):
+                            _it_header = {**_it_header, "broadcast": _f7_bc["broadcast"]}
+                    except Exception:
+                        pass
+                    if not _it_header.get("kickoff") and match_key:
+                        _f7_dm = re.search(r'(\d{4}-\d{2}-\d{2})', match_key)
+                        if _f7_dm:
+                            _it_header = {**_it_header, "kickoff": _f7_dm.group(1)}
                 _ih = _it_header["home"]
                 _ia = _it_header["away"]
                 _isport = _it0.get("sport_key", "soccer")
@@ -6894,7 +6939,8 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         _today = _date_cls.today().isoformat()
         rows = _conn.execute("""
             SELECT e.match_key, e.edge_tier, e.composite_score, e.bet_type,
-                   e.recommended_odds, e.bookmaker, e.predicted_ev, e.league, e.match_date
+                   e.recommended_odds, e.bookmaker, e.predicted_ev, e.league, e.match_date,
+                   e.confirming_signals
             FROM edge_results e
             WHERE e.match_date >= ? AND e.result IS NULL
               AND NOT EXISTS (
@@ -6937,7 +6983,12 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         # Fallback to assign_tier() only when DB tier is null (legacy rows).
         _composite = float(row["composite_score"] or 0)
         _ev_for_tier = float(row["predicted_ev"] or 0)
-        _confirming_est = 3 if _composite >= 70 else (2 if _composite >= 55 else (1 if _composite >= 35 else 0))
+        _confirming_actual = row.get("confirming_signals")
+        if _confirming_actual is not None:
+            _confirming_est = int(_confirming_actual)
+        else:
+            # Legacy fallback for rows logged before RENDER-FIX3 migration
+            _confirming_est = 3 if _composite >= 70 else (2 if _composite >= 55 else (1 if _composite >= 35 else 0))
         _db_tier = (row.get("edge_tier") or "").strip().lower()
         if _db_tier in ("diamond", "gold", "silver", "bronze"):
             edge_tier = _db_tier
@@ -7585,18 +7636,16 @@ def _build_hot_tips_page(
         lines.extend(yesterday_lines)
         lines.append("")
 
-    # R15-BUILD-02: Derive display_tier from composite_score thresholds
-    # instead of trusting DB's edge_tier which may be stale.
+    # RENDER-FIX1: Use V2 assign_tier() with triple gate (composite + edge_pct + confirming)
+    # Replaces R15-BUILD-02 composite-only override — a tip with high composite but
+    # low edge_pct or zero confirming_signals must not show as Diamond.
+    from scrapers.edge.tier_engine import assign_tier as _assign_tier
     for tip in page_tips:
         _cs = tip.get("edge_score", 0) or 0
-        if _cs >= 52:
-            tip["display_tier"] = "diamond"
-        elif _cs >= 40:
-            tip["display_tier"] = "gold"
-        elif _cs >= 38:
-            tip["display_tier"] = "silver"
-        elif _cs >= 15:
-            tip["display_tier"] = "bronze"
+        _ev = tip.get("ev", 0) or 0
+        _conf = (tip.get("edge_v2") or {}).get("confirming_signals", 0) or 0
+        _assigned = _assign_tier(_cs, _ev, _conf, red_flags=[])
+        tip["display_tier"] = _assigned or "bronze"
 
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
@@ -11349,18 +11398,7 @@ def build_verified_narrative(
             elif not is_home and team.get("away_record"):
                 setup.append(f"On the road, their record reads {team['away_record']}.")
 
-        # H2H
-        h2h = ctx_data.get("head_to_head") or []
-        if h2h:
-            latest = h2h[0]
-            h_score = latest.get("score", "?")
-            h_home = latest.get("home", "?")
-            h_away = latest.get("away", "?")
-            h_date = latest.get("date", "?")
-            setup.append(
-                f"In their last {len(h2h)} meetings, the most recent was "
-                f"{h_home} {h_score} {h_away} ({h_date})."
-            )
+        # H2H rendered solely by NarrativeSpec._render_setup() — not added here (RENDER-FIX4)
 
         # Venue
         venue = ctx_data.get("venue")
@@ -12209,12 +12247,7 @@ def _build_setup_section_v2(ctx_data: dict, tips: list[dict] | None = None,
     paragraphs.append(_build_home_para(d))
     paragraphs.append(_build_away_para(d))
 
-    h2h_para = _h2h_hook(h2h_count, h2h_away_wins, h2h_latest, home_name, away_name)
-    # R9-BUILD-03: Skip if narrative already contains H2H content (Path 1 via _h2h_bridge).
-    _assembled = "\n\n".join(p for p in paragraphs if p)
-    _h2h_already = bool(re.search(r"head to head:|meetings:|h2h", _assembled, re.IGNORECASE))
-    if h2h_para and not _h2h_already:
-        paragraphs.append(h2h_para)
+    # H2H rendered solely by NarrativeSpec._render_setup() — do not add here (RENDER-FIX4)
 
     return "\n\n".join(p for p in paragraphs if p)
 
@@ -15214,9 +15247,28 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         if narrative.strip() == "NO_DATA":
             narrative = ""
 
+    # RENDER-FIX2: Snapshot check — hot tips cache is authoritative for list↔detail consistency
+    _snapshot_ev = None
+    _snapshot_tier = None
+    _htc_snap = _hot_tips_cache.get("global")
+    if _htc_snap and _htc_snap.get("tips"):
+        _ht_raw = home_raw.lower().strip()
+        _at_raw = away_raw.lower().strip()
+        for _ht_tip in _htc_snap["tips"]:
+            _ht_h = (_ht_tip.get("home_team") or "").lower().strip()
+            _ht_a = (_ht_tip.get("away_team") or "").lower().strip()
+            if _ht_h == _ht_raw and _ht_a == _at_raw:
+                _snapshot_ev = _ht_tip.get("ev")
+                _snapshot_tier = _ht_tip.get("display_tier")
+                break
+
     # ── Apply EV cap guardrails to each tip before display ──
     if tips:
         for _tip in tips:
+            if _snapshot_ev is not None and _snapshot_tier is not None:
+                # RENDER-FIX2: Use snapshot EV — skip guardrails for list↔detail consistency
+                _tip["ev"] = _snapshot_ev
+                continue
             _tip_ev = _tip["ev"]
             if _tip_ev <= 0:
                 continue
@@ -15236,17 +15288,18 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _tip["ev"] = 0.0
 
     # ── Determine authoritative tier from hot tips cache (same source as list view) ──
-    _cached_display_tier = None
-    _htc = _hot_tips_cache.get("global")
-    if _htc and _htc.get("tips"):
-        _ht_raw = home_raw.lower().strip()
-        _at_raw = away_raw.lower().strip()
-        for _ht_tip in _htc["tips"]:
-            _ht_h = (_ht_tip.get("home_team") or "").lower().strip()
-            _ht_a = (_ht_tip.get("away_team") or "").lower().strip()
-            if _ht_h == _ht_raw and _ht_a == _at_raw:
-                _cached_display_tier = _ht_tip.get("display_tier")
-                break
+    _cached_display_tier = _snapshot_tier  # RENDER-FIX2: snapshot tier wins when available
+    if _cached_display_tier is None:
+        _htc = _hot_tips_cache.get("global")
+        if _htc and _htc.get("tips"):
+            _ht_raw = home_raw.lower().strip()
+            _at_raw = away_raw.lower().strip()
+            for _ht_tip in _htc["tips"]:
+                _ht_h = (_ht_tip.get("home_team") or "").lower().strip()
+                _ht_a = (_ht_tip.get("away_team") or "").lower().strip()
+                if _ht_h == _ht_raw and _ht_a == _at_raw:
+                    _cached_display_tier = _ht_tip.get("display_tier")
+                    break
 
     # ── Inject Edge Rating badge into Verdict header ──
     # W75-FIX: edge_v2 tier is authoritative — no EV-threshold fallback
@@ -15955,6 +16008,27 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         _ld_kickoff = _bc.get("kickoff", "") or _format_kickoff_display(tip.get("commence_time", ""))
         _ld_broadcast = _bc.get("broadcast", "")
         _ld_league = tip.get("league", "")
+        # RENDER-FIX7: Header fallback when snapshot is cleared (e.g., after bot restart)
+        if not _ld_kickoff:
+            try:
+                _f7_bc = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _get_broadcast_details,
+                        tip.get("home_team", ""),
+                        tip.get("away_team", ""),
+                    ),
+                    timeout=2.0,
+                )
+                if _f7_bc.get("kickoff"):
+                    _ld_kickoff = _f7_bc["kickoff"]
+                if not _ld_broadcast and _f7_bc.get("broadcast"):
+                    _ld_broadcast = _f7_bc["broadcast"]
+            except Exception:
+                pass
+            if not _ld_kickoff and match_key:
+                _f7_dm = re.search(r'(\d{4}-\d{2}-\d{2})', match_key)
+                if _f7_dm:
+                    _ld_kickoff = _f7_dm.group(1)
 
         _ld_text = f"🔒 <b>{_tier_name} Edge — Locked</b>\n\n"
         _ld_text += f"{_sport_emoji} <b>{_ld_home} vs {_ld_away}</b>\n"

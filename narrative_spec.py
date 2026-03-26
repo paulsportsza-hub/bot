@@ -282,8 +282,10 @@ def _build_risk_factors(
     if stale >= 360:
         factors.append(f"Stale price — hasn't updated in {stale // 60}h, could shift before kickoff.")
     if confirming == 0:
-        _seed = edge_data.get("home_team", "") + edge_data.get("away_team", "")
-        _v = _pick(_seed, 3)
+        _v = _pick(
+            f"{edge_data.get('match_key', '')}{edge_data.get('outcome', '')}{sport}",
+            3,
+        )
         _zero_confirm = [
             # 0 — What model-only risk actually means
             "No form, movement, or tipster consensus backs this up. The model's probability estimate works from the typical baseline for this fixture type — not from any current team intelligence.",
@@ -300,9 +302,11 @@ def _build_risk_factors(
     if outcome == "away" and confirming < 3:
         factors.append("Away side faces home crowd disadvantage — factor that in.")
     if not factors:
-        # W84-Q9: Replace clinical "Standard match variance applies." with 3 human variants
-        _seed = edge_data.get("home_team", "") + edge_data.get("away_team", "")
-        _v = _pick(_seed, 3)
+        # W84-Q9 / RENDER-FIX5: high-entropy seed (match_key + outcome + sport) for diversity
+        _v = _pick(
+            f"{edge_data.get('match_key', '')}{edge_data.get('outcome', '')}{sport}",
+            3,
+        )
         _default_factors = [
             "No specific flags on this one — clean risk profile on paper.",
             "Nothing obvious stands against this. The usual match-day variables apply.",
