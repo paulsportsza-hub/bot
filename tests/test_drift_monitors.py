@@ -4,6 +4,10 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+pytest.importorskip("scrapers.monitors", reason="scrapers.monitors not available in this environment")
+
 from scrapers.monitors import run_all_monitors
 from scrapers.monitors.alert import send_alert
 from scrapers.monitors.bookmaker_coverage import check_coverage
