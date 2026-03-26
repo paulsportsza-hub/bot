@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 
-BOT_PATH = Path("/home/paulsportsza/bot/bot.py")
+BOT_PATH = Path(__file__).resolve().parents[2] / "bot.py"
 
 
 def _function_node(name: str) -> ast.FunctionDef:
