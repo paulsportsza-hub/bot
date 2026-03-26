@@ -1943,6 +1943,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     back_page=_resolve_hot_tips_back_page(user_id, match_key),
                 )
                 _c_base_html = _cached_content["html"]
+                # BYPASS-FIX-B: Deduplicate stale cached H2H paragraphs and keep the newest bridge copy.
+                _h2h_blocks = list(re.finditer(
+                    r'(?:Head to head|Their last meeting|History (?:is|favours))[^<\n]+(?:\.|<br\s*/?>)',
+                    _c_base_html,
+                    flags=re.IGNORECASE,
+                ))
+                if len(_h2h_blocks) >= 2:
+                    for _h2h_match in reversed(_h2h_blocks[:-1]):
+                        _c_base_html = _c_base_html[:_h2h_match.start()] + _c_base_html[_h2h_match.end():]
                 # R15-BUILD-01: Reconcile narrative EV to match list (edge_results) EV.
                 # Pregenerated narratives recalculate EV from current odds, causing
                 # detail to show higher EV than list. Snapshot EV is authoritative.
