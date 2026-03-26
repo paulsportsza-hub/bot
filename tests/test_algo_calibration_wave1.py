@@ -40,8 +40,9 @@ def _create_edge_results_db(path: str) -> None:
     conn.executemany("""
         INSERT INTO edge_results
         (edge_id, match_key, sport, league, edge_tier, composite_score, bet_type,
-         recommended_odds, bookmaker, predicted_ev, result, recommended_at, match_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         recommended_odds, bookmaker, predicted_ev, result, recommended_at, match_date,
+         confirming_signals)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [
         (
             "edge_old_home",
@@ -57,6 +58,7 @@ def _create_edge_results_db(path: str) -> None:
             None,
             "2026-03-13T08:00:00+00:00",
             _FUTURE_DATE,
+            1,
         ),
         (
             "edge_new_away",
@@ -72,6 +74,7 @@ def _create_edge_results_db(path: str) -> None:
             None,
             "2026-03-13T12:00:00+00:00",
             _FUTURE_DATE,
+            1,
         ),
         (
             "edge_high_ev",
@@ -87,6 +90,7 @@ def _create_edge_results_db(path: str) -> None:
             None,
             "2026-03-13T12:00:00+00:00",
             _FUTURE_DATE,
+            None,
         ),
         (
             "edge_high_odds",
@@ -102,6 +106,7 @@ def _create_edge_results_db(path: str) -> None:
             None,
             "2026-03-13T12:00:00+00:00",
             _FUTURE_DATE,
+            None,
         ),
         (
             "edge_valid_other",
@@ -117,6 +122,7 @@ def _create_edge_results_db(path: str) -> None:
             None,
             "2026-03-13T12:00:00+00:00",
             _FUTURE_DATE,
+            1,
         ),
     ])
     conn.commit()

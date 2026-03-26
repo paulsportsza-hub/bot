@@ -459,6 +459,7 @@ class TestHotTipsModelOnlyIntegrity:
             "sport_key": "soccer_epl",
             "display_tier": "gold",
             "edge_rating": "gold",
+            "edge_score": 60,
             "outcome": "Arsenal",
             "odds": 2.15,
             "ev": 6.4,
@@ -473,7 +474,7 @@ class TestHotTipsModelOnlyIntegrity:
             },
         }
 
-        text, _ = bot._build_hot_tips_page([tip], user_id=123)
+        text, _ = bot._build_hot_tips_page([tip], user_id=config.ADMIN_IDS[0])
 
         assert "[MODEL ONLY]" in text
         assert tip["_ht_model_only"] is True
