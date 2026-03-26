@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# run_drift_monitors.sh — Run all drift monitors and alert Telegram admin channel on breaches.
+# run_drift_monitors.sh — Run all drift monitors and alert EdgeOps private group on breaches.
 # Monitors: null_rate, bookmaker_coverage, join_health, odds_freshness
-# Alerts sent to: @MzansiEdgeAlerts (chat_id: -1003789410835)
+# Alerts sent to: EdgeOps private group (chat_id: -1003877525865)
 
 set -uo pipefail
 
@@ -9,7 +9,7 @@ cd /home/paulsportsza/bot
 
 # Alert-specific bot token (separate from main @mzansiedge_bot)
 export TELEGRAM_BOT_TOKEN="8635022348:AAEMK4mAXp6OY4V1arZgekCnGQn42Qs2meg"
-export TELEGRAM_ALERT_CHAT_ID="-1003789410835"
+export TELEGRAM_ALERT_CHAT_ID="-1003877525865"
 export DB_PATH="/home/paulsportsza/scrapers/odds.db"
 
 echo "[$(date -Iseconds)] drift-monitors: starting"

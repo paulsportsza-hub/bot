@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import sqlite3
 import sys
 from pathlib import Path
@@ -9,10 +10,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-sys.path.insert(0, "/home/paulsportsza/bot")
-sys.path.insert(0, "/home/paulsportsza")
-sys.path.insert(0, "/home/paulsportsza/scrapers")
-os.chdir("/home/paulsportsza/bot")
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_REPO_ROOT.parent))
+sys.path.insert(0, str(_REPO_ROOT.parent / "scrapers"))
+os.chdir(str(_REPO_ROOT))
 
 import scripts.pregenerate_narratives as pregen
 

@@ -9,7 +9,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-ALERT_CHAT_ID = os.environ.get("TELEGRAM_ALERT_CHAT_ID", "-1003789410835")
+ALERT_CHAT_ID = os.environ.get("TELEGRAM_ALERT_CHAT_ID", "-1003877525865")
 ALERT_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 

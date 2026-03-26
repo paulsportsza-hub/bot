@@ -7575,7 +7575,8 @@ def _build_hot_tips_page(
             lines.append(fallback_track_record_line)
 
     # Third header line: live edge count (Wave 27-UX replaces streak badge)
-    lines.append(f"<b>✅ {total} Live Edge{"s" if total != 1 else ""} Found</b>")
+    _edge_s = "s" if total != 1 else ""
+    lines.append(f"<b>✅ {total} Live Edge{_edge_s} Found</b>")
 
     lines.append("")
 
