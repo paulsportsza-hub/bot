@@ -6296,6 +6296,7 @@ def _get_broadcast_details(
 
 
 def _get_edge_result_match_date(match_key: str = "") -> str:
+    # BYPASS-FIX-C: Final header fallback pulls match_date from edge_results.
     """Return edge_results.match_date for a match when header fallbacks exhaust."""
     if not match_key:
         return ""
