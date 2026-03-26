@@ -33,6 +33,7 @@ def _create_edge_results_db(path: str) -> None:
             recommended_at DATETIME NOT NULL,
             settled_at DATETIME,
             match_date DATE NOT NULL,
+            confirming_signals INTEGER,
             UNIQUE(match_key, bet_type)
         );
     """)

@@ -1708,9 +1708,160 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
     elif prefix == "edge":
         user_id = query.from_user.id
         if action.startswith("detail:"):
+            # ── CLEAN-RENDER-v2: Single renderer path ──────────────────
             match_key = _resolve_cb_key(action.split(":", 1)[1])
             _sentry_user(user_id)
             _sentry_tags(flow="edge_detail", route="edge:detail", match_id=match_key)
+
+            from edge_detail_renderer import render_edge_detail
+
+            _user_tier = await get_effective_tier(user_id)
+
+            # Tier limit check (existing pattern, in thread per RUNTIME-R2)
+            def _cr_check_limit():
+                try:
+                    from db_connection import get_connection as _gc
+                    from tier_gate import check_tip_limit as _cl
+                    oc = _gc()
+                    try:
+                        can_v, _ = _cl(user_id, _user_tier, oc)
+                        return can_v
+                    finally:
+                        oc.close()
+                except Exception as _ge:
+                    log.warning("Edge detail tier check failed: %s", _ge)
+                    return True
+
+            try:
+                _can_view = await asyncio.to_thread(_cr_check_limit)
+            except Exception:
+                _can_view = True
+
+            if not _can_view:
+                _limit_summary = await _get_edge_tracker_summary(7)
+                await query.edit_message_text(
+                    get_upgrade_message(
+                        _user_tier,
+                        context="tip",
+                        proof_line=_format_edge_tracker_record_line(_limit_summary),
+                    ),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                        user_id,
+                        match_key=match_key,
+                        primary_button=InlineKeyboardButton(
+                            "📋 View Plans", callback_data="sub:plans",
+                        ),
+                    )),
+                )
+                return
+
+            # CLEAN-RUGBY: resolve tip data for V1 fallback before render
+            _tip_for_v1 = next(
+                (t for t in _ht_tips_snapshot.get(user_id, [])
+                 if _tip_matches_hot_key(t, match_key)),
+                None,
+            )
+            if not _tip_for_v1:
+                _fb_tips = _game_tips_cache.get(match_key)
+                if _fb_tips:
+                    _tip_for_v1 = (
+                        _fb_tips[0] if isinstance(_fb_tips, list) else _fb_tips
+                    )
+
+            # Render in thread (sync SQLite per RUNTIME-R2)
+            try:
+                html = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        render_edge_detail, match_key, _user_tier,
+                        tip_data=_tip_for_v1,
+                    ),
+                    timeout=3.0,
+                )
+            except Exception as _cr_err:
+                log.warning("edge_detail_renderer failed for %s: %s", match_key, _cr_err)
+                _mk_display = match_key.replace("_vs_", " vs ").replace("_", " ").title()
+                html = (
+                    f"🎯 <b>{h(_mk_display)}</b>\n\n"
+                    "⚙️ Loading — tap again in a moment."
+                )
+
+            # Get tip data for buttons (handler-level concern, not renderer)
+            _cr_snap = next(
+                (t for t in _ht_tips_snapshot.get(user_id, [])
+                 if _tip_matches_hot_key(t, match_key)),
+                None,
+            )
+            if _cr_snap:
+                _cr_tips = [_cr_snap]
+            else:
+                _cr_tips = _game_tips_cache.get(match_key)
+                if not _cr_tips:
+                    try:
+                        _seed = await asyncio.to_thread(
+                            _load_tips_from_edge_results, 50,
+                        )
+                        _cr_tips = [
+                            t for t in (_seed or [])
+                            if t.get("match_id") == match_key
+                        ][:1]
+                        if _cr_tips and _seed:
+                            _ht_tips_snapshot[user_id] = list(_seed)
+                    except Exception:
+                        _cr_tips = []
+
+            _cr_tier = "bronze"
+            if _cr_tips:
+                _cr_tier = _cr_tips[0].get(
+                    "display_tier", _cr_tips[0].get("edge_rating", "bronze"),
+                )
+
+            _btns = _build_game_buttons(
+                _cr_tips or [{"ev": 0, "match_id": match_key}],
+                match_key, user_id,
+                source="edge_picks", user_tier=_user_tier,
+                edge_tier=_cr_tier,
+                back_page=_resolve_hot_tips_back_page(user_id, match_key),
+            )
+
+            _banner = _qa_banner(user_id)
+            _final = (_banner + html) if _banner else html
+
+            try:
+                await query.edit_message_text(
+                    _final, parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(_btns),
+                )
+            except BadRequest as _br:
+                if "not modified" in str(_br).lower():
+                    return
+                raise
+
+            # Background view recording (best-effort, never delays response)
+            async def _cr_record_view():
+                def _write():
+                    import sqlite3 as _sq
+                    try:
+                        from db_connection import get_connection as _gc
+                        from tier_gate import record_view as _rv
+                        oc = _gc(timeout_ms=3000)
+                        try:
+                            _rv(user_id, match_key, oc)
+                        finally:
+                            oc.close()
+                    except _sq.OperationalError as _re:
+                        if "locked" in str(_re).lower():
+                            log.debug("Background record_view deferred: %s", _re)
+                        else:
+                            log.warning("Background record_view failed: %s", _re)
+                    except Exception as _re:
+                        log.warning("Background record_view failed: %s", _re)
+                await asyncio.to_thread(_write)
+            asyncio.create_task(_cr_record_view())
+            log.info("PERF: edge:detail CLEAN-RENDER served for %s", match_key)
+            return
+            # ── END CLEAN-RENDER-v2 ────────────────────────────────────
+            # REPLACED BY edge_detail_renderer.py 2026-03-26 (dead code below)
 
             # ── INSTANT PATH: check both caches before any DB/API operations ──
             import time as _edge_t
@@ -7057,8 +7208,8 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         if _confirming_actual is not None:
             _confirming_est = int(_confirming_actual)
         else:
-            # Legacy fallback for rows logged before RENDER-FIX3 migration
-            _confirming_est = 3 if _composite >= 70 else (2 if _composite >= 55 else (1 if _composite >= 35 else 0))
+            # Unknown signals should not imply confirmation — default to 0
+            _confirming_est = 0
         _db_tier = (row.get("edge_tier") or "").strip().lower()
         if _db_tier in ("diamond", "gold", "silver", "bronze"):
             edge_tier = _db_tier
@@ -7289,7 +7440,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
                     market_type=mt,
                     sport=_DB_LEAGUE_SPORT.get(lg, "soccer"),
                     league=lg,
-                    _skip_log=True,
+                    _skip_log=False,
                 )
             except Exception as exc:
                 log.debug("Edge V2 failed for %s: %s", m["match_id"], exc)
@@ -7705,17 +7856,6 @@ def _build_hot_tips_page(
     if yesterday_lines:
         lines.extend(yesterday_lines)
         lines.append("")
-
-    # RENDER-FIX1: Use V2 assign_tier() with triple gate (composite + edge_pct + confirming)
-    # Replaces R15-BUILD-02 composite-only override — a tip with high composite but
-    # low edge_pct or zero confirming_signals must not show as Diamond.
-    from scrapers.edge.tier_engine import assign_tier as _assign_tier
-    for tip in page_tips:
-        _cs = tip.get("edge_score", 0) or 0
-        _ev = tip.get("ev", 0) or 0
-        _conf = (tip.get("edge_v2") or {}).get("confirming_signals", 0) or 0
-        _assigned = _assign_tier(_cs, _ev, _conf, red_flags=[])
-        tip["display_tier"] = _assigned or "bronze"
 
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)

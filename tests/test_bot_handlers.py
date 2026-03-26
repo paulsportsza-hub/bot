@@ -288,43 +288,33 @@ async def test_handle_menu_history_empty(test_db, mock_update, mock_context):
 
 
 class TestHotTipsHeaderRelock:
-    """W84-HT4: Hot Tips detail keeps list header metadata across detail paths."""
+    """CLEAN-RENDER-v2: edge:detail uses single renderer path."""
 
-    async def test_cache_hit_detail_uses_event_id_snapshot_header(self, mock_update, mock_context):
+    async def test_detail_renders_via_edge_detail_renderer(self, mock_update, mock_context):
+        """New handler delegates to render_edge_detail, not cache paths."""
         query = mock_update.callback_query
         user_id = query.from_user.id
         match_key = "chelsea_vs_newcastle_2026-03-14"
 
-        bot._analysis_cache.pop(match_key, None)
-        bot._game_tips_cache.pop(match_key, None)
         bot._ht_tips_snapshot[user_id] = [{
             "event_id": match_key,
+            "match_id": match_key,
             "home_team": "Chelsea",
             "away_team": "Newcastle United",
-            "league": "Premier League",
-            "league_key": "epl",
-            "_bc_kickoff": "Sat 14 Mar, 19:20 SAST",
-            "_bc_broadcast": "📺 DStv 208",
-            "_bc_league": "Premier League",
+            "display_tier": "bronze",
+            "edge_rating": "bronze",
+            "ev": 0,
         }]
-        bot._analysis_cache[match_key] = (
-            "🎯 <b>Old Header</b>\n\n📋 <b>The Setup</b>\nBody",
-            [{
-                "outcome": "home",
-                "odds": 1.85,
-                "bookie": "supabets",
-                "ev": 1.09,
-                "prob": 54.6,
-                "edge_v2": {"match_key": match_key, "league": "epl"},
-            }],
-            "bronze",
-            time.time(),
+
+        _rendered_html = (
+            "🎯 <b>Chelsea vs Newcastle United</b>\n"
+            "📅 Today\n🏆 Premier League\n🥉 BRONZE EDGE\n\n"
+            "🎯 <b>The Edge</b>\n<b>Chelsea</b> @ <b>2.10</b> on Betway"
         )
 
         try:
             with patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
-                 patch("db_connection.get_connection", return_value=MagicMock(close=MagicMock())), \
-                 patch("tier_gate.check_tip_limit", return_value=(True, 999)), \
+                 patch("edge_detail_renderer.render_edge_detail", return_value=_rendered_html), \
                  patch("bot._build_game_buttons", return_value=[]), \
                  patch("bot._qa_banner", return_value=""), \
                  patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
@@ -332,132 +322,64 @@ class TestHotTipsHeaderRelock:
 
             text = query.edit_message_text.call_args[0][0]
             assert "🎯 <b>Chelsea vs Newcastle United</b>" in text
-            assert "📅 Sat 14 Mar, 19:20 SAST" in text
-            assert "🏆 Premier League" in text
-            assert "📺 DStv 208" in text
+            assert "The Edge" in text
         finally:
-            bot._analysis_cache.pop(match_key, None)
-            bot._game_tips_cache.pop(match_key, None)
             bot._ht_tips_snapshot.pop(user_id, None)
 
-    async def test_instant_detail_uses_global_hot_tips_header(self, mock_update, mock_context):
+    async def test_detail_uses_snapshot_for_buttons(self, mock_update, mock_context):
+        """Handler still reads _ht_tips_snapshot for button building."""
         query = mock_update.callback_query
+        user_id = query.from_user.id
         match_key = "west_ham_vs_manchester_city_2026-03-14"
 
-        bot._analysis_cache.pop(match_key, None)
-        bot._game_tips_cache[match_key] = [{
-            "outcome": "away",
+        bot._ht_tips_snapshot[user_id] = [{
+            "match_id": match_key,
+            "event_id": match_key,
+            "home_team": "West Ham",
+            "away_team": "Manchester City",
+            "display_tier": "gold",
+            "edge_rating": "gold",
+            "outcome": "Manchester City",
             "odds": 1.72,
-            "bookmaker": "sportingbet",
             "ev": 1.18,
-            "prob": 58.8,
-            "sport_key": "soccer_epl",
-            "display_tier": "bronze",
-            "edge_rating": "bronze",
-            "edge_v2": {"match_key": match_key, "league": "epl"},
         }]
-        bot._hot_tips_cache["global"] = {
-            "tips": [{
-                "match_id": match_key,
-                "event_id": match_key,
-                "home_team": "West Ham",
-                "away_team": "Manchester City",
-                "league": "Premier League",
-                "league_key": "epl",
-                "_bc_kickoff": "Sat 14 Mar, 21:50 SAST",
-                "_bc_broadcast": "📺 DStv 203",
-                "_bc_league": "Premier League",
-                "sport_key": "soccer_epl",
-                "outcome": "Manchester City",
-                "odds": 1.72,
-                "ev": 1.18,
-                "prob": 58.8,
-                "display_tier": "bronze",
-                "edge_rating": "bronze",
-            }],
-            "ts": time.time(),
-        }
+
+        _rendered_html = "🎯 <b>West Ham vs Manchester City</b>\n🎯 <b>The Edge</b>\nContent"
 
         try:
-            with patch("bot._get_cached_narrative", new_callable=AsyncMock, return_value=None), \
-                 patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
-                 patch("db_connection.get_connection", return_value=MagicMock(close=MagicMock())), \
-                 patch("tier_gate.check_tip_limit", return_value=(True, 999)), \
-                 patch("bot._generate_narrative_v2", new_callable=AsyncMock, return_value="📋 <b>The Setup</b>\nBody\n\n🏆 <b>Verdict</b>\nLean."), \
+            with patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
+                 patch("edge_detail_renderer.render_edge_detail", return_value=_rendered_html), \
+                 patch("bot._build_game_buttons", return_value=[]) as mock_btns, \
+                 patch("bot._qa_banner", return_value=""), \
+                 patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
+                await bot._dispatch_button(query, mock_context, "edge", f"detail:{match_key}")
+
+            # _build_game_buttons should have been called with snapshot tip
+            assert mock_btns.called
+            tips_arg = mock_btns.call_args[0][0]
+            assert tips_arg[0].get("display_tier") == "gold"
+        finally:
+            bot._ht_tips_snapshot.pop(user_id, None)
+
+    async def test_detail_no_data_shows_friendly_message(self, mock_update, mock_context):
+        """When render_edge_detail returns no-data message, handler still serves."""
+        query = mock_update.callback_query
+        match_key = "unknown_vs_team_2026-03-14"
+
+        _no_data_html = "🎯 <b>Unknown Vs Team</b>\n\nNo current edge data for this match."
+
+        try:
+            with patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
+                 patch("edge_detail_renderer.render_edge_detail", return_value=_no_data_html), \
                  patch("bot._build_game_buttons", return_value=[]), \
                  patch("bot._qa_banner", return_value=""), \
                  patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
                 await bot._dispatch_button(query, mock_context, "edge", f"detail:{match_key}")
 
             text = query.edit_message_text.call_args[0][0]
-            assert "🎯 <b>West Ham vs Manchester City</b>" in text
-            assert "📅 Sat 14 Mar, 21:50 SAST" in text
-            assert "🏆 Premier League" in text
-            assert "📺 DStv 203" in text
+            assert "No current edge data" in text
         finally:
-            bot._analysis_cache.pop(match_key, None)
-            bot._game_tips_cache.pop(match_key, None)
-            bot._hot_tips_cache.pop("global", None)
-
-    async def test_instant_detail_includes_tier_track_record(self, mock_update, mock_context):
-        query = mock_update.callback_query
-        match_key = "west_ham_vs_manchester_city_2026-03-14"
-
-        bot._analysis_cache.pop(match_key, None)
-        bot._game_tips_cache[match_key] = [{
-            "outcome": "away",
-            "odds": 1.72,
-            "bookmaker": "sportingbet",
-            "ev": 1.18,
-            "prob": 58.8,
-            "sport_key": "soccer_epl",
-            "display_tier": "bronze",
-            "edge_rating": "bronze",
-            "edge_v2": {"match_key": match_key, "league": "epl"},
-        }]
-        bot._hot_tips_cache["global"] = {
-            "tips": [{
-                "match_id": match_key,
-                "event_id": match_key,
-                "home_team": "West Ham",
-                "away_team": "Manchester City",
-                "league": "Premier League",
-                "league_key": "epl",
-                "_bc_kickoff": "Sat 14 Mar, 21:50 SAST",
-                "_bc_broadcast": "📺 DStv 203",
-                "_bc_league": "Premier League",
-                "sport_key": "soccer_epl",
-                "outcome": "Manchester City",
-                "odds": 1.72,
-                "ev": 1.18,
-                "prob": 58.8,
-                "display_tier": "bronze",
-                "edge_rating": "bronze",
-            }],
-            "ts": time.time(),
-        }
-
-        try:
-            with patch("bot._get_cached_narrative", new_callable=AsyncMock, return_value=None), \
-                 patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
-                 patch("db_connection.get_connection", return_value=MagicMock(close=MagicMock())), \
-                 patch("tier_gate.check_tip_limit", return_value=(True, 999)), \
-                 patch("bot._generate_narrative_v2", new_callable=AsyncMock, return_value="📋 <b>The Setup</b>\nBody\n\n🏆 <b>Verdict</b>\nLean."), \
-                 patch("bot._build_game_buttons", return_value=[]), \
-                 patch("bot._qa_banner", return_value=""), \
-                 patch("bot._get_hot_tips_result_proof", new_callable=AsyncMock, return_value={
-                     "stats_7d": {"by_tier": {"bronze": {"total": 5, "hits": 3, "hit_rate": 0.6}}},
-                 }), \
-                 patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
-                await bot._dispatch_button(query, mock_context, "edge", f"detail:{match_key}")
-
-            text = query.edit_message_text.call_args[0][0]
-            assert "7D track record" in text
-            assert "Bronze edges hit <b>60%</b> (3/5 settled)" in text
-        finally:
-            bot._analysis_cache.pop(match_key, None)
-            bot._game_tips_cache.pop(match_key, None)
-            bot._hot_tips_cache.pop("global", None)
+            pass
 
 
 class TestHandleTipDetailResultProof:

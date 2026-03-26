@@ -31,6 +31,7 @@ BOT_MODULES = [
     "renderers.telegram_renderer",
     "renderers.whatsapp_renderer",
     "renderers.whatsapp_menus",
+    "edge_detail_renderer",
 ]
 
 # ── Core scraper modules ──
