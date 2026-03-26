@@ -1989,6 +1989,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                             _f7_dm = re.search(r'(\d{4}-\d{2}-\d{2})', match_key)
                             if _f7_dm:
                                 _ct_header = {**_ct_header, "kickoff": _f7_dm.group(1)}
+                        if not _ct_header.get("kickoff") and match_key:
+                            _f7_db_date = await asyncio.to_thread(_get_edge_result_match_date, match_key)
+                            if _f7_db_date:
+                                _ct_header = {**_ct_header, "kickoff": _f7_db_date}
                     if _ct_header["home"] and _ct_header["away"]:
                         _c_base_html = _inject_narrative_header(
                             _c_base_html,
@@ -2125,6 +2129,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         _f7_dm = re.search(r'(\d{4}-\d{2}-\d{2})', match_key)
                         if _f7_dm:
                             _it_header = {**_it_header, "kickoff": _f7_dm.group(1)}
+                    if not _it_header.get("kickoff") and match_key:
+                        _f7_db_date = await asyncio.to_thread(_get_edge_result_match_date, match_key)
+                        if _f7_db_date:
+                            _it_header = {**_it_header, "kickoff": _f7_db_date}
                 _ih = _it_header["home"]
                 _ia = _it_header["away"]
                 _isport = _it0.get("sport_key", "soccer")
@@ -6285,6 +6293,28 @@ def _get_broadcast_details(
     except Exception:
         pass
     return result
+
+
+def _get_edge_result_match_date(match_key: str = "") -> str:
+    """Return edge_results.match_date for a match when header fallbacks exhaust."""
+    if not match_key:
+        return ""
+    try:
+        import sqlite3 as _sq
+
+        _conn = _sq.connect("/home/paulsportsza/bot/scrapers/odds.db", timeout=2)
+        try:
+            _row = _conn.execute(
+                "SELECT match_date FROM edge_results WHERE match_key = ? LIMIT 1",
+                (match_key,),
+            ).fetchone()
+        finally:
+            _conn.close()
+        if _row and _row[0]:
+            return str(_row[0])
+    except Exception:
+        pass
+    return ""
 
 
 def _teams_from_vs_event_id(event_id: str) -> tuple[str, str]:
@@ -16068,6 +16098,10 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
                 _f7_dm = re.search(r'(\d{4}-\d{2}-\d{2})', match_key)
                 if _f7_dm:
                     _ld_kickoff = _f7_dm.group(1)
+            if not _ld_kickoff and match_key:
+                _f7_db_date = await asyncio.to_thread(_get_edge_result_match_date, match_key)
+                if _f7_db_date:
+                    _ld_kickoff = _f7_db_date
 
         _ld_text = f"🔒 <b>{_tier_name} Edge — Locked</b>\n\n"
         _ld_text += f"{_sport_emoji} <b>{_ld_home} vs {_ld_away}</b>\n"
