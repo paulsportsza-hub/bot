@@ -1443,8 +1443,10 @@ if __name__ == "__main__":
         log.warning("pregenerate_narratives.py: another instance is already running — exiting.")
         sys.exit(0)
 
+    _pregen_success = False
     try:
         asyncio.run(main(args.sweep))
+        _pregen_success = True
     finally:
         if _pid_fh:
             try:
@@ -1453,3 +1455,10 @@ if __name__ == "__main__":
                 os.unlink(_PID_FILE)
             except Exception:
                 pass
+
+    if _pregen_success:
+        _sentinel = f"/tmp/cron_sentinel_pregenerate_narratives_{time.strftime('%Y%m%d%H%M')}"
+        try:
+            open(_sentinel, "w").close()
+        except OSError:
+            pass

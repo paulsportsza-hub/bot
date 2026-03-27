@@ -8,17 +8,29 @@ from __future__ import annotations
 
 import os
 import socket as _socket
+import subprocess as _subprocess
 try:
     import sentry_sdk
     from sentry_sdk.integrations.logging import LoggingIntegration as _SentryLogging
 except ImportError:
+    import logging as _early_log
+    _early_log.critical(
+        "SENTRY SDK NOT INSTALLED. Error visibility is DISABLED. Install: pip install sentry-sdk"
+    )
     sentry_sdk = None
     _SentryLogging = None
 from dotenv import load_dotenv
 load_dotenv()
 _SENTRY_DSN = os.getenv("SENTRY_DSN", "")
 _SENTRY_ENV = os.getenv("SENTRY_ENVIRONMENT", "production")
-_SENTRY_RELEASE = os.getenv("SENTRY_RELEASE", "mzansiedge@d8a2c7d")
+try:
+    _SENTRY_RELEASE = os.getenv("SENTRY_RELEASE") or _subprocess.check_output(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+        stderr=_subprocess.DEVNULL,
+    ).decode().strip()
+except Exception:
+    _SENTRY_RELEASE = "mzansiedge@unknown"
 _SENTRY_BOT_INSTANCE = f"{_socket.gethostname()}:{os.getpid()}"
 if sentry_sdk and _SENTRY_DSN:
     sentry_sdk.init(
@@ -32,6 +44,11 @@ if sentry_sdk and _SENTRY_DSN:
         integrations=[_SentryLogging(level=30, event_level=40)] if _SentryLogging else [],
     )
     sentry_sdk.set_tag("bot_instance", _SENTRY_BOT_INSTANCE)
+else:
+    import logging as _early_log
+    _early_log.warning(
+        "WARNING: Sentry is not active. Production errors will be invisible."
+    )
 
 import asyncio
 import difflib
