@@ -9,7 +9,7 @@
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
-DB_PATH="${MZANSI_DB_PATH:-/home/paulsportsza/scrapers/odds.db}"
+DB_PATH="${ODDS_DB_PATH:-${MZANSI_DB_PATH:-/home/paulsportsza/scrapers/odds.db}}"
 LOG_PATH="${BOT_LOG_PATH:-/tmp/bot_latest.log}"
 HOURS=12
 MIN_RECENT=5

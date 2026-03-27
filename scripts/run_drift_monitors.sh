@@ -7,10 +7,18 @@ set -uo pipefail
 
 cd /home/paulsportsza/bot
 
-# Alert-specific bot token (separate from main @mzansiedge_bot)
-export TELEGRAM_BOT_TOKEN="8635022348:AAEMK4mAXp6OY4V1arZgekCnGQn42Qs2meg"
+# Load environment variables from .env
+if [ -f .env ]; then
+    set -a
+    # shellcheck source=.env
+    source .env
+    set +a
+fi
+
+# Alert-specific bot token (separate from main @mzansiedge_bot) — must be set in .env
+export TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:?"TELEGRAM_BOT_TOKEN is required — set it in .env"}"
 export TELEGRAM_ALERT_CHAT_ID="-1003877525865"
-export DB_PATH="/home/paulsportsza/scrapers/odds.db"
+export DB_PATH="${ODDS_DB_PATH:-/home/paulsportsza/scrapers/odds.db}"
 
 echo "[$(date -Iseconds)] drift-monitors: starting"
 
