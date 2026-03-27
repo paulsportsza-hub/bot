@@ -939,8 +939,18 @@ async def _generate_one(
         narrative = _final_polish(narrative, _pregen_edge_data)
         w82_baseline = narrative
         log.info("Pregen W82-WIRE: baseline rendered for %s", match_key)
-    except Exception as exc:
-        log.error("Pregen W82-WIRE: baseline failed for %s: %s", match_key, exc)
+    except Exception:
+        _ctx_home = (ctx or {}).get("home", {}) if ctx else {}
+        _ctx_away = (ctx or {}).get("away", {}) if ctx else {}
+        log.exception(
+            "PREGEN failed: match_key=%s sport=%s league=%s "
+            "home_record_type=%s away_record_type=%s",
+            match_key,
+            sport,
+            league,
+            type(_ctx_home.get("record", "")).__name__,
+            type(_ctx_away.get("record", "")).__name__,
+        )
         narrative = ""
 
     # 5. W84-CONFIRM-1: W84 is the permanent default generation path.

@@ -742,8 +742,13 @@ def _injuries_sent(injuries: list[str]) -> str:
     return f"Missing: {', '.join(injuries[:3])}."
 
 
-def _parse_wdl(record: str) -> tuple[int, int, int]:
+def _parse_wdl(record) -> tuple[int, int, int]:
     """Parse 'W9 D3 L2' → (9, 3, 2). Returns (0, 0, 0) on failure."""
+    # Defensive: accept dicts during transition / stale caches
+    if isinstance(record, dict):
+        return (int(record.get("wins", 0) or 0),
+                int(record.get("draws", 0) or 0),
+                int(record.get("losses", 0) or 0))
     if not record:
         return (0, 0, 0)
     m = re.search(r"W(\d+)\s+D(\d+)\s+L(\d+)", record)

@@ -11951,8 +11951,13 @@ def _build_signal_only_narrative(
 # ── W80-PROSE: Natural Analyst Prose Templates (replaces W79 fill-in-the-blank) ──
 
 
-def _parse_record(record_str: str) -> tuple[int, int, int]:
+def _parse_record(record_str) -> tuple[int, int, int]:
     """Parse 'W9 D3 L2' into (wins, draws, losses). Handles cricket 'W5 L3'."""
+    # Defensive: accept dicts from stale cache / alternative code paths
+    if isinstance(record_str, dict):
+        return (int(record_str.get("wins", 0) or 0),
+                int(record_str.get("draws", 0) or 0),
+                int(record_str.get("losses", 0) or 0))
     if not record_str:
         return (0, 0, 0)
     w = d_val = l = 0
