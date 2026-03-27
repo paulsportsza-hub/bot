@@ -49,6 +49,7 @@ VALID_CONFIDENCES = {"high", "medium", "low"}
 VALID_MARKET_TYPES = {"1x2", "over_under", "btts"}
 
 
+@pytest.mark.timeout(120)
 class TestEdgeReturnShape:
     """Verify the dict returned by calculate_composite_edge() has all required keys."""
 

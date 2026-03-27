@@ -18,6 +18,11 @@ ensure_scrapers_importable()
 from scrapers.edge.edge_v2_helper import get_top_edges
 from scrapers.edge.edge_config import TIER_THRESHOLDS, NON_SHARP_TIER_THRESHOLDS
 
+# Live-pipeline tests run the full edge pipeline against live odds.db.
+# Under scraper write contention the DB busy_timeout can push each test past
+# the global 30s limit.  120s is safe and still bounded.
+pytestmark = pytest.mark.timeout(120)
+
 TIER_ORDER = {"diamond": 4, "gold": 3, "silver": 2, "bronze": 1}
 
 

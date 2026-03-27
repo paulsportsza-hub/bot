@@ -87,7 +87,13 @@ if [ ${#BEFORE_DASHDASH[@]} -gt 0 ]; then
         accuracy)       TARGET="tests/accuracy/" ;;
         snapshots)      TARGET="tests/snapshots/" ;;
         e2e)            TARGET="tests/e2e/" ;;
-        gate)           TARGET="tests/contracts/ tests/edge_accuracy/ tests/accuracy/ tests/snapshots/" ;;
+        gate)           TARGET="tests/contracts/ tests/edge_accuracy/ tests/accuracy/ tests/snapshots/"
+                        # Gate runs live-pipeline tests against production odds.db.
+                        # Concurrent scrapers can hold DB write locks; live-pipeline
+                        # tests are marked @pytest.mark.timeout(120) to tolerate this.
+                        # Allow 10 minutes wall-clock so slow tests don't race the limit.
+                        QA_TIMEOUT="${QA_TIMEOUT:-600}"
+                        ;;
         *)              TARGET="${BEFORE_DASHDASH[0]}" ;;
     esac
 fi

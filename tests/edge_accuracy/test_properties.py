@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from config import ensure_scrapers_importable
 ensure_scrapers_importable()
 
+import pytest
+
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
@@ -137,6 +139,7 @@ class TestGateReturnsValidLevel:
 
 # ── Property 5: Draw cap ratio ──
 
+@pytest.mark.timeout(120)
 class TestDrawCapRatio:
 
     def test_draw_ratio_capped(self):
