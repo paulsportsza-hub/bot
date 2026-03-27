@@ -795,12 +795,26 @@ def _render_locked(data: EdgeDetailData) -> str:
 
 # ── Public API ───────────────────────────────────────────────
 
+def get_edge_tier_from_db(match_key: str) -> str:
+    """Return authoritative edge_tier from edge_results DB (no gating, no render).
+
+    Used by bot.py CLEAN-RENDER path so button tier always matches render tier.
+    Returns 'bronze' when no row exists or tier is unrecognised.
+    """
+    row = _load_edge_result(match_key)
+    if not row:
+        return "bronze"
+    tier = (row.get("edge_tier") or "bronze").strip().lower()
+    return tier if tier in ("diamond", "gold", "silver", "bronze") else "bronze"
+
+
 def render_edge_detail(
     match_key: str,
     user_tier: str,
     sport: str | None = None,
     tip_data: dict | None = None,
-) -> str:
+    include_tier: bool = False,
+) -> "str | tuple[str, str]":
     """Render edge detail HTML — ONE function, ONE path, no branching caches.
 
     Synchronous. Call from ``asyncio.to_thread()``.
@@ -812,9 +826,15 @@ def render_edge_detail(
         tip_data: V1 tip dict fallback when edge_results has no V2 row
             (CLEAN-RUGBY). Used to render a minimum viable card instead of
             the "No current edge data" error.
+        include_tier: When True, return ``(html, edge_tier)`` tuple so the
+            caller (bot.py CLEAN-RENDER) can use the authoritative tier for
+            button building without a second DB query. Default False preserves
+            the original string-return API so existing callers and tests are
+            unaffected.
 
     Returns:
-        HTML string ready for ``parse_mode='HTML'``.
+        HTML string when ``include_tier=False`` (default).
+        ``(html, edge_tier)`` tuple when ``include_tier=True``.
     """
     edge_row = _load_edge_result(match_key)
     if not edge_row:
@@ -823,10 +843,13 @@ def render_edge_detail(
             data = _build_detail_data_from_tip(tip_data, ctx, user_tier)
         else:
             mk_display = match_key.replace("_vs_", " vs ").replace("_", " ").title()
-            return (
+            error_html = (
                 f"🎯 <b>{h(mk_display)}</b>\n\n"
                 "No current edge data for this match."
             )
+            if include_tier:
+                return error_html, "bronze"
+            return error_html
     else:
         ctx = _load_match_context(match_key)
         data = _build_detail_data(edge_row, ctx, user_tier, sport)
@@ -842,4 +865,7 @@ def render_edge_detail(
 
     # Clean up excessive whitespace
     html = re.sub(r"\n{3,}", "\n\n", html)
+
+    if include_tier:
+        return html, data.edge_tier
     return html

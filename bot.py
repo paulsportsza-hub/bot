@@ -1791,15 +1791,19 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         _fb_tips[0] if isinstance(_fb_tips, list) else _fb_tips
                     )
 
-            # Render in thread (sync SQLite per RUNTIME-R2)
+            # FIX-6: Render returns (html, authoritative_tier) so button tier
+            # always matches the gating tier used inside the renderer.
+            # include_tier=True uses ONE DB read for both content and tier.
+            _auth_tier = "bronze"
             try:
-                html = await asyncio.wait_for(
+                _cr_render_result = await asyncio.wait_for(
                     asyncio.to_thread(
                         render_edge_detail, match_key, _user_tier,
-                        tip_data=_tip_for_v1,
+                        tip_data=_tip_for_v1, include_tier=True,
                     ),
                     timeout=3.0,
                 )
+                html, _auth_tier = _cr_render_result
             except Exception as _cr_err:
                 log.warning("edge_detail_renderer failed for %s: %s", match_key, _cr_err)
                 _mk_display = match_key.replace("_vs_", " vs ").replace("_", " ").title()
@@ -1807,6 +1811,31 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     f"🎯 <b>{h(_mk_display)}</b>\n\n"
                     "⚙️ Loading — tap again in a moment."
                 )
+
+            # FIX-7: Inject broadcast line into rendered HTML (best-effort, 2s timeout).
+            # Renderer shows date/league from edge_results but has no broadcast data.
+            # Snapshot may be empty after restart — use tip_data or match_key for team names.
+            try:
+                _f7_home = (_tip_for_v1 or {}).get("home_team", "") or ""
+                _f7_away = (_tip_for_v1 or {}).get("away_team", "") or ""
+                if not (_f7_home and _f7_away):
+                    _f7_home, _f7_away = _teams_from_vs_event_id(match_key)
+                _f7_bc_data = await asyncio.wait_for(
+                    asyncio.to_thread(_get_broadcast_details, _f7_home, _f7_away),
+                    timeout=2.0,
+                )
+                _f7_broadcast = _f7_bc_data.get("broadcast", "")
+                if _f7_broadcast:
+                    # Inject after 🏆 league line (before edge badge)
+                    import re as _f7_re
+                    html = _f7_re.sub(
+                        r"(🏆 [^\n]+\n)",
+                        r"\1" + _f7_broadcast + "\n",
+                        html,
+                        count=1,
+                    )
+            except Exception:
+                pass  # Broadcast is best-effort; missing it is non-fatal
 
             # Get tip data for buttons (handler-level concern, not renderer)
             _cr_snap = next(
@@ -1832,11 +1861,16 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     except Exception:
                         _cr_tips = []
 
-            _cr_tier = "bronze"
-            if _cr_tips:
-                _cr_tier = _cr_tips[0].get(
+            # FIX-6: _auth_tier from renderer (edge_results DB, authoritative).
+            # Falls back to snapshot display_tier only when renderer returned "bronze"
+            # due to a missing edge_results row (V1 tip path).
+            _cr_tier = _auth_tier
+            if _cr_tier == "bronze" and _cr_tips:
+                _snap_tier = _cr_tips[0].get(
                     "display_tier", _cr_tips[0].get("edge_rating", "bronze"),
                 )
+                if _snap_tier and _snap_tier != "bronze":
+                    _cr_tier = _snap_tier
 
             _btns = _build_game_buttons(
                 _cr_tips or [{"ev": 0, "match_id": match_key}],
@@ -7193,24 +7227,20 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         home_display = _display_team_name(_home_raw)
         away_display = _display_team_name(_away_raw)
 
-        # R11-BUILD-02 Fix B: Use DB's edge_tier directly — it was computed by the full
-        # V2 pipeline including data-presence gates and signal analysis. Re-computing
-        # with assign_tier() here used estimated confirming signals and missed the
-        # data-presence gate, causing tier divergence from what V2 originally assigned.
-        # Fallback to assign_tier() only when DB tier is null (legacy rows).
+        # RENDER-BUILD-P1 FIX-1: Always re-derive tier via assign_tier() triple gate.
+        # R11-BUILD-02 Fix B previously trusted DB's edge_tier, but stale rows can have
+        # inflated tiers from before the min_confirming=2 gate was added — causing BUG-4
+        # (Gold subscribers see "blurred" on tips that should be Gold-accessible).
+        # FIX-3 now stores actual confirming_signals in edge_results, so the old concern
+        # about estimated signals is resolved. Re-derivation is safe and authoritative.
         _composite = float(row["composite_score"] or 0)
         _ev_for_tier = float(row["predicted_ev"] or 0)
         _confirming_actual = row.get("confirming_signals")
         if _confirming_actual is not None:
             _confirming_est = int(_confirming_actual)
         else:
-            # Unknown signals should not imply confirmation — default to 0
             _confirming_est = 0
-        _db_tier = (row.get("edge_tier") or "").strip().lower()
-        if _db_tier in ("diamond", "gold", "silver", "bronze"):
-            edge_tier = _db_tier
-        else:
-            edge_tier = _assign_tier(_composite, _ev_for_tier, _confirming_est, red_flags=[]) or "bronze"
+        edge_tier = _assign_tier(_composite, _ev_for_tier, _confirming_est, red_flags=[]) or "bronze"
 
         # predicted_ev is stored as percentage (e.g. 5.2 = 5.2%)
         ev_pct = round(float(row["predicted_ev"] or 0), 1)
@@ -13607,6 +13637,10 @@ def _normalise_edge_pct_contract(
         ratio = abs(fallback / primary)
         if 50 <= ratio <= 150:
             return fallback
+    # BUG-3 sign-flip guard: if normalisation would return a negative when fallback is
+    # positive (decimal/percentage unit mismatch), prefer the percentage-unit fallback.
+    if fallback > 0 > primary:
+        return fallback
     return primary
 
 
@@ -15435,25 +15469,29 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             narrative = ""
 
     # RENDER-FIX2: Snapshot check — hot tips cache is authoritative for list↔detail consistency
+    # Per-user snapshot (frozen at list render) takes priority over global cache (W84-HT2).
     _snapshot_ev = None
     _snapshot_tier = None
-    _htc_snap = _hot_tips_cache.get("global")
-    if _htc_snap and _htc_snap.get("tips"):
+    _snapshot_outcome = None
+    _snap_tips = _ht_tips_snapshot.get(user_id) or (_hot_tips_cache.get("global") or {}).get("tips")
+    if _snap_tips:
         _ht_raw = home_raw.lower().strip()
         _at_raw = away_raw.lower().strip()
-        for _ht_tip in _htc_snap["tips"]:
+        for _ht_tip in _snap_tips:
             _ht_h = (_ht_tip.get("home_team") or "").lower().strip()
             _ht_a = (_ht_tip.get("away_team") or "").lower().strip()
             if _ht_h == _ht_raw and _ht_a == _at_raw:
                 _snapshot_ev = _ht_tip.get("ev")
                 _snapshot_tier = _ht_tip.get("display_tier")
+                _snapshot_outcome = _ht_tip.get("outcome", "")
                 break
 
     # ── Apply EV cap guardrails to each tip before display ──
     if tips:
         for _tip in tips:
-            if _snapshot_ev is not None and _snapshot_tier is not None:
-                # RENDER-FIX2: Use snapshot EV — skip guardrails for list↔detail consistency
+            # RENDER-FIX2: Snapshot outcome match — use snapshot EV, skip guardrails re-derivation
+            if (_snapshot_ev is not None and _snapshot_tier is not None
+                    and _tip.get("outcome", "").lower() == (_snapshot_outcome or "").lower()):
                 _tip["ev"] = _snapshot_ev
                 continue
             _tip_ev = _tip["ev"]

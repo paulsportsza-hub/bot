@@ -85,6 +85,54 @@ class TestModuleImport:
         from edge_detail_renderer import EdgeDetailData
         assert hasattr(EdgeDetailData, "__dataclass_fields__")
 
+    def test_get_edge_tier_from_db_exists(self):
+        """FIX-6: get_edge_tier_from_db exported for bot.py button coherence."""
+        from edge_detail_renderer import get_edge_tier_from_db
+        assert callable(get_edge_tier_from_db)
+
+    def test_include_tier_false_returns_string(self):
+        """FIX-6: default call returns plain string (backward compatible)."""
+        from edge_detail_renderer import render_edge_detail
+        with patch("edge_detail_renderer._load_edge_result", return_value=None), \
+             patch("edge_detail_renderer._load_match_context", return_value=None):
+            result = render_edge_detail("home_vs_away_2026-03-01", "bronze")
+        assert isinstance(result, str)
+
+    def test_include_tier_true_returns_tuple(self):
+        """FIX-6: include_tier=True returns (html, edge_tier) tuple."""
+        from edge_detail_renderer import render_edge_detail
+        with patch("edge_detail_renderer._load_edge_result", return_value=None), \
+             patch("edge_detail_renderer._load_match_context", return_value=None):
+            result = render_edge_detail("home_vs_away_2026-03-01", "bronze", include_tier=True)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        html, tier = result
+        assert isinstance(html, str)
+        assert tier in ("diamond", "gold", "silver", "bronze")
+
+    def test_include_tier_true_with_edge_row(self):
+        """FIX-6: include_tier=True returns DB tier from edge_results row."""
+        from edge_detail_renderer import render_edge_detail
+        row = _make_edge_row(edge_tier="gold", confirming_signals=2)
+        with patch("edge_detail_renderer._load_edge_result", return_value=row), \
+             patch("edge_detail_renderer._load_match_context", return_value=None):
+            result = render_edge_detail(row["match_key"], "diamond", include_tier=True)
+        html, tier = result
+        assert tier == "gold"
+
+    def test_get_edge_tier_from_db_no_row_returns_bronze(self):
+        """FIX-6: get_edge_tier_from_db returns 'bronze' when no row found."""
+        from edge_detail_renderer import get_edge_tier_from_db
+        with patch("edge_detail_renderer._load_edge_result", return_value=None):
+            assert get_edge_tier_from_db("no_match_2026-03-01") == "bronze"
+
+    def test_get_edge_tier_from_db_returns_db_tier(self):
+        """FIX-6: get_edge_tier_from_db returns authoritative tier from DB."""
+        from edge_detail_renderer import get_edge_tier_from_db
+        row = _make_edge_row(edge_tier="diamond")
+        with patch("edge_detail_renderer._load_edge_result", return_value=row):
+            assert get_edge_tier_from_db(row["match_key"]) == "diamond"
+
 
 # ── EdgeDetailData Construction ──────────────────────────────
 

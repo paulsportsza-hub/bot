@@ -313,8 +313,9 @@ class TestHotTipsHeaderRelock:
         )
 
         try:
+            # FIX-6: renderer now returns (html, edge_tier) when include_tier=True
             with patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
-                 patch("edge_detail_renderer.render_edge_detail", return_value=_rendered_html), \
+                 patch("edge_detail_renderer.render_edge_detail", return_value=(_rendered_html, "bronze")), \
                  patch("bot._build_game_buttons", return_value=[]), \
                  patch("bot._qa_banner", return_value=""), \
                  patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
@@ -347,8 +348,10 @@ class TestHotTipsHeaderRelock:
         _rendered_html = "🎯 <b>West Ham vs Manchester City</b>\n🎯 <b>The Edge</b>\nContent"
 
         try:
+            # FIX-6: renderer now returns (html, edge_tier) tuple; mock returns bronze
+            # so FIX-6 fallback promotes _cr_tier from snapshot's gold display_tier.
             with patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
-                 patch("edge_detail_renderer.render_edge_detail", return_value=_rendered_html), \
+                 patch("edge_detail_renderer.render_edge_detail", return_value=(_rendered_html, "bronze")), \
                  patch("bot._build_game_buttons", return_value=[]) as mock_btns, \
                  patch("bot._qa_banner", return_value=""), \
                  patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
@@ -369,8 +372,9 @@ class TestHotTipsHeaderRelock:
         _no_data_html = "🎯 <b>Unknown Vs Team</b>\n\nNo current edge data for this match."
 
         try:
+            # FIX-6: renderer returns (html, tier) tuple; no-data path returns ("html", "bronze")
             with patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="diamond"), \
-                 patch("edge_detail_renderer.render_edge_detail", return_value=_no_data_html), \
+                 patch("edge_detail_renderer.render_edge_detail", return_value=(_no_data_html, "bronze")), \
                  patch("bot._build_game_buttons", return_value=[]), \
                  patch("bot._qa_banner", return_value=""), \
                  patch("bot.asyncio.create_task", side_effect=lambda coro: coro.close()):
