@@ -13961,6 +13961,70 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
     return True
 
 
+def _enrich_edge_data_from_db(match_key: str, outcome: str) -> dict:
+    """BASELINE-FIX: Read real edge data from edge_results for the instant baseline path.
+
+    Sync function — call via asyncio.to_thread().
+    Pattern mirrors edge_detail_renderer._load_edge_result() (W81-DBLOCK compliant).
+    confirming_signals estimation from edge_detail_renderer._build_detail_data() pattern.
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db as _conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+        _conn = _conn_fn(_DB_PATH)
+        _conn.row_factory = lambda cursor, row: dict(
+            zip([col[0] for col in cursor.description], row)
+        )
+        try:
+            # Prefer outcome-specific row; fall back to any result-pending row for this match
+            row = _conn.execute(
+                "SELECT composite_score, recommended_odds, bookmaker, "
+                "predicted_ev, league, confirming_signals "
+                "FROM edge_results "
+                "WHERE match_key = ? AND bet_type = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC, id DESC LIMIT 1",
+                (match_key, outcome),
+            ).fetchone()
+            if not row:
+                row = _conn.execute(
+                    "SELECT composite_score, recommended_odds, bookmaker, "
+                    "predicted_ev, league, confirming_signals "
+                    "FROM edge_results "
+                    "WHERE match_key = ? AND result IS NULL "
+                    "ORDER BY recommended_at DESC, id DESC LIMIT 1",
+                    (match_key,),
+                ).fetchone()
+        finally:
+            _conn.close()
+
+        if not row:
+            return {}
+
+        composite = float(row.get("composite_score") or 0)
+        cs_raw = row.get("confirming_signals")
+        if cs_raw is not None:
+            confirming = int(cs_raw)
+        else:
+            # Estimation from composite when confirming_signals is NULL
+            # (mirrors edge_detail_renderer._build_detail_data() pattern)
+            confirming = (
+                3 if composite >= 70
+                else 2 if composite >= 55
+                else 1 if composite >= 35
+                else 0
+            )
+        return {
+            "best_bookmaker": row.get("bookmaker") or "",
+            "best_odds": float(row.get("recommended_odds") or 0),
+            "edge_pct": float(row.get("predicted_ev") or 0),
+            "composite_score": composite,
+            "confirming_signals": confirming,
+            "league": row.get("league") or "",
+        }
+    except Exception:
+        return {}
+
+
 async def _generate_narrative_v2(
     ctx_data: dict | None,
     tips: list[dict] | None,
@@ -13990,6 +14054,44 @@ async def _generate_narrative_v2(
 
     # Build spec → deterministic baseline (<100ms, zero API)
     edge_data = _extract_edge_data(tips, home_team, away_team, selected_outcome=selected_outcome)
+
+    # BASELINE-FIX: Enrich edge_data from DB when instant baseline path has missing values.
+    # Tips from _load_tips_from_edge_results() (fast cold path) may have edge_v2=None,
+    # leaving best_odds=0, edge_pct=0, best_bookmaker="?", confirming_signals=0, league="".
+    # Read real values from edge_results directly — same source as edge_detail_renderer.
+    _needs_enrich = (
+        not edge_data.get("best_odds")
+        or not edge_data.get("edge_pct")
+        or not edge_data.get("league")
+        or edge_data.get("best_bookmaker") in ("", "?")
+        or not edge_data.get("confirming_signals")
+    )
+    if _needs_enrich and tips:
+        _t0 = tips[0]
+        _mk = _t0.get("match_id") or _t0.get("match_key", "")
+        _oc = edge_data.get("outcome", _t0.get("outcome", ""))
+        if _mk:
+            try:
+                _enriched = await asyncio.wait_for(
+                    asyncio.to_thread(_enrich_edge_data_from_db, _mk, _oc),
+                    timeout=2.0,
+                )
+                if _enriched:
+                    if not edge_data.get("best_bookmaker") or edge_data["best_bookmaker"] in ("", "?"):
+                        edge_data["best_bookmaker"] = _enriched.get("best_bookmaker") or edge_data.get("best_bookmaker", "")
+                    if not edge_data.get("best_odds"):
+                        edge_data["best_odds"] = _enriched.get("best_odds") or 0
+                    if not edge_data.get("edge_pct"):
+                        edge_data["edge_pct"] = _enriched.get("edge_pct") or 0
+                    if not edge_data.get("composite_score"):
+                        edge_data["composite_score"] = _enriched.get("composite_score") or 0
+                    if not edge_data.get("confirming_signals"):
+                        edge_data["confirming_signals"] = _enriched.get("confirming_signals", 0)
+                    if not edge_data.get("league"):
+                        edge_data["league"] = _enriched.get("league") or ""
+            except Exception as _enrich_err:
+                log.debug("BASELINE-FIX: DB enrichment skipped: %s", _enrich_err)
+
     spec = build_narrative_spec(ctx_data, edge_data, tips, sport)
     baseline = _render_baseline(spec)
     baseline = _sanitise_jargon(baseline)
