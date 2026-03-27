@@ -7163,7 +7163,7 @@ def _tier_from_composite(composite: float) -> str:
     return "bronze"
 
 
-def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
+def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False) -> list[dict]:
     """W84-P1: Fast serving path — read pre-computed edges from edge_results table.
 
     Called synchronously from asyncio.to_thread(). Single SQL query, ~5ms.
@@ -7255,8 +7255,10 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         # confirming_est==0 + ev<=7% → _classify_evidence() returns "speculative punt",
         # which can render "Monitor the line but pass" or "Pass on this" in the detail view.
         # These tips should never appear in Top Edge Picks — they don't recommend a bet.
-        if _confirming_est == 0 and ev_pct <= 7.0:
-            continue
+        # skip_punt_filter=True bypasses this for pregen (generation-time concern, not display-time).
+        if not skip_punt_filter:
+            if _confirming_est == 0 and ev_pct <= 7.0:
+                continue
 
         league_key = (row["league"] or "").lower()
         outcome_label = row["bet_type"] or "home"

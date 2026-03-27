@@ -800,7 +800,7 @@ def _edge_from_serving_tip(tip: dict) -> dict | None:
 def _load_shadow_pregen_edges(limit: int = 100) -> list[dict]:
     """Shadow pregen must use the same authoritative edge_results source as serving."""
     try:
-        serving_tips = bot._load_tips_from_edge_results(limit=limit)
+        serving_tips = bot._load_tips_from_edge_results(limit=limit, skip_punt_filter=True)
     except Exception as exc:
         log.error("Failed to load live edge_results tips for shadow pregen: %s", exc)
         return []
