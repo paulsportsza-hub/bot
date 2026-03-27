@@ -6,8 +6,9 @@ import logging
 import sys
 from datetime import datetime, timezone
 
-if "/home/paulsportsza" not in sys.path:
-    sys.path.insert(0, "/home/paulsportsza")
+from config import ensure_scrapers_importable
+ensure_scrapers_importable()
+
 if "scrapers.db_connect" not in sys.modules:
     import importlib.util as _ilu, os as _os
     _spec = _ilu.spec_from_file_location(

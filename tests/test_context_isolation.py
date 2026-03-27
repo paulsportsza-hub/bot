@@ -8,9 +8,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-sys.path.insert(0, "/home/paulsportsza")
-sys.path.insert(0, "/home/paulsportsza/scrapers")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import ensure_scrapers_importable
+ensure_scrapers_importable()
 
 from scrapers import coach_fetcher
 from scrapers import match_context_fetcher as mcf

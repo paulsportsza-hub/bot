@@ -17,8 +17,9 @@ import time
 
 # Add project paths
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, "/home/paulsportsza")
-sys.path.insert(0, "/home/paulsportsza/scrapers")
+
+from config import BOT_ROOT, ensure_scrapers_importable
+ensure_scrapers_importable()
 
 from dotenv import load_dotenv
 _bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -531,8 +532,9 @@ async def main():
         "total_matches": len(MATCHES),
         "results": results,
     }
-    os.makedirs("/home/paulsportsza/reports", exist_ok=True)
-    json_path = "/home/paulsportsza/reports/sonnet_benchmark_w73_20260307.json"
+    _reports_dir = BOT_ROOT.parent / "reports"
+    _reports_dir.mkdir(parents=True, exist_ok=True)
+    json_path = str(_reports_dir / "sonnet_benchmark_w73_20260307.json")
     with open(json_path, "w") as f:
         json.dump(report_data, f, indent=2, ensure_ascii=False)
     log.info("Raw results saved to: %s", json_path)

@@ -114,6 +114,26 @@ ODDS_API_BASE = ODDS_BASE_URL  # alias used by scripts/sports_data.py
 DATA_DIR = BOT_ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
+# Scrapers repo — env-var driven for CI; defaults to sibling of bot repo on server
+SCRAPERS_ROOT = Path(os.environ.get("SCRAPERS_ROOT", str(BOT_ROOT.parent / "scrapers")))
+ODDS_DB_PATH = SCRAPERS_ROOT / "odds.db"
+ENRICHMENT_DB_PATH = SCRAPERS_ROOT / "enrichment.db"
+TIPSTER_DB_PATH = SCRAPERS_ROOT / "tipsters" / "tipster_predictions.db"
+COACHES_PATH = SCRAPERS_ROOT / "coaches.json"
+KEY_PLAYERS_PATH = SCRAPERS_ROOT / "key_players.json"
+SCRAPERS_ENV_PATH = SCRAPERS_ROOT / ".env"
+
+
+def ensure_scrapers_importable() -> None:
+    """Add SCRAPERS_ROOT (and its parent) to sys.path so scrapers modules
+    can be imported.  Call once at bot startup — replaces all scattered
+    sys.path.insert hacks."""
+    import sys
+    for p in (str(SCRAPERS_ROOT.parent), str(SCRAPERS_ROOT)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+
 # ── Bankroll defaults ──────────────────────────────────────
 DEFAULT_BANKROLL: float = 1000.0
 

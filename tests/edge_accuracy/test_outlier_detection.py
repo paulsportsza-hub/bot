@@ -12,15 +12,16 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.expanduser("~"))
-sys.path.insert(0, os.path.join(os.path.expanduser("~"), "bot"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from config import ODDS_DB_PATH, ensure_scrapers_importable
+ensure_scrapers_importable()
 
 from scrapers.odds_integrity import (
     detect_outlier_odds,
     MAX_SINGLE_BOOKMAKER_DEVIATION,
 )
 
-DB_PATH = os.path.expanduser("~/scrapers/odds.db")
+DB_PATH = str(ODDS_DB_PATH)
 
 
 def _get_sample_match_ids(limit=5):

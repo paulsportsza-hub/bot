@@ -1016,7 +1016,8 @@ async def run_all(phases: list[int] | None = None):
             print(f"    {line}")
 
     # Save report to file
-    report_path = f"/home/paulsportsza/reports/e2e-stress-wave20-{datetime.now().strftime('%Y%m%d-%H%M')}.json"
+    from config import BOT_ROOT
+    report_path = str(BOT_ROOT.parent / "reports" / f"e2e-stress-wave20-{datetime.now().strftime('%Y%m%d-%H%M')}.json")
     report_data = {
         "timestamp": datetime.now().isoformat(),
         "summary": report.summary(),
@@ -1040,5 +1041,6 @@ if __name__ == "__main__":
     parser.add_argument("--phase", type=int, nargs="*", help="Specific phases to run")
     args = parser.parse_args()
 
-    os.chdir("/home/paulsportsza/bot")
+    from config import BOT_ROOT as _br
+    os.chdir(str(_br))
     asyncio.run(run_all(args.phase))

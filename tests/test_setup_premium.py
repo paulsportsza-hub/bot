@@ -5,9 +5,9 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, os.path.expanduser("~"))
-sys.path.insert(0, os.path.join(os.path.expanduser("~"), "scrapers"))
-sys.path.insert(0, os.path.join(os.path.expanduser("~"), "bot"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import ensure_scrapers_importable
+ensure_scrapers_importable()
 
 from narrative_spec import NarrativeSpec, _render_setup, _render_setup_no_context, _render_team_para
 from scrapers.match_context_fetcher import _apply_soccer_team_fallback, _lookup_domestic_soccer_league

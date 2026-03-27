@@ -3543,8 +3543,9 @@ class TestW81Coaches:
 
     def _get_coach(self, *args):
         import sys
-        sys.path.insert(0, "/home/paulsportsza/scrapers")
-        from match_context_fetcher import _get_coach
+        from config import ensure_scrapers_importable
+        ensure_scrapers_importable()
+        from scrapers.match_context_fetcher import _get_coach
         return _get_coach(*args)
 
     def test_arsenal_coach_resolved(self):
@@ -3562,8 +3563,9 @@ class TestW81Coaches:
     def test_degraded_response_includes_coach(self):
         """Degraded response (DB lock scenario) still includes coach from static JSON."""
         import sys
-        sys.path.insert(0, "/home/paulsportsza/scrapers")
-        from match_context_fetcher import _get_coach, _degraded_response, LEAGUE_CONFIG
+        from config import ensure_scrapers_importable
+        ensure_scrapers_importable()
+        from scrapers.match_context_fetcher import _get_coach, _degraded_response, LEAGUE_CONFIG
         config = LEAGUE_CONFIG["epl"]
         resp = _degraded_response(config, "arsenal", "everton", "database is locked")
         # Simulate what get_match_context() now does on exception

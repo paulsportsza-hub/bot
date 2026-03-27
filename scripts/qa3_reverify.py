@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, "/home/paulsportsza")
+
+from config import BOT_ROOT, ODDS_DB_PATH, ensure_scrapers_importable
+ensure_scrapers_importable()
 
 from evidence_pack import (
     EvidencePack,
@@ -21,7 +23,7 @@ from evidence_pack import (
 )
 
 
-DB = "/home/paulsportsza/scrapers/odds.db"
+DB = str(ODDS_DB_PATH)
 
 
 @dataclass
@@ -343,7 +345,9 @@ def main():
         print(f"  {marker} {check:40s} {passes}/{total_c} ({pct:.0f}%)")
 
     # Dump full results for scoring
-    with open("/home/paulsportsza/reports/qa3_reverify_results.json", "w") as f:
+    _report_path = BOT_ROOT.parent / "reports" / "qa3_reverify_results.json"
+    _report_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(_report_path, "w") as f:
         output = []
         for r in results:
             output.append({
@@ -361,7 +365,7 @@ def main():
                 "w82_baseline": r["w82_baseline"],
             })
         json.dump(output, f, indent=2)
-    print(f"\nFull results saved to /home/paulsportsza/reports/qa3_reverify_results.json")
+    print(f"\nFull results saved to {_report_path}")
 
 
 if __name__ == "__main__":

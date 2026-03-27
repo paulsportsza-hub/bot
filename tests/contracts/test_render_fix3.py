@@ -16,7 +16,8 @@ import pytest
 # Allow importing scrapers package from parent dir
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../../scrapers"))
 
-ODDS_DB_PATH = "/home/paulsportsza/scrapers/odds.db"
+from config import ODDS_DB_PATH as _ODDS_DB
+ODDS_DB_PATH = str(_ODDS_DB)
 
 
 def _connect_db(db_path: str) -> sqlite3.Connection:
@@ -184,7 +185,8 @@ class TestRenderFix3Integration:
     """Test 4: log_edge_recommendation() stores actual confirming_signals=3 in DB row."""
 
     def test_log_edge_recommendation_stores_confirming_signals(self):
-        sys.path.insert(0, "/home/paulsportsza")
+        from config import ensure_scrapers_importable
+        ensure_scrapers_importable()
         from scrapers.edge.settlement import log_edge_recommendation
 
         temp_db_path = _build_temp_odds_db()

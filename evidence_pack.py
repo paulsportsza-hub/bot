@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from scrapers.db_connect import connect_odds_db_readonly
-from scrapers.odds_integrity import filter_outlier_prices
-from scrapers.odds_normaliser import display_name as _display_team_name
-from scrapers.utils.roster_validation import player_belongs_to_match_teams as _player_belongs_to_match_teams
+from config import ODDS_DB_PATH, ENRICHMENT_DB_PATH, TIPSTER_DB_PATH
 
-ODDS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scrapers", "odds.db")
-ENRICHMENT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scrapers", "enrichment.db")
+ODDS_DB = str(ODDS_DB_PATH)
+ENRICHMENT_DB = str(ENRICHMENT_DB_PATH)
 
 
 @dataclass
@@ -205,6 +201,7 @@ def _parse_match_key(match_key: str) -> tuple[str, str]:
 
 
 def _display_name(team_key: str) -> str:
+    from scrapers.odds_normaliser import display_name as _display_team_name
     return _display_team_name(team_key) if team_key else ""
 
 
@@ -308,6 +305,7 @@ def _score_richness(pack: EvidencePack) -> tuple[str, int]:
 
 
 def _fetch_fixture_identity(match_key: str) -> dict[str, str]:
+    from scrapers.db_connect import connect_odds_db_readonly
     conn = connect_odds_db_readonly(ODDS_DB, timeout=1.0)
     conn.row_factory = sqlite3.Row
     try:
@@ -321,6 +319,8 @@ def _fetch_fixture_identity(match_key: str) -> dict[str, str]:
 
 
 def _fetch_sa_odds(match_key: str) -> SAOddsBlock:
+    from scrapers.db_connect import connect_odds_db_readonly
+    from scrapers.odds_integrity import filter_outlier_prices
     now = datetime.now(timezone.utc)
     conn = connect_odds_db_readonly(ODDS_DB, timeout=1.0)
     conn.row_factory = sqlite3.Row
@@ -537,6 +537,7 @@ def _fetch_h2h_from_match_results(
     *,
     limit: int = 5,
 ) -> H2HBlock | None:
+    from scrapers.db_connect import connect_odds_db_readonly
     now = datetime.now(timezone.utc)
     conn = connect_odds_db_readonly(ODDS_DB, timeout=1.0)
     conn.row_factory = sqlite3.Row
@@ -674,6 +675,7 @@ def _fetch_news(
         article["_dedupe_key"] = key
         articles.append(article)
 
+    from scrapers.db_connect import connect_odds_db_readonly
     for db_kind in ("odds", "enrichment"):
         conn = (
             connect_odds_db_readonly(ODDS_DB, timeout=1.0)
@@ -767,6 +769,7 @@ def _prices_for_bookmaker(rows: list[sqlite3.Row], bookmaker_fragment: str) -> d
 
 
 def _fetch_sharp_lines(match_key: str) -> SharpLinesBlock:
+    from scrapers.db_connect import connect_odds_db_readonly
     now = datetime.now(timezone.utc)
     conn = connect_odds_db_readonly(ODDS_DB, timeout=1.0)
     conn.row_factory = sqlite3.Row
@@ -817,6 +820,7 @@ def _fetch_sharp_lines(match_key: str) -> SharpLinesBlock:
 
 
 def _fetch_settlement_stats() -> SettlementBlock:
+    from scrapers.db_connect import connect_odds_db_readonly
     now = datetime.now(timezone.utc)
     cutoff_30 = (now.replace(microsecond=0) - timedelta(days=30)).isoformat()
     cutoff_7 = (now.replace(microsecond=0) - timedelta(days=7)).isoformat()
@@ -890,6 +894,7 @@ def _fetch_settlement_stats() -> SettlementBlock:
 
 
 def _fetch_movements(match_key: str) -> MovementsBlock:
+    from scrapers.db_connect import connect_odds_db_readonly
     now = datetime.now(timezone.utc)
     conn = connect_odds_db_readonly(ODDS_DB, timeout=1.0)
     conn.row_factory = sqlite3.Row
@@ -930,6 +935,7 @@ def _fetch_injuries(
     league: str,
     sport: str,
 ) -> InjuriesBlock:
+    from scrapers.db_connect import connect_odds_db_readonly
     now = datetime.now(timezone.utc)
     conn = connect_odds_db_readonly(ODDS_DB, timeout=1.0)
     conn.row_factory = sqlite3.Row
@@ -1253,7 +1259,7 @@ def _format_elo_section(pack: EvidencePack) -> tuple[str | None, str | None]:
     """R12-OVERNIGHT: Surface Elo ratings for team strength context."""
     try:
         from scrapers.db_connect import connect_odds_db
-        conn = connect_odds_db("/home/paulsportsza/scrapers/odds.db")
+        conn = connect_odds_db(ODDS_DB)
         home_key = pack.match_key.split("_vs_")[0] if "_vs_" in pack.match_key else ""
         away_key = pack.match_key.split("_vs_")[1].rsplit("_", 1)[0] if "_vs_" in pack.match_key else ""
         if not home_key or not away_key:
@@ -1290,7 +1296,7 @@ def _format_tipster_section(pack: EvidencePack) -> tuple[str | None, str | None]
     """R12-OVERNIGHT: Surface tipster consensus data."""
     try:
         from scrapers.db_connect import connect_odds_db
-        conn = connect_odds_db("/home/paulsportsza/scrapers/tipsters/tipster_predictions.db")
+        conn = connect_odds_db(str(TIPSTER_DB_PATH))
         home_key = pack.match_key.split("_vs_")[0].replace("_", " ") if "_vs_" in pack.match_key else ""
         away_key = pack.match_key.split("_vs_")[1].rsplit("_", 1)[0].replace("_", " ") if "_vs_" in pack.match_key else ""
         if not home_key or not away_key:
@@ -2283,6 +2289,7 @@ def _extract_contextual_player_names(title: str) -> list[str]:
 def _player_in_roster(player_name: str, roster: list[str]) -> bool:
     """Return True if player_name matches any entry in roster using the same matching logic
     as player_belongs_to_match_teams (accent-tolerant, last-name-first-initial matching)."""
+    from scrapers.utils.roster_validation import player_belongs_to_match_teams as _player_belongs_to_match_teams
     if not roster:
         return False
     # Route through the public helper by using a single dummy team so both
@@ -2928,7 +2935,7 @@ def _build_accepted_percentage_values(pack: EvidencePack, refs: dict[str, Any]) 
     if pack.match_key and "_vs_" in pack.match_key:
         try:
             from scrapers.db_connect import connect_odds_db
-            _elo_conn = connect_odds_db("/home/paulsportsza/scrapers/odds.db")
+            _elo_conn = connect_odds_db(ODDS_DB)
             _hk = pack.match_key.split("_vs_")[0]
             _ak = pack.match_key.split("_vs_")[1].rsplit("_", 1)[0]
             _hr = _elo_conn.execute("SELECT rating FROM elo_ratings WHERE team = ? AND sport = ?", (_hk, pack.sport)).fetchone()
@@ -3550,9 +3557,6 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
     from narrative_spec import TONE_BANDS
 
     try:
-        import sys as _sys
-        if "/home/paulsportsza" not in _sys.path:
-            _sys.path.insert(0, "/home/paulsportsza")
         from scrapers.sport_terms import SPORT_BANNED_TERMS
     except Exception:
         SPORT_BANNED_TERMS = {}

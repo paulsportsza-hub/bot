@@ -672,7 +672,8 @@ async def main():
     print(f"{'='*60}")
 
     # Save results
-    report_path = "/home/paulsportsza/reports/e2e-beast-qa-1.txt"
+    from config import BOT_ROOT
+    report_path = str(BOT_ROOT.parent / "reports" / "e2e-beast-qa-1.txt")
     with open(report_path, "w") as f:
         f.write(f"BEAST-QA-1 E2E Results\n{'='*40}\n")
         for r in results:

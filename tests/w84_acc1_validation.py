@@ -21,7 +21,8 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 # ── DB access ──────────────────────────────────────────────────────────
 BOT_DB = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "mzansiedge.db")
-ODDS_DB = "/home/paulsportsza/scrapers/odds.db"
+from config import ODDS_DB_PATH, BOT_ROOT
+ODDS_DB = str(ODDS_DB_PATH)
 
 # ── Telethon ──────────────────────────────────────────────────────────
 from telethon import TelegramClient
@@ -83,7 +84,8 @@ def test_view_accounting():
 
     # Add project to path
     sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-    sys.path.insert(0, "/home/paulsportsza")
+    from config import ensure_scrapers_importable
+    ensure_scrapers_importable()
     from scrapers.edge.edge_v2_helper import record_tip_view, check_tip_limit
 
     conn = sqlite3.connect(":memory:")

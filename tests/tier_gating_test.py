@@ -31,8 +31,9 @@ STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "tel
 SESSION_FILE = os.environ.get("TELETHON_SESSION", "data/telethon_session")
 
 TEST_USER_ID = 411927634
-USER_DB = "/home/paulsportsza/bot/data/mzansiedge.db"
-ODDS_DB = "/home/paulsportsza/scrapers/odds.db"
+from config import BOT_ROOT, ODDS_DB_PATH, DATA_DIR
+USER_DB = str(DATA_DIR / "mzansiedge.db")
+ODDS_DB = str(ODDS_DB_PATH)
 
 TIMEOUT = 12  # seconds to wait for bot response
 
@@ -410,7 +411,7 @@ async def main():
         "summary": f"Tier-gating: {passed}/{total} passed",
         "results": [asdict(r) for r in results],
     }
-    report_path = f"/home/paulsportsza/reports/tier-gating-{datetime.utcnow().strftime('%Y%m%d-%H%M')}.json"
+    report_path = str(BOT_ROOT.parent / "reports" / f"tier-gating-{datetime.utcnow().strftime('%Y%m%d-%H%M')}.json")
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     print(f"\nReport saved: {report_path}")

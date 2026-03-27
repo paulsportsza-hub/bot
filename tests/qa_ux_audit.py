@@ -496,7 +496,8 @@ async def main():
 
     await client.disconnect()
 
-    out = "/home/paulsportsza/reports/e2e-captures-26a-review.json"
+    from config import BOT_ROOT
+    out = str(BOT_ROOT.parent / "reports" / "e2e-captures-26a-review.json")
     with open(out, "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"\nRaw captures: {out}")

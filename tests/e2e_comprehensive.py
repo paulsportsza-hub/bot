@@ -17,16 +17,18 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
 
-load_dotenv("/home/paulsportsza/bot/.env")
+import os as _os
+load_dotenv(_os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), ".env"))
 
 API_ID = int(os.getenv("TELEGRAM_API_ID") or os.getenv("API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH") or os.getenv("API_HASH", "")
 BOT_USERNAME = "mzansiedge_bot"
 
 # Read StringSession
-SESSION_STR = open("/home/paulsportsza/bot/data/telethon_session.string").read().strip()
+from config import DATA_DIR, BOT_ROOT
+SESSION_STR = open(str(DATA_DIR / "telethon_session.string")).read().strip()
 
-REPORT_DIR = "/home/paulsportsza/reports"
+REPORT_DIR = str(BOT_ROOT.parent / "reports")
 TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M")
 REPORT_FILE = f"{REPORT_DIR}/e2e-comprehensive-{TIMESTAMP}.txt"
 

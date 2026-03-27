@@ -1,6 +1,9 @@
 """Targeted false-positive probe for W84 verifier cleanup validation."""
+import os
 import sys
-sys.path.insert(0, "/home/paulsportsza")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import ensure_scrapers_importable
+ensure_scrapers_importable()
 
 from evidence_pack import (
     _extract_candidate_proper_nouns,

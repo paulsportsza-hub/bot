@@ -21,12 +21,9 @@ log = logging.getLogger(__name__)
 # ── Imports from existing modules ────────────────────────────
 # DB access (LOCKED rule: never bare sqlite3.connect)
 from fetchers.base_fetcher import get_cached_context
-from scrapers.edge.tier_engine import assign_tier
-from scrapers.edge.edge_config import LEAGUE_TO_SPORT
 from tier_gate import get_edge_access_level, get_upgrade_message
 from renderers.edge_renderer import render_edge_badge, EDGE_LABELS
 from config import get_country_flag
-from scrapers.odds_normaliser import display_name as _odds_display_name
 
 
 # ── Constants ────────────────────────────────────────────────
@@ -154,6 +151,7 @@ def _load_match_context(match_key: str) -> dict | None:
 def _display_team_name(raw_key: str) -> str:
     """Convert normalised key to display name via odds_normaliser."""
     try:
+        from scrapers.odds_normaliser import display_name as _odds_display_name
         return _odds_display_name(raw_key)
     except Exception:
         return raw_key.replace("_", " ").title()
@@ -198,6 +196,10 @@ def _detect_sport(league: str, sport_col: str | None = None) -> str:
     if sport_col:
         return sport_col.lower()
     lk = (league or "").lower()
+    try:
+        from scrapers.edge.edge_config import LEAGUE_TO_SPORT
+    except ImportError:
+        LEAGUE_TO_SPORT = {}
     return LEAGUE_TO_SPORT.get(lk) or _DB_LEAGUE_SPORT.get(lk, "soccer")
 
 
@@ -236,6 +238,8 @@ def _build_detail_data(
 
     Every field is set exactly ONCE from exactly ONE source.
     """
+    from scrapers.edge.tier_engine import assign_tier
+
     mk = edge_row["match_key"]
     home, away = _parse_teams(mk)
 
@@ -322,6 +326,8 @@ def _build_detail_data_from_tip(
     Sets ``model_only=True`` and ``confirming_signals=0`` because V1
     does not track individual signal confirmations.
     """
+    from scrapers.edge.tier_engine import assign_tier
+
     mk = tip_data.get("match_key") or tip_data.get("match_id", "")
     home, away = _parse_teams(mk)
 

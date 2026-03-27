@@ -167,8 +167,10 @@ async def main():
         print(f"  [{r['status']:>12}] {r['edge'][:40]} → {r['load_time']}s, {r['content_len']} chars, analysing={r['analysing_seen']}")
 
     # Save
-    os.makedirs(os.path.expanduser("~/reports/screenshots/w84_tap"), exist_ok=True)
-    out = os.path.expanduser("~/reports/screenshots/w84_tap/results.json")
+    from config import BOT_ROOT
+    _w84_dir = str(BOT_ROOT.parent / "reports" / "screenshots" / "w84_tap")
+    os.makedirs(_w84_dir, exist_ok=True)
+    out = os.path.join(_w84_dir, "results.json")
     with open(out, "w") as f:
         json.dump({"results": RESULTS}, f, indent=2)
     print(f"\nSaved: {out}")

@@ -25,7 +25,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, "/home/paulsportsza")
+from config import ensure_scrapers_importable, BOT_ROOT
+ensure_scrapers_importable()
 
 from dotenv import load_dotenv
 from telethon import TelegramClient
@@ -44,9 +45,9 @@ API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 SESSION_PATH = Path("data/telethon_session.string")
 
-SCREENSHOT_DIR = Path("/home/paulsportsza/reports/screenshots/phase0")
+SCREENSHOT_DIR = BOT_ROOT.parent / "reports" / "screenshots" / "phase0"
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-RESULTS_PATH = Path("/home/paulsportsza/reports/phase0-e2e-results.json")
+RESULTS_PATH = BOT_ROOT.parent / "reports" / "phase0-e2e-results.json"
 
 BOT_TIMEOUT = 15
 AI_TIMEOUT = 50

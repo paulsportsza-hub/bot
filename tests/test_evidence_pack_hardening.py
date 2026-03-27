@@ -3,8 +3,9 @@ from __future__ import annotations
 import os
 import sys
 
-sys.path.insert(0, os.path.expanduser("~"))
-sys.path.insert(0, os.path.join(os.path.expanduser("~"), "bot"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import ensure_scrapers_importable
+ensure_scrapers_importable()
 
 from evidence_pack import (
     _add_name_variants,

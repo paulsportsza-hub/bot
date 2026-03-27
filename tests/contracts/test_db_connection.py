@@ -16,8 +16,9 @@ import os
 
 
 def _get_project_root():
-    """Return the /home/paulsportsza directory."""
-    return "/home/paulsportsza"
+    """Return the project home directory."""
+    import os
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def test_no_raw_sqlite_connect():
@@ -70,10 +71,12 @@ def test_no_raw_sqlite_connect():
 
 def test_wal_mode_enforced():
     """Verify WAL mode is active on odds.db via get_connection()."""
-    sys.path.insert(0, "/home/paulsportsza/bot")
+    _bot_dir = os.path.join(_get_project_root(), "bot")
+    sys.path.insert(0, _bot_dir)
     from db_connection import get_connection
+    from config import ODDS_DB_PATH
 
-    odds_db = "/home/paulsportsza/scrapers/odds.db"
+    odds_db = str(ODDS_DB_PATH)
     if not os.path.exists(odds_db):
         import pytest
         pytest.skip("odds.db not present on this machine")
@@ -91,10 +94,12 @@ def test_wal_mode_enforced():
 
 def test_busy_timeout_enforced():
     """Verify busy_timeout=30000ms is configured on new connections."""
-    sys.path.insert(0, "/home/paulsportsza/bot")
+    _bot_dir = os.path.join(_get_project_root(), "bot")
+    sys.path.insert(0, _bot_dir)
     from db_connection import get_connection, _BUSY_MS
+    from config import ODDS_DB_PATH
 
-    odds_db = "/home/paulsportsza/scrapers/odds.db"
+    odds_db = str(ODDS_DB_PATH)
     if not os.path.exists(odds_db):
         import pytest
         pytest.skip("odds.db not present on this machine")

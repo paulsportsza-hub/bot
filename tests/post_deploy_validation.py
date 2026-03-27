@@ -19,11 +19,12 @@ from datetime import datetime, timezone
 
 # Ensure project roots are importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.expanduser("~"))
+from config import BOT_ROOT, ensure_scrapers_importable
+ensure_scrapers_importable()
 
 log = logging.getLogger("mzansiedge.validation")
 
-REPORT_DIR = os.path.expanduser("~/reports")
+REPORT_DIR = str(BOT_ROOT.parent / "reports")
 
 
 # ── W81-HEALTH: Fixture-aware thresholds ─────────────────────────────────

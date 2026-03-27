@@ -29,14 +29,14 @@ def test_config_database_url_is_cwd_safe() -> None:
 
     code = """
 import sys
-sys.path.insert(0, '/home/paulsportsza/bot')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 print(config.DATABASE_URL)
 print(config.DATABASE_PATH)
 """
     result = subprocess.run(
         [sys.executable, "-c", code],
-        cwd="/home/paulsportsza",
+        cwd=str(config.BOT_ROOT.parent),
         env=env,
         capture_output=True,
         text=True,
@@ -54,13 +54,13 @@ print(config.DATABASE_PATH)
 def test_match_context_import_no_longer_needs_scrapers_path() -> None:
     code = """
 import sys
-sys.path.insert(0, '/home/paulsportsza')
+sys.path.insert(0, str(config.BOT_ROOT.parent))
 import scrapers.match_context_fetcher
 print('ok')
 """
     result = subprocess.run(
         [sys.executable, "-c", code],
-        cwd="/home/paulsportsza/bot",
+        cwd=str(config.BOT_ROOT),
         capture_output=True,
         text=True,
         check=False,

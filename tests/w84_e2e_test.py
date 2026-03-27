@@ -24,8 +24,9 @@ from telethon.tl.types import ReplyInlineMarkup, KeyboardButtonCallback
 API_ID = int(os.getenv("TELEGRAM_API_ID", "32418601"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "95e313a8ef5b998be0515dd8328fac57")
 BOT_USERNAME = "mzansiedge_bot"
-SESSION_FILE = "/home/paulsportsza/bot/data/telethon_session"
-STRING_SESSION_FILE = "/home/paulsportsza/bot/data/telethon_session.string"
+from config import DATA_DIR
+SESSION_FILE = str(DATA_DIR / "telethon_session")
+STRING_SESSION_FILE = str(DATA_DIR / "telethon_session.string")
 WAIT = 18  # seconds to wait for bot response on tap
 
 results = []

@@ -21,21 +21,13 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import sys
 from pathlib import Path
 
 import aiosqlite
 
-# Allow importing from scrapers directory (shared with Dataminer)
-sys.path.insert(0, "/home/paulsportsza")
-from scrapers.odds_integrity import filter_outlier_prices
-from scrapers.odds_normaliser import normalise_key, normalise_match_id
-from scrapers.utils.team_mapper import normalise_team as _mapper_normalise
+from config import ODDS_DB_PATH
 
 log = logging.getLogger("mzansiedge.odds_service")
-
-# Path to the odds database (shared with Dataminer scrapers)
-ODDS_DB_PATH = "/home/paulsportsza/scrapers/odds.db"
 
 
 def build_match_id(home_team: str, away_team: str, commence_time: str) -> str:
@@ -47,6 +39,9 @@ def build_match_id(home_team: str, away_team: str, commence_time: str) -> str:
 
     Returns e.g. "kaizer_chiefs_vs_orlando_pirates_2026-02-28"
     """
+    from scrapers.odds_normaliser import normalise_key
+    from scrapers.utils.team_mapper import normalise_team as _mapper_normalise
+
     date_part = ""
     if commence_time:
         date_part = commence_time[:10]  # "2026-02-28" from "2026-02-28T15:00:00Z"
@@ -167,6 +162,9 @@ async def get_best_odds(
             - last_updated: str (ISO timestamp of most recent snapshot)
             - bookmaker_count: int (number of bookmakers with odds)
     """
+    from scrapers.odds_integrity import filter_outlier_prices
+    from scrapers.odds_normaliser import normalise_match_id
+
     # Resolve any alias keys in the match_id before querying
     match_id = normalise_match_id(match_id)
 
@@ -186,12 +184,12 @@ async def get_best_odds(
         log.warning("Unknown market_type: %s", market_type)
         return result
 
-    if not Path(ODDS_DB_PATH).exists():
+    if not Path(str(ODDS_DB_PATH)).exists():
         log.debug("odds.db not found at %s", ODDS_DB_PATH)
         return result
 
     try:
-        async with aiosqlite.connect(ODDS_DB_PATH) as conn:
+        async with aiosqlite.connect(str(ODDS_DB_PATH)) as conn:
             conn.row_factory = aiosqlite.Row
 
             # Get current odds from odds_latest (one row per bookmaker, guaranteed fresh)
@@ -306,11 +304,11 @@ async def get_all_matches(
     """
     results = []
 
-    if not Path(ODDS_DB_PATH).exists():
+    if not Path(str(ODDS_DB_PATH)).exists():
         return results
 
     try:
-        async with aiosqlite.connect(ODDS_DB_PATH) as conn:
+        async with aiosqlite.connect(str(ODDS_DB_PATH)) as conn:
             conn.row_factory = aiosqlite.Row
 
             # Get active match_ids from odds_latest (only current matches)
@@ -362,6 +360,8 @@ async def get_odds_movement(
         - odds: float
         - scraped_at: str (ISO format)
     """
+    from scrapers.odds_normaliser import normalise_match_id
+
     # Resolve any alias keys in the match_id before querying
     match_id = normalise_match_id(match_id)
 
@@ -370,13 +370,13 @@ async def get_odds_movement(
     if not columns:
         return result
 
-    if not Path(ODDS_DB_PATH).exists():
+    if not Path(str(ODDS_DB_PATH)).exists():
         return result
 
     try:
         cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)).isoformat()
 
-        async with aiosqlite.connect(ODDS_DB_PATH) as conn:
+        async with aiosqlite.connect(str(ODDS_DB_PATH)) as conn:
             conn.row_factory = aiosqlite.Row
 
             query = """
@@ -424,6 +424,8 @@ async def detect_line_movement(
         dict with keys: direction ("shortening"/"drifting"/"stable"), magnitude (float), hours (int)
         or None if insufficient data.
     """
+    from scrapers.odds_normaliser import normalise_match_id
+
     match_id = normalise_match_id(match_id)
     history = await get_odds_movement(match_id, hours=hours, market_type=market_type)
     if not history:
@@ -464,11 +466,13 @@ async def detect_line_movement(
 
 async def get_match_league(match_id: str) -> str | None:
     """Get league for a match_id from odds_snapshots metadata."""
+    from scrapers.odds_normaliser import normalise_match_id
+
     match_id = normalise_match_id(match_id)
-    if not Path(ODDS_DB_PATH).exists():
+    if not Path(str(ODDS_DB_PATH)).exists():
         return None
     try:
-        async with aiosqlite.connect(ODDS_DB_PATH) as conn:
+        async with aiosqlite.connect(str(ODDS_DB_PATH)) as conn:
             async with conn.execute(
                 "SELECT league FROM odds_snapshots WHERE match_id = ? LIMIT 1",
                 (match_id,),
@@ -483,11 +487,11 @@ async def get_db_stats() -> dict:
     """Get summary statistics from odds.db for admin dashboard."""
     stats = {"total_rows": 0, "bookmaker_count": 0, "latest_scrape": "N/A", "match_count": 0}
 
-    if not Path(ODDS_DB_PATH).exists():
+    if not Path(str(ODDS_DB_PATH)).exists():
         return stats
 
     try:
-        async with aiosqlite.connect(ODDS_DB_PATH) as conn:
+        async with aiosqlite.connect(str(ODDS_DB_PATH)) as conn:
             async with conn.execute("SELECT COUNT(*) FROM odds_snapshots") as cur:
                 stats["total_rows"] = (await cur.fetchone())[0]
             async with conn.execute("SELECT COUNT(DISTINCT bookmaker) FROM odds_snapshots") as cur:

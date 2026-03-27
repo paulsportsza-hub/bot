@@ -34,7 +34,8 @@ API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT = "mzansiedge_bot"
 SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session")
 STRING_SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "telethon_session.string")
-CAPTURE_DIR = os.path.expanduser("~/reports/screenshots/w74_load")
+from config import BOT_ROOT
+CAPTURE_DIR = str(BOT_ROOT.parent / "reports" / "screenshots" / "w74_load")
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 
 # ── Results tracking ──

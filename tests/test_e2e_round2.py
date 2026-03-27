@@ -34,7 +34,8 @@ API_HASH = "95e313a8ef5b998be0515dd8328fac57"
 BOT_USERNAME = "mzansiedge_bot"
 
 # Read string session from file
-with open("/home/paulsportsza/bot/data/telethon_session.string", "r") as f:
+from config import DATA_DIR, BOT_ROOT
+with open(str(DATA_DIR / "telethon_session.string"), "r") as f:
     SESSION_STR = f.read().strip()
 
 TIMEOUT = 20  # seconds to wait for bot response
@@ -50,7 +51,7 @@ FOLLOWED = [
 
 # Output file
 TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M")
-REPORT_FILE = f"/home/paulsportsza/reports/e2e-round2-{TIMESTAMP}.txt"
+REPORT_FILE = str(BOT_ROOT.parent / "reports" / f"e2e-round2-{TIMESTAMP}.txt")
 
 
 # ── Helpers ──────────────────────────────────────────────

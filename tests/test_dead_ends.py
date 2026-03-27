@@ -5,6 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import BOT_ROOT
+
 import pytest
 
 import bot
@@ -109,7 +113,7 @@ async def test_main_menu_is_reachable_from_start(
 
 
 def test_no_orphan_callback_prefixes() -> None:
-    source = Path("/home/paulsportsza/bot/bot.py").read_text()
+    source = (BOT_ROOT / "bot.py").read_text()
     handled_prefixes = set(re.findall(r'(?:if|elif) prefix == "([^"]+)"', source))
     callback_literals = re.findall(r'callback_data="([^"]+)"', source)
     callback_prefixes = {callback.split(":", 1)[0] for callback in callback_literals}

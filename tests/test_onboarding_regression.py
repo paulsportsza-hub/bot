@@ -41,6 +41,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
+from config import BOT_ROOT
 from bot import (
     TEAM_CELEBRATIONS,
     _SPORT_CELEBRATIONS,
@@ -63,7 +64,7 @@ class TestFlowStructure:
 
     def test_onboarding_is_6_steps(self):
         """Step counter must show X/6, never X/9 or X/7+."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         # Must have Step X/6 references
         step_6_refs = re.findall(r"Step \d/6", source)
         assert len(step_6_refs) > 0, "No 'Step X/6' references found"
@@ -79,13 +80,13 @@ class TestFlowStructure:
 
     def test_all_6_steps_present(self):
         """Steps 1/6 through 6/6 must all exist in the code."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         for step in range(1, 7):
             assert f"Step {step}/6" in source, f"Step {step}/6 missing from bot.py"
 
     def test_step_6_is_plan_picker(self):
         """Step 6/6 must be the 'Choose Your Plan' screen with tier options."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         assert "Step 6/6: Choose Your Plan" in source, "Step 6 plan picker missing"
         assert "ob_plan:bronze" in source, "Bronze option missing from plan step"
         assert "ob_plan:gold" in source, "Gold option missing from plan step"
@@ -97,7 +98,7 @@ class TestFlowStructure:
         Bug prevented: Phase 0D removed league selection because users
         think in teams, not leagues. Leagues are auto-inferred.
         """
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         assert "kb_onboarding_leagues" not in source, \
             "kb_onboarding_leagues found — league selection step was removed in Phase 0D"
         assert "_show_next_league_prompt" not in source, \
@@ -105,7 +106,7 @@ class TestFlowStructure:
 
     def test_no_league_selection_strings(self):
         """No UI text prompting league selection during onboarding."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         assert "Select your leagues" not in source, \
             "'Select your leagues' string found — league selection was removed"
         assert "Pick leagues" not in source, \
@@ -116,7 +117,7 @@ class TestFlowStructure:
 
         Bug prevented: Phase 0D changed from per-league prompts to per-sport.
         """
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         # Must have _fav_step_text (per-sport text builder)
         assert "_fav_step_text" in source, "_fav_step_text function missing"
         # Must NOT have _fav_league_queue (old per-league state)
@@ -320,7 +321,7 @@ class TestCelebrationFormat:
 
         Bug prevented: Phase 0D-FIX — celebrations were duplicated on summary line.
         """
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         # Find the "X teams added." / "X entity added." builder
         # It must use f"<b>{len(matched)} {entity_plural} added.</b>"
         assert 'added.</b>"' in source or "added.</b>" in source, \
@@ -330,14 +331,14 @@ class TestCelebrationFormat:
 
     def test_per_team_celebration_lines(self):
         """Each matched team gets its own celebration on a separate line."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         # Pattern: "✅ {team} — {cheer}"
         assert '✅ {h(m)} — {cheer}' in source or "✅" in source, \
             "Per-team celebration line pattern not found"
 
     def test_sport_emoji_in_header_only(self):
         """Sport emoji (⚽🏉🏏🥊) should appear in the header, not per-team line."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         # Header pattern: f"{s_emoji} {pick_header}"
         assert "s_emoji" in source or "sport.emoji" in source, \
             "Sport emoji header pattern not found"
@@ -359,7 +360,7 @@ class TestEdgeExplainerCopy:
         Bug prevented: Hard-coded bookmaker counts become stale when new
         bookmakers are added.
         """
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         assert "ALL the major SA bookmakers" in source, \
             "Edge explainer must say 'ALL the major SA bookmakers'"
         # No digit + "SA bookmaker" pattern near the explainer
@@ -371,7 +372,7 @@ class TestEdgeExplainerCopy:
 
     def test_edge_explainer_no_hardcoded_source_count(self):
         """Must say 'multiple prediction sources', not '4 prediction sources'."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         explainer_region = source[source.index("How Your Edge Works"):
                                   source.index("How Your Edge Works") + 1000]
         digit_sources = re.findall(r"\d+\s*prediction sources", explainer_region, re.IGNORECASE)
@@ -380,7 +381,7 @@ class TestEdgeExplainerCopy:
 
     def test_edge_explainer_sells_not_describes(self):
         """Explainer must contain power phrases that sell the algorithm."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         # Phrases that must appear within the source (may span string literals)
         must_contain = [
             "cross-references",
@@ -400,14 +401,14 @@ class TestEdgeExplainerCopy:
 
         Note: phrase spans two string literals in source, so we check parts.
         """
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         source_lower = source.lower()
         assert "the bookmakers" in source_lower, "Missing 'the bookmakers' in explainer"
         assert "got it wrong" in source_lower, "Missing 'got it wrong' in explainer"
 
     def test_edge_tiers_in_explainer(self):
         """Explainer must list all 4 Edge tiers with correct names."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         assert "Diamond Edge" in source, "Diamond Edge tier missing from explainer"
         assert "Golden Edge" in source, "Golden Edge tier missing from explainer"
         assert "Silver Edge" in source, "Silver Edge tier missing from explainer"
@@ -436,7 +437,7 @@ class TestGoldenEdgeNaming:
 
     def test_edge_renderer_no_plain_gold_edge(self):
         """edge_renderer.py must not contain bare 'GOLD EDGE' without 'GOLDEN'."""
-        source = Path("/home/paulsportsza/bot/renderers/edge_renderer.py").read_text()
+        source = (BOT_ROOT / "renderers" / "edge_renderer.py").read_text()
         # Remove all "GOLDEN EDGE" first, then check no "GOLD EDGE" remains
         cleaned = source.replace("GOLDEN EDGE", "")
         assert "GOLD EDGE" not in cleaned, \
@@ -456,7 +457,7 @@ class TestBankrollPreferences:
 
     def test_bankroll_amounts_sa_appropriate(self):
         """Bankroll presets must be R50, R200, R500, R1,000."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         # Find bankroll keyboard region
         bk_start = source.index("def kb_onboarding_bankroll")
         bk_end = source.index("\n\n", bk_start + 100)
@@ -475,7 +476,7 @@ class TestBankrollPreferences:
         Note: R2,000/R5,000 may appear in settings as expansion options,
         but NOT in the onboarding keyboard.
         """
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         bk_start = source.index("def kb_onboarding_bankroll")
         bk_end = source.index("\n\n", bk_start + 100)
         bk_region = source[bk_start:bk_end]
@@ -487,7 +488,7 @@ class TestBankrollPreferences:
 
     def test_bankroll_has_skip_and_custom(self):
         """Bankroll must offer skip and custom amount options."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         bk_start = source.index("def kb_onboarding_bankroll")
         bk_end = source.index("\n\n", bk_start + 100)
         bk_region = source[bk_start:bk_end]
@@ -497,7 +498,7 @@ class TestBankrollPreferences:
 
     def test_experience_label_is_bold(self):
         """Profile summary: Experience label must be bold."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         assert "<b>Experience:</b>" in source, \
             "Experience label must be bold in profile summary"
 
@@ -514,7 +515,7 @@ class TestRemovedFeatures:
 
         Bug prevented: Phase 0D — league selection confused users.
         """
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         assert "kb_onboarding_leagues" not in source
 
     def test_no_haiku_welcome(self):
@@ -523,7 +524,7 @@ class TestRemovedFeatures:
         Bug prevented: Phase 0D — Haiku welcome was slow and output was
         inconsistent in tone/length.
         """
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         # No anthropic API call in handle_ob_done
         ob_done_start = source.index("async def handle_ob_done")
         ob_done_end = source.index("\nasync def ", ob_done_start + 50)
@@ -601,13 +602,13 @@ class TestAliasesAndFuzzyMatching:
 
         Bug prevented: Users typing 'UCL' or 'Premier League' as a team name.
         """
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         assert "_LEAGUE_NAME_ALIASES" in source, \
             "_LEAGUE_NAME_ALIASES not found — league name detection was removed"
 
     def test_league_name_aliases_cover_key_leagues(self):
         """_LEAGUE_NAME_ALIASES must include UCL, EPL, PSL, Premier League."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         # Extract the set definition
         alias_start = source.index("_LEAGUE_NAME_ALIASES")
         alias_end = source.index("}", alias_start)
@@ -687,7 +688,7 @@ class TestWelcomeMessage:
 
     def test_welcome_has_edge_alerts_cta(self):
         """Welcome must offer 'Set Up Edge Alerts' button."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         ob_done_start = source.index("async def handle_ob_done")
         ob_done_end = source.index("\nasync def ", ob_done_start + 50)
         ob_done_region = source[ob_done_start:ob_done_end]
@@ -697,7 +698,7 @@ class TestWelcomeMessage:
 
     def test_welcome_has_skip_option(self):
         """Welcome must allow skipping Edge Alerts setup."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         ob_done_start = source.index("async def handle_ob_done")
         ob_done_end = source.index("\nasync def ", ob_done_start + 50)
         ob_done_region = source[ob_done_start:ob_done_end]
@@ -707,7 +708,7 @@ class TestWelcomeMessage:
 
     def test_welcome_activates_persistent_keyboard(self):
         """Welcome must send the persistent reply keyboard."""
-        source = Path("/home/paulsportsza/bot/bot.py").read_text()
+        source = (BOT_ROOT / "bot.py").read_text()
         ob_done_start = source.index("async def handle_ob_done")
         ob_done_end = source.index("\nasync def ", ob_done_start + 50)
         ob_done_region = source[ob_done_start:ob_done_end]

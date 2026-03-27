@@ -54,7 +54,8 @@ _TERSE_TEAMLINE = re.compile(
 
 SECTION_HEADERS = ["📋", "🎯", "⚠️", "🏆"]
 
-REPORT_DIR = "/home/paulsportsza/reports/e2e-quality-gate"
+from config import BOT_ROOT
+REPORT_DIR = str(BOT_ROOT.parent / "reports" / "e2e-quality-gate")
 
 
 @dataclass

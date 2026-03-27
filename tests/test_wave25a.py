@@ -13,8 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-sys.path.insert(0, "/home/paulsportsza/bot")
-sys.path.insert(0, "/home/paulsportsza")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import ensure_scrapers_importable
+ensure_scrapers_importable()
 
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("ODDS_API_KEY", "test-odds-key")

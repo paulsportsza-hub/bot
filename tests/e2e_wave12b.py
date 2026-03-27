@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import BOT_ROOT
 
 from dotenv import load_dotenv
 from telethon import TelegramClient
@@ -38,9 +39,9 @@ BOT = "mzansiedge_bot"
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 SESSION_PATH = Path("data/telethon_session.string")
-REPORT_DIR = Path("/home/paulsportsza/reports/e2e-screenshots")
+REPORT_DIR = BOT_ROOT.parent / "reports" / "e2e-screenshots"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
-RESULTS_PATH = Path("/home/paulsportsza/reports/wave12b-e2e-results.json")
+RESULTS_PATH = BOT_ROOT.parent / "reports" / "wave12b-e2e-results.json"
 
 BOT_TIMEOUT = 15
 PICKS_TIMEOUT = 45

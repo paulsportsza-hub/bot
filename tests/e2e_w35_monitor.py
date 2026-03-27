@@ -15,6 +15,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from config import BOT_ROOT
+_W35_CAPTURE_DIR = str(BOT_ROOT.parent / "reports" / "screenshots" / "w35_monitor")
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -103,7 +105,7 @@ async def test_1a_qa_health(client):
     record("1A-keys", all_found, f"Key checks found: {', '.join(found)}")
 
     # Save capture
-    capture_dir = os.path.expanduser("~/reports/screenshots/w35_monitor")
+    capture_dir = _W35_CAPTURE_DIR
     os.makedirs(capture_dir, exist_ok=True)
     with open(os.path.join(capture_dir, "qa_health.txt"), "w") as f:
         f.write(text)
@@ -147,7 +149,7 @@ async def test_2a_qa_morning(client):
     record("2A-compact", under_15, f"{len(content_lines)} content lines (max 15)")
 
     # Save capture
-    capture_dir = os.path.expanduser("~/reports/screenshots/w35_monitor")
+    capture_dir = _W35_CAPTURE_DIR
     os.makedirs(capture_dir, exist_ok=True)
     with open(os.path.join(capture_dir, "qa_morning.txt"), "w") as f:
         f.write(text)
@@ -184,7 +186,7 @@ async def test_3b_qa_validate(client):
         record("3B-detail", True, "All passed — no failure details needed")
 
     # Save capture
-    capture_dir = os.path.expanduser("~/reports/screenshots/w35_monitor")
+    capture_dir = _W35_CAPTURE_DIR
     os.makedirs(capture_dir, exist_ok=True)
     with open(os.path.join(capture_dir, "qa_validate.txt"), "w") as f:
         f.write(text)

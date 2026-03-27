@@ -28,18 +28,20 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Setup environment
-os.chdir("/home/paulsportsza/bot")
-sys.path.insert(0, "/home/paulsportsza/bot")
+_bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(_bot_dir)
+sys.path.insert(0, _bot_dir)
 
 os.environ.setdefault("TZ", "Africa/Johannesburg")
 
 # Load .env
 from dotenv import load_dotenv
-load_dotenv("/home/paulsportsza/bot/.env")
+load_dotenv(os.path.join(_bot_dir, ".env"))
 
 # ── Results tracking ─────────────────────────────────────────────────
 RESULTS: list[dict] = []
-SCREENSHOTS_DIR = Path("/home/paulsportsza/reports/e2e-screenshots")
+from config import BOT_ROOT
+SCREENSHOTS_DIR = BOT_ROOT.parent / "reports" / "e2e-screenshots"
 SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -178,7 +180,7 @@ async def run_diagnostics():
     # DIAG-001: Bot code version
     import subprocess
     result = subprocess.run(["git", "log", "--oneline", "-1"],
-                            capture_output=True, text=True, cwd="/home/paulsportsza/bot")
+                            capture_output=True, text=True, cwd=str(BOT_ROOT))
     commit = result.stdout.strip()
     record("DIAG-001", "Bot code version",
            "PASS" if "8c25076" in commit else "FAIL",
@@ -199,7 +201,9 @@ async def run_diagnostics():
 
     # DIAG-003: odds.db accessible and fresh
     try:
-        conn = sqlite3.connect("/home/paulsportsza/scrapers/odds.db")
+        from config import ODDS_DB_PATH
+        from db_connection import get_connection
+        conn = get_connection(str(ODDS_DB_PATH))
         c = conn.cursor()
         c.execute("SELECT COUNT(*) FROM odds_snapshots")
         rows = c.fetchone()[0]
@@ -1024,7 +1028,7 @@ async def main():
                     print(f"     Detail: {r['detail']}")
 
     # Save JSON results
-    json_path = Path("/home/paulsportsza/reports/e2e-results.json")
+    json_path = BOT_ROOT.parent / "reports" / "e2e-results.json"
     json_path.write_text(json.dumps(RESULTS, indent=2, default=str))
     print(f"\nJSON results: {json_path}")
     print(f"Screenshots: {SCREENSHOTS_DIR}/")

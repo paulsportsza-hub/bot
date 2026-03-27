@@ -12,8 +12,9 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.expanduser("~"))
-sys.path.insert(0, os.path.join(os.path.expanduser("~"), "bot"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from config import ensure_scrapers_importable
+ensure_scrapers_importable()
 
 # ── Core bot modules ──
 

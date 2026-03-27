@@ -23,8 +23,9 @@ import time
 
 # Add project paths
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, "/home/paulsportsza")
-sys.path.insert(0, "/home/paulsportsza/scrapers")
+from config import SCRAPERS_ROOT, BOT_ROOT
+sys.path.insert(0, str(SCRAPERS_ROOT.parent))
+sys.path.insert(0, str(SCRAPERS_ROOT))
 
 from dotenv import load_dotenv
 _bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1430,7 +1431,8 @@ if __name__ == "__main__":
 
     # W81-HEALTH: PID lock — prevent concurrent pregen instances
     import fcntl as _fcntl
-    _PID_FILE = os.path.expanduser("~/logs/pregen.pid")
+    from config import BOT_ROOT
+    _PID_FILE = str(BOT_ROOT.parent / "logs" / "pregen.pid")
     _pid_fh = None
     try:
         _pid_fh = open(_PID_FILE, "w")

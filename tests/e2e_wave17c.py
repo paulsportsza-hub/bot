@@ -22,7 +22,8 @@ import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, "/home/paulsportsza")
+from config import ensure_scrapers_importable, BOT_ROOT
+ensure_scrapers_importable()
 
 from dotenv import load_dotenv
 
@@ -36,9 +37,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("anthropic").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-REPORT_DIR = Path("/home/paulsportsza/reports/e2e-screenshots")
+REPORT_DIR = BOT_ROOT.parent / "reports" / "e2e-screenshots"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
-RESULTS_PATH = Path("/home/paulsportsza/reports/wave17c-e2e-results.json")
+RESULTS_PATH = BOT_ROOT.parent / "reports" / "wave17c-e2e-results.json"
 
 # Import bot functions directly
 from bot import (

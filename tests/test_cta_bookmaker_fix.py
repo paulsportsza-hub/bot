@@ -15,7 +15,8 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.expanduser("~"))  # For `from scrapers.*` imports
+from config import ensure_scrapers_importable
+ensure_scrapers_importable()
 
 
 # ── Part A: _load_tips_from_edge_results populates odds_by_bookmaker ──

@@ -62,6 +62,11 @@ from telegram.ext import (
 )
 
 import config
+from config import ODDS_DB_PATH, ensure_scrapers_importable
+
+# One-time path setup: replaces all scattered sys.path.insert blocks
+ensure_scrapers_importable()
+
 import db
 from scripts.odds_client import (
     fetch_odds, format_odds_message,
@@ -6132,9 +6137,6 @@ def _abbreviate_btn(name: str, max_len: int = 8) -> str:
 def _display_team_name(key: str) -> str:
     """Convert odds.db normalised key to display name: 'mamelodi_sundowns' → 'Mamelodi Sundowns'."""
     try:
-        import sys
-        if "/home/paulsportsza" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza")
         from scrapers.odds_normaliser import display_name
         return display_name(key)
     except (ImportError, Exception):
@@ -6239,21 +6241,15 @@ async def _get_user_fixture_preview(
         return []
 
     try:
-        import sys
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         from db_connection import get_connection as _get_conn
-
-        if "/home/paulsportsza" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza")
-        if "/home/paulsportsza/scrapers" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza/scrapers")
 
         tz = ZoneInfo(config.TZ)
         today = datetime.now(tz).date()
         horizon = today + timedelta(days=max(days_ahead, 1))
 
-        conn = _get_conn("/home/paulsportsza/scrapers/odds.db")
+        conn = _get_conn(str(ODDS_DB_PATH))
         rows = conn.execute(
             "SELECT programme_title, channel_short, dstv_number, broadcast_date, "
             "start_time, league, home_team, away_team "
@@ -6358,11 +6354,6 @@ def _get_broadcast_line(
     Returns simplified display like '📺 DStv 203' or empty string.
     """
     try:
-        import sys
-        if "/home/paulsportsza" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza")
-        if "/home/paulsportsza/scrapers" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza/scrapers")
         from scrapers.broadcast_scraper import get_broadcast_info
         info = get_broadcast_info(
             home_team=home_team,
@@ -6391,14 +6382,9 @@ def _get_broadcast_details(
     """
     result: dict[str, str] = {"broadcast": "", "kickoff": ""}
     try:
-        import sys
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         from db_connection import get_connection as _get_conn
-        if "/home/paulsportsza" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza")
-        if "/home/paulsportsza/scrapers" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza/scrapers")
         from scrapers.broadcast_matcher import fuzzy_match_broadcast
 
         tz = ZoneInfo(config.TZ)
@@ -6406,8 +6392,7 @@ def _get_broadcast_details(
         today = now.strftime("%Y-%m-%d")
         week_ahead = (now + timedelta(days=7)).strftime("%Y-%m-%d")
 
-        db_path = "/home/paulsportsza/scrapers/odds.db"
-        conn = _get_conn(db_path)
+        conn = _get_conn(str(ODDS_DB_PATH))
         rows = conn.execute(
             "SELECT * FROM broadcast_schedule "
             "WHERE broadcast_date BETWEEN ? AND ? AND is_live = 1 "
@@ -6452,9 +6437,9 @@ def _get_edge_result_match_date(match_key: str = "") -> str:
     if not match_key:
         return ""
     try:
-        import sqlite3 as _sq
+        from db_connection import get_connection as _get_conn
 
-        _conn = _sq.connect("/home/paulsportsza/bot/scrapers/odds.db", timeout=2)
+        _conn = _get_conn(str(ODDS_DB_PATH), timeout_ms=3000)
         try:
             _row = _conn.execute(
                 "SELECT match_date FROM edge_results WHERE match_key = ? LIMIT 1",
@@ -6835,22 +6820,16 @@ def _get_next_fixtures_for_teams(
     if not user_teams:
         return []
     try:
-        import sys
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         from db_connection import get_connection as _get_conn
-        if "/home/paulsportsza" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza")
-        if "/home/paulsportsza/scrapers" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza/scrapers")
 
         tz = ZoneInfo(config.TZ)
         now = datetime.now(tz)
         today = now.strftime("%Y-%m-%d")
         month_ahead = (now + timedelta(days=30)).strftime("%Y-%m-%d")
 
-        db_path = "/home/paulsportsza/scrapers/odds.db"
-        conn = _get_conn(db_path)
+        conn = _get_conn(str(ODDS_DB_PATH))
         rows = conn.execute(
             "SELECT programme_title, home_team, away_team, start_time, league "
             "FROM broadcast_schedule "
@@ -9208,7 +9187,7 @@ def _build_odds_compare_back_button(user_id: int, event_id: str) -> InlineKeyboa
 
 # ── W60-CACHE: Persistent narrative cache in odds.db ──────────
 _NARRATIVE_CACHE_TTL = 7200  # 2 hours in seconds (R14-BUILD-01: reduced from 6h)
-_NARRATIVE_DB_PATH = "/home/paulsportsza/scrapers/odds.db"
+_NARRATIVE_DB_PATH = str(ODDS_DB_PATH)
 # W75-FIX: Cache miss uses Sonnet (not Haiku) for quality parity with pre-gen
 _NARRATIVE_MODEL = os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514")
 
@@ -11229,9 +11208,6 @@ def validate_sport_context(narrative: str, sport: str) -> str:
         return narrative
 
     try:
-        import sys as _sys
-        if "/home/paulsportsza" not in _sys.path:
-            _sys.path.insert(0, "/home/paulsportsza")
         from scrapers.sport_terms import SPORT_BANNED_TERMS
         banned = SPORT_BANNED_TERMS.get(sport, {}).get("banned", [])
     except ImportError:
@@ -14828,11 +14804,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             _tbc_lines.append("")
             # Try to pull verified context for the known team
             try:
-                import sys as _sys
-                if "/home/paulsportsza" not in _sys.path:
-                    _sys.path.insert(0, "/home/paulsportsza")
-                if "/home/paulsportsza/scrapers" not in _sys.path:
-                    _sys.path.insert(0, "/home/paulsportsza/scrapers")
                 from scrapers.match_context_fetcher import get_match_context
                 _sk = config.LEAGUE_SPORT.get(target_league, "")
                 _ctx = await get_match_context(
@@ -14946,11 +14917,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     async def _fetch_context_bg():
         """Background coroutine for ESPN match context."""
         try:
-            import sys as _sys
-            if "/home/paulsportsza" not in _sys.path:
-                _sys.path.insert(0, "/home/paulsportsza")
-            if "/home/paulsportsza/scrapers" not in _sys.path:
-                _sys.path.insert(0, "/home/paulsportsza/scrapers")
             from scrapers.match_context_fetcher import get_match_context
             _sk = config.LEAGUE_SPORT.get(target_league, "")
             _SPORT_TO_FETCHER = {"combat": ""}
@@ -15194,9 +15160,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # W84-RT2: get_connection() is synchronous — the underlying sqlite3 busy_timeout (30s) blocks
     # the event loop if odds.db is locked. Run the entire form enrichment in a thread.
     try:
-        import sys as _sys
-        if "/home/paulsportsza" not in _sys.path:
-            _sys.path.insert(0, "/home/paulsportsza")
         from scrapers.form.form_analyser import format_form_for_narrative as _fmt_form
         _fhk = home_raw.lower().replace(" ", "_")
         _fak = away_raw.lower().replace(" ", "_")
@@ -15398,9 +15361,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         # Fetch banned sport terms for prompt + post-processing
         _banned_terms_str = ""
         try:
-            import sys as _sys
-            if "/home/paulsportsza" not in _sys.path:
-                _sys.path.insert(0, "/home/paulsportsza")
             from scrapers.sport_terms import SPORT_BANNED_TERMS as _SBT
             _banned_list = _SBT.get(_sport_for_prompt, {}).get("banned", [])
             _banned_terms_str = ", ".join(_banned_list) if _banned_list else ""
@@ -17293,9 +17253,6 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _get_settlement_funcs():
     """Lazy import settlement pipeline functions (sync sqlite3 on odds.db)."""
-    import sys
-    if "/home/paulsportsza" not in sys.path:
-        sys.path.insert(0, "/home/paulsportsza")
     from scrapers.edge.settlement import (
         get_edge_stats, get_recent_settled, get_best_hits, get_streak,
         get_upcoming_edges, get_settled_in_range,
@@ -17605,7 +17562,6 @@ def _load_hot_tips_result_proof_sync() -> dict:
     """Load Hot Tips result-proof data from existing settlement helpers."""
     from datetime import datetime as _dt_cls, timedelta as _td
     from zoneinfo import ZoneInfo as _ZI
-    import sys
 
     proof = {
         "stats_7d": {
@@ -17651,8 +17607,6 @@ def _load_hot_tips_result_proof_sync() -> dict:
         log.debug("Hot Tips result-proof stats unavailable: %s", exc)
 
     try:
-        if "/home/paulsportsza" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza")
         from scrapers.edge.settlement import get_recently_settled_since
 
         proof["recently_settled"] = [
@@ -18296,9 +18250,6 @@ def _get_portfolio_line() -> str:
     Wave 26A-FIX: shortened for mobile (was wrapping on small screens).
     """
     try:
-        import sys
-        if "/home/paulsportsza" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza")
         from scrapers.edge.settlement import get_top_10_portfolio_return
         pf = get_top_10_portfolio_return(days=7)
         if pf["count"] > 0:
@@ -19706,9 +19657,6 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     _sentry_tags(cron_job="settlement-pipeline")
 
     try:
-        import sys
-        if "/home/paulsportsza" not in sys.path:
-            sys.path.insert(0, "/home/paulsportsza")
         from scrapers.edge.settlement import get_recently_settled_since, get_edge_stats
     except Exception as exc:
         log.warning("Result alerts: settlement import failed: %s", exc)
@@ -20765,10 +20713,7 @@ async def _narrative_health_check_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     from db_connection import get_connection as _sql_get
     import random as _rand
 
-    DB_PATH = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "..", "scrapers", "odds.db",
-    )
+    DB_PATH = str(ODDS_DB_PATH)
     if not os.path.exists(DB_PATH):
         return
 
@@ -20903,7 +20848,6 @@ async def _post_deploy_validation_job(ctx) -> None:
     _pdv_mon.begin()
     _sentry_tags(cron_job="post-deploy-validation", bot_instance=_SENTRY_BOT_INSTANCE)
     try:
-        import sys as _sys
         import importlib.util
         _bot_dir = os.path.dirname(os.path.abspath(__file__))
         _val_path = os.path.join(_bot_dir, "tests", "post_deploy_validation.py")

@@ -20,7 +20,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, "/home/paulsportsza")
+from config import ensure_scrapers_importable
+ensure_scrapers_importable()
 
 from dotenv import load_dotenv
 from telethon import TelegramClient
@@ -39,9 +40,10 @@ API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 SESSION_PATH = Path("data/telethon_session.string")
 
-SCREENSHOT_DIR = Path("/home/paulsportsza/reports/screenshots/wave17f")
+from config import BOT_ROOT
+SCREENSHOT_DIR = BOT_ROOT.parent / "reports" / "screenshots" / "wave17f"
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-RESULTS_PATH = Path("/home/paulsportsza/reports/wave17f-e2e-results.json")
+RESULTS_PATH = BOT_ROOT.parent / "reports" / "wave17f-e2e-results.json"
 
 BOT_TIMEOUT = 15
 AI_TIMEOUT = 50
@@ -49,8 +51,7 @@ AI_TIMEOUT = 50
 EDGE_EMOJIS = {"💎", "🥇", "🥈", "🥉"}
 
 # ── Coaches lookup (for verification) ─────────────────────────────────
-COACHES_PATH = Path("/home/paulsportsza/scrapers/coaches.json")
-KEY_PLAYERS_PATH = Path("/home/paulsportsza/scrapers/key_players.json")
+from config import COACHES_PATH, KEY_PLAYERS_PATH
 
 try:
     COACHES = json.loads(COACHES_PATH.read_text())

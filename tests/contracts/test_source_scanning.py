@@ -15,10 +15,11 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.expanduser("~"))
-sys.path.insert(0, os.path.join(os.path.expanduser("~"), "bot"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from config import BOT_ROOT, ensure_scrapers_importable
+ensure_scrapers_importable()
 
-BOT_PY = os.path.expanduser("~/bot/bot.py")
+BOT_PY = str(BOT_ROOT / "bot.py")
 
 
 def _read_bot_source() -> str:
