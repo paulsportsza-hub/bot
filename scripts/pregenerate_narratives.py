@@ -841,7 +841,7 @@ async def _generate_one(
         home = home or bot._display_team_name(home_key)
         away = away or bot._display_team_name(away_key)
 
-    league = edge.get("league", "")
+    league = edge.get("league") or ""
     sport = edge.get("sport", "soccer")
     commence = edge.get("commence_time", "")
 

@@ -376,6 +376,8 @@ _LEAGUE_DISPLAY: dict[str, str] = {
 
 def _humanise_league(league_key: str) -> str:
     """Convert league key to user-friendly display name."""
+    if not league_key:
+        return ""
     return _LEAGUE_DISPLAY.get(league_key, league_key.replace("_", " ").title())
 
 
@@ -629,7 +631,7 @@ def build_narrative_spec(
     spec = NarrativeSpec(
         home_name=home_name,
         away_name=away_name,
-        competition=_humanise_league(edge_data.get("league", "")),
+        competition=_humanise_league(edge_data.get("league") or ""),
         sport=sport,
         home_story_type=_decide_team_story(
             home_setup.get("position"), home_setup.get("points"), home_setup.get("form", ""),
@@ -742,6 +744,8 @@ def _injuries_sent(injuries: list[str]) -> str:
 
 def _parse_wdl(record: str) -> tuple[int, int, int]:
     """Parse 'W9 D3 L2' → (9, 3, 2). Returns (0, 0, 0) on failure."""
+    if not record:
+        return (0, 0, 0)
     m = re.search(r"W(\d+)\s+D(\d+)\s+L(\d+)", record)
     if m:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
