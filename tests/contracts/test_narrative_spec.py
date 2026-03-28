@@ -23,6 +23,7 @@ from narrative_spec import (
     _humanise_league,
     _build_outcome_label,
     _build_h2h_summary,
+    _build_evidence_clauses,
     # W82-RENDER
     _ordinal_r,
     _pick,
@@ -1143,3 +1144,172 @@ class TestRenderBaseline:
         spec = self._full_spec()
         baseline = _render_baseline(spec)
         assert "Billiat" in baseline
+
+
+# ── VERDICT-COHERENCE-FIX: Evidence clause tests ─────────────────────────────
+
+class TestBuildEvidenceClauses:
+    """_build_evidence_clauses() returns match-specific evidence for verdict."""
+
+    def _spec(self, **overrides):
+        defaults = dict(
+            home_name="Arsenal", away_name="Chelsea",
+            competition="Premier League", sport="soccer",
+            home_story_type="neutral", away_story_type="neutral",
+            evidence_class="supported", tone_band="confident",
+            verdict_action="back", verdict_sizing="standard stake",
+            outcome="home", outcome_label="Arsenal win",
+            bookmaker="Betway", odds=2.10, ev_pct=8.3,
+            fair_prob_pct=51.5, composite_score=72.0,
+            bookmaker_count=5, support_level=3,
+            risk_factors=["Stale price — hasn't updated in 8h, could shift before kickoff."],
+            risk_severity="moderate", stale_minutes=30,
+            movement_direction="for", tipster_against=0,
+            tipster_agrees=True, tipster_available=True,
+        )
+        defaults.update(overrides)
+        return NarrativeSpec(**defaults)
+
+    def test_ev_clause_present_when_positive(self):
+        """EV clause appears when ev_pct > 0."""
+        spec = self._spec(ev_pct=8.3, bookmaker_count=5)
+        clauses = _build_evidence_clauses(spec)
+        assert "+8.3% EV across 5 bookmakers" in clauses
+
+    def test_ev_clause_single_bookmaker(self):
+        """Single bookmaker uses 'at current pricing' instead of count."""
+        spec = self._spec(ev_pct=4.5, bookmaker_count=1)
+        clauses = _build_evidence_clauses(spec)
+        assert "+4.5% EV at current pricing" in clauses
+        assert "bookmakers" not in clauses
+
+    def test_ev_clause_absent_when_zero(self):
+        """No EV clause when ev_pct is 0."""
+        spec = self._spec(ev_pct=0.0)
+        clauses = _build_evidence_clauses(spec)
+        assert "EV" not in clauses
+
+    def test_signal_clause_with_movement(self):
+        """Movement 'for' appears in key signals."""
+        spec = self._spec(movement_direction="for", tipster_available=False)
+        clauses = _build_evidence_clauses(spec)
+        assert "market movement confirms" in clauses
+
+    def test_signal_clause_with_tipster(self):
+        """Tipster agreement appears in key signals."""
+        spec = self._spec(movement_direction="neutral",
+                          tipster_available=True, tipster_agrees=True)
+        clauses = _build_evidence_clauses(spec)
+        assert "tipster consensus agrees" in clauses
+
+    def test_signal_clause_both_signals(self):
+        """Both movement and tipster appear together."""
+        spec = self._spec(movement_direction="for",
+                          tipster_available=True, tipster_agrees=True)
+        clauses = _build_evidence_clauses(spec)
+        assert "market movement confirms" in clauses
+        assert "tipster consensus agrees" in clauses
+
+    def test_no_signals_clause(self):
+        """Zero support level + no movement/tipster → higher variance."""
+        spec = self._spec(support_level=0, movement_direction="neutral",
+                          tipster_available=False)
+        clauses = _build_evidence_clauses(spec)
+        assert "No confirming signals" in clauses
+
+    def test_risk_clause_with_specific_risk(self):
+        """Specific risk factor appears as 'Main risk:'."""
+        spec = self._spec(risk_factors=["Market drifting away from this outcome — sharp money may disagree."])
+        clauses = _build_evidence_clauses(spec)
+        assert "Main risk:" in clauses
+        assert "sharp money" in clauses
+
+    def test_risk_clause_skipped_for_clean_risk(self):
+        """Default clean-risk phrases are not included."""
+        spec = self._spec(risk_factors=["Nothing obvious stands against this. The usual match-day variables apply."])
+        clauses = _build_evidence_clauses(spec)
+        assert "Main risk:" not in clauses
+
+    def test_risk_clause_skipped_when_empty(self):
+        """No risk clause when risk_factors is empty."""
+        spec = self._spec(risk_factors=[])
+        clauses = _build_evidence_clauses(spec)
+        assert "Main risk:" not in clauses
+
+
+class TestVerdictCoherenceIntegration:
+    """_render_verdict() includes evidence clauses in output."""
+
+    def _spec(self, **overrides):
+        defaults = dict(
+            home_name="Sundowns", away_name="Chiefs",
+            competition="Premiership (PSL)", sport="soccer",
+            home_story_type="title_push", away_story_type="inconsistent",
+            evidence_class="supported", tone_band="confident",
+            verdict_action="back", verdict_sizing="standard stake",
+            outcome="home", outcome_label="Sundowns win",
+            bookmaker="Hollywoodbets", odds=1.65, ev_pct=12.4,
+            fair_prob_pct=68.0, composite_score=74.0,
+            bookmaker_count=4, support_level=3,
+            risk_factors=["Market drifting away from this outcome — sharp money may disagree."],
+            risk_severity="moderate", stale_minutes=30,
+            movement_direction="for", tipster_against=0,
+            tipster_agrees=True, tipster_available=True,
+        )
+        defaults.update(overrides)
+        return NarrativeSpec(**defaults)
+
+    def test_back_verdict_includes_ev(self):
+        """Back verdict mentions the EV percentage."""
+        spec = self._spec()
+        verdict = _render_verdict(spec)
+        assert "+12.4% EV" in verdict
+
+    def test_speculative_verdict_includes_ev(self):
+        """Speculative verdict also includes evidence."""
+        spec = self._spec(
+            verdict_action="speculative punt", verdict_sizing="tiny exposure",
+            evidence_class="speculative", tone_band="cautious",
+            ev_pct=3.2, bookmaker_count=3,
+        )
+        verdict = _render_verdict(spec)
+        assert "+3.2% EV" in verdict
+
+    def test_monitor_verdict_no_evidence(self):
+        """Monitor/pass verdicts don't get evidence clauses."""
+        spec = self._spec(verdict_action="monitor", verdict_sizing="monitor", ev_pct=0.0)
+        verdict = _render_verdict(spec)
+        assert "EV" not in verdict
+        assert "monitor" in verdict.lower()
+
+    def test_strong_back_verdict_includes_ev(self):
+        """Strong back verdict includes evidence."""
+        spec = self._spec(
+            verdict_action="strong back", verdict_sizing="confident stake",
+            evidence_class="conviction", tone_band="strong",
+            ev_pct=16.5, bookmaker_count=5,
+        )
+        verdict = _render_verdict(spec)
+        assert "+16.5% EV across 5 bookmakers" in verdict
+
+    def test_verdict_includes_risk_clause(self):
+        """Verdict includes main risk when specific risk exists."""
+        spec = self._spec(risk_factors=["2 tipster sources lean the other way."])
+        verdict = _render_verdict(spec)
+        assert "Main risk:" in verdict
+
+    def test_verdict_still_passes_banned_phrase_check(self):
+        """Evidence clauses don't introduce banned phrases."""
+        for action, sizing, tone in (
+            ("speculative punt", "tiny exposure", "cautious"),
+            ("lean", "small stake", "moderate"),
+            ("back", "standard stake", "confident"),
+            ("strong back", "confident stake", "strong"),
+        ):
+            spec = self._spec(verdict_action=action, verdict_sizing=sizing,
+                              evidence_class="supported", tone_band=tone)
+            verdict = _render_verdict(spec)
+            for phrase in TONE_BANDS[tone]["banned"]:
+                assert phrase.lower() not in verdict.lower(), (
+                    f"Banned phrase {phrase!r} in {action} verdict with evidence"
+                )

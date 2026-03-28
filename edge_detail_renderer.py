@@ -686,6 +686,9 @@ def _section_verdict(data: EdgeDetailData) -> str:
 
     SERVE-PATH-FIX Fix 3: MD5-deterministic variant selection per match_key
     so different cards show different verdict text.
+
+    VERDICT-COHERENCE-FIX: Appends EV clause so the verdict references
+    specific evidence — not just generic posture language.
     """
     lines = ["🏆 <b>Verdict</b>"]
     badge = render_edge_badge(data.edge_tier)
@@ -719,6 +722,10 @@ def _section_verdict(data: EdgeDetailData) -> str:
             f"{badge} — The numbers and signals agree. Back it at standard exposure.",
         ]
         lines.append(variants[_vpick(seed, len(variants))])
+
+    # VERDICT-COHERENCE-FIX: Append EV clause — the single most differentiating evidence
+    if data.predicted_ev > 0:
+        lines.append(f"+{data.predicted_ev:.1f}% EV at current pricing.")
 
     return "\n".join(lines)
 

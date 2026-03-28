@@ -131,6 +131,9 @@ class NarrativeSpec:
     verdict_action: str = ""      # "speculative punt" / "lean" / "back" / "strong back"
     verdict_sizing: str = ""      # "tiny exposure" / "small stake" / "standard stake" / "confident stake"
 
+    # Bookmaker coverage
+    bookmaker_count: int = 0              # number of SA bookmakers pricing this match
+
     # Stale/movement context
     stale_minutes: int = 0
     movement_direction: str = "neutral"   # "for" / "against" / "neutral"
@@ -662,6 +665,7 @@ def build_narrative_spec(
         ev_pct=edge_data.get("edge_pct", 0),
         fair_prob_pct=round(float(fair_prob_raw) * 100, 1) if fair_prob_raw else 0.0,
         composite_score=edge_data.get("composite_score", 0),
+        bookmaker_count=edge_data.get("bookmaker_count", 0),
         support_level=edge_data.get("confirming_signals", 0),
         contradicting_signals=edge_data.get("contradicting_signals", 0),
         evidence_class=ev_class,
@@ -804,6 +808,46 @@ def _verdict_support_line(spec: NarrativeSpec) -> str:
         f"{support} supporting indicator{'s' if support != 1 else ''} sit behind it, "
         f"with {opposing} pushing back."
     )
+
+
+def _build_evidence_clauses(spec: NarrativeSpec) -> str:
+    """VERDICT-COHERENCE-FIX: Build match-specific evidence clauses for verdict.
+
+    Three clauses from already-computed data — all deterministic, zero LLM:
+    1. EV clause — why this edge is worth looking at
+    2. Signal clause — what confirms or doesn't
+    3. Risk clause — the one thing most likely to invalidate the edge
+    """
+    parts: list[str] = []
+
+    # 1. EV clause — the most important addition
+    if spec.ev_pct > 0:
+        if spec.bookmaker_count >= 2:
+            parts.append(f"+{spec.ev_pct:.1f}% EV across {spec.bookmaker_count} bookmakers.")
+        else:
+            parts.append(f"+{spec.ev_pct:.1f}% EV at current pricing.")
+
+    # 2. Signal clause — describe confirming/contradicting signals
+    signal_descs: list[str] = []
+    if spec.movement_direction == "for":
+        signal_descs.append("market movement confirms")
+    if spec.tipster_available and spec.tipster_agrees is True:
+        signal_descs.append("tipster consensus agrees")
+    if signal_descs:
+        parts.append(f"Key signals: {', '.join(signal_descs[:2])}.")
+    elif spec.support_level == 0:
+        parts.append("No confirming signals — higher variance.")
+
+    # 3. Risk clause — top risk factor (skip default clean-risk phrases)
+    _SKIP_RISK = ("clean risk", "nothing obvious", "price and signals are aligned")
+    if spec.risk_factors:
+        top_risk = spec.risk_factors[0]
+        if not any(skip in top_risk.lower() for skip in _SKIP_RISK):
+            # Ensure risk clause doesn't end with double period
+            risk_text = top_risk.rstrip(".")
+            parts.append(f"Main risk: {risk_text}.")
+
+    return " ".join(parts)
 
 
 # ── Story-type template functions (10 types × 3 variants) ─────────────────────
@@ -1650,7 +1694,11 @@ def _render_risk(spec: NarrativeSpec) -> str:
 
 
 def _render_verdict(spec: NarrativeSpec) -> str:
-    """Verdict capped by tone_band. Never uses phrases banned by tone_band."""
+    """Verdict capped by tone_band. Never uses phrases banned by tone_band.
+
+    VERDICT-COHERENCE-FIX: After the posture + sizing text, appends match-specific
+    evidence clauses (EV%, signals, risk) from already-computed NarrativeSpec data.
+    """
     outcome = spec.outcome_label or "this outcome"
     odds_str = f"{spec.odds:.2f}" if spec.odds else "?"
     bk = spec.bookmaker or "the market"
@@ -1668,6 +1716,9 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     # internal sizing label but render a neutral synonym.
     if sizing == "confident stake":
         sizing = "full stake"
+
+    # VERDICT-COHERENCE-FIX: evidence clauses appended after posture text
+    evidence = _build_evidence_clauses(spec)
 
     if action in ("pass", "monitor"):
         # W84-Q13 / VERDICT-FIX: Zero/negative EV — neutral monitor posture, no PASS recommendation
@@ -1699,7 +1750,8 @@ def _render_verdict(spec: NarrativeSpec) -> str:
                 f"Monitor the line before committing. {_sentence_case(sizing)}."
             ),
         ]
-        return _sp_variants[_v]
+        posture = _sp_variants[_v]
+        return f"{posture} {evidence}".rstrip() if evidence else posture
 
     elif action == "lean":
         _v = _pick(_seed, 3)
@@ -1717,7 +1769,8 @@ def _render_verdict(spec: NarrativeSpec) -> str:
                 f"One signal points the right way, so it is worth tracking without overstating the case. {_sentence_case(sizing)}."
             ),
         ]
-        return _lean_variants[_v]
+        posture = _lean_variants[_v]
+        return f"{posture} {evidence}".rstrip() if evidence else posture
 
     elif action == "back":
         _v = _pick(_seed, 3)
@@ -1735,7 +1788,8 @@ def _render_verdict(spec: NarrativeSpec) -> str:
                 f"{support_line or 'Supported and priced right.'} {_sentence_case(sizing)}."
             ),
         ]
-        return _back_variants[_v]
+        posture = _back_variants[_v]
+        return f"{posture} {evidence}".rstrip() if evidence else posture
 
     else:  # strong back
         _v = _pick(_seed, 3)
@@ -1753,7 +1807,8 @@ def _render_verdict(spec: NarrativeSpec) -> str:
                 f"The signals, the price, and the model all point the same way. {_sentence_case(sizing)}."
             ),
         ]
-        return _strong_variants[_v]
+        posture = _strong_variants[_v]
+        return f"{posture} {evidence}".rstrip() if evidence else posture
 
 
 def _render_baseline(spec: NarrativeSpec) -> str:
