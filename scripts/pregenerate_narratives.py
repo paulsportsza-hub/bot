@@ -934,24 +934,26 @@ async def _generate_one(
     )
     evidence_json = serialise_evidence_pack(evidence_pack)
 
-    # 2. Build tips from edge data
+    # 2. Build tips from edge data — include all fixtures (even zero/negative EV)
+    # so w84 polish can still produce rich narrative context (coaches, form, H2H).
     # edge_v2 uses "edge_pct"/"outcome"/"fair_probability"; normalise field names
     tips = []
     ev = bot._normalise_edge_pct_contract(edge.get("ev"), edge.get("edge_pct", 0))
-    if ev > 0:
-        fair_prob = edge.get("fair_prob") or edge.get("fair_probability", 0)
-        _bk_key = edge.get("best_bookmaker_key", "") or edge.get("bookmaker_key", "")
-        tips.append({
-            "outcome": edge.get("recommended_outcome") or edge.get("outcome", "?"),
-            "odds": edge.get("best_odds", 0),
-            "bookie": edge.get("best_bookmaker", "?"),
-            "bookmaker": edge.get("best_bookmaker", "?"),
-            "bookmaker_key": _bk_key,
-            "odds_by_bookmaker": {_bk_key: float(edge.get("best_odds", 0))} if _bk_key and edge.get("best_odds", 0) > 0 else {},
-            "ev": ev,
-            "prob": round(fair_prob * 100, 1) if fair_prob else 0,
-            "edge_v2": edge,
-        })
+    # MY-MATCHES-RELIABILITY-FIX: build tips for ALL EV levels (including zero/negative).
+    # Negative-EV fixtures still get w84 polish for richer context (coaches, form, H2H).
+    fair_prob = edge.get("fair_prob") or edge.get("fair_probability", 0)
+    _bk_key = edge.get("best_bookmaker_key", "") or edge.get("bookmaker_key", "")
+    tips.append({
+        "outcome": edge.get("recommended_outcome") or edge.get("outcome", "?"),
+        "odds": edge.get("best_odds", 0),
+        "bookie": edge.get("best_bookmaker", "?"),
+        "bookmaker": edge.get("best_bookmaker", "?"),
+        "bookmaker_key": _bk_key,
+        "odds_by_bookmaker": {_bk_key: float(edge.get("best_odds", 0))} if _bk_key and edge.get("best_odds", 0) > 0 else {},
+        "ev": ev,
+        "prob": round(fair_prob * 100, 1) if fair_prob else 0,
+        "edge_v2": edge,
+    })
 
     # 3. Build edge_data for NarrativeSpec (W82-WIRE)
     _pregen_sigs = edge.get("signals", {})

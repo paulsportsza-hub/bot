@@ -9560,6 +9560,51 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     pass
 
+            # MY-MATCHES-RELIABILITY-FIX: Reject w82 entries for ESPN-covered leagues
+            # within 7 days. w82 is the deterministic baseline — if ESPN data is available
+            # (or should be), force regeneration so pregen can produce a richer w84 entry.
+            if narrative_source == "w82":
+                _w82_league = None
+                # Try evidence_json first
+                if evidence_json:
+                    try:
+                        _w82_ej = json.loads(evidence_json) if isinstance(evidence_json, str) else evidence_json
+                        _w82_league = _w82_ej.get("league", "")
+                    except (json.JSONDecodeError, TypeError, AttributeError):
+                        pass
+                # Fallback: look up league from edge_results
+                if not _w82_league:
+                    try:
+                        _lr = conn.execute(
+                            "SELECT league FROM edge_results WHERE match_key = ? LIMIT 1",
+                            (match_id,),
+                        ).fetchone()
+                        if _lr:
+                            _w82_league = _lr[0]
+                    except Exception:
+                        pass
+                if _w82_league and _w82_league in _ESPN_COVERED_LEAGUES:
+                    _w82_reject = False
+                    try:
+                        _w82_ds = match_id.rsplit("_", 1)[-1]
+                        if len(_w82_ds) == 10:
+                            from datetime import date as _dt_date2
+                            _w82_md = _dt_date2.fromisoformat(_w82_ds)
+                            _w82_reject = (_w82_md - _dt_date2.today()).days <= 7
+                    except (ValueError, IndexError):
+                        _w82_reject = True
+                    if _w82_reject:
+                        log.warning(
+                            "Rejecting w82 cached narrative for %s — ESPN-covered league %s, forcing w84 regeneration",
+                            match_id, _w82_league,
+                        )
+                        try:
+                            conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                            conn.commit()
+                        except sqlite3.OperationalError as exc:
+                            log.debug("Deferred w82 freshness cache delete for %s: %s", match_id, exc)
+                        return None
+
             # W84-Q3: Reject cached narratives containing legacy banned phrases
             if _has_banned_patterns(cleaned):
                 log.warning("Rejecting cached narrative for %s — contains banned phrases", match_id)
@@ -14952,8 +14997,10 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # ── Check analysis cache first (1-hour TTL) ──
     cached = _analysis_cache.get(event_id)
     if cached:
-        # W30-GATE: cache now stores (msg, tips, edge_tier, ts)
-        if len(cached) == 4:
+        # VERDICT-COHERENCE-FIX: cache now stores 5-tuple (msg, tips, edge_tier, narrative_source, ts)
+        if len(cached) == 5:
+            cached_msg, cached_tips, cached_edge_tier, _cached_src, cached_ts = cached
+        elif len(cached) == 4:
             cached_msg, cached_tips, cached_edge_tier, cached_ts = cached
         else:
             cached_msg, cached_tips, cached_ts = cached
