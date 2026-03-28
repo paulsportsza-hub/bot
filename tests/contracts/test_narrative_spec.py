@@ -50,22 +50,22 @@ class TestClassifyEvidence:
         assert action == "speculative punt"
         assert sizing == "tiny exposure or pass"
 
-    def test_zero_ev_explicit_returns_pass(self):
-        """W84-Q13: EV=0.0 explicitly provided → pass, not actionable."""
+    def test_zero_ev_explicit_returns_monitor(self):
+        """VERDICT-FIX: EV=0.0 → monitor posture, not PASS recommendation."""
         ev_class, tone, action, sizing = _classify_evidence(
             {"confirming_signals": 2, "edge_pct": 0.0}
         )
         assert ev_class == "speculative"
         assert tone == "cautious"
-        assert action == "pass"
-        assert sizing == "pass"
+        assert action == "monitor"
+        assert sizing == "monitor"
 
-    def test_negative_ev_returns_pass(self):
-        """W84-Q13: Negative EV → pass verdict."""
+    def test_negative_ev_returns_monitor(self):
+        """VERDICT-FIX: Negative EV → monitor posture, not PASS recommendation."""
         ev_class, tone, action, sizing = _classify_evidence(
             {"confirming_signals": 3, "edge_pct": -1.5}
         )
-        assert action == "pass"
+        assert action == "monitor"
 
     def test_one_signal_returns_lean_moderate(self):
         ev_class, tone, action, sizing = _classify_evidence(

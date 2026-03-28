@@ -319,6 +319,9 @@ def _needs_pregen_context_lift(ctx: dict) -> bool:
     """Retry once in pregen when context would still collapse to thin/no-context prose."""
     if not ctx or not ctx.get("data_available"):
         return True
+    # VERDICT-FIX Fix 3: PARTIAL context is accepted as-is — no retry needed
+    if ctx.get("_context_mode") == "PARTIAL":
+        return False
 
     def _has_setup_signal(team: dict) -> bool:
         return bool(
@@ -332,6 +335,51 @@ def _needs_pregen_context_lift(ctx: dict) -> bool:
     home = ctx.get("home_team") or {}
     away = ctx.get("away_team") or {}
     return not (_has_setup_signal(home) or _has_setup_signal(away))
+
+
+def _build_partial_context(
+    home: str,
+    away: str,
+    league: str,
+    sport: str,
+    *,
+    home_key: str = "",
+    away_key: str = "",
+) -> dict:
+    """VERDICT-FIX Fix 3: Build a minimal partial context dict when ESPN data is thin.
+
+    Returns a dict with _context_mode='PARTIAL' so:
+    - _needs_pregen_context_lift() accepts it (stops retrying)
+    - build_narrative_spec() has team names for no-context prose
+    - W84 AI path is skipped (AI hallucinates with thin packs)
+    """
+    partial: dict = {
+        "data_available": True,
+        "_context_mode": "PARTIAL",
+        "sport": sport,
+        "league": league,
+        "home_team": {
+            "team_name": home,
+            "team_key": home_key or home.lower().replace(" ", "_"),
+        },
+        "away_team": {
+            "team_name": away,
+            "team_key": away_key or away.lower().replace(" ", "_"),
+        },
+    }
+    # Try to enrich with Elo data (rugby/cricket have Elo coverage)
+    try:
+        from scrapers.elo.elo_helper import get_elo_probability
+        hk = home_key or home.lower().replace(" ", "_")
+        ak = away_key or away.lower().replace(" ", "_")
+        elo_result = get_elo_probability(hk, ak, sport, require_confidence="low", league=league)
+        if elo_result:
+            partial["elo_home_prob"] = elo_result.get("home_win") or elo_result.get("elo_prob")
+            partial["elo_diff"] = elo_result.get("elo_diff")
+            partial["elo_confidence"] = elo_result.get("confidence")
+    except Exception:
+        pass
+    return partial
 
 
 def _context_fetch_attempts(
@@ -442,6 +490,15 @@ async def _get_match_context(
                     home_candidate,
                     away_candidate,
                 )
+        # VERDICT-FIX Fix 3: If all ESPN attempts still thin, build partial context from Elo/signal data
+        if _needs_pregen_context_lift(last_ctx):
+            partial = _build_partial_context(home, away, league, sport, home_key=home_key, away_key=away_key)
+            if partial:
+                log.warning(
+                    "W84_PARTIAL_CONTEXT league=%s sport=%s teams=%s vs %s reason=THIN_ESPN",
+                    league, sport, home, away,
+                )
+                return partial
         return last_ctx
     except Exception as exc:
         log.warning("Match context fetch failed for %s vs %s: %s", home, away, exc)
@@ -955,7 +1012,9 @@ async def _generate_one(
 
     # 5. W84-CONFIRM-1: W84 is the permanent default generation path.
     # W82 baseline is always computed first and remains the per-row fallback.
-    if narrative and spec is not None and evidence_pack is not None:
+    # VERDICT-FIX Fix 3: Skip W84 AI for partial context — AI hallucinates with thin packs.
+    _skip_w84 = (ctx or {}).get("_context_mode") == "PARTIAL"
+    if narrative and spec is not None and evidence_pack is not None and not _skip_w84:
         try:
             prompt_text = format_evidence_prompt(evidence_pack, spec)
             resp = await claude.messages.create(

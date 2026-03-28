@@ -159,10 +159,11 @@ def _classify_evidence(edge_data: dict) -> tuple[str, str, str, str]:
     stale = edge_data.get("stale_minutes", 0)
     movement = edge_data.get("movement_direction", "neutral")
 
-    # W84-Q13: Zero or negative EV — no actionable edge, always pass
+    # W84-Q13: Zero or negative EV — no actionable edge, neutral monitor posture
     # Gate only fires when edge_pct is explicitly provided and <= 0
+    # VERDICT-FIX: "monitor" avoids explicit PASS language that contradicts tier badges at serve time
     if "edge_pct" in edge_data and ev <= 0:
-        return ("speculative", "cautious", "pass", "pass")
+        return ("speculative", "cautious", "monitor", "monitor")
 
     def _bucket_from_ev(ev_pct: float) -> int:
         if ev_pct < 2.0:
@@ -1668,11 +1669,11 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     if sizing == "confident stake":
         sizing = "full stake"
 
-    if action == "pass":
-        # W84-Q13: Zero/negative EV — never frame as actionable
+    if action in ("pass", "monitor"):
+        # W84-Q13 / VERDICT-FIX: Zero/negative EV — neutral monitor posture, no PASS recommendation
         return (
             f"No positive expected value at current pricing — "
-            f"monitor for line movement or skip {outcome} until the price improves."
+            f"monitor for line movement until the price improves."
         )
 
     if action == "speculative punt":
@@ -1693,9 +1694,9 @@ def _render_verdict(spec: NarrativeSpec) -> str:
                 f"the price is right, the signals aren't there yet. Monitor the line before committing. {_sentence_case(sizing)}."
             ),
             (
-                f"Pass on this unless the price improves or a confirming signal emerges — "
-                f"{outcome} at {odds_str} ({bk}) has no signal support. "
-                f"Monitor the line, not the bet. {_sentence_case(sizing)}."
+                f"Hold on {outcome} at {odds_str} ({bk}) until a confirming signal emerges — "
+                f"the price is the only thing keeping this on the board. "
+                f"Monitor the line before committing. {_sentence_case(sizing)}."
             ),
         ]
         return _sp_variants[_v]

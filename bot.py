@@ -14800,6 +14800,48 @@ def _clean_fact_checked_output(text: str) -> str:
     return text
 
 
+def _refresh_yg_verdict_sync(html: str, match_key: str) -> str:
+    """VERDICT-FIX Fix 2: Sync — refresh EV values and replace stale PASS verdict using live edge_results.
+
+    Called via asyncio.to_thread() in each yg:game: cache-hit path.
+    Falls back to original HTML on any error (safe degradation).
+    """
+    import re as _re2
+    try:
+        from scrapers.db_connect import connect_odds_db
+        from scrapers.edge.edge_config import DB_PATH
+        _conn = connect_odds_db(DB_PATH)
+        _conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+        try:
+            _row = _conn.execute(
+                "SELECT predicted_ev, recommended_odds, bookmaker "
+                "FROM edge_results WHERE match_key = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC LIMIT 1",
+                (match_key,),
+            ).fetchone()
+        finally:
+            _conn.close()
+        if not _row:
+            return html
+        live_ev = float(_row.get("predicted_ev") or 0)
+        if live_ev > 0:
+            # Update EV percentages in the narrative
+            html = _re2.sub(
+                r'[+-]?\d+\.\d+(%\s*expected value)',
+                f'+{live_ev:.1f}\\1',
+                html,
+            )
+            # Replace PASS/no-EV verdict when EV is now positive
+            html = _re2.sub(
+                r'No positive expected value at current pricing[^<\n]*',
+                f'Value confirmed at current pricing (+{live_ev:.1f}% expected value) — monitor line for optimal entry.',
+                html,
+            )
+    except Exception:
+        pass
+    return html
+
+
 async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: str = "matches") -> None:
     """Generate AI betting tips for a specific game."""
     import time as _time
@@ -14868,6 +14910,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _early_db_hit["html"], _ea_home, _ea_away,
                 _ea_hdr["kickoff"], _ea_hdr["league_display"], _ea_hdr["broadcast_line"],
             )
+            # VERDICT-FIX Fix 2: Inject live EV/verdict from edge_results
+            try:
+                _ea_html = await asyncio.wait_for(
+                    asyncio.to_thread(_refresh_yg_verdict_sync, _ea_html, event_id),
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
             _analysis_cache[event_id] = (
                 _ea_html, _early_db_hit["tips"],
                 _early_db_hit["edge_tier"],
@@ -15045,6 +15095,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _pre_cached["html"], home_raw, away_raw,
                 _phdr["kickoff"], _phdr["league_display"], _phdr["broadcast_line"],
             )
+            # VERDICT-FIX Fix 2: Inject live EV/verdict from edge_results
+            try:
+                _p_html = await asyncio.wait_for(
+                    asyncio.to_thread(_refresh_yg_verdict_sync, _p_html, _pre_mid),
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
             _analysis_cache[event_id] = (
                 _p_html, _pre_cached["tips"],
                 _pre_cached["edge_tier"],
@@ -15113,6 +15171,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _cached_db["html"], home_raw, away_raw,
                 _bhdr["kickoff"], _bhdr["league_display"], _bhdr["broadcast_line"],
             )
+            # VERDICT-FIX Fix 2: Inject live EV/verdict from edge_results
+            try:
+                _b_html = await asyncio.wait_for(
+                    asyncio.to_thread(_refresh_yg_verdict_sync, _b_html, db_match_id),
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
             _analysis_cache[event_id] = (
                 _b_html, _cached_db["tips"],
                 _cached_db["edge_tier"],
