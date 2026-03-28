@@ -10,6 +10,7 @@ Usage (from async handler):
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from dataclasses import dataclass
@@ -370,10 +371,11 @@ def _build_detail_data_from_tip(
     else:
         fair_prob = 0
 
-    # Outcome
+    # Outcome — SERVE-PATH-FIX Fix 2: check edge_v2.outcome before defaulting
     bet_type = (
         tip_data.get("recommended_outcome")
         or tip_data.get("bet_type")
+        or (tip_data.get("edge_v2") or {}).get("outcome")
         or "home"
     )
     outcome_raw, outcome_display = _resolve_outcome(bet_type, home, away)
@@ -674,27 +676,49 @@ def _section_risk(data: EdgeDetailData) -> str:
     return "\n".join(lines)
 
 
+def _vpick(seed: str, n: int) -> int:
+    """MD5-deterministic variant index — same seed always picks same variant."""
+    return int(hashlib.md5(seed.encode()).hexdigest(), 16) % n
+
+
 def _section_verdict(data: EdgeDetailData) -> str:
-    """Tier-driven verdict — conviction mapped to signal count."""
+    """Tier-driven verdict — conviction mapped to signal count.
+
+    SERVE-PATH-FIX Fix 3: MD5-deterministic variant selection per match_key
+    so different cards show different verdict text.
+    """
     lines = ["🏆 <b>Verdict</b>"]
     badge = render_edge_badge(data.edge_tier)
+    seed = data.match_key
 
     if data.confirming_signals == 0:
-        lines.append(
-            f"{badge} — Monitor the line. Small speculative exposure at best."
-        )
+        variants = [
+            f"{badge} — Monitor the line. Small speculative exposure at best.",
+            f"{badge} — Price-only edge with no confirming signals. Watch, don't chase.",
+            f"{badge} — Speculative angle — if you take it, keep sizing minimal.",
+        ]
+        lines.append(variants[_vpick(seed, len(variants))])
     elif data.confirming_signals == 1:
-        lines.append(
-            f"{badge} — A lean, not a conviction play. Size carefully."
-        )
+        variants = [
+            f"{badge} — A lean, not a conviction play. Size carefully.",
+            f"{badge} — One signal confirms the price. Moderate exposure warranted.",
+            f"{badge} — Early confirmation but not yet a full picture. Stay measured.",
+        ]
+        lines.append(variants[_vpick(seed, len(variants))])
     elif data.confirming_signals >= 3 and data.predicted_ev >= 8:
-        lines.append(
-            f"{badge} — Strong support across indicators. Back with confidence."
-        )
+        variants = [
+            f"{badge} — Strong support across indicators. Back with confidence.",
+            f"{badge} — Multiple signals align with the price. This is a conviction play.",
+            f"{badge} — The depth of support here is rare. Execute with full sizing.",
+        ]
+        lines.append(variants[_vpick(seed, len(variants))])
     else:
-        lines.append(
-            f"{badge} — Enough signal to warrant a standard stake."
-        )
+        variants = [
+            f"{badge} — Enough signal to warrant a standard stake.",
+            f"{badge} — Solid supporting evidence. Normal sizing applies.",
+            f"{badge} — The numbers and signals agree. Back it at standard exposure.",
+        ]
+        lines.append(variants[_vpick(seed, len(variants))])
 
     return "\n".join(lines)
 

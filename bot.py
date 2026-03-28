@@ -1778,6 +1778,100 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 return
 
+            # SERVE-PATH-FIX Fix 1: Check w84 narrative_cache BEFORE programmatic renderer.
+            # The yg:game: path reads from narrative_cache and scores 8-10/10 — the w84
+            # Sonnet-polished narratives are excellent. This check serves them on edge:detail too.
+            # Fast DB read (single SELECT), no LLM call. Fallback to render_edge_detail on miss.
+            _w84_hit = None
+            try:
+                _w84_hit = await asyncio.wait_for(
+                    _get_cached_narrative(match_key),
+                    timeout=2.0,
+                )
+            except Exception:
+                _w84_hit = None
+
+            if _w84_hit:
+                import time as _w84_t
+                _w84_html = _w84_hit["html"]
+                _w84_tips = _w84_hit["tips"]
+                _w84_tier = _w84_hit.get("edge_tier", "bronze")
+
+                # Inject fresh header (broadcast + kickoff) — cached HTML may have stale header
+                _w84_snap = next(
+                    (t for t in _ht_tips_snapshot.get(user_id, [])
+                     if _tip_matches_hot_key(t, match_key)),
+                    None,
+                )
+                _w84_home, _w84_away = _teams_from_vs_event_id(match_key)
+                _w84_hdr = _build_event_header(_w84_home, _w84_away, "", _w84_snap)
+                _w84_html = _inject_narrative_header(
+                    _w84_html, _w84_home, _w84_away,
+                    _w84_hdr["kickoff"], _w84_hdr["league_display"], _w84_hdr["broadcast_line"],
+                )
+
+                # Warm in-memory caches
+                _analysis_cache[match_key] = (
+                    _w84_html, _w84_tips, _w84_tier,
+                    _w84_hit.get("narrative_source"),
+                    _w84_t.time(),
+                )
+                _game_tips_cache[match_key] = _w84_tips
+
+                # Build buttons from snapshot or cached tips
+                _w84_btn_tips = _w84_tips
+                _w84_snap_tip = _w84_snap or (
+                    _game_tips_cache.get(match_key, [None])[0]
+                    if isinstance(_game_tips_cache.get(match_key), list)
+                    else _game_tips_cache.get(match_key)
+                )
+                if _w84_snap_tip and isinstance(_w84_snap_tip, dict):
+                    _w84_btn_tips = [_w84_snap_tip]
+                _btns = _build_game_buttons(
+                    _w84_btn_tips or [{"ev": 0, "match_id": match_key}],
+                    match_key, user_id,
+                    source="edge_picks", user_tier=_user_tier,
+                    edge_tier=_w84_tier,
+                    back_page=_resolve_hot_tips_back_page(user_id, match_key),
+                )
+
+                _banner = _qa_banner(user_id)
+                _final = (_banner + _w84_html) if _banner else _w84_html
+                try:
+                    await query.edit_message_text(
+                        _final, parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup(_btns),
+                    )
+                except BadRequest as _br:
+                    if "not modified" in str(_br).lower():
+                        return
+                    raise
+
+                # Background view recording (best-effort)
+                async def _w84_record_view():
+                    def _write():
+                        import sqlite3 as _sq
+                        try:
+                            from db_connection import get_connection as _gc
+                            from tier_gate import record_view as _rv
+                            oc = _gc(timeout_ms=3000)
+                            try:
+                                _rv(user_id, match_key, oc)
+                            finally:
+                                oc.close()
+                        except _sq.OperationalError as _re:
+                            if "locked" in str(_re).lower():
+                                log.debug("Background record_view deferred: %s", _re)
+                            else:
+                                log.warning("Background record_view failed: %s", _re)
+                        except Exception as _re:
+                            log.warning("Background record_view failed: %s", _re)
+                    await asyncio.to_thread(_write)
+                asyncio.create_task(_w84_record_view())
+                log.info("PERF: edge:detail W84 CACHE HIT for %s (source=%s)", match_key, _w84_hit.get("narrative_source", "?"))
+                return
+            # ── END w84 cache check — fall through to programmatic renderer ──
+
             # CLEAN-RUGBY: resolve tip data for V1 fallback before render
             _tip_for_v1 = next(
                 (t for t in _ht_tips_snapshot.get(user_id, [])
