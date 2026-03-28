@@ -934,6 +934,16 @@ async def _generate_one(
     )
     evidence_json = serialise_evidence_pack(evidence_pack)
 
+    # Compute coverage_json for narrative_cache persistence (COVERAGE-GATE-BUILD)
+    _coverage_json = None
+    try:
+        from evidence_pack import serialise_coverage_metrics as _scm
+        _cm = getattr(evidence_pack, "coverage_metrics", None)
+        if _cm is not None:
+            _coverage_json = _scm(_cm)
+    except Exception as _cov_err:
+        log.debug("coverage_json computation failed: %s", _cov_err)
+
     # 2. Build tips from edge data — include all fixtures (even zero/negative EV)
     # so w84 polish can still produce rich narrative context (coaches, form, H2H).
     # edge_v2 uses "edge_pct"/"outcome"/"fair_probability"; normalise field names
@@ -1016,6 +1026,19 @@ async def _generate_one(
     # W82 baseline is always computed first and remains the per-row fallback.
     # VERDICT-FIX Fix 3: Skip W84 AI for partial context — AI hallucinates with thin packs.
     _skip_w84 = (ctx or {}).get("_context_mode") == "PARTIAL"
+
+    # --- Coverage gate: never polish empty evidence (COVERAGE-GATE-BUILD) ---
+    _coverage_level = "unknown"
+    if evidence_pack is not None:
+        _cm_gate = getattr(evidence_pack, "coverage_metrics", None)
+        if _cm_gate is not None:
+            _coverage_level = _cm_gate.level
+            if _cm_gate.level == "empty":
+                _skip_w84 = True
+                log.info(
+                    "[COVERAGE-GATE] Skipping Sonnet polish for %s: empty evidence", match_key
+                )
+
     if narrative and spec is not None and evidence_pack is not None and not _skip_w84:
         try:
             prompt_text = format_evidence_prompt(evidence_pack, spec)
@@ -1230,6 +1253,7 @@ async def _generate_one(
             "model": served_model,
             "evidence_json": evidence_json,
             "narrative_source": narrative_source,
+            "coverage_json": _coverage_json,
             "_shadow": {
                 "match_key": match_key,
                 "pack": evidence_pack,
@@ -1288,6 +1312,7 @@ async def _verify_and_fill_cache(
                         pw["model"],
                         evidence_json=pw.get("evidence_json"),
                         narrative_source=pw.get("narrative_source", "w82"),
+                        coverage_json=pw.get("coverage_json"),
                     )
                     log.info("  -> Gap filled for %s", mk)
                 except Exception as store_exc:
@@ -1453,6 +1478,7 @@ async def main(sweep: str) -> None:
                     pw["model"],
                     evidence_json=pw.get("evidence_json"),
                     narrative_source=pw.get("narrative_source", "w82"),
+                    coverage_json=pw.get("coverage_json"),
                 )
                 write_ok += 1
             except Exception as exc:

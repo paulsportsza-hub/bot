@@ -1791,6 +1791,24 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             except Exception:
                 _w84_hit = None
 
+            # --- Serve-time EV gate: don't serve stale 0% EV content (COVERAGE-GATE-BUILD) ---
+            if _w84_hit:
+                try:
+                    _cached_tips = _w84_hit.get("tips", [])
+                    _all_zero_ev = (
+                        all(float(t.get("ev", t.get("ev_pct", 0))) <= 0 for t in _cached_tips)
+                        if _cached_tips else True
+                    )
+                    if _all_zero_ev:
+                        _current_ev = await asyncio.wait_for(
+                            _get_current_ev_for_match(match_key), timeout=1.5
+                        )
+                        if _current_ev is not None and _current_ev <= 0:
+                            _w84_hit = None  # Force regeneration — edge has expired
+                            log.info("[EV-GATE] Suppressed stale 0%% EV card for %s", match_key)
+                except Exception as _ev_gate_err:
+                    log.warning("[EV-GATE] Error checking EV for %s: %s", match_key, _ev_gate_err)
+
             if _w84_hit:
                 import time as _w84_t
                 _w84_html = _w84_hit["html"]
@@ -9365,6 +9383,8 @@ def _ensure_narrative_cache_table() -> None:
                 "ALTER TABLE narrative_cache "
                 "ADD COLUMN narrative_source TEXT NOT NULL DEFAULT 'w82'"
             )
+        if "coverage_json" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN coverage_json TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -9481,13 +9501,13 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
         try:
             row = conn.execute(
                 "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
-                "evidence_json, narrative_source "
+                "evidence_json, narrative_source, coverage_json "
                 "FROM narrative_cache WHERE match_id = ?",
                 (match_id,),
             ).fetchone()
             if not row:
                 return None
-            html, model, tier, tips_json, stored_hash, expires_at, evidence_json, narrative_source = row
+            html, model, tier, tips_json, stored_hash, expires_at, evidence_json, narrative_source, coverage_json = row
             # Check TTL
             try:
                 exp = datetime.fromisoformat(expires_at)
@@ -9643,6 +9663,7 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 "edge_tier": tier,
                 "model": model,
                 "narrative_source": narrative_source or "w82",
+                "coverage_json": coverage_json,
             }
         finally:
             conn.close()
@@ -9658,6 +9679,7 @@ async def _store_narrative_cache(
     model: str,
     evidence_json: str | None = None,
     narrative_source: str = "w82",
+    coverage_json: str | None = None,
 ) -> None:
     """Persist narrative to DB cache with 6hr TTL.
 
@@ -9684,14 +9706,15 @@ async def _store_narrative_cache(
             conn.execute(
                 "INSERT OR REPLACE INTO narrative_cache "
                 "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
-                "evidence_json, narrative_source, created_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "evidence_json, narrative_source, coverage_json, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     match_id, html, model, edge_tier,
                     json.dumps(tips, default=str),
                     odds_hash,
                     evidence_json,
                     narrative_source,
+                    coverage_json,
                     now.isoformat(),
                     expires.isoformat(),
                 ),
@@ -9707,6 +9730,35 @@ async def _store_narrative_cache(
             conn.close()
 
     await asyncio.to_thread(_store)
+
+
+async def _get_current_ev_for_match(match_key: str) -> float | None:
+    """Query edge_results for current max EV for the given match_key.
+
+    COVERAGE-GATE-BUILD: Used by serve-time EV gate to determine if a cached
+    edge:detail card still has positive EV before serving it.
+    Returns None if the match is not found or on any error.
+    """
+    def _query():
+        try:
+            from scrapers.db_connect import connect_odds_db as _conn_fn
+            from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+            _conn = _conn_fn(_DB_PATH)
+            row = _conn.execute(
+                "SELECT predicted_ev FROM edge_results "
+                "WHERE match_key = ? AND result IS NULL "
+                "ORDER BY id DESC LIMIT 1",
+                (match_key,),
+            ).fetchone()
+            _conn.close()
+            if row and row[0] is not None:
+                return float(row[0])
+            return None
+        except Exception as _e:
+            log.debug("_get_current_ev_for_match failed for %s: %s", match_key, _e)
+            return None
+
+    return await asyncio.to_thread(_query)
 
 
 async def _delete_narrative_cache(match_id: str) -> None:
@@ -15463,6 +15515,10 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     _game_tips_cache[event_id] = tips
     log.info("PERF: odds_fetch+edge_v2=%.1fs", _time.time() - _perf_t0)
 
+    # Neutral analysis mode — all tips have EV ≤ 0% (COVERAGE-GATE-BUILD Step 8)
+    # Display-time change: suppress tier badge, replace CTA, add label to header.
+    _neutral_analysis = bool(tips) and all(t.get("ev", 0) <= 0 for t in tips)
+
     # Parse kickoff time (needed for AI call regardless of odds)
     try:
         ct = dt_cls.fromisoformat(target_event["commence_time"].replace("Z", "+00:00"))
@@ -15845,7 +15901,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # ── Inject Edge Rating badge into Verdict header ──
     # W75-FIX: edge_v2 tier is authoritative — no EV-threshold fallback
     # W83-HOTFIX: speculative/lean verdict must never show a GOLDEN/DIAMOND badge
-    if narrative and tips:
+    # COVERAGE-GATE-BUILD: Neutral analysis mode never shows a tier badge
+    if narrative and tips and not _neutral_analysis:
         tier = None
         if _cached_display_tier:
             tier = _cached_display_tier
@@ -15912,8 +15969,11 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     _kickoff_line = f"📅 {kickoff}"
     if _venue:
         _kickoff_line += f" · {h(_venue)}"
+    _match_title = f"🎯 <b>{hf}{home} vs {af}{away}</b>"
+    if _neutral_analysis:
+        _match_title += " — Neutral Analysis"
     lines = [
-        f"🎯 <b>{hf}{home} vs {af}{away}</b>",
+        _match_title,
         _kickoff_line,
     ]
     if league_display:
@@ -16101,6 +16161,13 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
     # Build simplified buttons (North Star: 4 buttons max, Wave 26A: tier-gated, W30-GATE: edge_tier)
     buttons = _build_game_buttons(tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=_edge_tier, selected_outcome=_selected_outcome)  # R9-BUILD-03
+
+    # Neutral analysis mode: replace primary CTA with informational no-op (COVERAGE-GATE-BUILD)
+    if _neutral_analysis and buttons:
+        buttons[0] = [InlineKeyboardButton(
+            "ℹ️ No actionable Edge at current pricing",
+            callback_data="yg:noop",
+        )]
 
     # W84-RT6: Wrap delivery — Telegram TimedOut on edit falls back to reply_text.
     # Unprotected edit here was the last step failing after sync DB calls stalled the loop.

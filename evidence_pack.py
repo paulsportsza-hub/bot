@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from config import ODDS_DB_PATH, ENRICHMENT_DB_PATH, TIPSTER_DB_PATH
 
@@ -125,6 +125,45 @@ class InjuriesBlock:
     total_injury_count: int = 0
 
 
+# ── Coverage Metrics (COVERAGE-GATE-BUILD) ──
+
+CoverageLevel = Literal["full", "partial", "empty"]
+
+
+@dataclass(frozen=True)
+class CoverageMetrics:
+    sport: str
+    league: str | None
+    sources_used: list[str]
+    missing_sources: list[str]
+    key_facts_count: int
+    injuries_count: int
+    form_games_count: int
+    h2h_games_count: int
+    standings_available: bool
+    market_coverage_count: int
+    sharp_available: bool
+    level: CoverageLevel
+
+
+def compute_coverage_level(
+    sport: str, league: str | None,
+    key_facts: int, form_games: int,
+    h2h_games: int, standings: bool,
+    market_count: int,
+) -> CoverageLevel:
+    """Deterministic coverage level. No LLM judgment."""
+    if key_facts == 0 and not standings and form_games == 0 and h2h_games == 0:
+        return "empty"
+    if key_facts < 3 or market_count < 2:
+        return "partial"
+    return "full"
+
+
+def serialise_coverage_metrics(m: CoverageMetrics) -> str:
+    return json.dumps(asdict(m), default=str)
+
+
 @dataclass
 class EvidencePack:
     match_key: str
@@ -144,6 +183,7 @@ class EvidencePack:
     richness_score: str = "low"
     sources_available: int = 0
     sources_total: int = 8
+    coverage_metrics: CoverageMetrics | None = field(default=None)
 
 
 def _utc_now_iso() -> str:
@@ -1128,6 +1168,69 @@ async def build_evidence_pack(
         pack.h2h = H2HBlock(provenance=_empty_source("h2h", error="No verified H2H rows."))
 
     pack.richness_score, pack.sources_available = _score_richness(pack)
+
+    # --- Compute CoverageMetrics (COVERAGE-GATE-BUILD) ---
+    _sources_used: list[str] = []
+    _missing_sources: list[str] = []
+    for _src_name, _src_block in [
+        ("sa_odds", pack.sa_odds),
+        ("espn_context", pack.espn_context),
+        ("sharp_lines", pack.sharp_lines),
+        ("injuries", pack.injuries),
+        ("h2h", pack.h2h),
+        ("news", pack.news),
+        ("movements", pack.movements),
+        ("settlement", pack.settlement_stats),
+    ]:
+        if _src_block and getattr(_src_block, "provenance", None) and _src_block.provenance.available:
+            _sources_used.append(_src_name)
+        else:
+            _missing_sources.append(_src_name)
+
+    _key_facts = 0
+    _form_games = 0
+    _standings = False
+    if pack.espn_context and pack.espn_context.data_available:
+        for _team in [pack.espn_context.home_team, pack.espn_context.away_team]:
+            if _team:
+                if _team.get("record"):
+                    _key_facts += 1
+                if _team.get("form"):
+                    _key_facts += 1
+                _last5 = _team.get("last_5") or []
+                _form_games += len(_last5)
+                if _team.get("standings") or _team.get("position"):
+                    _standings = True
+                if _team.get("coach"):
+                    _key_facts += 1
+                if _team.get("top_scorers"):
+                    _key_facts += 1
+
+    _h2h_games = len(pack.h2h.matches) if pack.h2h and pack.h2h.matches else 0
+    _injuries_cnt = pack.injuries.total_injury_count if pack.injuries else 0
+    _market_count = pack.sa_odds.bookmaker_count if pack.sa_odds else 0
+    _sharp = (
+        pack.sharp_lines.provenance.available
+        if pack.sharp_lines and pack.sharp_lines.provenance
+        else False
+    )
+
+    _level = compute_coverage_level(
+        sport=pack.sport, league=pack.league,
+        key_facts=_key_facts, form_games=_form_games,
+        h2h_games=_h2h_games, standings=_standings,
+        market_count=_market_count,
+    )
+
+    pack.coverage_metrics = CoverageMetrics(
+        sport=pack.sport, league=pack.league,
+        sources_used=_sources_used, missing_sources=_missing_sources,
+        key_facts_count=_key_facts, injuries_count=_injuries_cnt,
+        form_games_count=_form_games, h2h_games_count=_h2h_games,
+        standings_available=_standings, market_coverage_count=_market_count,
+        sharp_available=_sharp, level=_level,
+    )
+
     return pack
 
 
