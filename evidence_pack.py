@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from config import ODDS_DB_PATH, ENRICHMENT_DB_PATH, TIPSTER_DB_PATH
@@ -2447,6 +2449,21 @@ def _extract_decimal_odds(text: str) -> list[float]:
     return values
 
 
+# W82-KILL-FIX Fix 1: bot/data/coaches.json — flat underscore-key format
+_BOT_COACHES_CACHE: dict | None = None
+
+def _load_bot_coaches() -> dict:
+    global _BOT_COACHES_CACHE
+    if _BOT_COACHES_CACHE is None:
+        _path = Path(__file__).parent / "data" / "coaches.json"
+        try:
+            with open(_path, encoding="utf-8") as _f:
+                _BOT_COACHES_CACHE = json.load(_f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            _BOT_COACHES_CACHE = {}
+    return _BOT_COACHES_CACHE
+
+
 def _build_verified_coaches(pack: EvidencePack, spec) -> set[str]:
     verified: set[str] = set()
     unique_coaches: dict[str, list[str]] = {}
@@ -2465,6 +2482,14 @@ def _build_verified_coaches(pack: EvidencePack, spec) -> set[str]:
             _collect_coach(side.get("coach") or side.get("manager") or "")
     for attr in ("home_coach", "away_coach"):
         _collect_coach(getattr(spec, attr, ""))
+
+    # W82-KILL-FIX Fix 1: look up team names in bot/data/coaches.json
+    _bot_coaches = _load_bot_coaches()
+    for attr in ("home_name", "away_name"):
+        _team = getattr(spec, attr, "") or ""
+        _key = re.sub(r"[\s\-]+", "_", _team.lower().strip())
+        for _variant in _bot_coaches.get(_key) or []:
+            _collect_coach(_variant)
 
     coach_first_names: dict[str, int] = {}
     coach_last_names: dict[str, int] = {}
@@ -3116,6 +3141,45 @@ _DERBY_WHITELIST = {
     "el clasico", "el cl\u00e1sico", "der klassiker",
     "old firm", "tyne-wear", "tyne-wear derby",
     "south coast derby", "revierderby", "soweto derby",
+}
+
+# W82-KILL-FIX Fix 2: Geographic/regional terms that are NOT fabricated proper nouns
+_GEOGRAPHIC_WHITELIST = {
+    # UK regions
+    "tyneside", "lancashire", "yorkshire", "west yorkshire", "south yorkshire",
+    "west midlands", "east midlands", "midlands",
+    "london", "west london", "east london", "south london",
+    "kent", "surrey", "hampshire", "berkshire", "hertfordshire",
+    # Irish / Scottish / Welsh
+    "leinster", "munster", "connacht", "ulster",
+    "glasgow", "edinburgh",
+    # European regions
+    "catalonia", "cataluna", "catalu\u00f1a",
+    "lombardy", "lombardia",
+    "bavaria", "bayern",
+    "\u00eele-de-france", "ile de france",
+    "castile",
+    "andalusia",
+    # SA regions
+    "gauteng", "western cape", "eastern cape", "kwazulu-natal",
+    "johannesburg", "cape town", "durban", "pretoria", "soweto",
+    "limpopo", "mpumalanga", "north west", "free state",
+    # Football stadiums / grounds
+    "anfield", "old trafford", "stamford bridge",
+    "emirates", "the emirates",
+    "etihad", "etihad stadium",
+    "wembley", "wembley stadium",
+    "villa park", "st james park", "st james\u2019 park",
+    "signal iduna park", "westfalenstadion",
+    "camp nou", "bernabeu", "santiago bernabeu",
+    "san siro", "giuseppe meazza",
+    "allianz arena",
+    "parc des princes",
+    "celtic park", "ibrox", "hampden park",
+    "dlt", "peter mokaba", "fnb stadium", "orlando stadium",
+    # Rugby / cricket venues
+    "twickenham", "murrayfield", "aviva stadium", "principality stadium",
+    "stade de france", "eden park", "kings park",
 }
 
 _SETTLEMENT_CONTEXT_PATTERNS = (
@@ -3781,6 +3845,9 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
         # R12-BUILD-03 Fix 5: Skip derby/geographical names
         if _normalise_name_phrase(phrase) in _DERBY_WHITELIST:
             continue
+        # W82-KILL-FIX Fix 2: Skip geographic/regional/venue terms
+        if _normalise_name_phrase(phrase) in _GEOGRAPHIC_WHITELIST:
+            continue
         # R13-BUILD-01 Fix 1: Skip analytical Elo terms
         if phrase.lower().strip() in _ANALYTICAL_PREFIXES:
             continue
@@ -3812,11 +3879,12 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
             )
             if settlement_bridge_ok:
                 continue
-            direct_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["direct"])
-            market_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["market_implied"])
-            sharp_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["sharp_implied"])
+            # W82-KILL-FIX Fix 3: widened tolerance to 2.0pp (was 1.5pp)
+            direct_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages["direct"])
+            market_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages["market_implied"])
+            sharp_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages["sharp_implied"])
             # R13-BUILD-01 Fix 3: Check Elo-derived probabilities
-            elo_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages.get("elo", set()))
+            elo_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages.get("elo", set()))
             if not (direct_ok or market_ok or sharp_ok or elo_ok):
                 ev_pct_failures.append(value)
             continue

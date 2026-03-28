@@ -129,7 +129,7 @@ class NarrativeSpec:
 
     # Verdict (code-decided — capped by tone band)
     verdict_action: str = ""      # "speculative punt" / "lean" / "back" / "strong back"
-    verdict_sizing: str = ""      # "tiny exposure or pass" / "small stake" / "standard stake" / "confident stake"
+    verdict_sizing: str = ""      # "tiny exposure" / "small stake" / "standard stake" / "confident stake"
 
     # Stale/movement context
     stale_minutes: int = 0
@@ -176,7 +176,7 @@ def _classify_evidence(edge_data: dict) -> tuple[str, str, str, str]:
 
     def _profile(bucket: int) -> tuple[str, str, str, str]:
         profiles = [
-            ("speculative", "cautious", "speculative punt", "tiny exposure or pass"),
+            ("speculative", "cautious", "speculative punt", "tiny exposure"),
             ("lean", "moderate", "lean", "small stake"),
             ("supported", "confident", "back", "standard stake"),
             ("conviction", "strong", "strong back", "confident stake"),
@@ -258,7 +258,7 @@ def _enforce_coherence(spec: NarrativeSpec) -> NarrativeSpec:
             spec.tone_band = "cautious"
             spec.evidence_class = "speculative"
             spec.verdict_action = "speculative punt"
-            spec.verdict_sizing = "tiny exposure or pass"
+            spec.verdict_sizing = "tiny exposure"
         else:
             break  # Already at floor
         violations = _check_coherence(spec)
@@ -1661,7 +1661,7 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     _seed = (spec.home_name or "") + (spec.away_name or "")
 
     # R7-BUILD-02: P1-STAKING-FLOOR — EV >= 7% must never render "small"/"tiny" sizing
-    if spec.ev_pct >= 7.0 and sizing in ("tiny exposure or pass", "small stake"):
+    if spec.ev_pct >= 7.0 and sizing in ("tiny exposure", "small stake"):
         sizing = "standard stake"
 
     # The verification layer bans "confident" in rendered copy, so keep the

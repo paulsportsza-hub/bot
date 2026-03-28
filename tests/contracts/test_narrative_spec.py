@@ -48,7 +48,7 @@ class TestClassifyEvidence:
         assert ev_class == "speculative"
         assert tone == "cautious"
         assert action == "speculative punt"
-        assert sizing == "tiny exposure or pass"
+        assert sizing == "tiny exposure"
 
     def test_zero_ev_explicit_returns_monitor(self):
         """VERDICT-FIX: EV=0.0 → monitor posture, not PASS recommendation."""
@@ -74,7 +74,7 @@ class TestClassifyEvidence:
         assert ev_class == "speculative"
         assert tone == "cautious"
         assert action == "speculative punt"
-        assert sizing == "tiny exposure or pass"
+        assert sizing == "tiny exposure"
 
     def test_three_signals_returns_supported_confident(self):
         ev_class, tone, action, sizing = _classify_evidence(
@@ -163,7 +163,7 @@ class TestClassifyEvidence:
         assert ev_class == "speculative"
         assert tone == "cautious"
         assert action == "speculative punt"
-        assert sizing == "tiny exposure or pass"
+        assert sizing == "tiny exposure"
 
     def test_zero_signals_cap_high_ev_at_speculative(self):
         ev_class, tone, action, sizing = _classify_evidence({
@@ -216,7 +216,7 @@ class TestClassifyEvidence:
         assert ev_class == "speculative"
         assert tone == "cautious"
         assert action == "speculative punt"
-        assert sizing == "tiny exposure or pass"
+        assert sizing == "tiny exposure"
 
 
 # ── TONE_BANDS structure ───────────────────────────────────────────────────────
@@ -267,7 +267,7 @@ class TestCheckCoherence:
             home_story_type="neutral", away_story_type="neutral",
             support_level=0, evidence_class="speculative",
             tone_band="cautious", verdict_action="speculative punt",
-            verdict_sizing="tiny exposure or pass",
+            verdict_sizing="tiny exposure",
             risk_severity="moderate", stale_minutes=0,
             movement_direction="neutral", tipster_against=0,
         )
@@ -355,7 +355,7 @@ class TestEnforceCoherence:
             home_story_type="neutral", away_story_type="neutral",
             support_level=0, evidence_class="speculative",
             tone_band="cautious", verdict_action="speculative punt",
-            verdict_sizing="tiny exposure or pass",
+            verdict_sizing="tiny exposure",
             risk_severity="moderate", stale_minutes=0,
             movement_direction="neutral", tipster_against=0,
         )
@@ -867,14 +867,14 @@ class TestRenderEdge:
 
     def test_speculative_mentions_ev_or_probability(self):
         """W84-Q3: Speculative edge must reference EV or fair probability."""
-        spec = self._spec("speculative", "cautious", "speculative punt", "tiny exposure or pass",
+        spec = self._spec("speculative", "cautious", "speculative punt", "tiny exposure",
                           support_level=0)
         edge = _render_edge(spec)
         assert "expected value" in edge.lower() or "fair" in edge.lower() or "edge" in edge.lower()
 
     def test_speculative_no_legacy_phrases(self):
         """W84-Q3: Speculative edge must not contain legacy banned phrases."""
-        spec = self._spec("speculative", "cautious", "speculative punt", "tiny exposure or pass",
+        spec = self._spec("speculative", "cautious", "speculative punt", "tiny exposure",
                           support_level=0)
         edge = _render_edge(spec)
         legacy = ["tread carefully", "signals are absent", "supporting evidence is thin",
@@ -972,7 +972,7 @@ class TestRenderVerdict:
 
     def test_speculative_sizing_guidance(self):
         """W84-Q3: Speculative verdict includes sizing guidance."""
-        spec = self._spec("speculative punt", "tiny exposure or pass", "cautious")
+        spec = self._spec("speculative punt", "tiny exposure", "cautious")
         verdict = _render_verdict(spec)
         assert "punt" in verdict.lower() or "small" in verdict.lower() or "tiny" in verdict.lower()
 
@@ -996,7 +996,7 @@ class TestRenderVerdict:
         assert "strong" in verdict.lower() or "premium" in verdict.lower() or "conviction" in verdict.lower()
 
     def test_speculative_verdict_contains_no_banned_confident_phrases(self):
-        spec = self._spec("speculative punt", "tiny exposure or pass", "cautious")
+        spec = self._spec("speculative punt", "tiny exposure", "cautious")
         verdict = _render_verdict(spec)
         for phrase in TONE_BANDS["cautious"]["banned"]:
             assert phrase.lower() not in verdict.lower(), (
@@ -1021,7 +1021,7 @@ class TestRenderVerdict:
 
     def test_rendered_verdict_never_emits_confident(self):
         for action, sizing, tone in (
-            ("speculative punt", "tiny exposure or pass", "cautious"),
+            ("speculative punt", "tiny exposure", "cautious"),
             ("lean", "small stake", "moderate"),
             ("back", "standard stake", "confident"),
             ("strong back", "confident stake", "strong"),
@@ -1119,7 +1119,7 @@ class TestRenderBaseline:
         """Speculative baseline must not use tone-banned phrases."""
         spec = self._full_spec(
             evidence_class="speculative", tone_band="cautious",
-            verdict_action="speculative punt", verdict_sizing="tiny exposure or pass",
+            verdict_action="speculative punt", verdict_sizing="tiny exposure",
         )
         baseline = _render_baseline(spec)
         for phrase in TONE_BANDS["cautious"]["banned"]:
