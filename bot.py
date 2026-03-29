@@ -4866,12 +4866,12 @@ async def _render_your_games_all(
         ])
         return text, markup
 
-    # Collect available sport keys (from unfiltered games) for filter buttons
-    all_sport_keys: set[str] = set()
-    for lk in league_keys:
-        sk = config.LEAGUE_SPORT.get(lk)
-        if sk:
-            all_sport_keys.add(sk)
+    # Collect available sport keys from actual game data (not user prefs)
+    all_sport_keys = {
+        config.LEAGUE_SPORT.get(g.get("league_key", ""))
+        for g in games
+        if config.LEAGUE_SPORT.get(g.get("league_key", ""))
+    }
 
     # Apply sport filter
     all_games = games  # keep unfiltered ref for sport buttons
@@ -4900,13 +4900,7 @@ async def _render_your_games_all(
 
     # Empty state after filter
     if not sorted_games:
-        if sport_filter == "combat":
-            text = (
-                f"{title}\n\n"
-                "🥊 Combat Sports tips coming soon! We're building our data "
-                "pipeline for UFC/MMA and Boxing."
-            )
-        elif sport_filter:
+        if sport_filter:
             sport_def = config.ALL_SPORTS.get(sport_filter)
             sn = sport_def.label.lower() if sport_def else sport_filter
             text = f"{title}\n\nNo {sn} games scheduled."
@@ -7506,7 +7500,8 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
                 if match["match_id"] in seen_match_ids:
                     continue
                 seen_match_ids.add(match["match_id"])
-                if match.get("bookmaker_count", 0) < 2:
+                min_bk = 1 if league in ("ufc", "boxing") else 2
+                if match.get("bookmaker_count", 0) < min_bk:
                     continue
                 match_jobs.append((match, league, market_type))
         except Exception as exc:
