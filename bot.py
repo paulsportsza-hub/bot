@@ -1813,7 +1813,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 import time as _w84_t
                 _w84_html = _w84_hit["html"]
                 _w84_tips = _w84_hit["tips"]
-                _w84_tier = _w84_hit.get("edge_tier", "bronze")
+                # BUILD-4 Fix B: Re-derive tier from edge_results (not stale edge_tier column)
+                try:
+                    _fresh_tier_b2 = await asyncio.wait_for(
+                        asyncio.to_thread(_get_fresh_tier_from_er, match_key),
+                        timeout=1.0,
+                    )
+                except Exception:
+                    _fresh_tier_b2 = None
+                _w84_tier = _fresh_tier_b2 or _w84_hit.get("edge_tier", "bronze")
 
                 # Inject fresh header (broadcast + kickoff) — cached HTML may have stale header
                 _w84_snap = next(
@@ -7248,18 +7256,10 @@ def _build_model_from_consensus(match: dict) -> dict:
     }
 
 
+# BUILD-4: _tier_from_composite() RETIRED. Use _get_fresh_tier_from_er() which calls
+# assign_tier() from tier_engine — includes min_edge_pct gate that this function lacks.
 def _tier_from_composite(composite: float) -> str:
-    """Re-derive display tier from composite score using locked thresholds.
-
-    R6-BUILD-02: DB edge_tier may be stale (stored when Gold threshold was lower).
-    Always re-derive from composite_score for consistent list-view tier display.
-
-    Thresholds (locked — R6-BUILD-02, mirrors edge_config.TIER_THRESHOLDS):
-        Diamond >= 52
-        Gold    >= 40
-        Silver  >= 38
-        Bronze  <  38 (floor for any tip that passed production filters)
-    """
+    """DEPRECATED — kept for reference. Use _get_fresh_tier_from_er() instead."""
     if composite >= 52:
         return "diamond"
     if composite >= 40:
@@ -7267,6 +7267,39 @@ def _tier_from_composite(composite: float) -> str:
     if composite >= 38:
         return "silver"
     return "bronze"
+
+
+def _get_fresh_tier_from_er(match_key: str) -> str | None:
+    """BUILD-4 Fix B: Re-derive tier from edge_results via assign_tier().
+
+    Returns None if no edge_results row found or on error.
+    Called via asyncio.to_thread() in narrative_cache serving paths.
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db as _gft_fn
+        from scrapers.edge.edge_config import DB_PATH as _gft_db
+        from scrapers.edge.tier_engine import assign_tier as _gft_at
+        _gft_conn = _gft_fn(_gft_db)
+        _gft_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+        try:
+            _gft_row = _gft_conn.execute(
+                "SELECT composite_score, predicted_ev, confirming_signals "
+                "FROM edge_results WHERE match_key = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC LIMIT 1",
+                (match_key,),
+            ).fetchone()
+        finally:
+            _gft_conn.close()
+        if not _gft_row:
+            return None
+        return _gft_at(
+            float(_gft_row["composite_score"] or 0),
+            float(_gft_row["predicted_ev"] or 0),
+            int(_gft_row["confirming_signals"]) if _gft_row["confirming_signals"] is not None else 0,
+            red_flags=[],
+        ) or "bronze"
+    except Exception:
+        return None
 
 
 def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False) -> list[dict]:
@@ -15091,7 +15124,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
     # 2) If event_id is a DB match_id (contains _vs_), use DB path — skip Odds API loop.
     #    PSL and other DB-sourced events use match_id as event_id so we can serve directly.
-    if not target_event and "_vs_" in event_id:
+    #    BUILD-4 Fix A: check narrative_cache regardless of whether target_event is already set
+    #    (warm path from _schedule_cache set target_event above, but previously skipped this block).
+    if "_vs_" in event_id:
         # Check narrative cache immediately — serve without any further resolution
         try:
             _early_db_hit = await _get_cached_narrative(event_id)
@@ -15099,9 +15134,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             _early_db_hit = None
         if _early_db_hit:
             # W84-Q7: Extract teams from event_id for header injection
-            # (target_event is None at this point — cold tap before My Matches loads)
             _ea_home, _ea_away = _teams_from_vs_event_id(event_id)
-            _ea_hdr = _build_event_header(_ea_home, _ea_away, "", None)
+            # BUILD-4 Fix A: use schedule_cache team names when available (richer display)
+            if target_event:
+                _ea_home = target_event.get("home_team") or _ea_home
+                _ea_away = target_event.get("away_team") or _ea_away
+            _ea_hdr = _build_event_header(_ea_home, _ea_away, target_league or "", target_event)
             _ea_html = _inject_narrative_header(
                 _early_db_hit["html"], _ea_home, _ea_away,
                 _ea_hdr["kickoff"], _ea_hdr["league_display"], _ea_hdr["broadcast_line"],
@@ -15114,9 +15152,18 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 )
             except Exception:
                 pass
+            # BUILD-4 Fix B: re-derive tier from edge_results via assign_tier()
+            try:
+                _ea_fresh_tier = await asyncio.wait_for(
+                    asyncio.to_thread(_get_fresh_tier_from_er, event_id),
+                    timeout=1.0,
+                )
+            except Exception:
+                _ea_fresh_tier = None
+            _ea_tier = _ea_fresh_tier or _early_db_hit.get("edge_tier", "bronze")
             _analysis_cache[event_id] = (
                 _ea_html, _early_db_hit["tips"],
-                _early_db_hit["edge_tier"],
+                _ea_tier,
                 _early_db_hit.get("narrative_source"),
                 _time.time(),
             )
@@ -15124,7 +15171,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             buttons = _build_game_buttons(
                 _early_db_hit["tips"], event_id, user_id,
                 source=source, user_tier=_ggt_tier,
-                edge_tier=_early_db_hit["edge_tier"],
+                edge_tier=_ea_tier,
             )
             _banner = _qa_banner(user_id)
             _html = (_banner + _ea_html) if _banner else _ea_html
@@ -15133,31 +15180,32 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
             log.info(
-                "PERF: narrative_cache EARLY HIT (model=%s) for %s in %.1fs",
-                _early_db_hit["model"], event_id, _time.time() - _perf_t0,
+                "PERF: narrative_cache EARLY HIT (model=%s tier=%s) for %s in %.1fs",
+                _early_db_hit["model"], _ea_tier, event_id, _time.time() - _perf_t0,
             )
             return
-        # No narrative cache hit — build pseudo-event from odds.db for full generation
-        try:
-            db_match = await odds_svc.get_best_odds(event_id, "1x2")
-            if not db_match.get("outcomes"):
-                db_match = await odds_svc.get_best_odds(event_id, "match_winner")
-            if db_match.get("outcomes"):
-                home_t = _display_team_name(db_match.get("home_team") or "TBD")
-                away_t = _display_team_name(db_match.get("away_team") or "TBD")
-                league_raw = db_match.get("league", "")
-                parts = event_id.rsplit("_", 1)
-                date_str = parts[-1] if len(parts) > 1 and len(parts[-1]) == 10 else ""
-                target_event = {
-                    "id": event_id,
-                    "home_team": home_t,
-                    "away_team": away_t,
-                    "commence_time": f"{date_str}T00:00:00Z" if date_str else "",
-                    "league_key": league_raw,
-                }
-                target_league = league_raw
-        except Exception:
-            pass
+        # No narrative cache hit — build pseudo-event from odds.db for cold taps only
+        if not target_event:
+            try:
+                db_match = await odds_svc.get_best_odds(event_id, "1x2")
+                if not db_match.get("outcomes"):
+                    db_match = await odds_svc.get_best_odds(event_id, "match_winner")
+                if db_match.get("outcomes"):
+                    home_t = _display_team_name(db_match.get("home_team") or "TBD")
+                    away_t = _display_team_name(db_match.get("away_team") or "TBD")
+                    league_raw = db_match.get("league", "")
+                    parts = event_id.rsplit("_", 1)
+                    date_str = parts[-1] if len(parts) > 1 and len(parts[-1]) == 10 else ""
+                    target_event = {
+                        "id": event_id,
+                        "home_team": home_t,
+                        "away_team": away_t,
+                        "commence_time": f"{date_str}T00:00:00Z" if date_str else "",
+                        "league_key": league_raw,
+                    }
+                    target_league = league_raw
+            except Exception:
+                pass
 
     # 3) If still not resolved, search Odds API (EPL/CL event IDs are Odds API UUIDs)
     if not target_event:
