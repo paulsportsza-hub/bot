@@ -7604,7 +7604,15 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             # odds shift, causing list↔detail divergence and false cache busts.
             predicted_outcome = _er_outcomes.get(match["match_id"])
             if not predicted_outcome:
-                continue  # R15-BUILD-01 Fix 1: no authoritative outcome from edge_results — skip
+                # HOT-TIPS-BUILD-01 Fix A: first-cycle gap — V2 just computed this
+                # edge but edge_results hasn't been persisted yet. Populate _er_outcomes
+                # inline so the gate doesn't skip this match on its first scan cycle.
+                _v2_live_outcome = _v2_result.get("outcome", "")
+                if _v2_live_outcome:
+                    _er_outcomes[match["match_id"]] = _v2_live_outcome
+                    predicted_outcome = _v2_live_outcome
+                else:
+                    continue  # V2 outcome also absent — skip (R15-BUILD-01 preserved)
             edge_tier = _v2_result["tier"]
             composite_score = _v2_result["composite_score"]
             edge_pct = _v2_result["edge_pct"]
