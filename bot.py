@@ -1836,6 +1836,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _w84_hdr["kickoff"], _w84_hdr["league_display"], _w84_hdr["broadcast_line"],
                 )
 
+                # BUILD-6: Append evidence section (sharp lines + signals) if available
+                try:
+                    _ev_section = _render_evidence_section(_w84_hit.get("evidence_json"))
+                    if _ev_section:
+                        _w84_html = _w84_html + _ev_section
+                except Exception as _ev_err:
+                    log.debug("BUILD-6 evidence section failed for %s: %s", match_key, _ev_err)
+
                 # Warm in-memory caches
                 _analysis_cache[match_key] = (
                     _w84_html, _w84_tips, _w84_tier,
@@ -9700,6 +9708,7 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 "model": model,
                 "narrative_source": narrative_source or "w82",
                 "coverage_json": coverage_json,
+                "evidence_json": evidence_json,  # BUILD-6: expose for display
             }
         finally:
             conn.close()
@@ -10643,6 +10652,66 @@ def _extract_cached_espn_stale_minutes(evidence_json: str | None) -> float | Non
             return None
         from datetime import datetime, timezone
         return max(0.0, (datetime.now(timezone.utc) - fetched_dt).total_seconds() / 60.0)
+
+
+def _render_evidence_section(evidence_json_str: str | None) -> str:
+    """Render sharp-line vs SA odds + signal backing below the narrative (BUILD-6).
+
+    Returns an HTML fragment (starting with a divider) or "" when nothing to show.
+    Safe on any parse error or missing data.
+    """
+    if not evidence_json_str:
+        return ""
+    try:
+        ej = (
+            json.loads(evidence_json_str)
+            if isinstance(evidence_json_str, str)
+            else evidence_json_str
+        )
+    except (json.JSONDecodeError, TypeError):
+        return ""
+
+    lines: list[str] = []
+
+    edge_state = ej.get("edge_state") or {}
+    outcome = (edge_state.get("outcome") or "").lower().strip()
+    edge_pct = float(edge_state.get("edge_pct") or 0)
+    confirming = int(edge_state.get("confirming_signals") or 0)
+    contradicting = int(edge_state.get("contradicting_signals") or 0)
+
+    # ── Sharp lines vs SA odds ───────────────────────────────
+    sharp = ej.get("sharp_lines") or {}
+    if (sharp.get("provenance") or {}).get("available") and outcome:
+        pin = sharp.get("pinnacle_price") or {}
+        bfx = sharp.get("betfair_price") or {}
+        sharp_price = pin.get(outcome) or bfx.get(outcome)
+        sharp_src = "Pinnacle" if pin.get(outcome) else ("Betfair" if bfx.get(outcome) else "")
+        sa_blk = ej.get("sa_odds") or {}
+        sa_best = (sa_blk.get("best_odds") or {}).get(outcome)
+        sa_bk = (sa_blk.get("best_bookmaker") or {}).get(outcome, "")
+        if sharp_price and sa_best and sharp_src:
+            try:
+                ev_str = f" · <b>+{edge_pct:.1f}%</b>" if edge_pct > 0 else ""
+                lines.append(
+                    f"📈 <b>{sharp_src}:</b> {float(sharp_price):.2f}"
+                    f"  ·  <b>SA best:</b> {float(sa_best):.2f} ({h(sa_bk)}){ev_str}"
+                )
+            except (TypeError, ValueError):
+                pass
+
+    # ── Signal backing ───────────────────────────────────────
+    if confirming >= 1:
+        total = confirming + contradicting
+        if contradicting > 0:
+            lines.append(f"🤝 <b>Signals:</b> {confirming}/{total} confirming")
+        else:
+            s = "s" if confirming > 1 else ""
+            lines.append(f"🤝 <b>Signals:</b> {confirming} source{s} backing this")
+
+    if not lines:
+        return ""
+
+    return "\n\n━━━\n" + "\n".join(lines)
 
 
 def _has_stale_setup_context_claims(narrative: str, evidence_json: str | None) -> bool:
