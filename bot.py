@@ -8041,6 +8041,46 @@ def _build_hot_tips_page(
         lines.extend(yesterday_lines)
         lines.append("")
 
+    # P0-2 FIX: Batch-check narrative_cache for ESPN evidence to determine true MODEL ONLY status.
+    # confirming_signals==0 does not mean no ESPN data — standings/form/H2H can exist at sub-0.65
+    # signal strength. Only show [MODEL ONLY] when the cached narrative has NO ESPN data at all.
+    _nc_espn_match_ids: set[str] = set()
+    try:
+        from scrapers.db_connect import connect_odds_db as _nc_conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _nc_db_path
+        import json as _nc_json
+        _page_match_ids = [
+            tip.get("match_id") or tip.get("event_id") or ""
+            for tip in page_tips
+        ]
+        _page_match_ids = [mid for mid in _page_match_ids if mid]
+        if _page_match_ids:
+            _nc_conn = _nc_conn_fn(_nc_db_path)
+            _nc_placeholders = ",".join("?" * len(_page_match_ids))
+            _nc_rows = _nc_conn.execute(
+                f"SELECT match_id, evidence_json FROM narrative_cache "
+                f"WHERE match_id IN ({_nc_placeholders})",
+                _page_match_ids,
+            ).fetchall()
+            _nc_conn.close()
+            for _nc_row in _nc_rows:
+                _nc_mid = _nc_row[0]
+                _nc_ejson = _nc_row[1]
+                if not _nc_ejson:
+                    continue
+                try:
+                    _nc_cm = _nc_json.loads(_nc_ejson).get("coverage_metrics", {})
+                    if (
+                        _nc_cm.get("standings_available")
+                        or (_nc_cm.get("form_games_count") or 0) > 0
+                        or (_nc_cm.get("h2h_games_count") or 0) > 0
+                    ):
+                        _nc_espn_match_ids.add(_nc_mid)
+                except (ValueError, TypeError):
+                    pass
+    except Exception:
+        pass  # Graceful fallback — MODEL ONLY logic unchanged if cache unavailable
+
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
     diamond_locked = 0
@@ -8069,6 +8109,10 @@ def _build_hot_tips_page(
         tier_emoji = EDGE_EMOJIS.get(edge_tier, "🥉")
         sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
         _confirming, _total_signals, _model_only = _edge_signal_meta(tip.get("edge_v2"))
+        # P0-2: Suppress [MODEL ONLY] if narrative_cache has any ESPN data for this match
+        _tip_mid = tip.get("match_id") or tip.get("event_id") or ""
+        if _model_only and _tip_mid and _tip_mid in _nc_espn_match_ids:
+            _model_only = False
         tip["_ht_model_only"] = _model_only
         tip["_ht_confirming_signals"] = _confirming
         tip["_ht_total_signals"] = _total_signals
