@@ -1778,6 +1778,38 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 return
 
+            # BUILD-9: Always gate on current EV before serving detail.
+            # Catches the case where list showed stale positive EV (from 15-min cache)
+            # but the fresh edge_results row has gone negative since cache was filled.
+            _b9_ev: float | None = None
+            try:
+                _b9_ev = await asyncio.wait_for(
+                    _get_current_ev_for_match(match_key), timeout=1.5
+                )
+            except Exception as _b9_err:
+                log.debug("[BUILD-9] EV gate check failed for %s: %s", match_key, _b9_err)
+            if _b9_ev is not None and _b9_ev <= 0:
+                _b9_home, _b9_away = _teams_from_vs_event_id(match_key)
+                await query.edit_message_text(
+                    f"🎯 <b>{h(_b9_home)} vs {h(_b9_away)}</b>\n\n"
+                    "⚡ <b>Edge no longer available</b>\n\n"
+                    "Odds have moved since this edge was identified. "
+                    "Expected value is no longer positive at current pricing.\n\n"
+                    "<i>Return to the list for active edges.</i>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "↩️ Back to Edge Picks",
+                            callback_data=f"hot:back:{_resolve_hot_tips_back_page(user_id, match_key)}",
+                        ),
+                    ]]),
+                )
+                log.info(
+                    "[BUILD-9] Suppressed negative-EV detail for %s (ev=%.1f%%)",
+                    match_key, _b9_ev,
+                )
+                return
+
             # SERVE-PATH-FIX Fix 1: Check w84 narrative_cache BEFORE programmatic renderer.
             # The yg:game: path reads from narrative_cache and scores 8-10/10 — the w84
             # Sonnet-polished narratives are excellent. This check serves them on edge:detail too.
@@ -7493,6 +7525,66 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
     return tips[: max(int(limit or 10), 1)]
 
 
+async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
+    """BUILD-9: Batch-refresh EV values from edge_results before list render.
+
+    Filters out tips where current predicted_ev has gone negative.
+    Updates ev field in remaining tips to reflect current DB values.
+    Falls back to original list on any error (graceful degradation).
+    """
+    if not tips:
+        return tips
+    match_keys = [t.get("match_id") or t.get("event_id", "") for t in tips]
+    match_keys = [k for k in match_keys if k]
+    if not match_keys:
+        return tips
+
+    def _batch_query():
+        try:
+            from scrapers.db_connect import connect_odds_db as _conn_fn
+            from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+            _conn = _conn_fn(_DB_PATH)
+            _ph = ",".join("?" * len(match_keys))
+            rows = _conn.execute(
+                f"SELECT e.match_key, e.predicted_ev "
+                f"FROM edge_results e "
+                f"WHERE e.match_key IN ({_ph}) AND e.result IS NULL "
+                f"AND NOT EXISTS ("
+                f"  SELECT 1 FROM edge_results newer "
+                f"  WHERE newer.match_key = e.match_key AND newer.result IS NULL "
+                f"  AND (COALESCE(newer.recommended_at,'') > COALESCE(e.recommended_at,'') "
+                f"    OR (COALESCE(newer.recommended_at,'') = COALESCE(e.recommended_at,'') "
+                f"        AND newer.id > e.id))"
+                f")",
+                match_keys,
+            ).fetchall()
+            _conn.close()
+            return {row[0]: float(row[1]) for row in rows if row[1] is not None}
+        except Exception as _e:
+            log.debug("_refresh_tip_evs batch query failed: %s", _e)
+            return {}
+
+    try:
+        fresh_evs = await asyncio.wait_for(asyncio.to_thread(_batch_query), timeout=2.0)
+    except Exception:
+        return tips
+
+    if not fresh_evs:
+        return tips
+
+    result = []
+    for t in tips:
+        mk = t.get("match_id") or t.get("event_id", "")
+        if mk and mk in fresh_evs:
+            current_ev = fresh_evs[mk]
+            if current_ev <= 0:
+                continue  # Suppress — EV has gone negative since cache was filled
+            t = dict(t)  # Shallow copy — don't mutate shared cache dicts
+            t["ev"] = round(current_ev, 1)
+        result.append(t)
+    return result
+
+
 async def _fetch_hot_tips_from_db() -> list[dict]:
     """Fetch hot tips from Dataminer's odds.db — no external API needed.
 
@@ -8372,6 +8464,11 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _get_hot_tips_result_proof(),
             _get_edge_tracker_summary(7),
         )
+        # BUILD-9: Refresh EV values — filter stale negative-EV tips from 15-min cache
+        try:
+            _cached_tips = await _refresh_tip_evs(_cached_tips)
+        except Exception as _b9_err:
+            log.debug("BUILD-9 EV refresh failed (graceful fallback): %s", _b9_err)
         _wm_text, _wm_markup = _build_hot_tips_page(
             _cached_tips, page=0, user_tier=_wm_tier,
             remaining_views=_wm_rv, consecutive_misses=_wm_consec,
