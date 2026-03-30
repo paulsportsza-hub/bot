@@ -16524,6 +16524,15 @@ def _build_game_buttons(
                 _outcome_key = "draw"
             else:
                 _outcome_key = _out_raw
+
+            # HOT-TIPS-BUILD-07: Override with authoritative positional key from edge_results.
+            # The snapshot tip["outcome"] may be a stale display name from a prior cycle
+            # (e.g. "Arsenal" when edge_results.bet_type = "Home Win" = Sporting CP).
+            # _er_outcomes_cache is refreshed every precompute cycle by _refresh_er_outcomes_cache().
+            _er_auth = _er_outcomes_cache.get(match_key) or _er_outcomes_cache.get(match_id)
+            if _er_auth in ("home", "away", "draw"):
+                _outcome_key = _er_auth
+
             _rec_bk_key, _ = _select_best_bookmaker_for_outcome(odds_by_bk, _outcome_key)
             if _rec_bk_key:
                 best_bk = {"bookmaker_key": _rec_bk_key, "affiliate_url": ""}
@@ -16551,7 +16560,20 @@ def _build_game_buttons(
                     bk_name = best_ev_tip.get("bookmaker") or best_ev_tip.get("bookie") or config.get_active_display_name()
                 if not aff_url:
                     aff_url = get_affiliate_url(bk_key, match_id=match_id) if bk_key else ""
-                outcome = best_ev_tip["outcome"]
+
+                # HOT-TIPS-BUILD-07: Translate _outcome_key to team display name.
+                # Never use tip["outcome"] directly — it may be a stale display name or
+                # a positional key ("home"/"away") that must not appear verbatim in the CTA.
+                _home_disp = best_ev_tip.get("home_team") or ""
+                _away_disp = best_ev_tip.get("away_team") or ""
+                if _outcome_key == "home" and _home_disp:
+                    outcome = _home_disp
+                elif _outcome_key == "away" and _away_disp:
+                    outcome = _away_disp
+                elif _outcome_key == "draw":
+                    outcome = "Draw"
+                else:
+                    outcome = best_ev_tip.get("outcome") or ""
                 odds_val = best_ev_tip["odds"]
 
                 cta_text = f"{tier_emoji} Back {outcome} @ {odds_val:.2f} on {bk_name} →"
