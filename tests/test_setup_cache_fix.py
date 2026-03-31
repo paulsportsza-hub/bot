@@ -84,7 +84,7 @@ def test_find_stale_setup_patterns_ignores_clean_setup_with_price_in_edge() -> N
         "🎯 <b>Brentford vs Wolves</b>\n\n"
         "📋 <b>The Setup</b>\n"
         "Brentford look like one of those sides you assess by the latest run rather than the badge. "
-        "Form reads W-D-L-D-W — mixed enough to keep the picture open.\n\n"
+        "Form reads W-D-L-D-W — no clean trend in either direction.\n\n"
         "🎯 <b>The Edge</b>\n"
         "Betway's 2.80 on Brentford win offers 7.5% expected value against fair value.\n\n"
         "⚠️ <b>The Risk</b>\n"

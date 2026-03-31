@@ -6191,7 +6191,7 @@ HOT_TIPS_SCAN_SPORTS = [
 ]
 
 _hot_tips_cache: dict[str, dict] = {}  # "global" → {"tips": [...], "ts": float}
-HOT_TIPS_CACHE_TTL = 900  # 15 minutes
+HOT_TIPS_CACHE_TTL = 1800  # 30 minutes (BUILD-16b/FIX-6C: extended from 15m)
 _hot_tips_result_proof_cache: dict[str, dict] = {}  # "global" → {"data": {...}, "ts": float}
 HOT_TIPS_RESULT_PROOF_CACHE_TTL = 300  # 5 minutes
 _edge_tracker_summary_cache: dict[str, dict] = {}  # "{days}" → {"data": {...}, "ts": float}
@@ -8525,11 +8525,8 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _get_hot_tips_result_proof(),
             _get_edge_tracker_summary(7),
         )
-        # BUILD-9: Refresh EV values — filter stale negative-EV tips from 15-min cache
-        try:
-            _cached_tips = await _refresh_tip_evs(_cached_tips)
-        except Exception as _b9_err:
-            log.debug("BUILD-9 EV refresh failed (graceful fallback): %s", _b9_err)
+        # BUILD-16b/FIX-6A: _refresh_tip_evs() removed from warm path — precomputed EVs
+        # are fresh enough (<15 min). Retained on fast/cold paths only.
         _wm_text, _wm_markup = _build_hot_tips_page(
             _cached_tips, page=0, user_tier=_wm_tier,
             remaining_views=_wm_rv, consecutive_misses=_wm_consec,
@@ -9613,7 +9610,7 @@ def _build_odds_compare_back_button(user_id: int, event_id: str) -> InlineKeyboa
     return InlineKeyboardButton("↩️ Back to Game", callback_data=f"yg:game:{event_id}")
 
 # ── W60-CACHE: Persistent narrative cache in odds.db ──────────
-_NARRATIVE_CACHE_TTL = 7200  # 2 hours in seconds (R14-BUILD-01: reduced from 6h)
+_NARRATIVE_CACHE_TTL = 21600  # 6 hours in seconds (BUILD-16b/FIX-2A: extended from 2h)
 _NARRATIVE_DB_PATH = str(ODDS_DB_PATH)
 # W75-FIX: Cache miss uses Sonnet (not Haiku) for quality parity with pre-gen
 _NARRATIVE_MODEL = os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514")

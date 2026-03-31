@@ -1313,9 +1313,14 @@ def _form_outlook(form: str) -> str:
     if not f:
         return ""
 
+    # Single result is not a form run — suppress entirely
+    if len(form) < 2:
+        return ""
+
     wins = form.count("W")
     losses = form.count("L")
     draws = form.count("D")
+    total = len(form)
 
     if wins >= 4:
         return f"Form reads {f} — that is a side carrying genuine rhythm."
@@ -1327,7 +1332,18 @@ def _form_outlook(form: str) -> str:
         return f"Form reads {f} — the shape is still uneven."
     if draws >= 3 and wins <= 1 and losses <= 1:
         return f"Form reads {f} — a run built on tight margins rather than momentum."
-    return f"Form reads {f} — mixed enough to keep the picture open."
+
+    # Short form (2-3 results) — honest about brevity, differentiated by direction
+    if total <= 3:
+        if wins > losses:
+            return f"Form reads {f} — a short run leaning positive."
+        elif losses > wins:
+            return f"Form reads {f} — a short run that hasn\u2019t settled in their favour yet."
+        else:
+            return f"Form reads {f} — too early to read a clear trend."
+
+    # Genuine mixed form (4+ results, no dominant pattern)
+    return f"Form reads {f} — no clean trend in either direction."
 
 
 def _render_setup_no_context(spec: NarrativeSpec) -> str:

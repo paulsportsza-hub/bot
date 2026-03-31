@@ -169,90 +169,14 @@ _RUNTIME_SCHEMA_REQUIREMENTS = {
 }
 
 
-def _scraper_lock_file() -> str:
-    return os.environ.get("PREGEN_SCRAPER_LOCK_FILE", "/tmp/mzansi_scraper.lock")
-
-
-def _scraper_wait_seconds() -> float:
-    return float(os.environ.get("PREGEN_SCRAPER_WAIT_SECONDS", "720"))
-
-
-def _scraper_wait_poll_seconds() -> float:
-    return float(os.environ.get("PREGEN_SCRAPER_WAIT_POLL_SECONDS", "5"))
-
-
-def _is_active_process(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def _active_scraper_lock_pid(lock_file: str | None = None) -> int | None:
-    path = lock_file or _scraper_lock_file()
-    try:
-        with open(path) as fh:
-            raw = fh.read().strip()
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return None
-    if not raw:
-        return None
-    try:
-        pid = int(raw)
-    except ValueError:
-        return None
-    return pid if _is_active_process(pid) else None
-
-
 def _pregen_enrichment_live_safe() -> tuple[bool, int | None]:
-    """Always use read-only enrichment during pregen to eliminate DB write contention.
+    """Always use read-only enrichment during pregen — no lock dependency.
 
-    W84-LOCKFIX: Previously this only checked /tmp/mzansi_scraper.lock, but 7+
-    other cron processes write to odds.db without that lock file (sharp benchmark,
-    closing_capture, clv_tracker, settlement, lineups, integrity, bot edge_v2).
-    The lock-file check had a TOCTOU race even for the one writer it did cover.
-
-    Fix: unconditionally return live_safe=True.  Pregen reads from api_cache
-    (coach/ESPN data) but never writes.  Cache misses produce slightly thinner
-    narratives for ONE cycle; the next run (or a user tap) populates the cache.
-    This eliminates ALL write contention from pregen enrichment → odds.db.
+    BUILD-16a: Pregen only READS from odds_snapshots. SQLite WAL mode permits
+    concurrent reads during write transactions. The scraper writer lock
+    (/tmp/mzansi_scraper.lock) is irrelevant to read-only pregen operations.
     """
-    return True, _active_scraper_lock_pid()
-
-
-async def _wait_for_scraper_writer_window() -> bool:
-    """Serialize pregen startup behind the scraper lock to avoid writer collisions."""
-    active_pid = _active_scraper_lock_pid()
-    if active_pid is None:
-        return True
-
-    wait_seconds = max(_scraper_wait_seconds(), 0.0)
-    poll_seconds = max(_scraper_wait_poll_seconds(), 0.1)
-    deadline = time.monotonic() + wait_seconds
-    log.warning(
-        "Scraper writer lock active via %s (PID %s) — delaying pregen startup up to %.0fs",
-        _scraper_lock_file(),
-        active_pid,
-        wait_seconds,
-    )
-    while time.monotonic() < deadline:
-        await asyncio.sleep(poll_seconds)
-        active_pid = _active_scraper_lock_pid()
-        if active_pid is None:
-            log.info("Scraper writer lock cleared — proceeding with pregen startup")
-            return True
-
-    log.warning(
-        "Scraper writer lock still active after %.0fs (PID %s) — deferring this sweep safely",
-        wait_seconds,
-        active_pid,
-    )
-    return False
+    return True, None
 
 
 def _validate_pregen_runtime_schema(db_path: str | None = None) -> None:
@@ -1345,8 +1269,8 @@ async def main(sweep: str) -> None:
         model_id,
     )
 
-    if not await _wait_for_scraper_writer_window():
-        return
+    # BUILD-16a: No scraper lock dependency. Pregen reads via WAL mode —
+    # concurrent with scraper writes. No waiting, no deferral.
 
     # Runtime sweeps validate schema read-only; deploy/startup migration must happen elsewhere.
     _validate_pregen_runtime_schema()
