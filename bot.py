@@ -1778,43 +1778,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 return
 
-            # BUILD-9: Always gate on current EV before serving detail.
-            # Catches the case where list showed stale positive EV (from 15-min cache)
-            # but the fresh edge_results row has gone negative since cache was filled.
-            _b9_ev: float | None = None
-            try:
-                _b9_ev = await asyncio.wait_for(
-                    _get_current_ev_for_match(match_key), timeout=3.0
-                )
-            except Exception as _b9_err:
-                log.debug("[BUILD-9] EV gate check failed for %s: %s", match_key, _b9_err)
-            if _b9_ev is not None and _b9_ev <= 0:
-                _b9_home, _b9_away = _teams_from_vs_event_id(match_key)
-                await query.edit_message_text(
-                    f"🎯 <b>{h(_b9_home)} vs {h(_b9_away)}</b>\n\n"
-                    "⚡ <b>Edge no longer available</b>\n\n"
-                    "Odds have moved since this edge was identified. "
-                    "Expected value is no longer positive at current pricing.\n\n"
-                    "<i>Return to the list for active edges.</i>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton(
-                            "↩️ Back to Edge Picks",
-                            callback_data=f"hot:back:{_resolve_hot_tips_back_page(user_id, match_key)}",
-                        ),
-                    ]]),
-                )
-                log.info(
-                    "[BUILD-9] Suppressed negative-EV detail for %s (ev=%.1f%%)",
-                    match_key, _b9_ev,
-                )
-                return
-
-            # SERVE-PATH-FIX Fix 1: Check w84 narrative_cache BEFORE programmatic renderer.
-            # The yg:game: path reads from narrative_cache and scores 8-10/10 — the w84
-            # Sonnet-polished narratives are excellent. This check serves them on edge:detail too.
-            # Fast DB read (single SELECT), no LLM call. Fallback to render_edge_detail on miss.
+            # BUILD-16c: Check narrative cache FIRST — skip live EV recompute on hit.
+            # _get_cached_narrative is a fast DB read (<50ms). _get_current_ev_for_match
+            # queries 543K+ odds_snapshots rows (up to 3.0s). On cache hit with positive-EV
+            # tips, the precomputed EV is sufficient — skip the live recompute entirely.
             _w84_hit = None
+            _b16c_stale = False
+            _b16c_ev_checked = False
             try:
                 _w84_hit = await asyncio.wait_for(
                     _get_cached_narrative(match_key),
@@ -1823,8 +1793,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             except Exception:
                 _w84_hit = None
 
-            # --- Serve-time EV gate: don't serve stale 0% EV content (COVERAGE-GATE-BUILD) ---
             if _w84_hit:
+                # Cache HIT — check if cached tips have positive EV
                 try:
                     _cached_tips = _w84_hit.get("tips", [])
                     _all_zero_ev = (
@@ -1832,14 +1802,60 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         if _cached_tips else True
                     )
                     if _all_zero_ev:
+                        # COVERAGE-GATE: cached tips have zero EV — verify live (1.5s)
+                        _b16c_ev_checked = True
                         _current_ev = await asyncio.wait_for(
                             _get_current_ev_for_match(match_key), timeout=1.5
                         )
                         if _current_ev is not None and _current_ev <= 0:
                             _w84_hit = None  # Force regeneration — edge has expired
                             log.info("[EV-GATE] Suppressed stale 0%% EV card for %s", match_key)
+                    else:
+                        # BUILD-16c: Positive-EV cache hit — check staleness for indicator
+                        try:
+                            _ca_raw = _w84_hit.get("created_at")
+                            if _ca_raw:
+                                from datetime import datetime as _dt16c, timezone as _tz16c
+                                _ca_dt = _dt16c.fromisoformat(str(_ca_raw))
+                                if _ca_dt.tzinfo is None:
+                                    _ca_dt = _ca_dt.replace(tzinfo=_tz16c.utc)
+                                _age_min = (_dt16c.now(_tz16c.utc) - _ca_dt).total_seconds() / 60
+                                _b16c_stale = _age_min > 30
+                        except (ValueError, TypeError):
+                            pass
                 except Exception as _ev_gate_err:
                     log.warning("[EV-GATE] Error checking EV for %s: %s", match_key, _ev_gate_err)
+
+            # Cache MISS — fall through to BUILD-9 live EV gate (3.0s, unchanged)
+            if not _w84_hit and not _b16c_ev_checked:
+                _b9_ev: float | None = None
+                try:
+                    _b9_ev = await asyncio.wait_for(
+                        _get_current_ev_for_match(match_key), timeout=3.0
+                    )
+                except Exception as _b9_err:
+                    log.debug("[BUILD-9] EV gate check failed for %s: %s", match_key, _b9_err)
+                if _b9_ev is not None and _b9_ev <= 0:
+                    _b9_home, _b9_away = _teams_from_vs_event_id(match_key)
+                    await query.edit_message_text(
+                        f"🎯 <b>{h(_b9_home)} vs {h(_b9_away)}</b>\n\n"
+                        "⚡ <b>Edge no longer available</b>\n\n"
+                        "Odds have moved since this edge was identified. "
+                        "Expected value is no longer positive at current pricing.\n\n"
+                        "<i>Return to the list for active edges.</i>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton(
+                                "↩️ Back to Edge Picks",
+                                callback_data=f"hot:back:{_resolve_hot_tips_back_page(user_id, match_key)}",
+                            ),
+                        ]]),
+                    )
+                    log.info(
+                        "[BUILD-9] Suppressed negative-EV detail for %s (ev=%.1f%%)",
+                        match_key, _b9_ev,
+                    )
+                    return
 
             if _w84_hit:
                 import time as _w84_t
@@ -1900,6 +1916,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     edge_tier=_w84_tier,
                     back_page=_resolve_hot_tips_back_page(user_id, match_key),
                 )
+
+                # BUILD-16c: Stale-odds indicator when cached data is >30 min old
+                if _b16c_stale:
+                    _w84_html += "\n\n⌛ <i>Odds may have moved since this analysis was generated.</i>"
 
                 _banner = _qa_banner(user_id)
                 _final = (_banner + _w84_html) if _banner else _w84_html
@@ -9764,13 +9784,13 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
         try:
             row = conn.execute(
                 "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
-                "evidence_json, narrative_source, coverage_json "
+                "evidence_json, narrative_source, coverage_json, created_at "
                 "FROM narrative_cache WHERE match_id = ?",
                 (match_id,),
             ).fetchone()
             if not row:
                 return None
-            html, model, tier, tips_json, stored_hash, expires_at, evidence_json, narrative_source, coverage_json = row
+            html, model, tier, tips_json, stored_hash, expires_at, evidence_json, narrative_source, coverage_json, created_at_raw = row
             # Check TTL
             try:
                 exp = datetime.fromisoformat(expires_at)
@@ -9928,6 +9948,7 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 "narrative_source": narrative_source or "w82",
                 "coverage_json": coverage_json,
                 "evidence_json": evidence_json,  # BUILD-6: expose for display
+                "created_at": created_at_raw,  # BUILD-16c: staleness check
             }
         finally:
             conn.close()
