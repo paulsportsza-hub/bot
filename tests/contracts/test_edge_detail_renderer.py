@@ -430,14 +430,22 @@ class TestV1TipFallback:
         assert "1.85" in html
         assert "Betway" in html
 
-    def test_v1_fallback_model_only_true(self):
-        """V1 fallback always sets model_only=True (no V2 signal data)."""
+    def test_v1_fallback_confirming_estimated_from_composite(self):
+        """V1 fallback estimates confirming_signals from composite_score (same logic as V2 path).
+        composite=62 → confirming=2 → model_only=False."""
         from edge_detail_renderer import _build_detail_data_from_tip
 
+        # composite_score=62 (default in _make_tip) → confirming=2 (>= 55), model_only=False
         tip = _make_tip()
         data = _build_detail_data_from_tip(tip, None, "diamond")
-        assert data.model_only is True
-        assert data.confirming_signals == 0
+        assert data.confirming_signals == 2
+        assert data.model_only is False
+
+        # composite_score=0 → confirming=0, model_only=True
+        tip_zero = _make_tip(composite_score=0)
+        data_zero = _build_detail_data_from_tip(tip_zero, None, "diamond")
+        assert data_zero.confirming_signals == 0
+        assert data_zero.model_only is True
 
     def test_v2_path_ignores_tip_data(self):
         """When V2 edge_results exist, tip_data is not used."""

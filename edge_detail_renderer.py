@@ -324,8 +324,8 @@ def _build_detail_data_from_tip(
     """Build detail data from V1 tip dict when V2 edge_results unavailable.
 
     CLEAN-RUGBY: Produces a minimum viable card with real match info.
-    Sets ``model_only=True`` and ``confirming_signals=0`` because V1
-    does not track individual signal confirmations.
+    Estimates ``confirming_signals`` from composite_score (same as V2 path)
+    and sets ``model_only=(confirming == 0)`` because V1 has no signal tracking.
     """
     from scrapers.edge.tier_engine import assign_tier
 
@@ -351,8 +351,13 @@ def _build_detail_data_from_tip(
         tip_data.get("recommended_odds") or tip_data.get("odds") or 0,
     )
 
-    # V1 doesn't track confirming signals
-    confirming = 0
+    # V1 doesn't track confirming signals — estimate from composite (same logic as V2 path)
+    confirming = (
+        3 if composite >= 70
+        else 2 if composite >= 55
+        else 1 if composite >= 35
+        else 0
+    )
 
     # Tier from display_tier or edge_rating
     tier_raw = (
@@ -414,7 +419,7 @@ def _build_detail_data_from_tip(
         predicted_ev=ev,
         confirming_signals=confirming,
         fair_prob_pct=fair_prob,
-        model_only=True,
+        model_only=(confirming == 0),
         context=ctx,
         mep_met=mep_met,
         match_date=match_date,
