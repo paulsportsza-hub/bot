@@ -634,8 +634,7 @@ def _section_signals(data: EdgeDetailData) -> str:
 
     if data.model_only:
         lines.append(
-            "No confirming indicators behind this price — "
-            "the edge is carried by the pricing gap alone."
+            "No confirming indicators behind this price."
         )
     elif data.confirming_signals == 1:
         lines.append("1 signal aligned with this edge.")
@@ -675,7 +674,7 @@ def _section_risk(data: EdgeDetailData) -> str:
 
     if not factors:
         factors.append(
-            "No specific flags on this one — standard match-day variables apply."
+            "No elevated risk flags identified for this fixture."
         )
 
     for f in factors:
