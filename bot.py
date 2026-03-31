@@ -8196,18 +8196,55 @@ def _build_hot_tips_page(
     except Exception:
         pass  # Graceful fallback — MODEL ONLY logic unchanged if cache unavailable
 
+    # BUILD-12: Batch-fetch authoritative tiers from edge_results for all page tips.
+    # tip["display_tier"] may be stale from cache; edge_results is always current
+    # (same source as _get_fresh_tier_from_er() used by CTA buttons).
+    _fresh_tiers: dict[str, str] = {}
+    try:
+        _pt_keys = [t.get("match_id") or t.get("event_id") or "" for t in page_tips]
+        _pt_keys = [k for k in _pt_keys if k]
+        if _pt_keys:
+            from scrapers.db_connect import connect_odds_db as _b12_conn_fn
+            from scrapers.edge.edge_config import DB_PATH as _b12_db_path
+            from scrapers.edge.tier_engine import assign_tier as _b12_assign
+            _b12_conn = _b12_conn_fn(_b12_db_path)
+            _b12_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+            _b12_ph = ",".join("?" * len(_pt_keys))
+            _b12_rows = _b12_conn.execute(
+                f"SELECT match_key, composite_score, predicted_ev, confirming_signals "
+                f"FROM edge_results "
+                f"WHERE match_key IN ({_b12_ph}) AND result IS NULL "
+                f"ORDER BY recommended_at DESC",
+                _pt_keys,
+            ).fetchall()
+            _b12_conn.close()
+            _b12_seen: set[str] = set()
+            for _b12_r in _b12_rows:
+                _b12_mk = _b12_r["match_key"]
+                if _b12_mk in _b12_seen:
+                    continue
+                _b12_seen.add(_b12_mk)
+                _b12_cs = float(_b12_r["composite_score"] or 0)
+                _b12_ev = float(_b12_r["predicted_ev"] or 0)
+                _b12_sig = int(_b12_r["confirming_signals"]) if _b12_r["confirming_signals"] is not None else 0
+                _fresh_tiers[_b12_mk] = _b12_assign(_b12_cs, _b12_ev, _b12_sig, red_flags=[]) or "bronze"
+    except Exception:
+        pass  # Graceful fallback — stale display_tier used if edge_results unavailable
+
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
     diamond_locked = 0
     gold_locked = 0
     page_tier_counts: dict[str, int] = {}
     for tip in page_tips:
-        tier_key = str(tip.get("display_tier", tip.get("edge_rating", EdgeRating.BRONZE))).lower().strip()
+        _pt_mk = tip.get("match_id") or tip.get("event_id") or ""
+        tier_key = _fresh_tiers.get(_pt_mk) or str(tip.get("display_tier", tip.get("edge_rating", EdgeRating.BRONZE))).lower().strip()
         page_tier_counts[tier_key] = page_tier_counts.get(tier_key, 0) + 1
     last_section_tier = ""
 
     for i, tip in enumerate(page_tips, start + 1):
-        edge_tier = str(tip.get("display_tier", tip.get("edge_rating", "bronze"))).lower().strip()
+        _tip_mk_for_tier = tip.get("match_id") or tip.get("event_id") or ""
+        edge_tier = _fresh_tiers.get(_tip_mk_for_tier) or str(tip.get("display_tier", tip.get("edge_rating", "bronze"))).lower().strip()
         access = get_edge_access_level(user_tier, edge_tier)
 
         if edge_tier != last_section_tier:
@@ -8423,7 +8460,8 @@ def _build_hot_tips_page(
         h_abbr = config.abbreviate_team(tip.get("home_team") or "TBD")
         a_abbr = config.abbreviate_team(tip.get("away_team") or "TBD")
         if access in ("full", "partial"):
-            _btn_tier = EDGE_EMOJIS.get(tip.get("display_tier", tip.get("edge_rating", "bronze")), "🥉")
+            _btn_fresh = _fresh_tiers.get(match_key) or tip.get("display_tier", tip.get("edge_rating", "bronze"))
+            _btn_tier = EDGE_EMOJIS.get(_btn_fresh, "🥉")
             cb = f"edge:detail:{_shorten_cb_key(match_key)}"
         else:
             _btn_tier = "🔒"
@@ -9416,6 +9454,15 @@ def _build_edge_only_section(tips: list[dict]) -> str:
     odds = best.get("odds", 0)
     bk = best.get("bookmaker", best.get("bookie", "the market")) or "the market"
     outcome = best.get("outcome", "")
+    # BUILD-11: Translate positional keys to team display names (same as BUILD-7 in _build_game_buttons).
+    _home_disp = best.get("home_team") or ""
+    _away_disp = best.get("away_team") or ""
+    if outcome == "home" and _home_disp:
+        outcome = _home_disp
+    elif outcome == "away" and _away_disp:
+        outcome = _away_disp
+    elif outcome == "draw":
+        outcome = "Draw"
     prob = best.get("prob", 0)
     ev_str = f"+{ev:.1f}%" if ev > 0 else f"{ev:.1f}%"
     edge_score = best.get("edge_score", 0) or 0
