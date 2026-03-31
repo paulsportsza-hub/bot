@@ -5,19 +5,62 @@ Tests required by brief:
 2. Write test: insert row with confirming_signals=2, read it back, assert value is 2
 3. Legacy fallback test: NULL confirming_signals falls back to composite_score estimate
 4. Integration test: log_edge_recommendation() stores actual confirming_signals count
+
+BUILD-TEST-ISOLATION: All tests use isolated tmp DBs created from DDL.
+Never opens the live scrapers/odds.db — scraper write locks cannot cause flakiness.
 """
-import tempfile
 import sqlite3
 import sys
 import os
 
-import pytest
-
 # Allow importing scrapers package from parent dir
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../../scrapers"))
 
-from config import ODDS_DB_PATH as _ODDS_DB
-ODDS_DB_PATH = str(_ODDS_DB)
+# Minimal schema for the tests — includes tables that settlement.py queries internally.
+# edge_results: full DDL including confirming_signals column (post RENDER-FIX3 migration).
+# odds_snapshots: minimal stub so _is_isbets_only_fixture() doesn't raise OperationalError.
+_SCHEMA_DDL = """
+    CREATE TABLE IF NOT EXISTS edge_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        edge_id TEXT NOT NULL,
+        match_key TEXT NOT NULL,
+        sport TEXT NOT NULL,
+        league TEXT NOT NULL,
+        edge_tier TEXT NOT NULL,
+        composite_score REAL NOT NULL,
+        bet_type TEXT NOT NULL,
+        recommended_odds REAL NOT NULL,
+        bookmaker TEXT NOT NULL,
+        predicted_ev REAL NOT NULL,
+        result TEXT,
+        match_score TEXT,
+        actual_return REAL,
+        recommended_at DATETIME NOT NULL,
+        settled_at DATETIME,
+        match_date DATE NOT NULL,
+        confirming_signals INTEGER,
+        UNIQUE(match_key, bet_type)
+    );
+    CREATE TABLE IF NOT EXISTS odds_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        match_id TEXT NOT NULL,
+        bookmaker TEXT NOT NULL,
+        scraped_at DATETIME
+    );
+"""
+
+
+def _make_test_db(path: str) -> str:
+    """Create a fresh isolated SQLite DB with the required schema. Returns path."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(_SCHEMA_DDL)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.commit()
+    finally:
+        conn.close()
+    return path
 
 
 def _connect_db(db_path: str) -> sqlite3.Connection:
@@ -26,38 +69,26 @@ def _connect_db(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def _build_temp_odds_db() -> str:
-    fd, temp_db_path = tempfile.mkstemp(prefix="render-fix3-", suffix=".db")
-    os.close(fd)
-
-    source = _connect_db(ODDS_DB_PATH)
-    target = _connect_db(temp_db_path)
-    try:
-        source.backup(target)
-    finally:
-        target.close()
-        source.close()
-
-    return temp_db_path
-
-
 class TestRenderFix3Migration:
-    """Test 1: confirming_signals column exists in edge_results."""
+    """Test 1: confirming_signals column exists in edge_results schema."""
 
-    def test_column_exists_in_schema(self):
-        conn = _connect_db(ODDS_DB_PATH)
+    def test_column_exists_in_schema(self, tmp_path):
+        db_path = _make_test_db(str(tmp_path / "edge.db"))
+        conn = _connect_db(db_path)
         try:
             cur = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='edge_results'")
             schema = cur.fetchone()[0]
             assert "confirming_signals" in schema, (
-                "confirming_signals column missing from edge_results — run RENDER-FIX3 migration"
+                "confirming_signals column missing from edge_results DDL — "
+                "update _SCHEMA_DDL in this test and run the RENDER-FIX3 migration on odds.db"
             )
         finally:
             conn.close()
 
-    def test_column_is_nullable_integer(self):
+    def test_column_is_nullable_integer(self, tmp_path):
         """Column must be INTEGER DEFAULT NULL (not NOT NULL)."""
-        conn = _connect_db(ODDS_DB_PATH)
+        db_path = _make_test_db(str(tmp_path / "edge.db"))
+        conn = _connect_db(db_path)
         try:
             cur = conn.execute("PRAGMA table_info(edge_results)")
             cols = {row[1]: row for row in cur.fetchall()}
@@ -72,19 +103,13 @@ class TestRenderFix3Migration:
 class TestRenderFix3Write:
     """Test 2: write confirming_signals=2, read it back, assert value is 2."""
 
-    def test_write_and_read_confirming_signals(self):
-        temp_db_path = _build_temp_odds_db()
-        conn = _connect_db(temp_db_path)
+    def test_write_and_read_confirming_signals(self, tmp_path):
+        db_path = _make_test_db(str(tmp_path / "edge.db"))
+        conn = _connect_db(db_path)
         conn.row_factory = sqlite3.Row
+        match_key = "test_rendfix3_home_vs_away_2099-01-01"
+        bet_type = "Home Win"
         try:
-            # Use a unique match_key that won't conflict
-            match_key = "test_rendfix3_home_vs_away_2099-01-01"
-            bet_type = "Home Win"
-            # Clean up any leftover from previous runs
-            conn.execute(
-                "DELETE FROM edge_results WHERE match_key = ? AND bet_type = ?",
-                (match_key, bet_type),
-            )
             conn.execute(
                 """INSERT INTO edge_results
                    (edge_id, match_key, sport, league, edge_tier, composite_score,
@@ -117,13 +142,7 @@ class TestRenderFix3Write:
                 f"Expected confirming_signals=2, got {row['confirming_signals']}"
             )
         finally:
-            # Cleanup
-            conn.execute(
-                "DELETE FROM edge_results WHERE match_key = ?", (match_key,)
-            )
-            conn.commit()
             conn.close()
-            os.remove(temp_db_path)
 
 
 class TestRenderFix3LegacyFallback:
@@ -184,23 +203,18 @@ class TestRenderFix3LegacyFallback:
 class TestRenderFix3Integration:
     """Test 4: log_edge_recommendation() stores actual confirming_signals=3 in DB row."""
 
-    def test_log_edge_recommendation_stores_confirming_signals(self):
+    def test_log_edge_recommendation_stores_confirming_signals(self, tmp_path):
         from config import ensure_scrapers_importable
         ensure_scrapers_importable()
         from scrapers.edge.settlement import log_edge_recommendation
 
-        temp_db_path = _build_temp_odds_db()
-        conn = _connect_db(temp_db_path)
+        db_path = _make_test_db(str(tmp_path / "edge.db"))
+        conn = _connect_db(db_path)
         conn.row_factory = sqlite3.Row
-        # Use WAL mode + busy_timeout to match production settings
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
         match_key = "test_rendfix3_int_home_vs_away_2099-02-01"
         try:
-            # Clean up
-            conn.execute("DELETE FROM edge_results WHERE match_key = ?", (match_key,))
-            conn.commit()
-
             edge = {
                 "match_key": match_key,
                 "tier": "gold",
@@ -226,7 +240,4 @@ class TestRenderFix3Integration:
                 f"Expected confirming_signals=3, got {row['confirming_signals']}"
             )
         finally:
-            conn.execute("DELETE FROM edge_results WHERE match_key = ?", (match_key,))
-            conn.commit()
             conn.close()
-            os.remove(temp_db_path)
