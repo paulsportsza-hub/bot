@@ -8586,6 +8586,11 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _get_hot_tips_result_proof(),
             _get_edge_tracker_summary(7),
         )
+        # BUILD-14a: Refresh EV values — filter stale negative-EV tips from fast path
+        try:
+            _fast_tips = await _refresh_tip_evs(_fast_tips)
+        except Exception as _b14a_err:
+            log.debug("BUILD-14a EV refresh failed (graceful fallback): %s", _b14a_err)
         _fast_text, _fast_markup = _build_hot_tips_page(
             _fast_tips, page=0, user_tier=_fast_tier,
             remaining_views=_fast_rv, consecutive_misses=_fast_consec,
@@ -8705,6 +8710,12 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _consec_misses = getattr(_cm_user, "consecutive_misses", 0) or 0
         except Exception:
             pass
+
+    # BUILD-14a: Refresh EV values — filter stale negative-EV tips from cold path
+    try:
+        tips = await _refresh_tip_evs(tips)
+    except Exception as _b14a_err:
+        log.debug("BUILD-14a EV refresh failed (graceful fallback): %s", _b14a_err)
 
     # Show ALL tips with tiered display — thin-slate fallback adds fixtures when no edge clears the bar
     thin_slate = (_hot_tips_cache.get("global") or {}).get("thin_slate", {})
