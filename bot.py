@@ -13318,6 +13318,7 @@ SPORT_SUBS = {
         "finding the net": "finding the boundary",
         "in front of goal": "with the bat",
         "goalless": "scoreless",
+        "kickoff": "start of play",
     },
 }
 
