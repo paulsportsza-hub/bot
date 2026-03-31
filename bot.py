@@ -1784,7 +1784,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _b9_ev: float | None = None
             try:
                 _b9_ev = await asyncio.wait_for(
-                    _get_current_ev_for_match(match_key), timeout=1.5
+                    _get_current_ev_for_match(match_key), timeout=3.0
                 )
             except Exception as _b9_err:
                 log.debug("[BUILD-9] EV gate check failed for %s: %s", match_key, _b9_err)
@@ -10000,32 +10000,65 @@ async def _store_narrative_cache(
 
 
 async def _get_current_ev_for_match(match_key: str) -> float | None:
-    """Query edge_results for current max EV for the given match_key.
+    """Compute current EV live via calculate_edge_v2() for the given match_key.
 
     COVERAGE-GATE-BUILD: Used by serve-time EV gate to determine if a cached
     edge:detail card still has positive EV before serving it.
+    Falls back to stored predicted_ev on calculation error or timeout.
     Returns None if the match is not found or on any error.
     """
-    def _query():
+    def _compute():
         try:
             from scrapers.db_connect import connect_odds_db as _conn_fn
             from scrapers.edge.edge_config import DB_PATH as _DB_PATH
             _conn = _conn_fn(_DB_PATH)
             row = _conn.execute(
-                "SELECT predicted_ev FROM edge_results "
+                "SELECT predicted_ev, bet_type, sport, league FROM edge_results "
                 "WHERE match_key = ? AND result IS NULL "
                 "ORDER BY id DESC LIMIT 1",
                 (match_key,),
             ).fetchone()
             _conn.close()
-            if row and row[0] is not None:
-                return float(row[0])
-            return None
+            if not row:
+                return None
+            stored_ev = float(row[0]) if row[0] is not None else None
+            bet_type = row[1] or "home"
+            sport = row[2] or "soccer"
+            league = row[3] or ""
+            # Normalise bet_type to outcome key
+            _bt = bet_type.strip()
+            if _bt == "Home Win" or _bt == "home":
+                outcome = "home"
+            elif _bt == "Away Win" or _bt == "away":
+                outcome = "away"
+            elif _bt in ("Draw", "draw", "X"):
+                outcome = "draw"
+            else:
+                outcome = "home"
+            # Live calculation
+            try:
+                from scrapers.edge.edge_v2_helper import calculate_edge_v2
+                result = calculate_edge_v2(
+                    match_key,
+                    outcome=outcome,
+                    sport=sport,
+                    league=league,
+                    _skip_log=True,
+                )
+                if result and result.get("predicted_ev") is not None:
+                    return float(result["predicted_ev"])
+            except Exception as _calc_err:
+                log.debug(
+                    "_get_current_ev_for_match live calc failed for %s: %s",
+                    match_key, _calc_err,
+                )
+            # Fallback to stored value
+            return stored_ev
         except Exception as _e:
             log.debug("_get_current_ev_for_match failed for %s: %s", match_key, _e)
             return None
 
-    return await asyncio.to_thread(_query)
+    return await asyncio.to_thread(_compute)
 
 
 async def _delete_narrative_cache(match_id: str) -> None:

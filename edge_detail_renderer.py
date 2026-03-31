@@ -234,6 +234,7 @@ def _build_detail_data(
     ctx: dict | None,
     user_tier: str,
     sport_override: str | None = None,
+    ev_override: float | None = None,
 ) -> EdgeDetailData:
     """Merge edge_result + context into frozen data struct.
 
@@ -248,7 +249,10 @@ def _build_detail_data(
     sport = sport_override or _detect_sport(league_key, edge_row.get("sport"))
 
     composite = float(edge_row.get("composite_score") or 0)
-    ev = round(float(edge_row.get("predicted_ev") or 0), 1)
+    ev = round(
+        ev_override if ev_override is not None else float(edge_row.get("predicted_ev") or 0),
+        1,
+    )
     odds = float(edge_row.get("recommended_odds") or 0)
 
     # Confirming signals: DB column first, estimate fallback for legacy rows
@@ -850,6 +854,7 @@ def render_edge_detail(
     sport: str | None = None,
     tip_data: dict | None = None,
     include_tier: bool = False,
+    ev_override: float | None = None,
 ) -> "str | tuple[str, str]":
     """Render edge detail HTML — ONE function, ONE path, no branching caches.
 
@@ -867,6 +872,9 @@ def render_edge_detail(
             button building without a second DB query. Default False preserves
             the original string-return API so existing callers and tests are
             unaffected.
+        ev_override: When provided, overrides the stored predicted_ev value
+            with this live-computed EV. Falls back to stored when None.
+            Existing callers that omit this param are unaffected.
 
     Returns:
         HTML string when ``include_tier=False`` (default).
@@ -888,7 +896,7 @@ def render_edge_detail(
             return error_html
     else:
         ctx = _load_match_context(match_key)
-        data = _build_detail_data(edge_row, ctx, user_tier, sport)
+        data = _build_detail_data(edge_row, ctx, user_tier, sport, ev_override)
 
     if data.access_level == "locked":
         html = _render_locked(data)
