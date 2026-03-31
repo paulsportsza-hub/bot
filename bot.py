@@ -7526,59 +7526,82 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
 
 
 async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
-    """BUILD-9: Batch-refresh EV values from edge_results before list render.
+    """BUILD-10: Compute live EV via calculate_edge_v2() before list render.
 
-    Filters out tips where current predicted_ev has gone negative.
-    Updates ev field in remaining tips to reflect current DB values.
-    Falls back to original list on any error (graceful degradation).
+    Calls calculate_edge_v2() on current odds_latest data for each tip —
+    the same path as the edge:detail handler. Filters tips where live EV ≤ 0
+    and updates ev fields to reflect current values.
+    Falls back to original list on timeout or any error (graceful degradation).
     """
     if not tips:
         return tips
-    match_keys = [t.get("match_id") or t.get("event_id", "") for t in tips]
-    match_keys = [k for k in match_keys if k]
-    if not match_keys:
-        return tips
 
-    def _batch_query():
+    def _live_ev_for_tip(tip: dict) -> tuple[str, float | None]:
+        """Compute live EV for one tip. Returns (match_key, ev_pct or None)."""
+        mk = tip.get("match_id") or tip.get("event_id", "")
+        if not mk:
+            return ("", None)
+        # Derive raw outcome from bet_type stored in edge_v2
+        _bet_type = (tip.get("edge_v2") or {}).get("outcome", "")
+        if _bet_type == "Home Win":
+            outcome_raw = "home"
+        elif _bet_type == "Away Win":
+            outcome_raw = "away"
+        elif _bet_type in ("home", "draw", "away"):
+            outcome_raw = _bet_type
+        else:
+            outcome_raw = "home"  # safe default
+        sport = tip.get("sport_key", "soccer")
+        league = tip.get("league_key", "")
         try:
-            from scrapers.db_connect import connect_odds_db as _conn_fn
-            from scrapers.edge.edge_config import DB_PATH as _DB_PATH
-            _conn = _conn_fn(_DB_PATH)
-            _ph = ",".join("?" * len(match_keys))
-            rows = _conn.execute(
-                f"SELECT e.match_key, e.predicted_ev "
-                f"FROM edge_results e "
-                f"WHERE e.match_key IN ({_ph}) AND e.result IS NULL "
-                f"AND NOT EXISTS ("
-                f"  SELECT 1 FROM edge_results newer "
-                f"  WHERE newer.match_key = e.match_key AND newer.result IS NULL "
-                f"  AND (COALESCE(newer.recommended_at,'') > COALESCE(e.recommended_at,'') "
-                f"    OR (COALESCE(newer.recommended_at,'') = COALESCE(e.recommended_at,'') "
-                f"        AND newer.id > e.id))"
-                f")",
-                match_keys,
-            ).fetchall()
-            _conn.close()
-            return {row[0]: float(row[1]) for row in rows if row[1] is not None}
+            from scrapers.edge.edge_v2_helper import calculate_edge_v2
+            result = calculate_edge_v2(
+                mk,
+                outcome=outcome_raw,
+                sport=sport,
+                league=league,
+                _skip_log=True,  # W84-P0: user reads must not trigger DB writes
+            )
+            if result and result.get("predicted_ev") is not None:
+                return (mk, float(result["predicted_ev"]))
+            return (mk, None)
         except Exception as _e:
-            log.debug("_refresh_tip_evs batch query failed: %s", _e)
-            return {}
+            log.debug("_refresh_tip_evs calc failed for %s: %s", mk, _e)
+            return (mk, None)
 
     try:
-        fresh_evs = await asyncio.wait_for(asyncio.to_thread(_batch_query), timeout=2.0)
+        _tasks = [asyncio.to_thread(_live_ev_for_tip, t) for t in tips]
+        _raw = await asyncio.wait_for(
+            asyncio.gather(*_tasks, return_exceptions=True),
+            timeout=2.0,
+        )
     except Exception:
-        return tips
+        return tips  # Timeout or gather error — serve original list
 
-    if not fresh_evs:
+    # Build match_key → live EV map
+    live_evs: dict[str, float | None] = {}
+    for r in _raw:
+        if isinstance(r, Exception):
+            continue
+        mk, ev = r
+        if mk:
+            live_evs[mk] = ev
+
+    if not live_evs:
         return tips
 
     result = []
     for t in tips:
         mk = t.get("match_id") or t.get("event_id", "")
-        if mk and mk in fresh_evs:
-            current_ev = fresh_evs[mk]
+        if mk and mk in live_evs:
+            current_ev = live_evs[mk]
+            if current_ev is None:
+                # Could not compute live EV — keep tip (conservative)
+                result.append(t)
+                continue
             if current_ev <= 0:
-                continue  # Suppress — EV has gone negative since cache was filled
+                log.debug("[BUILD-10] Suppressing negative-EV tip %s (ev=%.1f%%)", mk, current_ev)
+                continue  # Suppress — live EV is negative
             t = dict(t)  # Shallow copy — don't mutate shared cache dicts
             t["ev"] = round(current_ev, 1)
         result.append(t)
