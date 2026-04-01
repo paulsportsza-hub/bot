@@ -1880,7 +1880,16 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     None,
                 )
                 _w84_home, _w84_away = _teams_from_vs_event_id(match_key)
+                # BUILD-QA22-FIX P1-2: Read broadcast from snapshot before _build_event_header
+                # Snapshot has specific channel data from list render; _build_event_header falls
+                # through to generic "Check SuperSport.com" when broadcast_schedule DB is locked.
+                _w84_snap_bc = (_w84_snap or {}).get("_bc_broadcast", "")
+                _w84_snap_ko = (_w84_snap or {}).get("_bc_kickoff", "")
                 _w84_hdr = _build_event_header(_w84_home, _w84_away, "", _w84_snap)
+                if _w84_snap_bc and (not _w84_hdr.get("broadcast_line") or "Check SuperSport" in _w84_hdr.get("broadcast_line", "")):
+                    _w84_hdr["broadcast_line"] = _w84_snap_bc
+                if _w84_snap_ko and not _w84_hdr.get("kickoff"):
+                    _w84_hdr["kickoff"] = _w84_snap_ko
                 _w84_html = _inject_narrative_header(
                     _w84_html, _w84_home, _w84_away,
                     _w84_hdr["kickoff"], _w84_hdr["league_display"], _w84_hdr["broadcast_line"],
@@ -1940,6 +1949,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 if _w84_snap_tip and isinstance(_w84_snap_tip, dict):
                     _w84_btn_tips = [_w84_snap_tip]
+
+                # BUILD-QA22-FIX P0-2: Suppress CTA when rendered HTML shows negative EV
+                # The narrative HTML may reflect live EV (negative) while tip dicts carry
+                # stale predicted_ev (positive). Use the HTML as source of truth.
+                _ev_html_match = re.search(r"EV:\s*([+-]?\d+\.?\d*)%", _w84_html)
+                if _ev_html_match and float(_ev_html_match.group(1)) <= 0:
+                    _w84_btn_tips = [{"ev": 0, "match_id": match_key}]
+
                 _btns = _build_game_buttons(
                     _w84_btn_tips or [{"ev": 0, "match_id": match_key}],
                     match_key, user_id,
@@ -2001,6 +2018,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _tip_for_v1 = (
                         _fb_tips[0] if isinstance(_fb_tips, list) else _fb_tips
                     )
+
+            # BUILD-QA22-FIX P0-1: DB fallback when snapshot + cache are both empty (post-restart)
+            if not _tip_for_v1:
+                try:
+                    _v1_seed = await asyncio.to_thread(_load_tips_from_edge_results, 50)
+                    _tip_for_v1 = next(
+                        (t for t in (_v1_seed or []) if t.get("match_id") == match_key),
+                        None,
+                    )
+                except Exception:
+                    pass
 
             # FIX-6: Render returns (html, authoritative_tier) so button tier
             # always matches the gating tier used inside the renderer.
@@ -2082,6 +2110,11 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 if _snap_tier and _snap_tier != "bronze":
                     _cr_tier = _snap_tier
+
+            # BUILD-QA22-FIX P0-2: Suppress CTA when rendered HTML shows negative EV
+            _ev_html_match_cr = re.search(r"EV:\s*([+-]?\d+\.?\d*)%", html)
+            if _ev_html_match_cr and float(_ev_html_match_cr.group(1)) <= 0:
+                _cr_tips = [{"ev": 0, "match_id": match_key}]
 
             _btns = _build_game_buttons(
                 _cr_tips or [{"ev": 0, "match_id": match_key}],
@@ -7633,14 +7666,24 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
             log.debug("_refresh_tip_evs calc failed for %s: %s", mk, _e)
             return (mk, None)
 
+    # BUILD-QA22-FIX P1-1: Use partial results on timeout instead of discarding all
+    _tasks = [asyncio.to_thread(_live_ev_for_tip, t) for t in tips]
     try:
-        _tasks = [asyncio.to_thread(_live_ev_for_tip, t) for t in tips]
         _raw = await asyncio.wait_for(
             asyncio.gather(*_tasks, return_exceptions=True),
             timeout=2.0,
         )
+    except asyncio.TimeoutError:
+        _raw = []
+        for _pt in _tasks:
+            if _pt.done() and not _pt.cancelled():
+                try:
+                    _raw.append(_pt.result())
+                except Exception:
+                    pass
+        log.warning("[BUILD-QA22] EV refresh partial timeout — %d/%d tips refreshed", len(_raw), len(tips))
     except Exception:
-        return tips  # Timeout or gather error — serve original list
+        return tips  # Non-timeout gather error — serve original list
 
     # Build match_key → live EV map
     live_evs: dict[str, float | None] = {}

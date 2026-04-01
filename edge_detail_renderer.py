@@ -102,8 +102,14 @@ class EdgeDetailData:
 
 # ── Data Loading ─────────────────────────────────────────────
 
-def _load_edge_result(match_key: str) -> dict | None:
+def _load_edge_result(match_key: str, bet_type: str | None = None) -> dict | None:
     """Read latest unsettled edge_results row for match_key.
+
+    Args:
+        match_key: Edge results match key.
+        bet_type: Optional bet_type filter (e.g. "Home Win", "Away Win").
+            When provided, prefer the row matching this bet_type.
+            Falls back to unfiltered if no match found.
 
     Uses the scraper connection factory per W81-DBLOCK locked rule.
     """
@@ -119,6 +125,23 @@ def _load_edge_result(match_key: str) -> dict | None:
         zip([col[0] for col in cursor.description], row)
     )
     try:
+        # BUILD-QA22-FIX P0-1b: Filter by bet_type when provided (defence in depth)
+        if bet_type:
+            row = conn.execute(
+                """
+                SELECT match_key, edge_tier, composite_score, bet_type,
+                       recommended_odds, bookmaker, predicted_ev, league,
+                       match_date, confirming_signals, sport
+                FROM edge_results
+                WHERE match_key = ? AND bet_type = ? AND result IS NULL
+                ORDER BY recommended_at DESC, id DESC
+                LIMIT 1
+                """,
+                (match_key, bet_type),
+            ).fetchone()
+            if row:
+                return row
+        # Fallback: unfiltered (original logic)
         row = conn.execute(
             """
             SELECT match_key, edge_tier, composite_score, bet_type,
@@ -887,7 +910,11 @@ def render_edge_detail(
         HTML string when ``include_tier=False`` (default).
         ``(html, edge_tier)`` tuple when ``include_tier=True``.
     """
-    edge_row = _load_edge_result(match_key)
+    # BUILD-QA22-FIX P0-1b: Pass bet_type hint to load the correct edge row
+    _bt_hint = None
+    if tip_data:
+        _bt_hint = tip_data.get("outcome_key") or tip_data.get("bet_type")
+    edge_row = _load_edge_result(match_key, bet_type=_bt_hint)
     if not edge_row:
         if tip_data:
             ctx = _load_match_context(match_key)
