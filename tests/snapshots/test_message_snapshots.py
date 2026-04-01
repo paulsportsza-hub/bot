@@ -9,6 +9,7 @@ Use --snapshot-update to regenerate after intentional changes.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import pathlib
@@ -221,10 +222,10 @@ class TestHotTipsHeader:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
             tips = _sample_tips()[:4]
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips, page=0, user_tier="diamond",
                 hit_rate_7d=62.0, resource_count=347043,
-            )
+            ))
         actual = _snapshot_data(text, markup)
         golden = _load_or_create_golden("header_above_threshold", actual)
         assert actual["text"] == golden["text"], (
@@ -239,7 +240,7 @@ class TestResultProofHotTips:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
             tips = _sample_tips()[:4]
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="diamond",
@@ -269,7 +270,7 @@ class TestResultProofHotTips:
                         actual_return=0.0,
                     ),
                 ],
-            )
+            ))
         actual = _snapshot_data(text, markup)
         golden = _load_or_create_golden("page_with_result_proof", actual)
         assert actual["text"] == golden["text"]
@@ -279,10 +280,10 @@ class TestResultProofHotTips:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
             tips = _sample_tips()[:4]
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips, page=0, user_tier="diamond",
                 hit_rate_7d=38.0, resource_count=347043,
-            )
+            ))
         actual = _snapshot_data(text, markup)
         golden = _load_or_create_golden("header_below_threshold", actual)
         assert actual["text"] == golden["text"], (
@@ -298,10 +299,10 @@ class TestEdgeCardAccessLevels:
         tip = _make_tip(display_tier=edge_tier, odds=2.10, ev=10.0)
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 [tip], page=0, user_tier=user_tier,
                 hit_rate_7d=0.0, resource_count=100000,
-            )
+            ))
         return _snapshot_data(text, markup)
 
     def test_card_full_access(self):
@@ -337,11 +338,11 @@ class TestFooterCTA:
         tips = _sample_tips()  # Mix of tiers
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips[:4], page=0, user_tier="bronze",
                 consecutive_misses=0,
                 hit_rate_7d=55.0, resource_count=347043,
-            )
+            ))
         actual = _snapshot_data(text, markup)
         golden = _load_or_create_golden("footer_bronze_locks", actual)
         assert actual["text"] == golden["text"]
@@ -351,11 +352,11 @@ class TestFooterCTA:
         tips = _sample_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips[:4], page=0, user_tier="bronze",
                 consecutive_misses=4,
                 hit_rate_7d=55.0, resource_count=347043,
-            )
+            ))
         actual = _snapshot_data(text, markup)
         golden = _load_or_create_golden("footer_bronze_losing_streak", actual)
         assert actual["text"] == golden["text"]
@@ -365,10 +366,10 @@ class TestFooterCTA:
         tips = _sample_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips[:4], page=0, user_tier="gold",
                 hit_rate_7d=55.0, resource_count=347043,
-            )
+            ))
         actual = _snapshot_data(text, markup)
         golden = _load_or_create_golden("footer_gold_diamond_locked", actual)
         assert actual["text"] == golden["text"]
@@ -378,10 +379,10 @@ class TestFooterCTA:
         tips = _sample_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips[:4], page=0, user_tier="diamond",
                 hit_rate_7d=55.0, resource_count=347043,
-            )
+            ))
         actual = _snapshot_data(text, markup)
         golden = _load_or_create_golden("footer_diamond_none", actual)
         assert actual["text"] == golden["text"]

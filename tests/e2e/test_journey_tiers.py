@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 import bot
@@ -87,25 +89,25 @@ def test_user_can_access_edge_matches_full_and_partial_rules(
 
 
 def test_bronze_list_shows_locked_diamond_copy() -> None:
-    text, _ = bot._build_hot_tips_page(
+    text, _ = asyncio.run(bot._build_hot_tips_page(
         [_tip("diamond", edge_score=62)], user_tier="bronze"
-    )
+    ))
     assert "Our highest-conviction pick." in text
     assert "@ 2.10" not in text
 
 
 def test_bronze_list_shows_return_not_odds_for_gold() -> None:
-    text, _ = bot._build_hot_tips_page(
+    text, _ = asyncio.run(bot._build_hot_tips_page(
         [_tip("gold", edge_score=45, odds=2.15)], user_tier="bronze"
-    )
+    ))
     assert "return on R300" in text
     assert "@ 2.15" not in text
 
 
 def test_gold_list_blurs_diamond_but_keeps_card_visible() -> None:
-    text, markup = bot._build_hot_tips_page(
+    text, markup = asyncio.run(bot._build_hot_tips_page(
         [_tip("diamond", edge_score=62, odds=1.85)], user_tier="gold"
-    )
+    ))
     assert "Diamond Home vs Diamond Away" in text
     assert "return on R300" in text
     assert "@ 1.85" not in text
@@ -113,9 +115,9 @@ def test_gold_list_blurs_diamond_but_keeps_card_visible() -> None:
 
 
 def test_diamond_list_has_no_upgrade_cta() -> None:
-    _, markup = bot._build_hot_tips_page(
+    _, markup = asyncio.run(bot._build_hot_tips_page(
         [_tip("diamond", edge_score=62)], user_tier="diamond"
-    )
+    ))
     assert not any(cb.startswith("hot:upgrade:") for cb in _callbacks(markup))
 
 
@@ -173,20 +175,20 @@ def test_upgrade_message_contains_diamond_pricing() -> None:
 def test_composite_score_below_threshold_is_hidden_not_mis_tiered() -> None:
     visible = _tip("gold", edge_score=45)
     hidden = _tip("silver", edge_score=39)
-    text, _ = bot._build_hot_tips_page([visible, hidden], user_tier="diamond")
+    text, _ = asyncio.run(bot._build_hot_tips_page([visible, hidden], user_tier="diamond"))
     assert "Gold Home vs Gold Away" in text
     assert "Silver Home vs Silver Away" not in text
 
 
 def test_tier_badge_in_list_matches_visible_diamond_card() -> None:
-    text, _ = bot._build_hot_tips_page(
+    text, _ = asyncio.run(bot._build_hot_tips_page(
         [_tip("diamond", edge_score=62)], user_tier="diamond"
-    )
+    ))
     assert "💎" in text
 
 
 def test_tier_badge_in_list_matches_visible_gold_card() -> None:
-    text, _ = bot._build_hot_tips_page(
+    text, _ = asyncio.run(bot._build_hot_tips_page(
         [_tip("gold", edge_score=45)], user_tier="diamond"
-    )
+    ))
     assert "🥇" in text

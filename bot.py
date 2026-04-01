@@ -1601,7 +1601,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _get_hot_tips_result_proof(),
                     _get_edge_tracker_summary(7),
                 )
-                _bt_text, _bt_markup = _build_hot_tips_page(
+                _bt_text, _bt_markup = await _build_hot_tips_page(
                     _bt_tips, page=_back_page, user_tier=_bt_tier,
                     remaining_views=_bt_rv, user_id=user_id,
                     hit_rate_7d=((_bt_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -1712,7 +1712,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _page_consec = getattr(_pcm, "consecutive_misses", 0) or 0
                 except Exception:
                     pass
-                text, markup = _build_hot_tips_page(
+                text, markup = await _build_hot_tips_page(
                     tips, page_num, user_tier=_user_tier,
                     consecutive_misses=_page_consec,
                     hit_rate_7d=_pg_hr, resource_count=_pg_res,
@@ -7174,13 +7174,21 @@ HIT_RATE_DISPLAY_THRESHOLD = 50  # Only show hit rate in header when >= this %
 def _build_tip_narrative(tip: dict) -> str:
     """Build a compelling narrative explaining WHY this tip has value."""
     outcome = tip.get("predicted_outcome", "") or tip.get("outcome", "this team")
-    best_bk = (
-        tip.get("best_bookmaker_display", "")
-        or tip.get("bookmaker", "")
-        or _display_bookmaker_name(tip.get("best_bookmaker", ""))
-        or "the best bookmaker"
-    )
-    best_odds = tip.get("best_odds", 0) or tip.get("odds", 0)
+    # BUILD-CTA-FIX: Read bookmaker/odds from fresh odds_by_bookmaker when available
+    # so narrative body is consistent with what the CTA button was built from.
+    _odds_by_bk = tip.get("odds_by_bookmaker", {})
+    if _odds_by_bk:
+        _best_bk_key = max(_odds_by_bk, key=_odds_by_bk.get)
+        best_bk = _display_bookmaker_name(_best_bk_key)
+        best_odds = _odds_by_bk[_best_bk_key]
+    else:
+        best_bk = (
+            tip.get("best_bookmaker_display", "")
+            or tip.get("bookmaker", "")
+            or _display_bookmaker_name(tip.get("best_bookmaker", ""))
+            or "the best bookmaker"
+        )
+        best_odds = tip.get("best_odds", 0) or tip.get("odds", 0)
     ev = tip.get("ev_pct", 0) or tip.get("ev", 0)
     tier = tip.get("display_tier", tip.get("edge_rating", "GOLD"))
     odds_by_bk = tip.get("odds_by_bookmaker", {})
@@ -7558,6 +7566,12 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
                         _bk_dict[_bk] = float(_o)
                 if _bk_dict:
                     tips[-1]["odds_by_bookmaker"] = _bk_dict
+                    # BUILD-CTA-FIX: Sync top-level fields with best fresh bookmaker so
+                    # CTA button and narrative body read the same data source.
+                    _best_bk_item = max(_bk_dict.items(), key=lambda x: x[1])
+                    tips[-1]["bookmaker_key"] = _best_bk_item[0]
+                    tips[-1]["bookmaker"] = _display_bookmaker_name(_best_bk_item[0])
+                    tips[-1]["odds"] = _best_bk_item[1]
         except Exception:
             pass  # Keep single-BK fallback
 
@@ -8094,7 +8108,7 @@ async def _show_hot_tips(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_id
     await _do_hot_tips_flow(update.effective_chat.id, ctx.bot, user_id=user_id)
 
 
-def _build_hot_tips_page(
+async def _build_hot_tips_page(
     tips: list[dict], page: int = 0,
     user_tier: str = "diamond", remaining_views: int = 999,
     streak: dict | None = None,
@@ -8309,6 +8323,27 @@ def _build_hot_tips_page(
     except Exception:
         pass  # Graceful fallback — stale display_tier used if edge_results unavailable
 
+    # BUILD-CTA-FIX Fix 3+4: Pre-fetch broadcast details in parallel before render loop.
+    # Uses asyncio.to_thread() with 3s timeout — matches My Matches pattern at line ~5040.
+    # Passes display-format names (e.g. "Arsenal") so fuzzy_match_broadcast matches correctly.
+    # DB-sourced tips carry normalized keys (e.g. "arsenal") — _display_team_name converts them.
+    _ht_bc_raw = await asyncio.gather(*[
+        asyncio.wait_for(
+            asyncio.to_thread(
+                _get_broadcast_details,
+                home_team=_display_team_name(tip.get("home_team") or ""),
+                away_team=_display_team_name(tip.get("away_team") or ""),
+                league_key=tip.get("league_key", ""),
+            ),
+            timeout=3.0,
+        )
+        for tip in page_tips
+    ], return_exceptions=True)
+    _ht_bc_infos: list[dict] = [
+        bc if isinstance(bc, dict) else {"broadcast": "", "kickoff": ""}
+        for bc in _ht_bc_raw
+    ]
+
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
     diamond_locked = 0
@@ -8359,11 +8394,8 @@ def _build_hot_tips_page(
         away = h(away_raw)
         league_display = tip.get("league", "")
 
-        # Broadcast details for line 2
-        bc_data = _get_broadcast_details(
-            home_team=home_raw, away_team=away_raw,
-            league_key=tip.get("league_key", ""),
-        )
+        # Broadcast details — use pre-fetched result (BUILD-CTA-FIX Fix 3+4)
+        bc_data = _ht_bc_infos[i - start - 1]
         kickoff = bc_data.get("kickoff", "")
         if not kickoff and tip.get("commence_time"):
             kickoff = _format_kickoff_display(tip["commence_time"])
@@ -8616,7 +8648,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         if _stale_ev_age > 600:  # > 10 minutes old → refresh EVs before serving
             log.debug("[BUILD-STALE-EV] Cache age %.0fs > 600s — refreshing tip EVs on warm path", _stale_ev_age)
             _cached_tips = await _refresh_tip_evs(_cached_tips)
-        _wm_text, _wm_markup = _build_hot_tips_page(
+        _wm_text, _wm_markup = await _build_hot_tips_page(
             _cached_tips, page=0, user_tier=_wm_tier,
             remaining_views=_wm_rv, consecutive_misses=_wm_consec,
             hit_rate_7d=((_wm_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -8677,7 +8709,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _fast_tips = await _refresh_tip_evs(_fast_tips)
         except Exception as _b14a_err:
             log.debug("BUILD-14a EV refresh failed (graceful fallback): %s", _b14a_err)
-        _fast_text, _fast_markup = _build_hot_tips_page(
+        _fast_text, _fast_markup = await _build_hot_tips_page(
             _fast_tips, page=0, user_tier=_fast_tier,
             remaining_views=_fast_rv, consecutive_misses=_fast_consec,
             hit_rate_7d=((_fast_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -8808,7 +8840,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     thin_slate_fixtures = []
     if not tips and user_id:
         thin_slate_fixtures = await _get_user_fixture_preview(user_id, limit=3, days_ahead=7)
-    text, markup = _build_hot_tips_page(
+    text, markup = await _build_hot_tips_page(
         tips, page=0, user_tier=user_tier, remaining_views=remaining_views,
         consecutive_misses=_consec_misses,
         hit_rate_7d=_hit_rate, resource_count=_res_count,
