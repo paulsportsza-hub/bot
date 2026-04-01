@@ -1898,6 +1898,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 # DEF-1 Fix 4: Detect wrong team in cached Edge section and regenerate
                 # via CLEAN-RENDER which now correctly uses outcome_key.
                 _w84_ok_key = (_w84_snap or {}).get("outcome_key") if _w84_snap else None
+                if not _w84_ok_key and _w84_snap:
+                    _o_fallback = (_w84_snap.get("outcome") or "").lower()
+                    if _o_fallback in ("home", "away", "draw"):
+                        _w84_ok_key = _o_fallback
                 if _w84_ok_key and _w84_ok_key in ("home", "away"):
                     _correct_f4 = h(_w84_home if _w84_ok_key == "home" else _w84_away)
                     _em_f4 = _w84_html.find("\U0001f3af <b>The Edge</b>")
@@ -7907,6 +7911,8 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         if best_odds > _MAX_RECOMMENDED_ODDS:
             continue
 
+        # BUILD-QA23-FIX: Initialise consensus_prob before V2/non-V2 branch
+        consensus_prob = _v2_result.get("fair_probability", 0) if _v2_result else 0
         # Fix 5: EV Consistency — use V2 benchmark-calibrated edge_pct as primary;
         # fall back to naive consensus calculation only when V2 is unavailable.
         if _v2_result and _v2_result.get("tier"):
@@ -7929,6 +7935,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             "away_team": away_display,
             "commence_time": "",
             "outcome": outcome_label,
+            "outcome_key": outcome_label,
             "odds": best_odds,
             "bookmaker": _display_bookmaker_name(best_bk_key),
             "prob": round(consensus_prob * 100) if consensus_prob else 0,

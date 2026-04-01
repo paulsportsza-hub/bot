@@ -125,6 +125,10 @@ def _load_edge_result(match_key: str, bet_type: str | None = None) -> dict | Non
         zip([col[0] for col in cursor.description], row)
     )
     try:
+        # BUILD-QA23-FIX: Translate positional keys to DB format
+        _BET_TYPE_MAP = {"home": "Home Win", "away": "Away Win", "draw": "Draw"}
+        if bet_type:
+            bet_type = _BET_TYPE_MAP.get(bet_type, bet_type)
         # BUILD-QA22-FIX P0-1b: Filter by bet_type when provided (defence in depth)
         if bet_type:
             row = conn.execute(
