@@ -7935,7 +7935,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             "away_team": away_display,
             "commence_time": "",
             "outcome": outcome_label,
-            "outcome_key": outcome_label,
+            "outcome_key": predicted_outcome,
             "odds": best_odds,
             "bookmaker": _display_bookmaker_name(best_bk_key),
             "prob": round(consensus_prob * 100) if consensus_prob else 0,
@@ -8516,6 +8516,18 @@ async def _build_hot_tips_page(
         if access in ("full", "partial"):
             # 3-line card: sport emoji + match + tier badge, info, outcome @ odds → return
             outcome = h(tip.get("outcome", ""))
+            # Normalise from outcome_key for consistency (positional key → display name)
+            _ok = (tip.get("outcome_key") or "").lower()
+            if _ok == "draw":
+                outcome = "Draw"
+            elif _ok == "home":
+                _home = h(tip.get("home_team", ""))
+                if _home:
+                    outcome = _home
+            elif _ok == "away":
+                _away = h(tip.get("away_team", ""))
+                if _away:
+                    outcome = _away
             odds_val = tip.get("odds", 0)
             ret_amount = odds_val * 300 if odds_val else 0
             ret_str = f"R{ret_amount:,.0f}" if ret_amount else ""
@@ -16947,19 +16959,24 @@ def _build_game_buttons(
             odds_by_bk = best_ev_tip.get("odds_by_bookmaker", {})
             match_id = best_ev_tip.get("match_id", "")
 
-            # REGFIX-04: Select bookmaker based on the RECOMMENDED outcome, not globally.
-            # Normalise display team name to positional key for nested-dict lookup.
-            _out_raw = (best_ev_tip.get("outcome") or "").lower()
-            _home_n = (best_ev_tip.get("home_team") or "").lower()
-            _away_n = (best_ev_tip.get("away_team") or "").lower()
-            if _out_raw in ("home", "1") or (_home_n and _out_raw == _home_n):
-                _outcome_key = "home"
-            elif _out_raw in ("away", "2") or (_away_n and _out_raw == _away_n):
-                _outcome_key = "away"
-            elif _out_raw == "draw":
-                _outcome_key = "draw"
+            # Prefer outcome_key (positional) before any existing derivation
+            _ok_raw = (best_ev_tip.get("outcome_key") or "").lower()
+            if _ok_raw in ("home", "away", "draw"):
+                _outcome_key = _ok_raw
             else:
-                _outcome_key = _out_raw
+                # REGFIX-04: Select bookmaker based on the RECOMMENDED outcome, not globally.
+                # Normalise display team name to positional key for nested-dict lookup.
+                _out_raw = (best_ev_tip.get("outcome") or "").lower()
+                _home_n = (best_ev_tip.get("home_team") or "").lower()
+                _away_n = (best_ev_tip.get("away_team") or "").lower()
+                if _out_raw in ("home", "1") or (_home_n and _out_raw == _home_n):
+                    _outcome_key = "home"
+                elif _out_raw in ("away", "2") or (_away_n and _out_raw == _away_n):
+                    _outcome_key = "away"
+                elif _out_raw == "draw":
+                    _outcome_key = "draw"
+                else:
+                    _outcome_key = _out_raw
 
             # BUILD-EDGE-GATE: CTA team name must come from best_ev_tip's own outcome,
             # NOT from _er_outcomes_cache. The cache stores edge_results.bet_type which may
