@@ -15546,6 +15546,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _time.time(),
             )
             _game_tips_cache[event_id] = _early_db_hit["tips"]
+            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
+            for _ct in _early_db_hit["tips"]:
+                if not _ct.get("home_team"):
+                    _ct["home_team"] = _ea_home
+                if not _ct.get("away_team"):
+                    _ct["away_team"] = _ea_away
             buttons = _build_game_buttons(
                 _early_db_hit["tips"], event_id, user_id,
                 source=source, user_tier=_ggt_tier,
@@ -15732,6 +15738,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _time.time(),
             )
             _game_tips_cache[event_id] = _pre_cached["tips"]
+            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
+            for _ct in _pre_cached["tips"]:
+                if not _ct.get("home_team"):
+                    _ct["home_team"] = home_raw
+                if not _ct.get("away_team"):
+                    _ct["away_team"] = away_raw
             _pre_buttons = _build_game_buttons(
                 _pre_cached["tips"], event_id, user_id,
                 source=source, user_tier=_ggt_tier,
@@ -15808,6 +15820,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _time.time(),
             )
             _game_tips_cache[event_id] = _cached_db["tips"]
+            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
+            for _ct in _cached_db["tips"]:
+                if not _ct.get("home_team"):
+                    _ct["home_team"] = home_raw
+                if not _ct.get("away_team"):
+                    _ct["away_team"] = away_raw
             _spinner_stop.set()
             await _spinner_task
             _ctx_task.cancel()

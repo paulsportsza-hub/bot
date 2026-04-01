@@ -887,6 +887,8 @@ async def _generate_one(
         "ev": ev,
         "prob": round(fair_prob * 100, 1) if fair_prob else 0,
         "edge_v2": edge,
+        "home_team": home,  # P0-2 FIX: required for _build_game_buttons CTA resolution
+        "away_team": away,  # P0-2 FIX: required for _build_game_buttons CTA resolution
     })
 
     # 3. Build edge_data for NarrativeSpec (W82-WIRE)

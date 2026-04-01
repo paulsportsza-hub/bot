@@ -895,6 +895,22 @@ def render_edge_detail(
             return error_html
     else:
         ctx = _load_match_context(match_key)
+        # P0-1 FIX: tip_data (from snapshot) is authoritative for outcome when edge_row exists.
+        # edge_results.bet_type can be stale; snapshot reflects what the user saw in the list.
+        if tip_data:
+            _td_out = (tip_data.get("outcome") or "").strip()
+            _td_home = (tip_data.get("home_team") or "").strip()
+            _td_away = (tip_data.get("away_team") or "").strip()
+            _bt_override = None
+            if _td_out.lower() in ("home", "away", "draw"):
+                _bt_override = _td_out.lower()
+            elif _td_home and _td_out.lower() == _td_home.lower():
+                _bt_override = "home"
+            elif _td_away and _td_out.lower() == _td_away.lower():
+                _bt_override = "away"
+            if _bt_override:
+                edge_row = dict(edge_row)
+                edge_row["bet_type"] = _bt_override
         data = _build_detail_data(edge_row, ctx, user_tier, sport, ev_override)
 
     if data.access_level == "locked":
