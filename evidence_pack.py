@@ -1041,7 +1041,31 @@ async def _run_with_timeout(func, *args, timeout: float, fallback):
 
 
 async def _fetch_espn_context(match_key: str, league: str, sport: str) -> dict[str, Any]:
+    """Fetch match context — API-Football primary (soccer), ESPN fallback."""
     home_key, away_key = _parse_match_key(match_key)
+
+    # ── Primary: API-Football for soccer ────────────────────────────────────
+    if sport in ("soccer", "football"):
+        try:
+            from fetchers import get_fetcher
+            _fetcher = get_fetcher("soccer")
+            _ctx = await asyncio.wait_for(
+                _fetcher.fetch_and_cache(
+                    match_key=match_key,
+                    home_team=home_key,
+                    away_team=away_key,
+                    league=league,
+                    sport="soccer",
+                    live_safe=True,
+                ),
+                timeout=10.0,
+            )
+            if _ctx and _ctx.get("data_available"):
+                return _ctx
+        except Exception:
+            pass
+
+    # ── Fallback: ESPN (all sports) ──────────────────────────────────────────
     try:
         from scrapers.match_context_fetcher import get_match_context
 

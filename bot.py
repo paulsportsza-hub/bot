@@ -15804,19 +15804,51 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         _run_spinner(_spinner_msg, f"Analysing {hf}{home} vs {af}{away}", _spinner_stop),
     )
 
-    # ── Start ESPN context fetch early (runs in background while odds load) ──
+    # ── Start context fetch early (runs in background while odds load) ──
+    # API-Football primary for soccer, ESPN fallback for all sports.
     async def _fetch_context_bg():
-        """Background coroutine for ESPN match context."""
+        """Background coroutine for match context — API-Football primary (soccer), ESPN fallback."""
         try:
-            from scrapers.match_context_fetcher import get_match_context
             _sk = config.LEAGUE_SPORT.get(target_league, "")
             _SPORT_TO_FETCHER = {"combat": ""}
             _fs = _SPORT_TO_FETCHER.get(_sk, _sk)
-            log.info("Fetching match context: %s vs %s, league=%s, sport=%s",
+            _h_key = home_raw.lower().replace(" ", "_")
+            _a_key = away_raw.lower().replace(" ", "_")
+
+            # ── Primary: API-Football for soccer ───────────────────────────
+            if _sk in ("soccer", "football"):
+                try:
+                    from fetchers import get_fetcher
+                    _fetcher = get_fetcher("soccer")
+                    _match_key = f"{_h_key}_vs_{_a_key}"
+                    _ctx = await _fetcher.fetch_and_cache(
+                        match_key=_match_key,
+                        home_team=_h_key,
+                        away_team=_a_key,
+                        league=target_league or "",
+                        sport="soccer",
+                        live_safe=True,
+                    )
+                    if _ctx and _ctx.get("data_available"):
+                        log.info("API-Football context hit for %s vs %s", home_raw, away_raw)
+                        return _ctx
+                    log.info(
+                        "API-Football context thin for %s vs %s — falling back to ESPN",
+                        home_raw, away_raw,
+                    )
+                except Exception as _ff_exc:
+                    log.warning(
+                        "Fetcher failed for %s vs %s: %s — falling back to ESPN",
+                        home_raw, away_raw, _ff_exc,
+                    )
+
+            # ── Fallback: ESPN (all sports) ─────────────────────────────────
+            from scrapers.match_context_fetcher import get_match_context
+            log.info("Fetching match context via ESPN: %s vs %s, league=%s, sport=%s",
                      home_raw, away_raw, target_league, _fs or "(auto)")
             return await get_match_context(
-                home_team=home_raw.lower().replace(" ", "_"),
-                away_team=away_raw.lower().replace(" ", "_"),
+                home_team=_h_key,
+                away_team=_a_key,
                 league=target_league or "",
                 sport=_fs,
             )
