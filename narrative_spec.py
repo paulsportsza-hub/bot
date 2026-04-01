@@ -39,6 +39,9 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
             "the numbers speak louder",
             "pure pricing call", "tread carefully",
             "conviction is limited",
+            "no supporting indicators from any source",
+            "no confirming indicators back it up",
+            "treat this as a price-only play",
         ],
     },
     "moderate": {

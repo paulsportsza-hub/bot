@@ -7897,6 +7897,22 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         ev_pct = round(adj_ev * 100, 1)
         edge_tier = str(adj_tier)
 
+        # BUILD-EDGE-GATE: Suppress zero-signal edges — Paul 31 March 2026.
+        # An edge with 0 confirming signals from any source must not be surfaced.
+        # "One edge backed by real signals is worth more than ten edges with no backing."
+        _gate_confirming = int((_v2_result or {}).get("confirming_signals", 0) or 0)
+        if _gate_confirming == 0:
+            log.info("BUILD-EDGE-GATE: suppressed zero-signal edge %s (tier=%s, ev=%.1f%%)",
+                     match["match_id"], edge_tier, ev_pct)
+            near_miss_tips.append({
+                **base_tip,
+                "ev": ev_pct,
+                "edge_rating": edge_tier,
+                "display_tier": edge_tier,
+                "edge_score": composite_score,
+            })
+            continue
+
         all_tips.append({
             **base_tip,
             "ev": ev_pct,
@@ -10683,6 +10699,11 @@ BANNED_NARRATIVE_PHRASES = [
     "knockout encounter",
     # R7-BUILD-02: P1-SHARP-REFERENCE — sharp book reference must never appear in user-facing narratives
     "Sharp market pricing",
+    # BUILD-EDGE-GATE: Zero-signal fallback phrases — these should never appear now that
+    # zero-signal edges are suppressed, but belt-and-suspenders in case of code path leaks.
+    "no supporting indicators from any source",
+    "no confirming indicators back it up",
+    "treat this as a price-only play",
 ]
 
 _INJURY_FETCH_LOOKBACK_DAYS = 2
@@ -16755,13 +16776,14 @@ def _build_game_buttons(
             else:
                 _outcome_key = _out_raw
 
-            # HOT-TIPS-BUILD-07: Override with authoritative positional key from edge_results.
-            # The snapshot tip["outcome"] may be a stale display name from a prior cycle
-            # (e.g. "Arsenal" when edge_results.bet_type = "Home Win" = Sporting CP).
-            # _er_outcomes_cache is refreshed every precompute cycle by _refresh_er_outcomes_cache().
-            _er_auth = _er_outcomes_cache.get(match_key) or _er_outcomes_cache.get(match_id)
-            if _er_auth in ("home", "away", "draw"):
-                _outcome_key = _er_auth
+            # BUILD-EDGE-GATE: CTA team name must come from best_ev_tip's own outcome,
+            # NOT from _er_outcomes_cache. The cache stores edge_results.bet_type which may
+            # be for a DIFFERENT outcome than the highest-EV tip. The initial normalization
+            # above (lines 16746-16756) already correctly maps display names to positional
+            # keys. The _er_outcomes_cache override was causing CTA/Verdict team mismatches
+            # (e.g. Verdict says "Bournemouth" but CTA says "Arsenal" at same odds/bookmaker).
+            # Removed: _er_outcomes_cache override (HOT-TIPS-BUILD-07) — superseded by
+            # R9-BUILD-03 selected_outcome + initial normalization.
 
             _rec_bk_key, _ = _select_best_bookmaker_for_outcome(odds_by_bk, _outcome_key)
             if _rec_bk_key:
