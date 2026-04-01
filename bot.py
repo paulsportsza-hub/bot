@@ -7450,13 +7450,11 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         ):
             continue
 
-        # P1-PASS-IN-LIST: R9-BUILD-03 — exclude speculative-punt tips from Top Edge Picks.
-        # confirming_est==0 + ev<=7% → _classify_evidence() returns "speculative punt",
-        # which can render "Monitor the line but pass" or "Pass on this" in the detail view.
-        # These tips should never appear in Top Edge Picks — they don't recommend a bet.
+        # BUILD-GATE-RELAX: Suppress zero-signal edges ONLY when EV < 3%.
+        # Price difference alone IS a valid edge — Paul revised 1 April 2026.
         # skip_punt_filter=True bypasses this for pregen (generation-time concern, not display-time).
         if not skip_punt_filter:
-            if _confirming_est == 0 and ev_pct <= 7.0:
+            if _confirming_est == 0 and ev_pct < 3.0:
                 continue
 
         league_key = (row["league"] or "").lower()
@@ -7897,12 +7895,11 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         ev_pct = round(adj_ev * 100, 1)
         edge_tier = str(adj_tier)
 
-        # BUILD-EDGE-GATE: Suppress zero-signal edges — Paul 31 March 2026.
-        # An edge with 0 confirming signals from any source must not be surfaced.
-        # "One edge backed by real signals is worth more than ten edges with no backing."
+        # BUILD-GATE-RELAX: Suppress zero-signal edges ONLY when EV < 3%.
+        # Price difference alone IS a valid edge — Paul revised 1 April 2026.
         _gate_confirming = int((_v2_result or {}).get("confirming_signals", 0) or 0)
-        if _gate_confirming == 0:
-            log.info("BUILD-EDGE-GATE: suppressed zero-signal edge %s (tier=%s, ev=%.1f%%)",
+        if _gate_confirming == 0 and ev_pct < 3.0:
+            log.info("BUILD-GATE-RELAX: suppressed zero-signal low-EV edge %s (tier=%s, ev=%.1f%%)",
                      match["match_id"], edge_tier, ev_pct)
             near_miss_tips.append({
                 **base_tip,
@@ -8103,6 +8100,12 @@ def _build_hot_tips_page(
     # in the header matches the number of rendered cards.
     # Fix 8: Also gate composite_score >= 40 (Bronze threshold) — sub-threshold cards never show.
     tips = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 40]
+    # BUILD-GATE-RELAX: Cap zero-signal edges at Bronze display tier — Paul 1 April 2026.
+    for _t in tips:
+        _t_cs = int(((_t.get("edge_v2") or {}).get("confirming_signals", 0)) or 0)
+        if _t_cs == 0:
+            _t["display_tier"] = "bronze"
+            _t["edge_rating"] = "bronze"
     # BUILD-TIER-ORDER: Diamond > Gold > Silver > Bronze, then EV descending within tier.
     _tier_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
     tips.sort(key=lambda t: (
@@ -8287,6 +8290,11 @@ def _build_hot_tips_page(
     for i, tip in enumerate(page_tips, start + 1):
         _tip_mk_for_tier = tip.get("match_id") or tip.get("event_id") or ""
         edge_tier = _fresh_tiers.get(_tip_mk_for_tier) or str(tip.get("display_tier", tip.get("edge_rating", "bronze"))).lower().strip()
+        # BUILD-GATE-RELAX Fix 4: CTA badge must match display_tier after zero-signal cap.
+        _tip_cs = int((tip.get("edge_v2") or {}).get("confirming_signals", 0) or 0)
+        if _tip_cs == 0:
+            edge_tier = "bronze"
+            tip["display_tier"] = "bronze"
         access = get_edge_access_level(user_tier, edge_tier)
 
         if edge_tier != last_section_tier:
@@ -16824,6 +16832,18 @@ def _build_game_buttons(
                 # a positional key ("home"/"away") that must not appear verbatim in the CTA.
                 _home_disp = best_ev_tip.get("home_team") or ""
                 _away_disp = best_ev_tip.get("away_team") or ""
+                # BUILD-GATE-RELAX Fix 5: Fallback — extract team names from match_id
+                # when home_team/away_team keys are missing from the tip dict.
+                if not _home_disp or not _away_disp:
+                    _cta_mid = best_ev_tip.get("match_id") or match_key or ""
+                    import re as _re_cta
+                    _cta_mid_no_date = _re_cta.sub(r"_\d{4}-\d{2}-\d{2}$", "", _cta_mid)
+                    if "_vs_" in _cta_mid_no_date:
+                        _h_raw, _a_raw = _cta_mid_no_date.split("_vs_", 1)
+                        if not _home_disp:
+                            _home_disp = _display_team_name(_h_raw)
+                        if not _away_disp:
+                            _away_disp = _display_team_name(_a_raw)
                 if _outcome_key == "home" and _home_disp:
                     outcome = _home_disp
                 elif _outcome_key == "away" and _away_disp:

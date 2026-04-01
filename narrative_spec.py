@@ -687,6 +687,15 @@ def build_narrative_spec(
         scaffold=scaffold,
     )
 
+    # BUILD-GATE-RELAX: Force cautious tone on ALL zero-signal edges — Paul 1 April 2026.
+    # No conviction language on zero-signal cards, regardless of EV.
+    if spec.support_level == 0:
+        spec.tone_band = "cautious"
+        if spec.verdict_action in ("back", "strong back"):
+            spec.verdict_action = "lean"
+        if spec.verdict_sizing in ("standard stake", "confident stake"):
+            spec.verdict_sizing = "small stake"
+
     # Enforce coherence — downgrade if contradictions found
     spec = _enforce_coherence(spec)
 
