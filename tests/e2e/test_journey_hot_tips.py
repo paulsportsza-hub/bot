@@ -107,8 +107,10 @@ async def test_hot_page_dispatch_renders_second_page(monkeypatch, test_edges) ->
 
     rendered_text = query.edit_message_text.await_args.args[0]
     rendered_markup = query.edit_message_text.await_args.kwargs["reply_markup"]
+    # BUILD-TIER-ORDER: After sort, page 1 = Silver + Bronze (Orlando Pirates, South Africa).
+    # Kaizer Chiefs (Diamond) moved to page 0.
     assert "South Africa vs Australia" in rendered_text
-    assert "Kaizer Chiefs vs AmaZulu" in rendered_text
+    assert "Orlando Pirates vs Mamelodi Sundowns" in rendered_text
     assert "hot:page:0" in _callbacks(rendered_markup)
 
 

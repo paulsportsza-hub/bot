@@ -8103,6 +8103,12 @@ def _build_hot_tips_page(
     # in the header matches the number of rendered cards.
     # Fix 8: Also gate composite_score >= 40 (Bronze threshold) — sub-threshold cards never show.
     tips = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 40]
+    # BUILD-TIER-ORDER: Diamond > Gold > Silver > Bronze, then EV descending within tier.
+    _tier_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
+    tips.sort(key=lambda t: (
+        _tier_order.get(str(t.get("display_tier", "bronze")).lower(), 9),
+        -(t.get("ev") or 0),
+    ))
     total = len(tips)
     total_pages = max((total + HOT_TIPS_PAGE_SIZE - 1) // HOT_TIPS_PAGE_SIZE, 1)
     page = max(0, min(page, total_pages - 1))

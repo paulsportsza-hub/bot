@@ -165,7 +165,11 @@ class TestCardBreathingRoom:
             )
 
     def test_tier_headers_between_different_tiers(self):
-        """When cards span different tiers, tier headers appear between them."""
+        """When cards span different tiers, tier headers appear between them.
+
+        BUILD-TIER-ORDER: sort is enforced inside _build_hot_tips_page, so Diamond
+        always renders before Gold regardless of input order.
+        """
         tips = [
             _make_tip(display_tier="gold", home_team="Home1", away_team="Away1",
                       match_id="h1_vs_a1_2026-03-10"),
@@ -176,10 +180,16 @@ class TestCardBreathingRoom:
         lines = text.split("\n")
         card_starts = [i for i, ln in enumerate(lines) if ln.strip().startswith("<b>[")]
         assert len(card_starts) == 2, f"Expected 2 cards, found {len(card_starts)}"
-        # Between the two cards, a DIAMOND EDGE tier header should appear
+        # After sort: Diamond card comes first, Gold card second.
+        # DIAMOND EDGE header appears before card 1 (in the text before card_starts[0]).
+        pre_card1_text = "\n".join(lines[:card_starts[0]])
+        assert "DIAMOND EDGE" in pre_card1_text, (
+            f"Expected DIAMOND EDGE tier header before first card, got:\n{pre_card1_text}"
+        )
+        # Between card 1 (Diamond) and card 2 (Gold), the GOLDEN EDGE header appears.
         between_text = "\n".join(lines[card_starts[0]:card_starts[1]])
-        assert "DIAMOND EDGE" in between_text, (
-            f"Expected DIAMOND EDGE tier header between cards, got:\n{between_text}"
+        assert "GOLDEN EDGE" in between_text, (
+            f"Expected GOLDEN EDGE tier header between cards, got:\n{between_text}"
         )
 
 
