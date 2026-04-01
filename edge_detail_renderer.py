@@ -175,13 +175,19 @@ def _parse_teams(match_key: str) -> tuple[str, str]:
 
 def _resolve_outcome(
     bet_type: str, home: str, away: str,
+    outcome_key: str | None = None,
 ) -> tuple[str, str]:
     """Map DB bet_type to (raw_outcome, display_outcome).
+
+    Args:
+        outcome_key: Positional key ("home"/"away"/"draw") from tip dict.
+            Used as fallback when bet_type is None/empty — avoids defaulting
+            to "home" when the actual recommendation is different.
 
     Returns:
         ("home"/"away"/"draw", team_display_name_or_Draw)
     """
-    bt = (bet_type or "home").strip()
+    bt = (bet_type or outcome_key or "home").strip()
     if bt in ("Home Win", "home"):
         raw = "home"
     elif bt in ("Away Win", "away"):
@@ -380,14 +386,16 @@ def _build_detail_data_from_tip(
     else:
         fair_prob = 0
 
-    # Outcome — SERVE-PATH-FIX Fix 2: check edge_v2.outcome before defaulting
+    # Outcome — DEF-1: outcome_key (positional) takes priority over display names
+    _ok = tip_data.get("outcome_key")
     bet_type = (
-        tip_data.get("recommended_outcome")
+        _ok
+        or tip_data.get("recommended_outcome")
         or tip_data.get("bet_type")
         or (tip_data.get("edge_v2") or {}).get("outcome")
         or "home"
     )
-    outcome_raw, outcome_display = _resolve_outcome(bet_type, home, away)
+    outcome_raw, outcome_display = _resolve_outcome(bet_type, home, away, outcome_key=_ok)
 
     # Bookmaker
     bk_key = (tip_data.get("bookmaker") or "").strip().lower()
@@ -895,19 +903,23 @@ def render_edge_detail(
             return error_html
     else:
         ctx = _load_match_context(match_key)
-        # P0-1 FIX: tip_data (from snapshot) is authoritative for outcome when edge_row exists.
-        # edge_results.bet_type can be stale; snapshot reflects what the user saw in the list.
+        # P0-1 FIX (DEF-1): Use outcome_key (positional "home"/"away"/"draw") when
+        # available — it is independent of team name resolution and breaks the
+        # circular dependency where tip_data.outcome was derived from the same
+        # stale edge_results.bet_type we are trying to override.
         if tip_data:
-            _td_out = (tip_data.get("outcome") or "").strip()
-            _td_home = (tip_data.get("home_team") or "").strip()
-            _td_away = (tip_data.get("away_team") or "").strip()
-            _bt_override = None
-            if _td_out.lower() in ("home", "away", "draw"):
-                _bt_override = _td_out.lower()
-            elif _td_home and _td_out.lower() == _td_home.lower():
-                _bt_override = "home"
-            elif _td_away and _td_out.lower() == _td_away.lower():
-                _bt_override = "away"
+            _bt_override = tip_data.get("outcome_key")  # Direct positional key
+            if not _bt_override:
+                # Legacy fallback: infer from display name (pre-DEF-1 tip dicts)
+                _td_out = (tip_data.get("outcome") or "").strip()
+                _td_home = (tip_data.get("home_team") or "").strip()
+                _td_away = (tip_data.get("away_team") or "").strip()
+                if _td_out.lower() in ("home", "away", "draw"):
+                    _bt_override = _td_out.lower()
+                elif _td_home and _td_out.lower() == _td_home.lower():
+                    _bt_override = "home"
+                elif _td_away and _td_out.lower() == _td_away.lower():
+                    _bt_override = "away"
             if _bt_override:
                 edge_row = dict(edge_row)
                 edge_row["bet_type"] = _bt_override

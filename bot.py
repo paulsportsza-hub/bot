@@ -1574,7 +1574,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             await _generate_game_tips_safe(query, ctx, event_id, user_id)
     elif prefix == "hot":
         user_id = query.from_user.id
-        if action in ("go", "show"):
+        if action == "noop":
+            return
+        elif action in ("go", "show"):
             await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
         elif action.startswith("back"):
             # W84-HT2: hot:back:{page} — return to the exact page the user came from.
@@ -1883,6 +1885,35 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _w84_html, _w84_home, _w84_away,
                     _w84_hdr["kickoff"], _w84_hdr["league_display"], _w84_hdr["broadcast_line"],
                 )
+
+                # DEF-1 Fix 4: Detect wrong team in cached Edge section and regenerate
+                # via CLEAN-RENDER which now correctly uses outcome_key.
+                _w84_ok_key = (_w84_snap or {}).get("outcome_key") if _w84_snap else None
+                if _w84_ok_key and _w84_ok_key in ("home", "away"):
+                    _correct_f4 = h(_w84_home if _w84_ok_key == "home" else _w84_away)
+                    _em_f4 = _w84_html.find("\U0001f3af <b>The Edge</b>")
+                    _rm_f4 = _w84_html.find("\u26a0\ufe0f", _em_f4 + 1 if _em_f4 >= 0 else 0)
+                    _edge_span = _w84_html[_em_f4:_rm_f4] if (_em_f4 >= 0 and _rm_f4 > _em_f4) else ""
+                    if _edge_span and _correct_f4 not in _edge_span:
+                        try:
+                            from edge_detail_renderer import render_edge_detail as _edr_f4
+                            _f4_snap = dict(_w84_snap) if _w84_snap else {}
+                            _f4_snap.setdefault("match_key", match_key)
+                            _fresh_f4 = await asyncio.to_thread(
+                                _edr_f4, match_key, _user_tier,
+                                tip_data=_f4_snap,
+                                include_tier=True,
+                            )
+                            _f4_body = _fresh_f4[0] if isinstance(_fresh_f4, tuple) else _fresh_f4
+                            # Re-inject narrative header onto fresh body
+                            _w84_html = _inject_narrative_header(
+                                _f4_body, _w84_home, _w84_away,
+                                _w84_hdr["kickoff"], _w84_hdr["league_display"],
+                                _w84_hdr["broadcast_line"],
+                            )
+                            log.info("DEF-1: Edge section team mismatch — regenerated for %s", match_key)
+                        except Exception as _f4e:
+                            log.debug("DEF-1 Edge regen failed for %s: %s", match_key, _f4e)
 
                 # BUILD-6: Append evidence section (sharp lines + signals) if available
                 try:
@@ -7479,6 +7510,7 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
             "away_team": away_display,
             "commence_time": "",
             "outcome": outcome_display,
+            "outcome_key": outcome_raw,
             "odds": _rec_odds,
             "bookmaker": _display_bookmaker_name(_raw_bk_key),
             "bookmaker_key": _raw_bk_key,
@@ -7614,7 +7646,8 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
         if mk and mk in live_evs:
             current_ev = live_evs[mk]
             if current_ev is None:
-                # Could not compute live EV — keep tip (conservative)
+                # Could not compute live EV — keep tip (conservative), but log warning
+                log.warning("[BUILD-STALE-EV] EV lookup returned None for %s — keeping stale value", mk)
                 result.append(t)
                 continue
             if current_ev <= 0:
@@ -8575,8 +8608,14 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _get_hot_tips_result_proof(),
             _get_edge_tracker_summary(7),
         )
-        # BUILD-16b/FIX-6A: _refresh_tip_evs() removed from warm path — precomputed EVs
-        # are fresh enough (<15 min). Retained on fast/cold paths only.
+        # BUILD-STALE-EV: Age-gated EV refresh — if cache > 10 min old, re-check live EVs
+        # to suppress tips whose EV has gone negative since last precompute cycle.
+        import time as _stale_ev_t
+        _stale_ev_entry = _hot_tips_cache.get("global", {})
+        _stale_ev_age = _stale_ev_t.time() - _stale_ev_entry.get("ts", 0)
+        if _stale_ev_age > 600:  # > 10 minutes old → refresh EVs before serving
+            log.debug("[BUILD-STALE-EV] Cache age %.0fs > 600s — refreshing tip EVs on warm path", _stale_ev_age)
+            _cached_tips = await _refresh_tip_evs(_cached_tips)
         _wm_text, _wm_markup = _build_hot_tips_page(
             _cached_tips, page=0, user_tier=_wm_tier,
             remaining_views=_wm_rv, consecutive_misses=_wm_consec,
@@ -16895,6 +16934,13 @@ def _build_game_buttons(
             # No positive EV — gate deep link by tier (W30-GATE)
             if _bet_access in ("blurred", "locked"):
                 primary_button = InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")
+            elif source == "edge_picks":
+                # DEF-2: Suppress bookmaker CTA when all EVs are negative in
+                # Hot Tips path — mirrors My Matches _neutral_analysis gate.
+                primary_button = InlineKeyboardButton(
+                    "ℹ️ No actionable Edge at current pricing",
+                    callback_data="hot:noop",
+                )
             else:
                 active_bk = config.get_active_bookmaker()
                 bk_key = config.ACTIVE_BOOKMAKER
