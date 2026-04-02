@@ -2023,9 +2023,12 @@ def format_evidence_prompt(pack: EvidencePack, spec) -> str:
 
 _STRONG_POSTURE_PHRASES = [
     "strong back", "strong conviction", "premium value", "one of the best plays",
-    "rock solid", "must back", "clear edge", "genuine value", "supported edge",
+    "rock solid", "must back",
     "slam dunk", "lock", "no-brainer", "guaranteed",
 ]
+# BUILD-PREGEN-FIX PRE-2A: "clear edge", "genuine value", "supported edge" moved out —
+# they describe edge quality, not over-confidence. A speculative-class match can
+# legitimately have a "genuine value" gap or a "supported edge" from pricing data.
 _MODERATE_POSTURE_PHRASES = ["worth backing", "solid play", "numbers and indicators agree"]
 _LIMITED_ACKNOWLEDGEMENT_PHRASES = [
     "limited evidence", "thin evidence", "limited evidence depth", "not much verified context",
@@ -3236,11 +3239,11 @@ _KNOWN_VERIFIED_VENUE_PHRASES = {
     "parc des princes",
     "signal iduna park",
     # SA venues
-    "moses mabhida",
+    "moses mabhida", "moses mabhida stadium",
     "loftus versfeld",
     "fnb stadium",
     "ellis park",
-    "dhl stadium",
+    "dhl stadium", "dhl newlands",
     "wanderers stadium",
     "cape town stadium",
     "newlands",
@@ -3248,6 +3251,8 @@ _KNOWN_VERIFIED_VENUE_PHRASES = {
     "boland park",
     "centurion park",
     "kingsmead",
+    "orlando stadium",
+    "peter mokaba stadium",
     # Rugby/cricket venues
     "twickenham",
     "principality stadium",
@@ -3263,6 +3268,7 @@ _KNOWN_VERIFIED_VENUE_PHRASES = {
 # R12-BUILD-03 Fix 5: Derby/geographical names that are NOT fabricated proper nouns
 _DERBY_WHITELIST = {
     "merseyside", "the merseyside", "merseyside derby",
+    "this merseyside", "this merseyside derby",
     "north london", "north london derby",
     "manchester", "manchester derby",
     "el clasico", "el cl\u00e1sico", "der klassiker",
@@ -3273,8 +3279,10 @@ _DERBY_WHITELIST = {
 # W82-KILL-FIX Fix 2: Geographic/regional terms that are NOT fabricated proper nouns
 _GEOGRAPHIC_WHITELIST = {
     # UK regions
-    "tyneside", "lancashire", "yorkshire", "west yorkshire", "south yorkshire",
+    "tyneside", "merseyside", "teesside", "lancashire",
+    "yorkshire", "west yorkshire", "south yorkshire",
     "west midlands", "east midlands", "midlands",
+    "the north", "the south",
     "london", "west london", "east london", "south london",
     "kent", "surrey", "hampshire", "berkshire", "hertfordshire",
     # Irish / Scottish / Welsh

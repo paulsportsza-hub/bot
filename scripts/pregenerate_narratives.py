@@ -1391,25 +1391,43 @@ async def main(sweep: str) -> None:
             await asyncio.sleep(1.0)
 
     # W79-P3D: Batch-write all narratives to cache (separate from generation)
+    # BUILD-PREGEN-FIX PRE-3: On refresh sweeps, never overwrite w84 with w82.
     if pending_writes:
         log.info("Writing %d narratives to cache...", len(pending_writes))
         write_ok = 0
+        w84_preserved = 0
         for pw in pending_writes:
+            new_source = pw.get("narrative_source", "w82")
+            match_id = pw["match_id"]
+            # PRE-3: Preserve existing w84 on refresh failure (refresh/uncached_only only)
+            if sweep != "full" and new_source == "w82":
+                existing = await _get_cached_narrative(match_id)
+                if existing and existing.get("narrative_source") == "w84":
+                    log.warning(
+                        "[PREGEN] Preserving w84 for %s — verification failed on "
+                        "refresh attempt. Keeping existing w84.",
+                        match_id,
+                    )
+                    w84_preserved += 1
+                    continue
             try:
                 await _store_narrative_cache(
-                    pw["match_id"],
+                    match_id,
                     pw["html"],
                     pw["tips"],
                     pw["edge_tier"],
                     pw["model"],
                     evidence_json=pw.get("evidence_json"),
-                    narrative_source=pw.get("narrative_source", "w82"),
+                    narrative_source=new_source,
                     coverage_json=pw.get("coverage_json"),
                 )
                 write_ok += 1
             except Exception as exc:
-                log.warning("Cache write failed for %s: %s", pw["match_id"], exc)
-        log.info("Cache writes: %d/%d successful", write_ok, len(pending_writes))
+                log.warning("Cache write failed for %s: %s", match_id, exc)
+        log.info(
+            "Cache writes: %d/%d successful, %d w84 preserved",
+            write_ok, len(pending_writes), w84_preserved,
+        )
 
     # W67-CALIBRATE: Verdict balance check
     _check_verdict_balance(sweep_verdicts)

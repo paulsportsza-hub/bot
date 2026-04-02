@@ -8475,10 +8475,11 @@ async def _build_hot_tips_page(
         tip["_bc_broadcast"] = broadcast_raw
         tip["_bc_league"] = league_display
 
-        # Line 2: league · kickoff · DStv channel
+        # Line 2: league · 📅 kickoff · DStv channel
+        # BUILD-PREGEN-FIX Fix 5: 📅 prefix on kickoff for visibility
         info_parts = [league_display]
         if kickoff and kickoff != "TBC":
-            info_parts.append(kickoff)
+            info_parts.append(f"📅 {kickoff}")
         # Extract DStv channel from broadcast line (e.g. "📺 SS PSL (DStv 202)" → "DStv 202")
         if broadcast_raw:
             import re as _re
@@ -14538,6 +14539,9 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         f"9. If the baseline includes a 'Head to head:' line, keep that H2H sentence VERBATIM or delete it entirely. Do NOT rewrite H2H counts, last-meeting records, or W/D/L summaries. If the baseline has no H2H line, do NOT add H2H prose anywhere else either.\n"
         f"{freshness_rule}"
         f"11. Platform blacklist is enforced at validation time. Do NOT use banned filler such as: let that shape the stake, keeps the stake size measured, worth a measured look, grab it before.\n\n"
+        f"BANNED PHRASES — using ANY of these will cause automated rejection:\n"
+        + "\n".join(f"- \"{p}\"" for p in BANNED_NARRATIVE_PHRASES[:30])
+        + "\n\nUse alternative language that conveys the same meaning without these phrases.\n\n"
         f"If you cannot improve the baseline without violating these constraints, return it UNCHANGED."
     )
 
@@ -15101,9 +15105,11 @@ _KNOWN_TEAM_NICKNAMES = {
     "los blancos", "los merengues", "los colchoneros",
     "the old lady", "the red devils", "die borussen",
     "les parisiens", "the parisians", "die bayern", "the rossoneri",
+    "the bavarians", "die roten",
     # SA PSL
     "the glamour boys", "the buccaneers", "the clever boys",
     "the citizens", "usuthu", "amakhosi", "masandawana",
+    "amavila", "dikwena",
     "richards bay", "betway premiership",
     # Rugby franchise nicknames
     "the brumbies", "the reds", "the waratahs", "the force",
@@ -18431,11 +18437,17 @@ def _resolve_settled_pick_label(edge: dict) -> str:
 
 
 def _format_hot_tips_track_record_line(last_10_results: list[str], roi_7d: float | None) -> str:
-    """Build the Hot Tips header track-record line."""
+    """Build the Hot Tips header track-record line.
+
+    BUILD-PREGEN-FIX Fix 4: Percentage format replaces tick/cross emoji string.
+    """
     parts: list[str] = []
-    if len(last_10_results) >= RESULT_PROOF_LAST_10_COUNT:
-        sequence = "".join("✅" if result == "hit" else "❌" for result in last_10_results[:RESULT_PROOF_LAST_10_COUNT])
-        parts.append(f"<b>Last 10:</b> {sequence}")
+    n = len(last_10_results)
+    if n > 0:
+        wins = sum(1 for r in last_10_results[:RESULT_PROOF_LAST_10_COUNT] if r == "hit")
+        counted = min(n, RESULT_PROOF_LAST_10_COUNT)
+        pct = round((wins / counted) * 100)
+        parts.append(f"🎯 <b>Last {counted} Edges: {pct}% Success Rate</b>")
     if roi_7d is not None:
         parts.append(f"<b>7D ROI:</b> {roi_7d:+.1f}%")
     return " · ".join(parts)
