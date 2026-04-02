@@ -2376,18 +2376,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     if _bfa3_tier:
                         _detail_tier = _bfa3_tier
                     elif _bfa3_tip.get("edge_v2"):
-                        # BYPASS-FIX-A.3: Derive tier from composite when cache lacks tier fields
-                        _bfa3_ev2 = _bfa3_tip["edge_v2"]
-                        _bfa3_cs = float(_bfa3_ev2.get("composite_score", 0) or 0)
-                        _bfa3_ev = float(_bfa3_ev2.get("edge_pct", 0) or 0)
-                        _bfa3_conf = int(_bfa3_ev2.get("confirming_signals", 0) or 0)
-                        try:
-                            from scrapers.edge.tier_engine import assign_tier as _bfa3_at
-                            _bfa3_derived = _bfa3_at(_bfa3_cs, _bfa3_ev, _bfa3_conf, red_flags=[])
-                            if _bfa3_derived:
-                                _detail_tier = _bfa3_derived
-                        except Exception:
-                            pass
+                        # TIER-FIX: Read tier from DB when cache lacks tier fields.
+                        # No re-derivation — trust edge_results.edge_tier.
+                        _bfa3_mk = _bfa3_tip.get("match_id") or _bfa3_tip.get("event_id") or match_key
+                        _bfa3_db_tier = _quick_edge_tier_lookup(_bfa3_mk)
+                        if _bfa3_db_tier:
+                            _detail_tier = _bfa3_db_tier
 
                 # Serve from cache IMMEDIATELY
                 _game_tips_cache[match_key] = _aligned_tips
@@ -7406,20 +7400,22 @@ def _tier_from_composite(composite: float) -> str:
 
 
 def _get_fresh_tier_from_er(match_key: str) -> str | None:
-    """BUILD-4 Fix B: Re-derive tier from edge_results via assign_tier().
+    """TIER-FIX B: Read edge_tier directly from edge_results.
 
     Returns None if no edge_results row found or on error.
     Called via asyncio.to_thread() in narrative_cache serving paths.
+    The DB value is the authoritative result of the full pipeline
+    (assign_tier + data_presence_gate + validate_tier). Re-deriving
+    with empty red_flags caused RC-3 tier mismatches.
     """
     try:
         from scrapers.db_connect import connect_odds_db as _gft_fn
         from scrapers.edge.edge_config import DB_PATH as _gft_db
-        from scrapers.edge.tier_engine import assign_tier as _gft_at
         _gft_conn = _gft_fn(_gft_db)
         _gft_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
         try:
             _gft_row = _gft_conn.execute(
-                "SELECT composite_score, predicted_ev, confirming_signals "
+                "SELECT edge_tier "
                 "FROM edge_results WHERE match_key = ? AND result IS NULL "
                 "ORDER BY recommended_at DESC LIMIT 1",
                 (match_key,),
@@ -7428,12 +7424,10 @@ def _get_fresh_tier_from_er(match_key: str) -> str | None:
             _gft_conn.close()
         if not _gft_row:
             return None
-        return _gft_at(
-            float(_gft_row["composite_score"] or 0),
-            float(_gft_row["predicted_ev"] or 0),
-            int(_gft_row["confirming_signals"]) if _gft_row["confirming_signals"] is not None else 0,
-            red_flags=[],
-        ) or "bronze"
+        _tier = (_gft_row.get("edge_tier") or "bronze").strip().lower()
+        if _tier not in ("diamond", "gold", "silver", "bronze"):
+            _tier = "bronze"
+        return _tier
     except Exception:
         return None
 
@@ -7457,7 +7451,6 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
             MAX_PRODUCTION_EDGE_PCT as _MAX_PRODUCTION_EDGE_PCT,
             MAX_RECOMMENDED_ODDS as _MAX_RECOMMENDED_ODDS,
         )
-        from scrapers.edge.tier_engine import assign_tier as _assign_tier
         _conn = _conn_fn(_DB_PATH)
         _conn.row_factory = lambda cursor, row: dict(
             zip([col[0] for col in cursor.description], row)
@@ -7502,20 +7495,15 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         home_display = _display_team_name(_home_raw)
         away_display = _display_team_name(_away_raw)
 
-        # RENDER-BUILD-P1 FIX-1: Always re-derive tier via assign_tier() triple gate.
-        # R11-BUILD-02 Fix B previously trusted DB's edge_tier, but stale rows can have
-        # inflated tiers from before the min_confirming=2 gate was added — causing BUG-4
-        # (Gold subscribers see "blurred" on tips that should be Gold-accessible).
-        # FIX-3 now stores actual confirming_signals in edge_results, so the old concern
-        # about estimated signals is resolved. Re-derivation is safe and authoritative.
-        _composite = float(row["composite_score"] or 0)
-        _ev_for_tier = float(row["predicted_ev"] or 0)
+        # TIER-FIX A: Trust edge_results.edge_tier directly. The DB value is the
+        # authoritative result of the full pipeline (assign_tier + data_presence_gate
+        # + validate_tier). Re-deriving here with empty red_flags and no gates caused
+        # RC-1 tier mismatches (list badge != DB tier).
+        edge_tier = (row.get("edge_tier") or "bronze").strip().lower()
+        if edge_tier not in ("diamond", "gold", "silver", "bronze"):
+            edge_tier = "bronze"
         _confirming_actual = row.get("confirming_signals")
-        if _confirming_actual is not None:
-            _confirming_est = int(_confirming_actual)
-        else:
-            _confirming_est = 0
-        edge_tier = _assign_tier(_composite, _ev_for_tier, _confirming_est, red_flags=[]) or "bronze"
+        _confirming_est = int(_confirming_actual) if _confirming_actual is not None else 0
 
         # predicted_ev is stored as percentage (e.g. 5.2 = 5.2%)
         ev_pct = round(float(row["predicted_ev"] or 0), 1)
@@ -8338,9 +8326,8 @@ async def _build_hot_tips_page(
     except Exception:
         pass  # Graceful fallback — MODEL ONLY logic unchanged if cache unavailable
 
-    # BUILD-12: Batch-fetch authoritative tiers from edge_results for all page tips.
-    # tip["display_tier"] may be stale from cache; edge_results is always current
-    # (same source as _get_fresh_tier_from_er() used by CTA buttons).
+    # BUILD-12 / TIER-FIX: Batch-fetch authoritative tiers from edge_results.
+    # Reads edge_tier directly — same trust-DB principle as Fix A/B.
     _fresh_tiers: dict[str, str] = {}
     try:
         _pt_keys = [t.get("match_id") or t.get("event_id") or "" for t in page_tips]
@@ -8348,12 +8335,11 @@ async def _build_hot_tips_page(
         if _pt_keys:
             from scrapers.db_connect import connect_odds_db as _b12_conn_fn
             from scrapers.edge.edge_config import DB_PATH as _b12_db_path
-            from scrapers.edge.tier_engine import assign_tier as _b12_assign
             _b12_conn = _b12_conn_fn(_b12_db_path)
             _b12_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
             _b12_ph = ",".join("?" * len(_pt_keys))
             _b12_rows = _b12_conn.execute(
-                f"SELECT match_key, composite_score, predicted_ev, confirming_signals "
+                f"SELECT match_key, edge_tier "
                 f"FROM edge_results "
                 f"WHERE match_key IN ({_b12_ph}) AND result IS NULL "
                 f"ORDER BY recommended_at DESC",
@@ -8366,10 +8352,10 @@ async def _build_hot_tips_page(
                 if _b12_mk in _b12_seen:
                     continue
                 _b12_seen.add(_b12_mk)
-                _b12_cs = float(_b12_r["composite_score"] or 0)
-                _b12_ev = float(_b12_r["predicted_ev"] or 0)
-                _b12_sig = int(_b12_r["confirming_signals"]) if _b12_r["confirming_signals"] is not None else 0
-                _fresh_tiers[_b12_mk] = _b12_assign(_b12_cs, _b12_ev, _b12_sig, red_flags=[]) or "bronze"
+                _b12_tier = (_b12_r.get("edge_tier") or "bronze").strip().lower()
+                if _b12_tier not in ("diamond", "gold", "silver", "bronze"):
+                    _b12_tier = "bronze"
+                _fresh_tiers[_b12_mk] = _b12_tier
     except Exception:
         pass  # Graceful fallback — stale display_tier used if edge_results unavailable
 
@@ -9951,6 +9937,73 @@ def _compute_odds_hash(match_id: str) -> str:
         conn.close()
 
 
+# ── TIER-FIX C: Tier drift + EV coherence helpers ───────────────────────────
+
+_TIER_LEVEL = {"bronze": 0, "silver": 1, "gold": 2, "diamond": 3}
+
+
+def _tier_drift_exceeds_threshold(cached_tier: str, current_tier: str, threshold: int = 1) -> bool:
+    """Return True if tier level distance > threshold."""
+    a = _TIER_LEVEL.get((cached_tier or "").lower(), 0)
+    b = _TIER_LEVEL.get((current_tier or "").lower(), 0)
+    return abs(a - b) > threshold
+
+
+def _ev_coherence_broken(cached_ev: float, live_ev: float, delta_threshold: float = 5.0) -> bool:
+    """Return True if EV sign flipped OR absolute delta exceeds threshold (5pp).
+
+    predicted_ev is stored as percentage points (e.g. 5.2 = 5.2%), so
+    delta_threshold=5.0 means >5 percentage points, matching AC-3.
+    """
+    sign_flip = (cached_ev >= 0) != (live_ev >= 0)
+    large_delta = abs(live_ev - cached_ev) > delta_threshold
+    return sign_flip or large_delta
+
+
+def _quick_edge_tier_lookup(match_id: str) -> str | None:
+    """Single SELECT on edge_results for current edge_tier. Read-only."""
+    try:
+        from scrapers.db_connect import connect_odds_db as _qetl_fn
+        from scrapers.edge.edge_config import DB_PATH as _qetl_db
+        _qetl_conn = _qetl_fn(_qetl_db)
+        try:
+            row = _qetl_conn.execute(
+                "SELECT edge_tier FROM edge_results "
+                "WHERE match_key = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC LIMIT 1",
+                (match_id,),
+            ).fetchone()
+        finally:
+            _qetl_conn.close()
+        if row and row[0]:
+            return row[0].strip().lower()
+        return None
+    except Exception:
+        return None
+
+
+def _quick_ev_lookup(match_id: str) -> float | None:
+    """Single SELECT on edge_results for current predicted_ev. Read-only."""
+    try:
+        from scrapers.db_connect import connect_odds_db as _qev_fn
+        from scrapers.edge.edge_config import DB_PATH as _qev_db
+        _qev_conn = _qev_fn(_qev_db)
+        try:
+            row = _qev_conn.execute(
+                "SELECT predicted_ev FROM edge_results "
+                "WHERE match_key = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC LIMIT 1",
+                (match_id,),
+            ).fetchone()
+        finally:
+            _qev_conn.close()
+        if row and row[0] is not None:
+            return float(row[0])
+        return None
+    except Exception:
+        return None
+
+
 async def _get_cached_narrative(match_id: str) -> dict | None:
     """Fetch cached narrative from persistent DB cache. Returns None if stale/expired."""
     import json
@@ -10119,6 +10172,35 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except sqlite3.OperationalError as exc:
                     log.debug("Deferred stale H2H cache delete for %s: %s", match_id, exc)
                 return None
+            # TIER-FIX C: Reject cache when tier drifts >1 level or EV is incoherent
+            _current_er_tier = _quick_edge_tier_lookup(match_id)
+            if _current_er_tier and _tier_drift_exceeds_threshold(tier, _current_er_tier):
+                log.warning(
+                    "Cache rejected for %s — tier drift: cache=%s current=%s",
+                    match_id, tier, _current_er_tier,
+                )
+                return None
+
+            # Extract cached EV from tips_json (first tip's predicted_ev or ev)
+            _cached_ev = None
+            if parsed_tips and isinstance(parsed_tips, list) and len(parsed_tips) > 0:
+                _first_tip = parsed_tips[0] if isinstance(parsed_tips[0], dict) else {}
+                _cached_ev_raw = _first_tip.get("predicted_ev") or _first_tip.get("ev")
+                if _cached_ev_raw is not None:
+                    try:
+                        _cached_ev = float(_cached_ev_raw)
+                    except (ValueError, TypeError):
+                        pass
+
+            _current_er_ev = _quick_ev_lookup(match_id)
+            if _current_er_ev is not None and _cached_ev is not None:
+                if _ev_coherence_broken(_cached_ev, _current_er_ev):
+                    log.warning(
+                        "Cache rejected for %s — EV incoherent: cached=%.3f live=%.3f",
+                        match_id, _cached_ev, _current_er_ev,
+                    )
+                    return None
+
             return {
                 "html": cleaned,
                 "tips": parsed_tips,
@@ -15691,7 +15773,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 )
             except Exception:
                 pass
-            # BUILD-4 Fix B: re-derive tier from edge_results via assign_tier()
+            # TIER-FIX B: read edge_tier directly from edge_results
             try:
                 _ea_fresh_tier = await asyncio.wait_for(
                     asyncio.to_thread(_get_fresh_tier_from_er, event_id),
