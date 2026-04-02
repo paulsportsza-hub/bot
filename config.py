@@ -638,6 +638,11 @@ TEAM_ALIASES: dict[str, str] = {
     "seagulls": "Brighton",
     "wolves": "Wolverhampton",
     "forest": "Nottingham Forest",
+    "cherries": "Bournemouth",
+    "foxes": "Leicester",
+    "bees": "Brentford",
+    "cottagers": "Fulham",
+    "saints": "Southampton",
     # La Liga
     "barca": "Barcelona", "fcb": "Barcelona", "blaugrana": "Barcelona",
     "real": "Real Madrid", "madrid": "Real Madrid", "los blancos": "Real Madrid",
