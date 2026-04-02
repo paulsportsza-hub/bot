@@ -924,6 +924,7 @@ async def _generate_one(
     w82_polished = None
     spec = None
     narrative_source = "w82"
+    verification_failure = ""  # BUILD-PREGEN-FIX-3: track why w84 failed
     served_model = model_label
     try:
         from narrative_spec import build_narrative_spec, _render_baseline
@@ -1038,6 +1039,7 @@ async def _generate_one(
                             match_key, _tip_bk, _tip_odds,
                         )
                     else:
+                        verification_failure = f"verdict_mismatch: expected {_tip_bk}@{_tip_odds:.2f}"
                         log.warning(
                             "W84 VERDICT MISMATCH for %s: verdict has wrong bookmaker/price "
                             "(expected %s@%.2f) — serving W82 fallback",
@@ -1045,8 +1047,10 @@ async def _generate_one(
                         )
             else:
                 reasons = "; ".join(report.get("rejection_reasons", [])[:3]) or "verification failed"
+                verification_failure = f"verify_fail: {reasons}"
                 log.warning("W84 VERIFY FAIL for %s: %s — serving W82 fallback", match_key, reasons)
         except Exception as exc:
+            verification_failure = f"w84_error: {exc}"
             log.warning("W84 ERROR for %s: %s — serving W82 fallback", match_key, exc)
 
     # R11-BUILD-01 Fix A (Option A): Inject H2H into W82 fallback.
@@ -1089,6 +1093,7 @@ async def _generate_one(
             if not _verdict_bookmaker_aligned(narrative, _final_bk, _final_odds):
                 # Realignment failed — fall back to W82 baseline which is guaranteed correct
                 if w82_baseline:
+                    verification_failure = f"final_alignment: expected {_final_bk}@{_final_odds:.2f}"
                     log.warning(
                         "BASELINE-FIX: final alignment failed for %s — reverting to W82 baseline",
                         match_key,
@@ -1103,6 +1108,7 @@ async def _generate_one(
     if narrative and narrative_source == "w84":
         _sv_valid, _sv_banned = validate_sport_text(narrative, sport)
         if not _sv_valid:
+            verification_failure = f"sport_validator: banned terms {_sv_banned}"
             log.warning(
                 "SPORT VALIDATOR BLOCKED: %s narrative for %s contained banned terms %s"
                 " — falling back to W82 template",
@@ -1179,6 +1185,7 @@ async def _generate_one(
             "model": served_model,
             "evidence_json": evidence_json,
             "narrative_source": narrative_source,
+            "verification_failure": verification_failure,
             "coverage_json": _coverage_json,
             "_shadow": {
                 "match_key": match_key,
@@ -1391,7 +1398,10 @@ async def main(sweep: str) -> None:
             await asyncio.sleep(1.0)
 
     # W79-P3D: Batch-write all narratives to cache (separate from generation)
-    # BUILD-PREGEN-FIX PRE-3: On refresh sweeps, never overwrite w84 with w82.
+    # BUILD-PREGEN-FIX PRE-3: Never overwrite w84 with w82 on ANY sweep type.
+    # BUILD-PREGEN-FIX-3: Extended to full sweeps. A full sweep's purpose is to
+    # ENRICH (w82→w84, w84→w84). If Opus fails verification and produces w82,
+    # the existing w84 is still valid product — preserve it.
     if pending_writes:
         log.info("Writing %d narratives to cache...", len(pending_writes))
         write_ok = 0
@@ -1399,14 +1409,18 @@ async def main(sweep: str) -> None:
         for pw in pending_writes:
             new_source = pw.get("narrative_source", "w82")
             match_id = pw["match_id"]
-            # PRE-3: Preserve existing w84 on refresh failure (refresh/uncached_only only)
-            if sweep != "full" and new_source == "w82":
+            # PRE-3 + BUILD-PREGEN-FIX-3: Preserve existing w84 on ALL sweep types
+            # when the new result is w82. Cold starts (no existing entry) still get w82.
+            if new_source == "w82":
                 existing = await _get_cached_narrative(match_id)
                 if existing and existing.get("narrative_source") == "w84":
+                    _fail_reason = pw.get("verification_failure", "unknown")
+                    _sweep_label = "full sweep" if sweep == "full" else "refresh"
                     log.warning(
-                        "[PREGEN] Preserving w84 for %s — verification failed on "
-                        "refresh attempt. Keeping existing w84.",
-                        match_id,
+                        "[PREGEN-FULL] Preserving w84 for %s — "
+                        "Opus verification failed on %s. Keeping existing w84. "
+                        "Failure reason: %s",
+                        match_id, _sweep_label, _fail_reason,
                     )
                     w84_preserved += 1
                     continue
