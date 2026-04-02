@@ -3382,7 +3382,11 @@ def _is_banned_phrase_false_positive(text: str, phrase: str) -> bool:
         return False
     if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in _CONFIDENT_ASSERTIVE_PATTERNS):
         return False
-    return _contains_contextual_confident_usage(text)
+    # BUILD-PREGEN-FIX-2: If no assertive pattern matches, "confident" is safe analytical
+    # language. The assertive patterns catch genuinely problematic uses (outcome-certainty
+    # phrases). Non-matching uses like "look confident", "less confident side" etc. are
+    # legitimate and should not trigger verification failure.
+    return True
 
 
 def _contains_contextual_confident_usage(text: str) -> bool:

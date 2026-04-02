@@ -8638,7 +8638,10 @@ async def _build_hot_tips_page(
         h_abbr = config.abbreviate_team(tip.get("home_team") or "TBD")
         a_abbr = config.abbreviate_team(tip.get("away_team") or "TBD")
         if access in ("full", "partial"):
-            _btn_fresh = _fresh_tiers.get(match_key) or tip.get("display_tier", tip.get("edge_rating", "bronze"))
+            # BUILD-PREGEN-FIX-2 AC-5: Use display_tier (already zero-signal-capped in the
+            # card loop at line 8413-8415) as single source of truth for tier badge.
+            # Previous code read _fresh_tiers first which bypassed the zero-signal cap.
+            _btn_fresh = tip.get("display_tier", tip.get("edge_rating", "bronze"))
             _btn_tier = EDGE_EMOJIS.get(_btn_fresh, "🥉")
             cb = f"edge:detail:{_shorten_cb_key(match_key)}"
         else:
@@ -9876,18 +9879,30 @@ def _ensure_shadow_narratives_table() -> None:
 
 
 def _cleanup_expired_narrative_cache_rows(limit: int | None = None) -> int:
-    """Delete expired narrative cache rows in one narrow hygiene sweep."""
+    """Delete expired narrative cache rows in one narrow hygiene sweep.
+
+    BUILD-PREGEN-FIX-2 PRE-3 gap fix: w84 rows are preserved (not deleted) on
+    expiry so that PRE-3 can find them during refresh sweeps and avoid overwriting
+    with w82. Only non-w84 expired rows are deleted.
+    """
     from datetime import datetime, timezone
     from db_connection import get_connection
 
     conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
     try:
         rows = conn.execute(
-            "SELECT match_id, expires_at FROM narrative_cache ORDER BY expires_at ASC"
+            "SELECT match_id, expires_at, narrative_source FROM narrative_cache ORDER BY expires_at ASC"
         ).fetchall()
         now = datetime.now(timezone.utc)
         expired_ids: list[str] = []
-        for match_id, expires_at in rows:
+        for row in rows:
+            match_id = row[0]
+            expires_at = row[1]
+            narrative_source = row[2] if len(row) > 2 else "w82"
+            # PRE-3 gap fix: never delete w84 rows — PRE-3 needs them to
+            # prevent w82 overwrites on refresh sweeps.
+            if narrative_source == "w84":
+                continue
             try:
                 exp = datetime.fromisoformat(expires_at)
                 if exp.tzinfo is None:
@@ -14540,7 +14555,7 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         f"{freshness_rule}"
         f"11. Platform blacklist is enforced at validation time. Do NOT use banned filler such as: let that shape the stake, keeps the stake size measured, worth a measured look, grab it before.\n\n"
         f"BANNED PHRASES — using ANY of these will cause automated rejection:\n"
-        + "\n".join(f"- \"{p}\"" for p in BANNED_NARRATIVE_PHRASES[:30])
+        + "\n".join(f"- \"{p}\"" for p in BANNED_NARRATIVE_PHRASES)
         + "\n\nUse alternative language that conveys the same meaning without these phrases.\n\n"
         f"If you cannot improve the baseline without violating these constraints, return it UNCHANGED."
     )
@@ -14564,6 +14579,13 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
     # 2. Banned phrases for this tone band
     for phrase in band["banned"]:
         if phrase.lower() in polished_lower:
+            # BUILD-PREGEN-FIX-2: "confident" gets false-positive handling — only reject
+            # when used assertively (outcome-certainty phrases). Non-assertive uses are
+            # safe analytical language and must not trigger polish rejection.
+            if phrase.lower() == "confident":
+                from evidence_pack import _is_banned_phrase_false_positive
+                if _is_banned_phrase_false_positive(polished_lower, phrase):
+                    continue  # False positive — skip this phrase
             log.warning("POLISH REJECT: banned phrase '%s' in %s band", phrase, spec.tone_band)
             return False
 
@@ -17309,10 +17331,10 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
 
         _ld_text = f"🔒 <b>{_tier_name} Edge — Locked</b>\n\n"
         _ld_text += f"{_sport_emoji} <b>{_ld_home} vs {_ld_away}</b>\n"
-        _ld_text += f"🏆 {_ld_league}"
+        # BUILD-PREGEN-FIX-2 AC-4: 📅 kickoff on its own line, matching My Matches format
         if _ld_kickoff:
-            _ld_text += f" · ⏰ {_ld_kickoff}"
-        _ld_text += "\n"
+            _ld_text += f"📅 {_ld_kickoff}\n"
+        _ld_text += f"🏆 {_ld_league}\n"
         if _ld_broadcast:
             _ld_text += f"{_ld_broadcast}\n"
         _ld_teaser = _build_signal_detail_block(
