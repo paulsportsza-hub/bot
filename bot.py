@@ -6056,7 +6056,7 @@ def _signal_mode(user_tier: str, edge_tier: str, access_level: str | None = None
 
 def _format_signal_count_hint(confirming: int, total: int, model_only: bool = False) -> str:
     """Return a compact card hint for Hot Tips list items."""
-    if total > 0:
+    if total > 0 and confirming > 0:
         return f"{confirming}/{total} signals aligned"
     if model_only:
         return "model-only signal view"
@@ -7659,7 +7659,7 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
             return (mk, None)
 
     # BUILD-QA22-FIX P1-1: Use partial results on timeout instead of discarding all
-    _tasks = [asyncio.to_thread(_live_ev_for_tip, t) for t in tips]
+    _tasks = [asyncio.create_task(asyncio.to_thread(_live_ev_for_tip, t)) for t in tips]
     try:
         _raw = await asyncio.wait_for(
             asyncio.gather(*_tasks, return_exceptions=True),
