@@ -132,6 +132,11 @@ class TestSignalCountHint:
 
         assert _format_signal_count_hint(4, 6) == "4/6 signals aligned"
 
+    def test_hint_hides_zero_confirming_edges(self):
+        from bot import _format_signal_count_hint
+
+        assert _format_signal_count_hint(0, 3) == ""
+
     def test_model_only_hint_degrades_gracefully(self):
         from bot import _format_signal_count_hint
 

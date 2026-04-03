@@ -797,6 +797,163 @@ def _load_shadow_pregen_edges(limit: int = 100) -> list[dict]:
     return edges
 
 
+def _infer_commence_time_from_match_key(match_key: str) -> str | None:
+    """Infer a stable kickoff placeholder from the match-key date suffix."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})$", str(match_key or ""))
+    if not m:
+        return None
+    return f"{m.group(1)}T00:00:00+00:00"
+
+
+def _pick_baseline_outcome(odds_data: dict) -> tuple[str, dict] | tuple[None, None]:
+    """Choose a deterministic baseline outcome from current odds."""
+    outcomes = odds_data.get("outcomes") or {}
+    ranked: list[tuple[float, str, dict]] = []
+    for outcome_key, outcome_data in outcomes.items():
+        best_odds = float(outcome_data.get("best_odds") or 0.0)
+        if best_odds > 1.0:
+            ranked.append((best_odds, outcome_key, outcome_data))
+    if not ranked:
+        return None, None
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    _best_odds, selected_key, selected_data = ranked[0]
+    return selected_key, selected_data
+
+
+def _baseline_composite_score(bookmaker_count: int) -> float:
+    """Estimate a stable composite from market coverage for no-edge baselines."""
+    return float(min(60, 44 + max(0, bookmaker_count) * 4))
+
+
+def _build_baseline_edge_from_snapshot_row(row: dict) -> dict | None:
+    """Build a template-only baseline edge for matches with no live edge row."""
+    from services.odds_service import get_best_odds
+
+    match_key = row.get("match_key") or row.get("match_id") or ""
+    commence_time = row.get("commence_time")
+    if not match_key or not commence_time:
+        return None
+
+    odds_data = asyncio.run(get_best_odds(match_key, row.get("market_type") or "1x2"))
+    outcome_key, outcome_data = _pick_baseline_outcome(odds_data)
+    if not outcome_key or not outcome_data:
+        return None
+
+    all_bookmakers = outcome_data.get("all_bookmakers") or {}
+    clean_prices = [float(price) for price in all_bookmakers.values() if price and float(price) > 1.0]
+    fair_probability = (
+        sum((1.0 / price) for price in clean_prices) / len(clean_prices)
+        if clean_prices else 0.0
+    )
+    best_odds = float(outcome_data.get("best_odds") or 0.0)
+    raw_edge_pct = round((fair_probability * best_odds - 1.0) * 100.0, 1) if fair_probability and best_odds > 0 else 0.0
+    bookmaker_count = int(odds_data.get("bookmaker_count") or len({bk for bk in all_bookmakers if bk}) or 0)
+
+    return {
+        "match_key": match_key,
+        "home_team": bot._display_team_name(odds_data.get("home_team") or row.get("home_team") or ""),
+        "away_team": bot._display_team_name(odds_data.get("away_team") or row.get("away_team") or ""),
+        "league": row.get("league") or odds_data.get("league") or "",
+        "sport": row.get("sport") or "soccer",
+        "recommended_outcome": outcome_key,
+        "outcome": outcome_key,
+        "best_odds": best_odds,
+        "best_bookmaker": bot._display_bookmaker_name(outcome_data.get("best_bookmaker") or ""),
+        "best_bookmaker_key": outcome_data.get("best_bookmaker") or "",
+        "edge_pct": min(raw_edge_pct, 0.0),
+        "ev": min(raw_edge_pct, 0.0),
+        "fair_probability": fair_probability,
+        "composite_score": _baseline_composite_score(bookmaker_count),
+        "confirming_signals": 0,
+        "contradicting_signals": 0,
+        "bookmaker_count": bookmaker_count,
+        "stale_minutes": 0,
+        "signals": {},
+        "tier": "bronze",
+        "sharp_source": "odds_snapshots",
+        "commence_time": commence_time,
+        "narrative_source_hint": "baseline_no_edge",
+        "skip_sonnet_polish": True,
+    }
+
+
+def _load_snapshot_baseline_edges(limit: int = 100) -> list[dict]:
+    """Find upcoming matches in odds_snapshots that never made it into edge_results."""
+    try:
+        from scrapers.db_connect import connect_odds_db as _connect_odds_db
+        from services.odds_service import LEAGUE_MARKET_TYPE
+    except Exception as exc:
+        log.error("Failed to import odds DB connector for baseline pregen: %s", exc)
+        return []
+
+    rows: list[dict] = []
+    conn = _connect_odds_db(str(SCRAPERS_ROOT / "odds.db"))
+    conn.row_factory = lambda cursor, row: dict(zip([col[0] for col in cursor.description], row))
+    try:
+        today = time.strftime("%Y-%m-%d")
+        query = """
+            SELECT
+                os.match_id AS match_key,
+                os.home_team,
+                os.away_team,
+                os.league,
+                os.sport,
+                os.market_type
+            FROM odds_snapshots os
+            LEFT JOIN edge_results er
+              ON er.match_key = os.match_id
+             AND er.result IS NULL
+            WHERE er.match_key IS NULL
+              AND substr(os.match_id, -10) >= ?
+            GROUP BY os.match_id, os.home_team, os.away_team, os.league, os.sport, os.market_type
+            ORDER BY substr(os.match_id, -10) ASC, MAX(os.scraped_at) DESC
+            LIMIT ?
+        """
+        raw_rows = conn.execute(query, (today, limit)).fetchall()
+        seen: set[str] = set()
+        for row in raw_rows:
+            match_key = row.get("match_key") or ""
+            if not match_key or match_key in seen:
+                continue
+            expected_market_type = LEAGUE_MARKET_TYPE.get(row.get("league") or "", "1x2")
+            if (row.get("market_type") or "") != expected_market_type:
+                continue
+            seen.add(match_key)
+            row["commence_time"] = _infer_commence_time_from_match_key(match_key)
+            if not row["commence_time"]:
+                continue
+            rows.append(row)
+    except Exception as exc:
+        log.error("Snapshot baseline discovery failed: %s", exc)
+        rows = []
+    finally:
+        conn.close()
+
+    baseline_edges: list[dict] = []
+    for row in rows:
+        try:
+            edge = _build_baseline_edge_from_snapshot_row(row)
+        except Exception as exc:
+            log.warning("Baseline edge build failed for %s: %s", row.get("match_key", "?"), exc)
+            continue
+        if edge and edge.get("best_odds"):
+            baseline_edges.append(edge)
+    return baseline_edges
+
+
+def _load_pregen_edges(limit: int = 100) -> list[dict]:
+    """Load positive-EV live edges plus snapshot-only baseline matches."""
+    live_edges = _load_shadow_pregen_edges(limit=limit)
+    seen = {edge.get("match_key", "") for edge in live_edges if edge.get("match_key")}
+    snapshot_edges = _load_snapshot_baseline_edges(limit=limit)
+    for edge in snapshot_edges:
+        match_key = edge.get("match_key", "")
+        if match_key and match_key not in seen:
+            live_edges.append(edge)
+            seen.add(match_key)
+    return live_edges[:limit]
+
+
 
 async def _generate_one(
     edge: dict,
@@ -923,9 +1080,9 @@ async def _generate_one(
     w82_baseline = ""
     w82_polished = None
     spec = None
-    narrative_source = "w82"
+    narrative_source = edge.get("narrative_source_hint", "w82")
     verification_failure = ""  # BUILD-PREGEN-FIX-3: track why w84 failed
-    served_model = model_label
+    served_model = "baseline" if narrative_source == "baseline_no_edge" else model_label
     try:
         from narrative_spec import build_narrative_spec, _render_baseline
         spec = build_narrative_spec(ctx, _pregen_edge_data, tips, sport)
@@ -952,7 +1109,7 @@ async def _generate_one(
     # 5. W84-CONFIRM-1: W84 is the permanent default generation path.
     # W82 baseline is always computed first and remains the per-row fallback.
     # VERDICT-FIX Fix 3: Skip W84 AI for partial context — AI hallucinates with thin packs.
-    _skip_w84 = (ctx or {}).get("_context_mode") == "PARTIAL"
+    _skip_w84 = (ctx or {}).get("_context_mode") == "PARTIAL" or bool(edge.get("skip_sonnet_polish"))
 
     # --- Coverage gate: never polish empty evidence (COVERAGE-GATE-BUILD) ---
     _coverage_level = "unknown"
@@ -1285,7 +1442,7 @@ async def main(sweep: str) -> None:
     _validate_pregen_runtime_schema()
 
     # Shadow pregen must track the same edge reality the live bot serves.
-    edges = await asyncio.to_thread(_load_shadow_pregen_edges, 100)
+    edges = await asyncio.to_thread(_load_pregen_edges, 100)
 
     if not edges:
         log.info("No live edges found — nothing to pre-generate")

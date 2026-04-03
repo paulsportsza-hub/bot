@@ -6056,7 +6056,7 @@ def _signal_mode(user_tier: str, edge_tier: str, access_level: str | None = None
 
 def _format_signal_count_hint(confirming: int, total: int, model_only: bool = False) -> str:
     """Return a compact card hint for Hot Tips list items."""
-    if total > 0:
+    if total > 0 and confirming > 0:
         return f"{confirming}/{total} signals aligned"
     if model_only:
         return "model-only signal view"
@@ -7432,12 +7432,19 @@ def _get_fresh_tier_from_er(match_key: str) -> str | None:
         return None
 
 
-def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False) -> list[dict]:
+def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False, with_clv: bool = False) -> list[dict]:
     """W84-P1: Fast serving path — read pre-computed edges from edge_results table.
 
     Called synchronously from asyncio.to_thread(). Single SQL query, ~5ms.
     No edge computation needed — edges were logged by calculate_edge_v2() on
     previous computation cycles.
+
+    Args:
+        limit: max tips to return
+        skip_punt_filter: bypass zero-signal filter (for pregen)
+        with_clv: AC-8 — optionally LEFT JOIN bet_recommendations_log to attach
+                  CLV data (clv_pct, fair_odds, closing_odds) when available.
+                  Graceful null if no CLV data — no card breakage.
 
     Returns tips in same dict format as _fetch_hot_tips_from_db() for drop-in
     use by _build_hot_tips_page(). Falls back gracefully on any error.
@@ -7600,6 +7607,40 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         except Exception:
             pass  # Keep single-BK fallback
 
+    # AC-8: Optionally attach CLV from bet_recommendations_log when available
+    if with_clv and tips:
+        try:
+            for _tip in tips:
+                _clv_row = _conn.execute("""
+                    SELECT clv_pct, fair_odds, closing_odds, market_efficiency,
+                           kill_switch_triggered
+                    FROM bet_recommendations_log
+                    WHERE match_key = ? AND bet_type = ?
+                      AND clv_pct IS NOT NULL
+                    ORDER BY logged_at DESC LIMIT 1
+                """, (_tip["match_id"], _tip.get("outcome_key", "home"))).fetchone()
+                if _clv_row:
+                    _tip["clv_pct"] = _clv_row.get("clv_pct") if isinstance(_clv_row, dict) else _clv_row[0]
+                    _tip["fair_odds"] = _clv_row.get("fair_odds") if isinstance(_clv_row, dict) else _clv_row[1]
+                    _tip["closing_odds"] = _clv_row.get("closing_odds") if isinstance(_clv_row, dict) else _clv_row[2]
+                    _tip["market_efficiency"] = _clv_row.get("market_efficiency") if isinstance(_clv_row, dict) else _clv_row[3]
+                    _tip["kill_switch_triggered"] = bool(
+                        _clv_row.get("kill_switch_triggered") if isinstance(_clv_row, dict) else _clv_row[4]
+                    )
+                else:
+                    # Graceful null — no CLV data yet, no card breakage
+                    _tip["clv_pct"] = None
+                    _tip["fair_odds"] = None
+                    _tip["closing_odds"] = None
+                    _tip["market_efficiency"] = None
+                    _tip["kill_switch_triggered"] = None
+        except Exception:
+            # Table may not exist yet — graceful degradation
+            for _tip in tips:
+                _tip["clv_pct"] = None
+                _tip["fair_odds"] = None
+                _tip["closing_odds"] = None
+
     # R10-BUILD-01: Close connection now that enrichment loop is complete
     try:
         _conn.close()
@@ -7659,7 +7700,7 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
             return (mk, None)
 
     # BUILD-QA22-FIX P1-1: Use partial results on timeout instead of discarding all
-    _tasks = [asyncio.to_thread(_live_ev_for_tip, t) for t in tips]
+    _tasks = [asyncio.create_task(asyncio.to_thread(_live_ev_for_tip, t)) for t in tips]
     try:
         _raw = await asyncio.wait_for(
             asyncio.gather(*_tasks, return_exceptions=True),
@@ -7934,6 +7975,9 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             "sharp_confidence": sharp_confidence,
             "sharp_source": sharp_source,
             "edge_v2": _v2_result,
+            "best_odds": best_odds,
+            "n_bookmakers": len(odds_by_bk) or int(match.get("bookmaker_count", 0) or 0),
+            "composite_score": composite_score,
         }
 
         if hidden_candidate or (0 < ev_pct < 1.0):
