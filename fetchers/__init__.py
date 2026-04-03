@@ -20,4 +20,13 @@ def get_fetcher(sport: str) -> BaseFetcher:
     if sport_lower in ("soccer", "football"):
         from fetchers.football_fetcher import FootballFetcher
         return FootballFetcher()
+    if sport_lower == "cricket":
+        from fetchers.cricket_fetcher import CricketFetcher
+        return CricketFetcher()
+    if sport_lower == "rugby":
+        from fetchers.rugby_fetcher import RugbyFetcher
+        return RugbyFetcher()
+    if sport_lower in ("mma", "boxing", "combat"):
+        from fetchers.mma_fetcher import MMAFetcher
+        return MMAFetcher()
     raise ValueError(f"No fetcher available for sport: {sport}")

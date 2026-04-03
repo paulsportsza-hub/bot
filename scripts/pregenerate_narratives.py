@@ -347,13 +347,14 @@ async def _get_match_context(
     CLEAN-DATA-v2: Uses sport-specific fetchers as primary data source.
     Falls back to ESPN when fetcher unavailable or returns thin context.
     """
-    # ── Primary: Sport-specific fetcher (API-Football for soccer) ─────
-    if sport in ("soccer", "football"):
+    # ── Primary: Sport-specific fetcher (API-Football for soccer; SportMonks for cricket) ─────
+    if sport in ("soccer", "football", "cricket"):
         try:
             from fetchers import get_fetcher
             from fetchers.base_fetcher import ensure_schema
 
-            fetcher = get_fetcher("soccer")
+            fetcher_sport = "soccer" if sport in ("soccer", "football") else sport
+            fetcher = get_fetcher(fetcher_sport)
             live_safe, scraper_pid = _pregen_enrichment_live_safe()
             if live_safe:
                 log.info(
@@ -371,13 +372,13 @@ async def _get_match_context(
                 home_team=h_key,
                 away_team=a_key,
                 league=league,
-                sport="soccer",
+                sport=fetcher_sport,
                 live_safe=live_safe,
             )
             if ctx and not _needs_pregen_context_lift(ctx):
-                log.info("API-Football context hit for %s vs %s", home, away)
+                log.info("%s fetcher context hit for %s vs %s", fetcher_sport, home, away)
                 return ctx
-            log.info("API-Football context thin for %s vs %s — trying ESPN fallback", home, away)
+            log.info("%s fetcher context thin for %s vs %s — trying ESPN fallback", fetcher_sport, home, away)
         except Exception as exc:
             log.warning("Fetcher failed for %s vs %s: %s — falling back to ESPN", home, away, exc)
 

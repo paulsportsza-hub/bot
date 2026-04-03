@@ -1082,6 +1082,69 @@ async def _fetch_espn_context(match_key: str, league: str, sport: str) -> dict[s
         except Exception:
             pass
 
+    # ── Primary: SportMonks for cricket ──────────────────────────────────────
+    if sport == "cricket":
+        try:
+            from fetchers import get_fetcher
+            _fetcher = get_fetcher("cricket")
+            _ctx = await asyncio.wait_for(
+                _fetcher.fetch_and_cache(
+                    match_key=match_key,
+                    home_team=home_key,
+                    away_team=away_key,
+                    league=league,
+                    sport="cricket",
+                    live_safe=True,
+                ),
+                timeout=12.0,
+            )
+            if _ctx and _ctx.get("data_available"):
+                return _ctx
+        except Exception:
+            pass
+
+    # ── Primary: API-Sports Rugby ────────────────────────────────────────────
+    if sport == "rugby":
+        try:
+            from fetchers import get_fetcher
+            _fetcher = get_fetcher("rugby")
+            _ctx = await asyncio.wait_for(
+                _fetcher.fetch_and_cache(
+                    match_key=match_key,
+                    home_team=home_key,
+                    away_team=away_key,
+                    league=league,
+                    sport="rugby",
+                    live_safe=True,
+                ),
+                timeout=12.0,
+            )
+            if _ctx and _ctx.get("data_available"):
+                return _ctx
+        except Exception:
+            pass
+
+    # ── Primary: API-Sports MMA (MMA + boxing) ───────────────────────────────
+    if sport in ("mma", "boxing", "combat"):
+        try:
+            from fetchers import get_fetcher
+            _fetcher = get_fetcher("mma")
+            _ctx = await asyncio.wait_for(
+                _fetcher.fetch_and_cache(
+                    match_key=match_key,
+                    home_team=home_key,
+                    away_team=away_key,
+                    league=league,
+                    sport=sport,
+                    live_safe=True,
+                ),
+                timeout=12.0,
+            )
+            if _ctx and _ctx.get("data_available"):
+                return _ctx
+        except Exception:
+            pass
+
     # ── Fallback: ESPN (all sports) ──────────────────────────────────────────
     try:
         from scrapers.match_context_fetcher import get_match_context
