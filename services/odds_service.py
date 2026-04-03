@@ -69,6 +69,8 @@ LEAGUE_MARKET_TYPE: dict[str, str] = {
     "test_cricket": "match_winner",
     "sa20": "match_winner",
     "ipl": "match_winner",
+    "odi": "match_winner",
+    "t20_international": "match_winner",
 }
 
 

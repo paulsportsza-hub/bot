@@ -941,7 +941,7 @@ def _load_snapshot_baseline_edges(limit: int = 100) -> list[dict]:
     return baseline_edges
 
 
-def _load_pregen_edges(limit: int = 100) -> list[dict]:
+def _load_pregen_edges(limit: int = 100, sport: str | None = None) -> list[dict]:
     """Load positive-EV live edges plus snapshot-only baseline matches."""
     live_edges = _load_shadow_pregen_edges(limit=limit)
     seen = {edge.get("match_key", "") for edge in live_edges if edge.get("match_key")}
@@ -951,6 +951,17 @@ def _load_pregen_edges(limit: int = 100) -> list[dict]:
         if match_key and match_key not in seen:
             live_edges.append(edge)
             seen.add(match_key)
+    if sport:
+        def _sport_matches(edge: dict) -> bool:
+            sp = (edge.get("sport") or "soccer").lower()
+            if sp == sport:
+                return True
+            # "combat" is a parent category for mma/boxing sub-sports
+            if sport in ("mma", "boxing") and sp == "combat":
+                league = (edge.get("league") or "").lower()
+                return (sport == "mma" and league == "ufc") or (sport == "boxing" and "box" in league)
+            return False
+        live_edges = [e for e in live_edges if _sport_matches(e)]
     return live_edges[:limit]
 
 
@@ -1424,15 +1435,17 @@ async def _verify_and_fill_cache(
     log.info("Cache coverage after gap fill: %.0f%% (%d/%d)", coverage, len(edges) - still_missing, len(edges))
 
 
-async def main(sweep: str) -> None:
+async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: bool = False) -> None:
     """Run the pre-generation sweep."""
     model_id = MODELS.get(sweep, MODELS["refresh"])
     model_label = "Opus" if sweep == "full" else "Sonnet"
     log.info(
-        "Starting %s sweep with %s (%s)",
+        "Starting %s sweep with %s (%s)%s%s",
         sweep,
         model_label,
         model_id,
+        f" sport={sport}" if sport else "",
+        " [DRY RUN]" if dry_run else "",
     )
 
     # BUILD-16a: No scraper lock dependency. Pregen reads via WAL mode —
@@ -1442,7 +1455,7 @@ async def main(sweep: str) -> None:
     _validate_pregen_runtime_schema()
 
     # Shadow pregen must track the same edge reality the live bot serves.
-    edges = await asyncio.to_thread(_load_pregen_edges, 100)
+    edges = await asyncio.to_thread(_load_pregen_edges, limit, sport)
 
     if not edges:
         log.info("No live edges found — nothing to pre-generate")
@@ -1519,6 +1532,11 @@ async def main(sweep: str) -> None:
             results["dropped"] += 1
             continue
         _in_progress_matches.add(mk)
+
+        if dry_run:
+            log.info("[%d/%d] DRY RUN: would generate %s (%s / %s)", i, len(edges), mk, edge.get("sport", "?"), edge.get("league", "?"))
+            results["success"] += 1
+            continue
 
         log.info("[%d/%d] Generating narrative for %s (%s)...", i, len(edges), mk, model_label)
 
@@ -1636,8 +1654,20 @@ async def main(sweep: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pre-generate narratives for live edges")
     parser.add_argument(
-        "--sweep", choices=["full", "refresh", "uncached_only"], required=True,
-        help="full = all edges, refresh = stale/expired only, uncached_only = new edges without cache",
+        "--sweep", choices=["full", "refresh", "uncached_only"], default="uncached_only",
+        help="full = all edges, refresh = stale/expired only, uncached_only = new edges without cache (default)",
+    )
+    parser.add_argument(
+        "--sport", default=None,
+        help="Filter to a specific sport (soccer, rugby, cricket, mma, boxing)",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=100,
+        help="Maximum number of edges to process (default: 100)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", default=False,
+        help="Print what would be generated without writing to cache",
     )
     args = parser.parse_args()
 
@@ -1657,7 +1687,7 @@ if __name__ == "__main__":
 
     _pregen_success = False
     try:
-        asyncio.run(main(args.sweep))
+        asyncio.run(main(args.sweep, sport=args.sport, limit=args.limit, dry_run=args.dry_run))
         _pregen_success = True
     finally:
         if _pid_fh:

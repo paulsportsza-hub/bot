@@ -2587,16 +2587,26 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _isport = _it0.get("sport_key", "soccer")
                 _ie_tier = _it0.get("display_tier", _it0.get("edge_rating", "bronze"))
 
-                # Build narrative — isolated try/except; build failure → edge-only fallback
+                # Build narrative — check narrative_cache first, then instant baseline
+                _ibline = ""
                 try:
-                    _ibline = await _generate_narrative_v2(
-                        ctx_data=None, tips=_instant_tips, sport=_isport,
-                        home_team=_ih, away_team=_ia, live_tap=True,
-                        selected_outcome=_it0.get("outcome"),
+                    _pre_cached = await asyncio.wait_for(
+                        _get_cached_narrative(match_key), timeout=1.0
                     )
-                except Exception as _nb_err:
-                    log.warning("Instant narrative build error for %s: %s", match_key, _nb_err)
-                    _ibline = ""
+                    if _pre_cached:
+                        _ibline = _pre_cached.get("html", "")
+                except Exception:
+                    pass
+                if not _ibline:
+                    try:
+                        _ibline = await _generate_narrative_v2(
+                            ctx_data=_it0.get("ctx_data"), tips=_instant_tips, sport=_isport,
+                            home_team=_ih, away_team=_ia, live_tap=True,
+                            selected_outcome=_it0.get("outcome"),
+                        )
+                    except Exception as _nb_err:
+                        log.warning("Instant narrative build error for %s: %s", match_key, _nb_err)
+                        _ibline = ""
 
                 # Header ALWAYS assembled — never skip fixture identity
                 _ilines = [f"🎯 <b>{h(_ih)} vs {h(_ia)}</b>"]
