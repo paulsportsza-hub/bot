@@ -14635,6 +14635,8 @@ def _extract_edge_data(
         "h2h_a_wins": h2h_signal.get("h2h_a_wins"),
         "h2h_b_wins": h2h_signal.get("h2h_b_wins"),
         "h2h_draws": h2h_signal.get("h2h_draws"),
+        # TONE-BANDS-FIX: pass tier so build_narrative_spec() can enforce minimum posture
+        "edge_tier": (best.get("display_tier") or best.get("edge_rating") or "").lower(),
     }
 
 
