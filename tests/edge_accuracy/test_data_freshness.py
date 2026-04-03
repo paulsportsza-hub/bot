@@ -1,11 +1,15 @@
 """Layer 2.3 — Data freshness guards.
 
 No stale odds in active edges. Stale edges must have red flag penalty.
+
+BUILD-TEST-ISOLATION-2: All classes that call get_top_edges() use an
+isolated tmp DB so the live scrapers/odds.db is never opened.
 """
 
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 
 import pytest
@@ -23,8 +27,48 @@ from scrapers.edge.edge_config import STALE_THRESHOLD_MINUTES
 pytestmark = pytest.mark.timeout(120)
 
 
+# ── Isolated DB helpers (BUILD-TEST-ISOLATION-2) ─────────────────────────────
+
+_SCHEMA_DDL = """
+    CREATE TABLE IF NOT EXISTS odds_latest (
+        match_id    TEXT NOT NULL,
+        bookmaker   TEXT NOT NULL,
+        market_type TEXT NOT NULL,
+        home_odds   REAL,
+        draw_odds   REAL,
+        away_odds   REAL,
+        scraped_at  DATETIME
+    );
+    CREATE TABLE IF NOT EXISTS broadcast_schedule (
+        home_team      TEXT,
+        away_team      TEXT,
+        broadcast_date TEXT,
+        start_time     TEXT
+    );
+"""
+
+
+def _make_test_db(path: str) -> str:
+    """Create an isolated SQLite DB with the required schema. Returns path."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(_SCHEMA_DDL)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
 class TestNoStaleEdgesInOutput:
     """get_top_edges() filters stale edges — none should appear in output."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_odds_db(self, tmp_path, monkeypatch):
+        """Redirect get_top_edges() to an empty isolated DB (BUILD-TEST-ISOLATION-2)."""
+        import scrapers.edge.edge_v2_helper as _helper
+        monkeypatch.setattr(_helper, "DB_PATH", _make_test_db(str(tmp_path / "odds.db")))
 
     def test_no_stale_warning_in_surfaced_edges(self):
         """Stale-warned edges are filtered by get_top_edges() before output."""
@@ -44,6 +88,12 @@ class TestNoStaleEdgesInOutput:
 
 class TestStaleDetectionPresent:
     """Stale price detection infrastructure must exist."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_odds_db(self, tmp_path, monkeypatch):
+        """Redirect get_top_edges() to an empty isolated DB (BUILD-TEST-ISOLATION-2)."""
+        import scrapers.edge.edge_v2_helper as _helper
+        monkeypatch.setattr(_helper, "DB_PATH", _make_test_db(str(tmp_path / "odds.db")))
 
     def test_stale_threshold_configured(self):
         """STALE_THRESHOLD_MINUTES must be defined and reasonable."""
@@ -70,6 +120,12 @@ class TestStaleDetectionPresent:
 
 class TestOddsFreshness:
     """Active edges should have reasonably fresh odds data."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_odds_db(self, tmp_path, monkeypatch):
+        """Redirect get_top_edges() to an empty isolated DB (BUILD-TEST-ISOLATION-2)."""
+        import scrapers.edge.edge_v2_helper as _helper
+        monkeypatch.setattr(_helper, "DB_PATH", _make_test_db(str(tmp_path / "odds.db")))
 
     def test_edges_have_bookmaker_data(self):
         """Every edge must have at least 1 bookmaker and best_odds > 1."""

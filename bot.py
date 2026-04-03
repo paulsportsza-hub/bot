@@ -1574,7 +1574,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             await _generate_game_tips_safe(query, ctx, event_id, user_id)
     elif prefix == "hot":
         user_id = query.from_user.id
-        if action in ("go", "show"):
+        if action == "noop":
+            return
+        elif action in ("go", "show"):
             await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
         elif action.startswith("back"):
             # W84-HT2: hot:back:{page} — return to the exact page the user came from.
@@ -1599,7 +1601,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _get_hot_tips_result_proof(),
                     _get_edge_tracker_summary(7),
                 )
-                _bt_text, _bt_markup = _build_hot_tips_page(
+                _bt_text, _bt_markup = await _build_hot_tips_page(
                     _bt_tips, page=_back_page, user_tier=_bt_tier,
                     remaining_views=_bt_rv, user_id=user_id,
                     hit_rate_7d=((_bt_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -1710,7 +1712,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _page_consec = getattr(_pcm, "consecutive_misses", 0) or 0
                 except Exception:
                     pass
-                text, markup = _build_hot_tips_page(
+                text, markup = await _build_hot_tips_page(
                     tips, page_num, user_tier=_user_tier,
                     consecutive_misses=_page_consec,
                     hit_rate_7d=_pg_hr, resource_count=_pg_res,
@@ -1778,6 +1780,236 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 return
 
+            # BUILD-16c: Check narrative cache FIRST — skip live EV recompute on hit.
+            # _get_cached_narrative is a fast DB read (<50ms). _get_current_ev_for_match
+            # queries 543K+ odds_snapshots rows (up to 3.0s). On cache hit with positive-EV
+            # tips, the precomputed EV is sufficient — skip the live recompute entirely.
+            _w84_hit = None
+            _b16c_stale = False
+            _b16c_ev_checked = False
+            try:
+                _w84_hit = await asyncio.wait_for(
+                    _get_cached_narrative(match_key),
+                    timeout=2.0,
+                )
+            except Exception:
+                _w84_hit = None
+
+            if _w84_hit:
+                # Cache HIT — check if cached tips have positive EV
+                try:
+                    _cached_tips = _w84_hit.get("tips", [])
+                    _all_zero_ev = (
+                        all(float(t.get("ev", t.get("ev_pct", 0))) <= 0 for t in _cached_tips)
+                        if _cached_tips else True
+                    )
+                    if _all_zero_ev:
+                        # COVERAGE-GATE: cached tips have zero EV — verify live (1.5s)
+                        _b16c_ev_checked = True
+                        _current_ev = await asyncio.wait_for(
+                            _get_current_ev_for_match(match_key), timeout=1.5
+                        )
+                        if _current_ev is not None and _current_ev <= 0:
+                            _w84_hit = None  # Force regeneration — edge has expired
+                            log.info("[EV-GATE] Suppressed stale 0%% EV card for %s", match_key)
+                    else:
+                        # BUILD-16c: Positive-EV cache hit — check staleness for indicator
+                        try:
+                            _ca_raw = _w84_hit.get("created_at")
+                            if _ca_raw:
+                                from datetime import datetime as _dt16c, timezone as _tz16c
+                                _ca_dt = _dt16c.fromisoformat(str(_ca_raw))
+                                if _ca_dt.tzinfo is None:
+                                    _ca_dt = _ca_dt.replace(tzinfo=_tz16c.utc)
+                                _age_min = (_dt16c.now(_tz16c.utc) - _ca_dt).total_seconds() / 60
+                                _b16c_stale = _age_min > 30
+                        except (ValueError, TypeError):
+                            pass
+                except Exception as _ev_gate_err:
+                    log.warning("[EV-GATE] Error checking EV for %s: %s", match_key, _ev_gate_err)
+
+            # Cache MISS — fall through to BUILD-9 live EV gate (3.0s, unchanged)
+            if not _w84_hit and not _b16c_ev_checked:
+                _b9_ev: float | None = None
+                try:
+                    _b9_ev = await asyncio.wait_for(
+                        _get_current_ev_for_match(match_key), timeout=3.0
+                    )
+                except Exception as _b9_err:
+                    log.debug("[BUILD-9] EV gate check failed for %s: %s", match_key, _b9_err)
+                if _b9_ev is not None and _b9_ev <= 0:
+                    _b9_home, _b9_away = _teams_from_vs_event_id(match_key)
+                    await query.edit_message_text(
+                        f"🎯 <b>{h(_b9_home)} vs {h(_b9_away)}</b>\n\n"
+                        "⚡ <b>Edge no longer available</b>\n\n"
+                        "Odds have moved since this edge was identified. "
+                        "Expected value is no longer positive at current pricing.\n\n"
+                        "<i>Return to the list for active edges.</i>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton(
+                                "↩️ Back to Edge Picks",
+                                callback_data=f"hot:back:{_resolve_hot_tips_back_page(user_id, match_key)}",
+                            ),
+                        ]]),
+                    )
+                    log.info(
+                        "[BUILD-9] Suppressed negative-EV detail for %s (ev=%.1f%%)",
+                        match_key, _b9_ev,
+                    )
+                    return
+
+            if _w84_hit:
+                import time as _w84_t
+                _w84_html = _w84_hit["html"]
+                _w84_tips = _w84_hit["tips"]
+                # BUILD-4 Fix B: Re-derive tier from edge_results (not stale edge_tier column)
+                try:
+                    _fresh_tier_b2 = await asyncio.wait_for(
+                        asyncio.to_thread(_get_fresh_tier_from_er, match_key),
+                        timeout=1.0,
+                    )
+                except Exception:
+                    _fresh_tier_b2 = None
+                _w84_tier = _fresh_tier_b2 or _w84_hit.get("edge_tier", "bronze")
+
+                # Inject fresh header (broadcast + kickoff) — cached HTML may have stale header
+                _w84_snap = next(
+                    (t for t in _ht_tips_snapshot.get(user_id, [])
+                     if _tip_matches_hot_key(t, match_key)),
+                    None,
+                )
+                _w84_home, _w84_away = _teams_from_vs_event_id(match_key)
+                # BUILD-QA22-FIX P1-2: Read broadcast from snapshot before _build_event_header
+                # Snapshot has specific channel data from list render; _build_event_header falls
+                # through to generic "Check SuperSport.com" when broadcast_schedule DB is locked.
+                _w84_snap_bc = (_w84_snap or {}).get("_bc_broadcast", "")
+                _w84_snap_ko = (_w84_snap or {}).get("_bc_kickoff", "")
+                _w84_hdr = _build_event_header(_w84_home, _w84_away, "", _w84_snap)
+                if _w84_snap_bc and (not _w84_hdr.get("broadcast_line") or "Check SuperSport" in _w84_hdr.get("broadcast_line", "")):
+                    _w84_hdr["broadcast_line"] = _w84_snap_bc
+                if _w84_snap_ko and not _w84_hdr.get("kickoff"):
+                    _w84_hdr["kickoff"] = _w84_snap_ko
+                _w84_html = _inject_narrative_header(
+                    _w84_html, _w84_home, _w84_away,
+                    _w84_hdr["kickoff"], _w84_hdr["league_display"], _w84_hdr["broadcast_line"],
+                )
+
+                # DEF-1 Fix 4: Detect wrong team in cached Edge section and regenerate
+                # via CLEAN-RENDER which now correctly uses outcome_key.
+                _w84_ok_key = (_w84_snap or {}).get("outcome_key") if _w84_snap else None
+                if not _w84_ok_key and _w84_snap:
+                    _o_fallback = (_w84_snap.get("outcome") or "").lower()
+                    if _o_fallback in ("home", "away", "draw"):
+                        _w84_ok_key = _o_fallback
+                if _w84_ok_key and _w84_ok_key in ("home", "away"):
+                    _correct_f4 = h(_w84_home if _w84_ok_key == "home" else _w84_away)
+                    _em_f4 = _w84_html.find("\U0001f3af <b>The Edge</b>")
+                    _rm_f4 = _w84_html.find("\u26a0\ufe0f", _em_f4 + 1 if _em_f4 >= 0 else 0)
+                    _edge_span = _w84_html[_em_f4:_rm_f4] if (_em_f4 >= 0 and _rm_f4 > _em_f4) else ""
+                    if _edge_span and _correct_f4 not in _edge_span:
+                        try:
+                            from edge_detail_renderer import render_edge_detail as _edr_f4
+                            _f4_snap = dict(_w84_snap) if _w84_snap else {}
+                            _f4_snap.setdefault("match_key", match_key)
+                            _fresh_f4 = await asyncio.to_thread(
+                                _edr_f4, match_key, _user_tier,
+                                tip_data=_f4_snap,
+                                include_tier=True,
+                            )
+                            _f4_body = _fresh_f4[0] if isinstance(_fresh_f4, tuple) else _fresh_f4
+                            # Re-inject narrative header onto fresh body
+                            _w84_html = _inject_narrative_header(
+                                _f4_body, _w84_home, _w84_away,
+                                _w84_hdr["kickoff"], _w84_hdr["league_display"],
+                                _w84_hdr["broadcast_line"],
+                            )
+                            log.info("DEF-1: Edge section team mismatch — regenerated for %s", match_key)
+                        except Exception as _f4e:
+                            log.debug("DEF-1 Edge regen failed for %s: %s", match_key, _f4e)
+
+                # BUILD-6: Append evidence section (sharp lines + signals) if available
+                try:
+                    _ev_section = _render_evidence_section(_w84_hit.get("evidence_json"))
+                    if _ev_section:
+                        _w84_html = _w84_html + _ev_section
+                except Exception as _ev_err:
+                    log.debug("BUILD-6 evidence section failed for %s: %s", match_key, _ev_err)
+
+                # Warm in-memory caches
+                _analysis_cache[match_key] = (
+                    _w84_html, _w84_tips, _w84_tier,
+                    _w84_hit.get("narrative_source"),
+                    _w84_t.time(),
+                )
+                _game_tips_cache[match_key] = _w84_tips
+
+                # Build buttons from snapshot or cached tips
+                _w84_btn_tips = _w84_tips
+                _w84_snap_tip = _w84_snap or (
+                    _game_tips_cache.get(match_key, [None])[0]
+                    if isinstance(_game_tips_cache.get(match_key), list)
+                    else _game_tips_cache.get(match_key)
+                )
+                if _w84_snap_tip and isinstance(_w84_snap_tip, dict):
+                    _w84_btn_tips = [_w84_snap_tip]
+
+                # BUILD-QA22-FIX P0-2: Suppress CTA when rendered HTML shows negative EV
+                # The narrative HTML may reflect live EV (negative) while tip dicts carry
+                # stale predicted_ev (positive). Use the HTML as source of truth.
+                _ev_html_match = re.search(r"EV:\s*([+-]?\d+\.?\d*)%", _w84_html)
+                if _ev_html_match and float(_ev_html_match.group(1)) <= 0:
+                    _w84_btn_tips = [{"ev": 0, "match_id": match_key}]
+
+                _btns = _build_game_buttons(
+                    _w84_btn_tips or [{"ev": 0, "match_id": match_key}],
+                    match_key, user_id,
+                    source="edge_picks", user_tier=_user_tier,
+                    edge_tier=_w84_tier,
+                    back_page=_resolve_hot_tips_back_page(user_id, match_key),
+                )
+
+                # BUILD-16c: Stale-odds indicator when cached data is >30 min old
+                if _b16c_stale:
+                    _w84_html += "\n\n⌛ <i>Odds may have moved since this analysis was generated.</i>"
+
+                _banner = _qa_banner(user_id)
+                _final = (_banner + _w84_html) if _banner else _w84_html
+                try:
+                    await query.edit_message_text(
+                        _final, parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup(_btns),
+                    )
+                except BadRequest as _br:
+                    if "not modified" in str(_br).lower():
+                        return
+                    raise
+
+                # Background view recording (best-effort)
+                async def _w84_record_view():
+                    def _write():
+                        import sqlite3 as _sq
+                        try:
+                            from db_connection import get_connection as _gc
+                            from tier_gate import record_view as _rv
+                            oc = _gc(timeout_ms=3000)
+                            try:
+                                _rv(user_id, match_key, oc)
+                            finally:
+                                oc.close()
+                        except _sq.OperationalError as _re:
+                            if "locked" in str(_re).lower():
+                                log.debug("Background record_view deferred: %s", _re)
+                            else:
+                                log.warning("Background record_view failed: %s", _re)
+                        except Exception as _re:
+                            log.warning("Background record_view failed: %s", _re)
+                    await asyncio.to_thread(_write)
+                asyncio.create_task(_w84_record_view())
+                log.info("PERF: edge:detail W84 CACHE HIT for %s (source=%s)", match_key, _w84_hit.get("narrative_source", "?"))
+                return
+            # ── END w84 cache check — fall through to programmatic renderer ──
+
             # CLEAN-RUGBY: resolve tip data for V1 fallback before render
             _tip_for_v1 = next(
                 (t for t in _ht_tips_snapshot.get(user_id, [])
@@ -1790,6 +2022,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _tip_for_v1 = (
                         _fb_tips[0] if isinstance(_fb_tips, list) else _fb_tips
                     )
+
+            # BUILD-QA22-FIX P0-1: DB fallback when snapshot + cache are both empty (post-restart)
+            if not _tip_for_v1:
+                try:
+                    _v1_seed = await asyncio.to_thread(_load_tips_from_edge_results, 50)
+                    _tip_for_v1 = next(
+                        (t for t in (_v1_seed or []) if t.get("match_id") == match_key),
+                        None,
+                    )
+                except Exception:
+                    pass
 
             # FIX-6: Render returns (html, authoritative_tier) so button tier
             # always matches the gating tier used inside the renderer.
@@ -1871,6 +2114,11 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 if _snap_tier and _snap_tier != "bronze":
                     _cr_tier = _snap_tier
+
+            # BUILD-QA22-FIX P0-2: Suppress CTA when rendered HTML shows negative EV
+            _ev_html_match_cr = re.search(r"EV:\s*([+-]?\d+\.?\d*)%", html)
+            if _ev_html_match_cr and float(_ev_html_match_cr.group(1)) <= 0:
+                _cr_tips = [{"ev": 0, "match_id": match_key}]
 
             _btns = _build_game_buttons(
                 _cr_tips or [{"ev": 0, "match_id": match_key}],
@@ -2128,18 +2376,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     if _bfa3_tier:
                         _detail_tier = _bfa3_tier
                     elif _bfa3_tip.get("edge_v2"):
-                        # BYPASS-FIX-A.3: Derive tier from composite when cache lacks tier fields
-                        _bfa3_ev2 = _bfa3_tip["edge_v2"]
-                        _bfa3_cs = float(_bfa3_ev2.get("composite_score", 0) or 0)
-                        _bfa3_ev = float(_bfa3_ev2.get("edge_pct", 0) or 0)
-                        _bfa3_conf = int(_bfa3_ev2.get("confirming_signals", 0) or 0)
-                        try:
-                            from scrapers.edge.tier_engine import assign_tier as _bfa3_at
-                            _bfa3_derived = _bfa3_at(_bfa3_cs, _bfa3_ev, _bfa3_conf, red_flags=[])
-                            if _bfa3_derived:
-                                _detail_tier = _bfa3_derived
-                        except Exception:
-                            pass
+                        # TIER-FIX: Read tier from DB when cache lacks tier fields.
+                        # No re-derivation — trust edge_results.edge_tier.
+                        _bfa3_mk = _bfa3_tip.get("match_id") or _bfa3_tip.get("event_id") or match_key
+                        _bfa3_db_tier = _quick_edge_tier_lookup(_bfa3_mk)
+                        if _bfa3_db_tier:
+                            _detail_tier = _bfa3_db_tier
 
                 # Serve from cache IMMEDIATELY
                 _game_tips_cache[match_key] = _aligned_tips
@@ -4754,12 +4996,12 @@ async def _render_your_games_all(
         ])
         return text, markup
 
-    # Collect available sport keys (from unfiltered games) for filter buttons
-    all_sport_keys: set[str] = set()
-    for lk in league_keys:
-        sk = config.LEAGUE_SPORT.get(lk)
-        if sk:
-            all_sport_keys.add(sk)
+    # Collect available sport keys from actual game data (not user prefs)
+    all_sport_keys = {
+        config.LEAGUE_SPORT.get(g.get("league_key", ""))
+        for g in games
+        if config.LEAGUE_SPORT.get(g.get("league_key", ""))
+    }
 
     # Apply sport filter
     all_games = games  # keep unfiltered ref for sport buttons
@@ -4788,13 +5030,7 @@ async def _render_your_games_all(
 
     # Empty state after filter
     if not sorted_games:
-        if sport_filter == "combat":
-            text = (
-                f"{title}\n\n"
-                "🥊 Combat Sports tips coming soon! We're building our data "
-                "pipeline for UFC/MMA and Boxing."
-            )
-        elif sport_filter:
+        if sport_filter:
             sport_def = config.ALL_SPORTS.get(sport_filter)
             sn = sport_def.label.lower() if sport_def else sport_filter
             text = f"{title}\n\nNo {sn} games scheduled."
@@ -6037,7 +6273,7 @@ HOT_TIPS_SCAN_SPORTS = [
 ]
 
 _hot_tips_cache: dict[str, dict] = {}  # "global" → {"tips": [...], "ts": float}
-HOT_TIPS_CACHE_TTL = 900  # 15 minutes
+HOT_TIPS_CACHE_TTL = 1800  # 30 minutes (BUILD-16b/FIX-6C: extended from 15m)
 _hot_tips_result_proof_cache: dict[str, dict] = {}  # "global" → {"data": {...}, "ts": float}
 HOT_TIPS_RESULT_PROOF_CACHE_TTL = 300  # 5 minutes
 _edge_tracker_summary_cache: dict[str, dict] = {}  # "{days}" → {"data": {...}, "ts": float}
@@ -6969,13 +7205,21 @@ HIT_RATE_DISPLAY_THRESHOLD = 50  # Only show hit rate in header when >= this %
 def _build_tip_narrative(tip: dict) -> str:
     """Build a compelling narrative explaining WHY this tip has value."""
     outcome = tip.get("predicted_outcome", "") or tip.get("outcome", "this team")
-    best_bk = (
-        tip.get("best_bookmaker_display", "")
-        or tip.get("bookmaker", "")
-        or _display_bookmaker_name(tip.get("best_bookmaker", ""))
-        or "the best bookmaker"
-    )
-    best_odds = tip.get("best_odds", 0) or tip.get("odds", 0)
+    # BUILD-CTA-FIX: Read bookmaker/odds from fresh odds_by_bookmaker when available
+    # so narrative body is consistent with what the CTA button was built from.
+    _odds_by_bk = tip.get("odds_by_bookmaker", {})
+    if _odds_by_bk:
+        _best_bk_key = max(_odds_by_bk, key=_odds_by_bk.get)
+        best_bk = _display_bookmaker_name(_best_bk_key)
+        best_odds = _odds_by_bk[_best_bk_key]
+    else:
+        best_bk = (
+            tip.get("best_bookmaker_display", "")
+            or tip.get("bookmaker", "")
+            or _display_bookmaker_name(tip.get("best_bookmaker", ""))
+            or "the best bookmaker"
+        )
+        best_odds = tip.get("best_odds", 0) or tip.get("odds", 0)
     ev = tip.get("ev_pct", 0) or tip.get("ev", 0)
     tier = tip.get("display_tier", tip.get("edge_rating", "GOLD"))
     odds_by_bk = tip.get("odds_by_bookmaker", {})
@@ -7142,18 +7386,10 @@ def _build_model_from_consensus(match: dict) -> dict:
     }
 
 
+# BUILD-4: _tier_from_composite() RETIRED. Use _get_fresh_tier_from_er() which calls
+# assign_tier() from tier_engine — includes min_edge_pct gate that this function lacks.
 def _tier_from_composite(composite: float) -> str:
-    """Re-derive display tier from composite score using locked thresholds.
-
-    R6-BUILD-02: DB edge_tier may be stale (stored when Gold threshold was lower).
-    Always re-derive from composite_score for consistent list-view tier display.
-
-    Thresholds (locked — R6-BUILD-02, mirrors edge_config.TIER_THRESHOLDS):
-        Diamond >= 52
-        Gold    >= 40
-        Silver  >= 38
-        Bronze  <  38 (floor for any tip that passed production filters)
-    """
+    """DEPRECATED — kept for reference. Use _get_fresh_tier_from_er() instead."""
     if composite >= 52:
         return "diamond"
     if composite >= 40:
@@ -7163,7 +7399,40 @@ def _tier_from_composite(composite: float) -> str:
     return "bronze"
 
 
-def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
+def _get_fresh_tier_from_er(match_key: str) -> str | None:
+    """TIER-FIX B: Read edge_tier directly from edge_results.
+
+    Returns None if no edge_results row found or on error.
+    Called via asyncio.to_thread() in narrative_cache serving paths.
+    The DB value is the authoritative result of the full pipeline
+    (assign_tier + data_presence_gate + validate_tier). Re-deriving
+    with empty red_flags caused RC-3 tier mismatches.
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db as _gft_fn
+        from scrapers.edge.edge_config import DB_PATH as _gft_db
+        _gft_conn = _gft_fn(_gft_db)
+        _gft_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+        try:
+            _gft_row = _gft_conn.execute(
+                "SELECT edge_tier "
+                "FROM edge_results WHERE match_key = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC LIMIT 1",
+                (match_key,),
+            ).fetchone()
+        finally:
+            _gft_conn.close()
+        if not _gft_row:
+            return None
+        _tier = (_gft_row.get("edge_tier") or "bronze").strip().lower()
+        if _tier not in ("diamond", "gold", "silver", "bronze"):
+            _tier = "bronze"
+        return _tier
+    except Exception:
+        return None
+
+
+def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False) -> list[dict]:
     """W84-P1: Fast serving path — read pre-computed edges from edge_results table.
 
     Called synchronously from asyncio.to_thread(). Single SQL query, ~5ms.
@@ -7182,7 +7451,6 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             MAX_PRODUCTION_EDGE_PCT as _MAX_PRODUCTION_EDGE_PCT,
             MAX_RECOMMENDED_ODDS as _MAX_RECOMMENDED_ODDS,
         )
-        from scrapers.edge.tier_engine import assign_tier as _assign_tier
         _conn = _conn_fn(_DB_PATH)
         _conn.row_factory = lambda cursor, row: dict(
             zip([col[0] for col in cursor.description], row)
@@ -7227,20 +7495,15 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         home_display = _display_team_name(_home_raw)
         away_display = _display_team_name(_away_raw)
 
-        # RENDER-BUILD-P1 FIX-1: Always re-derive tier via assign_tier() triple gate.
-        # R11-BUILD-02 Fix B previously trusted DB's edge_tier, but stale rows can have
-        # inflated tiers from before the min_confirming=2 gate was added — causing BUG-4
-        # (Gold subscribers see "blurred" on tips that should be Gold-accessible).
-        # FIX-3 now stores actual confirming_signals in edge_results, so the old concern
-        # about estimated signals is resolved. Re-derivation is safe and authoritative.
-        _composite = float(row["composite_score"] or 0)
-        _ev_for_tier = float(row["predicted_ev"] or 0)
+        # TIER-FIX A: Trust edge_results.edge_tier directly. The DB value is the
+        # authoritative result of the full pipeline (assign_tier + data_presence_gate
+        # + validate_tier). Re-deriving here with empty red_flags and no gates caused
+        # RC-1 tier mismatches (list badge != DB tier).
+        edge_tier = (row.get("edge_tier") or "bronze").strip().lower()
+        if edge_tier not in ("diamond", "gold", "silver", "bronze"):
+            edge_tier = "bronze"
         _confirming_actual = row.get("confirming_signals")
-        if _confirming_actual is not None:
-            _confirming_est = int(_confirming_actual)
-        else:
-            _confirming_est = 0
-        edge_tier = _assign_tier(_composite, _ev_for_tier, _confirming_est, red_flags=[]) or "bronze"
+        _confirming_est = int(_confirming_actual) if _confirming_actual is not None else 0
 
         # predicted_ev is stored as percentage (e.g. 5.2 = 5.2%)
         ev_pct = round(float(row["predicted_ev"] or 0), 1)
@@ -7251,12 +7514,12 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         ):
             continue
 
-        # P1-PASS-IN-LIST: R9-BUILD-03 — exclude speculative-punt tips from Top Edge Picks.
-        # confirming_est==0 + ev<=7% → _classify_evidence() returns "speculative punt",
-        # which can render "Monitor the line but pass" or "Pass on this" in the detail view.
-        # These tips should never appear in Top Edge Picks — they don't recommend a bet.
-        if _confirming_est == 0 and ev_pct <= 7.0:
-            continue
+        # BUILD-GATE-RELAX: Suppress zero-signal edges ONLY when EV < 3%.
+        # Price difference alone IS a valid edge — Paul revised 1 April 2026.
+        # skip_punt_filter=True bypasses this for pregen (generation-time concern, not display-time).
+        if not skip_punt_filter:
+            if _confirming_est == 0 and ev_pct < 3.0:
+                continue
 
         league_key = (row["league"] or "").lower()
         outcome_label = row["bet_type"] or "home"
@@ -7280,6 +7543,7 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
             "away_team": away_display,
             "commence_time": "",
             "outcome": outcome_display,
+            "outcome_key": outcome_raw,
             "odds": _rec_odds,
             "bookmaker": _display_bookmaker_name(_raw_bk_key),
             "bookmaker_key": _raw_bk_key,
@@ -7327,6 +7591,12 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
                         _bk_dict[_bk] = float(_o)
                 if _bk_dict:
                     tips[-1]["odds_by_bookmaker"] = _bk_dict
+                    # BUILD-CTA-FIX: Sync top-level fields with best fresh bookmaker so
+                    # CTA button and narrative body read the same data source.
+                    _best_bk_item = max(_bk_dict.items(), key=lambda x: x[1])
+                    tips[-1]["bookmaker_key"] = _best_bk_item[0]
+                    tips[-1]["bookmaker"] = _display_bookmaker_name(_best_bk_item[0])
+                    tips[-1]["odds"] = _best_bk_item[1]
         except Exception:
             pass  # Keep single-BK fallback
 
@@ -7342,6 +7612,100 @@ def _load_tips_from_edge_results(limit: int = 10) -> list[dict]:
         -t["ev"],
     ))
     return tips[: max(int(limit or 10), 1)]
+
+
+async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
+    """BUILD-10: Compute live EV via calculate_edge_v2() before list render.
+
+    Calls calculate_edge_v2() on current odds_latest data for each tip —
+    the same path as the edge:detail handler. Filters tips where live EV ≤ 0
+    and updates ev fields to reflect current values.
+    Falls back to original list on timeout or any error (graceful degradation).
+    """
+    if not tips:
+        return tips
+
+    def _live_ev_for_tip(tip: dict) -> tuple[str, float | None]:
+        """Compute live EV for one tip. Returns (match_key, ev_pct or None)."""
+        mk = tip.get("match_id") or tip.get("event_id", "")
+        if not mk:
+            return ("", None)
+        # Derive raw outcome from bet_type stored in edge_v2
+        _bet_type = (tip.get("edge_v2") or {}).get("outcome", "")
+        if _bet_type == "Home Win":
+            outcome_raw = "home"
+        elif _bet_type == "Away Win":
+            outcome_raw = "away"
+        elif _bet_type in ("home", "draw", "away"):
+            outcome_raw = _bet_type
+        else:
+            outcome_raw = "home"  # safe default
+        sport = tip.get("sport_key", "soccer")
+        league = tip.get("league_key", "")
+        try:
+            from scrapers.edge.edge_v2_helper import calculate_edge_v2
+            result = calculate_edge_v2(
+                mk,
+                outcome=outcome_raw,
+                sport=sport,
+                league=league,
+                _skip_log=True,  # W84-P0: user reads must not trigger DB writes
+            )
+            if result and result.get("predicted_ev") is not None:
+                return (mk, float(result["predicted_ev"]))
+            return (mk, None)
+        except Exception as _e:
+            log.debug("_refresh_tip_evs calc failed for %s: %s", mk, _e)
+            return (mk, None)
+
+    # BUILD-QA22-FIX P1-1: Use partial results on timeout instead of discarding all
+    _tasks = [asyncio.to_thread(_live_ev_for_tip, t) for t in tips]
+    try:
+        _raw = await asyncio.wait_for(
+            asyncio.gather(*_tasks, return_exceptions=True),
+            timeout=2.0,
+        )
+    except asyncio.TimeoutError:
+        _raw = []
+        for _pt in _tasks:
+            if _pt.done() and not _pt.cancelled():
+                try:
+                    _raw.append(_pt.result())
+                except Exception:
+                    pass
+        log.warning("[BUILD-QA22] EV refresh partial timeout — %d/%d tips refreshed", len(_raw), len(tips))
+    except Exception:
+        return tips  # Non-timeout gather error — serve original list
+
+    # Build match_key → live EV map
+    live_evs: dict[str, float | None] = {}
+    for r in _raw:
+        if isinstance(r, Exception):
+            continue
+        mk, ev = r
+        if mk:
+            live_evs[mk] = ev
+
+    if not live_evs:
+        return tips
+
+    result = []
+    for t in tips:
+        mk = t.get("match_id") or t.get("event_id", "")
+        if mk and mk in live_evs:
+            current_ev = live_evs[mk]
+            if current_ev is None:
+                # Could not compute live EV — keep tip (conservative), but log warning
+                log.warning("[BUILD-STALE-EV] EV lookup returned None for %s — keeping stale value", mk)
+                result.append(t)
+                continue
+            if current_ev <= 0:
+                log.debug("[BUILD-10] Suppressing negative-EV tip %s (ev=%.1f%%)", mk, current_ev)
+                continue  # Suppress — live EV is negative
+            t = dict(t)  # Shallow copy — don't mutate shared cache dicts
+            t["ev"] = round(current_ev, 1)
+        result.append(t)
+    return result
 
 
 async def _fetch_hot_tips_from_db() -> list[dict]:
@@ -7392,7 +7756,8 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
                 if match["match_id"] in seen_match_ids:
                     continue
                 seen_match_ids.add(match["match_id"])
-                if match.get("bookmaker_count", 0) < 2:
+                min_bk = 1 if league in ("ufc", "boxing") else 2
+                if match.get("bookmaker_count", 0) < min_bk:
                     continue
                 match_jobs.append((match, league, market_type))
         except Exception as exc:
@@ -7490,7 +7855,15 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             # odds shift, causing list↔detail divergence and false cache busts.
             predicted_outcome = _er_outcomes.get(match["match_id"])
             if not predicted_outcome:
-                continue  # R15-BUILD-01 Fix 1: no authoritative outcome from edge_results — skip
+                # HOT-TIPS-BUILD-01 Fix A: first-cycle gap — V2 just computed this
+                # edge but edge_results hasn't been persisted yet. Populate _er_outcomes
+                # inline so the gate doesn't skip this match on its first scan cycle.
+                _v2_live_outcome = _v2_result.get("outcome", "")
+                if _v2_live_outcome:
+                    _er_outcomes[match["match_id"]] = _v2_live_outcome
+                    predicted_outcome = _v2_live_outcome
+                else:
+                    continue  # V2 outcome also absent — skip (R15-BUILD-01 preserved)
             edge_tier = _v2_result["tier"]
             composite_score = _v2_result["composite_score"]
             edge_pct = _v2_result["edge_pct"]
@@ -7526,6 +7899,8 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         if best_odds > _MAX_RECOMMENDED_ODDS:
             continue
 
+        # BUILD-QA23-FIX: Initialise consensus_prob before V2/non-V2 branch
+        consensus_prob = _v2_result.get("fair_probability", 0) if _v2_result else 0
         # Fix 5: EV Consistency — use V2 benchmark-calibrated edge_pct as primary;
         # fall back to naive consensus calculation only when V2 is unavailable.
         if _v2_result and _v2_result.get("tier"):
@@ -7548,6 +7923,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             "away_team": away_display,
             "commence_time": "",
             "outcome": outcome_label,
+            "outcome_key": predicted_outcome,
             "odds": best_odds,
             "bookmaker": _display_bookmaker_name(best_bk_key),
             "prob": round(consensus_prob * 100) if consensus_prob else 0,
@@ -7603,6 +7979,21 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             continue
         ev_pct = round(adj_ev * 100, 1)
         edge_tier = str(adj_tier)
+
+        # BUILD-GATE-RELAX: Suppress zero-signal edges ONLY when EV < 3%.
+        # Price difference alone IS a valid edge — Paul revised 1 April 2026.
+        _gate_confirming = int((_v2_result or {}).get("confirming_signals", 0) or 0)
+        if _gate_confirming == 0 and ev_pct < 3.0:
+            log.info("BUILD-GATE-RELAX: suppressed zero-signal low-EV edge %s (tier=%s, ev=%.1f%%)",
+                     match["match_id"], edge_tier, ev_pct)
+            near_miss_tips.append({
+                **base_tip,
+                "ev": ev_pct,
+                "edge_rating": edge_tier,
+                "display_tier": edge_tier,
+                "edge_score": composite_score,
+            })
+            continue
 
         all_tips.append({
             **base_tip,
@@ -7755,7 +8146,7 @@ async def _show_hot_tips(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_id
     await _do_hot_tips_flow(update.effective_chat.id, ctx.bot, user_id=user_id)
 
 
-def _build_hot_tips_page(
+async def _build_hot_tips_page(
     tips: list[dict], page: int = 0,
     user_tier: str = "diamond", remaining_views: int = 999,
     streak: dict | None = None,
@@ -7794,6 +8185,18 @@ def _build_hot_tips_page(
     # in the header matches the number of rendered cards.
     # Fix 8: Also gate composite_score >= 40 (Bronze threshold) — sub-threshold cards never show.
     tips = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 40]
+    # BUILD-GATE-RELAX: Cap zero-signal edges at Bronze display tier — Paul 1 April 2026.
+    for _t in tips:
+        _t_cs = int(((_t.get("edge_v2") or {}).get("confirming_signals", 0)) or 0)
+        if _t_cs == 0:
+            _t["display_tier"] = "bronze"
+            _t["edge_rating"] = "bronze"
+    # BUILD-TIER-ORDER: Diamond > Gold > Silver > Bronze, then EV descending within tier.
+    _tier_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
+    tips.sort(key=lambda t: (
+        _tier_order.get(str(t.get("display_tier", "bronze")).lower(), 9),
+        -(t.get("ev") or 0),
+    ))
     total = len(tips)
     total_pages = max((total + HOT_TIPS_PAGE_SIZE - 1) // HOT_TIPS_PAGE_SIZE, 1)
     page = max(0, min(page, total_pages - 1))
@@ -7883,18 +8286,119 @@ def _build_hot_tips_page(
         lines.extend(yesterday_lines)
         lines.append("")
 
+    # P0-2 FIX: Batch-check narrative_cache for ESPN evidence to determine true MODEL ONLY status.
+    # confirming_signals==0 does not mean no ESPN data — standings/form/H2H can exist at sub-0.65
+    # signal strength. Only show [MODEL ONLY] when the cached narrative has NO ESPN data at all.
+    _nc_espn_match_ids: set[str] = set()
+    try:
+        from scrapers.db_connect import connect_odds_db as _nc_conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _nc_db_path
+        import json as _nc_json
+        _page_match_ids = [
+            tip.get("match_id") or tip.get("event_id") or ""
+            for tip in page_tips
+        ]
+        _page_match_ids = [mid for mid in _page_match_ids if mid]
+        if _page_match_ids:
+            _nc_conn = _nc_conn_fn(_nc_db_path)
+            _nc_placeholders = ",".join("?" * len(_page_match_ids))
+            _nc_rows = _nc_conn.execute(
+                f"SELECT match_id, evidence_json FROM narrative_cache "
+                f"WHERE match_id IN ({_nc_placeholders})",
+                _page_match_ids,
+            ).fetchall()
+            _nc_conn.close()
+            for _nc_row in _nc_rows:
+                _nc_mid = _nc_row[0]
+                _nc_ejson = _nc_row[1]
+                if not _nc_ejson:
+                    continue
+                try:
+                    _nc_cm = _nc_json.loads(_nc_ejson).get("coverage_metrics", {})
+                    if (
+                        _nc_cm.get("standings_available")
+                        or (_nc_cm.get("form_games_count") or 0) > 0
+                        or (_nc_cm.get("h2h_games_count") or 0) > 0
+                    ):
+                        _nc_espn_match_ids.add(_nc_mid)
+                except (ValueError, TypeError):
+                    pass
+    except Exception:
+        pass  # Graceful fallback — MODEL ONLY logic unchanged if cache unavailable
+
+    # BUILD-12 / TIER-FIX: Batch-fetch authoritative tiers from edge_results.
+    # Reads edge_tier directly — same trust-DB principle as Fix A/B.
+    _fresh_tiers: dict[str, str] = {}
+    try:
+        _pt_keys = [t.get("match_id") or t.get("event_id") or "" for t in page_tips]
+        _pt_keys = [k for k in _pt_keys if k]
+        if _pt_keys:
+            from scrapers.db_connect import connect_odds_db as _b12_conn_fn
+            from scrapers.edge.edge_config import DB_PATH as _b12_db_path
+            _b12_conn = _b12_conn_fn(_b12_db_path)
+            _b12_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+            _b12_ph = ",".join("?" * len(_pt_keys))
+            _b12_rows = _b12_conn.execute(
+                f"SELECT match_key, edge_tier "
+                f"FROM edge_results "
+                f"WHERE match_key IN ({_b12_ph}) AND result IS NULL "
+                f"ORDER BY recommended_at DESC",
+                _pt_keys,
+            ).fetchall()
+            _b12_conn.close()
+            _b12_seen: set[str] = set()
+            for _b12_r in _b12_rows:
+                _b12_mk = _b12_r["match_key"]
+                if _b12_mk in _b12_seen:
+                    continue
+                _b12_seen.add(_b12_mk)
+                _b12_tier = (_b12_r.get("edge_tier") or "bronze").strip().lower()
+                if _b12_tier not in ("diamond", "gold", "silver", "bronze"):
+                    _b12_tier = "bronze"
+                _fresh_tiers[_b12_mk] = _b12_tier
+    except Exception:
+        pass  # Graceful fallback — stale display_tier used if edge_results unavailable
+
+    # BUILD-CTA-FIX Fix 3+4: Pre-fetch broadcast details in parallel before render loop.
+    # Uses asyncio.to_thread() with 3s timeout — matches My Matches pattern at line ~5040.
+    # Passes display-format names (e.g. "Arsenal") so fuzzy_match_broadcast matches correctly.
+    # DB-sourced tips carry normalized keys (e.g. "arsenal") — _display_team_name converts them.
+    _ht_bc_raw = await asyncio.gather(*[
+        asyncio.wait_for(
+            asyncio.to_thread(
+                _get_broadcast_details,
+                home_team=_display_team_name(tip.get("home_team") or ""),
+                away_team=_display_team_name(tip.get("away_team") or ""),
+                league_key=tip.get("league_key", ""),
+            ),
+            timeout=3.0,
+        )
+        for tip in page_tips
+    ], return_exceptions=True)
+    _ht_bc_infos: list[dict] = [
+        bc if isinstance(bc, dict) else {"broadcast": "", "kickoff": ""}
+        for bc in _ht_bc_raw
+    ]
+
     # Track buttons per tip + locked counts for footer
     tip_buttons: list[tuple[int, str, str]] = []  # (index, match_key, access_level)
     diamond_locked = 0
     gold_locked = 0
     page_tier_counts: dict[str, int] = {}
     for tip in page_tips:
-        tier_key = str(tip.get("display_tier", tip.get("edge_rating", EdgeRating.BRONZE))).lower().strip()
+        _pt_mk = tip.get("match_id") or tip.get("event_id") or ""
+        tier_key = _fresh_tiers.get(_pt_mk) or str(tip.get("display_tier", tip.get("edge_rating", EdgeRating.BRONZE))).lower().strip()
         page_tier_counts[tier_key] = page_tier_counts.get(tier_key, 0) + 1
     last_section_tier = ""
 
     for i, tip in enumerate(page_tips, start + 1):
-        edge_tier = str(tip.get("display_tier", tip.get("edge_rating", "bronze"))).lower().strip()
+        _tip_mk_for_tier = tip.get("match_id") or tip.get("event_id") or ""
+        edge_tier = _fresh_tiers.get(_tip_mk_for_tier) or str(tip.get("display_tier", tip.get("edge_rating", "bronze"))).lower().strip()
+        # BUILD-GATE-RELAX Fix 4: CTA badge must match display_tier after zero-signal cap.
+        _tip_cs = int((tip.get("edge_v2") or {}).get("confirming_signals", 0) or 0)
+        if _tip_cs == 0:
+            edge_tier = "bronze"
+            tip["display_tier"] = "bronze"
         access = get_edge_access_level(user_tier, edge_tier)
 
         if edge_tier != last_section_tier:
@@ -7911,6 +8415,10 @@ def _build_hot_tips_page(
         tier_emoji = EDGE_EMOJIS.get(edge_tier, "🥉")
         sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
         _confirming, _total_signals, _model_only = _edge_signal_meta(tip.get("edge_v2"))
+        # P0-2: Suppress [MODEL ONLY] if narrative_cache has any ESPN data for this match
+        _tip_mid = tip.get("match_id") or tip.get("event_id") or ""
+        if _model_only and _tip_mid and _tip_mid in _nc_espn_match_ids:
+            _model_only = False
         tip["_ht_model_only"] = _model_only
         tip["_ht_confirming_signals"] = _confirming
         tip["_ht_total_signals"] = _total_signals
@@ -7922,11 +8430,8 @@ def _build_hot_tips_page(
         away = h(away_raw)
         league_display = tip.get("league", "")
 
-        # Broadcast details for line 2
-        bc_data = _get_broadcast_details(
-            home_team=home_raw, away_team=away_raw,
-            league_key=tip.get("league_key", ""),
-        )
+        # Broadcast details — use pre-fetched result (BUILD-CTA-FIX Fix 3+4)
+        bc_data = _ht_bc_infos[i - start - 1]
         kickoff = bc_data.get("kickoff", "")
         if not kickoff and tip.get("commence_time"):
             kickoff = _format_kickoff_display(tip["commence_time"])
@@ -7956,10 +8461,11 @@ def _build_hot_tips_page(
         tip["_bc_broadcast"] = broadcast_raw
         tip["_bc_league"] = league_display
 
-        # Line 2: league · kickoff · DStv channel
+        # Line 2: league · 📅 kickoff · DStv channel
+        # BUILD-PREGEN-FIX Fix 5: 📅 prefix on kickoff for visibility
         info_parts = [league_display]
         if kickoff and kickoff != "TBC":
-            info_parts.append(kickoff)
+            info_parts.append(f"📅 {kickoff}")
         # Extract DStv channel from broadcast line (e.g. "📺 SS PSL (DStv 202)" → "DStv 202")
         if broadcast_raw:
             import re as _re
@@ -7997,6 +8503,18 @@ def _build_hot_tips_page(
         if access in ("full", "partial"):
             # 3-line card: sport emoji + match + tier badge, info, outcome @ odds → return
             outcome = h(tip.get("outcome", ""))
+            # Normalise from outcome_key for consistency (positional key → display name)
+            _ok = (tip.get("outcome_key") or "").lower()
+            if _ok == "draw":
+                outcome = "Draw"
+            elif _ok == "home":
+                _home = h(tip.get("home_team", ""))
+                if _home:
+                    outcome = _home
+            elif _ok == "away":
+                _away = h(tip.get("away_team", ""))
+                if _away:
+                    outcome = _away
             odds_val = tip.get("odds", 0)
             ret_amount = odds_val * 300 if odds_val else 0
             ret_str = f"R{ret_amount:,.0f}" if ret_amount else ""
@@ -8106,7 +8624,11 @@ def _build_hot_tips_page(
         h_abbr = config.abbreviate_team(tip.get("home_team") or "TBD")
         a_abbr = config.abbreviate_team(tip.get("away_team") or "TBD")
         if access in ("full", "partial"):
-            _btn_tier = EDGE_EMOJIS.get(tip.get("display_tier", tip.get("edge_rating", "bronze")), "🥉")
+            # BUILD-PREGEN-FIX-2 AC-5: Use display_tier (already zero-signal-capped in the
+            # card loop at line 8413-8415) as single source of truth for tier badge.
+            # Previous code read _fresh_tiers first which bypassed the zero-signal cap.
+            _btn_fresh = tip.get("display_tier", tip.get("edge_rating", "bronze"))
+            _btn_tier = EDGE_EMOJIS.get(_btn_fresh, "🥉")
             cb = f"edge:detail:{_shorten_cb_key(match_key)}"
         else:
             _btn_tier = "🔒"
@@ -8170,7 +8692,15 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _get_hot_tips_result_proof(),
             _get_edge_tracker_summary(7),
         )
-        _wm_text, _wm_markup = _build_hot_tips_page(
+        # BUILD-STALE-EV: Age-gated EV refresh — if cache > 10 min old, re-check live EVs
+        # to suppress tips whose EV has gone negative since last precompute cycle.
+        import time as _stale_ev_t
+        _stale_ev_entry = _hot_tips_cache.get("global", {})
+        _stale_ev_age = _stale_ev_t.time() - _stale_ev_entry.get("ts", 0)
+        if _stale_ev_age > 600:  # > 10 minutes old → refresh EVs before serving
+            log.debug("[BUILD-STALE-EV] Cache age %.0fs > 600s — refreshing tip EVs on warm path", _stale_ev_age)
+            _cached_tips = await _refresh_tip_evs(_cached_tips)
+        _wm_text, _wm_markup = await _build_hot_tips_page(
             _cached_tips, page=0, user_tier=_wm_tier,
             remaining_views=_wm_rv, consecutive_misses=_wm_consec,
             hit_rate_7d=((_wm_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -8226,7 +8756,12 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _get_hot_tips_result_proof(),
             _get_edge_tracker_summary(7),
         )
-        _fast_text, _fast_markup = _build_hot_tips_page(
+        # BUILD-14a: Refresh EV values — filter stale negative-EV tips from fast path
+        try:
+            _fast_tips = await _refresh_tip_evs(_fast_tips)
+        except Exception as _b14a_err:
+            log.debug("BUILD-14a EV refresh failed (graceful fallback): %s", _b14a_err)
+        _fast_text, _fast_markup = await _build_hot_tips_page(
             _fast_tips, page=0, user_tier=_fast_tier,
             remaining_views=_fast_rv, consecutive_misses=_fast_consec,
             hit_rate_7d=((_fast_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -8346,12 +8881,18 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         except Exception:
             pass
 
+    # BUILD-14a: Refresh EV values — filter stale negative-EV tips from cold path
+    try:
+        tips = await _refresh_tip_evs(tips)
+    except Exception as _b14a_err:
+        log.debug("BUILD-14a EV refresh failed (graceful fallback): %s", _b14a_err)
+
     # Show ALL tips with tiered display — thin-slate fallback adds fixtures when no edge clears the bar
     thin_slate = (_hot_tips_cache.get("global") or {}).get("thin_slate", {})
     thin_slate_fixtures = []
     if not tips and user_id:
         thin_slate_fixtures = await _get_user_fixture_preview(user_id, limit=3, days_ahead=7)
-    text, markup = _build_hot_tips_page(
+    text, markup = await _build_hot_tips_page(
         tips, page=0, user_tier=user_tier, remaining_views=remaining_views,
         consecutive_misses=_consec_misses,
         hit_rate_7d=_hit_rate, resource_count=_res_count,
@@ -9094,6 +9635,15 @@ def _build_edge_only_section(tips: list[dict]) -> str:
     odds = best.get("odds", 0)
     bk = best.get("bookmaker", best.get("bookie", "the market")) or "the market"
     outcome = best.get("outcome", "")
+    # BUILD-11: Translate positional keys to team display names (same as BUILD-7 in _build_game_buttons).
+    _home_disp = best.get("home_team") or ""
+    _away_disp = best.get("away_team") or ""
+    if outcome == "home" and _home_disp:
+        outcome = _home_disp
+    elif outcome == "away" and _away_disp:
+        outcome = _away_disp
+    elif outcome == "draw":
+        outcome = "Draw"
     prob = best.get("prob", 0)
     ev_str = f"+{ev:.1f}%" if ev > 0 else f"{ev:.1f}%"
     edge_score = best.get("edge_score", 0) or 0
@@ -9233,7 +9783,7 @@ def _build_odds_compare_back_button(user_id: int, event_id: str) -> InlineKeyboa
     return InlineKeyboardButton("↩️ Back to Game", callback_data=f"yg:game:{event_id}")
 
 # ── W60-CACHE: Persistent narrative cache in odds.db ──────────
-_NARRATIVE_CACHE_TTL = 7200  # 2 hours in seconds (R14-BUILD-01: reduced from 6h)
+_NARRATIVE_CACHE_TTL = 21600  # 6 hours in seconds (BUILD-16b/FIX-2A: extended from 2h)
 _NARRATIVE_DB_PATH = str(ODDS_DB_PATH)
 # W75-FIX: Cache miss uses Sonnet (not Haiku) for quality parity with pre-gen
 _NARRATIVE_MODEL = os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514")
@@ -9269,6 +9819,8 @@ def _ensure_narrative_cache_table() -> None:
                 "ALTER TABLE narrative_cache "
                 "ADD COLUMN narrative_source TEXT NOT NULL DEFAULT 'w82'"
             )
+        if "coverage_json" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN coverage_json TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -9313,18 +9865,30 @@ def _ensure_shadow_narratives_table() -> None:
 
 
 def _cleanup_expired_narrative_cache_rows(limit: int | None = None) -> int:
-    """Delete expired narrative cache rows in one narrow hygiene sweep."""
+    """Delete expired narrative cache rows in one narrow hygiene sweep.
+
+    BUILD-PREGEN-FIX-2 PRE-3 gap fix: w84 rows are preserved (not deleted) on
+    expiry so that PRE-3 can find them during refresh sweeps and avoid overwriting
+    with w82. Only non-w84 expired rows are deleted.
+    """
     from datetime import datetime, timezone
     from db_connection import get_connection
 
     conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
     try:
         rows = conn.execute(
-            "SELECT match_id, expires_at FROM narrative_cache ORDER BY expires_at ASC"
+            "SELECT match_id, expires_at, narrative_source FROM narrative_cache ORDER BY expires_at ASC"
         ).fetchall()
         now = datetime.now(timezone.utc)
         expired_ids: list[str] = []
-        for match_id, expires_at in rows:
+        for row in rows:
+            match_id = row[0]
+            expires_at = row[1]
+            narrative_source = row[2] if len(row) > 2 else "w82"
+            # PRE-3 gap fix: never delete w84 rows — PRE-3 needs them to
+            # prevent w82 overwrites on refresh sweeps.
+            if narrative_source == "w84":
+                continue
             try:
                 exp = datetime.fromisoformat(expires_at)
                 if exp.tzinfo is None:
@@ -9373,6 +9937,73 @@ def _compute_odds_hash(match_id: str) -> str:
         conn.close()
 
 
+# ── TIER-FIX C: Tier drift + EV coherence helpers ───────────────────────────
+
+_TIER_LEVEL = {"bronze": 0, "silver": 1, "gold": 2, "diamond": 3}
+
+
+def _tier_drift_exceeds_threshold(cached_tier: str, current_tier: str, threshold: int = 1) -> bool:
+    """Return True if tier level distance > threshold."""
+    a = _TIER_LEVEL.get((cached_tier or "").lower(), 0)
+    b = _TIER_LEVEL.get((current_tier or "").lower(), 0)
+    return abs(a - b) > threshold
+
+
+def _ev_coherence_broken(cached_ev: float, live_ev: float, delta_threshold: float = 5.0) -> bool:
+    """Return True if EV sign flipped OR absolute delta exceeds threshold (5pp).
+
+    predicted_ev is stored as percentage points (e.g. 5.2 = 5.2%), so
+    delta_threshold=5.0 means >5 percentage points, matching AC-3.
+    """
+    sign_flip = (cached_ev >= 0) != (live_ev >= 0)
+    large_delta = abs(live_ev - cached_ev) > delta_threshold
+    return sign_flip or large_delta
+
+
+def _quick_edge_tier_lookup(match_id: str) -> str | None:
+    """Single SELECT on edge_results for current edge_tier. Read-only."""
+    try:
+        from scrapers.db_connect import connect_odds_db as _qetl_fn
+        from scrapers.edge.edge_config import DB_PATH as _qetl_db
+        _qetl_conn = _qetl_fn(_qetl_db)
+        try:
+            row = _qetl_conn.execute(
+                "SELECT edge_tier FROM edge_results "
+                "WHERE match_key = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC LIMIT 1",
+                (match_id,),
+            ).fetchone()
+        finally:
+            _qetl_conn.close()
+        if row and row[0]:
+            return row[0].strip().lower()
+        return None
+    except Exception:
+        return None
+
+
+def _quick_ev_lookup(match_id: str) -> float | None:
+    """Single SELECT on edge_results for current predicted_ev. Read-only."""
+    try:
+        from scrapers.db_connect import connect_odds_db as _qev_fn
+        from scrapers.edge.edge_config import DB_PATH as _qev_db
+        _qev_conn = _qev_fn(_qev_db)
+        try:
+            row = _qev_conn.execute(
+                "SELECT predicted_ev FROM edge_results "
+                "WHERE match_key = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC LIMIT 1",
+                (match_id,),
+            ).fetchone()
+        finally:
+            _qev_conn.close()
+        if row and row[0] is not None:
+            return float(row[0])
+        return None
+    except Exception:
+        return None
+
+
 async def _get_cached_narrative(match_id: str) -> dict | None:
     """Fetch cached narrative from persistent DB cache. Returns None if stale/expired."""
     import json
@@ -9385,13 +10016,13 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
         try:
             row = conn.execute(
                 "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
-                "evidence_json, narrative_source "
+                "evidence_json, narrative_source, coverage_json, created_at "
                 "FROM narrative_cache WHERE match_id = ?",
                 (match_id,),
             ).fetchone()
             if not row:
                 return None
-            html, model, tier, tips_json, stored_hash, expires_at, evidence_json, narrative_source = row
+            html, model, tier, tips_json, stored_hash, expires_at, evidence_json, narrative_source, coverage_json, created_at_raw = row
             # Check TTL
             try:
                 exp = datetime.fromisoformat(expires_at)
@@ -9464,6 +10095,51 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     pass
 
+            # MY-MATCHES-RELIABILITY-FIX: Reject w82 entries for ESPN-covered leagues
+            # within 7 days. w82 is the deterministic baseline — if ESPN data is available
+            # (or should be), force regeneration so pregen can produce a richer w84 entry.
+            if narrative_source == "w82":
+                _w82_league = None
+                # Try evidence_json first
+                if evidence_json:
+                    try:
+                        _w82_ej = json.loads(evidence_json) if isinstance(evidence_json, str) else evidence_json
+                        _w82_league = _w82_ej.get("league", "")
+                    except (json.JSONDecodeError, TypeError, AttributeError):
+                        pass
+                # Fallback: look up league from edge_results
+                if not _w82_league:
+                    try:
+                        _lr = conn.execute(
+                            "SELECT league FROM edge_results WHERE match_key = ? LIMIT 1",
+                            (match_id,),
+                        ).fetchone()
+                        if _lr:
+                            _w82_league = _lr[0]
+                    except Exception:
+                        pass
+                if _w82_league and _w82_league in _ESPN_COVERED_LEAGUES:
+                    _w82_reject = False
+                    try:
+                        _w82_ds = match_id.rsplit("_", 1)[-1]
+                        if len(_w82_ds) == 10:
+                            from datetime import date as _dt_date2
+                            _w82_md = _dt_date2.fromisoformat(_w82_ds)
+                            _w82_reject = (_w82_md - _dt_date2.today()).days <= 7
+                    except (ValueError, IndexError):
+                        _w82_reject = True
+                    if _w82_reject:
+                        log.warning(
+                            "Rejecting w82 cached narrative for %s — ESPN-covered league %s, forcing w84 regeneration",
+                            match_id, _w82_league,
+                        )
+                        try:
+                            conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                            conn.commit()
+                        except sqlite3.OperationalError as exc:
+                            log.debug("Deferred w82 freshness cache delete for %s: %s", match_id, exc)
+                        return None
+
             # W84-Q3: Reject cached narratives containing legacy banned phrases
             if _has_banned_patterns(cleaned):
                 log.warning("Rejecting cached narrative for %s — contains banned phrases", match_id)
@@ -9496,12 +10172,44 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except sqlite3.OperationalError as exc:
                     log.debug("Deferred stale H2H cache delete for %s: %s", match_id, exc)
                 return None
+            # TIER-FIX C: Reject cache when tier drifts >1 level or EV is incoherent
+            _current_er_tier = _quick_edge_tier_lookup(match_id)
+            if _current_er_tier and _tier_drift_exceeds_threshold(tier, _current_er_tier):
+                log.warning(
+                    "Cache rejected for %s — tier drift: cache=%s current=%s",
+                    match_id, tier, _current_er_tier,
+                )
+                return None
+
+            # Extract cached EV from tips_json (first tip's predicted_ev or ev)
+            _cached_ev = None
+            if parsed_tips and isinstance(parsed_tips, list) and len(parsed_tips) > 0:
+                _first_tip = parsed_tips[0] if isinstance(parsed_tips[0], dict) else {}
+                _cached_ev_raw = _first_tip.get("predicted_ev") or _first_tip.get("ev")
+                if _cached_ev_raw is not None:
+                    try:
+                        _cached_ev = float(_cached_ev_raw)
+                    except (ValueError, TypeError):
+                        pass
+
+            _current_er_ev = _quick_ev_lookup(match_id)
+            if _current_er_ev is not None and _cached_ev is not None:
+                if _ev_coherence_broken(_cached_ev, _current_er_ev):
+                    log.warning(
+                        "Cache rejected for %s — EV incoherent: cached=%.3f live=%.3f",
+                        match_id, _cached_ev, _current_er_ev,
+                    )
+                    return None
+
             return {
                 "html": cleaned,
                 "tips": parsed_tips,
                 "edge_tier": tier,
                 "model": model,
                 "narrative_source": narrative_source or "w82",
+                "coverage_json": coverage_json,
+                "evidence_json": evidence_json,  # BUILD-6: expose for display
+                "created_at": created_at_raw,  # BUILD-16c: staleness check
             }
         finally:
             conn.close()
@@ -9517,6 +10225,7 @@ async def _store_narrative_cache(
     model: str,
     evidence_json: str | None = None,
     narrative_source: str = "w82",
+    coverage_json: str | None = None,
 ) -> None:
     """Persist narrative to DB cache with 6hr TTL.
 
@@ -9543,14 +10252,15 @@ async def _store_narrative_cache(
             conn.execute(
                 "INSERT OR REPLACE INTO narrative_cache "
                 "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
-                "evidence_json, narrative_source, created_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "evidence_json, narrative_source, coverage_json, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     match_id, html, model, edge_tier,
                     json.dumps(tips, default=str),
                     odds_hash,
                     evidence_json,
                     narrative_source,
+                    coverage_json,
                     now.isoformat(),
                     expires.isoformat(),
                 ),
@@ -9566,6 +10276,68 @@ async def _store_narrative_cache(
             conn.close()
 
     await asyncio.to_thread(_store)
+
+
+async def _get_current_ev_for_match(match_key: str) -> float | None:
+    """Compute current EV live via calculate_edge_v2() for the given match_key.
+
+    COVERAGE-GATE-BUILD: Used by serve-time EV gate to determine if a cached
+    edge:detail card still has positive EV before serving it.
+    Falls back to stored predicted_ev on calculation error or timeout.
+    Returns None if the match is not found or on any error.
+    """
+    def _compute():
+        try:
+            from scrapers.db_connect import connect_odds_db as _conn_fn
+            from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+            _conn = _conn_fn(_DB_PATH)
+            row = _conn.execute(
+                "SELECT predicted_ev, bet_type, sport, league FROM edge_results "
+                "WHERE match_key = ? AND result IS NULL "
+                "ORDER BY id DESC LIMIT 1",
+                (match_key,),
+            ).fetchone()
+            _conn.close()
+            if not row:
+                return None
+            stored_ev = float(row[0]) if row[0] is not None else None
+            bet_type = row[1] or "home"
+            sport = row[2] or "soccer"
+            league = row[3] or ""
+            # Normalise bet_type to outcome key
+            _bt = bet_type.strip()
+            if _bt == "Home Win" or _bt == "home":
+                outcome = "home"
+            elif _bt == "Away Win" or _bt == "away":
+                outcome = "away"
+            elif _bt in ("Draw", "draw", "X"):
+                outcome = "draw"
+            else:
+                outcome = "home"
+            # Live calculation
+            try:
+                from scrapers.edge.edge_v2_helper import calculate_edge_v2
+                result = calculate_edge_v2(
+                    match_key,
+                    outcome=outcome,
+                    sport=sport,
+                    league=league,
+                    _skip_log=True,
+                )
+                if result and result.get("predicted_ev") is not None:
+                    return float(result["predicted_ev"])
+            except Exception as _calc_err:
+                log.debug(
+                    "_get_current_ev_for_match live calc failed for %s: %s",
+                    match_key, _calc_err,
+                )
+            # Fallback to stored value
+            return stored_ev
+        except Exception as _e:
+            log.debug("_get_current_ev_for_match failed for %s: %s", match_key, _e)
+            return None
+
+    return await asyncio.to_thread(_compute)
 
 
 async def _delete_narrative_cache(match_id: str) -> None:
@@ -10172,6 +10944,11 @@ BANNED_NARRATIVE_PHRASES = [
     "knockout encounter",
     # R7-BUILD-02: P1-SHARP-REFERENCE — sharp book reference must never appear in user-facing narratives
     "Sharp market pricing",
+    # BUILD-EDGE-GATE: Zero-signal fallback phrases — these should never appear now that
+    # zero-signal edges are suppressed, but belt-and-suspenders in case of code path leaks.
+    "no supporting indicators from any source",
+    "no confirming indicators back it up",
+    "treat this as a price-only play",
 ]
 
 _INJURY_FETCH_LOOKBACK_DAYS = 2
@@ -10414,6 +11191,66 @@ def _extract_cached_espn_stale_minutes(evidence_json: str | None) -> float | Non
             return None
         from datetime import datetime, timezone
         return max(0.0, (datetime.now(timezone.utc) - fetched_dt).total_seconds() / 60.0)
+
+
+def _render_evidence_section(evidence_json_str: str | None) -> str:
+    """Render sharp-line vs SA odds + signal backing below the narrative (BUILD-6).
+
+    Returns an HTML fragment (starting with a divider) or "" when nothing to show.
+    Safe on any parse error or missing data.
+    """
+    if not evidence_json_str:
+        return ""
+    try:
+        ej = (
+            json.loads(evidence_json_str)
+            if isinstance(evidence_json_str, str)
+            else evidence_json_str
+        )
+    except (json.JSONDecodeError, TypeError):
+        return ""
+
+    lines: list[str] = []
+
+    edge_state = ej.get("edge_state") or {}
+    outcome = (edge_state.get("outcome") or "").lower().strip()
+    edge_pct = float(edge_state.get("edge_pct") or 0)
+    confirming = int(edge_state.get("confirming_signals") or 0)
+    contradicting = int(edge_state.get("contradicting_signals") or 0)
+
+    # ── Sharp lines vs SA odds ───────────────────────────────
+    sharp = ej.get("sharp_lines") or {}
+    if (sharp.get("provenance") or {}).get("available") and outcome:
+        pin = sharp.get("pinnacle_price") or {}
+        bfx = sharp.get("betfair_price") or {}
+        sharp_price = pin.get(outcome) or bfx.get(outcome)
+        sharp_src = "Pinnacle" if pin.get(outcome) else ("Betfair" if bfx.get(outcome) else "")
+        sa_blk = ej.get("sa_odds") or {}
+        sa_best = (sa_blk.get("best_odds") or {}).get(outcome)
+        sa_bk = (sa_blk.get("best_bookmaker") or {}).get(outcome, "")
+        if sharp_price and sa_best and sharp_src:
+            try:
+                ev_str = f" · <b>+{edge_pct:.1f}%</b>" if edge_pct > 0 else ""
+                lines.append(
+                    f"📈 <b>{sharp_src}:</b> {float(sharp_price):.2f}"
+                    f"  ·  <b>SA best:</b> {float(sa_best):.2f} ({h(sa_bk)}){ev_str}"
+                )
+            except (TypeError, ValueError):
+                pass
+
+    # ── Signal backing ───────────────────────────────────────
+    if confirming >= 1:
+        total = confirming + contradicting
+        if contradicting > 0:
+            lines.append(f"🤝 <b>Signals:</b> {confirming}/{total} confirming")
+        else:
+            s = "s" if confirming > 1 else ""
+            lines.append(f"🤝 <b>Signals:</b> {confirming} source{s} backing this")
+
+    if not lines:
+        return ""
+
+    return "\n\n━━━\n" + "\n".join(lines)
 
 
 def _has_stale_setup_context_claims(narrative: str, evidence_json: str | None) -> bool:
@@ -11951,8 +12788,13 @@ def _build_signal_only_narrative(
 # ── W80-PROSE: Natural Analyst Prose Templates (replaces W79 fill-in-the-blank) ──
 
 
-def _parse_record(record_str: str) -> tuple[int, int, int]:
+def _parse_record(record_str) -> tuple[int, int, int]:
     """Parse 'W9 D3 L2' into (wins, draws, losses). Handles cricket 'W5 L3'."""
+    # Defensive: accept dicts from stale cache / alternative code paths
+    if isinstance(record_str, dict):
+        return (int(record_str.get("wins", 0) or 0),
+                int(record_str.get("draws", 0) or 0),
+                int(record_str.get("losses", 0) or 0))
     if not record_str:
         return (0, 0, 0)
     w = d_val = l = 0
@@ -12760,6 +13602,7 @@ SPORT_SUBS = {
         "finding the net": "finding the boundary",
         "in front of goal": "with the bat",
         "goalless": "scoreless",
+        "kickoff": "start of play",
     },
 }
 
@@ -13793,6 +14636,9 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         f"9. If the baseline includes a 'Head to head:' line, keep that H2H sentence VERBATIM or delete it entirely. Do NOT rewrite H2H counts, last-meeting records, or W/D/L summaries. If the baseline has no H2H line, do NOT add H2H prose anywhere else either.\n"
         f"{freshness_rule}"
         f"11. Platform blacklist is enforced at validation time. Do NOT use banned filler such as: let that shape the stake, keeps the stake size measured, worth a measured look, grab it before.\n\n"
+        f"BANNED PHRASES — using ANY of these will cause automated rejection:\n"
+        + "\n".join(f"- \"{p}\"" for p in BANNED_NARRATIVE_PHRASES)
+        + "\n\nUse alternative language that conveys the same meaning without these phrases.\n\n"
         f"If you cannot improve the baseline without violating these constraints, return it UNCHANGED."
     )
 
@@ -13815,6 +14661,13 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
     # 2. Banned phrases for this tone band
     for phrase in band["banned"]:
         if phrase.lower() in polished_lower:
+            # BUILD-PREGEN-FIX-2: "confident" gets false-positive handling — only reject
+            # when used assertively (outcome-certainty phrases). Non-assertive uses are
+            # safe analytical language and must not trigger polish rejection.
+            if phrase.lower() == "confident":
+                from evidence_pack import _is_banned_phrase_false_positive
+                if _is_banned_phrase_false_positive(polished_lower, phrase):
+                    continue  # False positive — skip this phrase
             log.warning("POLISH REJECT: banned phrase '%s' in %s band", phrase, spec.tone_band)
             return False
 
@@ -13961,6 +14814,70 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
     return True
 
 
+def _enrich_edge_data_from_db(match_key: str, outcome: str) -> dict:
+    """BASELINE-FIX: Read real edge data from edge_results for the instant baseline path.
+
+    Sync function — call via asyncio.to_thread().
+    Pattern mirrors edge_detail_renderer._load_edge_result() (W81-DBLOCK compliant).
+    confirming_signals estimation from edge_detail_renderer._build_detail_data() pattern.
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db as _conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+        _conn = _conn_fn(_DB_PATH)
+        _conn.row_factory = lambda cursor, row: dict(
+            zip([col[0] for col in cursor.description], row)
+        )
+        try:
+            # Prefer outcome-specific row; fall back to any result-pending row for this match
+            row = _conn.execute(
+                "SELECT composite_score, recommended_odds, bookmaker, "
+                "predicted_ev, league, confirming_signals "
+                "FROM edge_results "
+                "WHERE match_key = ? AND bet_type = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC, id DESC LIMIT 1",
+                (match_key, outcome),
+            ).fetchone()
+            if not row:
+                row = _conn.execute(
+                    "SELECT composite_score, recommended_odds, bookmaker, "
+                    "predicted_ev, league, confirming_signals "
+                    "FROM edge_results "
+                    "WHERE match_key = ? AND result IS NULL "
+                    "ORDER BY recommended_at DESC, id DESC LIMIT 1",
+                    (match_key,),
+                ).fetchone()
+        finally:
+            _conn.close()
+
+        if not row:
+            return {}
+
+        composite = float(row.get("composite_score") or 0)
+        cs_raw = row.get("confirming_signals")
+        if cs_raw is not None:
+            confirming = int(cs_raw)
+        else:
+            # Estimation from composite when confirming_signals is NULL
+            # (mirrors edge_detail_renderer._build_detail_data() pattern)
+            confirming = (
+                3 if composite >= 70
+                else 2 if composite >= 55
+                else 1 if composite >= 35
+                else 0
+            )
+        return {
+            "best_bookmaker": row.get("bookmaker") or "",
+            "best_odds": float(row.get("recommended_odds") or 0),
+            "edge_pct": float(row.get("predicted_ev") or 0),
+            "composite_score": composite,
+            "confirming_signals": confirming,
+            "league": row.get("league") or "",
+        }
+    except Exception:
+        return {}
+
+
 async def _generate_narrative_v2(
     ctx_data: dict | None,
     tips: list[dict] | None,
@@ -13990,6 +14907,44 @@ async def _generate_narrative_v2(
 
     # Build spec → deterministic baseline (<100ms, zero API)
     edge_data = _extract_edge_data(tips, home_team, away_team, selected_outcome=selected_outcome)
+
+    # BASELINE-FIX: Enrich edge_data from DB when instant baseline path has missing values.
+    # Tips from _load_tips_from_edge_results() (fast cold path) may have edge_v2=None,
+    # leaving best_odds=0, edge_pct=0, best_bookmaker="?", confirming_signals=0, league="".
+    # Read real values from edge_results directly — same source as edge_detail_renderer.
+    _needs_enrich = (
+        not edge_data.get("best_odds")
+        or not edge_data.get("edge_pct")
+        or not edge_data.get("league")
+        or edge_data.get("best_bookmaker") in ("", "?")
+        or not edge_data.get("confirming_signals")
+    )
+    if _needs_enrich and tips:
+        _t0 = tips[0]
+        _mk = _t0.get("match_id") or _t0.get("match_key", "")
+        _oc = edge_data.get("outcome", _t0.get("outcome", ""))
+        if _mk:
+            try:
+                _enriched = await asyncio.wait_for(
+                    asyncio.to_thread(_enrich_edge_data_from_db, _mk, _oc),
+                    timeout=2.0,
+                )
+                if _enriched:
+                    if not edge_data.get("best_bookmaker") or edge_data["best_bookmaker"] in ("", "?"):
+                        edge_data["best_bookmaker"] = _enriched.get("best_bookmaker") or edge_data.get("best_bookmaker", "")
+                    if not edge_data.get("best_odds"):
+                        edge_data["best_odds"] = _enriched.get("best_odds") or 0
+                    if not edge_data.get("edge_pct"):
+                        edge_data["edge_pct"] = _enriched.get("edge_pct") or 0
+                    if not edge_data.get("composite_score"):
+                        edge_data["composite_score"] = _enriched.get("composite_score") or 0
+                    if not edge_data.get("confirming_signals"):
+                        edge_data["confirming_signals"] = _enriched.get("confirming_signals", 0)
+                    if not edge_data.get("league"):
+                        edge_data["league"] = _enriched.get("league") or ""
+            except Exception as _enrich_err:
+                log.debug("BASELINE-FIX: DB enrichment skipped: %s", _enrich_err)
+
     spec = build_narrative_spec(ctx_data, edge_data, tips, sport)
     baseline = _render_baseline(spec)
     baseline = _sanitise_jargon(baseline)
@@ -14254,9 +15209,11 @@ _KNOWN_TEAM_NICKNAMES = {
     "los blancos", "los merengues", "los colchoneros",
     "the old lady", "the red devils", "die borussen",
     "les parisiens", "the parisians", "die bayern", "the rossoneri",
+    "the bavarians", "die roten",
     # SA PSL
     "the glamour boys", "the buccaneers", "the clever boys",
     "the citizens", "usuthu", "amakhosi", "masandawana",
+    "amavila", "dikwena",
     "richards bay", "betway premiership",
     # Rugby franchise nicknames
     "the brumbies", "the reds", "the waratahs", "the force",
@@ -14691,6 +15648,48 @@ def _clean_fact_checked_output(text: str) -> str:
     return text
 
 
+def _refresh_yg_verdict_sync(html: str, match_key: str) -> str:
+    """VERDICT-FIX Fix 2: Sync — refresh EV values and replace stale PASS verdict using live edge_results.
+
+    Called via asyncio.to_thread() in each yg:game: cache-hit path.
+    Falls back to original HTML on any error (safe degradation).
+    """
+    import re as _re2
+    try:
+        from scrapers.db_connect import connect_odds_db
+        from scrapers.edge.edge_config import DB_PATH
+        _conn = connect_odds_db(DB_PATH)
+        _conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+        try:
+            _row = _conn.execute(
+                "SELECT predicted_ev, recommended_odds, bookmaker "
+                "FROM edge_results WHERE match_key = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC LIMIT 1",
+                (match_key,),
+            ).fetchone()
+        finally:
+            _conn.close()
+        if not _row:
+            return html
+        live_ev = float(_row.get("predicted_ev") or 0)
+        if live_ev > 0:
+            # Update EV percentages in the narrative
+            html = _re2.sub(
+                r'[+-]?\d+\.\d+(%\s*expected value)',
+                f'+{live_ev:.1f}\\1',
+                html,
+            )
+            # Replace PASS/no-EV verdict when EV is now positive
+            html = _re2.sub(
+                r'No positive expected value at current pricing[^<\n]*',
+                f'Value confirmed at current pricing (+{live_ev:.1f}% expected value) — monitor line for optimal entry.',
+                html,
+            )
+    except Exception:
+        pass
+    return html
+
+
 async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: str = "matches") -> None:
     """Generate AI betting tips for a specific game."""
     import time as _time
@@ -14707,8 +15706,10 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # ── Check analysis cache first (1-hour TTL) ──
     cached = _analysis_cache.get(event_id)
     if cached:
-        # W30-GATE: cache now stores (msg, tips, edge_tier, ts)
-        if len(cached) == 4:
+        # VERDICT-COHERENCE-FIX: cache now stores 5-tuple (msg, tips, edge_tier, narrative_source, ts)
+        if len(cached) == 5:
+            cached_msg, cached_tips, cached_edge_tier, _cached_src, cached_ts = cached
+        elif len(cached) == 4:
             cached_msg, cached_tips, cached_edge_tier, cached_ts = cached
         else:
             cached_msg, cached_tips, cached_ts = cached
@@ -14744,7 +15745,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
     # 2) If event_id is a DB match_id (contains _vs_), use DB path — skip Odds API loop.
     #    PSL and other DB-sourced events use match_id as event_id so we can serve directly.
-    if not target_event and "_vs_" in event_id:
+    #    BUILD-4 Fix A: check narrative_cache regardless of whether target_event is already set
+    #    (warm path from _schedule_cache set target_event above, but previously skipped this block).
+    if "_vs_" in event_id:
         # Check narrative cache immediately — serve without any further resolution
         try:
             _early_db_hit = await _get_cached_narrative(event_id)
@@ -14752,24 +15755,50 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             _early_db_hit = None
         if _early_db_hit:
             # W84-Q7: Extract teams from event_id for header injection
-            # (target_event is None at this point — cold tap before My Matches loads)
             _ea_home, _ea_away = _teams_from_vs_event_id(event_id)
-            _ea_hdr = _build_event_header(_ea_home, _ea_away, "", None)
+            # BUILD-4 Fix A: use schedule_cache team names when available (richer display)
+            if target_event:
+                _ea_home = target_event.get("home_team") or _ea_home
+                _ea_away = target_event.get("away_team") or _ea_away
+            _ea_hdr = _build_event_header(_ea_home, _ea_away, target_league or "", target_event)
             _ea_html = _inject_narrative_header(
                 _early_db_hit["html"], _ea_home, _ea_away,
                 _ea_hdr["kickoff"], _ea_hdr["league_display"], _ea_hdr["broadcast_line"],
             )
+            # VERDICT-FIX Fix 2: Inject live EV/verdict from edge_results
+            try:
+                _ea_html = await asyncio.wait_for(
+                    asyncio.to_thread(_refresh_yg_verdict_sync, _ea_html, event_id),
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
+            # TIER-FIX B: read edge_tier directly from edge_results
+            try:
+                _ea_fresh_tier = await asyncio.wait_for(
+                    asyncio.to_thread(_get_fresh_tier_from_er, event_id),
+                    timeout=1.0,
+                )
+            except Exception:
+                _ea_fresh_tier = None
+            _ea_tier = _ea_fresh_tier or _early_db_hit.get("edge_tier", "bronze")
             _analysis_cache[event_id] = (
                 _ea_html, _early_db_hit["tips"],
-                _early_db_hit["edge_tier"],
+                _ea_tier,
                 _early_db_hit.get("narrative_source"),
                 _time.time(),
             )
             _game_tips_cache[event_id] = _early_db_hit["tips"]
+            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
+            for _ct in _early_db_hit["tips"]:
+                if not _ct.get("home_team"):
+                    _ct["home_team"] = _ea_home
+                if not _ct.get("away_team"):
+                    _ct["away_team"] = _ea_away
             buttons = _build_game_buttons(
                 _early_db_hit["tips"], event_id, user_id,
                 source=source, user_tier=_ggt_tier,
-                edge_tier=_early_db_hit["edge_tier"],
+                edge_tier=_ea_tier,
             )
             _banner = _qa_banner(user_id)
             _html = (_banner + _ea_html) if _banner else _ea_html
@@ -14778,31 +15807,32 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
             log.info(
-                "PERF: narrative_cache EARLY HIT (model=%s) for %s in %.1fs",
-                _early_db_hit["model"], event_id, _time.time() - _perf_t0,
+                "PERF: narrative_cache EARLY HIT (model=%s tier=%s) for %s in %.1fs",
+                _early_db_hit["model"], _ea_tier, event_id, _time.time() - _perf_t0,
             )
             return
-        # No narrative cache hit — build pseudo-event from odds.db for full generation
-        try:
-            db_match = await odds_svc.get_best_odds(event_id, "1x2")
-            if not db_match.get("outcomes"):
-                db_match = await odds_svc.get_best_odds(event_id, "match_winner")
-            if db_match.get("outcomes"):
-                home_t = _display_team_name(db_match.get("home_team") or "TBD")
-                away_t = _display_team_name(db_match.get("away_team") or "TBD")
-                league_raw = db_match.get("league", "")
-                parts = event_id.rsplit("_", 1)
-                date_str = parts[-1] if len(parts) > 1 and len(parts[-1]) == 10 else ""
-                target_event = {
-                    "id": event_id,
-                    "home_team": home_t,
-                    "away_team": away_t,
-                    "commence_time": f"{date_str}T00:00:00Z" if date_str else "",
-                    "league_key": league_raw,
-                }
-                target_league = league_raw
-        except Exception:
-            pass
+        # No narrative cache hit — build pseudo-event from odds.db for cold taps only
+        if not target_event:
+            try:
+                db_match = await odds_svc.get_best_odds(event_id, "1x2")
+                if not db_match.get("outcomes"):
+                    db_match = await odds_svc.get_best_odds(event_id, "match_winner")
+                if db_match.get("outcomes"):
+                    home_t = _display_team_name(db_match.get("home_team") or "TBD")
+                    away_t = _display_team_name(db_match.get("away_team") or "TBD")
+                    league_raw = db_match.get("league", "")
+                    parts = event_id.rsplit("_", 1)
+                    date_str = parts[-1] if len(parts) > 1 and len(parts[-1]) == 10 else ""
+                    target_event = {
+                        "id": event_id,
+                        "home_team": home_t,
+                        "away_team": away_t,
+                        "commence_time": f"{date_str}T00:00:00Z" if date_str else "",
+                        "league_key": league_raw,
+                    }
+                    target_league = league_raw
+            except Exception:
+                pass
 
     # 3) If still not resolved, search Odds API (EPL/CL event IDs are Odds API UUIDs)
     if not target_event:
@@ -14936,6 +15966,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _pre_cached["html"], home_raw, away_raw,
                 _phdr["kickoff"], _phdr["league_display"], _phdr["broadcast_line"],
             )
+            # VERDICT-FIX Fix 2: Inject live EV/verdict from edge_results
+            try:
+                _p_html = await asyncio.wait_for(
+                    asyncio.to_thread(_refresh_yg_verdict_sync, _p_html, _pre_mid),
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
             _analysis_cache[event_id] = (
                 _p_html, _pre_cached["tips"],
                 _pre_cached["edge_tier"],
@@ -14943,6 +15981,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _time.time(),
             )
             _game_tips_cache[event_id] = _pre_cached["tips"]
+            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
+            for _ct in _pre_cached["tips"]:
+                if not _ct.get("home_team"):
+                    _ct["home_team"] = home_raw
+                if not _ct.get("away_team"):
+                    _ct["away_team"] = away_raw
             _pre_buttons = _build_game_buttons(
                 _pre_cached["tips"], event_id, user_id,
                 source=source, user_tier=_ggt_tier,
@@ -14964,19 +16008,51 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         _run_spinner(_spinner_msg, f"Analysing {hf}{home} vs {af}{away}", _spinner_stop),
     )
 
-    # ── Start ESPN context fetch early (runs in background while odds load) ──
+    # ── Start context fetch early (runs in background while odds load) ──
+    # API-Football primary for soccer, ESPN fallback for all sports.
     async def _fetch_context_bg():
-        """Background coroutine for ESPN match context."""
+        """Background coroutine for match context — API-Football primary (soccer), ESPN fallback."""
         try:
-            from scrapers.match_context_fetcher import get_match_context
             _sk = config.LEAGUE_SPORT.get(target_league, "")
             _SPORT_TO_FETCHER = {"combat": ""}
             _fs = _SPORT_TO_FETCHER.get(_sk, _sk)
-            log.info("Fetching match context: %s vs %s, league=%s, sport=%s",
+            _h_key = home_raw.lower().replace(" ", "_")
+            _a_key = away_raw.lower().replace(" ", "_")
+
+            # ── Primary: API-Football for soccer ───────────────────────────
+            if _sk in ("soccer", "football"):
+                try:
+                    from fetchers import get_fetcher
+                    _fetcher = get_fetcher("soccer")
+                    _match_key = f"{_h_key}_vs_{_a_key}"
+                    _ctx = await _fetcher.fetch_and_cache(
+                        match_key=_match_key,
+                        home_team=_h_key,
+                        away_team=_a_key,
+                        league=target_league or "",
+                        sport="soccer",
+                        live_safe=True,
+                    )
+                    if _ctx and _ctx.get("data_available"):
+                        log.info("API-Football context hit for %s vs %s", home_raw, away_raw)
+                        return _ctx
+                    log.info(
+                        "API-Football context thin for %s vs %s — falling back to ESPN",
+                        home_raw, away_raw,
+                    )
+                except Exception as _ff_exc:
+                    log.warning(
+                        "Fetcher failed for %s vs %s: %s — falling back to ESPN",
+                        home_raw, away_raw, _ff_exc,
+                    )
+
+            # ── Fallback: ESPN (all sports) ─────────────────────────────────
+            from scrapers.match_context_fetcher import get_match_context
+            log.info("Fetching match context via ESPN: %s vs %s, league=%s, sport=%s",
                      home_raw, away_raw, target_league, _fs or "(auto)")
             return await get_match_context(
-                home_team=home_raw.lower().replace(" ", "_"),
-                away_team=away_raw.lower().replace(" ", "_"),
+                home_team=_h_key,
+                away_team=_a_key,
                 league=target_league or "",
                 sport=_fs,
             )
@@ -15004,6 +16080,14 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _cached_db["html"], home_raw, away_raw,
                 _bhdr["kickoff"], _bhdr["league_display"], _bhdr["broadcast_line"],
             )
+            # VERDICT-FIX Fix 2: Inject live EV/verdict from edge_results
+            try:
+                _b_html = await asyncio.wait_for(
+                    asyncio.to_thread(_refresh_yg_verdict_sync, _b_html, db_match_id),
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
             _analysis_cache[event_id] = (
                 _b_html, _cached_db["tips"],
                 _cached_db["edge_tier"],
@@ -15011,6 +16095,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _time.time(),
             )
             _game_tips_cache[event_id] = _cached_db["tips"]
+            # P0-2 FIX: Enrich cached tips with team names for CTA resolution
+            for _ct in _cached_db["tips"]:
+                if not _ct.get("home_team"):
+                    _ct["home_team"] = home_raw
+                if not _ct.get("away_team"):
+                    _ct["away_team"] = away_raw
             _spinner_stop.set()
             await _spinner_task
             _ctx_task.cancel()
@@ -15146,6 +16236,10 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         tips.sort(key=lambda t: t["ev"], reverse=True)
     _game_tips_cache[event_id] = tips
     log.info("PERF: odds_fetch+edge_v2=%.1fs", _time.time() - _perf_t0)
+
+    # Neutral analysis mode — all tips have EV ≤ 0% (COVERAGE-GATE-BUILD Step 8)
+    # Display-time change: suppress tier badge, replace CTA, add label to header.
+    _neutral_analysis = bool(tips) and all(t.get("ev", 0) <= 0 for t in tips)
 
     # Parse kickoff time (needed for AI call regardless of odds)
     try:
@@ -15529,7 +16623,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # ── Inject Edge Rating badge into Verdict header ──
     # W75-FIX: edge_v2 tier is authoritative — no EV-threshold fallback
     # W83-HOTFIX: speculative/lean verdict must never show a GOLDEN/DIAMOND badge
-    if narrative and tips:
+    # COVERAGE-GATE-BUILD: Neutral analysis mode never shows a tier badge
+    if narrative and tips and not _neutral_analysis:
         tier = None
         if _cached_display_tier:
             tier = _cached_display_tier
@@ -15596,8 +16691,11 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     _kickoff_line = f"📅 {kickoff}"
     if _venue:
         _kickoff_line += f" · {h(_venue)}"
+    _match_title = f"🎯 <b>{hf}{home} vs {af}{away}</b>"
+    if _neutral_analysis:
+        _match_title += " — Neutral Analysis"
     lines = [
-        f"🎯 <b>{hf}{home} vs {af}{away}</b>",
+        _match_title,
         _kickoff_line,
     ]
     if league_display:
@@ -15786,6 +16884,13 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # Build simplified buttons (North Star: 4 buttons max, Wave 26A: tier-gated, W30-GATE: edge_tier)
     buttons = _build_game_buttons(tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=_edge_tier, selected_outcome=_selected_outcome)  # R9-BUILD-03
 
+    # Neutral analysis mode: replace primary CTA with informational no-op (COVERAGE-GATE-BUILD)
+    if _neutral_analysis and buttons:
+        buttons[0] = [InlineKeyboardButton(
+            "ℹ️ No actionable Edge at current pricing",
+            callback_data="yg:noop",
+        )]
+
     # W84-RT6: Wrap delivery — Telegram TimedOut on edit falls back to reply_text.
     # Unprotected edit here was the last step failing after sync DB calls stalled the loop.
     try:
@@ -15964,19 +17069,34 @@ def _build_game_buttons(
             odds_by_bk = best_ev_tip.get("odds_by_bookmaker", {})
             match_id = best_ev_tip.get("match_id", "")
 
-            # REGFIX-04: Select bookmaker based on the RECOMMENDED outcome, not globally.
-            # Normalise display team name to positional key for nested-dict lookup.
-            _out_raw = (best_ev_tip.get("outcome") or "").lower()
-            _home_n = (best_ev_tip.get("home_team") or "").lower()
-            _away_n = (best_ev_tip.get("away_team") or "").lower()
-            if _out_raw in ("home", "1") or (_home_n and _out_raw == _home_n):
-                _outcome_key = "home"
-            elif _out_raw in ("away", "2") or (_away_n and _out_raw == _away_n):
-                _outcome_key = "away"
-            elif _out_raw == "draw":
-                _outcome_key = "draw"
+            # Prefer outcome_key (positional) before any existing derivation
+            _ok_raw = (best_ev_tip.get("outcome_key") or "").lower()
+            if _ok_raw in ("home", "away", "draw"):
+                _outcome_key = _ok_raw
             else:
-                _outcome_key = _out_raw
+                # REGFIX-04: Select bookmaker based on the RECOMMENDED outcome, not globally.
+                # Normalise display team name to positional key for nested-dict lookup.
+                _out_raw = (best_ev_tip.get("outcome") or "").lower()
+                _home_n = (best_ev_tip.get("home_team") or "").lower()
+                _away_n = (best_ev_tip.get("away_team") or "").lower()
+                if _out_raw in ("home", "1") or (_home_n and _out_raw == _home_n):
+                    _outcome_key = "home"
+                elif _out_raw in ("away", "2") or (_away_n and _out_raw == _away_n):
+                    _outcome_key = "away"
+                elif _out_raw == "draw":
+                    _outcome_key = "draw"
+                else:
+                    _outcome_key = _out_raw
+
+            # BUILD-EDGE-GATE: CTA team name must come from best_ev_tip's own outcome,
+            # NOT from _er_outcomes_cache. The cache stores edge_results.bet_type which may
+            # be for a DIFFERENT outcome than the highest-EV tip. The initial normalization
+            # above (lines 16746-16756) already correctly maps display names to positional
+            # keys. The _er_outcomes_cache override was causing CTA/Verdict team mismatches
+            # (e.g. Verdict says "Bournemouth" but CTA says "Arsenal" at same odds/bookmaker).
+            # Removed: _er_outcomes_cache override (HOT-TIPS-BUILD-07) — superseded by
+            # R9-BUILD-03 selected_outcome + initial normalization.
+
             _rec_bk_key, _ = _select_best_bookmaker_for_outcome(odds_by_bk, _outcome_key)
             if _rec_bk_key:
                 best_bk = {"bookmaker_key": _rec_bk_key, "affiliate_url": ""}
@@ -16004,7 +17124,32 @@ def _build_game_buttons(
                     bk_name = best_ev_tip.get("bookmaker") or best_ev_tip.get("bookie") or config.get_active_display_name()
                 if not aff_url:
                     aff_url = get_affiliate_url(bk_key, match_id=match_id) if bk_key else ""
-                outcome = best_ev_tip["outcome"]
+
+                # HOT-TIPS-BUILD-07: Translate _outcome_key to team display name.
+                # Never use tip["outcome"] directly — it may be a stale display name or
+                # a positional key ("home"/"away") that must not appear verbatim in the CTA.
+                _home_disp = best_ev_tip.get("home_team") or ""
+                _away_disp = best_ev_tip.get("away_team") or ""
+                # BUILD-GATE-RELAX Fix 5: Fallback — extract team names from match_id
+                # when home_team/away_team keys are missing from the tip dict.
+                if not _home_disp or not _away_disp:
+                    _cta_mid = best_ev_tip.get("match_id") or match_key or ""
+                    import re as _re_cta
+                    _cta_mid_no_date = _re_cta.sub(r"_\d{4}-\d{2}-\d{2}$", "", _cta_mid)
+                    if "_vs_" in _cta_mid_no_date:
+                        _h_raw, _a_raw = _cta_mid_no_date.split("_vs_", 1)
+                        if not _home_disp:
+                            _home_disp = _display_team_name(_h_raw)
+                        if not _away_disp:
+                            _away_disp = _display_team_name(_a_raw)
+                if _outcome_key == "home" and _home_disp:
+                    outcome = _home_disp
+                elif _outcome_key == "away" and _away_disp:
+                    outcome = _away_disp
+                elif _outcome_key == "draw":
+                    outcome = "Draw"
+                else:
+                    outcome = best_ev_tip.get("outcome") or ""
                 odds_val = best_ev_tip["odds"]
 
                 cta_text = f"{tier_emoji} Back {outcome} @ {odds_val:.2f} on {bk_name} →"
@@ -16030,6 +17175,13 @@ def _build_game_buttons(
             # No positive EV — gate deep link by tier (W30-GATE)
             if _bet_access in ("blurred", "locked"):
                 primary_button = InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")
+            elif source == "edge_picks":
+                # DEF-2: Suppress bookmaker CTA when all EVs are negative in
+                # Hot Tips path — mirrors My Matches _neutral_analysis gate.
+                primary_button = InlineKeyboardButton(
+                    "ℹ️ No actionable Edge at current pricing",
+                    callback_data="hot:noop",
+                )
             else:
                 active_bk = config.get_active_bookmaker()
                 bk_key = config.ACTIVE_BOOKMAKER
@@ -16261,10 +17413,10 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
 
         _ld_text = f"🔒 <b>{_tier_name} Edge — Locked</b>\n\n"
         _ld_text += f"{_sport_emoji} <b>{_ld_home} vs {_ld_away}</b>\n"
-        _ld_text += f"🏆 {_ld_league}"
+        # BUILD-PREGEN-FIX-2 AC-4: 📅 kickoff on its own line, matching My Matches format
         if _ld_kickoff:
-            _ld_text += f" · ⏰ {_ld_kickoff}"
-        _ld_text += "\n"
+            _ld_text += f"📅 {_ld_kickoff}\n"
+        _ld_text += f"🏆 {_ld_league}\n"
         if _ld_broadcast:
             _ld_text += f"{_ld_broadcast}\n"
         _ld_teaser = _build_signal_detail_block(
@@ -17389,11 +18541,17 @@ def _resolve_settled_pick_label(edge: dict) -> str:
 
 
 def _format_hot_tips_track_record_line(last_10_results: list[str], roi_7d: float | None) -> str:
-    """Build the Hot Tips header track-record line."""
+    """Build the Hot Tips header track-record line.
+
+    BUILD-PREGEN-FIX Fix 4: Percentage format replaces tick/cross emoji string.
+    """
     parts: list[str] = []
-    if len(last_10_results) >= RESULT_PROOF_LAST_10_COUNT:
-        sequence = "".join("✅" if result == "hit" else "❌" for result in last_10_results[:RESULT_PROOF_LAST_10_COUNT])
-        parts.append(f"<b>Last 10:</b> {sequence}")
+    n = len(last_10_results)
+    if n > 0:
+        wins = sum(1 for r in last_10_results[:RESULT_PROOF_LAST_10_COUNT] if r == "hit")
+        counted = min(n, RESULT_PROOF_LAST_10_COUNT)
+        pct = round((wins / counted) * 100)
+        parts.append(f"🎯 <b>Last {counted} Edges: {pct}% Success Rate</b>")
     if roi_7d is not None:
         parts.append(f"<b>7D ROI:</b> {roi_7d:+.1f}%")
     return " · ".join(parts)

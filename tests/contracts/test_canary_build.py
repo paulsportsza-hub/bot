@@ -242,7 +242,7 @@ async def test_verify_and_fill_cache_fills_gaps(monkeypatch: pytest.MonkeyPatch)
 @pytest.mark.asyncio
 async def test_main_runs_w84_generation(monkeypatch: pytest.MonkeyPatch) -> None:
     """W84-CONFIRM-1: main() always runs W84 generation (no env-var gate)."""
-    monkeypatch.setattr(pregen, "_wait_for_scraper_writer_window", AsyncMock(return_value=True))
+    # BUILD-16a: _wait_for_scraper_writer_window removed — pregen no longer depends on scraper lock
     monkeypatch.setattr(pregen, "_validate_pregen_runtime_schema", lambda db_path=None: None)
     monkeypatch.setattr(pregen, "_load_shadow_pregen_edges", lambda limit=100: [_edge()])
     monkeypatch.setattr(pregen, "_get_cached_narrative", AsyncMock(return_value=None))

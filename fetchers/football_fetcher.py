@@ -142,6 +142,15 @@ async def _api_fetch(
 
 # ── Data Extraction ───────────────────────────────────────────────────────────
 
+
+def _wdl_dict_to_str(stats: dict) -> str:
+    """Convert API-Football record dict {'wins':N,'draws':N,'losses':N} → 'WN DN LN'."""
+    w = int(stats.get("wins", 0) or 0)
+    d = int(stats.get("draws", 0) or 0)
+    l = int(stats.get("losses", 0) or 0)
+    return f"W{w} D{d} L{l}"
+
+
 def _extract_standings(
     standings_response: dict[str, Any],
     league_id: int,
@@ -175,21 +184,21 @@ def _extract_standings(
                     "goals_for": all_stats.get("goals", {}).get("for", 0),
                     "goals_against": all_stats.get("goals", {}).get("against", 0),
                     "goal_difference": entry.get("goalsDiff", 0),
-                    "record": {
+                    "record": _wdl_dict_to_str({
                         "wins": all_stats.get("win", 0),
                         "draws": all_stats.get("draw", 0),
                         "losses": all_stats.get("lose", 0),
-                    },
-                    "home_record": {
+                    }),
+                    "home_record": _wdl_dict_to_str({
                         "wins": home_stats.get("win", 0),
                         "draws": home_stats.get("draw", 0),
                         "losses": home_stats.get("lose", 0),
-                    },
-                    "away_record": {
+                    }),
+                    "away_record": _wdl_dict_to_str({
                         "wins": away_stats.get("win", 0),
                         "draws": away_stats.get("draw", 0),
                         "losses": away_stats.get("lose", 0),
-                    },
+                    }),
                 }
     return teams
 

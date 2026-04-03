@@ -10,6 +10,7 @@ Usage (from async handler):
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from dataclasses import dataclass
@@ -101,8 +102,14 @@ class EdgeDetailData:
 
 # ── Data Loading ─────────────────────────────────────────────
 
-def _load_edge_result(match_key: str) -> dict | None:
+def _load_edge_result(match_key: str, bet_type: str | None = None) -> dict | None:
     """Read latest unsettled edge_results row for match_key.
+
+    Args:
+        match_key: Edge results match key.
+        bet_type: Optional bet_type filter (e.g. "Home Win", "Away Win").
+            When provided, prefer the row matching this bet_type.
+            Falls back to unfiltered if no match found.
 
     Uses the scraper connection factory per W81-DBLOCK locked rule.
     """
@@ -118,6 +125,27 @@ def _load_edge_result(match_key: str) -> dict | None:
         zip([col[0] for col in cursor.description], row)
     )
     try:
+        # BUILD-QA23-FIX: Translate positional keys to DB format
+        _BET_TYPE_MAP = {"home": "Home Win", "away": "Away Win", "draw": "Draw"}
+        if bet_type:
+            bet_type = _BET_TYPE_MAP.get(bet_type, bet_type)
+        # BUILD-QA22-FIX P0-1b: Filter by bet_type when provided (defence in depth)
+        if bet_type:
+            row = conn.execute(
+                """
+                SELECT match_key, edge_tier, composite_score, bet_type,
+                       recommended_odds, bookmaker, predicted_ev, league,
+                       match_date, confirming_signals, sport
+                FROM edge_results
+                WHERE match_key = ? AND bet_type = ? AND result IS NULL
+                ORDER BY recommended_at DESC, id DESC
+                LIMIT 1
+                """,
+                (match_key, bet_type),
+            ).fetchone()
+            if row:
+                return row
+        # Fallback: unfiltered (original logic)
         row = conn.execute(
             """
             SELECT match_key, edge_tier, composite_score, bet_type,
@@ -174,13 +202,19 @@ def _parse_teams(match_key: str) -> tuple[str, str]:
 
 def _resolve_outcome(
     bet_type: str, home: str, away: str,
+    outcome_key: str | None = None,
 ) -> tuple[str, str]:
     """Map DB bet_type to (raw_outcome, display_outcome).
+
+    Args:
+        outcome_key: Positional key ("home"/"away"/"draw") from tip dict.
+            Used as fallback when bet_type is None/empty — avoids defaulting
+            to "home" when the actual recommendation is different.
 
     Returns:
         ("home"/"away"/"draw", team_display_name_or_Draw)
     """
-    bt = (bet_type or "home").strip()
+    bt = (bet_type or outcome_key or "home").strip()
     if bt in ("Home Win", "home"):
         raw = "home"
     elif bt in ("Away Win", "away"):
@@ -233,6 +267,7 @@ def _build_detail_data(
     ctx: dict | None,
     user_tier: str,
     sport_override: str | None = None,
+    ev_override: float | None = None,
 ) -> EdgeDetailData:
     """Merge edge_result + context into frozen data struct.
 
@@ -247,7 +282,10 @@ def _build_detail_data(
     sport = sport_override or _detect_sport(league_key, edge_row.get("sport"))
 
     composite = float(edge_row.get("composite_score") or 0)
-    ev = round(float(edge_row.get("predicted_ev") or 0), 1)
+    ev = round(
+        ev_override if ev_override is not None else float(edge_row.get("predicted_ev") or 0),
+        1,
+    )
     odds = float(edge_row.get("recommended_odds") or 0)
 
     # Confirming signals: DB column first, estimate fallback for legacy rows
@@ -323,8 +361,8 @@ def _build_detail_data_from_tip(
     """Build detail data from V1 tip dict when V2 edge_results unavailable.
 
     CLEAN-RUGBY: Produces a minimum viable card with real match info.
-    Sets ``model_only=True`` and ``confirming_signals=0`` because V1
-    does not track individual signal confirmations.
+    Estimates ``confirming_signals`` from composite_score (same as V2 path)
+    and sets ``model_only=(confirming == 0)`` because V1 has no signal tracking.
     """
     from scrapers.edge.tier_engine import assign_tier
 
@@ -350,8 +388,13 @@ def _build_detail_data_from_tip(
         tip_data.get("recommended_odds") or tip_data.get("odds") or 0,
     )
 
-    # V1 doesn't track confirming signals
-    confirming = 0
+    # V1 doesn't track confirming signals — estimate from composite (same logic as V2 path)
+    confirming = (
+        3 if composite >= 70
+        else 2 if composite >= 55
+        else 1 if composite >= 35
+        else 0
+    )
 
     # Tier from display_tier or edge_rating
     tier_raw = (
@@ -370,13 +413,16 @@ def _build_detail_data_from_tip(
     else:
         fair_prob = 0
 
-    # Outcome
+    # Outcome — DEF-1: outcome_key (positional) takes priority over display names
+    _ok = tip_data.get("outcome_key")
     bet_type = (
-        tip_data.get("recommended_outcome")
+        _ok
+        or tip_data.get("recommended_outcome")
         or tip_data.get("bet_type")
+        or (tip_data.get("edge_v2") or {}).get("outcome")
         or "home"
     )
-    outcome_raw, outcome_display = _resolve_outcome(bet_type, home, away)
+    outcome_raw, outcome_display = _resolve_outcome(bet_type, home, away, outcome_key=_ok)
 
     # Bookmaker
     bk_key = (tip_data.get("bookmaker") or "").strip().lower()
@@ -412,7 +458,7 @@ def _build_detail_data_from_tip(
         predicted_ev=ev,
         confirming_signals=confirming,
         fair_prob_pct=fair_prob,
-        model_only=True,
+        model_only=(confirming == 0),
         context=ctx,
         mep_met=mep_met,
         match_date=match_date,
@@ -623,8 +669,7 @@ def _section_signals(data: EdgeDetailData) -> str:
 
     if data.model_only:
         lines.append(
-            "No confirming indicators behind this price — "
-            "the edge is carried by the pricing gap alone."
+            "No confirming indicators behind this price."
         )
     elif data.confirming_signals == 1:
         lines.append("1 signal aligned with this edge.")
@@ -664,7 +709,7 @@ def _section_risk(data: EdgeDetailData) -> str:
 
     if not factors:
         factors.append(
-            "No specific flags on this one — standard match-day variables apply."
+            "No elevated risk flags identified for this fixture."
         )
 
     for f in factors:
@@ -674,27 +719,56 @@ def _section_risk(data: EdgeDetailData) -> str:
     return "\n".join(lines)
 
 
+def _vpick(seed: str, n: int) -> int:
+    """MD5-deterministic variant index — same seed always picks same variant."""
+    return int(hashlib.md5(seed.encode()).hexdigest(), 16) % n
+
+
 def _section_verdict(data: EdgeDetailData) -> str:
-    """Tier-driven verdict — conviction mapped to signal count."""
+    """Tier-driven verdict — conviction mapped to signal count.
+
+    SERVE-PATH-FIX Fix 3: MD5-deterministic variant selection per match_key
+    so different cards show different verdict text.
+
+    VERDICT-COHERENCE-FIX: Appends EV clause so the verdict references
+    specific evidence — not just generic posture language.
+    """
     lines = ["🏆 <b>Verdict</b>"]
     badge = render_edge_badge(data.edge_tier)
+    seed = data.match_key
 
     if data.confirming_signals == 0:
-        lines.append(
-            f"{badge} — Monitor the line. Small speculative exposure at best."
-        )
+        variants = [
+            f"{badge} — Monitor the line. Small speculative exposure at best.",
+            f"{badge} — Price-only edge with no confirming signals. Watch, don't chase.",
+            f"{badge} — Speculative angle — if you take it, keep sizing minimal.",
+        ]
+        lines.append(variants[_vpick(seed, len(variants))])
     elif data.confirming_signals == 1:
-        lines.append(
-            f"{badge} — A lean, not a conviction play. Size carefully."
-        )
+        variants = [
+            f"{badge} — A lean, not a conviction play. Size carefully.",
+            f"{badge} — One signal confirms the price. Moderate exposure warranted.",
+            f"{badge} — Early confirmation but not yet a full picture. Stay measured.",
+        ]
+        lines.append(variants[_vpick(seed, len(variants))])
     elif data.confirming_signals >= 3 and data.predicted_ev >= 8:
-        lines.append(
-            f"{badge} — Strong support across indicators. Back with confidence."
-        )
+        variants = [
+            f"{badge} — Strong support across indicators. Back with confidence.",
+            f"{badge} — Multiple signals align with the price. This is a conviction play.",
+            f"{badge} — The depth of support here is rare. Execute with full sizing.",
+        ]
+        lines.append(variants[_vpick(seed, len(variants))])
     else:
-        lines.append(
-            f"{badge} — Enough signal to warrant a standard stake."
-        )
+        variants = [
+            f"{badge} — Enough signal to warrant a standard stake.",
+            f"{badge} — Solid supporting evidence. Normal sizing applies.",
+            f"{badge} — The numbers and signals agree. Back it at standard exposure.",
+        ]
+        lines.append(variants[_vpick(seed, len(variants))])
+
+    # VERDICT-COHERENCE-FIX: Append EV clause — the single most differentiating evidence
+    if data.predicted_ev > 0:
+        lines.append(f"+{data.predicted_ev:.1f}% EV at current pricing.")
 
     return "\n".join(lines)
 
@@ -814,6 +888,7 @@ def render_edge_detail(
     sport: str | None = None,
     tip_data: dict | None = None,
     include_tier: bool = False,
+    ev_override: float | None = None,
 ) -> "str | tuple[str, str]":
     """Render edge detail HTML — ONE function, ONE path, no branching caches.
 
@@ -831,12 +906,19 @@ def render_edge_detail(
             button building without a second DB query. Default False preserves
             the original string-return API so existing callers and tests are
             unaffected.
+        ev_override: When provided, overrides the stored predicted_ev value
+            with this live-computed EV. Falls back to stored when None.
+            Existing callers that omit this param are unaffected.
 
     Returns:
         HTML string when ``include_tier=False`` (default).
         ``(html, edge_tier)`` tuple when ``include_tier=True``.
     """
-    edge_row = _load_edge_result(match_key)
+    # BUILD-QA22-FIX P0-1b: Pass bet_type hint to load the correct edge row
+    _bt_hint = None
+    if tip_data:
+        _bt_hint = tip_data.get("outcome_key") or tip_data.get("bet_type")
+    edge_row = _load_edge_result(match_key, bet_type=_bt_hint)
     if not edge_row:
         if tip_data:
             ctx = _load_match_context(match_key)
@@ -852,7 +934,27 @@ def render_edge_detail(
             return error_html
     else:
         ctx = _load_match_context(match_key)
-        data = _build_detail_data(edge_row, ctx, user_tier, sport)
+        # P0-1 FIX (DEF-1): Use outcome_key (positional "home"/"away"/"draw") when
+        # available — it is independent of team name resolution and breaks the
+        # circular dependency where tip_data.outcome was derived from the same
+        # stale edge_results.bet_type we are trying to override.
+        if tip_data:
+            _bt_override = tip_data.get("outcome_key")  # Direct positional key
+            if not _bt_override:
+                # Legacy fallback: infer from display name (pre-DEF-1 tip dicts)
+                _td_out = (tip_data.get("outcome") or "").strip()
+                _td_home = (tip_data.get("home_team") or "").strip()
+                _td_away = (tip_data.get("away_team") or "").strip()
+                if _td_out.lower() in ("home", "away", "draw"):
+                    _bt_override = _td_out.lower()
+                elif _td_home and _td_out.lower() == _td_home.lower():
+                    _bt_override = "home"
+                elif _td_away and _td_out.lower() == _td_away.lower():
+                    _bt_override = "away"
+            if _bt_override:
+                edge_row = dict(edge_row)
+                edge_row["bet_type"] = _bt_override
+        data = _build_detail_data(edge_row, ctx, user_tier, sport, ev_override)
 
     if data.access_level == "locked":
         html = _render_locked(data)

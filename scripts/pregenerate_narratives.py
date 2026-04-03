@@ -169,90 +169,14 @@ _RUNTIME_SCHEMA_REQUIREMENTS = {
 }
 
 
-def _scraper_lock_file() -> str:
-    return os.environ.get("PREGEN_SCRAPER_LOCK_FILE", "/tmp/mzansi_scraper.lock")
-
-
-def _scraper_wait_seconds() -> float:
-    return float(os.environ.get("PREGEN_SCRAPER_WAIT_SECONDS", "720"))
-
-
-def _scraper_wait_poll_seconds() -> float:
-    return float(os.environ.get("PREGEN_SCRAPER_WAIT_POLL_SECONDS", "5"))
-
-
-def _is_active_process(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def _active_scraper_lock_pid(lock_file: str | None = None) -> int | None:
-    path = lock_file or _scraper_lock_file()
-    try:
-        with open(path) as fh:
-            raw = fh.read().strip()
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return None
-    if not raw:
-        return None
-    try:
-        pid = int(raw)
-    except ValueError:
-        return None
-    return pid if _is_active_process(pid) else None
-
-
 def _pregen_enrichment_live_safe() -> tuple[bool, int | None]:
-    """Always use read-only enrichment during pregen to eliminate DB write contention.
+    """Always use read-only enrichment during pregen — no lock dependency.
 
-    W84-LOCKFIX: Previously this only checked /tmp/mzansi_scraper.lock, but 7+
-    other cron processes write to odds.db without that lock file (sharp benchmark,
-    closing_capture, clv_tracker, settlement, lineups, integrity, bot edge_v2).
-    The lock-file check had a TOCTOU race even for the one writer it did cover.
-
-    Fix: unconditionally return live_safe=True.  Pregen reads from api_cache
-    (coach/ESPN data) but never writes.  Cache misses produce slightly thinner
-    narratives for ONE cycle; the next run (or a user tap) populates the cache.
-    This eliminates ALL write contention from pregen enrichment → odds.db.
+    BUILD-16a: Pregen only READS from odds_snapshots. SQLite WAL mode permits
+    concurrent reads during write transactions. The scraper writer lock
+    (/tmp/mzansi_scraper.lock) is irrelevant to read-only pregen operations.
     """
-    return True, _active_scraper_lock_pid()
-
-
-async def _wait_for_scraper_writer_window() -> bool:
-    """Serialize pregen startup behind the scraper lock to avoid writer collisions."""
-    active_pid = _active_scraper_lock_pid()
-    if active_pid is None:
-        return True
-
-    wait_seconds = max(_scraper_wait_seconds(), 0.0)
-    poll_seconds = max(_scraper_wait_poll_seconds(), 0.1)
-    deadline = time.monotonic() + wait_seconds
-    log.warning(
-        "Scraper writer lock active via %s (PID %s) — delaying pregen startup up to %.0fs",
-        _scraper_lock_file(),
-        active_pid,
-        wait_seconds,
-    )
-    while time.monotonic() < deadline:
-        await asyncio.sleep(poll_seconds)
-        active_pid = _active_scraper_lock_pid()
-        if active_pid is None:
-            log.info("Scraper writer lock cleared — proceeding with pregen startup")
-            return True
-
-    log.warning(
-        "Scraper writer lock still active after %.0fs (PID %s) — deferring this sweep safely",
-        wait_seconds,
-        active_pid,
-    )
-    return False
+    return True, None
 
 
 def _validate_pregen_runtime_schema(db_path: str | None = None) -> None:
@@ -319,6 +243,9 @@ def _needs_pregen_context_lift(ctx: dict) -> bool:
     """Retry once in pregen when context would still collapse to thin/no-context prose."""
     if not ctx or not ctx.get("data_available"):
         return True
+    # VERDICT-FIX Fix 3: PARTIAL context is accepted as-is — no retry needed
+    if ctx.get("_context_mode") == "PARTIAL":
+        return False
 
     def _has_setup_signal(team: dict) -> bool:
         return bool(
@@ -332,6 +259,51 @@ def _needs_pregen_context_lift(ctx: dict) -> bool:
     home = ctx.get("home_team") or {}
     away = ctx.get("away_team") or {}
     return not (_has_setup_signal(home) or _has_setup_signal(away))
+
+
+def _build_partial_context(
+    home: str,
+    away: str,
+    league: str,
+    sport: str,
+    *,
+    home_key: str = "",
+    away_key: str = "",
+) -> dict:
+    """VERDICT-FIX Fix 3: Build a minimal partial context dict when ESPN data is thin.
+
+    Returns a dict with _context_mode='PARTIAL' so:
+    - _needs_pregen_context_lift() accepts it (stops retrying)
+    - build_narrative_spec() has team names for no-context prose
+    - W84 AI path is skipped (AI hallucinates with thin packs)
+    """
+    partial: dict = {
+        "data_available": True,
+        "_context_mode": "PARTIAL",
+        "sport": sport,
+        "league": league,
+        "home_team": {
+            "team_name": home,
+            "team_key": home_key or home.lower().replace(" ", "_"),
+        },
+        "away_team": {
+            "team_name": away,
+            "team_key": away_key or away.lower().replace(" ", "_"),
+        },
+    }
+    # Try to enrich with Elo data (rugby/cricket have Elo coverage)
+    try:
+        from scrapers.elo.elo_helper import get_elo_probability
+        hk = home_key or home.lower().replace(" ", "_")
+        ak = away_key or away.lower().replace(" ", "_")
+        elo_result = get_elo_probability(hk, ak, sport, require_confidence="low", league=league)
+        if elo_result:
+            partial["elo_home_prob"] = elo_result.get("home_win") or elo_result.get("elo_prob")
+            partial["elo_diff"] = elo_result.get("elo_diff")
+            partial["elo_confidence"] = elo_result.get("confidence")
+    except Exception:
+        pass
+    return partial
 
 
 def _context_fetch_attempts(
@@ -442,6 +414,15 @@ async def _get_match_context(
                     home_candidate,
                     away_candidate,
                 )
+        # VERDICT-FIX Fix 3: If all ESPN attempts still thin, build partial context from Elo/signal data
+        if _needs_pregen_context_lift(last_ctx):
+            partial = _build_partial_context(home, away, league, sport, home_key=home_key, away_key=away_key)
+            if partial:
+                log.warning(
+                    "W84_PARTIAL_CONTEXT league=%s sport=%s teams=%s vs %s reason=THIN_ESPN",
+                    league, sport, home, away,
+                )
+                return partial
         return last_ctx
     except Exception as exc:
         log.warning("Match context fetch failed for %s vs %s: %s", home, away, exc)
@@ -800,7 +781,7 @@ def _edge_from_serving_tip(tip: dict) -> dict | None:
 def _load_shadow_pregen_edges(limit: int = 100) -> list[dict]:
     """Shadow pregen must use the same authoritative edge_results source as serving."""
     try:
-        serving_tips = bot._load_tips_from_edge_results(limit=limit)
+        serving_tips = bot._load_tips_from_edge_results(limit=limit, skip_punt_filter=True)
     except Exception as exc:
         log.error("Failed to load live edge_results tips for shadow pregen: %s", exc)
         return []
@@ -877,24 +858,38 @@ async def _generate_one(
     )
     evidence_json = serialise_evidence_pack(evidence_pack)
 
-    # 2. Build tips from edge data
+    # Compute coverage_json for narrative_cache persistence (COVERAGE-GATE-BUILD)
+    _coverage_json = None
+    try:
+        from evidence_pack import serialise_coverage_metrics as _scm
+        _cm = getattr(evidence_pack, "coverage_metrics", None)
+        if _cm is not None:
+            _coverage_json = _scm(_cm)
+    except Exception as _cov_err:
+        log.debug("coverage_json computation failed: %s", _cov_err)
+
+    # 2. Build tips from edge data — include all fixtures (even zero/negative EV)
+    # so w84 polish can still produce rich narrative context (coaches, form, H2H).
     # edge_v2 uses "edge_pct"/"outcome"/"fair_probability"; normalise field names
     tips = []
     ev = bot._normalise_edge_pct_contract(edge.get("ev"), edge.get("edge_pct", 0))
-    if ev > 0:
-        fair_prob = edge.get("fair_prob") or edge.get("fair_probability", 0)
-        _bk_key = edge.get("best_bookmaker_key", "") or edge.get("bookmaker_key", "")
-        tips.append({
-            "outcome": edge.get("recommended_outcome") or edge.get("outcome", "?"),
-            "odds": edge.get("best_odds", 0),
-            "bookie": edge.get("best_bookmaker", "?"),
-            "bookmaker": edge.get("best_bookmaker", "?"),
-            "bookmaker_key": _bk_key,
-            "odds_by_bookmaker": {_bk_key: float(edge.get("best_odds", 0))} if _bk_key and edge.get("best_odds", 0) > 0 else {},
-            "ev": ev,
-            "prob": round(fair_prob * 100, 1) if fair_prob else 0,
-            "edge_v2": edge,
-        })
+    # MY-MATCHES-RELIABILITY-FIX: build tips for ALL EV levels (including zero/negative).
+    # Negative-EV fixtures still get w84 polish for richer context (coaches, form, H2H).
+    fair_prob = edge.get("fair_prob") or edge.get("fair_probability", 0)
+    _bk_key = edge.get("best_bookmaker_key", "") or edge.get("bookmaker_key", "")
+    tips.append({
+        "outcome": edge.get("recommended_outcome") or edge.get("outcome", "?"),
+        "odds": edge.get("best_odds", 0),
+        "bookie": edge.get("best_bookmaker", "?"),
+        "bookmaker": edge.get("best_bookmaker", "?"),
+        "bookmaker_key": _bk_key,
+        "odds_by_bookmaker": {_bk_key: float(edge.get("best_odds", 0))} if _bk_key and edge.get("best_odds", 0) > 0 else {},
+        "ev": ev,
+        "prob": round(fair_prob * 100, 1) if fair_prob else 0,
+        "edge_v2": edge,
+        "home_team": home,  # P0-2 FIX: required for _build_game_buttons CTA resolution
+        "away_team": away,  # P0-2 FIX: required for _build_game_buttons CTA resolution
+    })
 
     # 3. Build edge_data for NarrativeSpec (W82-WIRE)
     _pregen_sigs = edge.get("signals", {})
@@ -929,6 +924,7 @@ async def _generate_one(
     w82_polished = None
     spec = None
     narrative_source = "w82"
+    verification_failure = ""  # BUILD-PREGEN-FIX-3: track why w84 failed
     served_model = model_label
     try:
         from narrative_spec import build_narrative_spec, _render_baseline
@@ -939,13 +935,38 @@ async def _generate_one(
         narrative = _final_polish(narrative, _pregen_edge_data)
         w82_baseline = narrative
         log.info("Pregen W82-WIRE: baseline rendered for %s", match_key)
-    except Exception as exc:
-        log.error("Pregen W82-WIRE: baseline failed for %s: %s", match_key, exc)
+    except Exception:
+        _ctx_home = (ctx or {}).get("home", {}) if ctx else {}
+        _ctx_away = (ctx or {}).get("away", {}) if ctx else {}
+        log.exception(
+            "PREGEN failed: match_key=%s sport=%s league=%s "
+            "home_record_type=%s away_record_type=%s",
+            match_key,
+            sport,
+            league,
+            type(_ctx_home.get("record", "")).__name__,
+            type(_ctx_away.get("record", "")).__name__,
+        )
         narrative = ""
 
     # 5. W84-CONFIRM-1: W84 is the permanent default generation path.
     # W82 baseline is always computed first and remains the per-row fallback.
-    if narrative and spec is not None and evidence_pack is not None:
+    # VERDICT-FIX Fix 3: Skip W84 AI for partial context — AI hallucinates with thin packs.
+    _skip_w84 = (ctx or {}).get("_context_mode") == "PARTIAL"
+
+    # --- Coverage gate: never polish empty evidence (COVERAGE-GATE-BUILD) ---
+    _coverage_level = "unknown"
+    if evidence_pack is not None:
+        _cm_gate = getattr(evidence_pack, "coverage_metrics", None)
+        if _cm_gate is not None:
+            _coverage_level = _cm_gate.level
+            if _cm_gate.level == "empty":
+                _skip_w84 = True
+                log.info(
+                    "[COVERAGE-GATE] Skipping Sonnet polish for %s: empty evidence", match_key
+                )
+
+    if narrative and spec is not None and evidence_pack is not None and not _skip_w84:
         try:
             prompt_text = format_evidence_prompt(evidence_pack, spec)
             resp = await claude.messages.create(
@@ -1018,6 +1039,7 @@ async def _generate_one(
                             match_key, _tip_bk, _tip_odds,
                         )
                     else:
+                        verification_failure = f"verdict_mismatch: expected {_tip_bk}@{_tip_odds:.2f}"
                         log.warning(
                             "W84 VERDICT MISMATCH for %s: verdict has wrong bookmaker/price "
                             "(expected %s@%.2f) — serving W82 fallback",
@@ -1025,8 +1047,10 @@ async def _generate_one(
                         )
             else:
                 reasons = "; ".join(report.get("rejection_reasons", [])[:3]) or "verification failed"
+                verification_failure = f"verify_fail: {reasons}"
                 log.warning("W84 VERIFY FAIL for %s: %s — serving W82 fallback", match_key, reasons)
         except Exception as exc:
+            verification_failure = f"w84_error: {exc}"
             log.warning("W84 ERROR for %s: %s — serving W82 fallback", match_key, exc)
 
     # R11-BUILD-01 Fix A (Option A): Inject H2H into W82 fallback.
@@ -1069,6 +1093,7 @@ async def _generate_one(
             if not _verdict_bookmaker_aligned(narrative, _final_bk, _final_odds):
                 # Realignment failed — fall back to W82 baseline which is guaranteed correct
                 if w82_baseline:
+                    verification_failure = f"final_alignment: expected {_final_bk}@{_final_odds:.2f}"
                     log.warning(
                         "BASELINE-FIX: final alignment failed for %s — reverting to W82 baseline",
                         match_key,
@@ -1083,6 +1108,7 @@ async def _generate_one(
     if narrative and narrative_source == "w84":
         _sv_valid, _sv_banned = validate_sport_text(narrative, sport)
         if not _sv_valid:
+            verification_failure = f"sport_validator: banned terms {_sv_banned}"
             log.warning(
                 "SPORT VALIDATOR BLOCKED: %s narrative for %s contained banned terms %s"
                 " — falling back to W82 template",
@@ -1159,6 +1185,8 @@ async def _generate_one(
             "model": served_model,
             "evidence_json": evidence_json,
             "narrative_source": narrative_source,
+            "verification_failure": verification_failure,
+            "coverage_json": _coverage_json,
             "_shadow": {
                 "match_key": match_key,
                 "pack": evidence_pack,
@@ -1217,6 +1245,7 @@ async def _verify_and_fill_cache(
                         pw["model"],
                         evidence_json=pw.get("evidence_json"),
                         narrative_source=pw.get("narrative_source", "w82"),
+                        coverage_json=pw.get("coverage_json"),
                     )
                     log.info("  -> Gap filled for %s", mk)
                 except Exception as store_exc:
@@ -1249,8 +1278,8 @@ async def main(sweep: str) -> None:
         model_id,
     )
 
-    if not await _wait_for_scraper_writer_window():
-        return
+    # BUILD-16a: No scraper lock dependency. Pregen reads via WAL mode —
+    # concurrent with scraper writes. No waiting, no deferral.
 
     # Runtime sweeps validate schema read-only; deploy/startup migration must happen elsewhere.
     _validate_pregen_runtime_schema()
@@ -1369,24 +1398,50 @@ async def main(sweep: str) -> None:
             await asyncio.sleep(1.0)
 
     # W79-P3D: Batch-write all narratives to cache (separate from generation)
+    # BUILD-PREGEN-FIX PRE-3: Never overwrite w84 with w82 on ANY sweep type.
+    # BUILD-PREGEN-FIX-3: Extended to full sweeps. A full sweep's purpose is to
+    # ENRICH (w82→w84, w84→w84). If Opus fails verification and produces w82,
+    # the existing w84 is still valid product — preserve it.
     if pending_writes:
         log.info("Writing %d narratives to cache...", len(pending_writes))
         write_ok = 0
+        w84_preserved = 0
         for pw in pending_writes:
+            new_source = pw.get("narrative_source", "w82")
+            match_id = pw["match_id"]
+            # PRE-3 + BUILD-PREGEN-FIX-3: Preserve existing w84 on ALL sweep types
+            # when the new result is w82. Cold starts (no existing entry) still get w82.
+            if new_source == "w82":
+                existing = await _get_cached_narrative(match_id)
+                if existing and existing.get("narrative_source") == "w84":
+                    _fail_reason = pw.get("verification_failure", "unknown")
+                    _sweep_label = "full sweep" if sweep == "full" else "refresh"
+                    log.warning(
+                        "[PREGEN-FULL] Preserving w84 for %s — "
+                        "Opus verification failed on %s. Keeping existing w84. "
+                        "Failure reason: %s",
+                        match_id, _sweep_label, _fail_reason,
+                    )
+                    w84_preserved += 1
+                    continue
             try:
                 await _store_narrative_cache(
-                    pw["match_id"],
+                    match_id,
                     pw["html"],
                     pw["tips"],
                     pw["edge_tier"],
                     pw["model"],
                     evidence_json=pw.get("evidence_json"),
-                    narrative_source=pw.get("narrative_source", "w82"),
+                    narrative_source=new_source,
+                    coverage_json=pw.get("coverage_json"),
                 )
                 write_ok += 1
             except Exception as exc:
-                log.warning("Cache write failed for %s: %s", pw["match_id"], exc)
-        log.info("Cache writes: %d/%d successful", write_ok, len(pending_writes))
+                log.warning("Cache write failed for %s: %s", match_id, exc)
+        log.info(
+            "Cache writes: %d/%d successful, %d w84 preserved",
+            write_ok, len(pending_writes), w84_preserved,
+        )
 
     # W67-CALIBRATE: Verdict balance check
     _check_verdict_balance(sweep_verdicts)

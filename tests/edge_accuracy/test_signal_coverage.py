@@ -3,11 +3,15 @@
 An edge where most signals are unavailable (defaulting to 0.5 strength)
 indicates the pipeline is broken or the match has insufficient data.
 These edges should not be shown to users.
+
+BUILD-TEST-ISOLATION-2: TestSignalCoverage uses an isolated tmp DB so the
+live scrapers/odds.db is never opened during edge_accuracy runs.
 """
 
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 
 import pytest
@@ -24,6 +28,40 @@ from scrapers.edge.edge_config import SIGNAL_WEIGHTS
 # the global 30s limit.  120s is safe and still bounded.
 pytestmark = pytest.mark.timeout(120)
 
+
+# ── Isolated DB helpers (BUILD-TEST-ISOLATION-2) ─────────────────────────────
+
+_SCHEMA_DDL = """
+    CREATE TABLE IF NOT EXISTS odds_latest (
+        match_id    TEXT NOT NULL,
+        bookmaker   TEXT NOT NULL,
+        market_type TEXT NOT NULL,
+        home_odds   REAL,
+        draw_odds   REAL,
+        away_odds   REAL,
+        scraped_at  DATETIME
+    );
+    CREATE TABLE IF NOT EXISTS broadcast_schedule (
+        home_team      TEXT,
+        away_team      TEXT,
+        broadcast_date TEXT,
+        start_time     TEXT
+    );
+"""
+
+
+def _make_test_db(path: str) -> str:
+    """Create an isolated SQLite DB with the required schema. Returns path."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(_SCHEMA_DDL)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
 # Max percentage of signals that can be unavailable (defaulting).
 # Currently 2/7 signals (tipster, lineup) are often unavailable (~29%).
 # Set to 50% to allow this while catching catastrophic failures (>50% = 4+ signals down).
@@ -33,6 +71,12 @@ MAX_DEFAULT_PCT = 50
 
 class TestSignalCoverage:
     """Verify signal coverage meets quality threshold."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_odds_db(self, tmp_path, monkeypatch):
+        """Redirect get_top_edges() to an empty isolated DB (BUILD-TEST-ISOLATION-2)."""
+        import scrapers.edge.edge_v2_helper as _helper
+        monkeypatch.setattr(_helper, "DB_PATH", _make_test_db(str(tmp_path / "odds.db")))
 
     def test_no_edge_exceeds_default_threshold(self):
         """No surfaced edge should have >15% of its signals defaulting."""

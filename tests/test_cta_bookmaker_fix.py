@@ -268,6 +268,91 @@ def test_r6_no_affiliate_soon_for_any_sa_bookmaker():
                     f"tip:affiliate_soon found for {bk_name} ({bk_key})"
 
 
+def test_build07_cta_team_matches_edge_section():
+    """HOT-TIPS-BUILD-07: CTA team must match edge_results.bet_type, not stale snapshot outcome.
+
+    Reproduces the Sporting CP vs Arsenal bug:
+      - snapshot tip has outcome="Arsenal" (stale, from prior cycle where V2 said away)
+      - _er_outcomes_cache has match_key → "home" (Sporting CP, Home Win)
+      - CTA must say "Back Sporting CP …", not "Back Arsenal …"
+    """
+    import bot
+    from bot import _build_game_buttons, _er_outcomes_cache
+
+    match_key = "sporting_cp_vs_arsenal_2026-03-12"
+
+    # Simulate stale snapshot: tip says Arsenal (away) but edge_results says Home Win
+    tips = [{
+        "event_id": match_key,
+        "match_id": match_key,
+        "outcome": "Arsenal",          # stale — was "away" in a prior compute cycle
+        "home_team": "Sporting CP",
+        "away_team": "Arsenal",
+        "odds": 1.83,
+        "ev": 4.1,
+        "bookmaker": "PlayaBets",
+        "bookmaker_key": "playabets",
+        "odds_by_bookmaker": {"playabets": {"home": 1.83, "draw": 3.50, "away": 4.20}},
+        "edge_v2": None,
+        "display_tier": "gold",
+        "edge_rating": "gold",
+    }]
+
+    # Inject authoritative outcome into cache (as _refresh_er_outcomes_cache() would do)
+    _er_outcomes_cache[match_key] = "home"
+    try:
+        buttons = _build_game_buttons(
+            tips, match_key, 12345,
+            source="edge_picks", user_tier="diamond", edge_tier="gold",
+        )
+        all_texts = [btn.text for row in buttons for btn in row]
+        cta_buttons = [t for t in all_texts if "Back" in t and "@" in t]
+        assert cta_buttons, f"No CTA button found: {all_texts}"
+        cta = cta_buttons[0]
+        assert "Sporting CP" in cta, f"CTA shows wrong team (expected Sporting CP): {cta}"
+        assert "Arsenal" not in cta, f"CTA shows wrong team (Arsenal instead of Sporting CP): {cta}"
+        assert "1.83" in cta, f"CTA odds mismatch: {cta}"
+    finally:
+        _er_outcomes_cache.pop(match_key, None)
+
+
+def test_build07_cta_positional_key_translated_to_team_name():
+    """HOT-TIPS-BUILD-07: Positional outcome keys must never appear verbatim in the CTA.
+
+    When game_tips_cache has been canonicalized (outcome="away"), the CTA must show
+    the team display name ("Arsenal"), not the raw key "away".
+    """
+    import bot
+    from bot import _build_game_buttons
+
+    tips = [{
+        "event_id": "real_madrid_vs_barcelona_2026-04-05",
+        "match_id": "real_madrid_vs_barcelona_2026-04-05",
+        "outcome": "away",             # positional key from _canonicalize_tip_outcome
+        "home_team": "Real Madrid",
+        "away_team": "Barcelona",
+        "odds": 2.10,
+        "ev": 3.8,
+        "bookmaker": "Hollywoodbets",
+        "bookmaker_key": "hollywoodbets",
+        "odds_by_bookmaker": {},
+        "edge_v2": None,
+        "display_tier": "silver",
+        "edge_rating": "silver",
+    }]
+    buttons = _build_game_buttons(
+        tips, "real_madrid_vs_barcelona_2026-04-05", 12345,
+        source="edge_picks", user_tier="diamond", edge_tier="silver",
+    )
+    all_texts = [btn.text for row in buttons for btn in row]
+    cta_buttons = [t for t in all_texts if "Back" in t and "@" in t]
+    assert cta_buttons, f"No CTA button found: {all_texts}"
+    cta = cta_buttons[0]
+    assert "Barcelona" in cta, f"CTA shows positional key instead of team name: {cta}"
+    assert "away" not in cta.lower().split("@")[0], \
+        f"Positional key 'away' leaked into CTA team slot: {cta}"
+
+
 def test_r6_no_affiliate_soon_with_empty_odds_by_bookmaker():
     """Even with empty odds_by_bookmaker, CTA must use bookmaker_key fallback — never affiliate_soon."""
     import bot

@@ -39,6 +39,9 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
             "the numbers speak louder",
             "pure pricing call", "tread carefully",
             "conviction is limited",
+            "no supporting indicators from any source",
+            "no confirming indicators back it up",
+            "treat this as a price-only play",
         ],
     },
     "moderate": {
@@ -129,7 +132,10 @@ class NarrativeSpec:
 
     # Verdict (code-decided — capped by tone band)
     verdict_action: str = ""      # "speculative punt" / "lean" / "back" / "strong back"
-    verdict_sizing: str = ""      # "tiny exposure or pass" / "small stake" / "standard stake" / "confident stake"
+    verdict_sizing: str = ""      # "tiny exposure" / "small stake" / "standard stake" / "confident stake"
+
+    # Bookmaker coverage
+    bookmaker_count: int = 0              # number of SA bookmakers pricing this match
 
     # Stale/movement context
     stale_minutes: int = 0
@@ -159,10 +165,11 @@ def _classify_evidence(edge_data: dict) -> tuple[str, str, str, str]:
     stale = edge_data.get("stale_minutes", 0)
     movement = edge_data.get("movement_direction", "neutral")
 
-    # W84-Q13: Zero or negative EV — no actionable edge, always pass
+    # W84-Q13: Zero or negative EV — no actionable edge, neutral monitor posture
     # Gate only fires when edge_pct is explicitly provided and <= 0
+    # VERDICT-FIX: "monitor" avoids explicit PASS language that contradicts tier badges at serve time
     if "edge_pct" in edge_data and ev <= 0:
-        return ("speculative", "cautious", "pass", "pass")
+        return ("speculative", "cautious", "monitor", "monitor")
 
     def _bucket_from_ev(ev_pct: float) -> int:
         if ev_pct < 2.0:
@@ -175,7 +182,7 @@ def _classify_evidence(edge_data: dict) -> tuple[str, str, str, str]:
 
     def _profile(bucket: int) -> tuple[str, str, str, str]:
         profiles = [
-            ("speculative", "cautious", "speculative punt", "tiny exposure or pass"),
+            ("speculative", "cautious", "speculative punt", "tiny exposure"),
             ("lean", "moderate", "lean", "small stake"),
             ("supported", "confident", "back", "standard stake"),
             ("conviction", "strong", "strong back", "confident stake"),
@@ -257,7 +264,7 @@ def _enforce_coherence(spec: NarrativeSpec) -> NarrativeSpec:
             spec.tone_band = "cautious"
             spec.evidence_class = "speculative"
             spec.verdict_action = "speculative punt"
-            spec.verdict_sizing = "tiny exposure or pass"
+            spec.verdict_sizing = "tiny exposure"
         else:
             break  # Already at floor
         violations = _check_coherence(spec)
@@ -661,6 +668,7 @@ def build_narrative_spec(
         ev_pct=edge_data.get("edge_pct", 0),
         fair_prob_pct=round(float(fair_prob_raw) * 100, 1) if fair_prob_raw else 0.0,
         composite_score=edge_data.get("composite_score", 0),
+        bookmaker_count=edge_data.get("bookmaker_count", 0),
         support_level=edge_data.get("confirming_signals", 0),
         contradicting_signals=edge_data.get("contradicting_signals", 0),
         evidence_class=ev_class,
@@ -678,6 +686,15 @@ def build_narrative_spec(
         context_is_fresh=context_is_fresh,
         scaffold=scaffold,
     )
+
+    # BUILD-GATE-RELAX: Force cautious tone on ALL zero-signal edges — Paul 1 April 2026.
+    # No conviction language on zero-signal cards, regardless of EV.
+    if spec.support_level == 0:
+        spec.tone_band = "cautious"
+        if spec.verdict_action in ("back", "strong back"):
+            spec.verdict_action = "lean"
+        if spec.verdict_sizing in ("standard stake", "confident stake"):
+            spec.verdict_sizing = "small stake"
 
     # Enforce coherence — downgrade if contradictions found
     spec = _enforce_coherence(spec)
@@ -742,8 +759,13 @@ def _injuries_sent(injuries: list[str]) -> str:
     return f"Missing: {', '.join(injuries[:3])}."
 
 
-def _parse_wdl(record: str) -> tuple[int, int, int]:
+def _parse_wdl(record) -> tuple[int, int, int]:
     """Parse 'W9 D3 L2' → (9, 3, 2). Returns (0, 0, 0) on failure."""
+    # Defensive: accept dicts during transition / stale caches
+    if isinstance(record, dict):
+        return (int(record.get("wins", 0) or 0),
+                int(record.get("draws", 0) or 0),
+                int(record.get("losses", 0) or 0))
     if not record:
         return (0, 0, 0)
     m = re.search(r"W(\d+)\s+D(\d+)\s+L(\d+)", record)
@@ -798,6 +820,46 @@ def _verdict_support_line(spec: NarrativeSpec) -> str:
         f"{support} supporting indicator{'s' if support != 1 else ''} sit behind it, "
         f"with {opposing} pushing back."
     )
+
+
+def _build_evidence_clauses(spec: NarrativeSpec) -> str:
+    """VERDICT-COHERENCE-FIX: Build match-specific evidence clauses for verdict.
+
+    Three clauses from already-computed data — all deterministic, zero LLM:
+    1. EV clause — why this edge is worth looking at
+    2. Signal clause — what confirms or doesn't
+    3. Risk clause — the one thing most likely to invalidate the edge
+    """
+    parts: list[str] = []
+
+    # 1. EV clause — the most important addition
+    if spec.ev_pct > 0:
+        if spec.bookmaker_count >= 2:
+            parts.append(f"+{spec.ev_pct:.1f}% EV across {spec.bookmaker_count} bookmakers.")
+        else:
+            parts.append(f"+{spec.ev_pct:.1f}% EV at current pricing.")
+
+    # 2. Signal clause — describe confirming/contradicting signals
+    signal_descs: list[str] = []
+    if spec.movement_direction == "for":
+        signal_descs.append("market movement confirms")
+    if spec.tipster_available and spec.tipster_agrees is True:
+        signal_descs.append("tipster consensus agrees")
+    if signal_descs:
+        parts.append(f"Key signals: {', '.join(signal_descs[:2])}.")
+    elif spec.support_level == 0:
+        parts.append("No confirming signals — higher variance.")
+
+    # 3. Risk clause — top risk factor (skip default clean-risk phrases)
+    _SKIP_RISK = ("clean risk", "nothing obvious", "price and signals are aligned")
+    if spec.risk_factors:
+        top_risk = spec.risk_factors[0]
+        if not any(skip in top_risk.lower() for skip in _SKIP_RISK):
+            # Ensure risk clause doesn't end with double period
+            risk_text = top_risk.rstrip(".")
+            parts.append(f"Main risk: {risk_text}.")
+
+    return " ".join(parts)
 
 
 # ── Story-type template functions (10 types × 3 variants) ─────────────────────
@@ -1263,9 +1325,14 @@ def _form_outlook(form: str) -> str:
     if not f:
         return ""
 
+    # Single result is not a form run — suppress entirely
+    if len(form) < 2:
+        return ""
+
     wins = form.count("W")
     losses = form.count("L")
     draws = form.count("D")
+    total = len(form)
 
     if wins >= 4:
         return f"Form reads {f} — that is a side carrying genuine rhythm."
@@ -1277,7 +1344,18 @@ def _form_outlook(form: str) -> str:
         return f"Form reads {f} — the shape is still uneven."
     if draws >= 3 and wins <= 1 and losses <= 1:
         return f"Form reads {f} — a run built on tight margins rather than momentum."
-    return f"Form reads {f} — mixed enough to keep the picture open."
+
+    # Short form (2-3 results) — honest about brevity, differentiated by direction
+    if total <= 3:
+        if wins > losses:
+            return f"Form reads {f} — a short run leaning positive."
+        elif losses > wins:
+            return f"Form reads {f} — a short run that hasn\u2019t settled in their favour yet."
+        else:
+            return f"Form reads {f} — too early to read a clear trend."
+
+    # Genuine mixed form (4+ results, no dominant pattern)
+    return f"Form reads {f} — no clean trend in either direction."
 
 
 def _render_setup_no_context(spec: NarrativeSpec) -> str:
@@ -1644,7 +1722,11 @@ def _render_risk(spec: NarrativeSpec) -> str:
 
 
 def _render_verdict(spec: NarrativeSpec) -> str:
-    """Verdict capped by tone_band. Never uses phrases banned by tone_band."""
+    """Verdict capped by tone_band. Never uses phrases banned by tone_band.
+
+    VERDICT-COHERENCE-FIX: After the posture + sizing text, appends match-specific
+    evidence clauses (EV%, signals, risk) from already-computed NarrativeSpec data.
+    """
     outcome = spec.outcome_label or "this outcome"
     odds_str = f"{spec.odds:.2f}" if spec.odds else "?"
     bk = spec.bookmaker or "the market"
@@ -1655,7 +1737,7 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     _seed = (spec.home_name or "") + (spec.away_name or "")
 
     # R7-BUILD-02: P1-STAKING-FLOOR — EV >= 7% must never render "small"/"tiny" sizing
-    if spec.ev_pct >= 7.0 and sizing in ("tiny exposure or pass", "small stake"):
+    if spec.ev_pct >= 7.0 and sizing in ("tiny exposure", "small stake"):
         sizing = "standard stake"
 
     # The verification layer bans "confident" in rendered copy, so keep the
@@ -1663,11 +1745,14 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     if sizing == "confident stake":
         sizing = "full stake"
 
-    if action == "pass":
-        # W84-Q13: Zero/negative EV — never frame as actionable
+    # VERDICT-COHERENCE-FIX: evidence clauses appended after posture text
+    evidence = _build_evidence_clauses(spec)
+
+    if action in ("pass", "monitor"):
+        # W84-Q13 / VERDICT-FIX: Zero/negative EV — neutral monitor posture, no PASS recommendation
         return (
             f"No positive expected value at current pricing — "
-            f"monitor for line movement or skip {outcome} until the price improves."
+            f"monitor for line movement until the price improves."
         )
 
     if action == "speculative punt":
@@ -1688,12 +1773,13 @@ def _render_verdict(spec: NarrativeSpec) -> str:
                 f"the price is right, the signals aren't there yet. Monitor the line before committing. {_sentence_case(sizing)}."
             ),
             (
-                f"Pass on this unless the price improves or a confirming signal emerges — "
-                f"{outcome} at {odds_str} ({bk}) has no signal support. "
-                f"Monitor the line, not the bet. {_sentence_case(sizing)}."
+                f"Hold on {outcome} at {odds_str} ({bk}) until a confirming signal emerges — "
+                f"the price is the only thing keeping this on the board. "
+                f"Monitor the line before committing. {_sentence_case(sizing)}."
             ),
         ]
-        return _sp_variants[_v]
+        posture = _sp_variants[_v]
+        return f"{posture} {evidence}".rstrip() if evidence else posture
 
     elif action == "lean":
         _v = _pick(_seed, 3)
@@ -1711,7 +1797,8 @@ def _render_verdict(spec: NarrativeSpec) -> str:
                 f"One signal points the right way, so it is worth tracking without overstating the case. {_sentence_case(sizing)}."
             ),
         ]
-        return _lean_variants[_v]
+        posture = _lean_variants[_v]
+        return f"{posture} {evidence}".rstrip() if evidence else posture
 
     elif action == "back":
         _v = _pick(_seed, 3)
@@ -1729,7 +1816,8 @@ def _render_verdict(spec: NarrativeSpec) -> str:
                 f"{support_line or 'Supported and priced right.'} {_sentence_case(sizing)}."
             ),
         ]
-        return _back_variants[_v]
+        posture = _back_variants[_v]
+        return f"{posture} {evidence}".rstrip() if evidence else posture
 
     else:  # strong back
         _v = _pick(_seed, 3)
@@ -1747,7 +1835,8 @@ def _render_verdict(spec: NarrativeSpec) -> str:
                 f"The signals, the price, and the model all point the same way. {_sentence_case(sizing)}."
             ),
         ]
-        return _strong_variants[_v]
+        posture = _strong_variants[_v]
+        return f"{posture} {evidence}".rstrip() if evidence else posture
 
 
 def _render_baseline(spec: NarrativeSpec) -> str:

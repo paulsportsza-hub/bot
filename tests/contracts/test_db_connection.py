@@ -4,10 +4,13 @@ W81-DBLOCK: These 3 tests make regression architecturally impossible.
 
 If ANY test fails:
   - test_no_raw_sqlite_connect → someone added raw sqlite3.connect() to production code
-  - test_wal_mode_enforced     → WAL mode is not active on odds.db
-  - test_busy_timeout_enforced → busy_timeout is not set on new connections
+  - test_wal_mode_enforced     → WAL mode is not applied by get_connection()
+  - test_busy_timeout_enforced → busy_timeout is not set by get_connection()
 
 DO NOT modify the exclusion list without understanding why.
+
+BUILD-TEST-ISOLATION: WAL and timeout tests use a fresh tmp DB, not the live
+scrapers/odds.db. Scraper write locks must never cause test flakiness.
 """
 
 import subprocess
@@ -69,42 +72,40 @@ def test_no_raw_sqlite_connect():
     )
 
 
-def test_wal_mode_enforced():
-    """Verify WAL mode is active on odds.db via get_connection()."""
+def test_wal_mode_enforced(tmp_path):
+    """Verify get_connection() applies WAL mode to every new SQLite DB.
+
+    Uses an isolated tmp DB — never touches the live scrapers/odds.db.
+    Scraper write locks cannot interfere with this test.
+    """
     _bot_dir = os.path.join(_get_project_root(), "bot")
     sys.path.insert(0, _bot_dir)
     from db_connection import get_connection
-    from config import ODDS_DB_PATH
 
-    odds_db = str(ODDS_DB_PATH)
-    if not os.path.exists(odds_db):
-        import pytest
-        pytest.skip("odds.db not present on this machine")
-
-    conn = get_connection()
+    test_db = str(tmp_path / "test_wal.db")
+    conn = get_connection(test_db)
     try:
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         assert mode == "wal", (
             f"Expected WAL journal mode, got '{mode}'. "
-            "odds.db must be in WAL mode for concurrent access."
+            "get_connection() must apply WAL mode to every connection."
         )
     finally:
         conn.close()
 
 
-def test_busy_timeout_enforced():
-    """Verify busy_timeout=30000ms is configured on new connections."""
+def test_busy_timeout_enforced(tmp_path):
+    """Verify get_connection() applies busy_timeout=30000ms to every new SQLite DB.
+
+    Uses an isolated tmp DB — never touches the live scrapers/odds.db.
+    Scraper write locks cannot interfere with this test.
+    """
     _bot_dir = os.path.join(_get_project_root(), "bot")
     sys.path.insert(0, _bot_dir)
     from db_connection import get_connection, _BUSY_MS
-    from config import ODDS_DB_PATH
 
-    odds_db = str(ODDS_DB_PATH)
-    if not os.path.exists(odds_db):
-        import pytest
-        pytest.skip("odds.db not present on this machine")
-
-    conn = get_connection()
+    test_db = str(tmp_path / "test_timeout.db")
+    conn = get_connection(test_db)
     try:
         timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
         assert timeout == _BUSY_MS, (

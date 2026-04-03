@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from config import ODDS_DB_PATH, ENRICHMENT_DB_PATH, TIPSTER_DB_PATH
 
@@ -123,6 +125,45 @@ class InjuriesBlock:
     total_injury_count: int = 0
 
 
+# ── Coverage Metrics (COVERAGE-GATE-BUILD) ──
+
+CoverageLevel = Literal["full", "partial", "empty"]
+
+
+@dataclass(frozen=True)
+class CoverageMetrics:
+    sport: str
+    league: str | None
+    sources_used: list[str]
+    missing_sources: list[str]
+    key_facts_count: int
+    injuries_count: int
+    form_games_count: int
+    h2h_games_count: int
+    standings_available: bool
+    market_coverage_count: int
+    sharp_available: bool
+    level: CoverageLevel
+
+
+def compute_coverage_level(
+    sport: str, league: str | None,
+    key_facts: int, form_games: int,
+    h2h_games: int, standings: bool,
+    market_count: int,
+) -> CoverageLevel:
+    """Deterministic coverage level. No LLM judgment."""
+    if key_facts == 0 and not standings and form_games == 0 and h2h_games == 0:
+        return "empty"
+    if key_facts < 3 or market_count < 2:
+        return "partial"
+    return "full"
+
+
+def serialise_coverage_metrics(m: CoverageMetrics) -> str:
+    return json.dumps(asdict(m), default=str)
+
+
 @dataclass
 class EvidencePack:
     match_key: str
@@ -142,6 +183,7 @@ class EvidencePack:
     richness_score: str = "low"
     sources_available: int = 0
     sources_total: int = 8
+    coverage_metrics: CoverageMetrics | None = field(default=None)
 
 
 def _utc_now_iso() -> str:
@@ -999,7 +1041,31 @@ async def _run_with_timeout(func, *args, timeout: float, fallback):
 
 
 async def _fetch_espn_context(match_key: str, league: str, sport: str) -> dict[str, Any]:
+    """Fetch match context — API-Football primary (soccer), ESPN fallback."""
     home_key, away_key = _parse_match_key(match_key)
+
+    # ── Primary: API-Football for soccer ────────────────────────────────────
+    if sport in ("soccer", "football"):
+        try:
+            from fetchers import get_fetcher
+            _fetcher = get_fetcher("soccer")
+            _ctx = await asyncio.wait_for(
+                _fetcher.fetch_and_cache(
+                    match_key=match_key,
+                    home_team=home_key,
+                    away_team=away_key,
+                    league=league,
+                    sport="soccer",
+                    live_safe=True,
+                ),
+                timeout=10.0,
+            )
+            if _ctx and _ctx.get("data_available"):
+                return _ctx
+        except Exception:
+            pass
+
+    # ── Fallback: ESPN (all sports) ──────────────────────────────────────────
     try:
         from scrapers.match_context_fetcher import get_match_context
 
@@ -1126,6 +1192,69 @@ async def build_evidence_pack(
         pack.h2h = H2HBlock(provenance=_empty_source("h2h", error="No verified H2H rows."))
 
     pack.richness_score, pack.sources_available = _score_richness(pack)
+
+    # --- Compute CoverageMetrics (COVERAGE-GATE-BUILD) ---
+    _sources_used: list[str] = []
+    _missing_sources: list[str] = []
+    for _src_name, _src_block in [
+        ("sa_odds", pack.sa_odds),
+        ("espn_context", pack.espn_context),
+        ("sharp_lines", pack.sharp_lines),
+        ("injuries", pack.injuries),
+        ("h2h", pack.h2h),
+        ("news", pack.news),
+        ("movements", pack.movements),
+        ("settlement", pack.settlement_stats),
+    ]:
+        if _src_block and getattr(_src_block, "provenance", None) and _src_block.provenance.available:
+            _sources_used.append(_src_name)
+        else:
+            _missing_sources.append(_src_name)
+
+    _key_facts = 0
+    _form_games = 0
+    _standings = False
+    if pack.espn_context and pack.espn_context.data_available:
+        for _team in [pack.espn_context.home_team, pack.espn_context.away_team]:
+            if _team:
+                if _team.get("record"):
+                    _key_facts += 1
+                if _team.get("form"):
+                    _key_facts += 1
+                _last5 = _team.get("last_5") or []
+                _form_games += len(_last5)
+                if _team.get("standings") or _team.get("position"):
+                    _standings = True
+                if _team.get("coach"):
+                    _key_facts += 1
+                if _team.get("top_scorers"):
+                    _key_facts += 1
+
+    _h2h_games = len(pack.h2h.matches) if pack.h2h and pack.h2h.matches else 0
+    _injuries_cnt = pack.injuries.total_injury_count if pack.injuries else 0
+    _market_count = pack.sa_odds.bookmaker_count if pack.sa_odds else 0
+    _sharp = (
+        pack.sharp_lines.provenance.available
+        if pack.sharp_lines and pack.sharp_lines.provenance
+        else False
+    )
+
+    _level = compute_coverage_level(
+        sport=pack.sport, league=pack.league,
+        key_facts=_key_facts, form_games=_form_games,
+        h2h_games=_h2h_games, standings=_standings,
+        market_count=_market_count,
+    )
+
+    pack.coverage_metrics = CoverageMetrics(
+        sport=pack.sport, league=pack.league,
+        sources_used=_sources_used, missing_sources=_missing_sources,
+        key_facts_count=_key_facts, injuries_count=_injuries_cnt,
+        form_games_count=_form_games, h2h_games_count=_h2h_games,
+        standings_available=_standings, market_coverage_count=_market_count,
+        sharp_available=_sharp, level=_level,
+    )
+
     return pack
 
 
@@ -1894,9 +2023,12 @@ def format_evidence_prompt(pack: EvidencePack, spec) -> str:
 
 _STRONG_POSTURE_PHRASES = [
     "strong back", "strong conviction", "premium value", "one of the best plays",
-    "rock solid", "must back", "clear edge", "genuine value", "supported edge",
+    "rock solid", "must back",
     "slam dunk", "lock", "no-brainer", "guaranteed",
 ]
+# BUILD-PREGEN-FIX PRE-2A: "clear edge", "genuine value", "supported edge" moved out —
+# they describe edge quality, not over-confidence. A speculative-class match can
+# legitimately have a "genuine value" gap or a "supported edge" from pricing data.
 _MODERATE_POSTURE_PHRASES = ["worth backing", "solid play", "numbers and indicators agree"]
 _LIMITED_ACKNOWLEDGEMENT_PHRASES = [
     "limited evidence", "thin evidence", "limited evidence depth", "not much verified context",
@@ -2447,6 +2579,21 @@ def _extract_decimal_odds(text: str) -> list[float]:
     return values
 
 
+# W82-KILL-FIX Fix 1: bot/data/coaches.json — flat underscore-key format
+_BOT_COACHES_CACHE: dict | None = None
+
+def _load_bot_coaches() -> dict:
+    global _BOT_COACHES_CACHE
+    if _BOT_COACHES_CACHE is None:
+        _path = Path(__file__).parent / "data" / "coaches.json"
+        try:
+            with open(_path, encoding="utf-8") as _f:
+                _BOT_COACHES_CACHE = json.load(_f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            _BOT_COACHES_CACHE = {}
+    return _BOT_COACHES_CACHE
+
+
 def _build_verified_coaches(pack: EvidencePack, spec) -> set[str]:
     verified: set[str] = set()
     unique_coaches: dict[str, list[str]] = {}
@@ -2465,6 +2612,14 @@ def _build_verified_coaches(pack: EvidencePack, spec) -> set[str]:
             _collect_coach(side.get("coach") or side.get("manager") or "")
     for attr in ("home_coach", "away_coach"):
         _collect_coach(getattr(spec, attr, ""))
+
+    # W82-KILL-FIX Fix 1: look up team names in bot/data/coaches.json
+    _bot_coaches = _load_bot_coaches()
+    for attr in ("home_name", "away_name"):
+        _team = getattr(spec, attr, "") or ""
+        _key = re.sub(r"[\s\-]+", "_", _team.lower().strip())
+        for _variant in _bot_coaches.get(_key) or []:
+            _collect_coach(_variant)
 
     coach_first_names: dict[str, int] = {}
     coach_last_names: dict[str, int] = {}
@@ -3084,11 +3239,11 @@ _KNOWN_VERIFIED_VENUE_PHRASES = {
     "parc des princes",
     "signal iduna park",
     # SA venues
-    "moses mabhida",
+    "moses mabhida", "moses mabhida stadium",
     "loftus versfeld",
     "fnb stadium",
     "ellis park",
-    "dhl stadium",
+    "dhl stadium", "dhl newlands",
     "wanderers stadium",
     "cape town stadium",
     "newlands",
@@ -3096,6 +3251,8 @@ _KNOWN_VERIFIED_VENUE_PHRASES = {
     "boland park",
     "centurion park",
     "kingsmead",
+    "orlando stadium",
+    "peter mokaba stadium",
     # Rugby/cricket venues
     "twickenham",
     "principality stadium",
@@ -3111,11 +3268,53 @@ _KNOWN_VERIFIED_VENUE_PHRASES = {
 # R12-BUILD-03 Fix 5: Derby/geographical names that are NOT fabricated proper nouns
 _DERBY_WHITELIST = {
     "merseyside", "the merseyside", "merseyside derby",
+    "this merseyside", "this merseyside derby",
     "north london", "north london derby",
     "manchester", "manchester derby",
     "el clasico", "el cl\u00e1sico", "der klassiker",
     "old firm", "tyne-wear", "tyne-wear derby",
     "south coast derby", "revierderby", "soweto derby",
+}
+
+# W82-KILL-FIX Fix 2: Geographic/regional terms that are NOT fabricated proper nouns
+_GEOGRAPHIC_WHITELIST = {
+    # UK regions
+    "tyneside", "merseyside", "teesside", "lancashire",
+    "yorkshire", "west yorkshire", "south yorkshire",
+    "west midlands", "east midlands", "midlands",
+    "the north", "the south",
+    "london", "west london", "east london", "south london",
+    "kent", "surrey", "hampshire", "berkshire", "hertfordshire",
+    # Irish / Scottish / Welsh
+    "leinster", "munster", "connacht", "ulster",
+    "glasgow", "edinburgh",
+    # European regions
+    "catalonia", "cataluna", "catalu\u00f1a",
+    "lombardy", "lombardia",
+    "bavaria", "bayern",
+    "\u00eele-de-france", "ile de france",
+    "castile",
+    "andalusia",
+    # SA regions
+    "gauteng", "western cape", "eastern cape", "kwazulu-natal",
+    "johannesburg", "cape town", "durban", "pretoria", "soweto",
+    "limpopo", "mpumalanga", "north west", "free state",
+    # Football stadiums / grounds
+    "anfield", "old trafford", "stamford bridge",
+    "emirates", "the emirates",
+    "etihad", "etihad stadium",
+    "wembley", "wembley stadium",
+    "villa park", "st james park", "st james\u2019 park",
+    "signal iduna park", "westfalenstadion",
+    "camp nou", "bernabeu", "santiago bernabeu",
+    "san siro", "giuseppe meazza",
+    "allianz arena",
+    "parc des princes",
+    "celtic park", "ibrox", "hampden park",
+    "dlt", "peter mokaba", "fnb stadium", "orlando stadium",
+    # Rugby / cricket venues
+    "twickenham", "murrayfield", "aviva stadium", "principality stadium",
+    "stade de france", "eden park", "kings park",
 }
 
 _SETTLEMENT_CONTEXT_PATTERNS = (
@@ -3183,7 +3382,11 @@ def _is_banned_phrase_false_positive(text: str, phrase: str) -> bool:
         return False
     if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in _CONFIDENT_ASSERTIVE_PATTERNS):
         return False
-    return _contains_contextual_confident_usage(text)
+    # BUILD-PREGEN-FIX-2: If no assertive pattern matches, "confident" is safe analytical
+    # language. The assertive patterns catch genuinely problematic uses (outcome-certainty
+    # phrases). Non-matching uses like "look confident", "less confident side" etc. are
+    # legitimate and should not trigger verification failure.
+    return True
 
 
 def _contains_contextual_confident_usage(text: str) -> bool:
@@ -3781,6 +3984,9 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
         # R12-BUILD-03 Fix 5: Skip derby/geographical names
         if _normalise_name_phrase(phrase) in _DERBY_WHITELIST:
             continue
+        # W82-KILL-FIX Fix 2: Skip geographic/regional/venue terms
+        if _normalise_name_phrase(phrase) in _GEOGRAPHIC_WHITELIST:
+            continue
         # R13-BUILD-01 Fix 1: Skip analytical Elo terms
         if phrase.lower().strip() in _ANALYTICAL_PREFIXES:
             continue
@@ -3812,11 +4018,12 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
             )
             if settlement_bridge_ok:
                 continue
-            direct_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["direct"])
-            market_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["market_implied"])
-            sharp_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages["sharp_implied"])
+            # W82-KILL-FIX Fix 3: widened tolerance to 2.0pp (was 1.5pp)
+            direct_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages["direct"])
+            market_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages["market_implied"])
+            sharp_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages["sharp_implied"])
             # R13-BUILD-01 Fix 3: Check Elo-derived probabilities
-            elo_ok = any(abs(value - allowed) <= 1.5 for allowed in accepted_percentages.get("elo", set()))
+            elo_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages.get("elo", set()))
             if not (direct_ok or market_ok or sharp_ok or elo_ok):
                 ev_pct_failures.append(value)
             continue

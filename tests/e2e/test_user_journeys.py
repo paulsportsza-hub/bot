@@ -6,6 +6,7 @@ All tests use controlled data (no live API/DB calls).
 
 from __future__ import annotations
 
+import asyncio
 import os
 from unittest.mock import patch
 
@@ -108,11 +109,11 @@ class TestBronzeJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="bronze",
-            )
+            ))
         # Must have lock line for diamond edge
         assert "Our highest-conviction pick." in text
         # Must have footer with /subscribe
@@ -124,11 +125,11 @@ class TestBronzeJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = _build_hot_tips_page(
+            _, markup = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="bronze",
-            )
+            ))
         callbacks = [
             btn.callback_data
             for row in markup.inline_keyboard
@@ -146,11 +147,11 @@ class TestBronzeJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, _ = _build_hot_tips_page(
+            text, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="bronze",
-            )
+            ))
         # Diamond tip (Arsenal vs Chelsea, odds=1.85) should NOT show odds
         # The locked card should show "Our highest-conviction pick." not "@ 1.85"
         lines = text.split("\n")
@@ -195,11 +196,11 @@ class TestGoldJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="gold",
-            )
+            ))
         # Gold edge (Bulls vs Stormers) should show odds
         assert "1.65" in text
         # Diamond edge (Arsenal vs Chelsea) should be blurred — odds hidden, return shown
@@ -214,11 +215,11 @@ class TestGoldJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = _build_hot_tips_page(
+            _, markup = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="gold",
-            )
+            ))
         callbacks = [
             btn.callback_data
             for row in markup.inline_keyboard
@@ -246,11 +247,11 @@ class TestDiamondJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="diamond",
-            )
+            ))
         assert "🔒" not in text
         assert "Our highest-conviction pick." not in text
 
@@ -260,11 +261,11 @@ class TestDiamondJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, markup = _build_hot_tips_page(
+            text, markup = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="diamond",
-            )
+            ))
         assert "/subscribe" not in text
         assert "━━━" not in text
         assert "Unlock" not in text
@@ -275,11 +276,11 @@ class TestDiamondJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = _build_hot_tips_page(
+            _, markup = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="diamond",
-            )
+            ))
         edge_buttons = [
             btn.callback_data
             for row in markup.inline_keyboard
@@ -302,11 +303,11 @@ class TestDiamondJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, _ = _build_hot_tips_page(
+            text, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="diamond",
-            )
+            ))
         # Only Diamond and Gold edges clear the current Hot Tips threshold.
         assert "1.85" in text  # Diamond edge
         assert "1.65" in text  # Gold edge

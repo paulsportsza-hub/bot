@@ -74,33 +74,10 @@ def test_validate_pregen_runtime_schema_rejects_missing_column(tmp_path: Path) -
         pregen._validate_pregen_runtime_schema(str(db_path))
 
 
-@pytest.mark.asyncio
-async def test_wait_for_scraper_writer_window_returns_true_without_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PREGEN_SCRAPER_LOCK_FILE", str(tmp_path / "missing.lock"))
-
-    assert await pregen._wait_for_scraper_writer_window() is True
-
-
-@pytest.mark.asyncio
-async def test_wait_for_scraper_writer_window_defers_when_lock_persists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    lock_file = tmp_path / "scraper.lock"
-    lock_file.write_text(str(os.getpid()))
-    monkeypatch.setenv("PREGEN_SCRAPER_LOCK_FILE", str(lock_file))
-    monkeypatch.setenv("PREGEN_SCRAPER_WAIT_SECONDS", "0.2")
-    monkeypatch.setenv("PREGEN_SCRAPER_WAIT_POLL_SECONDS", "0.05")
-
-    assert await pregen._wait_for_scraper_writer_window() is False
-
-
-@pytest.mark.asyncio
-async def test_wait_for_scraper_writer_window_proceeds_after_lock_clears(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen = iter([123, None])
-
-    monkeypatch.setattr(pregen, "_active_scraper_lock_pid", lambda lock_file=None: next(seen, None))
-    monkeypatch.setenv("PREGEN_SCRAPER_WAIT_SECONDS", "1")
-    monkeypatch.setenv("PREGEN_SCRAPER_WAIT_POLL_SECONDS", "0.01")
-
-    assert await pregen._wait_for_scraper_writer_window() is True
+def test_pregen_no_scraper_lock_dependency() -> None:
+    """BUILD-16a: pregen must not have _wait_for_scraper_writer_window — lock removed."""
+    assert not hasattr(pregen, "_wait_for_scraper_writer_window"), \
+        "Scraper writer lock dependency must be removed from pregen (BUILD-16a)"
 
 
 @pytest.mark.asyncio
@@ -115,7 +92,7 @@ async def test_main_no_longer_calls_schema_ensure_in_hot_path(monkeypatch: pytes
         "_ensure_shadow_narratives_table",
         lambda: (_ for _ in ()).throw(AssertionError("hot-path DDL should not run")),
     )
-    monkeypatch.setattr(pregen, "_wait_for_scraper_writer_window", AsyncMock(return_value=True))
+    # BUILD-16a: no scraper lock mock needed — lock dependency removed
     monkeypatch.setattr(pregen, "_validate_pregen_runtime_schema", lambda db_path=None: None)
     monkeypatch.setattr(pregen, "_load_shadow_pregen_edges", lambda limit=100: [])
 
@@ -123,39 +100,27 @@ async def test_main_no_longer_calls_schema_ensure_in_hot_path(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_main_defers_safely_when_scraper_lock_is_active(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pregen, "_wait_for_scraper_writer_window", AsyncMock(return_value=False))
-    monkeypatch.setattr(
-        pregen,
-        "_validate_pregen_runtime_schema",
-        lambda db_path=None: (_ for _ in ()).throw(AssertionError("schema validation should not run")),
-    )
-    monkeypatch.setattr(
-        pregen,
-        "_load_shadow_pregen_edges",
-        lambda limit=100: (_ for _ in ()).throw(AssertionError("edge load should not run")),
-    )
+async def test_main_proceeds_without_scraper_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUILD-16a: main() proceeds directly — no scraper lock gate."""
+    schema_called = False
+
+    def _track_schema(db_path=None):
+        nonlocal schema_called
+        schema_called = True
+
+    monkeypatch.setattr(pregen, "_validate_pregen_runtime_schema", _track_schema)
+    monkeypatch.setattr(pregen, "_load_shadow_pregen_edges", lambda limit=100: [])
 
     await pregen.main("refresh")
+    assert schema_called, "main() must proceed to schema validation without lock gate"
 
 
-def test_pregen_enrichment_live_safe_reports_active_scraper_lock(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pregen, "_active_scraper_lock_pid", lambda lock_file=None: 4242)
-
+def test_pregen_enrichment_live_safe_always_true_no_lock() -> None:
+    """BUILD-16a: pregen enrichment always returns (True, None) — no lock dependency."""
     live_safe, pid = pregen._pregen_enrichment_live_safe()
 
-    assert live_safe is True
-    assert pid == 4242
-
-
-def test_pregen_enrichment_live_safe_always_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    """W84-LOCKFIX: pregen enrichment is ALWAYS read-only to eliminate DB write contention."""
-    monkeypatch.setattr(pregen, "_active_scraper_lock_pid", lambda lock_file=None: None)
-
-    live_safe, pid = pregen._pregen_enrichment_live_safe()
-
-    assert live_safe is True, "pregen enrichment must always use live_safe=True (W84-LOCKFIX)"
-    assert pid is None
+    assert live_safe is True, "pregen enrichment must always use live_safe=True"
+    assert pid is None, "No lock PID should be returned — lock dependency removed"
 
 
 @pytest.mark.asyncio
