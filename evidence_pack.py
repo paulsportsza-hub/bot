@@ -478,6 +478,23 @@ def _build_edge_state(edge_result: dict[str, Any] | None) -> EdgeStateBlock:
 
 def _wrap_espn_context(ctx: dict[str, Any] | None) -> ESPNContextBlock:
     ctx = ctx or {}
+    home_team = dict(ctx.get("home_team") or {})
+    away_team = dict(ctx.get("away_team") or {})
+
+    # coaches.json fallback: when ESPN/API-Football didn't return a coach, look up by
+    # team name in the curated scrapers/coaches.json (same pattern as build_narrative_spec()
+    # lines 660-661).  ESPN data always wins when present — only missing coaches fall back.
+    if not home_team.get("coach") or not away_team.get("coach"):
+        from narrative_spec import lookup_coach  # lazy — avoids Sentry init in test env
+        if not home_team.get("coach"):
+            _fb = lookup_coach(home_team.get("name", ""))
+            if _fb:
+                home_team["coach"] = _fb
+        if not away_team.get("coach"):
+            _fb = lookup_coach(away_team.get("name", ""))
+            if _fb:
+                away_team["coach"] = _fb
+
     return ESPNContextBlock(
         provenance=EvidenceSource(
             available=bool(ctx),
@@ -486,8 +503,8 @@ def _wrap_espn_context(ctx: dict[str, Any] | None) -> ESPNContextBlock:
             stale_minutes=0.0,
         ),
         data_available=bool(ctx.get("data_available")),
-        home_team=dict(ctx.get("home_team") or {}),
-        away_team=dict(ctx.get("away_team") or {}),
+        home_team=home_team,
+        away_team=away_team,
         h2h=list(ctx.get("head_to_head") or []),
         competition=ctx.get("league") or "",
         season=str(ctx.get("season") or ""),

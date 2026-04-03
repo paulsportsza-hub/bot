@@ -1,0 +1,25 @@
+{
+  "_comment": "Updated by scripts/data_health_check.py every 6h",
+  "_updated": "2026-04-03T10:12:29.986102+00:00",
+  "quotas": [
+    {
+      "api": "The Odds API",
+      "plan": "Upgraded (20K/month)",
+      "daily_limit": 670,
+      "used_today": null,
+      "remaining": null,
+      "reset": "Midnight UTC",
+      "link": "https://the-odds-api.com",
+      "_note": "Usage tracked via response headers (not in DB). Check provider dashboard."
+    },
+    {
+      "api": "API-Football",
+      "plan": "Check dashboard",
+      "daily_limit": null,
+      "used_today": 14,
+      "remaining": null,
+      "reset": "Midnight UTC",
+      "link": "https://dashboard.api-football.com"
+    }
+  ]
+}
