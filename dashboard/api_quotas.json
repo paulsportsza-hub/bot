@@ -1,0 +1,24 @@
+{
+  "_comment": "Updated by cron job. Edit manually or add cron: scripts/update_api_quotas.py",
+  "_updated": "2026-04-03T00:00:00Z",
+  "quotas": [
+    {
+      "api": "The Odds API",
+      "plan": "Upgraded (20K/month)",
+      "daily_limit": 670,
+      "used_today": null,
+      "remaining": null,
+      "reset": "Midnight UTC",
+      "link": "https://the-odds-api.com"
+    },
+    {
+      "api": "API-Football",
+      "plan": "Unknown — check dashboard",
+      "daily_limit": null,
+      "used_today": null,
+      "remaining": null,
+      "reset": "Midnight UTC",
+      "link": "https://dashboard.api-football.com"
+    }
+  ]
+}
