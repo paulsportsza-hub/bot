@@ -222,6 +222,23 @@ def test_build_narrative_spec_downgrades_stale_context_claims() -> None:
     assert "mid-table" not in baseline.lower()
 
 
+def test_build_narrative_spec_injects_static_coaches_when_context_is_missing() -> None:
+    ctx_data = {
+        "home_team": {"name": "Arsenal"},
+        "away_team": {"name": "Bournemouth"},
+    }
+    edge_data = {
+        "home_team": "Arsenal",
+        "away_team": "Bournemouth",
+        "league": "epl",
+    }
+
+    spec = build_narrative_spec(ctx_data, edge_data, [], "soccer")
+
+    assert spec.home_coach == "Mikel Arteta"
+    assert spec.away_coach == "Andoni Iraola"
+
+
 def test_render_risk_drops_shape_the_stake_closer() -> None:
     spec = NarrativeSpec(
         home_name="Kaizer Chiefs",

@@ -994,7 +994,12 @@ class TestRenderVerdict:
         """W84-Q3: Strong back verdict uses strong conviction language."""
         spec = self._spec("strong back", "confident stake", "strong")
         verdict = _render_verdict(spec)
-        assert "strong" in verdict.lower() or "premium" in verdict.lower() or "conviction" in verdict.lower()
+        assert (
+            "strong" in verdict.lower()
+            or "premium" in verdict.lower()
+            or "conviction" in verdict.lower()
+            or "confidence" in verdict.lower()
+        )
 
     def test_speculative_verdict_contains_no_banned_confident_phrases(self):
         spec = self._spec("speculative punt", "tiny exposure", "cautious")
@@ -1313,3 +1318,276 @@ class TestVerdictCoherenceIntegration:
                 assert phrase.lower() not in verdict.lower(), (
                     f"Banned phrase {phrase!r} in {action} verdict with evidence"
                 )
+
+
+# ── TONE-BANDS-FIX: Diamond/Gold conviction language regression ────────────────
+
+
+class TestTierConvictionLanguage:
+    """AC-6: Diamond/Gold Verdict must never contain banned hedging phrases.
+    AC-2/AC-3: Diamond/Gold must use conviction language in Verdict.
+    AC-7: Barcelona vs Atletico Madrid Diamond card verification."""
+
+    # Phrases banned from Diamond/Gold Verdict sections per brief AC-2/AC-3
+    DIAMOND_BANNED = ["speculative", "small stake only", "monitor"]
+    GOLD_BANNED = ["speculative", "small stake only"]
+
+    def _diamond_spec(self):
+        """Mimics a Diamond-tier card with 0 signals — the Barcelona/Atletico scenario."""
+        return NarrativeSpec(
+            home_name="Barcelona", away_name="Atletico Madrid",
+            competition="La Liga", sport="soccer",
+            home_story_type="title_push", away_story_type="crisis",
+            evidence_class="supported", tone_band="confident",
+            verdict_action="strong back", verdict_sizing="standard-to-heavy stake",
+            edge_tier="diamond", ev_pct=9.8, odds=2.10, bookmaker="SuperSportBet",
+        )
+
+    def _gold_spec(self):
+        """Gold-tier card — minimum lean posture required."""
+        return NarrativeSpec(
+            home_name="Mamelodi Sundowns", away_name="Orlando Pirates",
+            competition="PSL", sport="soccer",
+            home_story_type="momentum", away_story_type="neutral",
+            evidence_class="lean", tone_band="moderate",
+            verdict_action="lean", verdict_sizing="small stake",
+            edge_tier="gold", ev_pct=5.2, odds=1.85, bookmaker="Hollywoodbets",
+        )
+
+    def test_diamond_verdict_no_banned_phrases(self):
+        """AC-6: Diamond verdict must never contain hedging phrases."""
+        spec = self._diamond_spec()
+        verdict = _render_verdict(spec)
+        for phrase in self.DIAMOND_BANNED:
+            assert phrase.lower() not in verdict.lower(), (
+                f"Banned Diamond phrase {phrase!r} found in verdict: {verdict!r}"
+            )
+
+    def test_gold_verdict_no_banned_phrases(self):
+        """AC-6: Gold verdict must never contain speculative hedging phrases."""
+        spec = self._gold_spec()
+        verdict = _render_verdict(spec)
+        for phrase in self.GOLD_BANNED:
+            assert phrase.lower() not in verdict.lower(), (
+                f"Banned Gold phrase {phrase!r} found in verdict: {verdict!r}"
+            )
+
+    def test_diamond_verdict_uses_conviction_language(self):
+        """AC-2: Diamond verdict must use high-conviction language."""
+        spec = self._diamond_spec()
+        verdict = _render_verdict(spec)
+        conviction_phrases = [
+            "strong back", "with conviction", "with confidence",
+            "premium play", "all point the same way",
+        ]
+        assert any(p in verdict.lower() for p in conviction_phrases), (
+            f"Diamond verdict lacks conviction language: {verdict!r}"
+        )
+
+    def test_gold_verdict_uses_moderate_conviction_language(self):
+        """AC-3: Gold verdict must use moderate conviction language."""
+        spec = self._gold_spec()
+        verdict = _render_verdict(spec)
+        moderate_phrases = ["lean", "standard stake", "supported by data", "measured lean"]
+        assert any(p in verdict.lower() for p in moderate_phrases), (
+            f"Gold verdict lacks moderate conviction language: {verdict!r}"
+        )
+
+    def test_diamond_verdict_sizing_not_tiny_or_small(self):
+        """AC-2: Diamond sizing must not be tiny exposure or small stake."""
+        spec = self._diamond_spec()
+        verdict = _render_verdict(spec)
+        assert "tiny exposure" not in verdict.lower(), (
+            f"Diamond verdict uses 'tiny exposure' sizing: {verdict!r}"
+        )
+        assert "small stake only" not in verdict.lower(), (
+            f"Diamond verdict uses 'small stake only': {verdict!r}"
+        )
+
+    def test_barca_atletico_diamond_card_conviction(self):
+        """AC-7: Barcelona vs Atletico Madrid Diamond card — 0 signals scenario.
+        This is the exact failure case from QA-29 D-1 (P0).
+        After TONE-BANDS-FIX, conviction language must appear even with 0 confirming signals."""
+        # Simulate the worst case: Diamond tier, 0 confirming signals, no edge_v2
+        # The tier floor in build_narrative_spec() fires for this case.
+        spec = NarrativeSpec(
+            home_name="Barcelona", away_name="Atletico Madrid",
+            competition="La Liga", sport="soccer",
+            home_story_type="neutral", away_story_type="neutral",
+            evidence_class="supported", tone_band="confident",
+            verdict_action="strong back", verdict_sizing="standard-to-heavy stake",
+            support_level=0, edge_tier="diamond",
+            ev_pct=9.8, odds=2.10, bookmaker="SuperSportBet",
+        )
+        verdict = _render_verdict(spec)
+        # Must NOT contain hedging language
+        for phrase in self.DIAMOND_BANNED:
+            assert phrase.lower() not in verdict.lower(), (
+                f"QA-29 D-1 regression: banned phrase {phrase!r} in Diamond verdict"
+            )
+        # Must contain conviction language
+        conviction_phrases = [
+            "strong back", "with conviction", "with confidence",
+            "premium play", "all point the same way",
+        ]
+        assert any(p in verdict.lower() for p in conviction_phrases), (
+            f"QA-29 D-1 regression: Diamond verdict lacks conviction language: {verdict!r}"
+        )
+
+    def test_diamond_tone_band_allows_conviction_phrases(self):
+        """AC-2: TONE_BANDS['strong'] must allow Diamond conviction phrases."""
+        assert "back with confidence" in TONE_BANDS["strong"]["allowed"]
+        assert "standard-to-heavy stake" in TONE_BANDS["strong"]["allowed"]
+        assert "strong lean" in TONE_BANDS["strong"]["allowed"]
+
+    def test_gold_tone_band_allows_moderate_phrases(self):
+        """AC-3: TONE_BANDS['confident'/'moderate'] must allow Gold conviction phrases."""
+        assert "lean" in TONE_BANDS["confident"]["allowed"]
+        assert "standard stake" in TONE_BANDS["confident"]["allowed"]
+        assert "supported by data" in TONE_BANDS["confident"]["allowed"]
+        assert "lean" in TONE_BANDS["moderate"]["allowed"]
+        assert "small-to-standard stake" in TONE_BANDS["moderate"]["allowed"]
+
+    def test_diamond_gold_banned_phrases_in_tone_bands(self):
+        """AC-2/AC-3: Banned phrases must be in strong and confident tone bands."""
+        assert "small stake only" in TONE_BANDS["strong"]["banned"]
+        assert "monitor" in TONE_BANDS["strong"]["banned"]
+        assert "small stake only" in TONE_BANDS["confident"]["banned"]
+        assert "monitor" in TONE_BANDS["confident"]["banned"]
+        assert "small stake only" in TONE_BANDS["moderate"]["banned"]
+
+
+# ── BASELINE-VERDICT-FIX: Verdict/Risk deduplication regression ───────────────
+
+
+class TestBaselineNoEdgeVerdictRiskDistinct:
+    """BASELINE-VERDICT-FIX (QA-29 D-3): Verdict must differ from Risk on
+    baseline_no_edge cards.
+
+    Root cause: _build_risk_factors added _zero_confirm text ("no signals
+    backing a pricing gap") even when ev <= 0, where there IS no pricing gap.
+    Both sections ended up saying "no edge here" in different words.
+
+    Fix:
+    - _build_risk_factors: skip _zero_confirm when ev <= 0 (fall to _default_factors).
+    - _render_verdict for monitor: include outcome/odds/bookmaker so Verdict is
+      a match-specific assessment rather than a generic disclaimer.
+    """
+
+    def _no_edge_edge_data(self, match_key="richards_bay_vs_stellenbosch_2026-04-10",
+                           outcome="home", ev=-0.8):
+        return {
+            "match_key": match_key,
+            "outcome": outcome,
+            "edge_pct": ev,
+            "confirming_signals": 0,
+            "stale_minutes": 0,
+            "movement_direction": "neutral",
+            "tipster_against": 0,
+        }
+
+    def test_risk_factors_skip_zero_confirm_when_ev_negative(self):
+        """_build_risk_factors with ev <= 0 must NOT add _zero_confirm text.
+
+        _zero_confirm says "model identifies a pricing discrepancy" or "no signals
+        backing a pricing gap" — wrong when ev <= 0 and there IS no gap.
+        """
+        factors = _build_risk_factors(self._no_edge_edge_data(), None, "soccer")
+        text = " ".join(factors)
+        assert "pricing discrepancy" not in text
+        assert "price gap itself" not in text
+        assert "typical baseline for this fixture type" not in text
+
+    def test_risk_factors_skip_zero_confirm_when_ev_zero(self):
+        """Boundary: ev == 0 must also skip _zero_confirm."""
+        edge_data = self._no_edge_edge_data(ev=0.0)
+        factors = _build_risk_factors(edge_data, None, "soccer")
+        text = " ".join(factors)
+        assert "pricing discrepancy" not in text
+        assert "price gap itself" not in text
+
+    def test_risk_factors_still_add_zero_confirm_for_positive_ev(self):
+        """_zero_confirm must still appear when confirming==0 AND ev > 0 (original behaviour)."""
+        edge_data = self._no_edge_edge_data(ev=3.5)
+        factors = _build_risk_factors(edge_data, None, "soccer")
+        text = " ".join(factors)
+        # One of the three _zero_confirm variants must be present
+        assert any(p in text for p in (
+            "pricing discrepancy",
+            "price gap itself",
+            "typical baseline for this fixture type",
+        )), f"_zero_confirm missing for positive-EV + zero-signal edge: {text!r}"
+
+    def test_verdict_differs_from_risk_richards_bay(self):
+        """AC-4: Verdict content must differ from Risk content — Richards Bay case."""
+        edge_data = self._no_edge_edge_data()
+        risk_factors = _build_risk_factors(edge_data, None, "soccer")
+        spec = NarrativeSpec(
+            home_name="Richards Bay", away_name="Stellenbosch",
+            competition="Premiership (PSL)", sport="soccer",
+            home_story_type="neutral", away_story_type="neutral",
+            evidence_class="speculative", tone_band="cautious",
+            verdict_action="monitor", verdict_sizing="monitor",
+            outcome="home", outcome_label="Richards Bay win",
+            bookmaker="Hollywoodbets", odds=2.30,
+            ev_pct=-0.8, fair_prob_pct=42.0, composite_score=48.0,
+            bookmaker_count=2, support_level=0,
+            risk_factors=risk_factors, risk_severity="moderate",
+            stale_minutes=0, movement_direction="neutral", tipster_against=0,
+        )
+        risk_text = _render_risk(spec)
+        verdict_text = _render_verdict(spec)
+
+        assert risk_text != verdict_text, (
+            f"Verdict copies Risk verbatim on baseline_no_edge card:\n"
+            f"Risk:    {risk_text!r}\nVerdict: {verdict_text!r}"
+        )
+        # Risk must NOT contain Verdict-style assessment language
+        assert "no confirmed edge" not in risk_text.lower()
+        assert "monitor for line movement" not in risk_text.lower()
+        assert "no positive expected value" not in risk_text.lower()
+
+    def test_verdict_differs_from_risk_southampton_arsenal(self):
+        """AC-5: Southampton vs Arsenal baseline_no_edge — Verdict ≠ Risk."""
+        edge_data = self._no_edge_edge_data(
+            match_key="southampton_vs_arsenal_2026-04-09",
+            outcome="away", ev=-1.2,
+        )
+        risk_factors = _build_risk_factors(edge_data, None, "soccer")
+        spec = NarrativeSpec(
+            home_name="Southampton", away_name="Arsenal",
+            competition="Premier League", sport="soccer",
+            home_story_type="neutral", away_story_type="neutral",
+            evidence_class="speculative", tone_band="cautious",
+            verdict_action="monitor", verdict_sizing="monitor",
+            outcome="away", outcome_label="Arsenal win",
+            bookmaker="Betway", odds=1.55,
+            ev_pct=-1.2, fair_prob_pct=62.0, composite_score=50.0,
+            bookmaker_count=3, support_level=0,
+            risk_factors=risk_factors, risk_severity="moderate",
+            stale_minutes=0, movement_direction="neutral", tipster_against=0,
+        )
+        risk_text = _render_risk(spec)
+        verdict_text = _render_verdict(spec)
+
+        assert risk_text != verdict_text
+        # Verdict must include match-specific details (outcome/bookmaker/odds)
+        assert any(s in verdict_text for s in ("Arsenal win", "1.55", "Betway")), (
+            f"Verdict lacks match-specific detail: {verdict_text!r}"
+        )
+        assert "monitor for line movement" not in risk_text.lower()
+
+    def test_verdict_monitor_includes_bookmaker_and_odds(self):
+        """Verdict for monitor action must reference bookmaker + odds when known."""
+        spec = NarrativeSpec(
+            home_name="Richards Bay", away_name="Stellenbosch",
+            competition="Premiership (PSL)", sport="soccer",
+            home_story_type="neutral", away_story_type="neutral",
+            verdict_action="monitor", verdict_sizing="monitor",
+            outcome="home", outcome_label="Richards Bay win",
+            bookmaker="Hollywoodbets", odds=2.30,
+            ev_pct=-0.8,
+        )
+        verdict = _render_verdict(spec)
+        assert "Hollywoodbets" in verdict
+        assert "2.30" in verdict

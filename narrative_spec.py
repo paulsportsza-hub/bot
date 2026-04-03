@@ -11,9 +11,12 @@ in test/scraper environments.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 # ── Tone Band Language Rules ───────────────────────────────────────────────────
@@ -48,33 +51,92 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
         "allowed": [
             "mild lean", "slight edge", "numbers suggest",
             "worth considering", "some value here",
+            "lean", "small-to-standard stake",
         ],
         "banned": [
             "market has this completely wrong", "slam dunk", "lock",
             "huge edge", "no-brainer", "one of the best plays",
+            "small stake only",
         ],
     },
     "confident": {
         "allowed": [
             "genuine value", "supported edge", "solid play",
             "numbers and indicators agree", "worth backing",
+            "lean", "standard stake", "supported by data",
         ],
         "banned": [
             "slam dunk", "lock", "no-brainer", "guaranteed",
+            "small stake only", "monitor",
         ],
     },
     "strong": {
         "allowed": [
             "market mispriced", "strong conviction", "premium value",
             "one of the best plays on the card",
+            "back with confidence", "standard-to-heavy stake", "strong lean",
         ],
         "banned": [
             "guaranteed", "lock", "no-brainer", "can't lose",
+            "small stake only", "monitor",
         ],
     },
 }
 
 _SETUP_CONTEXT_MAX_AGE_HOURS = 48.0
+_COACH_LOOKUP_CACHE: dict[str, object] | None = None
+
+
+def _normalise_coach_lookup_name(name: str) -> str:
+    """Mirror the scraper-side team-name normaliser for static coach lookups."""
+    normalised = str(name or "").lower().strip().replace("_", " ").replace("-", " ")
+    for suffix in (" fc", " sc", " cf", " afc"):
+        if normalised.endswith(suffix):
+            normalised = normalised[: -len(suffix)].strip()
+    if normalised.startswith("the "):
+        normalised = normalised[4:]
+    return normalised
+
+
+def _load_coach_lookup() -> dict[str, object]:
+    """Load the shared scrapers coach table without importing bot config."""
+    global _COACH_LOOKUP_CACHE
+    if _COACH_LOOKUP_CACHE is not None:
+        return _COACH_LOOKUP_CACHE
+
+    scrapers_root = Path(
+        os.environ.get("SCRAPERS_ROOT", str(Path(__file__).resolve().parent.parent / "scrapers"))
+    )
+    coaches_path = scrapers_root / "coaches.json"
+    try:
+        payload = json.loads(coaches_path.read_text())
+        soccer_coaches = payload.get("soccer", {})
+        _COACH_LOOKUP_CACHE = soccer_coaches if isinstance(soccer_coaches, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        _COACH_LOOKUP_CACHE = {}
+    return _COACH_LOOKUP_CACHE
+
+
+def lookup_coach(team_name: str) -> str:
+    """Return static coach name for a team, or empty string when unavailable."""
+    normalised = _normalise_coach_lookup_name(team_name)
+    if not normalised:
+        return ""
+
+    soccer_coaches = _load_coach_lookup()
+    entry = soccer_coaches.get(normalised)
+    if isinstance(entry, dict):
+        return str(entry.get("name") or "")
+    if isinstance(entry, str):
+        return entry
+
+    for key, value in soccer_coaches.items():
+        if normalised in key or key in normalised:
+            if isinstance(value, dict):
+                return str(value.get("name") or "")
+            if isinstance(value, str):
+                return value
+    return ""
 
 
 # ── NarrativeSpec Dataclass ───────────────────────────────────────────────────
@@ -132,7 +194,10 @@ class NarrativeSpec:
 
     # Verdict (code-decided — capped by tone band)
     verdict_action: str = ""      # "speculative punt" / "lean" / "back" / "strong back"
-    verdict_sizing: str = ""      # "tiny exposure" / "small stake" / "standard stake" / "confident stake"
+    verdict_sizing: str = ""      # "tiny exposure" / "small stake" / "standard stake" / "confident stake" / "standard-to-heavy stake"
+
+    # Edge tier (from edge_rating — used for tier-based language floor)
+    edge_tier: str = ""           # "diamond" / "gold" / "silver" / "bronze" / ""
 
     # Bookmaker coverage
     bookmaker_count: int = 0              # number of SA bookmakers pricing this match
@@ -282,13 +347,17 @@ def _build_risk_factors(
     factors = []
     stale = edge_data.get("stale_minutes", 0)
     confirming = edge_data.get("confirming_signals", 0)
+    ev = edge_data.get("edge_pct", 0)
     movement = edge_data.get("movement_direction", "neutral")
     tipster_against = edge_data.get("tipster_against", 0)
     outcome = edge_data.get("outcome", "")
 
     if stale >= 360:
         factors.append(f"Stale price — hasn't updated in {stale // 60}h, could shift before kickoff.")
-    if confirming == 0:
+    # BASELINE-VERDICT-FIX: _zero_confirm text describes "no signals backing a pricing gap" —
+    # only appropriate when there IS a positive-EV gap (ev > 0). For baseline_no_edge (ev <= 0)
+    # there is no gap to confirm, so this text would duplicate the Verdict's "no edge" message.
+    if confirming == 0 and ev > 0:
         _v = _pick(
             f"{edge_data.get('match_key', '')}{edge_data.get('outcome', '')}{sport}",
             3,
@@ -601,6 +670,8 @@ def build_narrative_spec(
 
     home_name = home.get("name", edge_data.get("home_team", "Home"))
     away_name = away.get("name", edge_data.get("away_team", "Away"))
+    home_setup["coach"] = str(home_setup.get("coach") or lookup_coach(home_name) or "")
+    away_setup["coach"] = str(away_setup.get("coach") or lookup_coach(away_name) or "")
 
     # Evidence classification
     ev_class, tone, verdict_action, verdict_sizing = _classify_evidence(edge_data)
@@ -698,6 +769,30 @@ def build_narrative_spec(
 
     # Enforce coherence — downgrade if contradictions found
     spec = _enforce_coherence(spec)
+
+    # TONE-BANDS-FIX: Enforce minimum conviction posture per edge tier.
+    # Diamond/Gold badges already communicate quality — language must match the badge.
+    # Applied AFTER coherence enforcement to override the BUILD-GATE-RELAX floor.
+    _tier = (edge_data.get("edge_tier") or "").lower()
+    spec.edge_tier = _tier
+    if _tier == "diamond":
+        # Diamond always uses conviction language — never hedging or speculative posture.
+        if spec.tone_band not in ("confident", "strong"):
+            spec.tone_band = "confident"
+            spec.evidence_class = "supported"
+        if spec.verdict_action in ("speculative punt", "monitor"):
+            spec.verdict_action = "strong back"
+        if spec.verdict_sizing in ("tiny exposure", "small stake"):
+            spec.verdict_sizing = "standard-to-heavy stake"
+    elif _tier == "gold":
+        # Gold never uses hedging language — minimum lean posture.
+        if spec.tone_band == "cautious":
+            spec.tone_band = "moderate"
+            spec.evidence_class = "lean"
+        if spec.verdict_action in ("speculative punt", "monitor"):
+            spec.verdict_action = "lean"
+        if spec.verdict_sizing == "tiny exposure":
+            spec.verdict_sizing = "small stake"
 
     return spec
 
@@ -1750,6 +1845,15 @@ def _render_verdict(spec: NarrativeSpec) -> str:
 
     if action in ("pass", "monitor"):
         # W84-Q13 / VERDICT-FIX: Zero/negative EV — neutral monitor posture, no PASS recommendation
+        # BASELINE-VERDICT-FIX: Include match-specific details so Verdict is an assessment,
+        # not a generic disclaimer that echoes Risk. Risk = match uncertainties.
+        # Verdict = overall assessment of the pricing + recommended action.
+        if odds_str != "?" and bk != "the market":
+            return (
+                f"No confirmed edge on {outcome} at {odds_str} with {bk} — "
+                f"the current pricing doesn't present a clear opportunity. "
+                f"Monitor for line movement before committing."
+            )
         return (
             f"No positive expected value at current pricing — "
             f"monitor for line movement until the price improves."
@@ -1782,7 +1886,7 @@ def _render_verdict(spec: NarrativeSpec) -> str:
         return f"{posture} {evidence}".rstrip() if evidence else posture
 
     elif action == "lean":
-        _v = _pick(_seed, 3)
+        _v = _pick(_seed, 4)
         _lean_variants = [
             (
                 f"Lean on {outcome} at {odds_str} ({bk}) — "
@@ -1795,6 +1899,10 @@ def _render_verdict(spec: NarrativeSpec) -> str:
             (
                 f"Cautious nod to {outcome} at {odds_str} ({bk}). "
                 f"One signal points the right way, so it is worth tracking without overstating the case. {_sentence_case(sizing)}."
+            ),
+            (
+                f"Lean on {outcome} at {odds_str} ({bk}) — "
+                f"supported by data and priced with value. {_sentence_case(sizing)}."
             ),
         ]
         posture = _lean_variants[_v]
@@ -1820,7 +1928,7 @@ def _render_verdict(spec: NarrativeSpec) -> str:
         return f"{posture} {evidence}".rstrip() if evidence else posture
 
     else:  # strong back
-        _v = _pick(_seed, 3)
+        _v = _pick(_seed, 4)
         _strong_variants = [
             (
                 f"Strong back on {outcome} at {odds_str} ({bk}) — "
@@ -1833,6 +1941,10 @@ def _render_verdict(spec: NarrativeSpec) -> str:
             (
                 f"Premium play: {outcome} at {odds_str} ({bk}). "
                 f"The signals, the price, and the model all point the same way. {_sentence_case(sizing)}."
+            ),
+            (
+                f"Back {outcome} at {odds_str} ({bk}) with confidence — "
+                f"the edge is clear and the price is right. {_sentence_case(sizing)}."
             ),
         ]
         posture = _strong_variants[_v]
