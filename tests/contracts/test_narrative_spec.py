@@ -1455,3 +1455,139 @@ class TestTierConvictionLanguage:
         assert "small stake only" in TONE_BANDS["confident"]["banned"]
         assert "monitor" in TONE_BANDS["confident"]["banned"]
         assert "small stake only" in TONE_BANDS["moderate"]["banned"]
+
+
+# ── BASELINE-VERDICT-FIX: Verdict/Risk deduplication regression ───────────────
+
+
+class TestBaselineNoEdgeVerdictRiskDistinct:
+    """BASELINE-VERDICT-FIX (QA-29 D-3): Verdict must differ from Risk on
+    baseline_no_edge cards.
+
+    Root cause: _build_risk_factors added _zero_confirm text ("no signals
+    backing a pricing gap") even when ev <= 0, where there IS no pricing gap.
+    Both sections ended up saying "no edge here" in different words.
+
+    Fix:
+    - _build_risk_factors: skip _zero_confirm when ev <= 0 (fall to _default_factors).
+    - _render_verdict for monitor: include outcome/odds/bookmaker so Verdict is
+      a match-specific assessment rather than a generic disclaimer.
+    """
+
+    def _no_edge_edge_data(self, match_key="richards_bay_vs_stellenbosch_2026-04-10",
+                           outcome="home", ev=-0.8):
+        return {
+            "match_key": match_key,
+            "outcome": outcome,
+            "edge_pct": ev,
+            "confirming_signals": 0,
+            "stale_minutes": 0,
+            "movement_direction": "neutral",
+            "tipster_against": 0,
+        }
+
+    def test_risk_factors_skip_zero_confirm_when_ev_negative(self):
+        """_build_risk_factors with ev <= 0 must NOT add _zero_confirm text.
+
+        _zero_confirm says "model identifies a pricing discrepancy" or "no signals
+        backing a pricing gap" — wrong when ev <= 0 and there IS no gap.
+        """
+        factors = _build_risk_factors(self._no_edge_edge_data(), None, "soccer")
+        text = " ".join(factors)
+        assert "pricing discrepancy" not in text
+        assert "price gap itself" not in text
+        assert "typical baseline for this fixture type" not in text
+
+    def test_risk_factors_skip_zero_confirm_when_ev_zero(self):
+        """Boundary: ev == 0 must also skip _zero_confirm."""
+        edge_data = self._no_edge_edge_data(ev=0.0)
+        factors = _build_risk_factors(edge_data, None, "soccer")
+        text = " ".join(factors)
+        assert "pricing discrepancy" not in text
+        assert "price gap itself" not in text
+
+    def test_risk_factors_still_add_zero_confirm_for_positive_ev(self):
+        """_zero_confirm must still appear when confirming==0 AND ev > 0 (original behaviour)."""
+        edge_data = self._no_edge_edge_data(ev=3.5)
+        factors = _build_risk_factors(edge_data, None, "soccer")
+        text = " ".join(factors)
+        # One of the three _zero_confirm variants must be present
+        assert any(p in text for p in (
+            "pricing discrepancy",
+            "price gap itself",
+            "typical baseline for this fixture type",
+        )), f"_zero_confirm missing for positive-EV + zero-signal edge: {text!r}"
+
+    def test_verdict_differs_from_risk_richards_bay(self):
+        """AC-4: Verdict content must differ from Risk content — Richards Bay case."""
+        edge_data = self._no_edge_edge_data()
+        risk_factors = _build_risk_factors(edge_data, None, "soccer")
+        spec = NarrativeSpec(
+            home_name="Richards Bay", away_name="Stellenbosch",
+            competition="Premiership (PSL)", sport="soccer",
+            home_story_type="neutral", away_story_type="neutral",
+            evidence_class="speculative", tone_band="cautious",
+            verdict_action="monitor", verdict_sizing="monitor",
+            outcome="home", outcome_label="Richards Bay win",
+            bookmaker="Hollywoodbets", odds=2.30,
+            ev_pct=-0.8, fair_prob_pct=42.0, composite_score=48.0,
+            bookmaker_count=2, support_level=0,
+            risk_factors=risk_factors, risk_severity="moderate",
+            stale_minutes=0, movement_direction="neutral", tipster_against=0,
+        )
+        risk_text = _render_risk(spec)
+        verdict_text = _render_verdict(spec)
+
+        assert risk_text != verdict_text, (
+            f"Verdict copies Risk verbatim on baseline_no_edge card:\n"
+            f"Risk:    {risk_text!r}\nVerdict: {verdict_text!r}"
+        )
+        # Risk must NOT contain Verdict-style assessment language
+        assert "no confirmed edge" not in risk_text.lower()
+        assert "monitor for line movement" not in risk_text.lower()
+        assert "no positive expected value" not in risk_text.lower()
+
+    def test_verdict_differs_from_risk_southampton_arsenal(self):
+        """AC-5: Southampton vs Arsenal baseline_no_edge — Verdict ≠ Risk."""
+        edge_data = self._no_edge_edge_data(
+            match_key="southampton_vs_arsenal_2026-04-09",
+            outcome="away", ev=-1.2,
+        )
+        risk_factors = _build_risk_factors(edge_data, None, "soccer")
+        spec = NarrativeSpec(
+            home_name="Southampton", away_name="Arsenal",
+            competition="Premier League", sport="soccer",
+            home_story_type="neutral", away_story_type="neutral",
+            evidence_class="speculative", tone_band="cautious",
+            verdict_action="monitor", verdict_sizing="monitor",
+            outcome="away", outcome_label="Arsenal win",
+            bookmaker="Betway", odds=1.55,
+            ev_pct=-1.2, fair_prob_pct=62.0, composite_score=50.0,
+            bookmaker_count=3, support_level=0,
+            risk_factors=risk_factors, risk_severity="moderate",
+            stale_minutes=0, movement_direction="neutral", tipster_against=0,
+        )
+        risk_text = _render_risk(spec)
+        verdict_text = _render_verdict(spec)
+
+        assert risk_text != verdict_text
+        # Verdict must include match-specific details (outcome/bookmaker/odds)
+        assert any(s in verdict_text for s in ("Arsenal win", "1.55", "Betway")), (
+            f"Verdict lacks match-specific detail: {verdict_text!r}"
+        )
+        assert "monitor for line movement" not in risk_text.lower()
+
+    def test_verdict_monitor_includes_bookmaker_and_odds(self):
+        """Verdict for monitor action must reference bookmaker + odds when known."""
+        spec = NarrativeSpec(
+            home_name="Richards Bay", away_name="Stellenbosch",
+            competition="Premiership (PSL)", sport="soccer",
+            home_story_type="neutral", away_story_type="neutral",
+            verdict_action="monitor", verdict_sizing="monitor",
+            outcome="home", outcome_label="Richards Bay win",
+            bookmaker="Hollywoodbets", odds=2.30,
+            ev_pct=-0.8,
+        )
+        verdict = _render_verdict(spec)
+        assert "Hollywoodbets" in verdict
+        assert "2.30" in verdict
