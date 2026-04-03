@@ -22,6 +22,39 @@ DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASS = os.getenv("DASHBOARD_PASS", "mzansiedge")
 PORT = int(os.getenv("DASHBOARD_PORT", "8501"))
 
+# ── League chart labels (full names, not truncated) ───────────────────────────
+
+_LEAGUE_CHART_NAMES: dict[str, str] = {
+    "CHAMPIONS LEAGUE": "Champions League",
+    "SUPER RUGBY": "Super Rugby",
+    "TEST CRICKET": "Test Cricket",
+    "TEST MATCHES": "Test Cricket",
+    "SIX NATIONS": "Six Nations",
+    "RUGBY CHAMPIONSHIP": "Rugby Champ",
+    "T20 WORLD CUP": "T20 World Cup",
+    "BIG BASH": "Big Bash",
+    "URC": "URC",
+    "CURRIE CUP": "Currie Cup",
+    "VARSITY CUP": "Varsity Cup",
+    "EPL": "EPL",
+    "PSL": "PSL",
+    "SA20": "SA20",
+    "IPL": "IPL",
+    "UFC": "MMA/UFC",
+    "BOXING": "Boxing",
+    "LA LIGA": "La Liga",
+    "BUNDESLIGA": "Bundesliga",
+    "SERIE A": "Serie A",
+    "LIGUE 1": "Ligue 1",
+    "MLS": "MLS",
+    "INTERNATIONAL RUGBY": "Intl Rugby",
+}
+
+
+def _chart_label(league_upper: str) -> str:
+    return _LEAGUE_CHART_NAMES.get(league_upper, league_upper.title())
+
+
 BOOKMAKERS = [
     "hollywoodbets", "supabets", "betway", "sportingbet",
     "gbets", "wsb", "playabets", "supersportbet",
@@ -171,6 +204,49 @@ def build_coverage_matrix(conn) -> list[dict]:
             "css":      css,
             "badge":    badge,
         })
+
+    # ── Rugby watchlist: URC / Varsity Cup / Currie Cup visibility ────────────
+    _RUGBY_WATCHLIST = [
+        ("urc",     "URC"),
+        ("varsity",  "Varsity Cup"),
+        ("currie",   "Currie Cup"),
+    ]
+
+    # Query ALL odds_snapshots for any rugby/urc/varsity/currie keys (not just upcoming)
+    all_rugby_rows = q_all(conn, """
+        SELECT DISTINCT LOWER(league) AS league FROM odds_snapshots
+        WHERE LOWER(league) LIKE '%rugby%'
+           OR LOWER(league) LIKE '%urc%'
+           OR LOWER(league) LIKE '%varsity%'
+           OR LOWER(league) LIKE '%currie%'
+        LIMIT 30
+    """)
+    found_rugby_leagues = {r["league"] for r in all_rugby_rows}
+    app.logger.info("[DASHBOARD] Rugby-related leagues in odds_snapshots: %s",
+                    found_rugby_leagues or "none found")
+
+    # Leagues already in the matrix (upcoming matches)
+    in_matrix = {c["league"].lower() for c in out}
+
+    for kw, display in _RUGBY_WATCHLIST:
+        # Already shown via main upcoming-match query?
+        if any(kw in lg for lg in in_matrix):
+            continue
+        # In odds_snapshots (any date) but no upcoming matches?
+        in_db = any(kw in lg for lg in found_rugby_leagues)
+        badge = "⚫ No Data" if in_db else "○ Not Tracked"
+        out.append({
+            "sport":    "rugby",
+            "league":   display,
+            "total":    0,
+            "w84":      0,
+            "w82":      0,
+            "baseline": 0,
+            "pct":      0.0,
+            "css":      "s-black",
+            "badge":    badge,
+        })
+
     return out
 
 
@@ -398,8 +474,8 @@ def render_page(conn, db_status: str) -> str:
                 + td(c["league"])
                 + td(c["total"])
                 + td(c["w84"], "s-green" if c["w84"] > 0 else "s-black")
-                + td(c["w82"], "s-amber" if c["w82"] > 0 else "s-black")
-                + td(c["baseline"], "s-red" if c["baseline"] > 0 else "s-black")
+                + td(c["w82"], "s-red" if c["w82"] > 0 else "s-black")
+                + td(c["baseline"], "s-amber" if c["baseline"] > 0 else "s-black")
                 + td(f"{c['pct']}%", c["css"])
                 + td(c["badge"])
                 + "</tr>"
@@ -477,7 +553,7 @@ def render_page(conn, db_status: str) -> str:
         p5_rows = '<div style="text-align:center;color:#22c55e;padding:20px">✓ No active alerts</div>'
 
     # ── Chart data ────────────────────────────────────────────────────────────
-    chart_labels = json.dumps([f"{c['sport'][:3].upper()}/{c['league'][:6]}" for c in coverage])
+    chart_labels = json.dumps([_chart_label(c["league"]) for c in coverage])
     chart_w84    = json.dumps([c["w84"]      for c in coverage])
     chart_w82    = json.dumps([c["w82"]      for c in coverage])
     chart_base   = json.dumps([c["baseline"] for c in coverage])
@@ -584,7 +660,7 @@ def render_page(conn, db_status: str) -> str:
   <div class="panel panel-full">
     <div class="panel-head">
       <span class="panel-title">Sport Coverage Matrix</span>
-      <span class="panel-sub">Next 7 days · w84 = AI-enriched · w82 = Template · baseline = No edge data</span>
+      <span class="panel-sub">Next 7 days · 🟢 w84 = AI-enriched · 🔴 w82 = Template · 🟡 baseline = No edge data</span>
     </div>
     <div style="overflow-x:auto">
       <table class="tbl">
@@ -687,9 +763,9 @@ def render_page(conn, db_status: str) -> str:
     data: {{
       labels: labels,
       datasets: [
-        {{ label: 'w84 (AI)', data: w84Data, backgroundColor: 'rgba(248,200,48,0.85)', borderRadius: 3 }},
-        {{ label: 'w82 (Template)', data: w82Data, backgroundColor: 'rgba(245,158,11,0.5)', borderRadius: 3 }},
-        {{ label: 'Baseline', data: baseData, backgroundColor: 'rgba(239,68,68,0.4)', borderRadius: 3 }},
+        {{ label: 'w84 (AI-enriched)', data: w84Data, backgroundColor: 'rgba(34,197,94,0.85)', borderRadius: 3 }},
+        {{ label: 'w82 (Template)', data: w82Data, backgroundColor: 'rgba(239,68,68,0.70)', borderRadius: 3 }},
+        {{ label: 'Baseline', data: baseData, backgroundColor: 'rgba(245,158,11,0.55)', borderRadius: 3 }},
       ]
     }},
     options: {{
