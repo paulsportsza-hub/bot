@@ -20,6 +20,7 @@ import re
 import sqlite3
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 
 # Add project paths
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -942,8 +943,273 @@ def _load_snapshot_baseline_edges(limit: int = 100) -> list[dict]:
     return baseline_edges
 
 
+# BUILD-ENRICH-09: Fixture table sources for pregen discovery (beyond odds_snapshots).
+# Each entry describes how to query a specific fixture table.
+_FIXTURE_DISCOVERY_SOURCES = [
+    {
+        "table": "sportmonks_fixtures",
+        "sport": "cricket",
+        "home_col": "home_team",
+        "away_col": "away_team",
+        "league_col": "league_name",
+        "date_col": "match_date",
+        "status_col": "status",
+    },
+    {
+        "table": "mma_fixtures",
+        "sport": "mma",
+        "home_col": "fighter1_name",
+        "away_col": "fighter2_name",
+        "league_col": "event_slug",
+        "date_col": "fight_date",
+        "status_col": "status",
+    },
+    {
+        "table": "rugby_fixtures",
+        "sport": "rugby",
+        "home_col": "home_team",
+        "away_col": "away_team",
+        "league_col": "league_name",
+        "date_col": "match_date",
+        "status_col": "status",
+    },
+]
+
+_FIXTURE_TERMINAL_STATUSES = {"Finished", "Cancelled"}
+
+
+def _fixture_home_prefix(key: str) -> str:
+    """First two underscore-separated words of a normalised team key.
+
+    Used for fuzzy deduplication: 'royal_challengers_bengaluru' and
+    'royal_challengers_bangalore' both return 'royal_challengers', which
+    correctly identifies them as the same team despite a city rename.
+    """
+    parts = key.split("_")[:2]
+    return "_".join(parts) if len(parts) == 2 else key
+
+
+def discover_pregen_targets(
+    db_path: str | None = None,
+    hours_ahead: int = 48,
+) -> list[dict]:
+    """Discover upcoming matches from ALL fixture sources for pregen.
+
+    BUILD-ENRICH-09: Scans sportmonks_fixtures (cricket), mma_fixtures (MMA),
+    rugby_fixtures (rugby), and odds_snapshots (soccer/existing) for matches
+    with commence_time in the next *hours_ahead* hours.
+
+    Returns a unified list of dicts:
+        {match_key, sport, home_team, away_team, league, commence_time, source_table}
+
+    Deduplication rules:
+    - odds_snapshots version preferred (always scanned first).
+    - Exact match_key collision → skip fixture-table entry.
+    - Fuzzy collision (same date + league + home team prefix) → skip fixture-table entry.
+
+    Matches with NULL commence_time are skipped.
+    Missing fixture tables are handled gracefully (logged as WARNING, skipped).
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db as _connect_odds_db
+        from scrapers.utils.team_mapper import normalise_team as _norm_team
+    except Exception as exc:
+        log.error("discover_pregen_targets: import failed: %s", exc)
+        return []
+
+    path = db_path or str(SCRAPERS_ROOT / "odds.db")
+    now = datetime.now(timezone.utc)
+    window_start_date = now.strftime("%Y-%m-%d")
+    window_end_date = (now + timedelta(hours=hours_ahead)).strftime("%Y-%m-%d")
+
+    targets: list[dict] = []
+    # Exact dedup by match_key
+    seen_keys: set[str] = set()
+    # Fuzzy dedup: (date_10, league_normalised, home_prefix_2) for odds_snapshots entries
+    _seen_fuzzy: set[tuple] = set()
+
+    # ── Step 1: odds_snapshots (soccer/existing — always first for dedup priority) ──
+    try:
+        conn = _connect_odds_db(path)
+        conn.row_factory = lambda cursor, row: dict(
+            zip([col[0] for col in cursor.description], row)
+        )
+        rows = conn.execute(
+            """
+            SELECT match_id, home_team, away_team, league, sport
+            FROM odds_snapshots
+            WHERE substr(match_id, -10) >= ?
+              AND substr(match_id, -10) <= ?
+            GROUP BY match_id
+            ORDER BY substr(match_id, -10) ASC
+            """,
+            (window_start_date, window_end_date),
+        ).fetchall()
+        for row in rows:
+            mkey = (row.get("match_id") or "").strip()
+            if not mkey or mkey in seen_keys:
+                continue
+            commence = _infer_commence_time_from_match_key(mkey)
+            if not commence:
+                continue
+            targets.append(
+                {
+                    "match_key": mkey,
+                    "sport": row.get("sport") or "soccer",
+                    "home_team": row.get("home_team") or "",
+                    "away_team": row.get("away_team") or "",
+                    "league": row.get("league") or "",
+                    "commence_time": commence,
+                    "source_table": "odds_snapshots",
+                }
+            )
+            seen_keys.add(mkey)
+            # Register for fuzzy dedup: other sources skip on (date, league, home_prefix) collision
+            date_10 = mkey[-10:] if len(mkey) >= 10 else ""
+            league_norm = (row.get("league") or "").lower().replace(" ", "_")
+            home_prefix = _fixture_home_prefix(row.get("home_team") or "")
+            if date_10 and league_norm:
+                _seen_fuzzy.add((date_10, league_norm, home_prefix))
+        conn.close()
+    except Exception as exc:
+        log.warning("discover_pregen_targets: odds_snapshots scan failed: %s", exc)
+
+    # ── Step 2: fixture tables (cricket, MMA, rugby) ──
+    for source in _FIXTURE_DISCOVERY_SOURCES:
+        table = source["table"]
+        sport = source["sport"]
+        home_col = source["home_col"]
+        away_col = source["away_col"]
+        league_col = source["league_col"]
+        date_col = source["date_col"]
+        status_col = source["status_col"]
+
+        try:
+            conn = _connect_odds_db(path)
+            conn.row_factory = lambda cursor, row: dict(
+                zip([col[0] for col in cursor.description], row)
+            )
+            rows = conn.execute(
+                f"""
+                SELECT {home_col}, {away_col}, {league_col}, {date_col}
+                FROM {table}
+                WHERE substr({date_col}, 1, 10) >= ?
+                  AND substr({date_col}, 1, 10) <= ?
+                  AND {status_col} NOT IN ({",".join("?" * len(_FIXTURE_TERMINAL_STATUSES))})
+                  AND {home_col} IS NOT NULL
+                  AND {away_col} IS NOT NULL
+                  AND {date_col} IS NOT NULL
+                """,
+                (window_start_date, window_end_date, *_FIXTURE_TERMINAL_STATUSES),
+            ).fetchall()
+            conn.close()
+        except Exception as exc:
+            log.warning(
+                "discover_pregen_targets: %s scan failed (table may not exist): %s",
+                table,
+                exc,
+            )
+            continue
+
+        for row in rows:
+            home = (row.get(home_col) or "").strip()
+            away = (row.get(away_col) or "").strip()
+            league = (row.get(league_col) or "").strip()
+            raw_date = str(row.get(date_col) or "")
+            date_10 = raw_date[:10]
+
+            if not home or not away or not date_10:
+                continue
+
+            h_key = _norm_team(home)
+            a_key = _norm_team(away)
+            mkey = f"{h_key}_vs_{a_key}_{date_10}"
+
+            # Exact dedup
+            if mkey in seen_keys:
+                continue
+
+            # Fuzzy dedup (same date + league + home-team prefix as an odds_snapshots entry)
+            league_norm = league.lower().replace(" ", "_")
+            home_prefix = _fixture_home_prefix(h_key)
+            if (date_10, league_norm, home_prefix) in _seen_fuzzy:
+                log.debug(
+                    "discover_pregen_targets: fuzzy-dedup %s (date=%s league=%s home_prefix=%s)",
+                    mkey,
+                    date_10,
+                    league_norm,
+                    home_prefix,
+                )
+                continue
+
+            # Build ISO commence_time
+            if len(raw_date) >= 16:
+                commence = f"{raw_date[:16].replace(' ', 'T')}:00+00:00"
+            else:
+                commence = f"{date_10}T00:00:00+00:00"
+
+            targets.append(
+                {
+                    "match_key": mkey,
+                    "sport": sport,
+                    "home_team": home,
+                    "away_team": away,
+                    "league": league,
+                    "commence_time": commence,
+                    "source_table": table,
+                }
+            )
+            seen_keys.add(mkey)
+
+    log.info(
+        "discover_pregen_targets: %d targets (%d from odds_snapshots, %d from fixture tables)",
+        len(targets),
+        sum(1 for t in targets if t["source_table"] == "odds_snapshots"),
+        sum(1 for t in targets if t["source_table"] != "odds_snapshots"),
+    )
+    return targets
+
+
+def _build_fixture_only_edge(target: dict) -> dict:
+    """Build a minimal no-odds edge dict from a fixture-discovery target.
+
+    BUILD-ENRICH-09: Used for matches discovered from fixture tables that have no
+    SA bookmaker odds yet. The narrative pipeline (NarrativeSpec + _render_baseline)
+    handles zero-signal, zero-odds contexts gracefully.
+    """
+    return {
+        "match_key": target["match_key"],
+        "home_team": target.get("home_team", ""),
+        "away_team": target.get("away_team", ""),
+        "league": target.get("league", ""),
+        "sport": target.get("sport", "soccer"),
+        "commence_time": target.get("commence_time", ""),
+        "best_odds": 0.0,
+        "ev": 0.0,
+        "edge_pct": 0.0,
+        "fair_probability": 0.0,
+        "composite_score": 0.0,
+        "confirming_signals": 0,
+        "contradicting_signals": 0,
+        "bookmaker_count": 0,
+        "stale_minutes": 0,
+        "signals": {},
+        "tier": "bronze",
+        "sharp_source": target.get("source_table", "fixture"),
+        "skip_sonnet_polish": True,
+        "narrative_source_hint": "fixture_only",
+    }
+
+
 def _load_pregen_edges(limit: int = 100, sport: str | None = None) -> list[dict]:
-    """Load positive-EV live edges plus snapshot-only baseline matches."""
+    """Load positive-EV live edges plus snapshot-only baseline matches.
+
+    BUILD-ENRICH-09: After loading the existing edge and snapshot sources, also
+    discovers matches from fixture tables (rugby_fixtures, mma_fixtures,
+    sportmonks_fixtures) that have no SA bookmaker odds yet. These receive
+    narrative cards generated from enriched context only (no odds/EV data).
+    The existing odds_snapshots discovery path is unchanged (additive only).
+    """
     live_edges = _load_shadow_pregen_edges(limit=limit)
     seen = {edge.get("match_key", "") for edge in live_edges if edge.get("match_key")}
     snapshot_edges = _load_snapshot_baseline_edges(limit=limit)
@@ -952,6 +1218,28 @@ def _load_pregen_edges(limit: int = 100, sport: str | None = None) -> list[dict]
         if match_key and match_key not in seen:
             live_edges.append(edge)
             seen.add(match_key)
+
+    # BUILD-ENRICH-09: Add fixture-table targets not covered by odds_snapshots.
+    # discover_pregen_targets() includes odds_snapshots matches first (already in seen)
+    # then fixture-table matches — so only the new ones pass the seen check.
+    try:
+        fixture_targets = discover_pregen_targets()
+        fixture_added = 0
+        for target in fixture_targets:
+            mkey = target.get("match_key", "")
+            if mkey and mkey not in seen:
+                edge = _build_fixture_only_edge(target)
+                live_edges.append(edge)
+                seen.add(mkey)
+                fixture_added += 1
+        if fixture_added:
+            log.info(
+                "_load_pregen_edges: added %d fixture-only targets from discovery",
+                fixture_added,
+            )
+    except Exception as exc:
+        log.warning("_load_pregen_edges: fixture discovery failed (non-fatal): %s", exc)
+
     if sport:
         def _sport_matches(edge: dict) -> bool:
             sp = (edge.get("sport") or "soccer").lower()
