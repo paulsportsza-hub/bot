@@ -72,7 +72,8 @@ def _query_rugby_fixture(
         conn = connect_odds_db_readonly(scrapers_db)
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            """SELECT home_team, away_team, league_name, match_date, status
+            """SELECT home_team, away_team, league_name, match_date, status,
+                      home_team_api_id, away_team_api_id, league_api_id
                FROM rugby_fixtures
                WHERE LOWER(home_team) = LOWER(?)
                  AND LOWER(away_team) = LOWER(?)
@@ -86,6 +87,52 @@ def _query_rugby_fixture(
         return dict(row) if row else None
     except Exception as exc:
         log.warning("rugby_fixtures DB lookup failed: %s", exc)
+        return None
+
+
+def _query_rugby_standings(
+    team_name: str,
+    team_api_id: int | None,
+    league_api_id: int | None,
+    scrapers_db: str = _SCRAPERS_ODDS_DB,
+) -> dict[str, Any] | None:
+    """Look up a team's current standings from rugby_standings.
+
+    Primary: match by team_api_id + league_api_id (precise, avoids name collisions).
+    Fallback: match by LOWER(team_name) + league_api_id.
+    Returns None when league_api_id is unknown, table is missing, or no row found.
+
+    Uses connect_odds_db_readonly() per W81-DBLOCK.
+    """
+    if not league_api_id:
+        return None
+    try:
+        from scrapers.db_connect import connect_odds_db_readonly  # noqa: PLC0415
+        conn = connect_odds_db_readonly(scrapers_db)
+        conn.row_factory = sqlite3.Row
+        row = None
+        if team_api_id:
+            row = conn.execute(
+                """SELECT position, played, won, drawn, lost, points, points_diff, form
+                   FROM rugby_standings
+                   WHERE team_api_id = ? AND league_api_id = ?
+                   ORDER BY season DESC
+                   LIMIT 1""",
+                (team_api_id, league_api_id),
+            ).fetchone()
+        if row is None:
+            row = conn.execute(
+                """SELECT position, played, won, drawn, lost, points, points_diff, form
+                   FROM rugby_standings
+                   WHERE LOWER(team_name) = LOWER(?) AND league_api_id = ?
+                   ORDER BY season DESC
+                   LIMIT 1""",
+                (team_name, league_api_id),
+            ).fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as exc:
+        log.warning("rugby_standings DB lookup failed: %s", exc)
         return None
 
 
@@ -317,13 +364,45 @@ class RugbyFetcher(BaseFetcher):
                 fixture.get("league_name")
                 or LEAGUE_CONFIG.get(league, {}).get("display", "")
             )
+            home_data: dict[str, Any] = {"name": fixture["home_team"]}
+            away_data: dict[str, Any] = {"name": fixture["away_team"]}
+
+            # Enrich with standings from rugby_standings (RUNTIME-R2: to_thread + 3s timeout).
+            league_api_id = fixture.get("league_api_id")
+            for team_name, api_id, data in (
+                (fixture["home_team"], fixture.get("home_team_api_id"), home_data),
+                (fixture["away_team"], fixture.get("away_team_api_id"), away_data),
+            ):
+                try:
+                    std = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            _query_rugby_standings,
+                            team_name, api_id, league_api_id,
+                        ),
+                        timeout=3.0,
+                    )
+                    if std:
+                        data.update({
+                            "position": std["position"],
+                            "league_position": std["position"],
+                            "points": std["points"],
+                            "form": std["form"] or "",
+                            "games_played": std["played"],
+                            "matches_played": std["played"],
+                            "record": (
+                                f"W{std['won']} D{std['drawn']} L{std['lost']}"
+                            ),
+                        })
+                except Exception:
+                    pass  # standings enrichment is best-effort — never block fixture path
+
             return FetchResult(
                 context={
                     "data_available": True,
                     "data_freshness": datetime.now(timezone.utc).isoformat(),
                     "data_source": "rugby_fixtures",
-                    "home_team": {"name": fixture["home_team"]},
-                    "away_team": {"name": fixture["away_team"]},
+                    "home_team": home_data,
+                    "away_team": away_data,
                     "h2h": [],
                     "competition": competition,
                     "season": "",
