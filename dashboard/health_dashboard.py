@@ -9,13 +9,21 @@ import functools
 import json
 import os
 import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 
 from flask import Flask, Response, request
 
+# ── Response cache (avoids 5s full-table-scan queries on every request) ──────
+_page_cache: dict[str, tuple[str, float]] = {}
+_page_cache_lock = threading.Lock()
+_PAGE_CACHE_TTL = 60  # seconds — heavy queries run at most once per minute
+
 # ── Config ────────────────────────────────────────────────────────────────────
 SCRAPERS_DB = os.path.expanduser("~/scrapers/odds.db")
 BOT_DB = os.path.expanduser("~/bot/data/mzansiedge.db")
+TIPSTER_DB = os.path.expanduser("~/scrapers/tipsters/tipster_predictions.db")
 QUOTAS_FILE = os.path.join(os.path.dirname(__file__), "api_quotas.json")
 
 DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
@@ -250,15 +258,31 @@ def build_coverage_matrix(conn) -> list[dict]:
     return out
 
 
+def _trend_indicator(current_7d: int, prev_7d: int) -> str:
+    """Return 7d trend indicator: count + directional arrow."""
+    if prev_7d == 0 and current_7d == 0:
+        return "—"
+    if prev_7d == 0:
+        return f"{current_7d:,} ↑"
+    delta_pct = (current_7d - prev_7d) / prev_7d
+    if delta_pct > 0.1:
+        arrow = "↑"
+    elif delta_pct < -0.1:
+        arrow = "↓"
+    else:
+        arrow = "→"
+    return f"{current_7d:,} {arrow}"
+
+
 def build_source_freshness(conn) -> list[dict]:
     out = []
 
-    def row(name, last_ts, records_24h, extra=""):
+    def row(name, last_ts, records_24h, trend_7d="—"):
         css, lbl = freshness(last_ts)
         out.append({
             "name": name, "last_pull": lbl,
             "records_24h": records_24h,
-            "css": css, "extra": extra,
+            "css": css, "trend_7d": trend_7d,
         })
 
     # SA bookmakers — derive from scrape_runs
@@ -269,45 +293,89 @@ def build_source_freshness(conn) -> list[dict]:
                 total = sum(json.loads(r["bookmaker_summary"] or "{}").values())
             except Exception:
                 total = 0
-            row("SA Bookmakers (8x)", r["finished_at"], total)
+            # 7d trend from odds_snapshots
+            c7 = q_one(conn, "SELECT COUNT(*) as c FROM odds_snapshots WHERE scraped_at >= datetime('now','-7 days')")
+            c14 = q_one(conn, "SELECT COUNT(*) as c FROM odds_snapshots WHERE scraped_at >= datetime('now','-14 days') AND scraped_at < datetime('now','-7 days')")
+            trend = _trend_indicator(c7["c"] if c7 else 0, c14["c"] if c14 else 0)
+            row("SA Bookmakers (8x)", r["finished_at"], total, trend)
         else:
             row("SA Bookmakers (8x)", None, 0)
     else:
-        out.append({"name": "SA Bookmakers (8x)", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "extra": ""})
+        out.append({"name": "SA Bookmakers (8x)", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "—"})
 
     # The Odds API (sharp)
     if table_exists(conn, "sharp_odds"):
         r = q_one(conn, "SELECT MAX(scraped_at) as last FROM sharp_odds")
         c = q_one(conn, "SELECT COUNT(*) as c FROM sharp_odds WHERE scraped_at >= datetime('now','-24 hours')")
-        row("The Odds API (Sharp)", r["last"] if r else None, (c["c"] if c else 0))
+        c7 = q_one(conn, "SELECT COUNT(*) as c FROM sharp_odds WHERE scraped_at >= datetime('now','-7 days')")
+        c14 = q_one(conn, "SELECT COUNT(*) as c FROM sharp_odds WHERE scraped_at >= datetime('now','-14 days') AND scraped_at < datetime('now','-7 days')")
+        trend = _trend_indicator(c7["c"] if c7 else 0, c14["c"] if c14 else 0)
+        row("The Odds API (Sharp)", r["last"] if r else None, (c["c"] if c else 0), trend)
     else:
-        out.append({"name": "The Odds API (Sharp)", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "extra": ""})
+        out.append({"name": "The Odds API (Sharp)", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "—"})
 
     # ESPN
     if table_exists(conn, "espn_stats_cache"):
         r = q_one(conn, "SELECT MAX(fetched_at) as last, COUNT(*) as c FROM espn_stats_cache")
-        row("ESPN Hidden API", r["last"] if r else None, r["c"] if r else 0)
+        row("ESPN Hidden API", r["last"] if r else None, r["c"] if r else 0, f"{r['c'] if r else 0} →")
     else:
-        out.append({"name": "ESPN Hidden API", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "extra": ""})
+        out.append({"name": "ESPN Hidden API", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "—"})
 
-    # API-Football
+    # API-Football (from api_usage table)
     if table_exists(conn, "api_usage"):
         r = q_one(conn, "SELECT MAX(called_at) as last FROM api_usage WHERE api_name='api_football'")
         c = q_one(conn, "SELECT COUNT(*) as c FROM api_usage WHERE api_name='api_football' AND called_at >= date('now')")
+        c7 = q_one(conn, "SELECT COUNT(*) as c FROM api_usage WHERE api_name='api_football' AND called_at >= datetime('now','-7 days')")
+        c14 = q_one(conn, "SELECT COUNT(*) as c FROM api_usage WHERE api_name='api_football' AND called_at >= datetime('now','-14 days') AND called_at < datetime('now','-7 days')")
+        trend = _trend_indicator(c7["c"] if c7 else 0, c14["c"] if c14 else 0)
         if r and r["last"]:
-            row("API-Football", r["last"], c["c"] if c else 0)
+            row("API-Football", r["last"], c["c"] if c else 0, trend)
         else:
-            out.append({"name": "API-Football", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "extra": ""})
+            out.append({"name": "API-Football", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "—"})
     else:
-        out.append({"name": "API-Football", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "extra": ""})
+        out.append({"name": "API-Football", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "—"})
 
     # Narrative cache
     if table_exists(conn, "narrative_cache"):
         r = q_one(conn, "SELECT MAX(created_at) as last FROM narrative_cache")
         c = q_one(conn, "SELECT COUNT(*) as c FROM narrative_cache WHERE created_at >= datetime('now','-24 hours')")
-        row("Narrative Cache", r["last"] if r else None, c["c"] if c else 0)
+        c7 = q_one(conn, "SELECT COUNT(*) as c FROM narrative_cache WHERE created_at >= datetime('now','-7 days')")
+        c14 = q_one(conn, "SELECT COUNT(*) as c FROM narrative_cache WHERE created_at >= datetime('now','-14 days') AND created_at < datetime('now','-7 days')")
+        trend = _trend_indicator(c7["c"] if c7 else 0, c14["c"] if c14 else 0)
+        row("Narrative Cache", r["last"] if r else None, c["c"] if c else 0, trend)
     else:
-        out.append({"name": "Narrative Cache", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "extra": ""})
+        out.append({"name": "Narrative Cache", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "—"})
+
+    # Sportmonks Cricket — not yet integrated
+    out.append({"name": "Sportmonks Cricket", "last_pull": "Not Connected", "records_24h": 0, "css": "s-amber", "trend_7d": "—"})
+
+    # Tipster Sources (from tipster_predictions.db)
+    tip_conn = db_connect(TIPSTER_DB)
+    if tip_conn:
+        try:
+            tr = tip_conn.execute(
+                "SELECT MAX(scraped_at) as last, "
+                "SUM(CASE WHEN scraped_at >= datetime('now','-24 hours') THEN 1 ELSE 0 END) as d1, "
+                "SUM(CASE WHEN scraped_at >= datetime('now','-7 days') THEN 1 ELSE 0 END) as d7, "
+                "SUM(CASE WHEN scraped_at >= datetime('now','-14 days') AND scraped_at < datetime('now','-7 days') THEN 1 ELSE 0 END) as d14, "
+                "COUNT(DISTINCT source) as sources "
+                "FROM predictions"
+            ).fetchone()
+            if tr and tr["last"]:
+                src_count = tr["sources"] or 0
+                trend = _trend_indicator(tr["d7"] or 0, tr["d14"] or 0)
+                row(f"Tipster Sources ({src_count}x)", tr["last"], tr["d1"] or 0, trend)
+            else:
+                row("Tipster Sources", None, 0)
+        except Exception:
+            row("Tipster Sources", None, 0)
+        finally:
+            tip_conn.close()
+    else:
+        out.append({"name": "Tipster Sources", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "—"})
+
+    # WAHA / WhatsApp — not yet integrated
+    out.append({"name": "WAHA / WhatsApp", "last_pull": "Not Connected", "records_24h": 0, "css": "s-amber", "trend_7d": "—"})
 
     return out
 
@@ -349,31 +417,84 @@ def build_scraper_health(conn) -> list[dict]:
 
 
 def build_api_quotas() -> list[dict]:
-    try:
-        with open(QUOTAS_FILE) as f:
-            data = json.load(f)
-        return data.get("quotas", [])
-    except Exception:
-        return [
-            {
-                "api": "The Odds API",
-                "plan": "Upgraded (20K/month)",
-                "daily_limit": 670,
-                "used_today": None,
-                "remaining": None,
-                "reset": "Midnight UTC",
-                "link": "https://the-odds-api.com",
-            },
-            {
-                "api": "API-Football",
-                "plan": "Unknown",
-                "daily_limit": None,
-                "used_today": None,
-                "remaining": None,
-                "reset": "Midnight UTC",
-                "link": "https://dashboard.api-football.com",
-            },
-        ]
+    """Build API quota rows from live DB data."""
+    quotas = []
+    conn = db_connect(SCRAPERS_DB)  # dashboard's read-only connection
+
+    # ── The Odds API (tracked via sharp_odds scrape batches) ──
+    odds_used_month = 0
+    odds_used_today = 0
+    monthly_limit = 20000
+    credits_per_batch = 34  # ~34 credits per scrape run
+    if conn:
+        try:
+            # Monthly: count distinct scrape batches this calendar month
+            mr = conn.execute(
+                "SELECT COUNT(DISTINCT substr(scraped_at,1,16)) as batches "
+                "FROM sharp_odds WHERE scraped_at >= strftime('%Y-%m-01','now')"
+            ).fetchone()
+            if mr:
+                odds_used_month = (mr["batches"] or 0) * credits_per_batch
+            # Today
+            dr = conn.execute(
+                "SELECT COUNT(DISTINCT substr(scraped_at,1,16)) as batches "
+                "FROM sharp_odds WHERE scraped_at >= date('now')"
+            ).fetchone()
+            if dr:
+                odds_used_today = (dr["batches"] or 0) * credits_per_batch
+        except Exception:
+            pass
+
+    odds_remaining = max(monthly_limit - odds_used_month, 0)
+    quotas.append({
+        "api": "The Odds API",
+        "plan": "Upgraded (20K/month)",
+        "daily_limit": 670,
+        "used_today": odds_used_today,
+        "remaining": odds_remaining,
+        "reset": "1st of month",
+    })
+
+    # ── API-Football (tracked via api_usage table) ──
+    af_used_today = 0
+    af_daily_limit = 100
+    if conn:
+        try:
+            ar = conn.execute(
+                "SELECT COUNT(*) as cnt FROM api_usage "
+                "WHERE api_name='api_football' AND called_at >= date('now')"
+            ).fetchone()
+            if ar:
+                af_used_today = ar["cnt"] or 0
+        except Exception:
+            pass
+
+    quotas.append({
+        "api": "API-Football",
+        "plan": "Free (100/day)",
+        "daily_limit": af_daily_limit,
+        "used_today": af_used_today,
+        "remaining": max(af_daily_limit - af_used_today, 0),
+        "reset": "Midnight UTC",
+    })
+
+    # ── Sportmonks Cricket (not yet connected) ──
+    quotas.append({
+        "api": "Sportmonks Cricket",
+        "plan": "Not Connected",
+        "daily_limit": None,
+        "used_today": None,
+        "remaining": None,
+        "reset": "—",
+    })
+
+    if conn:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return quotas
 
 
 def build_alerts(conn) -> list[dict]:
@@ -464,6 +585,18 @@ def render_page(conn, db_status: str) -> str:
 
     alert_count = len(alerts)
 
+    # ── KPI metrics ──────────────────────────────────────────────────────────
+    active_scrapers = sum(1 for s in scrapers if s["css"] == "s-green")
+    matches_24h     = sum(s["matches_24h"] for s in scrapers)
+    total_w84       = sum(c["w84"]   for c in coverage)
+    total_matches_c = sum(c["total"] for c in coverage)
+    coverage_pct    = round(total_w84 / total_matches_c * 100, 1) if total_matches_c > 0 else 0
+
+    def chip(css_key: str, text: str) -> str:
+        cls = {"s-green": "chip-green", "s-amber": "chip-amber",
+               "s-red": "chip-red", "s-black": "chip-gray"}.get(css_key, "chip-gray")
+        return f'<span class="chip {cls}"><span class="cdot"></span>{text}</span>'
+
     # ── Panel 1: Coverage Matrix rows ────────────────────────────────────────
     p1_rows = ""
     if coverage:
@@ -489,9 +622,9 @@ def render_page(conn, db_status: str) -> str:
         p2_rows += (
             "<tr>"
             + td(s["name"])
-            + td(dot(s["css"]) + s["last_pull"], s["css"])
-            + td(s.get("records_24h", "—"))
-            + td("—")
+            + td(chip(s["css"], s["last_pull"]))
+            + td(f'{s.get("records_24h", "—"):,}' if isinstance(s.get("records_24h"), int) else "—")
+            + td(s.get("trend_7d", "—"))
             + "</tr>"
         )
 
@@ -501,7 +634,7 @@ def render_page(conn, db_status: str) -> str:
         p3_rows += (
             "<tr>"
             + td(s["name"])
-            + td(dot(s["css"]) + s["last_scrape"], s["css"])
+            + td(chip(s["css"], s["last_scrape"]))
             + td(s["matches_24h"])
             + td(s["avg_odds"])
             + "</tr>"
@@ -565,115 +698,192 @@ def render_page(conn, db_status: str) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="refresh" content="300">
 <title>MzansiEdge — Data Health</title>
+<link rel="icon" type="image/x-icon" href="https://mzansiedge.co.za/favicon.ico">
+<link rel="icon" type="image/png" sizes="192x192" href="https://mzansiedge.co.za/favicon-192.png">
+<link rel="apple-touch-icon" href="https://mzansiedge.co.za/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
-  *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
-  :root{{
-    --bg:#0A0A0A;--surface:#111111;--border:#1e1e1e;
-    --text:#F5F5F5;--muted:#6b7280;
-    --acc1:#F8C830;--acc2:#E8571F;
-    --green:#22c55e;--amber:#f59e0b;--red:#ef4444;
-    --font-head:'Outfit',sans-serif;
-    --font-body:'Work Sans',sans-serif;
-    --font-mono:'Geist Mono','Fira Code','Consolas',monospace;
+  :root {{
+    --carbon: #0A0A0A;
+    --surface: #111111;
+    --surface-alt: #161616;
+    --border: #1f1f1f;
+    --border-sub: #161616;
+    --text: #F5F5F5;
+    --muted: #6b7280;
+    --gold: #F8C830;
+    --gold-mid: #F0A020;
+    --gold-end: #E8571F;
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --font-d: 'Outfit', sans-serif;
+    --font-b: 'Work Sans', sans-serif;
+    --font-m: 'ui-monospace','Cascadia Code','Fira Code','Consolas',monospace;
+    --grad: linear-gradient(135deg, #F8C830, #F0A020, #E8571F);
+    --r: 10px;
   }}
-  html,body{{background:var(--bg);color:var(--text);font-family:var(--font-body);font-size:14px;line-height:1.6;min-height:100vh}}
-  a{{color:var(--acc1);text-decoration:none}}
-  a:hover{{text-decoration:underline}}
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  html, body {{ background: var(--carbon); color: var(--text); font-family: var(--font-b); font-size: 14px; line-height: 1.6; min-height: 100vh; }}
+  a {{ color: var(--gold); text-decoration: none; }} a:hover {{ text-decoration: underline; }}
 
-  /* Header */
-  .header{{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}}
-  .header-logo{{font-family:var(--font-head);font-weight:700;font-size:18px;background:linear-gradient(135deg,var(--acc1),var(--acc2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
-  .header-meta{{font-size:11px;color:var(--muted);font-family:var(--font-mono)}}
-  .header-meta span{{color:var(--text)}}
+  /* TOPBAR */
+  .topbar {{ position: sticky; top: 0; z-index: 100; background: rgba(10,10,10,0.96); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }}
+  .topbar-left {{ display: flex; align-items: center; gap: 16px; }}
+  .topbar-logo img {{ height: 28px; width: auto; display: block; }}
+  .topbar-divider {{ width: 1px; height: 20px; background: var(--border); }}
+  .topbar-pill {{ background: rgba(248,200,48,0.1); border: 1px solid rgba(248,200,48,0.2); border-radius: 999px; padding: 3px 12px; font-family: var(--font-d); font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold); }}
+  .topbar-right {{ display: flex; align-items: center; gap: 20px; }}
+  .topbar-meta {{ font-size: 11px; font-family: var(--font-m); color: var(--muted); }}
+  .topbar-meta em {{ color: var(--text); font-style: normal; }}
+  .db-status {{ display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--font-m); }}
+  .pulse {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }}
+  .pulse-green {{ background: var(--green); box-shadow: 0 0 0 2px rgba(34,197,94,.25); animation: pulse 2s infinite; }}
+  .pulse-red   {{ background: var(--red);   box-shadow: 0 0 0 2px rgba(239,68,68,.25); }}
+  @keyframes pulse {{ 0%,100% {{ box-shadow: 0 0 0 2px rgba(34,197,94,.25); }} 50% {{ box-shadow: 0 0 0 5px rgba(34,197,94,.1); }} }}
 
-  /* Layout */
-  .container{{max-width:1400px;margin:0 auto;padding:20px 16px}}
-  .grid-2{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}
-  .panel{{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px}}
-  .panel-full{{grid-column:1/-1}}
+  /* BANNER */
+  .banner {{ padding: 7px 24px; font-size: 11px; font-family: var(--font-m); text-align: center; letter-spacing: .02em; }}
+  .banner-ok  {{ background: rgba(34,197,94,.06); color: var(--green); border-bottom: 1px solid rgba(34,197,94,.12); }}
+  .banner-err {{ background: rgba(239,68,68,.06);  color: var(--red);   border-bottom: 1px solid rgba(239,68,68,.12); }}
 
-  /* Panel header */
-  .panel-head{{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}}
-  .panel-title{{font-family:var(--font-head);font-weight:700;font-size:13px;letter-spacing:.05em;text-transform:uppercase;color:var(--text)}}
-  .panel-sub{{font-size:11px;color:var(--muted)}}
+  /* PAGE */
+  .page {{ max-width: 1440px; margin: 0 auto; padding: 20px 20px 48px; }}
 
-  /* Tables */
-  .tbl{{width:100%;border-collapse:collapse}}
-  .tbl th{{font-family:var(--font-head);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}}
-  .tbl td{{padding:8px 12px;border-bottom:1px solid #161616;font-family:var(--font-mono);font-size:12px;vertical-align:middle;white-space:nowrap}}
-  .tbl tr:last-child td{{border-bottom:none}}
-  .tbl tr:hover td{{background:rgba(255,255,255,.03)}}
+  /* KPI STRIP */
+  .kpi-strip {{ display: grid; grid-template-columns: repeat(5,1fr); gap: 12px; margin-bottom: 20px; }}
+  .kpi {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 14px 16px; position: relative; overflow: hidden; }}
+  .kpi::after {{ content:''; position:absolute; top:0; left:0; right:0; height:2px; background: var(--grad); }}
+  .kpi-lbl {{ font-size: 10px; font-family: var(--font-d); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }}
+  .kpi-val {{ font-size: 26px; font-family: var(--font-d); font-weight: 700; line-height: 1; }}
+  .kpi-sub {{ font-size: 11px; font-family: var(--font-m); color: var(--muted); margin-top: 5px; }}
+  .c-gold  {{ color: var(--gold); }}
+  .c-green {{ color: var(--green); }}
+  .c-amber {{ color: var(--amber); }}
+  .c-red   {{ color: var(--red); }}
+  .c-text  {{ color: var(--text); }}
 
-  /* Alerts panel */
-  .alerts-scroll{{max-height:280px;overflow-y:auto;padding:8px 0}}
-  .alert-row{{padding:8px 16px;border-bottom:1px solid #161616;display:flex;align-items:flex-start;gap:8px;font-size:12px}}
-  .alert-row:last-child{{border-bottom:none}}
-  .alert-row:hover{{background:rgba(255,255,255,.02)}}
+  /* PANELS */
+  .panel {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; margin-bottom: 16px; }}
+  .panel-head {{ padding: 11px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; background: rgba(255,255,255,.015); }}
+  .panel-title {{ font-family: var(--font-d); font-weight: 700; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text); }}
+  .panel-sub {{ font-size: 11px; font-family: var(--font-m); color: var(--muted); text-align: right; }}
 
-  /* Status chip */
-  .chip{{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;font-family:var(--font-mono)}}
-  .chip-green{{background:rgba(34,197,94,.15);color:var(--green)}}
-  .chip-amber{{background:rgba(245,158,11,.15);color:var(--amber)}}
-  .chip-red{{background:rgba(239,68,68,.15);color:var(--red)}}
-  .chip-black{{background:rgba(107,114,128,.15);color:var(--muted)}}
+  /* TABLES */
+  .tbl-wrap {{ overflow-x: auto; }}
+  .tbl {{ width: 100%; border-collapse: collapse; min-width: 480px; }}
+  .tbl thead th {{ font-family: var(--font-d); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; background: rgba(0,0,0,.2); }}
+  .tbl tbody td {{ padding: 9px 14px; border-bottom: 1px solid var(--border-sub); font-family: var(--font-m); font-size: 12px; vertical-align: middle; white-space: nowrap; }}
+  .tbl tbody tr:last-child td {{ border-bottom: none; }}
+  .tbl tbody tr:hover td {{ background: rgba(248,200,48,.025); }}
 
-  /* DB status banner */
-  .banner{{padding:8px 16px;font-size:12px;font-family:var(--font-mono);text-align:center}}
-  .banner-ok{{background:rgba(34,197,94,.1);color:var(--green)}}
-  .banner-err{{background:rgba(239,68,68,.1);color:var(--red)}}
+  /* CHIPS */
+  .chip {{ display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:999px; font-size:10px; font-weight:700; font-family:var(--font-d); letter-spacing:.04em; white-space:nowrap; }}
+  .cdot {{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }}
+  .chip-green {{ background:rgba(34,197,94,.1);  color:var(--green); border:1px solid rgba(34,197,94,.2);  }} .chip-green .cdot {{ background:var(--green); box-shadow:0 0 4px var(--green); }}
+  .chip-amber {{ background:rgba(245,158,11,.1); color:var(--amber); border:1px solid rgba(245,158,11,.2); }} .chip-amber .cdot {{ background:var(--amber); }}
+  .chip-red   {{ background:rgba(239,68,68,.1);  color:var(--red);   border:1px solid rgba(239,68,68,.2);  }} .chip-red   .cdot {{ background:var(--red); }}
+  .chip-gray  {{ background:rgba(107,114,128,.1);color:var(--muted); border:1px solid rgba(107,114,128,.2);}} .chip-gray  .cdot {{ background:var(--muted); }}
 
-  /* Chart wrapper */
-  .chart-wrap{{padding:16px;height:180px;position:relative}}
+  /* STATUS TEXT (legacy compat) */
+  .s-green {{ color:var(--green); font-weight:700; }} .s-amber {{ color:var(--amber); font-weight:700; }} .s-red {{ color:var(--red); font-weight:700; }} .s-black {{ color:var(--muted); font-weight:700; }}
 
-  /* Alert count badge */
-  .alert-badge{{background:var(--red);color:#fff;border-radius:999px;padding:1px 7px;font-size:10px;margin-left:6px}}
+  /* ALERT LOG */
+  .alerts-scroll {{ max-height:320px; overflow-y:auto; }}
+  .alert-row {{ padding:9px 16px; border-bottom:1px solid var(--border-sub); display:flex; align-items:flex-start; gap:10px; }}
+  .alert-row:last-child {{ border-bottom:none; }} .alert-row:hover {{ background:rgba(255,255,255,.02); }}
+  .alert-ts {{ font-family:var(--font-m); font-size:10px; color:var(--muted); white-space:nowrap; padding-top:2px; min-width:108px; }}
+  .alert-msg {{ font-family:var(--font-m); font-size:12px; line-height:1.45; color:var(--text); }}
+  .alert-badge {{ background:var(--red); color:#fff; border-radius:999px; padding:1px 8px; font-size:10px; font-weight:700; margin-left:6px; }}
 
-  /* Mobile */
-  @media(max-width:768px){{
-    .grid-2{{grid-template-columns:1fr}}
-    .panel-full{{grid-column:1}}
-    .tbl td,.tbl th{{padding:6px 8px;font-size:11px}}
-    .header{{padding:12px 16px}}
-  }}
+  /* CHART */
+  .chart-wrap {{ padding:16px; height:200px; position:relative; }}
+
+  /* GRID */
+  .grid-2 {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
+
+  /* FOOTER */
+  .footer {{ text-align:center; padding:20px; font-size:11px; font-family:var(--font-m); color:var(--muted); border-top:1px solid var(--border); margin-top:8px; }}
+  #countdown {{ color:var(--gold); font-weight:700; }}
+
+  /* RESPONSIVE */
+  @media(max-width:1000px) {{ .kpi-strip {{ grid-template-columns:repeat(3,1fr); }} .grid-2 {{ grid-template-columns:1fr; }} }}
+  @media(max-width:600px)  {{ .kpi-strip {{ grid-template-columns:repeat(2,1fr); }} .topbar {{ padding:10px 14px; }} }}
 </style>
 </head>
 <body>
 
-<header class="header">
-  <div class="header-logo">MzansiEdge — Data Health</div>
-  <div class="header-meta">
-    Updated: <span>{updated} SAST</span>
-    &nbsp;·&nbsp; Auto-refreshes every 5 min
-    &nbsp;·&nbsp; DB: <span style="color:{'var(--green)' if conn else 'var(--red)'}">{db_status}</span>
+<!-- TOPBAR -->
+<nav class="topbar">
+  <div class="topbar-left">
+    <div class="topbar-logo">
+      <img src="/static/logo.png" alt="MzansiEdge" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+      <span style="display:none;font-family:var(--font-d);font-weight:700;font-size:16px;background:linear-gradient(135deg,#F8C830,#E8571F);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">MzansiEdge</span>
+    </div>
+    <div class="topbar-divider"></div>
+    <div class="topbar-pill">Data Health</div>
   </div>
-</header>
+  <div class="topbar-right">
+    <div class="db-status">
+      <span class="pulse {'pulse-green' if conn else 'pulse-red'}"></span>
+      <span style="color:{'var(--green)' if conn else 'var(--red)'}">{db_status}</span>
+    </div>
+    <div class="topbar-meta">Updated <em>{updated} SAST</em> · refreshes in <em id="countdown">5:00</em></div>
+  </div>
+</nav>
 
-{'<div class="banner banner-err">⚠ Main database unreachable — showing cached/empty data</div>' if conn is None else '<div class="banner banner-ok">✓ Database connected — scrapers/odds.db</div>'}
+{'<div class="banner banner-err">⚠ Main database unreachable — panels showing cached/empty data</div>' if conn is None else '<div class="banner banner-ok">✓ scrapers/odds.db connected and readable</div>'}
 
-<div class="container">
+<div class="page">
+
+  <!-- KPI STRIP -->
+  <div class="kpi-strip">
+    <div class="kpi">
+      <div class="kpi-lbl">Active Scrapers</div>
+      <div class="kpi-val {'c-green' if active_scrapers == len(scrapers) else 'c-amber' if active_scrapers > 0 else 'c-red'}">{active_scrapers}<span style="font-size:14px;color:var(--muted);font-weight:400">/{len(scrapers)}</span></div>
+      <div class="kpi-sub">bookmakers online</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Matches Scraped</div>
+      <div class="kpi-val c-gold">{matches_24h:,}</div>
+      <div class="kpi-sub">last 24 hours</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Narrative Coverage</div>
+      <div class="kpi-val {'c-green' if coverage_pct >= 80 else 'c-amber' if coverage_pct >= 40 else 'c-red'}">{coverage_pct}<span style="font-size:14px;color:var(--muted);font-weight:400">%</span></div>
+      <div class="kpi-sub">w84 AI-enriched</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Active Alerts</div>
+      <div class="kpi-val {'c-red' if alert_count > 5 else 'c-amber' if alert_count > 0 else 'c-green'}">{alert_count}</div>
+      <div class="kpi-sub">pipeline issues</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Leagues Tracked</div>
+      <div class="kpi-val c-text">{total_matches_c}</div>
+      <div class="kpi-sub">upcoming matches (7d)</div>
+    </div>
+  </div>
 
   <!-- Panel 1: Coverage Matrix -->
-  <div class="panel panel-full">
+  <div class="panel">
     <div class="panel-head">
       <span class="panel-title">Sport Coverage Matrix</span>
-      <span class="panel-sub">Next 7 days · 🟢 w84 = AI-enriched · 🔴 w82 = Template · 🟡 baseline = No edge data</span>
+      <span class="panel-sub">Next 7 days &nbsp;·&nbsp; 🟢 w84 = AI-enriched &nbsp;·&nbsp; 🔴 w82 = Template &nbsp;·&nbsp; 🟡 Baseline = No edge data</span>
     </div>
-    <div style="overflow-x:auto">
+    <div class="tbl-wrap">
       <table class="tbl">
         <thead>
           <tr>
-            <th>Sport</th><th>League</th><th>Total Matches</th>
+            <th>Sport</th><th>League</th><th>Matches</th>
             <th>w84 (AI)</th><th>w82 (Template)</th><th>Baseline</th>
             <th>Coverage %</th><th>Status</th>
           </tr>
         </thead>
-        <tbody>
-          {p1_rows}
-        </tbody>
+        <tbody>{p1_rows}</tbody>
       </table>
     </div>
     <div class="chart-wrap">
@@ -687,13 +897,11 @@ def render_page(conn, db_status: str) -> str:
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title">Data Source Freshness</span>
-        <span class="panel-sub">Green &lt;1h · Amber 1–6h · Red &gt;6h</span>
+        <span class="panel-sub">🟢 &lt;1h &nbsp; 🟡 1–6h &nbsp; 🔴 &gt;6h</span>
       </div>
-      <div style="overflow-x:auto">
+      <div class="tbl-wrap">
         <table class="tbl">
-          <thead>
-            <tr><th>Source</th><th>Last Pull</th><th>Records (24h)</th><th>Records (7d)</th></tr>
-          </thead>
+          <thead><tr><th>Source</th><th>Last Pull</th><th>Records (24h)</th><th>7d</th></tr></thead>
           <tbody>{p2_rows}</tbody>
         </table>
       </div>
@@ -703,13 +911,11 @@ def render_page(conn, db_status: str) -> str:
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title">Scraper Health</span>
-        <span class="panel-sub">8 SA bookmakers · last 24h</span>
+        <span class="panel-sub">8 SA bookmakers &nbsp;·&nbsp; last 24h</span>
       </div>
-      <div style="overflow-x:auto">
+      <div class="tbl-wrap">
         <table class="tbl">
-          <thead>
-            <tr><th>Bookmaker</th><th>Last Scrape</th><th>Matches (24h)</th><th>Avg Odds/Match</th></tr>
-          </thead>
+          <thead><tr><th>Bookmaker</th><th>Last Scrape</th><th>Matches (24h)</th><th>Avg Odds/Match</th></tr></thead>
           <tbody>{p3_rows}</tbody>
         </table>
       </div>
@@ -719,13 +925,11 @@ def render_page(conn, db_status: str) -> str:
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title">API Quota Tracker</span>
-        <span class="panel-sub">Updated by cron · manual check if stale</span>
+        <span class="panel-sub">Live from DB &nbsp;·&nbsp; refreshes every 60s</span>
       </div>
-      <div style="overflow-x:auto">
+      <div class="tbl-wrap">
         <table class="tbl">
-          <thead>
-            <tr><th>API</th><th>Plan</th><th>Daily Limit</th><th>Used Today</th><th>Remaining</th><th>Reset</th></tr>
-          </thead>
+          <thead><tr><th>API</th><th>Plan</th><th>Daily Limit</th><th>Used Today</th><th>Remaining</th><th>Reset</th></tr></thead>
           <tbody>{p4_rows}</tbody>
         </table>
       </div>
@@ -734,20 +938,19 @@ def render_page(conn, db_status: str) -> str:
     <!-- Panel 5: Alert Log -->
     <div class="panel">
       <div class="panel-head">
-        <span class="panel-title">
-          Alert Log
-          {'<span class="alert-badge">' + str(alert_count) + '</span>' if alert_count else ''}
-        </span>
-        <span class="panel-sub">Last 48h · scrapers · coverage · pipeline</span>
+        <span class="panel-title">Alert Log{'<span class="alert-badge">' + str(alert_count) + '</span>' if alert_count else ''}</span>
+        <span class="panel-sub">Last 48h &nbsp;·&nbsp; scrapers · coverage · pipeline</span>
       </div>
-      <div class="alerts-scroll">
-        {p5_rows}
-      </div>
+      <div class="alerts-scroll">{p5_rows}</div>
     </div>
 
   </div><!-- /grid-2 -->
 
-</div><!-- /container -->
+  <div class="footer">
+    Auto-refreshes in <span id="countdown">5:00</span> &nbsp;·&nbsp; MzansiEdge Ops &nbsp;·&nbsp; Read-only
+  </div>
+
+</div><!-- /page -->
 
 <script>
 (function() {{
@@ -763,32 +966,35 @@ def render_page(conn, db_status: str) -> str:
     data: {{
       labels: labels,
       datasets: [
-        {{ label: 'w84 (AI-enriched)', data: w84Data, backgroundColor: 'rgba(34,197,94,0.85)', borderRadius: 3 }},
-        {{ label: 'w82 (Template)', data: w82Data, backgroundColor: 'rgba(239,68,68,0.70)', borderRadius: 3 }},
-        {{ label: 'Baseline', data: baseData, backgroundColor: 'rgba(245,158,11,0.55)', borderRadius: 3 }},
+        {{ label: 'w84 (AI-enriched)', data: w84Data, backgroundColor: 'rgba(34,197,94,0.8)', borderRadius: 4 }},
+        {{ label: 'w82 (Template)',    data: w82Data, backgroundColor: 'rgba(239,68,68,0.65)',  borderRadius: 4 }},
+        {{ label: 'Baseline',          data: baseData, backgroundColor: 'rgba(245,158,11,0.5)', borderRadius: 4 }},
       ]
     }},
     options: {{
       responsive: true,
       maintainAspectRatio: false,
       plugins: {{
-        legend: {{ labels: {{ color: '#F5F5F5', font: {{ size: 11 }} }} }},
-        tooltip: {{ backgroundColor: '#111', titleColor: '#F5F5F5', bodyColor: '#9ca3af' }}
+        legend: {{ labels: {{ color: '#9ca3af', font: {{ size: 11, family: "'Work Sans'" }} }} }},
+        tooltip: {{ backgroundColor: '#161616', titleColor: '#F5F5F5', bodyColor: '#9ca3af', borderColor: '#1f1f1f', borderWidth: 1, padding: 10 }}
       }},
       scales: {{
-        x: {{ stacked: true, ticks: {{ color: '#6b7280', font: {{ size: 10 }} }}, grid: {{ color: '#1e1e1e' }} }},
-        y: {{ stacked: true, ticks: {{ color: '#6b7280', font: {{ size: 10 }}, stepSize: 1 }}, grid: {{ color: '#1e1e1e' }} }}
+        x: {{ stacked: true, ticks: {{ color: '#6b7280', font: {{ size: 10 }} }}, grid: {{ color: '#1a1a1a' }} }},
+        y: {{ stacked: true, ticks: {{ color: '#6b7280', font: {{ size: 10 }}, stepSize: 1 }}, grid: {{ color: '#1a1a1a' }} }}
       }}
     }}
   }});
 }})();
 
-// Countdown to next refresh
+// Countdown timer
 (function() {{
   var secs = 300;
+  var el = document.getElementById('countdown');
   setInterval(function() {{
     secs--;
-    if (secs <= 0) location.reload();
+    if (secs <= 0) {{ location.reload(); return; }}
+    var m = Math.floor(secs / 60), s = secs % 60;
+    if (el) el.textContent = m + ':' + (s < 10 ? '0' : '') + s;
   }}, 1000);
 }})();
 </script>
@@ -801,6 +1007,12 @@ def render_page(conn, db_status: str) -> str:
 @app.route("/ops/health")
 @require_auth
 def health():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("html")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+
     conn = db_connect(SCRAPERS_DB)
     db_status = "Connected" if conn else "Unreachable"
     try:
@@ -808,6 +1020,10 @@ def health():
     finally:
         if conn:
             conn.close()
+
+    with _page_cache_lock:
+        _page_cache["html"] = (html, now)
+
     return Response(html, mimetype="text/html")
 
 
