@@ -446,15 +446,11 @@ class CricketFetcher(BaseFetcher):
         live_safe: bool = True,
         db_path: str | None = None,
     ) -> FetchResult:
-        """Fetch cricket context from SportMonks with caching and fallback."""
+        """Fetch cricket context from SportMonks DB and API with caching and fallback."""
         db = db_path or DB_PATH
         token = _get_api_token()
         confidence: dict[str, float] = {}
         sources: dict[str, str] = {}
-
-        if not token:
-            log.warning("No SPORTMONKS_CRICKET_TOKEN — returning empty context")
-            return self._empty_fallback(home_team, away_team, league)
 
         league_cfg = LEAGUE_CONFIG.get(league, {})
         display_name = league_cfg.get("display") or league.replace("_", " ").title()
@@ -466,184 +462,210 @@ class CricketFetcher(BaseFetcher):
         venue = ""
         format_str = _infer_format(league)
 
-        async with aiohttp.ClientSession() as session:
-            # ── Resolve league ID ──────────────────────────────────────────
-            league_id = league_cfg.get("league_id")
-            if league_id is None:
-                league_id = await _discover_league_id(session, token, league, db)
+        # ── DB path: query sportmonks_fixtures + sportmonks_teams ─────────────
+        db_fixture = _fetch_fixture_from_db(home_team, away_team, league)
+        if db_fixture:
+            home_data["name"] = db_fixture["home_name"]
+            away_data["name"] = db_fixture["away_name"]
+            format_str = db_fixture.get("format") or format_str
+            display_name = db_fixture.get("competition") or display_name
+            confidence["fixture"] = 1.0
+            sources["fixture"] = "sportmonks_db"
+            log.info(
+                "sportmonks_db hit for %s vs %s (%s): home=%s away=%s",
+                home_team, away_team, league,
+                home_data["name"], away_data["name"],
+            )
 
-            # ── Tier A: Fixtures for date range + H2H (cached 12h) ────────
-            today = datetime.now(timezone.utc).date()
-            date1 = today.isoformat()
-            date2 = (today + timedelta(days=14)).isoformat()
-            fix_cache_key = f"sportmonks:fixtures:{date1}:{date2}"
-            fixtures_raw = get_cached_api_response(fix_cache_key, db_path=db)
+        if not token and db_fixture is None:
+            log.warning("No SPORTMONKS_CRICKET_TOKEN and no DB fixture — returning empty context")
+            return self._empty_fallback(home_team, away_team, league)
 
-            if not fixtures_raw:
-                fixtures_raw = await _api_fetch(
-                    session,
-                    "fixtures",
-                    {
-                        "filter[starts_between]": f"{date1},{date2}",
-                        "include": "localteam,visitorteam,league,venue,tosswon,batting",
-                    },
-                    token,
-                )
-                if fixtures_raw.get("data"):
-                    store_api_response(
-                        fix_cache_key, fixtures_raw,
-                        "cricket", league, "fixtures",
-                        ttl_hours=12.0, db_path=db,
+        if not token:
+            # Have DB fixture but no API token — skip API enrichment
+            log.info(
+                "No SPORTMONKS_CRICKET_TOKEN; serving DB-only context for %s (%s)",
+                home_team, league,
+            )
+        else:
+            async with aiohttp.ClientSession() as session:
+                # ── Resolve league ID ──────────────────────────────────────
+                league_id = league_cfg.get("league_id")
+                if league_id is None:
+                    league_id = await _discover_league_id(session, token, league, db)
+
+                # ── Tier A: Fixtures for date range + H2H (cached 12h) ────
+                today = datetime.now(timezone.utc).date()
+                date1 = today.isoformat()
+                date2 = (today + timedelta(days=14)).isoformat()
+                fix_cache_key = f"sportmonks:fixtures:{date1}:{date2}"
+                fixtures_raw = get_cached_api_response(fix_cache_key, db_path=db)
+
+                if not fixtures_raw:
+                    fixtures_raw = await _api_fetch(
+                        session,
+                        "fixtures",
+                        {
+                            "filter[starts_between]": f"{date1},{date2}",
+                            "include": "localteam,visitorteam,league,venue,tosswon,batting",
+                        },
+                        token,
                     )
-
-            h2h_list = _extract_h2h(fixtures_raw, home_team, away_team)
-            if h2h_list:
-                confidence["h2h"] = 0.9
-                sources["h2h"] = "sportmonks"
-
-            # ── Venue from upcoming fixture ────────────────────────────────
-            home_lower = home_team.lower()
-            away_lower = away_team.lower()
-            for fix in _paginate(fixtures_raw):
-                local = (fix.get("localteam", {}) or {}).get("name", "").lower()
-                visitor = (fix.get("visitorteam", {}) or {}).get("name", "").lower()
-                if (home_lower in local or local in home_lower) and (away_lower in visitor or visitor in away_lower):
-                    venue = (fix.get("venue", {}) or {}).get("name", "") or venue
-                    break
-
-            # ── Tier A: Standings (league + season, cached 12h) ───────────
-            if league_id:
-                season_id = league_cfg.get("season") or await _get_current_season_id(
-                    session, token, league_id, db,
-                )
-                if season_id:
-                    stand_cache_key = f"sportmonks:standings:{season_id}"
-                    standings_raw = get_cached_api_response(stand_cache_key, db_path=db)
-                    if not standings_raw:
-                        standings_raw = await _api_fetch(
-                            session,
-                            f"standings/season/{season_id}",
-                            {},
-                            token,
+                    if fixtures_raw.get("data"):
+                        store_api_response(
+                            fix_cache_key, fixtures_raw,
+                            "cricket", league, "fixtures",
+                            ttl_hours=12.0, db_path=db,
                         )
-                        if standings_raw.get("data"):
-                            store_api_response(
-                                stand_cache_key, standings_raw,
-                                "cricket", league, "standings",
-                                ttl_hours=12.0, db_path=db,
-                            )
 
-                    standings_data = _extract_standings(standings_raw)
-                    home_standing = _match_team_in_standings(home_team, standings_data)
-                    away_standing = _match_team_in_standings(away_team, standings_data)
-                    if home_standing:
-                        home_data.update(home_standing)
-                        confidence["home_standings"] = 0.9
-                        sources["home_standings"] = "sportmonks"
-                    if away_standing:
-                        away_data.update(away_standing)
-                        confidence["away_standings"] = 0.9
-                        sources["away_standings"] = "sportmonks"
+                h2h_list = _extract_h2h(fixtures_raw, home_team, away_team)
+                if h2h_list:
+                    confidence["h2h"] = 0.9
+                    sources["h2h"] = "sportmonks"
 
-            # ── Tier B: Match detail (near horizon, cached 6h) ────────────
-            from fetchers.base_fetcher import horizon_bucket
-            bucket = horizon_bucket(horizon_hours)
-
-            if bucket in ("near", "mid"):
-                # Find the specific fixture ID for this match
-                fix_id = None
+                # ── Venue from upcoming fixture ────────────────────────────
+                home_lower = home_team.lower()
+                away_lower = away_team.lower()
                 for fix in _paginate(fixtures_raw):
                     local = (fix.get("localteam", {}) or {}).get("name", "").lower()
                     visitor = (fix.get("visitorteam", {}) or {}).get("name", "").lower()
                     if (home_lower in local or local in home_lower) and (away_lower in visitor or visitor in away_lower):
-                        fix_id = fix.get("id")
+                        venue = (fix.get("venue", {}) or {}).get("name", "") or venue
                         break
 
-                if fix_id:
-                    detail_cache_key = f"sportmonks:fixture_detail:{fix_id}"
-                    detail_raw = get_cached_api_response(detail_cache_key, db_path=db)
-                    if not detail_raw:
-                        detail_raw = await _api_fetch(
-                            session,
-                            f"fixtures/{fix_id}",
-                            {"include": "batting,bowling,lineup,scoreboards,tosswon"},
-                            token,
-                        )
-                        if detail_raw.get("data"):
-                            store_api_response(
-                                detail_cache_key, detail_raw,
-                                "cricket", league, "fixture_detail",
-                                ttl_hours=6.0, db_path=db,
-                            )
-
-                    match_detail = _extract_match_detail(detail_raw)
-                    if match_detail:
-                        confidence["match_detail"] = 0.8
-                        sources["match_detail"] = "sportmonks"
-                        if match_detail.get("venue"):
-                            venue = match_detail["venue"]
-                        home_data["match_detail"] = match_detail
-
-            # ── Injuries: SportMonks v2 doesn't have a dedicated injuries
-            #    endpoint — graceful fallback, no data ─────────────────────
-            home_data["injuries"] = []
-            away_data["injuries"] = []
-
-            # ── Player stats (top squad members, near horizon only) ───────
-            if bucket == "near" and league_id:
-                # Attempt to get squad for home team from fixtures
-                for fix in _paginate(fixtures_raw):
-                    local_id = (fix.get("localteam", {}) or {}).get("id")
-                    local_name = (fix.get("localteam", {}) or {}).get("name", "").lower()
-                    if home_lower in local_name or local_name in home_lower:
-                        squad_cache_key = f"sportmonks:squad:{local_id}"
-                        squad_raw = get_cached_api_response(squad_cache_key, db_path=db)
-                        if not squad_raw and local_id:
-                            squad_raw = await _api_fetch(
+                # ── Tier A: Standings (league + season, cached 12h) ───────
+                if league_id:
+                    season_id = league_cfg.get("season") or await _get_current_season_id(
+                        session, token, league_id, db,
+                    )
+                    if season_id:
+                        stand_cache_key = f"sportmonks:standings:{season_id}"
+                        standings_raw = get_cached_api_response(stand_cache_key, db_path=db)
+                        if not standings_raw:
+                            standings_raw = await _api_fetch(
                                 session,
-                                f"teams/{local_id}",
-                                {"include": "squad"},
+                                f"standings/season/{season_id}",
+                                {},
                                 token,
                             )
-                            if squad_raw.get("data"):
+                            if standings_raw.get("data"):
                                 store_api_response(
-                                    squad_cache_key, squad_raw,
-                                    "cricket", league, "squad",
-                                    ttl_hours=24.0, db_path=db,
+                                    stand_cache_key, standings_raw,
+                                    "cricket", league, "standings",
+                                    ttl_hours=12.0, db_path=db,
                                 )
-                        if squad_raw:
-                            squad = _extract_squad(squad_raw)
-                            home_data["squad"] = squad
-                            # Fetch stats for first 2 players (capped to limit API calls)
-                            player_stats: list[dict[str, Any]] = []
-                            for player_entry in squad[:2]:
-                                pid = player_entry.get("id")
-                                if not pid:
-                                    continue
-                                ps_cache_key = f"sportmonks:player:{pid}"
-                                ps_raw = get_cached_api_response(ps_cache_key, db_path=db)
-                                if not ps_raw:
-                                    ps_raw = await _api_fetch(
-                                        session,
-                                        f"players/{pid}",
-                                        {"include": "career"},
-                                        token,
+
+                        standings_data = _extract_standings(standings_raw)
+                        home_standing = _match_team_in_standings(home_team, standings_data)
+                        away_standing = _match_team_in_standings(away_team, standings_data)
+                        if home_standing:
+                            home_data.update(home_standing)
+                            confidence["home_standings"] = 0.9
+                            sources["home_standings"] = "sportmonks"
+                        if away_standing:
+                            away_data.update(away_standing)
+                            confidence["away_standings"] = 0.9
+                            sources["away_standings"] = "sportmonks"
+
+                # ── Tier B: Match detail (near horizon, cached 6h) ────────
+                from fetchers.base_fetcher import horizon_bucket
+                bucket = horizon_bucket(horizon_hours)
+
+                if bucket in ("near", "mid"):
+                    # Find the specific fixture ID for this match
+                    fix_id = None
+                    for fix in _paginate(fixtures_raw):
+                        local = (fix.get("localteam", {}) or {}).get("name", "").lower()
+                        visitor = (fix.get("visitorteam", {}) or {}).get("name", "").lower()
+                        if (home_lower in local or local in home_lower) and (away_lower in visitor or visitor in away_lower):
+                            fix_id = fix.get("id")
+                            break
+
+                    if fix_id:
+                        detail_cache_key = f"sportmonks:fixture_detail:{fix_id}"
+                        detail_raw = get_cached_api_response(detail_cache_key, db_path=db)
+                        if not detail_raw:
+                            detail_raw = await _api_fetch(
+                                session,
+                                f"fixtures/{fix_id}",
+                                {"include": "batting,bowling,lineup,scoreboards,tosswon"},
+                                token,
+                            )
+                            if detail_raw.get("data"):
+                                store_api_response(
+                                    detail_cache_key, detail_raw,
+                                    "cricket", league, "fixture_detail",
+                                    ttl_hours=6.0, db_path=db,
+                                )
+
+                        match_detail = _extract_match_detail(detail_raw)
+                        if match_detail:
+                            confidence["match_detail"] = 0.8
+                            sources["match_detail"] = "sportmonks"
+                            if match_detail.get("venue"):
+                                venue = match_detail["venue"]
+                            home_data["match_detail"] = match_detail
+
+                # ── Injuries: SportMonks v2 doesn't have a dedicated injuries
+                #    endpoint — graceful fallback, no data ───────────────────
+                home_data["injuries"] = []
+                away_data["injuries"] = []
+
+                # ── Player stats (top squad members, near horizon only) ────
+                if bucket == "near" and league_id:
+                    # Attempt to get squad for home team from fixtures
+                    for fix in _paginate(fixtures_raw):
+                        local_id = (fix.get("localteam", {}) or {}).get("id")
+                        local_name = (fix.get("localteam", {}) or {}).get("name", "").lower()
+                        if home_lower in local_name or local_name in home_lower:
+                            squad_cache_key = f"sportmonks:squad:{local_id}"
+                            squad_raw = get_cached_api_response(squad_cache_key, db_path=db)
+                            if not squad_raw and local_id:
+                                squad_raw = await _api_fetch(
+                                    session,
+                                    f"teams/{local_id}",
+                                    {"include": "squad"},
+                                    token,
+                                )
+                                if squad_raw.get("data"):
+                                    store_api_response(
+                                        squad_cache_key, squad_raw,
+                                        "cricket", league, "squad",
+                                        ttl_hours=24.0, db_path=db,
                                     )
-                                    if ps_raw.get("data"):
-                                        store_api_response(
-                                            ps_cache_key, ps_raw,
-                                            "cricket", league, "player_stats",
-                                            ttl_hours=24.0, db_path=db,
+                            if squad_raw:
+                                squad = _extract_squad(squad_raw)
+                                home_data["squad"] = squad
+                                # Fetch stats for first 2 players (capped to limit API calls)
+                                player_stats: list[dict[str, Any]] = []
+                                for player_entry in squad[:2]:
+                                    pid = player_entry.get("id")
+                                    if not pid:
+                                        continue
+                                    ps_cache_key = f"sportmonks:player:{pid}"
+                                    ps_raw = get_cached_api_response(ps_cache_key, db_path=db)
+                                    if not ps_raw:
+                                        ps_raw = await _api_fetch(
+                                            session,
+                                            f"players/{pid}",
+                                            {"include": "career"},
+                                            token,
                                         )
-                                if ps_raw:
-                                    stats = _extract_player_stats(ps_raw)
-                                    if stats.get("name"):
-                                        player_stats.append(stats)
-                            if player_stats:
-                                home_data["player_stats"] = player_stats
-                                confidence["home_player_stats"] = 0.7
-                                sources["home_player_stats"] = "sportmonks"
-                        break
+                                        if ps_raw.get("data"):
+                                            store_api_response(
+                                                ps_cache_key, ps_raw,
+                                                "cricket", league, "player_stats",
+                                                ttl_hours=24.0, db_path=db,
+                                            )
+                                    if ps_raw:
+                                        stats = _extract_player_stats(ps_raw)
+                                        if stats.get("name"):
+                                            player_stats.append(stats)
+                                if player_stats:
+                                    home_data["player_stats"] = player_stats
+                                    confidence["home_player_stats"] = 0.7
+                                    sources["home_player_stats"] = "sportmonks"
+                            break
 
         # ── Elo ratings ───────────────────────────────────────────────────
         home_elo, away_elo = _get_elo_ratings(home_team, away_team, db_path=db)
@@ -651,7 +673,8 @@ class CricketFetcher(BaseFetcher):
         # ── Assemble context dict (ESPN-compatible format) ────────────────
         context: dict[str, Any] = {
             "data_available": bool(
-                home_data.get("position") is not None
+                db_fixture is not None
+                or home_data.get("position") is not None
                 or away_data.get("position") is not None
                 or h2h_list
             ),
@@ -704,6 +727,117 @@ class CricketFetcher(BaseFetcher):
             confidence={},
             sources={},
         )
+
+
+def _fetch_fixture_from_db(
+    home_team: str,
+    away_team: str,
+    league: str,
+    scrapers_db: str | None = None,
+) -> dict[str, Any] | None:
+    """Query sportmonks_fixtures + sportmonks_teams for a cricket fixture.
+
+    Uses scrapers/odds.db (the Dataminer DB — W81-DBLOCK: always via connect_odds_db).
+    Returns a partial context dict or None if no fixture found.
+    """
+    import sqlite3 as _sqlite3
+    import sys as _sys
+
+    # Ensure the project parent dir is on sys.path so scrapers is importable
+    # (needed when running from the bot/ working tree without the parent on PYTHONPATH)
+    _parent = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _parent not in _sys.path:
+        _sys.path.insert(0, _parent)
+
+    try:
+        from scrapers.db_connect import connect_odds_db as _connect
+    except ImportError:
+        log.warning("scrapers.db_connect not available — skipping sportmonks_fixtures lookup")
+        return None
+
+    _LEAGUE_NAME_MAP: dict[str, str] = {
+        "ipl": "IPL",
+        "sa20": "SA20",
+        "t20_world_cup": "ICC T20 World Cup",
+        "test_cricket": "Test Cricket",
+        "csa_t20": "CSA T20 Challenge",
+        "odi": "ODI",
+        "t20_international": "T20 International",
+    }
+
+    conn = None
+    try:
+        conn = _connect(scrapers_db) if scrapers_db else _connect()
+        conn.row_factory = _sqlite3.Row
+        home_lower = home_team.lower()
+        away_lower = away_team.lower()
+
+        # Try specific match first (team name substring match, case-insensitive)
+        row = conn.execute(
+            """
+            SELECT f.*,
+                   COALESCE(t1.name, f.home_team) AS home_resolved,
+                   COALESCE(t2.name, f.away_team) AS away_resolved
+            FROM sportmonks_fixtures f
+            LEFT JOIN sportmonks_teams t1 ON f.home_team_id = t1.team_id
+            LEFT JOIN sportmonks_teams t2 ON f.away_team_id = t2.team_id
+            WHERE f.match_date >= datetime('now')
+            AND f.status NOT IN ('Cancelled', 'Postponed', 'Finished')
+            AND (
+                (LOWER(f.home_team) LIKE ? AND LOWER(f.away_team) LIKE ?)
+                OR (LOWER(f.away_team) LIKE ? AND LOWER(f.home_team) LIKE ?)
+            )
+            ORDER BY f.match_date
+            LIMIT 1
+            """,
+            (
+                f"%{home_lower}%", f"%{away_lower}%",
+                f"%{home_lower}%", f"%{away_lower}%",
+            ),
+        ).fetchone()
+
+        if row is None:
+            # Fall back to any upcoming fixture for this league
+            league_name = _LEAGUE_NAME_MAP.get(league.lower())
+            if league_name:
+                row = conn.execute(
+                    """
+                    SELECT f.*,
+                           COALESCE(t1.name, f.home_team) AS home_resolved,
+                           COALESCE(t2.name, f.away_team) AS away_resolved
+                    FROM sportmonks_fixtures f
+                    LEFT JOIN sportmonks_teams t1 ON f.home_team_id = t1.team_id
+                    LEFT JOIN sportmonks_teams t2 ON f.away_team_id = t2.team_id
+                    WHERE f.match_date >= datetime('now')
+                    AND f.status NOT IN ('Cancelled', 'Postponed', 'Finished')
+                    AND UPPER(f.league_name) = UPPER(?)
+                    ORDER BY f.match_date
+                    LIMIT 1
+                    """,
+                    (league_name,),
+                ).fetchone()
+
+        if row is None:
+            return None
+
+        r = dict(row)
+        return {
+            "data_available": True,
+            "home_name": r.get("home_resolved") or home_team,
+            "away_name": r.get("away_resolved") or away_team,
+            "competition": r.get("league_name") or "",
+            "format": r.get("match_type") or _infer_format(league),
+            "match_date": r.get("match_date") or "",
+        }
+    except Exception as exc:
+        log.warning("_fetch_fixture_from_db failed: %s", exc)
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _infer_format(league: str) -> str:
