@@ -12,6 +12,7 @@ Rate limit: honour 429 responses, log remaining calls after each batch.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -477,6 +478,37 @@ class CricketFetcher(BaseFetcher):
                 home_data["name"], away_data["name"],
             )
 
+            # ── Standings from DB (RUNTIME-R2: asyncio.to_thread + 3s timeout) ──
+            _home_tid = db_fixture.get("home_team_id")
+            _away_tid = db_fixture.get("away_team_id")
+            try:
+                _standings_result = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_standings_from_db, _home_tid, _away_tid),
+                    timeout=3.0,
+                )
+                _home_st = _standings_result.get("home_standing")
+                _away_st = _standings_result.get("away_standing")
+                if _home_st:
+                    home_data.update(_home_st)
+                    confidence["home_standings"] = 0.85
+                    sources["home_standings"] = "cricket_standings_db"
+                    log.info(
+                        "standings_db hit for home team_id=%s: position=%s nrr=%s",
+                        _home_tid, _home_st.get("position"), _home_st.get("nrr"),
+                    )
+                if _away_st:
+                    away_data.update(_away_st)
+                    confidence["away_standings"] = 0.85
+                    sources["away_standings"] = "cricket_standings_db"
+                    log.info(
+                        "standings_db hit for away team_id=%s: position=%s nrr=%s",
+                        _away_tid, _away_st.get("position"), _away_st.get("nrr"),
+                    )
+            except asyncio.TimeoutError:
+                log.warning("_fetch_standings_from_db timed out (3s)")
+            except Exception as _st_exc:
+                log.warning("standings DB lookup failed: %s", _st_exc)
+
         if not token and db_fixture is None:
             log.warning("No SPORTMONKS_CRICKET_TOKEN and no DB fixture — returning empty context")
             return self._empty_fallback(home_team, away_team, league)
@@ -828,6 +860,8 @@ def _fetch_fixture_from_db(
             "competition": r.get("league_name") or "",
             "format": r.get("match_type") or _infer_format(league),
             "match_date": r.get("match_date") or "",
+            "home_team_id": r.get("home_team_id"),
+            "away_team_id": r.get("away_team_id"),
         }
     except Exception as exc:
         log.warning("_fetch_fixture_from_db failed: %s", exc)
@@ -838,6 +872,84 @@ def _fetch_fixture_from_db(
                 conn.close()
             except Exception:
                 pass
+
+
+def _fetch_standings_from_db(
+    home_team_id: int | None,
+    away_team_id: int | None,
+    scrapers_db: str | None = None,
+) -> dict[str, Any]:
+    """Query cricket_standings for home/away teams by team_id.
+
+    Uses connect_odds_db_readonly() as per W81-DBLOCK.
+    Call via asyncio.to_thread() + 3s timeout (RUNTIME-R2) from async context.
+
+    Returns:
+        {"home_standing": dict|None, "away_standing": dict|None}
+    """
+    import sqlite3 as _sqlite3
+    import sys as _sys
+
+    _parent = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _parent not in _sys.path:
+        _sys.path.insert(0, _parent)
+
+    result: dict[str, Any] = {"home_standing": None, "away_standing": None}
+
+    if not home_team_id and not away_team_id:
+        return result
+
+    try:
+        from scrapers.db_connect import connect_odds_db_readonly as _connect_ro
+    except ImportError:
+        log.warning("scrapers.db_connect not available — skipping standings lookup")
+        return result
+
+    conn = None
+    try:
+        conn = _connect_ro(scrapers_db) if scrapers_db else _connect_ro()
+        conn.row_factory = _sqlite3.Row
+
+        for team_id, key in [(home_team_id, "home_standing"), (away_team_id, "away_standing")]:
+            if not team_id:
+                continue
+            row = conn.execute(
+                """
+                SELECT position, points, played, won, lost, no_result, nrr, team_name, season_id
+                FROM cricket_standings
+                WHERE team_id = ?
+                ORDER BY season_id DESC
+                LIMIT 1
+                """,
+                (team_id,),
+            ).fetchone()
+
+            if row:
+                r = dict(row)
+                result[key] = {
+                    "position": r.get("position"),
+                    "points": r.get("points"),
+                    "games_played": r.get("played"),
+                    "matches_played": r.get("played"),
+                    "wins": r.get("won"),
+                    "losses": r.get("lost"),
+                    "no_result": r.get("no_result"),
+                    "nrr": r.get("nrr"),
+                    "record": (
+                        f"W{r.get('won', 0)} L{r.get('lost', 0)}"
+                        + (f" NR{r.get('no_result', 0)}" if r.get("no_result") else "")
+                    ),
+                }
+    except Exception as exc:
+        log.warning("_fetch_standings_from_db failed: %s", exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return result
 
 
 def _infer_format(league: str) -> str:
