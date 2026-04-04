@@ -2758,7 +2758,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             await handle_tip_detail(query, ctx, action)
     elif prefix == "odds":
         if action.startswith("compare:"):
-            event_id = action.split(":", 1)[1]
+            event_id = _resolve_cb_key(action.split(":", 1)[1])
             await _handle_odds_comparison(query, event_id)
     elif prefix == "results":
         # results:7 or results:30 toggle
@@ -17306,7 +17306,7 @@ def _build_game_buttons(
                     user_id, event_id, source, match_key=match_key, back_page=back_page,
                 )
             compare_rows.append([InlineKeyboardButton(
-                "📊 Compare All Odds", callback_data=f"odds:compare:{event_id}",
+                "📊 Compare All Odds", callback_data=f"odds:compare:{_shorten_cb_key(event_id)}",
             )])
 
     # Top Edge Picks button when no tips available (skip if already showing Back to Edge Picks)
