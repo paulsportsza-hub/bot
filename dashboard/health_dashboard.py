@@ -712,7 +712,7 @@ def _notion_request(endpoint: str, body: dict | None = None) -> dict | None:
     url = f"https://api.notion.com/v1/{endpoint}"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
-        "Notion-Version": "2022-06-28",
+        "Notion-Version": "2025-09-03",
         "Content-Type": "application/json",
     }
     data = json.dumps(body).encode("utf-8") if body else None
@@ -731,7 +731,7 @@ def _query_notion_db(db_id: str, filter_obj: dict | None = None, sorts: list | N
         body["filter"] = filter_obj
     if sorts:
         body["sorts"] = sorts
-    result = _notion_request(f"databases/{db_id}/query", body)
+    result = _notion_request(f"data_sources/{db_id}/query", body)
     if result and "results" in result:
         return result["results"]
     return []
