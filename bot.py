@@ -6303,7 +6303,7 @@ _odds_compare_origin: dict[tuple[int, str], dict[str, object]] = {}  # (user_id,
 DB_LEAGUES = [
     "psl", "epl", "champions_league",
     "super_rugby", "six_nations", "urc",
-    "t20_world_cup", "test_cricket", "sa20",
+    "ipl", "t20_world_cup", "test_cricket", "sa20",
     "ufc", "boxing",
 ]
 
