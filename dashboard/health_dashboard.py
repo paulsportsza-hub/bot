@@ -56,7 +56,10 @@ NOTION_TASK_HUB_PAGE = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
 SENTRY_AUTH_TOKEN = os.getenv("SENTRY_AUTH_TOKEN", "")
 SENTRY_ORG = "mzansi-edge"
 SENTRY_PROJECT = "mzansi-edge"
-_SENTRY_API = "https://sentry.io/api/0"
+# AC-8: Use DE region endpoint — project DSN is ingest.de.sentry.io, not sentry.io (US).
+# Global sentry.io endpoint returns X-Hits counts that ignore the is:unresolved filter,
+# causing the widget to show total-issue count (e.g. 16) even when 0 are unresolved.
+_SENTRY_API = "https://de.sentry.io/api/0"
 
 # -- System Health cache (Sentry + server metrics) ----------------------------
 _system_health_cache: dict = {}
@@ -2332,9 +2335,10 @@ def _fetch_sentry_data() -> dict:
         )
         with urllib.request.urlopen(req, timeout=8) as resp:
             issues = json.loads(resp.read().decode("utf-8"))
-            x_hits = resp.headers.get("X-Hits", "")
         result["available"] = True
-        result["total_issues"] = int(x_hits) if (x_hits or "").isdigit() else len(issues)
+        # AC-8: Use len(issues) — not X-Hits. X-Hits can reflect total project count
+        # regardless of the is:unresolved filter, showing stale/resolved issues as open.
+        result["total_issues"] = len(issues)
         by_level: dict = {}
         for issue in issues:
             lvl = issue.get("level", "error")

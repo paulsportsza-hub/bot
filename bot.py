@@ -23160,17 +23160,8 @@ def _log_startup_truth() -> None:
     for line in truth_lines:
         log.info(line)
 
-    if sentry_sdk:
-        sentry_sdk.capture_message(
-            "bot_startup",
-            level="info",
-            extras={
-                "pid": pid,
-                "git_sha": git_sha,
-                "bot_mtime": mtime_str,
-                "lock_status": lock_status,
-            },
-        )
+    # AC-7: bot_startup is routine operational noise — log to file only, not Sentry.
+    # Sentry should capture exceptions and regressions, not every scheduled restart.
 
 
 async def _post_shutdown(app_instance) -> None:
