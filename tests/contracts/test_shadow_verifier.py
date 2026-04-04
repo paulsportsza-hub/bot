@@ -1451,6 +1451,204 @@ def test_news_claims_traceable_still_rejects_explicit_report_style_claim_without
     assert report["hard_checks"]["news_claims_traceable"]["passed"] is False
 
 
+# ── FIX-VERIFIER-FALSE-POSITIVES tests ──────────────────────────────────────
+
+
+def _newcastle_draft(setup: str, edge: str, risk: str = "Standard variance applies.", verdict: str = "Lean Newcastle at Hollywoodbets 1.85.") -> str:
+    if "Bournemouth" not in setup:
+        setup = f"Newcastle host Bournemouth here. {setup}"
+    return (
+        f"📋 <b>The Setup</b>\n{setup}\n\n"
+        f"🎯 <b>The Edge</b>\n{edge}\n\n"
+        f"⚠️ <b>The Risk</b>\n{risk}\n\n"
+        f"🏆 <b>Verdict</b>\n{verdict}"
+    )
+
+
+def _make_newcastle_spec(**overrides) -> "NarrativeSpec":
+    spec = _make_spec(
+        home_name="Newcastle United",
+        away_name="Bournemouth",
+        home_coach="Eddie Howe",
+        away_coach="Andoni Iraola",
+        home_position=5,
+        away_position=10,
+        home_points=52,
+        away_points=42,
+        home_form="WWWLL",
+        away_form="DDDDD",
+        bookmaker="Hollywoodbets",
+        odds=1.85,
+        ev_pct=3.4,
+    )
+    for key, value in overrides.items():
+        setattr(spec, key, value)
+    return spec
+
+
+def _make_newcastle_pack(**overrides) -> evidence_pack.EvidencePack:
+    pack = _make_pack(
+        match_key="newcastle_vs_bournemouth_2026-04-18",
+        sa_odds=evidence_pack.SAOddsBlock(
+            provenance=evidence_pack.EvidenceSource(True, "2026-03-20T00:00:00+00:00", "odds_latest", 20.0),
+            odds_by_bookmaker={"Hollywoodbets": {"home": 1.85, "draw": 3.50, "away": 4.20}},
+            best_odds={"home": 1.85},
+            best_bookmaker={"home": "Hollywoodbets"},
+            bookmaker_count=1,
+        ),
+    )
+    for key, value in overrides.items():
+        setattr(pack, key, value)
+    return pack
+
+
+def test_fp1_st_james_park_plain_passes_no_fabricated_names() -> None:
+    """AC-1: 'St James Park' (no apostrophe) must not be flagged as fabricated."""
+    draft = _newcastle_draft(
+        "Newcastle sit 5th on 52 points with form WWWLL, playing at St James Park.",
+        "Hollywoodbets have Newcastle at 1.85 — a 4.2% edge over fair value.",
+        verdict="Lean Newcastle at Hollywoodbets 1.85.",
+    )
+
+    passed, report = evidence_pack.verify_shadow_narrative(
+        draft, _make_newcastle_pack(), _make_newcastle_spec()
+    )
+
+    assert report["hard_checks"]["no_fabricated_names"]["passed"] is True, (
+        f"St James Park should not be flagged: {report['hard_checks']['no_fabricated_names']['detail']}"
+    )
+
+
+def test_fp2_st_james_park_apostrophe_passes_no_fabricated_names() -> None:
+    """AC-1: 'St James\u2019 Park' (curly apostrophe) must not be flagged as fabricated."""
+    draft = _newcastle_draft(
+        "Newcastle sit 5th on 52 points with form WWWLL, playing at St James\u2019 Park.",
+        "Hollywoodbets have Newcastle at 1.85 — a 4.2% edge over fair value.",
+        verdict="Lean Newcastle at Hollywoodbets 1.85.",
+    )
+
+    passed, report = evidence_pack.verify_shadow_narrative(
+        draft, _make_newcastle_pack(), _make_newcastle_spec()
+    )
+
+    assert report["hard_checks"]["no_fabricated_names"]["passed"] is True, (
+        f"St James\u2019 Park should not be flagged: {report['hard_checks']['no_fabricated_names']['detail']}"
+    )
+
+
+def test_fp3_the_gunners_nickname_passes_no_fabricated_names() -> None:
+    """AC-2: 'The Gunners' (Arsenal nickname) must not be flagged as fabricated."""
+    draft = _draft(
+        "Arsenal sit 2nd on 61 points with form WWWDL. The Gunners have been dominant at home.",
+        "Hollywoodbets have Arsenal at 2.10 — a 5.2% edge over fair value.",
+        verdict="Lean Arsenal at Hollywoodbets 2.10.",
+    )
+
+    passed, report = evidence_pack.verify_shadow_narrative(
+        draft, _make_pack(), _make_spec(bookmaker="Hollywoodbets", odds=2.10)
+    )
+
+    assert report["hard_checks"]["no_fabricated_names"]["passed"] is True, (
+        f"The Gunners should not be flagged: {report['hard_checks']['no_fabricated_names']['detail']}"
+    )
+
+
+def test_fp4_sa_team_nicknames_pass_no_fabricated_names() -> None:
+    """AC-4: SA team nicknames (Bafana Bafana, Amakhosi, Springboks, Proteas) must pass."""
+    # Use a spec where home/away names include these teams to keep other checks happy
+    bafana_spec = _make_spec(
+        home_name="South Africa",
+        away_name="Nigeria",
+        competition="AFCON Qualifier",
+        home_coach="Hugo Broos",
+        away_coach="",
+        home_position=1,
+        away_position=3,
+        home_points=12,
+        away_points=9,
+        home_form="WWWDW",
+        away_form="WWDLW",
+        bookmaker="Hollywoodbets",
+        odds=1.90,
+        ev_pct=4.0,
+    )
+    bafana_pack = _make_pack(
+        match_key="south_africa_vs_nigeria_2026-06-15",
+        sa_odds=evidence_pack.SAOddsBlock(
+            provenance=evidence_pack.EvidenceSource(True, "2026-03-20T00:00:00+00:00", "odds_latest", 20.0),
+            odds_by_bookmaker={"Hollywoodbets": {"home": 1.90, "draw": 3.20, "away": 4.00}},
+            best_odds={"home": 1.90},
+            best_bookmaker={"home": "Hollywoodbets"},
+            bookmaker_count=1,
+        ),
+    )
+    draft = (
+        "📋 <b>The Setup</b>\n"
+        "South Africa host Nigeria here. Bafana Bafana sit top of the group on 12 points with form WWWDW.\n\n"
+        "🎯 <b>The Edge</b>\n"
+        "Hollywoodbets have South Africa at 1.90 — a 4.0% edge over fair value at 52.6%.\n\n"
+        "⚠️ <b>The Risk</b>\nStandard variance applies.\n\n"
+        "🏆 <b>Verdict</b>\nLean South Africa at Hollywoodbets 1.90."
+    )
+
+    _passed, report = evidence_pack.verify_shadow_narrative(draft, bafana_pack, bafana_spec)
+
+    assert report["hard_checks"]["no_fabricated_names"]["passed"] is True, (
+        f"Bafana Bafana should not be flagged: {report['hard_checks']['no_fabricated_names']['detail']}"
+    )
+
+
+def test_fp5_genuinely_fabricated_stadium_still_fails() -> None:
+    """AC-3: A made-up stadium name must still be rejected — whitelist must not be a rubber stamp."""
+    draft = _draft(
+        "Arsenal sit 2nd on 61 points with form WWWDL, playing at The Thunderdome Arena.",
+        "Hollywoodbets have Arsenal at 2.10 — a 5.2% edge over fair value.",
+        verdict="Lean Arsenal at Hollywoodbets 2.10.",
+    )
+
+    _passed, report = evidence_pack.verify_shadow_narrative(
+        draft, _make_pack(), _make_spec(bookmaker="Hollywoodbets", odds=2.10)
+    )
+
+    assert report["hard_checks"]["no_fabricated_names"]["passed"] is False, (
+        "A fabricated stadium 'The Thunderdome Arena' must still be caught by the verifier"
+    )
+
+
+def test_fp6_known_proper_nouns_is_importable_and_extensible() -> None:
+    """AC-5: KNOWN_PROPER_NOUNS is a module-level set that can be extended."""
+    assert hasattr(evidence_pack, "KNOWN_PROPER_NOUNS"), "KNOWN_PROPER_NOUNS must be a module-level attribute"
+    assert isinstance(evidence_pack.KNOWN_PROPER_NOUNS, set), "KNOWN_PROPER_NOUNS must be a set"
+    # All required entries per the brief
+    required = {
+        "the gunners",   # Arsenal
+        "the reds",      # Liverpool/Man United
+        "the blues",     # Chelsea/Man City
+        "the foxes",     # Leicester
+        "the hammers",   # West Ham
+        "the toffees",   # Everton
+        "the magpies",   # Newcastle
+        "the saints",    # Southampton
+        "the blades",    # Sheffield United
+        "bafana bafana", # SA national
+        "amakhosi",      # Kaizer Chiefs
+        "buccaneers",    # Orlando Pirates
+        "stormers",      # Stormers
+        "bulls",         # Bulls
+        "sharks",        # Sharks
+        "lions",         # Lions
+        "springboks",    # Springboks
+        "boks",          # Boks (short form)
+        "proteas",       # SA cricket
+    }
+    missing = required - evidence_pack.KNOWN_PROPER_NOUNS
+    assert not missing, f"Required entries missing from KNOWN_PROPER_NOUNS: {missing}"
+    # Extensibility: adding an entry should work
+    evidence_pack.KNOWN_PROPER_NOUNS.add("_test_entry_")
+    assert "_test_entry_" in evidence_pack.KNOWN_PROPER_NOUNS
+    evidence_pack.KNOWN_PROPER_NOUNS.discard("_test_entry_")
+
+
 def test_strict_form_points_claims_still_reject_unsupported_values() -> None:
     draft = _draft(
         "Arsenal sit 3rd on 63 points with form WWWWW.",

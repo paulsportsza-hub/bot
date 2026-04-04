@@ -2047,8 +2047,12 @@ def _format_settlement_section(pack: EvidencePack) -> tuple[str | None, str | No
     return "\n".join(lines), None
 
 
-def format_evidence_prompt(pack: EvidencePack, spec) -> str:
-    """Format the approved Phase B shadow reasoning prompt from evidence only."""
+def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False) -> str:
+    """Format the approved Phase B shadow reasoning prompt from evidence only.
+
+    match_preview=True: match preview mode for non-edge matches — no betting
+    recommendation, no verdict constraint, no bookmaker/sizing language.
+    """
     from narrative_spec import TONE_BANDS
 
     tone_band = TONE_BANDS.get(spec.tone_band, {"allowed": [], "banned": []})
@@ -2078,13 +2082,26 @@ def format_evidence_prompt(pack: EvidencePack, spec) -> str:
     if not unavailable:
         unavailable.append("None.")
 
-    prompt_parts = [
-        "You are a sharp South African sports betting analyst writing for MzansiEdge.",
-        "Your readers are informed punters who want analytical depth, not template prose.",
-        "",
-        "You write like a mate at the braai who actually knows the numbers: punchy, direct,",
-        "occasionally irreverent, but always evidence-grounded. You never bluff.",
-        "",
+    if match_preview:
+        role_lines = [
+            "You are a sharp South African sports analyst writing match previews for MzansiEdge.",
+            "Your readers follow these teams and want analytical context, not betting advice.",
+            "",
+            "You write like a mate at the braai who actually knows the game: punchy, direct,",
+            "evidence-grounded. You never bluff and you never make betting recommendations.",
+            "",
+        ]
+    else:
+        role_lines = [
+            "You are a sharp South African sports betting analyst writing for MzansiEdge.",
+            "Your readers are informed punters who want analytical depth, not template prose.",
+            "",
+            "You write like a mate at the braai who actually knows the numbers: punchy, direct,",
+            "occasionally irreverent, but always evidence-grounded. You never bluff.",
+            "",
+        ]
+
+    prompt_parts = role_lines + [
         "RULES (violation = AUTOMATIC REJECTION — no exceptions):",
         "1. Every factual claim must trace to a specific field in the EVIDENCE PACK below.",
         "2. You may interpret and prioritise, but ONLY from the evidence provided.",
@@ -2151,52 +2168,95 @@ def format_evidence_prompt(pack: EvidencePack, spec) -> str:
             "edge analysis, line movements, and any other available sources.",
         ])
 
-    prompt_parts.extend([
-        "",
-        "───────────── CONSTRAINTS ─────────────",
-        "",
-        f"TONE BAND: {spec.tone_band}",
-        f"Allowed phrases: {', '.join(tone_band['allowed']) or 'None'}",
-        f"Banned phrases: {', '.join(tone_band['banned']) or 'None'}",
-        "",
-        "VERDICT CONSTRAINT:",
-        f"Action: {spec.verdict_action}",
-        f"Sizing: {spec.verdict_sizing}",
-        "You MUST NOT upgrade the verdict beyond this level.",
-        "Do NOT call the bet a 'value play'.",
-        "",
-        f"EVIDENCE CLASS: {spec.evidence_class}",
-        _describe_evidence_class(spec.evidence_class),
-        "",
-        "H2H GUARDRAIL:",
-        (
-            "H2H context is injected separately. Do NOT generate head-to-head prose yourself. Do NOT invent, paraphrase, or mention meetings/history unless an H2H sentence is injected after generation."
-            if pack.h2h and pack.h2h.provenance.available and pack.h2h.matches
-            else "No verified H2H exists. Do NOT mention head-to-head, last meeting, meeting counts, or historical scores at all."
-        ),
-        "",
-        "───────────── OUTPUT FORMAT ─────────────",
-        "",
-        "Write exactly 4 sections in this order. Start directly with no preamble.",
-        "",
-        "📋 <b>The Setup</b>",
-        "2-4 sentences. Set the scene using standings, form, coaches, injuries, and news.",
-        "If ESPN data is unavailable, pivot to available data: Elo ratings, tipster consensus, line movements, odds structure.",
-        "Use Elo ratings for team strength context (e.g. 'rated 150 points higher'). Use tipster consensus for signal alignment (e.g. '3 of 5 tipsters back this').",
-        "",
-        "🎯 <b>The Edge</b>",
-        "2-3 sentences. Explain the pricing gap using edge analysis and SA bookmaker pricing only.",
-        "Do NOT mention sharp bookmakers or sharp prices. Any sharp context is injected separately.",
-        f"Name the bookmaker, odds, and the capped verdict posture for {spec.verdict_action}.",
-        "",
-        "⚠️ <b>The Risk</b>",
-        "1-3 sentences. State what could make this angle wrong.",
-        "If evidence is thin, say that limited evidence depth is part of the risk.",
-        "",
-        "🏆 <b>Verdict</b>",
-        "1-2 sentences. State the action and sizing guidance without upgrading it.",
-        f"YOUR VERDICT MUST recommend {getattr(spec, 'bookmaker', '')} at {getattr(spec, 'odds', '')}. This is NON-NEGOTIABLE. Do not substitute any other bookmaker or price.",
-    ])
+    h2h_guardrail = (
+        "H2H context is injected separately. Do NOT generate head-to-head prose yourself. Do NOT invent, paraphrase, or mention meetings/history unless an H2H sentence is injected after generation."
+        if pack.h2h and pack.h2h.provenance.available and pack.h2h.matches
+        else "No verified H2H exists. Do NOT mention head-to-head, last meeting, meeting counts, or historical scores at all."
+    )
+
+    if match_preview:
+        # Non-edge match preview: no betting recommendation, no verdict constraint.
+        prompt_parts.extend([
+            "",
+            "───────────── CONSTRAINTS ─────────────",
+            "",
+            f"TONE BAND: {spec.tone_band}",
+            f"Allowed phrases: {', '.join(tone_band['allowed']) or 'None'}",
+            f"Banned phrases: {', '.join(tone_band['banned']) or 'None'}",
+            "",
+            "MATCH PREVIEW MODE: This is NOT a betting tip. Do NOT recommend bets, mention",
+            "bet sizing, or use language like 'back this', 'take the edge', 'value play'.",
+            "Analyse the match for a fan/follower audience — who has the advantage and why.",
+            "",
+            f"EVIDENCE CLASS: {spec.evidence_class}",
+            _describe_evidence_class(spec.evidence_class),
+            "",
+            "H2H GUARDRAIL:",
+            h2h_guardrail,
+            "",
+            "───────────── OUTPUT FORMAT ─────────────",
+            "",
+            "Write exactly 4 sections in this order. Start directly with no preamble.",
+            "",
+            "📋 <b>The Setup</b>",
+            "2-4 sentences. Set the scene using standings, form, coaches, injuries, and news.",
+            "If ESPN data is unavailable, pivot to available data: Elo ratings, tipster consensus, odds structure.",
+            "",
+            "🎯 <b>The Edge</b>",
+            "2-3 sentences. Analyse the matchup: which team holds the advantage and why.",
+            "Reference odds structure and SA bookmaker pricing to illustrate market expectation.",
+            "Do NOT make a betting recommendation. Do NOT mention sharp bookmakers.",
+            "",
+            "⚠️ <b>The Risk</b>",
+            "1-3 sentences. State what could swing the match the other way.",
+            "",
+            "🏆 <b>Verdict</b>",
+            "1-2 sentences. Give a match outlook — who you lean toward and how the match might play out.",
+            "Do NOT recommend a bet or mention bet sizing.",
+        ])
+    else:
+        prompt_parts.extend([
+            "",
+            "───────────── CONSTRAINTS ─────────────",
+            "",
+            f"TONE BAND: {spec.tone_band}",
+            f"Allowed phrases: {', '.join(tone_band['allowed']) or 'None'}",
+            f"Banned phrases: {', '.join(tone_band['banned']) or 'None'}",
+            "",
+            "VERDICT CONSTRAINT:",
+            f"Action: {spec.verdict_action}",
+            f"Sizing: {spec.verdict_sizing}",
+            "You MUST NOT upgrade the verdict beyond this level.",
+            "Do NOT call the bet a 'value play'.",
+            "",
+            f"EVIDENCE CLASS: {spec.evidence_class}",
+            _describe_evidence_class(spec.evidence_class),
+            "",
+            "H2H GUARDRAIL:",
+            h2h_guardrail,
+            "",
+            "───────────── OUTPUT FORMAT ─────────────",
+            "",
+            "Write exactly 4 sections in this order. Start directly with no preamble.",
+            "",
+            "📋 <b>The Setup</b>",
+            "2-4 sentences. Set the scene using standings, form, coaches, injuries, and news.",
+            "If ESPN data is unavailable, pivot to available data: Elo ratings, tipster consensus, line movements, odds structure.",
+            "Use Elo ratings for team strength context (e.g. 'rated 150 points higher'). Use tipster consensus for signal alignment (e.g. '3 of 5 tipsters back this').",
+            "",
+            "🎯 <b>The Edge</b>",
+            "2-3 sentences. Explain the pricing gap using edge analysis and SA bookmaker pricing only.",
+            "Do NOT mention sharp bookmakers or sharp prices. Any sharp context is injected separately.",
+            f"Name the bookmaker, odds, and the capped verdict posture for {spec.verdict_action}.",
+            "",
+            "⚠️ <b>The Risk</b>",
+            "1-3 sentences. State what could make this angle wrong.",
+            "If evidence is thin, say that limited evidence depth is part of the risk.",
+            "",
+            "🏆 <b>Verdict</b>",
+            "1-2 sentences. State the action and sizing guidance without upgrading it.",
+            f"YOUR VERDICT MUST recommend {getattr(spec, 'bookmaker', '')} at {getattr(spec, 'odds', '')}. This is NON-NEGOTIABLE. Do not substitute any other bookmaker or price.",
+        ])
     return "\n".join(prompt_parts).strip()
 
 
@@ -3496,6 +3556,73 @@ _GEOGRAPHIC_WHITELIST = {
     "stade de france", "eden park", "kings park",
 }
 
+# FIX-VERIFIER-FALSE-POSITIVES: Known real proper nouns — stadium names, team
+# nicknames, competition names — that are NOT fabricated.  Maintained as a
+# single extensible set so future additions require only one edit.
+#
+# Rules:
+#   • Add both the full phrase ("the gunners") AND the bare token ("gunners")
+#     so the check fires whether the phrase is extracted whole or as part of a
+#     longer multi-word expression (e.g. "The Gunners' Elo").
+#   • Do NOT add generic words that could legitimately be fabricated names.
+#   • Stadium partial names (e.g. "st james") guard against HTML-entity splits
+#     where "St James' Park" → regex extracts only "St James".
+KNOWN_PROPER_NOUNS: set[str] = {
+    # ── English Premier League nicknames ────────────────────────────────────
+    "the gunners", "gunners",           # Arsenal
+    "the reds", "reds",                 # Liverpool / Manchester United
+    "the blues", "blues",               # Chelsea / Manchester City
+    "the foxes", "foxes",               # Leicester City
+    "the hammers", "hammers",           # West Ham United
+    "the toffees", "toffees",           # Everton
+    "the magpies", "magpies",           # Newcastle United
+    "the saints", "saints",             # Southampton
+    "the blades", "blades",             # Sheffield United
+    "the hornets", "hornets",           # Watford
+    "the bees", "bees",                 # Brentford
+    "the seagulls", "seagulls",         # Brighton
+    "the canaries", "canaries",         # Norwich City
+    "the potters", "potters",           # Stoke City / Wolverhampton
+    "the hatters", "hatters",           # Luton Town
+    "the villans", "villans",           # Aston Villa
+    "the baggies", "baggies",           # West Bromwich Albion
+    "the spurs", "spurs",               # Tottenham Hotspur
+    "the red devils", "red devils",     # Manchester United
+    "the citizens", "citizens",         # Manchester City
+    "the tractor boys", "tractor boys", # Ipswich Town
+    "the terriers", "terriers",         # Huddersfield Town
+    # ── SA football nicknames ────────────────────────────────────────────────
+    "bafana bafana", "bafana",          # SA national football team
+    "amakhosi",                         # Kaizer Chiefs
+    "buccaneers", "bucs",               # Orlando Pirates
+    "masandawana",                      # Mamelodi Sundowns
+    "usuthu",                           # AmaZulu
+    # ── SA rugby nicknames ───────────────────────────────────────────────────
+    "springboks", "boks", "bokke",      # South Africa rugby
+    "the stormers", "stormers",
+    "the bulls", "bulls",
+    "the sharks", "sharks",
+    "the lions", "lions",
+    "the cheetahs", "cheetahs",
+    # ── SA cricket ──────────────────────────────────────────────────────────
+    "proteas",                          # South Africa cricket
+    # ── European club / national nicknames ──────────────────────────────────
+    "los blancos", "blancos",           # Real Madrid
+    "blaugrana",                        # FC Barcelona
+    "les bleus", "bleus",               # France national
+    "die mannschaft", "mannschaft",     # Germany national
+    "oranje", "the oranje",             # Netherlands
+    "azzurri",                          # Italy
+    "the teranga lions", "teranga lions",  # Senegal
+    # ── Stadium partial names (HTML-entity split guard) ──────────────────────
+    # When a narrative renders "St James' Park" with an HTML entity, the
+    # apostrophe breaks the regex boundary and only "St James" is extracted.
+    # Adding the partial name here prevents a false rejection.
+    "st james",                         # St James' Park — Newcastle
+    "goodison",                         # Goodison Park — Everton
+    "stamford",                         # Stamford Bridge — Chelsea (single word, rare)
+}
+
 _SETTLEMENT_CONTEXT_PATTERNS = (
     r"\bsettlement\b",
     r"\bsettled\b",
@@ -4171,12 +4298,21 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
             continue
         if any(phrase.lower().startswith(prefix) for prefix in _ANALYTICAL_PREFIXES):
             continue
+        # FIX-VERIFIER-FALSE-POSITIVES: Skip known real proper nouns (stadiums,
+        # team nicknames, competition names).  Phrase-level check handles the
+        # common case; token-level check handles multi-word phrases where the
+        # nickname appears alongside other words (e.g. "The Gunners' Elo").
+        if _normalise_name_phrase(phrase) in KNOWN_PROPER_NOUNS:
+            continue
         tokens = [
             _strip_possessive_suffix(token).strip()
             for token in re.split(r"[\s\-]+", phrase.lower())
             if len(_strip_possessive_suffix(token).strip()) >= 4
         ]
-        if tokens and not any(token in verified_names for token in tokens):
+        if tokens and not any(
+            token in verified_names or token in KNOWN_PROPER_NOUNS
+            for token in tokens
+        ):
             unexpected_nouns.append(phrase)
     _record_hard(
         "no_fabricated_names",
