@@ -94,7 +94,7 @@ async def test_main_no_longer_calls_schema_ensure_in_hot_path(monkeypatch: pytes
     )
     # BUILD-16a: no scraper lock mock needed — lock dependency removed
     monkeypatch.setattr(pregen, "_validate_pregen_runtime_schema", lambda db_path=None: None)
-    monkeypatch.setattr(pregen, "_load_shadow_pregen_edges", lambda limit=100: [])
+    monkeypatch.setattr(pregen, "_load_pregen_edges", lambda limit=100, sport=None: [])
 
     await pregen.main("uncached_only")
 
@@ -109,7 +109,7 @@ async def test_main_proceeds_without_scraper_lock(monkeypatch: pytest.MonkeyPatc
         schema_called = True
 
     monkeypatch.setattr(pregen, "_validate_pregen_runtime_schema", _track_schema)
-    monkeypatch.setattr(pregen, "_load_shadow_pregen_edges", lambda limit=100: [])
+    monkeypatch.setattr(pregen, "_load_pregen_edges", lambda limit=100, sport=None: [])
 
     await pregen.main("refresh")
     assert schema_called, "main() must proceed to schema validation without lock gate"

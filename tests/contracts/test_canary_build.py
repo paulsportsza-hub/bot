@@ -244,7 +244,7 @@ async def test_main_runs_w84_generation(monkeypatch: pytest.MonkeyPatch) -> None
     """W84-CONFIRM-1: main() always runs W84 generation (no env-var gate)."""
     # BUILD-16a: _wait_for_scraper_writer_window removed — pregen no longer depends on scraper lock
     monkeypatch.setattr(pregen, "_validate_pregen_runtime_schema", lambda db_path=None: None)
-    monkeypatch.setattr(pregen, "_load_shadow_pregen_edges", lambda limit=100: [_edge()])
+    monkeypatch.setattr(pregen, "_load_pregen_edges", lambda limit=100, sport=None: [_edge()])
     monkeypatch.setattr(pregen, "_get_cached_narrative", AsyncMock(return_value=None))
     monkeypatch.setattr(pregen, "_store_narrative_cache", AsyncMock())
     monkeypatch.setattr(pregen, "_verify_and_fill_cache", AsyncMock())
