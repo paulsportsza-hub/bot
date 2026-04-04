@@ -440,9 +440,14 @@ def _fetch_sa_odds(match_key: str) -> SAOddsBlock:
     conn = connect_odds_db_readonly(ODDS_DB, timeout=1.0)
     conn.row_factory = sqlite3.Row
     try:
+        # Soccer/rugby use '1x2'; combat (MMA/boxing) and cricket use 'match_winner'.
+        # Query both in one pass so a single indexed scan covers all sport types.
+        _MARKET_TYPES = ("'1x2'", "'match_winner'", "'fight_winner'")
+        _MARKET_CLAUSE = f"market_type IN ({', '.join(_MARKET_TYPES)})"
+
         rows = conn.execute(
-            "SELECT bookmaker, home_odds, draw_odds, away_odds, last_seen "
-            "FROM odds_latest WHERE match_id = ? AND market_type = '1x2' ORDER BY bookmaker",
+            f"SELECT bookmaker, home_odds, draw_odds, away_odds, last_seen "
+            f"FROM odds_latest WHERE match_id = ? AND {_MARKET_CLAUSE} ORDER BY bookmaker",
             (match_key,),
         ).fetchall()
 
@@ -454,8 +459,8 @@ def _fetch_sa_odds(match_key: str) -> SAOddsBlock:
             if _m:
                 _reversed = f"{_m.group(2)}_vs_{_m.group(1)}_{_m.group(3)}"
                 rows = conn.execute(
-                    "SELECT bookmaker, home_odds, draw_odds, away_odds, last_seen "
-                    "FROM odds_latest WHERE match_id = ? AND market_type = '1x2' ORDER BY bookmaker",
+                    f"SELECT bookmaker, home_odds, draw_odds, away_odds, last_seen "
+                    f"FROM odds_latest WHERE match_id = ? AND {_MARKET_CLAUSE} ORDER BY bookmaker",
                     (_reversed,),
                 ).fetchall()
                 if rows:
