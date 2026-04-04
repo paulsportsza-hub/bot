@@ -445,6 +445,22 @@ def _fetch_sa_odds(match_key: str) -> SAOddsBlock:
             "FROM odds_latest WHERE match_id = ? AND market_type = '1x2' ORDER BY bookmaker",
             (match_key,),
         ).fetchall()
+
+        # Fallback: scraper may store away_vs_home for some sports (rugby, MMA).
+        # Try the reversed key before giving up — one extra indexed lookup, no table scan.
+        effective_key = match_key
+        if not rows:
+            _m = re.match(r"^(.+)_vs_(.+)_(\d{4}-\d{2}-\d{2})$", match_key)
+            if _m:
+                _reversed = f"{_m.group(2)}_vs_{_m.group(1)}_{_m.group(3)}"
+                rows = conn.execute(
+                    "SELECT bookmaker, home_odds, draw_odds, away_odds, last_seen "
+                    "FROM odds_latest WHERE match_id = ? AND market_type = '1x2' ORDER BY bookmaker",
+                    (_reversed,),
+                ).fetchall()
+                if rows:
+                    effective_key = _reversed
+
         if not rows:
             return SAOddsBlock(provenance=_empty_source("odds_latest"))
 
@@ -476,7 +492,7 @@ def _fetch_sa_odds(match_key: str) -> SAOddsBlock:
             ]
             clean_prices, _outliers = filter_outlier_prices(
                 prices,
-                match_id=match_key,
+                match_id=effective_key,
                 selection=outcome,
             )
             if clean_prices:

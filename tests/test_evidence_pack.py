@@ -864,3 +864,63 @@ def test_contains_settlement_percentage_context_accepts_sample_edge_wording() ->
     text = "the edge still lines up with a 42.3% recent settlement sample"
 
     assert evidence_pack._contains_settlement_percentage_context(text) is True
+
+
+# ---------------------------------------------------------------------------
+# AC-7: _fetch_sa_odds bidirectional key lookup
+# ---------------------------------------------------------------------------
+
+
+def _seed_odds_db(db_path: str, match_id: str) -> None:
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS odds_latest ("
+        "match_id TEXT, bookmaker TEXT, market_type TEXT, "
+        "home_odds REAL, draw_odds REAL, away_odds REAL, last_seen TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO odds_latest VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (match_id, "hollywoodbets", "1x2", 1.55, 4.20, 5.80, "2026-04-04T10:00:00"),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_fetch_sa_odds_forward_key_returns_data(tmp_path, monkeypatch) -> None:
+    """AC-7 (forward): DB stores a_vs_b; lookup with a_vs_b succeeds directly."""
+    db_path = str(tmp_path / "odds.db")
+    _seed_odds_db(db_path, "reds_vs_western_force_2026-04-04")
+
+    import scrapers.db_connect as _dbc
+    import scrapers.odds_integrity as _oi
+
+    monkeypatch.setattr(evidence_pack, "ODDS_DB", db_path)
+    monkeypatch.setattr(_dbc, "connect_odds_db_readonly", lambda path, timeout=None: sqlite3.connect(path))
+    monkeypatch.setattr(_oi, "filter_outlier_prices", lambda prices, **kw: (prices, []))
+
+    result = evidence_pack._fetch_sa_odds("reds_vs_western_force_2026-04-04")
+
+    assert result.provenance.available is True
+    assert result.bookmaker_count == 1
+    assert "hollywoodbets" in result.odds_by_bookmaker
+
+
+def test_fetch_sa_odds_reversed_key_fallback_returns_data(tmp_path, monkeypatch) -> None:
+    """AC-7 (reversed): DB stores b_vs_a; lookup with a_vs_b falls back and succeeds."""
+    db_path = str(tmp_path / "odds.db")
+    # Scraper stored reversed key (away_vs_home order)
+    _seed_odds_db(db_path, "western_force_vs_reds_2026-04-04")
+
+    import scrapers.db_connect as _dbc
+    import scrapers.odds_integrity as _oi
+
+    monkeypatch.setattr(evidence_pack, "ODDS_DB", db_path)
+    monkeypatch.setattr(_dbc, "connect_odds_db_readonly", lambda path, timeout=None: sqlite3.connect(path))
+    monkeypatch.setattr(_oi, "filter_outlier_prices", lambda prices, **kw: (prices, []))
+
+    # Edge key is reds_vs_western_force; odds are stored as western_force_vs_reds
+    result = evidence_pack._fetch_sa_odds("reds_vs_western_force_2026-04-04")
+
+    assert result.provenance.available is True
+    assert result.bookmaker_count == 1
+    assert "hollywoodbets" in result.odds_by_bookmaker
