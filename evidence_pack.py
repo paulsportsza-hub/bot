@@ -1075,6 +1075,70 @@ def _fetch_movements(match_key: str) -> MovementsBlock:
         conn.close()
 
 
+def _fetch_lineup_availability(
+    conn: sqlite3.Connection,
+    match_key: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Query match_lineups for player availability data.
+
+    Tries exact match_key, home/away swap, and ±1 day date tolerance.
+    Returns (home_players, away_players) dicts with player_name, injury_status, source.
+    """
+    m = re.match(r"^(.+)_vs_(.+)_(\d{4}-\d{2}-\d{2})$", match_key)
+    if not m:
+        return [], []
+    mk_home, mk_away, mk_date = m.group(1), m.group(2), m.group(3)
+    try:
+        base_dt = datetime.strptime(mk_date, "%Y-%m-%d")
+    except ValueError:
+        return [], []
+
+    candidates: list[str] = []
+    for delta in range(-1, 2):
+        d = (base_dt + timedelta(days=delta)).strftime("%Y-%m-%d")
+        candidates.append(f"{mk_home}_vs_{mk_away}_{d}")
+        candidates.append(f"{mk_away}_vs_{mk_home}_{d}")
+
+    placeholders = ",".join("?" * len(candidates))
+    rows = conn.execute(
+        f"SELECT match_key, player_name, team_side, is_starter "
+        f"FROM match_lineups WHERE match_key IN ({placeholders}) "
+        f"ORDER BY match_key, team_side, is_starter DESC, player_number",
+        candidates,
+    ).fetchall()
+
+    if not rows:
+        return [], []
+
+    # Determine if the found match_key has sides swapped relative to our perspective
+    found_mk = rows[0][0]
+    found_m = re.match(r"^(.+)_vs_(.+)_\d{4}-\d{2}-\d{2}$", found_mk)
+    # If DB home team = our away team, sides are reversed
+    needs_swap = bool(found_m and found_m.group(1) == mk_away)
+
+    home_players: list[dict[str, Any]] = []
+    away_players: list[dict[str, Any]] = []
+
+    for row in rows:
+        _, player_name, team_side, is_starter = row[0], row[1], row[2], row[3]
+        status = "starting" if is_starter else "bench"
+        entry: dict[str, Any] = {
+            "player_name": player_name,
+            "injury_status": status,
+            "source": "lineup",
+        }
+        effective_side = team_side
+        if needs_swap:
+            effective_side = "away" if team_side == "home" else "home"
+
+        if effective_side == "home":
+            home_players.append(entry)
+        else:
+            away_players.append(entry)
+
+    return home_players, away_players
+
+
 def _fetch_injuries(
     home_key: str,
     away_key: str,
@@ -1082,6 +1146,7 @@ def _fetch_injuries(
     away_name: str,
     league: str,
     sport: str,
+    match_key: str = "",
 ) -> InjuriesBlock:
     from scrapers.db_connect import connect_odds_db_readonly
     now = datetime.now(timezone.utc)
@@ -1116,17 +1181,32 @@ def _fetch_injuries(
         away_injuries = [item for item in news_items if item.get("team_key") == away_key]
         home_injuries.extend([item for item in api_items if _team_name_matches_requested(str(item.get("team") or ""), home_name)])
         away_injuries.extend([item for item in api_items if _team_name_matches_requested(str(item.get("team") or ""), away_name)])
+
+        # Fallback: use match_lineups for availability data when no injury records found
+        if not home_injuries and not away_injuries and match_key:
+            try:
+                lineup_home, lineup_away = _fetch_lineup_availability(conn, match_key)
+                home_injuries = lineup_home
+                away_injuries = lineup_away
+            except Exception:
+                pass
+
         latest_candidates = [
             _parse_dt(item.get("fetched_at") or item.get("extracted_at"))
             for item in (news_items + api_items)
         ]
         latest = max((dt for dt in latest_candidates if dt is not None), default=None)
         total = len({(item.get("player_name") or item.get("player")) for item in home_injuries + away_injuries if item.get("player_name") or item.get("player")})
+        source_name = (
+            "team_injuries+extracted_injuries+match_lineups"
+            if home_injuries or away_injuries
+            else "team_injuries+extracted_injuries"
+        )
         return InjuriesBlock(
             provenance=EvidenceSource(
                 available=True,
                 fetched_at=_utc_now_iso(),
-                source_name="team_injuries+extracted_injuries",
+                source_name=source_name,
                 stale_minutes=_stale_minutes(latest.isoformat() if latest else None, now=now),
             ),
             api_football=api_items,
@@ -1322,6 +1402,7 @@ async def build_evidence_pack(
         away_name,
         league,
         sport,
+        match_key,
         timeout=2.0,
         fallback=InjuriesBlock(provenance=_empty_source("injuries", error="timeout")),
     )
@@ -2581,6 +2662,25 @@ def _build_simple_team_aliases(
         for value in values:
             aliases[side] |= _team_reference_variants(str(value or ""))
     return aliases
+
+
+def _is_current_narrative_injury(
+    extracted_at: str | None = None,
+    fixture_date: str | None = None,
+    fetched_at: str | None = None,
+) -> bool:
+    """Return True if injury data is recent enough to be relevant for narratives."""
+    now = datetime.now(timezone.utc)
+    if extracted_at is not None:
+        dt = _parse_dt(extracted_at)
+        return dt is None or (now - dt).days <= 30
+    ref = _parse_dt(fetched_at)
+    if ref and (now - ref).days > 14:
+        return False
+    fix_dt = _parse_dt(fixture_date)
+    if fix_dt is not None:
+        return fix_dt >= (now - timedelta(days=7))
+    return True
 
 
 def _fetch_verified_injury_names(

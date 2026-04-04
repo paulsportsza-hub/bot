@@ -73,6 +73,27 @@ def _init_injury_tables(db_path: str) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS match_lineups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_key TEXT NOT NULL,
+            api_fixture_id INTEGER NOT NULL,
+            team TEXT NOT NULL,
+            team_side TEXT NOT NULL,
+            formation TEXT,
+            player_name TEXT NOT NULL,
+            player_id INTEGER,
+            player_number INTEGER,
+            player_pos TEXT,
+            is_starter INTEGER DEFAULT 1,
+            grid_position TEXT,
+            lineup_source TEXT DEFAULT 'api_football',
+            confirmed INTEGER DEFAULT 0,
+            fetched_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -773,6 +794,82 @@ def test_fetch_injuries_filters_cross_sport_team_collision(tmp_path) -> None:
 
     assert [item["player_name"] for item in injuries.home_injuries] == []
     assert [item["player_name"] for item in injuries.away_injuries] == ["Damian McKenzie"]
+
+
+def test_fetch_injuries_returns_lineup_data_when_no_injury_records(tmp_path) -> None:
+    """AC-6: With match_lineups data and no injury records, returns player availability."""
+    db_path = str(tmp_path / "injuries.db")
+    _init_injury_tables(db_path)
+
+    conn = sqlite3.connect(db_path)
+    # Insert a small lineup: 2 starters + 1 bench per side
+    conn.executemany(
+        "INSERT INTO match_lineups "
+        "(match_key, api_fixture_id, team, team_side, player_name, player_number, is_starter, confirmed) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("liverpool_vs_fulham_2026-04-11", 999001, "Liverpool", "home", "Mohamed Salah", 11, 1, 1),
+            ("liverpool_vs_fulham_2026-04-11", 999001, "Liverpool", "home", "Virgil van Dijk", 4, 1, 1),
+            ("liverpool_vs_fulham_2026-04-11", 999001, "Liverpool", "home", "Harvey Elliott", 19, 0, 1),
+            ("liverpool_vs_fulham_2026-04-11", 999001, "Fulham", "away", "Raul Jimenez", 9, 1, 1),
+            ("liverpool_vs_fulham_2026-04-11", 999001, "Fulham", "away", "Andreas Pereira", 18, 1, 1),
+            ("liverpool_vs_fulham_2026-04-11", 999001, "Fulham", "away", "Issa Diop", 6, 0, 1),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    original = evidence_pack.ODDS_DB
+    evidence_pack.ODDS_DB = db_path
+    try:
+        injuries = evidence_pack._fetch_injuries(
+            home_key="liverpool",
+            away_key="fulham",
+            home_name="Liverpool",
+            away_name="Fulham",
+            league="epl",
+            sport="soccer",
+            match_key="liverpool_vs_fulham_2026-04-11",
+        )
+    finally:
+        evidence_pack.ODDS_DB = original
+
+    home_names = [item["player_name"] for item in injuries.home_injuries]
+    away_names = [item["player_name"] for item in injuries.away_injuries]
+    assert "Mohamed Salah" in home_names
+    assert "Virgil van Dijk" in home_names
+    assert "Raul Jimenez" in away_names
+    assert injuries.total_injury_count > 0
+    assert all(item["source"] == "lineup" for item in injuries.home_injuries)
+    assert all(item.get("injury_status") in ("starting", "bench") for item in injuries.home_injuries)
+    assert "match_lineups" in injuries.provenance.source_name
+
+
+def test_fetch_injuries_returns_gracefully_with_no_lineup_data(tmp_path) -> None:
+    """AC-6: With no lineup data and no injury records, returns empty without crashing."""
+    db_path = str(tmp_path / "injuries.db")
+    _init_injury_tables(db_path)
+    # No rows inserted in any table
+
+    original = evidence_pack.ODDS_DB
+    evidence_pack.ODDS_DB = db_path
+    try:
+        injuries = evidence_pack._fetch_injuries(
+            home_key="manchester_city",
+            away_key="chelsea",
+            home_name="Manchester City",
+            away_name="Chelsea",
+            league="epl",
+            sport="soccer",
+            match_key="manchester_city_vs_chelsea_2026-04-12",
+        )
+    finally:
+        evidence_pack.ODDS_DB = original
+
+    assert injuries.home_injuries == []
+    assert injuries.away_injuries == []
+    assert injuries.total_injury_count == 0
+    # Function returns without crashing — no exception raised
 
 
 def test_fetch_h2h_prefers_match_results_over_espn(tmp_path) -> None:
