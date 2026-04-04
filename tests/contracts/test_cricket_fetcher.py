@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 
 def _create_sportmonks_db(db_path: str) -> None:
-    """Create sportmonks_fixtures + sportmonks_teams with sample IPL data."""
+    """Create sportmonks_fixtures + sportmonks_teams + sportmonks_venues with sample IPL data."""
     conn = sqlite3.connect(db_path)
     conn.executescript(
         """
@@ -50,6 +50,13 @@ def _create_sportmonks_db(db_path: str) -> None:
             team_id INTEGER PRIMARY KEY,
             name TEXT,
             code TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE sportmonks_venues (
+            venue_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            city TEXT,
+            country_id INTEGER,
             updated_at TEXT
         );
         INSERT INTO sportmonks_teams VALUES (6,  'Mumbai Indians',    'MI',   '2026-04-04');
@@ -94,6 +101,13 @@ def _create_empty_sportmonks_db(db_path: str) -> None:
             team_id INTEGER PRIMARY KEY,
             name TEXT,
             code TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE sportmonks_venues (
+            venue_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            city TEXT,
+            country_id INTEGER,
             updated_at TEXT
         );
         """
@@ -248,6 +262,10 @@ class TestFetchFixtureFromDB:
                 );
                 CREATE TABLE sportmonks_teams (
                     team_id INTEGER PRIMARY KEY, name TEXT, code TEXT, updated_at TEXT
+                );
+                CREATE TABLE sportmonks_venues (
+                    venue_id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+                    city TEXT, country_id INTEGER, updated_at TEXT
                 );
                 INSERT INTO sportmonks_fixtures VALUES (
                     1, 88888, 'IPL', 1, 1795,

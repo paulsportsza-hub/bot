@@ -9,7 +9,9 @@ Sidebar navigation with Data Health, Automation, and Customers views.
 import functools
 import json
 import os
+import re
 import sqlite3
+import subprocess
 import threading
 import time
 import urllib.request
@@ -42,6 +44,18 @@ NOTION_TOKEN = os.getenv(
     "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",
 )
 NOTION_MARKETING_DB = "58123052-0e48-466a-be63-5308e793e672"
+NOTION_TASK_HUB_PAGE = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
+
+# -- Sentry config ------------------------------------------------------------
+SENTRY_AUTH_TOKEN = os.getenv("SENTRY_AUTH_TOKEN", "")
+SENTRY_ORG = "mzansi-edge"
+SENTRY_PROJECT = "mzansi-edge"
+_SENTRY_API = "https://sentry.io/api/0"
+
+# -- System Health cache (Sentry + server metrics) ----------------------------
+_system_health_cache: dict = {}
+_system_health_cache_lock = threading.Lock()
+_SYSTEM_HEALTH_TTL = 60  # seconds
 
 # -- SAST timezone offset -----------------------------------------------------
 _SAST = timezone(timedelta(hours=2))
@@ -295,11 +309,9 @@ def build_coverage_matrix(conn) -> list[dict]:
     ]
 
     all_rugby_rows = q_all(conn, """
-        SELECT DISTINCT LOWER(league) AS league FROM odds_snapshots
-        WHERE LOWER(league) LIKE '%rugby%'
-           OR LOWER(league) LIKE '%urc%'
-           OR LOWER(league) LIKE '%varsity%'
-           OR LOWER(league) LIKE '%currie%'
+        SELECT DISTINCT league FROM odds_snapshots
+        WHERE league IN ('super_rugby','urc','currie_cup','varsity_cup',
+                         'international_rugby','rugby_championship','six_nations')
         LIMIT 30
     """)
     found_rugby_leagues = {r["league"] for r in all_rugby_rows}
@@ -386,7 +398,7 @@ def build_source_freshness(conn) -> list[dict]:
     # ESPN
     if table_exists(conn, "espn_stats_cache"):
         r = q_one(conn, "SELECT MAX(fetched_at) as last, COUNT(*) as c FROM espn_stats_cache")
-        row("ESPN Hidden API", r["last"] if r else None, r["c"] if r else 0, f"{r['c'] if r else 0} \u2192")
+        row("ESPN Hidden API", r["last"] if r else None, r["c"] if r else 0, "7 leagues")
     else:
         out.append({"name": "ESPN Hidden API", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
 
@@ -481,9 +493,6 @@ def build_source_freshness(conn) -> list[dict]:
             tip_conn.close()
     else:
         out.append({"name": "Tipster Sources", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
-
-    # WAHA / WhatsApp
-    out.append({"name": "WAHA / WhatsApp", "last_pull": "Not Connected", "records_24h": 0, "css": "s-amber", "trend_7d": "\u2014"})
 
     return out
 
@@ -707,7 +716,7 @@ def build_alerts(conn, coverage: list[dict]) -> list[dict]:
 
 # -- Notion API helpers (Automation view) -------------------------------------
 
-def _notion_request(endpoint: str, body: dict | None = None) -> dict | None:
+def _notion_request(endpoint: str, body: dict | None = None, method: str | None = None) -> dict | None:
     """Make a Notion API request using urllib. Returns parsed JSON or None."""
     url = f"https://api.notion.com/v1/{endpoint}"
     headers = {
@@ -716,7 +725,7 @@ def _notion_request(endpoint: str, body: dict | None = None) -> dict | None:
         "Content-Type": "application/json",
     }
     data = json.dumps(body).encode("utf-8") if body else None
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST" if body else "GET")
+    req = urllib.request.Request(url, data=data, headers=headers, method=method or ("POST" if body else "GET"))
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -724,17 +733,27 @@ def _notion_request(endpoint: str, body: dict | None = None) -> dict | None:
         return None
 
 
-def _query_notion_db(db_id: str, filter_obj: dict | None = None, sorts: list | None = None, page_size: int = 100) -> list[dict]:
-    """Query a Notion database. Returns list of page objects."""
-    body: dict = {"page_size": page_size}
-    if filter_obj:
-        body["filter"] = filter_obj
-    if sorts:
-        body["sorts"] = sorts
-    result = _notion_request(f"data_sources/{db_id}/query", body)
-    if result and "results" in result:
-        return result["results"]
-    return []
+def _query_notion_db(db_id: str, filter_obj: dict | None = None, sorts: list | None = None, page_size: int = 100, max_pages: int = 10) -> list[dict]:
+    """Query a Notion database with pagination. Returns list of page objects."""
+    all_results: list[dict] = []
+    start_cursor: str | None = None
+    for _ in range(max_pages):
+        body: dict = {"page_size": page_size}
+        if filter_obj:
+            body["filter"] = filter_obj
+        if sorts:
+            body["sorts"] = sorts
+        if start_cursor:
+            body["start_cursor"] = start_cursor
+        result = _notion_request(f"data_sources/{db_id}/query", body)
+        if not result or "results" not in result:
+            break
+        all_results.extend(result["results"])
+        if result.get("has_more") and result.get("next_cursor"):
+            start_cursor = result["next_cursor"]
+        else:
+            break
+    return all_results
 
 
 def _get_page_prop(page: dict, prop_name: str) -> str | None:
@@ -784,7 +803,12 @@ def _fetch_marketing_queue() -> tuple[list[dict], float]:
         if cached and (now - cached[1]) < _NOTION_CACHE_TTL:
             return cached[0], cached[1]
 
-    raw_pages = _query_notion_db(NOTION_MARKETING_DB, page_size=100)
+    raw_pages = _query_notion_db(
+        NOTION_MARKETING_DB,
+        sorts=[{"timestamp": "last_edited_time", "direction": "descending"}],
+        page_size=100,
+        max_pages=10,
+    )
     items = []
     for page in raw_pages:
         item = {
@@ -793,9 +817,10 @@ def _fetch_marketing_queue() -> tuple[list[dict], float]:
             "status": _get_page_prop(page, "Status") or "",
             "channel": _get_page_prop(page, "Channel") or "",
             "scheduled_time": _get_page_prop(page, "Scheduled Time") or _get_page_prop(page, "Scheduled") or "",
-            "copy": _get_page_prop(page, "Copy") or _get_page_prop(page, "Copy Preview") or _get_page_prop(page, "Body") or "",
+            "copy": _get_page_prop(page, "Final Copy") or _get_page_prop(page, "Copy") or _get_page_prop(page, "Copy Preview") or _get_page_prop(page, "Body") or "",
+            "asset_link": _get_page_prop(page, "Asset Link") or _get_page_prop(page, "Asset") or _get_page_prop(page, "Media") or "",
             "url": _get_page_prop(page, "URL") or _get_page_prop(page, "Published URL") or "",
-            "asset": _get_page_prop(page, "Asset") or _get_page_prop(page, "Media") or "",
+            "campaign_theme": _get_page_prop(page, "Campaign / Theme") or _get_page_prop(page, "Campaign") or _get_page_prop(page, "Theme") or "",
             "error": _get_page_prop(page, "Error") or _get_page_prop(page, "Reason") or "",
             "created": page.get("created_time", ""),
             "last_edited": page.get("last_edited_time", ""),
@@ -869,6 +894,8 @@ _ICON_HEARTBEAT = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" s
 _ICON_PLAY = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>'
 _ICON_USERS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
 _ICON_GEAR = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
+_ICON_SERVER = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>'
+_ICON_TASKHUB = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><rect x="3" y="13" width="6" height="6" rx="1"/><line x1="13" y1="8" x2="21" y2="8"/><line x1="13" y1="16" x2="21" y2="16"/><line x1="17" y1="5" x2="17" y2="11"/></svg>'
 
 
 
@@ -993,8 +1020,8 @@ def _shared_css() -> str:
   /* TABLES */
   .tbl-wrap { overflow-x: auto; }
   .tbl { width: 100%; border-collapse: collapse; min-width: 480px; }
-  .tbl thead th { font-family: var(--font-d); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; background: rgba(0,0,0,.2); }
-  .tbl tbody td { padding: 9px 14px; border-bottom: 1px solid var(--border-sub); font-family: var(--font-m); font-size: 12px; vertical-align: middle; white-space: nowrap; }
+  .tbl thead th { font-family: var(--font-d); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; background: rgba(0,0,0,.2); }
+  .tbl tbody td { padding: 6px 12px; border-bottom: 1px solid var(--border-sub); font-family: var(--font-m); font-size: 12px; vertical-align: middle; white-space: nowrap; }
   .tbl tbody tr:last-child td { border-bottom: none; }
   .tbl tbody tr:hover td { background: rgba(248,200,48,.025); }
 
@@ -1059,9 +1086,10 @@ def _shared_css() -> str:
 
 def _sidebar_html(active_view: str) -> str:
     items = [
+        ("task_hub", "Task Hub", _ICON_TASKHUB, "/admin/task-hub"),
         ("health", "Data Health", _ICON_HEARTBEAT, "/admin/health"),
-        ("automation", "Automation", _ICON_PLAY, "/admin/automation"),
-        ("customers", "Customers", _ICON_USERS, "/admin/customers"),
+        ("automation", "Social Media", _ICON_PLAY, "/admin/automation"),
+        ("system_health", "System Health", _ICON_SERVER, "/admin/system"),
     ]
     nav_items = ""
     for key, label, icon, href in items:
@@ -1085,6 +1113,29 @@ def _sidebar_js() -> str:
 (function() {
   var contentInner = document.getElementById('contentInner');
 
+  // Re-execute <script> tags that were injected via innerHTML
+  // (innerHTML does NOT execute scripts; we must clone each one)
+  function _execScripts(container) {
+    var scripts = container.querySelectorAll('script');
+    scripts.forEach(function(old) {
+      var s = document.createElement('script');
+      for (var i = 0; i < old.attributes.length; i++) {
+        s.setAttribute(old.attributes[i].name, old.attributes[i].value);
+      }
+      s.textContent = old.textContent;
+      old.parentNode.replaceChild(s, old);
+    });
+  }
+
+  function _injectView(view, html, href) {
+    contentInner.innerHTML = html;
+    if (href) history.pushState({view: view}, '', href);
+    _execScripts(contentInner);
+    if (view === 'health') {
+      document.dispatchEvent(new Event('healthViewLoaded'));
+    }
+  }
+
   // AJAX view switching
   var navItems = document.querySelectorAll('.sidebar-item[data-view]');
   navItems.forEach(function(item) {
@@ -1093,27 +1144,15 @@ def _sidebar_js() -> str:
       var view = this.getAttribute('data-view');
       var href = this.getAttribute('href');
 
-      // Update active state
       navItems.forEach(function(n) { n.classList.remove('active'); });
       this.classList.add('active');
 
-      // Fetch content via API endpoint
-      fetch('/admin/api/' + view, {
-        credentials: 'same-origin'
-      })
+      fetch('/admin/api/' + view, { credentials: 'same-origin' })
       .then(function(resp) {
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         return resp.text();
       })
-      .then(function(html) {
-        contentInner.innerHTML = html;
-        history.pushState({view: view}, '', href);
-        // Re-init charts if Data Health view
-        if (view === 'health') {
-          var evt = new Event('healthViewLoaded');
-          document.dispatchEvent(evt);
-        }
-      })
+      .then(function(html) { _injectView(view, html, href); })
       .catch(function(err) {
         contentInner.innerHTML = '<div class="page"><div class="panel"><div style="padding:40px;text-align:center;color:var(--muted)">Failed to load view: ' + err.message + '</div></div></div>';
       });
@@ -1129,12 +1168,7 @@ def _sidebar_js() -> str:
       });
       fetch('/admin/api/' + view, { credentials: 'same-origin' })
       .then(function(r) { return r.text(); })
-      .then(function(html) {
-        contentInner.innerHTML = html;
-        if (view === 'health') {
-          document.dispatchEvent(new Event('healthViewLoaded'));
-        }
-      });
+      .then(function(html) { _injectView(view, html, null); });
     }
   });
 
@@ -1403,7 +1437,7 @@ document.addEventListener('healthViewLoaded', function() {{
 # -- Automation content renderer ----------------------------------------------
 
 def render_automation_content() -> str:
-    """Render the Automation view inner content HTML."""
+    """Render the Social Media view inner content HTML."""
     notion_ok = True
     cache_age_str = ""
 
@@ -1415,7 +1449,6 @@ def render_automation_content() -> str:
     except Exception:
         items = []
         notion_ok = False
-        # Try to get from cache
         with _notion_cache_lock:
             cached = _notion_cache.get("marketing_queue")
             if cached:
@@ -1429,6 +1462,7 @@ def render_automation_content() -> str:
     now_sast = now_utc.astimezone(_SAST)
     today_str = now_sast.strftime("%Y-%m-%d")
     updated = now_sast.strftime("%Y-%m-%d %H:%M:%S")
+    fourteen_days = now_utc + timedelta(days=14)
 
     # Categorise items
     published_today = []
@@ -1437,42 +1471,48 @@ def render_automation_content() -> str:
     failed_blocked = []
     recent_publishes = []
     all_active = []
+    schedule_items = []   # for Schedule tab: Approved/Awaiting/Drafting/Briefed + has scheduled_time within 14d
 
     for item in items:
         status = (item.get("status") or "").lower().strip()
         sched_raw = item.get("scheduled_time") or ""
 
         if status in ("published", "done", "complete"):
-            # Check if published today
             created = item.get("last_edited") or item.get("created") or ""
             if created and today_str in created[:10]:
                 published_today.append(item)
-            # All published in last 24h
             dt = parse_ts(created or item.get("scheduled_time"))
             if dt and (now_utc - dt).total_seconds() < 86400:
                 recent_publishes.append(item)
         elif status in ("failed", "blocked", "error"):
             failed_blocked.append(item)
         elif status in ("approved", "ready", "scheduled"):
-            # Future scheduled
             sched_dt = parse_ts(sched_raw)
             if sched_dt and sched_dt > now_utc:
                 scheduled.append(item)
             elif sched_dt:
-                # Past scheduled but not published -- treat as awaiting
                 awaiting_approval.append(item)
             else:
                 scheduled.append(item)
         elif status in ("awaiting approval", "draft", "review", "pending", "in review", "awaiting", "in progress"):
             awaiting_approval.append(item)
+        elif status in ("drafting", "briefed"):
+            pass  # fall through to schedule_items below
 
         if status not in ("published", "done", "complete", "archived"):
             all_active.append(item)
 
+        # Schedule tab: approved/awaiting/drafting/briefed + scheduled_time within 14 days
+        if status in ("approved", "awaiting approval", "drafting", "briefed", "draft", "ready", "scheduled"):
+            sched_dt = parse_ts(sched_raw)
+            if sched_dt and now_utc <= sched_dt <= fourteen_days:
+                schedule_items.append(item)
+
     # Sort
     scheduled.sort(key=lambda x: x.get("scheduled_time") or "9999")
-    awaiting_approval.sort(key=lambda x: x.get("created") or "0000")
+    awaiting_approval.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
     recent_publishes.sort(key=lambda x: x.get("last_edited") or x.get("created") or "9999", reverse=True)
+    schedule_items.sort(key=lambda x: x.get("scheduled_time") or "9999")
 
     # -- Channel stats --
     channel_stats: dict[str, dict] = {}
@@ -1515,11 +1555,14 @@ def render_automation_content() -> str:
                     channel_stats[ch_key]["next_scheduled_ts"] = sched_dt
                     channel_stats[ch_key]["next_scheduled"] = sched
 
+    # -- Local helpers --
     def _channel_chip(ch_key: str) -> str:
         ch = _CHANNEL_MAP.get(ch_key)
         if not ch:
-            return f'<span class="ch-chip" style="background:rgba(107,114,128,0.15);color:var(--muted)">{ch_key}</span>'
-        return f'<span class="ch-chip" style="background:{ch["color"]}22;color:{ch["color"]};border:1px solid {ch["color"]}33"><span class="ch-dot" style="background:{ch["color"]}"></span>{ch["label"]}</span>'
+            return f'<span class="ch-chip" style="background:rgba(107,114,128,0.15);color:var(--muted)">{ch_key or "?"}</span>'
+        return (f'<span class="ch-chip" style="background:{ch["color"]}22;color:{ch["color"]};'
+                f'border:1px solid {ch["color"]}33"><span class="ch-dot" style="background:{ch["color"]}"></span>'
+                f'{ch["label"]}</span>')
 
     def _status_chip(status: str) -> str:
         low = status.lower().strip()
@@ -1533,6 +1576,23 @@ def render_automation_content() -> str:
             return '<span class="chip chip-gray"><span class="cdot"></span>Awaiting</span>'
         return f'<span class="chip chip-gray"><span class="cdot"></span>{status}</span>'
 
+    def _media_preview(asset_link: str, max_height: str = "300px") -> str:
+        if not asset_link:
+            return '<span style="color:var(--muted);font-size:11px;font-family:var(--font-m)">Text post</span>'
+        ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0] if "." in asset_link else ""
+        if ext in ("mp4", "mov", "webm"):
+            return (f'<video src="{asset_link}" controls '
+                    f'style="max-height:{max_height};border-radius:4px;display:block;margin-top:10px;width:auto;"></video>')
+        elif ext in ("jpg", "jpeg", "png", "gif", "webp"):
+            return (f'<img src="{asset_link}" alt="post asset" '
+                    f'style="max-height:{max_height};border-radius:4px;object-fit:cover;display:block;margin-top:10px;">')
+        else:
+            return '<span style="color:var(--muted);font-size:11px;font-family:var(--font-m)">Text post</span>'
+
+    def _media_thumb(asset_link: str) -> str:
+        """Thumbnail for Recent Publishes table (max 120px)."""
+        return _media_preview(asset_link, max_height="120px")
+
     # -- Topbar --
     banner = ""
     if cache_age_str:
@@ -1541,22 +1601,22 @@ def render_automation_content() -> str:
         banner = '<div class="banner banner-err">Notion unavailable -- no cached data</div>'
 
     topbar = f"""<nav class="topbar">
-  <div class="topbar-left"><div class="topbar-pill">Automation</div></div>
+  <div class="topbar-left"><div class="topbar-pill">Social Media</div></div>
   <div class="topbar-right"><div class="topbar-meta">Updated <em>{updated} SAST</em></div></div>
 </nav>
 {banner}"""
 
-    # -- Panel 1: Pipeline KPI Strip --
+    # ── KPI numbers (shared across Feed tab) ───────────────────────────────
     pub_today_count = len(published_today)
     scheduled_count = len(scheduled)
-    awaiting_count = len(awaiting_approval)
-    failed_count = len(failed_blocked)
-    total_queue = len(all_active)
+    awaiting_count  = len(awaiting_approval)
+    failed_count    = len(failed_blocked)
+    total_queue     = len(all_active)
 
-    pub_cls = "c-green" if pub_today_count > 0 else "c-text"
+    pub_cls   = "c-green" if pub_today_count > 0 else "c-text"
     sched_cls = "c-gold"
     await_cls = "c-amber" if awaiting_count > 0 else "c-text"
-    fail_cls = "c-red" if failed_count > 0 else "c-text"
+    fail_cls  = "c-red"   if failed_count > 0  else "c-text"
 
     kpi_strip = f"""<div class="kpi-strip">
     <div class="kpi"><div class="kpi-lbl">Published Today</div><div class="kpi-val {pub_cls}">{pub_today_count}</div><div class="kpi-sub">posts sent</div></div>
@@ -1566,29 +1626,23 @@ def render_automation_content() -> str:
     <div class="kpi"><div class="kpi-lbl">Total Queue</div><div class="kpi-val c-text">{total_queue}</div><div class="kpi-sub">active items</div></div>
   </div>"""
 
-    # -- Panel 2: Channel Status Grid --
+    # ── Channel Status Grid ────────────────────────────────────────────────
     channel_cards = ""
     for ch in _CHANNELS:
         cs = channel_stats[ch["key"]]
-        # Status dot
         last_ts = cs.get("last_published_ts")
         if cs["last_failed"]:
-            dot_color = "var(--red)"
-            dot_title = "Last action failed"
+            dot_color, dot_title = "var(--red)", "Last action failed"
         elif last_ts:
             age_h = (now_utc - last_ts).total_seconds() / 3600
             if age_h < 6:
-                dot_color = "var(--green)"
-                dot_title = "Active (< 6h)"
+                dot_color, dot_title = "var(--green)", "Active (< 6h)"
             elif age_h < 24:
-                dot_color = "var(--amber)"
-                dot_title = "Stale (6-24h)"
+                dot_color, dot_title = "var(--amber)", "Stale (6-24h)"
             else:
-                dot_color = "var(--red)"
-                dot_title = "Inactive (> 24h)"
+                dot_color, dot_title = "var(--red)", "Inactive (> 24h)"
         else:
-            dot_color = "var(--muted)"
-            dot_title = "No publishes yet"
+            dot_color, dot_title = "var(--muted)", "No publishes yet"
 
         last_pub_str = _relative_time(cs["last_published"]) if cs["last_published"] else '<span style="color:var(--muted)">No publishes yet</span>'
         next_sched_str = _sast_hhmm(cs["next_scheduled"]) + " SAST" if cs["next_scheduled"] else "\u2014"
@@ -1611,61 +1665,30 @@ def render_automation_content() -> str:
     <div class="channel-grid">{channel_cards}</div>
   </div>"""
 
-    # -- Panel 3: Upcoming Queue (max 20) --
-    upcoming_html = ""
-    if scheduled:
+    # ── Failed & Blocked ───────────────────────────────────────────────────
+    failed_html = ""
+    if failed_blocked:
         rows = ""
-        for item in scheduled[:20]:
+        for item in failed_blocked:
             ch_key = _normalise_channel_key(item.get("channel") or "")
+            page_id = item.get("id", "")
             rows += (
-                "<tr>"
-                + td(_sast_hhmm(item.get("scheduled_time")))
+                f'<tr id="fb-{page_id}">'
                 + td(_channel_chip(ch_key))
                 + td(_truncate(item.get("title"), 50))
-                + td(_truncate(item.get("copy"), 80), extra_style="color:var(--muted)")
-                + td("+" if item.get("asset") else "\u2014")
                 + td(_status_chip(item.get("status") or ""))
+                + td(_truncate(item.get("error"), 80) or "\u2014", extra_style="color:var(--red)")
+                + td(_sast_hhmm(item.get("scheduled_time")))
+                + td(_relative_time(item.get("created")))
+                + td(f'<button class="btn-dismiss" data-id="{page_id}">Dismiss</button>')
                 + "</tr>"
             )
-        upcoming_html = f"""<div class="panel">
-    <div class="panel-head"><span class="panel-title">Upcoming Queue</span><span class="panel-sub">{len(scheduled)} scheduled</span></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Time</th><th>Channel</th><th>Title</th><th>Copy Preview</th><th>Asset</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table></div>
+        failed_html = f"""<div class="panel panel-red-accent">
+    <div class="panel-head"><span class="panel-title" style="color:var(--red)">Failed &amp; Blocked</span><span class="panel-sub">{len(failed_blocked)} items need attention</span></div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Channel</th><th>Title</th><th>Status</th><th>Error / Reason</th><th>Scheduled</th><th>Age</th><th></th></tr></thead><tbody>{rows}</tbody></table></div>
   </div>"""
 
-    # -- Panel 4: Awaiting Approval --
-    awaiting_html = ""
-    if awaiting_approval:
-        rows = ""
-        for item in awaiting_approval:
-            ch_key = _normalise_channel_key(item.get("channel") or "")
-            created = item.get("created") or ""
-            age_str = _relative_time(created)
-            # Colour age
-            dt = parse_ts(created)
-            age_style = ""
-            if dt:
-                age_h = (now_utc - dt).total_seconds() / 3600
-                if age_h > 24:
-                    age_style = "color:var(--red);font-weight:700"
-                elif age_h > 12:
-                    age_style = "color:var(--amber);font-weight:700"
-
-            rows += (
-                "<tr>"
-                + td(_channel_chip(ch_key))
-                + td(_truncate(item.get("title"), 50))
-                + td(_truncate(item.get("copy"), 120), extra_style="color:var(--muted)")
-                + td("+" if item.get("asset") else "\u2014")
-                + td(_relative_time(created))
-                + td(age_str, extra_style=age_style)
-                + "</tr>"
-            )
-        awaiting_html = f"""<div class="panel">
-    <div class="panel-head"><span class="panel-title">Awaiting Approval</span><span class="panel-sub">{len(awaiting_approval)} items &middot; oldest first</span></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Channel</th><th>Title</th><th>Copy Preview</th><th>Asset</th><th>Created</th><th>Age</th></tr></thead><tbody>{rows}</tbody></table></div>
-  </div>"""
-
-    # -- Panel 5: Recent Publishes (last 24h, max 30) --
+    # ── Recent Publishes (with inline media) ───────────────────────────────
     recent_html = ""
     if recent_publishes:
         rows = ""
@@ -1673,71 +1696,1070 @@ def render_automation_content() -> str:
             ch_key = _normalise_channel_key(item.get("channel") or "")
             ts = item.get("last_edited") or item.get("scheduled_time") or item.get("created") or ""
             url = item.get("url") or ""
-            url_cell = f'<a href="{url}" target="_blank" style="color:var(--gold);font-size:11px">View</a>' if url else "\u2014"
+            url_cell = f'<a href="{url}" target="_blank" style="color:var(--gold);font-size:11px">View post</a>' if url else "\u2014"
+            media_cell = _media_thumb(item.get("asset_link") or "")
             rows += (
                 "<tr>"
+                + td(media_cell, css="", extra_style="padding:6px 14px;min-width:100px")
                 + td(_sast_hhmm(ts))
                 + td(_channel_chip(ch_key))
                 + td(_truncate(item.get("title"), 50))
                 + td(url_cell)
-                + td(_truncate(item.get("copy"), 60), extra_style="color:var(--muted)")
+                + td(_truncate(item.get("copy"), 60), extra_style="color:var(--muted);white-space:normal;max-width:300px")
                 + "</tr>"
             )
         recent_html = f"""<div class="panel">
     <div class="panel-head"><span class="panel-title">Recent Publishes</span><span class="panel-sub">Last 24h &middot; {len(recent_publishes)} items</span></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Time</th><th>Channel</th><th>Title</th><th>URL</th><th>Copy Preview</th></tr></thead><tbody>{rows}</tbody></table></div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Media</th><th>Time</th><th>Channel</th><th>Title</th><th>URL</th><th>Copy Preview</th></tr></thead><tbody>{rows}</tbody></table></div>
   </div>"""
 
-    # -- Panel 6: Failed & Blocked --
-    failed_html = ""
-    if failed_blocked:
-        rows = ""
-        for item in failed_blocked:
+    # ── Approval Queue cards ───────────────────────────────────────────────
+    # Strictly match Notion status "Awaiting Approval"
+    approval_queue_items = [i for i in items if (i.get("status") or "").strip().lower() == "awaiting approval"]
+    approval_queue_items.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
+
+    if approval_queue_items:
+        appr_cards = ""
+        for item in approval_queue_items:
             ch_key = _normalise_channel_key(item.get("channel") or "")
-            rows += (
-                "<tr>"
-                + td(_channel_chip(ch_key))
-                + td(_truncate(item.get("title"), 50))
-                + td(_status_chip(item.get("status") or ""))
-                + td(_truncate(item.get("error"), 80) or "\u2014", extra_style="color:var(--red)")
-                + td(_sast_hhmm(item.get("scheduled_time")))
-                + td(_relative_time(item.get("created")))
-                + "</tr>"
-            )
-        failed_html = f"""<div class="panel panel-red-accent">
-    <div class="panel-head"><span class="panel-title" style="color:var(--red)">Failed &amp; Blocked</span><span class="panel-sub">{len(failed_blocked)} items need attention</span></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Channel</th><th>Title</th><th>Status</th><th>Error / Reason</th><th>Scheduled</th><th>Age</th></tr></thead><tbody>{rows}</tbody></table></div>
-  </div>"""
+            sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
+            campaign = _truncate(item.get("campaign_theme") or "", 40)
+            copy_text = item.get("copy") or ""
+            media_html = _media_preview(item.get("asset_link") or "")
+            page_id = item.get("id", "")
+            appr_cards += f"""<div class="appr-card" id="appr-{page_id}">
+  <div class="appr-header">
+    {_channel_chip(ch_key)}
+    <span class="appr-meta">&#128337; {sched_str}</span>
+    {f'<span class="appr-campaign">{campaign}</span>' if campaign else ""}
+  </div>
+  <div class="appr-copy">{copy_text}</div>
+  {media_html}
+  <div class="appr-error" style="display:none;color:var(--red);font-size:11px;margin-top:8px"></div>
+  <div class="appr-actions">
+    <button class="btn-approve" data-id="{page_id}">Approve</button>
+    <button class="btn-archive" data-id="{page_id}">Archive</button>
+  </div>
+</div>"""
+        approval_tab_content = f'<div id="appr-list">{appr_cards}</div>'
+    else:
+        approval_tab_content = '<div class="empty-state">No posts awaiting approval.</div>'
+
+    # ── Schedule tab: 14-day lookahead table ───────────────────────────────
+    # Map items into cells: {date_str: {ch_key: [items]}}
+    channel_keys = [c["key"] for c in _CHANNELS]
+    sched_grid: dict[str, dict[str, list]] = {}
+    for i in range(14):
+        day = (now_sast + timedelta(days=i)).strftime("%Y-%m-%d")
+        sched_grid[day] = {k: [] for k in channel_keys}
+
+    for item in schedule_items:
+        sdt = parse_ts(item.get("scheduled_time") or "")
+        if not sdt:
+            continue
+        sdt_sast = sdt.astimezone(_SAST)
+        day_key = sdt_sast.strftime("%Y-%m-%d")
+        if day_key not in sched_grid:
+            continue
+        ch_key = _normalise_channel_key(item.get("channel") or "")
+        if ch_key in sched_grid[day_key]:
+            sched_grid[day_key][ch_key].append(item)
+
+    def _sched_status_color(status: str) -> str:
+        low = status.lower().strip()
+        if low in ("approved", "ready", "scheduled"):
+            return "var(--green)"
+        elif low in ("awaiting approval", "awaiting"):
+            return "var(--amber)"
+        else:
+            return "var(--muted)"
+
+    # Schedule table header
+    ch_headers = "".join(f'<th style="min-width:90px">{c["label"]}</th>' for c in _CHANNELS)
+    sched_rows = ""
+    for i in range(14):
+        day_dt = now_sast + timedelta(days=i)
+        day_key = day_dt.strftime("%Y-%m-%d")
+        day_label = "Today" if i == 0 else ("Tomorrow" if i == 1 else day_dt.strftime("%a %d %b"))
+        cells = ""
+        for ch in _CHANNELS:
+            day_items = sched_grid[day_key].get(ch["key"], [])
+            if not day_items:
+                cells += "<td></td>"
+            else:
+                cell_html = ""
+                for it in day_items:
+                    title = _truncate(it.get("title") or it.get("copy") or "", 40)
+                    status = it.get("status") or ""
+                    color = _sched_status_color(status)
+                    page_id = it.get("id", "")
+                    cell_html += (f'<div class="sched-cell-item" data-id="{page_id}" '
+                                  f'style="border-left:2px solid {color};padding:2px 6px;margin-bottom:3px;'
+                                  f'cursor:pointer;font-size:11px;font-family:var(--font-m);">'
+                                  f'{title}</div>')
+                cells += f"<td>{cell_html}</td>"
+        sched_rows += f"<tr><td style='white-space:nowrap;font-weight:600'>{day_label}</td>{cells}</tr>"
+
+    schedule_table = f"""<div class="panel">
+    <div class="panel-head"><span class="panel-title">14-Day Schedule</span><span class="panel-sub">Approved · Awaiting · Drafting · Briefed</span></div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Day</th>{ch_headers}</tr></thead>
+      <tbody id="sched-body">{sched_rows}</tbody>
+    </table></div>
+  </div>
+  <div id="sched-modal" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-top:12px"></div>"""
+
+    automation_js = """<style>
+.btn-dismiss{background:rgba(239,68,68,.08);color:var(--red);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:5px 14px;font-family:var(--font-d);font-weight:700;font-size:11px;cursor:pointer;transition:background 150ms;white-space:nowrap;}
+.btn-dismiss:hover{background:rgba(239,68,68,.18);}
+.btn-dismiss:disabled{opacity:.5;cursor:not-allowed;}
+</style>
+<script>
+(function(){
+  document.querySelectorAll('.btn-dismiss').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = this.dataset.id;
+      var row = document.getElementById('fb-' + id);
+      btn.disabled = true;
+      fetch('/admin/api/dismiss-item', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({page_id: id})
+      }).then(function(r){
+        if(r.ok){
+          row.style.transition='opacity 0.4s';
+          row.style.opacity='0';
+          setTimeout(function(){ row.remove(); }, 400);
+        } else { btn.disabled = false; }
+      }).catch(function(){ btn.disabled = false; });
+    });
+  });
+})();
+</script>"""
 
     return f"""{topbar}
 <div class="page">
   {kpi_strip}
   {channel_panel}
   {failed_html}
-  {upcoming_html}
-  {awaiting_html}
   {recent_html}
-  <div class="footer">MzansiEdge Automation &middot; Notion-powered</div>
+  <div class="footer">MzansiEdge Social Media &middot; Notion-powered</div>
+</div>
+{automation_js}"""
+
+
+# -- Task Hub helpers ---------------------------------------------------------
+
+def _fetch_task_hub_blocks() -> list[dict]:
+    """Fetch all blocks from Task Hub Notion page with pagination."""
+    cache_key = "task_hub_blocks"
+    now = time.monotonic()
+    with _notion_cache_lock:
+        cached = _notion_cache.get(cache_key)
+        if cached and (now - cached[1]) < _NOTION_CACHE_TTL:
+            return cached[0]
+
+    all_blocks: list[dict] = []
+    start_cursor: str | None = None
+    for _ in range(20):
+        params = "?page_size=100"
+        if start_cursor:
+            params += f"&start_cursor={start_cursor}"
+        result = _notion_request(f"blocks/{NOTION_TASK_HUB_PAGE}/children{params}")
+        if not result or "results" not in result:
+            break
+        all_blocks.extend(result["results"])
+        if result.get("has_more") and result.get("next_cursor"):
+            start_cursor = result["next_cursor"]
+        else:
+            break
+
+    with _notion_cache_lock:
+        _notion_cache[cache_key] = (all_blocks, now)
+    return all_blocks
+
+
+def _block_plain_text(block: dict) -> str:
+    """Extract plain text from a Notion block's rich_text array."""
+    btype = block.get("type", "")
+    type_data = block.get(btype, {})
+    rich_text = type_data.get("rich_text", [])
+    return "".join(rt.get("plain_text", "") for rt in rich_text)
+
+
+def render_rich_text_html(rich_text_array: list) -> str:
+    """Render a Notion rich_text array to HTML, preserving links, bold, italic, code."""
+    import html as _html_lib
+    parts = []
+    for span in rich_text_array:
+        text = span.get("plain_text", "")
+        if not text:
+            continue
+        href = span.get("href")
+        if not href:
+            link_obj = (span.get("text") or {}).get("link")
+            if isinstance(link_obj, dict):
+                href = link_obj.get("url")
+        ann = span.get("annotations", {})
+        esc = _html_lib.escape(text)
+        if href:
+            parts.append(f'<a href="{_html_lib.escape(href)}" target="_blank" class="task-link">{esc}</a>')
+        elif ann.get("bold"):
+            parts.append(f'<strong>{esc}</strong>')
+        elif ann.get("italic"):
+            parts.append(f'<em>{esc}</em>')
+        elif ann.get("code"):
+            parts.append(f'<code>{esc}</code>')
+        else:
+            parts.append(esc)
+    return "".join(parts)
+
+
+def _parse_card_zones(rich_text_array: list) -> tuple[str, str, str]:
+    """Split a rich_text array into (title_html, desc_html, links_html) at ' — ' separator."""
+    full_html = render_rich_text_html(rich_text_array)
+    sep = " \u2014 "  # " — "
+    html_parts = full_html.split(sep)
+    if len(html_parts) >= 2:
+        title_html = html_parts[0]
+        desc_html = sep.join(html_parts[1:])
+    else:
+        title_html = full_html
+        desc_html = ""
+    links_html = "".join(re.findall(r'<a[^>]*class="task-link"[^>]*>.*?</a>', full_html, re.DOTALL))
+    return title_html, desc_html, links_html
+
+
+def _classify_task(text: str) -> str:
+    """Classify a to_do block text into one of the 5 task section keys."""
+    lower = text.lower()
+    if "fb group" in lower:
+        return "post_now"
+    elif "linkedin" in lower or "li-" in lower:
+        return "connect"
+    elif "quora" in lower:
+        return "answer"
+    elif "reddit" in lower or "mybroadband" in lower:
+        return "read_reply"
+    else:
+        return "reminders"
+
+
+def render_task_hub_content() -> str:
+    """Render the Task Hub inner content HTML."""
+    now_utc = datetime.now(timezone.utc)
+    now_sast = now_utc.astimezone(_SAST)
+    updated = now_sast.strftime("%Y-%m-%d %H:%M:%S")
+
+    _ACCENT: dict[str, str] = {
+        "approve_posts": "#22c55e",
+        "post_now":      "#E8571F",
+        "connect":       "#3b82f6",
+        "answer":        "#8b5cf6",
+        "read_reply":    "#06b6d4",
+        "reminders":     "#888888",
+    }
+
+    _SECTION_META = [
+        ("approve_posts", "Approve Posts",   "📋"),
+        ("post_now",      "Post Now",        "📱"),
+        ("connect",       "Connect",         "🔗"),
+        ("answer",        "Answer",          "✍️"),
+        ("read_reply",    "Read &amp; Reply","💬"),
+        ("reminders",     "Reminders",       "🔔"),
+    ]
+
+    # ── Approve Posts: awaiting approval from Marketing Ops Queue ──────────
+    try:
+        mq_items, _ = _fetch_marketing_queue()
+    except Exception:
+        mq_items = []
+    approve_items = [i for i in mq_items if (i.get("status") or "").strip().lower() == "awaiting approval"]
+    approve_items.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
+
+    # ── Task sections: scoped to # 📝 Manual Tasks heading ─────────────────
+    sections: dict[str, list[dict]] = {
+        "post_now": [], "connect": [], "answer": [], "read_reply": [], "reminders": [],
+    }
+    try:
+        blocks = _fetch_task_hub_blocks()
+        in_manual = False
+        for block in blocks:
+            btype = block.get("type", "")
+            # Start scope at heading_1 containing "Manual Tasks"
+            if not in_manual:
+                if btype == "heading_1" and "Manual Tasks" in _block_plain_text(block):
+                    in_manual = True
+                continue
+            # End scope at next divider or heading_1
+            if btype in ("divider", "heading_1"):
+                break
+            if btype != "to_do":
+                continue
+            if block.get("to_do", {}).get("checked", False):
+                continue
+            rt_arr = block.get("to_do", {}).get("rich_text", [])
+            plain = "".join(sp.get("plain_text", "") for sp in rt_arr).strip()
+            if not plain:
+                continue
+            key = _classify_task(plain)
+            sections[key].append({"block_id": block["id"], "rich_text": rt_arr, "plain": plain})
+    except Exception:
+        pass
+
+    # ── Build section HTML ─────────────────────────────────────────────────
+    def _channel_chip_th(ch_key: str) -> str:
+        ch = _CHANNEL_MAP.get(ch_key)
+        if not ch:
+            return (f'<span class="ch-chip" style="background:rgba(107,114,128,0.15);'
+                    f'color:var(--muted)">{ch_key or "?"}</span>')
+        return (f'<span class="ch-chip" style="background:{ch["color"]}22;color:{ch["color"]};'
+                f'border:1px solid {ch["color"]}33"><span class="ch-dot" style="background:{ch["color"]}"></span>'
+                f'{ch["label"]}</span>')
+
+    sections_html = ""
+    any_items = bool(approve_items) or any(v for v in sections.values())
+
+    for sec_key, sec_label, sec_emoji in _SECTION_META:
+        accent = _ACCENT.get(sec_key, "#E8571F")
+
+        if sec_key == "approve_posts":
+            items_for_section = approve_items
+            if not items_for_section:
+                continue
+            n = len(items_for_section)
+            cards = ""
+            for item in items_for_section:
+                ch_key = _normalise_channel_key(item.get("channel") or "")
+                sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
+                campaign = _truncate(item.get("campaign_theme") or "", 40)
+                copy_text = item.get("copy") or ""
+                media_html = ""
+                asset_link = item.get("asset_link") or ""
+                if asset_link:
+                    ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0] if "." in asset_link else ""
+                    if ext in ("mp4", "mov", "webm"):
+                        media_html = (f'<video src="{asset_link}" controls style="max-height:280px;'
+                                      f'border-radius:4px;display:block;margin-top:10px;width:auto;"></video>')
+                    elif ext in ("jpg", "jpeg", "png", "gif", "webp"):
+                        media_html = (f'<img src="{asset_link}" alt="asset" style="max-height:280px;'
+                                      f'border-radius:4px;object-fit:cover;display:block;margin-top:10px;">')
+                page_id = item.get("id", "")
+                cards += f"""<div class="appr-card" id="th-appr-{page_id}">
+  <div class="appr-header">
+    {_channel_chip_th(ch_key)}
+    <span class="appr-meta">&#128337; {sched_str}</span>
+    {f'<span class="appr-campaign">{campaign}</span>' if campaign else ""}
+  </div>
+  <div class="appr-copy">{copy_text}</div>
+  {media_html}
+  <div class="appr-error" style="display:none;color:var(--red);font-size:11px;margin-top:8px"></div>
+  <div class="appr-actions">
+    <button class="btn-approve" data-id="{page_id}">Approve</button>
+    <button class="btn-archive" data-id="{page_id}">Archive</button>
+  </div>
+</div>"""
+            sections_html += f"""<div class="task-section" data-section="{sec_key}" id="th-sec-{sec_key}">
+  <div class="section-header">
+    <div class="section-left">
+      <span class="section-icon">{sec_emoji}</span>
+      <span class="section-title">{sec_label}</span>
+      <span class="section-count">{n} pending</span>
+    </div>
+    <div class="section-progress">
+      <span class="progress-text" data-done="0" data-total="{n}">0 / {n} done</span>
+      <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
+    </div>
+  </div>
+  <div class="task-cards-wrap">{cards}</div>
+</div>"""
+        else:
+            task_list = sections.get(sec_key, [])
+            if not task_list:
+                continue
+            n = len(task_list)
+            cards = ""
+            for task in task_list:
+                bid = task["block_id"]
+                rt_arr = task["rich_text"]
+                plain = task["plain"]
+                content_html = render_rich_text_html(rt_arr)
+                safe_plain = plain.replace('"', "&quot;").replace("'", "&#39;")
+                cards += f"""<div class="task-card" data-block-id="{bid}" style="border-left-color:{accent}">
+  <div class="task-content">{content_html}</div>
+  <div class="task-actions">
+    <button class="btn-copy" data-text="{safe_plain}">Copy</button>
+    <button class="btn-done" data-block-id="{bid}">Done &#10004;</button>
+  </div>
+</div>"""
+            sections_html += f"""<div class="task-section" data-section="{sec_key}" id="th-sec-{sec_key}">
+  <div class="section-header">
+    <div class="section-left">
+      <span class="section-icon">{sec_emoji}</span>
+      <span class="section-title">{sec_label}</span>
+      <span class="section-count">{n} pending</span>
+    </div>
+    <div class="section-progress">
+      <span class="progress-text" data-done="0" data-total="{n}">0 / {n} done</span>
+      <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
+    </div>
+  </div>
+  <div class="task-cards-wrap">{cards}</div>
 </div>"""
 
+    if not any_items:
+        page_body = """<div class="task-hub-done">
+  <div class="task-hub-done-icon">&#9989;</div>
+  <div class="task-hub-done-text">All done.</div>
+  <div class="task-hub-done-sub">Nothing pending. Well done.</div>
+</div>"""
+    else:
+        page_body = f'<div class="task-hub-content">{sections_html}</div>'
 
-# -- Customers placeholder ----------------------------------------------------
+    task_hub_css = """<style>
+.task-hub-content{}
+.task-section{margin-bottom:28px;}
+.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
+.section-left{display:flex;align-items:center;gap:8px;}
+.section-icon{font-size:18px;line-height:1;}
+.section-title{font-family:var(--font-d);font-size:15px;font-weight:700;color:var(--text);}
+.section-count{font-family:var(--font-m);font-size:12px;color:var(--muted);background:rgba(107,114,128,.12);border-radius:12px;padding:2px 9px;}
+.section-progress{display:flex;align-items:center;gap:8px;}
+.progress-text{font-family:var(--font-m);font-size:12px;color:var(--muted);white-space:nowrap;}
+.progress-bar{width:100px;height:4px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden;}
+.progress-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,#F8C830,#E8571F);transition:width 0.3s ease;}
+.task-cards-wrap{}
+.task-card{display:flex;gap:16px;justify-content:space-between;background:var(--surface-alt);border:1px solid var(--border);border-left:3px solid #E8571F;border-radius:8px;padding:16px 20px;margin-bottom:10px;transition:opacity 0.25s ease,transform 0.25s ease;}
+.task-card.exiting{opacity:0;transform:translateX(40px);}
+.task-content{flex:1;min-width:0;font-family:var(--font-m);font-size:13px;line-height:1.6;color:var(--text);word-break:break-word;}
+.task-actions{display:flex;gap:8px;flex-shrink:0;align-items:flex-start;}
+a.task-link{background:rgba(232,87,31,.12);color:#F8C830;border:1px solid rgba(248,200,48,.25);border-radius:5px;padding:4px 10px;font-size:12px;font-family:var(--font-m);text-decoration:none;display:inline-block;}
+a.task-link:hover{background:rgba(232,87,31,.22);}
+.btn-copy{background:rgba(107,114,128,.12);color:var(--muted);border:1px solid rgba(107,114,128,.2);border-radius:6px;padding:5px 14px;font-family:var(--font-d);font-weight:700;font-size:11px;cursor:pointer;transition:background 150ms,color 150ms;white-space:nowrap;}
+.btn-copy:hover{background:rgba(107,114,128,.22);}
+.btn-copy.copied{background:rgba(34,197,94,.12);color:var(--green);border-color:rgba(34,197,94,.3);}
+.btn-done{background:rgba(34,197,94,.12);color:var(--green);border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:5px 14px;font-family:var(--font-d);font-weight:700;font-size:11px;cursor:pointer;transition:background 150ms;white-space:nowrap;}
+.btn-done:hover{background:rgba(34,197,94,.22);}
+.btn-done:disabled{opacity:.5;cursor:not-allowed;}
+.appr-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid #22c55e;border-radius:8px;padding:18px;margin-bottom:14px;position:relative;}
+.appr-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+.appr-meta{font-family:var(--font-m);font-size:11px;color:var(--muted);}
+.appr-campaign{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);background:rgba(248,200,48,.1);border-radius:4px;padding:2px 8px;}
+.appr-copy{font-family:var(--font-m);font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word;}
+.appr-actions{display:flex;gap:10px;margin-top:14px;}
+.btn-approve{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);border-radius:6px;padding:7px 20px;font-family:var(--font-d);font-weight:700;font-size:12px;cursor:pointer;transition:background 150ms;}
+.btn-approve:hover{background:rgba(34,197,94,.25);}
+.btn-archive{background:rgba(107,114,128,.1);color:var(--muted);border:1px solid rgba(107,114,128,.2);border-radius:6px;padding:7px 20px;font-family:var(--font-d);font-weight:700;font-size:12px;cursor:pointer;transition:background 150ms;}
+.btn-archive:hover{background:rgba(107,114,128,.2);}
+.btn-approve:disabled,.btn-archive:disabled{opacity:.5;cursor:not-allowed;}
+.appr-error{display:none;color:var(--red);font-size:11px;margin-top:8px;}
+.toast-success{position:absolute;top:12px;right:14px;background:var(--green);color:#000;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;font-family:var(--font-d);}
+.task-hub-done{text-align:center;padding:80px 40px;}
+.task-hub-done-icon{font-size:48px;margin-bottom:16px;}
+.task-hub-done-text{font-family:var(--font-d);font-size:22px;font-weight:700;color:var(--text);}
+.task-hub-done-sub{font-family:var(--font-m);font-size:14px;color:var(--muted);margin-top:8px;}
+</style>"""
 
-def render_customers_content() -> str:
-    """Render the Customers placeholder content."""
-    topbar = """<nav class="topbar">
-  <div class="topbar-left"><div class="topbar-pill">Customers</div></div>
-  <div class="topbar-right"></div>
+    task_hub_js = """<script>
+(function(){
+  function updateSectionProgress(sectionEl) {
+    var pt = sectionEl.querySelector('.progress-text');
+    var pf = sectionEl.querySelector('.progress-fill');
+    if (!pt || !pf) return;
+    var total = parseInt(pt.dataset.total, 10);
+    var done = parseInt(pt.dataset.done, 10) + 1;
+    pt.dataset.done = done;
+    pt.textContent = done + ' / ' + total + ' done';
+    var pct = total > 0 ? Math.round(done * 100 / total) : 0;
+    pf.style.width = pct + '%';
+    if (done >= total) {
+      setTimeout(function() {
+        sectionEl.style.transition = 'opacity 0.3s';
+        sectionEl.style.opacity = '0';
+        setTimeout(function() {
+          sectionEl.remove();
+          checkAllComplete();
+        }, 300);
+      }, 500);
+    }
+  }
+
+  function checkAllComplete() {
+    var sections = document.querySelectorAll('.task-section');
+    var apprCards = document.querySelectorAll('.appr-card');
+    if (sections.length === 0 && apprCards.length === 0) {
+      var content = document.querySelector('.task-hub-content');
+      if (content) {
+        content.innerHTML = '<div class="task-hub-done"><div class="task-hub-done-icon">&#9989;</div>'
+          + '<div class="task-hub-done-text">All done.</div>'
+          + '<div class="task-hub-done-sub">Nothing pending. Well done.</div></div>';
+      }
+    }
+  }
+
+  // Done buttons (task cards)
+  document.querySelectorAll('.btn-done').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var blockId = this.dataset.blockId;
+      var card = this.closest('.task-card');
+      var sectionEl = card ? card.closest('.task-section') : null;
+      btn.disabled = true;
+      fetch('/admin/api/done-block', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({block_id: blockId})
+      }).then(function(r){
+        if (r.ok) {
+          card.classList.add('exiting');
+          setTimeout(function(){
+            card.remove();
+            if (sectionEl) updateSectionProgress(sectionEl);
+          }, 260);
+        } else { btn.disabled = false; }
+      }).catch(function(){ btn.disabled = false; });
+    });
+  });
+
+  // Copy buttons
+  document.querySelectorAll('.btn-copy').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var text = this.dataset.text;
+      var self = this;
+      navigator.clipboard.writeText(text).then(function(){
+        self.textContent = 'Copied \u2714';
+        self.classList.add('copied');
+        setTimeout(function(){
+          self.textContent = 'Copy';
+          self.classList.remove('copied');
+        }, 1500);
+      }).catch(function(){});
+    });
+  });
+
+  // Approve / Archive (Approve Posts section)
+  document.querySelectorAll('.btn-approve,.btn-archive').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = this.dataset.id;
+      var isApprove = this.classList.contains('btn-approve');
+      var newStatus = isApprove ? 'Approved' : 'Archived';
+      var card = document.getElementById('th-appr-' + id);
+      var errEl = card.querySelector('.appr-error');
+      var allBtns = card.querySelectorAll('.btn-approve,.btn-archive');
+      allBtns.forEach(function(b){ b.disabled = true; });
+      fetch('/admin/api/notion/patch', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({page_id: id, status: newStatus})
+      }).then(function(r){
+        if (r.ok) {
+          card.style.transition = 'opacity 0.4s';
+          card.style.opacity = '0.4';
+          var toast = document.createElement('div');
+          toast.className = 'toast-success';
+          toast.textContent = newStatus + ' \u2714';
+          card.appendChild(toast);
+          setTimeout(function(){
+            card.remove();
+            checkAllComplete();
+          }, 700);
+        } else {
+          errEl.textContent = 'Error updating Notion \u2014 try again';
+          errEl.style.display = 'block';
+          allBtns.forEach(function(b){ b.disabled = false; });
+        }
+      }).catch(function(){
+        errEl.textContent = 'Network error \u2014 try again';
+        errEl.style.display = 'block';
+        allBtns.forEach(function(b){ b.disabled = false; });
+      });
+    });
+  });
+})();
+</script>"""
+
+    topbar = f"""<nav class="topbar">
+  <div class="topbar-left"><div class="topbar-pill">Task Hub</div></div>
+  <div class="topbar-right"><div class="topbar-meta">Updated <em>{updated} SAST</em></div></div>
 </nav>"""
 
-    users_icon_large = '<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+    return f"""{task_hub_css}
+{topbar}
+<div class="page">
+  {page_body}
+  <div class="footer">MzansiEdge Task Hub &middot; Notion-powered</div>
+</div>
+{task_hub_js}"""
+
+
+# -- System Health data builders ----------------------------------------------
+
+def _fetch_sentry_data() -> dict:
+    """Fetch Sentry issues. Cached 60s."""
+    cache_key = "sentry"
+    now = time.monotonic()
+    with _system_health_cache_lock:
+        cached = _system_health_cache.get(cache_key)
+        if cached and (now - cached[1]) < _SYSTEM_HEALTH_TTL:
+            return cached[0]
+
+    result: dict = {
+        "available": False, "error": None,
+        "total_issues": 0, "by_level": {},
+        "top_issues": [],
+    }
+
+    if not SENTRY_AUTH_TOKEN:
+        result["error"] = "SENTRY_AUTH_TOKEN not configured — set in .env to enable"
+        with _system_health_cache_lock:
+            _system_health_cache[cache_key] = (result, now)
+        return result
+
+    try:
+        url = (
+            f"{_SENTRY_API}/projects/{SENTRY_ORG}/{SENTRY_PROJECT}/issues/"
+            f"?query=is%3Aunresolved&sort=freq&limit=25"
+        )
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {SENTRY_AUTH_TOKEN}"}
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            issues = json.loads(resp.read().decode("utf-8"))
+            x_hits = resp.headers.get("X-Hits", "")
+        result["available"] = True
+        result["total_issues"] = int(x_hits) if (x_hits or "").isdigit() else len(issues)
+        by_level: dict = {}
+        for issue in issues:
+            lvl = issue.get("level", "error")
+            by_level[lvl] = by_level.get(lvl, 0) + 1
+        result["by_level"] = by_level
+        result["top_issues"] = [
+            {
+                "short_id": i.get("shortId", ""),
+                "title": (i.get("title") or "")[:80],
+                "level": i.get("level", "error"),
+                "count": i.get("count", "0"),
+                "last_seen": i.get("lastSeen", ""),
+            }
+            for i in issues[:5]
+        ]
+    except Exception as exc:
+        result["error"] = str(exc)[:120]
+
+    with _system_health_cache_lock:
+        _system_health_cache[cache_key] = (result, now)
+    return result
+
+
+def _read_server_resources() -> dict:
+    """Read CPU/RAM/disk from /proc. Cached 60s."""
+    cache_key = "server_resources"
+    now = time.monotonic()
+    with _system_health_cache_lock:
+        cached = _system_health_cache.get(cache_key)
+        if cached and (now - cached[1]) < _SYSTEM_HEALTH_TTL:
+            return cached[0]
+
+    result: dict = {
+        "cpu_1": None, "cpu_5": None, "cpu_15": None,
+        "mem_total_mb": None, "mem_used_mb": None, "mem_avail_mb": None, "mem_pct": None,
+        "swap_total_mb": None, "swap_used_mb": None, "swap_pct": None,
+        "disk_total": None, "disk_used": None, "disk_pct": None,
+    }
+
+    # CPU load from /proc/loadavg
+    try:
+        with open("/proc/loadavg") as f:
+            parts = f.read().split()
+        result["cpu_1"]  = float(parts[0])
+        result["cpu_5"]  = float(parts[1])
+        result["cpu_15"] = float(parts[2])
+    except Exception:
+        pass
+
+    # Memory from /proc/meminfo
+    try:
+        mem: dict = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, v = line.split(":", 1)
+                mem[k.strip()] = int(v.strip().split()[0])
+        total = mem.get("MemTotal", 0)
+        avail = mem.get("MemAvailable", 0)
+        used  = total - avail
+        result["mem_total_mb"] = total // 1024
+        result["mem_avail_mb"] = avail // 1024
+        result["mem_used_mb"]  = used  // 1024
+        result["mem_pct"]      = round(used / total * 100) if total > 0 else 0
+        swap_t = mem.get("SwapTotal", 0)
+        swap_f = mem.get("SwapFree", 0)
+        swap_u = swap_t - swap_f
+        result["swap_total_mb"] = swap_t // 1024
+        result["swap_used_mb"]  = swap_u // 1024
+        result["swap_pct"]      = round(swap_u / swap_t * 100) if swap_t > 0 else 0
+    except Exception:
+        pass
+
+    # Disk from df
+    try:
+        out = subprocess.check_output(["df", "-B1", "/"], timeout=3).decode()
+        lines = out.strip().split("\n")
+        if len(lines) >= 2:
+            parts = lines[1].split()
+            dt = int(parts[1]); du = int(parts[2])
+            result["disk_total"] = f"{dt // (1024**3):.0f}G"
+            result["disk_used"]  = f"{du // (1024**3):.1f}G"
+            result["disk_pct"]   = round(du / dt * 100) if dt > 0 else 0
+    except Exception:
+        pass
+
+    with _system_health_cache_lock:
+        _system_health_cache[cache_key] = (result, now)
+    return result
+
+
+def _read_process_monitor() -> dict:
+    """Read running process status and cron schedule. Cached 60s."""
+    cache_key = "processes"
+    now = time.monotonic()
+    with _system_health_cache_lock:
+        cached = _system_health_cache.get(cache_key)
+        if cached and (now - cached[1]) < _SYSTEM_HEALTH_TTL:
+            return cached[0]
+
+    def _proc_info(pattern: str) -> dict:
+        try:
+            out = subprocess.check_output(
+                ["pgrep", "-a", "-f", pattern], timeout=3
+            ).decode().strip()
+            if out:
+                pid = out.split()[0]
+                lstart = subprocess.check_output(
+                    ["ps", "-p", pid, "-o", "lstart="], timeout=3
+                ).decode().strip()
+                return {"running": True, "pid": pid, "started": lstart}
+        except Exception:
+            pass
+        return {"running": False, "pid": None, "started": ""}
+
+    bot_info  = _proc_info(r"\.venv/bin/python bot\.py")
+    dash_info = _proc_info("health_dashboard.py")
+
+    cron_jobs = []
+    try:
+        ctab = subprocess.check_output(["crontab", "-l"], timeout=3).decode()
+        for line in ctab.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 5)
+            if len(parts) < 6:
+                continue
+            cmd = parts[5]
+            for kw in ["runner.py", "settlement", "glicko", "the_odds_api", "validate_odds"]:
+                if kw in cmd:
+                    cron_jobs.append({
+                        "schedule": " ".join(parts[:5]),
+                        "cmd": re.sub(r"\s+", " ", cmd)[:65],
+                    })
+                    break
+        cron_jobs = cron_jobs[:8]
+    except Exception:
+        pass
+
+    result = {
+        "bot": bot_info, "dashboard": dash_info,
+        "cron_jobs": cron_jobs,
+    }
+    with _system_health_cache_lock:
+        _system_health_cache[cache_key] = (result, now)
+    return result
+
+
+def _build_api_health(conn) -> list:
+    """Read API health metrics from api_usage table in odds.db."""
+    apis = [
+        ("the_odds_api", "The Odds API",      "sharp_odds"),
+        ("espn",         "ESPN",              None),
+        ("api_football", "API-Football",      None),
+        ("api_sports_mma",   "API-Sports MMA",   None),
+        ("api_sports_rugby", "API-Sports Rugby", None),
+        ("sportmonks_cricket", "Sportmonks Cricket", None),
+    ]
+    rows = []
+
+    # The Odds API — infer from sharp_odds table
+    if conn and table_exists(conn, "sharp_odds"):
+        r = q_one(conn, "SELECT MAX(scraped_at) as last FROM sharp_odds WHERE scraped_at >= datetime('now','-24 hours')")
+        last = r["last"] if r else None
+        _, lbl = freshness(last) if last else ("s-black", "No data (24h)")
+        css = "s-green" if last else "s-black"
+        calls_row = q_one(conn, "SELECT COUNT(DISTINCT substr(scraped_at,1,16)) as calls FROM sharp_odds WHERE scraped_at >= datetime('now','-24 hours')")
+        calls_24h = calls_row["calls"] if calls_row else 0
+        rows.append({"api": "The Odds API", "last_call": lbl, "calls_24h": calls_24h, "errors_24h": 0, "css": css})
+    else:
+        rows.append({"api": "The Odds API", "last_call": "No data", "calls_24h": 0, "errors_24h": 0, "css": "s-black"})
+
+    if conn is None or not table_exists(conn, "api_usage"):
+        for _, label, _ in apis[1:]:
+            rows.append({"api": label, "last_call": "No data", "calls_24h": "—", "errors_24h": 0, "css": "s-black"})
+        return rows
+
+    for api_key, label, _ in apis[1:]:
+        r = q_one(conn,
+            "SELECT MAX(called_at) as last, COUNT(*) as total, "
+            "SUM(CASE WHEN status_code >= 400 OR status_code IS NULL THEN 1 ELSE 0 END) as errs "
+            "FROM api_usage WHERE api_name=? AND called_at >= datetime('now','-24 hours')",
+            (api_key,)
+        )
+        if r and r["last"]:
+            errs = r["errs"] or 0
+            total = r["total"] or 0
+            css = "s-green" if errs == 0 else ("s-amber" if errs <= 3 else "s-red")
+            _, lbl = freshness(r["last"])
+            rows.append({"api": label, "last_call": lbl, "calls_24h": total, "errors_24h": errs, "css": css})
+        else:
+            # ESPN: fall back to espn_stats_cache when api_usage has no recent entries
+            if api_key == "espn" and table_exists(conn, "espn_stats_cache"):
+                ec = q_one(conn, "SELECT MAX(fetched_at) as last FROM espn_stats_cache")
+                if ec and ec["last"]:
+                    _, lbl = freshness(ec["last"])
+                    rows.append({"api": label, "last_call": lbl, "calls_24h": "cache", "errors_24h": 0, "css": "s-green"})
+                else:
+                    rows.append({"api": label, "last_call": "No data (24h)", "calls_24h": 0, "errors_24h": 0, "css": "s-black"})
+            else:
+                rows.append({"api": label, "last_call": "No data (24h)", "calls_24h": 0, "errors_24h": 0, "css": "s-black"})
+
+    return rows
+
+
+def _pbar(pct, label: str) -> str:
+    """Render a compact progress bar."""
+    pct = pct or 0
+    if pct < 70:
+        colour = "var(--green)"
+    elif pct < 90:
+        colour = "var(--amber)"
+    else:
+        colour = "var(--red)"
+    return (
+        f'<div style="display:flex;align-items:center;gap:10px">'
+        f'<div style="flex:1;background:#1f1f1f;border-radius:4px;height:8px;overflow:hidden">'
+        f'<div style="width:{min(pct,100)}%;height:100%;background:{colour};border-radius:4px"></div></div>'
+        f'<span style="font-family:var(--font-m);font-size:12px;color:var(--text);min-width:60px">{label}</span>'
+        f'</div>'
+    )
+
+
+# -- System Health renderer ---------------------------------------------------
+
+def render_system_health_content(conn) -> str:
+    """Render the System Health monitoring view."""
+    sentry   = _fetch_sentry_data()
+    res      = _read_server_resources()
+    procs    = _read_process_monitor()
+    api_rows = _build_api_health(conn)
+    updated  = datetime.now(_SAST).strftime("%Y-%m-%d %H:%M:%S")
+
+    topbar = f"""<nav class="topbar">
+  <div class="topbar-left"><div class="topbar-pill">System Health</div></div>
+  <div class="topbar-right">
+    <div class="topbar-meta">Updated <em>{updated} SAST</em> &middot; refreshes in <em id="sh-countdown">1:00</em></div>
+  </div>
+</nav>"""
+
+    # ── Panel 1: Sentry Issues ───────────────────────────────────────────────
+    if not sentry["available"]:
+        err_msg = sentry.get("error") or "Sentry unavailable"
+        if "not configured" in err_msg:
+            sentry_body = (
+                f'<div style="padding:24px;font-family:var(--font-m);font-size:13px;color:var(--muted)">'
+                f'<div style="color:var(--amber);font-weight:700;margin-bottom:10px">&#9888; Sentry not configured</div>'
+                f'<div>Add <code style="background:#1f1f1f;padding:2px 6px;border-radius:4px">SENTRY_AUTH_TOKEN=&lt;token&gt;</code> to <code style="background:#1f1f1f;padding:2px 6px;border-radius:4px">~/bot/.env</code> and restart the dashboard.</div>'
+                f'</div>'
+            )
+        else:
+            sentry_body = f'<div style="padding:24px;font-family:var(--font-m);font-size:12px;color:var(--red)">Sentry unavailable: {err_msg}</div>'
+    else:
+        level_html = ""
+        level_colours = {"error": "var(--red)", "warning": "var(--amber)", "info": "var(--green)", "fatal": "#ef4444"}
+        for lvl, cnt in sorted(sentry["by_level"].items(), key=lambda x: -x[1]):
+            col = level_colours.get(lvl, "var(--muted)")
+            level_html += (
+                f'<span style="background:{col}22;color:{col};border:1px solid {col}44;'
+                f'border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;font-family:var(--font-d);margin-right:6px">'
+                f'{lvl.upper()} {cnt}</span>'
+            )
+
+        issue_rows = ""
+        for i in sentry["top_issues"]:
+            last = _relative_time(i.get("last_seen"))
+            lvl = i.get("level", "error")
+            col = level_colours.get(lvl, "var(--muted)")
+            dot_html = f'<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:{col};margin-right:6px;flex-shrink:0"></span>'
+            issue_rows += (
+                f'<tr>'
+                f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{i.get("short_id","")}</td>'
+                f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px;max-width:320px;overflow:hidden;text-overflow:ellipsis">'
+                f'{dot_html}{i.get("title","")}</td>'
+                f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px;text-align:right">{i.get("count","—")}</td>'
+                f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{last}</td>'
+                f'</tr>'
+            )
+
+        sentry_body = (
+            f'<div style="padding:12px 16px 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+            f'<span style="font-family:var(--font-d);font-size:22px;font-weight:700;color:var(--text)">{sentry["total_issues"]}</span>'
+            f'<span style="font-family:var(--font-m);font-size:12px;color:var(--muted)">open issues</span>'
+            f'<span style="flex:1"></span>{level_html}</div>'
+            f'<div class="tbl-wrap"><table class="tbl">'
+            f'<thead><tr><th>ID</th><th>Error</th><th>Events</th><th>Last Seen</th></tr></thead>'
+            f'<tbody>{issue_rows}</tbody></table></div>'
+        )
+
+    sentry_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Sentry Issues</span>'
+        f'<span class="panel-sub">mzansi-edge project &middot; unresolved &middot; top 5 by frequency</span>'
+        f'</div>{sentry_body}</div>'
+    )
+
+    # ── Panel 2: Server Resources ────────────────────────────────────────────
+    def _na(v, fmt="{}", suffix=""):
+        return "N/A" if v is None else (fmt.format(v) + suffix)
+
+    cpu_1  = res["cpu_1"];  cpu_5 = res["cpu_5"];  cpu_15 = res["cpu_15"]
+    mem_pct  = res["mem_pct"] or 0
+    swap_pct = res["swap_pct"] or 0
+    disk_pct = res["disk_pct"] or 0
+
+    # CPU colour based on 1-min load (assuming ~2 cores on DO)
+    cpu_pct_approx = round((cpu_1 or 0) / 2 * 100) if cpu_1 is not None else None
+    cpu_bar = _pbar(cpu_pct_approx, _na(cpu_1, "{:.2f}")) if cpu_1 is not None else '<span style="color:var(--muted);font-size:12px">N/A</span>'
+    mem_bar  = _pbar(mem_pct,  f'{res["mem_used_mb"] or 0:,} MB / {res["mem_total_mb"] or 0:,} MB ({mem_pct}%)')
+    swap_bar = _pbar(swap_pct, f'{res["swap_used_mb"] or 0:,} MB ({swap_pct}%)')
+    disk_bar = _pbar(disk_pct, f'{res["disk_used"] or "—"} / {res["disk_total"] or "—"} ({disk_pct}%)')
+
+    res_rows = (
+        f'<div style="padding:16px;display:grid;gap:14px">'
+        f'<div><div style="font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">CPU Load (1m / 5m / 15m)</div>'
+        f'{cpu_bar}'
+        f'<div style="font-family:var(--font-m);font-size:11px;color:var(--muted);margin-top:4px">'
+        f'{_na(cpu_1,"{:.2f}")} / {_na(cpu_5,"{:.2f}")} / {_na(cpu_15,"{:.2f}")}</div></div>'
+        f'<div><div style="font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">RAM Usage</div>'
+        f'{mem_bar}</div>'
+        f'<div><div style="font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Swap Usage</div>'
+        f'{swap_bar}</div>'
+        f'<div><div style="font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Disk Usage (/)</div>'
+        f'{disk_bar}</div>'
+        f'</div>'
+    )
+
+    resources_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Server Resources</span>'
+        f'<span class="panel-sub">/proc/loadavg &middot; /proc/meminfo &middot; df /</span>'
+        f'</div>{res_rows}</div>'
+    )
+
+    # ── Panel 3: Process Monitor ─────────────────────────────────────────────
+    def _proc_row(label: str, info: dict) -> str:
+        if info["running"]:
+            dot = f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 4px var(--green);margin-right:8px"></span>'
+            status = f'{dot}<span style="color:var(--green);font-weight:700">Running</span>'
+            detail = f'PID {info["pid"]} &middot; started {info["started"]}'
+        else:
+            dot = f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--red);margin-right:8px"></span>'
+            status = f'{dot}<span style="color:var(--red);font-weight:700">Not running</span>'
+            detail = "—"
+        return (
+            f'<tr>'
+            f'<td style="padding:8px 12px;font-family:var(--font-d);font-size:12px;font-weight:600">{label}</td>'
+            f'<td style="padding:8px 12px;font-family:var(--font-m);font-size:12px">{status}</td>'
+            f'<td style="padding:8px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{detail}</td>'
+            f'</tr>'
+        )
+
+    proc_rows = _proc_row("bot.py", procs["bot"]) + _proc_row("health_dashboard.py", procs["dashboard"])
+
+    cron_html = ""
+    if procs["cron_jobs"]:
+        cron_rows = ""
+        for job in procs["cron_jobs"]:
+            cron_rows += (
+                f'<tr>'
+                f'<td style="padding:5px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{job["schedule"]}</td>'
+                f'<td style="padding:5px 12px;font-family:var(--font-m);font-size:11px">{job["cmd"]}</td>'
+                f'</tr>'
+            )
+        cron_html = (
+            f'<div style="padding:0 12px 4px;font-family:var(--font-d);font-size:10px;font-weight:700;'
+            f'letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:12px">Cron Jobs</div>'
+            f'<div class="tbl-wrap"><table class="tbl">'
+            f'<thead><tr><th>Schedule</th><th>Command</th></tr></thead>'
+            f'<tbody>{cron_rows}</tbody></table></div>'
+        )
+
+    processes_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Process Monitor</span>'
+        f'<span class="panel-sub">pgrep &middot; crontab -l</span>'
+        f'</div>'
+        f'<div class="tbl-wrap"><table class="tbl">'
+        f'<thead><tr><th>Process</th><th>Status</th><th>Detail</th></tr></thead>'
+        f'<tbody>{proc_rows}</tbody></table></div>'
+        f'{cron_html}</div>'
+    )
+
+    # ── Panel 4: API Health ───────────────────────────────────────────────────
+    api_table_rows = ""
+    for row in api_rows:
+        errs = row["errors_24h"]
+        err_css = "s-red" if errs > 3 else ("s-amber" if errs > 0 else "s-black")
+        status_dot = dot(row["css"])
+        api_table_rows += (
+            f'<tr>'
+            f'<td style="padding:6px 12px;font-family:var(--font-d);font-size:12px;font-weight:600">{row["api"]}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px">{status_dot}{row["last_call"]}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px">{row["calls_24h"]}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px" class="{err_css if errs else ""}">{errs if errs else "—"}</td>'
+            f'</tr>'
+        )
+
+    api_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">API Health</span>'
+        f'<span class="panel-sub">api_usage table &middot; last 24h</span>'
+        f'</div>'
+        f'<div class="tbl-wrap"><table class="tbl">'
+        f'<thead><tr><th>API</th><th>Last Call</th><th>Calls (24h)</th><th>Errors (24h)</th></tr></thead>'
+        f'<tbody>{api_table_rows}</tbody></table></div></div>'
+    )
 
     return f"""{topbar}
-<div class="coming-soon">
-  {users_icon_large}
-  <h2>Coming Soon</h2>
-  <p>Customer analytics and user management will appear here.</p>
-</div>"""
+<div class="page">
+  <div class="grid-2">
+    {sentry_panel}
+    {resources_panel}
+    {processes_panel}
+    {api_panel}
+  </div>
+  <div class="footer">Auto-refreshes in <span id="sh-countdown2">1:00</span> &middot; MzansiEdge Ops &middot; Read-only</div>
+</div>
+<script>
+(function(){{
+  var secs = 60;
+  function tick() {{
+    secs--;
+    if (secs <= 0) {{ location.reload(); return; }}
+    var txt = secs + 's';
+    var el1 = document.getElementById('sh-countdown');
+    var el2 = document.getElementById('sh-countdown2');
+    if (el1) el1.textContent = txt;
+    if (el2) el2.textContent = txt;
+  }}
+  setInterval(tick, 1000);
+}})();
+</script>"""
 
 
 # -- Shell renderer -----------------------------------------------------------
@@ -1816,22 +2838,34 @@ def admin_automation():
     return Response(html, mimetype="text/html")
 
 
-@app.route("/admin/customers")
+@app.route("/admin/system")
 @require_auth
-def admin_customers():
+def admin_system():
     now = time.monotonic()
     with _page_cache_lock:
-        cached = _page_cache.get("customers_full")
+        cached = _page_cache.get("system_full")
         if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
             return Response(cached[0], mimetype="text/html")
 
-    content = render_customers_content()
-    html = render_shell("customers", content)
+    conn = db_connect(SCRAPERS_DB)
+    try:
+        content = render_system_health_content(conn)
+    finally:
+        if conn:
+            conn.close()
+
+    html = render_shell("system_health", content)
 
     with _page_cache_lock:
-        _page_cache["customers_full"] = (html, now)
+        _page_cache["system_full"] = (html, now)
 
     return Response(html, mimetype="text/html")
+
+
+@app.route("/admin/customers")
+@require_auth
+def admin_customers_redirect():
+    return redirect("/admin/system", code=302)
 
 
 # AJAX content-only routes (for sidebar navigation without full page reload)
@@ -1876,11 +2910,166 @@ def api_automation():
     return Response(content, mimetype="text/html")
 
 
-@app.route("/admin/api/customers")
+@app.route("/admin/task-hub")
 @require_auth
-def api_customers():
-    content = render_customers_content()
+def admin_task_hub():
+    content = render_task_hub_content()
+    html = render_shell("task_hub", content)
+    return Response(html, mimetype="text/html")
+
+
+@app.route("/admin/api/task_hub")
+@require_auth
+def api_task_hub():
+    content = render_task_hub_content()
     return Response(content, mimetype="text/html")
+
+
+@app.route("/admin/api/system_health")
+@require_auth
+def api_system_health():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("system_content")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+
+    conn = db_connect(SCRAPERS_DB)
+    try:
+        content = render_system_health_content(conn)
+    finally:
+        if conn:
+            conn.close()
+
+    with _page_cache_lock:
+        _page_cache["system_content"] = (content, now)
+
+    return Response(content, mimetype="text/html")
+
+
+@app.route("/admin/api/notion/patch", methods=["POST"])
+@require_auth
+def api_notion_patch():
+    """PATCH a Notion page status (Approved or Archived)."""
+    try:
+        body = request.get_json(force=True)
+        page_id = (body or {}).get("page_id", "").strip()
+        new_status = (body or {}).get("status", "").strip()
+    except Exception:
+        return Response('{"error":"bad request"}', status=400, mimetype="application/json")
+
+    if not page_id or new_status not in ("Approved", "Archived"):
+        return Response('{"error":"invalid params"}', status=400, mimetype="application/json")
+
+    patch_body = {"properties": {"Status": {"select": {"name": new_status}}}}
+    result = _notion_request(f"pages/{page_id}", body=patch_body, method="PATCH")
+    if result and result.get("object") == "page":
+        # Invalidate notion cache so next load reflects the change
+        with _notion_cache_lock:
+            _notion_cache.pop("marketing_queue", None)
+        with _page_cache_lock:
+            _page_cache.pop("automation_full", None)
+            _page_cache.pop("automation_content", None)
+        return Response('{"ok":true}', mimetype="application/json")
+    else:
+        return Response('{"error":"notion update failed"}', status=502, mimetype="application/json")
+
+
+@app.route("/admin/api/dismiss-item", methods=["POST"])
+@require_auth
+def api_dismiss_item():
+    """Dismiss a Failed/Blocked item — PATCH Notion status to Archived."""
+    try:
+        body = request.get_json(force=True)
+        page_id = (body or {}).get("page_id", "").strip()
+    except Exception:
+        return Response('{"error":"bad request"}', status=400, mimetype="application/json")
+
+    if not page_id:
+        return Response('{"error":"missing page_id"}', status=400, mimetype="application/json")
+
+    patch_body = {"properties": {"Status": {"select": {"name": "Archived"}}}}
+    result = _notion_request(f"pages/{page_id}", body=patch_body, method="PATCH")
+    if result and result.get("object") == "page":
+        with _notion_cache_lock:
+            _notion_cache.pop("marketing_queue", None)
+        with _page_cache_lock:
+            _page_cache.pop("automation_full", None)
+            _page_cache.pop("automation_content", None)
+        return Response('{"ok":true}', mimetype="application/json")
+    else:
+        return Response('{"error":"notion update failed"}', status=502, mimetype="application/json")
+
+
+@app.route("/admin/api/done-block", methods=["POST"])
+@require_auth
+def api_done_block():
+    """Mark a Notion to_do block as checked (done)."""
+    try:
+        body = request.get_json(force=True)
+        block_id = (body or {}).get("block_id", "").strip()
+    except Exception:
+        return Response('{"error":"bad request"}', status=400, mimetype="application/json")
+
+    if not block_id:
+        return Response('{"error":"missing block_id"}', status=400, mimetype="application/json")
+
+    patch_body = {"to_do": {"checked": True}}
+    result = _notion_request(f"blocks/{block_id}", body=patch_body, method="PATCH")
+    if result and result.get("object") == "block":
+        with _notion_cache_lock:
+            _notion_cache.pop("task_hub_blocks", None)
+        return Response('{"ok":true}', mimetype="application/json")
+    else:
+        return Response('{"error":"notion update failed"}', status=502, mimetype="application/json")
+
+
+@app.route("/admin/api/notion/page/<page_id>")
+@require_auth
+def api_notion_page(page_id: str):
+    """Return an HTML snippet for a single Notion page (schedule expand panel)."""
+    # Find item in cache
+    items = []
+    with _notion_cache_lock:
+        cached = _notion_cache.get("marketing_queue")
+        if cached:
+            items = cached[0]
+
+    item = next((i for i in items if i.get("id", "").replace("-", "") == page_id.replace("-", "")), None)
+    if not item:
+        return Response('<div style="color:var(--muted);font-family:var(--font-m);font-size:12px">Post not found in cache.</div>', mimetype="text/html")
+
+    ch_key = _normalise_channel_key(item.get("channel") or "")
+    ch = _CHANNEL_MAP.get(ch_key)
+    ch_html = (f'<span class="ch-chip" style="background:{ch["color"]}22;color:{ch["color"]};border:1px solid {ch["color"]}33">'
+               f'{ch["label"]}</span>') if ch else ""
+
+    sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
+    copy_text = item.get("copy") or ""
+    asset_link = item.get("asset_link") or ""
+    campaign = item.get("campaign_theme") or ""
+
+    if asset_link:
+        ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0] if "." in asset_link else ""
+        if ext in ("mp4", "mov", "webm"):
+            media_html = f'<video src="{asset_link}" controls style="max-height:300px;border-radius:4px;display:block;margin-top:10px;width:auto;"></video>'
+        elif ext in ("jpg", "jpeg", "png", "gif", "webp"):
+            media_html = f'<img src="{asset_link}" style="max-height:300px;border-radius:4px;object-fit:cover;display:block;margin-top:10px;">'
+        else:
+            media_html = ""
+    else:
+        media_html = ""
+
+    html = f"""<div style="font-family:var(--font-m)">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+    {ch_html}
+    <span style="font-size:11px;color:var(--muted)">&#128337; {sched_str}</span>
+    {f'<span style="color:var(--gold);font-size:11px">{campaign}</span>' if campaign else ""}
+  </div>
+  <div style="font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word">{copy_text}</div>
+  {media_html}
+</div>"""
+    return Response(html, mimetype="text/html")
 
 
 # Redirects

@@ -463,7 +463,7 @@ class CricketFetcher(BaseFetcher):
         venue = ""
         format_str = _infer_format(league)
 
-        # ── DB path: query sportmonks_fixtures + sportmonks_teams ─────────────
+        # ── DB path: query sportmonks_fixtures + sportmonks_teams + sportmonks_venues ──
         db_fixture = _fetch_fixture_from_db(home_team, away_team, league)
         if db_fixture:
             home_data["name"] = db_fixture["home_name"]
@@ -472,10 +472,19 @@ class CricketFetcher(BaseFetcher):
             display_name = db_fixture.get("competition") or display_name
             confidence["fixture"] = 1.0
             sources["fixture"] = "sportmonks_db"
+
+            # Venue from JOIN — set here so DB-only path includes venue
+            _vname = db_fixture.get("venue_name") or ""
+            _vcity = db_fixture.get("venue_city") or ""
+            if _vname:
+                venue = f"{_vname}, {_vcity}" if _vcity else _vname
+                confidence["venue"] = 1.0
+                sources["venue"] = "sportmonks_venues_db"
+
             log.info(
-                "sportmonks_db hit for %s vs %s (%s): home=%s away=%s",
+                "sportmonks_db hit for %s vs %s (%s): home=%s away=%s venue=%s",
                 home_team, away_team, league,
-                home_data["name"], away_data["name"],
+                home_data["name"], away_data["name"], venue or "(none)",
             )
 
             # ── Standings from DB (RUNTIME-R2: asyncio.to_thread + 3s timeout) ──
@@ -508,6 +517,27 @@ class CricketFetcher(BaseFetcher):
                 log.warning("_fetch_standings_from_db timed out (3s)")
             except Exception as _st_exc:
                 log.warning("standings DB lookup failed: %s", _st_exc)
+
+            # ── Venue fallback: async lookup when JOIN returned no name ──────
+            _db_venue_id = db_fixture.get("venue_id")
+            if not venue and _db_venue_id:
+                try:
+                    _venue_result = await asyncio.wait_for(
+                        asyncio.to_thread(_fetch_venue_from_db, _db_venue_id),
+                        timeout=3.0,
+                    )
+                    if _venue_result:
+                        _vn = _venue_result.get("name") or ""
+                        _vc = _venue_result.get("city") or ""
+                        if _vn:
+                            venue = f"{_vn}, {_vc}" if _vc else _vn
+                            confidence["venue"] = 0.9
+                            sources["venue"] = "sportmonks_venues_db_async"
+                            log.info("venue async fallback hit: venue_id=%d → %s", _db_venue_id, venue)
+                except asyncio.TimeoutError:
+                    log.warning("_fetch_venue_from_db timed out (3s) for venue_id=%d", _db_venue_id)
+                except Exception as _ve_exc:
+                    log.warning("venue DB lookup failed for venue_id=%d: %s", _db_venue_id, _ve_exc)
 
         if not token and db_fixture is None:
             log.warning("No SPORTMONKS_CRICKET_TOKEN and no DB fixture — returning empty context")
@@ -809,10 +839,13 @@ def _fetch_fixture_from_db(
             """
             SELECT f.*,
                    COALESCE(t1.name, f.home_team) AS home_resolved,
-                   COALESCE(t2.name, f.away_team) AS away_resolved
+                   COALESCE(t2.name, f.away_team) AS away_resolved,
+                   v.name AS venue_name,
+                   v.city AS venue_city
             FROM sportmonks_fixtures f
             LEFT JOIN sportmonks_teams t1 ON f.home_team_id = t1.team_id
             LEFT JOIN sportmonks_teams t2 ON f.away_team_id = t2.team_id
+            LEFT JOIN sportmonks_venues v ON f.venue_id = v.venue_id
             WHERE f.match_date >= datetime('now')
             AND f.status NOT IN ('Cancelled', 'Postponed', 'Finished')
             AND (
@@ -836,10 +869,13 @@ def _fetch_fixture_from_db(
                     """
                     SELECT f.*,
                            COALESCE(t1.name, f.home_team) AS home_resolved,
-                           COALESCE(t2.name, f.away_team) AS away_resolved
+                           COALESCE(t2.name, f.away_team) AS away_resolved,
+                           v.name AS venue_name,
+                           v.city AS venue_city
                     FROM sportmonks_fixtures f
                     LEFT JOIN sportmonks_teams t1 ON f.home_team_id = t1.team_id
                     LEFT JOIN sportmonks_teams t2 ON f.away_team_id = t2.team_id
+                    LEFT JOIN sportmonks_venues v ON f.venue_id = v.venue_id
                     WHERE f.match_date >= datetime('now')
                     AND f.status NOT IN ('Cancelled', 'Postponed', 'Finished')
                     AND UPPER(f.league_name) = UPPER(?)
@@ -862,6 +898,9 @@ def _fetch_fixture_from_db(
             "match_date": r.get("match_date") or "",
             "home_team_id": r.get("home_team_id"),
             "away_team_id": r.get("away_team_id"),
+            "venue_id": r.get("venue_id"),
+            "venue_name": r.get("venue_name") or "",
+            "venue_city": r.get("venue_city") or "",
         }
     except Exception as exc:
         log.warning("_fetch_fixture_from_db failed: %s", exc)
@@ -950,6 +989,53 @@ def _fetch_standings_from_db(
                 pass
 
     return result
+
+
+def _fetch_venue_from_db(
+    venue_id: int,
+    scrapers_db: str | None = None,
+) -> dict[str, Any] | None:
+    """Query sportmonks_venues for a venue_id.
+
+    Uses connect_odds_db_readonly() per W81-DBLOCK.
+    Call via asyncio.to_thread() + 3s timeout (RUNTIME-R2) from async context.
+
+    Returns:
+        {"name": str, "city": str|None} or None if not found.
+    """
+    import sqlite3 as _sqlite3
+    import sys as _sys
+
+    _parent = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _parent not in _sys.path:
+        _sys.path.insert(0, _parent)
+
+    try:
+        from scrapers.db_connect import connect_odds_db_readonly as _connect_ro
+    except ImportError:
+        log.warning("scrapers.db_connect not available — skipping venue lookup")
+        return None
+
+    conn = None
+    try:
+        conn = _connect_ro(scrapers_db) if scrapers_db else _connect_ro()
+        conn.row_factory = _sqlite3.Row
+        row = conn.execute(
+            "SELECT name, city FROM sportmonks_venues WHERE venue_id = ?",
+            (venue_id,),
+        ).fetchone()
+        if row:
+            return {"name": row["name"], "city": row["city"]}
+        return None
+    except Exception as exc:
+        log.warning("_fetch_venue_from_db failed for venue_id=%d: %s", venue_id, exc)
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _infer_format(league: str) -> str:

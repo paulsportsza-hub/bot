@@ -222,8 +222,9 @@ def _query_mma_fixture(home_team: str, away_team: str) -> dict[str, Any] | None:
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
-                """SELECT fighter1_name, fighter2_name, event_slug,
-                          fight_date, weight_class
+                """SELECT fighter1_name, fighter1_api_id,
+                          fighter2_name, fighter2_api_id,
+                          event_slug, fight_date, weight_class
                    FROM mma_fixtures
                    WHERE fight_date >= date('now')
                    AND status NOT IN ('Cancelled', 'Postponed')
@@ -242,7 +243,9 @@ def _query_mma_fixture(home_team: str, away_team: str) -> dict[str, Any] | None:
         if _fighter_names_match(f1, home_team) and _fighter_names_match(f2, away_team):
             return {
                 "fighter1_name": f1,
+                "fighter1_api_id": row["fighter1_api_id"],
                 "fighter2_name": f2,
+                "fighter2_api_id": row["fighter2_api_id"],
                 "competition": row["event_slug"] or "MMA",
                 "fight_date": row["fight_date"],
                 "weight_class": row["weight_class"] or "",
@@ -251,12 +254,51 @@ def _query_mma_fixture(home_team: str, away_team: str) -> dict[str, Any] | None:
         if _fighter_names_match(f2, home_team) and _fighter_names_match(f1, away_team):
             return {
                 "fighter1_name": f2,
+                "fighter1_api_id": row["fighter2_api_id"],
                 "fighter2_name": f1,
+                "fighter2_api_id": row["fighter1_api_id"],
                 "competition": row["event_slug"] or "MMA",
                 "fight_date": row["fight_date"],
                 "weight_class": row["weight_class"] or "",
             }
     return None
+
+
+def _query_mma_fighters(fighter_api_id: int, db_path: str) -> dict[str, Any] | None:
+    """Look up a fighter's record data from the mma_fighters table.
+
+    Synchronous — must be called via asyncio.to_thread() in async contexts (RUNTIME-R2).
+    Uses connect_odds_db_readonly (W81-DBLOCK). Returns None on no match or error.
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db_readonly
+        conn = connect_odds_db_readonly(db_path, timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                """SELECT api_id, name, record_wins, record_losses, record_draws,
+                          reach, stance, weight_class, ranking
+                   FROM mma_fighters
+                   WHERE api_id = ?""",
+                (fighter_api_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.debug("mma_fighters DB lookup error for id %d: %s", fighter_api_id, exc)
+        return None
+
+    if not row:
+        return None
+    return dict(row)
+
+
+def _format_record_str(wins: Any, losses: Any, draws: Any) -> str:
+    """Format a fighter record as 'W-L-D' string (e.g. '25-4-0')."""
+    w = int(wins or 0)
+    l_ = int(losses or 0)
+    d = int(draws or 0)
+    return f"{w}-{l_}-{d}"
 
 
 # ── Main Fetcher ───────────────────────────────────────────────────────────────
@@ -313,6 +355,52 @@ class MMAFetcher(BaseFetcher):
             fighter2_data = {"name": away_team}
             competition = "MMA"
             weight_class = ""
+
+        # ── Step 1b: mma_fighters DB lookup (W81-DBLOCK + RUNTIME-R2) ───────────
+        # Read cached fighter records (wins/losses/draws/ranking) written by the
+        # api_sports_mma.py cron scraper.  Zero live API calls here.
+        if db_fixture:
+            f1_api_id = db_fixture.get("fighter1_api_id")
+            f2_api_id = db_fixture.get("fighter2_api_id")
+            for fighter_data, api_id in (
+                (fighter1_data, f1_api_id),
+                (fighter2_data, f2_api_id),
+            ):
+                if not api_id:
+                    continue
+                try:
+                    record_row = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            lambda _aid=api_id: _query_mma_fighters(_aid, _SCRAPERS_DB)
+                        ),
+                        timeout=3.0,
+                    )
+                except Exception as exc:
+                    log.debug("mma_fighters lookup failed for api_id %s: %s", api_id, exc)
+                    record_row = None
+
+                if record_row:
+                    fighter_data["form"] = _format_record_str(
+                        record_row.get("record_wins"),
+                        record_row.get("record_losses"),
+                        record_row.get("record_draws"),
+                    )
+                    fighter_data["position"] = record_row.get("ranking")
+                    if record_row.get("reach"):
+                        fighter_data["reach"] = record_row["reach"]
+                    if record_row.get("stance"):
+                        fighter_data["stance"] = record_row["stance"]
+                    # Propagate weight_class if not already set from fixtures
+                    if not weight_class and record_row.get("weight_class"):
+                        weight_class = record_row["weight_class"]
+                    confidence[f"fighter{1 if fighter_data is fighter1_data else 2}_record"] = 0.95
+                    sources[f"fighter{1 if fighter_data is fighter1_data else 2}_record"] = "mma_fighters_db"
+                    log.info(
+                        "MMA fighter record (DB): %s — %s, rank=%s",
+                        fighter_data["name"],
+                        fighter_data.get("form"),
+                        fighter_data.get("position"),
+                    )
 
         # ── Step 2: API enrichment (fighter records) ──────────────────────────
         all_fights: list[dict[str, Any]] = []
