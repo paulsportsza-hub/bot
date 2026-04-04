@@ -146,13 +146,86 @@ class CoverageMetrics:
     level: CoverageLevel
 
 
+def _has_nonzero_record(form_str: str | None) -> bool:
+    """Check if a fighter record string like '25-4-0' has non-zero total."""
+    if not form_str:
+        return False
+    try:
+        parts = form_str.strip().split("-")
+        if len(parts) >= 3:
+            return sum(int(p) for p in parts[:3]) > 0
+    except (ValueError, TypeError):
+        pass
+    return False
+
+
+async def _check_glicko_available(home_key: str, away_key: str) -> bool:
+    """Check if Glicko-2 ratings exist for both teams (rugby)."""
+    try:
+        from scrapers.elo.elo_helper import get_glicko2_rating
+        result = await asyncio.wait_for(
+            asyncio.to_thread(get_glicko2_rating, home_key, away_key, "rugby"),
+            timeout=3.0,
+        )
+        return result is not None
+    except Exception:
+        return False
+
+
 def compute_coverage_level(
     sport: str, league: str | None,
     key_facts: int, form_games: int,
     h2h_games: int, standings: bool,
     market_count: int,
+    *,
+    fighter_records: int = 0,
+    fighter_rankings: int = 0,
+    cricket_standings: bool = False,
+    glicko_available: bool = False,
 ) -> CoverageLevel:
-    """Deterministic coverage level. No LLM judgment."""
+    """Sport-aware coverage level. No LLM judgment."""
+
+    # ── Soccer (unchanged — ESPN works well) ──
+    if sport in ("soccer", "football"):
+        if key_facts == 0 and not standings and form_games == 0 and h2h_games == 0:
+            return "empty"
+        if key_facts < 3 or market_count < 2:
+            return "partial"
+        return "full"
+
+    # ── MMA / Boxing / Combat ──
+    if sport in ("mma", "boxing", "combat"):
+        if fighter_records >= 2:
+            return "full"
+        if fighter_records >= 1 and market_count >= 1:
+            return "partial"
+        if market_count >= 2:
+            return "partial"
+        return "empty"
+
+    # ── Cricket ──
+    if sport == "cricket":
+        cricket_facts = key_facts + (1 if cricket_standings else 0)
+        if cricket_standings and cricket_facts >= 2:
+            return "full"
+        if cricket_facts >= 1 or (glicko_available and market_count >= 2):
+            return "partial"
+        if key_facts == 0 and not cricket_standings and form_games == 0:
+            return "empty"
+        return "partial"
+
+    # ── Rugby ──
+    if sport == "rugby":
+        rugby_facts = key_facts + (1 if glicko_available else 0)
+        if rugby_facts >= 2 and (standings or glicko_available):
+            return "full"
+        if rugby_facts >= 1 or h2h_games >= 1:
+            return "partial"
+        if key_facts == 0 and not standings and form_games == 0 and h2h_games == 0 and not glicko_available:
+            return "empty"
+        return "partial"
+
+    # ── Default fallback (unknown sports — preserve original logic) ──
     if key_facts == 0 and not standings and form_games == 0 and h2h_games == 0:
         return "empty"
     if key_facts < 3 or market_count < 2:
@@ -1310,6 +1383,28 @@ async def build_evidence_pack(
                 if _team.get("top_scorers"):
                     _key_facts += 1
 
+    # ── Non-ESPN evidence counting (BUILD-COVERAGE-GATE) ──
+    _fighter_records = 0
+    _fighter_rankings = 0
+    _cricket_standings = False
+    _glicko_available = False
+
+    if sport in ("mma", "boxing", "combat") and pack.espn_context:
+        for _team in [pack.espn_context.home_team, pack.espn_context.away_team]:
+            if _team:
+                _form_str = _team.get("form", "")
+                if _form_str and _has_nonzero_record(_form_str):
+                    _fighter_records += 1
+                if _team.get("position"):
+                    _fighter_rankings += 1
+    elif sport == "cricket" and pack.espn_context:
+        for _team in [pack.espn_context.home_team, pack.espn_context.away_team]:
+            if _team and _team.get("position"):
+                _cricket_standings = True
+                break
+    elif sport == "rugby":
+        _glicko_available = await _check_glicko_available(home_key, away_key)
+
     _h2h_games = len(pack.h2h.matches) if pack.h2h and pack.h2h.matches else 0
     _injuries_cnt = pack.injuries.total_injury_count if pack.injuries else 0
     _market_count = pack.sa_odds.bookmaker_count if pack.sa_odds else 0
@@ -1324,6 +1419,10 @@ async def build_evidence_pack(
         key_facts=_key_facts, form_games=_form_games,
         h2h_games=_h2h_games, standings=_standings,
         market_count=_market_count,
+        fighter_records=_fighter_records,
+        fighter_rankings=_fighter_rankings,
+        cricket_standings=_cricket_standings,
+        glicko_available=_glicko_available,
     )
 
     pack.coverage_metrics = CoverageMetrics(

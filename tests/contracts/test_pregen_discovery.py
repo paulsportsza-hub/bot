@@ -530,7 +530,8 @@ class TestBuildFixtureOnlyEdge:
         assert edge["league"] == "IPL"
         assert edge["commence_time"] == "2026-04-06T14:00:00+00:00"
         assert edge["narrative_source_hint"] == "fixture_only"
-        assert edge["skip_sonnet_polish"] is True
+        # Cricket fixture-only: skip_sonnet_polish is False (enriched sport)
+        assert edge["skip_sonnet_polish"] is False
         assert edge["tier"] == "bronze"
 
     def test_zero_odds_and_ev(self):

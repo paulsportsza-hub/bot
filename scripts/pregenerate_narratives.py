@@ -348,8 +348,9 @@ async def _get_match_context(
     CLEAN-DATA-v2: Uses sport-specific fetchers as primary data source.
     Falls back to ESPN when fetcher unavailable or returns thin context.
     """
-    # ── Primary: Sport-specific fetcher (API-Football for soccer; SportMonks for cricket) ─────
-    if sport in ("soccer", "football", "cricket"):
+    # ── Primary: Sport-specific fetcher (API-Football for soccer; SportMonks for cricket;
+    #    API-Sports for MMA/Boxing/Rugby) ─────
+    if sport in ("soccer", "football", "cricket", "rugby", "mma", "boxing", "combat"):
         try:
             from fetchers import get_fetcher
             from fetchers.base_fetcher import ensure_schema
@@ -1196,7 +1197,7 @@ def _build_fixture_only_edge(target: dict) -> dict:
         "signals": {},
         "tier": "bronze",
         "sharp_source": target.get("source_table", "fixture"),
-        "skip_sonnet_polish": True,
+        "skip_sonnet_polish": target.get("sport", "soccer") not in ("mma", "boxing", "combat", "rugby", "cricket"),
         "narrative_source_hint": "fixture_only",
     }
 
@@ -1408,20 +1409,26 @@ async def _generate_one(
 
     # 5. W84-CONFIRM-1: W84 is the permanent default generation path.
     # W82 baseline is always computed first and remains the per-row fallback.
-    # VERDICT-FIX Fix 3: Skip W84 AI for partial context — AI hallucinates with thin packs.
-    _skip_w84 = (ctx or {}).get("_context_mode") == "PARTIAL" or bool(edge.get("skip_sonnet_polish"))
 
-    # --- Coverage gate: never polish empty evidence (COVERAGE-GATE-BUILD) ---
+    # --- Coverage gate: compute BEFORE skip decision (BUILD-COVERAGE-GATE) ---
     _coverage_level = "unknown"
     if evidence_pack is not None:
         _cm_gate = getattr(evidence_pack, "coverage_metrics", None)
         if _cm_gate is not None:
             _coverage_level = _cm_gate.level
-            if _cm_gate.level == "empty":
-                _skip_w84 = True
-                log.info(
-                    "[COVERAGE-GATE] Skipping Sonnet polish for %s: empty evidence", match_key
-                )
+
+    # VERDICT-FIX Fix 3 + BUILD-COVERAGE-GATE: PARTIAL context with non-empty
+    # coverage (e.g. MMA fighter records, cricket standings) should still allow W84.
+    _partial = (ctx or {}).get("_context_mode") == "PARTIAL"
+    _skip_w84_partial = _partial and (_coverage_level == "empty")
+    _skip_w84 = _skip_w84_partial or bool(edge.get("skip_sonnet_polish"))
+
+    # Empty evidence always blocks W84 regardless of other flags
+    if _coverage_level == "empty":
+        _skip_w84 = True
+        log.info(
+            "[COVERAGE-GATE] Skipping Sonnet polish for %s: empty evidence", match_key
+        )
 
     if narrative and spec is not None and evidence_pack is not None and not _skip_w84:
         try:

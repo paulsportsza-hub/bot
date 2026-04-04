@@ -69,21 +69,38 @@ class TestCoverageMetricsEmpty:
 class TestCoverageMetricsPartial:
     """Rugby fixture with odds + basic standings but no form → partial."""
 
-    def test_compute_coverage_level_partial_low_key_facts(self):
+    def test_compute_coverage_level_rugby_full_with_standings(self):
+        """Rugby: 2 key_facts + standings = 'full' (sport-specific threshold)."""
         from evidence_pack import compute_coverage_level
 
         level = compute_coverage_level(
             sport="rugby",
             league="six_nations",
-            key_facts=2,   # below threshold of 3
+            key_facts=2,   # rugby threshold: 2+ facts + standings = full
             form_games=0,
             h2h_games=2,
             standings=True,
             market_count=3,
         )
+        assert level == "full", f"Expected 'full', got '{level}'"
+
+    def test_compute_coverage_level_rugby_partial_no_standings(self):
+        """Rugby: 1 key_fact, no standings, no Glicko → partial."""
+        from evidence_pack import compute_coverage_level
+
+        level = compute_coverage_level(
+            sport="rugby",
+            league="six_nations",
+            key_facts=1,
+            form_games=0,
+            h2h_games=0,
+            standings=False,
+            market_count=3,
+        )
         assert level == "partial", f"Expected 'partial', got '{level}'"
 
-    def test_compute_coverage_level_partial_low_market_count(self):
+    def test_compute_coverage_level_rugby_full_despite_low_market_count(self):
+        """Rugby: rich evidence + standings = 'full' even with 1 bookmaker."""
         from evidence_pack import compute_coverage_level
 
         level = compute_coverage_level(
@@ -93,9 +110,9 @@ class TestCoverageMetricsPartial:
             form_games=3,
             h2h_games=2,
             standings=True,
-            market_count=1,  # below threshold of 2
+            market_count=1,
         )
-        assert level == "partial", f"Expected 'partial', got '{level}'"
+        assert level == "full", f"Expected 'full', got '{level}'"
 
 
 # ── Test 3: CoverageMetrics → level = "full" ──
