@@ -2105,10 +2105,17 @@ _append_h2h, _build_setup_position/form/matchup/h2h, _build_setup_section
 ## Wave W81-SCAFFOLD — Story Detection + Factual Scaffold (9 March 2026)
 
 ### Three-Stage Prose Engine: Stage 1 Complete
-- _decide_team_story(pos, pts, form, home_rec, away_rec, gpg, is_home) → 10 story types
+- _decide_team_story(pos, pts, form, home_rec, away_rec, gpg, is_home, sport="soccer") → story type
+  Soccer/rugby/cricket — 10 story types:
   (title_push, fortress, crisis, recovery, momentum, inconsistent, draw_merchants, setback, anonymous, neutral)
   Priority chain: title_push → fortress → crisis → recovery → momentum → inconsistent →
   draw_merchants → setback → anonymous → neutral
+  MMA (sport="mma") — ranking + record story types (BUILD-ENRICH-08, 2026-04-04):
+  Ranking: pos 1-3 → title_contender, 4-10 → gatekeeper, 11+ → prospect
+  Modifier: wins≥20 & losses≤5 → dominant, losses>wins → comeback
+  Combined: e.g. title_contender_dominant, gatekeeper_comeback
+  Record-only (no ranking): dominant/comeback/neutral from form string
+  No data (pos=None, form empty) → neutral (default preserved)
 - _scaffold_last_result(team) — module-level helper extracted from _build_setup_section_v2
 - _build_verified_scaffold(ctx, edge_data, sport) — full factual scaffold:
   SPORT/COMPETITION, HOME/AWAY story type + verified facts + H2H + EDGE + RISK FACTORS
