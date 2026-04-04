@@ -713,11 +713,11 @@ def build_narrative_spec(
         sport=sport,
         home_story_type=_decide_team_story(
             home_setup.get("position"), home_setup.get("points"), home_setup.get("form", ""),
-            home_rec, None, home_setup.get("goals_per_game"), is_home=True,
+            home_rec, None, home_setup.get("goals_per_game"), is_home=True, sport=sport,
         ),
         away_story_type=_decide_team_story(
             away_setup.get("position"), away_setup.get("points"), away_setup.get("form", ""),
-            None, away_rec, away_setup.get("goals_per_game"), is_home=False,
+            None, away_rec, away_setup.get("goals_per_game"), is_home=False, sport=sport,
         ),
         home_coach=home_setup.get("coach"),
         away_coach=away_setup.get("coach"),

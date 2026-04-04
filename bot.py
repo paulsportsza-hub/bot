@@ -14310,9 +14310,59 @@ def _decide_team_story(
     away_rec: tuple[int, int, int] | None,
     gpg: float | None,
     is_home: bool,
+    sport: str = "soccer",
 ) -> str:
     """Decide the narrative angle for this team based on data patterns.
-    Returns one of 10 story types."""
+    Returns one of 10 story types for soccer/rugby/cricket, or MMA-specific
+    story types (title_contender, gatekeeper, prospect, dominant, comeback,
+    and combined variants) for combat sports."""
+
+    # ── MMA branch ─────────────────────────────────────────────────────────
+    if sport == "mma":
+        # Parse fighter career record from "W-L-D" string (e.g. "25-4-0").
+        # Handles missing/malformed strings gracefully — falls back to None.
+        mma_wins: int | None = None
+        mma_losses: int | None = None
+        if form:
+            parts = form.split("-")
+            if len(parts) >= 2:
+                try:
+                    mma_wins = int(parts[0])
+                    mma_losses = int(parts[1])
+                except (ValueError, IndexError):
+                    pass
+
+        # Base tier from UFC ranking position.
+        # pos=None means unranked — no base tier (record drives classification).
+        base_tier: str | None
+        if pos is not None:
+            if pos <= 3:
+                base_tier = "title_contender"
+            elif pos <= 10:
+                base_tier = "gatekeeper"
+            else:
+                base_tier = "prospect"
+        else:
+            base_tier = None
+
+        # Modifier from career record wins/losses.
+        modifier: str | None = None
+        if mma_wins is not None and mma_losses is not None:
+            if mma_wins >= 20 and mma_losses <= 5:
+                modifier = "dominant"
+            elif mma_losses > mma_wins:
+                modifier = "comeback"
+
+        # Combine tier and modifier into final story type.
+        if base_tier is None and modifier is None:
+            return "neutral"
+        if base_tier is None:
+            return modifier  # type: ignore[return-value]
+        if modifier is None:
+            return base_tier
+        return f"{base_tier}_{modifier}"
+    # ── End MMA branch ──────────────────────────────────────────────────────
+
     w = form.count("W") if form else 0
     l = form.count("L") if form else 0
     d = form.count("D") if form else 0
