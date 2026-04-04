@@ -869,7 +869,7 @@ _ICON_HEARTBEAT = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" s
 _ICON_PLAY = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>'
 _ICON_USERS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
 _ICON_GEAR = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
-_ICON_HAMBURGER = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>'
+
 
 
 # -- Shared CSS ---------------------------------------------------------------
@@ -895,8 +895,7 @@ def _shared_css() -> str:
     --font-m: 'ui-monospace','Cascadia Code','Fira Code','Consolas',monospace;
     --grad: linear-gradient(135deg, #F8C830, #F0A020, #E8571F);
     --r: 10px;
-    --sidebar-w-collapsed: 60px;
-    --sidebar-w-expanded: 220px;
+    --sidebar-w: 220px;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: var(--carbon); color: var(--text); font-family: var(--font-b); font-size: 14px; line-height: 1.6; min-height: 100vh; overflow-x: hidden; }
@@ -905,36 +904,19 @@ def _shared_css() -> str:
   /* SIDEBAR */
   .sidebar {
     position: fixed; top: 0; left: 0; bottom: 0; z-index: 200;
-    width: var(--sidebar-w-collapsed);
+    width: var(--sidebar-w);
     background: #0A0A0A;
     border-right: 1px solid var(--border);
     display: flex; flex-direction: column;
-    transition: width 200ms ease;
     overflow: hidden;
   }
-  .sidebar.expanded { width: var(--sidebar-w-expanded); }
-  .sidebar-toggle {
+  .sidebar-brand {
     display: flex; align-items: center; justify-content: center;
-    height: 52px; min-height: 52px;
-    cursor: pointer; color: var(--muted);
+    padding: 20px 16px 16px;
     border-bottom: 1px solid var(--border);
-    transition: color 150ms;
     flex-shrink: 0;
   }
-  .sidebar-toggle:hover { color: var(--text); }
-  .sidebar-brand {
-    display: flex; align-items: center; gap: 10px;
-    padding: 0 0 0 18px; height: 52px; min-height: 52px;
-    border-bottom: 1px solid var(--border);
-    overflow: hidden; flex-shrink: 0;
-  }
-  .sidebar-brand .brand-text {
-    font-family: var(--font-d); font-weight: 700; font-size: 14px;
-    background: var(--grad); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    background-clip: text; white-space: nowrap;
-    opacity: 0; transition: opacity 150ms ease;
-  }
-  .sidebar.expanded .brand-text { opacity: 1; }
+  .sidebar-brand img { width: 160px; height: auto; display: block; }
   .sidebar-nav { flex: 1; display: flex; flex-direction: column; padding: 8px 0; gap: 2px; }
   .sidebar-item {
     display: flex; align-items: center; gap: 12px;
@@ -952,9 +934,8 @@ def _shared_css() -> str:
   .sidebar-item .item-icon { flex-shrink: 0; display: flex; align-items: center; }
   .sidebar-item .item-label {
     font-family: var(--font-d); font-weight: 600; font-size: 12px;
-    letter-spacing: 0.04em; opacity: 0; transition: opacity 150ms ease;
+    letter-spacing: 0.04em;
   }
-  .sidebar.expanded .item-label { opacity: 1; }
   .sidebar-bottom {
     border-top: 1px solid var(--border);
     padding: 8px 0; flex-shrink: 0;
@@ -962,11 +943,9 @@ def _shared_css() -> str:
 
   /* CONTENT AREA */
   .content-area {
-    margin-left: var(--sidebar-w-collapsed);
+    margin-left: var(--sidebar-w);
     min-height: 100vh;
-    transition: margin-left 200ms ease;
   }
-  .sidebar.expanded ~ .content-area { margin-left: var(--sidebar-w-expanded); }
 
   /* TOPBAR (inside content area) */
   .topbar { position: sticky; top: 0; z-index: 100; background: rgba(10,10,10,0.96); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -1067,11 +1046,9 @@ def _shared_css() -> str:
   #countdown { color:var(--gold); font-weight:700; }
 
   /* RESPONSIVE */
-  @media(max-width:1024px) {
-    .sidebar { width: var(--sidebar-w-collapsed) !important; }
-    .sidebar .item-label { opacity: 0 !important; }
-    .sidebar .brand-text { opacity: 0 !important; }
-    .content-area { margin-left: var(--sidebar-w-collapsed) !important; }
+  @media(max-width:768px) {
+    .sidebar { display: none; }
+    .content-area { margin-left: 0 !important; }
   }
   @media(max-width:1000px) { .kpi-strip { grid-template-columns:repeat(3,1fr); } .grid-2 { grid-template-columns:1fr; } }
   @media(max-width:600px)  { .kpi-strip { grid-template-columns:repeat(2,1fr); } .topbar { padding:10px 14px; } }
@@ -1092,8 +1069,7 @@ def _sidebar_html(active_view: str) -> str:
         nav_items += f'<a class="sidebar-item{active_cls}" href="{href}" data-view="{key}"><span class="item-icon">{icon}</span><span class="item-label">{label}</span></a>\n'
 
     return f"""<aside class="sidebar" id="sidebar">
-  <div class="sidebar-toggle" id="sidebarToggle" title="Toggle sidebar">{_ICON_HAMBURGER}</div>
-  <div class="sidebar-brand"><span class="brand-text">MzansiEdge</span></div>
+  <div class="sidebar-brand"><img src="/static/wordmark.png" alt="MzansiEdge"></div>
   <nav class="sidebar-nav">{nav_items}</nav>
   <div class="sidebar-bottom">
     <a class="sidebar-item" href="#" title="Settings"><span class="item-icon">{_ICON_GEAR}</span><span class="item-label">Settings</span></a>
@@ -1107,24 +1083,7 @@ def _sidebar_js() -> str:
     return """
 <script>
 (function() {
-  var sidebar = document.getElementById('sidebar');
-  var toggle = document.getElementById('sidebarToggle');
-  var contentArea = document.getElementById('contentArea');
   var contentInner = document.getElementById('contentInner');
-
-  // Toggle sidebar expand/collapse
-  toggle.addEventListener('click', function() {
-    sidebar.classList.toggle('expanded');
-  });
-
-  // Auto-collapse on narrow screens
-  function checkWidth() {
-    if (window.innerWidth < 1024) {
-      sidebar.classList.remove('expanded');
-    }
-  }
-  window.addEventListener('resize', checkWidth);
-  checkWidth();
 
   // AJAX view switching
   var navItems = document.querySelectorAll('.sidebar-item[data-view]');
