@@ -17,6 +17,12 @@ import time
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+except ImportError:
+    pass
+
 from flask import Flask, Response, request, redirect
 
 # -- Response cache (avoids heavy queries on every request) -------------------
@@ -896,6 +902,7 @@ _ICON_USERS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" strok
 _ICON_GEAR = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
 _ICON_SERVER = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>'
 _ICON_TASKHUB = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><rect x="3" y="13" width="6" height="6" rx="1"/><line x1="13" y1="8" x2="21" y2="8"/><line x1="13" y1="16" x2="21" y2="16"/><line x1="17" y1="5" x2="17" y2="11"/></svg>'
+_ICON_CHART = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>'
 
 
 
@@ -1090,6 +1097,7 @@ def _sidebar_html(active_view: str) -> str:
         ("health", "Data Health", _ICON_HEARTBEAT, "/admin/health"),
         ("automation", "Social Media", _ICON_PLAY, "/admin/automation"),
         ("system_health", "System Health", _ICON_SERVER, "/admin/system"),
+        ("performance", "Edge Performance", _ICON_CHART, "/admin/performance"),
     ]
     nav_items = ""
     for key, label, icon, href in items:
@@ -2762,6 +2770,418 @@ def render_system_health_content(conn) -> str:
 </script>"""
 
 
+# -- Edge Performance content renderer ----------------------------------------
+
+_TIER_CONFIG = {
+    "diamond": {"label": "💎 Diamond", "cls": "tier-diamond"},
+    "gold":    {"label": "🥇 Gold",    "cls": "tier-gold"},
+    "silver":  {"label": "🥈 Silver",  "cls": "tier-silver"},
+    "bronze":  {"label": "🥉 Bronze",  "cls": "tier-bronze"},
+}
+_SPORT_EMOJI = {
+    "soccer": "⚽", "rugby": "🏉", "cricket": "🏏",
+    "mma": "🥊", "boxing": "🥊", "combat": "🥊",
+}
+_TIER_ORDER = ["diamond", "gold", "silver", "bronze"]
+
+
+def _fmt_match(match_key: str) -> str:
+    key = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_key)
+    key = key.replace("_vs_", " vs ")
+    return key.replace("_", " ").title()
+
+
+def _perf_css() -> str:
+    return """
+  /* Tier badges */
+  .tier-badge { display:inline-flex; align-items:center; padding:3px 9px; border-radius:999px;
+    font-size:10px; font-weight:700; font-family:var(--font-d); letter-spacing:.04em; white-space:nowrap; }
+  .tier-diamond { background: rgba(248,200,48,.15); color:#F8C830;
+    border:1px solid rgba(248,200,48,.35); }
+  .tier-gold    { background: rgba(240,160,32,.12); color:#F0A020;
+    border:1px solid rgba(240,160,32,.3); }
+  .tier-silver  { background: rgba(156,163,175,.12); color:#9CA3AF;
+    border:1px solid rgba(156,163,175,.25); }
+  .tier-bronze  { background: rgba(180,120,60,.12); color:#B47840;
+    border:1px solid rgba(180,120,60,.25); }
+  /* Win/loss chips in recent table */
+  .outcome-win  { color:var(--green); font-weight:700; }
+  .outcome-loss { color:var(--red);   font-weight:700; }
+  /* Chart window tabs */
+  .chart-tabs { display:flex; gap:4px; }
+  .chart-tab  { background:var(--surface-alt); border:1px solid var(--border); border-radius:6px;
+    padding:4px 12px; font-size:10px; font-family:var(--font-d); font-weight:700;
+    letter-spacing:.05em; color:var(--muted); cursor:pointer; }
+  .chart-tab.active { background:rgba(248,200,48,.12); border-color:rgba(248,200,48,.35);
+    color:var(--gold); }
+  /* Empty state */
+  .perf-empty { padding:48px 24px; text-align:center; color:var(--muted);
+    font-family:var(--font-m); font-size:13px; }
+"""
+
+
+def render_performance_content(conn) -> str:
+    """Render the Edge Performance inner content HTML (no shell)."""
+    now_sast = datetime.now(_SAST)
+    updated = now_sast.strftime("%Y-%m-%d %H:%M SAST")
+
+    # ---- Query summary ----
+    summary = q_one(conn, """
+        SELECT COUNT(*) as total,
+               SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as hits,
+               ROUND(AVG(predicted_ev), 2) as avg_edge,
+               SUM(CASE WHEN result='hit' THEN actual_return - 100.0 ELSE -100.0 END) as net_pl
+        FROM edge_results WHERE result IN ('hit','miss')
+    """)
+    total   = int(summary["total"])   if summary else 0
+    hits    = int(summary["hits"])    if summary else 0
+    misses  = total - hits
+    hit_rate = round(hits * 100.0 / total, 1) if total > 0 else 0.0
+    avg_edge = round(float(summary["avg_edge"] or 0), 1) if summary else 0.0
+    net_pl   = round(float(summary["net_pl"]   or 0), 0) if summary else 0.0
+
+    # ---- Current streak ----
+    recent_rows = q_all(conn, """
+        SELECT result FROM edge_results
+        WHERE result IN ('hit','miss')
+        ORDER BY settled_at DESC LIMIT 30
+    """)
+    streak, streak_type = 0, None
+    for row in recent_rows:
+        r = row["result"]
+        if streak_type is None:
+            streak_type, streak = r, 1
+        elif r == streak_type:
+            streak += 1
+        else:
+            break
+
+    # ---- By Tier ----
+    tier_rows = q_all(conn, """
+        SELECT edge_tier,
+               COUNT(*) as cnt,
+               SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as wins,
+               SUM(CASE WHEN result='miss' THEN 1 ELSE 0 END) as losses,
+               ROUND(SUM(CASE WHEN result='hit' THEN 1.0 ELSE 0 END)*100.0/COUNT(*),1) as hit_rate,
+               ROUND(AVG(predicted_ev),1) as avg_edge,
+               ROUND(AVG(recommended_odds),2) as avg_odds
+        FROM edge_results WHERE result IN ('hit','miss')
+        GROUP BY edge_tier
+    """)
+    tier_map = {row["edge_tier"]: row for row in tier_rows}
+
+    # ---- By Sport ----
+    sport_rows = q_all(conn, """
+        SELECT sport,
+               COUNT(*) as cnt,
+               SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as wins,
+               SUM(CASE WHEN result='miss' THEN 1 ELSE 0 END) as losses,
+               ROUND(SUM(CASE WHEN result='hit' THEN 1.0 ELSE 0 END)*100.0/COUNT(*),1) as hit_rate,
+               ROUND(AVG(predicted_ev),1) as avg_edge
+        FROM edge_results WHERE result IN ('hit','miss')
+        GROUP BY sport ORDER BY cnt DESC
+    """)
+
+    # ---- Recent 20 settlements ----
+    recent_settled = q_all(conn, """
+        SELECT match_date, match_key, sport, edge_tier, result,
+               ROUND(predicted_ev,1) as ev,
+               ROUND(recommended_odds,2) as odds, bookmaker
+        FROM edge_results WHERE result IN ('hit','miss')
+        ORDER BY settled_at DESC LIMIT 20
+    """)
+
+    # ---- Chart data: daily stats ----
+    daily_raw = q_all(conn, """
+        SELECT match_date,
+               SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as dh,
+               COUNT(*) as dt
+        FROM edge_results WHERE result IN ('hit','miss')
+        GROUP BY match_date ORDER BY match_date ASC
+    """)
+    daily = {row["match_date"]: (int(row["dh"]), int(row["dt"])) for row in daily_raw}
+    all_dates = sorted(daily.keys())
+
+    def build_window(days: int) -> dict:
+        from datetime import date as _dt_date, timedelta as _dt_td
+        cutoff = str(now_sast.date() - _dt_td(days=days - 1))
+        dates = [d for d in all_dates if d >= cutoff]
+        if not dates:
+            dates = all_dates
+        labels, wins_d, losses_d, rolling_7 = [], [], [], []
+        for d in dates:
+            labels.append(d[5:])
+            dh, dt = daily[d]
+            wins_d.append(dh)
+            losses_d.append(dt - dh)
+            d_date = _dt_date.fromisoformat(d)
+            s7 = str(d_date - _dt_td(days=6))
+            r7h = sum(v[0] for k, v in daily.items() if s7 <= k <= d)
+            r7t = sum(v[1] for k, v in daily.items() if s7 <= k <= d)
+            rolling_7.append(round(r7h * 100.0 / r7t, 1) if r7t > 0 else None)
+        return {"labels": labels, "wins": wins_d, "losses": losses_d, "rolling": rolling_7}
+
+    import json as _json
+    chart_30  = _json.dumps(build_window(30))
+    chart_60  = _json.dumps(build_window(60))
+    chart_90  = _json.dumps(build_window(90))
+
+    # ---- KPI HTML ----
+    pl_cls = "c-green" if net_pl >= 0 else "c-red"
+    pl_sign = "+" if net_pl >= 0 else ""
+    hr_cls = "c-green" if hit_rate >= 50 else ("c-amber" if hit_rate >= 35 else "c-red")
+    streak_label = (f"+{streak} ✅" if streak_type == "hit" else f"-{streak} ❌") if streak > 0 else "—"
+    streak_cls = "c-green" if streak_type == "hit" else ("c-red" if streak_type == "miss" else "c-text")
+
+    kpi_html = f"""
+<div class="kpi-strip">
+  <div class="kpi">
+    <div class="kpi-lbl">Total Settled</div>
+    <div class="kpi-val c-text">{total}</div>
+    <div class="kpi-sub">{hits}W / {misses}L</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-lbl">Hit Rate</div>
+    <div class="kpi-val {hr_cls}">{hit_rate}%</div>
+    <div class="kpi-sub">from {total} edges</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-lbl">Net P/L (R100 stake)</div>
+    <div class="kpi-val {pl_cls}">{pl_sign}R{int(net_pl):,}</div>
+    <div class="kpi-sub">total return</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-lbl">Avg Edge %</div>
+    <div class="kpi-val c-gold">{avg_edge}%</div>
+    <div class="kpi-sub">predicted EV</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-lbl">Current Streak</div>
+    <div class="kpi-val {streak_cls}">{streak_label}</div>
+    <div class="kpi-sub">consecutive</div>
+  </div>
+</div>"""
+
+    # ---- By Tier table ----
+    if tier_map:
+        tier_rows_html = ""
+        for t in _TIER_ORDER:
+            row = tier_map.get(t)
+            if not row:
+                continue
+            cfg = _TIER_CONFIG.get(t, {"label": t.title(), "cls": "tier-bronze"})
+            hr_c = "s-green" if row["hit_rate"] >= 50 else ("s-amber" if row["hit_rate"] >= 35 else "s-red")
+            tier_rows_html += f"""
+      <tr>
+        <td><span class="tier-badge {cfg['cls']}">{cfg['label']}</span></td>
+        <td>{int(row['cnt'])}</td>
+        <td class="s-green">{int(row['wins'])}</td>
+        <td class="s-red">{int(row['losses'])}</td>
+        <td class="{hr_c}">{row['hit_rate']}%</td>
+        <td>{row['avg_edge']}%</td>
+        <td>{row['avg_odds']}</td>
+      </tr>"""
+        tier_table = f"""
+<div class="tbl-wrap">
+  <table class="tbl">
+    <thead><tr>
+      <th>Tier</th><th>Total</th><th>Wins</th><th>Losses</th>
+      <th>Hit Rate</th><th>Avg Edge</th><th>Avg Odds</th>
+    </tr></thead>
+    <tbody>{tier_rows_html}</tbody>
+  </table>
+</div>"""
+    else:
+        tier_table = '<div class="perf-empty">No tier data yet.</div>'
+
+    # ---- By Sport table ----
+    if sport_rows:
+        sport_rows_html = ""
+        for row in sport_rows:
+            sp = row["sport"] or "unknown"
+            emoji = _SPORT_EMOJI.get(sp, "🏅")
+            hr_c = "s-green" if row["hit_rate"] >= 50 else ("s-amber" if row["hit_rate"] >= 35 else "s-red")
+            sport_rows_html += f"""
+      <tr>
+        <td>{emoji} {sp.title()}</td>
+        <td>{int(row['cnt'])}</td>
+        <td class="s-green">{int(row['wins'])}</td>
+        <td class="s-red">{int(row['losses'])}</td>
+        <td class="{hr_c}">{row['hit_rate']}%</td>
+        <td>{row['avg_edge']}%</td>
+      </tr>"""
+        sport_table = f"""
+<div class="tbl-wrap">
+  <table class="tbl">
+    <thead><tr>
+      <th>Sport</th><th>Total</th><th>Wins</th><th>Losses</th>
+      <th>Hit Rate</th><th>Avg Edge</th>
+    </tr></thead>
+    <tbody>{sport_rows_html}</tbody>
+  </table>
+</div>"""
+    else:
+        sport_table = '<div class="perf-empty">No sport data yet.</div>'
+
+    # ---- Chart HTML ----
+    if daily:
+        chart_html = f"""
+<div class="panel" style="margin-bottom:16px;">
+  <div class="panel-head">
+    <span class="panel-title">Rolling Hit Rate</span>
+    <div class="chart-tabs">
+      <button class="chart-tab active" data-window="30">30D</button>
+      <button class="chart-tab" data-window="60">60D</button>
+      <button class="chart-tab" data-window="90">90D</button>
+    </div>
+  </div>
+  <div class="chart-wrap" style="height:220px; padding:16px 16px 8px;">
+    <canvas id="perfHRChart"></canvas>
+  </div>
+</div>
+<script>
+(function() {{
+  var datasets = {{
+    30: {chart_30},
+    60: {chart_60},
+    90: {chart_90}
+  }};
+  var chartInst = null;
+  function renderChart(days) {{
+    var ctx = document.getElementById('perfHRChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+    if (chartInst) {{ chartInst.destroy(); chartInst = null; }}
+    var d = datasets[days];
+    chartInst = new Chart(ctx, {{
+      type: 'bar',
+      data: {{
+        labels: d.labels,
+        datasets: [
+          {{ label: 'Wins', data: d.wins,
+             backgroundColor: 'rgba(34,197,94,0.45)', borderColor: 'rgba(34,197,94,0.7)',
+             borderWidth: 1, order: 2 }},
+          {{ label: 'Losses', data: d.losses,
+             backgroundColor: 'rgba(239,68,68,0.45)', borderColor: 'rgba(239,68,68,0.7)',
+             borderWidth: 1, order: 2 }},
+          {{ label: '7-Day Hit Rate %', data: d.rolling, type: 'line',
+             borderColor: '#F8C830', backgroundColor: 'transparent', borderWidth: 2,
+             pointRadius: 3, pointBackgroundColor: '#F8C830',
+             yAxisID: 'y2', order: 1, spanGaps: true }}
+        ]
+      }},
+      options: {{
+        responsive: true, maintainAspectRatio: false,
+        scales: {{
+          x: {{ grid: {{ color: 'rgba(255,255,255,0.04)' }},
+               ticks: {{ color: '#6b7280', font: {{ size: 10 }} }} }},
+          y: {{ grid: {{ color: 'rgba(255,255,255,0.04)' }},
+               ticks: {{ color: '#6b7280', font: {{ size: 10 }} }},
+               title: {{ display: true, text: 'Results', color: '#6b7280', font: {{ size: 10 }} }} }},
+          y2: {{ position: 'right', min: 0, max: 100, grid: {{ display: false }},
+                ticks: {{ color: '#F8C830', font: {{ size: 10 }},
+                          callback: function(v) {{ return v + '%'; }} }},
+                title: {{ display: true, text: 'Hit Rate', color: '#F8C830', font: {{ size: 10 }} }} }}
+        }},
+        plugins: {{
+          legend: {{ labels: {{ color: '#F5F5F5', font: {{ size: 11 }}, boxWidth: 12 }} }},
+          tooltip: {{ backgroundColor: 'rgba(17,17,17,0.95)', titleColor: '#F5F5F5',
+                     bodyColor: '#9ca3af', borderColor: '#1f1f1f', borderWidth: 1 }}
+        }}
+      }}
+    }});
+  }}
+  renderChart(30);
+  document.querySelectorAll('.chart-tab').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      document.querySelectorAll('.chart-tab').forEach(function(b) {{ b.classList.remove('active'); }});
+      this.classList.add('active');
+      renderChart(parseInt(this.getAttribute('data-window')));
+    }});
+  }});
+}})();
+</script>"""
+    else:
+        chart_html = """
+<div class="panel" style="margin-bottom:16px;">
+  <div class="panel-head"><span class="panel-title">Rolling Hit Rate</span></div>
+  <div class="perf-empty">No settlement data yet — chart will appear once edges are settled.</div>
+</div>"""
+
+    # ---- Recent settlements table ----
+    if recent_settled:
+        recent_rows_html = ""
+        for row in recent_settled:
+            match_name = _fmt_match(row["match_key"])
+            sp = row["sport"] or ""
+            emoji = _SPORT_EMOJI.get(sp, "🏅")
+            t_cfg = _TIER_CONFIG.get(row["edge_tier"] or "", {"label": (row["edge_tier"] or "").title(), "cls": "tier-bronze"})
+            outcome_cls = "outcome-win" if row["result"] == "hit" else "outcome-loss"
+            outcome_lbl = "W" if row["result"] == "hit" else "L"
+            bk = BK_DISPLAY.get(row["bookmaker"] or "", (row["bookmaker"] or "").title())
+            recent_rows_html += f"""
+      <tr>
+        <td style="color:var(--muted)">{row['match_date']}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;">{emoji} {match_name}</td>
+        <td><span class="tier-badge {t_cfg['cls']}">{t_cfg['label']}</span></td>
+        <td class="{outcome_cls}" style="font-weight:700;">{outcome_lbl}</td>
+        <td>{row['ev']}%</td>
+        <td>{row['odds']}</td>
+        <td style="color:var(--muted)">{bk}</td>
+      </tr>"""
+        recent_table = f"""
+<div class="tbl-wrap">
+  <table class="tbl">
+    <thead><tr>
+      <th>Date</th><th>Match</th><th>Tier</th><th>W/L</th>
+      <th>Edge %</th><th>Odds</th><th>Bookmaker</th>
+    </tr></thead>
+    <tbody>{recent_rows_html}</tbody>
+  </table>
+</div>"""
+    else:
+        recent_table = '<div class="perf-empty">No settled edges yet. Results will appear here once the settlement pipeline runs.</div>'
+
+    # ---- Assemble page ----
+    return f"""
+<style>{_perf_css()}</style>
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-pill">Edge Performance</span>
+  </div>
+  <div class="topbar-right">
+    <span class="topbar-meta">Updated: <em>{updated}</em></span>
+  </div>
+</div>
+<div class="page">
+  {kpi_html}
+  <div class="grid-2">
+    <div class="panel panel-orange-accent">
+      <div class="panel-head">
+        <span class="panel-title">Performance by Tier</span>
+        <span class="panel-sub">{total} edges</span>
+      </div>
+      {tier_table}
+    </div>
+    <div class="panel panel-orange-accent">
+      <div class="panel-head">
+        <span class="panel-title">Performance by Sport</span>
+        <span class="panel-sub">{total} edges</span>
+      </div>
+      {sport_table}
+    </div>
+  </div>
+  {chart_html}
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">Recent Settlements</span>
+      <span class="panel-sub">Last 20</span>
+    </div>
+    {recent_table}
+  </div>
+  <div class="footer">MzansiEdge Admin · Edge Performance · {updated}</div>
+</div>"""
+
+
 # -- Shell renderer -----------------------------------------------------------
 
 def render_shell(active_view: str, content_html: str) -> str:
@@ -3070,6 +3490,52 @@ def api_notion_page(page_id: str):
   {media_html}
 </div>"""
     return Response(html, mimetype="text/html")
+
+
+@app.route("/admin/performance")
+@require_auth
+def admin_performance():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("performance_full")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+
+    conn = db_connect(SCRAPERS_DB)
+    try:
+        content = render_performance_content(conn)
+    finally:
+        if conn:
+            conn.close()
+
+    html = render_shell("performance", content)
+
+    with _page_cache_lock:
+        _page_cache["performance_full"] = (html, now)
+
+    return Response(html, mimetype="text/html")
+
+
+@app.route("/admin/api/performance")
+@require_auth
+def api_performance():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("performance_content")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+
+    conn = db_connect(SCRAPERS_DB)
+    try:
+        content = render_performance_content(conn)
+    finally:
+        if conn:
+            conn.close()
+
+    with _page_cache_lock:
+        _page_cache["performance_content"] = (content, now)
+
+    return Response(content, mimetype="text/html")
 
 
 # Redirects
