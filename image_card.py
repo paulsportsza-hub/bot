@@ -363,6 +363,63 @@ def _draw_footer(
     draw.text((_PAD_X, _H - 38), "mzansiedge.co.za", font=f_footer, fill=_MUTED)
 
 
+# ── Single-match card (AC-12 / P1P3-BUILD) ────────────────────────────────────
+
+def generate_match_card(card_data: dict) -> bytes:
+    """Generate a 1080×1080px branded card for a single structured match card.
+
+    Accepts the dict produced by ``card_pipeline.build_card_data()``.
+    Falls back to ``generate_digest_card([card_data])`` internally so all
+    Brand Bible v3 tokens (colors, fonts, confidence meter) are preserved.
+
+    Parameters
+    ----------
+    card_data:
+        Structured card dict.  Key fields used:
+
+        * ``matchup`` / ``home_team``, ``away_team``
+        * ``tier`` — diamond/gold/silver/bronze (maps to tier header color)
+        * ``odds`` (float) — best decimal odds
+        * ``confidence`` (float, 0-100) — confidence meter fill
+        * ``kickoff`` — pre-formatted kickoff string
+        * ``sport`` (optional) — sport key
+
+    Returns
+    -------
+    bytes
+        Raw PNG bytes suitable for ``bot.send_photo()``.
+
+    Raises
+    ------
+    RuntimeError
+        On any Pillow or asset error.  Callers catch and fall back to text.
+    """
+    # Normalise card_data into the pick dict format used by _draw_match_card
+    pick = {
+        "home_team": card_data.get("home_team") or (card_data.get("matchup", "") or "Home").split(" vs ")[0],
+        "away_team": card_data.get("away_team") or (card_data.get("matchup", "") or "Away").split(" vs ")[-1],
+        "display_tier": card_data.get("tier", "bronze"),
+        "edge_rating": card_data.get("tier", "bronze"),
+        "odds": card_data.get("odds", 0.0),
+        "composite_score": card_data.get("confidence", 0.0),
+        "edge_score": card_data.get("confidence", 0.0),
+        "kickoff": card_data.get("kickoff", ""),
+        "_bc_kickoff": card_data.get("kickoff", ""),
+        "sport_emoji": _SPORT_EMOJI_MAP.get(card_data.get("sport", ""), "🏅"),
+    }
+    return generate_digest_card([pick])
+
+
+# ── Sport emoji lookup (used by generate_match_card) ──────────────────────────
+_SPORT_EMOJI_MAP: dict[str, str] = {
+    "soccer": "⚽", "football": "⚽",
+    "rugby": "🏉", "rugby_union": "🏉", "rugby_league": "🏉",
+    "cricket": "🏏",
+    "mma": "🥊", "boxing": "🥊", "combat": "🥊",
+    "basketball": "🏀", "tennis": "🎾",
+}
+
+
 # ── Main entry point ─────────────────────────────────────────────────────────
 
 def generate_digest_card(picks: list[dict]) -> bytes:

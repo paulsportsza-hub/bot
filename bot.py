@@ -10173,6 +10173,9 @@ def _ensure_narrative_cache_table() -> None:
             )
         if "coverage_json" not in cols:
             conn.execute("ALTER TABLE narrative_cache ADD COLUMN coverage_json TEXT")
+        # AC-1 (P1P3-BUILD): structured card data stored per match
+        if "structured_card_json" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN structured_card_json TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -10580,6 +10583,7 @@ async def _store_narrative_cache(
     evidence_json: str | None = None,
     narrative_source: str = "w82",
     coverage_json: str | None = None,
+    structured_card_json: str | None = None,
 ) -> None:
     """Persist narrative to DB cache with 6hr TTL.
 
@@ -10606,8 +10610,9 @@ async def _store_narrative_cache(
             conn.execute(
                 "INSERT OR REPLACE INTO narrative_cache "
                 "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
-                "evidence_json, narrative_source, coverage_json, created_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "evidence_json, narrative_source, coverage_json, created_at, expires_at, "
+                "structured_card_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     match_id, html, model, edge_tier,
                     json.dumps(tips, default=str),
@@ -10617,6 +10622,7 @@ async def _store_narrative_cache(
                     coverage_json,
                     now.isoformat(),
                     expires.isoformat(),
+                    structured_card_json,
                 ),
             )
             conn.commit()
@@ -16237,6 +16243,44 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                         "league_key": league_raw,
                     }
                     target_league = league_raw
+                    # AC-7 (P1P3-BUILD): serve structured card when DB has odds but no
+                    # narrative cache hit — faster than full ESPN + LLM pipeline.
+                    try:
+                        from card_pipeline import build_card_data as _bcd_ac7, render_card_html as _rch_ac7
+                        _ac7_card = await asyncio.wait_for(
+                            asyncio.to_thread(_bcd_ac7, event_id, None, include_analysis=False),
+                            timeout=5.0,
+                        )
+                        if _ac7_card.get("odds"):
+                            _ac7_html = _rch_ac7(_ac7_card)
+                            if _ac7_html:
+                                _ac7_tip = {
+                                    "home_team": home_t, "away_team": away_t,
+                                    "outcome": _ac7_card.get("outcome", ""),
+                                    "odds": _ac7_card.get("odds", 0),
+                                    "bookmaker": _ac7_card.get("bookmaker", ""),
+                                    "ev": _ac7_card.get("ev", 0),
+                                    "display_tier": _ac7_card.get("tier", "bronze"),
+                                    "match_id": event_id,
+                                }
+                                _game_tips_cache[event_id] = [_ac7_tip]
+                                _ac7_tier = _ac7_card.get("tier", "bronze")
+                                _analysis_cache[event_id] = (
+                                    _ac7_html, [_ac7_tip], _ac7_tier,
+                                    "p1p3_card", _time.time(),
+                                )
+                                _ac7_buttons = _build_game_buttons(
+                                    [_ac7_tip], event_id, user_id,
+                                    source=source, user_tier=_ggt_tier,
+                                    edge_tier=_ac7_tier,
+                                )
+                                await query.edit_message_text(
+                                    _ac7_html, parse_mode=ParseMode.HTML,
+                                    reply_markup=InlineKeyboardMarkup(_ac7_buttons),
+                                )
+                                return
+                    except Exception as _ac7_err:
+                        log.debug("AC-7 card fast path failed for %s: %s", event_id, _ac7_err)
             except Exception:
                 pass
 
@@ -17969,6 +18013,19 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
 
         # AI narrative explaining why this tip has value
         narrative = _build_tip_narrative(tip)
+        # AC-6 (P1P3-BUILD): fall back to structured card analysis when tip narrative is thin
+        if len(narrative.strip()) < 80:
+            try:
+                from card_pipeline import build_card_data as _bcd_ac6
+                _ac6_mkey = match_key or event_id
+                _ac6_card = await asyncio.wait_for(
+                    asyncio.to_thread(_bcd_ac6, _ac6_mkey, None, tip=tip, include_analysis=True),
+                    timeout=10.0,
+                )
+                if _ac6_card.get("analysis_text"):
+                    narrative = _ac6_card["analysis_text"]
+            except Exception as _ac6_err:
+                log.debug("card_pipeline AC-6 fallback for %s: %s", event_id, _ac6_err)
         text += f"\n\n{narrative}"
 
         # Sharp confidence indicator

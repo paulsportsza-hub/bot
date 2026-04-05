@@ -157,6 +157,7 @@ _RUNTIME_SCHEMA_REQUIREMENTS = {
         "expires_at",
         "evidence_json",
         "narrative_source",
+        "structured_card_json",  # AC-1 (P1P3-BUILD) — added via ALTER TABLE at bot startup
     },
     "shadow_narratives": {
         "match_key",
@@ -1763,6 +1764,20 @@ async def _generate_one(
     # D-04 FIX: When ESPN returns no data for this match, label model as
     # "instant-baseline-no-ctx" so QA can distinguish genuinely enriched cards
     # from generic ones. narrative_cache schema unchanged — model column only.
+    # AC-8 (P1P3-BUILD): build structured card data per edge and persist alongside narrative
+    _structured_card_json = None
+    try:
+        from card_pipeline import build_card_data as _build_card
+        _card_tip = tips[0] if tips else None
+        _card_data = _build_card(match_key, tip=_card_tip, include_analysis=True)
+        _structured_card_json = json.dumps(_card_data, default=str)
+        log.info(
+            "P1P3-BUILD: card data built for %s (%d sources)",
+            match_key, len(_card_data.get("data_sources_used", [])),
+        )
+    except Exception as _card_err:
+        log.debug("card_pipeline: build_card_data failed for %s: %s", match_key, _card_err)
+
     _ctx_had_data = bool(ctx and ctx.get("data_available"))
     _final_model = served_model if _ctx_had_data else "instant-baseline-no-ctx"
     duration = time.time() - t0
@@ -1779,6 +1794,7 @@ async def _generate_one(
             "narrative_source": narrative_source,
             "verification_failure": verification_failure,
             "coverage_json": _coverage_json,
+            "structured_card_json": _structured_card_json,
             "_shadow": {
                 "match_key": match_key,
                 "pack": evidence_pack,
@@ -1838,6 +1854,7 @@ async def _verify_and_fill_cache(
                         evidence_json=pw.get("evidence_json"),
                         narrative_source=pw.get("narrative_source", "w82"),
                         coverage_json=pw.get("coverage_json"),
+                        structured_card_json=pw.get("structured_card_json"),
                     )
                     log.info("  -> Gap filled for %s", mk)
                 except Exception as store_exc:
@@ -2039,6 +2056,7 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                     evidence_json=pw.get("evidence_json"),
                     narrative_source=new_source,
                     coverage_json=pw.get("coverage_json"),
+                    structured_card_json=pw.get("structured_card_json"),
                 )
                 write_ok += 1
             except Exception as exc:
