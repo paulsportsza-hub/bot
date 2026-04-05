@@ -6390,6 +6390,8 @@ _ht_tips_snapshot: dict[int, list] = {}  # user_id → shallow copy of tips at l
 _ht_detail_origin: dict[tuple[int, str], int] = {}  # (user_id, match_key) → source page
 # P3-02: /today digest snapshot — per-user tips frozen at last DigestMessage render
 _today_digest_snapshot: dict[int, list] = {}  # user_id → tips list
+# P4-07: Dedup guard — prevents logging the same edge twice per user per day
+_bet_log_seen: set[str] = set()  # f"{match_key}:{bet_type}:{user_id_str}:{today_date}"
 _odds_compare_origin: dict[tuple[int, str], dict[str, object]] = {}  # (user_id, event_id) → source metadata
 
 # Leagues available in our scrapers DB (odds.db)
@@ -6853,8 +6855,10 @@ def _teams_from_vs_event_id(event_id: str) -> tuple[str, str]:
     parts = event_id.split("_vs_")
     if len(parts) != 2:
         return "Home", "Away"
-    home = parts[0].replace("_", " ").title()
-    away = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", parts[1]).replace("_", " ").title()
+    home_raw = parts[0]
+    away_raw = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", parts[1])
+    home = _display_team_name(home_raw)
+    away = _display_team_name(away_raw)
     return home, away
 
 
@@ -7575,7 +7579,7 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         )
         _today = _date_cls.today().isoformat()
         rows = _conn.execute("""
-            SELECT e.match_key, e.edge_tier, e.composite_score, e.bet_type,
+            SELECT e.match_key, e.edge_id, e.edge_tier, e.composite_score, e.bet_type,
                    e.recommended_odds, e.bookmaker, e.predicted_ev, e.league, e.match_date,
                    e.confirming_signals
             FROM edge_results e
@@ -7656,6 +7660,7 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         tips.append({
             "event_id": mk,
             "match_id": mk,
+            "edge_id": row.get("edge_id") or "",
             "sport_key": _DB_LEAGUE_SPORT.get(league_key, config.LEAGUE_SPORT.get(league_key, "soccer")),
             "home_team": home_display,
             "away_team": away_display,
@@ -8816,6 +8821,98 @@ async def _build_hot_tips_page(
     return (text, InlineKeyboardMarkup(buttons))
 
 
+# ---------------------------------------------------------------------------
+# P4-07 — CLV bet_log_writer wiring
+# ---------------------------------------------------------------------------
+
+def _blw_get_edge_id(match_key: str, db_path: str) -> str | None:
+    """Return edge_id from edge_results for the live edge on match_key.
+
+    Runs in a thread (called via asyncio.to_thread).  Uses connect_odds_db
+    so WAL mode and busy_timeout rules are satisfied.
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db as _blw_conn_fn
+        _blw_c = _blw_conn_fn(db_path)
+        import sqlite3 as _blw_sqlite
+        _blw_c.row_factory = _blw_sqlite.Row
+        _blw_row = _blw_c.execute(
+            "SELECT edge_id FROM edge_results "
+            "WHERE match_key = ? AND result IS NULL "
+            "ORDER BY id DESC LIMIT 1",
+            (match_key,),
+        ).fetchone()
+        _blw_c.close()
+        return _blw_row["edge_id"] if _blw_row else None
+    except Exception:
+        return None
+
+
+async def _blw_log_tip(tip: dict, user_id_str: str) -> None:
+    """Async coroutine: log one tip to bet_recommendations_log (non-blocking).
+
+    Looks up edge_id from edge_results, then fires log_recommendation().
+    Errors are swallowed — CLV logging must never block or crash serving.
+    """
+    try:
+        from scrapers.sharp.bet_log_writer import log_recommendation as _blw_rec
+        from scrapers.edge.edge_config import DB_PATH as _BLW_DB
+
+        match_key = tip.get("match_id") or tip.get("event_id") or ""
+        if not match_key:
+            return
+
+        edge_id = tip.get("edge_id") or await asyncio.to_thread(
+            _blw_get_edge_id, match_key, _BLW_DB
+        )
+        if not edge_id:
+            return  # No live edge_results row — skip
+
+        bet_type = tip.get("outcome_key") or "home"
+        raw_bk = tip.get("bookmaker_key") or "unknown"
+        _v2 = tip.get("edge_v2") or {}
+        model_prob_raw = tip.get("prob")  # stored as 0-100 integer
+        model_prob = float(model_prob_raw) / 100.0 if model_prob_raw else None
+
+        await _blw_rec(
+            edge_id=edge_id,
+            match_key=match_key,
+            sport=tip.get("sport_key") or "soccer",
+            league=tip.get("league_key") or "",
+            edge_tier=tip.get("display_tier") or tip.get("edge_rating") or "bronze",
+            bet_type=bet_type,
+            recommended_odds=float(tip.get("odds") or 0),
+            bookmaker=raw_bk,
+            predicted_ev=float(tip.get("ev") or 0),
+            model_prob=model_prob,
+            composite_score=tip.get("edge_score") or tip.get("composite_score"),
+            confirming_signals=(
+                _v2.get("confirming_signals") if isinstance(_v2, dict) else None
+            ),
+        )
+        log.debug("P4-07: logged edge_id=%s match=%s user=%s", edge_id, match_key, user_id_str)
+    except Exception as _blw_exc:
+        log.debug("P4-07 _blw_log_tip failed: %s", _blw_exc)
+
+
+def _blw_fire_tips(tips: list[dict], user_id_str: str) -> None:
+    """Schedule fire-and-forget bet_log_writer tasks for each tip.
+
+    Deduplicates by (match_key, bet_type, user_id, today) so refreshes
+    and re-renders don't produce duplicate rows.  Broadcast paths pass
+    user_id_str='channel'.
+    """
+    from datetime import date as _blw_date
+    _today = _blw_date.today().isoformat()
+    for tip in tips:
+        mk = tip.get("match_id") or tip.get("event_id") or ""
+        bt = tip.get("outcome_key") or "home"
+        key = f"{mk}:{bt}:{user_id_str}:{_today}"
+        if mk and key not in _bet_log_seen:
+            _bet_log_seen.add(key)
+            asyncio.create_task(_blw_log_tip(tip, user_id_str))
+
+
 async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> None:
     """Core Hot Tips — fetch ALL tips, show tiered display (Wave 21)."""
     if user_id:
@@ -8871,6 +8968,8 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         if user_id:
             _ht_page_state[user_id] = 0
             _ht_tips_snapshot[user_id] = list(_cached_tips)
+        # P4-07: log recommendations to bet_recommendations_log (non-blocking)
+        _blw_fire_tips(_cached_tips, str(user_id or "channel"))
         return
 
     # W84-P1: Fast serving path — read pre-computed edges from edge_results table.
@@ -8932,6 +9031,8 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         if user_id:
             _ht_page_state[user_id] = 0
             _ht_tips_snapshot[user_id] = list(_fast_tips)
+        # P4-07: log recommendations to bet_recommendations_log (non-blocking)
+        _blw_fire_tips(_fast_tips, str(user_id or "channel"))
         # Trigger background refresh so next tap gets freshly computed tips
         asyncio.create_task(_fetch_hot_tips_from_db())
         return
@@ -9066,6 +9167,8 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     if user_id:
         _ht_page_state[user_id] = 0
         _ht_tips_snapshot[user_id] = list(tips)
+    # P4-07: log recommendations to bet_recommendations_log (non-blocking)
+    _blw_fire_tips(tips, str(user_id or "channel"))
 
     # Wave 25C: log edge views for all visible tips
     if user_id and tips:
@@ -16974,8 +17077,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     if _venue:
         _kickoff_line += f" · {h(_venue)}"
     _match_title = f"🎯 <b>{hf}{home} vs {af}{away}</b>"
-    if _neutral_analysis:
-        _match_title += " — Neutral Analysis"
     lines = [
         _match_title,
         _kickoff_line,
@@ -19379,6 +19480,10 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             tips = []
 
+    # P4-07: log broadcast tips once per run (user_id='channel' per brief)
+    if tips:
+        _blw_fire_tips(tips, "channel")
+
     # Fetch yesterday's results + streak once for all users (Wave 23)
     yesterday_stats = None
     yesterday_streak = None
@@ -19394,6 +19499,12 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             # Wave 25A: anti-fatigue gate
             if not await _can_send_notification(user.id):
                 continue
+
+            # P3-05: determine audible/silent for this send
+            import notification_budget as _nb_mt
+            _mt_silent = True if (current_hour == 21) else (
+                not await asyncio.to_thread(_nb_mt.can_send_audible, user.id)
+            )
 
             user_tier = await get_effective_tier(user.id)
 
@@ -19444,11 +19555,14 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 teaser = "\n".join(lines)
                 await ctx.bot.send_message(
                     chat_id=user.id, text=teaser, parse_mode=ParseMode.HTML,
+                    disable_notification=_mt_silent,
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
                         [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                     ]),
                 )
+                if not _mt_silent:
+                    await asyncio.to_thread(_nb_mt.record_audible, user.id)
                 continue
 
             if user_tier == "diamond":
@@ -19579,12 +19693,16 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     caption=teaser[:1024],
                     parse_mode=ParseMode.HTML,
                     reply_markup=markup,
+                    disable_notification=_mt_silent,
                 )
             else:
                 await ctx.bot.send_message(
                     chat_id=user.id, text=teaser, parse_mode=ParseMode.HTML,
                     reply_markup=markup,
+                    disable_notification=_mt_silent,
                 )
+            if not _mt_silent:
+                await asyncio.to_thread(_nb_mt.record_audible, user.id)
             await _after_send(user.id)
         except Exception as exc:
             log.warning("Failed to send morning teaser to user %s: %s", user.id, exc)
@@ -21231,6 +21349,7 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await ctx.bot.send_message(
                     chat_id=uid, text=text, parse_mode=ParseMode.HTML,
                     reply_markup=InlineKeyboardMarkup(buttons),
+                    disable_notification=True,  # AC-3: post-match results always silent
                 )
                 await _after_send(uid)
                 sent += 1
@@ -21319,6 +21438,7 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await ctx.bot.send_message(
                     chat_id=uid, text="\n".join(lines), parse_mode=ParseMode.HTML,
                     reply_markup=InlineKeyboardMarkup(buttons),
+                    disable_notification=True,  # AC-3: post-match results always silent
                 )
                 await _after_send(uid)
                 sent += 1
@@ -21327,6 +21447,195 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     log.info("Result alerts: sent %d alerts to %d users", sent, len(user_alerts))
     _ra_mon.done()
+
+
+# ── P3-05: Pre-match Gold+ alert ──────────────────────────
+
+# Tracks match_keys already alerted today; keyed by SAST date string.
+_pre_match_alert_sent: dict[str, set] = {}
+
+
+def _kickoff_for_match_key(match_key: str):
+    """Synchronous. Return timezone-aware kickoff datetime from broadcast_schedule, or None."""
+    try:
+        from datetime import datetime  # noqa: PLC0415
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+        from db_connection import get_connection  # noqa: PLC0415
+        from scrapers.edge.edge_config import DB_PATH  # noqa: PLC0415
+
+        # Parse date and team keywords from match_key (format: home_vs_away_YYYY-MM-DD)
+        parts = match_key.rsplit("_", 1)
+        if len(parts) != 2 or len(parts[1]) != 10:
+            return None
+        match_date, rest = parts[1], parts[0]
+        if "_vs_" not in rest:
+            return None
+        home_raw, away_raw = rest.split("_vs_", 1)
+        home_kw = home_raw.split("_")[0].lower()[:5]
+        away_kw = away_raw.split("_")[0].lower()[:5]
+
+        conn = get_connection(DB_PATH, readonly=True, timeout_ms=3000)
+        row = conn.execute(
+            """
+            SELECT start_time FROM broadcast_schedule
+            WHERE broadcast_date = ?
+              AND (LOWER(home_team) LIKE ? OR LOWER(home_team) LIKE ?)
+            LIMIT 1
+            """,
+            (match_date, f"%{home_kw}%", f"%{away_kw}%"),
+        ).fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return None
+        dt = datetime.fromisoformat(str(row[0]))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("Africa/Johannesburg"))
+        return dt
+    except Exception as exc:
+        log.debug("_kickoff_for_match_key(%s) failed: %s", match_key, exc)
+        return None
+
+
+async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hourly: send audible pre-match alert when Gold/Diamond edges kick off in 2-4h.
+
+    AC-2: Gold+ only. Audible if budget allows.
+    AC-7: Scheduled from edge_results. No duplicates per day.
+    """
+    from datetime import datetime as dt_cls  # noqa: PLC0415
+    from zoneinfo import ZoneInfo  # noqa: PLC0415
+    import notification_budget as _nb  # noqa: PLC0415
+
+    tz = ZoneInfo(config.TZ)
+    now = dt_cls.now(tz)
+    today = now.date().isoformat()
+
+    # Initialise / rotate daily dedup set
+    if today not in _pre_match_alert_sent:
+        _pre_match_alert_sent.clear()
+        _pre_match_alert_sent[today] = set()
+    already_sent = _pre_match_alert_sent[today]
+
+    # Query today's Gold/Diamond unsettled edges
+    try:
+        from scrapers.db_connect import connect_odds_db  # noqa: PLC0415
+        from scrapers.edge.edge_config import DB_PATH  # noqa: PLC0415
+        _pma_conn = connect_odds_db(DB_PATH)
+        _pma_conn.row_factory = lambda c, r: dict(
+            zip([col[0] for col in c.description], r)
+        )
+        gold_rows = _pma_conn.execute(
+            """
+            SELECT match_key, edge_tier, bet_type, recommended_odds,
+                   bookmaker, predicted_ev, league, composite_score
+            FROM edge_results
+            WHERE match_date = ? AND result IS NULL
+              AND edge_tier IN ('gold', 'diamond')
+            ORDER BY composite_score DESC
+            """,
+            (today,),
+        ).fetchall()
+        _pma_conn.close()
+    except Exception as exc:
+        log.debug("Pre-match gold alert: edge_results query failed: %s", exc)
+        return
+
+    if not gold_rows:
+        return
+
+    # Deduplicate by match_key (keep highest composite_score)
+    _seen: dict[str, dict] = {}
+    for row in gold_rows:
+        mk = row["match_key"]
+        if mk not in _seen or row["composite_score"] > _seen[mk]["composite_score"]:
+            _seen[mk] = row
+    unique_edges = list(_seen.values())
+
+    # Find edges with kickoff in the 2-4h window
+    qualifying: list[dict] = []
+    for edge in unique_edges:
+        mk = edge["match_key"]
+        if mk in already_sent:
+            continue
+        kickoff = await asyncio.to_thread(_kickoff_for_match_key, mk)
+        if kickoff is None:
+            continue
+        hours_until = (kickoff - now).total_seconds() / 3600
+        if 2.0 <= hours_until <= 4.0:
+            qualifying.append(edge)
+
+    if not qualifying:
+        return
+
+    log.info(
+        "Pre-match gold alert: %d qualifying edge(s) kicking off in 2-4h", len(qualifying)
+    )
+
+    from renderers.edge_renderer import EDGE_EMOJIS as _pma_emojis  # noqa: PLC0415
+
+    users = await db.get_all_onboarded_users()
+    sent_count = 0
+    for user in users:
+        try:
+            user_tier = await get_effective_tier(user.id)
+            if user_tier not in ("gold", "diamond"):
+                continue  # AC-2: Gold+ only
+
+            if not await _can_send_notification(user.id):
+                continue
+
+            audible = await asyncio.to_thread(_nb.can_send_audible, user.id)
+
+            # Build a single batch message for all qualifying edges
+            lines = [f"🎯 <b>Pre-Match Alert</b> — kickoff in 2–4h\n"]
+            for edge in qualifying:
+                t_emoji = _pma_emojis.get(edge["edge_tier"], "")
+                match_disp = _display_team_name(edge["match_key"])
+                lines.append(
+                    f"{t_emoji} <b>{match_disp}</b>\n"
+                    f"   💰 {edge['bet_type']} @ {edge['recommended_odds']:.2f}"
+                    f" · EV +{edge['predicted_ev']:.1f}%"
+                )
+            text = "\n\n".join(lines)
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
+            ])
+            await ctx.bot.send_message(
+                chat_id=user.id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+                disable_notification=not audible,
+            )
+            if audible:
+                await asyncio.to_thread(_nb.record_audible, user.id)
+            await _after_send(user.id)
+            sent_count += 1
+        except Exception as exc:
+            log.debug("Pre-match alert: failed to send to user %d: %s", user.id, exc)
+
+    # Mark these edges as sent today (do this once, regardless of users reached)
+    for edge in qualifying:
+        already_sent.add(edge["match_key"])
+
+    log.info("Pre-match gold alert: sent to %d users", sent_count)
+
+
+# ── P3-05: Budget reset (00:00 SAST) ─────────────────────
+
+
+async def _budget_reset_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hourly: prune stale audible budget rows at 00:00 SAST."""
+    from datetime import datetime as dt_cls  # noqa: PLC0415
+    from zoneinfo import ZoneInfo  # noqa: PLC0415
+    import notification_budget as _nb  # noqa: PLC0415
+
+    now = dt_cls.now(ZoneInfo(config.TZ))
+    if now.hour != 0:
+        return
+
+    log.info("Budget reset job running at 00:00 SAST")
+    await asyncio.to_thread(_nb.reset)
 
 
 # ── Wave 25A: /mute command ───────────────────────────────
@@ -23169,6 +23478,24 @@ async def _post_init(app_instance) -> None:
             name="narrative_health_check",
         )
         log.info("Scheduled narrative health check (every 2h)")
+
+        # P3-05: Pre-match Gold+ alert — runs hourly, fires when Gold/Diamond kickoff in 2-4h
+        job_queue.run_repeating(
+            _pre_match_gold_alert_job,
+            interval=3600,
+            first=_seconds_until_next_hour(),
+            name="pre_match_gold_alert",
+        )
+        log.info("Scheduled pre-match gold alert job (hourly, acts 2-4h before Gold+ kickoff)")
+
+        # P3-05: Budget reset — runs hourly, prunes stale rows at 00:00 SAST
+        job_queue.run_repeating(
+            _budget_reset_job,
+            interval=3600,
+            first=_seconds_until_next_hour(),
+            name="budget_reset",
+        )
+        log.info("Scheduled notification budget reset job (hourly, acts at 00:00 SAST)")
 
         # Post-deploy validation — runs once 30s after startup
         job_queue.run_once(
