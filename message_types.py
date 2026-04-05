@@ -1,4 +1,4 @@
-"""P3-02 — Message Type System for MzansiEdge bot.
+"""P3-02 / P3-04 — Message Type System for MzansiEdge bot.
 
 Four canonical message builders:
 
@@ -157,6 +157,7 @@ class DigestMessage:
         picks: list[dict],
         *,
         title: str = "Today's Edge Picks",
+        stats_summary: str = "",
     ) -> tuple[str, InlineKeyboardMarkup]:
         """Build digest text + keyboard.
 
@@ -176,6 +177,10 @@ class DigestMessage:
 
         title:
             Header title (default "Today's Edge Picks").
+
+        stats_summary:
+            Optional pre-rendered HTML for an expandable performance stats blockquote
+            shown below the pick list.  E.g. "7-day hit rate: 68% · ROI +14.2%".
 
         Returns
         -------
@@ -215,12 +220,15 @@ class DigestMessage:
                 f"<b>[{i}]</b> {tier_emoji} {sport_emoji}"
                 f" <b>{home} vs {away}</b>{warn}"
             )
-            # Second line: kickoff + confidence (indented)
+            # Second line: kickoff + confidence + EV% (indented)
             detail_parts: list[str] = []
             if kickoff:
                 detail_parts.append(kickoff)
             if confidence:
                 detail_parts.append(confidence)
+            ev_val = float(pick.get("ev") or 0.0)
+            if ev_val > 0:
+                detail_parts.append(f"<code>+{ev_val:.1f}%</code> EV")
             lines.append(line1)
             if detail_parts:
                 lines.append("    " + " · ".join(detail_parts))
@@ -251,6 +259,12 @@ class DigestMessage:
             buttons.append(row)
 
         lines.append("<i>Tap any pick for full analysis →</i>")
+
+        # Optional expandable stats summary blockquote (P3-04)
+        if stats_summary:
+            lines.append("")
+            lines.append(f"<blockquote expandable>{stats_summary}</blockquote>")
+
         buttons.append([InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")])
         buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
@@ -392,6 +406,7 @@ class DetailMessage:
         bookmaker_name: str = "",
         bookmaker_url: str = "",
         compare_odds_cb: str = "",
+        confidence_pct: float = 0.0,
     ) -> tuple[str, InlineKeyboardMarkup]:
         """Build detail view text + keyboard.
 
@@ -433,6 +448,9 @@ class DetailMessage:
             Callback data for Compare Odds button.  Typically
             ``f"odds:compare:{cb_key}"`` (pre-computed by caller).
 
+        confidence_pct:
+            Confidence percentage to display (0–100).  0 means omit the line.
+
         Returns
         -------
         (text, InlineKeyboardMarkup)
@@ -466,21 +484,23 @@ class DetailMessage:
             lines.append(broadcast)
         lines.append("")
 
-        # Narrative (pre-rendered, assumed safe HTML)
+        # Narrative in expandable blockquote (P3-04)
         if narrative:
-            lines.append(narrative.strip())
+            lines.append(f"<blockquote expandable>{narrative.strip()}</blockquote>")
             lines.append("")
         else:
             lines.append("📋 <b>The Setup</b>")
             lines.append(f"<b>{home}</b> vs <b>{away}</b>")
             lines.append("")
 
-        # Odds block
+        # Odds block — monospace for all numerical data (P3-04)
         if show_odds and odds_val:
             bk_str = f" ({bookmaker})" if bookmaker else ""
-            lines.append(f"💰 <b>{outcome}</b> @ {odds_val:.2f}{bk_str}")
+            lines.append(f"💰 <b>{outcome}</b> @ <code>{odds_val:.2f}</code>{bk_str}")
+            if confidence_pct > 0:
+                lines.append(f"   📊 Confidence: <code>{confidence_pct:.0f}%</code>")
             if ev > 0:
-                lines.append(f"   📈 +{ev:.1f}% EV")
+                lines.append(f"   📈 +<code>{ev:.1f}%</code> EV")
             lines.append("")
 
         # Injury flags
@@ -579,6 +599,7 @@ class AlertMessage:
         bookmaker_url: str = "",
         minutes_to_kickoff: int = 0,
         detail_cb: str = "",
+        analysis: str = "",
     ) -> tuple[str, InlineKeyboardMarkup]:
         """Build alert text + keyboard.
 
@@ -598,8 +619,12 @@ class AlertMessage:
             the time string is omitted.
 
         detail_cb:
-            Callback data for the "Full Analysis" secondary button.
+            Callback data for the "View Details" secondary button.
             Typically ``f"edge:detail:{cb_key}"`` (pre-computed by caller).
+
+        analysis:
+            Optional pre-rendered HTML for an expandable analysis blockquote
+            (key insight, market context, or brief narrative).
 
         Returns
         -------
@@ -646,14 +671,19 @@ class AlertMessage:
 
         if outcome:
             if odds_val and bookmaker:
-                lines.append(f"<b>Pick:</b> {outcome} @ {odds_val:.2f} ({bookmaker})")
+                lines.append(f"<b>Pick:</b> {outcome} @ <code>{odds_val:.2f}</code> ({bookmaker})")
             elif odds_val:
-                lines.append(f"<b>Pick:</b> {outcome} @ {odds_val:.2f}")
+                lines.append(f"<b>Pick:</b> {outcome} @ <code>{odds_val:.2f}</code>")
             else:
                 lines.append(f"<b>Pick:</b> {outcome}")
 
         if ev > 0:
-            lines.append(f"<b>Edge:</b> +{ev:.1f}% expected value")
+            lines.append(f"<b>Edge:</b> +<code>{ev:.1f}%</code> expected value")
+
+        # Expandable analysis blockquote — key insight / market context (P3-04)
+        if analysis:
+            lines.append("")
+            lines.append(f"<blockquote expandable>{analysis}</blockquote>")
 
         text = "\n".join(lines)
 
@@ -667,7 +697,7 @@ class AlertMessage:
 
         if detail_cb:
             buttons.append([
-                InlineKeyboardButton("🔍 Full Analysis", callback_data=detail_cb)
+                InlineKeyboardButton("🔍 View Details", callback_data=detail_cb)
             ])
 
         if not buttons:
@@ -702,6 +732,7 @@ class ResultMessage:
     def build(
         result: dict,
         totals: dict | None = None,
+        post_match_analysis: str = "",
     ) -> tuple[str, None]:
         """Build result notification text.
 
@@ -727,6 +758,10 @@ class ResultMessage:
             * ``roi_pct`` / ``roi_7d`` (float) — ROI percentage
             * ``period`` (str) — e.g. ``"7 days"``
 
+        post_match_analysis:
+            Optional pre-rendered HTML for an expandable post-match analysis
+            blockquote (market review, model notes, etc.).
+
         Returns
         -------
         (text, None)  — no keyboard for silent result messages
@@ -747,6 +782,7 @@ class ResultMessage:
             result.get("odds") or result.get("recommended_odds") or 0.0
         )
         score = h(result.get("match_score") or "")
+        pl_rands = float(result.get("pl_rands") or 0.0)
 
         lines: list[str] = [
             f"{r_emoji} <b>{result_word}</b> {tier_emoji}",
@@ -758,11 +794,16 @@ class ResultMessage:
         if score:
             lines.append(f"📋 Score: {score}")
         if outcome and odds_val:
-            lines.append(f"🎯 Pick: {outcome} @ {odds_val:.2f}")
+            lines.append(f"🎯 Pick: {outcome} @ <code>{odds_val:.2f}</code>")
         elif outcome:
             lines.append(f"🎯 Pick: {outcome}")
 
-        # Running totals
+        # P/L in Rands (P3-04)
+        if pl_rands != 0.0:
+            pl_sign = "+" if pl_rands >= 0 else "-"
+            lines.append(f"💵 P/L: <code>{pl_sign}R{abs(pl_rands):.0f}</code>")
+
+        # Running totals — monospace for all numbers (P3-04)
         if totals and int(totals.get("total") or 0) > 0:
             lines.append("")
             total = int(totals["total"])
@@ -775,8 +816,13 @@ class ResultMessage:
             roi_sign = "+" if roi >= 0 else ""
             lines.append(
                 f"<b>Last {h(period)}:</b>"
-                f"  {hits}/{total} ({hr_pct:.0f}%)"
-                f" · ROI {roi_sign}{roi:.1f}%"
+                f"  <code>{hits}/{total}</code> (<code>{hr_pct:.0f}%</code>)"
+                f" · ROI <code>{roi_sign}{roi:.1f}%</code>"
             )
+
+        # Expandable post-match analysis blockquote (P3-04)
+        if post_match_analysis:
+            lines.append("")
+            lines.append(f"<blockquote expandable>{post_match_analysis}</blockquote>")
 
         return "\n".join(lines), None
