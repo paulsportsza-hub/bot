@@ -52,6 +52,7 @@ else:
 
 import asyncio
 import difflib
+import io
 import json
 import logging
 import os
@@ -1746,6 +1747,64 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _td_text, _td_markup = DigestMessage.build(_td_tips)
             await query.edit_message_text(
                 _td_text, parse_mode=ParseMode.HTML, reply_markup=_td_markup
+            )
+    elif prefix == "digest":
+        # P3-WIRE: Image card tier filter navigation
+        user_id = query.from_user.id
+        _dg_back_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("↩️ Back", callback_data="digest:back")],
+            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+        ])
+        _TIER_EMOJIS_DG = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}
+        if action.startswith("filter:"):
+            _dg_tier = action.split(":", 1)[1].lower()
+            _dg_tips = _today_digest_snapshot.get(user_id) or []
+            _dg_filtered = [
+                t for t in _dg_tips
+                if (t.get("display_tier") or t.get("edge_rating") or "bronze").lower() == _dg_tier
+            ]
+            if _dg_filtered:
+                _dg_text, _ = DigestMessage.build(_dg_filtered, title=f"{_dg_tier.title()} Edges")
+                _dg_caption = _dg_text[:1024]
+            else:
+                _dg_caption = f"{_TIER_EMOJIS_DG.get(_dg_tier, '')} No {_dg_tier.title()} edges today."
+            await query.edit_message_caption(
+                caption=_dg_caption, parse_mode=ParseMode.HTML, reply_markup=_dg_back_markup
+            )
+        elif action == "stats":
+            _dg_tips = _today_digest_snapshot.get(user_id) or []
+            _stat_lines = ["📊 <b>Today's Edge Stats</b>\n"]
+            for _tier in ("diamond", "gold", "silver", "bronze"):
+                _cnt = sum(
+                    1 for t in _dg_tips
+                    if (t.get("display_tier") or t.get("edge_rating") or "bronze").lower() == _tier
+                )
+                if _cnt:
+                    _stat_lines.append(
+                        f"{_TIER_EMOJIS_DG[_tier]} {_tier.title()}: <b>{_cnt}</b> edge{'s' if _cnt != 1 else ''}"
+                    )
+            if len(_stat_lines) == 1:
+                _stat_lines.append("No edges found today.")
+            await query.edit_message_caption(
+                caption="\n".join(_stat_lines)[:1024],
+                parse_mode=ParseMode.HTML,
+                reply_markup=_dg_back_markup,
+            )
+        elif action == "back":
+            # Restore original image card caption (no re-upload)
+            _dg_tips = _today_digest_snapshot.get(user_id) or []
+            if not _dg_tips:
+                _dg_tips = list(_hot_tips_cache.get("global", {}).get("tips", []))
+                for _t in _dg_tips:
+                    if _t.get("match_id") and not _t.get("cb_key"):
+                        _t["cb_key"] = _shorten_cb_key(_t["match_id"])
+            try:
+                _, _dg_caption, _dg_markup = DigestMessage.build_photo(_dg_tips)
+            except RuntimeError:
+                _dg_text, _dg_markup = DigestMessage.build(_dg_tips)
+                _dg_caption = _dg_text[:1024]
+            await query.edit_message_caption(
+                caption=_dg_caption, parse_mode=ParseMode.HTML, reply_markup=_dg_markup
             )
     elif prefix == "edge":
         user_id = query.from_user.id
@@ -9202,12 +9261,21 @@ async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not t.get("sport_emoji"):
             t["sport_emoji"] = _get_sport_emoji_for_api_key(t.get("sport_key", ""))
 
-    text, markup = DigestMessage.build(tips)
-
-    if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-    elif update.effective_message:
-        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    _msg = update.message or update.effective_message
+    try:
+        _png, _caption, markup = DigestMessage.build_photo(tips)
+        if _msg:
+            await _msg.reply_photo(
+                photo=io.BytesIO(_png),
+                caption=_caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+    except RuntimeError as _img_err:
+        log.warning("/today image card failed, falling back to text: %s", _img_err)
+        text, markup = DigestMessage.build(tips)
+        if _msg:
+            await _msg.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
     # Freeze snapshot for today:back
     if user_id:
@@ -19497,10 +19565,26 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 ])
 
-            await ctx.bot.send_message(
-                chat_id=user.id, text=teaser, parse_mode=ParseMode.HTML,
-                reply_markup=markup,
-            )
+            # P3-WIRE: send image card digest; fall back to text on Pillow failure
+            _mt_png: bytes | None = None
+            try:
+                from image_card import generate_digest_card as _gen_mt_card
+                _mt_png = await asyncio.to_thread(_gen_mt_card, tips)
+            except (RuntimeError, ImportError) as _mt_img_err:
+                log.warning("Morning teaser image card failed for user %s: %s", user.id, _mt_img_err)
+            if _mt_png is not None:
+                await ctx.bot.send_photo(
+                    chat_id=user.id,
+                    photo=io.BytesIO(_mt_png),
+                    caption=teaser[:1024],
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
+                )
+            else:
+                await ctx.bot.send_message(
+                    chat_id=user.id, text=teaser, parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
+                )
             await _after_send(user.id)
         except Exception as exc:
             log.warning("Failed to send morning teaser to user %s: %s", user.id, exc)
