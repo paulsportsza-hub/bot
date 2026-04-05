@@ -39,7 +39,21 @@ _NOTION_CACHE_TTL = 60  # seconds
 SCRAPERS_DB = os.path.expanduser("~/scrapers/odds.db")
 BOT_DB = os.path.expanduser("~/bot/data/mzansiedge.db")
 TIPSTER_DB = os.path.expanduser("~/scrapers/tipsters/tipster_predictions.db")
+ENRICHMENT_DB = os.path.expanduser("~/scrapers/enrichment.db")
+COMBAT_DB = os.path.expanduser("~/bot/data/combat_data.db")
 QUOTAS_FILE = os.path.join(os.path.dirname(__file__), "api_quotas.json")
+
+# Billing alert config
+_BILLING_PATTERNS = [
+    "credit balance", "payment required", "quota exceeded",
+    "billing", "402", "insufficient credits", "plan limit", "api key",
+]
+_BILLING_URLS = {
+    "anthropic":    "https://console.anthropic.com/settings/billing",
+    "openrouter":   "https://openrouter.ai/settings/credits",
+    "the_odds_api": "https://the-odds-api.com/account",
+    "api-football": "https://dashboard.api-football.com",
+}
 
 DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASS = os.getenv("DASHBOARD_PASS", "mzansiedge")
@@ -204,7 +218,7 @@ def freshness(ts_str: str | None) -> tuple[str, str]:
     """Return (css_class, human_label) for a timestamp."""
     dt = parse_ts(ts_str)
     if dt is None:
-        return "s-black", "Never"
+        return "s-grey", "Never"
     age_h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
     if age_h < 1:
         mins = int(age_h * 60)
@@ -215,6 +229,37 @@ def freshness(ts_str: str | None) -> tuple[str, str]:
         return "s-red", f"{age_h:.1f}h ago"
 
 
+def _is_offpeak() -> bool:
+    """True during weekend (Sat/Sun) or off-peak hours (22:00-06:00 SAST)."""
+    now_sast = datetime.now(_SAST)
+    if now_sast.weekday() >= 5:  # Sat=5, Sun=6
+        return True
+    return now_sast.hour >= 22 or now_sast.hour < 6
+
+
+def freshness_rag(ts_str, cycle_minutes: int = 60, offpeak_relaxed: bool = False) -> tuple:
+    """RAG freshness with service-type-aware thresholds (AC-4, AC-6).
+
+    cycle_minutes=0 -> GREY (on-demand)
+    offpeak_relaxed=True -> 2x thresholds (AC-6)
+    """
+    if cycle_minutes == 0:
+        return "s-grey", "On-demand — idle"
+    dt = parse_ts(ts_str)
+    if dt is None:
+        return "s-grey", "No data"  # never ran — show grey not red
+    age_m = (datetime.now(timezone.utc) - dt).total_seconds() / 60
+    mult = 2 if offpeak_relaxed else 1
+    green_max = cycle_minutes * mult
+    amber_max = cycle_minutes * 2 * mult
+    if age_m < green_max:
+        return "s-green", (f"{int(age_m)}m ago" if age_m < 60 else f"{age_m/60:.1f}h ago")
+    elif age_m < amber_max:
+        return "s-amber", f"{age_m/60:.1f}h ago"
+    else:
+        return "s-red", f"{age_m/60:.1f}h ago"
+
+
 def coverage_badge(pct: float) -> tuple[str, str]:
     if pct >= 90:
         return "s-green", "Healthy"
@@ -223,7 +268,7 @@ def coverage_badge(pct: float) -> tuple[str, str]:
     elif pct > 0:
         return "s-red", "Critical"
     else:
-        return "s-black", "No Data"
+        return "s-grey", "No Data"
 
 
 def _relative_time(ts_str: str | None) -> str:
@@ -342,7 +387,7 @@ def build_coverage_matrix(conn) -> list[dict]:
             "w82":      0,
             "baseline": 0,
             "pct":      0.0,
-            "css":      "s-black",
+            "css":      "s-grey",
             "badge":    badge,
         })
 
@@ -391,7 +436,7 @@ def build_source_freshness(conn) -> list[dict]:
         else:
             row("SA Bookmakers (8x)", None, 0)
     else:
-        out.append({"name": "SA Bookmakers (8x)", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+        out.append({"name": "SA Bookmakers (8x)", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
     # The Odds API (sharp)
     if table_exists(conn, "sharp_odds"):
@@ -402,14 +447,14 @@ def build_source_freshness(conn) -> list[dict]:
         trend = _trend_indicator(c7["c"] if c7 else 0, c14["c"] if c14 else 0)
         row("The Odds API (Sharp)", r["last"] if r else None, (c["c"] if c else 0), trend)
     else:
-        out.append({"name": "The Odds API (Sharp)", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+        out.append({"name": "The Odds API (Sharp)", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
     # ESPN
     if table_exists(conn, "espn_stats_cache"):
         r = q_one(conn, "SELECT MAX(fetched_at) as last, COUNT(*) as c FROM espn_stats_cache")
         row("ESPN Hidden API", r["last"] if r else None, r["c"] if r else 0, "7 leagues")
     else:
-        out.append({"name": "ESPN Hidden API", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+        out.append({"name": "ESPN Hidden API", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
     # API-Football
     if table_exists(conn, "api_usage"):
@@ -421,9 +466,9 @@ def build_source_freshness(conn) -> list[dict]:
         if r and r["last"]:
             row("API-Football", r["last"], c["c"] if c else 0, trend)
         else:
-            out.append({"name": "API-Football", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+            out.append({"name": "API-Football", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
     else:
-        out.append({"name": "API-Football", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+        out.append({"name": "API-Football", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
     # Narrative cache
     if table_exists(conn, "narrative_cache"):
@@ -434,7 +479,7 @@ def build_source_freshness(conn) -> list[dict]:
         trend = _trend_indicator(c7["c"] if c7 else 0, c14["c"] if c14 else 0)
         row("Narrative Cache", r["last"] if r else None, c["c"] if c else 0, trend)
     else:
-        out.append({"name": "Narrative Cache", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+        out.append({"name": "Narrative Cache", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
     # API-Sports MMA
     if table_exists(conn, "api_usage"):
@@ -446,9 +491,9 @@ def build_source_freshness(conn) -> list[dict]:
         if r and r["last"]:
             row("API-Sports MMA", r["last"], c["c"] if c else 0, trend)
         else:
-            out.append({"name": "API-Sports MMA", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+            out.append({"name": "API-Sports MMA", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
     else:
-        out.append({"name": "API-Sports MMA", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+        out.append({"name": "API-Sports MMA", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
     # API-Sports Rugby
     if table_exists(conn, "api_usage"):
@@ -460,9 +505,9 @@ def build_source_freshness(conn) -> list[dict]:
         if r and r["last"]:
             row("API-Sports Rugby", r["last"], c["c"] if c else 0, trend)
         else:
-            out.append({"name": "API-Sports Rugby", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+            out.append({"name": "API-Sports Rugby", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
     else:
-        out.append({"name": "API-Sports Rugby", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+        out.append({"name": "API-Sports Rugby", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
     # Sportmonks Cricket
     if table_exists(conn, "api_usage"):
@@ -474,9 +519,9 @@ def build_source_freshness(conn) -> list[dict]:
         if r and r["last"]:
             row("Sportmonks Cricket", r["last"], c["c"] if c else 0, trend)
         else:
-            out.append({"name": "Sportmonks Cricket", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+            out.append({"name": "Sportmonks Cricket", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
     else:
-        out.append({"name": "Sportmonks Cricket", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+        out.append({"name": "Sportmonks Cricket", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
     # Tipster Sources
     tip_conn = db_connect(TIPSTER_DB)
@@ -501,14 +546,89 @@ def build_source_freshness(conn) -> list[dict]:
         finally:
             tip_conn.close()
     else:
-        out.append({"name": "Tipster Sources", "last_pull": "Not Connected", "records_24h": 0, "css": "s-black", "trend_7d": "\u2014"})
+        out.append({"name": "Tipster Sources", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+
+    # Enrichment DB (weather + news) — AC-7
+    enr_conn = db_connect(ENRICHMENT_DB)
+    if enr_conn:
+        try:
+            offpeak = _is_offpeak()
+            wr = enr_conn.execute(
+                "SELECT MAX(scraped_at) as last, COUNT(*) as c FROM weather_forecasts "
+                "WHERE scraped_at >= datetime('now','-24 hours')"
+            ).fetchone()
+            nr = enr_conn.execute(
+                "SELECT MAX(scraped_at) as last, COUNT(*) as c FROM news_articles "
+                "WHERE scraped_at >= datetime('now','-24 hours')"
+            ).fetchone()
+            w_css, w_lbl = freshness_rag(wr["last"] if wr else None, 1440, offpeak)
+            n_css, n_lbl = freshness_rag(nr["last"] if nr else None, 1440, offpeak)
+            out.append({"name": "Weather Forecasts", "last_pull": w_lbl, "records_24h": wr["c"] if wr else 0, "css": w_css, "trend_7d": "enrichment"})
+            out.append({"name": "News Articles", "last_pull": n_lbl, "records_24h": nr["c"] if nr else 0, "css": n_css, "trend_7d": "enrichment"})
+        except Exception:
+            out.append({"name": "Weather Forecasts", "last_pull": "Error", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+            out.append({"name": "News Articles", "last_pull": "Error", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+        finally:
+            enr_conn.close()
+    else:
+        out.append({"name": "Weather Forecasts", "last_pull": "Not found", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+        out.append({"name": "News Articles", "last_pull": "Not found", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+
+    # Combat data DB (may not exist) — AC-7
+    if os.path.exists(COMBAT_DB):
+        cbt_conn = db_connect(COMBAT_DB)
+        if cbt_conn:
+            try:
+                cr = cbt_conn.execute(
+                    "SELECT MAX(scraped_at) as last, COUNT(*) as c FROM fighter_records "
+                    "WHERE scraped_at >= datetime('now','-24 hours')"
+                ).fetchone()
+                c_css, c_lbl = freshness_rag(cr["last"] if cr else None, 1440, _is_offpeak())
+                out.append({"name": "MMA Fighter Records", "last_pull": c_lbl, "records_24h": cr["c"] if cr else 0, "css": c_css, "trend_7d": "combat"})
+            except Exception:
+                out.append({"name": "MMA Fighter Records", "last_pull": "No table", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+            finally:
+                cbt_conn.close()
+        else:
+            out.append({"name": "MMA Fighter Records", "last_pull": "Not connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+    else:
+        out.append({"name": "MMA Fighter Records", "last_pull": "Not found", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+
+    # Bot state DB (mzansiedge.db) — AC-7
+    bot_conn = db_connect(BOT_DB)
+    if bot_conn:
+        try:
+            ur = bot_conn.execute(
+                "SELECT COUNT(*) as total, "
+                "SUM(CASE WHEN is_active=1 OR is_active IS NULL THEN 1 ELSE 0 END) as active "
+                "FROM users"
+            ).fetchone()
+            sr = bot_conn.execute(
+                "SELECT COUNT(*) as subs FROM users WHERE subscription_status='active'"
+            ).fetchone()
+            total_users = ur["total"] if ur else 0
+            active_users = ur["active"] if ur else 0
+            subs = sr["subs"] if sr else 0
+            out.append({
+                "name": f"Bot Users ({total_users} total, {subs} subscribers)",
+                "last_pull": "Live",
+                "records_24h": active_users,
+                "css": "s-green",
+                "trend_7d": "bot",
+            })
+        except Exception:
+            out.append({"name": "Bot Users", "last_pull": "Error", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+        finally:
+            bot_conn.close()
+    else:
+        out.append({"name": "Bot Users", "last_pull": "Not connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
     return out
 
 
 def build_scraper_health(conn) -> list[dict]:
     if not table_exists(conn, "odds_snapshots"):
-        return [{"name": BK_DISPLAY[b], "last_scrape": "Not Connected", "matches_24h": 0, "avg_odds": 0, "css": "s-black"} for b in BOOKMAKERS]
+        return [{"name": BK_DISPLAY[b], "last_scrape": "Not Connected", "matches_24h": 0, "avg_odds": 0, "css": "s-grey"} for b in BOOKMAKERS]
     rows = q_all(conn, """
         SELECT bookmaker,
                COUNT(DISTINCT match_id)                           AS matches,
@@ -523,13 +643,14 @@ def build_scraper_health(conn) -> list[dict]:
     for bk in BOOKMAKERS:
         r = by_bk.get(bk)
         if r:
-            css, lbl = freshness(r["last"])
+            css, lbl = freshness_rag(r["last"], cycle_minutes=180, offpeak_relaxed=True)
             out.append({
                 "name":       BK_DISPLAY[bk],
                 "last_scrape": lbl,
                 "matches_24h": r["matches"] or 0,
                 "avg_odds":    round(r["avg_odds"] or 0, 1),
                 "css":         css,
+                "has_data_24h": True,
             })
         else:
             out.append({
@@ -538,6 +659,7 @@ def build_scraper_health(conn) -> list[dict]:
                 "matches_24h": 0,
                 "avg_odds":    0,
                 "css":         "s-red",
+                "has_data_24h": False,
             })
     return out
 
@@ -723,6 +845,86 @@ def build_alerts(conn, coverage: list[dict]) -> list[dict]:
     return sorted(alerts, key=lambda x: x["ts"], reverse=True)[:50]
 
 
+def build_health_alerts_history(conn) -> list[dict]:
+    """Query health_alerts table for last 24h EdgeOps alerts with resolution status."""
+    if conn is None:
+        return []
+    if not table_exists(conn, "health_alerts"):
+        return []
+    try:
+        rows = q_all(conn, """
+            SELECT ha.source_id, ha.alert_type, ha.severity, ha.message,
+                   ha.fired_at, ha.resolved_at, ha.acknowledged,
+                   sr.source_name
+            FROM health_alerts ha
+            LEFT JOIN source_registry sr ON sr.source_id = ha.source_id
+            WHERE ha.fired_at >= datetime('now', '-24 hours')
+            ORDER BY ha.fired_at DESC
+            LIMIT 60
+        """)
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        resolved = r["resolved_at"] is not None
+        out.append({
+            "source_id": r["source_id"],
+            "source_name": r["source_name"] or r["source_id"],
+            "alert_type": (r["alert_type"] or "").replace("_", " "),
+            "severity": r["severity"] or "warning",
+            "message": r["message"] or "",
+            "fired_at": r["fired_at"],
+            "resolved": resolved,
+            "ts": _sast_hhmm(r["fired_at"]),
+            "ts_rel": _relative_time(r["fired_at"]),
+        })
+    return out
+
+
+def build_api_quota_from_db(conn) -> list[dict]:
+    """Query api_quota_tracking for latest per-API quota data (live from health_checker)."""
+    if conn is None:
+        return []
+    if not table_exists(conn, "api_quota_tracking"):
+        return []
+    try:
+        rows = q_all(conn, """
+            SELECT api_name, credits_used, credits_limit, credits_remaining,
+                   pct_used, period, checked_at
+            FROM api_quota_tracking
+            WHERE rowid IN (
+                SELECT MAX(rowid) FROM api_quota_tracking GROUP BY api_name
+            )
+            ORDER BY api_name
+        """)
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        used = r["credits_used"]
+        limit = r["credits_limit"]
+        remaining = r["credits_remaining"]
+        pct = float(r["pct_used"] or 0)
+        pct_rem = (100.0 - pct) if limit else 0
+        if pct_rem > 50:
+            quota_css = "s-green"
+        elif pct_rem > 20:
+            quota_css = "s-amber"
+        else:
+            quota_css = "s-red"
+        out.append({
+            "api": r["api_name"].replace("_", " ").replace("the ", "The ").title(),
+            "used": used if used is not None else "—",
+            "limit": f"{limit:,}" if limit else "—",
+            "remaining": f"{remaining:,}" if remaining is not None else "—",
+            "pct_used": round(pct, 1),
+            "period": r["period"] or "—",
+            "last_updated": _relative_time(r["checked_at"]),
+            "css": quota_css,
+        })
+    return out
+
+
 # -- Notion API helpers (Automation view) -------------------------------------
 
 def _notion_request(endpoint: str, body: dict | None = None, method: str | None = None) -> dict | None:
@@ -831,6 +1033,8 @@ def _fetch_marketing_queue() -> tuple[list[dict], float]:
             "url": _get_page_prop(page, "URL") or _get_page_prop(page, "Published URL") or "",
             "campaign_theme": _get_page_prop(page, "Campaign / Theme") or _get_page_prop(page, "Campaign") or _get_page_prop(page, "Theme") or "",
             "error": _get_page_prop(page, "Error") or _get_page_prop(page, "Reason") or "",
+            "work_type": _get_page_prop(page, "Work Type") or _get_page_prop(page, "Type") or "",
+            "platform_notes": _get_page_prop(page, "Platform Notes") or _get_page_prop(page, "Notes") or "",
             "created": page.get("created_time", ""),
             "last_edited": page.get("last_edited_time", ""),
         }
@@ -868,6 +1072,52 @@ def _normalise_channel_key(raw: str) -> str:
     return ""
 
 
+# Channels that require Paul's approval before publishing.
+# X/Twitter, WhatsApp, TikTok, and Telegram have standing auto-approval —
+# those items must never appear in the Approve Posts panel.
+_APPROVAL_CHANNELS: frozenset[str] = frozenset({
+    "Facebook", "Facebook Image",
+    "Instagram", "Instagram Image",
+    "LinkedIn", "LinkedIn Image",
+})
+
+
+def _get_awaiting_items(
+    items: list[dict],
+    include_overdue: bool = False,
+    channels: frozenset[str] | None = None,
+) -> list[dict]:
+    """Return items needing review.
+
+    Args:
+        items: all queue items
+        include_overdue: if True, also include Approved/Ready/Scheduled items with
+            past scheduled times (overdue posts that still need action).
+        channels: if provided, restrict results to items whose Channel matches
+            one of these values (exact, case-sensitive). Pass _APPROVAL_CHANNELS
+            to enforce the FB/IG/LI-only approval model in the Task Hub.
+    """
+    now_utc = datetime.now(timezone.utc)
+    awaiting: list[dict] = []
+    for item in items:
+        # Channel gate — apply before anything else
+        if channels is not None:
+            item_channel = (item.get("channel") or "").strip()
+            if item_channel not in channels:
+                continue
+        status = (item.get("status") or "").lower().strip()
+        sched_raw = item.get("scheduled_time") or ""
+        if status in ("awaiting approval", "draft", "review", "pending",
+                       "in review", "awaiting", "in progress"):
+            awaiting.append(item)
+        elif include_overdue and status in ("approved", "ready", "scheduled"):
+            sched_dt = parse_ts(sched_raw)
+            if sched_dt and sched_dt <= now_utc:
+                awaiting.append(item)
+    awaiting.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
+    return awaiting
+
+
 # -- HTML renderer helpers ----------------------------------------------------
 
 STATUS_CSS = {
@@ -875,6 +1125,7 @@ STATUS_CSS = {
     "s-amber": "color:#f59e0b;font-weight:700",
     "s-red":   "color:#ef4444;font-weight:700",
     "s-black": "color:#6b7280;font-weight:700",
+    "s-grey":  "color:#6b7280;font-weight:700",
 }
 
 
@@ -884,6 +1135,7 @@ def dot(css_class: str) -> str:
         "s-amber": "#f59e0b",
         "s-red":   "#ef4444",
         "s-black": "#6b7280",
+        "s-grey":  "#6b7280",
     }
     colour = styles.get(css_class, "#6b7280")
     return f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{colour};margin-right:6px"></span>'
@@ -906,6 +1158,7 @@ _ICON_GEAR = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke
 _ICON_SERVER = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>'
 _ICON_TASKHUB = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><rect x="3" y="13" width="6" height="6" rx="1"/><line x1="13" y1="8" x2="21" y2="8"/><line x1="13" y1="16" x2="21" y2="16"/><line x1="17" y1="5" x2="17" y2="11"/></svg>'
 _ICON_CHART = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>'
+_ICON_APPROVAL = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
 
 
 
@@ -971,7 +1224,13 @@ def _shared_css() -> str:
   .sidebar-item .item-icon { flex-shrink: 0; display: flex; align-items: center; }
   .sidebar-item .item-label {
     font-family: var(--font-d); font-weight: 600; font-size: 12px;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.04em; display: flex; align-items: center; gap: 8px;
+  }
+  .nav-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 5px;
+    background: #E8571F; color: #fff; font-size: 10px; font-weight: 700;
+    border-radius: 9px; line-height: 1; font-family: var(--font-d);
   }
   .sidebar-bottom {
     border-top: 1px solid var(--border);
@@ -1048,7 +1307,7 @@ def _shared_css() -> str:
   .ch-dot { width:5px; height:5px; border-radius:50%; flex-shrink:0; }
 
   /* STATUS TEXT */
-  .s-green { color:var(--green); font-weight:700; } .s-amber { color:var(--amber); font-weight:700; } .s-red { color:var(--red); font-weight:700; } .s-black { color:var(--muted); font-weight:700; }
+  .s-green { color:var(--green); font-weight:700; } .s-amber { color:var(--amber); font-weight:700; } .s-red { color:var(--red); font-weight:700; } .s-black { color:var(--muted); font-weight:700; } .s-grey { color:var(--muted); font-weight:700; }
 
   /* ALERT LOG */
   .alerts-scroll { max-height:320px; overflow-y:auto; }
@@ -1089,6 +1348,97 @@ def _shared_css() -> str:
   }
   @media(max-width:1000px) { .kpi-strip { grid-template-columns:repeat(3,1fr); } .grid-2 { grid-template-columns:1fr; } }
   @media(max-width:600px)  { .kpi-strip { grid-template-columns:repeat(2,1fr); } .topbar { padding:10px 14px; } }
+
+  /* LOADING BAR */
+  #loading-bar {
+    position: fixed; top: 0; left: var(--sidebar-w); right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #F8C830, #F0A020, #E8571F);
+    z-index: 9999;
+    opacity: 0;
+    pointer-events: none;
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: opacity 80ms;
+  }
+  #loading-bar.lb-active {
+    opacity: 1;
+    animation: lb-progress 1.4s ease-in-out infinite alternate;
+  }
+  @keyframes lb-progress {
+    0%   { transform: scaleX(0.05); }
+    50%  { transform: scaleX(0.65); }
+    100% { transform: scaleX(0.92); }
+  }
+
+  /* CLICKABLE KPI */
+  .kpi-clickable { cursor: pointer; transition: background 150ms; border-radius: var(--r); }
+  .kpi-clickable:hover { background: rgba(248,200,48,0.07); }
+
+  /* APPROVALS VIEW */
+  .appr-pipeline-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:12px; }
+  .appr-count-badge { font-family:var(--font-d); font-size:13px; font-weight:700; color:var(--amber); background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.2); border-radius:999px; padding:4px 14px; }
+  .appr-notion-link { font-family:var(--font-m); font-size:12px; color:var(--gold); }
+  .empty-state { text-align:center; padding:60px 20px; font-family:var(--font-m); font-size:14px; color:var(--muted); }
+  .empty-state-done { text-align:center; padding:60px 20px; }
+  .empty-state-done-icon { font-size:40px; margin-bottom:12px; }
+  .empty-state-done-text { font-family:var(--font-d); font-size:18px; font-weight:700; color:var(--text); }
+  .empty-state-done-sub { font-family:var(--font-m); font-size:13px; color:var(--muted); margin-top:6px; }
+
+  /* TABS */
+  .tab-bar { display:flex; gap:0; border-bottom:1px solid var(--border); margin-bottom:20px; overflow-x:auto; flex-shrink:0; }
+  .tab-btn { padding:10px 20px; font-family:var(--font-d); font-weight:600; font-size:12px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); cursor:pointer; border:none; background:none; border-bottom:3px solid transparent; margin-bottom:-1px; transition:color 150ms,border-color 150ms; white-space:nowrap; }
+  .tab-btn:hover { color:var(--text); }
+  .tab-btn.tab-active { color:var(--gold); border-bottom-color:var(--gold); }
+  .tab-pane { display:none; }
+  .tab-pane.tab-active { display:block; }
+
+  /* KPI TIER HIERARCHY */
+  .kpi-strip-h { grid-template-columns:repeat(6,1fr); }
+  .kpi-strip-h .kpi-t1 { grid-column:span 3; }
+  .kpi-t1 .kpi-val { font-size:36px; }
+  @media(max-width:1100px) { .kpi-strip-h { grid-template-columns:repeat(4,1fr); } .kpi-strip-h .kpi-t1 { grid-column:span 2; } }
+  @media(max-width:768px) { .kpi-strip-h { grid-template-columns:repeat(2,1fr); } .kpi-strip-h .kpi-t1 { grid-column:span 2; } }
+
+  /* COVERAGE BARS */
+  .cov-bar-row { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--border-sub); }
+  .cov-bar-label { width:90px; font-family:var(--font-d); font-size:11px; font-weight:600; color:var(--text); flex-shrink:0; text-transform:capitalize; }
+  .cov-bar-track { flex:1; background:rgba(255,255,255,0.06); border-radius:999px; height:7px; overflow:hidden; }
+  .cov-bar-fill { height:100%; border-radius:999px; }
+  .cov-bar-meta { font-family:var(--font-m); font-size:11px; color:var(--muted); flex-shrink:0; text-align:right; min-width:90px; }
+
+  /* EXCEPTION-FIRST */
+  .exc-critical { background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.22); border-radius:8px; padding:10px 14px; margin-bottom:10px; }
+  .exc-warn-wrap { border:1px solid rgba(245,158,11,0.2); border-radius:8px; margin-bottom:8px; overflow:hidden; }
+  .exc-warn-sum { padding:8px 14px; cursor:pointer; display:flex; align-items:center; gap:8px; font-family:var(--font-m); font-size:12px; color:var(--amber); }
+  .exc-ok { background:rgba(34,197,94,0.04); border:1px solid rgba(34,197,94,0.14); border-radius:8px; padding:9px 14px; color:var(--green); font-family:var(--font-m); font-size:12px; margin-top:4px; }
+  .exc-src-row { display:flex; align-items:center; gap:8px; padding:4px 2px; font-size:12px; border-bottom:1px solid rgba(239,68,68,0.1); }
+
+  /* TABLE FIXED HEIGHT */
+  .tbl-fixed { max-height:280px; overflow-y:auto; }
+
+  /* ALERT LIMIT NOTE */
+  .alert-limit-note { font-family:var(--font-m); font-size:11px; color:var(--muted); padding:6px 16px; border-top:1px solid var(--border); }
+
+  /* BILLING ALERT (AC-15) */
+  @keyframes billing-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  .billing-alert {
+    background: rgba(255,0,255,0.08);
+    border: 2px solid #ff00ff;
+    color: #ff88ff;
+    padding: 10px 16px;
+    margin: 8px 0;
+    border-radius: 6px;
+    font-family: var(--font-m);
+    font-size: 12px;
+    animation: billing-pulse 1s ease-in-out infinite;
+  }
+
+  /* CLICKABLE KPI (s-grey status class) */
+  .s-grey { color: #6b7280; font-weight: 700; }
 """
 
 
@@ -1096,16 +1446,25 @@ def _shared_css() -> str:
 
 def _sidebar_html(active_view: str) -> str:
     items = [
-        ("task_hub", "Task Hub", _ICON_TASKHUB, "/admin/task-hub"),
-        ("health", "Data Health", _ICON_HEARTBEAT, "/admin/health"),
-        ("automation", "Social Media", _ICON_PLAY, "/admin/automation"),
-        ("system_health", "System Health", _ICON_SERVER, "/admin/system"),
+        ("health", "System Health", _ICON_SERVER, "/admin/health"),
         ("performance", "Edge Performance", _ICON_CHART, "/admin/performance"),
+        ("automation", "Social Media", _ICON_PLAY, "/admin/automation"),
+        ("task_hub", "Task Hub", _ICON_TASKHUB, "/admin/task-hub"),
     ]
+    # Compute pending approval count for Task Hub badge
+    _badge_count = 0
+    try:
+        _mq, _ = _fetch_marketing_queue()
+        _badge_count = len(_get_awaiting_items(_mq, include_overdue=True, channels=_APPROVAL_CHANNELS))
+    except Exception:
+        pass
     nav_items = ""
     for key, label, icon, href in items:
         active_cls = " active" if key == active_view else ""
-        nav_items += f'<a class="sidebar-item{active_cls}" href="{href}" data-view="{key}"><span class="item-icon">{icon}</span><span class="item-label">{label}</span></a>\n'
+        badge_html = ""
+        if key == "task_hub" and _badge_count > 0:
+            badge_html = f'<span class="nav-badge">{_badge_count}</span>'
+        nav_items += f'<a class="sidebar-item{active_cls}" href="{href}" data-view="{key}"><span class="item-icon">{icon}</span><span class="item-label">{label}{badge_html}</span></a>\n'
 
     return f"""<aside class="sidebar" id="sidebar">
   <div class="sidebar-brand"><img src="/static/wordmark.png" alt="MzansiEdge"></div>
@@ -1123,6 +1482,22 @@ def _sidebar_js() -> str:
 <script>
 (function() {
   var contentInner = document.getElementById('contentInner');
+  var _loadingBar = document.getElementById('loading-bar');
+  var _currentXhr = null;
+  var _loadStart = 0;
+  var _MIN_LOAD_MS = 150;
+
+  function _showBar() {
+    _loadStart = Date.now();
+    if (_loadingBar) { _loadingBar.classList.add('lb-active'); }
+  }
+  function _hideBar() {
+    var elapsed = Date.now() - _loadStart;
+    var delay = Math.max(0, _MIN_LOAD_MS - elapsed);
+    setTimeout(function() {
+      if (_loadingBar) { _loadingBar.classList.remove('lb-active'); }
+    }, delay);
+  }
 
   // Re-execute <script> tags that were injected via innerHTML
   // (innerHTML does NOT execute scripts; we must clone each one)
@@ -1155,20 +1530,43 @@ def _sidebar_js() -> str:
       var view = this.getAttribute('data-view');
       var href = this.getAttribute('href');
 
+      // Cancel any in-flight request
+      if (_currentXhr) { try { _currentXhr.abort(); } catch(_) {} _currentXhr = null; }
+
       navItems.forEach(function(n) { n.classList.remove('active'); });
       this.classList.add('active');
+      _showBar();
 
-      fetch('/admin/api/' + view, { credentials: 'same-origin' })
-      .then(function(resp) {
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        return resp.text();
-      })
-      .then(function(html) { _injectView(view, html, href); })
-      .catch(function(err) {
-        contentInner.innerHTML = '<div class="page"><div class="panel"><div style="padding:40px;text-align:center;color:var(--muted)">Failed to load view: ' + err.message + '</div></div></div>';
-      });
+      var xhr = new XMLHttpRequest();
+      _currentXhr = xhr;
+      xhr.open('GET', '/admin/api/' + view, true);
+      xhr.withCredentials = true;
+      xhr.onload = function() {
+        if (xhr !== _currentXhr) return;  // superseded by a newer click
+        _currentXhr = null;
+        _hideBar();
+        if (xhr.status >= 200 && xhr.status < 300) {
+          _injectView(view, xhr.responseText, href);
+        } else {
+          contentInner.innerHTML = '<div class="page"><div class="panel"><div style="padding:40px;text-align:center;color:var(--muted)">Failed to load view: HTTP ' + xhr.status + '</div></div></div>';
+        }
+      };
+      xhr.onerror = function() {
+        if (xhr !== _currentXhr) return;
+        _currentXhr = null;
+        _hideBar();
+        contentInner.innerHTML = '<div class="page"><div class="panel"><div style="padding:40px;text-align:center;color:var(--muted)">Network error loading view.</div></div></div>';
+      };
+      xhr.onabort = function() { /* superseded — do nothing */ };
+      xhr.send();
     });
   });
+
+  // Expose helper for KPI card clicks that navigate programmatically
+  window._navToView = function(view) {
+    var item = document.querySelector('.sidebar-item[data-view="' + view + '"]');
+    if (item) { item.click(); }
+  };
 
   // Handle browser back/forward
   window.addEventListener('popstate', function(e) {
@@ -1177,9 +1575,13 @@ def _sidebar_js() -> str:
       navItems.forEach(function(n) {
         n.classList.toggle('active', n.getAttribute('data-view') === view);
       });
-      fetch('/admin/api/' + view, { credentials: 'same-origin' })
-      .then(function(r) { return r.text(); })
-      .then(function(html) { _injectView(view, html, null); });
+      _showBar();
+      var xhr2 = new XMLHttpRequest();
+      xhr2.open('GET', '/admin/api/' + view, true);
+      xhr2.withCredentials = true;
+      xhr2.onload = function() { _hideBar(); _injectView(view, xhr2.responseText, null); };
+      xhr2.onerror = function() { _hideBar(); };
+      xhr2.send();
     }
   });
 
@@ -1187,6 +1589,385 @@ def _sidebar_js() -> str:
   history.replaceState({view: document.body.getAttribute('data-active-view')}, '');
 })();
 </script>"""
+
+
+# -- Source Health Monitor helpers -------------------------------------------
+
+_CATEGORY_DISPLAY = {
+    "bookmaker":  "Bookmaker Odds (8)",
+    "sharp":      "Sharp Benchmark (4)",
+    "rating":     "Ratings & Results (3)",
+    "fixture":    "Fixtures & Lineups (5)",
+    "tipster":    "Tipster Predictions (9)",
+    "enrichment": "News & Enrichment (4)",
+    "settlement": "Edge & Settlement (4)",
+    "bot_job":    "Bot Jobs (5)",
+}
+
+_CATEGORY_ORDER = [
+    "bookmaker", "sharp", "rating", "fixture",
+    "tipster", "enrichment", "settlement", "bot_job",
+]
+
+_STATUS_DOT = {
+    "green":  '<span style="color:#22c55e">&#9679;</span>',
+    "yellow": '<span style="color:#f59e0b">&#9679;</span>',
+    "red":    '<span style="color:#ef4444">&#9679;</span>',
+    "black":  '<span style="color:#6b7280">&#9679;</span>',
+    "grey":   '<span style="color:#6b7280">&#9679;</span>',
+}
+
+_STATUS_DISPLAY = {
+    "green":  "GREEN",
+    "yellow": "AMBER",
+    "red":    "RED",
+    "black":  "OFFLINE",
+    "grey":   "IDLE",
+}
+
+
+def build_source_health_monitor(conn):
+    """Return source health monitor dict for rendering.
+
+    Returns dict with:
+      system_score, green_count, yellow_count, red_count, black_count,
+      sources_by_category, critical_issues
+    Returns fallback dict with system_score=-1 if schema not migrated.
+    """
+    _fallback = {
+        "system_score": -1,
+        "green_count": 0, "yellow_count": 0, "red_count": 0, "black_count": 0,
+        "grey_count": 0, "total_count": 0,
+        "sources_by_category": {},
+        "critical_issues": [],
+    }
+    if conn is None:
+        return _fallback
+    if not table_exists(conn, "source_health_current"):
+        return _fallback
+    if not table_exists(conn, "source_registry"):
+        return _fallback
+
+    try:
+        rows = q_all(conn, """
+            SELECT
+                r.source_id, r.source_name, r.category, r.critical,
+                r.expected_interval_minutes,
+                h.status, h.last_success_at, h.consecutive_failures, h.last_rows_produced
+            FROM source_registry r
+            LEFT JOIN source_health_current h ON h.source_id = r.source_id
+            WHERE r.enabled = 1
+            ORDER BY r.category, r.source_name
+        """)
+    except Exception:
+        return _fallback
+
+    counts = {"green": 0, "yellow": 0, "red": 0, "black": 0, "grey": 0}
+    sources_by_category = {cat: [] for cat in _CATEGORY_ORDER}
+    critical_issues = []
+
+    for row in rows:
+        d = dict(row)
+        interval = d.get("expected_interval_minutes") or 0
+        raw_status = d.get("status") or "black"
+        # AC-1: on-demand services (interval=0) with no success show as grey, never red/black
+        status = "grey" if (interval == 0 and raw_status == "black") else raw_status
+        d["status"] = status  # update for rendering
+        counts[status] = counts.get(status, 0) + 1
+        cat = d.get("category", "")
+        if cat not in sources_by_category:
+            sources_by_category[cat] = []
+        sources_by_category[cat].append(d)
+        # GREY on-demand items are never critical
+        if d.get("critical") and status in ("red", "black"):
+            critical_issues.append(d)
+
+    total = len(rows)
+    # Weighted score: exclude GREY (on-demand/idle) from denominator (AC-5)
+    # Only score sources with expected_interval > 0
+    scored = [dict(r) for r in rows if (dict(r).get("expected_interval_minutes") or 0) > 0]
+    if scored:
+        s_weights = {"green": 100, "yellow": 60, "red": 20, "black": 0, "grey": 0}
+        raw = sum(s_weights.get(d.get("status") or "black", 0) for d in scored)
+        system_score = round(raw / len(scored), 1)
+    else:
+        system_score = 0.0
+
+    return {
+        "system_score": system_score,
+        "green_count": counts["green"],
+        "yellow_count": counts["yellow"],
+        "red_count": counts["red"],
+        "black_count": counts["black"],
+        "grey_count": counts.get("grey", 0),
+        "total_count": total,
+        "sources_by_category": sources_by_category,
+        "critical_issues": critical_issues,
+    }
+
+
+def build_rendering_path_stats(conn):
+    """Query narrative_cache rendering path breakdown."""
+    _fallback = {
+        "w84": 0, "w82": 0, "baseline_no_edge": 0, "total": 0,
+        "pct_w84": 0.0, "pct_w82": 0.0, "pct_baseline": 0.0,
+    }
+    if conn is None:
+        return _fallback
+    if not table_exists(conn, "narrative_cache"):
+        return _fallback
+    try:
+        rows = q_all(conn, "SELECT narrative_source, COUNT(*) FROM narrative_cache GROUP BY narrative_source")
+        counts = {r[0]: r[1] for r in rows}
+    except Exception:
+        return _fallback
+
+    w84 = counts.get("w84", 0)
+    w82 = counts.get("w82", 0)
+    baseline = counts.get("baseline_no_edge", 0)
+    total = sum(counts.values())
+    return {
+        "w84": w84,
+        "w82": w82,
+        "baseline_no_edge": baseline,
+        "total": total,
+        "pct_w84": round(w84 / total * 100, 1) if total else 0.0,
+        "pct_w82": round(w82 / total * 100, 1) if total else 0.0,
+        "pct_baseline": round(baseline / total * 100, 1) if total else 0.0,
+    }
+
+
+def _render_source_health_panel(shm: dict) -> str:
+    """Render the full Source Health Monitor panel HTML."""
+    if shm["system_score"] < 0:
+        return '<div class="panel"><div class="panel-head"><span class="panel-title">Source Health Monitor</span></div><div style="padding:20px;color:#6b7280">Schema not migrated. Run scripts/health_schema_migration.py to enable.</div></div>'
+
+    green = shm["green_count"]
+    yellow = shm["yellow_count"]
+    red = shm["red_count"]
+    black = shm["black_count"]
+    grey = shm.get("grey_count", black)
+
+    summary_bar = (
+        f'<div style="display:flex;gap:16px;padding:8px 0 12px;font-size:13px;font-family:var(--font-m)">'
+        f'<span style="color:#22c55e">&#9679; {green} green</span>'
+        f'<span style="color:#f59e0b">&#9679; {yellow} yellow</span>'
+        f'<span style="color:#ef4444">&#9679; {red} red</span>'
+        f'<span style="color:#6b7280">&#9679; {grey} on-demand/idle</span>'
+        f'</div>'
+    )
+
+    critical_html = ""
+    if shm["critical_issues"]:
+        items_html = "".join(
+            f'<div style="padding:4px 0;color:#ef4444;font-size:12px">'
+            f'{_STATUS_DOT.get(d.get("status","black"),"")} '
+            f'<b>{d.get("source_name","")}</b> — {_STATUS_DISPLAY.get(d.get("status",""), "UNKNOWN")}'
+            f'</div>'
+            for d in shm["critical_issues"]
+        )
+        critical_html = (
+            f'<div style="background:#1a0000;border:1px solid #ef4444;border-radius:6px;padding:10px 14px;margin-bottom:12px">'
+            f'<div style="font-size:12px;font-weight:600;color:#ef4444;margin-bottom:6px">Critical Issues ({len(shm["critical_issues"])})</div>'
+            f'{items_html}'
+            f'</div>'
+        )
+
+    categories_html = ""
+    for cat in _CATEGORY_ORDER:
+        sources = shm["sources_by_category"].get(cat, [])
+        if not sources:
+            continue
+        cat_label = _CATEGORY_DISPLAY.get(cat, cat)
+        rows_html = ""
+        for d in sources:
+            status = d.get("status") or "grey"
+            dot = _STATUS_DOT.get(status, _STATUS_DOT.get("grey", _STATUS_DOT["black"]))
+            last_ok = d.get("last_success_at") or "—"
+            if last_ok and last_ok != "—":
+                last_ok = _relative_time(last_ok)
+            failures = d.get("consecutive_failures") or 0
+            rows_count = d.get("last_rows_produced")
+            rows_str = f"{rows_count:,}" if isinstance(rows_count, int) else "—"
+            fail_str = f'<span style="color:#ef4444">{failures} fails</span>' if failures > 0 else ""
+            sid = d.get("source_id", "")
+            rows_html += (
+                f'<div class="src-row" onclick="fetchHealthLog(\'{sid}\')" '
+                f'style="display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer;'
+                f'border-bottom:1px solid #1a1a1a;font-size:12px">'
+                f'<span style="width:14px">{dot}</span>'
+                f'<span style="flex:1;color:#e5e7eb">{d.get("source_name","")}</span>'
+                f'<span style="color:#6b7280;font-family:var(--font-m)">{last_ok}</span>'
+                f'<span style="width:80px;text-align:right;font-family:var(--font-m)">{rows_str} rows</span>'
+                f'{fail_str}'
+                f'</div>'
+                f'<div id="hl-{sid}" style="display:none;font-size:11px;padding:4px 8px;background:#111;border-radius:4px;margin-bottom:4px"></div>'
+            )
+        categories_html += (
+            f'<details open style="margin-bottom:8px">'
+            f'<summary style="cursor:pointer;font-size:13px;font-weight:600;color:#9ca3af;padding:6px 0">{cat_label}</summary>'
+            f'<div style="padding:0 4px">{rows_html}</div>'
+            f'</details>'
+        )
+
+    fetch_script = """<script>
+function fetchHealthLog(sid) {
+  var el = document.getElementById('hl-' + sid);
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = '<em style="color:#6b7280">Loading...</em>';
+  fetch('/admin/api/health-log/' + sid)
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if (!data || !data.length) { el.innerHTML = '<em style="color:#6b7280">No log entries in last 24h</em>'; return; }
+      var html = '<table style="width:100%;border-collapse:collapse"><tr><th style="color:#6b7280;font-size:10px;text-align:left">Time</th><th style="color:#6b7280;font-size:10px">Status</th><th style="color:#6b7280;font-size:10px">Min since</th><th style="color:#6b7280;font-size:10px">Rows</th></tr>';
+      var statusMap = {green:'GREEN',yellow:'AMBER',red:'RED',black:'OFFLINE',grey:'IDLE'};
+      data.slice(-20).forEach(function(r){
+        var dot = r.status === 'green' ? '&#9679;<span style="color:#22c55e">' : r.status === 'yellow' ? '<span style="color:#f59e0b">&#9679;' : r.status === 'red' ? '<span style="color:#ef4444">&#9679;' : '<span style="color:#6b7280">&#9679;';
+        html += '<tr><td style="color:#9ca3af">' + (r.checked_at||'').slice(11,16) + '</td><td>' + dot + (statusMap[r.status]||r.status) + '</span></td><td style="color:#9ca3af">' + (r.minutes_since_success||'—') + '</td><td style="color:#9ca3af">' + (r.rows_produced||'—') + '</td></tr>';
+      });
+      html += '</table>';
+      el.innerHTML = html;
+    })
+    .catch(function(e){ el.innerHTML = '<em style="color:#ef4444">Error: ' + e + '</em>'; });
+}
+</script>"""
+
+    return (
+        f'<div class="panel">'
+        f'<div class="panel-head"><span class="panel-title">Source Health Monitor</span>'
+        f'<span class="panel-sub">42 sources &middot; updated every 30 min</span></div>'
+        f'{summary_bar}'
+        f'{critical_html}'
+        f'{categories_html}'
+        f'{fetch_script}'
+        f'</div>'
+    )
+
+
+def _render_exception_source_health(shm: dict) -> str:
+    """Overview-tab exception-first source health. Surfaces critical/warning; collapses healthy."""
+    if shm["system_score"] < 0:
+        return '<div class="panel"><div class="panel-head"><span class="panel-title">Source Health Monitor</span></div><div style="padding:16px;color:#6b7280;font-family:var(--font-m);font-size:12px">Schema not migrated.</div></div>'
+
+    green = shm["green_count"]
+    yellow = shm["yellow_count"]
+    total = shm.get("total_count", 42)
+
+    # Critical block (any red/black non-demand sources)
+    crit_html = ""
+    warn_html = ""
+    if shm["critical_issues"]:
+        rows = "".join(
+            f'<div class="exc-src-row">'
+            f'{_STATUS_DOT.get(d.get("status","black"),"")} '
+            f'<span style="color:var(--text);font-weight:600">{d.get("source_name","")}</span>'
+            f'<span style="color:#ef4444;margin-left:auto">{_STATUS_DISPLAY.get(d.get("status",""), "UNKNOWN")}</span>'
+            f'</div>'
+            for d in shm["critical_issues"]
+        )
+        crit_html = (
+            f'<div class="exc-critical">'
+            f'<div style="font-family:var(--font-d);font-size:11px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">&#9888; Critical ({len(shm["critical_issues"])} sources)</div>'
+            f'{rows}'
+            f'</div>'
+        )
+
+    # Warn block: yellow sources (collapsed details)
+    if yellow > 0:
+        warn_src = []
+        for cat in _CATEGORY_ORDER:
+            for d in shm["sources_by_category"].get(cat, []):
+                if (d.get("status") or "black") == "yellow":
+                    warn_src.append(d)
+        if warn_src:
+            rows = "".join(
+                f'<div style="display:flex;align-items:center;gap:8px;padding:3px 14px;font-size:12px;font-family:var(--font-m)">'
+                f'{_STATUS_DOT.get("yellow","")} '
+                f'<span style="color:var(--text)">{d.get("source_name","")}</span>'
+                f'<span style="color:var(--muted);margin-left:auto">{_relative_time(d.get("last_success_at"))}</span>'
+                f'</div>'
+                for d in warn_src
+            )
+            warn_html = (
+                f'<details class="exc-warn-wrap">'
+                f'<summary class="exc-warn-sum">&#9679; {yellow} source{"s" if yellow != 1 else ""} degraded (yellow) — expand</summary>'
+                f'<div style="padding:6px 0 8px">{rows}</div>'
+                f'</details>'
+            )
+
+    # Healthy summary
+    ok_html = ""
+    if green > 0 and not crit_html and not warn_html:
+        ok_html = f'<div class="exc-ok">&#10003; All {total} sources healthy</div>'
+    elif green > 0:
+        ok_html = f'<div class="exc-ok">&#10003; {green} source{"s" if green != 1 else ""} green</div>'
+
+    score = shm["system_score"]
+    score_cls = "c-green" if score >= 80 else ("c-amber" if score >= 50 else "c-red")
+    score_disp = f"{score}%" if score >= 0 else "N/A"
+
+    return (
+        f'<div class="panel">'
+        f'<div class="panel-head">'
+        f'<span class="panel-title">Source Health Monitor</span>'
+        f'<span class="panel-sub">{total} sources &middot; score <span class="{score_cls}">{score_disp}</span></span>'
+        f'</div>'
+        f'<div style="padding:12px 16px">'
+        f'{crit_html}{warn_html}{ok_html}'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def _build_coverage_summary(coverage: list, p1_rows: str) -> str:
+    """Compact per-sport coverage bars for Overview tab, with full matrix in accordion."""
+    # Group by sport
+    by_sport: dict = {}
+    for c in coverage:
+        sport = c["sport"]
+        if sport not in by_sport:
+            by_sport[sport] = {"total": 0, "w84": 0}
+        by_sport[sport]["total"] += c["total"]
+        by_sport[sport]["w84"] += c["w84"]
+
+    bars_html = ""
+    for sport, vals in sorted(by_sport.items()):
+        total = vals["total"]
+        w84 = vals["w84"]
+        pct = round(w84 / total * 100, 1) if total > 0 else 0
+        fill_col = "#22c55e" if pct >= 80 else ("#f59e0b" if pct >= 40 else "#ef4444")
+        bars_html += (
+            f'<div class="cov-bar-row">'
+            f'<span class="cov-bar-label">{sport}</span>'
+            f'<div class="cov-bar-track"><div class="cov-bar-fill" style="width:{pct}%;background:{fill_col}"></div></div>'
+            f'<span class="cov-bar-meta">{w84}/{total} · {pct}%</span>'
+            f'</div>'
+        )
+
+    if not bars_html:
+        bars_html = '<div style="color:var(--muted);font-size:12px;font-family:var(--font-m);padding:8px 0">No coverage data</div>'
+
+    full_matrix = (
+        f'<details style="margin-top:12px">'
+        f'<summary style="cursor:pointer;font-family:var(--font-d);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:6px 0">Full League Breakdown &amp; Chart</summary>'
+        f'<div style="margin-top:8px">'
+        f'<div class="tbl-wrap tbl-fixed"><table class="tbl"><thead><tr><th>Sport</th><th>League</th><th>Matches</th><th>w84 (AI)</th><th>w82 (Tpl)</th><th>Baseline</th><th>Coverage %</th><th>Status</th></tr></thead><tbody>{p1_rows}</tbody></table></div>'
+        f'<div class="chart-wrap"><canvas id="coverageChart"></canvas></div>'
+        f'</div>'
+        f'</details>'
+    )
+
+    return (
+        f'<div class="panel">'
+        f'<div class="panel-head"><span class="panel-title">Sport Coverage</span><span class="panel-sub">Next 7 days &middot; w84 AI-enriched</span></div>'
+        f'<div style="padding:12px 16px">'
+        f'{bars_html}'
+        f'{full_matrix}'
+        f'</div>'
+        f'</div>'
+    )
 
 
 # -- Data Health content renderer ---------------------------------------------
@@ -1198,12 +1979,14 @@ def render_health_content(conn, db_status: str) -> str:
     sources   = build_source_freshness(conn)
     quotas    = build_api_quotas(conn)
     alerts    = build_alerts(conn, coverage)
+    shm       = build_source_health_monitor(conn)
+    rps       = build_rendering_path_stats(conn)
     updated   = datetime.now(_SAST).strftime("%Y-%m-%d %H:%M:%S")
 
     alert_count = len(alerts)
 
     # -- KPI metrics --
-    active_scrapers = sum(1 for s in scrapers if s["css"] == "s-green")
+    active_scrapers = sum(1 for s in scrapers if s.get("has_data_24h", False))
     matches_24h     = sum(s["matches_24h"] for s in scrapers)
     total_w84       = sum(c["w84"]   for c in coverage)
     total_matches_c = sum(c["total"] for c in coverage)
@@ -1211,7 +1994,8 @@ def render_health_content(conn, db_status: str) -> str:
 
     def chip(css_key: str, text: str) -> str:
         cls = {"s-green": "chip-green", "s-amber": "chip-amber",
-               "s-red": "chip-red", "s-black": "chip-gray"}.get(css_key, "chip-gray")
+               "s-red": "chip-red", "s-black": "chip-gray",
+               "s-grey": "chip-gray"}.get(css_key, "chip-gray")
         return f'<span class="chip {cls}"><span class="cdot"></span>{text}</span>'
 
     # -- Topbar --
@@ -1230,6 +2014,22 @@ def render_health_content(conn, db_status: str) -> str:
 </nav>
 {banner}"""
 
+    # -- Billing alert banner (AC-15) --
+    billing_alerts = _check_billing_alerts()
+    billing_html = ""
+    if billing_alerts:
+        items_html = "".join(
+            f'<span style="margin-right:16px"><b>{a["service"]}</b>: {a["title"][:60]}&hellip; '
+            f'({a["count"]} events) <a href="{a["billing_url"]}" target="_blank" '
+            f'style="color:#fff;text-decoration:underline">Fix billing &rarr;</a></span>'
+            for a in billing_alerts
+        )
+        billing_html = (
+            f'<div class="billing-alert">'
+            f'&#9888; BILLING ALERT &mdash; Pipeline is degraded: {items_html}'
+            f'</div>'
+        )
+
     # -- Panel 1: Coverage Matrix rows --
     p1_rows = ""
     if coverage:
@@ -1239,9 +2039,9 @@ def render_health_content(conn, db_status: str) -> str:
                 + td(c["sport"].capitalize())
                 + td(c["league"])
                 + td(c["total"])
-                + td(c["w84"], "s-green" if c["w84"] > 0 else "s-black")
-                + td(c["w82"], "s-red" if c["w82"] > 0 else "s-black")
-                + td(c["baseline"], "s-amber" if c["baseline"] > 0 else "s-black")
+                + td(c["w84"], "s-green" if c["w84"] > 0 else "s-grey")
+                + td(c["w82"], "s-red" if c["w82"] > 0 else "s-grey")
+                + td(c["baseline"], "s-amber" if c["baseline"] > 0 else "s-grey")
                 + td(f"{c['pct']}%", c["css"])
                 + td(c["badge"])
                 + "</tr>"
@@ -1289,7 +2089,7 @@ def render_health_content(conn, db_status: str) -> str:
             pct = remain / limit
             rcss = "s-green" if pct > 0.5 else ("s-amber" if pct > 0.2 else "s-red")
         else:
-            rcss = "s-black"
+            rcss = "s-grey"
 
         p4_rows += (
             "<tr>"
@@ -1328,15 +2128,45 @@ def render_health_content(conn, db_status: str) -> str:
     cov_cls = "c-green" if coverage_pct >= 80 else ("c-amber" if coverage_pct >= 40 else "c-red")
     alert_cls = "c-red" if alert_count > 5 else ("c-amber" if alert_count > 0 else "c-green")
 
+    # -- Source Health Monitor KPI values --
+    shm_score = shm["system_score"]
+    shm_score_cls = "c-green" if shm_score >= 80 else ("c-amber" if shm_score >= 50 else ("c-red" if shm_score >= 0 else "c-text"))
+    shm_score_display = f"{shm_score}" if shm_score >= 0 else "N/A"
+    shm_green = shm["green_count"]
+    shm_total = shm.get("total_count", 42)
+    rps_pct = rps["pct_w82"]
+
+    # -- Source Health Monitor panel --
+    shm_panel = _render_source_health_panel(shm)
+
+    # -- Clickable RED KPI helpers (AC-14) --
+    def _kpi_onclick(metric_name: str, current_val: str, expected_val: str, db_path: str = "~/scrapers/odds.db") -> str:
+        """Return onclick attribute for a RED-state KPI (copies COO investigation prompt)."""
+        ts = updated
+        return (
+            f'onclick="copyPrompt(\'{metric_name}\',\'{current_val}\',\'{expected_val}\',\'{ts}\',\'{db_path}\')" '
+            f'class="kpi kpi-clickable" title="Click to copy investigation prompt"'
+        )
+
+    scraper_kpi_attr = _kpi_onclick("Active Scrapers", str(active_scrapers), str(len(scrapers))) if active_cls == "c-red" else 'class="kpi"'
+    cov_kpi_attr = _kpi_onclick("Narrative Coverage", f"{coverage_pct}%", ">80%", "~/bot/data/mzansiedge.db") if cov_cls == "c-red" else 'class="kpi"'
+    alert_kpi_attr = _kpi_onclick("Active Alerts", str(alert_count), "<5", "~/scrapers/odds.db") if alert_cls == "c-red" else 'class="kpi"'
+    shm_kpi_attr = _kpi_onclick("System Health", f"{shm_score_display}%", ">80%", "~/scrapers/odds.db") if shm_score_cls == "c-red" else 'class="kpi"'
+
     return f"""{topbar}
+{billing_html}
 <div class="page">
   <div class="kpi-strip">
-    <div class="kpi"><div class="kpi-lbl">Active Scrapers</div><div class="kpi-val {active_cls}">{active_scrapers}<span style="font-size:14px;color:var(--muted);font-weight:400">/{len(scrapers)}</span></div><div class="kpi-sub">bookmakers online</div></div>
+    <div {shm_kpi_attr}><div class="kpi-lbl">System Health</div><div class="kpi-val {shm_score_cls}">{shm_score_display}<span style="font-size:14px;color:var(--muted);font-weight:400">%</span></div><div class="kpi-sub">{shm_green}/{shm_total} sources green</div></div>
+    <div class="kpi"><div class="kpi-lbl">Template Path %</div><div class="kpi-val c-text">{rps_pct}<span style="font-size:14px;color:var(--muted);font-weight:400">%</span></div><div class="kpi-sub">w82 template renders</div></div>
+    <div {scraper_kpi_attr}><div class="kpi-lbl">Active Scrapers</div><div class="kpi-val {active_cls}">{active_scrapers}<span style="font-size:14px;color:var(--muted);font-weight:400">/{len(scrapers)}</span></div><div class="kpi-sub">bookmakers online</div></div>
     <div class="kpi"><div class="kpi-lbl">Matches Scraped</div><div class="kpi-val c-gold">{matches_24h:,}</div><div class="kpi-sub">last 24 hours</div></div>
-    <div class="kpi"><div class="kpi-lbl">Narrative Coverage</div><div class="kpi-val {cov_cls}">{coverage_pct}<span style="font-size:14px;color:var(--muted);font-weight:400">%</span></div><div class="kpi-sub">w84 AI-enriched</div></div>
-    <div class="kpi"><div class="kpi-lbl">Active Alerts</div><div class="kpi-val {alert_cls}">{alert_count}</div><div class="kpi-sub">pipeline issues</div></div>
+    <div {cov_kpi_attr}><div class="kpi-lbl">Narrative Coverage</div><div class="kpi-val {cov_cls}">{coverage_pct}<span style="font-size:14px;color:var(--muted);font-weight:400">%</span></div><div class="kpi-sub">w84 AI-enriched</div></div>
+    <div {alert_kpi_attr}><div class="kpi-lbl">Active Alerts</div><div class="kpi-val {alert_cls}">{alert_count}</div><div class="kpi-sub">pipeline issues</div></div>
     <div class="kpi"><div class="kpi-lbl">Leagues Tracked</div><div class="kpi-val c-text">{total_matches_c}</div><div class="kpi-sub">upcoming matches (7d)</div></div>
   </div>
+
+  {shm_panel}
 
   <div class="panel">
     <div class="panel-head"><span class="panel-title">Sport Coverage Matrix</span><span class="panel-sub">Next 7 days &middot; w84 = AI-enriched &middot; w82 = Template &middot; Baseline = No edge data</span></div>
@@ -1442,6 +2272,27 @@ document.addEventListener('healthViewLoaded', function() {{
   }}
   setInterval(tick, 1000);
 }})();
+
+function copyPrompt(metricName, currentValue, expectedValue, lastTs, dbPath) {{
+  var prompt = 'Investigate: ' + metricName + ' showing ' + currentValue + ' (expected: ' + expectedValue + ').\n' +
+    'Last data: ' + lastTs + '. Server: 178.128.171.28\n' +
+    'Relevant path: ' + dbPath + '\n' +
+    'Steps: Check cron schedule, review logs, verify DB connectivity, check Sentry for related errors.';
+  if (navigator.clipboard) {{
+    navigator.clipboard.writeText(prompt).then(function() {{
+      var toast = document.getElementById('copy-toast');
+      if (!toast) {{
+        toast = document.createElement('div');
+        toast.id = 'copy-toast';
+        toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#22c55e;color:#000;padding:8px 16px;border-radius:6px;font-size:13px;z-index:9999;font-family:sans-serif';
+        document.body.appendChild(toast);
+      }}
+      toast.textContent = 'Prompt copied \u2713';
+      toast.style.display = 'block';
+      setTimeout(function() {{ toast.style.display = 'none'; }}, 2000);
+    }});
+  }}
+}}
 </script>"""
 
 
@@ -1558,7 +2409,7 @@ def render_automation_content() -> str:
         elif status not in ("archived",):
             channel_stats[ch_key]["queue_depth"] += 1
 
-        if status in ("approved", "ready", "scheduled"):
+        if status in ("approved", "ready", "scheduled", "awaiting approval"):
             sched = item.get("scheduled_time") or ""
             sched_dt = parse_ts(sched)
             if sched_dt and sched_dt > now_utc:
@@ -1587,9 +2438,29 @@ def render_automation_content() -> str:
             return '<span class="chip chip-gray"><span class="cdot"></span>Awaiting</span>'
         return f'<span class="chip chip-gray"><span class="cdot"></span>{status}</span>'
 
-    def _media_preview(asset_link: str, max_height: str = "300px") -> str:
+    def _media_type_label(asset_link: str = "", channel: str = "", work_type: str = "") -> str:
+        """Smart media type detection: returns 'Video', 'Image', or 'Post'."""
+        ch_low = channel.lower().strip()
+        wt_low = work_type.lower().strip()
+        # TikTok is always video
+        if "tiktok" in ch_low:
+            return "Video"
+        # BRU work type = video (Brand Response Unit)
+        if wt_low == "bru":
+            return "Video"
+        # Detect from asset extension
+        if asset_link and "." in asset_link:
+            ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0]
+            if ext in ("mp4", "mov", "webm", "avi"):
+                return "Video"
+            if ext in ("jpg", "jpeg", "png", "gif", "webp"):
+                return "Image"
+        return "Post"
+
+    def _media_preview(asset_link: str, max_height: str = "300px", channel: str = "", work_type: str = "") -> str:
         if not asset_link:
-            return '<span style="color:var(--muted);font-size:11px;font-family:var(--font-m)">Text post</span>'
+            label = _media_type_label("", channel, work_type)
+            return f'<span style="color:var(--muted);font-size:11px;font-family:var(--font-m)">{label}</span>'
         ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0] if "." in asset_link else ""
         if ext in ("mp4", "mov", "webm"):
             return (f'<video src="{asset_link}" controls '
@@ -1598,7 +2469,8 @@ def render_automation_content() -> str:
             return (f'<img src="{asset_link}" alt="post asset" '
                     f'style="max-height:{max_height};border-radius:4px;object-fit:cover;display:block;margin-top:10px;">')
         else:
-            return '<span style="color:var(--muted);font-size:11px;font-family:var(--font-m)">Text post</span>'
+            label = _media_type_label(asset_link, channel, work_type)
+            return f'<span style="color:var(--muted);font-size:11px;font-family:var(--font-m)">{label}</span>'
 
     def _media_thumb(asset_link: str) -> str:
         """Thumbnail for Recent Publishes table (max 120px)."""
@@ -1632,7 +2504,7 @@ def render_automation_content() -> str:
     kpi_strip = f"""<div class="kpi-strip">
     <div class="kpi"><div class="kpi-lbl">Published Today</div><div class="kpi-val {pub_cls}">{pub_today_count}</div><div class="kpi-sub">posts sent</div></div>
     <div class="kpi"><div class="kpi-lbl">Scheduled</div><div class="kpi-val {sched_cls}">{scheduled_count}</div><div class="kpi-sub">approved &amp; queued</div></div>
-    <div class="kpi"><div class="kpi-lbl">Awaiting Approval</div><div class="kpi-val {await_cls}">{awaiting_count}</div><div class="kpi-sub">needs review</div></div>
+    <div class="kpi kpi-clickable" onclick="window._navToView('task_hub')" title="View approval pipeline"><div class="kpi-lbl">Awaiting Approval</div><div class="kpi-val {await_cls}">{awaiting_count}</div><div class="kpi-sub">{"tap to review" if awaiting_count > 0 else "all clear"}</div></div>
     <div class="kpi"><div class="kpi-lbl">Failed / Blocked</div><div class="kpi-val {fail_cls}">{failed_count}</div><div class="kpi-sub">{"action needed" if failed_count > 0 else "all clear"}</div></div>
     <div class="kpi"><div class="kpi-lbl">Total Queue</div><div class="kpi-val c-text">{total_queue}</div><div class="kpi-sub">active items</div></div>
   </div>"""
@@ -1736,7 +2608,18 @@ def render_automation_content() -> str:
             sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
             campaign = _truncate(item.get("campaign_theme") or "", 40)
             copy_text = item.get("copy") or ""
-            media_html = _media_preview(item.get("asset_link") or "")
+            item_channel = item.get("channel") or ""
+            item_work_type = item.get("work_type") or ""
+            item_platform_notes = item.get("platform_notes") or ""
+            media_html = _media_preview(item.get("asset_link") or "", channel=item_channel, work_type=item_work_type)
+            # TikTok filename from Platform Notes
+            tiktok_file_html = ""
+            if "tiktok" in item_channel.lower() and item_platform_notes:
+                _fn_match = re.search(r'[Ff]ile:\s*(.+)', item_platform_notes)
+                if _fn_match:
+                    tiktok_file_html = (f'<div style="margin-top:6px;font-size:11px;color:var(--amber);'
+                                        f'font-family:var(--font-m)">&#128193; File to upload: '
+                                        f'<code>{_fn_match.group(1).strip()}</code></div>')
             page_id = item.get("id", "")
             appr_cards += f"""<div class="appr-card" id="appr-{page_id}">
   <div class="appr-header">
@@ -1746,6 +2629,7 @@ def render_automation_content() -> str:
   </div>
   <div class="appr-copy">{copy_text}</div>
   {media_html}
+  {tiktok_file_html}
   <div class="appr-error" style="display:none;color:var(--red);font-size:11px;margin-top:8px"></div>
   <div class="appr-actions">
     <button class="btn-approve" data-id="{page_id}">Approve</button>
@@ -1857,6 +2741,151 @@ def render_automation_content() -> str:
   <div class="footer">MzansiEdge Social Media &middot; Notion-powered</div>
 </div>
 {automation_js}"""
+
+
+# -- Approvals view -----------------------------------------------------------
+
+_APPROVALS_NOTION_URL = "https://www.notion.so/Marketing-Ops-Queue"
+
+def render_approvals_content() -> str:
+    """Render the Approvals pipeline view inner content HTML."""
+    now_utc = datetime.now(timezone.utc)
+    now_sast = now_utc.astimezone(_SAST)
+    updated = now_sast.strftime("%Y-%m-%d %H:%M:%S")
+
+    cache_error = False
+    banner = ""
+    items: list[dict] = []
+
+    try:
+        items, fetch_time = _fetch_marketing_queue()
+        cache_age_min = (time.monotonic() - fetch_time) / 60
+        if cache_age_min > 1:
+            banner = f'<div class="banner banner-warn">Showing cached data ({cache_age_min:.0f}m ago)</div>'
+    except Exception:
+        cache_error = True
+        with _notion_cache_lock:
+            cached_entry = _notion_cache.get("marketing_queue")
+            if cached_entry:
+                items = cached_entry[0]
+                age_min = (time.monotonic() - cached_entry[1]) / 60
+                banner = f'<div class="banner banner-warn">Notion unavailable — cached data ({age_min:.0f}m ago)</div>'
+            else:
+                banner = '<div class="banner banner-err">Unable to load approvals — Notion unavailable. <a href="/admin/approvals" style="color:var(--gold)">Retry</a></div>'
+
+    approval_items = [i for i in items if (i.get("status") or "").strip().lower() == "awaiting approval"]
+    approval_items.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
+
+    has_more = len(approval_items) > 10
+    shown_items = approval_items[:10]
+    total_count = len(approval_items)
+
+    topbar = f"""<nav class="topbar">
+  <div class="topbar-left"><div class="topbar-pill">Approvals</div></div>
+  <div class="topbar-right"><div class="topbar-meta">Updated <em>{updated} SAST</em></div></div>
+</nav>
+{banner}"""
+
+    def _ch_chip(ch_key: str) -> str:
+        ch = _CHANNEL_MAP.get(ch_key)
+        if not ch:
+            return f'<span class="ch-chip" style="background:rgba(107,114,128,0.15);color:var(--muted)">{ch_key or "?"}</span>'
+        return (f'<span class="ch-chip" style="background:{ch["color"]}22;color:{ch["color"]};'
+                f'border:1px solid {ch["color"]}33"><span class="ch-dot" style="background:{ch["color"]}"></span>'
+                f'{ch["label"]}</span>')
+
+    def _media_prev(asset_link: str) -> str:
+        if not asset_link:
+            return ""
+        ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0] if "." in asset_link else ""
+        if ext in ("mp4", "mov", "webm"):
+            return (f'<video src="{asset_link}" controls '
+                    f'style="max-height:280px;border-radius:4px;display:block;margin-top:10px;width:auto;"></video>')
+        elif ext in ("jpg", "jpeg", "png", "gif", "webp"):
+            return (f'<img src="{asset_link}" alt="post asset" '
+                    f'style="max-height:280px;border-radius:4px;object-fit:cover;display:block;margin-top:10px;">')
+        return ""
+
+    if cache_error and not items:
+        body_html = banner  # error already shown in topbar banner
+    elif not approval_items:
+        body_html = """<div class="empty-state-done">
+  <div class="empty-state-done-icon">&#10003;</div>
+  <div class="empty-state-done-text">All caught up</div>
+  <div class="empty-state-done-sub">No posts awaiting approval right now.</div>
+</div>"""
+    else:
+        count_label = f"{total_count} item{'s' if total_count != 1 else ''} awaiting approval"
+        more_link = (f'<a class="appr-notion-link" href="{_APPROVALS_NOTION_URL}" target="_blank">'
+                     f'View all {total_count} in Notion →</a>') if has_more else ""
+        cards_html = ""
+        for item in shown_items:
+            ch_key = _normalise_channel_key(item.get("channel") or "")
+            sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
+            campaign = _truncate(item.get("campaign_theme") or "", 40)
+            copy_text = item.get("copy") or ""
+            media_html = _media_prev(item.get("asset_link") or "")
+            page_id = item.get("id", "")
+            cards_html += f"""<div class="appr-card" id="appr-pl-{page_id}">
+  <div class="appr-header">
+    {_ch_chip(ch_key)}
+    <span class="appr-meta">&#128337; {sched_str}</span>
+    {f'<span class="appr-campaign">{campaign}</span>' if campaign else ""}
+  </div>
+  <div class="appr-copy">{copy_text}</div>
+  {media_html}
+  <div class="appr-error" style="display:none;color:var(--red);font-size:11px;margin-top:8px"></div>
+  <div class="appr-actions">
+    <button class="btn-approve" data-id="{page_id}">Approve</button>
+    <button class="btn-archive" data-id="{page_id}">Archive</button>
+  </div>
+</div>"""
+
+        body_html = f"""<div class="panel">
+  <div class="appr-pipeline-header">
+    <span class="appr-count-badge">{count_label}</span>
+    {more_link}
+  </div>
+  <div id="appr-pipeline-list">{cards_html}</div>
+</div>"""
+
+    approvals_js = """<script>
+(function(){
+  function _patch(page_id, status, card_id) {
+    fetch('/admin/api/notion/patch', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({page_id: page_id, status: status})
+    }).then(function(r){
+      if(r.ok){
+        var card = document.getElementById(card_id);
+        if(card){ card.style.transition='opacity 0.35s'; card.style.opacity='0'; setTimeout(function(){card.remove();}, 370); }
+      }
+    });
+  }
+  document.querySelectorAll('.btn-approve').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = this.dataset.id;
+      btn.disabled = true;
+      _patch(id, 'Approved', 'appr-pl-' + id);
+    });
+  });
+  document.querySelectorAll('.btn-archive').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = this.dataset.id;
+      btn.disabled = true;
+      _patch(id, 'Archived', 'appr-pl-' + id);
+    });
+  });
+})();
+</script>"""
+
+    return f"""{topbar}
+<div class="page">
+  {body_html}
+  <div class="footer">MzansiEdge Approvals &middot; Notion-powered</div>
+</div>
+{approvals_js}"""
 
 
 # -- Task Hub helpers ---------------------------------------------------------
@@ -1985,8 +3014,7 @@ def render_task_hub_content() -> str:
         mq_items, _ = _fetch_marketing_queue()
     except Exception:
         mq_items = []
-    approve_items = [i for i in mq_items if (i.get("status") or "").strip().lower() == "awaiting approval"]
-    approve_items.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
+    approve_items = _get_awaiting_items(mq_items, include_overdue=True, channels=_APPROVAL_CHANNELS)
 
     # ── Task sections: scoped to # 📝 Manual Tasks heading ─────────────────
     sections: dict[str, list[dict]] = {
@@ -2029,7 +3057,8 @@ def render_task_hub_content() -> str:
                 f'{ch["label"]}</span>')
 
     sections_html = ""
-    any_items = bool(approve_items) or any(v for v in sections.values())
+    # Approvals section always renders (even empty), so any_items is always True
+    any_items = True
 
     for sec_key, sec_label, sec_emoji in _SECTION_META:
         accent = _ACCENT.get(sec_key, "#E8571F")
@@ -2037,33 +3066,39 @@ def render_task_hub_content() -> str:
         if sec_key == "approve_posts":
             items_for_section = approve_items
             if not items_for_section:
+                # Always render approvals section — show empty state when clear
+                sections_html += f"""<div class="task-section" data-section="{sec_key}" id="th-sec-{sec_key}">
+  <div class="section-header">
+    <div class="section-left">
+      <span class="section-icon">{sec_emoji}</span>
+      <span class="section-title">{sec_label}</span>
+      <span class="section-count">0 pending</span>
+    </div>
+  </div>
+  <div class="empty-state-done">
+    <div class="empty-state-done-icon">&#10003;</div>
+    <div class="empty-state-done-text">All caught up</div>
+    <div class="empty-state-done-sub">No posts awaiting approval.</div>
+  </div>
+</div>"""
                 continue
             n = len(items_for_section)
             cards = ""
             for item in items_for_section:
+                title = item.get("title") or ""
                 ch_key = _normalise_channel_key(item.get("channel") or "")
                 sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
-                campaign = _truncate(item.get("campaign_theme") or "", 40)
-                copy_text = item.get("copy") or ""
-                media_html = ""
                 asset_link = item.get("asset_link") or ""
-                if asset_link:
-                    ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0] if "." in asset_link else ""
-                    if ext in ("mp4", "mov", "webm"):
-                        media_html = (f'<video src="{asset_link}" controls style="max-height:280px;'
-                                      f'border-radius:4px;display:block;margin-top:10px;width:auto;"></video>')
-                    elif ext in ("jpg", "jpeg", "png", "gif", "webp"):
-                        media_html = (f'<img src="{asset_link}" alt="asset" style="max-height:280px;'
-                                      f'border-radius:4px;object-fit:cover;display:block;margin-top:10px;">')
+                asset_html = (f'<a href="{asset_link}" target="_blank" rel="noopener" '
+                              f'class="appr-asset-link">&#128444;&#65039; View image</a>') if asset_link else ""
                 page_id = item.get("id", "")
                 cards += f"""<div class="appr-card" id="th-appr-{page_id}">
+  <div class="appr-title">{title}</div>
   <div class="appr-header">
     {_channel_chip_th(ch_key)}
     <span class="appr-meta">&#128337; {sched_str}</span>
-    {f'<span class="appr-campaign">{campaign}</span>' if campaign else ""}
+    {asset_html}
   </div>
-  <div class="appr-copy">{copy_text}</div>
-  {media_html}
   <div class="appr-error" style="display:none;color:var(--red);font-size:11px;margin-top:8px"></div>
   <div class="appr-actions">
     <button class="btn-approve" data-id="{page_id}">Approve</button>
@@ -2153,8 +3188,11 @@ a.task-link:hover{background:rgba(232,87,31,.22);}
 .btn-done:hover{background:rgba(34,197,94,.22);}
 .btn-done:disabled{opacity:.5;cursor:not-allowed;}
 .appr-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid #22c55e;border-radius:8px;padding:18px;margin-bottom:14px;position:relative;}
+.appr-title{font-family:var(--font-d);font-weight:700;font-size:14px;color:var(--text);margin-bottom:8px;}
 .appr-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
 .appr-meta{font-family:var(--font-m);font-size:11px;color:var(--muted);}
+.appr-asset-link{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);text-decoration:none;}
+.appr-asset-link:hover{text-decoration:underline;}
 .appr-campaign{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);background:rgba(248,200,48,.1);border-radius:4px;padding:2px 8px;}
 .appr-copy{font-family:var(--font-m);font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word;}
 .appr-actions{display:flex;gap:10px;margin-top:14px;}
@@ -2303,6 +3341,51 @@ a.task-link:hover{background:rgba(232,87,31,.22);}
 
 
 # -- System Health data builders ----------------------------------------------
+
+def _check_billing_alerts() -> list:
+    """Scan Sentry issues for billing/payment failures. Cached 60s. (AC-15)"""
+    cache_key = "billing_alerts"
+    now = time.monotonic()
+    with _system_health_cache_lock:
+        cached = _system_health_cache.get(cache_key)
+        if cached and (now - cached[1]) < _SYSTEM_HEALTH_TTL:
+            return cached[0]
+    alerts: list = []
+    try:
+        sentry = _fetch_sentry_data()
+        if sentry.get("available"):
+            all_issues_url = (
+                f"{_SENTRY_API}/projects/{SENTRY_ORG}/{SENTRY_PROJECT}/issues/"
+                f"?query=is%3Aunresolved&sort=freq&limit=50"
+            )
+            req = urllib.request.Request(
+                all_issues_url, headers={"Authorization": f"Bearer {SENTRY_AUTH_TOKEN}"}
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                all_issues = json.loads(resp.read().decode("utf-8"))
+            for issue in all_issues:
+                title_lower = (issue.get("title") or "").lower()
+                if any(p in title_lower for p in _BILLING_PATTERNS):
+                    svc = "Unknown Service"
+                    burl = "#"
+                    for svc_key, url in _BILLING_URLS.items():
+                        if svc_key.lower() in title_lower:
+                            svc = svc_key.replace("-", " ").title()
+                            burl = url
+                            break
+                    alerts.append({
+                        "service": svc,
+                        "title": (issue.get("title") or "")[:120],
+                        "count": issue.get("count", "?"),
+                        "billing_url": burl,
+                        "short_id": issue.get("shortId", ""),
+                    })
+    except Exception:
+        pass
+    with _system_health_cache_lock:
+        _system_health_cache[cache_key] = (alerts, now)
+    return alerts
+
 
 def _fetch_sentry_data() -> dict:
     """Fetch Sentry issues. Cached 60s."""
@@ -2503,17 +3586,17 @@ def _build_api_health(conn) -> list:
     if conn and table_exists(conn, "sharp_odds"):
         r = q_one(conn, "SELECT MAX(scraped_at) as last FROM sharp_odds WHERE scraped_at >= datetime('now','-24 hours')")
         last = r["last"] if r else None
-        _, lbl = freshness(last) if last else ("s-black", "No data (24h)")
-        css = "s-green" if last else "s-black"
+        _, lbl = freshness(last) if last else ("s-grey", "No data (24h)")
+        css = "s-green" if last else "s-grey"
         calls_row = q_one(conn, "SELECT COUNT(DISTINCT substr(scraped_at,1,16)) as calls FROM sharp_odds WHERE scraped_at >= datetime('now','-24 hours')")
         calls_24h = calls_row["calls"] if calls_row else 0
         rows.append({"api": "The Odds API", "last_call": lbl, "calls_24h": calls_24h, "errors_24h": 0, "css": css})
     else:
-        rows.append({"api": "The Odds API", "last_call": "No data", "calls_24h": 0, "errors_24h": 0, "css": "s-black"})
+        rows.append({"api": "The Odds API", "last_call": "No data", "calls_24h": 0, "errors_24h": 0, "css": "s-grey"})
 
     if conn is None or not table_exists(conn, "api_usage"):
         for _, label, _ in apis[1:]:
-            rows.append({"api": label, "last_call": "No data", "calls_24h": "—", "errors_24h": 0, "css": "s-black"})
+            rows.append({"api": label, "last_call": "No data", "calls_24h": "—", "errors_24h": 0, "css": "s-grey"})
         return rows
 
     for api_key, label, _ in apis[1:]:
@@ -2537,9 +3620,9 @@ def _build_api_health(conn) -> list:
                     _, lbl = freshness(ec["last"])
                     rows.append({"api": label, "last_call": lbl, "calls_24h": "cache", "errors_24h": 0, "css": "s-green"})
                 else:
-                    rows.append({"api": label, "last_call": "No data (24h)", "calls_24h": 0, "errors_24h": 0, "css": "s-black"})
+                    rows.append({"api": label, "last_call": "No data (24h)", "calls_24h": 0, "errors_24h": 0, "css": "s-grey"})
             else:
-                rows.append({"api": label, "last_call": "No data (24h)", "calls_24h": 0, "errors_24h": 0, "css": "s-black"})
+                rows.append({"api": label, "last_call": "No data (24h)", "calls_24h": 0, "errors_24h": 0, "css": "s-grey"})
 
     return rows
 
@@ -2726,7 +3809,7 @@ def render_system_health_content(conn) -> str:
     api_table_rows = ""
     for row in api_rows:
         errs = row["errors_24h"]
-        err_css = "s-red" if errs > 3 else ("s-amber" if errs > 0 else "s-black")
+        err_css = "s-red" if errs > 3 else ("s-amber" if errs > 0 else "s-grey")
         status_dot = dot(row["css"])
         api_table_rows += (
             f'<tr>'
@@ -3186,6 +4269,532 @@ def render_performance_content(conn) -> str:
 </div>"""
 
 
+
+# -- Unified System Health renderer -------------------------------------------
+
+def render_unified_health_content(conn, db_status: str) -> str:
+    """Unified System Health view — tabbed layout (Overview / Alerts / Sources / System)."""
+    # ── Gather all data ───────────────────────────────────────────────────────
+    sentry   = _fetch_sentry_data()
+    res      = _read_server_resources()
+    procs    = _read_process_monitor()
+    api_rows = _build_api_health(conn)
+    coverage = build_coverage_matrix(conn)
+    scrapers  = build_scraper_health(conn)
+    sources   = build_source_freshness(conn)
+    quotas    = build_api_quotas(conn)
+    ha_rows  = build_health_alerts_history(conn)
+    db_qrows = build_api_quota_from_db(conn)
+    shm      = build_source_health_monitor(conn)
+    rps      = build_rendering_path_stats(conn)
+    updated  = datetime.now(_SAST).strftime("%Y-%m-%d %H:%M:%S")
+
+    # ── Derived KPI values ────────────────────────────────────────────────────
+    active_scrapers  = sum(1 for s in scrapers if s.get("has_data_24h", False))
+    matches_24h      = sum(s["matches_24h"] for s in scrapers)
+    total_w84        = sum(c["w84"]   for c in coverage)
+    total_matches_c  = sum(c["total"] for c in coverage)
+    coverage_pct     = round(total_w84 / total_matches_c * 100, 1) if total_matches_c > 0 else 0
+    alert_count      = len(ha_rows)
+    shm_score        = shm["system_score"]
+    shm_green        = shm["green_count"]
+    shm_total        = shm.get("total_count", 42)
+    rps_pct          = rps["pct_w82"]
+    cpu_1            = res["cpu_1"]
+    mem_pct          = res["mem_pct"] or 0
+
+    shm_score_cls    = "c-green" if shm_score >= 80 else ("c-amber" if shm_score >= 50 else ("c-red" if shm_score >= 0 else "c-text"))
+    shm_score_disp   = f"{shm_score}" if shm_score >= 0 else "N/A"
+    active_cls       = "c-green" if active_scrapers == len(scrapers) else ("c-amber" if active_scrapers > 0 else "c-red")
+    cov_cls          = "c-green" if coverage_pct >= 80 else ("c-amber" if coverage_pct >= 40 else "c-red")
+    alert_cls        = "c-red" if alert_count > 3 else ("c-amber" if alert_count > 0 else "c-green")
+    cpu_pct_approx   = round((cpu_1 or 0) / 2 * 100) if cpu_1 is not None else 0
+    cpu_cls          = "c-green" if cpu_pct_approx < 60 else ("c-amber" if cpu_pct_approx < 85 else "c-red")
+    mem_cls          = "c-green" if mem_pct < 70 else ("c-amber" if mem_pct < 90 else "c-red")
+    sentry_count     = sentry.get("total_issues", 0) if sentry.get("available") else "—"
+    sentry_cls       = "c-green" if sentry_count == 0 else ("c-amber" if isinstance(sentry_count, int) and sentry_count < 5 else "c-red")
+
+    def chip(css_key: str, text: str) -> str:
+        cls = {"s-green": "chip-green", "s-amber": "chip-amber",
+               "s-red": "chip-red", "s-black": "chip-gray",
+               "s-grey": "chip-gray"}.get(css_key, "chip-gray")
+        return f'<span class="chip {cls}"><span class="cdot"></span>{text}</span>'
+
+    def _na(v, fmt="{}", suffix=""):
+        return "N/A" if v is None else (fmt.format(v) + suffix)
+
+    def _kpi_onclick(metric_name: str, current_val: str, expected_val: str, db_path: str = "~/scrapers/odds.db", extra_cls: str = "") -> str:
+        cls = f"kpi{' ' + extra_cls if extra_cls else ''} kpi-clickable"
+        return (
+            f'onclick="copyPrompt(\'{metric_name}\',\'{current_val}\',\'{expected_val}\',\'{updated}\',\'{db_path}\')" '
+            f'class="{cls}" title="Click to copy investigation prompt"'
+        )
+
+    shm_kpi_attr     = _kpi_onclick("System Health",      f"{shm_score_disp}%",        ">80%",  extra_cls="kpi-t1") if shm_score_cls == "c-red" else 'class="kpi kpi-t1"'
+    alert_kpi_attr   = _kpi_onclick("Active Alerts",      str(alert_count),            "<5",    extra_cls="kpi-t1") if alert_cls     == "c-red" else 'class="kpi kpi-t1"'
+    scraper_kpi_attr = _kpi_onclick("Active Scrapers",    str(active_scrapers),        str(len(scrapers)))          if active_cls   == "c-red" else 'class="kpi"'
+    cov_kpi_attr     = _kpi_onclick("Narrative Coverage", f"{coverage_pct}%",          ">80%",  "~/bot/data/mzansiedge.db") if cov_cls == "c-red" else 'class="kpi"'
+
+    # ── Topbar ────────────────────────────────────────────────────────────────
+    db_pulse = "pulse-green" if conn else "pulse-red"
+    db_color = "var(--green)" if conn else "var(--red)"
+    banner = (
+        '<div class="banner banner-err">Main database unreachable — panels showing cached/empty data</div>'
+        if conn is None else
+        '<div class="banner banner-ok">scrapers/odds.db connected and readable</div>'
+    )
+
+    topbar = f"""<nav class="topbar">
+  <div class="topbar-left">
+    <div class="topbar-pill">System Health</div>
+  </div>
+  <div class="topbar-right">
+    <div class="db-status"><span class="pulse {db_pulse}"></span><span style="color:{db_color}">{db_status}</span></div>
+    <div class="topbar-meta">Updated <em>{updated} SAST</em> &middot; refreshes in <em id="countdown">5:00</em></div>
+  </div>
+</nav>
+{banner}"""
+
+    # ── KPI Strip (8 cards, 2-tier hierarchy) ─────────────────────────────────
+    cpu_disp = f"{cpu_1:.2f}" if cpu_1 is not None else "N/A"
+    kpi_strip = f"""<div class="kpi-strip kpi-strip-h">
+  <div {shm_kpi_attr}><div class="kpi-lbl">System Health Score</div><div class="kpi-val {shm_score_cls}">{shm_score_disp}<span style="font-size:16px;color:var(--muted);font-weight:400">%</span></div><div class="kpi-sub">{shm_green}/{shm_total} sources green</div></div>
+  <div {alert_kpi_attr}><div class="kpi-lbl">Active Alerts (24h)</div><div class="kpi-val {alert_cls}">{alert_count}</div><div class="kpi-sub">EdgeOps pipeline alerts</div></div>
+  <div {scraper_kpi_attr}><div class="kpi-lbl">Active Scrapers</div><div class="kpi-val {active_cls}">{active_scrapers}<span style="font-size:14px;color:var(--muted);font-weight:400">/{len(scrapers)}</span></div><div class="kpi-sub">{matches_24h:,} matches (24h)</div></div>
+  <div {cov_kpi_attr}><div class="kpi-lbl">Narrative Coverage</div><div class="kpi-val {cov_cls}">{coverage_pct}<span style="font-size:14px;color:var(--muted);font-weight:400">%</span></div><div class="kpi-sub">w84 AI-enriched · {rps_pct}% template</div></div>
+  <div class="kpi"><div class="kpi-lbl">Upcoming Matches</div><div class="kpi-val c-text">{total_matches_c}</div><div class="kpi-sub">next 7 days · {len(coverage)} leagues</div></div>
+  <div class="kpi"><div class="kpi-lbl">Sentry Issues</div><div class="kpi-val {sentry_cls}">{sentry_count}</div><div class="kpi-sub">unresolved · mzansi-edge</div></div>
+  <div class="kpi"><div class="kpi-lbl">CPU Load (1m)</div><div class="kpi-val {cpu_cls}">{cpu_disp}</div><div class="kpi-sub">{_na(res.get("cpu_5"), "{:.2f}")} / {_na(res.get("cpu_15"), "{:.2f}")} (5m/15m)</div></div>
+  <div class="kpi"><div class="kpi-lbl">RAM Usage</div><div class="kpi-val {mem_cls}">{mem_pct}<span style="font-size:14px;color:var(--muted);font-weight:400">%</span></div><div class="kpi-sub">{res.get("mem_used_mb") or 0:,} / {res.get("mem_total_mb") or 0:,} MB</div></div>
+</div>"""
+
+    # ── Coverage data for summary ─────────────────────────────────────────────
+    p1_rows = ""
+    if coverage:
+        for c in coverage:
+            p1_rows += (
+                "<tr>"
+                + td(c["sport"].capitalize())
+                + td(c["league"])
+                + td(c["total"])
+                + td(c["w84"], "s-green" if c["w84"] > 0 else "s-grey")
+                + td(c["w82"], "s-red" if c["w82"] > 0 else "s-grey")
+                + td(c["baseline"], "s-amber" if c["baseline"] > 0 else "s-grey")
+                + td(f"{c['pct']}%", c["css"])
+                + td(c["badge"])
+                + "</tr>"
+            )
+    else:
+        p1_rows = '<tr><td colspan="8" style="text-align:center;color:#6b7280;padding:20px">No upcoming matches in next 7 days</td></tr>'
+
+    chart_labels = json.dumps([_chart_label(c["league"]) for c in coverage])
+    chart_w84    = json.dumps([c["w84"]      for c in coverage])
+    chart_w82    = json.dumps([c["w82"]      for c in coverage])
+    chart_base   = json.dumps([c["baseline"] for c in coverage])
+
+    coverage_summary = _build_coverage_summary(coverage, p1_rows)
+    exc_shm = _render_exception_source_health(shm)
+
+    # ── Overview tab ──────────────────────────────────────────────────────────
+    tab_overview = f"""<div id="tab-overview" class="tab-pane tab-active">
+  {kpi_strip}
+  {exc_shm}
+  {coverage_summary}
+</div>"""
+
+    # ── Alerts & Issues tab ───────────────────────────────────────────────────
+    # Show 5 most recent, with expand to see all
+    ALERT_PREVIEW = 5
+    ha_preview = ha_rows[:ALERT_PREVIEW]
+    ha_rest    = ha_rows[ALERT_PREVIEW:]
+
+    def _ha_row_html(a: dict) -> str:
+        sev = a["severity"]
+        is_crit = sev == "critical"
+        sev_col = "var(--red)" if is_crit else "var(--amber)"
+        sev_icon = "&#x1F534;" if is_crit else "&#x1F7E1;"
+        resolved_badge = (
+            '<span style="background:rgba(34,197,94,0.1);color:var(--green);border:1px solid rgba(34,197,94,0.2);'
+            'border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;font-family:var(--font-d);margin-left:6px">Resolved</span>'
+            if a["resolved"] else ""
+        )
+        return (
+            f'<div class="alert-row">'
+            f'<span class="alert-ts">{a["ts"]} SAST</span>'
+            f'<span style="color:{sev_col};font-size:13px;flex-shrink:0">{sev_icon}</span>'
+            f'<div style="min-width:0">'
+            f'<div style="font-family:var(--font-d);font-size:11px;font-weight:700;color:var(--text)">{a["source_name"]}</div>'
+            f'<div class="alert-msg">{_truncate(a["message"], 120)}{resolved_badge}</div>'
+            f'</div>'
+            f'</div>'
+        )
+
+    if ha_rows:
+        ha_preview_html = "".join(_ha_row_html(a) for a in ha_preview)
+        ha_rest_html = (
+            f'<details><summary class="alert-limit-note">+ {len(ha_rest)} more alerts — click to expand</summary>'
+            f'{"".join(_ha_row_html(a) for a in ha_rest)}</details>'
+            if ha_rest else ""
+        )
+        ha_html = ha_preview_html + ha_rest_html
+    else:
+        ha_html = '<div style="text-align:center;color:var(--green);padding:28px;font-family:var(--font-m);font-size:12px">&#10003; No EdgeOps alerts in the last 24h</div>'
+
+    alerts_count_badge = f'<span class="alert-badge">{alert_count}</span>' if alert_count else ""
+    alerts_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Alert History (24h){alerts_count_badge}</span>'
+        f'<span class="panel-sub">health_alerts table &middot; {alert_count} total</span>'
+        f'</div><div class="alerts-scroll">{ha_html}</div></div>'
+    )
+
+    # Sentry panel
+    if not sentry["available"]:
+        err_msg = sentry.get("error") or "Sentry unavailable"
+        if "not configured" in err_msg:
+            sentry_body = (
+                f'<div style="padding:24px;font-family:var(--font-m);font-size:13px;color:var(--muted)">'
+                f'<div style="color:var(--amber);font-weight:700;margin-bottom:10px">&#9888; Sentry not configured</div>'
+                f'<div>Add <code>SENTRY_AUTH_TOKEN</code> to <code>~/bot/.env</code> and restart.</div></div>'
+            )
+        else:
+            sentry_body = f'<div style="padding:24px;font-family:var(--font-m);font-size:12px;color:var(--red)">Sentry unavailable: {err_msg}</div>'
+    else:
+        level_colours = {"error": "var(--red)", "warning": "var(--amber)", "info": "var(--green)", "fatal": "#ef4444"}
+        level_html = "".join(
+            f'<span style="background:{level_colours.get(lvl,"")}22;color:{level_colours.get(lvl,"")};border:1px solid {level_colours.get(lvl,"")}44;'
+            f'border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;font-family:var(--font-d);margin-right:6px">'
+            f'{lvl.upper()} {cnt}</span>'
+            for lvl, cnt in sorted(sentry["by_level"].items(), key=lambda x: -x[1])
+        )
+        issue_rows = "".join(
+            f'<tr>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{i.get("short_id","")}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px;max-width:320px;overflow:hidden;text-overflow:ellipsis">'
+            f'<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:{level_colours.get(i.get("level","error"),"")}; margin-right:6px"></span>'
+            f'{i.get("title","")}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px;text-align:right">{i.get("count","—")}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{_relative_time(i.get("last_seen"))}</td>'
+            f'</tr>'
+            for i in sentry["top_issues"]
+        )
+        sentry_body = (
+            f'<div style="padding:12px 16px 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+            f'<span style="font-family:var(--font-d);font-size:22px;font-weight:700;color:var(--text)">{sentry["total_issues"]}</span>'
+            f'<span style="font-family:var(--font-m);font-size:12px;color:var(--muted)">open issues</span>'
+            f'<span style="flex:1"></span>{level_html}</div>'
+            f'<div class="tbl-wrap tbl-fixed"><table class="tbl"><thead><tr><th>ID</th><th>Error</th><th>Events</th><th>Last Seen</th></tr></thead>'
+            f'<tbody>{issue_rows}</tbody></table></div>'
+        )
+
+    sentry_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Sentry Issues</span>'
+        f'<span class="panel-sub">mzansi-edge &middot; unresolved &middot; top 5 by frequency</span>'
+        f'</div>{sentry_body}</div>'
+    )
+
+    tab_alerts = f"""<div id="tab-alerts" class="tab-pane">
+  {alerts_panel}
+  {sentry_panel}
+</div>"""
+
+    # ── Data Sources tab ──────────────────────────────────────────────────────
+    shm_full_panel = _render_source_health_panel(shm)
+
+    p2_rows = "".join(
+        "<tr>"
+        + td(s["name"])
+        + td(chip(s["css"], s["last_pull"]))
+        + td(f'{s.get("records_24h", "—"):,}' if isinstance(s.get("records_24h"), int) else "—")
+        + td(s.get("trend_7d", "—"))
+        + "</tr>"
+        for s in sources
+    )
+    freshness_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Data Source Freshness</span>'
+        f'<span class="panel-sub">&lt;1h &middot; 1-6h &middot; &gt;6h</span>'
+        f'</div><div class="tbl-wrap tbl-fixed"><table class="tbl">'
+        f'<thead><tr><th>Source</th><th>Last Pull</th><th>Records (24h)</th><th>7d Trend</th></tr></thead>'
+        f'<tbody>{p2_rows}</tbody></table></div></div>'
+    )
+
+    p3_rows = "".join(
+        "<tr>"
+        + td(s["name"])
+        + td(chip(s["css"], s["last_scrape"]))
+        + td(s["matches_24h"])
+        + td(s["avg_odds"])
+        + "</tr>"
+        for s in scrapers
+    )
+    scraper_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Scraper Health</span>'
+        f'<span class="panel-sub">8 SA bookmakers &middot; last 24h</span>'
+        f'</div><div class="tbl-wrap tbl-fixed"><table class="tbl">'
+        f'<thead><tr><th>Bookmaker</th><th>Last Scrape</th><th>Matches (24h)</th><th>Avg Odds/Match</th></tr></thead>'
+        f'<tbody>{p3_rows}</tbody></table></div></div>'
+    )
+
+    api_table_rows = "".join(
+        f'<tr>'
+        f'<td style="padding:6px 12px;font-family:var(--font-d);font-size:12px;font-weight:600">{r["api"]}</td>'
+        f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px">{dot(r["css"])}{r["last_call"]}</td>'
+        f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px">{r["calls_24h"]}</td>'
+        f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px" class="{"s-red" if r["errors_24h"]>3 else ("s-amber" if r["errors_24h"]>0 else "")}">{r["errors_24h"] if r["errors_24h"] else "—"}</td>'
+        f'</tr>'
+        for r in api_rows
+    )
+    api_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">API Health</span>'
+        f'<span class="panel-sub">api_usage table &middot; last 24h</span>'
+        f'</div><div class="tbl-wrap tbl-fixed"><table class="tbl">'
+        f'<thead><tr><th>API</th><th>Last Call</th><th>Calls (24h)</th><th>Errors (24h)</th></tr></thead>'
+        f'<tbody>{api_table_rows}</tbody></table></div></div>'
+    )
+
+    if db_qrows:
+        dq_rows = "".join(
+            f'<tr>'
+            f'<td style="padding:6px 12px;font-family:var(--font-d);font-size:12px;font-weight:600">{q["api"]}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px">{q["period"]}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px">{q["limit"]}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px">{q["used"]}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:12px" class="{q["css"]}">{q["remaining"]}</td>'
+            f'<td style="padding:6px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{q["pct_used"]}% used &middot; {q["last_updated"]}</td>'
+            f'</tr>'
+            for q in db_qrows
+        )
+        quota_hdr = '<tr><th>API</th><th>Period</th><th>Limit</th><th>Used</th><th>Remaining</th><th>Details</th></tr>'
+    else:
+        dq_rows = ""
+        for q in quotas:
+            used    = q.get("used_today")
+            limit   = q.get("daily_limit")
+            remain  = q.get("remaining")
+            link    = q.get("link", "#")
+            used_cell   = str(used)   if used   is not None else f'<a href="{link}" target="_blank" style="color:#F8C830;font-size:11px">Check dashboard</a>'
+            remain_cell = str(remain) if remain is not None else "—"
+            limit_cell  = str(limit)  if limit  is not None else "—"
+            rcss = "s-grey"
+            if remain is not None and limit:
+                pct = remain / limit
+                rcss = "s-green" if pct > 0.5 else ("s-amber" if pct > 0.2 else "s-red")
+            dq_rows += (
+                "<tr>"
+                + td(q["api"])
+                + td(q.get("plan", "—"))
+                + td(limit_cell)
+                + td(used_cell)
+                + td(remain_cell, rcss)
+                + td(q.get("reset", "—"))
+                + "</tr>"
+            )
+        quota_hdr = '<tr><th>API</th><th>Plan</th><th>Daily Limit</th><th>Used Today</th><th>Remaining</th><th>Reset</th></tr>'
+
+    quota_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">API Quota Tracker</span>'
+        f'<span class="panel-sub">Live from api_quota_tracking &middot; health_checker verified</span>'
+        f'</div><div class="tbl-wrap tbl-fixed"><table class="tbl"><thead>{quota_hdr}</thead>'
+        f'<tbody>{dq_rows}</tbody></table></div></div>'
+    )
+
+    tab_sources = f"""<div id="tab-sources" class="tab-pane">
+  {shm_full_panel}
+  <div class="grid-2">
+    {scraper_panel}
+    {freshness_panel}
+  </div>
+  <div class="grid-2">
+    {api_panel}
+    {quota_panel}
+  </div>
+</div>"""
+
+    # ── System tab ────────────────────────────────────────────────────────────
+    mem_pct_v  = res["mem_pct"] or 0
+    swap_pct_v = res["swap_pct"] or 0
+    disk_pct_v = res["disk_pct"] or 0
+    cpu_pct_approx2 = round((cpu_1 or 0) / 2 * 100) if cpu_1 is not None else None
+    cpu_bar  = _pbar(cpu_pct_approx2, _na(cpu_1, "{:.2f}")) if cpu_1 is not None else '<span style="color:var(--muted);font-size:12px">N/A</span>'
+    mem_bar  = _pbar(mem_pct_v,  f'{res["mem_used_mb"] or 0:,} MB / {res["mem_total_mb"] or 0:,} MB ({mem_pct_v}%)')
+    swap_bar = _pbar(swap_pct_v, f'{res["swap_used_mb"] or 0:,} MB ({swap_pct_v}%)')
+    disk_bar = _pbar(disk_pct_v, f'{res["disk_used"] or "—"} / {res["disk_total"] or "—"} ({disk_pct_v}%)')
+
+    resources_panel = f"""<div class="panel"><div class="panel-head">
+  <span class="panel-title">Server Resources</span>
+  <span class="panel-sub">/proc/loadavg &middot; /proc/meminfo &middot; df /</span>
+</div>
+<div style="padding:16px;display:grid;gap:14px">
+  <div><div style="font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">CPU Load (1m / 5m / 15m)</div>
+  {cpu_bar}
+  <div style="font-family:var(--font-m);font-size:11px;color:var(--muted);margin-top:4px">{_na(cpu_1, "{:.2f}")} / {_na(res.get("cpu_5"), "{:.2f}")} / {_na(res.get("cpu_15"), "{:.2f}")}</div></div>
+  <div><div style="font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">RAM Usage</div>{mem_bar}</div>
+  <div><div style="font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Swap Usage</div>{swap_bar}</div>
+  <div><div style="font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Disk Usage (/)</div>{disk_bar}</div>
+</div></div>"""
+
+    def _proc_row(label: str, info: dict) -> str:
+        if info["running"]:
+            d = f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 4px var(--green);margin-right:8px"></span>'
+            status = f'{d}<span style="color:var(--green);font-weight:700">Running</span>'
+            detail = f'PID {info["pid"]} &middot; started {info["started"]}'
+        else:
+            d = f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--red);margin-right:8px"></span>'
+            status = f'{d}<span style="color:var(--red);font-weight:700">Not running</span>'
+            detail = "—"
+        return (f'<tr><td style="padding:8px 12px;font-family:var(--font-d);font-size:12px;font-weight:600">{label}</td>'
+                f'<td style="padding:8px 12px;font-family:var(--font-m);font-size:12px">{status}</td>'
+                f'<td style="padding:8px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{detail}</td></tr>')
+
+    proc_rows = _proc_row("bot.py", procs["bot"]) + _proc_row("health_dashboard.py", procs["dashboard"])
+    cron_html = ""
+    if procs["cron_jobs"]:
+        cron_rows = "".join(
+            f'<tr><td style="padding:5px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{j["schedule"]}</td>'
+            f'<td style="padding:5px 12px;font-family:var(--font-m);font-size:11px">{j["cmd"]}</td></tr>'
+            for j in procs["cron_jobs"]
+        )
+        cron_html = (
+            f'<div style="padding:0 12px 4px;font-family:var(--font-d);font-size:10px;font-weight:700;'
+            f'letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:12px">Cron Jobs</div>'
+            f'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Schedule</th><th>Command</th></tr></thead>'
+            f'<tbody>{cron_rows}</tbody></table></div>'
+        )
+
+    processes_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Process Monitor</span>'
+        f'<span class="panel-sub">pgrep &middot; crontab -l</span>'
+        f'</div>'
+        f'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Process</th><th>Status</th><th>Detail</th></tr></thead>'
+        f'<tbody>{proc_rows}</tbody></table></div>{cron_html}</div>'
+    )
+
+    tab_system = f"""<div id="tab-system" class="tab-pane">
+  <div class="grid-2">
+    {resources_panel}
+    {processes_panel}
+  </div>
+</div>"""
+
+    # ── Assemble page ─────────────────────────────────────────────────────────
+    return f"""{topbar}
+<div class="page">
+  <div class="tab-bar">
+    <button class="tab-btn tab-active" onclick="switchTab('overview',this)">Overview</button>
+    <button class="tab-btn" onclick="switchTab('alerts',this)">Alerts &amp; Issues{(' <span class="alert-badge">' + str(alert_count) + '</span>') if alert_count else ''}</button>
+    <button class="tab-btn" onclick="switchTab('sources',this)">Data Sources</button>
+    <button class="tab-btn" onclick="switchTab('system',this)">System</button>
+  </div>
+
+  {tab_overview}
+  {tab_alerts}
+  {tab_sources}
+  {tab_system}
+
+  <div class="footer">Auto-refreshes in <span id="countdown2">5:00</span> &middot; MzansiEdge Ops &middot; Read-only</div>
+</div>
+
+<script>
+function switchTab(id, btn) {{
+  document.querySelectorAll('.tab-pane').forEach(function(p) {{ p.classList.remove('tab-active'); }});
+  document.querySelectorAll('.tab-btn').forEach(function(b) {{ b.classList.remove('tab-active'); }});
+  document.getElementById('tab-' + id).classList.add('tab-active');
+  btn.classList.add('tab-active');
+  if (id === 'overview') {{ initCoverageChart(); }}
+}}
+
+function initCoverageChart() {{
+  var labels  = {chart_labels};
+  var w84Data = {chart_w84};
+  var w82Data = {chart_w82};
+  var baseData= {chart_base};
+  var ctx = document.getElementById('coverageChart');
+  if (!ctx || !labels.length) return;
+  if (ctx._chartInstance) {{ ctx._chartInstance.destroy(); }}
+  ctx._chartInstance = new Chart(ctx, {{
+    type: 'bar',
+    data: {{
+      labels: labels,
+      datasets: [
+        {{ label: 'w84 (AI-enriched)', data: w84Data, backgroundColor: 'rgba(34,197,94,0.8)', borderRadius: 4 }},
+        {{ label: 'w82 (Template)',    data: w82Data, backgroundColor: 'rgba(239,68,68,0.65)',  borderRadius: 4 }},
+        {{ label: 'Baseline',          data: baseData, backgroundColor: 'rgba(245,158,11,0.5)', borderRadius: 4 }},
+      ]
+    }},
+    options: {{
+      responsive: true, maintainAspectRatio: false,
+      plugins: {{
+        legend: {{ labels: {{ color: '#9ca3af', font: {{ size: 11, family: "'Work Sans'" }} }} }},
+        tooltip: {{ backgroundColor: '#161616', titleColor: '#F5F5F5', bodyColor: '#9ca3af', borderColor: '#1f1f1f', borderWidth: 1, padding: 10 }}
+      }},
+      scales: {{
+        x: {{ stacked: true, ticks: {{ color: '#6b7280', font: {{ size: 10 }} }}, grid: {{ color: '#1a1a1a' }} }},
+        y: {{ stacked: true, ticks: {{ color: '#6b7280', font: {{ size: 10 }}, stepSize: 1 }}, grid: {{ color: '#1a1a1a' }} }}
+      }}
+    }}
+  }});
+}}
+
+// Init chart when coverage accordion is opened
+document.addEventListener('DOMContentLoaded', function() {{
+  var details = document.querySelector('#tab-overview details');
+  if (details) {{
+    details.addEventListener('toggle', function() {{
+      if (details.open) initCoverageChart();
+    }});
+  }}
+  // Also try init immediately if accordion already open
+  initCoverageChart();
+}});
+
+document.addEventListener('healthViewLoaded', function() {{
+  setTimeout(initCoverageChart, 100);
+}});
+
+(function() {{
+  var secs = 300;
+  function tick() {{
+    secs--;
+    if (secs <= 0) {{ location.reload(); return; }}
+    var m = Math.floor(secs / 60), s = secs % 60;
+    var txt = m + ':' + (s < 10 ? '0' : '') + s;
+    var el1 = document.getElementById('countdown');
+    var el2 = document.getElementById('countdown2');
+    if (el1) el1.textContent = txt;
+    if (el2) el2.textContent = txt;
+  }}
+  setInterval(tick, 1000);
+}})();
+
+function copyPrompt(metricName, currentValue, expectedValue, lastTs, dbPath) {{
+  var prompt = 'Investigate: ' + metricName + ' showing ' + currentValue + ' (expected: ' + expectedValue + ').\n' +
+    'Last data: ' + lastTs + '. Server: 178.128.171.28\n' +
+    'Relevant path: ' + dbPath + '\n' +
+    'Steps: Check cron schedule, review logs, verify DB connectivity, check Sentry for related errors.';
+  if (navigator.clipboard) {{
+    navigator.clipboard.writeText(prompt).then(function() {{
+      var toast = document.getElementById('copy-toast');
+      if (!toast) {{
+        toast = document.createElement('div');
+        toast.id = 'copy-toast';
+        toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#22c55e;color:#000;padding:8px 16px;border-radius:6px;font-size:13px;z-index:9999;font-family:sans-serif';
+        document.body.appendChild(toast);
+      }}
+      toast.textContent = 'Prompt copied \u2713';
+      toast.style.display = 'block';
+      setTimeout(function() {{ toast.style.display = 'none'; }}, 2000);
+    }});
+  }}
+}}
+</script>"""
+
+
 # -- Shell renderer -----------------------------------------------------------
 
 def render_shell(active_view: str, content_html: str) -> str:
@@ -3206,6 +4815,7 @@ def render_shell(active_view: str, content_html: str) -> str:
 <style>{_shared_css()}</style>
 </head>
 <body data-active-view="{active_view}">
+<div id="loading-bar"></div>
 {_sidebar_html(active_view)}
 <div class="content-area" id="contentArea">
   <div id="contentInner">{content_html}</div>
@@ -3231,7 +4841,7 @@ def admin_health():
     conn = db_connect(SCRAPERS_DB)
     db_status = "Connected" if conn else "Unreachable"
     try:
-        content = render_health_content(conn, db_status)
+        content = render_unified_health_content(conn, db_status)
     finally:
         if conn:
             conn.close()
@@ -3265,25 +4875,7 @@ def admin_automation():
 @app.route("/admin/system")
 @require_auth
 def admin_system():
-    now = time.monotonic()
-    with _page_cache_lock:
-        cached = _page_cache.get("system_full")
-        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
-            return Response(cached[0], mimetype="text/html")
-
-    conn = db_connect(SCRAPERS_DB)
-    try:
-        content = render_system_health_content(conn)
-    finally:
-        if conn:
-            conn.close()
-
-    html = render_shell("system_health", content)
-
-    with _page_cache_lock:
-        _page_cache["system_full"] = (html, now)
-
-    return Response(html, mimetype="text/html")
+    return redirect("/admin/health", code=302)
 
 
 @app.route("/admin/customers")
@@ -3306,7 +4898,7 @@ def api_health():
     conn = db_connect(SCRAPERS_DB)
     db_status = "Connected" if conn else "Unreachable"
     try:
-        content = render_health_content(conn, db_status)
+        content = render_unified_health_content(conn, db_status)
     finally:
         if conn:
             conn.close()
@@ -3352,23 +4944,8 @@ def api_task_hub():
 @app.route("/admin/api/system_health")
 @require_auth
 def api_system_health():
-    now = time.monotonic()
-    with _page_cache_lock:
-        cached = _page_cache.get("system_content")
-        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
-            return Response(cached[0], mimetype="text/html")
-
-    conn = db_connect(SCRAPERS_DB)
-    try:
-        content = render_system_health_content(conn)
-    finally:
-        if conn:
-            conn.close()
-
-    with _page_cache_lock:
-        _page_cache["system_content"] = (content, now)
-
-    return Response(content, mimetype="text/html")
+    # Merged into /admin/api/health — serve unified content
+    return api_health()
 
 
 @app.route("/admin/api/notion/patch", methods=["POST"])
@@ -3540,6 +5117,44 @@ def api_performance():
         _page_cache["performance_content"] = (content, now)
 
     return Response(content, mimetype="text/html")
+
+
+@app.route("/admin/approvals")
+@require_auth
+def admin_approvals():
+    content = render_approvals_content()
+    html = render_shell("approvals", content)
+    return Response(html, mimetype="text/html")
+
+
+@app.route("/admin/api/approvals")
+@require_auth
+def api_approvals():
+    content = render_approvals_content()
+    return Response(content, mimetype="text/html")
+
+
+@app.route("/admin/api/health-log/<source_id>")
+@require_auth
+def api_health_log(source_id: str):
+    """Return last 24h health log for a source as JSON."""
+    conn = db_connect(SCRAPERS_DB)
+    if conn is None:
+        return Response('{"error":"db unavailable"}', status=503, mimetype="application/json")
+    try:
+        rows = q_all(conn, """
+            SELECT checked_at, status, minutes_since_success, rows_produced, error_message
+            FROM source_health_log
+            WHERE source_id = ?
+              AND checked_at >= datetime('now', '-24 hours')
+            ORDER BY checked_at ASC
+        """, (source_id,))
+        data = [dict(r) for r in rows]
+        return Response(json.dumps(data), mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, mimetype="application/json")
+    finally:
+        conn.close()
 
 
 # Redirects
