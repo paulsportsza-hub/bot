@@ -92,9 +92,16 @@ def _today_sast() -> str:
 def can_send_audible(user_id: int) -> bool:
     """Return True if user has audible notifications remaining today (SAST).
 
+    Returns False during the user's configured quiet hours (P3-06).
     Fails open on DB error — always returns True rather than silencing
     notifications unexpectedly.
     """
+    try:
+        import user_settings as _us  # noqa: PLC0415
+        if _us.is_quiet_now(user_id):
+            return False
+    except Exception:
+        pass  # fail-open — never block audibles due to settings module error
     try:
         _ensure_table()
         conn = _get_conn()

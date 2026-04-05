@@ -659,6 +659,7 @@ def kb_settings() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("💰 Bankroll", callback_data="settings:bankroll")],
         [InlineKeyboardButton("🔔 Notifications", callback_data="settings:notify")],
         [InlineKeyboardButton("⚽ My Sports", callback_data="settings:sports")],
+        [InlineKeyboardButton("📊 Alert Preferences", callback_data="settings:prefs")],
         [InlineKeyboardButton("🔄 Reset Profile", callback_data="settings:reset")],
         [
             InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
@@ -9356,6 +9357,26 @@ async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Filter out zero/negative EV and build cb_keys
     tips = [t for t in tips if (t.get("ev") or 0) > 0]
+
+    # P3-06: Apply user's tier and sport filters
+    if user_id:
+        try:
+            import user_settings as _us_today  # noqa: PLC0415
+            _pref = await asyncio.to_thread(_us_today.get_settings, user_id)
+            _active_tiers = set(_pref["tier_filter"].split(","))
+            _active_sports = set(_pref["sport_filter"].split(","))
+            tips = [
+                t for t in tips
+                if (t.get("edge_tier") or "bronze") in _active_tiers
+                and (
+                    t.get("sport_key", "soccer") in _active_sports
+                    or (t.get("sport_key") == "combat"
+                        and ("mma" in _active_sports or "boxing" in _active_sports))
+                )
+            ]
+        except Exception as _pf_err:
+            log.debug("/today pref filter error (fail-open): %s", _pf_err)
+
     for t in tips:
         mk = t.get("match_id") or t.get("match_key") or ""
         if mk:
@@ -18473,6 +18494,121 @@ async def handle_affiliate(query, action: str) -> None:
     await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_bookmakers())
 
 
+_TIER_LABELS: dict[str, str] = {
+    "diamond": "💎 Diamond",
+    "gold": "🥇 Gold",
+    "silver": "🥈 Silver",
+    "bronze": "🥉 Bronze",
+}
+_SPORT_LABELS: dict[str, str] = {
+    "soccer": "⚽ Soccer",
+    "rugby": "🏉 Rugby",
+    "cricket": "🏏 Cricket",
+    "mma": "🥊 MMA",
+    "boxing": "🥊 Boxing",
+}
+_QUIET_PRESETS: list[tuple[int, int, str]] = [
+    (22, 7, "22:00–07:00"),
+    (23, 7, "23:00–07:00"),
+    (0, 6, "00:00–06:00"),
+]
+
+
+def _build_prefs_text(settings: dict) -> str:
+    """Build the Alert Preferences screen text."""
+    active_tiers = set(settings["tier_filter"].split(","))
+    active_sports = set(settings["sport_filter"].split(","))
+    qs = settings["quiet_start"]
+    qe = settings["quiet_end"]
+    quiet_label = f"{qs:02d}:00–{qe:02d}:00 ✅" if qs is not None else "Off"
+
+    tier_lines = "  ".join(
+        f"{'✅' if t in active_tiers else '❌'} {lbl}"
+        for t, lbl in _TIER_LABELS.items()
+    )
+    sport_lines = "  ".join(
+        f"{'✅' if s in active_sports else '❌'} {lbl}"
+        for s, lbl in _SPORT_LABELS.items()
+    )
+
+    return (
+        "<b>📊 Alert Preferences</b>\n\n"
+        "<b>🏆 Tiers</b> — which edge tiers to alert you for:\n"
+        f"{tier_lines}\n\n"
+        "<b>⚽ Sports</b> — which sports to alert you for:\n"
+        f"{sport_lines}\n\n"
+        f"<b>🔇 Quiet Hours</b>: <b>{quiet_label}</b>\n"
+        "<i>During quiet hours all notifications are silent.</i>"
+    )
+
+
+def _build_prefs_keyboard(settings: dict) -> InlineKeyboardMarkup:
+    """Build the Alert Preferences inline keyboard."""
+    import user_settings as _us  # noqa: PLC0415
+    active_tiers = set(settings["tier_filter"].split(","))
+    active_sports = set(settings["sport_filter"].split(","))
+
+    rows: list[list[InlineKeyboardButton]] = []
+
+    # Tier row (2 per row)
+    tier_items = list(_TIER_LABELS.items())
+    for i in range(0, len(tier_items), 2):
+        row = []
+        for t, lbl in tier_items[i:i + 2]:
+            icon = "✅" if t in active_tiers else "❌"
+            row.append(InlineKeyboardButton(
+                f"{icon} {lbl}", callback_data=f"settings:tier:{t}"
+            ))
+        rows.append(row)
+
+    # Sport row (2 per row)
+    sport_items = list(_SPORT_LABELS.items())
+    for i in range(0, len(sport_items), 2):
+        row = []
+        for s, lbl in sport_items[i:i + 2]:
+            icon = "✅" if s in active_sports else "❌"
+            row.append(InlineKeyboardButton(
+                f"{icon} {lbl}", callback_data=f"settings:sport:{s}"
+            ))
+        rows.append(row)
+
+    # Quiet hours
+    qs = settings["quiet_start"]
+    if qs is not None:
+        qe = settings["quiet_end"]
+        rows.append([
+            InlineKeyboardButton(
+                f"🔇 {qs:02d}:00–{qe:02d}:00 ✅", callback_data="settings:quiet_pick"
+            ),
+            InlineKeyboardButton("Turn Off", callback_data="settings:quiet_off"),
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton("🔇 Set Quiet Hours", callback_data="settings:quiet_pick")
+        ])
+
+    rows.append([InlineKeyboardButton("↩️ Back", callback_data="settings:home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _build_quiet_picker_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard with preset quiet-hour windows."""
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                label,
+                callback_data=f"settings:quiet:{start}:{end}",
+            )
+        ]
+        for start, end, label in _QUIET_PRESETS
+    ]
+    rows.append([
+        InlineKeyboardButton("🔕 Turn Off", callback_data="settings:quiet_off"),
+        InlineKeyboardButton("↩️ Back", callback_data="settings:prefs"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
 async def handle_settings(query, action: str) -> None:
     """Handle settings:* callbacks."""
     user_id = query.from_user.id
@@ -18705,6 +18841,112 @@ async def handle_settings(query, action: str) -> None:
             _build_settings_notifications_text(user, notify_prefs),
             parse_mode=ParseMode.HTML,
             reply_markup=_build_settings_notifications_keyboard(user, notify_prefs),
+        )
+    # ── P3-06: Alert Preferences ───────────────────────────
+    elif action == "prefs":
+        import user_settings as _us  # noqa: PLC0415
+        settings = await asyncio.to_thread(_us.get_settings, user_id)
+        await query.edit_message_text(
+            _build_prefs_text(settings),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_prefs_keyboard(settings),
+        )
+    elif action.startswith("tier:"):
+        import user_settings as _us  # noqa: PLC0415
+        tier = action.split(":", 1)[1]
+        if tier not in _us.ALL_TIERS:
+            return
+        settings = await asyncio.to_thread(_us.get_settings, user_id)
+        active = set(settings["tier_filter"].split(","))
+        if tier in active:
+            active.discard(tier)
+        else:
+            active.add(tier)
+        if not active:
+            await query.answer(
+                "⚠️ You've disabled all tiers. Enable at least one tier in /settings.",
+                show_alert=True,
+            )
+            return
+        await asyncio.to_thread(_us.set_tier_filter, user_id, list(active))
+        await query.answer("✅ Tier updated")
+        settings = await asyncio.to_thread(_us.get_settings, user_id)
+        await query.edit_message_text(
+            _build_prefs_text(settings),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_prefs_keyboard(settings),
+        )
+    elif action.startswith("sport:") and not action.startswith("sports"):
+        import user_settings as _us  # noqa: PLC0415
+        sport = action.split(":", 1)[1]
+        if sport not in _us.ALL_SPORTS:
+            return
+        settings = await asyncio.to_thread(_us.get_settings, user_id)
+        active = set(settings["sport_filter"].split(","))
+        if sport in active:
+            active.discard(sport)
+        else:
+            active.add(sport)
+        if not active:
+            await query.answer(
+                "⚠️ You've disabled all sports. Enable at least one sport in /settings.",
+                show_alert=True,
+            )
+            return
+        await asyncio.to_thread(_us.set_sport_filter, user_id, list(active))
+        await query.answer("✅ Sport updated")
+        settings = await asyncio.to_thread(_us.get_settings, user_id)
+        await query.edit_message_text(
+            _build_prefs_text(settings),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_prefs_keyboard(settings),
+        )
+    elif action == "quiet_pick":
+        import user_settings as _us  # noqa: PLC0415
+        settings = await asyncio.to_thread(_us.get_settings, user_id)
+        qs = settings["quiet_start"]
+        qe = settings["quiet_end"]
+        current_str = (
+            f"Current quiet window: <b>{qs:02d}:00–{qe:02d}:00</b>\n\n"
+            if qs is not None
+            else ""
+        )
+        await query.edit_message_text(
+            f"<b>🔇 Set Quiet Hours</b>\n\n"
+            f"{current_str}"
+            "During quiet hours all notifications will be silent.\n\n"
+            "Choose a window:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_quiet_picker_keyboard(),
+        )
+    elif action.startswith("quiet:") and action != "quiet_pick" and action != "quiet_off":
+        import user_settings as _us  # noqa: PLC0415
+        parts = action.split(":")
+        if len(parts) < 3:
+            return
+        try:
+            start, end = int(parts[1]), int(parts[2])
+        except ValueError:
+            return
+        if not (0 <= start <= 23 and 0 <= end <= 23):
+            return
+        await asyncio.to_thread(_us.set_quiet_hours, user_id, start, end)
+        await query.answer(f"✅ Quiet hours set: {start:02d}:00–{end:02d}:00")
+        settings = await asyncio.to_thread(_us.get_settings, user_id)
+        await query.edit_message_text(
+            _build_prefs_text(settings),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_prefs_keyboard(settings),
+        )
+    elif action == "quiet_off":
+        import user_settings as _us  # noqa: PLC0415
+        await asyncio.to_thread(_us.set_quiet_hours, user_id, None, None)
+        await query.answer("✅ Quiet hours disabled")
+        settings = await asyncio.to_thread(_us.get_settings, user_id)
+        await query.edit_message_text(
+            _build_prefs_text(settings),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_prefs_keyboard(settings),
         )
     else:
         await query.edit_message_text("<b>⚙️ Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings())
@@ -21575,6 +21817,14 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     users = await db.get_all_onboarded_users()
     sent_count = 0
+
+    # P3-06: Pre-load edge sport key for filter checks
+    _edge_sports = set()
+    for edge in qualifying:
+        _edge_league = edge.get("league", "")
+        _edge_sk = _DB_LEAGUE_SPORT.get(_edge_league, "soccer")
+        _edge_sports.add(_edge_sk)
+
     for user in users:
         try:
             user_tier = await get_effective_tier(user.id)
@@ -21583,6 +21833,21 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
             if not await _can_send_notification(user.id):
                 continue
+
+            # P3-06: Check user's sport filter
+            try:
+                import user_settings as _us_pma  # noqa: PLC0415
+                _pma_pref = await asyncio.to_thread(_us_pma.get_settings, user.id)
+                _pma_active = set(_pma_pref["sport_filter"].split(","))
+                _pma_match = any(
+                    (sk in _pma_active)
+                    or (sk == "combat" and ("mma" in _pma_active or "boxing" in _pma_active))
+                    for sk in _edge_sports
+                )
+                if not _pma_match:
+                    continue
+            except Exception as _pma_err:
+                log.debug("Pre-match sport filter error (fail-open): %s", _pma_err)
 
             audible = await asyncio.to_thread(_nb.can_send_audible, user.id)
 
