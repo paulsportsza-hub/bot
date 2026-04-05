@@ -1351,13 +1351,16 @@ def _render_team_para(
     competition: str,
     sport: str,
     is_home: bool,
+    opponent_name: str = "",
 ) -> str:
     """Select and render a team paragraph based on story type.
-    Template selection is MD5-deterministic: same team always gets same variant.
+    Template selection is MD5-deterministic: same team + opponent always gets same variant.
+    D-09: Seeds with both name AND opponent_name so the same team vs different opponents
+    produces different descriptions.
     Falls back to 'neutral' for unknown story types.
     """
     variants = _TEAM_TEMPLATES.get(story_type, _TEAM_TEMPLATES["neutral"])
-    idx = _pick(name, len(variants))
+    idx = _pick(name + opponent_name, len(variants))
     fn = variants[idx]
     return fn(name, coach, position, points, form, record, gpg, last_result,
               injuries, competition, sport, is_home)
@@ -1657,12 +1660,14 @@ def _render_setup(spec: NarrativeSpec) -> str:
         spec.home_position, spec.home_points, spec.home_form,
         spec.home_record, spec.home_gpg, spec.home_last_result,
         spec.injuries_home, spec.competition, spec.sport, is_home=True,
+        opponent_name=spec.away_name,
     )
     away_para = _render_team_para(
         spec.away_name, spec.away_coach, spec.away_story_type,
         spec.away_position, spec.away_points, spec.away_form,
         spec.away_record, spec.away_gpg, spec.away_last_result,
         spec.injuries_away, spec.competition, spec.sport, is_home=False,
+        opponent_name=spec.home_name,
     )
     h2h = _h2h_bridge(spec.h2h_summary, spec.home_name, spec.away_name)
     bridge = ""

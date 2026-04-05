@@ -495,7 +495,28 @@ def _section_header(data: EdgeDetailData) -> str:
 def _section_team_context(data: EdgeDetailData) -> str:
     """Sport-dispatched team context from match_context."""
     if not data.context or not data.mep_met:
-        return ""
+        # D-08: Minimal fallback using available EdgeDetailData fields
+        _sport = data.sport or "soccer"
+        _fixture_type = {
+            "soccer": "fixture", "rugby": "clash",
+            "cricket": "encounter", "mma": "bout", "boxing": "bout",
+        }.get(_sport, "fixture")
+        _league_str = data.league_display or (data.league.upper() if data.league else "")
+        _date_str = _format_date(data.match_date) if data.match_date else ""
+        _ctx_parts = [p for p in [_league_str, _date_str] if p]
+        _ctx_suffix = " · ".join(_ctx_parts)
+        lines = ["📋 <b>The Setup</b>"]
+        if _ctx_suffix:
+            lines.append(f"{h(data.home)} vs {h(data.away)} — {_ctx_suffix}.")
+        else:
+            lines.append(f"{h(data.home)} vs {h(data.away)} — {_fixture_type}.")
+        if data.predicted_ev > 0 and data.recommended_odds > 1.0 and data.fair_prob_pct > 0:
+            lines.append(
+                f"Model probability: {data.fair_prob_pct}% "
+                f"({data.predicted_ev:.1f}% above implied market price)."
+            )
+        lines.append("")
+        return "\n".join(lines)
 
     ctx = data.context
     lines = ["📋 <b>The Setup</b>"]
