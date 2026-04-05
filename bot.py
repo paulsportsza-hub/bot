@@ -2022,6 +2022,31 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 except Exception as _ev_err:
                     log.debug("BUILD-6 evidence section failed for %s: %s", match_key, _ev_err)
 
+                # P2-FIX-33: Inject Signal Check block when absent from cached HTML.
+                # W84 pre-gen stores narratives without the 📡 section — it is only
+                # injected at serve time. Cached HTML never has it, so inject here.
+                if "📡" not in _w84_html:
+                    try:
+                        _sig_ev2 = None
+                        # Snapshot tip (list-render time) has the freshest edge_v2
+                        if _w84_snap:
+                            _sig_ev2 = _w84_snap.get("edge_v2")
+                        # Fallback: check cached tips_json
+                        if not _sig_ev2 and isinstance(_w84_tips, list) and _w84_tips:
+                            _sig_ev2 = (_w84_tips[0].get("edge_v2") if isinstance(_w84_tips[0], dict) else None)
+                        if _sig_ev2:
+                            _sig_block = _build_signal_detail_block(
+                                _sig_ev2,
+                                user_tier=_user_tier,
+                                edge_tier=_w84_tier,
+                                home_team=_w84_home,
+                                away_team=_w84_away,
+                            )
+                            if _sig_block:
+                                _w84_html = _w84_html + "\n\n" + _sig_block
+                    except Exception as _sig_err:
+                        log.debug("P2-FIX signal block failed for %s: %s", match_key, _sig_err)
+
                 # Warm in-memory caches
                 _analysis_cache[match_key] = (
                     _w84_html, _w84_tips, _w84_tier,
@@ -2038,7 +2063,27 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     else _game_tips_cache.get(match_key)
                 )
                 if _w84_snap_tip and isinstance(_w84_snap_tip, dict):
-                    _w84_btn_tips = [_w84_snap_tip]
+                    # P1-FIX-33: Only use snapshot odds for button when they match the
+                    # narrative odds. A mismatch (e.g. 3.50 in narrative, 3.40 in snapshot)
+                    # confuses users — the card says one price, the CTA shows another.
+                    # If odds have drifted ≥0.05 absolute, keep cached narrative odds so
+                    # the button is consistent with what the text describes.
+                    _snap_btn_odds = float(_w84_snap_tip.get("odds", 0) or 0)
+                    _cached_btn_odds = float(
+                        (_w84_tips[0].get("odds", 0) if isinstance(_w84_tips, list) and _w84_tips and isinstance(_w84_tips[0], dict) else 0) or 0
+                    )
+                    _odds_consistent = (
+                        _snap_btn_odds <= 0
+                        or _cached_btn_odds <= 0
+                        or abs(_snap_btn_odds - _cached_btn_odds) < 0.05
+                    )
+                    if _odds_consistent:
+                        _w84_btn_tips = [_w84_snap_tip]
+                    else:
+                        log.info(
+                            "[P1-FIX] Button odds kept from narrative (%.2f) — snapshot drifted to %.2f for %s",
+                            _cached_btn_odds, _snap_btn_odds, match_key,
+                        )
 
                 # BUILD-QA22-FIX P0-2: Suppress CTA when rendered HTML shows negative EV
                 # The narrative HTML may reflect live EV (negative) while tip dicts carry
@@ -10504,6 +10549,29 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except sqlite3.OperationalError as exc:
                     log.debug("Deferred banned cache delete for %s: %s", match_id, exc)
                 return None
+            # P0-FIX-33: Reject non-w82 entries that lack W84-Q1 HTML section headers.
+            # Narratives generated before W82-WIRE (old 3-stage AI rewrite path) used
+            # markdown bold (**) or plain text headers — they never contain "<b>The Setup</b>".
+            # New W84 pipeline always produces bold HTML headers via _render_baseline().
+            # Any w84 entry without these headers is an old-format narrative that may
+            # contain hallucinated tactical content — force re-generation.
+            if narrative_source not in ("w82", "baseline_no_edge"):
+                _has_html_headers = (
+                    "<b>The Setup</b>" in cleaned
+                    or "<b>The Edge</b>" in cleaned
+                    or "<b>The Risk</b>" in cleaned
+                )
+                if not _has_html_headers:
+                    log.warning(
+                        "Rejecting cached narrative for %s — old-format entry missing W84-Q1 HTML headers (source=%s)",
+                        match_id, narrative_source,
+                    )
+                    try:
+                        conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                        conn.commit()
+                    except sqlite3.OperationalError as exc:
+                        log.debug("Deferred old-format cache delete for %s: %s", match_id, exc)
+                    return None
             if _has_empty_sections(cleaned):
                 log.warning("Rejecting cached narrative for %s — contains empty section", match_id)
                 try:
@@ -11309,6 +11377,19 @@ BANNED_NARRATIVE_PHRASES = [
     "no supporting indicators from any source",
     "no confirming indicators back it up",
     "treat this as a price-only play",
+    # P0-FIX-33: Old AI-path tactical hallucination phrases — generated before W82-WIRE
+    # by the 3-stage AI rewrite (scaffold + exemplars + Sonnet). These are generic tactical
+    # descriptions not grounded in verified data. Reject any cached entry containing them.
+    "tactical discipline",
+    "organizational structure",
+    "organisational structure",
+    "build attacks methodically",
+    "defensive solidity",
+    "counter-attacking efficiency",
+    "superior midfield control",
+    "possession-based style",
+    "high-pressing game",
+    "direct counter-attacks",
 ]
 
 _INJURY_FETCH_LOOKBACK_DAYS = 2

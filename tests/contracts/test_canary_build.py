@@ -143,9 +143,17 @@ async def test_cache_round_trips_narrative_source(tmp_path) -> None:
     conn.close()
     try:
         bot._ensure_narrative_cache_table()
+        # P0-FIX-33: W84 cached entries must contain HTML section headers.
+        # Sections need >30 chars of content to pass _has_empty_sections check.
+        _w84_html = (
+            "📋 <b>The Setup</b>\nArsenal sit 2nd on 54 points, in strong form.\n\n"
+            "🎯 <b>The Edge</b>\nBookmaker pricing implies 28% but model reads 34%.\n\n"
+            "⚠️ <b>The Risk</b>\nBournemouth away record is decent, keep stake measured.\n\n"
+            "🏆 <b>Verdict</b>\nBack Arsenal at home — enough indicators aligned here."
+        )
         await bot._store_narrative_cache(
             "arsenal_vs_bournemouth_2026-03-21",
-            "<b>Test</b>",
+            _w84_html,
             [{"outcome": "home", "odds": 2.1, "ev": 5.2}],
             "silver",
             "sonnet",
