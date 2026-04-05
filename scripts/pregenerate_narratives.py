@@ -69,6 +69,8 @@ SHADOW_MODEL = os.environ.get(
     "NARRATIVE_SHADOW_MODEL",
     os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514"),
 )
+# BUILD-DUAL-MODEL-PREGEN: Haiku for non-edge match previews (~12x cheaper than Sonnet).
+HAIKU_MODEL = os.environ.get("NARRATIVE_HAIKU_MODEL", "claude-haiku-4-5-20251001")
 # W84-CONFIRM-1: W84 is now the permanent default generation path.
 # The W84_SERVE env-var gate has been removed — W84 always serves.
 
@@ -876,7 +878,7 @@ def _build_baseline_edge_from_snapshot_row(row: dict) -> dict | None:
         "sharp_source": "odds_snapshots",
         "commence_time": commence_time,
         "narrative_source_hint": "baseline_no_edge",
-        "skip_sonnet_polish": True,
+        "is_non_edge": True,
     }
 
 
@@ -1256,6 +1258,91 @@ def _load_pregen_edges(limit: int = 100, sport: str | None = None) -> list[dict]
 
 
 
+def _build_minimal_haiku_prompt(
+    home: str, away: str, sport: str, league: str, commence: str
+) -> str:
+    """Minimal context prompt for Haiku when evidence pack is empty.
+
+    FIX-HAIKU-GATE (AC-3): Non-edge matches have thin ESPN data so evidence
+    packs are empty. Build a prompt from always-present edge dict fields
+    (home/away names, sport, competition, date) rather than from the evidence pack.
+    """
+    from datetime import datetime
+
+    date_str = ""
+    if commence:
+        try:
+            dt = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+            date_str = dt.strftime("%-d %B %Y")
+        except (ValueError, AttributeError):
+            date_str = commence[:10] if len(commence) >= 10 else commence
+
+    sport_display = sport.replace("_", " ").title()
+    league_display = league.replace("_", " ").upper() if league else "UNKNOWN"
+
+    parts = [
+        "Write an analytical match preview for the following fixture.",
+        "",
+        f"HOME: {home}",
+        f"AWAY: {away}",
+        f"SPORT: {sport_display}",
+        f"COMPETITION: {league_display}",
+    ]
+    if date_str:
+        parts.append(f"DATE: {date_str}")
+    parts.extend([
+        "",
+        "Use exactly these four section headers in order:",
+        "\U0001f4cb <b>The Setup</b>",
+        "\U0001f3af <b>The Edge</b>",
+        "\u26a0\ufe0f <b>The Risk</b>",
+        "\U0001f3c6 <b>Verdict</b>",
+        "",
+        "Keep analysis factual and concise. Do not recommend bets.",
+        "Do not use 'back', 'stake', or 'value play'. Mention both team names.",
+    ])
+    return "\n".join(parts)
+
+
+def _validate_preview_polish(polished: str, spec) -> bool:
+    """Validate Haiku-polished match preview for non-edge matches.
+
+    BUILD-DUAL-MODEL-PREGEN: Simpler than verify_shadow_narrative — no
+    bookmaker/odds alignment required since this is a preview not a bet tip.
+    """
+    polished_lower = polished.lower()
+
+    # 1. All 4 section headers must be present
+    for header in ("\U0001f4cb", "\U0001f3af", "\u26a0\ufe0f", "\U0001f3c6"):
+        if header not in polished:
+            log.warning("PREVIEW REJECT: missing section header %s", header)
+            return False
+
+    # 2. Team names must survive (check first word of each team name)
+    home = getattr(spec, "home_name", None) or ""
+    away = getattr(spec, "away_name", None) or ""
+    if home and home.lower().split()[0] not in polished_lower:
+        log.warning("PREVIEW REJECT: home team '%s' missing", home)
+        return False
+    if away and away.lower().split()[0] not in polished_lower:
+        log.warning("PREVIEW REJECT: away team '%s' missing", away)
+        return False
+
+    # 3. No globally banned narrative phrases
+    if _has_banned_patterns(polished):
+        log.warning("PREVIEW REJECT: banned phrase detected")
+        return False
+
+    # 4. No betting recommendation language (preview mode only)
+    _bet_phrases = ["back this", "take the edge", "value play", "back at", "worth backing"]
+    for phrase in _bet_phrases:
+        if phrase in polished_lower:
+            log.warning("PREVIEW REJECT: bet recommendation phrase '%s' in preview", phrase)
+            return False
+
+    return True
+
+
 async def _generate_one(
     edge: dict,
     model_id: str,
@@ -1383,6 +1470,8 @@ async def _generate_one(
     spec = None
     narrative_source = edge.get("narrative_source_hint", "w82")
     verification_failure = ""  # BUILD-PREGEN-FIX-3: track why w84 failed
+    # BUILD-DUAL-MODEL-PREGEN: non-edge matches use Haiku (match preview mode)
+    _is_non_edge = edge.get("is_non_edge", False)
     served_model = "baseline" if narrative_source == "baseline_no_edge" else model_label
     try:
         from narrative_spec import build_narrative_spec, _render_baseline
@@ -1419,12 +1508,16 @@ async def _generate_one(
 
     # VERDICT-FIX Fix 3 + BUILD-COVERAGE-GATE: PARTIAL context with non-empty
     # coverage (e.g. MMA fighter records, cricket standings) should still allow W84.
+    # FIX-HAIKU-GATE: non-edge matches bypass the PARTIAL+empty gate — thin evidence
+    # is expected for match previews and Haiku handles it with a minimal context prompt.
     _partial = (ctx or {}).get("_context_mode") == "PARTIAL"
-    _skip_w84_partial = _partial and (_coverage_level == "empty")
+    _skip_w84_partial = _partial and (_coverage_level == "empty") and not _is_non_edge
     _skip_w84 = _skip_w84_partial or bool(edge.get("skip_sonnet_polish"))
 
-    # Empty evidence always blocks W84 regardless of other flags
-    if _coverage_level == "empty":
+    # Empty evidence blocks W84 for edge matches only.
+    # FIX-HAIKU-GATE: Non-edge (is_non_edge=True) bypasses this gate — thin evidence
+    # is expected for match previews and the Haiku path uses a minimal context prompt.
+    if _coverage_level == "empty" and not _is_non_edge:
         _skip_w84 = True
         log.info(
             "[COVERAGE-GATE] Skipping Sonnet polish for %s: empty evidence", match_key
@@ -1432,87 +1525,116 @@ async def _generate_one(
 
     if narrative and spec is not None and evidence_pack is not None and not _skip_w84:
         try:
-            prompt_text = format_evidence_prompt(evidence_pack, spec)
-            resp = await claude.messages.create(
-                model=SHADOW_MODEL,
-                max_tokens=1200,
-                messages=[{"role": "user", "content": prompt_text}],
-                timeout=45.0,
-            )
-            model_draft = _strip_preamble(_extract_text_from_response(resp)).strip()
-            sanitized_draft = sanitize_ai_response(model_draft)
-            sanitized_draft = _strip_model_generated_h2h_references(sanitized_draft)
-            sanitized_draft = _strip_model_generated_sharp_references(sanitized_draft)
-            h2h_sentence = _build_h2h_injection(evidence_pack, spec)
-            if h2h_sentence:
-                sanitized_draft = _inject_h2h_sentence(sanitized_draft, h2h_sentence)
-            sharp_sentence = _build_sharp_injection(evidence_pack, spec)
-            if sharp_sentence:
-                sanitized_draft = _inject_sharp_sentence(sanitized_draft, sharp_sentence)
-            # R12-BUILD-03 Fix 3b: Suppress AFTER all injections (belt-and-suspenders)
-            sanitized_draft = _suppress_shadow_banned_phrases(sanitized_draft)
-
-            # R12-BUILD-03 Fix 2: Force-inject correct verdict bookmaker+odds
-            # BEFORE verify, so the verifier sees the correct data.
-            # Sonnet substitutes wrong bookmaker ~40% of the time for unusual names.
-            _fix2_bk = tips[0]["bookie"] if tips else ""
-            _fix2_odds = tips[0]["odds"] if tips else 0
-            if _fix2_bk and _fix2_odds:
-                sanitized_draft = _realign_verdict_bookmaker(
-                    sanitized_draft, _fix2_bk, float(_fix2_odds)
-                )
-                # Fix 2b: If realign didn't fix it, force-inject bk@price into verdict
-                if not _verdict_bookmaker_aligned(sanitized_draft, _fix2_bk, float(_fix2_odds)):
-                    import re as _re2
-                    _v_start = sanitized_draft.find("\U0001f3c6")  # 🏆
-                    if _v_start != -1:
-                        _v_section = sanitized_draft[_v_start:]
-                        _odds_str = f"{float(_fix2_odds):.2f}"
-                        # Find any "@ X.XX" or "at X.XX" pattern and replace with correct values
-                        _v_fixed = _re2.sub(
-                            r'(?:\b\w[\w\s]*?)\s*@\s*\d+\.\d{2}',
-                            f'{_fix2_bk} @ {_odds_str}',
-                            _v_section,
-                            count=1,
-                        )
-                        if _v_fixed == _v_section:
-                            # No @ pattern found — append recommendation
-                            _v_fixed = _v_section.rstrip() + f" ({_fix2_bk} @ {_odds_str})"
-                        sanitized_draft = sanitized_draft[:_v_start] + _v_fixed
-
-            passed, report = verify_shadow_narrative(sanitized_draft, evidence_pack, spec)
-            if passed:
-                candidate = report.get("sanitized_draft") or sanitized_draft
-                # BASELINE-FIX: Verify verdict bookmaker+price matches tip data
-                _tip_bk = tips[0]["bookie"] if tips else ""
-                _tip_odds = tips[0]["odds"] if tips else 0
-                if _verdict_bookmaker_aligned(candidate, _tip_bk, _tip_odds):
-                    narrative = candidate
-                    narrative_source = "w84"
-                    served_model = "opus" if "opus" in SHADOW_MODEL else "sonnet"
-                    log.info("W84 SERVED for %s", match_key)
+            if _is_non_edge:
+                # BUILD-DUAL-MODEL-PREGEN: Haiku path for non-edge match previews.
+                # No bookmaker/odds alignment needed — this is an analytical preview.
+                # FIX-HAIKU-GATE (AC-3): use minimal prompt when evidence is empty.
+                if _coverage_level == "empty":
+                    prompt_text = _build_minimal_haiku_prompt(home, away, sport, league, commence)
+                    log.info(
+                        "[HAIKU-MINIMAL-CTX] Using minimal context prompt for %s", match_key
+                    )
                 else:
-                    # Attempt to realign before falling back
-                    realigned = _realign_verdict_bookmaker(candidate, _tip_bk, _tip_odds)
-                    if _verdict_bookmaker_aligned(realigned, _tip_bk, _tip_odds):
-                        narrative = realigned
+                    prompt_text = format_evidence_prompt(evidence_pack, spec, match_preview=True)
+                resp = await claude.messages.create(
+                    model=HAIKU_MODEL,
+                    max_tokens=800,
+                    messages=[{"role": "user", "content": prompt_text}],
+                    timeout=30.0,
+                )
+                model_draft = _strip_preamble(_extract_text_from_response(resp)).strip()
+                sanitized_draft = sanitize_ai_response(model_draft)
+                sanitized_draft = _suppress_shadow_banned_phrases(sanitized_draft)
+                if _validate_preview_polish(sanitized_draft, spec):
+                    narrative = sanitized_draft
+                    narrative_source = "w84"
+                    served_model = "haiku"
+                    log.info("W84-HAIKU SERVED for %s", match_key)
+                else:
+                    log.warning("W84-HAIKU REJECT for %s — serving W82 fallback", match_key)
+            else:
+                # Sonnet path for edge matches.
+                prompt_text = format_evidence_prompt(evidence_pack, spec)
+                resp = await claude.messages.create(
+                    model=SHADOW_MODEL,
+                    max_tokens=1200,
+                    messages=[{"role": "user", "content": prompt_text}],
+                    timeout=45.0,
+                )
+                model_draft = _strip_preamble(_extract_text_from_response(resp)).strip()
+                sanitized_draft = sanitize_ai_response(model_draft)
+                sanitized_draft = _strip_model_generated_h2h_references(sanitized_draft)
+                sanitized_draft = _strip_model_generated_sharp_references(sanitized_draft)
+                h2h_sentence = _build_h2h_injection(evidence_pack, spec)
+                if h2h_sentence:
+                    sanitized_draft = _inject_h2h_sentence(sanitized_draft, h2h_sentence)
+                sharp_sentence = _build_sharp_injection(evidence_pack, spec)
+                if sharp_sentence:
+                    sanitized_draft = _inject_sharp_sentence(sanitized_draft, sharp_sentence)
+                # R12-BUILD-03 Fix 3b: Suppress AFTER all injections (belt-and-suspenders)
+                sanitized_draft = _suppress_shadow_banned_phrases(sanitized_draft)
+
+                # R12-BUILD-03 Fix 2: Force-inject correct verdict bookmaker+odds
+                # BEFORE verify, so the verifier sees the correct data.
+                # Sonnet substitutes wrong bookmaker ~40% of the time for unusual names.
+                _fix2_bk = tips[0]["bookie"] if tips else ""
+                _fix2_odds = tips[0]["odds"] if tips else 0
+                if _fix2_bk and _fix2_odds:
+                    sanitized_draft = _realign_verdict_bookmaker(
+                        sanitized_draft, _fix2_bk, float(_fix2_odds)
+                    )
+                    # Fix 2b: If realign didn't fix it, force-inject bk@price into verdict
+                    if not _verdict_bookmaker_aligned(sanitized_draft, _fix2_bk, float(_fix2_odds)):
+                        import re as _re2
+                        _v_start = sanitized_draft.find("\U0001f3c6")  # 🏆
+                        if _v_start != -1:
+                            _v_section = sanitized_draft[_v_start:]
+                            _odds_str = f"{float(_fix2_odds):.2f}"
+                            # Find any "@ X.XX" or "at X.XX" pattern and replace with correct values
+                            _v_fixed = _re2.sub(
+                                r'(?:\b\w[\w\s]*?)\s*@\s*\d+\.\d{2}',
+                                f'{_fix2_bk} @ {_odds_str}',
+                                _v_section,
+                                count=1,
+                            )
+                            if _v_fixed == _v_section:
+                                # No @ pattern found — append recommendation
+                                _v_fixed = _v_section.rstrip() + f" ({_fix2_bk} @ {_odds_str})"
+                            sanitized_draft = sanitized_draft[:_v_start] + _v_fixed
+
+                passed, report = verify_shadow_narrative(sanitized_draft, evidence_pack, spec)
+                if passed:
+                    candidate = report.get("sanitized_draft") or sanitized_draft
+                    # BASELINE-FIX: Verify verdict bookmaker+price matches tip data
+                    _tip_bk = tips[0]["bookie"] if tips else ""
+                    _tip_odds = tips[0]["odds"] if tips else 0
+                    if _verdict_bookmaker_aligned(candidate, _tip_bk, _tip_odds):
+                        narrative = candidate
                         narrative_source = "w84"
                         served_model = "opus" if "opus" in SHADOW_MODEL else "sonnet"
-                        log.info(
-                            "W84 SERVED (realigned) for %s: verdict → %s@%.2f",
-                            match_key, _tip_bk, _tip_odds,
-                        )
+                        log.info("W84 SERVED for %s", match_key)
                     else:
-                        verification_failure = f"verdict_mismatch: expected {_tip_bk}@{_tip_odds:.2f}"
-                        log.warning(
-                            "W84 VERDICT MISMATCH for %s: verdict has wrong bookmaker/price "
-                            "(expected %s@%.2f) — serving W82 fallback",
-                            match_key, _tip_bk, _tip_odds,
-                        )
-            else:
-                reasons = "; ".join(report.get("rejection_reasons", [])[:3]) or "verification failed"
-                verification_failure = f"verify_fail: {reasons}"
-                log.warning("W84 VERIFY FAIL for %s: %s — serving W82 fallback", match_key, reasons)
+                        # Attempt to realign before falling back
+                        realigned = _realign_verdict_bookmaker(candidate, _tip_bk, _tip_odds)
+                        if _verdict_bookmaker_aligned(realigned, _tip_bk, _tip_odds):
+                            narrative = realigned
+                            narrative_source = "w84"
+                            served_model = "opus" if "opus" in SHADOW_MODEL else "sonnet"
+                            log.info(
+                                "W84 SERVED (realigned) for %s: verdict → %s@%.2f",
+                                match_key, _tip_bk, _tip_odds,
+                            )
+                        else:
+                            verification_failure = f"verdict_mismatch: expected {_tip_bk}@{_tip_odds:.2f}"
+                            log.warning(
+                                "W84 VERDICT MISMATCH for %s: verdict has wrong bookmaker/price "
+                                "(expected %s@%.2f) — serving W82 fallback",
+                                match_key, _tip_bk, _tip_odds,
+                            )
+                else:
+                    reasons = "; ".join(report.get("rejection_reasons", [])[:3]) or "verification failed"
+                    verification_failure = f"verify_fail: {reasons}"
+                    log.warning("W84 VERIFY FAIL for %s: %s — serving W82 fallback", match_key, reasons)
         except Exception as exc:
             verification_failure = f"w84_error: {exc}"
             log.warning("W84 ERROR for %s: %s — serving W82 fallback", match_key, exc)
@@ -1549,7 +1671,8 @@ async def _generate_one(
     # BASELINE-FIX: Final verdict alignment enforcement.
     # After all post-processing (Layer 2 etc.), ensure the narrative still has
     # the correct bookmaker+price matching the odds table tip data.
-    if narrative and tips:
+    # BUILD-DUAL-MODEL-PREGEN: Skip for non-edge previews — no bet recommendation to align.
+    if narrative and tips and not _is_non_edge:
         _final_bk = tips[0]["bookie"]
         _final_odds = tips[0]["odds"]
         if not _verdict_bookmaker_aligned(narrative, _final_bk, _final_odds):
@@ -1637,16 +1760,21 @@ async def _generate_one(
     msg = _final_polish(_sanitise_jargon("\n".join(lines)))
 
     # 9. Return cache-write data (caller batch-writes after all generation)
+    # D-04 FIX: When ESPN returns no data for this match, label model as
+    # "instant-baseline-no-ctx" so QA can distinguish genuinely enriched cards
+    # from generic ones. narrative_cache schema unchanged — model column only.
+    _ctx_had_data = bool(ctx and ctx.get("data_available"))
+    _final_model = served_model if _ctx_had_data else "instant-baseline-no-ctx"
     duration = time.time() - t0
     return {
-        "match_key": match_key, "success": True, "model": served_model,
+        "match_key": match_key, "success": True, "model": _final_model,
         "duration": duration, "narrative": narrative,
         "_cache": {
             "match_id": match_key,
             "html": msg,
             "tips": tips,
             "edge_tier": edge_tier,
-            "model": served_model,
+            "model": _final_model,
             "evidence_json": evidence_json,
             "narrative_source": narrative_source,
             "verification_failure": verification_failure,
@@ -1809,6 +1937,7 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         "total_duration": 0.0,
         "w84_served": 0,
         "w82_fallback": 0,
+        "haiku_calls": 0,  # BUILD-DUAL-MODEL-PREGEN: non-edge Haiku preview count
     }
     sweep_verdicts: list[str] = []
     pending_writes: list[dict] = []  # W79-P3D: collect cache writes, batch after generation
@@ -1816,8 +1945,10 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
     for i, edge in enumerate(edges, 1):
         mk = edge.get("match_key", "")
 
-        # W67-CALIBRATE Fix 5: Skip no-odds matches
-        if not edge.get("best_odds") or edge.get("edge_pct", 0) == 0:
+        # W67-CALIBRATE Fix 5: Skip no-odds matches.
+        # BUILD-DUAL-MODEL-PREGEN: Do NOT skip zero/negative edge_pct — non-edge
+        # matches are valid Haiku targets as long as they have SA odds.
+        if not edge.get("best_odds"):
             log.info("SKIP: %s — no active odds data", mk)
             results["skipped"] += 1
             continue
@@ -1846,6 +1977,8 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                     pending_writes.append(result["_cache"])
                     if result["_cache"].get("narrative_source") == "w84":
                         results["w84_served"] += 1
+                        if result["_cache"].get("model") == "haiku":
+                            results["haiku_calls"] += 1
                     else:
                         results["w82_fallback"] += 1
                 # W67-CALIBRATE: collect verdict for balance check
@@ -1881,8 +2014,9 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
             new_source = pw.get("narrative_source", "w82")
             match_id = pw["match_id"]
             # PRE-3 + BUILD-PREGEN-FIX-3: Preserve existing w84 on ALL sweep types
-            # when the new result is w82. Cold starts (no existing entry) still get w82.
-            if new_source == "w82":
+            # when the new result is w82 or baseline_no_edge (Haiku fallback).
+            # Cold starts (no existing entry) still get w82/baseline_no_edge.
+            if new_source in ("w82", "baseline_no_edge"):
                 existing = await _get_cached_narrative(match_id)
                 if existing and existing.get("narrative_source") == "w84":
                     _fail_reason = pw.get("verification_failure", "unknown")
@@ -1929,7 +2063,7 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         "Failed: %d\n"
         "Skipped (no odds): %d\n"
         "Dropped (duplicate): %d\n"
-        "W84 served: %d\n"
+        "W84 served: %d (haiku: %d, sonnet: %d)\n"
         "W82 fallback: %d\n"
         "Total time: %.1fs\n"
         "Avg per edge: %.1fs",
@@ -1941,6 +2075,8 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         results["skipped"],
         results["dropped"],
         results["w84_served"],
+        results["haiku_calls"],
+        results["w84_served"] - results["haiku_calls"],
         results["w82_fallback"],
         results["total_duration"],
         results["total_duration"] / max(len(edges), 1),

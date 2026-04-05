@@ -107,6 +107,7 @@ from services import odds_service as odds_svc
 from services.affiliate_service import get_affiliate_url, select_best_bookmaker, get_runner_up_odds, get_cta_label
 from renderers.edge_renderer import render_edge_badge, render_tip_with_odds, render_odds_comparison, EDGE_EMOJIS, EDGE_LABELS
 from tier_gate import gate_edges, gate_narrative, record_view, get_upgrade_message
+from message_types import DigestMessage, DetailMessage, AlertMessage, ResultMessage, is_stale_hash
 
 # ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
 from logging.handlers import RotatingFileHandler
@@ -1729,11 +1730,36 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _ht_page_state[user_id] = page_num
             else:
                 await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
+    elif prefix == "today":
+        # P3-02: /today DigestMessage drill-down + back navigation
+        user_id = query.from_user.id
+        if action == "back" or action.startswith("back:"):
+            # Rebuild digest from per-user snapshot
+            _td_tips = _today_digest_snapshot.get(user_id)
+            if not _td_tips:
+                # Snapshot cleared (restart) — serve fresh digest via /today flow
+                _td_fresh = _hot_tips_cache.get("global", {}).get("tips", [])
+                _td_tips = _td_fresh or []
+                for _t in _td_tips:
+                    if _t.get("match_id") and not _t.get("cb_key"):
+                        _t["cb_key"] = _shorten_cb_key(_t["match_id"])
+            _td_text, _td_markup = DigestMessage.build(_td_tips)
+            await query.edit_message_text(
+                _td_text, parse_mode=ParseMode.HTML, reply_markup=_td_markup
+            )
     elif prefix == "edge":
         user_id = query.from_user.id
         if action.startswith("detail:"):
             # ── CLEAN-RENDER-v2: Single renderer path ──────────────────
-            match_key = _resolve_cb_key(action.split(":", 1)[1])
+            _raw_cb_key = action.split(":", 1)[1]
+            # P3-02: Detect stale digest — hash key not in map after bot restart
+            if is_stale_hash(_raw_cb_key) and _resolve_cb_key(_raw_cb_key) == _raw_cb_key:
+                _stale_text, _stale_markup = DigestMessage.expired_response()
+                await query.edit_message_text(
+                    _stale_text, parse_mode=ParseMode.HTML, reply_markup=_stale_markup
+                )
+                return
+            match_key = _resolve_cb_key(_raw_cb_key)
             _sentry_user(user_id)
             _sentry_tags(flow="edge_detail", route="edge:detail", match_id=match_key)
 
@@ -2637,6 +2663,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                                 rf"\1 — {_ib_emoji} {_ib_label}",
                                 _ibline, count=1,
                             )
+                    # D-03 FIX: Strip duplicate 🎯 fixture header from cached narrative.
+                    # The outer header block above already has 🎯 Home vs Away + date + league.
+                    # Cached HTML from _inject_narrative_header() prepends 🎯...📋; strip it.
+                    _ib_setup_pos = _ibline.find("📋")
+                    if _ib_setup_pos > 0:
+                        _ibline = _ibline[_ib_setup_pos:]
                     _ilines.append(_ibline.lstrip("\n"))
                 else:
                     # Narrative unavailable — concrete edge-only content (never boilerplate)
@@ -6297,6 +6329,8 @@ _hot_tips_fetch_lock: asyncio.Lock | None = None  # W84-P1: prevents concurrent 
 _ht_page_state: dict[int, int] = {}    # user_id → last rendered page number
 _ht_tips_snapshot: dict[int, list] = {}  # user_id → shallow copy of tips at last render
 _ht_detail_origin: dict[tuple[int, str], int] = {}  # (user_id, match_key) → source page
+# P3-02: /today digest snapshot — per-user tips frozen at last DigestMessage render
+_today_digest_snapshot: dict[int, list] = {}  # user_id → tips list
 _odds_compare_origin: dict[tuple[int, str], dict[str, object]] = {}  # (user_id, event_id) → source metadata
 
 # Leagues available in our scrapers DB (odds.db)
@@ -7219,9 +7253,17 @@ def _build_tip_narrative(tip: dict) -> str:
     # so narrative body is consistent with what the CTA button was built from.
     _odds_by_bk = tip.get("odds_by_bookmaker", {})
     if _odds_by_bk:
-        _best_bk_key = max(_odds_by_bk, key=_odds_by_bk.get)
-        best_bk = _display_bookmaker_name(_best_bk_key)
-        best_odds = _odds_by_bk[_best_bk_key]
+        # D-01 FIX: Use outcome-specific bookmaker selection (same algorithm as CTA button).
+        # Old code: max(_odds_by_bk, key=_odds_by_bk.get) — compares nested dicts, not prices.
+        _outcome_raw = tip.get("outcome", "home")
+        _best_bk_key, _best_bk_price = _select_best_bookmaker_for_outcome(_odds_by_bk, _outcome_raw)
+        if _best_bk_key is None:
+            # Fallback: first bookmaker in dict (graceful empty-outcome handling)
+            _best_bk_key = next(iter(_odds_by_bk), "")
+            _bk_markets = _odds_by_bk.get(_best_bk_key, {})
+            _best_bk_price = _bk_markets.get(_outcome_raw) if isinstance(_bk_markets, dict) else None
+        best_bk = _display_bookmaker_name(_best_bk_key) if _best_bk_key else "the market"
+        best_odds = _best_bk_price or 0
     else:
         best_bk = (
             tip.get("best_bookmaker_display", "")
@@ -9128,6 +9170,50 @@ async def cmd_picks(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _show_hot_tips(update, ctx, update.effective_user.id)
 
 
+async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """P3-02: /today — send a DigestMessage of today's top picks.
+
+    Each pick is a compact 2-line card (tier + teams + kickoff + confidence).
+    Tapping a pick edits the message in-place to show the full DetailMessage.
+    Tapping ← Back edits back to the DigestMessage (today:back callback).
+    """
+    user_id = update.effective_user.id if update.effective_user else 0
+    chat_id = update.effective_message.chat_id if update.effective_message else 0
+
+    tips: list[dict] = []
+    # Primary: in-memory hot tips cache (fastest, already computed)
+    _cached = _hot_tips_cache.get("global", {}).get("tips", [])
+    if _cached:
+        tips = list(_cached)
+    else:
+        # Cold path: load from DB
+        try:
+            tips = await _fetch_hot_tips_from_db()
+        except Exception as _e:
+            log.warning("/today cold fetch failed: %s", _e)
+
+    # Filter out zero/negative EV and build cb_keys
+    tips = [t for t in tips if (t.get("ev") or 0) > 0]
+    for t in tips:
+        mk = t.get("match_id") or t.get("match_key") or ""
+        if mk:
+            t["cb_key"] = _shorten_cb_key(mk)
+        # Populate sport_emoji if missing
+        if not t.get("sport_emoji"):
+            t["sport_emoji"] = _get_sport_emoji_for_api_key(t.get("sport_key", ""))
+
+    text, markup = DigestMessage.build(tips)
+
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif update.effective_message:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+    # Freeze snapshot for today:back
+    if user_id:
+        _today_digest_snapshot[user_id] = list(tips)
+
+
 async def handle_picks(query, ctx: ContextTypes.DEFAULT_TYPE, action: str) -> None:
     """Callback handler for picks:go and picks:today buttons."""
     if action in ("go", "today"):
@@ -9726,13 +9812,33 @@ def _build_edge_only_section(tips: list[dict]) -> str:
             f"No supporting signals; this is a model-only play."
         )
         verdict = "Small punt only if the price appeals — treat as speculative."
+    # D-06 FIX: Include competition name, match date, and odds structure in Setup.
+    # Tip data has all three: league key, match_id date suffix, odds+bookmaker.
+    _d06_league_key = best.get("league", "")
+    _d06_league_name = LEAGUE_DISPLAY_NAMES.get(
+        _d06_league_key, _d06_league_key.replace("_", " ").title() if _d06_league_key else ""
+    )
+    _d06_mid = best.get("match_id", "")
+    _d06_date = ""
+    if _d06_mid:
+        _d06_ds = _d06_mid.rsplit("_", 1)[-1]
+        if len(_d06_ds) == 10:
+            try:
+                from datetime import date as _d06_dt
+                _d06_date = _d06_dt.fromisoformat(_d06_ds).strftime("%d %b %Y")
+            except ValueError:
+                pass
+    _d06_ctx = " · ".join(p for p in [_d06_league_name, _d06_date] if p)
+    _d06_odds_ctx = f"{h(outcome)} priced at {odds:.2f} with {h(bk)}." if odds > 1 else ""
+    _d06_prefix = (_d06_ctx + " — " if _d06_ctx else "") + (_d06_odds_ctx + " " if _d06_odds_ctx else "")
+
     # Edge-score-aware setup text
     if edge_score >= 55:
-        setup = "This fixture looks like one that will declare its character early rather than hand it over before kickoff."
+        setup = _d06_prefix + "This fixture looks like one that will declare its character early rather than hand it over before kickoff."
     elif edge_score >= 40:
-        setup = "The opening phase should matter here, because the contest still has to establish its own rhythm."
+        setup = _d06_prefix + "The opening phase should matter here, because the contest still has to establish its own rhythm."
     else:
-        setup = "This shapes up as the sort of fixture where the game itself has to set the tone before anything else."
+        setup = _d06_prefix + "This shapes up as the sort of fixture where the game itself has to set the tone before anything else."
     return (
         f"📋 <b>The Setup</b>\n{setup}\n\n"
         f"🎯 <b>The Edge</b>\n{edge_desc}\n\n"
@@ -10248,7 +10354,9 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
 
             _current_er_ev = _quick_ev_lookup(match_id)
             if _current_er_ev is not None and _cached_ev is not None:
-                if _ev_coherence_broken(_cached_ev, _current_er_ev):
+                # D-02 FIX: Tighten threshold to 1.0pp so narrative EV stays coherent
+                # with footer EV. Old threshold was 5.0pp — allowed visible divergence.
+                if _ev_coherence_broken(_cached_ev, _current_er_ev, delta_threshold=1.0):
                     log.warning(
                         "Cache rejected for %s — EV incoherent: cached=%.3f live=%.3f",
                         match_id, _cached_ev, _current_er_ev,
@@ -23218,6 +23326,7 @@ def main() -> None:
     app.add_handler(CommandHandler("tip", cmd_tip))
     app.add_handler(CommandHandler("picks", cmd_picks))
     app.add_handler(CommandHandler("tips", cmd_picks))
+    app.add_handler(CommandHandler("today", cmd_today))  # P3-02: DigestMessage
     app.add_handler(CommandHandler("schedule", cmd_schedule))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("admin", cmd_admin))
