@@ -22,7 +22,7 @@
     Bulls @ 1.65 → R495 on R300
 
 [buttons]
-[1] ⚽ SUN v KC 🔒 -> hot:upgrade:sundowns_vs_chiefs_2026-03-10 | [2] ⚽ ARS v CHE 🥇 -> edge:detail:arsenal_vs_chelsea_2026-03-10
-[3] 🏉 BUL v STO 🥇 -> edge:detail:bulls_vs_stormers_2026-03-10
+[1] ⚽ SUN v KC 🔒 -> hot:upgrade:sundowns_vs_chiefs_2026-03-10 | [2] ⚽ ARS v CHE 🥇 -> ep:pick:1
+[3] 🏉 BUL v STO 🥇 -> ep:pick:2
 📊 Edge Tracker -> results:7
 ⚽ My Matches -> yg:all:0 | ↩️ Menu -> nav:main

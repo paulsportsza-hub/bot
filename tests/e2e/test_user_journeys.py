@@ -139,7 +139,7 @@ class TestBronzeJourney:
         # W84-P0: locked/blurred edges route to hot:upgrade:{page} (page-encoded since W84-HT2)
         assert any(cb.startswith("hot:upgrade") for cb in callbacks)
         # Gold/Diamond remain visible; sub-threshold Silver/Bronze do not appear in the list
-        assert not any(cb.startswith("edge:detail:") for cb in callbacks)
+        assert not any(cb.startswith("ep:pick:") for cb in callbacks)
 
     def test_bronze_never_sees_diamond_odds(self):
         """Bronze Hot Tips text never reveals diamond edge odds."""
@@ -227,7 +227,7 @@ class TestGoldJourney:
             if btn.callback_data
         ]
         # Only the Gold edge clears the current list threshold and stays directly accessible
-        detail_callbacks = [cb for cb in callbacks if cb.startswith("edge:detail:")]
+        detail_callbacks = [cb for cb in callbacks if cb.startswith("ep:pick:")]
         assert len(detail_callbacks) == 1
 
 
@@ -271,7 +271,7 @@ class TestDiamondJourney:
         assert "Unlock" not in text
 
     def test_diamond_all_buttons_are_detail(self):
-        """Diamond user: every edge button goes to edge:detail."""
+        """Diamond user: every accessible edge button goes to ep:pick, zero sub:plans."""
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
@@ -281,21 +281,21 @@ class TestDiamondJourney:
                 page=0,
                 user_tier="diamond",
             ))
-        edge_buttons = [
+        pick_buttons = [
             btn.callback_data
             for row in markup.inline_keyboard
             for btn in row
-            if btn.callback_data
-            and (
-                btn.callback_data.startswith("edge:")
-                or btn.callback_data == "sub:plans"
-            )
+            if btn.callback_data and btn.callback_data.startswith("ep:pick:")
         ]
-        # All should be edge:detail, none should be sub:plans
-        for cb in edge_buttons:
-            assert cb.startswith("edge:detail:"), (
-                f"Diamond button goes to {cb}, not edge:detail"
-            )
+        sub_buttons = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+            if btn.callback_data and btn.callback_data == "sub:plans"
+        ]
+        # Diamond has pick buttons, no sub:plans
+        assert len(pick_buttons) > 0, "Diamond user should see ep:pick: buttons"
+        assert len(sub_buttons) == 0, f"Diamond user should not see sub:plans: {sub_buttons}"
 
     def test_diamond_sees_all_odds(self):
         """Diamond sees odds on every card."""

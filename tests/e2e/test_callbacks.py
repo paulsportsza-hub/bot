@@ -89,6 +89,10 @@ HANDLED_PREFIXES = {
     "unsubscribe",
     "sub",
     "settings",
+    "ep",
+    "mm",
+    "ed",
+    "md",
 }
 
 

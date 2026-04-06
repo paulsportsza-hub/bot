@@ -478,7 +478,7 @@ class TestHotTipsModelOnlyIntegrity:
             },
         }
 
-        text, _ = bot._build_hot_tips_page([tip], user_id=config.ADMIN_IDS[0])
+        text, _ = await bot._build_hot_tips_page([tip], user_id=config.ADMIN_IDS[0])
 
         assert "[MODEL ONLY]" in text
         assert tip["_ht_model_only"] is True

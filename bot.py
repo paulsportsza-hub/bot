@@ -1573,16 +1573,18 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
                     [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                 ])
-            # BUILD-W3: My Matches card pagination (photo→photo, no flicker)
+            # BUILD-W3 / W3-FIX: My Matches card pagination (photo→photo, no flicker)
             _raw_games = _schedule_cache.get(user_id, [])
             _edge_info = _get_edge_info_for_games(_raw_games)
             _mm_input = _build_mm_matches_for_card(_raw_games, _edge_info)
-            _mm_games_snapshot[user_id] = _mm_input
+            # W3-FIX: sort matches to align with build_my_matches_data() card [N] order
+            _mm_sorted = _sort_mm_snapshot(_mm_input)
+            _mm_games_snapshot[user_id] = _mm_sorted
             _yg_card_data = build_my_matches_data(_mm_input, page=pg + 1)
             await send_card_or_fallback(
                 bot=ctx.bot, chat_id=query.message.chat_id,
                 template="my_matches.html", data=_yg_card_data,
-                text_fallback=text, markup=markup,
+                text_fallback=text, markup=_build_mm_card_markup(_mm_sorted, page=pg),
                 message_to_edit=query.message,
             )
         elif action.startswith("sport:"):
@@ -1766,7 +1768,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             else:
                 await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
     elif prefix == "ep":
-        # BUILD-W3: Edge Picks card — numbered pick buttons (ep:pick:{N})
+        # BUILD-W3 / W3-FIX: Edge Picks card — numbered pick buttons (ep:pick:{N})
         user_id = query.from_user.id
         if action.startswith("pick:"):
             try:
@@ -1775,26 +1777,88 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _ep_idx = 0
             _ep_tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
             if _ep_tips and _ep_idx < len(_ep_tips):
-                _ep_key = _ep_tips[_ep_idx].get("match_id") or _ep_tips[_ep_idx].get("event_id", "")
-                if _ep_key:
-                    await _generate_game_tips_safe(query, ctx, _ep_key, user_id)
-                    return
+                _ep_tip = _ep_tips[_ep_idx]
+                _ep_tier = await get_effective_tier(user_id)
+                _ep_back_page = _ht_page_state.get(user_id, 0)
+                _ep_edge_tier = (
+                    _ep_tip.get("display_tier") or _ep_tip.get("edge_rating")
+                    or _ep_tip.get("tier") or "bronze"
+                ).lower()
+                _ep_event_id = _ep_tip.get("event_id") or _ep_tip.get("match_id") or ""
+                # W3-FIX: build edge detail card — zero LLM
+                _ep_data = build_edge_detail_data(_ep_tip)
+                _ep_btn_rows = _build_game_buttons(
+                    [_ep_tip], event_id=_ep_event_id, user_id=user_id,
+                    source="edge_picks", user_tier=_ep_tier, edge_tier=_ep_edge_tier,
+                )
+                _ep_btn_rows.append([
+                    InlineKeyboardButton(
+                        "↩️ Back to Edge Picks",
+                        callback_data=f"ed:back:{_ep_back_page}",
+                    ),
+                    InlineKeyboardButton("🏠 Menu", callback_data="nav:main"),
+                ])
+                _ep_markup = InlineKeyboardMarkup(_ep_btn_rows)
+                _ep_fallback = (
+                    f"<b>{h(_ep_tip.get('home', ''))} vs "
+                    f"{h(_ep_tip.get('away', ''))}</b>"
+                )
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=query.message.chat_id,
+                    template="edge_detail.html", data=_ep_data,
+                    text_fallback=_ep_fallback, markup=_ep_markup,
+                    message_to_edit=query.message,
+                )
+                return
             await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
     elif prefix == "mm":
-        # BUILD-W3: My Matches card — numbered match buttons (mm:match:{N}:{e|n})
+        # BUILD-W3 / W3-FIX: My Matches card — numbered match buttons (mm:match:{N}:{e|n})
         user_id = query.from_user.id
         if action.startswith("match:"):
             parts = action.split(":")
             try:
-                _mm_idx = int(parts[1])
+                _mm_card_n = int(parts[1])  # 1-based card number
             except (ValueError, IndexError):
-                _mm_idx = 0
+                _mm_card_n = 1
+            _mm_kind = parts[2] if len(parts) > 2 else "n"  # "e"=edge, "n"=non-edge
             _mm_snap = _mm_games_snapshot.get(user_id, [])
-            if _mm_snap and _mm_idx < len(_mm_snap):
-                _mm_ev = _mm_snap[_mm_idx].get("_event_id", "")
-                if _mm_ev:
-                    await _generate_game_tips_safe(query, ctx, _mm_ev, user_id)
-                    return
+            _mm_snap_idx = _mm_card_n - 1  # convert 1-based card label to 0-based index
+            if _mm_snap and 0 <= _mm_snap_idx < len(_mm_snap):
+                _mm_match = _mm_snap[_mm_snap_idx]
+                _mm_event_id = _mm_match.get("_event_id", "")
+                _mm_back_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("↩️ Back to My Matches", callback_data="md:back")],
+                    [InlineKeyboardButton("🏠 Menu", callback_data="nav:main")],
+                ])
+                _mm_fallback = (
+                    f"<b>{h(_mm_match.get('home', ''))} vs "
+                    f"{h(_mm_match.get('away', ''))}</b>"
+                )
+                if _mm_kind == "e":
+                    # W3-FIX: Edge match — look up full tip from cache for richer card data
+                    _mm_full_tip = next(
+                        (t for t in _hot_tips_cache.get("global", {}).get("tips", [])
+                         if t.get("event_id") == _mm_event_id
+                         or t.get("match_id") == _mm_event_id),
+                        _mm_match,
+                    )
+                    _mm_ed_data = build_edge_detail_data(_mm_full_tip)
+                    await send_card_or_fallback(
+                        bot=ctx.bot, chat_id=query.message.chat_id,
+                        template="edge_detail.html", data=_mm_ed_data,
+                        text_fallback=_mm_fallback, markup=_mm_back_markup,
+                        message_to_edit=query.message,
+                    )
+                else:
+                    # W3-FIX: Non-edge match — build match detail card
+                    _mm_md_data = build_match_detail_data(_mm_match)
+                    await send_card_or_fallback(
+                        bot=ctx.bot, chat_id=query.message.chat_id,
+                        template="match_detail.html", data=_mm_md_data,
+                        text_fallback=_mm_fallback, markup=_mm_back_markup,
+                        message_to_edit=query.message,
+                    )
+                return
             _ut = await get_effective_tier(user_id)
             _md_text, _md_markup = await _render_your_games_all(user_id, user_tier=_ut, skip_broadcast=True)
             await query.edit_message_text(_md_text, parse_mode=ParseMode.HTML, reply_markup=_md_markup)
@@ -1850,15 +1914,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _raw_games_md = _schedule_cache.get(user_id, [])
             _edge_info_md = _get_edge_info_for_games(_raw_games_md)
             _mm_input_md = _build_mm_matches_for_card(_raw_games_md, _edge_info_md)
-            _mm_games_snapshot[user_id] = _mm_input_md
+            # W3-FIX: sort to align with card [N] order
+            _mm_sorted_md = _sort_mm_snapshot(_mm_input_md)
+            _mm_games_snapshot[user_id] = _mm_sorted_md
             _mdback_card_data = build_my_matches_data(_mm_input_md, page=1)
-            _mdback_text, _mdback_markup = await _render_your_games_all(
+            _mdback_text, _ = await _render_your_games_all(
                 user_id, user_tier=_mdback_ut, skip_broadcast=True,
             )
             await send_card_or_fallback(
                 bot=ctx.bot, chat_id=query.message.chat_id,
                 template="my_matches.html", data=_mdback_card_data,
-                text_fallback=_mdback_text, markup=_mdback_markup,
+                text_fallback=_mdback_text, markup=_build_mm_card_markup(_mm_sorted_md, page=0),
                 message_to_edit=query.message,
             )
     elif prefix == "today":
@@ -5178,18 +5244,20 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
         except Exception as _we:
             log.warning("MM warm render failed for user %s: %s", user_id, _we)
             text, markup = _FALLBACK_TEXT, _FALLBACK_MARKUP
-        # BUILD-W3: send My Matches image card (falls back to text on render failure)
+        # BUILD-W3 / W3-FIX: send My Matches image card (falls back to text on render failure)
         try:
             _raw_games_wm = _schedule_cache.get(user_id, [])
             _edge_info_wm = _get_edge_info_for_games(_raw_games_wm)
             _mm_input_wm = _build_mm_matches_for_card(_raw_games_wm, _edge_info_wm)
-            _mm_games_snapshot[user_id] = _mm_input_wm
+            # W3-FIX: sort to align with card [N] order
+            _mm_sorted_wm = _sort_mm_snapshot(_mm_input_wm)
+            _mm_games_snapshot[user_id] = _mm_sorted_wm
             _wm_card_data = build_my_matches_data(_mm_input_wm, page=1)
             await asyncio.wait_for(
                 send_card_or_fallback(
                     bot=ctx.bot, chat_id=update.message.chat_id,
                     template="my_matches.html", data=_wm_card_data,
-                    text_fallback=text, markup=markup,
+                    text_fallback=text, markup=_build_mm_card_markup(_mm_sorted_wm, page=0),
                 ),
                 timeout=12.0,
             )
@@ -5284,11 +5352,13 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 await asyncio.wait_for(asyncio.shield(spinner_task), timeout=2.0)
             except (asyncio.TimeoutError, Exception):
                 pass  # Spinner has in-flight API call; proceed with delivery
-        # BUILD-W3: store snapshot + build card data
+        # BUILD-W3 / W3-FIX: store sorted snapshot + build card data
         _raw_games_cp = _schedule_cache.get(user_id, [])
         _edge_info_cp = _get_edge_info_for_games(_raw_games_cp)
         _mm_input_cp = _build_mm_matches_for_card(_raw_games_cp, _edge_info_cp)
-        _mm_games_snapshot[user_id] = _mm_input_cp
+        # W3-FIX: sort to align with card [N] order
+        _mm_sorted_cp = _sort_mm_snapshot(_mm_input_cp)
+        _mm_games_snapshot[user_id] = _mm_sorted_cp
         _cp_card_data = build_my_matches_data(_mm_input_cp, page=1)
         # Delete spinner, send card (falls back to text on render failure)
         if loading is not None:
@@ -5301,12 +5371,55 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 send_card_or_fallback(
                     bot=ctx.bot, chat_id=update.message.chat_id,
                     template="my_matches.html", data=_cp_card_data,
-                    text_fallback=text, markup=markup,
+                    text_fallback=text, markup=_build_mm_card_markup(_mm_sorted_cp, page=0),
                 ),
                 timeout=12.0,
             )
         except Exception as _fe:
             log.error("MM: final delivery failed for user %s: %s", user_id, _fe)
+
+
+# W3-FIX: My Matches card helpers — order must match build_my_matches_data() sort
+def _sort_mm_snapshot(mm_input: list) -> list:
+    """Sort My Matches input to match build_my_matches_data() card order.
+    Edge-first by tier rank (diamond=0→bronze=3), then non-edge in caller order.
+    """
+    _RANK = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
+    edge = sorted(
+        [m for m in mm_input if m.get("has_edge")],
+        key=lambda m: _RANK.get((m.get("edge_tier") or "bronze").lower(), 99),
+    )
+    return edge + [m for m in mm_input if not m.get("has_edge")]
+
+
+def _build_mm_card_markup(mm_sorted: list, page: int = 0) -> "InlineKeyboardMarkup":
+    """Build image card markup for My Matches with mm:match:{N}:{e|n} buttons.
+    N matches the card's [N] labels — aligned with _sort_mm_snapshot() order.
+    """
+    import math as _math_mm
+    per = GAMES_PER_PAGE
+    start = page * per
+    page_items = mm_sorted[start: start + per]
+    rows = []
+    for i, m in enumerate(page_items):
+        n = start + i + 1  # 1-based, matches card [N] label
+        t = "e" if m.get("has_edge") else "n"
+        h = config.abbreviate_team(m.get("home") or "")
+        a = config.abbreviate_team(m.get("away") or "")
+        rows.append([InlineKeyboardButton(
+            f"[{n}] {h} vs {a}",
+            callback_data=f"mm:match:{n}:{t}",
+        )])
+    nav = []
+    total_pages = max(1, _math_mm.ceil(len(mm_sorted) / per))
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"yg:all:{page - 1}"))
+    if page + 1 < total_pages:
+        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"yg:all:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")])
+    return InlineKeyboardMarkup(rows)
 
 
 # BUILD-W3: My Matches card adapter
@@ -9218,7 +9331,7 @@ async def _build_hot_tips_page(
             # Previous code read _fresh_tiers first which bypassed the zero-signal cap.
             _btn_fresh = tip.get("display_tier", tip.get("edge_rating", "bronze"))
             _btn_tier = EDGE_EMOJIS.get(_btn_fresh, "🥉")
-            cb = f"edge:detail:{_shorten_cb_key(match_key)}"
+            cb = f"ep:pick:{idx - 1}"
         else:
             _btn_tier = "🔒"
             cb = f"hot:upgrade:{_shorten_cb_key(match_key)}"
