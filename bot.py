@@ -1614,9 +1614,25 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     yesterday_results=_bt_proof.get("yesterday_results"),
                     edge_tracker_summary=_bt_summary,
                 )
-                await query.edit_message_text(
-                    _bt_text, parse_mode=ParseMode.HTML, reply_markup=_bt_markup
-                )
+                # P1P3-WIRE-DETAIL: photo detail → text list transition
+                if query.message.photo:
+                    # Detail was served as photo by card_pipeline — can't edit_message_text.
+                    # Delete photo, send list as new text message.
+                    _bt_chat_id = query.message.chat_id
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    await ctx.bot.send_message(
+                        chat_id=_bt_chat_id,
+                        text=_bt_text,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=_bt_markup,
+                    )
+                else:
+                    await query.edit_message_text(
+                        _bt_text, parse_mode=ParseMode.HTML, reply_markup=_bt_markup
+                    )
                 _ht_page_state[user_id] = _back_page  # W84-HT2: keep state in sync
             else:
                 # Cache cold — fallback to full flow
@@ -1945,6 +1961,77 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     )
                     return
 
+            # ── P1P3-WIRE-DETAIL: card_pipeline photo detail (primary path) ──
+            # Resolve tip data from all available sources for card_pipeline
+            _card_tip = None
+            if _w84_hit and isinstance(_w84_hit.get("tips"), list) and _w84_hit["tips"]:
+                _card_tip = _w84_hit["tips"][0] if isinstance(_w84_hit["tips"][0], dict) else None
+            if not _card_tip:
+                _card_tip = next(
+                    (t for t in _ht_tips_snapshot.get(user_id, [])
+                     if _tip_matches_hot_key(t, match_key)),
+                    None,
+                )
+            if not _card_tip:
+                _ct_cache = _game_tips_cache.get(match_key)
+                _card_tip = (
+                    _ct_cache[0] if isinstance(_ct_cache, list) and _ct_cache else
+                    _ct_cache if isinstance(_ct_cache, dict) else None
+                )
+            if not _card_tip:
+                try:
+                    _card_seed = await asyncio.to_thread(_load_tips_from_edge_results, 50)
+                    _card_tip = next(
+                        (t for t in (_card_seed or []) if t.get("match_id") == match_key),
+                        None,
+                    )
+                except Exception:
+                    pass
+
+            # Determine edge tier for card buttons
+            _card_edge_tier = "bronze"
+            if _card_tip:
+                _card_edge_tier = _card_tip.get(
+                    "display_tier", _card_tip.get("edge_rating", "bronze"),
+                )
+            if _w84_hit:
+                _card_edge_tier = _w84_hit.get("edge_tier", _card_edge_tier)
+
+            # Skip Haiku analysis on cache-hit path (fast); include on cache-miss
+            _card_analysis = not bool(_w84_hit)
+
+            _card_served = await _serve_card_detail(
+                query, match_key, _card_tip, user_id, _user_tier,
+                _card_edge_tier,
+                back_page=_resolve_hot_tips_back_page(user_id, match_key),
+                include_analysis=_card_analysis,
+            )
+            if _card_served:
+                # Background view recording (best-effort)
+                async def _card_record_view_bg():
+                    def _wr():
+                        import sqlite3 as _sq
+                        try:
+                            from db_connection import get_connection as _gc
+                            from tier_gate import record_view as _rv
+                            oc = _gc(timeout_ms=3000)
+                            try:
+                                _rv(user_id, match_key, oc)
+                            finally:
+                                oc.close()
+                        except _sq.OperationalError as _re:
+                            if "locked" in str(_re).lower():
+                                log.debug("Background record_view deferred: %s", _re)
+                            else:
+                                log.warning("Background record_view failed: %s", _re)
+                        except Exception as _re:
+                            log.warning("Background record_view failed: %s", _re)
+                    await asyncio.to_thread(_wr)
+                asyncio.create_task(_card_record_view_bg())
+                return
+            # Card pipeline failed — fall through to old text-based path
+            # ── END P1P3-WIRE-DETAIL ──────────────────────────────────────
+
             if _w84_hit:
                 import time as _w84_t
                 _w84_html = _w84_hit["html"]
@@ -1965,6 +2052,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                      if _tip_matches_hot_key(t, match_key)),
                     None,
                 )
+                # AC-4/5: Prefer snapshot display_tier (list-view-adjusted) over DB re-derived tier.
+                # BUILD-GATE-RELAX forces display_tier="bronze" for zero-signal tips in the list;
+                # _fresh_tier_b2 reads the raw "gold" from edge_results, causing CTA/badge mismatch.
+                _snap_display_tier = (_w84_snap or {}).get("display_tier")
+                if _snap_display_tier:
+                    _w84_tier = _snap_display_tier
+
                 _w84_home, _w84_away = _teams_from_vs_event_id(match_key)
                 # BUILD-QA22-FIX P1-2: Read broadcast from snapshot before _build_event_header
                 # Snapshot has specific channel data from list render; _build_event_header falls
@@ -2780,12 +2874,19 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _ilines.append(_build_edge_only_section(_instant_tips))
 
                 _ilines.append("")
-                _best_it = max(_instant_tips, key=lambda t: t.get("ev", 0))
-                _it_bk = _best_it.get("bookmaker", _best_it.get("bookie", ""))
-                _it_odds = _best_it.get("odds", 0)
-                _it_ev = _best_it.get("ev", 0)
-                _it_prob = _best_it.get("prob", 0)
-                _it_out = _best_it.get("outcome", "")
+                # AC-6/7: Use _extract_edge_data for EV so footer matches narrative body.
+                # Narrative calls _normalise_edge_pct_contract which may pick v2["edge_pct"]
+                # over tip["ev"]; reading tip["ev"] directly here caused divergent displays.
+                _foot_ed = _extract_edge_data(
+                    _instant_tips, _ih, _ia,
+                    selected_outcome=_it0.get("outcome_key") or _it0.get("outcome"),
+                )
+                _it0_bk = _it0.get("bookmaker", _it0.get("bookie", ""))
+                _it_bk = _it0_bk
+                _it_odds = _it0.get("odds", 0)
+                _it_ev = _foot_ed.get("edge_pct", 0) or _it0.get("ev", 0)
+                _it_prob = _it0.get("prob", 0)
+                _it_out = _it0.get("outcome", "")
                 _it_ev_str = f"+{_it_ev:.1f}%" if _it_ev > 0 else f"{_it_ev:.1f}%"
                 _it_value_m = " 💰" if _it_ev > 2 else ""
                 _ilines.append("<b>SA Bookmaker Odds:</b>")
@@ -6920,6 +7021,89 @@ def _tip_matches_hot_key(tip: dict | None, match_key: str) -> bool:
     return edge_v2.get("match_key") == match_key
 
 
+async def _serve_card_detail(
+    query,
+    match_key: str,
+    tip_data: dict | None,
+    user_id: int,
+    user_tier: str,
+    edge_tier: str,
+    back_page: int = 0,
+    include_analysis: bool = True,
+) -> bool:
+    """P1P3-WIRE-DETAIL: Serve card_pipeline photo detail view.
+
+    Builds a structured card via ``card_pipeline.build_card_data``, generates a
+    single-match Pillow image via ``image_card.generate_match_card``, and sends
+    as a Telegram photo with ≤1024-char HTML caption.
+
+    Returns True on success.  Returns False on any failure so the caller can
+    fall through to the old text-based rendering path.
+    """
+    try:
+        from card_pipeline import build_card_data
+        from message_types import DetailMessage
+        import io as _cd_io
+
+        # Build structured card data (in thread — DB queries + optional Haiku)
+        _cd_card = await asyncio.wait_for(
+            asyncio.to_thread(
+                build_card_data,
+                match_key,
+                tip=tip_data,
+                include_analysis=include_analysis,
+            ),
+            timeout=10.0,
+        )
+
+        # Build buttons via existing function (handles tier gating, CTA, etc.)
+        _cd_tips = [tip_data] if tip_data else [{"ev": 0, "match_id": match_key}]
+        _cd_btns = _build_game_buttons(
+            _cd_tips, match_key, user_id,
+            source="edge_picks", user_tier=user_tier,
+            edge_tier=edge_tier, back_page=back_page,
+        )
+
+        # DetailMessage.build_card_photo handles image + caption rendering
+        _cd_img, _cd_caption, _cd_markup = DetailMessage.build_card_photo(
+            _cd_card,
+            buttons=_cd_btns,
+            back_cb=f"hot:back:{back_page}",
+        )
+
+        # QA banner
+        _cd_banner = _qa_banner(user_id)
+        if _cd_banner:
+            _cd_caption = _cd_banner + _cd_caption
+            # Re-enforce 1024-char Telegram photo caption limit
+            if len(_cd_caption) > 1024:
+                _cd_caption = _cd_caption[:1021] + "..."
+
+        # Transition: delete text list message → send photo
+        _cd_chat_id = query.message.chat_id
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+        from telegram.constants import ParseMode as _cd_PM
+        await query.get_bot().send_photo(
+            chat_id=_cd_chat_id,
+            photo=_cd_io.BytesIO(_cd_img),
+            caption=_cd_caption,
+            parse_mode=_cd_PM.HTML,
+            reply_markup=_cd_markup,
+        )
+        log.info("PERF: edge:detail CARD-PIPELINE served for %s", match_key)
+        return True
+    except Exception as _cd_err:
+        log.warning(
+            "Card pipeline detail failed for %s: %s — falling back to old path",
+            match_key, _cd_err,
+        )
+        return False
+
+
 async def _resolve_hot_tip_header(
     match_key: str,
     user_id: int,
@@ -7348,6 +7532,7 @@ def _get_flag_prefixes(home: str, away: str) -> tuple[str, str]:
 
 HOT_TIPS_PAGE_SIZE = 4
 RESULT_PROOF_LAST_10_COUNT = 10
+MIN_SAMPLE_FOR_STATS = 50
 HOT_TIPS_RECENT_SETTLED_LIMIT = 3
 HOT_TIPS_RECENT_SETTLED_HOURS = 36
 DETAIL_TRACK_RECORD_MIN_SETTLED = 3
@@ -8469,17 +8654,21 @@ async def _build_hot_tips_page(
     _banner = _qa_banner(user_id) if user_id else ""
     lines = [f"{_banner}{header}" if _banner else header, subline]
 
-    track_record_line = _format_hot_tips_track_record_line(last_10_results, roi_7d)
-    if track_record_line:
-        lines.append(track_record_line)
-    else:
-        fallback_track_record_line = _format_edge_tracker_record_line(
-            edge_tracker_summary,
-            label="📊 7D",
-            include_roi=False,
-        )
-        if fallback_track_record_line:
-            lines.append(fallback_track_record_line)
+    _settled_total = (edge_tracker_summary or {}).get("total", 0)
+    _stats_eligible = _settled_total >= MIN_SAMPLE_FOR_STATS
+
+    if _stats_eligible:
+        track_record_line = _format_hot_tips_track_record_line(last_10_results, roi_7d)
+        if track_record_line:
+            lines.append(track_record_line)
+        else:
+            fallback_track_record_line = _format_edge_tracker_record_line(
+                edge_tracker_summary,
+                label="📊 7D",
+                include_roi=False,
+            )
+            if fallback_track_record_line:
+                lines.append(fallback_track_record_line)
 
     # Third header line: live edge count (Wave 27-UX replaces streak badge)
     _edge_s = "s" if total != 1 else ""
@@ -8487,10 +8676,11 @@ async def _build_hot_tips_page(
 
     lines.append("")
 
-    yesterday_lines = _build_hot_tips_yesterday_lines(yesterday_results)
-    if yesterday_lines:
-        lines.extend(yesterday_lines)
-        lines.append("")
+    if _stats_eligible:
+        yesterday_lines = _build_hot_tips_yesterday_lines(yesterday_results)
+        if yesterday_lines:
+            lines.extend(yesterday_lines)
+            lines.append("")
 
     # P0-2 FIX: Batch-check narrative_cache for ESPN evidence to determine true MODEL ONLY status.
     # confirming_signals==0 does not mean no ESPN data — standings/form/H2H can exist at sub-0.65
@@ -18185,13 +18375,26 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
     """Show all bookmaker odds for a match (odds:compare:{event_id})."""
     tips = _game_tips_cache.get(event_id, [])
     if not tips:
-        await query.edit_message_text(
-            "⚠️ Tip data expired. Try Top Edge Picks again.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
-            ]),
-        )
+        _oc_fallback_text = "⚠️ Tip data expired. Try Top Edge Picks again."
+        _oc_fallback_mk = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        ])
+        # P1P3-WIRE-DETAIL: handle photo messages from card detail
+        if query.message.photo:
+            _oc_cid = query.message.chat_id
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await query.get_bot().send_message(
+                chat_id=_oc_cid, text=_oc_fallback_text,
+                parse_mode=ParseMode.HTML, reply_markup=_oc_fallback_mk,
+            )
+        else:
+            await query.edit_message_text(
+                _oc_fallback_text, parse_mode=ParseMode.HTML,
+                reply_markup=_oc_fallback_mk,
+            )
         return
 
     tip = tips[0]
@@ -18281,10 +18484,22 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
     buttons.append([_build_odds_compare_back_button(query.from_user.id, event_id)])
     buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
 
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
+    # P1P3-WIRE-DETAIL: handle photo messages from card detail
+    _oc_mk = InlineKeyboardMarkup(buttons)
+    if query.message.photo:
+        _oc_cid = query.message.chat_id
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await query.get_bot().send_message(
+            chat_id=_oc_cid, text=text,
+            parse_mode=ParseMode.HTML, reply_markup=_oc_mk,
+        )
+    else:
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=_oc_mk,
+        )
 
 
 def _format_tip_detail(tip: dict, experience: str, bankroll: float | None) -> str:

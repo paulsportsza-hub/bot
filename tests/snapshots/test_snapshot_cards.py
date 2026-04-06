@@ -65,6 +65,7 @@ class TestHotTipsPageSnapshots:
             resource_count=347043,
             last_10_results=["hit", "miss", "hit", "hit", "miss", "hit", "miss", "hit", "hit", "miss"],
             roi_7d=-4.2,
+            edge_tracker_summary={"total": 60, "hits": 36, "hit_rate_pct": 60.0, "roi": -4.2},
             recently_settled=[
                 make_settled_edge("kaizer_chiefs_vs_orlando_pirates_2026-03-13"),
                 make_settled_edge(
