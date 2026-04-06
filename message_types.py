@@ -537,6 +537,47 @@ class DetailMessage:
         return text, InlineKeyboardMarkup(buttons)
 
     @staticmethod
+    def build_card_photo(
+        card_data: dict,
+        *,
+        buttons: list[list] | None = None,
+        back_cb: str = "hot:back:0",
+    ) -> tuple[bytes, str, "InlineKeyboardMarkup"]:
+        """Build single-match photo detail from card_pipeline data.
+
+        Parameters
+        ----------
+        card_data:
+            Output of ``card_pipeline.build_card_data()``.
+        buttons:
+            Pre-built button rows (from ``_build_game_buttons``).
+            If None, a minimal Back button is used.
+        back_cb:
+            Callback data for fallback Back button (only used when
+            *buttons* is None).
+
+        Returns
+        -------
+        (png_bytes, caption_html, InlineKeyboardMarkup)
+
+        Raises
+        ------
+        RuntimeError
+            If image generation or caption rendering fails.
+        """
+        from image_card import generate_match_card
+        from card_pipeline import render_card_html
+
+        img = generate_match_card(card_data)
+        caption = render_card_html(card_data)
+
+        if buttons is None:
+            buttons = [[InlineKeyboardButton(
+                "↩️ Back to Edge Picks", callback_data=back_cb,
+            )]]
+        return img, caption, InlineKeyboardMarkup(buttons)
+
+    @staticmethod
     def _deep_analysis(tip: dict, *, show_odds: bool = True) -> str:
         """Build the expandable blockquote content."""
         parts: list[str] = []
