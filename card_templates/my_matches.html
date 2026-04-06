@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #000000;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+            padding: 3px;
+            box-sizing: content-box;
+        }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+            border: none;
+            box-shadow: none;
+        }
+
+        /* ── Header ──────────────────────────────────────────── */
+        .header {
+            text-align: center;
+            padding: 20px 20px 14px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img {
+            height: 32px;
+            width: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
+        }
+        .title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: 3px;
+            margin-bottom: 6px;
+        }
+        .summary {
+            font-size: 11px;
+            color: #777777;
+            font-weight: 400;
+        }
+
+        /* ── Matches Section ─────────────────────────────────── */
+        .matches-section {
+            padding: 8px 14px 12px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Section sub-header */
+        .section-label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin: 10px 0 6px;
+        }
+        .section-label:first-child {
+            margin-top: 2px;
+        }
+        .section-label-emoji {
+            font-size: 11px;
+            line-height: 1;
+        }
+        .section-label-name {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            line-height: 1;
+        }
+        .section-label-line {
+            flex: 1;
+            height: 1px;
+        }
+
+        /* Match row */
+        .match-row {
+            background: #1A1A1A;
+            border-radius: 10px;
+            border: 1px solid #2A2A2A;
+            border-left-width: 3px;
+            padding: 10px 14px;
+            margin-bottom: 5px;
+        }
+        .match-row:last-child {
+            margin-bottom: 0;
+        }
+
+        /* ── Row line 1 ──────────────────────────────────────── */
+        .match-line1 {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .match-number {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            color: #FFFFFF;
+            margin-right: 6px;
+            flex-shrink: 0;
+        }
+        .match-teams {
+            font-size: 14px;
+            font-weight: 700;
+            color: #FFFFFF;
+            flex: 1;
+            margin-right: 8px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Edge badge (edge rows) */
+        .edge-badge {
+            font-size: 9px;
+            font-weight: 800;
+            padding: 3px 8px;
+            border-radius: 10px;
+            border: 1px solid;
+            white-space: nowrap;
+            flex-shrink: 0;
+            letter-spacing: 0.3px;
+        }
+
+        /* Odds grid (non-edge rows) */
+        .odds-grid {
+            display: flex;
+            gap: 3px;
+            flex-shrink: 0;
+            align-items: stretch;
+        }
+        .odds-box {
+            background: #0F0F0F;
+            padding: 3px 6px;
+            border-radius: 4px;
+            min-width: 41px;
+            text-align: center;
+        }
+        .odds-label {
+            font-size: 10px;
+            color: #555555;
+            display: block;
+            line-height: 1.3;
+        }
+        .odds-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: #CCCCCC;
+            font-weight: 700;
+            display: block;
+            line-height: 1.3;
+        }
+
+        /* ── Row line 2: sport + league + meta ───────────────── */
+        .match-line2 {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-bottom: 4px;
+        }
+        .match-line2.no-line3 {
+            margin-bottom: 0;
+        }
+        .sport-emoji {
+            font-size: 11px;
+            flex-shrink: 0;
+        }
+        .league-tag {
+            background: #F7931A18;
+            color: #F7931A;
+            font-size: 9px;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 3px;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .match-meta {
+            font-size: 10px;
+            color: #777777;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* ── Row line 3: pick + bookmaker (edge rows only) ───── */
+        .match-line3 {
+            display: flex;
+            align-items: center;
+        }
+        .pick-name {
+            font-size: 10px;
+            font-weight: 600;
+            color: #F7931A;
+        }
+        .pick-bookie {
+            font-size: 9px;
+            color: #777777;
+            margin-left: 4px;
+        }
+
+        /* ── Page Indicator ──────────────────────────────────── */
+        .page-indicator {
+            text-align: center;
+            font-size: 10px;
+            color: #555555;
+            margin-top: 8px;
+            padding-bottom: 4px;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+
+    <!-- Header -->
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">MY MATCHES</div>
+        <div class="summary">
+            {{ total_matches }} match{{ 'es' if total_matches != 1 else '' }} &middot; {{ total_edges }} edge{{ 's' if total_edges != 1 else '' }} found
+        </div>
+    </div>
+
+    <!-- Match Groups -->
+    <div class="matches-section">
+
+        <!-- 🎯 Edge Available section -->
+        {% if edge_matches %}
+        <div class="section-label">
+            <span class="section-label-emoji">🎯</span>
+            <span class="section-label-name" style="color: #F7931A;">EDGE AVAILABLE</span>
+            <div class="section-label-line" style="background: #F7931A30;"></div>
+        </div>
+
+        {% for match in edge_matches %}
+        <div class="match-row" style="border-left-color: {{ match.tier_color }};">
+
+            <!-- Line 1: number + matchup + edge badge -->
+            <div class="match-line1">
+                <span class="match-number">[{{ match.number }}]</span>
+                <span class="match-teams">{{ match.home }} vs {{ match.away }}</span>
+                <span class="edge-badge" style="color: {{ match.tier_color }}; background: {{ match.tier_color }}12; border-color: {{ match.tier_color }}25;">{{ match.tier_emoji }} EDGE</span>
+            </div>
+
+            <!-- Line 2: sport emoji + league + meta -->
+            <div class="match-line2">
+                {% if match.sport_emoji %}<span class="sport-emoji">{{ match.sport_emoji }}</span>{% endif %}
+                {% if match.league %}<span class="league-tag">{{ match.league }}</span>{% endif %}
+                <span class="match-meta">
+                    {{- match.date -}}
+                    {%- if match.date and match.time %} &middot; {% endif -%}
+                    {{- match.time -}}
+                    {%- if match.channel %} &middot; Ch {{ match.channel }}{% endif -%}
+                </span>
+            </div>
+
+            <!-- Line 3: pick + bookmaker -->
+            {% if match.pick or match.bookmaker %}
+            <div class="match-line3">
+                {% if match.pick %}<span class="pick-name">{{ match.pick }}</span>{% endif %}
+                {% if match.bookmaker %}<span class="pick-bookie">@ {{ match.bookmaker }}</span>{% endif %}
+            </div>
+            {% endif %}
+
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        <!-- 📋 Upcoming section -->
+        {% if upcoming_matches %}
+        <div class="section-label {% if not edge_matches %}:first-child{% endif %}">
+            <span class="section-label-emoji">📋</span>
+            <span class="section-label-name" style="color: #777777;">UPCOMING</span>
+            <div class="section-label-line" style="background: #77777730;"></div>
+        </div>
+
+        {% for match in upcoming_matches %}
+        <div class="match-row" style="border-left-color: #2A2A2A;">
+
+            <!-- Line 1: number + matchup + odds grid -->
+            <div class="match-line1">
+                <span class="match-number">[{{ match.number }}]</span>
+                <span class="match-teams">{{ match.home }} vs {{ match.away }}</span>
+                <div class="odds-grid">
+                    <div class="odds-box">
+                        <span class="odds-label">H</span>
+                        <span class="odds-value">{{ match.odds_home or '—' }}</span>
+                    </div>
+                    {% if match.odds_draw %}
+                    <div class="odds-box">
+                        <span class="odds-label">D</span>
+                        <span class="odds-value">{{ match.odds_draw }}</span>
+                    </div>
+                    {% endif %}
+                    <div class="odds-box">
+                        <span class="odds-label">A</span>
+                        <span class="odds-value">{{ match.odds_away or '—' }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Line 2: sport emoji + league + meta (no line 3) -->
+            <div class="match-line2 no-line3">
+                {% if match.sport_emoji %}<span class="sport-emoji">{{ match.sport_emoji }}</span>{% endif %}
+                {% if match.league %}<span class="league-tag">{{ match.league }}</span>{% endif %}
+                <span class="match-meta">
+                    {{- match.date -}}
+                    {%- if match.date and match.time %} &middot; {% endif -%}
+                    {{- match.time -}}
+                    {%- if match.channel %} &middot; Ch {{ match.channel }}{% endif -%}
+                </span>
+            </div>
+
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        {% if total_pages > 1 %}
+        <div class="page-indicator">Page {{ page }} of {{ total_pages }}</div>
+        {% endif %}
+
+    </div>
+
+</div>
+</body>
+</html>

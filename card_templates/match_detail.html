@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #000000;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+            padding: 3px;
+            box-sizing: content-box;
+        }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+            border: none;
+            box-shadow: none;
+        }
+
+        /* ── 1. Header ───────────────────────────────────────── */
+        .header {
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            background: linear-gradient(90deg, #0D0D0D, #000);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img {
+            height: 26px;
+            width: auto;
+            flex-shrink: 0;
+        }
+        .logo-fallback {
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            background: linear-gradient(90deg, #F7931A, #FFBE45);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            flex-shrink: 0;
+        }
+        .header-badges {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .badge-my-match {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            background: #F7931A10;
+            border: 1px solid #F7931A20;
+            padding: 4px 14px;
+            border-radius: 20px;
+        }
+        .badge-my-match-text {
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: #F7931A;
+        }
+        .badge-no-edge {
+            background: #77777710;
+            border: 1px solid #77777715;
+            padding: 4px 10px;
+            border-radius: 20px;
+        }
+        .badge-no-edge-text {
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            color: #777777;
+        }
+
+        /* ── 2. Matchup ──────────────────────────────────────── */
+        .matchup {
+            padding: 18px 20px 10px;
+            text-align: center;
+        }
+        .league-line {
+            font-size: 10px;
+            font-weight: 600;
+            color: #777777;
+            margin-bottom: 12px;
+        }
+        .teams-row {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+        }
+        .team-block {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+        .team-name {
+            font-size: 18px;
+            font-weight: 800;
+            color: #FFFFFF;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 100%;
+        }
+        .vs-badge {
+            font-size: 12px;
+            font-weight: 700;
+            color: #555555;
+            background: #1A1A1A;
+            padding: 6px 12px;
+            border-radius: 6px;
+            flex-shrink: 0;
+            margin: 0 8px;
+            align-self: flex-start;
+            margin-top: 2px;
+        }
+        .form-row {
+            display: flex;
+            gap: 3px;
+        }
+        .form-box {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+        .form-w { background: #00E676; color: #000000; }
+        .form-d { background: #555555; color: #FFFFFF; }
+        .form-l { background: #FF5252; color: #FFFFFF; }
+
+        /* ── 3. Meta Bar ─────────────────────────────────────── */
+        .meta-bar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            padding: 10px 20px;
+            border-top: 1px solid #2A2A2A;
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .meta-item {
+            font-size: 9px;
+            color: #777777;
+            white-space: nowrap;
+        }
+
+        /* ── 4. Market Overview ──────────────────────────────── */
+        .market-section {
+            padding: 14px 20px;
+        }
+        .section-hdr {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        .odds-grid {
+            display: flex;
+            gap: 6px;
+        }
+        .odds-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 10px 4px;
+            border-radius: 8px;
+            background: #0A0A0A;
+            border: 1px solid #2A2A2A;
+        }
+        .odds-outcome-label {
+            font-size: 9px;
+            color: #777777;
+            margin-bottom: 4px;
+            text-align: center;
+        }
+        .odds-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 18px;
+            font-weight: 700;
+            color: #FFFFFF;
+            margin-bottom: 4px;
+        }
+        .odds-bookie {
+            font-size: 8px;
+            color: #555555;
+        }
+        .no-edge-box {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            background: #FFB30008;
+            border: 1px solid #FFB30012;
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-top: 10px;
+        }
+        .no-edge-icon {
+            font-size: 10px;
+            flex-shrink: 0;
+        }
+        .no-edge-text {
+            font-size: 10px;
+            color: #CCCCCC;
+            line-height: 1.5;
+        }
+
+        /* ── 5. Key Stats ────────────────────────────────────── */
+        .stats-section {
+            padding: 0 20px 12px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+        .stat-card {
+            padding: 8px 10px;
+            border-radius: 6px;
+            background: #1A1A1A;
+            border: 1px solid #2A2A2A;
+        }
+        .stat-label {
+            font-size: 9px;
+            color: #777777;
+            margin-bottom: 3px;
+        }
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 700;
+            color: #FFFFFF;
+            margin-bottom: 2px;
+        }
+        .stat-context {
+            font-size: 9px;
+            color: #555555;
+        }
+
+        /* ── 6. Injury Watch ─────────────────────────────────── */
+        .injury-section {
+            padding: 10px 20px;
+            border-top: 1px solid #2A2A2A;
+        }
+        .injury-team-row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 5px;
+        }
+        .injury-team-name { font-size: 9px; color: #777777; flex-shrink: 0; }
+        .injury-chip {
+            font-size: 9px;
+            color: #AAAAAA;
+            background: #1A1A1A;
+            border: 1px solid #2A2A2A;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        /* ── 7. H2H ──────────────────────────────────────────── */
+        .h2h-section {
+            padding: 10px 20px;
+            border-top: 1px solid #2A2A2A;
+        }
+        .h2h-bar {
+            height: 6px;
+            display: flex;
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 6px 0 5px;
+        }
+        .h2h-seg-home { background: #00E676; min-width: 6px; }
+        .h2h-seg-draw { background: #555555; min-width: 6px; }
+        .h2h-seg-away { background: #FF5252; min-width: 6px; }
+        .h2h-labels {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .h2h-lbl-home { font-size: 9px; color: #00E676; }
+        .h2h-lbl-draw { font-size: 9px; color: #777777; }
+        .h2h-lbl-away { font-size: 9px; color: #FF5252; }
+    </style>
+</head>
+<body>
+<div class="card">
+
+    <!-- ── 1. Header ─────────────────────────────────────────── -->
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="header-badges">
+            <div class="badge-my-match">
+                <span style="font-size: 11px;">{{ sport_emoji }}</span>
+                <span class="badge-my-match-text">MY MATCH</span>
+            </div>
+            <div class="badge-no-edge">
+                <span class="badge-no-edge-text">NO EDGE</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 2. Matchup ────────────────────────────────────────── -->
+    <div class="matchup">
+        <div class="league-line">{{ sport_emoji }} {{ league }}</div>
+        <div class="teams-row">
+
+            <div class="team-block">
+                <div class="team-name">{{ home }}</div>
+                {% if home_form %}
+                <div class="form-row">
+                    {% for r in home_form %}
+                    <div class="form-box form-{{ r | lower }}">{{ r }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="vs-badge">VS</div>
+
+            <div class="team-block">
+                <div class="team-name">{{ away }}</div>
+                {% if away_form %}
+                <div class="form-row">
+                    {% for r in away_form %}
+                    <div class="form-box form-{{ r | lower }}">{{ r }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+
+        </div>
+    </div>
+
+    <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
+    <div class="meta-bar">
+        {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
+        {% if time %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
+        {% if channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
+        {% if venue %}<span class="meta-item">🏟 {{ venue }}</span>{% endif %}
+    </div>
+
+    <!-- ── 4. Market Overview ────────────────────────────────── -->
+    <div class="market-section">
+        <div class="section-hdr" style="color: #FFD700;">⭐ MARKET OVERVIEW</div>
+        <div class="odds-grid">
+            <div class="odds-col">
+                <div class="odds-outcome-label">{{ home }}</div>
+                <div class="odds-value">{{ home_odds }}</div>
+                <div class="odds-bookie">{{ home_bookie }}</div>
+            </div>
+            {% if draw_odds %}
+            <div class="odds-col">
+                <div class="odds-outcome-label">Draw</div>
+                <div class="odds-value">{{ draw_odds }}</div>
+                <div class="odds-bookie">{{ draw_bookie }}</div>
+            </div>
+            {% endif %}
+            <div class="odds-col">
+                <div class="odds-outcome-label">{{ away }}</div>
+                <div class="odds-value">{{ away_odds }}</div>
+                <div class="odds-bookie">{{ away_bookie }}</div>
+            </div>
+        </div>
+        {% if reason %}
+        <div class="no-edge-box">
+            <span class="no-edge-icon">⚠️</span>
+            <span class="no-edge-text">{{ reason }}</span>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- ── 5. Key Stats ──────────────────────────────────────── -->
+    {% if stats %}
+    <div class="stats-section">
+        <div class="section-hdr" style="color: #F7931A;">📊 KEY STATS</div>
+        <div class="stats-grid">
+            {% for s in stats %}
+            <div class="stat-card">
+                <div class="stat-label">{{ s.label }}</div>
+                <div class="stat-value">{{ s.value }}</div>
+                <div class="stat-context">{{ s.context }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ── 6. Injury Watch (conditional) ────────────────────── -->
+    {% if home_injuries or away_injuries %}
+    <div class="injury-section">
+        <div class="section-hdr" style="color: #FF5252;">🏥 INJURY WATCH</div>
+        {% if home_injuries %}
+        <div class="injury-team-row">
+            <span class="injury-team-name">{{ home }}:</span>
+            {% for inj in home_injuries %}
+            <span class="injury-chip">{{ inj }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if away_injuries %}
+        <div class="injury-team-row">
+            <span class="injury-team-name">{{ away }}:</span>
+            {% for inj in away_injuries %}
+            <span class="injury-chip">{{ inj }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- ── 7. H2H ────────────────────────────────────────────── -->
+    {% if h2h_total %}
+    <div class="h2h-section">
+        <div class="section-hdr" style="color: #777777;">↔ H2H &middot; {{ h2h_total }} matches</div>
+        <div class="h2h-bar">
+            {% if h2h_home_wins %}<div class="h2h-seg-home" style="flex: {{ h2h_home_wins }};"></div>{% endif %}
+            {% if h2h_draws %}<div class="h2h-seg-draw" style="flex: {{ h2h_draws }};"></div>{% endif %}
+            {% if h2h_away_wins %}<div class="h2h-seg-away" style="flex: {{ h2h_away_wins }};"></div>{% endif %}
+        </div>
+        <div class="h2h-labels">
+            <span class="h2h-lbl-home">{{ home }} {{ h2h_home_wins }}W</span>
+            {% if h2h_draws %}<span class="h2h-lbl-draw">{{ h2h_draws }}D</span>{% endif %}
+            <span class="h2h-lbl-away">{{ h2h_away_wins }}W {{ away }}</span>
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+</body>
+</html>

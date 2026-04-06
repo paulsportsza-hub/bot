@@ -21,15 +21,21 @@ def _make_query(user_id: int = 9001) -> MagicMock:
     query.from_user = SimpleNamespace(
         id=user_id, first_name="Tester", username="tester"
     )
-    query.message = SimpleNamespace(
-        chat_id=user_id, chat=SimpleNamespace(send_message=AsyncMock())
-    )
+    # BUILD-W3: query.message must be a MagicMock with .photo for card sender
+    query.message = MagicMock()
+    query.message.chat_id = user_id
+    query.message.chat = SimpleNamespace(send_message=AsyncMock())
+    query.message.photo = [MagicMock()]  # simulate existing photo message
+    query.message.edit_media = AsyncMock()
+    query.message.delete = AsyncMock()
+    query.message.edit_text = AsyncMock()
     return query
 
 
 def _make_context() -> MagicMock:
     ctx = MagicMock()
     ctx.bot.send_message = AsyncMock()
+    ctx.bot.send_photo = AsyncMock()  # BUILD-W3: card sender uses send_photo
     return ctx
 
 
@@ -58,6 +64,7 @@ async def test_main_menu_has_hot_tips_button() -> None:
 async def test_hot_go_dispatch_sends_hot_tips_surface(monkeypatch, test_edges) -> None:
     query = _make_query()
     ctx = _make_context()
+    query.message.photo = None  # new message → card sent via send_photo
     monkeypatch.setattr(bot, "get_effective_tier", AsyncMock(return_value="diamond"))
     monkeypatch.setattr(
         bot.db,
@@ -67,11 +74,9 @@ async def test_hot_go_dispatch_sends_hot_tips_surface(monkeypatch, test_edges) -
 
     await bot._dispatch_button(query, ctx, "hot", "go")
 
-    ctx.bot.send_message.assert_awaited_once()
-    sent_text = ctx.bot.send_message.await_args.args[1]
-    sent_markup = ctx.bot.send_message.await_args.kwargs["reply_markup"]
-    assert "Top Edge Picks" in sent_text
-    assert len(_visible_card_lines(sent_text)) == bot.HOT_TIPS_PAGE_SIZE
+    # BUILD-W3: card pipeline sends photo, not plain text message
+    ctx.bot.send_photo.assert_awaited_once()
+    sent_markup = ctx.bot.send_photo.await_args.kwargs["reply_markup"]
     assert any(cb.startswith("edge:detail:") for cb in _callbacks(sent_markup))
 
 
@@ -105,12 +110,9 @@ async def test_hot_page_dispatch_renders_second_page(monkeypatch, test_edges) ->
 
     await bot._dispatch_button(query, ctx, "hot", "page:1")
 
-    rendered_text = query.edit_message_text.await_args.args[0]
-    rendered_markup = query.edit_message_text.await_args.kwargs["reply_markup"]
-    # BUILD-TIER-ORDER: After sort, page 1 = Silver + Bronze (Orlando Pirates, South Africa).
-    # Kaizer Chiefs (Diamond) moved to page 0.
-    assert "South Africa vs Australia" in rendered_text
-    assert "Orlando Pirates vs Mamelodi Sundowns" in rendered_text
+    # BUILD-W3: photo→photo pagination via edit_media (no flicker)
+    query.message.edit_media.assert_awaited_once()
+    rendered_markup = query.message.edit_media.await_args.kwargs["reply_markup"]
     assert "hot:page:0" in _callbacks(rendered_markup)
 
 

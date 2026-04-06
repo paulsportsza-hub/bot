@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #000000;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+            padding: 2px;
+            box-sizing: content-box;
+        }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+            border: none;
+            box-shadow: none;
+        }
+
+        /* ── Header ──────────────────────────────────────────── */
+        .header {
+            text-align: center;
+            padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img {
+            height: 32px;
+            width: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
+        }
+        .title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: 3px;
+            margin-bottom: 8px;
+        }
+        .tier-summary {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            flex-wrap: wrap;
+        }
+        .tier-summary-item {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .tier-summary-sep {
+            font-size: 13px;
+            color: #444444;
+            margin: 0 5px;
+        }
+        .tier-summary-total {
+            font-size: 11px;
+            color: #777777;
+            font-weight: 400;
+            font-family: 'Inter', sans-serif;
+            margin-left: 6px;
+        }
+
+        /* ── Pick Groups ─────────────────────────────────────── */
+        .picks-section {
+            padding: 12px 14px 16px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Tier sub-header */
+        .tier-label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin: 14px 0 8px;
+        }
+        .tier-label:first-child {
+            margin-top: 2px;
+        }
+        .tier-label-emoji {
+            font-size: 11px;
+            line-height: 1;
+        }
+        .tier-label-name {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            line-height: 1;
+        }
+        .tier-label-line {
+            flex: 1;
+            height: 1px;
+        }
+
+        /* Pick row */
+        .pick-row {
+            background: #1A1A1A;
+            border-radius: 10px;
+            border: 1px solid #2A2A2A;
+            border-left-width: 3px;
+            padding: 12px 16px;
+            margin-bottom: 6px;
+        }
+        .pick-row:last-child {
+            margin-bottom: 0;
+        }
+
+        /* Line 1: number + matchup + odds + ev */
+        .pick-line1 {
+            display: flex;
+            align-items: baseline;
+            margin-bottom: 6px;
+        }
+        .pick-number {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            color: #FFFFFF;
+            margin-right: 6px;
+            flex-shrink: 0;
+        }
+        .pick-matchup {
+            font-size: 14px;
+            font-weight: 700;
+            color: #FFFFFF;
+            flex: 1;
+            margin-right: 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .pick-odds-group {
+            display: flex;
+            align-items: baseline;
+            gap: 5px;
+            flex-shrink: 0;
+        }
+        .pick-odds {
+            font-size: 18px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            color: #FFFFFF;
+        }
+        .pick-ev {
+            font-size: 11px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            color: #00E676;
+        }
+
+        /* Line 2: league tag + meta + pick + bookmaker */
+        .pick-line2 {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .pick-meta-left {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex: 1;
+            min-width: 0;
+        }
+        .sport-emoji {
+            font-size: 11px;
+            margin-right: 3px;
+            vertical-align: middle;
+            flex-shrink: 0;
+        }
+        .league-tag {
+            background: #F7931A18;
+            color: #F7931A;
+            font-size: 9px;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 3px;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .pick-datetime {
+            font-size: 10px;
+            color: #777777;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .pick-meta-right {
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+            margin-left: 8px;
+        }
+        .pick-name {
+            font-size: 10px;
+            font-weight: 600;
+            color: #F7931A;
+            white-space: nowrap;
+        }
+        .pick-bookie {
+            font-size: 9px;
+            color: #777777;
+            margin-left: 4px;
+            white-space: nowrap;
+        }
+
+        /* ── Page Indicator ──────────────────────────────────── */
+        .page-indicator {
+            text-align: center;
+            font-size: 10px;
+            color: #555555;
+            margin-top: 8px;
+            padding-bottom: 4px;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+
+    <!-- Header -->
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">EDGE PICKS</div>
+        <div class="tier-summary">
+            {% for item in tier_summary %}
+            {% if not loop.first %}<span class="tier-summary-sep">·</span>{% endif %}
+            <span class="tier-summary-item" style="color: {{ item.color }};">{{ item.emoji }}{{ item.count }}</span>
+            {% endfor %}
+            <span class="tier-summary-total">— {{ total_edges }} edge{{ 's' if total_edges != 1 else '' }} today</span>
+        </div>
+    </div>
+
+    <!-- Pick Groups -->
+    <div class="picks-section">
+        {% for group in groups %}
+
+        <!-- Tier sub-header -->
+        <div class="tier-label">
+            <span class="tier-label-emoji">{{ group.tier_emoji }}</span>
+            <span class="tier-label-name" style="color: {{ group.tier_color }};">{{ group.tier_name }}</span>
+            <div class="tier-label-line" style="background: {{ group.tier_color }}30;"></div>
+        </div>
+
+        <!-- Pick rows for this tier -->
+        {% for pick in group.picks %}
+        <div class="pick-row" style="border-left-color: {{ group.tier_color }};">
+
+            <!-- Line 1: number + matchup + odds + EV -->
+            <div class="pick-line1">
+                <span class="pick-number">[{{ pick.number }}]</span>
+                <span class="pick-matchup">{{ pick.home }} vs {{ pick.away }}</span>
+                <div class="pick-odds-group">
+                    <span class="pick-odds">{{ pick.odds }}</span>
+                    <span class="pick-ev">+{{ pick.ev }}%</span>
+                </div>
+            </div>
+
+            <!-- Line 2: league + meta + pick team + bookmaker -->
+            <div class="pick-line2">
+                <div class="pick-meta-left">
+                    {% if pick.sport_emoji %}
+                    <span class="sport-emoji">{{ pick.sport_emoji }}</span>
+                    {% endif %}
+                    {% if pick.league %}
+                    <span class="league-tag">{{ pick.league }}</span>
+                    {% endif %}
+                    <span class="pick-datetime">
+                        {{- pick.date -}}
+                        {%- if pick.date and pick.time %} &middot; {% endif -%}
+                        {{- pick.time -}}
+                        {%- if pick.channel %} &middot; Ch {{ pick.channel }}{% endif -%}
+                    </span>
+                </div>
+                <div class="pick-meta-right">
+                    {% if pick.pick %}
+                    <span class="pick-name">{{ pick.pick }}</span>
+                    {% endif %}
+                    {% if pick.bookmaker %}
+                    <span class="pick-bookie">@ {{ pick.bookmaker }}</span>
+                    {% endif %}
+                </div>
+            </div>
+
+        </div>
+        {% endfor %}
+
+        {% endfor %}
+
+        {% if total_pages > 1 %}
+        <div class="page-indicator">Page {{ page }} of {{ total_pages }}</div>
+        {% endif %}
+    </div>
+
+</div>
+</body>
+</html>

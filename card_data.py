@@ -1,0 +1,808 @@
+"""IMG-PW1: Data adapter — build edge_summary template data from pipeline tips.
+
+Public API:
+    build_edge_summary_data(tips: list[dict]) -> dict
+"""
+from __future__ import annotations
+import base64
+import io
+import logging
+from datetime import datetime
+from pathlib import Path
+
+log = logging.getLogger(__name__)
+
+# ── Logo helpers ───────────────────────────────────────────────────────────────
+_BOT_DIR = Path(__file__).parent
+_ASSETS_DIR = _BOT_DIR.parent / "assets"
+
+_HEADER_LOGO = _BOT_DIR / "assets" / "LOGO" / "mzansiedge-wordmark-dark-transparent.png"
+_FOOTER_LOGO = _ASSETS_DIR / "LOGO" / "mzansiedge-micro-mark-e-transparent.png"
+
+
+def logo_b64(path: Path, max_height: int = 64) -> str:
+    """Resize a logo PNG and return as base64 data URI."""
+    try:
+        from PIL import Image  # type: ignore[import-untyped]
+        img = Image.open(path)
+        ratio = max_height / img.height
+        new_size = (max(1, int(img.width * ratio)), max_height)
+        img = img.resize(new_size, Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        return f"data:image/png;base64,{b64}"
+    except Exception as exc:
+        log.warning("logo_b64: failed to load %s: %s", path, exc)
+        return ""
+
+
+# ── Tier metadata
+# bg_alpha / border_alpha are 2-char hex suffixes appended to the color hex.
+# Values chosen to be visible against #0A0A0A card background.
+_TIER_META = {
+    "diamond": {"emoji": "💎", "label": "DIAMOND", "color": "#B9F2FF", "rank": 0, "bg_alpha": "15", "border_alpha": "30"},
+    "gold":    {"emoji": "🥇", "label": "GOLD",    "color": "#FFD700", "rank": 1, "bg_alpha": "15", "border_alpha": "30"},
+    "silver":  {"emoji": "🥈", "label": "SILVER",  "color": "#A0AEC0", "rank": 2, "bg_alpha": "12", "border_alpha": "25"},
+    "bronze":  {"emoji": "🥉", "label": "BRONZE",  "color": "#CD7F32", "rank": 3, "bg_alpha": "15", "border_alpha": "30"},
+}
+
+_TIER_ORDER = ["diamond", "gold", "silver", "bronze"]
+
+# ── Sport icon helpers ──────────────────────────────────────────────────────────
+LEAGUE_SPORT_MAP: dict[str, str] = {
+    # Soccer
+    "EPL": "soccer", "UCL": "soccer", "PSL": "soccer",
+    "La Liga": "soccer", "Serie A": "soccer", "Bundesliga": "soccer",
+    "Ligue 1": "soccer", "MLS": "soccer", "EFL": "soccer",
+    "Europa": "soccer", "AFCON": "soccer",
+    # Cricket
+    "IPL": "cricket", "SA20": "cricket", "ODI": "cricket",
+    "T20": "cricket", "Test": "cricket", "BBL": "cricket",
+    "CPL": "cricket", "PSL-C": "cricket",
+    # Rugby
+    "Super Rugby": "rugby", "URC": "rugby",
+    "Rugby Championship": "rugby", "Six Nations": "rugby",
+    "Currie Cup": "rugby",
+    # Combat
+    "UFC": "mma", "MMA": "mma",
+    "Boxing": "boxing",
+}
+
+_SPORT_EMOJI_MAP: dict[str, str] = {
+    "soccer": "⚽",
+    "cricket": "🏏",
+    "rugby": "🏉",
+    "boxing": "🥊",
+    "mma": "🤼",
+}
+
+
+def sport_emoji(league: str) -> str:
+    """Return the sport emoji for the given league string."""
+    sport = LEAGUE_SPORT_MAP.get(league, "soccer")
+    return _SPORT_EMOJI_MAP.get(sport, "⚽")
+
+
+def build_edge_summary_data(tips: list[dict]) -> dict:
+    """Transform card_pipeline / Hot Tips tip dicts into edge_summary template data.
+
+    Parameters
+    ----------
+    tips:
+        List of tip dicts from bot._hot_tips_cache or card_pipeline.build_card_data().
+        Expected fields (all optional with graceful fallbacks):
+            tier / display_tier / edge_rating  -> tier key (lowercase)
+            ev                                 -> EV percentage (float)
+            odds                               -> decimal odds (float)
+            home_team / home                   -> home team display name
+            away_team / away                   -> away team display name
+            league / league_display            -> league display name
+            _bc_kickoff / kickoff              -> formatted kickoff string
+            _bc_broadcast                      -> broadcast info (unused here)
+
+    Returns
+    -------
+    dict matching edge_summary.html template contract:
+        total_edges, tiers, top_pick, date_label
+    """
+    if not tips:
+        return _empty_data()
+
+    # Count per tier
+    counts: dict[str, int] = {k: 0 for k in _TIER_ORDER}
+    for tip in tips:
+        tier = _resolve_tier(tip)
+        if tier in counts:
+            counts[tier] += 1
+
+    # Build tier pills (only include tiers with count > 0)
+    tiers = []
+    for tier_key in _TIER_ORDER:
+        if counts[tier_key] > 0:
+            meta = _TIER_META[tier_key]
+            tiers.append({
+                "emoji": meta["emoji"],
+                "count": counts[tier_key],
+                "label": meta["label"],
+                "color": meta["color"],
+                "bg_hex": meta["color"] + meta["bg_alpha"],
+                "border_hex": meta["color"] + meta["border_alpha"],
+            })
+
+    # Top pick: highest EV tip in highest-ranked tier
+    top_pick = _pick_top(tips)
+
+    return {
+        "total_edges": len(tips),
+        "tiers": tiers,
+        "top_pick": top_pick,
+        "date_label": datetime.now().strftime("%-d %b %Y"),
+        "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
+        "footer_logo_b64": logo_b64(_FOOTER_LOGO, max_height=32),
+    }
+
+
+def _empty_data() -> dict:
+    return {
+        "total_edges": 0,
+        "tiers": [],
+        "top_pick": None,
+        "date_label": datetime.now().strftime("%-d %b %Y"),
+    }
+
+
+def _resolve_tier(tip: dict) -> str:
+    raw = (
+        tip.get("display_tier")
+        or tip.get("edge_rating")
+        or tip.get("tier")
+        or "bronze"
+    )
+    return str(raw).lower().strip()
+
+
+def _pick_top(tips: list[dict]) -> dict | None:
+    if not tips:
+        return None
+
+    # Sort: best tier first (diamond=0), then highest EV
+    def sort_key(t):
+        tier = _resolve_tier(t)
+        rank = _TIER_META.get(tier, {"rank": 99})["rank"]
+        ev = float(t.get("ev") or 0)
+        return (rank, -ev)
+
+    best = sorted(tips, key=sort_key)[0]
+    tier = _resolve_tier(best)
+    tier_color = _TIER_META.get(tier, {"color": "#A0AEC0"})["color"]
+
+    # Parse kickoff into date + time parts
+    kickoff_raw = best.get("_bc_kickoff") or best.get("kickoff") or ""
+    date_part, time_part = _split_kickoff(kickoff_raw)
+
+    # Home/away
+    home = best.get("home_team") or best.get("home") or ""
+    away = best.get("away_team") or best.get("away") or ""
+
+    # League
+    league = (
+        best.get("league")
+        or best.get("league_display")
+        or best.get("league_key", "").upper()
+        or ""
+    )
+
+    # Odds
+    odds_val = float(best.get("odds") or 0)
+    odds_str = f"{odds_val:.2f}" if odds_val else ""
+
+    # EV
+    ev_val = float(best.get("ev") or 0)
+    ev_str = f"{ev_val:.1f}"
+
+    # Bookmaker
+    bookmaker = (
+        best.get("bookmaker")
+        or best.get("bookie")
+        or best.get("best_bookmaker")
+        or ""
+    )
+
+    return {
+        "home": home,
+        "away": away,
+        "league": league,
+        "date": date_part,
+        "time": time_part,
+        "odds": odds_str,
+        "ev": ev_str,
+        "tier_color": tier_color,
+        "bookmaker": bookmaker,
+    }
+
+
+def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4) -> dict:
+    """Build edge_picks.html template data (merged summary + picks card).
+
+    Parameters
+    ----------
+    tips:
+        Full list of tip dicts (same format as build_edge_summary_data).
+    page:
+        1-based page number. Page 1 shows picks [1]-[4], page 2 shows [5]-[8].
+    per_page:
+        Max picks per image (default 4).
+
+    Returns
+    -------
+    dict matching edge_picks.html template contract:
+        tier_summary, total_edges, groups, page, total_pages,
+        header_logo_b64, footer_logo_b64
+    """
+    if not tips:
+        return {
+            "tier_summary": [],
+            "total_edges": 0,
+            "groups": [],
+            "page": 1,
+            "total_pages": 1,
+            "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
+            "footer_logo_b64": logo_b64(_FOOTER_LOGO, max_height=32),
+        }
+
+    # Sort all tips by tier rank, then EV descending within tier
+    def _sort_key(t):
+        tier_key = _resolve_tier(t)
+        rank = _TIER_META.get(tier_key, {"rank": 99})["rank"]
+        ev = float(t.get("ev") or 0)
+        return (rank, -ev)
+
+    sorted_tips = sorted(tips, key=_sort_key)
+    total = len(sorted_tips)
+    import math
+    total_pages = max(1, math.ceil(total / per_page))
+    page = max(1, min(page, total_pages))
+
+    # Tier summary: total counts across ALL pages
+    counts: dict[str, int] = {k: 0 for k in _TIER_ORDER}
+    for tip in sorted_tips:
+        tk = _resolve_tier(tip)
+        if tk in counts:
+            counts[tk] += 1
+    tier_summary = []
+    for tk in _TIER_ORDER:
+        if counts[tk] > 0:
+            meta = _TIER_META[tk]
+            tier_summary.append({"emoji": meta["emoji"], "count": counts[tk], "color": meta["color"]})
+
+    # Slice for current page
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_tips = sorted_tips[start:end]
+
+    # Assign sequential pick numbers: page 1 = 1..4, page 2 = 5..8
+    # Group by tier for sub-headers (only tiers present on this page)
+    groups_dict: dict[str, list[dict]] = {}
+    for i, tip in enumerate(page_tips):
+        number = start + i + 1
+        tier_key = _resolve_tier(tip)
+        meta = _TIER_META.get(tier_key, _TIER_META["bronze"])
+
+        home = tip.get("home_team") or tip.get("home") or ""
+        away = tip.get("away_team") or tip.get("away") or ""
+        league = (
+            tip.get("league")
+            or tip.get("league_display")
+            or tip.get("league_key", "").upper()
+            or ""
+        )
+        kickoff_raw = tip.get("_bc_kickoff") or tip.get("kickoff") or ""
+        # Support pre-split date/time fields (from SAMPLE_PICKS)
+        date_part = tip.get("date") or ""
+        time_part = tip.get("time") or ""
+        if not date_part and not time_part:
+            date_part, time_part = _split_kickoff(kickoff_raw)
+
+        odds_val = float(tip.get("odds") or 0)
+        odds_str = f"{odds_val:.2f}" if odds_val else ""
+        ev_val = float(tip.get("ev") or 0)
+        ev_str = f"{ev_val:.1f}"
+        pick_name = (
+            tip.get("pick")
+            or tip.get("pick_team")
+            or tip.get("home_team")
+            or tip.get("home")
+            or ""
+        )
+        bookmaker = (
+            tip.get("bookmaker")
+            or tip.get("bookie")
+            or tip.get("best_bookmaker")
+            or ""
+        )
+        channel = tip.get("channel") or tip.get("ch") or ""
+
+        pick_dict = {
+            "number": number,
+            "home": home,
+            "away": away,
+            "league": league,
+            "date": date_part,
+            "time": time_part,
+            "channel": str(channel) if channel else "",
+            "odds": odds_str,
+            "ev": ev_str,
+            "pick": pick_name,
+            "bookmaker": bookmaker,
+            "sport_emoji": sport_emoji(league),
+        }
+
+        if tier_key not in groups_dict:
+            groups_dict[tier_key] = []
+        groups_dict[tier_key].append(pick_dict)
+
+    # Build ordered groups list (diamond → gold → silver → bronze, present tiers only)
+    groups = []
+    for tk in _TIER_ORDER:
+        if tk in groups_dict:
+            meta = _TIER_META[tk]
+            groups.append({
+                "tier_emoji": meta["emoji"],
+                "tier_name": meta["label"],
+                "tier_color": meta["color"],
+                "picks": groups_dict[tk],
+            })
+
+    return {
+        "tier_summary": tier_summary,
+        "total_edges": total,
+        "groups": groups,
+        "page": page,
+        "total_pages": total_pages,
+        "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
+        "footer_logo_b64": logo_b64(_FOOTER_LOGO, max_height=32),
+    }
+
+
+def build_tier_page_data(tips: list[dict], tier: str) -> dict:
+    """Build tier_page.html template data for a single tier.
+
+    Parameters
+    ----------
+    tips:
+        Full list of tip dicts (same format as build_edge_summary_data).
+    tier:
+        Tier key: 'diamond', 'gold', 'silver', or 'bronze'.
+
+    Returns
+    -------
+    dict matching tier_page.html template contract:
+        tier (dict with name/emoji/color/pick_label),
+        picks (list of pick dicts),
+        header_logo_b64, footer_logo_b64
+    """
+    meta = _TIER_META.get(tier.lower(), _TIER_META["bronze"])
+
+    # Filter picks for this tier
+    tier_tips = [t for t in tips if _resolve_tier(t) == tier.lower()]
+
+    picks = []
+    for tip in tier_tips:
+        home = tip.get("home_team") or tip.get("home") or ""
+        away = tip.get("away_team") or tip.get("away") or ""
+        league = (
+            tip.get("league")
+            or tip.get("league_display")
+            or tip.get("league_key", "").upper()
+            or ""
+        )
+        kickoff_raw = tip.get("_bc_kickoff") or tip.get("kickoff") or ""
+        date_part, time_part = _split_kickoff(kickoff_raw)
+        odds_val = float(tip.get("odds") or 0)
+        odds_str = f"{odds_val:.2f}" if odds_val else ""
+        ev_val = float(tip.get("ev") or 0)
+        ev_str = f"{ev_val:.1f}"
+        pick_name = (
+            tip.get("pick")
+            or tip.get("pick_team")
+            or tip.get("home_team")
+            or tip.get("home")
+            or ""
+        )
+        bookmaker = (
+            tip.get("bookmaker")
+            or tip.get("bookie")
+            or tip.get("best_bookmaker")
+            or ""
+        )
+        channel = tip.get("channel") or tip.get("ch") or ""
+        picks.append({
+            "home": home,
+            "away": away,
+            "league": league,
+            "date": date_part,
+            "time": time_part,
+            "odds": odds_str,
+            "ev": ev_str,
+            "pick": pick_name,
+            "bookmaker": bookmaker,
+            "channel": str(channel) if channel else "",
+        })
+
+    pick_count = len(picks)
+    pick_label = f"{pick_count} pick{'s' if pick_count != 1 else ''}"
+
+    return {
+        "tier": {
+            "name": meta["label"],
+            "emoji": meta["emoji"],
+            "color": meta["color"],
+            "pick_label": pick_label,
+        },
+        "picks": picks,
+        "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=44),
+        "footer_logo_b64": logo_b64(_FOOTER_LOGO, max_height=32),
+    }
+
+
+def build_edge_detail_data(tip: dict) -> dict:
+    """Build edge_detail.html template data from a single tip/edge.
+
+    Parameters
+    ----------
+    tip:
+        Single tip dict. Expected fields (all optional with graceful fallbacks):
+            tier / display_tier / edge_rating  -> tier key
+            ev                                 -> EV percentage (float)
+            home / home_team                   -> home team name
+            away / away_team                   -> away team name
+            league / league_display            -> league name
+            date, time                         -> formatted date/time strings
+            channel / ch                       -> DStv channel number
+            venue                              -> stadium/venue name
+            home_form, away_form               -> list of "W"/"D"/"L" strings
+            pick                               -> pick description
+            pick_odds / odds                   -> best odds (float)
+            bookmaker                          -> bookmaker display name
+            all_odds                           -> list of {bookie/b, odds/o} dicts
+            signals                            -> dict {name: bool} or list [{name, active}]
+            fair_value                         -> int 0-100
+            confidence                         -> int 0-100
+            h2h / h2h_total,h2h_home_wins...   -> H2H data
+            home_injuries, away_injuries       -> lists of injury strings
+            verdict                            -> verdict text string
+    """
+    tier_key = _resolve_tier(tip)
+    meta = _TIER_META.get(tier_key, _TIER_META["bronze"])
+
+    home = tip.get("home") or tip.get("home_team") or ""
+    away = tip.get("away") or tip.get("away_team") or ""
+    league = tip.get("league") or tip.get("league_display") or ""
+
+    # EV
+    ev_val = float(tip.get("ev") or 0)
+    ev_str = f"{ev_val:.2f}"
+
+    # Pick odds — float for comparison in template, string for display
+    pick_odds_val = float(tip.get("pick_odds") or tip.get("odds") or 0)
+    pick_odds_str = f"{pick_odds_val:.2f}"
+
+    # All odds — normalise {b, o} or {bookie, odds} formats
+    raw_all_odds = tip.get("all_odds") or []
+    all_odds = []
+    for o in raw_all_odds:
+        bookie = o.get("bookie") or o.get("b") or ""
+        odds_f = float(o.get("odds") or o.get("o") or 0)
+        all_odds.append({
+            "bookie": bookie,
+            "odds": f"{odds_f:.2f}",
+            "odds_float": odds_f,
+        })
+
+    # Signals — normalise from dict or list
+    raw_signals = tip.get("signals") or {}
+    if isinstance(raw_signals, dict):
+        signals = [{"name": k, "active": bool(v)} for k, v in raw_signals.items()]
+    else:
+        signals = [{"name": s.get("name", ""), "active": bool(s.get("active"))} for s in raw_signals]
+
+    # H2H — support nested dict {n, hw, d, aw} or flat fields
+    h2h = tip.get("h2h") or {}
+    h2h_total    = int(h2h.get("n")  or tip.get("h2h_total")     or 0)
+    h2h_home_wins = int(h2h.get("hw") or tip.get("h2h_home_wins") or 0)
+    h2h_draws    = int(h2h.get("d")  or tip.get("h2h_draws")     or 0)
+    h2h_away_wins = int(h2h.get("aw") or tip.get("h2h_away_wins") or 0)
+
+    return {
+        # Tier
+        "tier":       tier_key,
+        "tier_emoji": meta["emoji"],
+        "tier_name":  meta["label"],
+        "tier_color": meta["color"],
+
+        # Match identity
+        "sport_emoji": tip.get("sport_emoji") or sport_emoji(league),
+        "league":  league,
+        "home":    home,
+        "away":    away,
+        "date":    tip.get("date") or "",
+        "time":    tip.get("time") or "",
+        "channel": str(tip.get("channel") or tip.get("ch") or ""),
+        "venue":   tip.get("venue") or "",
+
+        # Form
+        "home_form": tip.get("home_form") or [],
+        "away_form": tip.get("away_form") or [],
+
+        # The Pick
+        "pick":           tip.get("pick") or "",
+        "pick_odds":      pick_odds_str,
+        "pick_odds_float": pick_odds_val,
+        "bookmaker":      tip.get("bookmaker") or "",
+        "ev":             ev_str,
+        "all_odds":       all_odds,
+
+        # Signals + bars
+        "signals":     signals,
+        "fair_value":  int(tip.get("fair_value") or 0),
+        "confidence":  int(tip.get("confidence") or 0),
+
+        # H2H
+        "h2h_total":     h2h_total,
+        "h2h_home_wins": h2h_home_wins,
+        "h2h_draws":     h2h_draws,
+        "h2h_away_wins": h2h_away_wins,
+
+        # Injuries
+        "home_injuries": tip.get("home_injuries") or [],
+        "away_injuries": tip.get("away_injuries") or [],
+
+        # Verdict
+        "verdict": tip.get("verdict") or "",
+
+        # Logo
+        "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
+    }
+
+
+def _fmt_odds(v) -> str | None:
+    """Format an odds value as '1.85' string, or None if no draw."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+        return f"{f:.2f}"
+    except (ValueError, TypeError):
+        return str(v) if v else None
+
+
+def build_my_matches_data(matches: list[dict], page: int = 1, per_page: int = 4) -> dict:
+    """Build my_matches.html template data.
+
+    Splits matches into edge_matches (has_edge=True) and upcoming_matches.
+    Edge matches sorted first (by tier: diamond > gold > silver > bronze).
+    Upcoming matches preserve caller order.
+    Paginates: max 4 per image, edge matches first then upcoming.
+    Assigns sequential [N] numbers across both groups.
+    total_matches and total_edges reflect ALL matches, not just current page.
+
+    Parameters
+    ----------
+    matches:
+        List of match dicts. Expected fields:
+            has_edge    bool  — True if an edge was found for this match
+            home        str   — home team display name (also: home_team)
+            away        str   — away team display name (also: away_team)
+            league      str   — league display name
+            date        str   — formatted date string, e.g. "Sat 12 Apr"
+            time        str   — formatted time string, e.g. "13:30"
+            channel     str   — DStv channel number (optional)
+            sport_emoji str   — override sport emoji (optional; auto-derived from league)
+            -- edge-only fields --
+            edge_tier   str   — 'diamond'|'gold'|'silver'|'bronze'
+            pick        str   — recommended pick team name
+            bookmaker   str   — bookmaker display name
+            -- non-edge fields --
+            odds_home   float — home win odds
+            odds_draw   float|None — draw odds (None for cricket/MMA/boxing)
+            odds_away   float — away win odds
+    """
+    import math
+
+    if not matches:
+        return {
+            "total_matches": 0,
+            "total_edges": 0,
+            "edge_matches": [],
+            "upcoming_matches": [],
+            "page": 1,
+            "total_pages": 1,
+            "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
+        }
+
+    # Split into edge and non-edge
+    all_edge = [m for m in matches if m.get("has_edge")]
+    all_non_edge = [m for m in matches if not m.get("has_edge")]
+
+    # Sort edge matches by tier rank (diamond first)
+    def _edge_rank(m: dict) -> int:
+        tier = (m.get("edge_tier") or "bronze").lower()
+        return _TIER_META.get(tier, {"rank": 99})["rank"]
+
+    all_edge_sorted = sorted(all_edge, key=_edge_rank)
+
+    # Flat ordered list: edge first, then upcoming (preserve caller order for non-edge)
+    all_flat = all_edge_sorted + all_non_edge
+    total = len(all_flat)
+    total_edges = len(all_edge)
+
+    total_pages = max(1, math.ceil(total / per_page))
+    page = max(1, min(page, total_pages))
+
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_slice = all_flat[start:end]
+
+    edge_matches: list[dict] = []
+    upcoming_matches: list[dict] = []
+
+    for i, m in enumerate(page_slice):
+        number = start + i + 1
+        home = m.get("home") or m.get("home_team") or ""
+        away = m.get("away") or m.get("away_team") or ""
+        league = m.get("league") or m.get("league_display") or ""
+        s_emoji = m.get("sport_emoji") or sport_emoji(league)
+        date_part = m.get("date") or ""
+        time_part = m.get("time") or ""
+        channel = str(m.get("channel") or m.get("ch") or "")
+
+        if m.get("has_edge"):
+            tier_key = (m.get("edge_tier") or "gold").lower()
+            meta = _TIER_META.get(tier_key, _TIER_META["gold"])
+            edge_matches.append({
+                "number": number,
+                "home": home,
+                "away": away,
+                "league": league,
+                "sport_emoji": s_emoji,
+                "date": date_part,
+                "time": time_part,
+                "channel": channel,
+                "has_edge": True,
+                "edge_tier": tier_key,
+                "tier_emoji": meta["emoji"],
+                "tier_color": meta["color"],
+                "pick": m.get("pick") or "",
+                "bookmaker": m.get("bookmaker") or "",
+            })
+        else:
+            upcoming_matches.append({
+                "number": number,
+                "home": home,
+                "away": away,
+                "league": league,
+                "sport_emoji": s_emoji,
+                "date": date_part,
+                "time": time_part,
+                "channel": channel,
+                "has_edge": False,
+                "odds_home": _fmt_odds(m.get("odds_home")),
+                "odds_draw": _fmt_odds(m.get("odds_draw")),
+                "odds_away": _fmt_odds(m.get("odds_away")),
+            })
+
+    return {
+        "total_matches": total,
+        "total_edges": total_edges,
+        "edge_matches": edge_matches,
+        "upcoming_matches": upcoming_matches,
+        "page": page,
+        "total_pages": total_pages,
+        "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
+    }
+
+
+def build_match_detail_data(match: dict) -> dict:
+    """Build match_detail template data from a single match (no edge).
+
+    Parameters
+    ----------
+    match:
+        Single match dict. Expected fields (all optional with graceful fallbacks):
+            league / league_display            -> league name
+            home / home_team                   -> home team display name
+            away / away_team                   -> away team display name
+            date, time                         -> formatted date/time strings
+            channel / ch                       -> DStv channel (already formatted, e.g. "DStv 211")
+            venue                              -> stadium/venue name
+            home_form, away_form               -> list of "W"/"D"/"L" strings
+            home_odds                          -> best home win odds (float)
+            home_bookie                        -> bookmaker for home odds
+            draw_odds                          -> best draw odds (float or None)
+            draw_bookie                        -> bookmaker for draw odds
+            away_odds                          -> best away win odds (float)
+            away_bookie                        -> bookmaker for away odds
+            reason                             -> "why no edge" explanation string
+            stats                              -> list of {label, value, context} dicts
+            h2h / h2h_total,h2h_home_wins...   -> H2H data
+            home_injuries, away_injuries       -> lists of injury strings
+    """
+    home = match.get("home") or match.get("home_team") or ""
+    away = match.get("away") or match.get("away_team") or ""
+    league = match.get("league") or match.get("league_display") or ""
+
+    # H2H — support nested dict {n, hw, d, aw} or flat fields
+    h2h = match.get("h2h") or {}
+    h2h_total     = int(h2h.get("n")  or match.get("h2h_total")     or 0)
+    h2h_home_wins = int(h2h.get("hw") or match.get("h2h_home_wins") or 0)
+    h2h_draws     = int(h2h.get("d")  or match.get("h2h_draws")     or 0)
+    h2h_away_wins = int(h2h.get("aw") or match.get("h2h_away_wins") or 0)
+
+    # Odds — format as string with 2dp
+    def _fmt(v) -> str:
+        try:
+            return f"{float(v):.2f}" if v is not None else ""
+        except (TypeError, ValueError):
+            return str(v) if v else ""
+
+    return {
+        # Identity
+        "sport_emoji": match.get("sport_emoji") or sport_emoji(league),
+        "league":  league,
+        "home":    home,
+        "away":    away,
+        "date":    match.get("date") or "",
+        "time":    match.get("time") or "",
+        "channel": str(match.get("channel") or match.get("ch") or ""),
+        "venue":   match.get("venue") or "",
+
+        # Form
+        "home_form": match.get("home_form") or [],
+        "away_form": match.get("away_form") or [],
+
+        # Market Overview
+        "home_odds":   _fmt(match.get("home_odds")),
+        "home_bookie": match.get("home_bookie") or "",
+        "draw_odds":   _fmt(match.get("draw_odds")) if match.get("draw_odds") is not None else None,
+        "draw_bookie": match.get("draw_bookie") or "",
+        "away_odds":   _fmt(match.get("away_odds")),
+        "away_bookie": match.get("away_bookie") or "",
+
+        # Why no edge
+        "reason": match.get("reason") or "",
+
+        # Key Stats
+        "stats": match.get("stats") or [],
+
+        # H2H
+        "h2h_total":     h2h_total,
+        "h2h_home_wins": h2h_home_wins,
+        "h2h_draws":     h2h_draws,
+        "h2h_away_wins": h2h_away_wins,
+
+        # Injuries
+        "home_injuries": match.get("home_injuries") or [],
+        "away_injuries": match.get("away_injuries") or [],
+
+        # Logo
+        "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
+    }
+
+
+def _split_kickoff(kickoff: str) -> tuple[str, str]:
+    """Split 'Today 19:30' or 'Fri 6 Mar · 15:00' into (date, time)."""
+    if not kickoff:
+        return "", ""
+    # Try '·' separator
+    if "\u00b7" in kickoff or "·" in kickoff:
+        sep = "\u00b7" if "\u00b7" in kickoff else "·"
+        parts = kickoff.split(sep, 1)
+        return parts[0].strip(), parts[1].strip()
+    # Try space before HH:MM pattern
+    import re
+    m = re.match(r"^(.*?)\s+(\d{1,2}:\d{2})$", kickoff.strip())
+    if m:
+        return m.group(1).strip(), m.group(2)
+    # Just date
+    return kickoff.strip(), ""

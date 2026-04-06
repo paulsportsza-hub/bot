@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #000000;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+            padding: 3px;
+            box-sizing: content-box;
+        }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+            border: none;
+            box-shadow: none;
+        }
+
+        /* ── 1. Header ───────────────────────────────────────── */
+        .header {
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .logo-img {
+            height: 26px;
+            width: auto;
+            flex-shrink: 0;
+        }
+        .logo-fallback {
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            background: linear-gradient(90deg, #F7931A, #FFBE45);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            flex-shrink: 0;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .tier-badge {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: 14px;
+            border: 1px solid;
+        }
+        .tier-badge-emoji { font-size: 11px; }
+        .tier-badge-name {
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 2px;
+        }
+        .ev-display {
+            display: flex;
+            align-items: baseline;
+            gap: 3px;
+        }
+        .ev-label { font-size: 10px; color: #777777; }
+        .ev-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 15px;
+            font-weight: 700;
+            color: #00E676;
+        }
+
+        /* ── 2. Matchup ──────────────────────────────────────── */
+        .matchup {
+            padding: 14px 18px 8px;
+            text-align: center;
+        }
+        .league-line {
+            font-size: 13px;
+            font-weight: 700;
+            color: #AAAAAA;
+            margin-top: -6px;
+            margin-bottom: -20px;
+        }
+        .teams-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .team-block {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+        .team-name {
+            font-size: 18px;
+            font-weight: 800;
+            color: #FFFFFF;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 100%;
+        }
+        .vs-badge {
+            font-size: 8px;
+            font-weight: 700;
+            color: #555555;
+            background: #1A1A1A;
+            padding: 4px 8px;
+            border-radius: 4px;
+            flex-shrink: 0;
+            margin: 0 8px;
+            align-self: flex-start;
+            margin-top: 30px;
+        }
+        .form-row {
+            display: flex;
+            gap: 3px;
+        }
+        .form-box {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+        .form-w { background: #00E676; color: #000000; }
+        .form-d { background: #555555; color: #FFFFFF; }
+        .form-l { background: #FF5252; color: #FFFFFF; }
+
+        /* ── 3. Meta Bar ─────────────────────────────────────── */
+        .meta-bar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 10px 18px;
+            border-top: 1px solid #2A2A2A;
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .meta-item {
+            font-size: 12px;
+            color: #777777;
+            white-space: nowrap;
+        }
+
+        /* ── 4. The Pick ─────────────────────────────────────── */
+        .pick-section {
+            margin: 10px 14px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            border-left: 3px solid;
+        }
+        .pick-label {
+            font-size: 9px;
+            color: #777777;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        .pick-line2 {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            margin-bottom: 2px;
+        }
+        .pick-name {
+            font-size: 16px;
+            font-weight: 800;
+            color: #FFFFFF;
+        }
+        .pick-odds {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 24px;
+            font-weight: 700;
+        }
+        .pick-bookie {
+            font-size: 9px;
+            color: #777777;
+            margin-bottom: 8px;
+        }
+        .odds-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .odds-pill {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid;
+        }
+
+        /* ── 5. Edge Signals ─────────────────────────────────── */
+        .signals-section {
+            padding: 8px 18px 10px;
+            border-top: 1px solid #2A2A2A;
+        }
+        .section-hdr {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        .signals-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 5px 10px;
+            margin-bottom: 10px;
+        }
+        .signal-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .signal-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .signal-dot.active {
+            background: #00E676;
+            box-shadow: 0 0 4px #00E67680;
+        }
+        .signal-dot.inactive {
+            background: #77777730;
+        }
+        .signal-lbl { font-size: 10px; }
+        .bar-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 5px;
+        }
+        .bar-row:last-child { margin-bottom: 0; }
+        .bar-label { font-size: 9px; color: #777777; width: 72px; flex-shrink: 0; }
+        .bar-track {
+            flex: 1;
+            height: 6px;
+            background: #1A1A1A;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .bar-fill { height: 100%; border-radius: 3px; }
+        .bar-pct {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            font-weight: 700;
+            width: 32px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        /* ── 6. Injury Watch ─────────────────────────────────── */
+        .injury-section {
+            padding: 8px 18px;
+            border-top: 1px solid #2A2A2A;
+        }
+        .injury-team-row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 5px;
+        }
+        .injury-team-name { font-size: 9px; color: #777777; flex-shrink: 0; }
+        .injury-chip {
+            font-size: 9px;
+            color: #AAAAAA;
+            background: #1A1A1A;
+            border: 1px solid #2A2A2A;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        /* ── 7. H2H ──────────────────────────────────────────── */
+        .h2h-section {
+            padding: 8px 18px;
+            border-top: 1px solid #2A2A2A;
+        }
+        .h2h-bar {
+            height: 6px;
+            display: flex;
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 6px 0 5px;
+        }
+        .h2h-seg-home { background: #00E676; }
+        .h2h-seg-draw { background: #444444; }
+        .h2h-seg-away { background: #FF5252; }
+        .h2h-labels {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .h2h-lbl-home { font-size: 9px; color: #00E676; }
+        .h2h-lbl-draw { font-size: 9px; color: #777777; }
+        .h2h-lbl-away { font-size: 9px; color: #FF5252; }
+
+        /* ── 8. Verdict ──────────────────────────────────────── */
+        .verdict-section {
+            padding: 12px 22px;
+            background: #141414;
+            border-top: 1px solid #2A2A2A;
+        }
+        .verdict-section .section-hdr {
+            font-size: 11px;
+        }
+        .verdict-text {
+            font-size: 13px;
+            color: #DDDDDD;
+            line-height: 1.5;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+
+    <!-- ── 1. Header ─────────────────────────────────────────── -->
+    <div class="header" style="background: linear-gradient(90deg, {{ tier_color }}08, #0A0A0A); border-bottom: 1px solid {{ tier_color }}20;">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="header-right">
+            <div class="tier-badge" style="background: {{ tier_color }}12; border-color: {{ tier_color }}20;">
+                <span class="tier-badge-emoji">{{ tier_emoji }}</span>
+                <span class="tier-badge-name" style="color: {{ tier_color }};">{{ tier_name }} EDGE</span>
+            </div>
+            <div class="ev-display">
+                <span class="ev-label">EV</span>
+                <span class="ev-value">+{{ ev }}%</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 2. Matchup ────────────────────────────────────────── -->
+    <div class="matchup">
+        <div class="league-line">{{ sport_emoji }} {{ league }}</div>
+        <div class="teams-row">
+
+            <div class="team-block">
+                <div class="team-name">{{ home }}</div>
+                {% if home_form %}
+                <div class="form-row">
+                    {% for r in home_form %}
+                    <div class="form-box form-{{ r | lower }}">{{ r }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="vs-badge">VS</div>
+
+            <div class="team-block">
+                <div class="team-name">{{ away }}</div>
+                {% if away_form %}
+                <div class="form-row">
+                    {% for r in away_form %}
+                    <div class="form-box form-{{ r | lower }}">{{ r }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+
+        </div>
+    </div>
+
+    <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
+    <div class="meta-bar">
+        {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
+        {% if time %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
+        {% if channel %}<span class="meta-item">📺 Ch {{ channel }}</span>{% endif %}
+        {% if venue %}<span class="meta-item">🏟 {{ venue }}</span>{% endif %}
+    </div>
+
+    <!-- ── 4. The Pick ───────────────────────────────────────── -->
+    <div class="pick-section" style="background: linear-gradient(135deg, {{ tier_color }}08, #1A1A1A); border-left-color: {{ tier_color }};">
+        <div class="pick-label">THE PICK</div>
+        <div class="pick-line2">
+            <span class="pick-name">{{ pick }}</span>
+            <span class="pick-odds" style="color: {{ tier_color }};">{{ pick_odds }}</span>
+        </div>
+        <div class="pick-bookie">@ {{ bookmaker }}</div>
+        {% if all_odds %}
+        <div class="odds-pills">
+            {% for o in all_odds %}
+            {% if o.odds_float >= pick_odds_float %}
+            <span class="odds-pill" style="background: {{ tier_color }}12; border-color: {{ tier_color }}30; color: {{ tier_color }};">{{ o.bookie }} {{ o.odds }}</span>
+            {% else %}
+            <span class="odds-pill" style="background: #0A0A0A; border-color: #2A2A2A; color: #777777;">{{ o.bookie }} {{ o.odds }}</span>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- ── 5. Edge Signals ───────────────────────────────────── -->
+    {% if signals %}
+    <div class="signals-section">
+        <div class="section-hdr" style="color: #F7931A;">EDGE SIGNALS</div>
+        <div class="signals-grid">
+            {% for sig in signals %}
+            <div class="signal-item">
+                <div class="signal-dot {{ 'active' if sig.active else 'inactive' }}"></div>
+                <span class="signal-lbl" style="color: {{ '#FFFFFF' if sig.active else '#555555' }};">{{ sig.name }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% if fair_value %}
+        <div class="bar-row">
+            <span class="bar-label">Fair Value</span>
+            <div class="bar-track">
+                <div class="bar-fill" style="width: {{ fair_value }}%; background: {{ tier_color }};"></div>
+            </div>
+            <span class="bar-pct" style="color: {{ tier_color }};">{{ fair_value }}%</span>
+        </div>
+        {% endif %}
+        {% if confidence %}
+        <div class="bar-row">
+            <span class="bar-label">Confidence</span>
+            <div class="bar-track">
+                <div class="bar-fill" style="width: {{ confidence }}%; background: {{ tier_color }};"></div>
+            </div>
+            <span class="bar-pct" style="color: {{ tier_color }};">{{ confidence }}%</span>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- ── 6. Injury Watch (conditional) ────────────────────── -->
+    {% if home_injuries or away_injuries %}
+    <div class="injury-section">
+        <div class="section-hdr" style="color: #FF5252;">🏥 INJURY WATCH</div>
+        {% if home_injuries %}
+        <div class="injury-team-row">
+            <span class="injury-team-name">{{ home }}:</span>
+            {% for inj in home_injuries %}
+            <span class="injury-chip">{{ inj }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if away_injuries %}
+        <div class="injury-team-row">
+            <span class="injury-team-name">{{ away }}:</span>
+            {% for inj in away_injuries %}
+            <span class="injury-chip">{{ inj }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- ── 7. H2H ────────────────────────────────────────────── -->
+    {% if h2h_total %}
+    <div class="h2h-section">
+        <div class="section-hdr" style="color: #777777;">↔ H2H &middot; {{ h2h_total }} matches</div>
+        <div class="h2h-bar">
+            {% if h2h_home_wins %}<div class="h2h-seg-home" style="flex: {{ h2h_home_wins }};"></div>{% endif %}
+            {% if h2h_draws %}<div class="h2h-seg-draw" style="flex: {{ h2h_draws }};"></div>{% endif %}
+            {% if h2h_away_wins %}<div class="h2h-seg-away" style="flex: {{ h2h_away_wins }};"></div>{% endif %}
+        </div>
+        <div class="h2h-labels">
+            <span class="h2h-lbl-home">{{ home }} {{ h2h_home_wins }}W</span>
+            <span class="h2h-lbl-draw">{{ h2h_draws }}D</span>
+            <span class="h2h-lbl-away">{{ h2h_away_wins }}W {{ away }}</span>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ── 8. Verdict ────────────────────────────────────────── -->
+    {% if verdict %}
+    <div class="verdict-section">
+        <div class="section-hdr" style="color: #FFB300;">⚠ VERDICT</div>
+        <div class="verdict-text">{{ verdict }}</div>
+    </div>
+    {% endif %}
+
+</div>
+</body>
+</html>

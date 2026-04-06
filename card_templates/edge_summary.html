@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #000000;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+        }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+            border: none;
+            box-shadow: none;
+        }
+        /* Fix 5 / Fix 4: Header with gradient background */
+        .header {
+            text-align: center;
+            padding: 22px 20px 0;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img {
+            height: 32px;
+            width: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
+        }
+        /* Fix 4: letter-spacing on title */
+        .title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #D4D4D4;
+            letter-spacing: 3px;
+        }
+        .subtitle {
+            font-size: 11px;
+            color: #777777;
+            margin-top: 4px;
+            padding-bottom: 20px;
+        }
+        .tiers {
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            gap: 8px;
+            padding: 20px 16px 20px;
+            flex-wrap: wrap;
+        }
+        /* Fix 4: tinted tier card backgrounds */
+        .tier-pill {
+            border-radius: 10px;
+            padding: 10px 14px;
+            text-align: center;
+            min-width: 72px;
+        }
+        .tier-emoji { font-size: 18px; }
+        .tier-count {
+            font-size: 22px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            line-height: 1.2;
+        }
+        .tier-label {
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            margin-top: 2px;
+        }
+        .separator { height: 1px; background: #2A2A2A; margin: 0 16px; }
+        /* Fix 4: top pick left border accent + visible surface */
+        .top-pick {
+            padding: 18px 16px 18px 13px;
+            background: #1A1A1A;
+            border: 1px solid #2A2A2A;
+            border-left: 3px solid var(--top-pick-color, #B9F2FF);
+            border-radius: 0 8px 8px 0;
+            margin: 0 16px;
+        }
+        .top-pick-wrapper {
+            padding: 0;
+        }
+        .top-pick-badge {
+            font-size: 9px;
+            font-weight: 700;
+            color: #F7931A;
+            letter-spacing: 0.12em;
+            margin-bottom: 8px;
+        }
+        .matchup {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+        }
+        .pick-tags {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .league-tag {
+            background: #141414;
+            border: 1px solid #333333;
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 10px;
+            font-weight: 600;
+            color: #A0AEC0;
+        }
+        .pick-datetime {
+            font-size: 11px;
+            color: #777777;
+        }
+        .pick-odds-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-top: 10px;
+        }
+        .pick-odds-block {
+            display: flex;
+            flex-direction: column;
+        }
+        .pick-odds {
+            font-size: 20px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        /* Fix 3: bookmaker name under odds */
+        .pick-bookmaker {
+            font-size: 9px;
+            color: #777777;
+            margin-top: 2px;
+        }
+        .pick-ev {
+            font-size: 13px;
+            font-weight: 600;
+            color: #00E676;
+        }
+        /* Fix 4: footer gradient */
+        .footer {
+            background: linear-gradient(180deg, #141414, #0A0A0A);
+            border-top: 1px solid #2A2A2A;
+            padding: 12px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .footer-url { font-size: 10px; color: #555555; }
+        .footer-logo-img {
+            height: 16px;
+            width: auto;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <!-- Fix 5/4: gradient header background -->
+    <div class="header">
+        <!-- Fix 2: Real MzansiEdge wordmark logo -->
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">TODAY'S EDGE PICKS</div>
+        <div class="subtitle">{{ total_edges }} edge{{ 's' if total_edges != 1 else '' }} live &middot; {{ date_label }}</div>
+    </div>
+
+    {% if tiers %}
+    <div class="tiers">
+        {% for tier in tiers %}
+        {% if tier.count > 0 %}
+        <!-- Fix 4: tinted tier card backgrounds (visible opacity per tier) -->
+        <div class="tier-pill" style="background: {{ tier.bg_hex }}; border: 1px solid {{ tier.border_hex }};">
+            <div class="tier-emoji">{{ tier.emoji }}</div>
+            <div class="tier-count" style="color: {{ tier.color }};">{{ tier.count }}</div>
+            <div class="tier-label" style="color: {{ tier.color }};">{{ tier.label }}</div>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if top_pick %}
+    <div class="separator"></div>
+    <div class="top-pick-wrapper" style="padding: 18px 16px;">
+        <!-- Fix 4: left border accent in tier colour -->
+        <div class="top-pick" style="--top-pick-color: {{ top_pick.tier_color }};">
+            <div class="top-pick-badge">TOP PICK</div>
+            <div class="matchup">{{ top_pick.home }} vs {{ top_pick.away }}</div>
+            <div class="pick-tags">
+                {% if top_pick.league %}
+                <span class="league-tag">{{ top_pick.league }}</span>
+                {% endif %}
+                {% if top_pick.date or top_pick.time %}
+                <span class="pick-datetime">{{ top_pick.date }}{% if top_pick.date and top_pick.time %} &middot; {% endif %}{{ top_pick.time }}</span>
+                {% endif %}
+            </div>
+            <div class="pick-odds-row">
+                <div class="pick-odds-block">
+                    <span class="pick-odds" style="color: {{ top_pick.tier_color }};">{{ top_pick.odds }}</span>
+                    <!-- Fix 3: bookmaker name under odds -->
+                    {% if top_pick.bookmaker %}
+                    <span class="pick-bookmaker">@ {{ top_pick.bookmaker }}</span>
+                    {% endif %}
+                </div>
+                <span class="pick-ev">+{{ top_pick.ev }}% EV</span>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Fix 4: footer gradient; Fix 2: real micro mark logo -->
+    <div class="footer">
+        <span class="footer-url">mzansiedge.co.za</span>
+        {% if footer_logo_b64 %}
+        <img class="footer-logo-img" src="{{ footer_logo_b64 }}" alt="ME" />
+        {% else %}
+        <div style="width:22px;height:22px;background:#F7931A;color:#000;font-size:9px;font-weight:800;border-radius:50%;display:flex;align-items:center;justify-content:center;">ME</div>
+        {% endif %}
+    </div>
+</div>
+</body>
+</html>

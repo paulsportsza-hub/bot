@@ -109,6 +109,16 @@ from services.affiliate_service import get_affiliate_url, select_best_bookmaker,
 from renderers.edge_renderer import render_edge_badge, render_tip_with_odds, render_odds_comparison, EDGE_EMOJIS, EDGE_LABELS
 from tier_gate import gate_edges, gate_narrative, record_view, get_upgrade_message
 from message_types import DigestMessage, DetailMessage, AlertMessage, ResultMessage, is_stale_hash
+# BUILD-W3: image card pipeline
+from card_sender import send_card_or_fallback
+from card_data import (
+    build_edge_picks_data,
+    build_my_matches_data,
+    build_edge_detail_data,  # noqa: F401 — available for ed: handler
+    build_match_detail_data,  # noqa: F401 — available for md: handler
+    build_edge_summary_data,
+)
+from card_renderer import render_card_sync
 
 # ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
 from logging.handlers import RotatingFileHandler
@@ -1563,7 +1573,18 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
                     [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                 ])
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            # BUILD-W3: My Matches card pagination (photo→photo, no flicker)
+            _raw_games = _schedule_cache.get(user_id, [])
+            _edge_info = _get_edge_info_for_games(_raw_games)
+            _mm_input = _build_mm_matches_for_card(_raw_games, _edge_info)
+            _mm_games_snapshot[user_id] = _mm_input
+            _yg_card_data = build_my_matches_data(_mm_input, page=pg + 1)
+            await send_card_or_fallback(
+                bot=ctx.bot, chat_id=query.message.chat_id,
+                template="my_matches.html", data=_yg_card_data,
+                text_fallback=text, markup=markup,
+                message_to_edit=query.message,
+            )
         elif action.startswith("sport:"):
             # yg:sport:{key} → inline re-render with filter (Wave 15B)
             parts = action.split(":")
@@ -1614,25 +1635,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     yesterday_results=_bt_proof.get("yesterday_results"),
                     edge_tracker_summary=_bt_summary,
                 )
-                # P1P3-WIRE-DETAIL: photo detail → text list transition
-                if query.message.photo:
-                    # Detail was served as photo by card_pipeline — can't edit_message_text.
-                    # Delete photo, send list as new text message.
-                    _bt_chat_id = query.message.chat_id
-                    try:
-                        await query.message.delete()
-                    except Exception:
-                        pass
-                    await ctx.bot.send_message(
-                        chat_id=_bt_chat_id,
-                        text=_bt_text,
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=_bt_markup,
-                    )
-                else:
-                    await query.edit_message_text(
-                        _bt_text, parse_mode=ParseMode.HTML, reply_markup=_bt_markup
-                    )
+                # BUILD-W3: Back → Edge Picks card (photo→photo or text→photo)
+                _bt_card_data = build_edge_picks_data(_bt_tips, page=_back_page + 1, per_page=HOT_TIPS_PAGE_SIZE)
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=query.message.chat_id,
+                    template="edge_picks.html", data=_bt_card_data,
+                    text_fallback=_bt_text, markup=_bt_markup,
+                    message_to_edit=query.message,
+                )
                 _ht_page_state[user_id] = _back_page  # W84-HT2: keep state in sync
             else:
                 # Cache cold — fallback to full flow
@@ -1742,12 +1752,115 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     yesterday_results=_pg_proof.get("yesterday_results"),
                     edge_tracker_summary=_pg_summary,
                 )
-                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                # BUILD-W3: photo→photo pagination with Edge Picks card
+                _pg_card_data = build_edge_picks_data(tips, page=page_num + 1, per_page=HOT_TIPS_PAGE_SIZE)
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=query.message.chat_id,
+                    template="edge_picks.html", data=_pg_card_data,
+                    text_fallback=text, markup=markup,
+                    message_to_edit=query.message,
+                )
                 # W84-HT2: freeze page identity so detail back returns here
                 # R7-BUILD-03: snapshot already seeded on page 0 — do not re-assign here
                 _ht_page_state[user_id] = page_num
             else:
                 await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
+    elif prefix == "ep":
+        # BUILD-W3: Edge Picks card — numbered pick buttons (ep:pick:{N})
+        user_id = query.from_user.id
+        if action.startswith("pick:"):
+            try:
+                _ep_idx = int(action.split(":")[1])
+            except (ValueError, IndexError):
+                _ep_idx = 0
+            _ep_tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
+            if _ep_tips and _ep_idx < len(_ep_tips):
+                _ep_key = _ep_tips[_ep_idx].get("match_id") or _ep_tips[_ep_idx].get("event_id", "")
+                if _ep_key:
+                    await _generate_game_tips_safe(query, ctx, _ep_key, user_id)
+                    return
+            await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
+    elif prefix == "mm":
+        # BUILD-W3: My Matches card — numbered match buttons (mm:match:{N}:{e|n})
+        user_id = query.from_user.id
+        if action.startswith("match:"):
+            parts = action.split(":")
+            try:
+                _mm_idx = int(parts[1])
+            except (ValueError, IndexError):
+                _mm_idx = 0
+            _mm_snap = _mm_games_snapshot.get(user_id, [])
+            if _mm_snap and _mm_idx < len(_mm_snap):
+                _mm_ev = _mm_snap[_mm_idx].get("_event_id", "")
+                if _mm_ev:
+                    await _generate_game_tips_safe(query, ctx, _mm_ev, user_id)
+                    return
+            _ut = await get_effective_tier(user_id)
+            _md_text, _md_markup = await _render_your_games_all(user_id, user_tier=_ut, skip_broadcast=True)
+            await query.edit_message_text(_md_text, parse_mode=ParseMode.HTML, reply_markup=_md_markup)
+    elif prefix == "ed":
+        # BUILD-W3: Edge Detail card back button (ed:back:{page}) → back to Edge Picks
+        user_id = query.from_user.id
+        if action.startswith("back"):
+            _ed_pg = 0
+            if ":" in action:
+                _ed_pg_str = action.split(":")[1]
+                if _ed_pg_str.isdigit():
+                    _ed_pg = int(_ed_pg_str)
+            _ed_tips = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
+            if _ed_tips:
+                _ed_tier = await get_effective_tier(user_id)
+                _ed_rv = 999
+                try:
+                    from db_connection import get_connection as _ed_gc
+                    _edc = _ed_gc()
+                    _, _ed_rv, _ = gate_edges(_ed_tips, user_id, _ed_tier, _edc)
+                    _edc.close()
+                except Exception:
+                    pass
+                _ed_proof, _ed_summ = await asyncio.gather(
+                    _get_hot_tips_result_proof(),
+                    _get_edge_tracker_summary(7),
+                )
+                _ed_text, _ed_markup = await _build_hot_tips_page(
+                    _ed_tips, page=_ed_pg, user_tier=_ed_tier,
+                    remaining_views=_ed_rv, user_id=user_id,
+                    hit_rate_7d=((_ed_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
+                    last_10_results=_ed_proof.get("last_10_results"),
+                    roi_7d=_ed_proof.get("roi_7d"),
+                    recently_settled=_ed_proof.get("recently_settled"),
+                    yesterday_results=_ed_proof.get("yesterday_results"),
+                    edge_tracker_summary=_ed_summ,
+                )
+                _ed_card_data = build_edge_picks_data(_ed_tips, page=_ed_pg + 1, per_page=HOT_TIPS_PAGE_SIZE)
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=query.message.chat_id,
+                    template="edge_picks.html", data=_ed_card_data,
+                    text_fallback=_ed_text, markup=_ed_markup,
+                    message_to_edit=query.message,
+                )
+                _ht_page_state[user_id] = _ed_pg
+            else:
+                await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
+    elif prefix == "md":
+        # BUILD-W3: Match Detail card back button (md:back) → back to My Matches
+        user_id = query.from_user.id
+        if action == "back":
+            _mdback_ut = await get_effective_tier(user_id)
+            _raw_games_md = _schedule_cache.get(user_id, [])
+            _edge_info_md = _get_edge_info_for_games(_raw_games_md)
+            _mm_input_md = _build_mm_matches_for_card(_raw_games_md, _edge_info_md)
+            _mm_games_snapshot[user_id] = _mm_input_md
+            _mdback_card_data = build_my_matches_data(_mm_input_md, page=1)
+            _mdback_text, _mdback_markup = await _render_your_games_all(
+                user_id, user_tier=_mdback_ut, skip_broadcast=True,
+            )
+            await send_card_or_fallback(
+                bot=ctx.bot, chat_id=query.message.chat_id,
+                template="my_matches.html", data=_mdback_card_data,
+                text_fallback=_mdback_text, markup=_mdback_markup,
+                message_to_edit=query.message,
+            )
     elif prefix == "today":
         # P3-02: /today DigestMessage drill-down + back navigation
         user_id = query.from_user.id
@@ -5065,13 +5178,30 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
         except Exception as _we:
             log.warning("MM warm render failed for user %s: %s", user_id, _we)
             text, markup = _FALLBACK_TEXT, _FALLBACK_MARKUP
+        # BUILD-W3: send My Matches image card (falls back to text on render failure)
         try:
+            _raw_games_wm = _schedule_cache.get(user_id, [])
+            _edge_info_wm = _get_edge_info_for_games(_raw_games_wm)
+            _mm_input_wm = _build_mm_matches_for_card(_raw_games_wm, _edge_info_wm)
+            _mm_games_snapshot[user_id] = _mm_input_wm
+            _wm_card_data = build_my_matches_data(_mm_input_wm, page=1)
             await asyncio.wait_for(
-                update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup),
-                timeout=8.0,
+                send_card_or_fallback(
+                    bot=ctx.bot, chat_id=update.message.chat_id,
+                    template="my_matches.html", data=_wm_card_data,
+                    text_fallback=text, markup=markup,
+                ),
+                timeout=12.0,
             )
         except Exception as _de:
-            log.warning("MM warm delivery failed for user %s: %s", user_id, _de)
+            log.warning("MM warm card failed for user %s: %s", user_id, _de)
+            try:
+                await asyncio.wait_for(
+                    update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup),
+                    timeout=8.0,
+                )
+            except Exception:
+                pass
         return
 
     # W84-MM1/RT5: Cold path — strict 5s deadline, never leave user on spinner.
@@ -5148,34 +5278,93 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
             except Exception:
                 pass
     else:
-        # Success path: cap spinner wait (2.0s) then edit in place (3.0s)
+        # Success path: stop spinner, build card, deliver
         if spinner_task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(spinner_task), timeout=2.0)
             except (asyncio.TimeoutError, Exception):
                 pass  # Spinner has in-flight API call; proceed with delivery
+        # BUILD-W3: store snapshot + build card data
+        _raw_games_cp = _schedule_cache.get(user_id, [])
+        _edge_info_cp = _get_edge_info_for_games(_raw_games_cp)
+        _mm_input_cp = _build_mm_matches_for_card(_raw_games_cp, _edge_info_cp)
+        _mm_games_snapshot[user_id] = _mm_input_cp
+        _cp_card_data = build_my_matches_data(_mm_input_cp, page=1)
+        # Delete spinner, send card (falls back to text on render failure)
         if loading is not None:
-            # W84-MM1: Edit spinner in place with explicit timeout
             try:
-                await asyncio.wait_for(
-                    loading.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=markup),
-                    timeout=3.0,
-                )
-                return  # Edit succeeded — done
-            except (asyncio.TimeoutError, Exception):
-                # Edit failed — clean up loading msg, fall through to fresh send below
-                try:
-                    await loading.delete()
-                except Exception:
-                    pass
-        # W84-RT5: loading was None (initial send failed) OR edit failed — send fresh message
+                await loading.delete()
+            except Exception:
+                pass
         try:
             await asyncio.wait_for(
-                update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup),
-                timeout=8.0,
+                send_card_or_fallback(
+                    bot=ctx.bot, chat_id=update.message.chat_id,
+                    template="my_matches.html", data=_cp_card_data,
+                    text_fallback=text, markup=markup,
+                ),
+                timeout=12.0,
             )
         except Exception as _fe:
             log.error("MM: final delivery failed for user %s: %s", user_id, _fe)
+
+
+# BUILD-W3: My Matches card adapter
+def _build_mm_matches_for_card(games: list[dict], edge_info: dict) -> list[dict]:
+    """Convert schedule games + edge_info → build_my_matches_data() input format.
+
+    Called once per My Matches render. Result stored in _mm_games_snapshot[user_id].
+    The snapshot index aligns with the card's [N] numbers after build_my_matches_data sorting.
+    """
+    from datetime import datetime as _dt_cls
+    from zoneinfo import ZoneInfo as _ZI
+    _sa_tz = _ZI(config.TZ)
+    _today = _dt_cls.now(_sa_tz).date()
+
+    result: list[dict] = []
+    for event in games:
+        event_id = event.get("id", "")
+        ei = edge_info.get(event_id)
+        # Date string from commence_time
+        ct = _parse_date(event.get("commence_time", ""))
+        if ct:
+            _delta = (ct.date() - _today).days
+            if _delta == 0:
+                date_str = "Today"
+            elif _delta == 1:
+                date_str = "Tomorrow"
+            else:
+                date_str = ct.strftime("%a %-d %b")
+        else:
+            date_str = ""
+        # Time from _mm_kickoff e.g. "16:00 SAST" → "16:00"
+        kickoff = event.get("_mm_kickoff", "")
+        time_str = kickoff.replace(" SAST", "").strip() if kickoff else ""
+        channel_str = event.get("_mm_broadcast", "")
+        league = _get_league_display(
+            event.get("league_key", ""),
+            event.get("home_team"),
+            event.get("away_team"),
+        )
+        m: dict = {
+            "home": event.get("home_team") or "",
+            "away": event.get("away_team") or "",
+            "league": league,
+            "date": date_str,
+            "time": time_str,
+            "channel": channel_str,
+            "sport_emoji": event.get("sport_emoji", "🏅"),
+            "has_edge": bool(ei),
+            "_event_id": event_id,  # for mm:match:{N} callback routing
+        }
+        if ei:
+            m["edge_tier"] = (
+                ei.get("display_tier") or ei.get("edge_rating") or "bronze"
+            )
+            m["pick"] = ei.get("outcome") or ""
+            m["bookmaker"] = ei.get("bookmaker") or ""
+        result.append(m)
+    return result
 
 
 async def _render_your_games_all(
@@ -6534,6 +6723,10 @@ _hot_tips_fetch_lock: asyncio.Lock | None = None  # W84-P1: prevents concurrent 
 # so hot:back returns the user to the exact page and tip set they left.
 _ht_page_state: dict[int, int] = {}    # user_id → last rendered page number
 _ht_tips_snapshot: dict[int, list] = {}  # user_id → shallow copy of tips at last render
+# BUILD-W3: My Matches card snapshot
+_mm_games_snapshot: dict[int, list] = {}  # user_id → flat match list at last render
+# BUILD-W3: @MzansiEdgeAlerts subscriber broadcast channel
+_CHANNEL_ID = -1003789410835
 _ht_detail_origin: dict[tuple[int, str], int] = {}  # (user_id, match_key) → source page
 # P3-02: /today digest snapshot — per-user tips frozen at last DigestMessage render
 _today_digest_snapshot: dict[int, list] = {}  # user_id → tips list
@@ -9199,7 +9392,13 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             yesterday_results=_wm_proof.get("yesterday_results"),
             edge_tracker_summary=_wm_summary,
         )
-        await bot.send_message(chat_id, _wm_text, parse_mode=ParseMode.HTML, reply_markup=_wm_markup)
+        # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
+        _wm_card_data = build_edge_picks_data(_cached_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE)
+        await send_card_or_fallback(
+            bot=bot, chat_id=chat_id,
+            template="edge_picks.html", data=_wm_card_data,
+            text_fallback=_wm_text, markup=_wm_markup,
+        )
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
@@ -9262,7 +9461,13 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             yesterday_results=_fast_proof.get("yesterday_results"),
             edge_tracker_summary=_fast_summary,
         )
-        await bot.send_message(chat_id, _fast_text, parse_mode=ParseMode.HTML, reply_markup=_fast_markup)
+        # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
+        _fast_card_data = build_edge_picks_data(_fast_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE)
+        await send_card_or_fallback(
+            bot=bot, chat_id=chat_id,
+            template="edge_picks.html", data=_fast_card_data,
+            text_fallback=_fast_text, markup=_fast_markup,
+        )
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
@@ -9398,7 +9603,13 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         yesterday_results=_result_proof.get("yesterday_results"),
         edge_tracker_summary=_edge_tracker_summary,
     )
-    await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
+    _cold_card_data = build_edge_picks_data(tips, page=1, per_page=HOT_TIPS_PAGE_SIZE)
+    await send_card_or_fallback(
+        bot=bot, chat_id=chat_id,
+        template="edge_picks.html", data=_cold_card_data,
+        text_fallback=text, markup=markup,
+    )
     # W84-HT2: freeze page identity at render time (cold path)
     if user_id:
         _ht_page_state[user_id] = 0
@@ -20078,6 +20289,19 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # P4-07: log broadcast tips once per run (user_id='channel' per brief)
     if tips:
         _blw_fire_tips(tips, "channel")
+
+    # BUILD-W3: broadcast Edge Summary card to @MzansiEdgeAlerts at 08:00 SAST
+    if tips and current_hour == 8:
+        try:
+            _ch_data = build_edge_summary_data(tips)
+            _ch_png = await asyncio.to_thread(render_card_sync, "edge_summary.html", _ch_data)
+            _ch_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Open Bot →", url="https://t.me/mzansiedge_bot"),
+            ]])
+            await ctx.bot.send_photo(chat_id=_CHANNEL_ID, photo=_ch_png, reply_markup=_ch_markup)
+            log.info("Edge Summary card broadcast to channel at hour=%d", current_hour)
+        except Exception as _ch_err:
+            log.warning("Channel broadcast failed: %s", _ch_err)
 
     # Fetch yesterday's results + streak once for all users (Wave 23)
     yesterday_stats = None

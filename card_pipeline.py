@@ -113,6 +113,250 @@ def _stale_marker(scraped_at: str | None) -> str:
         return ""
 
 
+# ── IMG-W2: Data adapter helpers ──────────────────────────────────────────────
+
+def _compute_team_form(results: list[dict], team_key: str, last_n: int = 5) -> list[str]:
+    """Return per-team array of 'W'/'D'/'L' for last *last_n* matches.
+
+    Parses the ``results`` list produced by :func:`build_verified_data_block`.
+    Only matches where *team_key* appears (case-insensitive substring) as home
+    or away are counted.  Matches with missing scores are skipped.
+    """
+    form: list[str] = []
+    for r in results:
+        if len(form) >= last_n:
+            break
+        home = r.get("home") or ""
+        away = r.get("away") or ""
+        hs = r.get("home_score")
+        as_ = r.get("away_score")
+        if hs is None or as_ is None:
+            continue
+        team_lower = team_key.lower()
+        team_is_home = team_lower in home.lower()
+        team_is_away = team_lower in away.lower()
+        if not team_is_home and not team_is_away:
+            continue
+        try:
+            hs_i, as_i = int(hs), int(as_)
+        except (TypeError, ValueError):
+            continue
+        if hs_i == as_i:
+            form.append("D")
+        elif team_is_home:
+            form.append("W" if hs_i > as_i else "L")
+        else:
+            form.append("W" if as_i > hs_i else "L")
+    return form
+
+
+def _compute_h2h(results: list[dict], home_key: str, away_key: str) -> dict:
+    """Return head-to-head record as ``{played, hw, d, aw}``.
+
+    Invariant: ``hw + d + aw == played``.
+    ``hw`` = wins for the *home_key* side.
+    """
+    played = hw = d = aw = 0
+    hk = home_key.lower()
+    ak = away_key.lower()
+    for r in results:
+        home = (r.get("home") or "").lower()
+        away = (r.get("away") or "").lower()
+        hs = r.get("home_score")
+        as_ = r.get("away_score")
+        if hs is None or as_ is None:
+            continue
+        # Normal direction: home_key at home, away_key away
+        normal = hk in home and ak in away
+        # Reversed: away_key at home, home_key away
+        reversed_ = ak in home and hk in away
+        if not normal and not reversed_:
+            continue
+        try:
+            hs_i, as_i = int(hs), int(as_)
+        except (TypeError, ValueError):
+            continue
+        played += 1
+        if hs_i == as_i:
+            d += 1
+        elif normal:
+            if hs_i > as_i:
+                hw += 1
+            else:
+                aw += 1
+        else:  # reversed
+            if hs_i > as_i:
+                aw += 1
+            else:
+                hw += 1
+    return {"played": played, "hw": hw, "d": d, "aw": aw}
+
+
+def _split_injuries(
+    injuries: list[str], home_key: str, away_key: str
+) -> tuple[list[str], list[str]]:
+    """Split flat injuries list into per-team arrays of ``'Player (status)'`` strings.
+
+    The raw format from :func:`build_verified_data_block` is::
+
+        "Player Name (team_key) — status_or_type"
+
+    This function reformats each entry to ``'Player Name (status)'`` and
+    assigns it to the correct team bucket.
+    """
+    home_injuries: list[str] = []
+    away_injuries: list[str] = []
+    hk = home_key.lower()
+    ak = away_key.lower()
+    for inj in injuries:
+        inj_lower = inj.lower()
+        is_home = hk in inj_lower
+        is_away = ak in inj_lower
+        if not is_home and not is_away:
+            continue
+        # Reformat: "Player (team) — status" → "Player (status)"
+        parts = inj.split(" — ", 1)
+        if len(parts) == 2:
+            player_part = parts[0].split(" (")[0].strip()
+            status = parts[1].strip()
+            formatted = f"{player_part} ({status})"
+        else:
+            formatted = inj
+        if is_home:
+            home_injuries.append(formatted)
+        else:
+            away_injuries.append(formatted)
+    return home_injuries, away_injuries
+
+
+def _compute_signals(tip: dict | None, verified: dict) -> dict:
+    """Return signals dict with 6 named booleans for the card renderer.
+
+    Keys: ``price_edge``, ``form``, ``movement``, ``market``, ``tipster``,
+    ``injury``.
+    """
+    ev = float((tip or {}).get("ev") or 0)
+    tipster = verified.get("tipster") or {}
+    return {
+        "price_edge": ev > 0,
+        "form": bool(verified.get("results")),
+        "movement": bool((tip or {}).get("movement")),
+        "market": tipster.get("home_consensus_pct") is not None,
+        "tipster": bool(tipster.get("sources")),
+        "injury": bool(verified.get("injuries")),
+    }
+
+
+def _compute_pick_team(outcome: str, home_display: str, away_display: str) -> str:
+    """Return clean team name string for the pick outcome.
+
+    Maps ``'Home'`` → home_display, ``'Away'`` → away_display,
+    ``'Draw'`` → ``'Draw'``.  Falls back to *outcome* unchanged.
+    """
+    oc = outcome.lower().strip()
+    if oc in ("home", "1"):
+        return home_display
+    if oc in ("away", "2"):
+        return away_display
+    if oc in ("draw", "x", "tie"):
+        return "Draw"
+    return outcome
+
+
+def _compute_no_edge_reason(ev: float, verified: dict, tip: dict | None) -> str:
+    """Return deterministic template string for non-edge matches.
+
+    Returns an empty string when a positive edge exists.
+    """
+    if tip and ev > 0:
+        return ""
+    if not verified.get("data_sources_used"):
+        return "Insufficient data to calculate edge for this match."
+    if not verified.get("odds"):
+        return "No bookmaker odds available for this match."
+    return "No positive expected value detected across available bookmakers."
+
+
+def _compute_key_stats(
+    verified: dict,
+    home_key: str,
+    away_key: str,
+    home_form: list[str],
+    away_form: list[str],
+    h2h: dict,
+) -> list[dict]:
+    """Return exactly 4 stat box dicts for Match Detail cards.
+
+    Each dict has at minimum ``'label'``, ``'home'``, ``'away'`` keys.
+    H2H boxes also include a ``'draw'`` key.  Missing data boxes use ``'—'``.
+    """
+    stats: list[dict] = []
+
+    # Box 1: Glicko-2 / Elo ratings
+    ratings = verified.get("ratings") or {}
+    home_rat = ratings.get(home_key) or {}
+    away_rat = ratings.get(away_key) or {}
+    if home_rat or away_rat:
+        stats.append({
+            "label": "Rating",
+            "home": f"{home_rat.get('mu', 0):.0f}" if home_rat else "N/A",
+            "away": f"{away_rat.get('mu', 0):.0f}" if away_rat else "N/A",
+        })
+
+    # Box 2: Recent form (last 5)
+    if home_form or away_form:
+        stats.append({
+            "label": "Form (L5)",
+            "home": "".join(home_form) if home_form else "N/A",
+            "away": "".join(away_form) if away_form else "N/A",
+        })
+
+    # Box 3: Head-to-head record
+    if h2h.get("played"):
+        stats.append({
+            "label": "H2H",
+            "home": str(h2h["hw"]),
+            "draw": str(h2h["d"]),
+            "away": str(h2h["aw"]),
+        })
+
+    # Box 4: Tipster consensus
+    tipster = verified.get("tipster") or {}
+    if tipster.get("sources"):
+        home_pct = tipster.get("home_consensus_pct")
+        away_pct = tipster.get("away_consensus_pct")
+        stats.append({
+            "label": "Tipster",
+            "home": f"{home_pct}%" if home_pct is not None else "N/A",
+            "away": f"{away_pct}%" if away_pct is not None else "N/A",
+        })
+
+    # Pad to exactly 4 boxes
+    while len(stats) < 4:
+        stats.append({"label": "N/A", "home": "—", "away": "—"})
+
+    return stats[:4]
+
+
+def _compute_odds_structured(verified: dict) -> dict:
+    """Return 3-way odds structured per outcome with best bookmaker.
+
+    Keys: ``'home'``, ``'draw'``, ``'away'`` (only present when data exists).
+    Each value: ``{bookmaker, odds, stale}``.
+    """
+    best_odds = verified.get("best_odds") or {}
+    result: dict = {}
+    for outcome in ("home", "draw", "away"):
+        bo = best_odds.get(outcome) or {}
+        if bo.get("odds"):
+            result[outcome] = {
+                "bookmaker": bo.get("bookmaker", ""),
+                "odds": float(bo["odds"]),
+                "stale": bo.get("stale", ""),
+            }
+    return result
+
+
 # ── AC-2: build_verified_data_block ──────────────────────────────────────────
 
 def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = None) -> dict:
@@ -139,6 +383,10 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
         weather (dict), tipster (dict),
         data_sources_used (list[str])
     """
+    import time as _time
+    _pipeline_start = _time.monotonic()
+    _stages_completed: list[str] = []
+
     home_key, away_key, date_str = _parse_match_key(match_key)
     result: dict = {
         "match_key": match_key,
@@ -189,6 +437,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
             ).fetchall()
             if rows:
                 result["data_sources_used"].append("odds_snapshots")
+                _stages_completed.append("odds")
                 seen_bk = set()
                 for row in rows:
                     bk = row["bookmaker"]
@@ -244,6 +493,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
             ).fetchall()
             if lineup_rows:
                 result["data_sources_used"].append("match_lineups")
+                _stages_completed.append("lineups")
                 result["lineups"] = [
                     {
                         "team": row["team"],
@@ -271,6 +521,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
             ).fetchall()
             if inj_rows:
                 result["data_sources_used"].append("extracted_injuries")
+                _stages_completed.append("injuries")
                 for row in inj_rows:
                     result["injuries"].append(
                         f"{row['player_name']} ({row['team_key']}) — "
@@ -297,6 +548,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
             ).fetchall()
             if res_rows:
                 result["data_sources_used"].append("match_results")
+                _stages_completed.append("results")
                 for row in res_rows:
                     result["results"].append({
                         "match_key": row["match_key"],
@@ -331,6 +583,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                     }
                     if "team_ratings" not in result["data_sources_used"]:
                         result["data_sources_used"].append("team_ratings")
+                        _stages_completed.append("ratings")
         except Exception as exc:
             log.debug("card_pipeline: team_ratings query failed: %s", exc)
 
@@ -389,6 +642,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                         }
                         if "combat_data.db" not in result["data_sources_used"]:
                             result["data_sources_used"].append("combat_data.db")
+                            _stages_completed.append("combat")
                         # Fight history for this fighter
                         hist_rows = combat_conn.execute(
                             """
@@ -439,6 +693,8 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                     if enrich_news:
                         if "enrichment.db:news" not in result["data_sources_used"]:
                             result["data_sources_used"].append("enrichment.db:news")
+                            if "enrichment" not in _stages_completed:
+                                _stages_completed.append("enrichment")
                 except Exception as exc:
                     log.debug("card_pipeline: enrichment news query failed: %s", exc)
 
@@ -495,6 +751,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                 ).fetchall()
                 if tip_rows:
                     result["data_sources_used"].append("tipster_predictions.db")
+                    _stages_completed.append("tipster")
                     home_pcts, away_pcts, draw_pcts = [], [], []
                     winners: list[str] = []
                     for row in tip_rows:
@@ -518,6 +775,16 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
     except Exception as exc:
         log.debug("card_pipeline: tipster_predictions.db query failed: %s", exc)
 
+    _pipeline_ms = (_time.monotonic() - _pipeline_start) * 1000
+    _total_stages = 9  # odds, lineups, injuries, results, ratings, combat, enrichment, tipster, Haiku
+    log.info(
+        "pipeline_complete match_key=%s stages=%d/%d completed=%s elapsed_ms=%.1f",
+        match_key,
+        len(_stages_completed),
+        _total_stages,
+        ",".join(_stages_completed) if _stages_completed else "none",
+        _pipeline_ms,
+    )
     return result
 
 
@@ -664,8 +931,10 @@ def build_card_data(
         broadcast, sport, tier, analysis_text, data_sources_used
     """
     verified = build_verified_data_block(match_key, conn=conn)
-    home_display = _team_display(verified.get("home_key", ""))
-    away_display = _team_display(verified.get("away_key", ""))
+    home_key = verified.get("home_key", "")
+    away_key = verified.get("away_key", "")
+    home_display = _team_display(home_key)
+    away_display = _team_display(away_key)
 
     # Determine best outcome/odds from verified data or tip overlay
     outcome = ""
@@ -733,7 +1002,23 @@ def build_card_data(
     if include_analysis and (verified["data_sources_used"] or tip):
         analysis_text = generate_card_analysis(match_key, verified)
 
+    # ── IMG-W2: compute new structured fields ─────────────────────────────────
+    _results = verified.get("results") or []
+    home_form = _compute_team_form(_results, home_key)
+    away_form = _compute_team_form(_results, away_key)
+    h2h = _compute_h2h(_results, home_key, away_key)
+
+    _raw_injuries = verified.get("injuries") or []
+    home_injuries, away_injuries = _split_injuries(_raw_injuries, home_key, away_key)
+
+    signals = _compute_signals(tip, verified)
+    pick_team = _compute_pick_team(outcome, home_display, away_display)
+    no_edge_reason = _compute_no_edge_reason(ev, verified, tip)
+    key_stats = _compute_key_stats(verified, home_key, away_key, home_form, away_form, h2h)
+    odds_structured = _compute_odds_structured(verified)
+
     card: dict = {
+        # ── original fields (backward compatible — DO NOT REMOVE) ─────────
         "matchup": verified["matchup"] or f"{home_display} vs {away_display}",
         "home_team": home_display,
         "away_team": away_display,
@@ -751,6 +1036,21 @@ def build_card_data(
         "data_sources_used": verified["data_sources_used"],
         # Pass-through for downstream renderers
         "_verified": verified,
+        # ── IMG-W2 structured fields (new — required by Pillow renderer) ──
+        "home_form": home_form,        # AC-1: list[str] of 'W'/'D'/'L'
+        "away_form": away_form,        # AC-1
+        "signals": signals,            # AC-2: dict[str, bool]
+        "h2h": h2h,                    # AC-3: {played, hw, d, aw}
+        "home_injuries": home_injuries,  # AC-4: list[str] 'Player (status)'
+        "away_injuries": away_injuries,  # AC-4
+        "pick_team": pick_team,        # AC-5: clean team name string
+        "no_edge_reason": no_edge_reason,  # AC-6: deterministic template
+        "key_stats": key_stats,        # AC-7: list of 4 stat box dicts
+        "odds_structured": odds_structured,  # AC-8: {home,draw,away} with bookmaker
+        # ── IMG-W1R: edge_digest portrait fields (additive) ───────────────
+        "league": (tip.get("league") or tip.get("league_display") or tip.get("league_key") or "") if tip else "",
+        "broadcast_channel": (tip.get("_bc_broadcast") or tip.get("broadcast_channel") or "") if tip else "",
+        "display_tier": tier,
     }
     return card
 
