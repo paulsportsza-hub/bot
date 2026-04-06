@@ -24,6 +24,9 @@ import threading
 import time
 from pathlib import Path
 
+import hashlib
+import json
+
 from jinja2 import Environment, FileSystemLoader
 from playwright.async_api import async_playwright
 
@@ -94,13 +97,13 @@ async def _render_page(
     )
     try:
         await page.set_content(html, wait_until="networkidle")
-        await page.wait_for_timeout(600)  # allow fonts to load
+        await page.wait_for_timeout(50)  # minimal settle time
 
         height = await page.evaluate("document.body.scrollHeight")
         if height < 10:
             height = 200
         await page.set_viewport_size({"width": width, "height": height})
-        await page.wait_for_timeout(200)
+        await page.wait_for_timeout(30)  # minimal post-render
 
         png_bytes = await page.screenshot(
             type="png",
@@ -126,12 +129,30 @@ def render_card_sync(
     data: dict,
     width: int = 480,
     device_scale_factor: int = 2,
+    *,
+    cache_ttl: int | None = None,
 ) -> bytes:
     """Render a card synchronously using the persistent browser pool.
 
     Safe to call from any thread (including asyncio.to_thread).
     Blocks until the render completes or raises on error.
+
+    Results are cached in card_cache (in-memory LRU). Pass cache_ttl to
+    override the default TTL (300s on-demand / 900s precomputed).
     """
+    from card_cache import card_cache as _cc
+
+    # Cache key: template + data hash (invalidates when data changes)
+    _data_hash = hashlib.md5(
+        json.dumps(data, sort_keys=True, default=str).encode()
+    ).hexdigest()[:12]
+    _cache_key = f"{template_name}:{_data_hash}"
+
+    _cached = _cc.get(_cache_key)
+    if _cached is not None:
+        log.debug("card_renderer: cache HIT for %s", _cache_key)
+        return _cached
+
     # Wait for pool to be ready (browser launch or error)
     if not _pool["ready"].wait(timeout=30):
         raise RuntimeError("card_renderer: browser pool did not initialise in 30s")
@@ -146,7 +167,9 @@ def render_card_sync(
         _render_page(template_name, data, width, device_scale_factor),
         loop,
     )
-    return future.result(timeout=90)
+    png_bytes = future.result(timeout=90)
+    _cc.put(_cache_key, png_bytes, ttl=cache_ttl)
+    return png_bytes
 
 
 async def render_card(

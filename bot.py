@@ -232,26 +232,28 @@ _settings_sports_state: dict[int, dict] = {}
 # Always-visible bottom keyboard (separate from inline keyboards)
 
 _KEYBOARD_LABELS = [
-    "⚽ My Matches", "💎 Top Edge Picks", "📖 Guide",
+    "🏠 Menu", "⚽ My Matches", "💎 Edge Picks",
     "👤 Profile", "⚙️ Settings", "❓ Help",
 ]
 
 # Legacy labels kept for transition — users with cached keyboards may still send these
 _LEGACY_LABELS = {
-    "🎯 Today's Picks": "hot_tips",         # old picks → Top Edge Picks
+    "🎯 Today's Picks": "hot_tips",         # old picks → Edge Picks
     "📅 Schedule": "your_games",             # old schedule → My Matches
     "🔴 Live Games": "live_games",           # old keyboard → Live Games
     "📊 My Stats": "results",                # old keyboard → Edge Tracker
     "📖 Betway Guide": "guide",              # old keyboard → Guide
-    "🔥 Hot Tips": "hot_tips",               # old Hot Tips → Top Edge Picks
+    "🔥 Hot Tips": "hot_tips",               # old Hot Tips → Edge Picks
     "⚽ Your Games": "your_games",           # old Your Games → My Matches
+    "💎 Top Edge Picks": "hot_tips",         # old label → Edge Picks
+    "📖 Guide": "guide",                     # removed from Row 1 → Guide action
 }
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Return the persistent 2×3 reply keyboard."""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("⚽ My Matches"), KeyboardButton("💎 Top Edge Picks"), KeyboardButton("📖 Guide")],
+            [KeyboardButton("🏠 Menu"), KeyboardButton("⚽ My Matches"), KeyboardButton("💎 Edge Picks")],
             [KeyboardButton("👤 Profile"), KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")],
         ],
         resize_keyboard=True,
@@ -1482,12 +1484,6 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
     elif prefix == "nav":
         if action == "main":
             await handle_menu(query, "home")
-        elif action == "schedule":
-            # Legacy nav:schedule → redirect to My Matches
-            user_id = query.from_user.id
-            _ut = await get_effective_tier(user_id)
-            text, markup = await _render_your_games_all(user_id, user_tier=_ut)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
     elif prefix == "menu":
         await handle_menu(query, action)
@@ -1521,14 +1517,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         await handle_ob_edit(query, action)
     elif prefix == "ob_summary":
         await handle_ob_summary(query, action)
-    elif prefix == "picks":
-        await handle_picks(query, ctx, action)
-    elif prefix == "bets":
-        await handle_bets(query, action)
     elif prefix == "teams":
         await handle_teams(query, action)
-    elif prefix == "stats":
-        await handle_stats_menu(query, action)
     elif prefix == "affiliate":
         await handle_affiliate(query, action)
     elif prefix == "story":
@@ -1785,8 +1775,11 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     or _ep_tip.get("tier") or "bronze"
                 ).lower()
                 _ep_event_id = _ep_tip.get("event_id") or _ep_tip.get("match_id") or ""
-                # W3-FIX: build edge detail card — zero LLM
-                _ep_data = build_edge_detail_data(_ep_tip)
+                # BUILD-CARDWIRE: Enrich tip with verified DB data before building detail card
+                _ep_tip_enriched = await asyncio.to_thread(
+                    _enrich_tip_for_card, _ep_tip, _ep_event_id
+                )
+                _ep_data = build_edge_detail_data(_ep_tip_enriched)
                 _ep_btn_rows = _build_game_buttons(
                     [_ep_tip], event_id=_ep_event_id, user_id=user_id,
                     source="edge_picks", user_tier=_ep_tier, edge_tier=_ep_edge_tier,
@@ -1842,7 +1835,11 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                          or t.get("match_id") == _mm_event_id),
                         _mm_match,
                     )
-                    _mm_ed_data = build_edge_detail_data(_mm_full_tip)
+                    # BUILD-CARDWIRE: Enrich tip with verified DB data
+                    _mm_full_tip_enriched = await asyncio.to_thread(
+                        _enrich_tip_for_card, _mm_full_tip, _mm_event_id
+                    )
+                    _mm_ed_data = build_edge_detail_data(_mm_full_tip_enriched)
                     await send_card_or_fallback(
                         bot=ctx.bot, chat_id=query.message.chat_id,
                         template="edge_detail.html", data=_mm_ed_data,
@@ -1850,8 +1847,11 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         message_to_edit=query.message,
                     )
                 else:
-                    # W3-FIX: Non-edge match — build match detail card
-                    _mm_md_data = build_match_detail_data(_mm_match)
+                    # BUILD-CARDWIRE: Non-edge match — enrich with verified DB data
+                    _mm_match_enriched = await asyncio.to_thread(
+                        _enrich_tip_for_card, _mm_match, _mm_event_id
+                    )
+                    _mm_md_data = build_match_detail_data(_mm_match_enriched)
                     await send_card_or_fallback(
                         bot=ctx.bot, chat_id=query.message.chat_id,
                         template="match_detail.html", data=_mm_md_data,
@@ -2037,10 +2037,20 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     log.warning("Edge detail tier check failed: %s", _ge)
                     return True
 
+            # BUILD-SPEED: Tier check + narrative cache run in parallel (saves ~50ms sequential I/O).
+            _w84_hit_prelim: dict | None = None
             try:
-                _can_view = await asyncio.to_thread(_cr_check_limit)
+                _cr_gather = await asyncio.gather(
+                    asyncio.to_thread(_cr_check_limit),
+                    asyncio.wait_for(_get_cached_narrative(match_key), timeout=2.0),
+                    return_exceptions=True,
+                )
+                _can_view = _cr_gather[0] if not isinstance(_cr_gather[0], Exception) else True
+                _nc_raw = _cr_gather[1]
+                _w84_hit_prelim = _nc_raw if isinstance(_nc_raw, dict) else None
             except Exception:
                 _can_view = True
+                _w84_hit_prelim = None
 
             if not _can_view:
                 _limit_summary = await _get_edge_tracker_summary(7)
@@ -2061,20 +2071,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 return
 
-            # BUILD-16c: Check narrative cache FIRST — skip live EV recompute on hit.
-            # _get_cached_narrative is a fast DB read (<50ms). _get_current_ev_for_match
-            # queries 543K+ odds_snapshots rows (up to 3.0s). On cache hit with positive-EV
-            # tips, the precomputed EV is sufficient — skip the live recompute entirely.
-            _w84_hit = None
+            # BUILD-16c / BUILD-SPEED: narrative cache result from parallel gather above.
+            # Fetched concurrently with tier check — no sequential wait needed here.
+            # BUILD-16c: On positive-EV cache hit, skip _get_current_ev_for_match (3.0s).
+            _w84_hit = _w84_hit_prelim
             _b16c_stale = False
             _b16c_ev_checked = False
-            try:
-                _w84_hit = await asyncio.wait_for(
-                    _get_cached_narrative(match_key),
-                    timeout=2.0,
-                )
-            except Exception:
-                _w84_hit = None
 
             if _w84_hit:
                 # Cache HIT — check if cached tips have positive EV
@@ -5050,7 +5052,7 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     # Handle legacy button labels from cached keyboards
     legacy = _LEGACY_LABELS.get(text)
     if legacy == "hot_tips":
-        text = "💎 Top Edge Picks"
+        text = "💎 Edge Picks"
     elif legacy == "your_games":
         text = "⚽ My Matches"
     elif legacy == "live_games":
@@ -5060,9 +5062,17 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await _show_stats_overview(update, user_id)
         return
     elif legacy == "guide":
-        text = "📖 Guide"
+        await _show_betway_guide(update)
+        return
 
-    if text == "⚽ My Matches":
+    if text == "🏠 Menu":
+        name = h(update.effective_user.first_name or "")
+        await update.message.reply_text(
+            f"<b>🇿🇦 MzansiEdge</b>\n\nHey {name}!",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_main(),
+        )
+    elif text == "⚽ My Matches":
         db_user = await db.get_user(user_id)
         if not db_user or not db_user.onboarding_done:
             await update.message.reply_text(
@@ -5071,10 +5081,8 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             )
             return
         await _show_your_games(update, ctx, user_id)
-    elif text == "💎 Top Edge Picks":
+    elif text == "💎 Edge Picks":
         await _show_hot_tips(update, ctx, user_id)
-    elif text == "📖 Guide":
-        await _show_betway_guide(update)
     elif text == "👤 Profile":
         db_user = await db.get_user(user_id)
         if not db_user or not db_user.onboarding_done:
@@ -6991,6 +6999,116 @@ def _display_team_name(key: str) -> str:
 def _display_bookmaker_name(key: str) -> str:
     """Convert bookmaker key to display name."""
     return _BK_DISPLAY.get(key, key.title())
+
+
+def _enrich_tip_for_card(tip: dict, match_key: str) -> dict:
+    """Enrich a tip/match dict with verified DB data for card rendering.
+
+    BUILD-CARDWIRE: Calls build_verified_data_block() once per match and maps
+    the result into the fields expected by build_edge_detail_data() and
+    build_match_detail_data(). Synchronous — wrap in asyncio.to_thread() inside
+    async handlers.
+
+    Returns a shallow copy of tip with enrichment merged in. Empty sections
+    are set to empty list (not None) so Jinja2 {% if signals %} blocks hide
+    them gracefully rather than throwing errors.
+    """
+    from card_pipeline import (
+        build_verified_data_block as _bvdb,
+        _compute_team_form,
+        _compute_h2h,
+        _split_injuries,
+        _compute_signals,
+    )
+    enriched = dict(tip)
+
+    if not match_key:
+        return enriched
+
+    try:
+        verified = _bvdb(match_key)
+    except Exception as exc:
+        log.debug("_enrich_tip_for_card: build_verified_data_block failed for %s: %s", match_key, exc)
+        return enriched
+
+    home_key = verified.get("home_key", "")
+    away_key = verified.get("away_key", "")
+    results = verified.get("results") or []
+    injuries = verified.get("injuries") or []
+
+    # 1) Signals — 6-key dict {price_edge, form, movement, market, tipster, injury}
+    enriched["signals"] = _compute_signals(tip, verified)
+
+    # 2) all_odds — bookmaker comparison list for edge detail card
+    outcome_key = (tip.get("outcome_key") or "home").lower()
+    if outcome_key not in ("home", "away", "draw"):
+        outcome_key = "home"
+    raw_odds = verified.get("odds") or {}
+    all_odds = []
+    for bk, odds_data in raw_odds.items():
+        v = odds_data.get(outcome_key) or 0
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if v > 1.0:
+            all_odds.append({"bookie": _display_bookmaker_name(bk), "odds": v})
+    enriched["all_odds"] = sorted(all_odds, key=lambda x: x["odds"], reverse=True)
+
+    # 3) Form — last 5 results per team as ['W','D','L'] lists
+    enriched["home_form"] = _compute_team_form(results, home_key) if home_key else []
+    enriched["away_form"] = _compute_team_form(results, away_key) if away_key else []
+
+    # 4) H2H — remap 'played' → 'n' for build_edge_detail_data() / build_match_detail_data()
+    h2h = _compute_h2h(results, home_key, away_key)
+    enriched["h2h"] = {
+        "n": h2h.get("played", 0),
+        "hw": h2h.get("hw", 0),
+        "d": h2h.get("d", 0),
+        "aw": h2h.get("aw", 0),
+    }
+
+    # 5) Injuries — split by team into ['Player (status)'] lists
+    home_inj, away_inj = _split_injuries(injuries, home_key, away_key)
+    enriched["home_injuries"] = home_inj
+    enriched["away_injuries"] = away_inj
+
+    # 6) Confidence from edge_score (0-100)
+    if not enriched.get("confidence") and tip.get("edge_score"):
+        enriched["confidence"] = int(float(tip["edge_score"]))
+
+    # 7) Fair value from probability estimate
+    if not enriched.get("fair_value") and enriched.get("prob"):
+        enriched["fair_value"] = int(float(enriched["prob"]))
+
+    # 8) Best odds per outcome for match detail card (home_odds/draw_odds/away_odds + bookmakers)
+    best = verified.get("best_odds") or {}
+    if not enriched.get("home_odds") and best.get("home", {}).get("odds"):
+        enriched["home_odds"] = best["home"]["odds"]
+        enriched["home_bookie"] = _display_bookmaker_name(best["home"].get("bookmaker", ""))
+    elif not enriched.get("home_odds") and enriched.get("odds_home"):
+        enriched["home_odds"] = enriched["odds_home"]
+    if not enriched.get("draw_odds") and best.get("draw", {}).get("odds"):
+        enriched["draw_odds"] = best["draw"]["odds"]
+        enriched["draw_bookie"] = _display_bookmaker_name(best["draw"].get("bookmaker", ""))
+    elif not enriched.get("draw_odds") and enriched.get("odds_draw"):
+        enriched["draw_odds"] = enriched["odds_draw"]
+    if not enriched.get("away_odds") and best.get("away", {}).get("odds"):
+        enriched["away_odds"] = best["away"]["odds"]
+        enriched["away_bookie"] = _display_bookmaker_name(best["away"].get("bookmaker", ""))
+    elif not enriched.get("away_odds") and enriched.get("odds_away"):
+        enriched["away_odds"] = enriched["odds_away"]
+
+    # 9) Pick name — outcome display for summary and detail cards
+    if not enriched.get("pick"):
+        enriched["pick"] = tip.get("outcome") or tip.get("home_team") or ""
+
+    # 10) Verdict — tipster most_tipped as short verdict when not already set
+    tipster = verified.get("tipster") or {}
+    if not enriched.get("verdict") and tipster.get("most_tipped"):
+        enriched["verdict"] = f"Most tipsters back {tipster['most_tipped']}"
+
+    return enriched
 
 
 def _truncate_form_bullets(bullets: list[str], match_ctx: dict | None) -> list[str]:
@@ -9162,6 +9280,12 @@ async def _build_hot_tips_page(
         tip["_bc_kickoff"] = kickoff
         tip["_bc_broadcast"] = broadcast_raw
         tip["_bc_league"] = league_display
+        # BUILD-CARDWIRE: lightweight summary card enrichment — no DB call
+        if not tip.get("pick"):
+            tip["pick"] = tip.get("outcome") or tip.get("home_team") or ""
+        if not tip.get("channel") and broadcast_raw:
+            tip["channel"] = broadcast_raw.replace("📺 ", "")
+        tip["all_odds_count"] = len(tip.get("odds_by_bookmaker") or {})
 
         # Line 2: league · 📅 kickoff · DStv channel
         # BUILD-PREGEN-FIX Fix 5: 📅 prefix on kickoff for visibility
@@ -9963,16 +10087,6 @@ async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # Freeze snapshot for today:back
     if user_id:
         _today_digest_snapshot[user_id] = list(tips)
-
-
-async def handle_picks(query, ctx: ContextTypes.DEFAULT_TYPE, action: str) -> None:
-    """Callback handler for picks:go and picks:today buttons."""
-    if action in ("go", "today"):
-        await _do_hot_tips_flow(
-            chat_id=query.message.chat_id,
-            bot=ctx.bot,
-            user_id=query.from_user.id,
-        )
 
 
 async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
@@ -18263,8 +18377,10 @@ def _build_game_buttons(
     if primary_button is not None:
         buttons.append([primary_button])
     buttons.extend(compare_rows)
-    buttons.append([InlineKeyboardButton("↩️ Back to My Matches", callback_data="yg:all:0")])
-    buttons.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
+    buttons.append([
+        InlineKeyboardButton("↩️ My Matches", callback_data="yg:all:0"),
+        InlineKeyboardButton("🏠 Menu", callback_data="nav:main"),
+    ])
 
     return buttons
 
@@ -19022,15 +19138,6 @@ async def _save_story_prefs(query, chat_id: int, user_id: int) -> None:
 
 # ── Sub-menu handlers ────────────────────────────────────
 
-async def handle_bets(query, action: str) -> None:
-    """Compatibility shim for stale bets:* callbacks."""
-    try:
-        await query.answer("My Bets has been retired. Use the working menu below.")
-    except Exception:
-        pass
-    await handle_menu(query, "home")
-
-
 async def handle_teams(query, action: str) -> None:
     """Handle teams:* callbacks."""
     user_id = query.from_user.id
@@ -19140,18 +19247,6 @@ async def handle_teams(query, action: str) -> None:
     else:
         text = "<b>🏟️ My Teams</b>"
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_teams())
-
-
-async def handle_stats_menu(query, action: str) -> None:
-    """Compatibility shim for stale stats:* callbacks."""
-    if action in {"overview", "leaderboard"}:
-        try:
-            await query.answer("Stats now live under Edge Tracker.")
-        except Exception:
-            pass
-    user_id = query.from_user.id
-    text, markup = await _render_results_surface(user_id, days=7)
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def handle_affiliate(query, action: str) -> None:
@@ -23430,6 +23525,27 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 )
                 import asyncio as _asyncio
                 _asyncio.create_task(_background_pregen_fill())
+
+            # BUILD-SPEED: Prerender Edge Picks cards into PNG cache (TTL 15 min).
+            # Warms card_cache so hot:back:N taps are instant cache hits.
+            if tips:
+                try:
+                    _max_pages = min(4, -(-len(tips) // HOT_TIPS_PAGE_SIZE))  # ceil div
+                    for _pgn in range(1, _max_pages + 1):
+                        _pc_data = build_edge_picks_data(
+                            tips, page=_pgn, per_page=HOT_TIPS_PAGE_SIZE,
+                        )
+                        await asyncio.to_thread(
+                            render_card_sync, "edge_picks.html", _pc_data,
+                            cache_ttl=900,  # 15-min TTL for precomputed cards
+                        )
+                    log.info(
+                        "BUILD-SPEED: prerendered %d Edge Picks card page(s) into PNG cache",
+                        _max_pages,
+                    )
+                except Exception as _pr_err:
+                    log.debug("BUILD-SPEED: card prerender skipped: %s", _pr_err)
+
             _ep_mon.done()
     except Exception as exc:
         log.warning("Edge pre-compute failed (%.1fs): %s", _t.time() - _start, exc)
@@ -24722,7 +24838,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_button))
 
     # Persistent reply keyboard taps (must be BEFORE freetext_handler)
-    _kb_pattern = r"^(⚽ My Matches|⚽ Your Games|💎 Top Edge Picks|🔥 Hot Tips|📖 Guide|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule)$"
+    _kb_pattern = r"^(🏠 Menu|⚽ My Matches|💎 Edge Picks|⚽ Your Games|💎 Top Edge Picks|🔥 Hot Tips|📖 Guide|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule)$"
     app.add_handler(MessageHandler(filters.Regex(_kb_pattern), handle_keyboard_tap))
 
     # Free-text chat (also handles favourite input during onboarding)

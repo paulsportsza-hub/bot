@@ -38,6 +38,42 @@ _HAIKU_MODEL = "claude-haiku-4-5-20251001"
 _HAIKU_TEMP = 0.3
 _HAIKU_MAX_TOKENS = 200
 
+# ── Haiku circuit breaker (BUILD-SPEED) ───────────────────────────────────────
+_haiku_failures: int = 0
+_haiku_circuit_open_until: float = 0.0
+
+
+def _call_haiku_with_breaker(client, prompt: str) -> str | None:
+    """Call Haiku with a circuit breaker: 2 consecutive failures → 5-min cooldown."""
+    global _haiku_failures, _haiku_circuit_open_until
+    if time.time() < _haiku_circuit_open_until:
+        log.debug("card_pipeline: Haiku circuit open — skipping call")
+        return None
+    try:
+        response = client.messages.create(
+            model=_HAIKU_MODEL,
+            max_tokens=_HAIKU_MAX_TOKENS,
+            temperature=_HAIKU_TEMP,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        _haiku_failures = 0
+        text = ""
+        for block in response.content:
+            if hasattr(block, "text") and block.text:
+                text += block.text
+        return text.strip()
+    except Exception as exc:
+        _haiku_failures += 1
+        if _haiku_failures >= 2:
+            _haiku_circuit_open_until = time.time() + 300  # 5-min cooldown
+            log.warning(
+                "card_pipeline: Haiku circuit OPENED after %d failures — cooldown 5min",
+                _haiku_failures,
+            )
+        else:
+            log.warning("card_pipeline: Haiku call failed (%d): %s", _haiku_failures, exc)
+        return None
+
 # ── Caption hard limit (Telegram photo captions) ─────────────────────────────
 _CAPTION_MAX = 1024
 
@@ -878,26 +914,13 @@ def generate_card_analysis(match_key: str, verified_data: dict) -> str:
     data_block = "\n".join(lines)
     prompt = CARD_ANALYSIS_PROMPT.format(data_block=data_block)
 
-    try:
-        response = client.messages.create(
-            model=_HAIKU_MODEL,
-            max_tokens=_HAIKU_MAX_TOKENS,
-            temperature=_HAIKU_TEMP,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = ""
-        for block in response.content:
-            if hasattr(block, "text") and block.text:
-                text += block.text
-        text = text.strip()
-        # Hard cap at 280 chars
-        if len(text) > 280:
-            # Truncate at last sentence boundary within 280
-            text = text[:277] + "..."
-        return text
-    except Exception as exc:
-        log.warning("card_pipeline: Haiku call failed for %s: %s", match_key, exc)
-        return ""  # Graceful fallback — callers serve card without analysis
+    text = _call_haiku_with_breaker(client, prompt)
+    if not text:
+        return ""  # Circuit open or API failure — callers serve card without analysis
+    # Hard cap at 280 chars
+    if len(text) > 280:
+        text = text[:277] + "..."
+    return text
 
 
 # ── AC-4: build_card_data ─────────────────────────────────────────────────────
