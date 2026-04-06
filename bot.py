@@ -22954,6 +22954,9 @@ async def _background_pregen_fill() -> None:
     BASELINE-FIX: single-flight via _pregen_active bool set BEFORE lock acquisition.
     No yield point between check and set — TOCTOU-free by construction.
     """
+    # P0-KILL: Anthropic API cost emergency — background pregen disabled 2026-04-06
+    log.warning("P0-KILL: _background_pregen_fill DISABLED — Anthropic API cost emergency")
+    return
     global _pregen_active
     if _pregen_active:
         log.info("Pregen [background]: DROPPED — sweep already active")
@@ -23105,6 +23108,9 @@ async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     Runs hourly, gated to 04:00, 10:00, 16:00 UTC (06:00, 12:00, 18:00 SAST).
     06:00 = Opus full sweep, 12:00/18:00 = Sonnet refresh sweep.
     """
+    # P0-KILL: Anthropic API cost emergency — narrative pregen job disabled 2026-04-06
+    log.warning("P0-KILL: _narrative_pregenerate_job DISABLED — Anthropic API cost emergency")
+    return
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -23148,6 +23154,9 @@ async def _narrative_health_check_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     Extracts factual claims, verifies via Haiku + web search, alerts admin on mismatches.
     """
+    # P0-KILL: Anthropic API cost emergency — health check (Haiku calls) disabled 2026-04-06
+    log.warning("P0-KILL: _narrative_health_check_job DISABLED — Anthropic API cost emergency")
+    return
     from db_connection import get_connection as _sql_get
     import random as _rand
 
