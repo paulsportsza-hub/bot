@@ -83,22 +83,24 @@
             color: #777777;
         }
         .ev-display {
-            display: flex;
-            align-items: baseline;
-            gap: 3px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
         }
         .ev-label { font-size: 10px; color: #777777; }
         .ev-value {
             font-family: 'JetBrains Mono', monospace;
             font-size: 15px;
             font-weight: 700;
-            color: #F5A623;
+            color: #FFD700;
         }
         .prize-line {
-            color: #F5A623;
+            color: #FFD700;
             font-size: 13px;
             font-weight: 600;
-            margin-top: 6px;
+            margin-top: 2px;
+            text-align: right;
+            margin-left: auto;
         }
 
         /* ── 2. Matchup ──────────────────────────────────────── */
@@ -203,7 +205,7 @@
         }
         .pick-line2 {
             display: flex;
-            align-items: baseline;
+            align-items: center;
             justify-content: space-between;
             margin-bottom: 2px;
         }
@@ -284,9 +286,9 @@
         .bar-label { font-size: 9px; color: #777777; width: 72px; flex-shrink: 0; }
         .bar-track {
             flex: 1;
-            height: 6px;
+            height: 10px;
             background: #1A1A1A;
-            border-radius: 3px;
+            border-radius: 5px;
             overflow: hidden;
         }
         .bar-fill { height: 100%; border-radius: 3px; }
@@ -471,15 +473,6 @@
             </div>
             {% endfor %}
         </div>
-        {% if fair_value and fair_value != 0 %}
-        <div class="bar-row">
-            <span class="bar-label">Fair Value</span>
-            <div class="bar-track">
-                <div class="bar-fill" style="width: {{ fair_value }}%; background: {{ tier_color }};"></div>
-            </div>
-            <span class="bar-pct" style="color: {{ tier_color }};">{{ fair_value }}%</span>
-        </div>
-        {% endif %}
         {% if confidence and confidence != 0 %}
         <div class="bar-row">
             <span class="bar-label">Confidence</span>
@@ -529,19 +522,6 @@
             <span class="h2h-lbl-draw">{{ h2h_draws }}D</span>
             <span class="h2h-lbl-away">{{ h2h_away_wins }}W {{ away }}</span>
         </div>
-    </div>
-    {% endif %}
-
-    <!-- ── 8. Tipster Sources ────────────────────────────────── -->
-    {% if top_tipsters %}
-    <div class="tipster-section" style="margin-top:10px; padding: 8px 12px; background: rgba(119,119,119,0.08); border-radius: 8px;">
-        <div class="section-hdr" style="color: #777777; font-size:0.68rem; letter-spacing:0.08em; margin-bottom:6px;">🔍 TIPSTER PICKS</div>
-        {% for ts in top_tipsters %}
-        <div class="tipster-row" style="display:flex; justify-content:space-between; align-items:center; font-size:0.78rem; padding: 2px 0;">
-            <span class="tipster-source" style="color:#AAAAAA;">{{ ts.source }}</span>
-            {% if ts.pick %}<span class="tipster-pick" style="color:#FFFFFF; font-weight:600;">{{ ts.pick }}</span>{% endif %}
-        </div>
-        {% endfor %}
     </div>
     {% endif %}
 

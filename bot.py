@@ -7058,13 +7058,13 @@ def _display_bookmaker_name(key: str) -> str:
 
 
 def _generate_verdict(tip: dict, verified: dict) -> str:
-    """Call Haiku for a 2-3 sentence verdict referencing stake tier and citing a number.
+    """Call Sonnet for a 2-3 sentence verdict referencing stake tier and citing a number.
 
-    CARD-FIX-F:
-    - Model: claude-haiku-4-5-20251001, temp=0.3, max_tokens=200
-    - System prompt instructs 2-3 sentences, 80-150 chars total, references confidence_tier
+    CARD-FIX-G:
+    - Model: claude-sonnet-4-6, temp=0.3, max_tokens=220
+    - Expanded system prompt leverages Sonnet capability + narrative context
     - Phrase blacklist checked before digit guardrail — blacklisted → return ""
-    - 160-char word-boundary truncation is a safety net only
+    - 400-char word-boundary truncation is a safety net only
     - Returns "" on any failure — never blocks rendering
     """
     import re as _re
@@ -7116,27 +7116,43 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             lines.append(f"Tipster home consensus: {home_pct}%")
         elif tipster.get("most_tipped"):
             lines.append(f"Most tipped: {tipster['most_tipped']}")
+        narrative_snippet = tip.get("narrative_snippet") or tip.get("narrative") or ""
+        if narrative_snippet:
+            lines.append(f"Narrative context: {narrative_snippet[:200]}")
+        home_context = tip.get("home_context") or verified.get("home_context") or ""
+        if home_context:
+            lines.append(f"Home context: {home_context}")
+        away_context = tip.get("away_context") or verified.get("away_context") or ""
+        if away_context:
+            lines.append(f"Away context: {away_context}")
+        key_injury = tip.get("key_injury") or verified.get("key_injury") or ""
+        if key_injury:
+            lines.append(f"Key injury: {key_injury}")
 
         if not lines:
             return ""
 
         system_prompt = (
-            "You are a sharp SA sports columnist writing a 2-3 sentence verdict for a betting card. "
-            "The reader sees the match, pick, odds, and stake tier. Your job is the editorial angle. "
-            "Rules: "
-            "1. 2-3 sentences, 80-150 characters total. No padding. "
-            "2. Sentence 1: the market insight (cite one number — EV%, odds, or consensus). "
-            "3. Sentence 2: the supporting signal (form, injury, line movement — use what's in the data). "
-            "4. Sentence 3 (optional): stake sizing cue that matches the confidence tier exactly: "
+            "You are a sharp South African sports columnist writing the verdict for a premium betting card. "
+            "You have access to the edge data, team form, tipster signals, and narrative context. "
+            "Write 2–3 punchy sentences, 100–200 characters total. "
+            "Structure: "
+            "1. The market insight — cite one number (odds, EV%, or consensus). Be specific. "
+            "2. The supporting signal — form, injuries, line movement, or narrative context. Use what is in the data. "
+            "3. The stake cue — one phrase that matches the confidence tier exactly: "
             "   LEAN='keep stake small', SOLID='manageable unit', STRONG='back with confidence', MAX='full unit'. "
-            "5. No hedging. No clichés. No team history. SA conversational register — Kickoff Magazine columnist. "
-            "6. End with a full stop."
+            "Rules: "
+            "- SA conversational register. Reads like a sharp friend, not a report. "
+            "- No hedging, no clichés, no team history lessons. "
+            "- If there is a specific injury, suspension, or travel angle in the data — use it. "
+            "- Lead sentence must not start with a team name. "
+            "- End with a full stop."
         )
 
         client = _anthropic.Anthropic()
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
+            model="claude-sonnet-4-6",
+            max_tokens=220,
             temperature=0.3,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -7155,15 +7171,15 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             log.warning("_generate_verdict: response contains no digit — discarding")
             return ""
 
-        if len(text) > 160:
-            trunc = text[:160].rsplit(" ", 1)[0]
+        if len(text) > 400:
+            trunc = text[:400].rsplit(" ", 1)[0]
             text = trunc.rstrip(",.;:")
             if not text.endswith((".", "!")):
                 text += "."
 
         return text
     except Exception as exc:
-        log.warning("_generate_verdict: Haiku call failed: %s", exc)
+        log.warning("_generate_verdict: Sonnet call failed: %s", exc)
         return ""
 
 

@@ -175,7 +175,7 @@ def test_each_blacklisted_phrase_triggers_rejection(phrase):
 # ── D-01: max_tokens and system prompt params ─────────────────────────────────
 
 def test_max_tokens_is_100():
-    """D-01: Haiku is called with max_tokens=100 (not 60)."""
+    """D-01: Sonnet is called with max_tokens=220 (CARD-FIX-G upgrade)."""
     from bot import _generate_verdict
 
     mock_resp = _make_mock_response("Odds at 1.85 offer +9.2% EV edge.")
@@ -189,8 +189,8 @@ def test_max_tokens_is_100():
         _generate_verdict(tip, verified)
 
     call_kwargs = mock_client.messages.create.call_args
-    assert call_kwargs.kwargs.get("max_tokens") == 200, (
-        f"max_tokens should be 200 (CARD-FIX-F: 2-3 sentence verdict), got {call_kwargs.kwargs.get('max_tokens')}"
+    assert call_kwargs.kwargs.get("max_tokens") == 220, (
+        f"max_tokens should be 220 (CARD-FIX-G: Sonnet verdict), got {call_kwargs.kwargs.get('max_tokens')}"
     )
 
 
@@ -209,24 +209,28 @@ def test_system_prompt_param_used():
         _generate_verdict(tip, verified)
 
     call_kwargs = mock_client.messages.create.call_args
-    assert "system" in call_kwargs.kwargs, "Haiku call must use 'system' parameter"
+    assert "system" in call_kwargs.kwargs, "Sonnet call must use 'system' parameter"
     system_text = call_kwargs.kwargs["system"]
-    assert "80-150" in system_text, f"System prompt must instruct char range, got: {system_text!r}"
+    assert "100–200" in system_text, f"System prompt must instruct char range, got: {system_text!r}"
 
 
 # ── D-01: truncation safety net ───────────────────────────────────────────────
 
 def test_truncation_appends_period_when_missing():
-    """CARD-FIX-F: truncated text that doesn't end with . or ! gets a period appended. Limit is 160 chars."""
+    """CARD-FIX-G: truncated text that doesn't end with . or ! gets a period appended. Limit is 400 chars."""
     from bot import _generate_verdict
 
-    # 170-char text with no terminal punctuation — must be truncated and period appended
+    # 410-char text with no terminal punctuation — must be truncated and period appended
     long_text = (
         "Arsenal priced 8% tight at 1.85 with +9.2% EV edge — "
         "line movement backs the pick and tipster consensus sits at 72% — "
-        "back with a manageable unit here no doubt about it at all"
+        "back with a manageable unit here no doubt about it at all and the "
+        "form data confirms that the home side has been in exceptional touch "
+        "across their last five outings winning four and drawing once with "
+        "some really impressive attacking numbers throughout the whole run "
+        "which means confidence in this selection is absolutely warranted here"
     )
-    assert len(long_text) > 160, f"Test text must exceed 160 chars to trigger truncation, got {len(long_text)}"
+    assert len(long_text) > 400, f"Test text must exceed 400 chars to trigger truncation, got {len(long_text)}"
     mock_resp = _make_mock_response(long_text)
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
@@ -237,7 +241,7 @@ def test_truncation_appends_period_when_missing():
     with patch("anthropic.Anthropic", return_value=mock_client):
         result = _generate_verdict(tip, verified)
 
-    assert len(result) <= 160
+    assert len(result) <= 400
     assert result.endswith((".", "!")), f"Truncated verdict must end with . or !: {result!r}"
 
 
