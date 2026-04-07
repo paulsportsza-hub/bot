@@ -111,6 +111,8 @@ from tier_gate import gate_edges, gate_narrative, record_view, get_upgrade_messa
 from message_types import DigestMessage, DetailMessage, AlertMessage, ResultMessage, is_stale_hash
 # BUILD-W3: image card pipeline
 from card_sender import send_card_or_fallback
+# X-CARD-PIPE-01: queue Gold Edge cards for X Publisher
+from x_card_queue import queue_gold_card_for_x
 from card_data import (
     build_edge_picks_data,
     build_my_matches_data,
@@ -6840,6 +6842,8 @@ _ht_page_state: dict[int, int] = {}    # user_id → last rendered page number
 _ht_tips_snapshot: dict[int, list] = {}  # user_id → shallow copy of tips at last render
 # BUILD-W3: My Matches card snapshot
 _mm_games_snapshot: dict[int, list] = {}  # user_id → flat match list at last render
+# X-CARD-PIPE-01: per-match dedup guard — each Gold match_key queued at most once per run
+_x_queued_keys: set[str] = set()
 # BUILD-W3: @MzansiEdgeAlerts subscriber broadcast channel
 _CHANNEL_ID = -1003789410835
 _ht_detail_origin: dict[tuple[int, str], int] = {}  # (user_id, match_key) → source page
@@ -7459,7 +7463,7 @@ async def _serve_card_detail(
     fall through to the old text-based rendering path.
     """
     try:
-        from card_pipeline import build_card_data
+        from card_pipeline import build_card_data, verify_card_populates, _log_card_population_failure
         from message_types import DetailMessage
         import io as _cd_io
 
@@ -7473,6 +7477,21 @@ async def _serve_card_detail(
             ),
             timeout=10.0,
         )
+
+        # CARD-GATE-INV-01: Apply population gate to card detail output.
+        # When tip_data=None, build_card_data falls back to build_verified_data_block
+        # which may pull odds from wrong market type (btts/o_u instead of 1x2).
+        # Gate the OUTPUT: if the rendered card has empty pick/odds, reject it.
+        _gate_tip = {
+            "outcome": _cd_card.get("outcome", ""),
+            "odds": _cd_card.get("odds", 0),
+            "bookmaker": _cd_card.get("bookmaker", ""),
+        }
+        _gate_ok, _gate_reason = verify_card_populates(_gate_tip, match_key)
+        if not _gate_ok:
+            _log_card_population_failure(match_key, f"detail_card:{_gate_reason}", tip_data)
+            log.info("CARD-GATE: suppressed empty detail card for %s (reason=%s)", match_key, _gate_reason)
+            return False  # fall through to text-based path
 
         # Build buttons via existing function (handles tier gating, CTA, etc.)
         _cd_tips = [tip_data] if tip_data else [{"ev": 0, "match_id": match_key}]
@@ -7513,6 +7532,15 @@ async def _serve_card_detail(
             reply_markup=_cd_markup,
         )
         log.info("PERF: edge:detail CARD-PIPELINE served for %s", match_key)
+
+        # X-CARD-PIPE-01: queue Gold cards for X Publisher (fire-and-forget, deduped)
+        _cd_tier = (_cd_card.get("tier") or "").lower()
+        if _cd_tier == "gold" and match_key not in _x_queued_keys:
+            _x_queued_keys.add(match_key)
+            asyncio.create_task(
+                asyncio.to_thread(queue_gold_card_for_x, match_key, _cd_img, _cd_card)
+            )
+
         return True
     except Exception as _cd_err:
         log.warning(
@@ -8838,6 +8866,9 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         "candidate_count": len(near_miss_tips),
         "weaker_tip": near_miss_tips[0] if near_miss_tips else None,
     }
+    # CARD-BUILD-01: Population gate
+    from card_pipeline import verify_card_populates, _log_card_population_failure
+    top_tips = [t for t in top_tips if verify_card_populates(t, t.get("match_id", ""))[0]]
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time(), "thin_slate": thin_state}
     return top_tips
 
@@ -8946,6 +8977,9 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
         "candidate_count": len(near_miss_tips),
         "weaker_tip": near_miss_tips[0] if near_miss_tips else None,
     }
+    # CARD-BUILD-01: Population gate
+    from card_pipeline import verify_card_populates, _log_card_population_failure
+    top_tips = [t for t in top_tips if verify_card_populates(t, t.get("match_id", ""))[0]]
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time(), "thin_slate": thin_state}
     return top_tips
 
@@ -16974,7 +17008,9 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                             asyncio.to_thread(_bcd_ac7, event_id, None, include_analysis=False),
                             timeout=5.0,
                         )
-                        if _ac7_card.get("odds"):
+                        # CARD-GATE-INV-01: Require positive EV + valid odds. Without a tip,
+                        # build_card_data may pull odds from wrong market type (btts/o_u).
+                        if _ac7_card.get("odds") and float(_ac7_card.get("ev") or 0) > 0:
                             _ac7_html = _rch_ac7(_ac7_card)
                             if _ac7_html:
                                 _ac7_tip = {
@@ -23445,6 +23481,19 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             # R12-BUILD-02: Refresh authoritative outcomes before any cache writes
             await asyncio.to_thread(_refresh_er_outcomes_cache)
             tips = await _fetch_hot_tips_from_db()
+            # CARD-BUILD-01: Population gate — suppress tips that can't produce valid cards
+            from card_pipeline import verify_card_populates, _log_card_population_failure
+            _gated_tips = []
+            for _tip in tips:
+                _mk = _tip.get("match_id", "")
+                _ok, _reason = verify_card_populates(_tip, _mk)
+                if _ok:
+                    _gated_tips.append(_tip)
+                else:
+                    _log_card_population_failure(_mk, _reason, _tip)
+            if len(_gated_tips) < len(tips):
+                log.info("Card population gate: suppressed %d/%d tips", len(tips) - len(_gated_tips), len(tips))
+            tips = _gated_tips
             # R15-BUILD-01 Fix 2: re-sync outcome cache so _canonicalize_tip_outcome
             # uses the same edge_results snapshot that _fetch_hot_tips_from_db_inner used
             await asyncio.to_thread(_refresh_er_outcomes_cache)
