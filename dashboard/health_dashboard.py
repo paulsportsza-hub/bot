@@ -1581,7 +1581,7 @@ def _sidebar_html(active_view: str) -> str:
         active_cls = " active" if key == active_view else ""
         badge_html = ""
         if key == "task_hub" and _badge_count > 0:
-            badge_html = f'<span class="nav-badge">{_badge_count}</span>'
+            badge_html = f'<span class="nav-badge" id="th-badge">{_badge_count}</span>'
         nav_items += f'<a class="sidebar-item{active_cls}" href="{href}" data-view="{key}"><span class="item-icon">{icon}</span><span class="item-label">{label}{badge_html}</span></a>\n'
 
     return f"""<aside class="sidebar" id="sidebar">
@@ -1638,6 +1638,24 @@ def _sidebar_js() -> str:
     if (view === 'health') {
       document.dispatchEvent(new Event('healthViewLoaded'));
     }
+    // Refresh Task Hub badge from server on every view switch
+    fetch('/admin/api/task_hub_badge', {credentials:'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        var badge = document.getElementById('th-badge');
+        var c = d.count || 0;
+        if (badge) {
+          if (c > 0) { badge.textContent = c; }
+          else { badge.remove(); }
+        } else if (c > 0) {
+          var thLink = document.querySelector('.sidebar-item[data-view="task_hub"] .item-label');
+          if (thLink) {
+            var b = document.createElement('span');
+            b.className = 'nav-badge'; b.id = 'th-badge'; b.textContent = c;
+            thLink.appendChild(b);
+          }
+        }
+      }).catch(function(){});
   }
 
   // AJAX view switching
@@ -3608,6 +3626,19 @@ a.task-link:hover{background:rgba(232,87,31,.22);}
 
     task_hub_js = """<script>
 (function(){
+  // Live badge update — keeps sidebar badge in sync after approve/archive/done
+  function _updateBadge(delta) {
+    var badge = document.getElementById('th-badge');
+    if (!badge) return;
+    var cur = parseInt(badge.textContent, 10) || 0;
+    var nv = Math.max(0, cur + delta);
+    if (nv > 0) {
+      badge.textContent = nv;
+    } else {
+      badge.remove();
+    }
+  }
+
   function updateSectionProgress(sectionEl) {
     var pt = sectionEl.querySelector('.progress-text');
     var pf = sectionEl.querySelector('.progress-fill');
@@ -3658,6 +3689,7 @@ a.task-link:hover{background:rgba(232,87,31,.22);}
         body: JSON.stringify({block_id: blockId})
       }).then(function(r){
         if (r.ok) {
+          _updateBadge(-1);
           card.classList.add('exiting');
           setTimeout(function(){
             card.remove();
@@ -3700,6 +3732,7 @@ a.task-link:hover{background:rgba(232,87,31,.22);}
         body: JSON.stringify({page_id: id, status: newStatus})
       }).then(function(r){
         if (r.ok) {
+          _updateBadge(-1);
           card.style.transition = 'opacity 0.4s';
           card.style.opacity = '0.4';
           var toast = document.createElement('div');
@@ -5326,6 +5359,18 @@ def api_task_hub_refresh():
         _notion_cache.pop("marketing_queue", None)
         _notion_cache.pop("task_hub_blocks", None)
     return Response('{"ok":true}', mimetype="application/json")
+
+
+@app.route("/admin/api/task_hub_badge")
+@require_auth
+def api_task_hub_badge():
+    """Return live Task Hub badge count (pending approvals + manual tasks)."""
+    try:
+        mq, _ = _fetch_marketing_queue()
+        count = len(_get_awaiting_items(mq, include_overdue=False))
+    except Exception:
+        count = 0
+    return Response(json.dumps({"count": count}), mimetype="application/json")
 
 
 # AJAX content-only routes (for sidebar navigation without full page reload)
