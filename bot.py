@@ -1710,7 +1710,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             if page_num == 0:
                 _live = _hot_tips_cache.get("global", {}).get("tips", [])
                 if _live:
-                    _ht_tips_snapshot[user_id] = list(_live)
+                    _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(_live)
             tips = _ht_tips_snapshot.get(user_id, [])
             if tips:
                 _user_tier = await get_effective_tier(user_id)
@@ -8955,6 +8955,26 @@ async def _show_hot_tips(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_id
     await _do_hot_tips_flow(update.effective_chat.id, ctx.bot, user_id=user_id)
 
 
+def _sort_tips_for_snapshot(tips: list[dict]) -> list[dict]:
+    """Return a sorted+filtered copy of tips using the same order as _build_hot_tips_page.
+
+    CARDWIRE-FIX: snapshot must match the displayed order so ep:pick:N / edge:detail:N
+    look up the correct tip.  Applies the identical filter, zero-signal cap, and sort.
+    """
+    result = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 40]
+    for _t in result:
+        _t_cs = int(((_t.get("edge_v2") or {}).get("confirming_signals", 0)) or 0)
+        if _t_cs == 0:
+            _t["display_tier"] = "bronze"
+            _t["edge_rating"] = "bronze"
+    _tier_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
+    result.sort(key=lambda t: (
+        _tier_order.get(str(t.get("display_tier", "bronze")).lower(), 9),
+        -(t.get("ev") or 0),
+    ))
+    return result
+
+
 async def _build_hot_tips_page(
     tips: list[dict], page: int = 0,
     user_tier: str = "diamond", remaining_views: int = 999,
@@ -9633,7 +9653,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
-            _ht_tips_snapshot[user_id] = list(_cached_tips)
+            _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(_cached_tips)
         # P4-07: log recommendations to bet_recommendations_log (non-blocking)
         _blw_fire_tips(_cached_tips, str(user_id or "channel"))
         return
@@ -9702,7 +9722,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
-            _ht_tips_snapshot[user_id] = list(_fast_tips)
+            _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(_fast_tips)
         # P4-07: log recommendations to bet_recommendations_log (non-blocking)
         _blw_fire_tips(_fast_tips, str(user_id or "channel"))
         # Trigger background refresh so next tap gets freshly computed tips
@@ -9844,7 +9864,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     # W84-HT2: freeze page identity at render time (cold path)
     if user_id:
         _ht_page_state[user_id] = 0
-        _ht_tips_snapshot[user_id] = list(tips)
+        _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(tips)
     # P4-07: log recommendations to bet_recommendations_log (non-blocking)
     _blw_fire_tips(tips, str(user_id or "channel"))
 
