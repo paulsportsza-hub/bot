@@ -544,6 +544,12 @@ def build_edge_detail_data(tip: dict) -> dict:
             "odds": f"{odds_f:.2f}",
             "odds_float": odds_f,
         })
+    # D-12: Pixel Ref Rule 8 — min 2 chips (hide pills row if <2), max 6 sorted by odds desc
+    all_odds.sort(key=lambda x: x["odds_float"], reverse=True)
+    if len(all_odds) < 2:
+        all_odds = []
+    elif len(all_odds) > 6:
+        all_odds = all_odds[:6]
 
     # Signals — normalise from dict or list
     _SIGNAL_DISPLAY = {
