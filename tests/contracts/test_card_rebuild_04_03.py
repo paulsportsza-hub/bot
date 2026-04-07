@@ -211,7 +211,7 @@ def test_system_prompt_param_used():
     call_kwargs = mock_client.messages.create.call_args
     assert "system" in call_kwargs.kwargs, "Haiku call must use 'system' parameter"
     system_text = call_kwargs.kwargs["system"]
-    assert "≤75" in system_text, f"System prompt must instruct ≤75 chars, got: {system_text!r}"
+    assert "60-75" in system_text, f"System prompt must instruct char range, got: {system_text!r}"
 
 
 # ── D-01: truncation safety net ───────────────────────────────────────────────

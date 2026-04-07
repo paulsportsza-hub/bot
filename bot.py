@@ -6975,9 +6975,9 @@ def _simplify_broadcast(raw: str) -> str:
         result += f" | FREE DStv {parts[1]}"
     return result
 _BK_DISPLAY = {
-    "hollywoodbets": "Hollywoodbets", "betway": "Betway",
-    "supabets": "SupaBets", "sportingbet": "Sportingbet", "gbets": "GBets",
-    "wsb": "World Sports Betting", "playabets": "PlayaBets",
+    "hollywoodbets": "HWB", "betway": "Betway",
+    "supabets": "Supabets", "sportingbet": "Sportingbet", "gbets": "GBets",
+    "wsb": "WSB", "playabets": "PlayaBets",
     "supersportbet": "SuperSportBet",
 }
 # R10-BUILD-02: Bookmaker base URLs for affiliate fallback chain.
@@ -7077,6 +7077,14 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         "form suggests", "expected to",
         "known for", "famous for",
         "favourite", "underdog",
+        # CARD-FIX-D additions
+        "offers value",
+        "presents an opportunity",
+        "worth considering",
+        "looks promising",
+        "should be backed",
+        "sure thing",
+        "slam dunk",
     ]
     try:
         import anthropic as _anthropic
@@ -7105,10 +7113,17 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             return ""
 
         system_prompt = (
-            "You are a sharp sports betting analyst. Write ONE sentence of ≤75 characters "
-            "that summarises the edge using only the data provided. You MUST include at least "
-            "one number (EV%, odds, fair value, or confidence). Active voice. No hedging. "
-            "No general knowledge. End with a period."
+            "You are a sharp SA sports columnist writing a one-line kicker for a betting card. "
+            "The reader already sees the match, the pick, and the odds — your job is to add "
+            "the editorial angle they would not get from the numbers alone. "
+            "Write ONE punchy sentence, 60-75 characters. "
+            "Rules: "
+            "1. You MUST cite one number from the data (EV%, odds, or consensus). "
+            "2. Active voice. Present tense. No hedging words. "
+            "3. No general knowledge, history, or clichés about the teams. "
+            "4. Lead with the insight, not the team name. "
+            "5. SA conversational register — write like a Kickoff Magazine columnist, not a textbook. "
+            "6. End with a full stop."
         )
 
         client = _anthropic.Anthropic()
@@ -7229,6 +7244,21 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             continue
         if v > 1.0:
             all_odds.append({"bookie": _display_bookmaker_name(bk), "odds": v})
+    # CARD-FIX-B Task 4: inject pick bookmaker if missing from snapshot odds
+    pick_bk = tip.get("bookmaker") or ""
+    pick_odds = 0.0
+    try:
+        pick_odds = float(tip.get("odds") or 0)
+    except (TypeError, ValueError):
+        pass
+    if pick_bk and pick_odds > 1.0:
+        pick_bk_display = _display_bookmaker_name(pick_bk)
+        if not any(o["bookie"] == pick_bk_display for o in all_odds):
+            all_odds.append({"bookie": pick_bk_display, "odds": pick_odds, "is_pick": True})
+    # Mark the pick bookmaker in existing entries
+    for o in all_odds:
+        if pick_bk and o["bookie"] == _display_bookmaker_name(pick_bk):
+            o["is_pick"] = True
     enriched["all_odds"] = sorted(all_odds, key=lambda x: x["odds"], reverse=True)
 
     # 3) Form — last 5 results per team as ['W','D','L'] lists
@@ -10604,11 +10634,20 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
         sport_emoji = sport.emoji if sport else "🏅"
         for match in db_matches:
             mid = match["match_id"]
-            if mid in seen_match_ids:
-                continue
-            seen_match_ids.add(mid)
             home_display = _display_team_name(match.get("home_team") or "TBD")
             away_display = _display_team_name(match.get("away_team") or "TBD")
+            # CARD-FIX-B Task 1: normalise DB match_id through build_match_id
+            # for cross-source dedup (DB uses midnight 00:00:00Z, API uses real time)
+            parts = mid.rsplit("_", 1)
+            date_str = parts[-1] if len(parts) > 1 and len(parts[-1]) == 10 else ""
+            norm_mid = odds_svc.build_match_id(
+                home_display, away_display,
+                f"{date_str}T00:00:00Z" if date_str else "",
+            )
+            if mid in seen_match_ids or norm_mid in seen_match_ids:
+                continue
+            seen_match_ids.add(mid)
+            seen_match_ids.add(norm_mid)
             is_relevant = (
                 home_display.lower() in user_teams
                 or away_display.lower() in user_teams
@@ -10616,9 +10655,7 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
             )
             if not is_relevant:
                 continue
-            # Extract date from match_id (format: team_vs_team_YYYY-MM-DD)
-            parts = mid.rsplit("_", 1)
-            date_str = parts[-1] if len(parts) > 1 and len(parts[-1]) == 10 else ""
+            # date_str already extracted above for dedup normalisation
             all_events.append({
                 "id": mid,
                 "home_team": home_display,

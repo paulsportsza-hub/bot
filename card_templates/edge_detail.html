@@ -105,7 +105,7 @@
             font-weight: 700;
             color: #AAAAAA;
             margin-top: -6px;
-            margin-bottom: -20px;
+            margin-bottom: 6px;
         }
         .teams-row {
             display: flex;
@@ -120,7 +120,7 @@
             align-items: center;
             gap: 6px;
             min-width: 0;
-            min-height: 90px;
+            min-height: 56px;
             flex-shrink: 0;
         }
         .team-name {
@@ -141,8 +141,7 @@
             border-radius: 4px;
             flex-shrink: 0;
             margin: 0 8px;
-            align-self: flex-start;
-            margin-top: 30px;
+            align-self: center;
         }
         /* FIX 8 (D03): form-strip gap widened from 3px to 10px */
         .form-row {
@@ -222,17 +221,14 @@
             flex-wrap: wrap;
             gap: 4px;
         }
-        /* FIX 8 (D10): odds pills overflow guard */
+        /* D-INV-6: let flex-wrap handle layout; no truncation */
         .odds-pill {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 10px;
+            font-size: 11px;
             padding: 3px 8px;
             border-radius: 4px;
             border: 1px solid;
             white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 90px;
         }
 
         /* ── 5. Edge Signals ─────────────────────────────────── */
@@ -423,8 +419,9 @@
     <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
     <div class="meta-bar">
         {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
-        {% if time %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
+        {% if time and time != 'TBC' %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
         {% if channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
+        {% if venue %}<span class="meta-item">&#127967; {{ venue }}</span>{% endif %}
     </div>
 
     {% if tier %}
@@ -442,7 +439,9 @@
         <div class="odds-pills">
             {% for o in all_odds %}
             {% if o.odds_float and o.odds_float > 0 %}
-            {% if o.odds_float >= pick_odds_float %}
+            {% if o.is_pick %}
+            <span class="odds-pill" style="background: {{ tier_color }}20; border: 1.5px solid {{ tier_color }}; color: {{ tier_color }}; font-weight: 600;">★ {{ o.bookie }} {{ o.odds }}</span>
+            {% elif o.odds_float >= pick_odds_float %}
             <span class="odds-pill" style="background: {{ tier_color }}12; border-color: {{ tier_color }}30; color: {{ tier_color }};">{{ o.bookie }} {{ o.odds }}</span>
             {% else %}
             <span class="odds-pill" style="background: #0A0A0A; border-color: #2A2A2A; color: #777777;">{{ o.bookie }} {{ o.odds }}</span>
