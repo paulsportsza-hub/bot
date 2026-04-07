@@ -174,13 +174,20 @@ def _empty_data() -> dict:
     }
 
 
-def _resolve_tier(tip: dict) -> str:
+def _resolve_tier(tip: dict) -> str | None:
+    # Resolution chain for tier badges.
+    # `edge_tier` (from edge_results) is the CANONICAL source of truth.
+    # `display_tier` / `edge_rating` / `tier` are backwards-compat fields from
+    # older tip dict shapes.  Future code MUST write to `edge_tier`.
+    # This chain is a backwards-compat shim — do not extend it.
     raw = (
         tip.get("display_tier")
         or tip.get("edge_rating")
         or tip.get("tier")
-        or "bronze"
+        or tip.get("edge_tier")
     )
+    if raw is None:
+        return None
     return str(raw).lower().strip()
 
 
@@ -497,9 +504,15 @@ def build_edge_detail_data(tip: dict) -> dict:
             home_injuries, away_injuries       -> lists of injury strings
             verdict                            -> verdict text string
     """
-    # FIX 2: display_tier=None means no edge — suppress tier/pick/verdict in template
+    # FIX 2: display_tier=None means no edge — suppress tier/pick/verdict in template.
+    # Also gates on edge_tier so a tip with ONLY edge_tier set still resolves correctly.
     raw_tier = tip.get("display_tier")
-    if raw_tier is None and not tip.get("edge_rating") and not tip.get("tier"):
+    if (
+        raw_tier is None
+        and not tip.get("edge_rating")
+        and not tip.get("tier")
+        and not tip.get("edge_tier")
+    ):
         tier_key = None
     else:
         tier_key = _resolve_tier(tip)
@@ -699,8 +712,12 @@ def build_my_matches_data(matches: list[dict], page: int = 1, per_page: int = 4)
         channel = str(m.get("channel") or m.get("ch") or "")
 
         if m.get("has_edge"):
-            tier_key = (m.get("edge_tier") or "gold").lower()
-            meta = _TIER_META.get(tier_key, _TIER_META["gold"])
+            _et_raw = m.get("edge_tier")
+            tier_key = _et_raw.lower() if _et_raw else None
+            meta = _TIER_META.get(tier_key, _TIER_META["bronze"]) if tier_key else {
+                "emoji": "", "label": "", "color": "#777777", "rank": 99,
+                "bg_alpha": "10", "border_alpha": "15",
+            }
             edge_matches.append({
                 "number": number,
                 "home": home,
