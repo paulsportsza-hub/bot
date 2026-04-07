@@ -60,8 +60,11 @@ LEAGUE_SPORT_MAP: dict[str, str] = {
     "IPL": "cricket", "SA20": "cricket", "ODI": "cricket",
     "T20": "cricket", "Test": "cricket", "BBL": "cricket",
     "CPL": "cricket", "PSL-C": "cricket",
+    "Test Series": "cricket", "T20 World Cup": "cricket",
+    "ICC U19 World Cup": "cricket",
     # Rugby
-    "Super Rugby": "rugby", "URC": "rugby",
+    "Super Rugby": "rugby", "Super Rugby Pacific": "rugby",
+    "URC": "rugby",
     "Rugby Championship": "rugby", "Six Nations": "rugby",
     "Currie Cup": "rugby",
     # Combat
@@ -78,9 +81,28 @@ _SPORT_EMOJI_MAP: dict[str, str] = {
 }
 
 
-def sport_emoji(league: str) -> str:
+def detect_sport(league: str, sport_key: str | None = None) -> str:
+    """Detect sport from league string with fuzzy fallback chain.
+
+    1. Exact match in LEAGUE_SPORT_MAP
+    2. Case-insensitive substring match
+    3. sport_key hint from caller
+    4. Default to 'soccer'
+    """
+    if league in LEAGUE_SPORT_MAP:
+        return LEAGUE_SPORT_MAP[league]
+    league_lower = league.lower()
+    for key, sport in LEAGUE_SPORT_MAP.items():
+        if key.lower() in league_lower or league_lower in key.lower():
+            return sport
+    if sport_key:
+        return sport_key
+    return "soccer"
+
+
+def sport_emoji(league: str, sport_key: str | None = None) -> str:
     """Return the sport emoji for the given league string."""
-    sport = LEAGUE_SPORT_MAP.get(league, "soccer")
+    sport = detect_sport(league, sport_key)
     return _SPORT_EMOJI_MAP.get(sport, "⚽")
 
 
@@ -310,6 +332,7 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4) ->
         ev_str = f"{ev_val:.1f}"
         pick_name = (
             tip.get("pick")
+            or tip.get("outcome")
             or tip.get("pick_team")
             or tip.get("home_team")
             or tip.get("home")
@@ -405,6 +428,7 @@ def build_tier_page_data(tips: list[dict], tier: str) -> dict:
         ev_str = f"{ev_val:.1f}"
         pick_name = (
             tip.get("pick")
+            or tip.get("outcome")
             or tip.get("pick_team")
             or tip.get("home_team")
             or tip.get("home")
@@ -473,8 +497,16 @@ def build_edge_detail_data(tip: dict) -> dict:
             home_injuries, away_injuries       -> lists of injury strings
             verdict                            -> verdict text string
     """
-    tier_key = _resolve_tier(tip)
-    meta = _TIER_META.get(tier_key, _TIER_META["bronze"])
+    # FIX 2: display_tier=None means no edge — suppress tier/pick/verdict in template
+    raw_tier = tip.get("display_tier")
+    if raw_tier is None and not tip.get("edge_rating") and not tip.get("tier"):
+        tier_key = None
+    else:
+        tier_key = _resolve_tier(tip)
+    meta = _TIER_META.get(tier_key, _TIER_META["bronze"]) if tier_key else {
+        "emoji": "", "label": "", "color": "#777777", "rank": 99,
+        "bg_alpha": "10", "border_alpha": "15",
+    }
 
     home = tip.get("home") or tip.get("home_team") or ""
     away = tip.get("away") or tip.get("away_team") or ""

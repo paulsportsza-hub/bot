@@ -63,7 +63,7 @@ from html import escape as h
 
 import anthropic
 from telegram import (
-    InlineKeyboardButton, InlineKeyboardMarkup,
+    InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto,
     KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove,
     Update,
 )
@@ -1843,14 +1843,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         message_to_edit=query.message,
                     )
                 else:
-                    # BUILD-CARDWIRE: Non-edge match — enrich with verified DB data
+                    # FIX 4 (D04): Non-edge match — enrich with verified DB data,
+                    # then render via edge_detail.html with display_tier=None (FIX 2
+                    # suppresses PICK/Verdict blocks, shows "No Edge Rating" badge).
                     _mm_match_enriched = await asyncio.to_thread(
                         _enrich_tip_for_card, _mm_match, _mm_event_id
                     )
-                    _mm_md_data = build_match_detail_data(_mm_match_enriched)
+                    _mm_match_enriched["display_tier"] = None
+                    _mm_ed_data = build_edge_detail_data(_mm_match_enriched)
                     await send_card_or_fallback(
                         bot=ctx.bot, chat_id=query.message.chat_id,
-                        template="match_detail.html", data=_mm_md_data,
+                        template="edge_detail.html", data=_mm_ed_data,
                         text_fallback=_mm_fallback, markup=_mm_back_markup,
                         message_to_edit=query.message,
                     )
@@ -3325,6 +3328,50 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
 # ── Menu handlers ─────────────────────────────────────────
 
+async def _serve_response(query, text: str, markup, photo=None) -> None:
+    """FIX 3 (D08): Transition helper for photo↔text message edits.
+
+    Handles all four transitions:
+    - photo→text: delete + send_message
+    - photo→photo: edit_message_media
+    - text→text: edit_message_text
+    - text→photo: delete + send_photo
+    """
+    msg = query.message
+    is_photo_msg = bool(msg and msg.photo)
+    if photo:
+        # Target is a photo
+        if is_photo_msg:
+            await msg.edit_media(
+                media=InputMediaPhoto(media=photo),
+                reply_markup=markup,
+            )
+        else:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            await query.get_bot().send_photo(
+                chat_id=msg.chat_id, photo=photo, reply_markup=markup,
+            )
+    else:
+        # Target is text
+        if is_photo_msg:
+            _cid = msg.chat_id
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            await query.get_bot().send_message(
+                chat_id=_cid, text=text,
+                parse_mode=ParseMode.HTML, reply_markup=markup,
+            )
+        else:
+            await query.edit_message_text(
+                text, parse_mode=ParseMode.HTML, reply_markup=markup,
+            )
+
+
 async def handle_menu(query, action: str) -> None:
     if action == "home":
         user = query.from_user
@@ -3333,14 +3380,10 @@ async def handle_menu(query, action: str) -> None:
 
             Hey {h(user.first_name or '')}, what would you like to do?
         """)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
+        await _serve_response(query, text, kb_main())
 
     elif action == "help":
-        await query.edit_message_text(
-            HELP_TEXT,
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_help(),
-        )
+        await _serve_response(query, HELP_TEXT, kb_help())
 
     elif action == "history":
         tips = await db.get_recent_tips(limit=5)
@@ -3357,7 +3400,7 @@ async def handle_menu(query, action: str) -> None:
                 )
                 lines.append("")
             text = "\n".join(lines)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_nav())
+        await _serve_response(query, text, kb_nav())
 
 
 # ── Sport / odds handlers ────────────────────────────────
@@ -7106,6 +7149,13 @@ def _enrich_tip_for_card(tip: dict, match_key: str) -> dict:
     if not enriched.get("verdict") and tipster.get("most_tipped"):
         enriched["verdict"] = f"Most tipsters back {tipster['most_tipped']}"
 
+    # FIX 5 (D06): Verdict coherence gate — skip verdict when tipster pick conflicts with PICK
+    pick_outcome = enriched.get("pick") or ""
+    tipster_most_tipped = tipster.get("most_tipped") or ""
+    if tipster_most_tipped and pick_outcome:
+        if tipster_most_tipped.lower() != pick_outcome.lower():
+            enriched["verdict"] = ""
+
     return enriched
 
 
@@ -9048,12 +9098,6 @@ async def _build_hot_tips_page(
     # in the header matches the number of rendered cards.
     # Fix 8: Also gate composite_score >= 40 (Bronze threshold) — sub-threshold cards never show.
     tips = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 40]
-    # BUILD-GATE-RELAX: Cap zero-signal edges at Bronze display tier — Paul 1 April 2026.
-    for _t in tips:
-        _t_cs = int(((_t.get("edge_v2") or {}).get("confirming_signals", 0)) or 0)
-        if _t_cs == 0:
-            _t["display_tier"] = "bronze"
-            _t["edge_rating"] = "bronze"
     # BUILD-TIER-ORDER: Diamond > Gold > Silver > Bronze, then EV descending within tier.
     _tier_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
     tips.sort(key=lambda t: (
@@ -9262,11 +9306,6 @@ async def _build_hot_tips_page(
     for i, tip in enumerate(page_tips, start + 1):
         _tip_mk_for_tier = tip.get("match_id") or tip.get("event_id") or ""
         edge_tier = _fresh_tiers.get(_tip_mk_for_tier) or str(tip.get("display_tier", tip.get("edge_rating", "bronze"))).lower().strip()
-        # BUILD-GATE-RELAX Fix 4: CTA badge must match display_tier after zero-signal cap.
-        _tip_cs = int((tip.get("edge_v2") or {}).get("confirming_signals", 0) or 0)
-        if _tip_cs == 0:
-            edge_tier = "bronze"
-            tip["display_tier"] = "bronze"
         access = get_edge_access_level(user_tier, edge_tier)
 
         if edge_tier != last_section_tier:

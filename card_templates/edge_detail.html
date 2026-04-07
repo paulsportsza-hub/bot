@@ -67,6 +67,21 @@
             font-weight: 800;
             letter-spacing: 2px;
         }
+        .no-edge-badge {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: 14px;
+            background: #77777710;
+            border: 1px solid #77777715;
+        }
+        .no-edge-badge-text {
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: #777777;
+        }
         .ev-display {
             display: flex;
             align-items: baseline;
@@ -97,6 +112,7 @@
             align-items: center;
             justify-content: center;
         }
+        /* FIX 8 (D02): min-height prevents collapse on 2-line team names */
         .team-block {
             flex: 1;
             display: flex;
@@ -104,6 +120,8 @@
             align-items: center;
             gap: 6px;
             min-width: 0;
+            min-height: 90px;
+            flex-shrink: 0;
         }
         .team-name {
             font-size: 18px;
@@ -126,9 +144,10 @@
             align-self: flex-start;
             margin-top: 30px;
         }
+        /* FIX 8 (D03): form-strip gap widened from 3px to 10px */
         .form-row {
             display: flex;
-            gap: 3px;
+            gap: 10px;
         }
         .form-box {
             width: 16px;
@@ -203,12 +222,17 @@
             flex-wrap: wrap;
             gap: 4px;
         }
+        /* FIX 8 (D10): odds pills overflow guard */
         .odds-pill {
             font-family: 'JetBrains Mono', monospace;
             font-size: 10px;
             padding: 3px 8px;
             border-radius: 4px;
             border: 1px solid;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 90px;
         }
 
         /* ── 5. Edge Signals ─────────────────────────────────── */
@@ -347,6 +371,7 @@
         <div class="logo-fallback">MzansiEdge</div>
         {% endif %}
         <div class="header-right">
+            {% if tier %}
             <div class="tier-badge" style="background: {{ tier_color }}12; border-color: {{ tier_color }}20;">
                 <span class="tier-badge-emoji">{{ tier_emoji }}</span>
                 <span class="tier-badge-name" style="color: {{ tier_color }};">{{ tier_name }} EDGE</span>
@@ -355,6 +380,11 @@
                 <span class="ev-label">EV</span>
                 <span class="ev-value">+{{ ev }}%</span>
             </div>
+            {% else %}
+            <div class="no-edge-badge">
+                <span class="no-edge-badge-text">No Edge Rating</span>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -395,29 +425,34 @@
         {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
         {% if time %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
         {% if channel %}<span class="meta-item">📺 Ch {{ channel }}</span>{% endif %}
-        {% if venue %}<span class="meta-item">🏟 {{ venue }}</span>{% endif %}
     </div>
 
-    <!-- ── 4. The Pick ───────────────────────────────────────── -->
+    {% if tier %}
+    <!-- ── 4. The Pick (edge only) ─────────────────────────── -->
     <div class="pick-section" style="background: linear-gradient(135deg, {{ tier_color }}08, #1A1A1A); border-left-color: {{ tier_color }};">
         <div class="pick-label">THE PICK</div>
         <div class="pick-line2">
             <span class="pick-name">{{ pick }}</span>
+            {% if pick_odds and pick_odds != "0.00" and pick_odds != 0 %}
             <span class="pick-odds" style="color: {{ tier_color }};">{{ pick_odds }}</span>
+            {% endif %}
         </div>
-        <div class="pick-bookie">@ {{ bookmaker }}</div>
+        {% if bookmaker %}<div class="pick-bookie">@ {{ bookmaker }}</div>{% endif %}
         {% if all_odds %}
         <div class="odds-pills">
             {% for o in all_odds %}
+            {% if o.odds_float and o.odds_float > 0 %}
             {% if o.odds_float >= pick_odds_float %}
             <span class="odds-pill" style="background: {{ tier_color }}12; border-color: {{ tier_color }}30; color: {{ tier_color }};">{{ o.bookie }} {{ o.odds }}</span>
             {% else %}
             <span class="odds-pill" style="background: #0A0A0A; border-color: #2A2A2A; color: #777777;">{{ o.bookie }} {{ o.odds }}</span>
             {% endif %}
+            {% endif %}
             {% endfor %}
         </div>
         {% endif %}
     </div>
+    {% endif %}
 
     <!-- ── 5. Edge Signals ───────────────────────────────────── -->
     {% if signals %}
@@ -431,7 +466,7 @@
             </div>
             {% endfor %}
         </div>
-        {% if fair_value %}
+        {% if fair_value and fair_value != 0 %}
         <div class="bar-row">
             <span class="bar-label">Fair Value</span>
             <div class="bar-track">
@@ -440,7 +475,7 @@
             <span class="bar-pct" style="color: {{ tier_color }};">{{ fair_value }}%</span>
         </div>
         {% endif %}
-        {% if confidence %}
+        {% if confidence and confidence != 0 %}
         <div class="bar-row">
             <span class="bar-label">Confidence</span>
             <div class="bar-track">
@@ -492,8 +527,8 @@
     </div>
     {% endif %}
 
-    <!-- ── 8. Verdict ────────────────────────────────────────── -->
-    {% if verdict %}
+    <!-- ── 8. Verdict (edge only) ──────────────────────────── -->
+    {% if tier and verdict %}
     <div class="verdict-section">
         <div class="section-hdr" style="color: #FFB300;">⚠ VERDICT</div>
         <div class="verdict-text">{{ verdict }}</div>
