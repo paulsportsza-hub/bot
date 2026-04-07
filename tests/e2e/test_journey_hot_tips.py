@@ -139,7 +139,7 @@ async def test_build_game_buttons_has_bet_cta(test_edges) -> None:
         edge_tier="diamond",
         selected_outcome="Arsenal",
     )
-    assert rows[0][0].text.startswith("💎 Back Arsenal @ 1.85 on Hollywoodbets")
+    assert rows[0][0].text.startswith("💎 Back Arsenal @ 1.85 on HWB")
     assert rows[0][0].url
 
 

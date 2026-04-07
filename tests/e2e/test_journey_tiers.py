@@ -144,7 +144,7 @@ def test_bronze_detail_cta_keeps_real_bookmaker_for_silver_edge() -> None:
         edge_tier="silver",
         selected_outcome="Silver Home",
     )
-    assert rows[0][0].text.startswith("🥈 Back Silver Home @ 3.20 on Hollywoodbets")
+    assert rows[0][0].text.startswith("🥈 Back Silver Home @ 3.20 on HWB")
     assert rows[0][0].url
 
 

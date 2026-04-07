@@ -831,6 +831,26 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
     except Exception as exc:
         log.warning("card_pipeline: tipster_predictions.db query failed: %s", exc)
 
+    # ── CARD-FIX-B Task 2: venue from sportmonks ──────────────────────────────
+    if conn is not None:
+        try:
+            venue_row = conn.execute(
+                """
+                SELECT v.name, v.city
+                FROM sportmonks_fixtures f
+                JOIN sportmonks_venues v ON f.venue_id = v.venue_id
+                WHERE f.home_team LIKE ? AND f.away_team LIKE ?
+                ORDER BY f.match_date DESC
+                LIMIT 1
+                """,
+                (f"%{home_display}%", f"%{away_display}%"),
+            ).fetchone()
+            if venue_row and venue_row["name"]:
+                city = venue_row["city"] or ""
+                result["venue"] = f"{venue_row['name']}, {city}" if city else venue_row["name"]
+        except Exception as exc:
+            log.debug("card_pipeline: venue query failed: %s", exc)
+
     _pipeline_ms = (_time.monotonic() - _pipeline_start) * 1000
     _total_stages = 9  # odds, lineups, injuries, results, ratings, combat, enrichment, tipster, Haiku
     log.info(
@@ -1077,6 +1097,43 @@ def build_card_data(
         except ValueError:
             kickoff = date_str
 
+    # CARD-FIX-B Task 3: resolve real kickoff from broadcast_schedule
+    if conn is not None and date_str and home_display and away_display:
+        try:
+            _bs_row = conn.execute(
+                """
+                SELECT start_time FROM broadcast_schedule
+                WHERE broadcast_date = ?
+                  AND (home_team LIKE ? OR away_team LIKE ?)
+                  AND (home_team LIKE ? OR away_team LIKE ?)
+                  AND is_live = 1
+                LIMIT 1
+                """,
+                (date_str,
+                 f"%{home_display}%", f"%{home_display}%",
+                 f"%{away_display}%", f"%{away_display}%"),
+            ).fetchone()
+            if _bs_row and _bs_row["start_time"]:
+                from zoneinfo import ZoneInfo
+                _st = datetime.fromisoformat(str(_bs_row["start_time"]))
+                _sa_tz = ZoneInfo("Africa/Johannesburg")
+                if _st.tzinfo is None:
+                    _st = _st.replace(tzinfo=_sa_tz)
+                else:
+                    _st = _st.astimezone(_sa_tz)
+                _time_str = _st.strftime("%H:%M")
+                # Enrich kickoff with real time
+                today = datetime.now().date()
+                diff = (_st.date() - today).days
+                if diff == 0:
+                    kickoff = f"Today {_time_str}"
+                elif diff == 1:
+                    kickoff = f"Tomorrow {_time_str}"
+                else:
+                    kickoff = _st.strftime(f"%a %-d %b {_time_str}")
+        except Exception as _bs_exc:
+            log.debug("card_pipeline: broadcast_schedule kickoff query failed: %s", _bs_exc)
+
     # Override kickoff from tip if it has _bc_kickoff
     if tip and tip.get("_bc_kickoff"):
         kickoff = tip["_bc_kickoff"]
@@ -1131,7 +1188,7 @@ def build_card_data(
         "confidence": confidence,
         "ev": ev,
         "kickoff": kickoff,
-        "venue": "",  # venue not yet in DB schema
+        "venue": verified.get("venue") or (tip.get("venue") if tip else "") or "",
         "broadcast": broadcast,
         "sport": sport,
         "tier": tier,

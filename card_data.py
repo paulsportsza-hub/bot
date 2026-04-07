@@ -543,6 +543,7 @@ def build_edge_detail_data(tip: dict) -> dict:
             "bookie": bookie,
             "odds": f"{odds_f:.2f}",
             "odds_float": odds_f,
+            "is_pick": bool(o.get("is_pick")),
         })
     # D-12: Pixel Ref Rule 8 — min 2 chips (hide pills row if <2), max 6 sorted by odds desc
     all_odds.sort(key=lambda x: x["odds_float"], reverse=True)
@@ -566,6 +567,14 @@ def build_edge_detail_data(tip: dict) -> dict:
         signals = [{"name": _SIGNAL_DISPLAY.get(k, k), "active": bool(v)} for k, v in raw_signals.items()]
     else:
         signals = [{"name": _SIGNAL_DISPLAY.get(s.get("name", ""), s.get("name", "")), "active": bool(s.get("active"))} for s in raw_signals]
+
+    # CARD-FIX-B Task 5: pad to 6 canonical signals in fixed order
+    _CANONICAL_SIGNALS = ["Price Edge", "Line Mvt", "Form", "Market", "Tipster", "Injury"]
+    existing_names = {s["name"] for s in signals}
+    for canon in _CANONICAL_SIGNALS:
+        if canon not in existing_names:
+            signals.append({"name": canon, "active": False})
+    signals.sort(key=lambda s: _CANONICAL_SIGNALS.index(s["name"]) if s["name"] in _CANONICAL_SIGNALS else 99)
 
     # H2H — support nested dict {n, hw, d, aw} or flat fields
     h2h = tip.get("h2h") or {}
