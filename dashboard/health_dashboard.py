@@ -3447,20 +3447,32 @@ def render_task_hub_content() -> str:
             n = len(items_for_section)
             cards = ""
             for item in items_for_section:
+                import html as _html_mod
                 title = item.get("title") or ""
                 ch_key = _normalise_channel_key(item.get("channel") or "")
                 sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
                 asset_link = item.get("asset_link") or ""
                 asset_html = (f'<a href="{asset_link}" target="_blank" rel="noopener" '
-                              f'class="appr-asset-link">&#128444;&#65039; View image</a>') if asset_link else ""
+                              f'class="appr-asset-link">&#128444;&#65039; View asset</a>') if asset_link else ""
                 page_id = item.get("id", "")
+                notion_url = f"https://www.notion.so/{page_id.replace('-', '')}" if page_id else ""
+                notion_html = (f'<a href="{notion_url}" target="_blank" rel="noopener" '
+                               f'class="appr-notion-link">&#128279; Open in Notion</a>') if notion_url else ""
+                # Copy preview — show the post content Paul needs to review
+                raw_copy = item.get("copy") or ""
+                # Convert <br> to newlines for display, escape HTML, then re-add line breaks
+                copy_text = raw_copy.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+                copy_text = _html_mod.escape(copy_text).replace("\n", "<br>")
+                copy_html = f'<div class="appr-copy">{copy_text}</div>' if copy_text else ""
                 cards += f"""<div class="appr-card" id="th-appr-{page_id}">
-  <div class="appr-title">{title}</div>
+  <div class="appr-title">{_html_mod.escape(title)}</div>
   <div class="appr-header">
     {_channel_chip_th(ch_key)}
     <span class="appr-meta">&#128337; {sched_str}</span>
     {asset_html}
+    {notion_html}
   </div>
+  {copy_html}
   <div class="appr-error" style="display:none;color:var(--red);font-size:11px;margin-top:8px"></div>
   <div class="appr-actions">
     <button class="btn-approve" data-id="{page_id}">Approve</button>
@@ -3570,8 +3582,9 @@ a.task-link:hover{background:rgba(232,87,31,.22);}
 .appr-title{font-family:var(--font-d);font-weight:700;font-size:14px;color:var(--text);margin-bottom:8px;}
 .appr-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
 .appr-meta{font-family:var(--font-m);font-size:11px;color:var(--muted);}
-.appr-asset-link{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);text-decoration:none;}
-.appr-asset-link:hover{text-decoration:underline;}
+.appr-asset-link,.appr-notion-link{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);text-decoration:none;}
+.appr-asset-link:hover,.appr-notion-link:hover{text-decoration:underline;}
+.appr-notion-link{color:var(--muted);}
 .appr-campaign{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);background:rgba(248,200,48,.1);border-radius:4px;padding:2px 8px;}
 .appr-copy{font-family:var(--font-m);font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word;}
 .appr-actions{display:flex;gap:10px;margin-top:14px;}
