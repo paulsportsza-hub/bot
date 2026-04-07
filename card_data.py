@@ -546,6 +546,12 @@ def build_edge_detail_data(tip: dict) -> dict:
     h2h_draws    = int(h2h.get("d")  or tip.get("h2h_draws")     or 0)
     h2h_away_wins = int(h2h.get("aw") or tip.get("h2h_away_wins") or 0)
 
+    # FIX 2 (CARD-REBUILD-02): Wire _split_kickoff into detail data — same as build_edge_picks_data
+    kickoff_raw = tip.get("_bc_kickoff") or tip.get("kickoff") or ""
+    date_part, time_part = _split_kickoff(kickoff_raw)
+    date_str = tip.get("date") or date_part
+    time_str = tip.get("time") or time_part
+
     return {
         # Tier
         "tier":       tier_key,
@@ -558,8 +564,8 @@ def build_edge_detail_data(tip: dict) -> dict:
         "league":  league,
         "home":    home,
         "away":    away,
-        "date":    tip.get("date") or "",
-        "time":    tip.get("time") or "",
+        "date":    date_str,
+        "time":    time_str,
         "channel": str(tip.get("channel") or tip.get("ch") or ""),
         "venue":   tip.get("venue") or "",
 

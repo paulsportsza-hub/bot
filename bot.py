@@ -2168,14 +2168,26 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 except Exception:
                     pass
 
-            # Determine edge tier for card buttons
-            _card_edge_tier = "bronze"
+            # Determine edge tier for card buttons — FIX 4 (CARD-REBUILD-02):
+            # Default to "no_rating" (not "bronze") when no tier source available.
+            # Priority: tip dict → cache hit → DB query → "no_rating" fallback.
+            _card_edge_tier = "no_rating"
             if _card_tip:
                 _card_edge_tier = _card_tip.get(
-                    "display_tier", _card_tip.get("edge_rating", "bronze"),
+                    "display_tier", _card_tip.get("edge_rating", "no_rating"),
                 )
             if _w84_hit:
                 _card_edge_tier = _w84_hit.get("edge_tier", _card_edge_tier)
+            if _card_edge_tier == "no_rating":
+                try:
+                    _db_tier_f4 = await asyncio.wait_for(
+                        asyncio.to_thread(_get_fresh_tier_from_er, match_key),
+                        timeout=1.5,
+                    )
+                    if _db_tier_f4:
+                        _card_edge_tier = _db_tier_f4
+                except Exception:
+                    pass
 
             # Skip Haiku analysis on cache-hit path (fast); include on cache-miss
             _card_analysis = not bool(_w84_hit)
@@ -2233,8 +2245,6 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     None,
                 )
                 # AC-4/5: Prefer snapshot display_tier (list-view-adjusted) over DB re-derived tier.
-                # BUILD-GATE-RELAX forces display_tier="bronze" for zero-signal tips in the list;
-                # _fresh_tier_b2 reads the raw "gold" from edge_results, causing CTA/badge mismatch.
                 _snap_display_tier = (_w84_snap or {}).get("display_tier")
                 if _snap_display_tier:
                     _w84_tier = _snap_display_tier
@@ -7069,7 +7079,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str) -> dict:
     try:
         verified = _bvdb(match_key)
     except Exception as exc:
-        log.debug("_enrich_tip_for_card: build_verified_data_block failed for %s: %s", match_key, exc)
+        log.exception("_enrich_tip_for_card: build_verified_data_block failed for %s", match_key)
         return enriched
 
     home_key = verified.get("home_key", "")
@@ -9045,12 +9055,7 @@ def _sort_tips_for_snapshot(tips: list[dict]) -> list[dict]:
     CARDWIRE-FIX: snapshot must match the displayed order so ep:pick:N / edge:detail:N
     look up the correct tip.  Applies the identical filter, zero-signal cap, and sort.
     """
-    result = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 40]
-    for _t in result:
-        _t_cs = int(((_t.get("edge_v2") or {}).get("confirming_signals", 0)) or 0)
-        if _t_cs == 0:
-            _t["display_tier"] = "bronze"
-            _t["edge_rating"] = "bronze"
+    result = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 38]
     _tier_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
     result.sort(key=lambda t: (
         _tier_order.get(str(t.get("display_tier", "bronze")).lower(), 9),
@@ -9371,7 +9376,11 @@ async def _build_hot_tips_page(
         if not tip.get("pick"):
             tip["pick"] = tip.get("outcome") or tip.get("home_team") or ""
         if not tip.get("channel") and broadcast_raw:
-            tip["channel"] = broadcast_raw.replace("📺 ", "")
+            # FIX 6 (CARD-REBUILD-02): Extract DStv channel from broadcast string
+            # e.g. "📺 SS EPL (DStv 203)" → "DStv 203"
+            import re as _re_ch
+            _ch_m = _re_ch.search(r"\(?(DStv \d+)\)?", broadcast_raw)
+            tip["channel"] = _ch_m.group(1) if _ch_m else broadcast_raw.replace("📺 ", "")
         tip["all_odds_count"] = len(tip.get("odds_by_bookmaker") or {})
 
         # Line 2: league · 📅 kickoff · DStv channel

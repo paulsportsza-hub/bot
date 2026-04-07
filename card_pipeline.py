@@ -117,18 +117,14 @@ def _parse_match_key(match_key: str) -> tuple[str, str, str]:
 
 
 def _ro_conn(path: str) -> sqlite3.Connection | None:
-    """Open a read-only SQLite connection. Returns None on failure."""
+    """Open a read-only SQLite connection via approved factory. Returns None on failure."""
     if not Path(path).exists():
         return None
     try:
-        conn = sqlite3.connect(
-            f"file:{path}?mode=ro", uri=True,
-            timeout=3.0, check_same_thread=False,
-        )
-        conn.row_factory = sqlite3.Row
-        return conn
+        from db_connection import get_connection
+        return get_connection(db_path=path, readonly=True, timeout_ms=5000)
     except Exception as exc:
-        log.debug("card_pipeline: cannot open %s: %s", path, exc)
+        log.warning("card_pipeline: cannot open %s: %s", path, exc)
         return None
 
 
@@ -276,7 +272,11 @@ def _compute_signals(tip: dict | None, verified: dict) -> dict:
     return {
         "price_edge": ev > 0,
         "form": bool(verified.get("results")),
-        "movement": bool((tip or {}).get("movement")),
+        "movement": bool(
+            (tip or {}).get("movement")
+            or (tip or {}).get("line_movement")
+            or (tip or {}).get("movement_detected")
+        ),
         "market": tipster.get("home_consensus_pct") is not None,
         "tipster": bool(tipster.get("sources")),
         "injury": bool(verified.get("injuries")),
@@ -514,7 +514,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                             "stale": _stale_marker(best_draw[1]["scraped_at"]),
                         }
         except Exception as exc:
-            log.debug("card_pipeline: odds_snapshots query failed: %s", exc)
+            log.warning("card_pipeline: odds_snapshots query failed: %s", exc)
 
         # match_lineups — starting XI
         try:
@@ -540,7 +540,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                     for row in lineup_rows[:22]  # cap at 22 players
                 ]
         except Exception as exc:
-            log.debug("card_pipeline: match_lineups query failed: %s", exc)
+            log.warning("card_pipeline: match_lineups query failed: %s", exc)
 
         # extracted_injuries — from news scraping
         try:
@@ -564,7 +564,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                         f"{row['status'] or row['injury_type'] or 'injured'}"
                     )
         except Exception as exc:
-            log.debug("card_pipeline: extracted_injuries query failed: %s", exc)
+            log.warning("card_pipeline: extracted_injuries query failed: %s", exc)
 
         # match_results — recent form
         try:
@@ -595,7 +595,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                         "league": row["league"],
                     })
         except Exception as exc:
-            log.debug("card_pipeline: match_results query failed: %s", exc)
+            log.warning("card_pipeline: match_results query failed: %s", exc)
 
         # team_ratings — Glicko-2 / Elo
         try:
@@ -621,7 +621,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                         result["data_sources_used"].append("team_ratings")
                         _stages_completed.append("ratings")
         except Exception as exc:
-            log.debug("card_pipeline: team_ratings query failed: %s", exc)
+            log.warning("card_pipeline: team_ratings query failed: %s", exc)
 
         # news_articles in odds.db (sport-tagged)
         try:
@@ -640,7 +640,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                     if row["title"]:
                         result["news"].append(row["title"])
         except Exception as exc:
-            log.debug("card_pipeline: news_articles (odds.db) query failed: %s", exc)
+            log.warning("card_pipeline: news_articles (odds.db) query failed: %s", exc)
 
     finally:
         if _close_conn and conn:
@@ -705,7 +705,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
             finally:
                 combat_conn.close()
     except Exception as exc:
-        log.debug("card_pipeline: combat_data.db query failed: %s", exc)
+        log.warning("card_pipeline: combat_data.db query failed: %s", exc)
 
     # ── enrichment.db — AC-10 ─────────────────────────────────────────────────
     try:
@@ -732,7 +732,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                             if "enrichment" not in _stages_completed:
                                 _stages_completed.append("enrichment")
                 except Exception as exc:
-                    log.debug("card_pipeline: enrichment news query failed: %s", exc)
+                    log.warning("card_pipeline: enrichment news query failed: %s", exc)
 
                 # Weather — use date from match_key if available
                 try:
@@ -758,11 +758,11 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                         }
                         result["data_sources_used"].append("enrichment.db:weather")
                 except Exception as exc:
-                    log.debug("card_pipeline: enrichment weather query failed: %s", exc)
+                    log.warning("card_pipeline: enrichment weather query failed: %s", exc)
             finally:
                 enrich_conn.close()
     except Exception as exc:
-        log.debug("card_pipeline: enrichment.db connection failed: %s", exc)
+        log.warning("card_pipeline: enrichment.db connection failed: %s", exc)
 
     # ── tipster_predictions.db — AC-11 ────────────────────────────────────────
     try:
@@ -809,7 +809,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
             finally:
                 tipster_conn.close()
     except Exception as exc:
-        log.debug("card_pipeline: tipster_predictions.db query failed: %s", exc)
+        log.warning("card_pipeline: tipster_predictions.db query failed: %s", exc)
 
     _pipeline_ms = (_time.monotonic() - _pipeline_start) * 1000
     _total_stages = 9  # odds, lineups, injuries, results, ratings, combat, enrichment, tipster, Haiku
@@ -921,6 +921,52 @@ def generate_card_analysis(match_key: str, verified_data: dict) -> str:
     if len(text) > 280:
         text = text[:277] + "..."
     return text
+
+
+# ── CARD-BUILD-01: Card Population Gate ──────────────────────────────────────
+
+def verify_card_populates(tip: dict | None, match_key: str) -> tuple[bool, str]:
+    """Pre-flight check: can this tip produce a valid card?
+
+    Returns (True, "") if yes. Returns (False, reason) if no.
+    Does NOT call build_verified_data_block() — cheap dict-only check.
+    """
+    if tip is None:
+        return False, "tip_is_none"
+    pick = tip.get("outcome") or tip.get("home_team", "")
+    if not pick or not pick.strip():
+        return False, "empty_pick"
+    odds = float(tip.get("odds", 0) or tip.get("home_odds", 0) or 0)
+    if odds < 1.01:
+        return False, f"invalid_odds:{odds}"
+    bookmaker = tip.get("bookmaker") or tip.get("bookie", "")
+    if not bookmaker or not bookmaker.strip():
+        return False, "empty_bookmaker"
+    return True, ""
+
+
+def _log_card_population_failure(match_key: str, reason: str, tip: dict | None) -> None:
+    """Log a tip that failed the population gate. Never raises."""
+    try:
+        from db_connection import get_connection
+        conn = get_connection()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS card_population_failures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_key TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                tip_snapshot_json TEXT,
+                created_at DATETIME DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute(
+            "INSERT INTO card_population_failures (match_key, reason, tip_snapshot_json) VALUES (?,?,?)",
+            (match_key, reason, json.dumps(tip) if tip else None),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # never block on logging
 
 
 # ── AC-4: build_card_data ─────────────────────────────────────────────────────
@@ -1074,6 +1120,10 @@ def build_card_data(
         "league": (tip.get("league") or tip.get("league_display") or tip.get("league_key") or "") if tip else "",
         "broadcast_channel": (tip.get("_bc_broadcast") or tip.get("broadcast_channel") or "") if tip else "",
         "display_tier": tier,
+        # CARD-BUILD-01: stealth fallback marker
+        "data_status": "no_data" if not tip else "ok",
+        # CARD-BUILD-01: Fair Value from model probability
+        "fair_value": round(float(tip.get("prob", 0) or 0) * 100, 1) if tip and tip.get("prob") else None,
     }
     return card
 
