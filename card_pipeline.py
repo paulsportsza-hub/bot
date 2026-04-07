@@ -553,7 +553,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                 FROM extracted_injuries ei
                 WHERE (ei.team_key LIKE ? OR ei.team_key LIKE ?)
                   AND ei.status NOT IN ('Missing Fixture', 'Unknown')
-                  AND ei.last_updated > datetime('now', '-72 hours')
+                  AND ei.extracted_at > datetime('now', '-72 hours')
                 ORDER BY ei.id DESC
                 LIMIT 10
                 """,
