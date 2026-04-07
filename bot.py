@@ -7058,13 +7058,13 @@ def _display_bookmaker_name(key: str) -> str:
 
 
 def _generate_verdict(tip: dict, verified: dict) -> str:
-    """Call Haiku for a ≤75-char verdict sentence citing a number.
+    """Call Haiku for a 2-3 sentence verdict referencing stake tier and citing a number.
 
-    CARD-REBUILD-04-03 (D-01 + D-02):
-    - Model: claude-haiku-4-5-20251001, temp=0.3, max_tokens=100
-    - System prompt instructs ≤75 chars, active voice, must cite a number, no general knowledge
+    CARD-FIX-F:
+    - Model: claude-haiku-4-5-20251001, temp=0.3, max_tokens=200
+    - System prompt instructs 2-3 sentences, 80-150 chars total, references confidence_tier
     - Phrase blacklist checked before digit guardrail — blacklisted → return ""
-    - 80-char word-boundary truncation is a safety net only
+    - 160-char word-boundary truncation is a safety net only
     - Returns "" on any failure — never blocks rendering
     """
     import re as _re
@@ -7093,6 +7093,13 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         pick = tip.get("pick") or tip.get("outcome") or ""
         matchup = verified.get("matchup", "")
         tipster = verified.get("tipster") or {}
+        _conf_pct = float(tip.get("confidence") or 0)
+        def _derive_tier(p):
+            if p >= 95: return "MAX"
+            if p >= 85: return "STRONG"
+            if p >= 70: return "SOLID"
+            return "LEAN"
+        confidence_tier = tip.get("confidence_tier") or verified.get("confidence_tier") or _derive_tier(_conf_pct)
 
         lines: list[str] = []
         if matchup:
@@ -7103,6 +7110,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             lines.append(f"EV: +{ev:.1f}%")
         if odds:
             lines.append(f"Best odds: {odds:.2f}")
+        lines.append(f"Confidence tier: {confidence_tier}")
         home_pct = tipster.get("home_consensus_pct")
         if home_pct is not None:
             lines.append(f"Tipster home consensus: {home_pct}%")
@@ -7113,23 +7121,22 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             return ""
 
         system_prompt = (
-            "You are a sharp SA sports columnist writing a one-line kicker for a betting card. "
-            "The reader already sees the match, the pick, and the odds — your job is to add "
-            "the editorial angle they would not get from the numbers alone. "
-            "Write ONE punchy sentence, 60-75 characters. "
+            "You are a sharp SA sports columnist writing a 2-3 sentence verdict for a betting card. "
+            "The reader sees the match, pick, odds, and stake tier. Your job is the editorial angle. "
             "Rules: "
-            "1. You MUST cite one number from the data (EV%, odds, or consensus). "
-            "2. Active voice. Present tense. No hedging words. "
-            "3. No general knowledge, history, or clichés about the teams. "
-            "4. Lead with the insight, not the team name. "
-            "5. SA conversational register — write like a Kickoff Magazine columnist, not a textbook. "
+            "1. 2-3 sentences, 80-150 characters total. No padding. "
+            "2. Sentence 1: the market insight (cite one number — EV%, odds, or consensus). "
+            "3. Sentence 2: the supporting signal (form, injury, line movement — use what's in the data). "
+            "4. Sentence 3 (optional): stake sizing cue that matches the confidence tier exactly: "
+            "   LEAN='keep stake small', SOLID='manageable unit', STRONG='back with confidence', MAX='full unit'. "
+            "5. No hedging. No clichés. No team history. SA conversational register — Kickoff Magazine columnist. "
             "6. End with a full stop."
         )
 
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=100,
+            max_tokens=200,
             temperature=0.3,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -7148,8 +7155,8 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             log.warning("_generate_verdict: response contains no digit — discarding")
             return ""
 
-        if len(text) > 80:
-            trunc = text[:80].rsplit(" ", 1)[0]
+        if len(text) > 160:
+            trunc = text[:160].rsplit(" ", 1)[0]
             text = trunc.rstrip(",.;:")
             if not text.endswith((".", "!")):
                 text += "."

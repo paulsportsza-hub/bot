@@ -92,7 +92,13 @@
             font-family: 'JetBrains Mono', monospace;
             font-size: 15px;
             font-weight: 700;
-            color: #00E676;
+            color: #F5A623;
+        }
+        .prize-line {
+            color: #F5A623;
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 6px;
         }
 
         /* ── 2. Matchup ──────────────────────────────────────── */
@@ -373,8 +379,7 @@
                 <span class="tier-badge-name" style="color: {{ tier_color }};">{{ tier_name }} EDGE</span>
             </div>
             <div class="ev-display">
-                <span class="ev-label">EV</span>
-                <span class="ev-value">+{{ ev }}%</span>
+                <span class="ev-value">R200 → R{{ prize_return }}</span>
             </div>
             {% else %}
             <div class="no-edge-badge">
@@ -435,6 +440,7 @@
             {% endif %}
         </div>
         {% if bookmaker %}<div class="pick-bookie">@ {{ bookmaker }}</div>{% endif %}
+        {% if tier and prize_return %}<div class="prize-line">R200 returns R{{ prize_return }} · {{ bookmaker }}</div>{% endif %}
         {% if all_odds %}
         <div class="odds-pills">
             {% for o in all_odds %}
@@ -480,7 +486,7 @@
             <div class="bar-track">
                 <div class="bar-fill" style="width: {{ confidence }}%; background: {{ tier_color }};"></div>
             </div>
-            <span class="bar-pct" style="color: {{ tier_color }};">{{ confidence }}%</span>
+            <span class="bar-pct" style="color: {{ tier_color }};">{{ confidence_tier }}</span>
         </div>
         {% endif %}
     </div>

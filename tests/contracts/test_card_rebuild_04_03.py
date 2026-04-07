@@ -189,8 +189,8 @@ def test_max_tokens_is_100():
         _generate_verdict(tip, verified)
 
     call_kwargs = mock_client.messages.create.call_args
-    assert call_kwargs.kwargs.get("max_tokens") == 100, (
-        f"max_tokens should be 100, got {call_kwargs.kwargs.get('max_tokens')}"
+    assert call_kwargs.kwargs.get("max_tokens") == 200, (
+        f"max_tokens should be 200 (CARD-FIX-F: 2-3 sentence verdict), got {call_kwargs.kwargs.get('max_tokens')}"
     )
 
 
@@ -211,18 +211,22 @@ def test_system_prompt_param_used():
     call_kwargs = mock_client.messages.create.call_args
     assert "system" in call_kwargs.kwargs, "Haiku call must use 'system' parameter"
     system_text = call_kwargs.kwargs["system"]
-    assert "60-75" in system_text, f"System prompt must instruct char range, got: {system_text!r}"
+    assert "80-150" in system_text, f"System prompt must instruct char range, got: {system_text!r}"
 
 
 # ── D-01: truncation safety net ───────────────────────────────────────────────
 
 def test_truncation_appends_period_when_missing():
-    """D-01: truncated text that doesn't end with . or ! gets a period appended."""
+    """CARD-FIX-F: truncated text that doesn't end with . or ! gets a period appended. Limit is 160 chars."""
     from bot import _generate_verdict
 
-    # 92-char text with no terminal punctuation — must be truncated and period appended
-    long_text = "Arsenal priced 8% tight at 1.85 with +9.2% EV edge — back with full confidence here"
-    assert len(long_text) > 80, "Test text must exceed 80 chars to trigger truncation"
+    # 170-char text with no terminal punctuation — must be truncated and period appended
+    long_text = (
+        "Arsenal priced 8% tight at 1.85 with +9.2% EV edge — "
+        "line movement backs the pick and tipster consensus sits at 72% — "
+        "back with a manageable unit here no doubt about it at all"
+    )
+    assert len(long_text) > 160, f"Test text must exceed 160 chars to trigger truncation, got {len(long_text)}"
     mock_resp = _make_mock_response(long_text)
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
@@ -233,7 +237,7 @@ def test_truncation_appends_period_when_missing():
     with patch("anthropic.Anthropic", return_value=mock_client):
         result = _generate_verdict(tip, verified)
 
-    assert len(result) <= 80
+    assert len(result) <= 160
     assert result.endswith((".", "!")), f"Truncated verdict must end with . or !: {result!r}"
 
 

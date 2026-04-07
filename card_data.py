@@ -477,6 +477,17 @@ def build_tier_page_data(tips: list[dict], tier: str) -> dict:
     }
 
 
+def _confidence_tier(pct: float) -> str:
+    if pct >= 95:
+        return "MAX"
+    elif pct >= 85:
+        return "STRONG"
+    elif pct >= 70:
+        return "SOLID"
+    else:
+        return "LEAN"
+
+
 def build_edge_detail_data(tip: dict) -> dict:
     """Build edge_detail.html template data from a single tip/edge.
 
@@ -532,6 +543,9 @@ def build_edge_detail_data(tip: dict) -> dict:
     # Pick odds — float for comparison in template, string for display
     pick_odds_val = float(tip.get("pick_odds") or tip.get("odds") or 0)
     pick_odds_str = f"{pick_odds_val:.2f}"
+
+    # Prize return: R200 × odds, rounded to nearest R1
+    prize_return = round(200 * pick_odds_val) if pick_odds_val > 0 else 200
 
     # All odds — normalise {b, o} or {bookie, odds} formats
     raw_all_odds = tip.get("all_odds") or []
@@ -616,12 +630,14 @@ def build_edge_detail_data(tip: dict) -> dict:
         "pick_odds_float": pick_odds_val,
         "bookmaker":      tip.get("bookmaker") or "",
         "ev":             ev_str,
+        "prize_return":   prize_return,
         "all_odds":       all_odds,
 
         # Signals + bars
         "signals":     signals,
         "fair_value":  int(tip.get("fair_value") or 0),
         "confidence":  int(tip.get("confidence") or 0),
+        "confidence_tier": _confidence_tier(int(tip.get("confidence") or 0)),
 
         # H2H
         "h2h_total":     h2h_total,
