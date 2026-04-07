@@ -138,8 +138,11 @@ def test_my_matches_enrichment():
 
 # ── FIX 5: test_verdict_coherence_gate ────────────────────────────────────────
 
-def test_verdict_coherence_gate():
-    """When tipster_most_tipped conflicts with pick, verdict block is suppressed."""
+def test_verdict_from_haiku():
+    """FIX 2 (CARD-REBUILD-03A): verdict comes from _generate_verdict (Haiku), not tipster consensus.
+    Even when tipster most_tipped conflicts with pick, the Haiku-generated verdict is shown
+    because it is based on EV/odds data, not on tipster alignment.
+    """
     from bot import _enrich_tip_for_card
     from unittest.mock import patch, MagicMock
 
@@ -147,33 +150,39 @@ def test_verdict_coherence_gate():
         "pick": "Bournemouth",
         "outcome": "Bournemouth",
         "odds": 2.5,
+        "ev": 12.0,
         "bookmaker": "Betway",
     }
-    # Mock build_verified_data_block to return conflicting tipster data
     mock_verified = {
         "home_key": "arsenal",
         "away_key": "bournemouth",
+        "matchup": "Arsenal vs Bournemouth",
         "results": [],
         "injuries": [],
         "odds": {},
         "best_odds": {},
-        "tipster": {"most_tipped": "Arsenal"},
+        "tipster": {"most_tipped": "Arsenal", "_rows": []},
     }
     mock_bvdb = MagicMock(return_value=mock_verified)
     mock_form = MagicMock(return_value=[])
     mock_h2h = MagicMock(return_value={"played": 0, "hw": 0, "d": 0, "aw": 0})
     mock_inj = MagicMock(return_value=([], []))
     mock_sig = MagicMock(return_value=[])
+    mock_verdict = MagicMock(return_value="Bournemouth at 2.50 offers +12.0% EV over true probability.")
 
     with patch("card_pipeline.build_verified_data_block", mock_bvdb), \
          patch("card_pipeline._compute_team_form", mock_form), \
          patch("card_pipeline._compute_h2h", mock_h2h), \
          patch("card_pipeline._split_injuries", mock_inj), \
-         patch("card_pipeline._compute_signals", mock_sig):
+         patch("card_pipeline._compute_signals", mock_sig), \
+         patch("bot._generate_verdict", mock_verdict):
         result = _enrich_tip_for_card(tip, "arsenal_vs_bournemouth_2026-04-07")
 
-    # Verdict should be suppressed because Arsenal != Bournemouth
-    assert result["verdict"] == "", f"Verdict should be empty on conflict, got: {result['verdict']}"
+    # Verdict is Haiku-generated (EV-based), not tipster consensus
+    assert result["verdict"] != "", "Verdict should be set by Haiku"
+    assert "2.50" in result["verdict"] or "12" in result["verdict"], \
+        f"Verdict should cite a number, got: {result['verdict']}"
+    mock_verdict.assert_called_once()
 
 
 # ── FIX 6: test_zero_value_guards ─────────────────────────────────────────────

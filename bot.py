@@ -1831,9 +1831,11 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                          or t.get("match_id") == _mm_event_id),
                         _mm_match,
                     )
+                    # FIX 1: Normalise UUID event_id → canonical match_key
+                    _mm_card_key = _normalise_mm_event_id(_mm_full_tip, _mm_match)
                     # BUILD-CARDWIRE: Enrich tip with verified DB data
                     _mm_full_tip_enriched = await asyncio.to_thread(
-                        _enrich_tip_for_card, _mm_full_tip, _mm_event_id
+                        _enrich_tip_for_card, _mm_full_tip, _mm_card_key
                     )
                     _mm_ed_data = build_edge_detail_data(_mm_full_tip_enriched)
                     await send_card_or_fallback(
@@ -1846,8 +1848,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     # FIX 4 (D04): Non-edge match — enrich with verified DB data,
                     # then render via edge_detail.html with display_tier=None (FIX 2
                     # suppresses PICK/Verdict blocks, shows "No Edge Rating" badge).
+                    # FIX 1: Normalise UUID event_id → canonical match_key
+                    _mm_ne_card_key = _normalise_mm_event_id(_mm_match, _mm_match)
                     _mm_match_enriched = await asyncio.to_thread(
-                        _enrich_tip_for_card, _mm_match, _mm_event_id
+                        _enrich_tip_for_card, _mm_match, _mm_ne_card_key
                     )
                     _mm_match_enriched["display_tier"] = None
                     _mm_ed_data = build_edge_detail_data(_mm_match_enriched)
@@ -5526,6 +5530,7 @@ def _build_mm_matches_for_card(games: list[dict], edge_info: dict) -> list[dict]
             "sport_emoji": event.get("sport_emoji", "🏅"),
             "has_edge": bool(ei),
             "_event_id": event_id,  # for mm:match:{N} callback routing
+            "_commence_time": event.get("commence_time", ""),  # FIX 1: for UUID→canonical key
         }
         if ei:
             m["edge_tier"] = (
@@ -7052,7 +7057,109 @@ def _display_bookmaker_name(key: str) -> str:
     return _BK_DISPLAY.get(key, key.title())
 
 
-def _enrich_tip_for_card(tip: dict, match_key: str) -> dict:
+def _generate_verdict(tip: dict, verified: dict) -> str:
+    """Call Haiku for a ≤80-char verdict sentence citing a number.
+
+    CARD-REBUILD-03A FIX 2 — Haiku Verdict Spec (LOCKED 7 April 2026):
+    - Model: claude-haiku-4-5-20251001, temp=0.3, max_tokens=60
+    - One sentence ≤80 chars, must cite EV%/odds/probability
+    - Guardrail: must contain a digit (re.search r'\\d')
+    - 80-char word-boundary truncation
+    - Returns "" on any failure — never blocks rendering
+    """
+    import re as _re
+    try:
+        import anthropic as _anthropic
+        ev = float(tip.get("ev") or 0)
+        odds = float(tip.get("odds") or tip.get("pick_odds") or 0)
+        pick = tip.get("pick") or tip.get("outcome") or ""
+        matchup = verified.get("matchup", "")
+        tipster = verified.get("tipster") or {}
+
+        lines: list[str] = []
+        if matchup:
+            lines.append(f"Match: {matchup}")
+        if pick:
+            lines.append(f"Pick: {pick}")
+        if ev:
+            lines.append(f"EV: +{ev:.1f}%")
+        if odds:
+            lines.append(f"Best odds: {odds:.2f}")
+        home_pct = tipster.get("home_consensus_pct")
+        if home_pct is not None:
+            lines.append(f"Tipster home consensus: {home_pct}%")
+        elif tipster.get("most_tipped"):
+            lines.append(f"Most tipped: {tipster['most_tipped']}")
+
+        if not lines:
+            return ""
+
+        prompt = (
+            "You are a concise sports betting analyst. Write exactly ONE sentence "
+            "(≤80 characters) summarising why this pick has edge. You MUST cite at "
+            "least one number (EV%, odds, or a percentage). No disclaimer, no hype.\n\n"
+            + "\n".join(lines)
+        )
+
+        client = _anthropic.Anthropic()
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=60,
+            temperature=0.3,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = ""
+        for block in resp.content:
+            if hasattr(block, "text") and block.text:
+                text += block.text
+        text = text.strip()
+
+        if not _re.search(r"\d", text):
+            log.warning("_generate_verdict: response contains no digit — discarding")
+            return ""
+
+        if len(text) > 80:
+            trunc = text[:80].rsplit(" ", 1)[0]
+            text = trunc.rstrip(",.;:") + "."
+
+        return text
+    except Exception as exc:
+        log.warning("_generate_verdict: Haiku call failed: %s", exc)
+        return ""
+
+
+def _normalise_mm_event_id(tip: dict, snapshot_match: dict) -> str:
+    """Convert a snapshot entry's _event_id (may be Odds API UUID) to canonical match_key.
+
+    Priority:
+    1. ``tip["match_id"]`` when it looks like ``home_vs_away_YYYY-MM-DD`` (already canonical).
+    2. Build from snapshot home/away + _commence_time via ``build_match_id()``.
+    3. Return ``""`` with a warning when neither source yields a canonical key.
+    """
+    # 1 — tip already carries canonical match_id
+    existing = tip.get("match_id") or ""
+    if existing and "_vs_" in existing:
+        return existing
+
+    # 2 — build from snapshot fields
+    home = snapshot_match.get("home", "")
+    away = snapshot_match.get("away", "")
+    commence_time = snapshot_match.get("_commence_time", "")
+    if home and away:
+        try:
+            from services.odds_service import build_match_id as _bmi
+            key = _bmi(home, away, commence_time)
+            if key:
+                return key
+        except Exception as exc:
+            log.warning("_normalise_mm_event_id: build_match_id failed for %s vs %s: %s", home, away, exc)
+
+    log.warning("_normalise_mm_event_id: could not resolve canonical key for event_id=%s home=%s away=%s",
+                snapshot_match.get("_event_id", ""), home, away)
+    return ""
+
+
+def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     """Enrich a tip/match dict with verified DB data for card rendering.
 
     BUILD-CARDWIRE: Calls build_verified_data_block() once per match and maps
@@ -7071,6 +7178,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str) -> dict:
         _split_injuries,
         _compute_signals,
     )
+    import re as _re
     enriched = dict(tip)
 
     if not match_key:
@@ -7110,14 +7218,39 @@ def _enrich_tip_for_card(tip: dict, match_key: str) -> dict:
     enriched["home_form"] = _compute_team_form(results, home_key) if home_key else []
     enriched["away_form"] = _compute_team_form(results, away_key) if away_key else []
 
-    # 4) H2H — remap 'played' → 'n' for build_edge_detail_data() / build_match_detail_data()
-    h2h = _compute_h2h(results, home_key, away_key)
-    enriched["h2h"] = {
-        "n": h2h.get("played", 0),
-        "hw": h2h.get("hw", 0),
-        "d": h2h.get("d", 0),
-        "aw": h2h.get("aw", 0),
-    }
+    # 4) H2H — FIX 3 (CARD-REBUILD-03A): use evidence_pack for richer H2H (up to 5 meetings)
+    _h2h_set = False
+    try:
+        from evidence_pack import _fetch_h2h_from_match_results as _ep_h2h
+        _ep_league = (tip.get("league_key") or tip.get("league", "")).lower()
+        _ep_sport = tip.get("sport") or "soccer"
+        _mm_parts = verified.get("matchup", "").split(" vs ", 1)
+        _ep_home_name = _mm_parts[0].strip() if _mm_parts else ""
+        _ep_away_name = _mm_parts[1].strip() if len(_mm_parts) > 1 else ""
+        if home_key and away_key and _ep_league:
+            _h2h_block = _ep_h2h(
+                home_key, away_key, _ep_home_name, _ep_away_name,
+                _ep_league, _ep_sport, limit=5,
+            )
+            if _h2h_block and _h2h_block.summary:
+                _s = _h2h_block.summary
+                enriched["h2h"] = {
+                    "n": _s.get("total", 0),
+                    "hw": _s.get("home_wins", 0),
+                    "d": _s.get("draws", 0),
+                    "aw": _s.get("away_wins", 0),
+                }
+                _h2h_set = True
+    except Exception as _h2h_exc:
+        log.debug("_enrich_tip_for_card: evidence_pack H2H failed (%s), falling back", _h2h_exc)
+    if not _h2h_set:
+        _h2h_fb = _compute_h2h(results, home_key, away_key)
+        enriched["h2h"] = {
+            "n": _h2h_fb.get("played", 0),
+            "hw": _h2h_fb.get("hw", 0),
+            "d": _h2h_fb.get("d", 0),
+            "aw": _h2h_fb.get("aw", 0),
+        }
 
     # 5) Injuries — split by team into ['Player (status)'] lists
     home_inj, away_inj = _split_injuries(injuries, home_key, away_key)
@@ -7154,17 +7287,22 @@ def _enrich_tip_for_card(tip: dict, match_key: str) -> dict:
     if not enriched.get("pick"):
         enriched["pick"] = tip.get("outcome") or tip.get("home_team") or ""
 
-    # 10) Verdict — tipster most_tipped as short verdict when not already set
+    # 10) Verdict — FIX 2 (CARD-REBUILD-03A): Haiku single-sentence citing a number
     tipster = verified.get("tipster") or {}
-    if not enriched.get("verdict") and tipster.get("most_tipped"):
-        enriched["verdict"] = f"Most tipsters back {tipster['most_tipped']}"
+    if not enriched.get("verdict"):
+        enriched["verdict"] = _generate_verdict(enriched, verified)
 
-    # FIX 5 (D06): Verdict coherence gate — skip verdict when tipster pick conflicts with PICK
-    pick_outcome = enriched.get("pick") or ""
-    tipster_most_tipped = tipster.get("most_tipped") or ""
-    if tipster_most_tipped and pick_outcome:
-        if tipster_most_tipped.lower() != pick_outcome.lower():
-            enriched["verdict"] = ""
+    # 11) Top tipsters — FIX 4 (CARD-REBUILD-03A): individual source rows for template
+    _tipster_rows = tipster.get("_rows") or []
+    if _tipster_rows:
+        enriched["top_tipsters"] = [
+            {
+                "source": row.get("source", ""),
+                "pick": row.get("predicted_winner") or "",
+                "confidence": row.get("confidence"),
+            }
+            for row in _tipster_rows if row.get("source")
+        ][:4]
 
     return enriched
 

@@ -77,6 +77,9 @@ def _call_haiku_with_breaker(client, prompt: str) -> str | None:
 # ── Caption hard limit (Telegram photo captions) ─────────────────────────────
 _CAPTION_MAX = 1024
 
+# ── Injury staleness threshold ────────────────────────────────────────────────
+INJURY_STALE_HOURS = 72
+
 # ── DB paths (resolved from config or ENV fallback) ──────────────────────────
 _BOT_DIR = Path(__file__).parent
 _SCRAPERS_DIR = Path(os.environ.get("SCRAPERS_ROOT", str(_BOT_DIR.parent / "scrapers")))
@@ -550,6 +553,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                 FROM extracted_injuries ei
                 WHERE (ei.team_key LIKE ? OR ei.team_key LIKE ?)
                   AND ei.status NOT IN ('Missing Fixture', 'Unknown')
+                  AND ei.last_updated > datetime('now', '-72 hours')
                 ORDER BY ei.id DESC
                 LIMIT 10
                 """,
@@ -805,6 +809,19 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                         "away_consensus_pct": round(sum(away_pcts) / len(away_pcts), 1) if away_pcts else None,
                         "draw_consensus_pct": round(sum(draw_pcts) / len(draw_pcts), 1) if draw_pcts else None,
                         "most_tipped": max(set(winners), key=winners.count) if winners else None,
+                        # FIX 4 (CARD-REBUILD-03A): raw rows for top_tipsters in _enrich_tip_for_card
+                        "_rows": [
+                            {
+                                "source": str(r["source"] or ""),
+                                "predicted_winner": str(r["predicted_winner"] or ""),
+                                "home_win_pct": r["home_win_pct"],
+                                "away_win_pct": r["away_win_pct"],
+                                "draw_pct": r["draw_pct"],
+                                "confidence": r["confidence"],
+                                "pick_summary": str(r["pick_summary"] or ""),
+                            }
+                            for r in tip_rows
+                        ],
                     }
             finally:
                 tipster_conn.close()

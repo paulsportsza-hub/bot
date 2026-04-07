@@ -599,6 +599,9 @@ def build_edge_detail_data(tip: dict) -> dict:
         # Verdict
         "verdict": tip.get("verdict") or "",
 
+        # Tipsters — FIX 4 (CARD-REBUILD-03A)
+        "top_tipsters": tip.get("top_tipsters") or [],
+
         # Logo
         "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
     }
