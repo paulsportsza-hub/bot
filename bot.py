@@ -1783,14 +1783,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _ep_btn_rows = _build_game_buttons(
                     [_ep_tip], event_id=_ep_event_id, user_id=user_id,
                     source="edge_picks", user_tier=_ep_tier, edge_tier=_ep_edge_tier,
+                    back_page=_ep_back_page,
                 )
-                _ep_btn_rows.append([
-                    InlineKeyboardButton(
-                        "↩️ Back to Edge Picks",
-                        callback_data=f"ed:back:{_ep_back_page}",
-                    ),
-                    InlineKeyboardButton("🏠 Menu", callback_data="nav:main"),
-                ])
                 _ep_markup = InlineKeyboardMarkup(_ep_btn_rows)
                 _ep_fallback = (
                     f"<b>{h(_ep_tip.get('home', ''))} vs "
