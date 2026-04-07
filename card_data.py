@@ -548,6 +548,7 @@ def build_edge_detail_data(tip: dict) -> dict:
     # Signals — normalise from dict or list
     _SIGNAL_DISPLAY = {
         "line_mvt":    "Line Mvt",
+        "movement":    "Line Mvt",
         "price_edge":  "Price Edge",
         "tipster":     "Tipster",
         "form":        "Form",
