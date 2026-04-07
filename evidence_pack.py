@@ -701,7 +701,7 @@ def _fetch_h2h_from_match_results(
             FROM match_results
             WHERE league = ? AND sport = ?
             ORDER BY match_date DESC
-            LIMIT 250
+            LIMIT 1500
             """,
             (league, sport),
         ).fetchall()

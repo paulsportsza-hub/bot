@@ -7248,7 +7248,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     try:
         from evidence_pack import _fetch_h2h_from_match_results as _ep_h2h
         _ep_league = (tip.get("league_key") or tip.get("league", "")).lower()
-        _ep_sport = tip.get("sport") or "soccer"
+        _ep_sport = tip.get("sport_key") or tip.get("sport") or "soccer"
         _mm_parts = verified.get("matchup", "").split(" vs ", 1)
         _ep_home_name = _mm_parts[0].strip() if _mm_parts else ""
         _ep_away_name = _mm_parts[1].strip() if len(_mm_parts) > 1 else ""
