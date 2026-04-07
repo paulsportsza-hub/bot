@@ -7058,16 +7058,26 @@ def _display_bookmaker_name(key: str) -> str:
 
 
 def _generate_verdict(tip: dict, verified: dict) -> str:
-    """Call Haiku for a ≤80-char verdict sentence citing a number.
+    """Call Haiku for a ≤75-char verdict sentence citing a number.
 
-    CARD-REBUILD-03A FIX 2 — Haiku Verdict Spec (LOCKED 7 April 2026):
-    - Model: claude-haiku-4-5-20251001, temp=0.3, max_tokens=60
-    - One sentence ≤80 chars, must cite EV%/odds/probability
-    - Guardrail: must contain a digit (re.search r'\\d')
-    - 80-char word-boundary truncation
+    CARD-REBUILD-04-03 (D-01 + D-02):
+    - Model: claude-haiku-4-5-20251001, temp=0.3, max_tokens=100
+    - System prompt instructs ≤75 chars, active voice, must cite a number, no general knowledge
+    - Phrase blacklist checked before digit guardrail — blacklisted → return ""
+    - 80-char word-boundary truncation is a safety net only
     - Returns "" on any failure — never blocks rendering
     """
     import re as _re
+    _BLACKLISTED_PHRASES = [
+        "home advantage", "away advantage",
+        "historically", "tradition", "traditionally",
+        "derby", "rivalry",
+        "big game", "big match",
+        "relegation battle", "title race",
+        "form suggests", "expected to",
+        "known for", "famous for",
+        "favourite", "underdog",
+    ]
     try:
         import anthropic as _anthropic
         ev = float(tip.get("ev") or 0)
@@ -7094,19 +7104,20 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         if not lines:
             return ""
 
-        prompt = (
-            "You are a concise sports betting analyst. Write exactly ONE sentence "
-            "(≤80 characters) summarising why this pick has edge. You MUST cite at "
-            "least one number (EV%, odds, or a percentage). No disclaimer, no hype.\n\n"
-            + "\n".join(lines)
+        system_prompt = (
+            "You are a sharp sports betting analyst. Write ONE sentence of ≤75 characters "
+            "that summarises the edge using only the data provided. You MUST include at least "
+            "one number (EV%, odds, fair value, or confidence). Active voice. No hedging. "
+            "No general knowledge. End with a period."
         )
 
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=60,
+            max_tokens=100,
             temperature=0.3,
-            messages=[{"role": "user", "content": prompt}],
+            system=system_prompt,
+            messages=[{"role": "user", "content": "\n".join(lines)}],
         )
         text = ""
         for block in resp.content:
@@ -7114,13 +7125,19 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
                 text += block.text
         text = text.strip()
 
+        if any(p in text.lower() for p in _BLACKLISTED_PHRASES):
+            log.warning("verdict blacklisted: %s", text)
+            return ""
+
         if not _re.search(r"\d", text):
             log.warning("_generate_verdict: response contains no digit — discarding")
             return ""
 
         if len(text) > 80:
             trunc = text[:80].rsplit(" ", 1)[0]
-            text = trunc.rstrip(",.;:") + "."
+            text = trunc.rstrip(",.;:")
+            if not text.endswith((".", "!")):
+                text += "."
 
         return text
     except Exception as exc:

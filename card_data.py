@@ -546,11 +546,19 @@ def build_edge_detail_data(tip: dict) -> dict:
         })
 
     # Signals — normalise from dict or list
+    _SIGNAL_DISPLAY = {
+        "line_mvt":    "Line Mvt",
+        "price_edge":  "Price Edge",
+        "tipster":     "Tipster",
+        "form":        "Form",
+        "market":      "Market",
+        "injury":      "Injury",
+    }
     raw_signals = tip.get("signals") or {}
     if isinstance(raw_signals, dict):
-        signals = [{"name": k, "active": bool(v)} for k, v in raw_signals.items()]
+        signals = [{"name": _SIGNAL_DISPLAY.get(k, k), "active": bool(v)} for k, v in raw_signals.items()]
     else:
-        signals = [{"name": s.get("name", ""), "active": bool(s.get("active"))} for s in raw_signals]
+        signals = [{"name": _SIGNAL_DISPLAY.get(s.get("name", ""), s.get("name", "")), "active": bool(s.get("active"))} for s in raw_signals]
 
     # H2H — support nested dict {n, hw, d, aw} or flat fields
     h2h = tip.get("h2h") or {}
@@ -612,8 +620,11 @@ def build_edge_detail_data(tip: dict) -> dict:
         # Verdict
         "verdict": tip.get("verdict") or "",
 
-        # Tipsters — FIX 4 (CARD-REBUILD-03A)
-        "top_tipsters": tip.get("top_tipsters") or [],
+        # Tipsters — FIX 4 (CARD-REBUILD-03A); resolve "Home"/"Away" to team names (D-18)
+        "top_tipsters": [
+            {**t, "pick": home if t.get("pick") == "Home" else (away if t.get("pick") == "Away" else t.get("pick", ""))}
+            for t in (tip.get("top_tipsters") or [])
+        ],
 
         # Logo
         "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),

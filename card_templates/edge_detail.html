@@ -513,7 +513,7 @@
     <!-- ── 7. H2H ────────────────────────────────────────────── -->
     {% if h2h_total %}
     <div class="h2h-section">
-        <div class="section-hdr" style="color: #777777;">↔ H2H &middot; {{ h2h_total }} matches</div>
+        <div class="section-hdr" style="color: #777777;">↔ H2H &middot; {{ h2h_total }} match{{ 'es' if h2h_total != 1 else '' }}</div>
         <div class="h2h-bar">
             {% if h2h_home_wins %}<div class="h2h-seg-home" style="flex: {{ h2h_home_wins }};"></div>{% endif %}
             {% if h2h_draws %}<div class="h2h-seg-draw" style="flex: {{ h2h_draws }};"></div>{% endif %}
@@ -543,7 +543,7 @@
     <!-- ── 9. Verdict (edge only) ──────────────────────────── -->
     {% if tier and verdict %}
     <div class="verdict-section">
-        <div class="section-hdr" style="color: #FFB300;">⚠ VERDICT</div>
+        <div class="section-hdr" style="color: #FFB300;">🏆 VERDICT</div>
         <div class="verdict-text">{{ verdict }}</div>
     </div>
     {% endif %}

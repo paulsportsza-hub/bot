@@ -1106,6 +1106,9 @@ def build_card_data(
         _form_n = min(len(home_form), len(away_form))
         home_form = home_form[:_form_n][::-1]
         away_form = away_form[:_form_n][::-1]
+    # D-17b: hard cap at 5 regardless of asymmetric guard result
+    home_form = home_form[:5]
+    away_form = away_form[:5]
     h2h = _compute_h2h(_results, home_key, away_key)
 
     _raw_injuries = verified.get("injuries") or []
