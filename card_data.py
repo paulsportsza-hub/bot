@@ -563,7 +563,7 @@ def build_edge_detail_data(tip: dict) -> dict:
     kickoff_raw = tip.get("_bc_kickoff") or tip.get("kickoff") or ""
     date_part, time_part = _split_kickoff(kickoff_raw)
     date_str = tip.get("date") or date_part
-    time_str = tip.get("time") or time_part
+    time_str = tip.get("time") or time_part or "TBC"
 
     return {
         # Tier

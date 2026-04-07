@@ -7215,8 +7215,16 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     enriched["all_odds"] = sorted(all_odds, key=lambda x: x["odds"], reverse=True)
 
     # 3) Form — last 5 results per team as ['W','D','L'] lists
-    enriched["home_form"] = _compute_team_form(results, home_key) if home_key else []
-    enriched["away_form"] = _compute_team_form(results, away_key) if away_key else []
+    # CARD-REBUILD-04-02: asymmetric guard + most-recent-RIGHT reversal.
+    _hf = _compute_team_form(results, home_key) if home_key else []
+    _af = _compute_team_form(results, away_key) if away_key else []
+    if not _hf or not _af:
+        enriched["home_form"] = []
+        enriched["away_form"] = []
+    else:
+        _fn = min(len(_hf), len(_af))
+        enriched["home_form"] = _hf[:_fn][::-1]
+        enriched["away_form"] = _af[:_fn][::-1]
 
     # 4) H2H — FIX 3 (CARD-REBUILD-03A): use evidence_pack for richer H2H (up to 5 meetings)
     _h2h_set = False
@@ -7569,9 +7577,10 @@ def _get_broadcast_details(
             if start_time_str:
                 result["kickoff"] = _format_kickoff_display(start_time_str)
 
-            # Build broadcast display (simplified: just DStv number)
+            # Build broadcast display — raw channel string only (no emoji prefix)
             ch_num = best["dstv_number"]
-            result["broadcast"] = f"\U0001f4fa DStv {ch_num}"
+            ch_short = (best.get("channel_short") or "").strip()
+            result["broadcast"] = f"{ch_short} (DStv {ch_num})" if ch_short else f"DStv {ch_num}"
 
             # Check for free-to-air option
             for row in matches:
@@ -7580,13 +7589,15 @@ def _get_broadcast_details(
                     result["broadcast"] += f" | FREE DStv {free_num}"
                     break
         else:
-            # Fallback: league-level match via existing helper
-            result["broadcast"] = _get_broadcast_line(
+            # Fallback: league-level match via existing helper — strip emoji prefix
+            _raw = _get_broadcast_line(
                 home_team=home_team, away_team=away_team,
                 league_key=league_key, match_date=today,
             )
+            result["broadcast"] = re.sub(r"^📺\s*", "", _raw) if _raw else ""
     except Exception:
         pass
+    # Returns raw channel string only. Template adds emoji prefix.
     return result
 
 

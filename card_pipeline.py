@@ -153,6 +153,9 @@ def _stale_marker(scraped_at: str | None) -> str:
 def _compute_team_form(results: list[dict], team_key: str, last_n: int = 5) -> list[str]:
     """Return per-team array of 'W'/'D'/'L' for last *last_n* matches.
 
+    CANONICAL HELPER (INV-04 AC-3): This is the single authoritative function
+    for computing recent results per team. Do not duplicate this logic elsewhere.
+
     Parses the ``results`` list produced by :func:`build_verified_data_block`.
     Only matches where *team_key* appears (case-insensitive substring) as home
     or away are counted.  Matches with missing scores are skipped.
@@ -578,8 +581,8 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                 FROM match_results
                 WHERE (home_team LIKE ? OR away_team LIKE ?
                        OR home_team LIKE ? OR away_team LIKE ?)
-                ORDER BY match_key DESC
-                LIMIT 10
+                ORDER BY match_date DESC
+                LIMIT 20
                 """,
                 (
                     f"%{home_key}%", f"%{home_key}%",
@@ -1092,6 +1095,17 @@ def build_card_data(
     _results = verified.get("results") or []
     home_form = _compute_team_form(_results, home_key)
     away_form = _compute_team_form(_results, away_key)
+    # CARD-REBUILD-04-02: asymmetric guard + most-recent-RIGHT reversal.
+    # Results are fetched ORDER BY match_date DESC, so _compute_team_form returns
+    # [newest, ..., oldest]. Reverse to [oldest, ..., newest] so rightmost dot
+    # = most recent (Pixel Ref Rule 6). If either side has 0 results, hide both.
+    if not home_form or not away_form:
+        home_form = []
+        away_form = []
+    else:
+        _form_n = min(len(home_form), len(away_form))
+        home_form = home_form[:_form_n][::-1]
+        away_form = away_form[:_form_n][::-1]
     h2h = _compute_h2h(_results, home_key, away_key)
 
     _raw_injuries = verified.get("injuries") or []
