@@ -7191,6 +7191,160 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         return ""
 
 
+def _fact_check_verdict(verdict: str, spec: dict) -> str | None:
+    """PIPELINE-BUILD-01 Task 3: Strip hallucination patterns from verdict output.
+
+    Returns cleaned verdict, or None if >50% of content was stripped
+    (caller should fall back to deterministic baseline).
+    """
+    import re as _re
+    if not verdict:
+        return None
+
+    _HALLUCINATION_PATTERNS = [
+        _re.compile(r"hasn't (beaten|won|scored) .{3,30} since \d{4}", _re.IGNORECASE),
+        _re.compile(r"\btraditionally\b", _re.IGNORECASE),
+        _re.compile(r"\bhistorically\b", _re.IGNORECASE),
+        _re.compile(r"\bknown for\b", _re.IGNORECASE),
+        _re.compile(r"\bfamous for\b", _re.IGNORECASE),
+        _re.compile(r"\btends to\b", _re.IGNORECASE),
+        _re.compile(r"\busually\b", _re.IGNORECASE),
+        _re.compile(r"\btypically\b", _re.IGNORECASE),
+        _re.compile(r"\balways\b", _re.IGNORECASE),
+        _re.compile(r"\blast time they met\b", _re.IGNORECASE),
+        _re.compile(r"\b(manager|coach|gaffer)\b", _re.IGNORECASE),
+        _re.compile(r"\btravel fatigue\b", _re.IGNORECASE),
+    ]
+
+    original_len = len(verdict)
+    sentences = _re.split(r'(?<=[.!?])\s+', verdict.strip())
+    kept: list[str] = []
+    for sentence in sentences:
+        if any(pat.search(sentence) for pat in _HALLUCINATION_PATTERNS):
+            log.warning("_fact_check_verdict: stripped '%s'", sentence[:60])
+            continue
+        kept.append(sentence)
+
+    if not kept:
+        return None
+
+    cleaned = " ".join(kept)
+    stripped_ratio = 1 - (len(cleaned) / max(original_len, 1))
+    if stripped_ratio > 0.5:
+        log.warning(
+            "_fact_check_verdict: >50%% stripped (%.0f%%), falling back to deterministic",
+            stripped_ratio * 100,
+        )
+        return None
+    return cleaned
+
+
+def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
+    """PIPELINE-BUILD-01 Task 2: Pre-computation verdict with ALLOWED fields only.
+
+    Differences from _generate_verdict():
+    - ALLOWED fields only — no narrative_snippet, home_context, away_context, key_injury, coach
+    - All 10 guardrails baked into system prompt
+    - max_tokens=150, temp=0.2 (tighter than view-time version)
+    - Calls _fact_check_verdict() after generation
+    - Falls back to _render_verdict(spec) from narrative_spec if fact-check strips >50%
+    """
+    import re as _re
+    try:
+        import anthropic as _anthropic
+        from narrative_spec import _render_verdict as _render_verdict_deterministic, NarrativeSpec
+
+        ev = float(allowed_data.get("ev") or 0)
+        odds = float(allowed_data.get("odds") or 0)
+        pick = allowed_data.get("pick") or allowed_data.get("outcome") or ""
+        bookmaker = allowed_data.get("bookmaker") or ""
+        matchup = allowed_data.get("matchup") or ""
+        confidence_tier = allowed_data.get("confidence_tier") or "LEAN"
+
+        lines: list[str] = []
+        if matchup:
+            lines.append(f"Match: {matchup}")
+        if pick:
+            lines.append(f"Pick: {pick}")
+        if ev:
+            lines.append(f"EV: +{ev:.1f}%")
+        if odds:
+            lines.append(f"Best odds: {odds:.2f}")
+        if bookmaker:
+            lines.append(f"Bookmaker: {bookmaker}")
+        lines.append(f"Confidence tier: {confidence_tier}")
+        if not lines:
+            # Fall back to deterministic
+            if isinstance(spec, NarrativeSpec):
+                return _render_verdict_deterministic(spec)
+            return ""
+
+        system_prompt = (
+            "You are a sharp South African sports analyst writing a 2-sentence verdict "
+            "for a pre-computed betting card. "
+            "Sentence 1: cite the key number (odds, EV%, or consensus). "
+            "Sentence 2: one phrase matching the confidence tier exactly: "
+            "LEAN='keep stake small', SOLID='manageable unit', STRONG='back with confidence', MAX='full unit'. "
+            "ABSOLUTE RULES — no exceptions: "
+            "1. GOLDEN RULE: If you cannot point to the exact field in the DATA block that supports a claim, DO NOT MAKE THAT CLAIM. "
+            "2. No training-data facts. Every factual claim must come from the DATA block only. "
+            "3. No person names. "
+            "4. No historical claims. "
+            "5. No venue commentary. "
+            "6. No tactical descriptions. "
+            "7. No stake guidance beyond the exact sizing phrase. "
+            "8. Banned phrases: historically, traditionally, known for, famous for, haven't beaten, "
+            "last time they met, always struggle, typically, usually, tends to. "
+            "9. No hedging or clichés. "
+            "10. Tone ceiling: do not express more confidence than the confidence tier."
+        )
+
+        client = _anthropic.Anthropic()
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=150,
+            temperature=0.2,
+            system=system_prompt,
+            messages=[{"role": "user", "content": "\n".join(lines)}],
+        )
+        text = ""
+        for block in resp.content:
+            if hasattr(block, "text") and block.text:
+                text += block.text
+        text = text.strip()
+
+        if not text:
+            if isinstance(spec, NarrativeSpec):
+                return _render_verdict_deterministic(spec)
+            return ""
+
+        # Fact-check the output
+        checked = _fact_check_verdict(text, spec if isinstance(spec, dict) else {})
+        if checked is None:
+            # >50% stripped or empty — fall back to deterministic
+            if isinstance(spec, NarrativeSpec):
+                return _render_verdict_deterministic(spec)
+            return ""
+
+        # Truncate safety net
+        if len(checked) > 350:
+            trunc = checked[:350].rsplit(" ", 1)[0]
+            checked = trunc.rstrip(",.;:")
+            if not checked.endswith((".", "!")):
+                checked += "."
+
+        return checked
+    except Exception as exc:
+        log.warning("_generate_verdict_constrained failed: %s", exc)
+        try:
+            from narrative_spec import _render_verdict as _rv_fallback, NarrativeSpec
+            if isinstance(spec, NarrativeSpec):
+                return _rv_fallback(spec)
+        except Exception:
+            pass
+        return ""
+
+
 def _normalise_mm_event_id(tip: dict, snapshot_match: dict) -> str:
     """Convert a snapshot entry's _event_id (may be Odds API UUID) to canonical match_key.
 
@@ -7278,25 +7432,41 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             continue
         if v > 1.0:
             all_odds.append({"bookie": _display_bookmaker_name(bk), "odds": v})
-    # CARD-FIX-B Task 4: inject pick bookmaker if missing from snapshot odds
-    pick_bk = tip.get("bookmaker") or ""
+    # CARD-FIX-K: Fall back to odds_by_bookmaker when odds_snapshots has no data
+    # (match >48h old, rugby/cricket not scraped, or key mismatch).
+    if len(all_odds) < 2 and tip.get("odds_by_bookmaker"):
+        for _obk, _ov in tip["odds_by_bookmaker"].items():
+            try:
+                _ov = float(_ov)
+            except (TypeError, ValueError):
+                continue
+            if _ov > 1.0:
+                _od = _display_bookmaker_name(_obk)
+                if not any(o["bookie"] == _od for o in all_odds):
+                    all_odds.append({"bookie": _od, "odds": _ov})
+    # CARD-FIX-K: Use bookmaker_key (raw DB key) not bookmaker (display name) so that
+    # _display_bookmaker_name maps correctly — tip["bookmaker"] already IS the display
+    # name ("HWB"), passing it through _display_bookmaker_name returns "Hwb" (wrong).
+    pick_bk_raw = (tip.get("bookmaker_key") or "").lower()
+    if not pick_bk_raw:
+        # bookmaker field may be a raw key if bookmaker_key wasn't populated
+        pick_bk_raw = (tip.get("bookmaker") or "").lower()
+    pick_bk_display = _display_bookmaker_name(pick_bk_raw)
     pick_odds = 0.0
     try:
         pick_odds = float(tip.get("odds") or 0)
     except (TypeError, ValueError):
         pass
-    if pick_bk and pick_odds > 1.0:
-        pick_bk_display = _display_bookmaker_name(pick_bk)
+    if pick_bk_raw and pick_odds > 1.0:
         if not any(o["bookie"] == pick_bk_display for o in all_odds):
             all_odds.append({"bookie": pick_bk_display, "odds": pick_odds, "is_pick": True})
     # Mark the pick bookmaker in existing entries
     for o in all_odds:
-        if pick_bk and o["bookie"] == _display_bookmaker_name(pick_bk):
+        if pick_bk_raw and o["bookie"] == pick_bk_display:
             o["is_pick"] = True
-    # CARD-FIX-H Task 1: chip selection — pick + 3 worst (lowest = biggest gap vs pick price)
-    _pick_bk_display = _display_bookmaker_name(tip.get("bookmaker") or "")
-    _pick_chips = [o for o in all_odds if o["bookie"] == _pick_bk_display]
-    _other_chips = [o for o in all_odds if o["bookie"] != _pick_bk_display]
+    # CARD-FIX-H Task 1 / CARD-FIX-K: chip selection — pick first, then 3 lowest others
+    _pick_chips = [o for o in all_odds if o.get("is_pick")]
+    _other_chips = [o for o in all_odds if not o.get("is_pick")]
     _other_chips.sort(key=lambda x: x["odds"])  # ascending = lowest first = worst
     enriched["all_odds"] = _pick_chips + _other_chips[:3]
 
@@ -7398,14 +7568,46 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
         except Exception as _ve:
             log.debug("_enrich_tip_for_card: venue query failed: %s", _ve)
 
+    # 8c) Channel — broadcast lookup when tip["channel"] is empty
+    # CARD-FIX-K: _channel_fields in card_data.py reads tip["channel"]. Tips from the
+    # global hot_tips_cache (not through _build_hot_tips_page) never have channel set.
+    # Do a direct broadcast_schedule lookup here as a reliable fallback.
+    if not enriched.get("channel"):
+        try:
+            _home_bd = _team_display(home_key) if home_key else tip.get("home_team", "")
+            _away_bd = _team_display(away_key) if away_key else tip.get("away_team", "")
+            _bc_d = _get_broadcast_details(
+                home_team=_home_bd,
+                away_team=_away_bd,
+                league_key=tip.get("sport_key", ""),
+            )
+            if _bc_d.get("broadcast"):
+                # Store the full broadcast string (e.g. "📺 SS EPL (DStv 203)");
+                # _parse_channel in card_data.py extracts number + SS flag from it.
+                enriched["channel"] = _bc_d["broadcast"]
+        except Exception as _ch_err:
+            log.debug("_enrich_tip_for_card: broadcast lookup failed: %s", _ch_err)
+
     # 9) Pick name — outcome display for summary and detail cards
     if not enriched.get("pick"):
         enriched["pick"] = tip.get("outcome") or tip.get("home_team") or ""
 
-    # 10) Verdict — FIX 2 (CARD-REBUILD-03A): Haiku single-sentence citing a number
+    # 10) Verdict — PIPELINE-BUILD-01: check narrative_cache first, then generate
     tipster = verified.get("tipster") or {}
     if not enriched.get("verdict"):
-        enriched["verdict"] = _generate_verdict(enriched, verified)
+        # Try cached verdict from narrative_cache (pre-computed by pregenerate_narratives)
+        _cached_verdict = _get_cached_verdict(match_key)
+        if _cached_verdict and not _is_verdict_stale(_cached_verdict):
+            enriched["verdict"] = _cached_verdict["verdict_html"]
+        else:
+            # Fallback: generate at view time (existing path)
+            enriched["verdict"] = _generate_verdict(enriched, verified)
+            # Store for next view (best-effort, fire-and-forget)
+            if enriched["verdict"] and match_key:
+                try:
+                    _store_verdict_cache_sync(match_key, enriched["verdict"], enriched)
+                except Exception:
+                    pass  # Best-effort — don't block card rendering
 
     # 11) Top tipsters — FIX 4 (CARD-REBUILD-03A): individual source rows for template
     _tipster_rows = tipster.get("_rows") or []
@@ -11208,6 +11410,22 @@ def _ensure_narrative_cache_table() -> None:
         # AC-1 (P1P3-BUILD): structured card data stored per match
         if "structured_card_json" not in cols:
             conn.execute("ALTER TABLE narrative_cache ADD COLUMN structured_card_json TEXT")
+        # PIPELINE-BUILD-01: new columns for pre-computed verdict pipeline
+        if "verdict_html" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN verdict_html TEXT")
+        if "evidence_class" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN evidence_class TEXT")
+        if "tone_band" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN tone_band TEXT")
+        if "spec_json" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN spec_json TEXT")
+        if "context_json" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN context_json TEXT")
+        if "generation_ms" not in cols:
+            conn.execute("ALTER TABLE narrative_cache ADD COLUMN generation_ms INTEGER")
+        # PIPELINE-BUILD-01: indexes for staleness + tier queries
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_nc_expires ON narrative_cache(expires_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_nc_tier ON narrative_cache(edge_tier)")
         conn.commit()
     finally:
         conn.close()
@@ -11639,6 +11857,12 @@ async def _store_narrative_cache(
     narrative_source: str = "w82",
     coverage_json: str | None = None,
     structured_card_json: str | None = None,
+    verdict_html: str | None = None,
+    evidence_class: str | None = None,
+    tone_band: str | None = None,
+    spec_json: str | None = None,
+    context_json: str | None = None,
+    generation_ms: int | None = None,
 ) -> None:
     """Persist narrative to DB cache with 6hr TTL.
 
@@ -11666,8 +11890,9 @@ async def _store_narrative_cache(
                 "INSERT OR REPLACE INTO narrative_cache "
                 "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
                 "evidence_json, narrative_source, coverage_json, created_at, expires_at, "
-                "structured_card_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "structured_card_json, verdict_html, evidence_class, tone_band, "
+                "spec_json, context_json, generation_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     match_id, html, model, edge_tier,
                     json.dumps(tips, default=str),
@@ -11678,6 +11903,12 @@ async def _store_narrative_cache(
                     now.isoformat(),
                     expires.isoformat(),
                     structured_card_json,
+                    verdict_html,
+                    evidence_class,
+                    tone_band,
+                    spec_json,
+                    context_json,
+                    generation_ms,
                 ),
             )
             conn.commit()
@@ -11774,6 +12005,130 @@ async def _delete_narrative_cache(match_id: str) -> None:
             conn.close()
 
     await asyncio.to_thread(_delete)
+
+
+def _get_cached_verdict(match_key: str) -> dict | None:
+    """PIPELINE-BUILD-01: Fetch cached verdict from narrative_cache. Synchronous.
+
+    Returns dict with verdict_html, evidence_class, tone_band, odds_hash, created_at
+    or None if not found.
+    """
+    import sqlite3
+    from db_connection import get_connection
+    if not match_key:
+        return None
+    try:
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+        try:
+            row = conn.execute(
+                "SELECT verdict_html, evidence_class, tone_band, odds_hash, "
+                "created_at, expires_at "
+                "FROM narrative_cache WHERE match_id = ?",
+                (match_key,),
+            ).fetchone()
+            if not row or not row[0]:
+                return None
+            return {
+                "verdict_html": row[0],
+                "evidence_class": row[1] or "",
+                "tone_band": row[2] or "",
+                "odds_hash": row[3] or "",
+                "created_at": row[4] or "",
+                "expires_at": row[5] or "",
+            }
+        finally:
+            conn.close()
+    except sqlite3.OperationalError:
+        return None
+    except Exception:
+        return None
+
+
+def _is_verdict_stale(cached: dict) -> bool:
+    """PIPELINE-BUILD-01: Staleness rules for cached verdict.
+
+    0–6h: serve as-is
+    6–24h: serve, but flag for background refresh if odds_hash changed
+    >24h: regenerate
+    """
+    from datetime import datetime, timezone
+    created_str = cached.get("created_at", "")
+    if not created_str:
+        return True
+    try:
+        created = datetime.fromisoformat(created_str)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+        if age_hours > 24:
+            return True
+        if age_hours > 6:
+            # Check if odds have changed
+            match_key = cached.get("match_key", "")
+            if match_key:
+                current_hash = _compute_odds_hash(match_key)
+                if current_hash and current_hash != cached.get("odds_hash", ""):
+                    return True
+        return False
+    except (ValueError, TypeError):
+        return True
+
+
+def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict) -> None:
+    """PIPELINE-BUILD-01: Store verdict in narrative_cache. Synchronous, best-effort.
+
+    Updates verdict_html column on existing row (from pregenerate or narrative cache).
+    If no row exists, creates a minimal one.
+    """
+    import json
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    from db_connection import get_connection
+    if not match_key or not verdict_html:
+        return
+    try:
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+        try:
+            # Check if row exists
+            existing = conn.execute(
+                "SELECT match_id FROM narrative_cache WHERE match_id = ?",
+                (match_key,),
+            ).fetchone()
+            if existing:
+                # Update verdict on existing row
+                conn.execute(
+                    "UPDATE narrative_cache SET verdict_html = ? WHERE match_id = ?",
+                    (verdict_html, match_key),
+                )
+            else:
+                # Create minimal row for verdict
+                now = datetime.now(timezone.utc)
+                expires = now + timedelta(seconds=_NARRATIVE_CACHE_TTL)
+                conn.execute(
+                    "INSERT OR REPLACE INTO narrative_cache "
+                    "(match_id, narrative_html, verdict_html, model, edge_tier, "
+                    "tips_json, odds_hash, narrative_source, created_at, expires_at) "
+                    "VALUES (?, '', ?, 'view-time', ?, ?, ?, 'verdict-cache', ?, ?)",
+                    (
+                        match_key,
+                        verdict_html,
+                        tip_data.get("edge_tier", ""),
+                        json.dumps([tip_data], default=str),
+                        _compute_odds_hash(match_key),
+                        now.isoformat(),
+                        expires.isoformat(),
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e).lower():
+            log.debug("Verdict cache persist deferred (DB contention) for %s", match_key)
+        else:
+            log.warning("Verdict cache persist failed for %s: %s", match_key, e)
+    except Exception as e:
+        log.debug("Verdict cache persist error for %s: %s", match_key, e)
 
 
 async def _store_narrative_evidence(match_id: str, evidence_json: str) -> bool:

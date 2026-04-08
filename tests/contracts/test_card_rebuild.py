@@ -175,6 +175,7 @@ def test_verdict_from_haiku():
          patch("card_pipeline._compute_h2h", mock_h2h), \
          patch("card_pipeline._split_injuries", mock_inj), \
          patch("card_pipeline._compute_signals", mock_sig), \
+         patch("bot._get_cached_verdict", return_value=None), \
          patch("bot._generate_verdict", mock_verdict):
         result = _enrich_tip_for_card(tip, "arsenal_vs_bournemouth_2026-04-07")
 
