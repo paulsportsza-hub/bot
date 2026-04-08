@@ -175,7 +175,7 @@ def test_each_blacklisted_phrase_triggers_rejection(phrase):
 # ── D-01: max_tokens and system prompt params ─────────────────────────────────
 
 def test_max_tokens_is_100():
-    """D-01: Sonnet is called with max_tokens=220 (CARD-FIX-G upgrade)."""
+    """D-01: Sonnet is called with max_tokens=110 (CARD-FIX-N: 2 sentences + call line)."""
     from bot import _generate_verdict
 
     mock_resp = _make_mock_response("Odds at 1.85 offer +9.2% EV edge.")
@@ -189,8 +189,8 @@ def test_max_tokens_is_100():
         _generate_verdict(tip, verified)
 
     call_kwargs = mock_client.messages.create.call_args
-    assert call_kwargs.kwargs.get("max_tokens") == 220, (
-        f"max_tokens should be 220 (CARD-FIX-G: Sonnet verdict), got {call_kwargs.kwargs.get('max_tokens')}"
+    assert call_kwargs.kwargs.get("max_tokens") == 110, (
+        f"max_tokens should be 110 (CARD-FIX-N: 2 sentences + call line), got {call_kwargs.kwargs.get('max_tokens')}"
     )
 
 
@@ -211,16 +211,16 @@ def test_system_prompt_param_used():
     call_kwargs = mock_client.messages.create.call_args
     assert "system" in call_kwargs.kwargs, "Sonnet call must use 'system' parameter"
     system_text = call_kwargs.kwargs["system"]
-    assert "100–200" in system_text, f"System prompt must instruct char range, got: {system_text!r}"
+    assert "SA sports pundit" in system_text, f"System prompt must use SA sports pundit voice, got: {system_text!r}"
 
 
 # ── D-01: truncation safety net ───────────────────────────────────────────────
 
 def test_truncation_appends_period_when_missing():
-    """CARD-FIX-G: truncated text that doesn't end with . or ! gets a period appended. Limit is 400 chars."""
+    """VERDICT-UPGRADE-01: no truncation cap — verdict section has room. Long text passes through."""
     from bot import _generate_verdict
 
-    # 410-char text with no terminal punctuation — must be truncated and period appended
+    # 410-char text — no truncation, returned as-is (max_tokens=180 prevents this in production)
     long_text = (
         "Arsenal priced 8% tight at 1.85 with +9.2% EV edge — "
         "line movement backs the pick and tipster consensus sits at 72% — "
@@ -228,9 +228,8 @@ def test_truncation_appends_period_when_missing():
         "form data confirms that the home side has been in exceptional touch "
         "across their last five outings winning four and drawing once with "
         "some really impressive attacking numbers throughout the whole run "
-        "which means confidence in this selection is absolutely warranted here"
+        "which means confidence in this selection is absolutely warranted here."
     )
-    assert len(long_text) > 400, f"Test text must exceed 400 chars to trigger truncation, got {len(long_text)}"
     mock_resp = _make_mock_response(long_text)
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
@@ -241,8 +240,8 @@ def test_truncation_appends_period_when_missing():
     with patch("anthropic.Anthropic", return_value=mock_client):
         result = _generate_verdict(tip, verified)
 
-    assert len(result) <= 400
-    assert result.endswith((".", "!")), f"Truncated verdict must end with . or !: {result!r}"
+    # No truncation — full text returned
+    assert result == long_text.strip()
 
 
 # ── D-16: template emoji ───────────────────────────────────────────────────────

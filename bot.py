@@ -7163,29 +7163,35 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "- signals_active: list of edge signals firing — mention 1-2 if they add flavour ('the line's been moving their way', 'tipsters are aligned')\n"
             "\n"
             "Rules:\n"
-            "- 3 to 5 sentences maximum\n"
+            "- 2 sentences maximum, then one final call line\n"
+            "- Sentence 1: the pick + bookmaker + why (form or H2H)\n"
+            "- Sentence 2: the supporting evidence (form gap, head-to-head, signals) — ONE supporting point only, not three\n"
+            "- Final line: always \"Back [team/outcome].\" — short, punchy, standalone\n"
             "- Use nicknames and manager names to create personality — but only when the field is provided\n"
             "- NEVER mention EV% — it means nothing to most fans\n"
             "- NEVER use abbreviations: no H2H, no EV, no WLLLW form strings\n"
             "- NEVER hedge: no 'could', 'might', 'possibly', 'if form holds'\n"
             "- Name the bookmaker — always\n"
             "- Active voice, present tense\n"
-            "- End with the call: 'Back [team/outcome].' or '[team/outcome] is the play.' as the punchline\n"
             "- NO hallucination: only use the exact fields provided. No invented injuries, no invented player names, no invented stats.\n"
+            "\n"
+            "ABSOLUTELY FORBIDDEN — these will make the verdict wrong and unacceptable:\n"
+            "- Stadium or venue names (Stamford Bridge, Old Trafford, FNB Stadium, DHL Newlands, etc.) — venue data is NOT in our database. If you mention a stadium name, you are inventing it. Never do this.\n"
+            "- Player names (Salah, Rashford, Osimhen, Khune, etc.) — player data is NOT verified in our system. Never name a player.\n"
+            "- Any statistic not present in the exact verified fields passed to you — do not invent goal tallies, win streaks, clean sheet records, or anything else\n"
+            "- Tactical descriptions (\"they press high\", \"low block\", \"set up defensively\") — not in our data\n"
+            "- Historical context beyond form_home_plain, form_away_plain, and h2h_summary — do not reference seasons, trophies, or records from your training knowledge\n"
+            "- Injury information unless it appears in signals_active\n"
+            "\n"
+            "If you are about to write something and you cannot find it in the verified fields provided, DO NOT write it. Use only what is in the data.\n"
             "\n"
             "Examples of good verdicts:\n"
             "\n"
-            "\"Draw money at WSB is the play. Maresca's Chelsea haven't won in four — leaking goals, no rhythm. "
-            "Amorim's United grind results but they don't blow anyone away either. "
-            "These two have drawn twice in their last five meetings and this one's heading the same way. Back the draw.\"\n"
+            "\"Draw money at WSB is the play. Maresca's Chelsea are in terrible form — four losses from their last five — but Amorim's United don't come here and run riot. Back the draw.\"\n"
             "\n"
-            "\"Amakhosi at home is the call. The Bucs haven't won in Soweto in three straight derbies and "
-            "Chiefs have been clinical at home — four wins from five. "
-            "The line's been moving the same way all week. HWB have the best price. Back Amakhosi.\"\n"
+            "\"Amakhosi at home is the call. Chiefs have won four of their last five and the Bucs are in poor nick on the road. Back Amakhosi.\"\n"
             "\n"
-            "\"Galaxy at home is the move. Babina Ntwa arrive in terrible form — lost three of their last five "
-            "and shipping goals away from home. Galaxy have taken three from four at home and the price movement's "
-            "been pointing the same way. HWB have the right price. Back the home side.\"\n"
+            "\"Blues away is the move. They've won four from five and the line's been shifting their way all week. Back the Blues.\"\n"
             "\n"
             "Examples of bad verdicts (never write like this):\n"
             "\"The H2H record and EV% of +8.8% suggest value on the draw.\"\n"
@@ -7206,7 +7212,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=180,
+            max_tokens=110,
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -7261,6 +7267,8 @@ def _fact_check_verdict(verdict: str, spec: dict) -> str | None:
         _re.compile(r"\blast time they met\b", _re.IGNORECASE),
         _re.compile(r"\b(manager|coach|gaffer)\b", _re.IGNORECASE),
         _re.compile(r"\btravel fatigue\b", _re.IGNORECASE),
+        _re.compile(r"\b(stadium|bridge|park|ground|arena|bowl|oval|field|centre|center)\b", _re.IGNORECASE),
+        _re.compile(r"\b[A-Z][a-z]+ (Bridge|Park|Ground|Stadium|Arena|Field|Bowl|Oval|Centre)\b"),
     ]
 
     # SA conversational phrases — never strip sentences containing these
@@ -7396,29 +7404,35 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "- signals_active: list of edge signals firing — mention 1-2 if they add flavour ('the line's been moving their way', 'tipsters are aligned')\n"
             "\n"
             "Rules:\n"
-            "- 3 to 5 sentences maximum\n"
+            "- 2 sentences maximum, then one final call line\n"
+            "- Sentence 1: the pick + bookmaker + why (form or H2H)\n"
+            "- Sentence 2: the supporting evidence (form gap, head-to-head, signals) — ONE supporting point only, not three\n"
+            "- Final line: always \"Back [team/outcome].\" — short, punchy, standalone\n"
             "- Use nicknames and manager names to create personality — but only when the field is provided\n"
             "- NEVER mention EV% — it means nothing to most fans\n"
             "- NEVER use abbreviations: no H2H, no EV, no WLLLW form strings\n"
             "- NEVER hedge: no 'could', 'might', 'possibly', 'if form holds'\n"
             "- Name the bookmaker — always\n"
             "- Active voice, present tense\n"
-            "- End with the call: 'Back [team/outcome].' or '[team/outcome] is the play.' as the punchline\n"
             "- NO hallucination: only use the exact fields provided. No invented injuries, no invented player names, no invented stats.\n"
+            "\n"
+            "ABSOLUTELY FORBIDDEN — these will make the verdict wrong and unacceptable:\n"
+            "- Stadium or venue names (Stamford Bridge, Old Trafford, FNB Stadium, DHL Newlands, etc.) — venue data is NOT in our database. If you mention a stadium name, you are inventing it. Never do this.\n"
+            "- Player names (Salah, Rashford, Osimhen, Khune, etc.) — player data is NOT verified in our system. Never name a player.\n"
+            "- Any statistic not present in the exact verified fields passed to you — do not invent goal tallies, win streaks, clean sheet records, or anything else\n"
+            "- Tactical descriptions (\"they press high\", \"low block\", \"set up defensively\") — not in our data\n"
+            "- Historical context beyond form_home_plain, form_away_plain, and h2h_summary — do not reference seasons, trophies, or records from your training knowledge\n"
+            "- Injury information unless it appears in signals_active\n"
+            "\n"
+            "If you are about to write something and you cannot find it in the verified fields provided, DO NOT write it. Use only what is in the data.\n"
             "\n"
             "Examples of good verdicts:\n"
             "\n"
-            "\"Draw money at WSB is the play. Maresca's Chelsea haven't won in four — leaking goals, no rhythm. "
-            "Amorim's United grind results but they don't blow anyone away either. "
-            "These two have drawn twice in their last five meetings and this one's heading the same way. Back the draw.\"\n"
+            "\"Draw money at WSB is the play. Maresca's Chelsea are in terrible form — four losses from their last five — but Amorim's United don't come here and run riot. Back the draw.\"\n"
             "\n"
-            "\"Amakhosi at home is the call. The Bucs haven't won in Soweto in three straight derbies and "
-            "Chiefs have been clinical at home — four wins from five. "
-            "The line's been moving the same way all week. HWB have the best price. Back Amakhosi.\"\n"
+            "\"Amakhosi at home is the call. Chiefs have won four of their last five and the Bucs are in poor nick on the road. Back Amakhosi.\"\n"
             "\n"
-            "\"Galaxy at home is the move. Babina Ntwa arrive in terrible form — lost three of their last five "
-            "and shipping goals away from home. Galaxy have taken three from four at home and the price movement's "
-            "been pointing the same way. HWB have the right price. Back the home side.\"\n"
+            "\"Blues away is the move. They've won four from five and the line's been shifting their way all week. Back the Blues.\"\n"
             "\n"
             "Examples of bad verdicts (never write like this):\n"
             "\"The H2H record and EV% of +8.8% suggest value on the draw.\"\n"
@@ -7429,7 +7443,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=180,
+            max_tokens=110,
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],

@@ -188,6 +188,15 @@
         .form-w { background: #00E676; color: #000000; }
         .form-d { background: #555555; color: #FFFFFF; }
         .form-l { background: #FF5252; color: #FFFFFF; }
+        .team-side-label {
+          font-size: 9px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          color: #666;
+          text-align: center;
+          margin-bottom: 4px;
+          text-transform: uppercase;
+        }
 
         /* ── 3. Meta Bar ─────────────────────────────────────── */
         .meta-bar {
@@ -388,9 +397,9 @@
             font-size: 11px;
         }
         .verdict-text {
-            font-size: 13px;
+            font-size: 15px;
             color: #DDDDDD;
-            line-height: 1.55;
+            line-height: 1.6;
             margin-top: 5px;
         }
     </style>
@@ -429,6 +438,7 @@
 
             <div class="team-block">
                 <div class="team-name">{{ home }}</div>
+                <div class="team-side-label">HOME</div>
                 {% if home_form %}
                 <div class="form-row">
                     {% for r in home_form %}
@@ -442,6 +452,7 @@
 
             <div class="team-block">
                 <div class="team-name">{{ away }}</div>
+                <div class="team-side-label">AWAY</div>
                 {% if away_form %}
                 <div class="form-row">
                     {% for r in away_form %}
@@ -464,7 +475,6 @@
           <span class="meta-item">📺 {{ channel_number }}</span>
           {% endif %}
         {% elif channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
-        {% if venue %}<span class="meta-item">🏙️ {{ venue }}</span>{% endif %}
     </div>
 
     {% if tier %}
