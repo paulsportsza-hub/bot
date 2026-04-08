@@ -7058,40 +7058,27 @@ def _display_bookmaker_name(key: str) -> str:
 
 
 def _generate_verdict(tip: dict, verified: dict) -> str:
-    """Call Sonnet for a 2-3 sentence verdict referencing stake tier and citing a number.
+    """Call Sonnet for a 3-5 sentence SA sports fan verdict.
 
-    CARD-FIX-G:
-    - Model: claude-sonnet-4-6, temp=0.3, max_tokens=220
-    - Expanded system prompt leverages Sonnet capability + narrative context
-    - Phrase blacklist checked before digit guardrail — blacklisted → return ""
-    - 400-char word-boundary truncation is a safety net only
+    VERDICT-UPGRADE-02:
+    - Uses team nicknames, manager names, plain-English form (team_data.py)
+    - EV% removed from output (banned in new prompt)
+    - Model: claude-sonnet-4-6, temp=0.5, max_tokens=180
+    - SA sports fan voice — commentator register, data-anchored
+    - Few-shot examples embedded in system prompt
+    - No truncation cap — verdict section has room
     - Returns "" on any failure — never blocks rendering
     """
-    import re as _re
-    _BLACKLISTED_PHRASES = [
-        "home advantage", "away advantage",
-        "historically", "tradition", "traditionally",
-        "derby", "rivalry",
-        "big game", "big match",
-        "relegation battle", "title race",
-        "form suggests", "expected to",
-        "known for", "famous for",
-        # CARD-FIX-D additions
-        "offers value",
-        "presents an opportunity",
-        "worth considering",
-        "looks promising",
-        "should be backed",
-        "sure thing",
-        "slam dunk",
-    ]
     try:
         import anthropic as _anthropic
-        ev = float(tip.get("ev") or 0)
+        from team_data import get_nickname, get_manager, form_to_plain
         odds = float(tip.get("odds") or tip.get("pick_odds") or 0)
         pick = tip.get("pick") or tip.get("outcome") or ""
-        matchup = verified.get("matchup", "")
-        tipster = verified.get("tipster") or {}
+        home = tip.get("home_team") or tip.get("home") or ""
+        away = tip.get("away_team") or tip.get("away") or ""
+        league = tip.get("league_key") or tip.get("league") or ""
+        bookmaker = tip.get("bookmaker") or ""
+        matchup = verified.get("matchup", "") or (f"{home} vs {away}" if home and away else "")
         _conf_pct = float(tip.get("confidence") or 0)
         def _derive_tier(p):
             if p >= 95: return "MAX"
@@ -7100,61 +7087,127 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             return "LEAN"
         confidence_tier = tip.get("confidence_tier") or verified.get("confidence_tier") or _derive_tier(_conf_pct)
 
+        # Form lists from home_form/away_form (set by _enrich_tip_for_card)
+        _hf = tip.get("home_form") or []
+        _af = tip.get("away_form") or []
+
+        # Plain-English form descriptions (VERDICT-UPGRADE-02)
+        form_home_plain = form_to_plain(_hf)
+        form_away_plain = form_to_plain(_af)
+
+        # Nicknames and manager names (VERDICT-UPGRADE-02)
+        nickname_home = get_nickname(home)
+        nickname_away = get_nickname(away)
+        manager_home = get_manager(home)
+        manager_away = get_manager(away)
+
+        # H2H summary from h2h dict
+        _h2h = tip.get("h2h") or {}
+        h2h_summary = ""
+        if _h2h.get("n"):
+            h2h_summary = (
+                f"{_h2h['n']} meetings: "
+                f"{_h2h.get('hw', 0)}W {_h2h.get('d', 0)}D {_h2h.get('aw', 0)}A"
+            )
+
+        # Active signals
+        _sigs = tip.get("signals") or {}
+        signals_active = [k for k, v in _sigs.items() if v and isinstance(v, (int, float)) and float(v) > 0]
+
         lines: list[str] = []
         if matchup:
             lines.append(f"Match: {matchup}")
+        if league:
+            lines.append(f"League: {league}")
         if pick:
             lines.append(f"Pick: {pick}")
-        if ev:
-            lines.append(f"EV: +{ev:.1f}%")
         if odds:
-            lines.append(f"Best odds: {odds:.2f}")
+            lines.append(f"Odds: {odds:.2f}")
+        if bookmaker:
+            lines.append(f"Bookmaker: {bookmaker}")
         lines.append(f"Confidence tier: {confidence_tier}")
-        home_pct = tipster.get("home_consensus_pct")
-        if home_pct is not None:
-            lines.append(f"Tipster home consensus: {home_pct}%")
-        elif tipster.get("most_tipped"):
-            lines.append(f"Most tipped: {tipster['most_tipped']}")
+        lines.append(f"home_team: {home}")
+        lines.append(f"away_team: {away}")
+        lines.append(f"nickname_home: {nickname_home}")
+        lines.append(f"nickname_away: {nickname_away}")
+        if manager_home:
+            lines.append(f"manager_home: {manager_home}")
+        if manager_away:
+            lines.append(f"manager_away: {manager_away}")
+        if form_home_plain:
+            lines.append(f"form_home_plain: {form_home_plain}")
+        if form_away_plain:
+            lines.append(f"form_away_plain: {form_away_plain}")
+        if h2h_summary:
+            lines.append(f"h2h_summary: {h2h_summary}")
+        if signals_active:
+            lines.append(f"signals_active: {', '.join(signals_active)}")
         if not lines:
             return ""
 
         system_prompt = (
-            "You are a sharp South African sports columnist writing the verdict for a premium betting card. "
-            "You have access to the edge data, team form, tipster signals, and narrative context. "
-            "Write 2–3 punchy sentences, 100–200 characters total. "
-            "Structure: "
-            "1. The market insight — cite one number (odds, EV%, or consensus). Be specific. "
-            "2. The supporting signal — form, injuries, line movement, or narrative context. Use what is in the data. "
-            "3. The stake cue — one phrase that matches the confidence tier exactly: "
-            "   LEAN='keep stake small', SOLID='manageable unit', STRONG='back with confidence', MAX='full unit'. "
-            "Rules: "
-            "- SA conversational register. Reads like a sharp friend, not a report. "
-            "- No hedging, no clichés, no team history lessons. "
-            "- If there is a specific injury, suspension, or travel angle in the data — use it. "
-            "- Lead sentence must not start with a team name. "
-            "- End with a full stop."
+            "You are a sharp SA sports pundit writing a short verdict for a betting edge card.\n"
+            "You sound like a knowledgeable South African sports fan — direct, confident, warm, no waffle.\n"
+            "You are NOT a risk-disclaimer machine. You are someone who watched the form, checked the numbers, and knows the call.\n"
+            "\n"
+            "Data you receive:\n"
+            "- home_team / away_team: official team names\n"
+            "- nickname_home / nickname_away: fan nicknames — USE THESE in your verdict instead of the full name where they exist\n"
+            "- manager_home / manager_away: current manager surnames — USE THESE when they add personality (e.g. 'Maresca's side', 'under Amorim'). SKIP if the field is empty.\n"
+            "- form_home_plain / form_away_plain: plain English form summaries — USE THESE directly in sentences. Never restate them as letter strings (WWLLL etc).\n"
+            "- pick: what we are backing\n"
+            "- odds: the odds on offer\n"
+            "- bookmaker: the specific bookie — always name them\n"
+            "- confidence_tier: LEAN / SOLID / STRONG / MAX — this is how strong the edge is\n"
+            "- h2h_summary: meeting history — translate into plain English ('these two have drawn twice in five meetings', not 'H2H: 1W 2D 2A')\n"
+            "- signals_active: list of edge signals firing — mention 1-2 if they add flavour ('the line's been moving their way', 'tipsters are aligned')\n"
+            "\n"
+            "Rules:\n"
+            "- 3 to 5 sentences maximum\n"
+            "- Use nicknames and manager names to create personality — but only when the field is provided\n"
+            "- NEVER mention EV% — it means nothing to most fans\n"
+            "- NEVER use abbreviations: no H2H, no EV, no WLLLW form strings\n"
+            "- NEVER hedge: no 'could', 'might', 'possibly', 'if form holds'\n"
+            "- Name the bookmaker — always\n"
+            "- Active voice, present tense\n"
+            "- End with the call: 'Back [team/outcome].' or '[team/outcome] is the play.' as the punchline\n"
+            "- NO hallucination: only use the exact fields provided. No invented injuries, no invented player names, no invented stats.\n"
+            "\n"
+            "Examples of good verdicts:\n"
+            "\n"
+            "\"Draw money at WSB is the play. Maresca's Chelsea haven't won in four — leaking goals, no rhythm. "
+            "Amorim's United grind results but they don't blow anyone away either. "
+            "These two have drawn twice in their last five meetings and this one's heading the same way. Back the draw.\"\n"
+            "\n"
+            "\"Amakhosi at home is the call. The Bucs haven't won in Soweto in three straight derbies and "
+            "Chiefs have been clinical at home — four wins from five. "
+            "The line's been moving the same way all week. HWB have the best price. Back Amakhosi.\"\n"
+            "\n"
+            "\"Galaxy at home is the move. Babina Ntwa arrive in terrible form — lost three of their last five "
+            "and shipping goals away from home. Galaxy have taken three from four at home and the price movement's "
+            "been pointing the same way. HWB have the right price. Back the home side.\"\n"
+            "\n"
+            "Examples of bad verdicts (never write like this):\n"
+            "\"The H2H record and EV% of +8.8% suggest value on the draw.\"\n"
+            "\"Chelsea's WLLLL run indicates poor form.\"\n"
+            "\"This could be a value bet if the SOLID confidence tier holds.\""
         )
-        guardrails = (
-            "ABSOLUTE RULES — no exceptions: "
-            "1. GOLDEN RULE: If you cannot point to the exact field in the DATA block that supports a claim, DO NOT MAKE THAT CLAIM. "
-            "2. No training-data facts. Every factual claim must come from the DATA block only. "
-            "3. No person names unless explicitly in the DATA block. "
-            "4. No historical claims beyond H2H and Form fields in DATA. "
-            "5. Form verbatim: reproduce character-for-character only. "
-            "6. No venue commentary ('fortress', 'happy hunting ground', etc). "
-            "7. No tactical descriptions (formations, styles, counter-attacks). "
-            "8. No stake guidance beyond the exact verdict_sizing phrase in DATA. "
-            "9. Banned phrases: historically, traditionally, known for, famous for, haven't beaten, "
-            "last time they met, always struggle, typically, usually, tends to. "
-            "10. Tone ceiling: do not express more confidence than the evidence_class in DATA."
-        )
-        system_prompt = system_prompt + " " + guardrails
+
+        _BLACKLISTED_PHRASES = [
+            "home advantage", "away advantage",
+            "historically", "tradition", "traditionally",
+            "derby", "rivalry",
+            "big game", "big match",
+            "relegation battle", "title race",
+            "form suggests", "expected to",
+            "known for", "famous for",
+        ]
 
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=220,
-            temperature=0.3,
+            max_tokens=180,
+            temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
         )
@@ -7167,12 +7220,6 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         if any(p in text.lower() for p in _BLACKLISTED_PHRASES):
             log.warning("verdict blacklisted: %s", text)
             return ""
-
-        if len(text) > 400:
-            trunc = text[:400].rsplit(" ", 1)[0]
-            text = trunc.rstrip(",.;:")
-            if not text.endswith((".", "!")):
-                text += "."
 
         return text
     except Exception as exc:
@@ -7216,10 +7263,17 @@ def _fact_check_verdict(verdict: str, spec: dict) -> str | None:
         _re.compile(r"\btravel fatigue\b", _re.IGNORECASE),
     ]
 
+    # SA conversational phrases — never strip sentences containing these
+    _SA_SLANG = {"bru", "the move", "the play", "doesn't lie", "sort it out", "the call"}
+
     original_len = len(verdict)
     sentences = _re.split(r'(?<=[.!?])\s+', verdict.strip())
     kept: list[str] = []
     for sentence in sentences:
+        sentence_lower = sentence.lower()
+        if any(slang in sentence_lower for slang in _SA_SLANG):
+            kept.append(sentence)
+            continue
         if any(pat.search(sentence) for pat in _HALLUCINATION_PATTERNS):
             log.warning("_fact_check_verdict: stripped '%s'", sentence[:60])
             continue
@@ -7240,70 +7294,143 @@ def _fact_check_verdict(verdict: str, spec: dict) -> str | None:
 
 
 def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
-    """PIPELINE-BUILD-01 Task 2: Pre-computation verdict with ALLOWED fields only.
+    """VERDICT-UPGRADE-02: Pre-computation verdict with ALLOWED fields only + personality layer.
 
-    Differences from _generate_verdict():
+    Same SA sports fan voice and prompt as _generate_verdict().
     - ALLOWED fields only — no narrative_snippet, home_context, away_context, key_injury, coach
-    - All 10 guardrails baked into system prompt
-    - max_tokens=150, temp=0.2 (tighter than view-time version)
+    - Adds team nicknames, manager names, plain-English form (team_data.py)
+    - EV% removed from output (banned in new prompt)
+    - max_tokens=180, temp=0.5 (matches view-time version)
     - Calls _fact_check_verdict() after generation
     - Falls back to _render_verdict(spec) from narrative_spec if fact-check strips >50%
     """
-    import re as _re
     try:
         import anthropic as _anthropic
         from narrative_spec import _render_verdict as _render_verdict_deterministic, NarrativeSpec
+        from team_data import get_nickname, get_manager, form_to_plain
 
-        ev = float(allowed_data.get("ev") or 0)
         odds = float(allowed_data.get("odds") or 0)
         pick = allowed_data.get("pick") or allowed_data.get("outcome") or ""
         bookmaker = allowed_data.get("bookmaker") or ""
         matchup = allowed_data.get("matchup") or ""
+        league = allowed_data.get("league_key") or allowed_data.get("league") or ""
         confidence_tier = allowed_data.get("confidence_tier") or "LEAN"
+
+        # Form lists
+        _hf = allowed_data.get("home_form") or []
+        _af = allowed_data.get("away_form") or []
+        home = allowed_data.get("home_team") or allowed_data.get("home") or ""
+        away = allowed_data.get("away_team") or allowed_data.get("away") or ""
+
+        # Plain-English form descriptions (VERDICT-UPGRADE-02)
+        form_home_plain = form_to_plain(_hf)
+        form_away_plain = form_to_plain(_af)
+
+        # Nicknames and manager names (VERDICT-UPGRADE-02)
+        nickname_home = get_nickname(home)
+        nickname_away = get_nickname(away)
+        manager_home = get_manager(home)
+        manager_away = get_manager(away)
+
+        # H2H summary
+        _h2h = allowed_data.get("h2h") or {}
+        h2h_summary = ""
+        if _h2h.get("n"):
+            h2h_summary = (
+                f"{_h2h['n']} meetings: "
+                f"{_h2h.get('hw', 0)}W {_h2h.get('d', 0)}D {_h2h.get('aw', 0)}A"
+            )
+
+        # Active signals
+        _sigs = allowed_data.get("signals") or {}
+        signals_active = [k for k, v in _sigs.items() if v and isinstance(v, (int, float)) and float(v) > 0]
 
         lines: list[str] = []
         if matchup:
             lines.append(f"Match: {matchup}")
+        if league:
+            lines.append(f"League: {league}")
         if pick:
             lines.append(f"Pick: {pick}")
-        if ev:
-            lines.append(f"EV: +{ev:.1f}%")
         if odds:
-            lines.append(f"Best odds: {odds:.2f}")
+            lines.append(f"Odds: {odds:.2f}")
         if bookmaker:
             lines.append(f"Bookmaker: {bookmaker}")
         lines.append(f"Confidence tier: {confidence_tier}")
+        lines.append(f"home_team: {home}")
+        lines.append(f"away_team: {away}")
+        lines.append(f"nickname_home: {nickname_home}")
+        lines.append(f"nickname_away: {nickname_away}")
+        if manager_home:
+            lines.append(f"manager_home: {manager_home}")
+        if manager_away:
+            lines.append(f"manager_away: {manager_away}")
+        if form_home_plain:
+            lines.append(f"form_home_plain: {form_home_plain}")
+        if form_away_plain:
+            lines.append(f"form_away_plain: {form_away_plain}")
+        if h2h_summary:
+            lines.append(f"h2h_summary: {h2h_summary}")
+        if signals_active:
+            lines.append(f"signals_active: {', '.join(signals_active)}")
         if not lines:
-            # Fall back to deterministic
             if isinstance(spec, NarrativeSpec):
                 return _render_verdict_deterministic(spec)
             return ""
 
         system_prompt = (
-            "You are a sharp South African sports analyst writing a 2-sentence verdict "
-            "for a pre-computed betting card. "
-            "Sentence 1: cite the key number (odds, EV%, or consensus). "
-            "Sentence 2: one phrase matching the confidence tier exactly: "
-            "LEAN='keep stake small', SOLID='manageable unit', STRONG='back with confidence', MAX='full unit'. "
-            "ABSOLUTE RULES — no exceptions: "
-            "1. GOLDEN RULE: If you cannot point to the exact field in the DATA block that supports a claim, DO NOT MAKE THAT CLAIM. "
-            "2. No training-data facts. Every factual claim must come from the DATA block only. "
-            "3. No person names. "
-            "4. No historical claims. "
-            "5. No venue commentary. "
-            "6. No tactical descriptions. "
-            "7. No stake guidance beyond the exact sizing phrase. "
-            "8. Banned phrases: historically, traditionally, known for, famous for, haven't beaten, "
-            "last time they met, always struggle, typically, usually, tends to. "
-            "9. No hedging or clichés. "
-            "10. Tone ceiling: do not express more confidence than the confidence tier."
+            "You are a sharp SA sports pundit writing a short verdict for a betting edge card.\n"
+            "You sound like a knowledgeable South African sports fan — direct, confident, warm, no waffle.\n"
+            "You are NOT a risk-disclaimer machine. You are someone who watched the form, checked the numbers, and knows the call.\n"
+            "\n"
+            "Data you receive:\n"
+            "- home_team / away_team: official team names\n"
+            "- nickname_home / nickname_away: fan nicknames — USE THESE in your verdict instead of the full name where they exist\n"
+            "- manager_home / manager_away: current manager surnames — USE THESE when they add personality (e.g. 'Maresca's side', 'under Amorim'). SKIP if the field is empty.\n"
+            "- form_home_plain / form_away_plain: plain English form summaries — USE THESE directly in sentences. Never restate them as letter strings (WWLLL etc).\n"
+            "- pick: what we are backing\n"
+            "- odds: the odds on offer\n"
+            "- bookmaker: the specific bookie — always name them\n"
+            "- confidence_tier: LEAN / SOLID / STRONG / MAX — this is how strong the edge is\n"
+            "- h2h_summary: meeting history — translate into plain English ('these two have drawn twice in five meetings', not 'H2H: 1W 2D 2A')\n"
+            "- signals_active: list of edge signals firing — mention 1-2 if they add flavour ('the line's been moving their way', 'tipsters are aligned')\n"
+            "\n"
+            "Rules:\n"
+            "- 3 to 5 sentences maximum\n"
+            "- Use nicknames and manager names to create personality — but only when the field is provided\n"
+            "- NEVER mention EV% — it means nothing to most fans\n"
+            "- NEVER use abbreviations: no H2H, no EV, no WLLLW form strings\n"
+            "- NEVER hedge: no 'could', 'might', 'possibly', 'if form holds'\n"
+            "- Name the bookmaker — always\n"
+            "- Active voice, present tense\n"
+            "- End with the call: 'Back [team/outcome].' or '[team/outcome] is the play.' as the punchline\n"
+            "- NO hallucination: only use the exact fields provided. No invented injuries, no invented player names, no invented stats.\n"
+            "\n"
+            "Examples of good verdicts:\n"
+            "\n"
+            "\"Draw money at WSB is the play. Maresca's Chelsea haven't won in four — leaking goals, no rhythm. "
+            "Amorim's United grind results but they don't blow anyone away either. "
+            "These two have drawn twice in their last five meetings and this one's heading the same way. Back the draw.\"\n"
+            "\n"
+            "\"Amakhosi at home is the call. The Bucs haven't won in Soweto in three straight derbies and "
+            "Chiefs have been clinical at home — four wins from five. "
+            "The line's been moving the same way all week. HWB have the best price. Back Amakhosi.\"\n"
+            "\n"
+            "\"Galaxy at home is the move. Babina Ntwa arrive in terrible form — lost three of their last five "
+            "and shipping goals away from home. Galaxy have taken three from four at home and the price movement's "
+            "been pointing the same way. HWB have the right price. Back the home side.\"\n"
+            "\n"
+            "Examples of bad verdicts (never write like this):\n"
+            "\"The H2H record and EV% of +8.8% suggest value on the draw.\"\n"
+            "\"Chelsea's WLLLL run indicates poor form.\"\n"
+            "\"This could be a value bet if the SOLID confidence tier holds.\""
         )
 
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=150,
-            temperature=0.2,
+            max_tokens=180,
+            temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
         )
@@ -7325,13 +7452,6 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             if isinstance(spec, NarrativeSpec):
                 return _render_verdict_deterministic(spec)
             return ""
-
-        # Truncate safety net
-        if len(checked) > 350:
-            trunc = checked[:350].rsplit(" ", 1)[0]
-            checked = trunc.rstrip(",.;:")
-            if not checked.endswith((".", "!")):
-                checked += "."
 
         return checked
     except Exception as exc:
@@ -7880,21 +8000,23 @@ def _get_broadcast_details(
         matches = fuzzy_match_broadcast(rows, home_team, away_team)
         if matches:
             # fuzzy_match_broadcast returns results sorted by confidence descending
-            best = matches[0]
+            # Convert sqlite3.Row → dict so .get() works correctly
+            best = dict(matches[0])
             # Extract kickoff from start_time
-            start_time_str = best["start_time"]
+            start_time_str = best.get("start_time", "")
             if start_time_str:
                 result["kickoff"] = _format_kickoff_display(start_time_str)
 
             # Build broadcast display — raw channel string only (no emoji prefix)
-            ch_num = best["dstv_number"]
+            ch_num = best.get("dstv_number", "")
             ch_short = (best.get("channel_short") or "").strip()
             result["broadcast"] = f"{ch_short} (DStv {ch_num})" if ch_short else f"DStv {ch_num}"
 
             # Check for free-to-air option
             for row in matches:
-                if row["is_free_to_air"]:
-                    free_num = row["dstv_number"]
+                row_d = dict(row)
+                if row_d.get("is_free_to_air"):
+                    free_num = row_d.get("dstv_number", "")
                     result["broadcast"] += f" | FREE DStv {free_num}"
                     break
         else:
