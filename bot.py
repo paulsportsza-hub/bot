@@ -7092,8 +7092,9 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         _af = tip.get("away_form") or []
 
         # Plain-English form descriptions (VERDICT-UPGRADE-02)
-        form_home_plain = form_to_plain(_hf)
-        form_away_plain = form_to_plain(_af)
+        # ENRICH-FIX-01: check pre-set fallback string before computing from list
+        form_home_plain = form_to_plain(_hf) or tip.get("form_home_plain") or ""
+        form_away_plain = form_to_plain(_af) or tip.get("form_away_plain") or ""
 
         # Nicknames and manager names (VERDICT-UPGRADE-02)
         nickname_home = get_nickname(home)
@@ -7102,6 +7103,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         manager_away = get_manager(away)
 
         # H2H summary from h2h dict
+        # ENRICH-FIX-01: check pre-set fallback string when h2h dict is empty
         _h2h = tip.get("h2h") or {}
         h2h_summary = ""
         if _h2h.get("n"):
@@ -7109,6 +7111,8 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
                 f"{_h2h['n']} meetings: "
                 f"{_h2h.get('hw', 0)}W {_h2h.get('d', 0)}D {_h2h.get('aw', 0)}A"
             )
+        if not h2h_summary:
+            h2h_summary = tip.get("h2h_summary") or ""
 
         # Active signals
         _sigs = tip.get("signals") or {}
@@ -7184,6 +7188,11 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "- Injury information unless it appears in signals_active\n"
             "\n"
             "If you are about to write something and you cannot find it in the verified fields provided, DO NOT write it. Use only what is in the data.\n"
+            "\n"
+            "HANDLING MISSING DATA FIELDS:\n"
+            "If form_home_plain, form_away_plain, or h2h_summary say 'Form data unavailable' or 'H2H data unavailable', "
+            "work with the signals and odds data you DO have. Do not explain or apologise for missing data. "
+            "Do not mention that data is missing. Focus on what you can confirm from pick, odds, bookmaker, and signals_active.\n"
             "\n"
             "Examples of good verdicts:\n"
             "\n"
@@ -7331,8 +7340,9 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         away = allowed_data.get("away_team") or allowed_data.get("away") or ""
 
         # Plain-English form descriptions (VERDICT-UPGRADE-02)
-        form_home_plain = form_to_plain(_hf)
-        form_away_plain = form_to_plain(_af)
+        # ENRICH-FIX-01: check pre-set fallback string before computing from list
+        form_home_plain = form_to_plain(_hf) or allowed_data.get("form_home_plain") or ""
+        form_away_plain = form_to_plain(_af) or allowed_data.get("form_away_plain") or ""
 
         # Nicknames and manager names (VERDICT-UPGRADE-02)
         nickname_home = get_nickname(home)
@@ -7341,6 +7351,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         manager_away = get_manager(away)
 
         # H2H summary
+        # ENRICH-FIX-01: check pre-set fallback string when h2h dict is empty
         _h2h = allowed_data.get("h2h") or {}
         h2h_summary = ""
         if _h2h.get("n"):
@@ -7348,6 +7359,8 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
                 f"{_h2h['n']} meetings: "
                 f"{_h2h.get('hw', 0)}W {_h2h.get('d', 0)}D {_h2h.get('aw', 0)}A"
             )
+        if not h2h_summary:
+            h2h_summary = allowed_data.get("h2h_summary") or ""
 
         # Active signals
         _sigs = allowed_data.get("signals") or {}
@@ -7425,6 +7438,11 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "- Injury information unless it appears in signals_active\n"
             "\n"
             "If you are about to write something and you cannot find it in the verified fields provided, DO NOT write it. Use only what is in the data.\n"
+            "\n"
+            "HANDLING MISSING DATA FIELDS:\n"
+            "If form_home_plain, form_away_plain, or h2h_summary say 'Form data unavailable' or 'H2H data unavailable', "
+            "work with the signals and odds data you DO have. Do not explain or apologise for missing data. "
+            "Do not mention that data is missing. Focus on what you can confirm from pick, odds, bookmaker, and signals_active.\n"
             "\n"
             "Examples of good verdicts:\n"
             "\n"
@@ -7509,6 +7527,95 @@ def _normalise_mm_event_id(tip: dict, snapshot_match: dict) -> str:
                 snapshot_match.get("_event_id", ""), home, away)
     return ""
 
+
+# ENRICH-FIX-01 helpers ──────────────────────────────────────────────────────
+
+def _enrich_query_form(conn, team_key: str, limit: int = 5) -> list:
+    """Query match_results for last N matches of a team. Returns list of dicts."""
+    if conn is None or not team_key:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT home_team, away_team, home_score, away_score "
+            "FROM match_results "
+            "WHERE home_team = ? OR away_team = ? "
+            "ORDER BY match_date DESC LIMIT ?",
+            (team_key, team_key, limit),
+        ).fetchall()
+        return [{"home": r[0], "away": r[1], "home_score": r[2], "away_score": r[3]} for r in rows]
+    except Exception:
+        return []
+
+
+def _enrich_query_h2h(conn, home_key: str, away_key: str, limit: int = 5) -> list:
+    """Query match_results for H2H meetings between two teams."""
+    if conn is None or not home_key or not away_key:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT home_team, away_team, home_score, away_score "
+            "FROM match_results "
+            "WHERE (home_team = ? AND away_team = ?) OR (home_team = ? AND away_team = ?) "
+            "ORDER BY match_date DESC LIMIT ?",
+            (home_key, away_key, away_key, home_key, limit),
+        ).fetchall()
+        return [{"home": r[0], "away": r[1], "home_score": r[2], "away_score": r[3]} for r in rows]
+    except Exception:
+        return []
+
+
+def _enrich_format_form(form_list: list) -> str:
+    """Convert W/D/L list to plain English form summary."""
+    if not form_list:
+        return ""
+    n = len(form_list)
+    wins = form_list.count("W")
+    draws = form_list.count("D")
+    losses = form_list.count("L")
+    if wins >= n - 1:
+        return f"won {wins} of their last {n}"
+    if losses >= n - 1:
+        return f"lost {losses} of their last {n}"
+    if draws >= n - 1:
+        return f"drawn {draws} of their last {n}"
+    if wins > losses:
+        return f"won {wins}, drawn {draws}, lost {losses} in their last {n}"
+    return f"won {wins}, drawn {draws}, lost {losses} in their last {n}"
+
+
+def _enrich_format_h2h(rows: list, home_key: str, away_key: str) -> str:
+    """Format H2H rows as '5 meetings: 2W 1D 2A' string."""
+    played = hw = d = aw = 0
+    hk = home_key.lower()
+    for r in rows:
+        hs = r.get("home_score")
+        as_ = r.get("away_score")
+        if hs is None or as_ is None:
+            continue
+        try:
+            hs_i, as_i = int(hs), int(as_)
+        except (TypeError, ValueError):
+            continue
+        played += 1
+        home_is_hk = hk in (r.get("home") or "").lower()
+        if hs_i == as_i:
+            d += 1
+        elif home_is_hk:
+            if hs_i > as_i:
+                hw += 1
+            else:
+                aw += 1
+        else:
+            if as_i > hs_i:
+                hw += 1
+            else:
+                aw += 1
+    if not played:
+        return ""
+    return f"{played} meetings: {hw}W {d}D {aw}A"
+
+
+# ────────────────────────────────────────────────────────────────────────────
 
 def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     """Enrich a tip/match dict with verified DB data for card rendering.
@@ -7649,6 +7756,54 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             "d": _h2h_fb.get("d", 0),
             "aw": _h2h_fb.get("aw", 0),
         }
+
+    # ENRICH-FIX-01: Guarantee form/H2H fields before verdict call.
+    # When _compute_team_form got no data (e.g. IPL, Super Rugby), query match_results
+    # directly. If still empty, set fallback string so _generate_verdict never goes
+    # meta-commentary on missing data.
+    _fb_conn = None
+    try:
+        if not enriched.get("home_form") or not enriched.get("away_form"):
+            _fb_conn = _ro_conn(_ODDS_DB_PATH)
+            if not enriched.get("home_form"):
+                _mr_home = _enrich_query_form(_fb_conn, home_key, limit=5)
+                _hf_fb = _compute_team_form(_mr_home, home_key)
+                if _hf_fb:
+                    enriched["home_form"] = _hf_fb[::-1]
+                else:
+                    enriched["form_home_plain"] = "Form data unavailable"
+            if not enriched.get("away_form"):
+                _mr_away = _enrich_query_form(_fb_conn, away_key, limit=5)
+                _af_fb = _compute_team_form(_mr_away, away_key)
+                if _af_fb:
+                    enriched["away_form"] = _af_fb[::-1]
+                else:
+                    enriched["form_away_plain"] = "Form data unavailable"
+        _cur_h2h = enriched.get("h2h") or {}
+        if not _cur_h2h.get("n"):
+            if _fb_conn is None:
+                _fb_conn = _ro_conn(_ODDS_DB_PATH)
+            _h2h_rows = _enrich_query_h2h(_fb_conn, home_key, away_key, limit=5)
+            _h2h_str = _enrich_format_h2h(_h2h_rows, home_key, away_key)
+            if _h2h_str:
+                _h2h_m = _re.match(r"(\d+) meetings: (\d+)W (\d+)D (\d+)A", _h2h_str)
+                if _h2h_m:
+                    enriched["h2h"] = {
+                        "n": int(_h2h_m.group(1)),
+                        "hw": int(_h2h_m.group(2)),
+                        "d": int(_h2h_m.group(3)),
+                        "aw": int(_h2h_m.group(4)),
+                    }
+            else:
+                enriched["h2h_summary"] = "H2H data unavailable"
+    except Exception as _fix01_exc:
+        log.debug("_enrich_tip_for_card ENRICH-FIX-01 fallback failed: %s", _fix01_exc)
+    finally:
+        if _fb_conn is not None:
+            try:
+                _fb_conn.close()
+            except Exception:
+                pass
 
     # 5) Injuries — split by team into ['Player (status)'] lists
     home_inj, away_inj = _split_injuries(injuries, home_key, away_key)
