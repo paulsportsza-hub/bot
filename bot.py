@@ -9360,24 +9360,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             v2_best_bk = _v2_result.get("best_bookmaker", "")
             v2_best_odds = _v2_result.get("best_odds", 0)
         else:
-            # Fallback to V1 edge rating
-            snapshots = _build_edge_snapshots_from_match(match)
-            model = _build_model_from_consensus(match)
-            if not model or not model.get("outcome"):
-                continue
-            movement = await odds_svc.detect_line_movement(
-                match["match_id"], model["outcome"],
-            )
-            edge = calculate_edge_rating(snapshots, model, movement)
-            predicted_outcome = _er_outcomes.get(match["match_id"]) or model["outcome"]
-            hidden_candidate = edge == EdgeRating.HIDDEN
-            edge_tier = "bronze" if hidden_candidate else str(edge)
-            composite_score = calculate_edge_score(snapshots, model, movement)
-            edge_pct = 0
-            sharp_confidence = "low"
-            sharp_source = "sa_consensus"
-            v2_best_bk = ""
-            v2_best_odds = 0
+            continue  # V2 result required — skip unscored matches (TIER-FIX-01)
 
         # Find best bookmaker for CTA
         outcome_data = match["outcomes"].get(predicted_outcome, {})
