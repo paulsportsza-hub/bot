@@ -9,15 +9,21 @@
             margin: 0;
             padding: 0;
             background: #000000;
+            width: 480px;
+            height: 620px;
+            overflow: hidden;
         }
         body {
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
             width: 480px;
-            padding: 3px;
-            box-sizing: content-box;
+            height: 620px;
+            overflow: hidden;
         }
         .card {
-            width: 100%;
+            width: 480px;
+            height: 620px;
+            display: flex;
+            flex-direction: column;
             background: #0A0A0A;
             border-radius: 0;
             overflow: hidden;
@@ -103,7 +109,16 @@
         .prize-label { color: #888888; font-weight: 400; }
         .prize-amount { color: #FFD700; font-weight: 600; }
         .hero-stake { color: #999999; font-weight: 600; }
-        .hero-arrow { color: #999999; font-weight: 800; font-size: 1.1em; margin: 0 4px; }
+        .hero-arrow {
+            color: #999999;
+            font-weight: 900;
+            font-size: 1.1em;
+            margin: 0 4px;
+            display: inline-block;
+            vertical-align: middle;
+            line-height: 1;
+            align-self: center;
+        }
         .hero-return { color: #FFD700; font-weight: 700; }
 
         /* ── 2. Matchup ──────────────────────────────────────── */
@@ -227,10 +242,14 @@
             margin-right: 4px;
             vertical-align: middle;
         }
+        .pick-line3 {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
         .pick-bookie {
             font-size: 9px;
             color: #777777;
-            margin-bottom: 4px;
         }
         .bookie-chips-row {
             display: flex;
@@ -359,7 +378,9 @@
 
         /* ── 8. Verdict ──────────────────────────────────────── */
         .verdict-section {
-            padding: 12px 22px;
+            flex-grow: 1;
+            min-height: 90px;
+            padding: 10px 14px 12px;
             background: #141414;
             border-top: 1px solid #2A2A2A;
         }
@@ -369,7 +390,7 @@
         .verdict-text {
             font-size: 13px;
             color: #DDDDDD;
-            line-height: 1.5;
+            line-height: 1.55;
             margin-top: 5px;
         }
     </style>
@@ -435,7 +456,7 @@
 
     <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
     <div class="meta-bar">
-        <span class="meta-item">🗓 {{ date }}{% if time and time != 'TBC' %}, {{ time }} SAST{% endif %}</span>
+        <span class="meta-item">📅 {{ date }}{% if time and time != 'TBC' %}, {{ time }} SAST{% endif %}</span>
         {% if channel_number %}
           {% if channel_is_ss and ss_logo_b64 %}
           <span class="meta-item"><img src="{{ ss_logo_b64 }}" style="height:18px;vertical-align:middle;margin-right:3px;">{{ channel_number }}</span>
@@ -443,7 +464,7 @@
           <span class="meta-item">📺 {{ channel_number }}</span>
           {% endif %}
         {% elif channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
-        {% if venue %}<span class="meta-item">🏟 {{ venue }}</span>{% endif %}
+        {% if venue %}<span class="meta-item">🏙️ {{ venue }}</span>{% endif %}
     </div>
 
     {% if tier %}
@@ -456,8 +477,12 @@
             <span class="pick-odds" style="color: {{ tier_color }};">{% if tier_emoji %}<span class="tier-emoji">{{ tier_emoji }}</span>{% endif %}{{ pick_odds }}</span>
             {% endif %}
         </div>
-        {% if bookmaker %}<div class="pick-bookie">@ {{ bookmaker }}</div>{% endif %}
-        {% if tier and prize_return %}<div class="prize-line"><span class="prize-label">R200 returns </span><span class="prize-amount">R{{ prize_return }} · {{ bookmaker }}</span></div>{% endif %}
+        {% if bookmaker or (tier and prize_return) %}
+        <div class="pick-line3">
+            {% if bookmaker %}<span class="pick-bookie">@ {{ bookmaker }}</span>{% endif %}
+            {% if tier and prize_return %}<div class="prize-line"><span class="prize-label">R200 returns </span><span class="prize-amount">R{{ prize_return }} · {{ bookmaker }}</span></div>{% endif %}
+        </div>
+        {% endif %}
     </div>
     {% if all_odds %}
     <div class="bookie-chips-row">

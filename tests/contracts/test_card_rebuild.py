@@ -280,8 +280,8 @@ def test_template_layout_overflow():
     template_path = Path(__file__).parent.parent.parent / "card_templates" / "edge_detail.html"
     html = template_path.read_text()
 
-    # CARD-FIX-I: venue 🏟 restored as conditional meta item
-    assert '🏟' in html, "Venue slot (🏟) must be present in edge_detail.html meta bar"
+    # CARD-FIX-L: venue emoji updated to 🏙️
+    assert '🏙️' in html, "Venue slot (🏙️) must be present in edge_detail.html meta bar"
 
     # CARD-FIX-A (D-INV-2): min-height reduced to remove dead space
     assert 'min-height: 56px' in html, "team-block should have min-height: 56px"

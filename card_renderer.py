@@ -5,10 +5,10 @@ Usage:
     png_bytes = await render_card("edge_summary.html", data, width=480)
     png_bytes = render_card_sync("edge_summary.html", data, width=480)
 
-LOCKED RENDER STANDARD (IMG-PW2R):
-    width=480, device_scale_factor=2 → 960px physical output.
-    body { padding: 2px; box-sizing: content-box; } adds 2px black bleed on all sides.
-    page.screenshot(full_page=True) — no omit_background (transparent PNG causes grey edges on Telegram Desktop).
+LOCKED RENDER STANDARD (IMG-PW2R — updated CARD-FIX-L):
+    width=480, height=620, device_scale_factor=2 → 960×1240px physical output.
+    Fixed clip: {"x":0,"y":0,"width":480,"height":620} — every card identical dimensions.
+    No omit_background (transparent PNG causes grey edges on Telegram Desktop).
     Do NOT change these defaults without a brief.
 
 BROWSER POOL (BUILD-W3):
@@ -90,24 +90,20 @@ async def _render_page(
     template = _env.get_template(template_name)
     html = template.render(**data)
 
+    # CARD-FIX-L: all cards render at fixed 480×620 CSS px → 960×1240px physical
+    _card_height = 620
     _start = time.monotonic()
     page = await browser.new_page(
-        viewport={"width": width, "height": 100},
+        viewport={"width": width, "height": _card_height},
         device_scale_factor=device_scale_factor,
     )
     try:
         await page.set_content(html, wait_until="networkidle")
         await page.wait_for_timeout(50)  # minimal settle time
 
-        height = await page.evaluate("document.body.scrollHeight")
-        if height < 10:
-            height = 200
-        await page.set_viewport_size({"width": width, "height": height})
-        await page.wait_for_timeout(30)  # minimal post-render
-
         png_bytes = await page.screenshot(
             type="png",
-            full_page=True,
+            clip={"x": 0, "y": 0, "width": width, "height": _card_height},
         )
     finally:
         await page.close()
@@ -119,7 +115,7 @@ async def _render_page(
         _elapsed_ms,
         len(png_bytes),
         width * device_scale_factor,
-        height * device_scale_factor,
+        _card_height * device_scale_factor,
     )
     return png_bytes
 
