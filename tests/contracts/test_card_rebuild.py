@@ -274,23 +274,22 @@ def test_template_layout_overflow():
     # Long team name present
     assert data["home"] == "Borussia Mönchengladbach"
 
-    # Venue field should still be in data (card_data provides it) but template no longer renders it
-    # Verify the template doesn't contain the venue meta-item
+    # CARD-FIX-I: venue slot restored to meta bar (conditional — only shown when data present)
     from pathlib import Path
     template_path = Path(__file__).parent.parent.parent / "card_templates" / "edge_detail.html"
     html = template_path.read_text()
 
-    # FIX 8: venue slot deleted from template
-    assert '🏟' not in html, "Venue slot (🏟) should be deleted from edge_detail.html"
+    # CARD-FIX-I: venue 🏟 restored as conditional meta item
+    assert '🏟' in html, "Venue slot (🏟) must be present in edge_detail.html meta bar"
 
-    # FIX 8: min-height on team-block
-    assert 'min-height: 90px' in html, "team-block should have min-height: 90px"
+    # CARD-FIX-A (D-INV-2): min-height reduced to remove dead space
+    assert 'min-height: 56px' in html, "team-block should have min-height: 56px"
 
     # FIX 8: form-strip gap widened
     assert 'gap: 10px' in html, "form-row gap should be 10px"
 
-    # FIX 8: odds-pill overflow guard
-    assert 'max-width: 90px' in html, "odds-pill should have max-width: 90px"
+    # CARD-FIX-A (D-INV-6): max-width/overflow removed; flex-wrap handles layout
+    assert 'max-width: 90px' not in html, "odds-pill must not have max-width: 90px"
 
     try:
         from card_renderer import render_card_sync

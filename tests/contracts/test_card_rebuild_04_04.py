@@ -66,24 +66,17 @@ def test_time_tbc_when_kickoff_date_only():
 
 
 def test_channel_meta_item_has_single_emoji_no_ch_prefix():
-    """D-06: edge_detail.html channel meta item has exactly one 📺 and no 'Ch' prefix."""
+    """D-06 (CARD-FIX-J): channel meta bar supports SS logo path + 📺 fallback, no 'Ch' prefix."""
     template_path = Path(__file__).parent.parent.parent / "card_templates" / "edge_detail.html"
     content = template_path.read_text(encoding="utf-8")
 
-    # Find the channel meta item line
-    channel_lines = [ln for ln in content.splitlines() if "channel" in ln and "meta-item" in ln]
-    assert channel_lines, "No channel meta-item line found in template"
-    channel_line = channel_lines[0]
+    # Must have ss_logo_b64 path for SuperSport channels (CARD-FIX-J)
+    assert "ss_logo_b64" in content, "Template must have SS logo path for SuperSport channels"
+    assert "channel_number" in content, "Template must reference channel_number variable"
 
-    # Must have exactly ONE 📺 emoji
-    assert channel_line.count("📺") == 1, (
-        f"Expected exactly 1 📺 in channel meta item, got {channel_line.count('📺')}: {channel_line!r}"
-    )
+    # Must still have 📺 fallback for non-SS channels
+    assert "📺" in content, "Template must have 📺 fallback for non-SS channels"
 
-    # Must NOT have 'Ch' prefix after the emoji
-    assert "📺 Ch " not in channel_line, (
-        f"Template still has '📺 Ch' prefix — should be '📺 {{{{ channel }}}}': {channel_line!r}"
-    )
-    assert "Ch {{ channel }}" not in channel_line, (
-        f"Template still has 'Ch' before channel variable: {channel_line!r}"
-    )
+    # Must NOT have 'Ch' prefix
+    assert "📺 Ch " not in content, "Template must not have '📺 Ch' prefix"
+    assert "Ch {{ channel }}" not in content, "Template must not have 'Ch' before channel variable"

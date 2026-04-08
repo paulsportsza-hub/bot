@@ -18,6 +18,28 @@ _ASSETS_DIR = _BOT_DIR.parent / "assets"
 
 _HEADER_LOGO = _BOT_DIR / "assets" / "LOGO" / "mzansiedge-wordmark-dark-transparent.png"
 _FOOTER_LOGO = _ASSETS_DIR / "LOGO" / "mzansiedge-micro-mark-e-transparent.png"
+_SS_LOGO = _BOT_DIR.parent / "assets" / "icons" / "ss.png"
+
+
+def _parse_channel(raw: str) -> tuple[str, bool]:
+    """Parse DStv channel number and SS flag from a broadcast/channel string.
+
+    Returns (channel_number, is_ss).
+    Examples:
+      "📺 SS EPL (DStv 203)"  → ("203", True)
+      "SS Rugby (DStv 211)"   → ("211", True)
+      "DStv 203"              → ("203", False)
+      "SABC 1 (FTA)"          → ("", False)
+    """
+    import re as _re_ch
+    is_ss = bool(_re_ch.search(r'\bSS\b', raw))
+    m = _re_ch.search(r'DStv\s*(\d+)', raw, _re_ch.IGNORECASE)
+    if m:
+        return m.group(1), is_ss
+    m2 = _re_ch.search(r'\b(\d{3})\b', raw)
+    if m2:
+        return m2.group(1), is_ss
+    return "", is_ss
 
 
 def logo_b64(path: Path, max_height: int = 64) -> str:
@@ -488,6 +510,22 @@ def _confidence_tier(pct: float) -> str:
         return "LEAN"
 
 
+def _channel_fields(tip: dict) -> dict:
+    """Parse channel info for SS logo display in the meta bar.
+
+    Returns dict with: channel_number (str), channel_is_ss (bool), ss_logo_b64 (str).
+    Parses from _bc_broadcast first (richest source), then falls back to channel field.
+    """
+    raw = str(tip.get("_bc_broadcast") or tip.get("channel") or "")
+    number, is_ss = _parse_channel(raw)
+    ss_b64 = logo_b64(_SS_LOGO, max_height=18) if is_ss and number else ""
+    return {
+        "channel_number": number,
+        "channel_is_ss": is_ss,
+        "ss_logo_b64": ss_b64,
+    }
+
+
 def build_edge_detail_data(tip: dict) -> dict:
     """Build edge_detail.html template data from a single tip/edge.
 
@@ -619,6 +657,7 @@ def build_edge_detail_data(tip: dict) -> dict:
         "time":    time_str,
         "channel": str(tip.get("channel") or tip.get("ch") or ""),
         "venue":   tip.get("venue") or "",
+        **_channel_fields(tip),
 
         # Form
         "home_form": tip.get("home_form") or [],

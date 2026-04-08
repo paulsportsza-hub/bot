@@ -95,13 +95,16 @@
             color: #FFD700;
         }
         .prize-line {
-            color: #FFD700;
             font-size: 13px;
-            font-weight: 600;
-            margin-top: 2px;
+            margin-top: 1px;
             text-align: right;
             margin-left: auto;
         }
+        .prize-label { color: #888888; font-weight: 400; }
+        .prize-amount { color: #FFD700; font-weight: 600; }
+        .hero-stake { color: #999999; font-weight: 600; }
+        .hero-arrow { color: #999999; font-weight: 800; font-size: 1.1em; margin: 0 4px; }
+        .hero-return { color: #FFD700; font-weight: 700; }
 
         /* ── 2. Matchup ──────────────────────────────────────── */
         .matchup {
@@ -190,8 +193,8 @@
 
         /* ── 4. The Pick ─────────────────────────────────────── */
         .pick-section {
-            margin: 10px 14px;
-            padding: 12px 14px;
+            margin: 8px 14px;
+            padding: 8px 12px;
             border-radius: 10px;
             border-left: 3px solid;
         }
@@ -201,7 +204,7 @@
             font-weight: 700;
             letter-spacing: 1px;
             text-transform: uppercase;
-            margin-bottom: 4px;
+            margin-bottom: 2px;
         }
         .pick-line2 {
             display: flex;
@@ -219,15 +222,22 @@
             font-size: 24px;
             font-weight: 700;
         }
+        .tier-emoji {
+            font-size: 0.85em;
+            margin-right: 4px;
+            vertical-align: middle;
+        }
         .pick-bookie {
             font-size: 9px;
             color: #777777;
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }
-        .odds-pills {
+        .bookie-chips-row {
             display: flex;
             flex-wrap: wrap;
-            gap: 4px;
+            gap: 6px;
+            padding: 8px 16px 4px;
+            margin-top: -2px;
         }
         /* D-INV-6: let flex-wrap handle layout; no truncation */
         .odds-pill {
@@ -381,7 +391,7 @@
                 <span class="tier-badge-name" style="color: {{ tier_color }};">{{ tier_name }} EDGE</span>
             </div>
             <div class="ev-display">
-                <span class="ev-value">R200 → R{{ prize_return }}</span>
+                <span class="ev-value"><span class="hero-stake">R200</span><span class="hero-arrow">→</span><span class="hero-return">R{{ prize_return }}</span></span>
             </div>
             {% else %}
             <div class="no-edge-badge">
@@ -425,10 +435,15 @@
 
     <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
     <div class="meta-bar">
-        {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
-        {% if time and time != 'TBC' %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
-        {% if channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
-        {% if venue %}<span class="meta-item">&#127967; {{ venue }}</span>{% endif %}
+        <span class="meta-item">🗓 {{ date }}{% if time and time != 'TBC' %}, {{ time }} SAST{% endif %}</span>
+        {% if channel_number %}
+          {% if channel_is_ss and ss_logo_b64 %}
+          <span class="meta-item"><img src="{{ ss_logo_b64 }}" style="height:18px;vertical-align:middle;margin-right:3px;">{{ channel_number }}</span>
+          {% else %}
+          <span class="meta-item">📺 {{ channel_number }}</span>
+          {% endif %}
+        {% elif channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
+        {% if venue %}<span class="meta-item">🏟 {{ venue }}</span>{% endif %}
     </div>
 
     {% if tier %}
@@ -438,27 +453,27 @@
         <div class="pick-line2">
             <span class="pick-name">{{ pick }}</span>
             {% if pick_odds and pick_odds != "0.00" and pick_odds != 0 %}
-            <span class="pick-odds" style="color: {{ tier_color }};">{{ pick_odds }}</span>
+            <span class="pick-odds" style="color: {{ tier_color }};">{% if tier_emoji %}<span class="tier-emoji">{{ tier_emoji }}</span>{% endif %}{{ pick_odds }}</span>
             {% endif %}
         </div>
         {% if bookmaker %}<div class="pick-bookie">@ {{ bookmaker }}</div>{% endif %}
-        {% if tier and prize_return %}<div class="prize-line">R200 returns R{{ prize_return }} · {{ bookmaker }}</div>{% endif %}
-        {% if all_odds %}
-        <div class="odds-pills">
-            {% for o in all_odds %}
-            {% if o.odds_float and o.odds_float > 0 %}
-            {% if o.is_pick %}
-            <span class="odds-pill" style="background: {{ tier_color }}20; border: 1.5px solid {{ tier_color }}; color: {{ tier_color }}; font-weight: 600;">★ {{ o.bookie }} {{ o.odds }}</span>
-            {% elif o.odds_float >= pick_odds_float %}
-            <span class="odds-pill" style="background: {{ tier_color }}12; border-color: {{ tier_color }}30; color: {{ tier_color }};">{{ o.bookie }} {{ o.odds }}</span>
-            {% else %}
-            <span class="odds-pill" style="background: #0A0A0A; border-color: #2A2A2A; color: #777777;">{{ o.bookie }} {{ o.odds }}</span>
-            {% endif %}
-            {% endif %}
-            {% endfor %}
-        </div>
-        {% endif %}
+        {% if tier and prize_return %}<div class="prize-line"><span class="prize-label">R200 returns </span><span class="prize-amount">R{{ prize_return }} · {{ bookmaker }}</span></div>{% endif %}
     </div>
+    {% if all_odds %}
+    <div class="bookie-chips-row">
+        {% for o in all_odds %}
+        {% if o.odds_float and o.odds_float > 0 %}
+        {% if o.is_pick %}
+        <span class="odds-pill" style="background: {{ tier_color }}20; border: 1.5px solid {{ tier_color }}; color: {{ tier_color }}; font-weight: 600;">★ {{ o.bookie }} {{ o.odds }}</span>
+        {% elif o.odds_float >= pick_odds_float %}
+        <span class="odds-pill" style="background: {{ tier_color }}12; border-color: {{ tier_color }}30; color: {{ tier_color }};">{{ o.bookie }} {{ o.odds }}</span>
+        {% else %}
+        <span class="odds-pill" style="background: #0A0A0A; border-color: #2A2A2A; color: #777777;">{{ o.bookie }} {{ o.odds }}</span>
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
     {% endif %}
 
     <!-- ── 5. Edge Signals ───────────────────────────────────── -->

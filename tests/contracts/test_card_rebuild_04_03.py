@@ -27,7 +27,7 @@ _BLACKLISTED_PHRASES = [
     "relegation battle", "title race",
     "form suggests", "expected to",
     "known for", "famous for",
-    "favourite", "underdog",
+    # CARD-FIX-J: "favourite" and "underdog" removed — legitimate SA betting terms
 ]
 
 _FOUNDER_BASELINE = [

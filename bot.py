@@ -7076,7 +7076,6 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         "relegation battle", "title race",
         "form suggests", "expected to",
         "known for", "famous for",
-        "favourite", "underdog",
         # CARD-FIX-D additions
         "offers value",
         "presents an opportunity",
@@ -7116,19 +7115,6 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             lines.append(f"Tipster home consensus: {home_pct}%")
         elif tipster.get("most_tipped"):
             lines.append(f"Most tipped: {tipster['most_tipped']}")
-        narrative_snippet = tip.get("narrative_snippet") or tip.get("narrative") or ""
-        if narrative_snippet:
-            lines.append(f"Narrative context: {narrative_snippet[:200]}")
-        home_context = tip.get("home_context") or verified.get("home_context") or ""
-        if home_context:
-            lines.append(f"Home context: {home_context}")
-        away_context = tip.get("away_context") or verified.get("away_context") or ""
-        if away_context:
-            lines.append(f"Away context: {away_context}")
-        key_injury = tip.get("key_injury") or verified.get("key_injury") or ""
-        if key_injury:
-            lines.append(f"Key injury: {key_injury}")
-
         if not lines:
             return ""
 
@@ -7148,6 +7134,21 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "- Lead sentence must not start with a team name. "
             "- End with a full stop."
         )
+        guardrails = (
+            "ABSOLUTE RULES — no exceptions: "
+            "1. GOLDEN RULE: If you cannot point to the exact field in the DATA block that supports a claim, DO NOT MAKE THAT CLAIM. "
+            "2. No training-data facts. Every factual claim must come from the DATA block only. "
+            "3. No person names unless explicitly in the DATA block. "
+            "4. No historical claims beyond H2H and Form fields in DATA. "
+            "5. Form verbatim: reproduce character-for-character only. "
+            "6. No venue commentary ('fortress', 'happy hunting ground', etc). "
+            "7. No tactical descriptions (formations, styles, counter-attacks). "
+            "8. No stake guidance beyond the exact verdict_sizing phrase in DATA. "
+            "9. Banned phrases: historically, traditionally, known for, famous for, haven't beaten, "
+            "last time they met, always struggle, typically, usually, tends to. "
+            "10. Tone ceiling: do not express more confidence than the evidence_class in DATA."
+        )
+        system_prompt = system_prompt + " " + guardrails
 
         client = _anthropic.Anthropic()
         resp = client.messages.create(
@@ -7167,10 +7168,6 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             log.warning("verdict blacklisted: %s", text)
             return ""
 
-        if not _re.search(r"\d", text):
-            log.warning("_generate_verdict: response contains no digit — discarding")
-            return ""
-
         if len(text) > 400:
             trunc = text[:400].rsplit(" ", 1)[0]
             text = trunc.rstrip(",.;:")
@@ -7180,6 +7177,17 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         return text
     except Exception as exc:
         log.warning("_generate_verdict: Sonnet call failed: %s", exc)
+        # Programmatic fallback — always show something rather than blank verdict
+        try:
+            _ev = float(tip.get("ev") or 0)
+            _odds = float(tip.get("odds") or tip.get("pick_odds") or 0)
+            _pick = tip.get("pick") or tip.get("outcome") or ""
+            _bk = tip.get("bookmaker") or ""
+            if _ev > 0 and _odds > 0 and _pick:
+                _bk_str = f" on {_bk}" if _bk else ""
+                return f"{_pick} at {_odds:.2f}{_bk_str} carries +{_ev:.1f}% edge over fair probability. Keep stake manageable."
+        except Exception:
+            pass
         return ""
 
 
@@ -7232,6 +7240,9 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
         _compute_h2h,
         _split_injuries,
         _compute_signals,
+        _ro_conn,
+        _ODDS_DB_PATH,
+        _team_display,
     )
     import re as _re
     enriched = dict(tip)
@@ -7282,7 +7293,12 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     for o in all_odds:
         if pick_bk and o["bookie"] == _display_bookmaker_name(pick_bk):
             o["is_pick"] = True
-    enriched["all_odds"] = sorted(all_odds, key=lambda x: x["odds"], reverse=True)
+    # CARD-FIX-H Task 1: chip selection — pick + 3 worst (lowest = biggest gap vs pick price)
+    _pick_bk_display = _display_bookmaker_name(tip.get("bookmaker") or "")
+    _pick_chips = [o for o in all_odds if o["bookie"] == _pick_bk_display]
+    _other_chips = [o for o in all_odds if o["bookie"] != _pick_bk_display]
+    _other_chips.sort(key=lambda x: x["odds"])  # ascending = lowest first = worst
+    enriched["all_odds"] = _pick_chips + _other_chips[:3]
 
     # 3) Form — last 5 results per team as ['W','D','L'] lists
     # CARD-REBUILD-04-02: asymmetric guard + most-recent-RIGHT reversal.
@@ -7360,6 +7376,27 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
         enriched["away_bookie"] = _display_bookmaker_name(best["away"].get("bookmaker", ""))
     elif not enriched.get("away_odds") and enriched.get("odds_away"):
         enriched["away_odds"] = enriched["odds_away"]
+
+    # 8b) Venue — query sportmonks_fixtures JOIN sportmonks_venues (soccer only; rugby returns None gracefully)
+    if not enriched.get("venue") and home_key and away_key:
+        try:
+            _vc = _ro_conn(_ODDS_DB_PATH)
+            if _vc is not None:
+                _hd = _team_display(home_key)
+                _ad = _team_display(away_key)
+                _vr = _vc.execute(
+                    "SELECT v.name, v.city FROM sportmonks_fixtures f "
+                    "JOIN sportmonks_venues v ON f.venue_id = v.venue_id "
+                    "WHERE f.home_team LIKE ? AND f.away_team LIKE ? "
+                    "ORDER BY f.match_date DESC LIMIT 1",
+                    (f"%{_hd}%", f"%{_ad}%"),
+                ).fetchone()
+                if _vr and _vr[0]:
+                    _city = _vr[1] or ""
+                    enriched["venue"] = f"{_vr[0]}, {_city}" if _city else _vr[0]
+                _vc.close()
+        except Exception as _ve:
+            log.debug("_enrich_tip_for_card: venue query failed: %s", _ve)
 
     # 9) Pick name — outcome display for summary and detail cards
     if not enriched.get("pick"):
