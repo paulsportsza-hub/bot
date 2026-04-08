@@ -375,6 +375,8 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4) ->
         )
         channel = tip.get("channel") or tip.get("ch") or ""
 
+        prize_return = round(200 * odds_val) if odds_val else 0
+
         pick_dict = {
             "number": number,
             "home": home,
@@ -388,6 +390,7 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4) ->
             "pick": pick_name,
             "bookmaker": bookmaker,
             "sport_emoji": sport_emoji(league),
+            "prize_return": prize_return,
         }
 
         if tier_key not in groups_dict:

@@ -220,6 +220,19 @@
             white-space: nowrap;
         }
 
+        /* ── Prize Return ─────────────────────────────────── */
+        .pick-prize-line {
+            margin-top: 6px;
+        }
+        .pick-prize {
+            font-size: 11px;
+            color: #888888;
+        }
+        .prize-return {
+            color: #FFD700;
+            font-weight: 700;
+        }
+
         /* ── Page Indicator ──────────────────────────────────── */
         .page-indicator {
             text-align: center;
@@ -289,7 +302,6 @@
                         {{- pick.date -}}
                         {%- if pick.date and pick.time %} &middot; {% endif -%}
                         {{- pick.time -}}
-                        {%- if pick.channel %} &middot; Ch {{ pick.channel }}{% endif -%}
                     </span>
                 </div>
                 <div class="pick-meta-right">
@@ -301,6 +313,12 @@
                     {% endif %}
                 </div>
             </div>
+
+            {% if pick.prize_return %}
+            <div class="pick-prize-line">
+                <span class="pick-prize">R200 → <span class="prize-return">R{{ pick.prize_return }}</span></span>
+            </div>
+            {% endif %}
 
         </div>
         {% endfor %}
