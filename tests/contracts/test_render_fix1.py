@@ -20,8 +20,8 @@ class TestRenderFix1TripleGateDiamond:
     """Test 1: All three gates satisfied → diamond."""
 
     def test_diamond_requires_triple_gate(self):
-        """composite=55 ≥ 52, ev=6.0 ≥ 5.0, confirming=2 ≥ 2 → diamond."""
-        tier = assign_tier(55, 6.0, 2, red_flags=[]) or "bronze"
+        """composite=62 ≥ 60, ev=6.0 ≥ 5.0, confirming=2 ≥ 2 → diamond. (ALGO-FIX-01 threshold)"""
+        tier = assign_tier(62, 6.0, 2, red_flags=[]) or "bronze"
         assert tier == "diamond", f"Expected diamond, got {tier}"
 
     def test_composite_only_not_enough_for_diamond(self):

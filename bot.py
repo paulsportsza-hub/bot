@@ -9352,6 +9352,10 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
                     predicted_outcome = _v2_live_outcome
                 else:
                     continue  # V2 outcome also absent — skip (R15-BUILD-01 preserved)
+            # Fix 1: Hard-exclude draws (ALGO-FIX-01 8 Apr 2026)
+            # Draws: 13.6% win rate, -43.2% ROI on 22 bets — no draw-specific signal
+            if predicted_outcome == "draw":
+                continue
             edge_tier = _v2_result["tier"]
             composite_score = _v2_result["composite_score"]
             edge_pct = _v2_result["edge_pct"]
@@ -9359,6 +9363,11 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             sharp_source = _v2_result.get("sharp_source", "sa_consensus")
             v2_best_bk = _v2_result.get("best_bookmaker", "")
             v2_best_odds = _v2_result.get("best_odds", 0)
+            # Fix 4: CLV gate — exclude NEGATIVE CLV when data available (ALGO-FIX-01 8 Apr 2026)
+            # 49% of CLV-tracked edges had negative CLV — closing line disagreed with model
+            _clv_avg = _v2_result.get("clv_avg")
+            if _clv_avg is not None and _clv_avg < 0:
+                continue
         else:
             continue  # V2 result required — skip unscored matches (TIER-FIX-01)
 
@@ -9368,6 +9377,13 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         best_odds = v2_best_odds or outcome_data.get("best_odds", 0)
         best_bk_key = v2_best_bk or outcome_data.get("best_bookmaker", "")
         if best_odds > _MAX_RECOMMENDED_ODDS:
+            continue
+        # Fix 3: Odds ceiling by tier (ALGO-FIX-01 8 Apr 2026)
+        # 54% of bets at 3.0+ odds had only 28.6% win rate — longshots dressed as edges
+        # Diamond/Gold capped at 3.5; Silver capped at 5.0; Bronze: no tier cap
+        _TIER_ODDS_CAPS = {"diamond": 3.5, "gold": 3.5, "silver": 5.0}
+        _odds_ceil = _TIER_ODDS_CAPS.get(edge_tier)
+        if _odds_ceil is not None and best_odds > _odds_ceil:
             continue
 
         # BUILD-QA23-FIX: Initialise consensus_prob before V2/non-V2 branch
