@@ -47,6 +47,7 @@ _pool: dict = {
     "pw_ctx": None,
     "ready": threading.Event(),
     "error": None,
+    "lock": threading.Lock(),
 }
 
 
@@ -64,6 +65,31 @@ async def _pool_init() -> None:
         _pool["error"] = exc
         _pool["ready"].set()  # unblock render_card_sync so it can raise
         log.error("card_renderer: pool init failed: %s", exc)
+
+
+async def _recreate_browser() -> None:
+    """Close dead Playwright context and launch a fresh browser.
+
+    Runs inside the pool's event loop. Called by _render_page_safe() on crash detection.
+    """
+    try:
+        if _pool.get("browser"):
+            await _pool["browser"].close()
+    except Exception:
+        pass  # browser is already dead — ignore
+    try:
+        if _pool.get("pw_ctx"):
+            await _pool["pw_ctx"].__aexit__(None, None, None)
+    except Exception:
+        pass  # playwright context may already be dead
+    # Re-launch fresh browser + playwright context
+    pw_ctx = async_playwright()
+    pw = await pw_ctx.__aenter__()
+    browser = await pw.chromium.launch()
+    with _pool["lock"]:
+        _pool["pw_ctx"] = pw_ctx
+        _pool["browser"] = browser
+    log.info("card_renderer: browser pool recreated after crash")
 
 
 def _run_pool() -> None:
@@ -120,6 +146,30 @@ async def _render_page(
     return png_bytes
 
 
+async def _render_page_safe(
+    template_name: str,
+    data: dict,
+    width: int,
+    device_scale_factor: int,
+) -> bytes:
+    """Render with automatic browser recovery on crash.
+
+    Wraps _render_page(). On a dead-browser error, recreates the browser and
+    retries once. Non-browser errors are re-raised immediately.
+    """
+    try:
+        return await _render_page(template_name, data, width, device_scale_factor)
+    except Exception as e:
+        err_str = str(e).lower()
+        if "closed" in err_str or "target" in err_str or "browser" in err_str:
+            log.warning(
+                "card_renderer: browser crash detected (%s), recreating pool...", e
+            )
+            await _recreate_browser()
+            return await _render_page(template_name, data, width, device_scale_factor)
+        raise  # non-browser error: re-raise as-is
+
+
 def render_card_sync(
     template_name: str,
     data: dict,
@@ -160,7 +210,7 @@ def render_card_sync(
         raise RuntimeError("card_renderer: pool loop is None")
 
     future = asyncio.run_coroutine_threadsafe(
-        _render_page(template_name, data, width, device_scale_factor),
+        _render_page_safe(template_name, data, width, device_scale_factor),
         loop,
     )
     png_bytes = future.result(timeout=90)
