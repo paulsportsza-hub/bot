@@ -1575,10 +1575,11 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _mm_sorted = _sort_mm_snapshot(_mm_input)
             _mm_games_snapshot[user_id] = _mm_sorted
             _yg_card_data = build_my_matches_data(_mm_input, page=pg + 1)
+            _yg_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
             await send_card_or_fallback(
                 bot=ctx.bot, chat_id=query.message.chat_id,
                 template="my_matches.html", data=_yg_card_data,
-                text_fallback=text, markup=_build_mm_card_markup(_mm_sorted, page=pg),
+                text_fallback=text, markup=_build_mm_card_markup(_mm_sorted, page=pg, sport_keys=_yg_sk, sport_filter=sf),
                 message_to_edit=query.message,
             )
         elif action.startswith("sport:"):
@@ -1831,7 +1832,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _mm_match = _mm_snap[_mm_snap_idx]
                 _mm_event_id = _mm_match.get("_event_id", "")
                 _mm_back_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("↩️ Back", callback_data="md:back")],
+                    [InlineKeyboardButton("↩️ My Matches", callback_data="md:back")],
                 ])
                 _mm_fallback = (
                     f"<b>{h(_mm_match.get('home', ''))} vs "
@@ -1912,12 +1913,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _mm_games_snapshot[user_id] = _mm_sorted_md
             _mdback_card_data = build_my_matches_data(_mm_input_md, page=1)
             _mdback_text, _ = await _render_your_games_all(
-                user_id, user_tier=_mdback_ut, skip_broadcast=True,
+                user_id, user_tier=_mdback_ut,
             )
+            _md_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games_md if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
             await send_card_or_fallback(
                 bot=ctx.bot, chat_id=query.message.chat_id,
                 template="my_matches.html", data=_mdback_card_data,
-                text_fallback=_mdback_text, markup=_build_mm_card_markup(_mm_sorted_md, page=0),
+                text_fallback=_mdback_text, markup=_build_mm_card_markup(_mm_sorted_md, page=0, sport_keys=_md_sk),
                 message_to_edit=query.message,
             )
     elif prefix == "today":
@@ -5305,11 +5307,12 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
             _mm_sorted_wm = _sort_mm_snapshot(_mm_input_wm)
             _mm_games_snapshot[user_id] = _mm_sorted_wm
             _wm_card_data = build_my_matches_data(_mm_input_wm, page=1)
+            _wm_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games_wm if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
             await asyncio.wait_for(
                 send_card_or_fallback(
                     bot=ctx.bot, chat_id=update.message.chat_id,
                     template="my_matches.html", data=_wm_card_data,
-                    text_fallback=text, markup=_build_mm_card_markup(_mm_sorted_wm, page=0),
+                    text_fallback=text, markup=_build_mm_card_markup(_mm_sorted_wm, page=0, sport_keys=_wm_sk),
                 ),
                 timeout=12.0,
             )
@@ -5408,12 +5411,13 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 _ms = _sort_mm_snapshot(_mi)
                 _mm_games_snapshot[user_id] = _ms
                 _cd = build_my_matches_data(_mi, page=1)
+                _ar_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _rg if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
                 await asyncio.wait_for(
                     send_card_or_fallback(
                         bot=ctx.bot, chat_id=_ar_chat_id,
                         template="my_matches.html", data=_cd,
                         text_fallback=_mm_result[0] or _FALLBACK_TEXT,
-                        markup=_build_mm_card_markup(_ms, page=0),
+                        markup=_build_mm_card_markup(_ms, page=0, sport_keys=_ar_sk),
                     ),
                     timeout=12.0,
                 )
@@ -5441,12 +5445,13 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 await loading.delete()
             except Exception:
                 pass
+        _cp_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games_cp if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
         try:
             await asyncio.wait_for(
                 send_card_or_fallback(
                     bot=ctx.bot, chat_id=update.message.chat_id,
                     template="my_matches.html", data=_cp_card_data,
-                    text_fallback=text, markup=_build_mm_card_markup(_mm_sorted_cp, page=0),
+                    text_fallback=text, markup=_build_mm_card_markup(_mm_sorted_cp, page=0, sport_keys=_cp_sk),
                 ),
                 timeout=12.0,
             )
@@ -5467,7 +5472,10 @@ def _sort_mm_snapshot(mm_input: list) -> list:
     return edge + [m for m in mm_input if not m.get("has_edge")]
 
 
-def _build_mm_card_markup(mm_sorted: list, page: int = 0) -> "InlineKeyboardMarkup":
+def _build_mm_card_markup(
+    mm_sorted: list, page: int = 0,
+    sport_keys: "set | None" = None, sport_filter: "str | None" = None,
+) -> "InlineKeyboardMarkup":
     """Build image card markup for My Matches with mm:match:{N}:{e|n} buttons.
     N matches the card's [N] labels — aligned with _sort_mm_snapshot() order.
     """
@@ -5493,7 +5501,10 @@ def _build_mm_card_markup(mm_sorted: list, page: int = 0) -> "InlineKeyboardMark
         nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"yg:all:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")])
+    if sport_keys and len(sport_keys) >= 2:
+        rows.append(_build_sport_filter_row(sport_keys, sport_filter))
+    rows.append([InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")])
+    rows.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -5705,6 +5716,8 @@ async def _render_your_games_all(
             for ev in page_games
         ])
     card_context = await _get_cached_match_card_context(page_games, edge_info)
+    _mm_user = await db.get_user(user_id)
+    _mm_bankroll = float(_mm_user.bankroll) if _mm_user and _mm_user.bankroll else 200.0
 
     # Group page games by date
     current_date_label = None
@@ -5763,7 +5776,7 @@ async def _render_your_games_all(
         if home_pos and away_pos:
             lines.append(f"     📊 {home_pos} vs {away_pos}")
 
-        preview_line = _format_my_matches_edge_preview(_ei, user_tier, home_raw, away_raw)
+        preview_line = _format_my_matches_edge_preview(_ei, user_tier, home_raw, away_raw, bankroll=_mm_bankroll)
         if preview_line:
             lines.append(f"     {preview_line}")
 
@@ -5882,7 +5895,7 @@ async def _render_your_games_sport(
         if ct_sa and ct_sa.date() == target_date:
             day_games.append({**event, "_ct_sa": ct_sa})
 
-    edge_events = await _check_edges_for_games(day_games)
+    edge_events = _get_edge_info_for_games(day_games)
 
     date_label = _format_date_label(target_date, now)
 
@@ -6181,6 +6194,7 @@ def _format_my_matches_edge_preview(
     user_tier: str,
     home_team: str,
     away_team: str,
+    bankroll: float = 200,
 ) -> str:
     """Render a single premium edge preview line for My Matches cards."""
     if not edge_match:
@@ -6222,8 +6236,8 @@ def _format_my_matches_edge_preview(
         outcome_label = outcome_raw or "Edge"
 
     tier_emoji = EDGE_EMOJIS.get(edge_match.get("display_tier", edge_tier), "🔥")
-    ret_amount = odds_val * 300
-    return f"{tier_emoji} {h(outcome_label)} @ {odds_val:.2f} → R{ret_amount:,.0f} on R300"
+    ret_amount = odds_val * bankroll
+    return f"{tier_emoji} {h(outcome_label)} @ {odds_val:.2f} → R{ret_amount:,.0f} on R{bankroll:,.0f}"
 
 
 async def _get_cached_match_card_context(
