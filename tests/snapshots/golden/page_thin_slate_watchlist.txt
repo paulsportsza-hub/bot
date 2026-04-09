@@ -15,4 +15,3 @@ A couple of early leans are forming, but nothing belongs on the main card yet.
 
 [buttons]
 ⚽ My Matches -> yg:all:0
-↩️ Menu -> nav:main

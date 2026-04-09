@@ -1811,8 +1811,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _mm_match = _mm_snap[_mm_snap_idx]
                 _mm_event_id = _mm_match.get("_event_id", "")
                 _mm_back_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("↩️ Back to My Matches", callback_data="md:back")],
-                    [InlineKeyboardButton("🏠 Menu", callback_data="nav:main")],
+                    [InlineKeyboardButton("↩️ Back", callback_data="md:back")],
                 ])
                 _mm_fallback = (
                     f"<b>{h(_mm_match.get('home', ''))} vs "
@@ -2129,7 +2128,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         parse_mode=ParseMode.HTML,
                         reply_markup=InlineKeyboardMarkup([[
                             InlineKeyboardButton(
-                                "↩️ Back to Edge Picks",
+                                "↩️ Back",
                                 callback_data=f"hot:back:{_resolve_hot_tips_back_page(user_id, match_key)}",
                             ),
                         ]]),
@@ -10021,7 +10020,6 @@ async def _build_hot_tips_page(
             "\n".join(lines),
             InlineKeyboardMarkup([
                 [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
-                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
             ]),
             tips,
         )
@@ -10403,14 +10401,13 @@ async def _build_hot_tips_page(
 
     text = "\n".join(lines)
 
-    # Build buttons — 2 per row: [N] {sport} {home} v {away} {tier/lock}
+    # Build buttons — 1 per row: [N] {sport} {home} vs {away} {tier/lock}
     buttons: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
     for idx, match_key, access in tip_buttons:
         tip = page_tips[idx - start - 1]
         _btn_sport = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
-        h_abbr = config.abbreviate_team(tip.get("home_team") or "TBD")
-        a_abbr = config.abbreviate_team(tip.get("away_team") or "TBD")
+        h_name = tip.get("home_team") or "TBD"
+        a_name = tip.get("away_team") or "TBD"
         if access in ("full", "partial"):
             # BUILD-PREGEN-FIX-2 AC-5: Use display_tier (already zero-signal-capped in the
             # card loop at line 8413-8415) as single source of truth for tier badge.
@@ -10421,30 +10418,26 @@ async def _build_hot_tips_page(
         else:
             _btn_tier = "🔒"
             cb = f"hot:upgrade:{_shorten_cb_key(match_key)}"
-        label = f"[{idx}] {_btn_sport} {h_abbr} v {a_abbr} {_btn_tier}"
-        row.append(InlineKeyboardButton(label, callback_data=cb))
-        if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
+        label = f"[{idx}] {_btn_sport} {h_name} vs {a_name} {_btn_tier}"
+        buttons.append([InlineKeyboardButton(label, callback_data=cb)])
 
-    # Pagination row
-    nav: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"hot:page:{page - 1}"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"hot:page:{page + 1}"))
-    if nav:
-        buttons.append(nav)
-
-    buttons.append([InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7")])
-
-    # Action buttons
-    buttons.append([
-        InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0"),
-        InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
-    ])
+    # Navigation row — only row allowed to have 2 buttons side-by-side
+    has_prev = page > 0
+    has_next = page < total_pages - 1
+    if has_prev and has_next:
+        buttons.append([
+            InlineKeyboardButton("← Previous", callback_data=f"hot:page:{page - 1}"),
+            InlineKeyboardButton("Next →", callback_data=f"hot:page:{page + 1}"),
+        ])
+    elif has_prev:
+        buttons.append([InlineKeyboardButton("← Previous", callback_data=f"hot:page:{page - 1}")])
+    elif has_next:
+        buttons.append([
+            InlineKeyboardButton("↩️ Back", callback_data="nav:main"),
+            InlineKeyboardButton("Next →", callback_data=f"hot:page:{page + 1}"),
+        ])
+    else:
+        buttons.append([InlineKeyboardButton("↩️ Back", callback_data="nav:main")])
 
     return (text, InlineKeyboardMarkup(buttons), tips)
 
@@ -11729,16 +11722,12 @@ def _build_hot_tips_detail_rows(
 ) -> list[list[InlineKeyboardButton]]:
     """Build the normalized Hot Tips detail action surface."""
     back_page = _resolve_hot_tips_back_page(user_id, match_key, fallback_page)
-    first_row: list[InlineKeyboardButton] = []
+    rows: list[list[InlineKeyboardButton]] = []
     if primary_button is not None:
-        first_row.append(primary_button)
-    first_row.append(InlineKeyboardButton(
-        "↩️ Back to Edge Picks", callback_data=f"hot:back:{back_page}",
-    ))
-    rows = [first_row]
-    if extra_rows:
-        rows.extend(extra_rows)
-    rows.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
+        rows.append([primary_button])
+    rows.append([InlineKeyboardButton(
+        "↩️ Back", callback_data=f"hot:back:{back_page}",
+    )])
     return rows
 
 
@@ -11772,9 +11761,9 @@ def _build_odds_compare_back_button(user_id: int, event_id: str) -> InlineKeyboa
             fallback_page if isinstance(fallback_page, int) else None,
         )
         return InlineKeyboardButton(
-            "↩️ Back to Edge Picks", callback_data=f"hot:back:{back_page}",
+            "↩️ Back", callback_data=f"hot:back:{back_page}",
         )
-    return InlineKeyboardButton("↩️ Back to Game", callback_data=f"yg:game:{event_id}")
+    return InlineKeyboardButton("↩️ Back", callback_data=f"yg:game:{event_id}")
 
 # ── W60-CACHE: Persistent narrative cache in odds.db ──────────
 _NARRATIVE_CACHE_TTL = 21600  # 6 hours in seconds (BUILD-16b/FIX-2A: extended from 2h)
@@ -19451,7 +19440,7 @@ def _build_game_buttons(
                     outcome = best_ev_tip.get("outcome") or ""
                 odds_val = best_ev_tip["odds"]
 
-                cta_text = f"{tier_emoji} Back {outcome} @ {odds_val:.2f} on {bk_name} →"
+                cta_text = f"{tier_emoji} Back {outcome} on {bk_name} →"
                 if aff_url:
                     primary_button = InlineKeyboardButton(cta_text, url=aff_url)
                 else:
@@ -19491,17 +19480,6 @@ def _build_game_buttons(
                     f"📲 {cta_label}", url=bk_url,
                 )
 
-        # Button 2: Compare All Odds (only when multi-bookmaker data and accessible)
-        has_multi_bk = any(t.get("odds_by_bookmaker") for t in tips)
-        if has_multi_bk and _bet_access in ("full", "partial"):
-            if source == "edge_picks":
-                _remember_odds_compare_origin(
-                    user_id, event_id, source, match_key=match_key, back_page=back_page,
-                )
-            compare_rows.append([InlineKeyboardButton(
-                "📊 Compare All Odds", callback_data=f"odds:compare:{_shorten_cb_key(event_id)}",
-            )])
-
     # Top Edge Picks button when no tips available (skip if already showing Back to Edge Picks)
     if not tips and source != "edge_picks":
         buttons.append([InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")])
@@ -19518,11 +19496,7 @@ def _build_game_buttons(
 
     if primary_button is not None:
         buttons.append([primary_button])
-    buttons.extend(compare_rows)
-    buttons.append([
-        InlineKeyboardButton("↩️ My Matches", callback_data="yg:all:0"),
-        InlineKeyboardButton("🏠 Menu", callback_data="nav:main"),
-    ])
+    buttons.append([InlineKeyboardButton("↩️ Back", callback_data="yg:all:0")])
 
     return buttons
 

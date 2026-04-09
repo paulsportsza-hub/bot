@@ -139,7 +139,7 @@ async def test_build_game_buttons_has_bet_cta(test_edges) -> None:
         edge_tier="diamond",
         selected_outcome="Arsenal",
     )
-    assert rows[0][0].text.startswith("💎 Back Arsenal @ 1.85 on HWB")
+    assert rows[0][0].text.startswith("💎 Back Arsenal on HWB →")
     assert rows[0][0].url
 
 
@@ -153,7 +153,7 @@ async def test_build_game_buttons_has_compare_odds_button(test_edges) -> None:
         edge_tier="diamond",
     )
     labels = [btn.text for row in rows for btn in row]
-    assert "📊 Compare All Odds" in labels
+    assert "📊 Compare All Odds" not in labels  # Removed per BUTTON-REWORK-01
 
 
 async def test_detail_rows_include_back_to_edge_picks(test_edges) -> None:
@@ -161,7 +161,7 @@ async def test_detail_rows_include_back_to_edge_picks(test_edges) -> None:
     rows = bot._build_hot_tips_detail_rows(123, match_key=test_edges[0]["match_id"])
     callbacks = [btn.callback_data for row in rows for btn in row if btn.callback_data]
     assert "hot:back:1" in callbacks
-    assert "nav:main" in callbacks
+    # Menu button removed from detail rows per BUTTON-REWORK-01
 
 
 @pytest.mark.no_test_edges
@@ -169,7 +169,7 @@ async def test_thin_slate_empty_state_is_safe() -> None:
     text, markup, _ = await bot._build_hot_tips_page([], page=0, user_tier="diamond")
     assert "thin slate" in text.lower()
     assert "yg:all:0" in _callbacks(markup)
-    assert "nav:main" in _callbacks(markup)
+    # Menu button removed from inline keyboards per BUTTON-REWORK-01
 
 
 async def test_header_count_matches_total_edges(test_edges) -> None:

@@ -27,7 +27,7 @@ The market has been tight recently.
 Check back for fresh edges.
 
 [buttons]
-[1] ⚽ SUN v KC 🔒 -> hot:upgrade:sundowns_vs_chiefs_2026-03-10 | [2] ⚽ ARS v CHE 🔒 -> hot:upgrade:arsenal_vs_chelsea_2026-03-10
-[3] 🏉 BUL v STO 🔒 -> hot:upgrade:bulls_vs_stormers_2026-03-10
-📊 Edge Tracker -> results:7
-⚽ My Matches -> yg:all:0 | ↩️ Menu -> nav:main
+[1] ⚽ Mamelodi Sundowns vs Kaizer Chiefs 🔒 -> hot:upgrade:sundowns_vs_chiefs_2026-03-10
+[2] ⚽ Arsenal vs Chelsea 🔒 -> hot:upgrade:arsenal_vs_chelsea_2026-03-10
+[3] 🏉 Bulls vs Stormers 🔒 -> hot:upgrade:bulls_vs_stormers_2026-03-10
+↩️ Back -> nav:main

@@ -17,6 +17,5 @@
 🎁 <b>Founding Member:</b> R699/yr Diamond — 8 days left
 
 [buttons]
-[1] ⚽ SUN v KC 🔒 -> hot:upgrade:mamelodi_sundowns_vs_kaizer_chiefs_2026-03-10
-📊 Edge Tracker -> results:7
-⚽ My Matches -> yg:all:0 | ↩️ Menu -> nav:main
+[1] ⚽ Mamelodi Sundowns vs Kaizer Chiefs 🔒 -> hot:upgrade:mamelodi_sundowns_vs_kaizer_chiefs_2026-03-10
+↩️ Back -> nav:main

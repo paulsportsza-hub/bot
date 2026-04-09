@@ -124,7 +124,7 @@ class TestBronzeNeverSeesPaidData:
             edge_tier="silver",
             selected_outcome=tip["outcome"],
         )
-        assert rows[0][0].text.startswith("🥈 Back Sundowns @ 3.20")
+        assert rows[0][0].text.startswith("🥈 Back Sundowns on")
         assert rows[0][0].url
 
     def test_bronze_multi_page_no_leak(self):
