@@ -7057,6 +7057,21 @@ def _display_bookmaker_name(key: str) -> str:
     return _BK_DISPLAY.get(key, key.title())
 
 
+# Module-level verdict content blacklist — applied at both generation and serve time
+# (VERDICT-FIX-02: refactored from local var in _generate_verdict to module level)
+_VERDICT_BLACKLIST = [
+    "home advantage", "away advantage",
+    "historically", "tradition", "traditionally",
+    "derby", "rivalry",
+    "big game", "big match",
+    "relegation battle", "title race",
+    "form suggests", "expected to",
+    "known for", "famous for",
+    "ev edge", "ev%", "expected value",
+    "the home side", "the away side",
+]
+
+
 def _generate_verdict(tip: dict, verified: dict) -> str:
     """Call Sonnet for a 3-5 sentence SA sports fan verdict.
 
@@ -7079,6 +7094,11 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         league = tip.get("league_key") or tip.get("league") or ""
         bookmaker = tip.get("bookmaker") or ""
         matchup = verified.get("matchup", "") or (f"{home} vs {away}" if home and away else "")
+
+        # Guard: do not call LLM if team names are missing
+        if not home.strip() or not away.strip():
+            log.warning("_generate_verdict: empty team names for %s", matchup or "unknown match")
+            return ""
         _conf_pct = float(tip.get("confidence") or 0)
         def _derive_tier(p):
             if p >= 95: return "MAX"
@@ -7208,16 +7228,6 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "\"This could be a value bet if the SOLID confidence tier holds.\""
         )
 
-        _BLACKLISTED_PHRASES = [
-            "home advantage", "away advantage",
-            "historically", "tradition", "traditionally",
-            "derby", "rivalry",
-            "big game", "big match",
-            "relegation battle", "title race",
-            "form suggests", "expected to",
-            "known for", "famous for",
-        ]
-
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
@@ -7232,7 +7242,38 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
                 text += block.text
         text = text.strip()
 
-        if any(p in text.lower() for p in _BLACKLISTED_PHRASES):
+        # Echo detection: if LLM returned its input data dump instead of a verdict
+        _ECHO_MARKERS = [
+            "here are the verified fields",
+            "here is the data i have been given",
+            "here is the data",
+            "data i have been given",
+            "verified fields i have",
+            "can work with",
+            "verified fields i can work with",
+            "\n- pick:", "\n- odds:", "\n- bookmaker:",
+            "- pick:", "- odds:", "- bookmaker:",
+            "not provided",
+            "form_home_plain", "h2h_summary",
+            "signals_active", "nickname_home", "nickname_away",
+        ]
+        _echo_hits = sum(1 for _m in _ECHO_MARKERS if _m in text.lower())
+        if _echo_hits >= 2:
+            log.warning("_generate_verdict: echo-detected — LLM parroted input: %s", text[:80])
+            return ""
+
+        # Field-name leak guard: prompt field names must never appear in verdict output
+        _FIELD_NAME_LEAK = [
+            "form_home_plain", "form_away_plain", "h2h_summary",
+            "signals_active", "nickname_home", "nickname_away",
+            "home_team / away_team", "confidence_tier:",
+            "home_team:", "away_team:",
+        ]
+        if any(fn in text.lower() for fn in _FIELD_NAME_LEAK):
+            log.warning("_generate_verdict: field-name leak detected, discarding: %s", text[:80])
+            return ""
+
+        if any(p in text.lower() for p in _VERDICT_BLACKLIST):
             log.warning("verdict blacklisted: %s", text)
             return ""
 
@@ -7338,6 +7379,13 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         _af = allowed_data.get("away_form") or []
         home = allowed_data.get("home_team") or allowed_data.get("home") or ""
         away = allowed_data.get("away_team") or allowed_data.get("away") or ""
+
+        # Guard: do not call LLM if team names are missing
+        if not home.strip() or not away.strip():
+            log.warning("_generate_verdict_constrained: empty team names for %s", matchup or "unknown match")
+            if isinstance(spec, NarrativeSpec):
+                return _render_verdict_deterministic(spec)
+            return ""
 
         # Plain-English form descriptions (VERDICT-UPGRADE-02)
         # ENRICH-FIX-01: check pre-set fallback string before computing from list
@@ -7471,6 +7519,48 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             if hasattr(block, "text") and block.text:
                 text += block.text
         text = text.strip()
+
+        # Echo detection: if LLM returned its input data dump instead of a verdict
+        _ECHO_MARKERS_C = [
+            "here are the verified fields",
+            "here is the data i have been given",
+            "here is the data",
+            "data i have been given",
+            "verified fields i have",
+            "can work with",
+            "verified fields i can work with",
+            "\n- pick:", "\n- odds:", "\n- bookmaker:",
+            "- pick:", "- odds:", "- bookmaker:",
+            "not provided",
+            "form_home_plain", "h2h_summary",
+            "signals_active", "nickname_home", "nickname_away",
+        ]
+        _echo_hits_c = sum(1 for _m in _ECHO_MARKERS_C if _m in text.lower())
+        if _echo_hits_c >= 2:
+            log.warning("_generate_verdict_constrained: echo-detected — LLM parroted input: %s", text[:80])
+            if isinstance(spec, NarrativeSpec):
+                return _render_verdict_deterministic(spec)
+            return ""
+
+        # Field-name leak guard: prompt field names must never appear in verdict output
+        _FIELD_NAME_LEAK_C = [
+            "form_home_plain", "form_away_plain", "h2h_summary",
+            "signals_active", "nickname_home", "nickname_away",
+            "home_team / away_team", "confidence_tier:",
+            "home_team:", "away_team:",
+        ]
+        if any(fn in text.lower() for fn in _FIELD_NAME_LEAK_C):
+            log.warning("_generate_verdict_constrained: field-name leak detected, discarding: %s", text[:80])
+            if isinstance(spec, NarrativeSpec):
+                return _render_verdict_deterministic(spec)
+            return ""
+
+        # Blacklist check (matches _generate_verdict)
+        if any(p in text.lower() for p in _VERDICT_BLACKLIST):
+            log.warning("_generate_verdict_constrained: blacklisted phrase, discarding: %s", text[:80])
+            if isinstance(spec, NarrativeSpec):
+                return _render_verdict_deterministic(spec)
+            return ""
 
         if not text:
             if isinstance(spec, NarrativeSpec):
@@ -7886,9 +7976,40 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     if not enriched.get("verdict"):
         # Try cached verdict from narrative_cache (pre-computed by pregenerate_narratives)
         _cached_verdict = _get_cached_verdict(match_key)
+        _use_cached_verdict = False
         if _cached_verdict and not _is_verdict_stale(_cached_verdict):
-            enriched["verdict"] = _cached_verdict["verdict_html"]
-        else:
+            # Serve-time staleness check: skip cached verdict if odds/bookie changed
+            _cached_bk = _cached_verdict.get("cached_bookmaker", "")
+            _cached_odds_val = _cached_verdict.get("cached_odds", 0.0)
+            _current_bk = enriched.get("bookmaker") or tip.get("bookmaker") or ""
+            _current_odds = float(enriched.get("odds") or tip.get("odds") or 0)
+            _bk_mismatch = bool(_cached_bk and _current_bk and _cached_bk != _current_bk)
+            _odds_mismatch = bool(
+                _cached_odds_val and _current_odds
+                and abs(_cached_odds_val - _current_odds) > 0.05
+            )
+            # EV mismatch: cached verdict embedding a stale EV% should be regenerated
+            _cached_ev = float(_cached_verdict.get("cached_ev") or 0)
+            _current_ev = float(enriched.get("ev") or tip.get("ev") or tip.get("predicted_ev") or 0)
+            _ev_mismatch = bool(
+                _cached_ev and _current_ev
+                and abs(_cached_ev - _current_ev) > 0.3  # 0.3% tolerance
+            )
+            if _bk_mismatch or _odds_mismatch or _ev_mismatch:
+                log.info("VERDICT_STALE: odds/bookie/ev mismatch for %s, regenerating", match_key)
+            else:
+                _use_cached_verdict = True
+        if _use_cached_verdict:
+            _cv_text = _cached_verdict.get("verdict_html", "")
+            # Serve-time content gate: apply blacklist to cached verdicts
+            if _VERDICT_BLACKLIST and any(p in _cv_text.lower() for p in _VERDICT_BLACKLIST):
+                log.info("VERDICT_BLACKLISTED_CACHED: %s, will regenerate", match_key)
+                _use_cached_verdict = False
+            elif _cv_text:
+                enriched["verdict"] = _cv_text
+            else:
+                _use_cached_verdict = False
+        if not _use_cached_verdict:
             # Fallback: generate at view time (existing path)
             enriched["verdict"] = _generate_verdict(enriched, verified)
             # Store for next view (best-effort, fire-and-forget)
@@ -12312,12 +12433,27 @@ def _get_cached_verdict(match_key: str) -> dict | None:
         try:
             row = conn.execute(
                 "SELECT verdict_html, evidence_class, tone_band, odds_hash, "
-                "created_at, expires_at "
+                "created_at, expires_at, tips_json "
                 "FROM narrative_cache WHERE match_id = ?",
                 (match_key,),
             ).fetchone()
             if not row or not row[0]:
                 return None
+            # Extract cached odds/bookmaker/ev from tips_json for serve-time staleness checks
+            _cached_bookie = ""
+            _cached_odds = 0.0
+            _cached_ev = 0.0
+            if row[6]:
+                try:
+                    import json as _json_vc
+                    _tips_vc = _json_vc.loads(row[6])
+                    if _tips_vc:
+                        _t0 = _tips_vc[0]
+                        _cached_bookie = str(_t0.get("bookie") or _t0.get("bookmaker") or "")
+                        _cached_odds = float(_t0.get("odds") or 0)
+                        _cached_ev = float(_t0.get("ev") or 0)
+                except Exception:
+                    pass
             return {
                 "verdict_html": row[0],
                 "evidence_class": row[1] or "",
@@ -12325,6 +12461,9 @@ def _get_cached_verdict(match_key: str) -> dict | None:
                 "odds_hash": row[3] or "",
                 "created_at": row[4] or "",
                 "expires_at": row[5] or "",
+                "cached_bookmaker": _cached_bookie,
+                "cached_odds": _cached_odds,
+                "cached_ev": _cached_ev,
             }
         finally:
             conn.close()
