@@ -95,7 +95,7 @@ class TestBronzeNeverSeesPaidData:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, _ = asyncio.run(_build_hot_tips_page([tip], page=0, user_tier="bronze"))
+            text, _, _ = asyncio.run(_build_hot_tips_page([tip], page=0, user_tier="bronze"))
         # The card should NOT contain odds value
         assert "1.85" not in text
         assert "@ " not in text  # No "@ odds" pattern
@@ -106,7 +106,7 @@ class TestBronzeNeverSeesPaidData:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, _ = asyncio.run(_build_hot_tips_page([tip], page=0, user_tier="bronze"))
+            text, _, _ = asyncio.run(_build_hot_tips_page([tip], page=0, user_tier="bronze"))
         # Blurred card shows return but not specific odds
         assert "@ 2.50" not in text
 
@@ -148,9 +148,9 @@ class TestBronzeNeverSeesPaidData:
             from bot import _build_hot_tips_page
 
             # Page 1
-            text1, _ = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier="bronze"))
+            text1, _, _ = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier="bronze"))
             # Page 2
-            text2, _ = asyncio.run(_build_hot_tips_page(tips, page=1, user_tier="bronze"))
+            text2, _, _ = asyncio.run(_build_hot_tips_page(tips, page=1, user_tier="bronze"))
 
         for text, page_num in [(text1, 1), (text2, 2)]:
             # Find diamond-tier card lines — they must not contain odds

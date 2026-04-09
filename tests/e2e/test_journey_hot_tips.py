@@ -81,19 +81,19 @@ async def test_hot_go_dispatch_sends_hot_tips_surface(monkeypatch, test_edges) -
 
 
 async def test_build_hot_tips_page_shows_edge_cards(test_edges) -> None:
-    text, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
+    text, _, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
     assert "Arsenal vs Chelsea" in text
     assert "Premier League" in text
     assert "Sat 29 Mar" in text
 
 
 async def test_page_zero_has_next_button(test_edges) -> None:
-    _, markup = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
+    _, markup, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
     assert "hot:page:1" in _callbacks(markup)
 
 
 async def test_page_one_has_prev_button(test_edges) -> None:
-    _, markup = await bot._build_hot_tips_page(test_edges, page=1, user_tier="diamond")
+    _, markup, _ = await bot._build_hot_tips_page(test_edges, page=1, user_tier="diamond")
     assert "hot:page:0" in _callbacks(markup)
 
 
@@ -117,14 +117,14 @@ async def test_hot_page_dispatch_renders_second_page(monkeypatch, test_edges) ->
 
 
 async def test_accessible_buttons_use_edge_detail_for_diamond(test_edges) -> None:
-    _, markup = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
+    _, markup, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
     callbacks = _callbacks(markup)
     assert any(cb.startswith("ep:pick:") for cb in callbacks)
     assert not any(cb.startswith("hot:upgrade:") for cb in callbacks)
 
 
 async def test_bronze_page_uses_upgrade_buttons_for_locked_edges(test_edges) -> None:
-    _, markup = await bot._build_hot_tips_page(test_edges, page=0, user_tier="bronze")
+    _, markup, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="bronze")
     callbacks = _callbacks(markup)
     assert any(cb.startswith("hot:upgrade:") for cb in callbacks)
 
@@ -166,24 +166,24 @@ async def test_detail_rows_include_back_to_edge_picks(test_edges) -> None:
 
 @pytest.mark.no_test_edges
 async def test_thin_slate_empty_state_is_safe() -> None:
-    text, markup = await bot._build_hot_tips_page([], page=0, user_tier="diamond")
+    text, markup, _ = await bot._build_hot_tips_page([], page=0, user_tier="diamond")
     assert "thin slate" in text.lower()
     assert "yg:all:0" in _callbacks(markup)
     assert "nav:main" in _callbacks(markup)
 
 
 async def test_header_count_matches_total_edges(test_edges) -> None:
-    text, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
+    text, _, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
     assert "6 Live Edges Found" in text
 
 
 async def test_cards_show_league_and_kickoff_metadata(test_edges) -> None:
-    text, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
+    text, _, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
     assert "Premier League · 📅 Sat 29 Mar · 17:30 · DStv 202" in text
 
 
 async def test_sport_icon_matches_rugby_tip(test_edges) -> None:
-    text, _ = await bot._build_hot_tips_page([test_edges[1]], page=0, user_tier="diamond")
+    text, _, _ = await bot._build_hot_tips_page([test_edges[1]], page=0, user_tier="diamond")
     assert "🏉 <b>Bulls vs Stormers</b>" in text
 
 

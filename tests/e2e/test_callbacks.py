@@ -123,7 +123,7 @@ class TestHotTipsButtonsHandled:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier="diamond"))
+            _, markup, _ = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier="diamond"))
 
         callbacks = _extract_callbacks(markup)
         assert len(callbacks) > 0, "No buttons found on Hot Tips page"
@@ -144,7 +144,7 @@ class TestHotTipsButtonsHandled:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier="bronze"))
+            _, markup, _ = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier="bronze"))
 
         callbacks = _extract_callbacks(markup)
         for cb in callbacks:
@@ -159,7 +159,7 @@ class TestHotTipsButtonsHandled:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier="diamond"))
+            _, markup, _ = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier="diamond"))
 
         callbacks = _extract_callbacks(markup)
         page_cbs = [cb for cb in callbacks if cb.startswith("hot:page:")]
@@ -214,7 +214,7 @@ class TestEmptyTipsButtonsHandled:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = asyncio.run(_build_hot_tips_page([], page=0, user_tier="diamond"))
+            _, markup, _ = asyncio.run(_build_hot_tips_page([], page=0, user_tier="diamond"))
 
         callbacks = _extract_callbacks(markup)
         assert len(callbacks) > 0, "Empty state should still have navigation buttons"

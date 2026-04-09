@@ -109,7 +109,7 @@ class TestBronzeJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, markup = asyncio.run(_build_hot_tips_page(
+            text, markup, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="bronze",
@@ -125,7 +125,7 @@ class TestBronzeJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = asyncio.run(_build_hot_tips_page(
+            _, markup, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="bronze",
@@ -147,7 +147,7 @@ class TestBronzeJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, _ = asyncio.run(_build_hot_tips_page(
+            text, _, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="bronze",
@@ -196,7 +196,7 @@ class TestGoldJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, markup = asyncio.run(_build_hot_tips_page(
+            text, markup, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="gold",
@@ -215,7 +215,7 @@ class TestGoldJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = asyncio.run(_build_hot_tips_page(
+            _, markup, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="gold",
@@ -247,7 +247,7 @@ class TestDiamondJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, markup = asyncio.run(_build_hot_tips_page(
+            text, markup, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="diamond",
@@ -261,7 +261,7 @@ class TestDiamondJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, markup = asyncio.run(_build_hot_tips_page(
+            text, markup, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="diamond",
@@ -276,7 +276,7 @@ class TestDiamondJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            _, markup = asyncio.run(_build_hot_tips_page(
+            _, markup, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="diamond",
@@ -303,7 +303,7 @@ class TestDiamondJourney:
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
 
-            text, _ = asyncio.run(_build_hot_tips_page(
+            text, _, _ = asyncio.run(_build_hot_tips_page(
                 tips,
                 page=0,
                 user_tier="diamond",

@@ -173,10 +173,10 @@ async def test_edge_detail_no_bronze_default():
     )
 
 
-# ── FIX 5: test_score_filter_threshold_38 ───────────────────────────────────
+# ── FIX 5: test_score_filter_threshold_40 ───────────────────────────────────
 
 def test_score_filter_threshold_38():
-    """_sort_tips_for_snapshot includes tips with composite >= 38 (silver floor)."""
+    """_sort_tips_for_snapshot uses >= 40 threshold, matching _build_hot_tips_page (P0-FIX-01)."""
     from bot import _sort_tips_for_snapshot
 
     tips = [
@@ -186,11 +186,11 @@ def test_score_filter_threshold_38():
     ]
     result = _sort_tips_for_snapshot(tips)
 
-    # 39.6 >= 38 → included, 37.9 < 38 → excluded
+    # 39.6 < 40 → excluded, 62.4 >= 40 → included, 37.9 < 40 → excluded
     scores = [t["edge_score"] for t in result]
-    assert 39.6 in scores, "Tip with composite 39.6 should be included (>= 38)"
-    assert 62.4 in scores, "Tip with composite 62.4 should be included"
-    assert 37.9 not in scores, "Tip with composite 37.9 should be excluded (< 38)"
+    assert 39.6 not in scores, "Tip with composite 39.6 should be excluded (< 40, P0-FIX-01)"
+    assert 62.4 in scores, "Tip with composite 62.4 should be included (>= 40)"
+    assert 37.9 not in scores, "Tip with composite 37.9 should be excluded (< 40)"
 
 
 # ── FIX 6: test_channel_display_clean ────────────────────────────────────────

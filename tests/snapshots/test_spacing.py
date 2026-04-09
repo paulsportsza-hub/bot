@@ -93,7 +93,7 @@ def _build_page(tips: list[dict], user_tier: str = "diamond", **kw) -> str:
     """Build hot tips page and return text only."""
     with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
         from bot import _build_hot_tips_page
-        text, _ = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier=user_tier, **kw))
+        text, _, _ = asyncio.run(_build_hot_tips_page(tips, page=0, user_tier=user_tier, **kw))
     return text
 
 

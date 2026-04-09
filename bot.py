@@ -1619,7 +1619,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _get_hot_tips_result_proof(),
                     _get_edge_tracker_summary(7),
                 )
-                _bt_text, _bt_markup = await _build_hot_tips_page(
+                _bt_text, _bt_markup, _ = await _build_hot_tips_page(
                     _bt_tips, page=_back_page, user_tier=_bt_tier,
                     remaining_views=_bt_rv, user_id=user_id,
                     hit_rate_7d=((_bt_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -1707,12 +1707,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 page_num = int(action.split(":")[1])
             except (ValueError, IndexError):
                 page_num = 0
-            # R7-BUILD-03: On page 0, always refresh snapshot from live cache (first entry point).
-            # On page 1+, ONLY use existing snapshot — never fall back to live cache (identity lock).
-            if page_num == 0:
-                _live = _hot_tips_cache.get("global", {}).get("tips", [])
-                if _live:
-                    _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(_live)
+            # Snapshot is frozen at render time — never refresh from live cache on page nav.
             tips = _ht_tips_snapshot.get(user_id, [])
             if tips:
                 _user_tier = await get_effective_tier(user_id)
@@ -1735,7 +1730,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _page_consec = getattr(_pcm, "consecutive_misses", 0) or 0
                 except Exception:
                     pass
-                text, markup = await _build_hot_tips_page(
+                text, markup, _ = await _build_hot_tips_page(
                     tips, page_num, user_tier=_user_tier,
                     consecutive_misses=_page_consec,
                     hit_rate_7d=_pg_hr, resource_count=_pg_res,
@@ -1889,7 +1884,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _get_hot_tips_result_proof(),
                     _get_edge_tracker_summary(7),
                 )
-                _ed_text, _ed_markup = await _build_hot_tips_page(
+                _ed_text, _ed_markup, _ = await _build_hot_tips_page(
                     _ed_tips, page=_ed_pg, user_tier=_ed_tier,
                     remaining_views=_ed_rv, user_id=user_id,
                     hit_rate_7d=((_ed_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -2633,11 +2628,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 # list↔detail divergence. It must always run.
                 _r9_skip = False
                 # R15-BUILD-01 Fix 3: seed snapshot from edge_results after bot restart
+                # P0-FIX-01: apply same threshold filter as _build_hot_tips_page (>= 40)
                 if not _ht_tips_snapshot.get(user_id):
                     try:
                         _seed_tips = await asyncio.to_thread(_load_tips_from_edge_results, 50)
                         if _seed_tips:
-                            _ht_tips_snapshot[user_id] = list(_seed_tips)
+                            _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(_seed_tips)
                     except Exception:
                         pass
                 _r9_snap_chk = None
@@ -9924,7 +9920,7 @@ def _sort_tips_for_snapshot(tips: list[dict]) -> list[dict]:
     CARDWIRE-FIX: snapshot must match the displayed order so ep:pick:N / edge:detail:N
     look up the correct tip.  Applies the identical filter, zero-signal cap, and sort.
     """
-    result = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 38]
+    result = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 40]
     _tier_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
     result.sort(key=lambda t: (
         _tier_order.get(str(t.get("display_tier", "bronze")).lower(), 9),
@@ -9949,7 +9945,7 @@ async def _build_hot_tips_page(
     recently_settled: list[dict] | None = None,
     yesterday_results: list[dict] | None = None,
     edge_tracker_summary: dict | None = None,
-) -> tuple[str, InlineKeyboardMarkup]:
+) -> tuple[str, InlineKeyboardMarkup, list]:
     """Build text + keyboard for a single page of hot tips (max 4 per page).
 
     Wave 27-UX: Header shows 7D hit rate, live edge count, resource count.
@@ -10027,6 +10023,7 @@ async def _build_hot_tips_page(
                 [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
             ]),
+            tips,
         )
 
     # Header — Wave 27-UX: hit rate + resource count + live edge count
@@ -10449,7 +10446,7 @@ async def _build_hot_tips_page(
         InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
     ])
 
-    return (text, InlineKeyboardMarkup(buttons))
+    return (text, InlineKeyboardMarkup(buttons), tips)
 
 
 # ---------------------------------------------------------------------------
@@ -10583,7 +10580,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         if _stale_ev_age > 600:  # > 10 minutes old → refresh EVs before serving
             log.debug("[BUILD-STALE-EV] Cache age %.0fs > 600s — refreshing tip EVs on warm path", _stale_ev_age)
             _cached_tips = await _refresh_tip_evs(_cached_tips)
-        _wm_text, _wm_markup = await _build_hot_tips_page(
+        _wm_text, _wm_markup, _wm_rendered = await _build_hot_tips_page(
             _cached_tips, page=0, user_tier=_wm_tier,
             remaining_views=_wm_rv, consecutive_misses=_wm_consec,
             hit_rate_7d=((_wm_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -10604,7 +10601,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
-            _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(_cached_tips)
+            _ht_tips_snapshot[user_id] = _wm_rendered
         # P4-07: log recommendations to bet_recommendations_log (non-blocking)
         _blw_fire_tips(_cached_tips, str(user_id or "channel"))
         return
@@ -10652,7 +10649,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             _fast_tips = await _refresh_tip_evs(_fast_tips)
         except Exception as _b14a_err:
             log.debug("BUILD-14a EV refresh failed (graceful fallback): %s", _b14a_err)
-        _fast_text, _fast_markup = await _build_hot_tips_page(
+        _fast_text, _fast_markup, _fast_rendered = await _build_hot_tips_page(
             _fast_tips, page=0, user_tier=_fast_tier,
             remaining_views=_fast_rv, consecutive_misses=_fast_consec,
             hit_rate_7d=((_fast_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -10673,7 +10670,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
-            _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(_fast_tips)
+            _ht_tips_snapshot[user_id] = _fast_rendered
         # P4-07: log recommendations to bet_recommendations_log (non-blocking)
         _blw_fire_tips(_fast_tips, str(user_id or "channel"))
         # Trigger background refresh so next tap gets freshly computed tips
@@ -10791,7 +10788,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     thin_slate_fixtures = []
     if not tips and user_id:
         thin_slate_fixtures = await _get_user_fixture_preview(user_id, limit=3, days_ahead=7)
-    text, markup = await _build_hot_tips_page(
+    text, markup, _rendered_tips = await _build_hot_tips_page(
         tips, page=0, user_tier=user_tier, remaining_views=remaining_views,
         consecutive_misses=_consec_misses,
         hit_rate_7d=_hit_rate, resource_count=_res_count,
@@ -10815,7 +10812,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     # W84-HT2: freeze page identity at render time (cold path)
     if user_id:
         _ht_page_state[user_id] = 0
-        _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(tips)
+        _ht_tips_snapshot[user_id] = _rendered_tips
     # P4-07: log recommendations to bet_recommendations_log (non-blocking)
     _blw_fire_tips(tips, str(user_id or "channel"))
 

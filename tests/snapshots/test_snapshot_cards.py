@@ -27,7 +27,7 @@ def _snapshot_page(name: str, update_snapshots: bool, **kwargs) -> None:
     with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
         from bot import _build_hot_tips_page
 
-        text, markup = asyncio.run(_build_hot_tips_page(**kwargs))
+        text, markup, _ = asyncio.run(_build_hot_tips_page(**kwargs))
     assert_snapshot(name, serialize_snapshot(text, markup), update_snapshots)
 
 
