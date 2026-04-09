@@ -1619,7 +1619,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _get_hot_tips_result_proof(),
                     _get_edge_tracker_summary(7),
                 )
-                _bt_text, _bt_markup, _ = await _build_hot_tips_page(
+                _bt_text, _bt_markup, _bt_rendered = await _build_hot_tips_page(
                     _bt_tips, page=_back_page, user_tier=_bt_tier,
                     remaining_views=_bt_rv, user_id=user_id,
                     hit_rate_7d=((_bt_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -1630,7 +1630,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     edge_tracker_summary=_bt_summary,
                 )
                 # BUILD-W3: Back → Edge Picks card (photo→photo or text→photo)
-                _bt_card_data = build_edge_picks_data(_bt_tips, page=_back_page + 1, per_page=HOT_TIPS_PAGE_SIZE)
+                # P0-FIX-02: use _bt_rendered (filtered+sorted) — NOT raw _bt_tips.
+                _bt_card_data = build_edge_picks_data(_bt_rendered, page=_back_page + 1, per_page=HOT_TIPS_PAGE_SIZE)
                 await send_card_or_fallback(
                     bot=ctx.bot, chat_id=query.message.chat_id,
                     template="edge_picks.html", data=_bt_card_data,
@@ -1730,7 +1731,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _page_consec = getattr(_pcm, "consecutive_misses", 0) or 0
                 except Exception:
                     pass
-                text, markup, _ = await _build_hot_tips_page(
+                text, markup, _pg_rendered = await _build_hot_tips_page(
                     tips, page_num, user_tier=_user_tier,
                     consecutive_misses=_page_consec,
                     hit_rate_7d=_pg_hr, resource_count=_pg_res,
@@ -1742,7 +1743,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     edge_tracker_summary=_pg_summary,
                 )
                 # BUILD-W3: photo→photo pagination with Edge Picks card
-                _pg_card_data = build_edge_picks_data(tips, page=page_num + 1, per_page=HOT_TIPS_PAGE_SIZE)
+                # P0-FIX-02: use _pg_rendered (filtered+sorted) — NOT raw tips.
+                _pg_card_data = build_edge_picks_data(_pg_rendered, page=page_num + 1, per_page=HOT_TIPS_PAGE_SIZE)
                 await send_card_or_fallback(
                     bot=ctx.bot, chat_id=query.message.chat_id,
                     template="edge_picks.html", data=_pg_card_data,
@@ -1883,7 +1885,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _get_hot_tips_result_proof(),
                     _get_edge_tracker_summary(7),
                 )
-                _ed_text, _ed_markup, _ = await _build_hot_tips_page(
+                _ed_text, _ed_markup, _ed_rendered = await _build_hot_tips_page(
                     _ed_tips, page=_ed_pg, user_tier=_ed_tier,
                     remaining_views=_ed_rv, user_id=user_id,
                     hit_rate_7d=((_ed_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
@@ -1893,7 +1895,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     yesterday_results=_ed_proof.get("yesterday_results"),
                     edge_tracker_summary=_ed_summ,
                 )
-                _ed_card_data = build_edge_picks_data(_ed_tips, page=_ed_pg + 1, per_page=HOT_TIPS_PAGE_SIZE)
+                # P0-FIX-02: use _ed_rendered (filtered+sorted) — NOT raw _ed_tips.
+                _ed_card_data = build_edge_picks_data(_ed_rendered, page=_ed_pg + 1, per_page=HOT_TIPS_PAGE_SIZE)
                 await send_card_or_fallback(
                     bot=ctx.bot, chat_id=query.message.chat_id,
                     template="edge_picks.html", data=_ed_card_data,
@@ -7990,8 +7993,31 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
                 _cached_ev and _current_ev
                 and abs(_cached_ev - _current_ev) > 0.3  # 0.3% tolerance
             )
-            if _bk_mismatch or _odds_mismatch or _ev_mismatch:
-                log.info("VERDICT_STALE: odds/bookie/ev mismatch for %s, regenerating", match_key)
+            # ODDS-FRESHNESS-01: force regeneration if same-day odds are >90 min stale
+            _odds_age_stale = False
+            _max_scraped_at = max(
+                (v.get("scraped_at", "") for v in (verified.get("odds") or {}).values()),
+                default="",
+            )
+            if _max_scraped_at:
+                try:
+                    from datetime import datetime, timezone
+                    _oa_ts = datetime.fromisoformat(_max_scraped_at.replace("Z", "+00:00"))
+                    _oa_mins = (datetime.now(timezone.utc) - _oa_ts).total_seconds() / 60
+                    _today = datetime.now(timezone.utc).date().isoformat()
+                    if _oa_mins > 90 and date_str == _today:
+                        _odds_age_stale = True
+                except Exception:
+                    pass
+            if _bk_mismatch or _odds_mismatch or _ev_mismatch or _odds_age_stale:
+                log.info(
+                    "VERDICT_STALE: %s%s%s%s for %s, regenerating",
+                    "bookie_mismatch " if _bk_mismatch else "",
+                    "odds_mismatch " if _odds_mismatch else "",
+                    "ev_mismatch " if _ev_mismatch else "",
+                    "odds_age_stale " if _odds_age_stale else "",
+                    match_key,
+                )
             else:
                 _use_cached_verdict = True
         if _use_cached_verdict:
@@ -9034,12 +9060,24 @@ def _format_confidence_badge(confidence: str, source: str = "") -> str:
     return ""  # Low confidence — omit
 
 
-def _format_freshness(minutes_ago: int) -> str:
-    """Smart freshness display — only show when impressive."""
+def _format_freshness(minutes_ago: int, same_day_match: bool = False, odds_ts: str = "") -> str:
+    """Smart freshness display — warns when odds are stale for same-day matches."""
     if minutes_ago <= 5:
         return "<i>⚡ Live odds</i>"
     elif minutes_ago <= 20:
         return f"<i>Odds updated {minutes_ago} min ago</i>"
+    elif same_day_match and minutes_ago > 90:
+        # ODDS-FRESHNESS-01: same-day match with odds >90 min old — show explicit warning
+        if odds_ts:
+            try:
+                from datetime import datetime, timezone, timedelta
+                _ts = datetime.fromisoformat(odds_ts.replace("Z", "+00:00"))
+                _sast = _ts + timedelta(hours=2)
+                _time_str = _sast.strftime("%H:%M")
+                return f"<i>⚠️ Odds as of {_time_str} SAST — verify on bookmaker before placing</i>"
+            except Exception:
+                pass
+        return "<i>⚠️ Odds may have moved — verify before placing</i>"
     else:
         return "<i>Live SA bookmaker odds</i>"
 
@@ -10585,7 +10623,9 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             edge_tracker_summary=_wm_summary,
         )
         # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
-        _wm_card_data = build_edge_picks_data(_cached_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE)
+        # P0-FIX-02: use _wm_rendered (filtered+sorted) — NOT raw _cached_tips.
+        # Raw cache may contain ev<=0 or edge_score<40 tips that buttons exclude.
+        _wm_card_data = build_edge_picks_data(_wm_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE)
         await send_card_or_fallback(
             bot=bot, chat_id=chat_id,
             template="edge_picks.html", data=_wm_card_data,
@@ -10654,7 +10694,8 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             edge_tracker_summary=_fast_summary,
         )
         # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
-        _fast_card_data = build_edge_picks_data(_fast_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE)
+        # P0-FIX-02: use _fast_rendered (filtered+sorted) — NOT raw _fast_tips.
+        _fast_card_data = build_edge_picks_data(_fast_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE)
         await send_card_or_fallback(
             bot=bot, chat_id=chat_id,
             template="edge_picks.html", data=_fast_card_data,
@@ -10796,7 +10837,8 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         edge_tracker_summary=_edge_tracker_summary,
     )
     # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
-    _cold_card_data = build_edge_picks_data(tips, page=1, per_page=HOT_TIPS_PAGE_SIZE)
+    # P0-FIX-02: use _rendered_tips (filtered+sorted) — NOT raw tips.
+    _cold_card_data = build_edge_picks_data(_rendered_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE)
     await send_card_or_fallback(
         bot=bot, chat_id=chat_id,
         template="edge_picks.html", data=_cold_card_data,
@@ -19865,14 +19907,18 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             elif sharp_conf == "medium":
                 text += "\n\n📊 <b>Edge source:</b> SA bookmaker consensus"
 
-        # Smart freshness indicator
+        # Smart freshness indicator — ODDS-FRESHNESS-01: warns when stale for same-day
         last_updated = odds_result.get("last_updated")
         if last_updated:
             from datetime import datetime, timezone
             try:
                 ts = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
                 mins_ago = int((datetime.now(timezone.utc) - ts).total_seconds() / 60)
-                text += f"\n\n{_format_freshness(mins_ago)}"
+                # Detect same-day match from match_id suffix (home_away_YYYY-MM-DD)
+                _mid = tip.get("match_id", "")
+                _today = datetime.now(timezone.utc).date().isoformat()
+                _same_day = bool(_mid and _mid.endswith(_today))
+                text += f"\n\n{_format_freshness(mins_ago, same_day_match=_same_day, odds_ts=last_updated)}"
             except (ValueError, TypeError):
                 pass
     else:
@@ -24657,12 +24703,15 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
             # BUILD-SPEED: Prerender Edge Picks cards into PNG cache (TTL 15 min).
             # Warms card_cache so hot:back:N taps are instant cache hits.
-            if tips:
+            # P0-FIX-02: pre-filter tips to match _build_hot_tips_page filtering.
+            # Raw tips may include ev<=0 or edge_score<40 items that buttons exclude.
+            _prerender_tips = _sort_tips_for_snapshot(tips)
+            if _prerender_tips:
                 try:
-                    _max_pages = min(4, -(-len(tips) // HOT_TIPS_PAGE_SIZE))  # ceil div
+                    _max_pages = min(4, -(-len(_prerender_tips) // HOT_TIPS_PAGE_SIZE))  # ceil div
                     for _pgn in range(1, _max_pages + 1):
                         _pc_data = build_edge_picks_data(
-                            tips, page=_pgn, per_page=HOT_TIPS_PAGE_SIZE,
+                            _prerender_tips, page=_pgn, per_page=HOT_TIPS_PAGE_SIZE,
                         )
                         await asyncio.to_thread(
                             render_card_sync, "edge_picks.html", _pc_data,
