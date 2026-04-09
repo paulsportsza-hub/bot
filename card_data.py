@@ -28,17 +28,24 @@ def _parse_channel(raw: str) -> tuple[str, bool]:
     Examples:
       "📺 SS EPL (DStv 203)"  → ("203", True)
       "SS Rugby (DStv 211)"   → ("211", True)
-      "DStv 203"              → ("203", False)
+      "DStv 203"              → ("203", True)   ← SS range 199-216
       "SABC 1 (FTA)"          → ("", False)
     """
     import re as _re_ch
     is_ss = bool(_re_ch.search(r'\bSS\b', raw))
     m = _re_ch.search(r'DStv\s*(\d+)', raw, _re_ch.IGNORECASE)
     if m:
-        return m.group(1), is_ss
+        num = m.group(1)
+        # DStv channels 199-216 are all SuperSport channels
+        if not is_ss and 199 <= int(num) <= 216:
+            is_ss = True
+        return num, is_ss
     m2 = _re_ch.search(r'\b(\d{3})\b', raw)
     if m2:
-        return m2.group(1), is_ss
+        num = m2.group(1)
+        if not is_ss and 199 <= int(num) <= 216:
+            is_ss = True
+        return num, is_ss
     return "", is_ss
 
 
@@ -642,7 +649,11 @@ def build_edge_detail_data(tip: dict) -> dict:
     kickoff_raw = tip.get("_bc_kickoff") or tip.get("kickoff") or ""
     date_part, time_part = _split_kickoff(kickoff_raw)
     date_str = tip.get("date") or date_part
-    time_str = tip.get("time") or time_part or "TBC"
+    _raw_time = tip.get("time") or time_part
+    # Coerce midnight sentinel (00:00 / 0:00) — stored when DB has date-only fixtures
+    if _raw_time in ("00:00", "0:00", "0:00:00"):
+        _raw_time = ""
+    time_str = _raw_time or "TBC"
 
     return {
         # Tier
@@ -702,6 +713,9 @@ def build_edge_detail_data(tip: dict) -> dict:
 
         # Logo
         "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
+
+        # Model calibration badge — shown on rugby cards while Glicko-2 accumulates data (RUGBY-FIX-01)
+        "model_badge": "Model Calibrating" if tip.get("sport") in ("rugby", "super_rugby") else None,
     }
 
 

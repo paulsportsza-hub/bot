@@ -163,13 +163,15 @@ def test_error_tag_for_black_status(tmp_path):
     db_path = _make_db(tmp_path)
     conn = _open(db_path)
 
+    # Use a critical=1 source so _fire_stale_error_alerts does not silently discard it.
+    # news_psl is marked critical=0 in health_schema_migration — use bk_hollywoodbets instead.
     conn.execute("""
         INSERT INTO health_alerts
             (source_id, alert_type, severity, message, fired_at, telegram_sent)
-        VALUES ('news_psl', 'status_degraded', 'critical', 'dead', ?, 0)
+        VALUES ('bk_hollywoodbets', 'status_degraded', 'critical', 'dead', ?, 0)
     """, (_ts_ago(5),))
     conn.execute(
-        "UPDATE source_health_current SET status='black' WHERE source_id='news_psl'"
+        "UPDATE source_health_current SET status='black' WHERE source_id='bk_hollywoodbets'"
     )
     conn.commit()
 

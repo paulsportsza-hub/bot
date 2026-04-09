@@ -88,6 +88,16 @@
             letter-spacing: 2px;
             color: #777777;
         }
+        .model-badge {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: #F59E0B;
+            background: #F59E0B12;
+            border: 1px solid #F59E0B30;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
         .ev-display {
             display: inline-flex;
             align-items: center;
@@ -428,6 +438,9 @@
                 <span class="no-edge-badge-text">No Edge Rating</span>
             </div>
             {% endif %}
+            {% if model_badge %}
+            <div class="model-badge">⚡ {{ model_badge }}</div>
+            {% endif %}
         </div>
     </div>
 
@@ -467,10 +480,12 @@
 
     <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
     <div class="meta-bar">
-        <span class="meta-item">📅 {{ date }}{% if time and time != 'TBC' %}, {{ time }} SAST{% endif %}</span>
+        <span class="meta-item">📅 {{ date }}{% if time and time != 'TBC' %} · {{ time }} SAST{% else %} · KO time TBC{% endif %}</span>
         {% if channel_number %}
           {% if channel_is_ss and ss_logo_b64 %}
           <span class="meta-item"><img src="{{ ss_logo_b64 }}" style="height:18px;vertical-align:middle;margin-right:3px;">{{ channel_number }}</span>
+          {% elif channel_is_ss %}
+          <span class="meta-item">SS {{ channel_number }}</span>
           {% else %}
           <span class="meta-item">📺 {{ channel_number }}</span>
           {% endif %}
