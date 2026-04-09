@@ -120,7 +120,7 @@ from card_data import (
     build_match_detail_data,  # noqa: F401 — available for md: handler
     build_edge_summary_data,
 )
-from card_renderer import render_card_sync
+from card_renderer import render_card_sync, warm_chromium as _warm_chromium
 
 # ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
 from logging.handlers import RotatingFileHandler
@@ -1073,6 +1073,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         analytics_track(user.id, "onboarding_start")
 
     if db_user.onboarding_done:
+        # MM-01: Pre-warm My Matches cache in background so first tap hits warm path
+        asyncio.create_task(_fetch_schedule_games(user.id))
         name = h(user.first_name or "")
         text = textwrap.dedent(f"""\
             <b>🇿🇦 Welcome back, {name}!</b>
@@ -1808,6 +1810,22 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _mm_card_n = 1
             _mm_kind = parts[2] if len(parts) > 2 else "n"  # "e"=edge, "n"=non-edge
             _mm_snap = _mm_games_snapshot.get(user_id, [])
+            # MM-03: rebuild snapshot from cache or fresh fetch when lost on restart
+            if not _mm_snap:
+                _sched_rb = _schedule_cache.get(user_id, [])
+                if not _sched_rb:
+                    try:
+                        _sched_rb = await asyncio.wait_for(
+                            _fetch_schedule_games(user_id), timeout=8.0
+                        )
+                    except asyncio.TimeoutError:
+                        _sched_rb = []
+                if _sched_rb:
+                    _ei_rb = _get_edge_info_for_games(_sched_rb)
+                    _mi_rb = _build_mm_matches_for_card(_sched_rb, _ei_rb)
+                    _ms_rb = _sort_mm_snapshot(_mi_rb)
+                    _mm_games_snapshot[user_id] = _ms_rb
+                    _mm_snap = _ms_rb
             _mm_snap_idx = _mm_card_n - 1  # convert 1-based card label to 0-based index
             if _mm_snap and 0 <= _mm_snap_idx < len(_mm_snap):
                 _mm_match = _mm_snap[_mm_snap_idx]
@@ -1819,44 +1837,19 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     f"<b>{h(_mm_match.get('home', ''))} vs "
                     f"{h(_mm_match.get('away', ''))}</b>"
                 )
-                if _mm_kind == "e":
-                    # W3-FIX: Edge match — look up full tip from cache for richer card data
-                    _mm_full_tip = next(
-                        (t for t in _hot_tips_cache.get("global", {}).get("tips", [])
-                         if t.get("event_id") == _mm_event_id
-                         or t.get("match_id") == _mm_event_id),
-                        _mm_match,
-                    )
-                    # FIX 1: Normalise UUID event_id → canonical match_key
-                    _mm_card_key = _normalise_mm_event_id(_mm_full_tip, _mm_match)
-                    # BUILD-CARDWIRE: Enrich tip with verified DB data
-                    _mm_full_tip_enriched = await asyncio.to_thread(
-                        _enrich_tip_for_card, _mm_full_tip, _mm_card_key
-                    )
-                    _mm_ed_data = build_edge_detail_data(_mm_full_tip_enriched)
-                    await send_card_or_fallback(
-                        bot=ctx.bot, chat_id=query.message.chat_id,
-                        template="edge_detail.html", data=_mm_ed_data,
-                        text_fallback=_mm_fallback, markup=_mm_back_markup,
-                        message_to_edit=query.message,
-                    )
-                else:
-                    # FIX 4 (D04): Non-edge match — enrich with verified DB data,
-                    # then render via edge_detail.html with display_tier=None (FIX 2
-                    # suppresses PICK/Verdict blocks, shows "No Edge Rating" badge).
-                    # FIX 1: Normalise UUID event_id → canonical match_key
-                    _mm_ne_card_key = _normalise_mm_event_id(_mm_match, _mm_match)
-                    _mm_match_enriched = await asyncio.to_thread(
-                        _enrich_tip_for_card, _mm_match, _mm_ne_card_key
-                    )
-                    _mm_match_enriched["display_tier"] = None
-                    _mm_ed_data = build_edge_detail_data(_mm_match_enriched)
-                    await send_card_or_fallback(
-                        bot=ctx.bot, chat_id=query.message.chat_id,
-                        template="edge_detail.html", data=_mm_ed_data,
-                        text_fallback=_mm_fallback, markup=_mm_back_markup,
-                        message_to_edit=query.message,
-                    )
+                # MM-04: Both edge and non-edge use match_detail.html (data-only card:
+                # market overview, key stats, injury watch, H2H — COO-locked 9 Apr 2026)
+                _mm_card_key = _normalise_mm_event_id(_mm_match, _mm_match)
+                _mm_match_enriched = await asyncio.to_thread(
+                    _enrich_tip_for_card, _mm_match, _mm_card_key
+                )
+                _mm_md_data = build_match_detail_data(_mm_match_enriched)
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=query.message.chat_id,
+                    template="match_detail.html", data=_mm_md_data,
+                    text_fallback=_mm_fallback, markup=_mm_back_markup,
+                    message_to_edit=query.message,
+                )
                 return
             _ut = await get_effective_tier(user_id)
             _md_text, _md_markup = await _render_your_games_all(user_id, user_tier=_ut, skip_broadcast=True)
@@ -5370,8 +5363,8 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
     asyncio.create_task(_do_cold_render())
     _mm_timed_out = False
     try:
-        # W84-MM1: 5.0s deadline (well within 8s gate) — generous for API file-cache reads
-        await asyncio.wait_for(asyncio.shield(_mm_done.wait()), timeout=5.0)
+        # MM-01/02: 10.0s deadline — covers 3.5s API + 2.5s DB + render time under lock contention
+        await asyncio.wait_for(asyncio.shield(_mm_done.wait()), timeout=10.0)
         text, markup = _mm_result[0], _mm_result[1]
     except asyncio.TimeoutError:
         _mm_timed_out = True
@@ -5386,9 +5379,7 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
         text, markup = _FALLBACK_TEXT, _FALLBACK_MARKUP
 
     if _mm_timed_out:
-        # W84-RT3: 5.0s deadline already consumed. Cancel spinner now — don't wait up to
-        # 2.0s for its in-flight Telegram API call. Deliver via reply_text (no edit needed)
-        # so we skip the additional 3.0s edit_text timeout. Total budget: ~5.1s.
+        # MM-01/02: 10.0s deadline consumed. Cancel spinner; deliver fallback; auto-retry once.
         if spinner_task is not None:
             spinner_task.cancel()
             try:
@@ -5404,6 +5395,31 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 await loading.delete()
             except Exception:
                 pass
+        # MM-01: Auto-retry — background render continues; deliver card when it completes
+        _ar_chat_id = update.message.chat_id
+        async def _auto_retry_deliver() -> None:
+            try:
+                await asyncio.wait_for(_mm_done.wait(), timeout=15.0)
+                if not _schedule_cache.get(user_id):
+                    return
+                _rg = _schedule_cache.get(user_id, [])
+                _ei = _get_edge_info_for_games(_rg)
+                _mi = _build_mm_matches_for_card(_rg, _ei)
+                _ms = _sort_mm_snapshot(_mi)
+                _mm_games_snapshot[user_id] = _ms
+                _cd = build_my_matches_data(_mi, page=1)
+                await asyncio.wait_for(
+                    send_card_or_fallback(
+                        bot=ctx.bot, chat_id=_ar_chat_id,
+                        template="my_matches.html", data=_cd,
+                        text_fallback=_mm_result[0] or _FALLBACK_TEXT,
+                        markup=_build_mm_card_markup(_ms, page=0),
+                    ),
+                    timeout=12.0,
+                )
+            except Exception as _ar_e:
+                log.debug("MM auto-retry failed for user %s: %s", user_id, _ar_e)
+        asyncio.create_task(_auto_retry_deliver())
     else:
         # Success path: stop spinner, build card, deliver
         if spinner_task is not None:
@@ -25754,6 +25770,18 @@ async def _post_init(app_instance) -> None:
             name="budget_reset",
         )
         log.info("Scheduled notification budget reset job (hourly, acts at 00:00 SAST)")
+
+        # MM-05: Chromium keep-warm — dummy render every 60min prevents 10s+ cold starts
+        async def _chromium_warmup_job(ctx_unused) -> None:
+            await asyncio.to_thread(_warm_chromium)
+
+        job_queue.run_repeating(
+            _chromium_warmup_job,
+            interval=3600,
+            first=300,  # first warm 5 minutes after startup
+            name="chromium_warmup",
+        )
+        log.info("Scheduled Chromium keep-warm job (every 60 min)")
 
         # Post-deploy validation — runs once 30s after startup
         job_queue.run_once(

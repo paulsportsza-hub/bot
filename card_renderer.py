@@ -229,3 +229,40 @@ async def render_card(
         render_card_sync, template_name, data,
         width=width, device_scale_factor=device_scale_factor,
     )
+
+
+def warm_chromium() -> None:
+    """MM-05: Render a minimal 1×1px page to keep the Chromium process warm.
+
+    Call from a PTB job (or external cron) every 60 minutes to prevent 10+ second
+    cold-start renders after 1.5h+ idle. Blocks up to 15s; output is discarded.
+    """
+    _WARM_HTML = "<html><body style='background:#000;width:1px;height:1px;'></body></html>"
+
+    async def _do_warm() -> None:
+        browser = _pool.get("browser")
+        if not browser:
+            raise RuntimeError("no browser in pool")
+        page = await browser.new_page(viewport={"width": 1, "height": 1})
+        try:
+            await page.set_content(_WARM_HTML)
+            await page.screenshot(type="png", clip={"x": 0, "y": 0, "width": 1, "height": 1})
+        finally:
+            await page.close()
+
+    if not _pool["ready"].wait(timeout=30):
+        log.warning("warm_chromium: browser pool not ready — skipping")
+        return
+    if _pool.get("error"):
+        log.warning("warm_chromium: pool init failed — skipping")
+        return
+    loop = _pool.get("loop")
+    if not loop:
+        log.warning("warm_chromium: pool loop not available — skipping")
+        return
+    future = asyncio.run_coroutine_threadsafe(_do_warm(), loop)
+    try:
+        future.result(timeout=15)
+        log.info("warm_chromium: keep-warm render complete")
+    except Exception as exc:
+        log.warning("warm_chromium: keep-warm render failed: %s", exc)
