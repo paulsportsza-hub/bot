@@ -1866,27 +1866,54 @@ def _render_verdict(spec: NarrativeSpec) -> str:
 
     if action == "speculative punt":
         _v = _pick(_seed, 4)
-        _sp_variants = [
-            # W84-Q15: Disciplined posture — no "worth a unit", no "take the edge"
-            (
-                f"The price is the only reason {outcome} ({bk} @ {odds_str}) is on the board — "
-                f"no confirming signal backs it. Only take it with minimal exposure and a clear head. "
-                f"{_sentence_case(sizing)}."
-            ),
-            (
-                f"If you back this at all, keep exposure very tight — {outcome} at {odds_str} ({bk}). "
-                f"Monitor the line before kickoff. {_sentence_case(sizing)}."
-            ),
-            (
-                f"A speculative angle on {outcome} at {odds_str} with {bk} — "
-                f"the price is right, the signals aren't there yet. Monitor the line before committing. {_sentence_case(sizing)}."
-            ),
-            (
-                f"Hold on {outcome} at {odds_str} ({bk}) until a confirming signal emerges — "
-                f"the price is the only thing keeping this on the board. "
-                f"Monitor the line before committing. {_sentence_case(sizing)}."
-            ),
-        ]
+        # SIGNAL-FIX-01: Branch on support_level to prevent false "no signal" claims.
+        # When support_level >= 1, confirming signals exist in the DB (and on the card)
+        # but penalties (stale price / adverse movement) reduce effective support to 0.
+        # Variants must not claim "no confirming signal" when support_level >= 1.
+        if spec.support_level >= 1:
+            _sp_variants = [
+                (
+                    f"One signal aligns but the edge is penalty-adjusted — "
+                    f"{outcome} at {odds_str} ({bk}) warrants only minimal exposure. "
+                    f"Verify the price before committing. {_sentence_case(sizing)}."
+                ),
+                (
+                    f"If you back this at all, keep exposure very tight — {outcome} at {odds_str} ({bk}). "
+                    f"Monitor the line before kickoff. {_sentence_case(sizing)}."
+                ),
+                (
+                    f"A speculative angle on {outcome} at {odds_str} with {bk} — "
+                    f"one indicator aligns, but the overall posture remains cautious. "
+                    f"Monitor the line before committing. {_sentence_case(sizing)}."
+                ),
+                (
+                    f"Cautious lean on {outcome} at {odds_str} ({bk}) — "
+                    f"a signal points this way but the price or market context reduces confidence. "
+                    f"Monitor the line before committing. {_sentence_case(sizing)}."
+                ),
+            ]
+        else:
+            _sp_variants = [
+                # W84-Q15: Disciplined posture — no "worth a unit", no "take the edge"
+                (
+                    f"The price is the only reason {outcome} ({bk} @ {odds_str}) is on the board — "
+                    f"no confirming signal backs it. Only take it with minimal exposure and a clear head. "
+                    f"{_sentence_case(sizing)}."
+                ),
+                (
+                    f"If you back this at all, keep exposure very tight — {outcome} at {odds_str} ({bk}). "
+                    f"Monitor the line before kickoff. {_sentence_case(sizing)}."
+                ),
+                (
+                    f"A speculative angle on {outcome} at {odds_str} with {bk} — "
+                    f"the price is right, the signals aren't there yet. Monitor the line before committing. {_sentence_case(sizing)}."
+                ),
+                (
+                    f"Hold on {outcome} at {odds_str} ({bk}) until a confirming signal emerges — "
+                    f"the price is the only thing keeping this on the board. "
+                    f"Monitor the line before committing. {_sentence_case(sizing)}."
+                ),
+            ]
         posture = _sp_variants[_v]
         return f"{posture} {evidence}".rstrip() if evidence else posture
 

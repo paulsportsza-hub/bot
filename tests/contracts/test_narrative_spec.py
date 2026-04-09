@@ -1038,6 +1038,49 @@ class TestRenderVerdict:
                 f"Rendered verdict for {action!r} leaked banned 'confident' wording"
             )
 
+    def test_speculative_punt_with_one_signal_no_false_zero_claim(self):
+        """SIGNAL-FIX-01: When support_level >= 1 and verdict_action == speculative punt,
+        the verdict must NOT claim there are zero confirming signals.
+
+        This case occurs when confirming_signals=1 in DB but a stale or movement
+        penalty reduces effective support to 0, producing a speculative punt action.
+        The card shows 1+ confirming signal; the verdict must not contradict it.
+        """
+        _FALSE_ZERO_PHRASES = (
+            "no confirming signal backs it",
+            "until a confirming signal emerges",
+            "the signals aren't there yet",
+        )
+        # support_level=1 mimics confirming_signals=1 in DB (penalty reduces effective to 0)
+        spec = NarrativeSpec(
+            home_name="Punjab Kings",
+            away_name="SRH",
+            competition="IPL",
+            sport="cricket",
+            home_story_type="neutral",
+            away_story_type="neutral",
+            evidence_class="speculative",
+            tone_band="cautious",
+            verdict_action="speculative punt",
+            verdict_sizing="tiny exposure",
+            outcome="home",
+            outcome_label="Punjab Kings win",
+            bookmaker="Betway",
+            odds=2.30,
+            ev_pct=2.1,
+            support_level=1,  # 1 confirming signal in DB, but effective=0 after stale penalty
+            risk_factors=["Stale price — hasn't updated in 6h, could shift before kickoff."],
+            risk_severity="moderate",
+            stale_minutes=420,
+            movement_direction="neutral",
+        )
+        verdict = _render_verdict(spec)
+        for phrase in _FALSE_ZERO_PHRASES:
+            assert phrase.lower() not in verdict.lower(), (
+                f"SIGNAL-FIX-01: False zero-signal claim {phrase!r} in verdict "
+                f"for support_level=1 speculative punt. Verdict: {verdict!r}"
+            )
+
 
 # ── W82-RENDER: _render_baseline structure tests ──────────────────────────────
 
