@@ -1634,7 +1634,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 # BUILD-W3: Back → Edge Picks card (photo→photo or text→photo)
                 # P0-FIX-02: use _bt_rendered (filtered+sorted) — NOT raw _bt_tips.
-                _bt_card_data = build_edge_picks_data(_bt_rendered, page=_back_page + 1, per_page=HOT_TIPS_PAGE_SIZE)
+                _bt_card_data = build_edge_picks_data(_bt_rendered, page=_back_page + 1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_bt_tier)
                 await send_card_or_fallback(
                     bot=ctx.bot, chat_id=query.message.chat_id,
                     template="edge_picks.html", data=_bt_card_data,
@@ -1747,7 +1747,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 # BUILD-W3: photo→photo pagination with Edge Picks card
                 # P0-FIX-02: use _pg_rendered (filtered+sorted) — NOT raw tips.
-                _pg_card_data = build_edge_picks_data(_pg_rendered, page=page_num + 1, per_page=HOT_TIPS_PAGE_SIZE)
+                _pg_card_data = build_edge_picks_data(_pg_rendered, page=page_num + 1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_user_tier)
                 await send_card_or_fallback(
                     bot=ctx.bot, chat_id=query.message.chat_id,
                     template="edge_picks.html", data=_pg_card_data,
@@ -1890,7 +1890,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     edge_tracker_summary=_ed_summ,
                 )
                 # P0-FIX-02: use _ed_rendered (filtered+sorted) — NOT raw _ed_tips.
-                _ed_card_data = build_edge_picks_data(_ed_rendered, page=_ed_pg + 1, per_page=HOT_TIPS_PAGE_SIZE)
+                _ed_card_data = build_edge_picks_data(_ed_rendered, page=_ed_pg + 1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_ed_tier)
                 await send_card_or_fallback(
                     bot=ctx.bot, chat_id=query.message.chat_id,
                     template="edge_picks.html", data=_ed_card_data,
@@ -10655,7 +10655,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
         # P0-FIX-02: use _wm_rendered (filtered+sorted) — NOT raw _cached_tips.
         # Raw cache may contain ev<=0 or edge_score<40 tips that buttons exclude.
-        _wm_card_data = build_edge_picks_data(_wm_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE)
+        _wm_card_data = build_edge_picks_data(_wm_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_wm_tier)
         await send_card_or_fallback(
             bot=bot, chat_id=chat_id,
             template="edge_picks.html", data=_wm_card_data,
@@ -10725,7 +10725,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         )
         # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
         # P0-FIX-02: use _fast_rendered (filtered+sorted) — NOT raw _fast_tips.
-        _fast_card_data = build_edge_picks_data(_fast_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE)
+        _fast_card_data = build_edge_picks_data(_fast_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_fast_tier)
         await send_card_or_fallback(
             bot=bot, chat_id=chat_id,
             template="edge_picks.html", data=_fast_card_data,
@@ -10868,7 +10868,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     )
     # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
     # P0-FIX-02: use _rendered_tips (filtered+sorted) — NOT raw tips.
-    _cold_card_data = build_edge_picks_data(_rendered_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE)
+    _cold_card_data = build_edge_picks_data(_rendered_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=user_tier)
     await send_card_or_fallback(
         bot=bot, chat_id=chat_id,
         template="edge_picks.html", data=_cold_card_data,

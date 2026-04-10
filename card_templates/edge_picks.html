@@ -279,6 +279,35 @@
         {% for pick in group.picks %}
         <div class="pick-row" style="border-left-color: {{ group.tier_color }};">
 
+            {% if pick.locked %}
+            <!-- TIER-GATE-INV-01: Locked Diamond pick — label only, no pick data -->
+            <div class="pick-line1">
+                <span class="pick-number">[{{ pick.number }}]</span>
+                <span class="pick-matchup" style="color: #B9F2FF;">💎 Diamond Edge</span>
+                <div class="pick-odds-group">
+                    <span class="pick-odds" style="color: #555555;">🔒</span>
+                </div>
+            </div>
+            <div class="pick-line2">
+                <div class="pick-meta-left">
+                    {% if pick.sport_emoji %}
+                    <span class="sport-emoji">{{ pick.sport_emoji }}</span>
+                    {% endif %}
+                    {% if pick.league %}
+                    <span class="league-tag">{{ pick.league }}</span>
+                    {% endif %}
+                    <span class="pick-datetime">
+                        {{- pick.date -}}
+                        {%- if pick.date and pick.time %} &middot; {% endif -%}
+                        {{- pick.time -}}
+                    </span>
+                </div>
+                <div class="pick-meta-right">
+                    <span class="pick-name" style="color: #B9F2FF;">Upgrade to unlock</span>
+                </div>
+            </div>
+            {% else %}
+
             <!-- Line 1: number + matchup + odds + EV -->
             <div class="pick-line1">
                 <span class="pick-number">[{{ pick.number }}]</span>
@@ -318,6 +347,8 @@
             <div class="pick-prize-line">
                 <span class="pick-prize">R200 → <span class="prize-return">R{{ pick.prize_return }}</span></span>
             </div>
+            {% endif %}
+
             {% endif %}
 
         </div>

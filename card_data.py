@@ -280,7 +280,7 @@ def _pick_top(tips: list[dict]) -> dict | None:
     }
 
 
-def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4) -> dict:
+def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4, user_tier: str = "diamond") -> dict:
     """Build edge_picks.html template data (merged summary + picks card).
 
     Parameters
@@ -291,6 +291,9 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4) ->
         1-based page number. Page 1 shows picks [1]-[4], page 2 shows [5]-[8].
     per_page:
         Max picks per image (default 4).
+    user_tier:
+        Viewer's subscription tier. Non-Diamond users see masked Diamond edges
+        (TIER-GATE-INV-01).
 
     Returns
     -------
@@ -384,20 +387,24 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4) ->
 
         prize_return = round(200 * odds_val) if odds_val else 0
 
+        # TIER-GATE-INV-01: Diamond picks are masked for non-Diamond users
+        _locked = tier_key == "diamond" and user_tier.lower().strip() != "diamond"
+
         pick_dict = {
             "number": number,
-            "home": home,
-            "away": away,
+            "home": "" if _locked else home,
+            "away": "" if _locked else away,
             "league": league,
             "date": date_part,
             "time": time_part,
             "channel": str(channel) if channel else "",
-            "odds": odds_str,
-            "ev": ev_str,
-            "pick": pick_name,
-            "bookmaker": bookmaker,
+            "odds": "" if _locked else odds_str,
+            "ev": "" if _locked else ev_str,
+            "pick": "" if _locked else pick_name,
+            "bookmaker": "" if _locked else bookmaker,
             "sport_emoji": sport_emoji(league),
-            "prize_return": prize_return,
+            "prize_return": 0 if _locked else prize_return,
+            "locked": _locked,
         }
 
         if tier_key not in groups_dict:
