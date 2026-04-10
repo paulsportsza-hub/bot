@@ -1838,6 +1838,23 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     f"<b>{h(_mm_match.get('home', ''))} vs "
                     f"{h(_mm_match.get('away', ''))}</b>"
                 )
+                # Override of MM-04 lock — founder instruction 2026-04-10
+                # Edge cards must render as edge cards regardless of entry point
+                if _mm_kind == "e":
+                    _mm_full_tip = _mm_match.get("_full_tip")
+                    if _mm_full_tip:
+                        _mm_tip_key = _mm_full_tip.get("match_id", "")
+                        if _mm_tip_key:
+                            _mm_ut = await get_effective_tier(user_id)
+                            _mm_edge_tier = _mm_match.get("edge_tier", "bronze")
+                            _mm_back_pg = _ht_page_state.get(user_id, 0)
+                            _mm_card_served = await _serve_card_detail(
+                                query, _mm_tip_key, _mm_full_tip, user_id, _mm_ut,
+                                _mm_edge_tier, back_page=_mm_back_pg, include_analysis=True,
+                            )
+                            if _mm_card_served:
+                                return
+                    # Fallthrough: _full_tip missing (cached session) or card pipeline failed
                 # MM-04: Both edge and non-edge use match_detail.html (data-only card:
                 # market overview, key stats, injury watch, H2H — COO-locked 9 Apr 2026)
                 _mm_card_key = _normalise_mm_event_id(_mm_match, _mm_match)
@@ -5558,11 +5575,11 @@ def _build_mm_matches_for_card(games: list[dict], edge_info: dict) -> list[dict]
             "_commence_time": event.get("commence_time", ""),  # FIX 1: for UUID→canonical key
         }
         if ei:
-            m["edge_tier"] = (
-                ei.get("display_tier") or ei.get("edge_rating") or "bronze"
-            )
-            m["pick"] = ei.get("outcome") or ""
-            m["bookmaker"] = ei.get("bookmaker") or ""
+            _tip = ei.get("tip") or {}
+            m["edge_tier"]  = (ei.get("display_tier") or _tip.get("edge_rating") or "bronze")
+            m["pick"]       = _tip.get("outcome") or ""
+            m["bookmaker"]  = _tip.get("bookmaker") or ""
+            m["_full_tip"]  = _tip  # Pass full tip dict through for detail-view routing
         result.append(m)
     return result
 
@@ -16575,6 +16592,62 @@ def _format_verified_injuries_for_narrative(
     return "\n".join(lines)
 
 
+def _get_fpl_injuries_for_narrative(match_key: str) -> str:
+    """Query fpl_injuries for EPL match teams identified via match_key snake_case keys.
+
+    Returns formatted text like:
+        Arsenal injuries: Saka (doubtful, 75% chance), Merino (injured, 0% chance)
+        Bournemouth injuries: none listed
+    Returns empty string on any failure or if table has no recent data.
+    """
+    if not match_key:
+        return ""
+    try:
+        import re as _re
+        from db_connection import get_connection as _gc
+        m = _re.match(r"^(.+)_vs_(.+?)(?:_\d{4}-\d{2}-\d{2})?$", match_key)
+        if not m:
+            return ""
+        home_key, away_key = m.group(1), m.group(2)
+        _FPL_MAP = {
+            "d": "doubtful",
+            "i": "injured",
+            "u": "unavailable",
+            "s": "suspended",
+        }
+        conn = _gc(_NARRATIVE_DB_PATH)
+        rows = conn.execute(
+            "SELECT player_name, team_key, fpl_status, chance_this_round "
+            "FROM fpl_injuries "
+            "WHERE team_key IN (?, ?) "
+            "AND fetched_at >= datetime('now', '-2 hours') "
+            "ORDER BY team_key, chance_this_round ASC",
+            (home_key, away_key),
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return ""
+        by_team: dict[str, list[str]] = {home_key: [], away_key: []}
+        for player_name, team_key, fpl_status, chance in rows:
+            if team_key not in by_team:
+                continue
+            status_label = _FPL_MAP.get(fpl_status or "", fpl_status or "unknown")
+            entry = (
+                f"{player_name} ({status_label}, {chance}% chance)"
+                if chance is not None and chance < 100
+                else f"{player_name} ({status_label})"
+            )
+            by_team[team_key].append(entry)
+        lines: list[str] = []
+        for team_key_iter, entries in by_team.items():
+            team_disp = " ".join(w.capitalize() for w in team_key_iter.split("_"))
+            if entries:
+                lines.append(f"{team_disp} injuries: {', '.join(entries)}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def _format_routed_injuries_for_narrative(
     match_key: str,
     home: str,
@@ -16594,6 +16667,11 @@ def _format_routed_injuries_for_narrative(
                 return text
         except Exception:
             pass
+    # For EPL: prepend FPL first-party injury data before team_injuries fallback
+    if sport == "soccer" and "epl" in league_key and match_key:
+        fpl_text = _get_fpl_injuries_for_narrative(match_key)
+        if fpl_text:
+            return fpl_text
     return _format_verified_injuries_for_narrative(
         home,
         away,
@@ -16664,6 +16742,11 @@ def _build_edge_risk_prompt(sport: str = "soccer", banned_terms: str = "", manda
     4. NEVER MENTION PERSON NAMES unless in IMMUTABLE CONTEXT.
     5. NEVER DESCRIBE PLAYING STYLE OR TACTICS.
     6. WHEN DATA IS SPARSE, keep it short — focus on odds and pricing.
+
+    INJURY SIGNALS:
+    - If SETUP FACTS contain injury or availability data (players listed as injured, doubtful, suspended, or unavailable), mention the single most significant player in ⚠️ The Risk section by name and status.
+    - Only flag players with chance_this_round ≤ 75 OR status in [injured, suspended, unavailable].
+    - If no injury data is present in SETUP FACTS, do NOT mention player availability — do not invent it.
 
     THE GOLDEN RULE: If not in IMMUTABLE CONTEXT or ODDS DATA, it does not exist.
 
