@@ -749,6 +749,38 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
         except Exception as exc:
             log.warning("card_pipeline: match_lineups query failed: %s", exc)
 
+        # fpl_injuries — FPL official API (EPL only, priority source)
+        _FPL_STATUS_MAP = {
+            "d": "doubtful",
+            "i": "injured",
+            "u": "unavailable",
+            "s": "suspended",
+        }
+        try:
+            fpl_rows = conn.execute(
+                """
+                SELECT player_name, team_key, fpl_status, news, chance_this_round
+                FROM fpl_injuries
+                WHERE (team_key = ? OR team_key = ?)
+                  AND fetched_at >= datetime('now', '-2 hours')
+                ORDER BY chance_this_round ASC
+                LIMIT 5
+                """,
+                (home_key, away_key),
+            ).fetchall()
+            if fpl_rows:
+                result["data_sources_used"].append("fpl_injuries")
+                _stages_completed.append("injuries")
+                for row in fpl_rows:
+                    status_label = _FPL_STATUS_MAP.get(
+                        row["fpl_status"], row["fpl_status"]
+                    )
+                    result["injuries"].append(
+                        f"{row['player_name']} ({row['team_key']}) — {status_label}"
+                    )
+        except Exception as exc:
+            log.warning("card_pipeline: fpl_injuries query failed: %s", exc)
+
         # extracted_injuries — from news scraping
         try:
             inj_rows = conn.execute(
@@ -773,6 +805,57 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                     )
         except Exception as exc:
             log.warning("card_pipeline: extracted_injuries query failed: %s", exc)
+
+        # team_injuries — from API-Football fixture-based scraper
+        try:
+            # Normalise keys to space form for fuzzy matching against API team names
+            # e.g. "west_ham" → "west ham", then REPLACE(' ','_') on DB side for comparison
+            home_space = home_key.replace("_", " ")
+            away_space = away_key.replace("_", " ")
+            ti_rows = conn.execute(
+                """
+                SELECT ti.player_name, ti.team, ti.injury_status, ti.injury_type,
+                       ti.injury_reason
+                FROM team_injuries ti
+                WHERE (LOWER(REPLACE(ti.team, ' ', '_')) LIKE ?
+                       OR LOWER(REPLACE(ti.team, ' ', '_')) LIKE ?
+                       OR LOWER(ti.team) LIKE ?
+                       OR LOWER(ti.team) LIKE ?)
+                  AND ti.injury_status NOT IN ('Missing Fixture', 'Unknown')
+                  AND ti.fetched_at > datetime('now', '-72 hours')
+                ORDER BY ti.id DESC
+                LIMIT 10
+                """,
+                (
+                    f"%{home_key}%", f"%{away_key}%",
+                    f"%{home_space}%", f"%{away_space}%",
+                ),
+            ).fetchall()
+            if ti_rows:
+                result["data_sources_used"].append("team_injuries")
+                _stages_completed.append("injuries")
+                for row in ti_rows:
+                    # Determine which side this player belongs to
+                    team_norm = row["team"].lower().replace(" ", "_")
+                    if home_key in team_norm or any(
+                        p in team_norm for p in home_key.split("_") if len(p) > 3
+                    ):
+                        side_key = home_key
+                    elif away_key in team_norm or any(
+                        p in team_norm for p in away_key.split("_") if len(p) > 3
+                    ):
+                        side_key = away_key
+                    else:
+                        side_key = team_norm
+                    status_label = (
+                        row["injury_reason"] or row["injury_type"]
+                        or row["injury_status"] or "injured"
+                    )
+                    result["injuries"].append(
+                        f"{row['player_name']} ({side_key}) — {status_label}"
+                    )
+        except Exception as exc:
+            log.warning("card_pipeline: team_injuries query failed: %s", exc)
 
         # match_results — recent form
         try:
