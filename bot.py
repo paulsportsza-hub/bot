@@ -658,7 +658,7 @@ def kb_bookmakers() -> InlineKeyboardMarkup:
         url = get_affiliate_url(bk_key)
         if url:
             buttons.append([InlineKeyboardButton(
-                f"{info['emoji']} {info['name']} — Sign Up \u2192", url=url,
+                f"{info['emoji']} {info['name']} — Sign Up", url=url,
             )])
     buttons.append([
         InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
@@ -7047,9 +7047,17 @@ _BTN_ABBREVS: dict[str, str] = {
     "Kaizer Chiefs": "Chiefs", "Orlando Pirates": "Pirates",
     "Mamelodi Sundowns": "Downs", "Cape Town City": "CT City",
     "Manchester United": "Man U", "Manchester City": "Man C",
-    "Bayern Munich": "Bayern", "Borussia Dortmund": "Dort",
+    "Bayern Munich": "Bayern", "Borussia Dortmund": "BVB",
     "Real Madrid": "Madrid", "Atletico Madrid": "Atl Mad",
     "Paris Saint-Germain": "PSG", "Inter Milan": "Inter",
+    # IPL (cricket) — BUILD-BUTTON-FIX-01
+    "Chennai Super Kings": "CSK", "Delhi Capitals": "DC",
+    "Mumbai Indians": "MI", "Kolkata Knight Riders": "KKR",
+    "Royal Challengers Bangalore": "RCB",
+    "Royal Challengers Bengaluru": "RCB",
+    "Sunrisers Hyderabad": "SRH", "Rajasthan Royals": "RR",
+    "Lucknow Super Giants": "LSG", "Punjab Kings": "PBKS",
+    "Gujarat Titans": "GT",
 }
 
 
@@ -7114,6 +7122,20 @@ _VERDICT_BLACKLIST = [
     "known for", "famous for",
     "ev edge", "ev%", "expected value",
     "the home side", "the away side",
+    # BUILD-CARD-FIX-01: banned staking/hedge language
+    "measured lean",
+    "keep stakes controlled",
+    "stay proportionate",
+    "factor that in",
+    "factor this in",
+    "small stake",
+    "proceed with caution",
+    "worth monitoring",
+    "keep an eye on",
+    "keep stakes",
+    "stake manageable",
+    "size your stake",
+    "limit your stake",
 ]
 
 
@@ -7149,7 +7171,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             if p >= 95: return "MAX"
             if p >= 85: return "STRONG"
             if p >= 70: return "SOLID"
-            return "SELECTIVE"
+            return "MILD"
         confidence_tier = tip.get("confidence_tier") or verified.get("confidence_tier") or _derive_tier(_conf_pct)
 
         # Form lists from home_form/away_form (set by _enrich_tip_for_card)
@@ -7227,7 +7249,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "- pick: what we are backing\n"
             "- odds: the odds on offer\n"
             "- bookmaker: the specific bookie — always name them\n"
-            "- confidence_tier: SELECTIVE / SOLID / STRONG / MAX — this is how strong the edge is\n"
+            "- confidence_tier: MILD / SOLID / STRONG / MAX — this is how strong the edge is\n"
             "- h2h_summary: meeting history — translate into plain English ('these two have drawn twice in five meetings', not 'H2H: 1W 2D 2A')\n"
             "- signals_active: list of edge signals firing — mention 1-2 if they add flavour ('the line's been moving their way', 'tipsters are aligned')\n"
             "\n"
@@ -7251,6 +7273,14 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "- Tactical descriptions (\"they press high\", \"low block\", \"set up defensively\") — not in our data\n"
             "- Historical context beyond form_home_plain, form_away_plain, and h2h_summary — do not reference seasons, trophies, or records from your training knowledge\n"
             "- Injury information unless it appears in signals_active\n"
+            "- Staking advice of any kind: 'small stake', 'keep stakes controlled', 'stay proportionate', 'size your bet', 'measured lean', 'proceed with caution' — we are here to tell them WHERE the edge is, not HOW MUCH to bet\n"
+            "- Hedge language: 'worth monitoring', 'keep an eye on', 'factor that in', 'factor this in', 'could be'\n"
+            "\n"
+            "SA VOICE — THIS IS NON-NEGOTIABLE:\n"
+            "Write like you're telling a mate at the braai why this bet is sharp. "
+            "Use team nicknames (Gunners, Amakhosi, Canes, Bucs, Chiefs, Pirates) when provided. "
+            "Lead with the DATA that makes this edge pop — the form gap, the H2H pattern, the moving line. "
+            "End with a clear call: 'Back X.' / 'Take the draw.' / 'Ride with X.' — short, punchy, standalone.\n"
             "\n"
             "If you are about to write something and you cannot find it in the verified fields provided, DO NOT write it. Use only what is in the data.\n"
             "\n"
@@ -7270,7 +7300,9 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "Examples of bad verdicts (never write like this):\n"
             "\"The H2H record and EV% of +8.8% suggest value on the draw.\"\n"
             "\"Chelsea's WLLLL run indicates poor form.\"\n"
-            "\"This could be a value bet if the SOLID confidence tier holds.\""
+            "\"This could be a value bet if the SOLID confidence tier holds.\"\n"
+            "\"A measured lean: Delhi Capitals win. Keep stakes controlled and stay proportionate.\"\n"
+            "\"Small stake. +2.0% EV at current pricing. Main risk: factor that in.\""
         )
 
         client = _anthropic.Anthropic()
@@ -7333,7 +7365,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             _bk = tip.get("bookmaker") or ""
             if _ev > 0 and _odds > 0 and _pick:
                 _bk_str = f" on {_bk}" if _bk else ""
-                return f"{_pick} at {_odds:.2f}{_bk_str} carries +{_ev:.1f}% edge over fair probability. Keep stake manageable."
+                return f"{_pick} at {_odds:.2f}{_bk_str} — the price carries a +{_ev:.1f}% edge. Back {_pick.split()[-1]}."
         except Exception:
             pass
         return ""
@@ -7417,7 +7449,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         bookmaker = allowed_data.get("bookmaker") or ""
         matchup = allowed_data.get("matchup") or ""
         league = allowed_data.get("league_key") or allowed_data.get("league") or ""
-        confidence_tier = allowed_data.get("confidence_tier") or "SELECTIVE"
+        confidence_tier = allowed_data.get("confidence_tier") or "MILD"
 
         # Form lists
         _hf = allowed_data.get("home_form") or []
@@ -7505,7 +7537,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "- pick: what we are backing\n"
             "- odds: the odds on offer\n"
             "- bookmaker: the specific bookie — always name them\n"
-            "- confidence_tier: SELECTIVE / SOLID / STRONG / MAX — this is how strong the edge is\n"
+            "- confidence_tier: MILD / SOLID / STRONG / MAX — this is how strong the edge is\n"
             "- h2h_summary: meeting history — translate into plain English ('these two have drawn twice in five meetings', not 'H2H: 1W 2D 2A')\n"
             "- signals_active: list of edge signals firing — mention 1-2 if they add flavour ('the line's been moving their way', 'tipsters are aligned')\n"
             "\n"
@@ -7529,6 +7561,14 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "- Tactical descriptions (\"they press high\", \"low block\", \"set up defensively\") — not in our data\n"
             "- Historical context beyond form_home_plain, form_away_plain, and h2h_summary — do not reference seasons, trophies, or records from your training knowledge\n"
             "- Injury information unless it appears in signals_active\n"
+            "- Staking advice of any kind: 'small stake', 'keep stakes controlled', 'stay proportionate', 'size your bet', 'measured lean', 'proceed with caution' — we are here to tell them WHERE the edge is, not HOW MUCH to bet\n"
+            "- Hedge language: 'worth monitoring', 'keep an eye on', 'factor that in', 'factor this in', 'could be'\n"
+            "\n"
+            "SA VOICE — THIS IS NON-NEGOTIABLE:\n"
+            "Write like you're telling a mate at the braai why this bet is sharp. "
+            "Use team nicknames (Gunners, Amakhosi, Canes, Bucs, Chiefs, Pirates) when provided. "
+            "Lead with the DATA that makes this edge pop — the form gap, the H2H pattern, the moving line. "
+            "End with a clear call: 'Back X.' / 'Take the draw.' / 'Ride with X.' — short, punchy, standalone.\n"
             "\n"
             "If you are about to write something and you cannot find it in the verified fields provided, DO NOT write it. Use only what is in the data.\n"
             "\n"
@@ -7548,7 +7588,9 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "Examples of bad verdicts (never write like this):\n"
             "\"The H2H record and EV% of +8.8% suggest value on the draw.\"\n"
             "\"Chelsea's WLLLL run indicates poor form.\"\n"
-            "\"This could be a value bet if the SOLID confidence tier holds.\""
+            "\"This could be a value bet if the SOLID confidence tier holds.\"\n"
+            "\"A measured lean: Delhi Capitals win. Keep stakes controlled and stay proportionate.\"\n"
+            "\"Small stake. +2.0% EV at current pricing. Main risk: factor that in.\""
         )
 
         client = _anthropic.Anthropic()
@@ -7971,28 +8013,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     elif not enriched.get("away_odds") and enriched.get("odds_away"):
         enriched["away_odds"] = enriched["odds_away"]
 
-    # 8b) Venue — query sportmonks_fixtures JOIN sportmonks_venues (soccer only; rugby returns None gracefully)
-    if not enriched.get("venue") and home_key and away_key:
-        try:
-            _vc = _ro_conn(_ODDS_DB_PATH)
-            if _vc is not None:
-                _hd = _team_display(home_key)
-                _ad = _team_display(away_key)
-                _vr = _vc.execute(
-                    "SELECT v.name, v.city FROM sportmonks_fixtures f "
-                    "JOIN sportmonks_venues v ON f.venue_id = v.venue_id "
-                    "WHERE f.home_team LIKE ? AND f.away_team LIKE ? "
-                    "ORDER BY f.match_date DESC LIMIT 1",
-                    (f"%{_hd}%", f"%{_ad}%"),
-                ).fetchone()
-                if _vr and _vr[0]:
-                    _city = _vr[1] or ""
-                    enriched["venue"] = f"{_vr[0]}, {_city}" if _city else _vr[0]
-                _vc.close()
-        except Exception as _ve:
-            log.debug("_enrich_tip_for_card: venue query failed: %s", _ve)
-
-    # 8c) Channel — broadcast lookup when tip["channel"] is empty
+    # 8b) Channel — broadcast lookup when tip["channel"] is empty
     # CARD-FIX-K: _channel_fields in card_data.py reads tip["channel"]. Tips from the
     # global hot_tips_cache (not through _build_hot_tips_page) never have channel set.
     # Do a direct broadcast_schedule lookup here as a reliable fallback.
@@ -8011,6 +8032,36 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
                 enriched["channel"] = _bc_d["broadcast"]
         except Exception as _ch_err:
             log.debug("_enrich_tip_for_card: broadcast lookup failed: %s", _ch_err)
+
+    # 8d) KO time — BUILD-KO-TIME-FIX-01: sport-aware resolver with fixture-table fallbacks.
+    # Never falls back to 'TBC' — returns empty string when no time data exists
+    # (rugby date-only, mma date-only, etc.). Midnight-UTC sentinels are also dropped.
+    if not enriched.get("time") and not enriched.get("_bc_kickoff"):
+        try:
+            _match_key = tip.get("match_id") or tip.get("match_key") or ""
+            _sport = (
+                tip.get("sport")
+                or tip.get("sport_key")
+                or enriched.get("sport")
+                or "soccer"
+            )
+            _home_d = _team_display(home_key) if home_key else tip.get("home_team", "")
+            _away_d = _team_display(away_key) if away_key else tip.get("away_team", "")
+            _ct = tip.get("commence_time") or tip.get("starts_at") or ""
+            _kd, _kt = _resolve_kickoff_time(
+                sport=_sport,
+                match_key=_match_key,
+                home=_home_d,
+                away=_away_d,
+                commence_time=_ct,
+                league=tip.get("league") or tip.get("league_key") or "",
+            )
+            if _kd and not enriched.get("date"):
+                enriched["date"] = _kd
+            if _kt:
+                enriched["time"] = _kt
+        except Exception as _ke:
+            log.debug("_enrich_tip_for_card: _resolve_kickoff_time failed: %s", _ke)
 
     # 9) Pick name — outcome display for summary and detail cards
     if not enriched.get("pick"):
@@ -9913,11 +9964,343 @@ def _load_fixture_kickoffs(match_ids: list) -> dict:
         return {}
 
 
+def _resolve_kickoff_time(
+    sport: str,
+    match_key: str,
+    home: str = "",
+    away: str = "",
+    commence_time: str = "",
+    league: str = "",
+) -> tuple[str, str]:
+    """Resolve (date, time) for a match across all sports.
+
+    BUILD-KO-TIME-FIX-01: eliminates 'KO time TBC' permanently by resolving
+    kickoff from sport-specific fixture tables with a clear fallback chain.
+
+    Args:
+        sport: "soccer"/"football", "cricket", "rugby", "mma"/"boxing"/"combat"
+        match_key: snake_case match key, typically suffixed with YYYY-MM-DD
+        home: display name (e.g. "Chennai Super Kings") — used for cricket/rugby/mma
+        away: display name — used for cricket/rugby/mma
+        commence_time: ISO fallback (Odds API commence_time)
+        league: league key (optional; reserved for future league-aware routing)
+
+    Returns:
+        (date_str, time_str) where:
+        - date_str is a display-friendly date ("Today", "Tomorrow", "Wed 11 Apr")
+        - time_str is SAST HH:MM ("19:30"); empty string when no time is available
+          (rugby, mma, unknown) or when every fallback fails
+        - Never returns "TBC" as either component.
+
+    Fallback order (per sport):
+        football:  fixture_mapping.kickoff → broadcast_schedule.start_time
+                   → commence_time → match_key date suffix (date only)
+        cricket:   sportmonks_fixtures.match_date (UTC) → broadcast_schedule.start_time
+                   → commence_time → match_key date suffix
+        rugby:     rugby_fixtures.match_date (date only) → broadcast_schedule.start_time
+                   → commence_time → match_key date suffix
+        mma:       mma_fixtures.fight_date (date only) → broadcast_schedule.start_time
+                   → commence_time → match_key date suffix
+    """
+    from datetime import datetime as _dt, timedelta as _td, date as _date
+    from zoneinfo import ZoneInfo as _ZI
+
+    _SAST = _ZI(config.TZ)
+    _sport = (sport or "").strip().lower()
+    if _sport in ("football",):
+        _sport = "soccer"
+    if _sport in ("boxing", "combat"):
+        _sport = "mma"
+
+    def _fmt_sast_dt(dt_obj) -> tuple[str, str]:
+        """Format a tz-aware datetime into (date_label, HH:MM)."""
+        now = _dt.now(_SAST)
+        today = now.date()
+        d = dt_obj.date()
+        if d == today:
+            date_str = "Today"
+        elif d == today + _td(days=1):
+            date_str = "Tomorrow"
+        else:
+            date_str = dt_obj.strftime("%a %d %b")
+        time_str = dt_obj.strftime("%H:%M")
+        # Midnight-UTC sentinel (00:00 UTC → 02:00 SAST) = placeholder, not real time
+        if time_str == "02:00":
+            return (date_str, "")
+        return (date_str, time_str)
+
+    def _fmt_iso_utc(iso_str: str) -> tuple[str, str]:
+        """Parse UTC ISO/space-separated datetime, convert to SAST, format."""
+        try:
+            s = (iso_str or "").strip()
+            if not s:
+                return ("", "")
+            # Support both "2026-04-11T19:30:00+00:00" and "2026-04-11 19:30:00"
+            if "T" not in s and " " in s:
+                s = s.replace(" ", "T")
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt_obj = _dt.fromisoformat(s)
+            if dt_obj.tzinfo is None:
+                # sportmonks_fixtures match_date is UTC
+                dt_obj = dt_obj.replace(tzinfo=_ZI("UTC"))
+            return _fmt_sast_dt(dt_obj.astimezone(_SAST))
+        except Exception:
+            return ("", "")
+
+    def _fmt_iso_local(iso_str: str) -> tuple[str, str]:
+        """Parse local/naive ISO datetime — treat as already SAST."""
+        try:
+            s = (iso_str or "").strip()
+            if not s:
+                return ("", "")
+            if "T" not in s and " " in s:
+                s = s.replace(" ", "T")
+            dt_obj = _dt.fromisoformat(s)
+            if dt_obj.tzinfo is None:
+                dt_obj = dt_obj.replace(tzinfo=_SAST)
+            return _fmt_sast_dt(dt_obj.astimezone(_SAST))
+        except Exception:
+            return ("", "")
+
+    def _fmt_date_only(date_str: str) -> tuple[str, str]:
+        """Parse a YYYY-MM-DD date string — return (label, '')."""
+        try:
+            s = (date_str or "").strip()[:10]
+            if not s:
+                return ("", "")
+            d = _date.fromisoformat(s)
+            today = _dt.now(_SAST).date()
+            if d == today:
+                return ("Today", "")
+            if d == today + _td(days=1):
+                return ("Tomorrow", "")
+            return (d.strftime("%a %d %b"), "")
+        except Exception:
+            return ("", "")
+
+    # Extract date from match_key suffix as last-resort date
+    def _date_from_match_key() -> tuple[str, str]:
+        try:
+            import re as _re
+            m = _re.search(r"(\d{4}-\d{2}-\d{2})$", match_key or "")
+            if m:
+                return _fmt_date_only(m.group(1))
+        except Exception:
+            pass
+        return ("", "")
+
+    # Broadcast schedule query — shared across sports
+    def _from_broadcast_schedule() -> tuple[str, str]:
+        if not home and not away:
+            return ("", "")
+        try:
+            from scrapers.db_connect import connect_odds_db as _cfn
+            from scrapers.edge.edge_config import DB_PATH as _DP
+            _c = _cfn(_DP)
+            try:
+                _row = _c.execute(
+                    """
+                    SELECT start_time FROM broadcast_schedule
+                    WHERE home_team IS NOT NULL AND away_team IS NOT NULL
+                      AND start_time IS NOT NULL
+                      AND (home_team LIKE ? OR away_team LIKE ?)
+                      AND (home_team LIKE ? OR away_team LIKE ?)
+                    ORDER BY start_time DESC
+                    LIMIT 1
+                    """,
+                    (f"%{home}%", f"%{home}%", f"%{away}%", f"%{away}%"),
+                ).fetchone()
+                if _row and _row[0]:
+                    return _fmt_iso_local(_row[0])
+            finally:
+                _c.close()
+        except Exception as exc:
+            log.debug("_resolve_kickoff_time: broadcast_schedule lookup failed: %s", exc)
+        return ("", "")
+
+    # ── Football path ────────────────────────────────────────
+    if _sport == "soccer":
+        # 1) fixture_mapping (primary — API-Football kickoffs, UTC ISO)
+        if match_key:
+            try:
+                from scrapers.db_connect import connect_odds_db as _cfn
+                from scrapers.edge.edge_config import DB_PATH as _DP
+                _c = _cfn(_DP)
+                try:
+                    _row = _c.execute(
+                        "SELECT kickoff FROM fixture_mapping WHERE match_key = ? "
+                        "AND kickoff IS NOT NULL AND kickoff != '' LIMIT 1",
+                        (match_key,),
+                    ).fetchone()
+                    if _row and _row[0]:
+                        d, t = _fmt_iso_utc(_row[0])
+                        if d:
+                            log.debug("_resolve_kickoff_time[soccer:fixture_mapping] %s → %s %s",
+                                      match_key, d, t)
+                            return (d, t)
+                finally:
+                    _c.close()
+            except Exception as exc:
+                log.debug("_resolve_kickoff_time[soccer]: fixture_mapping failed: %s", exc)
+        # 2) broadcast_schedule
+        d, t = _from_broadcast_schedule()
+        if d:
+            log.debug("_resolve_kickoff_time[soccer:broadcast] %s → %s %s", match_key, d, t)
+            return (d, t)
+        # 3) commence_time (Odds API)
+        d, t = _fmt_iso_utc(commence_time)
+        if d:
+            log.debug("_resolve_kickoff_time[soccer:commence_time] %s → %s %s", match_key, d, t)
+            return (d, t)
+        # 4) date from match_key
+        return _date_from_match_key()
+
+    # ── Cricket path ─────────────────────────────────────────
+    if _sport == "cricket":
+        # 1) sportmonks_fixtures (primary — team names are display-style, match_date UTC)
+        if home and away:
+            try:
+                from scrapers.db_connect import connect_odds_db as _cfn
+                from scrapers.edge.edge_config import DB_PATH as _DP
+                _c = _cfn(_DP)
+                try:
+                    _row = _c.execute(
+                        """
+                        SELECT match_date FROM sportmonks_fixtures
+                        WHERE match_date IS NOT NULL AND match_date != ''
+                          AND (home_team LIKE ? OR away_team LIKE ?)
+                          AND (home_team LIKE ? OR away_team LIKE ?)
+                        ORDER BY match_date DESC LIMIT 1
+                        """,
+                        (f"%{home}%", f"%{home}%", f"%{away}%", f"%{away}%"),
+                    ).fetchone()
+                    if _row and _row[0]:
+                        d, t = _fmt_iso_utc(_row[0])
+                        if d:
+                            log.debug("_resolve_kickoff_time[cricket:sportmonks] %s → %s %s",
+                                      match_key, d, t)
+                            return (d, t)
+                finally:
+                    _c.close()
+            except Exception as exc:
+                log.debug("_resolve_kickoff_time[cricket]: sportmonks_fixtures failed: %s", exc)
+        # 2) broadcast_schedule
+        d, t = _from_broadcast_schedule()
+        if d:
+            log.debug("_resolve_kickoff_time[cricket:broadcast] %s → %s %s", match_key, d, t)
+            return (d, t)
+        # 3) commence_time
+        d, t = _fmt_iso_utc(commence_time)
+        if d:
+            log.debug("_resolve_kickoff_time[cricket:commence_time] %s → %s %s", match_key, d, t)
+            return (d, t)
+        # 4) date from match_key
+        return _date_from_match_key()
+
+    # ── Rugby path ───────────────────────────────────────────
+    if _sport == "rugby":
+        # 1) rugby_fixtures (date-only)
+        if home and away:
+            try:
+                from scrapers.db_connect import connect_odds_db as _cfn
+                from scrapers.edge.edge_config import DB_PATH as _DP
+                _c = _cfn(_DP)
+                try:
+                    _row = _c.execute(
+                        """
+                        SELECT match_date FROM rugby_fixtures
+                        WHERE match_date IS NOT NULL AND match_date != ''
+                          AND (home_team LIKE ? OR away_team LIKE ?)
+                          AND (home_team LIKE ? OR away_team LIKE ?)
+                        ORDER BY match_date DESC LIMIT 1
+                        """,
+                        (f"%{home}%", f"%{home}%", f"%{away}%", f"%{away}%"),
+                    ).fetchone()
+                    if _row and _row[0]:
+                        d, t = _fmt_date_only(_row[0])
+                        if d:
+                            # Try broadcast_schedule as a time-only upgrade
+                            _d2, _t2 = _from_broadcast_schedule()
+                            if _t2 and _d2 == d:
+                                log.debug("_resolve_kickoff_time[rugby:rugby_fixtures+broadcast] %s → %s %s",
+                                          match_key, d, _t2)
+                                return (d, _t2)
+                            log.debug("_resolve_kickoff_time[rugby:rugby_fixtures] %s → %s (date-only)",
+                                      match_key, d)
+                            return (d, "")
+                finally:
+                    _c.close()
+            except Exception as exc:
+                log.debug("_resolve_kickoff_time[rugby]: rugby_fixtures failed: %s", exc)
+        # 2) broadcast_schedule
+        d, t = _from_broadcast_schedule()
+        if d:
+            return (d, t)
+        # 3) commence_time
+        d, t = _fmt_iso_utc(commence_time)
+        if d:
+            return (d, t)
+        # 4) date from match_key
+        return _date_from_match_key()
+
+    # ── MMA / boxing path ────────────────────────────────────
+    if _sport == "mma":
+        # 1) mma_fixtures (date-only)
+        if home and away:
+            try:
+                from scrapers.db_connect import connect_odds_db as _cfn
+                from scrapers.edge.edge_config import DB_PATH as _DP
+                _c = _cfn(_DP)
+                try:
+                    _row = _c.execute(
+                        """
+                        SELECT fight_date FROM mma_fixtures
+                        WHERE fight_date IS NOT NULL AND fight_date != ''
+                          AND (fighter1_name LIKE ? OR fighter2_name LIKE ?)
+                          AND (fighter1_name LIKE ? OR fighter2_name LIKE ?)
+                        ORDER BY fight_date DESC LIMIT 1
+                        """,
+                        (f"%{home}%", f"%{home}%", f"%{away}%", f"%{away}%"),
+                    ).fetchone()
+                    if _row and _row[0]:
+                        d, t = _fmt_date_only(_row[0])
+                        if d:
+                            log.debug("_resolve_kickoff_time[mma:mma_fixtures] %s → %s (date-only)",
+                                      match_key, d)
+                            return (d, "")
+                finally:
+                    _c.close()
+            except Exception as exc:
+                log.debug("_resolve_kickoff_time[mma]: mma_fixtures failed: %s", exc)
+        # 2) broadcast_schedule
+        d, t = _from_broadcast_schedule()
+        if d:
+            return (d, t)
+        # 3) commence_time
+        d, t = _fmt_iso_utc(commence_time)
+        if d:
+            return (d, t)
+        # 4) date from match_key
+        return _date_from_match_key()
+
+    # ── Unknown sport fallback ───────────────────────────────
+    # Try commence_time first, then match_key date
+    d, t = _fmt_iso_utc(commence_time)
+    if d:
+        return (d, t)
+    return _date_from_match_key()
+
+
 def _format_kickoff_display(commence_time: str) -> str:
-    """Format commence time as 'Today 19:30 SAST' or 'Wed 04 Mar, 15:00 SAST'."""
+    """Format commence time as 'Today 19:30 SAST' or 'Wed 04 Mar, 15:00 SAST'.
+
+    BUILD-KO-TIME-FIX-01: returns empty string (not "TBC") when parse fails.
+    Callers should use _resolve_kickoff_time() for sport-aware resolution.
+    """
     ct_sa = _parse_date(commence_time)
     if not ct_sa:
-        return "TBC"
+        return ""
     from datetime import datetime as dt_cls, timedelta
     from zoneinfo import ZoneInfo
     now = dt_cls.now(ZoneInfo(config.TZ))
@@ -19576,7 +19959,8 @@ def _build_game_buttons(
                     outcome = best_ev_tip.get("outcome") or ""
                 odds_val = best_ev_tip["odds"]
 
-                cta_text = f"{tier_emoji} Back {outcome} on {bk_name} →"
+                _cta_outcome = _BTN_ABBREVS.get(outcome) or smart_abbreviate(outcome, max_len=15)
+                cta_text = f"{tier_emoji} Back {_cta_outcome} on {bk_name}"
                 if aff_url:
                     primary_button = InlineKeyboardButton(cta_text, url=aff_url)
                 else:
@@ -20174,7 +20558,7 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
         bk_name = _display_bookmaker_name(best_bk_key)
         label = _aff_labels.get(oc_key, oc_key)
         buttons.append([InlineKeyboardButton(
-            f"📲 {bk_name} — Best for {label} →", url=aff_url,
+            f"📲 {bk_name} — Best for {label}", url=aff_url,
         )])
 
     buttons.append([_build_odds_compare_back_button(query.from_user.id, event_id)])
@@ -21760,7 +22144,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             _ch_data = build_edge_summary_data(tips)
             _ch_png = await asyncio.to_thread(render_card_sync, "edge_summary.html", _ch_data)
             _ch_markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton("💎 Open Bot →", url="https://t.me/mzansiedge_bot"),
+                InlineKeyboardButton("💎 Open Bot", url="https://t.me/mzansiedge_bot"),
             ]])
             await ctx.bot.send_photo(chat_id=_CHANNEL_ID, photo=_ch_png, reply_markup=_ch_markup)
             log.info("Edge Summary card broadcast to channel at hour=%d", current_hour)
@@ -22921,7 +23305,7 @@ def _payment_ready_text(plan_code: str, reference: str) -> str:
 
 def _payment_ready_markup(payment_url: str, payment_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Pay Now →", url=payment_url)],
+        [InlineKeyboardButton("💳 Pay Now", url=payment_url)],
         [InlineKeyboardButton("✅ I've Paid — Check Status", callback_data=f"sub:verify:{payment_id}")],
         [InlineKeyboardButton("❌ Cancel", callback_data="sub:cancel")],
     ])

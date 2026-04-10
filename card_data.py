@@ -524,7 +524,7 @@ def _confidence_tier(pct: float) -> str:
     elif pct >= 70:
         return "SOLID"
     else:
-        return "SELECTIVE"
+        return "MILD"
 
 
 def _channel_fields(tip: dict) -> dict:
@@ -652,15 +652,18 @@ def build_edge_detail_data(tip: dict) -> dict:
     h2h_draws    = int(h2h.get("d")  or tip.get("h2h_draws")     or 0)
     h2h_away_wins = int(h2h.get("aw") or tip.get("h2h_away_wins") or 0)
 
-    # FIX 2 (CARD-REBUILD-02): Wire _split_kickoff into detail data — same as build_edge_picks_data
+    # BUILD-KO-TIME-FIX-01: never fall back to "TBC". _enrich_tip_for_card() now
+    # populates tip["time"] via _resolve_kickoff_time() (sport-aware fixture table
+    # lookups). For sports with no time data (rugby, mma), time_str is empty and
+    # the template renders date-only gracefully.
     kickoff_raw = tip.get("_bc_kickoff") or tip.get("kickoff") or ""
     date_part, time_part = _split_kickoff(kickoff_raw)
     date_str = tip.get("date") or date_part
     _raw_time = tip.get("time") or time_part
     # Coerce midnight sentinel (00:00 / 0:00) — stored when DB has date-only fixtures
-    if _raw_time in ("00:00", "0:00", "0:00:00"):
+    if _raw_time in ("00:00", "0:00", "0:00:00", "02:00", "TBC"):
         _raw_time = ""
-    time_str = _raw_time or "TBC"
+    time_str = _raw_time or ""
 
     return {
         # Tier
@@ -919,8 +922,6 @@ def build_match_detail_data(match: dict) -> dict:
         "date":    match.get("date") or "",
         "time":    match.get("time") or "",
         "channel": str(match.get("channel") or match.get("ch") or ""),
-        "venue":   match.get("venue") or "",
-
         # Form
         "home_form": match.get("home_form") or [],
         "away_form": match.get("away_form") or [],

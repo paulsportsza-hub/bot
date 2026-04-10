@@ -188,15 +188,39 @@ def _compute_team_form(results: list[dict], team_key: str, last_n: int = 5) -> l
     return form
 
 
+def _h2h_key_variants(key: str) -> list[str]:
+    """Return name variants to try for H2H matching, handling afc_/fc_ prefixes.
+
+    e.g. 'bournemouth' → ['bournemouth', 'afc_bournemouth', 'fc_bournemouth', 'bournemouth_fc']
+         'afc_bournemouth' → ['afc_bournemouth', 'bournemouth']
+    """
+    k = key.lower()
+    variants = [k]
+    if k.startswith("afc_"):
+        variants.append(k[4:])
+    elif k.startswith("fc_"):
+        variants.append(k[3:])
+    elif k.endswith("_fc"):
+        variants.append(k[:-3])
+    else:
+        variants.append(f"afc_{k}")
+        variants.append(f"fc_{k}")
+        variants.append(f"{k}_fc")
+    return variants
+
+
 def _compute_h2h(results: list[dict], home_key: str, away_key: str) -> dict:
     """Return head-to-head record as ``{played, hw, d, aw}``.
 
     Invariant: ``hw + d + aw == played``.
     ``hw`` = wins for the *home_key* side.
+
+    Uses prefix-alias expansion (afc_/fc_) so that 'bournemouth' matches
+    stored keys like 'afc_bournemouth' in match_results.
     """
     played = hw = d = aw = 0
-    hk = home_key.lower()
-    ak = away_key.lower()
+    hk_variants = _h2h_key_variants(home_key)
+    ak_variants = _h2h_key_variants(away_key)
     for r in results:
         home = (r.get("home") or "").lower()
         away = (r.get("away") or "").lower()
@@ -205,9 +229,9 @@ def _compute_h2h(results: list[dict], home_key: str, away_key: str) -> dict:
         if hs is None or as_ is None:
             continue
         # Normal direction: home_key at home, away_key away
-        normal = hk in home and ak in away
+        normal = any(v in home for v in hk_variants) and any(v in away for v in ak_variants)
         # Reversed: away_key at home, home_key away
-        reversed_ = ak in home and hk in away
+        reversed_ = any(v in home for v in ak_variants) and any(v in away for v in hk_variants)
         if not normal and not reversed_:
             continue
         try:
@@ -441,6 +465,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
         "lineups": [],
         "injuries": [],
         "results": [],
+        "h2h_results": [],
         "ratings": {},
         "fighters": {},
         "news": [],
@@ -473,6 +498,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                 FROM odds_snapshots
                 WHERE match_id = ?
                   AND scraped_at >= datetime('now', '-48 hours')
+                  AND market_type = '1x2'
                 ORDER BY scraped_at DESC
                 """,
                 (match_key,),
@@ -603,6 +629,34 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                     })
         except Exception as exc:
             log.warning("card_pipeline: match_results query failed: %s", exc)
+
+        # h2h_results — dedicated head-to-head query (AND, not OR — guarantees both teams appear)
+        # Uses %key% patterns so 'bournemouth' matches stored 'afc_bournemouth'.
+        try:
+            _hk_pat = f"%{home_key}%"
+            _ak_pat = f"%{away_key}%"
+            h2h_rows = conn.execute(
+                """
+                SELECT match_key, home_team, away_team, home_score, away_score, league
+                FROM match_results
+                WHERE (home_team LIKE ? AND away_team LIKE ?)
+                   OR (home_team LIKE ? AND away_team LIKE ?)
+                ORDER BY match_date DESC
+                LIMIT 10
+                """,
+                (_hk_pat, _ak_pat, _ak_pat, _hk_pat),
+            ).fetchall()
+            for row in h2h_rows:
+                result["h2h_results"].append({
+                    "match_key": row["match_key"],
+                    "home": row["home_team"],
+                    "away": row["away_team"],
+                    "home_score": row["home_score"],
+                    "away_score": row["away_score"],
+                    "league": row["league"],
+                })
+        except Exception as exc:
+            log.warning("card_pipeline: h2h_results query failed: %s", exc)
 
         # team_ratings — Glicko-2 / Elo
         try:
@@ -1166,7 +1220,8 @@ def build_card_data(
     # D-17b: hard cap at 5 regardless of asymmetric guard result
     home_form = home_form[:5]
     away_form = away_form[:5]
-    h2h = _compute_h2h(_results, home_key, away_key)
+    _h2h_results = verified.get("h2h_results") or []
+    h2h = _compute_h2h(_h2h_results if _h2h_results else _results, home_key, away_key)
 
     _raw_injuries = verified.get("injuries") or []
     home_injuries, away_injuries = _split_injuries(_raw_injuries, home_key, away_key)
