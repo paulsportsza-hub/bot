@@ -524,7 +524,7 @@ def _confidence_tier(pct: float) -> str:
     elif pct >= 70:
         return "SOLID"
     else:
-        return "LEAN"
+        return "SELECTIVE"
 
 
 def _channel_fields(tip: dict) -> dict:

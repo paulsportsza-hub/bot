@@ -7053,6 +7053,23 @@ _BTN_ABBREVS: dict[str, str] = {
 }
 
 
+_SMART_BTN_MAX = 20  # Telegram mobile truncation threshold (chars)
+
+
+def smart_abbreviate(name: str, max_len: int = _SMART_BTN_MAX) -> str:
+    """Abbreviate a team name only when it would truncate on mobile buttons.
+
+    Full name shown when len(name) <= max_len. Otherwise first word kept
+    full, remaining words reduced to initial + '.'.
+    """
+    if len(name) <= max_len:
+        return name
+    parts = name.split()
+    if len(parts) == 1:
+        return name[:max_len]
+    return parts[0] + " " + " ".join(p[0] + "." for p in parts[1:])
+
+
 def _abbreviate_btn(name: str, max_len: int = 8) -> str:
     """Abbreviate team name for inline button text (max ~8 chars)."""
     if name in _BTN_ABBREVS:
@@ -7132,7 +7149,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             if p >= 95: return "MAX"
             if p >= 85: return "STRONG"
             if p >= 70: return "SOLID"
-            return "LEAN"
+            return "SELECTIVE"
         confidence_tier = tip.get("confidence_tier") or verified.get("confidence_tier") or _derive_tier(_conf_pct)
 
         # Form lists from home_form/away_form (set by _enrich_tip_for_card)
@@ -7210,7 +7227,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "- pick: what we are backing\n"
             "- odds: the odds on offer\n"
             "- bookmaker: the specific bookie — always name them\n"
-            "- confidence_tier: LEAN / SOLID / STRONG / MAX — this is how strong the edge is\n"
+            "- confidence_tier: SELECTIVE / SOLID / STRONG / MAX — this is how strong the edge is\n"
             "- h2h_summary: meeting history — translate into plain English ('these two have drawn twice in five meetings', not 'H2H: 1W 2D 2A')\n"
             "- signals_active: list of edge signals firing — mention 1-2 if they add flavour ('the line's been moving their way', 'tipsters are aligned')\n"
             "\n"
@@ -7400,7 +7417,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         bookmaker = allowed_data.get("bookmaker") or ""
         matchup = allowed_data.get("matchup") or ""
         league = allowed_data.get("league_key") or allowed_data.get("league") or ""
-        confidence_tier = allowed_data.get("confidence_tier") or "LEAN"
+        confidence_tier = allowed_data.get("confidence_tier") or "SELECTIVE"
 
         # Form lists
         _hf = allowed_data.get("home_form") or []
@@ -7488,7 +7505,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "- pick: what we are backing\n"
             "- odds: the odds on offer\n"
             "- bookmaker: the specific bookie — always name them\n"
-            "- confidence_tier: LEAN / SOLID / STRONG / MAX — this is how strong the edge is\n"
+            "- confidence_tier: SELECTIVE / SOLID / STRONG / MAX — this is how strong the edge is\n"
             "- h2h_summary: meeting history — translate into plain English ('these two have drawn twice in five meetings', not 'H2H: 1W 2D 2A')\n"
             "- signals_active: list of edge signals firing — mention 1-2 if they add flavour ('the line's been moving their way', 'tipsters are aligned')\n"
             "\n"
@@ -9596,6 +9613,12 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
         MAX_RECOMMENDED_ODDS as _MAX_RECOMMENDED_ODDS,
     )
 
+    # KO-TIME-INV-01: Batch-load kickoff times from fixture_mapping before edge loop.
+    # odds_snapshots has no commence_time; fixture_mapping carries scheduled kickoffs.
+    # RUNTIME-R2: sync SQLite must run in to_thread inside async context.
+    _ht_match_ids = [m["match_id"] for m, _, _ in match_jobs]
+    _fixture_kickoffs: dict = await asyncio.to_thread(_load_fixture_kickoffs, _ht_match_ids) if _ht_match_ids else {}
+
     # R12-BUILD-01 Fix 1: Batch-load authoritative outcomes from edge_results so the
     # display outcome matches what narratives were generated against. This eliminates
     # divergence between the list path (which used live V2 outcome) and the detail
@@ -9747,7 +9770,7 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             "sport_key": _DB_LEAGUE_SPORT.get(league, config.LEAGUE_SPORT.get(league, "soccer")),
             "home_team": home_display,
             "away_team": away_display,
-            "commence_time": "",
+            "commence_time": _fixture_kickoffs.get(match["match_id"], ""),
             "outcome": outcome_label,
             "outcome_key": predicted_outcome,
             "odds": best_odds,
@@ -9863,6 +9886,31 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
     top_tips = [t for t in top_tips if verify_card_populates(t, t.get("match_id", ""))[0]]
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time(), "thin_slate": thin_state}
     return top_tips
+
+
+def _load_fixture_kickoffs(match_ids: list) -> dict:
+    """Batch-load kickoff ISO strings from fixture_mapping for the given match_ids.
+
+    Returns {match_id: kickoff_str}. Never raises — returns {} on any error.
+    KO-TIME-INV-01: odds.db has no commence_time; fixture_mapping carries the
+    actual scheduled kickoff scraped from API-Football.
+    """
+    if not match_ids:
+        return {}
+    try:
+        from scrapers.db_connect import connect_odds_db as _conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+        _conn = _conn_fn(_DB_PATH)
+        _ph = ",".join("?" * len(match_ids))
+        _rows = _conn.execute(
+            f"SELECT match_key, kickoff FROM fixture_mapping "
+            f"WHERE match_key IN ({_ph}) AND kickoff IS NOT NULL AND kickoff != ''",
+            list(match_ids),
+        ).fetchall()
+        _conn.close()
+        return {row[0]: row[1] for row in _rows}
+    except Exception:
+        return {}
 
 
 def _format_kickoff_display(commence_time: str) -> str:
@@ -10486,7 +10534,7 @@ async def _build_hot_tips_page(
         else:
             _btn_tier = "🔒"
             cb = f"hot:upgrade:{_shorten_cb_key(match_key)}"
-        label = f"[{idx}] {_btn_sport} {h_name} vs {a_name} {_btn_tier}"
+        label = f"[{idx}] {_btn_sport} {smart_abbreviate(h_name)} vs {smart_abbreviate(a_name)} {_btn_tier}"
         buttons.append([InlineKeyboardButton(label, callback_data=cb)])
 
     # Navigation row — only row allowed to have 2 buttons side-by-side
@@ -11362,6 +11410,20 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
     else:
         db_results = []
 
+    # KO-TIME-INV-01: Batch-load kickoff times from fixture_mapping for all DB matches.
+    # odds_snapshots has no commence_time column; fixture_mapping carries the actual
+    # scheduled kickoff from API-Football. Wrapped in to_thread (sync SQLite).
+    _mm_db_match_ids: list = []
+    for _r in db_results:
+        if isinstance(_r, (BaseException, list)):
+            if isinstance(_r, list):
+                for _m in _r:
+                    if isinstance(_m, dict) and _m.get("match_id"):
+                        _mm_db_match_ids.append(_m["match_id"])
+    _mm_fixture_kickoffs: dict = await asyncio.to_thread(
+        _load_fixture_kickoffs, _mm_db_match_ids
+    ) if _mm_db_match_ids else {}
+
     for (config_key, db_key, sport_key), db_matches in zip(db_league_queries, db_results):
         if isinstance(db_matches, BaseException):
             continue
@@ -11390,12 +11452,14 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
             )
             if not is_relevant:
                 continue
-            # date_str already extracted above for dedup normalisation
+            # KO-TIME-INV-01: Use actual kickoff from fixture_mapping; fall back to
+            # midnight UTC only when fixture_mapping has no entry for this match_id.
+            _ko_str = _mm_fixture_kickoffs.get(mid, "")
             all_events.append({
                 "id": mid,
                 "home_team": home_display,
                 "away_team": away_display,
-                "commence_time": f"{date_str}T00:00:00Z" if date_str else "",
+                "commence_time": _ko_str if _ko_str else (f"{date_str}T00:00:00Z" if date_str else ""),
                 "league_key": config_key,
                 "sport_emoji": sport_emoji,
                 "sport_key": sport_key,

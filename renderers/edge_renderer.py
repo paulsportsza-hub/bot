@@ -156,9 +156,13 @@ def render_odds_comparison(odds_by_bookmaker: dict[str, float], predicted_outcom
         aff = config.BOOKMAKER_AFFILIATES.get(bk_key)
         sa = config.SA_BOOKMAKERS.get(bk_key)
         name = (aff or {}).get("name") or (sa or {}).get("short_name") or bk_key.title()
-        # Mark the best with a star
-        marker = "\u2b50 " if bk_key == sorted_odds[0][0] else "  "
-        lines.append(f"{marker}{name}: <b>{odds:.2f}</b>")
+        # Mark the best with a star; only bold the recommended bookmaker
+        is_best = bk_key == sorted_odds[0][0]
+        marker = "\u2b50 " if is_best else "  "
+        if is_best:
+            lines.append(f"{marker}{name}: <b>{odds:.2f}</b>")
+        else:
+            lines.append(f"{marker}{name}: {odds:.2f}")
 
     return "\n".join(lines)
 

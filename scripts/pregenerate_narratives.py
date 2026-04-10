@@ -98,6 +98,9 @@ from bot import (
     _validate_breakdown,
     _get_cached_narrative,
     _store_narrative_cache,
+    _generate_verdict_constrained,
+    _fact_check_verdict,
+    _compute_odds_hash,
     _ensure_narrative_cache_table,
     _ensure_shadow_narratives_table,
     _check_verdict_balance,
@@ -158,6 +161,12 @@ _RUNTIME_SCHEMA_REQUIREMENTS = {
         "evidence_json",
         "narrative_source",
         "structured_card_json",  # AC-1 (P1P3-BUILD) — added via ALTER TABLE at bot startup
+        "verdict_html",          # PIPELINE-BUILD-01
+        "evidence_class",        # PIPELINE-BUILD-01
+        "tone_band",             # PIPELINE-BUILD-01
+        "spec_json",             # PIPELINE-BUILD-01
+        "context_json",          # PIPELINE-BUILD-01
+        "generation_ms",         # PIPELINE-BUILD-01
     },
     "shadow_narratives": {
         "match_key",
@@ -1781,6 +1790,70 @@ async def _generate_one(
     _ctx_had_data = bool(ctx and ctx.get("data_available"))
     _final_model = served_model if _ctx_had_data else "instant-baseline-no-ctx"
     duration = time.time() - t0
+    generation_ms = int(duration * 1000)
+
+    # PIPELINE-BUILD-01: Generate constrained verdict and extract spec metadata
+    _verdict_html = None
+    _evidence_class = None
+    _tone_band = None
+    _spec_json_str = None
+    _context_json_str = None
+    if spec is not None:
+        _evidence_class = getattr(spec, "evidence_class", None)
+        _tone_band = getattr(spec, "tone_band", None)
+        try:
+            from narrative_spec import _render_verdict as _rv_det
+            # Build ALLOWED fields for constrained verdict
+            _allowed = {
+                "matchup": f"{home} vs {away}",
+                "pick": tips[0]["outcome"] if tips else "",
+                "odds": tips[0]["odds"] if tips else 0,
+                "ev": tips[0]["ev"] if tips else 0,
+                "bookmaker": tips[0]["bookie"] if tips else "",
+                "confidence_tier": (
+                    "MAX" if (edge.get("composite_score") or 0) >= 95 else
+                    "STRONG" if (edge.get("composite_score") or 0) >= 85 else
+                    "SOLID" if (edge.get("composite_score") or 0) >= 70 else
+                    "SELECTIVE"
+                ),
+            }
+            _verdict_html = _generate_verdict_constrained(spec, _allowed)
+            if not _verdict_html:
+                _verdict_html = _rv_det(spec)
+            log.info("PIPELINE-BUILD-01: verdict generated for %s (constrained=%s)",
+                     match_key, bool(_verdict_html))
+        except Exception as _verd_err:
+            log.debug("PIPELINE-BUILD-01: verdict generation failed for %s: %s", match_key, _verd_err)
+            try:
+                from narrative_spec import _render_verdict as _rv_fb
+                _verdict_html = _rv_fb(spec)
+            except Exception:
+                pass
+
+        # Serialise spec for cache
+        try:
+            _spec_dict = {
+                "evidence_class": _evidence_class,
+                "tone_band": _tone_band,
+                "verdict_action": getattr(spec, "verdict_action", ""),
+                "verdict_sizing": getattr(spec, "verdict_sizing", ""),
+                "support_level": getattr(spec, "support_level", 0),
+                "risk_severity": getattr(spec, "risk_severity", ""),
+                "ev_pct": getattr(spec, "ev_pct", 0),
+                "composite_score": getattr(spec, "composite_score", 0),
+                "edge_tier": edge_tier,
+            }
+            _spec_json_str = json.dumps(_spec_dict, default=str)
+        except Exception:
+            pass
+
+    # Serialise context for cache
+    if ctx and ctx.get("data_available"):
+        try:
+            _context_json_str = json.dumps(ctx, default=str)
+        except Exception:
+            pass
+
     return {
         "match_key": match_key, "success": True, "model": _final_model,
         "duration": duration, "narrative": narrative,
@@ -1795,6 +1868,12 @@ async def _generate_one(
             "verification_failure": verification_failure,
             "coverage_json": _coverage_json,
             "structured_card_json": _structured_card_json,
+            "verdict_html": _verdict_html,
+            "evidence_class": _evidence_class,
+            "tone_band": _tone_band,
+            "spec_json": _spec_json_str,
+            "context_json": _context_json_str,
+            "generation_ms": generation_ms,
             "_shadow": {
                 "match_key": match_key,
                 "pack": evidence_pack,
@@ -1855,6 +1934,12 @@ async def _verify_and_fill_cache(
                         narrative_source=pw.get("narrative_source", "w82"),
                         coverage_json=pw.get("coverage_json"),
                         structured_card_json=pw.get("structured_card_json"),
+                        verdict_html=pw.get("verdict_html"),
+                        evidence_class=pw.get("evidence_class"),
+                        tone_band=pw.get("tone_band"),
+                        spec_json=pw.get("spec_json"),
+                        context_json=pw.get("context_json"),
+                        generation_ms=pw.get("generation_ms"),
                     )
                     log.info("  -> Gap filled for %s", mk)
                 except Exception as store_exc:
@@ -2057,6 +2142,12 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                     narrative_source=new_source,
                     coverage_json=pw.get("coverage_json"),
                     structured_card_json=pw.get("structured_card_json"),
+                    verdict_html=pw.get("verdict_html"),
+                    evidence_class=pw.get("evidence_class"),
+                    tone_band=pw.get("tone_band"),
+                    spec_json=pw.get("spec_json"),
+                    context_json=pw.get("context_json"),
+                    generation_ms=pw.get("generation_ms"),
                 )
                 write_ok += 1
             except Exception as exc:
