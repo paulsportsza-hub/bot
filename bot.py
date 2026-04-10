@@ -7810,6 +7810,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
         build_verified_data_block as _bvdb,
         _compute_team_form,
         _compute_h2h,
+        _compute_match_detail_stats,
         _split_injuries,
         _compute_signals,
         _ro_conn,
@@ -8149,6 +8150,19 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             }
             for row in _tipster_rows if row.get("source")
         ][:4]
+
+    # 12) Key Stats — BUILD-MY-MATCHES-02: Home Record / Away Record / Avg Score / Fair Value
+    # Wired for match_detail path (mm:match callbacks). build_match_detail_data() reads
+    # enriched["stats"]; build_edge_detail_data() uses key_stats from card_pipeline separately.
+    try:
+        _stats_sport = (tip.get("sport_key") or tip.get("sport") or "soccer").lower()
+        _stats_league = (tip.get("league_key") or tip.get("league") or "").lower()
+        enriched["stats"] = _compute_match_detail_stats(
+            match_key, home_key, away_key, _stats_sport, _stats_league, verified
+        )
+    except Exception as _stats_exc:
+        log.debug("_enrich_tip_for_card: _compute_match_detail_stats failed: %s", _stats_exc)
+        enriched.setdefault("stats", [])
 
     return enriched
 

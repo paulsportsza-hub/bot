@@ -404,6 +404,181 @@ def _compute_key_stats(
     return stats[:4]
 
 
+def _compute_match_detail_stats(
+    match_key: str,
+    home_key: str,
+    away_key: str,
+    sport: str,
+    league: str,
+    verified_ctx: dict,
+) -> list[dict]:
+    """Compute 4 Key Stats tiles for My Matches match_detail card.
+
+    BUILD-MY-MATCHES-02: Home Record / Away Record / Avg Score / Fair Value.
+    Schema: [{label: str, value: str, context: str}] — match_detail.html expects this.
+    Returns [] on failure or insufficient data so the section hides gracefully.
+    """
+    if not home_key or not away_key:
+        return []
+
+    conn = _ro_conn(_ODDS_DB_PATH)
+    if conn is None:
+        return []
+
+    stats: list[dict] = []
+    hk_variants = _h2h_key_variants(home_key)
+    ak_variants = _h2h_key_variants(away_key)
+
+    def _ph(n: int) -> str:
+        return ",".join("?" * n)
+
+    try:
+        cur = conn.cursor()
+
+        # Determine current season: most-matched season in last 400 days for this league.
+        # A rolling window avoids picking sparse "2026-2026" labels over the true active
+        # season (e.g. '2025-2026' with 281 EPL rows).
+        season = ""
+        if league:
+            cur.execute(
+                """SELECT season, COUNT(*) AS cnt FROM match_results
+                   WHERE league = ? AND match_date >= DATE('now', '-400 days')
+                   GROUP BY season ORDER BY cnt DESC LIMIT 1""",
+                (league,),
+            )
+            row = cur.fetchone()
+            if row:
+                season = row[0]
+
+        season_clause = "AND season = ?" if season else ""
+        season_params: tuple = (season,) if season else ()
+
+        # ── Home Record: W-D-L for home_key at home this season ─────────────
+        cur.execute(
+            f"""SELECT result, COUNT(*) FROM match_results
+               WHERE home_team IN ({_ph(len(hk_variants))}) {season_clause}
+               GROUP BY result""",
+            (*hk_variants, *season_params),
+        )
+        hw = hd = hl = 0
+        for result, cnt in cur.fetchall():
+            if result == "home":
+                hw = cnt
+            elif result == "draw":
+                hd = cnt
+            elif result == "away":
+                hl = cnt
+        if hw or hd or hl:
+            stats.append({
+                "label": "Home Record",
+                "value": f"{hw}-{hd}-{hl}",
+                "context": "at home",
+            })
+
+        # ── Away Record: W-D-L for away_key on road this season ─────────────
+        cur.execute(
+            f"""SELECT result, COUNT(*) FROM match_results
+               WHERE away_team IN ({_ph(len(ak_variants))}) {season_clause}
+               GROUP BY result""",
+            (*ak_variants, *season_params),
+        )
+        aw = ad = al = 0
+        for result, cnt in cur.fetchall():
+            if result == "away":
+                aw = cnt
+            elif result == "draw":
+                ad = cnt
+            elif result == "home":
+                al = cnt
+        if aw or ad or al:
+            stats.append({
+                "label": "Away Record",
+                "value": f"{aw}-{ad}-{al}",
+                "context": "on the road",
+            })
+
+        # ── Avg Score: average scoreline from last 5 H2H matches ─────────────
+        cur.execute(
+            f"""SELECT home_score, away_score FROM match_results
+               WHERE (home_team IN ({_ph(len(hk_variants))}) AND away_team IN ({_ph(len(ak_variants))}))
+                  OR (home_team IN ({_ph(len(ak_variants))}) AND away_team IN ({_ph(len(hk_variants))}))
+               ORDER BY match_date DESC LIMIT 5""",
+            (*hk_variants, *ak_variants, *ak_variants, *hk_variants),
+        )
+        h2h_scores: list[tuple[int, int]] = []
+        for hs, as_ in cur.fetchall():
+            try:
+                h2h_scores.append((int(hs), int(as_)))
+            except (TypeError, ValueError):
+                pass
+        if h2h_scores:
+            avg_h = sum(s[0] for s in h2h_scores) / len(h2h_scores)
+            avg_a = sum(s[1] for s in h2h_scores) / len(h2h_scores)
+            stats.append({
+                "label": "Avg Score",
+                "value": f"{avg_h:.0f}-{avg_a:.0f}",
+                "context": "last 5 H2H",
+            })
+
+        # ── Fair Value: home win probability ─────────────────────────────────
+        # Use verified.prob when available; fallback to Glicko-2 from team_ratings
+        fair_pct: int | None = None
+        raw_prob = verified_ctx.get("prob")
+        if raw_prob is not None:
+            try:
+                p = float(raw_prob)
+                # Handle both fraction (0–1) and percentage (0–100) formats
+                if 0 < p <= 1.0:
+                    fair_pct = int(round(p * 100))
+                elif 1 < p <= 100:
+                    fair_pct = int(round(p))
+            except (TypeError, ValueError):
+                pass
+
+        if fair_pct is None:
+            # Derive from team_ratings.mu using Glicko-2 expected score formula
+            mu_home = mu_away = None
+            _sport = sport or "soccer"
+            for tk in hk_variants:
+                cur.execute(
+                    "SELECT mu FROM team_ratings WHERE team_name = ? AND sport = ? LIMIT 1",
+                    (tk, _sport),
+                )
+                row = cur.fetchone()
+                if row:
+                    mu_home = float(row[0])
+                    break
+            for tk in ak_variants:
+                cur.execute(
+                    "SELECT mu FROM team_ratings WHERE team_name = ? AND sport = ? LIMIT 1",
+                    (tk, _sport),
+                )
+                row = cur.fetchone()
+                if row:
+                    mu_away = float(row[0])
+                    break
+            if mu_home is not None and mu_away is not None:
+                p_home = 1.0 / (1.0 + 10.0 ** (-(mu_home - mu_away) / 400.0))
+                fair_pct = int(round(p_home * 100))
+
+        if fair_pct is not None:
+            stats.append({
+                "label": "Fair Value",
+                "value": f"{fair_pct}%",
+                "context": "home win prob",
+            })
+
+    except Exception as exc:
+        log.warning("_compute_match_detail_stats: query failed: %s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return stats[:4]
+
+
 def _compute_odds_structured(verified: dict) -> dict:
     """Return 3-way odds structured per outcome with best bookmaker.
 
