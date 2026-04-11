@@ -1570,7 +1570,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             # BUILD-W3 / W3-FIX: My Matches card pagination (photo→photo, no flicker)
             _raw_games = _schedule_cache.get(user_id, [])
             _edge_info = _get_edge_info_for_games(_raw_games)
-            _mm_input = _build_mm_matches_for_card(_raw_games, _edge_info)
+            _mm_input = await _build_mm_matches_for_card_with_odds(_raw_games, _edge_info)
             # W3-FIX: sort matches to align with build_my_matches_data() card [N] order
             _mm_sorted = _sort_mm_snapshot(_mm_input)
             _mm_games_snapshot[user_id] = _mm_sorted
@@ -1823,7 +1823,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         _sched_rb = []
                 if _sched_rb:
                     _ei_rb = _get_edge_info_for_games(_sched_rb)
-                    _mi_rb = _build_mm_matches_for_card(_sched_rb, _ei_rb)
+                    _mi_rb = await _build_mm_matches_for_card_with_odds(_sched_rb, _ei_rb)
                     _ms_rb = _sort_mm_snapshot(_mi_rb)
                     _mm_games_snapshot[user_id] = _ms_rb
                     _mm_snap = _ms_rb
@@ -1935,7 +1935,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _mdback_ut = await get_effective_tier(user_id)
             _raw_games_md = _schedule_cache.get(user_id, [])
             _edge_info_md = _get_edge_info_for_games(_raw_games_md)
-            _mm_input_md = _build_mm_matches_for_card(_raw_games_md, _edge_info_md)
+            _mm_input_md = await _build_mm_matches_for_card_with_odds(_raw_games_md, _edge_info_md)
             # W3-FIX: sort to align with card [N] order
             _mm_sorted_md = _sort_mm_snapshot(_mm_input_md)
             _mm_games_snapshot[user_id] = _mm_sorted_md
@@ -5330,7 +5330,7 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
         try:
             _raw_games_wm = _schedule_cache.get(user_id, [])
             _edge_info_wm = _get_edge_info_for_games(_raw_games_wm)
-            _mm_input_wm = _build_mm_matches_for_card(_raw_games_wm, _edge_info_wm)
+            _mm_input_wm = await _build_mm_matches_for_card_with_odds(_raw_games_wm, _edge_info_wm)
             # W3-FIX: sort to align with card [N] order
             _mm_sorted_wm = _sort_mm_snapshot(_mm_input_wm)
             _mm_games_snapshot[user_id] = _mm_sorted_wm
@@ -5435,7 +5435,7 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                     return
                 _rg = _schedule_cache.get(user_id, [])
                 _ei = _get_edge_info_for_games(_rg)
-                _mi = _build_mm_matches_for_card(_rg, _ei)
+                _mi = await _build_mm_matches_for_card_with_odds(_rg, _ei)
                 _ms = _sort_mm_snapshot(_mi)
                 _mm_games_snapshot[user_id] = _ms
                 _cd = build_my_matches_data(_mi, page=1)
@@ -5462,7 +5462,7 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
         # BUILD-W3 / W3-FIX: store sorted snapshot + build card data
         _raw_games_cp = _schedule_cache.get(user_id, [])
         _edge_info_cp = _get_edge_info_for_games(_raw_games_cp)
-        _mm_input_cp = _build_mm_matches_for_card(_raw_games_cp, _edge_info_cp)
+        _mm_input_cp = await _build_mm_matches_for_card_with_odds(_raw_games_cp, _edge_info_cp)
         # W3-FIX: sort to align with card [N] order
         _mm_sorted_cp = _sort_mm_snapshot(_mm_input_cp)
         _mm_games_snapshot[user_id] = _mm_sorted_cp
@@ -5537,11 +5537,22 @@ def _build_mm_card_markup(
 
 
 # BUILD-W3: My Matches card adapter
-def _build_mm_matches_for_card(games: list[dict], edge_info: dict) -> list[dict]:
+def _build_mm_matches_for_card(
+    games: list[dict],
+    edge_info: dict,
+    odds_map: "dict[str, tuple] | None" = None,
+) -> list[dict]:
     """Convert schedule games + edge_info → build_my_matches_data() input format.
 
     Called once per My Matches render. Result stored in _mm_games_snapshot[user_id].
     The snapshot index aligns with the card's [N] numbers after build_my_matches_data sorting.
+
+    Args:
+        games: raw schedule events from _fetch_schedule_games / _schedule_cache.
+        edge_info: output of _get_edge_info_for_games().
+        odds_map: optional output of _fetch_mm_odds_map() — pre-fetched 1x2 odds for
+                  non-edge games.  Keyed by Odds API event_id.
+                  If None or empty, non-edge tiles render without odds (shows ——).
     """
     from datetime import datetime as _dt_cls
     from zoneinfo import ZoneInfo as _ZI
@@ -5591,8 +5602,35 @@ def _build_mm_matches_for_card(games: list[dict], edge_info: dict) -> list[dict]
             m["pick"]       = _tip.get("outcome") or ""
             m["bookmaker"]  = _tip.get("bookmaker") or ""
             m["_full_tip"]  = _tip  # Pass full tip dict through for detail-view routing
+        else:
+            # BUILD-MY-MATCHES-05: wire odds into non-edge (Upcoming) tiles
+            _ov = (odds_map or {}).get(event_id)
+            if _ov:
+                m["odds_home"] = _ov[0]
+                m["odds_draw"] = _ov[1]
+                m["odds_away"] = _ov[2]
         result.append(m)
     return result
+
+
+async def _build_mm_matches_for_card_with_odds(
+    games: list[dict], edge_info: dict
+) -> list[dict]:
+    """Async wrapper: pre-fetches 1x2 odds then calls _build_mm_matches_for_card.
+
+    Wraps _fetch_mm_odds_map in asyncio.to_thread so the synchronous SQLite
+    query does not block the event loop.  Falls back to empty odds_map on any
+    error or timeout so My Matches always renders (just without odds tiles).
+    """
+    edge_event_ids: set[str] = set(edge_info.keys())
+    try:
+        odds_map = await asyncio.wait_for(
+            asyncio.to_thread(_fetch_mm_odds_map, games, edge_event_ids),
+            timeout=2.0,
+        )
+    except Exception:
+        odds_map = {}
+    return _build_mm_matches_for_card(games, edge_info, odds_map)
 
 
 async def _render_your_games_all(
@@ -6479,6 +6517,89 @@ def _get_edge_info_for_games(games: list[dict]) -> dict[str, dict]:
             "total_signals": total,
             "tip": tip,
         }
+    return result
+
+
+def _fetch_mm_odds_map(
+    games: list[dict], edge_event_ids: "set[str]"
+) -> "dict[str, tuple[float | None, float | None, float | None]]":
+    """Batch-fetch best 1x2 odds for non-edge My Matches games from odds_snapshots.
+
+    Queries odds_snapshots for each non-edge game's normalised match_id and returns
+    the best (highest) available odds per outcome across all bookmakers.
+
+    Must be called via asyncio.to_thread() — uses synchronous SQLite.
+
+    Args:
+        games: schedule game dicts (from _fetch_schedule_games / _schedule_cache)
+        edge_event_ids: set of Odds API event_ids already covered by edge tips
+
+    Returns:
+        dict mapping Odds API event_id → (best_home, best_draw_or_None, best_away)
+        best_draw is None when no bookmaker offers a draw market for the game.
+        Returns {} on any error or when scrapers DB is unavailable.
+    """
+    from services.odds_service import build_match_id as _build_mid
+
+    # BUILD-MY-MATCHES-01: only 1x2 market for H/D/A display
+    _MARKET = "1x2"
+    _FRESH_HOURS = 6
+
+    # Build match_id for each non-edge game
+    mid_to_event: dict[str, str] = {}
+    for g in games:
+        eid = g.get("id", "")
+        if not eid or eid in edge_event_ids:
+            continue
+        home = g.get("home_team", "")
+        away = g.get("away_team", "")
+        ct = g.get("commence_time", "")
+        if not home or not away:
+            continue
+        try:
+            mid = _build_mid(home, away, ct)
+            mid_to_event[mid] = eid
+        except Exception:
+            continue
+
+    if not mid_to_event:
+        return {}
+
+    result: dict[str, tuple] = {}
+    try:
+        from scrapers.db_connect import connect_odds_db as _connect
+        conn = _connect(str(config.ODDS_DB_PATH))
+        conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+        placeholders = ",".join("?" * len(mid_to_event))
+        try:
+            # BUILD-MY-MATCHES-01: AND market_type = '1x2' is mandatory
+            rows = conn.execute(f"""
+                SELECT match_id,
+                       MAX(home_odds)  AS best_home,
+                       MAX(CASE WHEN draw_odds > 1 THEN draw_odds ELSE NULL END) AS best_draw,
+                       MAX(away_odds)  AS best_away
+                FROM odds_snapshots
+                WHERE match_id IN ({placeholders})
+                  AND market_type = '{_MARKET}'
+                  AND scraped_at >= datetime('now', '-{_FRESH_HOURS} hours')
+                GROUP BY match_id
+            """, list(mid_to_event.keys())).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+    for row in rows:
+        mid = row.get("match_id", "")
+        eid = mid_to_event.get(mid)
+        if not eid:
+            continue
+        h = row.get("best_home")
+        d = row.get("best_draw")
+        a = row.get("best_away")
+        if h and a:
+            result[eid] = (float(h), float(d) if d else None, float(a))
+
     return result
 
 
