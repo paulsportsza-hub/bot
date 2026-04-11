@@ -1840,11 +1840,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 # Override of MM-04 lock — founder instruction 2026-04-10
                 # Edge cards must render as edge cards regardless of entry point
+                _mm_tip_key = ""  # P0-BUILD-MM-RENDER-01: canonical key from edge tip; used in fallthrough
                 if _mm_kind == "e":
                     _mm_full_tip = _mm_match.get("_full_tip")
                     if _mm_full_tip:
                         _mm_tip_key = _mm_full_tip.get("match_id", "")
                         if _mm_tip_key:
+                            # P0-BUILD-MM-RENDER-01 Cache Seeding: inject pre-generated narrative
+                            # so Haiku circuit breaker open does not produce an empty card body
+                            _mm_cached_entry = _analysis_cache.get(_mm_tip_key)
+                            if _mm_cached_entry and _mm_cached_entry[0]:
+                                _mm_full_tip = {**_mm_full_tip, "_analysis_text": _mm_cached_entry[0]}
                             _mm_ut = await get_effective_tier(user_id)
                             _mm_edge_tier = _mm_match.get("edge_tier", "bronze")
                             _mm_back_pg = _ht_page_state.get(user_id, 0)
@@ -1857,7 +1863,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     # Fallthrough: _full_tip missing (cached session) or card pipeline failed
                 # MM-04: Both edge and non-edge use match_detail.html (data-only card:
                 # market overview, key stats, injury watch, H2H — COO-locked 9 Apr 2026)
-                _mm_card_key = _normalise_mm_event_id(_mm_match, _mm_match)
+                # P0-BUILD-MM-RENDER-01 Fallthrough Hardening: when match_id was already
+                # resolved from _full_tip (edge path), use it directly.  The generic
+                # _normalise_mm_event_id(_mm_match, _mm_match) checks _mm_match.get("match_id")
+                # which is always empty — match_id lives inside _mm_match["_full_tip"] — so
+                # it falls to display-name normalisation that can miss the DB key.
+                _mm_card_key = _mm_tip_key or _normalise_mm_event_id(_mm_match, _mm_match)
                 _mm_match_enriched = await asyncio.to_thread(
                     _enrich_tip_for_card, _mm_match, _mm_card_key
                 )

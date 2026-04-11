@@ -1456,8 +1456,9 @@ def build_card_data(
         broadcast = tip["_bc_broadcast"]
 
     # Analysis
-    analysis_text = ""
-    if include_analysis and (verified["data_sources_used"] or tip):
+    # P0-BUILD-MM-RENDER-01 Cache Seeding: use pre-seeded narrative to skip Haiku when warm
+    analysis_text = (tip.get("_analysis_text") or "") if tip else ""
+    if not analysis_text and include_analysis and (verified["data_sources_used"] or tip):
         analysis_text = generate_card_analysis(match_key, verified)
 
     # ── IMG-W2: compute new structured fields ─────────────────────────────────
