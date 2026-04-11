@@ -8032,10 +8032,16 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
         enriched["away_odds"] = enriched["odds_away"]
 
     # 8b) Channel — broadcast lookup when tip["channel"] is empty
-    # CARD-FIX-K: _channel_fields in card_data.py reads tip["channel"]. Tips from the
-    # global hot_tips_cache (not through _build_hot_tips_page) never have channel set.
-    # Do a direct broadcast_schedule lookup here as a reliable fallback.
-    if not enriched.get("channel"):
+    # CARD-FIX-K: Tips from the global hot_tips_cache (not through _build_hot_tips_page)
+    # never have channel or _bc_broadcast set.  Canonical pattern (see _build_hot_tips_page):
+    #   _bc_broadcast = full string  e.g. "📺 SS EPL (DStv 203)"
+    #   channel       = number only  e.g. "DStv 203"
+    # _channel_fields() in card_data.py reads _bc_broadcast first; build_my_matches_data
+    # and friends read channel directly and pass it as-is to the template.
+    # BUILD-MY-MATCHES-04: previous code stored the full broadcast string in channel
+    # instead of _bc_broadcast, causing "📺 SS EPL (DStv 203)" to appear where the
+    # template expected "DStv 203".
+    if not enriched.get("channel") and not enriched.get("_bc_broadcast"):
         try:
             _home_bd = _team_display(home_key) if home_key else tip.get("home_team", "")
             _away_bd = _team_display(away_key) if away_key else tip.get("away_team", "")
@@ -8045,9 +8051,12 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
                 league_key=tip.get("sport_key", ""),
             )
             if _bc_d.get("broadcast"):
-                # Store the full broadcast string (e.g. "📺 SS EPL (DStv 203)");
-                # _parse_channel in card_data.py extracts number + SS flag from it.
-                enriched["channel"] = _bc_d["broadcast"]
+                _8b_raw = _bc_d["broadcast"]
+                # Canonical field for _channel_fields() — full string with emoji
+                enriched["_bc_broadcast"] = _8b_raw
+                # channel = "DStv NNN" only; other card builders pass this directly to template
+                _8b_ch = re.search(r"\(?(DStv \d+)\)?", _8b_raw)
+                enriched["channel"] = _8b_ch.group(1) if _8b_ch else _8b_raw.replace("📺 ", "")
         except Exception as _ch_err:
             log.debug("_enrich_tip_for_card: broadcast lookup failed: %s", _ch_err)
 
