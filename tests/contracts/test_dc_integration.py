@@ -216,7 +216,6 @@ def test_clv_metadata_keys_present_in_edge_output():
         "lineup_injury": {"signal_strength": None, "available": False},
         "form_h2h": {"signal_strength": None, "available": False},
         "model_probability": {"signal_strength": None, "available": False},
-        "weather": {"signal_strength": None, "available": False},
     }
 
     with mock.patch("scrapers.edge.edge_v2.collect_all_signals", return_value=fake_signals), \
@@ -224,7 +223,7 @@ def test_clv_metadata_keys_present_in_edge_output():
          mock.patch("scrapers.edge.edge_v2.get_weights", return_value={
              "price_edge": 0.35, "market_agreement": 0.12, "movement": 0.13,
              "tipster": 0.08, "lineup_injury": 0.08, "form_h2h": 0.14,
-             "model_probability": 0.0, "weather": 0.0,
+             "model_probability": 0.0,
          }), \
          mock.patch("scrapers.edge.edge_v2.assign_tier", return_value="silver"), \
          mock.patch("scrapers.edge.edge_v2.get_tier_display", return_value="Silver"), \

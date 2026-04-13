@@ -58,7 +58,6 @@ def _verified_base() -> dict:
         "ratings": {},
         "fighters": {},
         "news": [],
-        "weather": {},
         "tipster": {},
         "data_sources_used": [],
     }

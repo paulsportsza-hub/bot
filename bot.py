@@ -1250,7 +1250,6 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
                 • Form &amp; H2H
                 • Tipster split
                 • Lineup / injury
-                • Weather
 
                 <b>Where it shows up</b>
                 • In <b>Top Edge Picks</b>, you see compact hints like aligned signals
@@ -6627,7 +6626,6 @@ _SIGNAL_RENDER_ORDER = [
     ("market_agreement", "Market agreement"),
     ("tipster", "Tipster"),
     ("lineup_injury", "Lineup / injury"),
-    ("weather", "Weather"),
 ]
 _SIGNAL_CONFIRM_THRESHOLD = 0.65
 _SIGNAL_CONTRADICT_THRESHOLD = 0.35
@@ -6644,7 +6642,6 @@ _HOT_TIPS_SIGNAL_HINT_LABELS = {
     "market_agreement": "market",
     "tipster": "tipster",
     "lineup_injury": "team news",
-    "weather": "conditions",
 }
 _HOT_TIPS_HOOK_HEADLINES = {
     EdgeRating.DIAMOND: {
@@ -6798,17 +6795,6 @@ def _signal_gloss(
         if home_inj or away_inj:
             return f"{home_team or 'Home'} {home_inj} out · {away_team or 'Away'} {away_inj} out"
         return "team news is stable"
-
-    if signal_key == "weather":
-        condition = signal_data.get("condition", "")
-        level = signal_data.get("overall_level", "")
-        if condition and level:
-            return f"{condition} · {level} impact"
-        if condition:
-            return condition
-        if level:
-            return f"{level} impact"
-        return "match conditions noted"
 
     return ""
 
@@ -12606,6 +12592,19 @@ def _ensure_narrative_cache_table() -> None:
         # PIPELINE-BUILD-01: indexes for staleness + tier queries
         conn.execute("CREATE INDEX IF NOT EXISTS idx_nc_expires ON narrative_cache(expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_nc_tier ON narrative_cache(edge_tier)")
+        # BUILD-VERDICT-CAP-01: Purge cached verdicts that exceed the 140-char cap.
+        # These were generated before the cap was applied and will regenerate on next view.
+        try:
+            _pv_result = conn.execute(
+                "DELETE FROM narrative_cache WHERE LENGTH(verdict_html) > 140"
+            )
+            if _pv_result.rowcount:
+                log.info(
+                    "VERDICT_CAP_PURGE: Deleted %d overlong verdict_html rows",
+                    _pv_result.rowcount,
+                )
+        except Exception as _pv_exc:
+            log.warning("VERDICT_CAP_PURGE failed: %s", _pv_exc)
         conn.commit()
     finally:
         conn.close()
@@ -15037,18 +15036,6 @@ def _format_signal_data_for_prompt(edge: dict) -> str:
         )
     else:
         lines.append("• Form signal: N/A")
-
-    # Signal 7: Weather
-    wt = signals.get("weather", {})
-    if wt.get("available"):
-        cond = wt.get("condition", "")
-        level = wt.get("overall_level", "low")
-        desc = f"{cond} ({level} impact)" if cond else f"{level} impact"
-        lines.append(
-            f"• Weather: {desc} (signal: {wt.get('score', 0):.0f}/100)"
-        )
-    else:
-        lines.append("• Weather: N/A")
 
     # Confirming / contradicting
     lines.append(
@@ -19478,21 +19465,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             _enrichment_parts.append(f"\n{_injury_text}")
     except Exception as _e:
         log.debug("Injury enrichment failed: %s", _e)
-
-    # Weather impact
-    try:
-        from scrapers.weather.weather_scorer import format_weather_for_narrative_sync, get_venue_city
-        _home_key = home_raw.lower().replace(" ", "_")
-        _city = get_venue_city(_home_key)
-        if _city and commence_time:
-            _weather_text = format_weather_for_narrative_sync(
-                _city, commence_time[:10],
-                _DB_LEAGUE_SPORT.get(_game_db_league, "soccer"),
-            )
-            if _weather_text:
-                _enrichment_parts.append(f"\n{_weather_text}")
-    except Exception as _e:
-        log.debug("Weather enrichment failed: %s", _e)
 
     # Lineup data
     try:

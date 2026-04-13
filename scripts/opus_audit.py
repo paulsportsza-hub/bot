@@ -96,21 +96,10 @@ async def _get_match_context(home: str, away: str, league: str, sport: str) -> d
 async def _get_enrichment(
     match_id: str, home: str, away: str, league: str, sport: str,
 ) -> str:
-    """Fetch enrichment data (weather, lineup, injuries)."""
+    """Fetch enrichment data (lineup, injuries)."""
     parts = []
     home_key = home.lower().replace(" ", "_")
     away_key = away.lower().replace(" ", "_")
-
-    # Weather
-    try:
-        from scrapers.weather_helper import get_venue_city, format_weather_for_narrative_sync
-        city = get_venue_city(home_key)
-        if city:
-            weather = format_weather_for_narrative_sync(city, match_id.rsplit("_", 1)[-1], sport)
-            if weather:
-                parts.append(weather)
-    except Exception:
-        pass
 
     # Lineups
     try:

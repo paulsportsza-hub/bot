@@ -350,7 +350,6 @@ def test_format_edge_section_omits_zero_fair_probability() -> None:
             tipster_score=0.0,
             lineup_injury_score=0.0,
             form_h2h_score=0.0,
-            weather_score=0.0,
             sharp_available=False,
         ),
     )

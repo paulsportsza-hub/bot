@@ -60,12 +60,6 @@ def _sample_edge_v2() -> dict:
                 "home_injuries": 1,
                 "away_injuries": 3,
             },
-            "weather": {
-                "available": True,
-                "signal_strength": 0.52,
-                "condition": "Rain",
-                "overall_level": "low",
-            },
         },
     }
 

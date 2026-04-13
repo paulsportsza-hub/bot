@@ -68,7 +68,6 @@ MEP_DEFINITIONS: dict[str, dict[str, set[str]]] = {
         "near": {
             "team_names", "competition", "format",
             "standings", "recent_form", "venue", "h2h_last_5",
-            "weather_forecast",
         },
     },
     "mma": {
@@ -334,8 +333,6 @@ class BaseFetcher(ABC):
             present.add("injuries_list")
         if home.get("lineup") or away.get("lineup"):
             present.add("predicted_lineups")
-        if ctx.get("weather"):
-            present.add("weather_forecast")
         if ctx.get("format"):
             present.add("format")
         if home.get("record") or home.get("wins") is not None:

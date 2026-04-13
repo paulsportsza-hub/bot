@@ -51,7 +51,6 @@ class EdgeStateBlock:
     tipster_score: float = 0.0
     lineup_injury_score: float = 0.0
     form_h2h_score: float = 0.0
-    weather_score: float = 0.0
     sharp_available: bool = False
 
 
@@ -531,7 +530,6 @@ def _build_edge_state(edge_result: dict[str, Any] | None) -> EdgeStateBlock:
     tipster = signals.get("tipster") or {}
     lineup = signals.get("lineup_injury") or {}
     form_h2h = signals.get("form_h2h") or {}
-    weather = signals.get("weather") or {}
 
     # R12-OVERNIGHT: Normalise edge_pct to percentage points.
     # edge_results may store decimal form (0.05) or percentage (5.0).
@@ -565,7 +563,6 @@ def _build_edge_state(edge_result: dict[str, Any] | None) -> EdgeStateBlock:
         tipster_score=float(tipster.get("score") or 0.0),
         lineup_injury_score=float(lineup.get("score") or 0.0),
         form_h2h_score=float(form_h2h.get("score") or 0.0),
-        weather_score=float(weather.get("score") or 0.0),
         sharp_available=bool(edge_result.get("sharp_available")),
     )
 
@@ -1659,7 +1656,6 @@ def _format_edge_section(pack: EvidencePack) -> tuple[str | None, str | None]:
         f"- Tipster consensus: {_fmt_float(block.tipster_score, 2)}",
         f"- Form/H2H: {_fmt_float(block.form_h2h_score, 2)}",
         f"- Lineup/injury: {_fmt_float(block.lineup_injury_score, 2)}",
-        f"- Weather: {_fmt_float(block.weather_score, 2)}",
         f"Sharp benchmark available: {'yes' if block.sharp_available else 'no'}",
     ]
     return "\n".join(lines), None

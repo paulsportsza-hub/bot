@@ -621,7 +621,7 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
         results (list[dict]), ratings (dict[team → rating]),
         fighters (dict[team_key → fighter_dict]),
         news (list[str — headline]),
-        weather (dict), tipster (dict),
+        tipster (dict),
         data_sources_used (list[str])
     """
     import time as _time
@@ -644,7 +644,6 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
         "ratings": {},
         "fighters": {},
         "news": [],
-        "weather": {},
         "tipster": {},
         "data_sources_used": [],
     }
@@ -1053,31 +1052,6 @@ def build_verified_data_block(match_key: str, conn: sqlite3.Connection | None = 
                 except Exception as exc:
                     log.warning("card_pipeline: enrichment news query failed: %s", exc)
 
-                # Weather — use date from match_key if available
-                try:
-                    weather_date = date_str if date_str else datetime.now().strftime("%Y-%m-%d")
-                    weather_row = enrich_conn.execute(
-                        """
-                        SELECT venue_city, forecast_date, temp_c, wind_kmh,
-                               precip_pct, condition
-                        FROM weather_forecasts
-                        WHERE forecast_date = ?
-                        ORDER BY forecast_hour
-                        LIMIT 1
-                        """,
-                        (weather_date,),
-                    ).fetchone()
-                    if weather_row and weather_row["temp_c"] is not None:
-                        result["weather"] = {
-                            "city": weather_row["venue_city"],
-                            "temp_c": weather_row["temp_c"],
-                            "wind_kmh": weather_row["wind_kmh"],
-                            "precip_pct": weather_row["precip_pct"],
-                            "condition": weather_row["condition"],
-                        }
-                        result["data_sources_used"].append("enrichment.db:weather")
-                except Exception as exc:
-                    log.warning("card_pipeline: enrichment weather query failed: %s", exc)
             finally:
                 enrich_conn.close()
     except Exception as exc:

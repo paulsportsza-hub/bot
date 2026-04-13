@@ -86,7 +86,6 @@ def _make_pack(*, with_news: bool = True, low_richness: bool = False) -> evidenc
             tipster_score=0.1,
             lineup_injury_score=0.2,
             form_h2h_score=0.4,
-            weather_score=0.0,
             sharp_available=True,
         ),
         espn_context=evidence_pack.ESPNContextBlock(

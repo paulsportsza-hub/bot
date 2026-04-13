@@ -637,20 +637,6 @@ def _section_injuries(data: EdgeDetailData) -> str:
     return "\n".join(lines)
 
 
-def _section_weather(data: EdgeDetailData) -> str:
-    """Cricket only, from context weather_forecast."""
-    if data.sport != "cricket":
-        return ""
-    if not data.context:
-        return ""
-
-    weather = data.context.get("weather_forecast", "")
-    if not weather:
-        return ""
-
-    return f"🌤️ <b>Conditions</b>\n{h(str(weather))}\n"
-
-
 def _section_edge(data: EdgeDetailData) -> str:
     """Bookmaker, odds, fair prob, EV gap explanation."""
     lines = ["🎯 <b>The Edge</b>"]
@@ -807,7 +793,7 @@ _SPORT_SECTIONS: dict[str, list] = {
         _section_edge, _section_signals, _section_risk, _section_verdict,
     ],
     "cricket": [
-        _section_header, _section_team_context, _section_weather,
+        _section_header, _section_team_context,
         _section_h2h, _section_edge, _section_signals,
         _section_risk, _section_verdict,
     ],

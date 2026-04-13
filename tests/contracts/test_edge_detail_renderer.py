@@ -309,7 +309,6 @@ class TestSportDispatch:
 
         row = _make_edge_row(sport=sport, league="epl")
         ctx = _make_context(
-            weather_forecast="Clear skies, 25°C",
             data_available=True,
         )
         with patch("edge_detail_renderer._load_edge_result", return_value=row), \
@@ -319,14 +318,6 @@ class TestSportDispatch:
     def test_soccer_has_injuries(self):
         html = self._render_sport("soccer")
         assert "Key Absences" in html
-
-    def test_cricket_has_weather(self):
-        html = self._render_sport("cricket")
-        assert "Conditions" in html
-
-    def test_rugby_no_weather(self):
-        html = self._render_sport("rugby")
-        assert "Conditions" not in html
 
     def test_mma_no_injuries(self):
         html = self._render_sport("mma")

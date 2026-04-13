@@ -73,7 +73,6 @@ def make_tip(
             },
             "tipster": {"available": False, "signal_strength": 0.5},
             "lineup_injury": {"available": False, "signal_strength": 0.5},
-            "weather": {"available": False, "signal_strength": 0.5},
         },
     }
     return {
