@@ -543,6 +543,29 @@ def _channel_fields(tip: dict) -> dict:
     }
 
 
+def _build_verdict_with_injuries(
+    verdict: str,
+    home_injuries: list,
+    away_injuries: list,
+    home: str,
+    away: str,
+) -> str:
+    """Weave injury alerts into the verdict text (BUILD-INJURY-CARD-01).
+
+    If injuries are present, appends a single 🏥 line to the verdict.
+    Capped at 2 players per team to keep the card compact.
+    """
+    parts = []
+    if home_injuries:
+        parts.append(f"{home}: {', '.join(home_injuries[:2])}")
+    if away_injuries:
+        parts.append(f"{away}: {', '.join(away_injuries[:2])}")
+    if not parts:
+        return verdict
+    inj_line = "🏥 " + " · ".join(parts)
+    return f"{verdict}\n{inj_line}" if verdict else inj_line
+
+
 def build_edge_detail_data(tip: dict) -> dict:
     """Build edge_detail.html template data from a single tip/edge.
 
@@ -708,12 +731,18 @@ def build_edge_detail_data(tip: dict) -> dict:
         "h2h_draws":     h2h_draws,
         "h2h_away_wins": h2h_away_wins,
 
-        # Injuries
+        # Injuries — kept for backward compat; woven into verdict (BUILD-INJURY-CARD-01)
         "home_injuries": tip.get("home_injuries") or [],
         "away_injuries": tip.get("away_injuries") or [],
 
-        # Verdict
-        "verdict": tip.get("verdict") or "",
+        # Verdict — injury context woven in (BUILD-INJURY-CARD-01)
+        "verdict": _build_verdict_with_injuries(
+            tip.get("verdict") or "",
+            tip.get("home_injuries") or [],
+            tip.get("away_injuries") or [],
+            home,
+            away,
+        ),
 
         # Tipsters — FIX 4 (CARD-REBUILD-03A); resolve "Home"/"Away" to team names (D-18)
         "top_tipsters": [

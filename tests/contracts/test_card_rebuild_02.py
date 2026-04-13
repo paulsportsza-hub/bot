@@ -278,8 +278,8 @@ def test_density_acceptance_arsenal_bournemouth():
     if data.get("fair_value", 0) > 0 or data.get("confidence", 0) > 0:
         criteria_met += 1
 
-    # 7. H2H block, INJURY WATCH, or VERDICT populated
-    if data.get("h2h_total", 0) > 0 or data.get("home_injuries") or data.get("verdict"):
+    # 7. H2H block or VERDICT populated (injuries woven into verdict — BUILD-INJURY-CARD-01)
+    if data.get("h2h_total", 0) > 0 or data.get("verdict"):
         criteria_met += 1
 
     assert criteria_met >= 6, (
