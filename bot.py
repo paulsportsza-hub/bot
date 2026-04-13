@@ -56,6 +56,7 @@ import io
 import json
 import logging
 import os
+import pathlib
 import re
 import textwrap
 from hashlib import md5 as _md5
@@ -25320,6 +25321,34 @@ _precompute_lock = asyncio.Lock()
 _precompute_active = False  # BASELINE-FIX: replaces .locked() TOCTOU in _edge_precompute_job
 _last_stale_cleanup: float = 0.0  # BUILD-STALE-PICKS-01: tracks last stale-edge cleanup time
 
+# BUILD-EDGE-RECOMPUTE-01: File-based IPC queue for forced edge recompute on price movement
+_RECOMPUTE_QUEUE = pathlib.Path("/home/paulsportsza/scrapers/edge_recompute_queue.txt")
+
+
+def _drain_recompute_queue() -> list[tuple[str, str]]:
+    """Read and clear the recompute queue. Returns list of (match_id, market_type).
+
+    Safe for concurrent scraper writes — worst case a late write is picked up next cycle.
+    """
+    if not _RECOMPUTE_QUEUE.exists():
+        return []
+    try:
+        lines = _RECOMPUTE_QUEUE.read_text().strip().splitlines()
+        _RECOMPUTE_QUEUE.write_text("")  # clear after read
+        seen: set[tuple[str, str]] = set()
+        result: list[tuple[str, str]] = []
+        for line in lines:
+            parts = line.split("|")
+            if len(parts) >= 2:
+                key = (parts[0], parts[1])
+                if key not in seen:
+                    seen.add(key)
+                    result.append(key)
+        return result
+    except Exception as exc:
+        log.warning("RECOMPUTE_QUEUE drain failed: %s", exc)
+        return []
+
 
 async def _background_pregen_fill() -> None:
     """W83-CACHE: Background narrative fill for hot tips with no cached narrative.
@@ -25371,6 +25400,26 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             _ep_mon = _CronMonitor("edge-precompute")
             _ep_mon.begin()
             _sentry_tags(cron_job="edge-precompute")
+
+            # BUILD-EDGE-RECOMPUTE-01: Drain odds-change queue FIRST — forced recomputes on price movement
+            _queued = await asyncio.to_thread(_drain_recompute_queue)
+            if _queued:
+                log.info("RECOMPUTE_QUEUE: %d matches queued for forced recompute", len(_queued))
+                from scrapers.edge.edge_v2_helper import calculate_edge_v2 as _cev2
+                from scrapers.edge.settlement import log_edge_recommendation as _log_edge
+                for _rmatch_id, _rmarket in _queued:
+                    try:
+                        _rresult = await asyncio.to_thread(
+                            _cev2, _rmatch_id, None, _rmarket, None, None
+                        )
+                        if _rresult:
+                            await asyncio.to_thread(_log_edge, _rresult)
+                            log.info(
+                                "RECOMPUTE: %s/%s composite=%.1f",
+                                _rmatch_id, _rmarket, _rresult.get("composite_score", 0),
+                            )
+                    except Exception as _re:
+                        log.warning("RECOMPUTE failed for %s/%s: %s", _rmatch_id, _rmarket, _re)
 
             # BUILD-STALE-PICKS-01: Expire stale unsettled edges once per hour.
             # Marks edges past kickoff as result='expired' so they are excluded from
