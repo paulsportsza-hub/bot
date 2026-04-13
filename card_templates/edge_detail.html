@@ -459,7 +459,7 @@
 
     <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
     <div class="meta-bar">
-        <span class="meta-item">📅 {{ date }}{% if time and time != 'TBC' %} · {{ time }} SAST{% else %} · KO time TBC{% endif %}</span>
+        <span class="meta-item">📅 {{ date }}{% if time and time != 'TBC' %} · {{ time }} SAST{% endif %}</span>
         {% if channel_number %}
           {% if channel_is_ss and ss_logo_b64 %}
           <span class="meta-item"><img src="{{ ss_logo_b64 }}" style="height:18px;vertical-align:middle;margin-right:3px;">{{ channel_number }}</span>

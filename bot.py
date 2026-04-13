@@ -9023,7 +9023,7 @@ def _build_event_header(
     commence = (target_event or {}).get("commence_time", "")
 
     # Kickoff from commence_time; reject 02:00 SAST (midnight-UTC PSL placeholder)
-    kickoff = "TBC"
+    kickoff = ""
     try:
         ct = _dt.fromisoformat(commence.replace("Z", "+00:00"))
         if ct.tzinfo is None:
@@ -9033,8 +9033,8 @@ def _build_event_header(
             kickoff = ct_sa.strftime("%a %-d %b, %H:%M") + " SAST"
     except Exception:
         pass
-    if kickoff == "TBC":
-        kickoff = (target_event or {}).get("_mm_kickoff") or "TBC"
+    if not kickoff:
+        kickoff = (target_event or {}).get("_mm_kickoff") or ""
 
     # Broadcast — prefer stored list metadata (zero DB cost), then DB lookup
     broadcast_line = (target_event or {}).get("_mm_broadcast") or ""
@@ -9084,7 +9084,7 @@ def _inject_narrative_header(
     home_e = h(home_raw)
     away_e = h(away_raw)
     header_lines = [f"🎯 <b>{hf}{home_e} vs {af}{away_e}</b>"]
-    if kickoff and kickoff != "TBC":
+    if kickoff:
         header_lines.append(f"📅 {kickoff}")
     if league_display:
         header_lines.append(f"\U0001f3c6 {league_display}")
@@ -9477,7 +9477,7 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
     use by _build_hot_tips_page(). Falls back gracefully on any error.
     """
     import re as _re_er
-    from datetime import date as _date_cls
+    from datetime import date as _date_cls, datetime as _dt_cls, timezone as _tz
     try:
         from scrapers.db_connect import connect_odds_db as _conn_fn
         from scrapers.edge.edge_config import (
@@ -9490,12 +9490,19 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
             zip([col[0] for col in cursor.description], row)
         )
         _today = _date_cls.today().isoformat()
-        rows = _conn.execute("""
+        # BUILD-STALE-PICKS-01: Exclude matches that have already kicked off.
+        # LEFT JOIN fixture_mapping; where kickoff data exists and is in the past → exclude.
+        # Conservative: matches without fixture_mapping entry are kept (date-only fallback).
+        # Falls back to date-only query if fixture_mapping table doesn't exist (test envs).
+        _now_utc = _dt_cls.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        _base_sql = """
             SELECT e.match_key, e.edge_id, e.edge_tier, e.composite_score, e.bet_type,
                    e.recommended_odds, e.bookmaker, e.predicted_ev, e.league, e.match_date,
                    e.confirming_signals
             FROM edge_results e
+            {join}
             WHERE e.match_date >= ? AND e.result IS NULL
+              {kickoff_filter}
               AND NOT EXISTS (
                   SELECT 1
                   FROM edge_results newer
@@ -9511,7 +9518,22 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
               )
             ORDER BY e.composite_score DESC
             LIMIT ?
-        """, (_today, max(int(limit or 10), 1) * 2)).fetchall()
+        """
+        _limit_val = max(int(limit or 10), 1) * 2
+        try:
+            rows = _conn.execute(
+                _base_sql.format(
+                    join="LEFT JOIN fixture_mapping fm ON fm.match_key = e.match_key",
+                    kickoff_filter="AND (fm.kickoff IS NULL OR fm.kickoff > ?)",
+                ),
+                (_today, _now_utc, _limit_val),
+            ).fetchall()
+        except Exception:
+            # fixture_mapping table absent (test environment) — date-only fallback
+            rows = _conn.execute(
+                _base_sql.format(join="", kickoff_filter=""),
+                (_today, _limit_val),
+            ).fetchall()
     except Exception as _e:
         log.debug("_load_tips_from_edge_results DB read failed: %s", _e)
         return []
@@ -9850,6 +9872,19 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
     _ht_match_ids = [m["match_id"] for m, _, _ in match_jobs]
     _fixture_kickoffs: dict = await asyncio.to_thread(_load_fixture_kickoffs, _ht_match_ids) if _ht_match_ids else {}
 
+    # BUILD-STALE-PICKS-01: Filter out matches that have already kicked off.
+    # Conservative: matches without kickoff data are kept (date-only filter is the fallback).
+    from datetime import datetime as _sp_dt, timezone as _sp_tz
+    _now_utc_str = _sp_dt.now(_sp_tz.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    _pre_filter_count = len(match_jobs)
+    match_jobs = [
+        (m, l, mt) for m, l, mt in match_jobs
+        if not _fixture_kickoffs.get(m["match_id"])  # no kickoff data → keep (conservative)
+        or _fixture_kickoffs[m["match_id"]] > _now_utc_str  # kickoff in future → keep
+    ]
+    if len(match_jobs) < _pre_filter_count:
+        log.info("Kickoff filter: removed %d already-started matches", _pre_filter_count - len(match_jobs))
+
     # R12-BUILD-01 Fix 1: Batch-load authoritative outcomes from edge_results so the
     # display outcome matches what narratives were generated against. This eliminates
     # divergence between the list path (which used live V2 outcome) and the detail
@@ -10117,6 +10152,53 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
     top_tips = [t for t in top_tips if verify_card_populates(t, t.get("match_id", ""))[0]]
     _hot_tips_cache["global"] = {"tips": top_tips, "ts": time.time(), "thin_slate": thin_state}
     return top_tips
+
+
+def _expire_stale_edges() -> None:
+    """BUILD-STALE-PICKS-01: Mark unsettled edges as 'expired' when their match has kicked off.
+
+    Run once per hour from _edge_precompute_job. Uses result='expired' (not 'void')
+    so stats queries (WHERE result IN ('hit','miss')) exclude them automatically.
+    Two expiry paths:
+      1. Has fixture_mapping entry with kickoff in the past → expired at kickoff
+      2. match_date > 2 days ago with no fixture_mapping entry → date-stale fallback
+    Never raises — best-effort DB write.
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db as _conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+        from datetime import datetime as _dt, timezone as _tz
+        _now_utc = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        _conn = _conn_fn(_DB_PATH)
+        # Path 1: Has fixture_mapping + kickoff is past
+        _expired_ko = _conn.execute("""
+            UPDATE edge_results
+            SET result = 'expired'
+            WHERE result IS NULL
+              AND match_key IN (
+                  SELECT e.match_key
+                  FROM edge_results e
+                  JOIN fixture_mapping fm ON fm.match_key = e.match_key
+                  WHERE e.result IS NULL
+                    AND fm.kickoff < ?
+              )
+        """, (_now_utc,)).rowcount
+        # Path 2: No fixture_mapping + match_date > 2 days ago (settlement lag guard)
+        _expired_date = _conn.execute("""
+            UPDATE edge_results
+            SET result = 'expired'
+            WHERE result IS NULL
+              AND match_date < date('now', '-2 days')
+        """).rowcount
+        _conn.commit()
+        _conn.close()
+        if _expired_ko or _expired_date:
+            log.info(
+                "Stale edge cleanup: expired %d kickoff-past + %d date-stale edges",
+                _expired_ko, _expired_date,
+            )
+    except Exception as _e:
+        log.debug("_expire_stale_edges failed: %s", _e)
 
 
 def _load_fixture_kickoffs(match_ids: list) -> dict:
@@ -19304,7 +19386,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         ct_sa = ct.astimezone(ZoneInfo(config.TZ))
         kickoff = ct_sa.strftime("%a %d %b, %H:%M") + " SAST"
     except Exception:
-        kickoff = "TBC"
+        kickoff = ""
 
     # Build odds context for Claude
     if tips:
@@ -19737,7 +19819,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     # target_event._mm_kickoff / _mm_broadcast are stored during _render_your_games_all().
     if not broadcast_line and target_event and target_event.get("_mm_broadcast"):
         broadcast_line = target_event["_mm_broadcast"]
-    if (not kickoff or kickoff == "TBC") and target_event and target_event.get("_mm_kickoff"):
+    if not kickoff and target_event and target_event.get("_mm_kickoff"):
         kickoff = target_event["_mm_kickoff"]
     league_display = _get_league_display(target_league or "", home_raw, away_raw)
 
@@ -25262,6 +25344,7 @@ _pregen_lock = asyncio.Lock()
 _pregen_active = False   # BASELINE-FIX: single-flight flag — set before lock acquisition, no TOCTOU
 _precompute_lock = asyncio.Lock()
 _precompute_active = False  # BASELINE-FIX: replaces .locked() TOCTOU in _edge_precompute_job
+_last_stale_cleanup: float = 0.0  # BUILD-STALE-PICKS-01: tracks last stale-edge cleanup time
 
 
 async def _background_pregen_fill() -> None:
@@ -25314,6 +25397,18 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             _ep_mon = _CronMonitor("edge-precompute")
             _ep_mon.begin()
             _sentry_tags(cron_job="edge-precompute")
+
+            # BUILD-STALE-PICKS-01: Expire stale unsettled edges once per hour.
+            # Marks edges past kickoff as result='expired' so they are excluded from
+            # all stats queries (which use WHERE result IN ('hit','miss')).
+            global _last_stale_cleanup
+            if _t.time() - _last_stale_cleanup >= 3600:
+                try:
+                    await asyncio.to_thread(_expire_stale_edges)
+                    _last_stale_cleanup = _t.time()
+                except Exception as _sc_exc:
+                    log.debug("Stale edge cleanup skipped: %s", _sc_exc)
+
             # R12-BUILD-02: Refresh authoritative outcomes before any cache writes
             await asyncio.to_thread(_refresh_er_outcomes_cache)
             tips = await _fetch_hot_tips_from_db()
