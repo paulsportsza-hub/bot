@@ -1,8 +1,8 @@
 """BUILD-CARD-RENDER-01 — Regression tests for three card rendering defects.
 
 D1: Verdict truncation
-    _generate_verdict max_tokens reduced to 40 (≈160 chars max) so output fits
-    the fixed 480×620 verdict container (≈150 char visible capacity).
+    _generate_verdict max_tokens reduced to 35 (≈140 chars max) so output fits
+    the fixed 480×620 verdict container (≈150 char visible capacity) with margin.
 
 D2: Match time not showing
     _enrich_tip_for_card must call _resolve_kickoff_time even when _bc_kickoff
@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # ── D1 — Verdict max_tokens cap ───────────────────────────────────────────────
 
 def test_d1_generate_verdict_max_tokens_capped():
-    """_generate_verdict max_tokens must be ≤ 40 (container fits ≈150 chars)."""
+    """_generate_verdict max_tokens must be ≤ 35 (container fits ≈150 chars; 35 tok ≈ 140 chars)."""
     bot_path = os.path.join(os.path.dirname(__file__), "..", "..", "bot.py")
     source = open(bot_path).read()
 
@@ -39,14 +39,14 @@ def test_d1_generate_verdict_max_tokens_capped():
     token_values = re.findall(r"max_tokens=(\d+)", fn_body)
     assert token_values, "No max_tokens found in _generate_verdict"
     for tv in token_values:
-        assert int(tv) <= 40, (
-            f"_generate_verdict max_tokens={tv} exceeds safe limit of 40 "
-            f"(card container fits ≈150 chars; 40 tokens ≈ 160 char max)"
+        assert int(tv) <= 35, (
+            f"_generate_verdict max_tokens={tv} exceeds safe limit of 35 "
+            f"(card container fits ≈150 chars; 35 tokens ≈ 140 chars — 10-char safety margin)"
         )
 
 
 def test_d1_generate_verdict_constrained_max_tokens_capped():
-    """_generate_verdict_constrained max_tokens must also be ≤ 40."""
+    """_generate_verdict_constrained max_tokens must also be ≤ 35."""
     bot_path = os.path.join(os.path.dirname(__file__), "..", "..", "bot.py")
     source = open(bot_path).read()
 
@@ -57,8 +57,8 @@ def test_d1_generate_verdict_constrained_max_tokens_capped():
     token_values = re.findall(r"max_tokens=(\d+)", fn_body)
     assert token_values, "No max_tokens found in _generate_verdict_constrained"
     for tv in token_values:
-        assert int(tv) <= 40, (
-            f"_generate_verdict_constrained max_tokens={tv} exceeds safe limit of 40"
+        assert int(tv) <= 35, (
+            f"_generate_verdict_constrained max_tokens={tv} exceeds safe limit of 35"
         )
 
 

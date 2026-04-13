@@ -7296,7 +7296,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
     VERDICT-UPGRADE-02:
     - Uses team nicknames, manager names, plain-English form (team_data.py)
     - EV% removed from output (banned in new prompt)
-    - Model: claude-sonnet-4-6, temp=0.5, max_tokens=40
+    - Model: claude-sonnet-4-6, temp=0.5, max_tokens=35
     - SA sports fan voice — commentator register, data-anchored
     - Few-shot examples embedded in system prompt
     - BUILD-CARD-RENDER-01 D1: cap at 40 tokens (≈160 chars); container holds ≈150 chars
@@ -7459,7 +7459,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=40,  # BUILD-CARD-RENDER-01 D1: container holds ~150 chars; 40 tok ≈ 160 char max
+            max_tokens=35,  # BUILD-CARD-RENDER-01-PATCH: 35 tok ≈ 140 chars — 10-char safety margin vs 150-char container
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -7586,7 +7586,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
     - ALLOWED fields only — no narrative_snippet, home_context, away_context, key_injury, coach
     - Adds team nicknames, manager names, plain-English form (team_data.py)
     - EV% removed from output (banned in new prompt)
-    - max_tokens=40, temp=0.5 — BUILD-CARD-RENDER-01 D1: matches view-time cap
+    - max_tokens=35, temp=0.5 — BUILD-CARD-RENDER-01-PATCH: 35 tok ≈ 140 chars
     - Calls _fact_check_verdict() after generation
     - Falls back to _render_verdict(spec) from narrative_spec if fact-check strips >50%
     """
@@ -7747,7 +7747,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=40,  # BUILD-CARD-RENDER-01 D1: container holds ~150 chars; 40 tok ≈ 160 char max
+            max_tokens=35,  # BUILD-CARD-RENDER-01-PATCH: 35 tok ≈ 140 chars — 10-char safety margin vs 150-char container
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],

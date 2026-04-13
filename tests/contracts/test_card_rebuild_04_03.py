@@ -189,8 +189,8 @@ def test_max_tokens_is_100():
         _generate_verdict(tip, verified)
 
     call_kwargs = mock_client.messages.create.call_args
-    assert call_kwargs.kwargs.get("max_tokens") == 40, (
-        f"max_tokens should be 40 (BUILD-CARD-RENDER-01 D1: container fits ≈150 chars), got {call_kwargs.kwargs.get('max_tokens')}"
+    assert call_kwargs.kwargs.get("max_tokens") == 35, (
+        f"max_tokens should be 35 (BUILD-CARD-RENDER-01-PATCH: 35 tok ≈ 140 chars, 10-char safety margin), got {call_kwargs.kwargs.get('max_tokens')}"
     )
 
 
