@@ -6487,6 +6487,8 @@ def _get_edge_info_for_games(games: list[dict]) -> dict[str, dict]:
     # Build lookup by normalised team names
     tip_lookup: dict[tuple[str, str], dict] = {}
     for tip in tips:
+        if (tip.get("outcome") or "").lower() == "draw":
+            continue  # ALGO-FIX-01 parity
         h_name = (tip.get("home_team") or "").lower().strip()
         a_name = (tip.get("away_team") or "").lower().strip()
         if h_name and a_name:
@@ -9565,6 +9567,11 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         _outcome_labels = {"home": home_display, "away": away_display, "draw": "Draw"}
         outcome_display = _outcome_labels.get(outcome_raw, outcome_label)
 
+        # ALGO-FIX-01 parity: hard-exclude draws from the fast serving path.
+        # Matches the guard in _fetch_hot_tips_from_db_inner.
+        if outcome_raw == "draw":
+            continue
+
         _raw_bk_key = (row["bookmaker"] or "").strip().lower()
         _rec_odds = float(row["recommended_odds"] or 0)
         tips.append({
@@ -9697,8 +9704,9 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
         mk = tip.get("match_id") or tip.get("event_id", "")
         if not mk:
             return ("", None)
-        # Derive raw outcome from bet_type stored in edge_v2
-        _bet_type = (tip.get("edge_v2") or {}).get("outcome", "")
+        # Derive raw outcome from bet_type stored in edge_v2;
+        # fall back to outcome_key for fast-path tips (edge_v2=None).
+        _bet_type = (tip.get("edge_v2") or {}).get("outcome", "") or tip.get("outcome_key", "")
         if _bet_type == "Home Win":
             outcome_raw = "home"
         elif _bet_type == "Away Win":
