@@ -7296,10 +7296,10 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
     VERDICT-UPGRADE-02:
     - Uses team nicknames, manager names, plain-English form (team_data.py)
     - EV% removed from output (banned in new prompt)
-    - Model: claude-sonnet-4-6, temp=0.5, max_tokens=180
+    - Model: claude-sonnet-4-6, temp=0.5, max_tokens=40
     - SA sports fan voice — commentator register, data-anchored
     - Few-shot examples embedded in system prompt
-    - No truncation cap — verdict section has room
+    - BUILD-CARD-RENDER-01 D1: cap at 40 tokens (≈160 chars); container holds ≈150 chars
     - Returns "" on any failure — never blocks rendering
     """
     try:
@@ -7459,7 +7459,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=110,
+            max_tokens=40,  # BUILD-CARD-RENDER-01 D1: container holds ~150 chars; 40 tok ≈ 160 char max
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -7586,7 +7586,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
     - ALLOWED fields only — no narrative_snippet, home_context, away_context, key_injury, coach
     - Adds team nicknames, manager names, plain-English form (team_data.py)
     - EV% removed from output (banned in new prompt)
-    - max_tokens=180, temp=0.5 (matches view-time version)
+    - max_tokens=40, temp=0.5 — BUILD-CARD-RENDER-01 D1: matches view-time cap
     - Calls _fact_check_verdict() after generation
     - Falls back to _render_verdict(spec) from narrative_spec if fact-check strips >50%
     """
@@ -7747,7 +7747,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=110,
+            max_tokens=40,  # BUILD-CARD-RENDER-01 D1: container holds ~150 chars; 40 tok ≈ 160 char max
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -8197,7 +8197,9 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     # 8d) KO time — BUILD-KO-TIME-FIX-01: sport-aware resolver with fixture-table fallbacks.
     # Never falls back to 'TBC' — returns empty string when no time data exists
     # (rugby date-only, mma date-only, etc.). Midnight-UTC sentinels are also dropped.
-    if not enriched.get("time") and not enriched.get("_bc_kickoff"):
+    # BUILD-CARD-RENDER-01 D2: call resolver whenever time is absent, even when
+    # _bc_kickoff is set — it may be date-only (no time component) from the scraper.
+    if not enriched.get("time"):
         try:
             _match_key = tip.get("match_id") or tip.get("match_key") or ""
             _sport = (
