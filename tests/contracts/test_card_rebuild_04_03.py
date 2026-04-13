@@ -32,29 +32,29 @@ _BLACKLISTED_PHRASES = [
 
 _FOUNDER_BASELINE = [
     {
-        "tip": {"pick": "Arsenal", "outcome": "Arsenal", "odds": 1.85, "ev": 9.2},
+        "tip": {"pick": "Arsenal", "outcome": "Arsenal", "odds": 1.85, "ev": 9.2, "home": "Arsenal", "away": "Chelsea"},
         "verified": {"matchup": "Arsenal vs Chelsea", "tipster": {}},
-        "mock_verdict": "Arsenal at 1.85 offers +9.2% EV; Chelsea priced 8% tight.",
+        "mock_verdict": "Arsenal at 1.85 offers +9.2% edge; Chelsea priced 8% tight.",
     },
     {
-        "tip": {"pick": "Mamelodi Sundowns", "outcome": "Mamelodi Sundowns", "odds": 1.65, "ev": 6.5},
+        "tip": {"pick": "Mamelodi Sundowns", "outcome": "Mamelodi Sundowns", "odds": 1.65, "ev": 6.5, "home": "Sundowns", "away": "Chiefs"},
         "verified": {"matchup": "Sundowns vs Chiefs", "tipster": {"home_consensus_pct": 72}},
-        "mock_verdict": "Sundowns at 1.65 with +6.5% EV and 72% tipster backing.",
+        "mock_verdict": "Sundowns at 1.65 with +6.5% and 72% tipster backing.",
     },
     {
-        "tip": {"pick": "Draw", "outcome": "Draw", "odds": 3.40, "ev": 11.0},
+        "tip": {"pick": "Draw", "outcome": "Draw", "odds": 3.40, "ev": 11.0, "home": "Man City", "away": "Liverpool"},
         "verified": {"matchup": "Man City vs Liverpool", "tipster": {}},
-        "mock_verdict": "Draw at 3.40 yields +11.0% EV against 28% market implied.",
+        "mock_verdict": "Draw at 3.40 yields +11.0% against 28% market implied.",
     },
     {
-        "tip": {"pick": "Springboks", "outcome": "Springboks", "odds": 1.55, "ev": 4.8},
+        "tip": {"pick": "Springboks", "outcome": "Springboks", "odds": 1.55, "ev": 4.8, "home": "Springboks", "away": "All Blacks"},
         "verified": {"matchup": "Springboks vs All Blacks", "tipster": {"most_tipped": "Springboks"}},
-        "mock_verdict": "Springboks at 1.55 prices in +4.8% expected value edge.",
+        "mock_verdict": "Springboks at 1.55 present a +4.8% edge with 3 signals aligned.",
     },
     {
-        "tip": {"pick": "Over 2.5", "outcome": "Over 2.5", "odds": 1.90, "ev": 7.3},
+        "tip": {"pick": "Over 2.5", "outcome": "Over 2.5", "odds": 1.90, "ev": 7.3, "home": "Barcelona", "away": "Real Madrid"},
         "verified": {"matchup": "Barcelona vs Real Madrid", "tipster": {}},
-        "mock_verdict": "Over 2.5 at 1.90 delivers +7.3% EV over 58% fair probability.",
+        "mock_verdict": "Over 2.5 at 1.90 delivers +7.3% over 58% fair probability.",
     },
 ]
 
@@ -182,7 +182,7 @@ def test_max_tokens_is_100():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
 
-    tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2}
+    tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2, "home": "Arsenal", "away": "Chelsea"}
     verified = {"matchup": "Arsenal vs Chelsea", "tipster": {}}
 
     with patch("anthropic.Anthropic", return_value=mock_client):
@@ -202,7 +202,7 @@ def test_system_prompt_param_used():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
 
-    tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2}
+    tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2, "home": "Arsenal", "away": "Chelsea"}
     verified = {"matchup": "Arsenal vs Chelsea", "tipster": {}}
 
     with patch("anthropic.Anthropic", return_value=mock_client):
@@ -222,10 +222,10 @@ def test_truncation_appends_period_when_missing():
 
     # 410-char text — no truncation, returned as-is (max_tokens=180 prevents this in production)
     long_text = (
-        "Arsenal priced 8% tight at 1.85 with +9.2% EV edge — "
+        "Arsenal priced 8% tight at 1.85 with a +9.2% pricing gap — "
         "line movement backs the pick and tipster consensus sits at 72% — "
         "back with a manageable unit here no doubt about it at all and the "
-        "form data confirms that the home side has been in exceptional touch "
+        "form data confirms that the squad has been in exceptional touch "
         "across their last five outings winning four and drawing once with "
         "some really impressive attacking numbers throughout the whole run "
         "which means confidence in this selection is absolutely warranted here."
@@ -234,7 +234,7 @@ def test_truncation_appends_period_when_missing():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
 
-    tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2}
+    tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2, "home": "Arsenal", "away": "Chelsea"}
     verified = {"matchup": "Arsenal vs Chelsea", "tipster": {}}
 
     with patch("anthropic.Anthropic", return_value=mock_client):

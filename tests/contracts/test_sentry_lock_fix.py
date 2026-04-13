@@ -35,7 +35,13 @@ def _create_runtime_tables(db_path: Path, *, include_narrative_source: bool = Tr
             {narrative_source_col}
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP NOT NULL,
-            structured_card_json TEXT
+            structured_card_json TEXT,
+            verdict_html TEXT,
+            evidence_class TEXT,
+            tone_band TEXT,
+            spec_json TEXT,
+            context_json TEXT,
+            generation_ms REAL
         )
         """
     )

@@ -25,7 +25,8 @@ def test_time_fallback_is_tbc_when_no_kickoff():
         "match_id": "everton_vs_liverpool_2026-04-19",
     }
     data = build_edge_detail_data(tip)
-    assert data["time"] == "TBC", f"Expected 'TBC' when no kickoff, got {data['time']!r}"
+    # BUILD-KO-TIME-FIX-01: code returns "" for missing time; template renders "KO time TBC"
+    assert data["time"] == "", f"Expected '' when no kickoff (BUILD-KO-TIME-FIX-01), got {data['time']!r}"
 
 
 def test_time_preserved_when_kickoff_has_time():
@@ -62,7 +63,8 @@ def test_time_tbc_when_kickoff_date_only():
     }
     data = build_edge_detail_data(tip)
     assert data["date"] == "Sat 19 Apr"
-    assert data["time"] == "TBC", f"Expected 'TBC' for date-only kickoff, got {data['time']!r}"
+    # BUILD-KO-TIME-FIX-01: code returns "" for missing time; template renders "KO time TBC"
+    assert data["time"] == "", f"Expected '' for date-only kickoff (BUILD-KO-TIME-FIX-01), got {data['time']!r}"
 
 
 def test_channel_meta_item_has_single_emoji_no_ch_prefix():

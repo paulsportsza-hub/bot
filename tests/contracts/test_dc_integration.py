@@ -74,8 +74,9 @@ def test_non_soccer_sports_have_zero_model_probability_weight():
         rugby_w = cfg.get_weights("rugby", "six_nations")
         cricket_w = cfg.get_weights("cricket", "ipl")
 
-    assert rugby_w.get("model_probability", 0) == 0.0, (
-        "Rugby model_probability must be 0 (no model active for rugby)"
+    # RUGBY-FIX-01: rugby now has model_probability=0.18 (Glicko-2 active)
+    assert abs(rugby_w.get("model_probability", 0) - 0.18) < 0.02, (
+        f"Rugby model_probability should be ~0.18 (Glicko-2 active, RUGBY-FIX-01), got {rugby_w.get('model_probability')}"
     )
     assert cricket_w.get("model_probability", 0) == 0.0, (
         "Cricket model_probability must be 0 (no model active for cricket)"
@@ -86,16 +87,19 @@ def test_non_soccer_sports_have_zero_model_probability_weight():
 # AC-3: Non-soccer signal exclusion
 # ---------------------------------------------------------------------------
 
-def test_model_probability_returns_none_strength_for_rugby():
-    """Rugby match → signal_strength=None (excluded from composite, AC-3)."""
+def test_model_probability_returns_signal_for_rugby():
+    """RUGBY-FIX-01: rugby match → Glicko-2 signal (included in composite)."""
     from scrapers.edge.signal_collectors import collect_model_probability_signal
 
     result = collect_model_probability_signal("sharks_vs_bulls_2026-03-15", "home", "rugby")
 
-    assert result["signal_strength"] is None, (
-        "Rugby model_probability must return signal_strength=None (AC-3)"
+    # RUGBY-FIX-01: rugby now uses Glicko-2 model — returns a real signal
+    assert result["available"] is True, (
+        "Rugby model_probability should be available (Glicko-2 active, RUGBY-FIX-01)"
     )
-    assert result["available"] is False
+    assert isinstance(result["signal_strength"], float), (
+        f"Rugby signal_strength should be a float, got {type(result['signal_strength'])}"
+    )
 
 
 def test_model_probability_returns_none_strength_for_cricket():
