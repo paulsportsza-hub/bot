@@ -7609,7 +7609,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
     - ALLOWED fields only — no narrative_snippet, home_context, away_context, key_injury, coach
     - Adds team nicknames, manager names, plain-English form (team_data.py)
     - EV% removed from output (banned in new prompt)
-    - max_tokens=60, temp=0.5 — BUILD-VERDICT-TRUNCATE-02: 60 tok; _trim_to_last_sentence caps to ≤140
+    - max_tokens=120, temp=0.5 — BUILD-VERDICT-PROMPT-04: 120 tok; _trim_to_last_sentence caps to ≤140
     - Calls _fact_check_verdict() after generation
     - Falls back to _render_verdict(spec) from narrative_spec if fact-check strips >50%
     """
@@ -8321,6 +8321,32 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
         if not _use_cached_verdict:
             # Fallback: generate at view time (existing path)
             enriched["verdict"] = _generate_verdict(enriched, verified)
+            # BUILD-CARD-REGRESSION-FIX-07: live verdict empty (blacklist reject) — try cached then deterministic
+            if not enriched["verdict"] and _cached_verdict:
+                _cv_fb = _cap_verdict(_cached_verdict.get("verdict_html", ""))
+                if _cv_fb and not (_VERDICT_BLACKLIST and any(p in _cv_fb.lower() for p in _VERDICT_BLACKLIST)):
+                    enriched["verdict"] = _cv_fb
+            if not enriched["verdict"]:
+                try:
+                    from narrative_spec import NarrativeSpec, _render_verdict as _ns_render_verdict
+                    _fb_spec = NarrativeSpec(
+                        home_name=enriched.get("home_team") or tip.get("home_team") or "",
+                        away_name=enriched.get("away_team") or tip.get("away_team") or "",
+                        competition=enriched.get("league_key") or tip.get("league_key") or tip.get("league") or "",
+                        sport=(tip.get("sport") or tip.get("sport_key") or "soccer").lower(),
+                        home_story_type="neutral",
+                        away_story_type="neutral",
+                        outcome_label=enriched.get("pick") or tip.get("outcome") or "",
+                        bookmaker=enriched.get("bookmaker") or tip.get("bookmaker") or "",
+                        odds=float(enriched.get("odds") or tip.get("odds") or 0),
+                        ev_pct=float(enriched.get("ev") or tip.get("ev") or 0),
+                        verdict_action="lean",
+                        verdict_sizing="small stake",
+                    )
+                    enriched["verdict"] = _ns_render_verdict(_fb_spec)
+                except Exception as _vfe:
+                    log.warning("verdict_deterministic_fallback_failed: %s %s", match_key, _vfe)
+                log.warning("contract_violation=verdict_empty match_key=%s", match_key)
             # Store for next view (best-effort, fire-and-forget)
             if enriched["verdict"] and match_key:
                 try:
@@ -11213,7 +11239,7 @@ async def _build_hot_tips_page(
         else:
             _btn_tier = "🔒"
             cb = f"hot:upgrade:{_shorten_cb_key(match_key)}"
-        label = f"[{idx}] {_btn_sport} {smart_abbreviate(h_name)} vs {smart_abbreviate(a_name)} {_btn_tier}"
+        label = f"[{idx}] {_btn_sport} {_abbreviate_btn(h_name)} vs {_abbreviate_btn(a_name)} {_btn_tier}"
         buttons.append([InlineKeyboardButton(label, callback_data=cb)])
 
     # Navigation row — only row allowed to have 2 buttons side-by-side

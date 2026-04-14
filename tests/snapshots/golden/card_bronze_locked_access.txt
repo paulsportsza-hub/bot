@@ -17,5 +17,5 @@
 🎁 <b>Founding Member:</b> R699/yr Diamond — 8 days left
 
 [buttons]
-[1] ⚽ Mamelodi Sundowns vs Kaizer Chiefs 🔒 -> hot:upgrade:mamelodi_sundowns_vs_kaizer_chiefs_2026-03-10
+[1] ⚽ Downs vs Chiefs 🔒 -> hot:upgrade:mamelodi_sundowns_vs_kaizer_chiefs_2026-03-10
 ↩️ Back -> nav:main
