@@ -113,6 +113,55 @@ def test_d1_trim_to_last_sentence_handles_mid_word_truncation():
     assert len(result2) <= 140
 
 
+def test_trim_dash_heavy_single_sentence():
+    """BUILD-VERDICT-TRIM-HARDEN-04: em-dash / en-dash after pos 60 is a soft sentence boundary.
+
+    Exact Sonnet output from QA-VERDICT-VERIFY-01 — Man City vs Arsenal 2026-04-19.
+    The verdict shipped mid-sentence because _trim_to_last_sentence had no .!? to anchor
+    on and fell back to word-boundary trim, dropping the final word "form".
+    Fix: treat the last em-dash after position 60 as a soft boundary; trim there and append ".."
+    """
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+    from bot import _trim_to_last_sentence
+
+    # Exact string from narrative_cache — 133 chars, two em-dashes, no .!?
+    # First — at index 38 (not > 60), second — at index 74 (> 60 → soft boundary)
+    offending = (
+        "Guardiola\u2019s City are struggling badly \u2014 just one win from their last five "
+        "\u2014 and Arteta sends his Gunners to the Etihad in strong form"
+    )
+    assert len(offending) < 140, "Offending string must fit within max_chars (no forced truncation)"
+
+    result = _trim_to_last_sentence(offending, max_chars=140)
+
+    # Must trim at the last em-dash (index 74) and append ".."
+    assert result.endswith("five.."), (
+        f"Expected trim at last em-dash with 'five..' suffix, got: {result!r}"
+    )
+    assert result.endswith(".."), "Soft boundary trim must append '..'"
+    assert "struggling badly" in result, "Content before first em-dash must be preserved"
+    assert len(result) <= 140
+    assert result != ""
+
+    # En-dash (–) also triggers the soft boundary when it falls after position 60
+    # Second en-dash is at index 70 (> 60)
+    en_dash_case = (
+        "Sundowns have been exceptional in recent matches \u2013 six wins from eight "
+        "\u2013 and the odds are significantly undervaluing them"
+    )
+    result_en = _trim_to_last_sentence(en_dash_case, max_chars=140)
+    assert result_en.endswith(".."), f"En-dash must also trigger soft boundary, got: {result_en!r}"
+    assert result_en != ""
+
+    # Dash BEFORE position 60 must NOT trigger soft boundary (word-boundary fallback instead)
+    early_dash = "Back Chiefs \u2014 good form"  # dash at index 12, < 60
+    result_early = _trim_to_last_sentence(early_dash, max_chars=140)
+    assert not result_early.endswith(".."), (
+        f"Dash before pos 60 must not trigger soft boundary, got: {result_early!r}"
+    )
+    assert result_early != ""
+
+
 def test_d1_deterministic_fallbacks_all_capped_in_constrained():
     """Every return _render_verdict_deterministic(spec) in _generate_verdict_constrained must be wrapped with _cap_verdict."""
     bot_path = os.path.join(os.path.dirname(__file__), "..", "..", "bot.py")

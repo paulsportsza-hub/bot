@@ -7584,9 +7584,14 @@ def _cap_verdict(text: str, limit: int = 140) -> str:
 
 
 def _trim_to_last_sentence(text: str, max_chars: int = 140) -> str:
-    """BUILD-VERDICT-TRUNCATE-02 / -HARDEN-03: Trim Sonnet output to last complete
-    sentence within max_chars. If no sentence boundary exists, fall back to
-    word-boundary truncation. NEVER returns empty for non-empty input.
+    """BUILD-VERDICT-TRUNCATE-02 / -HARDEN-03 / -HARDEN-04: Trim Sonnet output to last
+    complete sentence within max_chars.
+
+    1. Sentence-terminal boundary (.!?) at position >= 20 → trim there.
+    2. Em-dash (—) or en-dash (–) after position 60 → trim AT dash, append ".."
+       (BUILD-VERDICT-TRIM-HARDEN-04: dash-heavy single-sentence verdicts).
+    3. No clean boundary → word-boundary fallback (parity with _cap_verdict).
+    NEVER returns empty for non-empty input (HARDEN-03).
     """
     if not text:
         return ""
@@ -7595,10 +7600,15 @@ def _trim_to_last_sentence(text: str, max_chars: int = 140) -> str:
         return ""
     if len(text) > max_chars:
         text = text[:max_chars]
+    # 1. Sentence-terminal boundary
     last = max(text.rfind('.'), text.rfind('!'), text.rfind('?'))
     if last >= 20:
         return text[:last + 1].strip()
-    # Fallback: word-boundary trim (parity with _cap_verdict)
+    # 2. Em-dash / en-dash as soft boundary (BUILD-VERDICT-TRIM-HARDEN-04)
+    last_dash = max(text.rfind('\u2014'), text.rfind('\u2013'))  # — and –
+    if last_dash > 60:
+        return text[:last_dash].rstrip() + ".."
+    # 3. Fallback: word-boundary trim (parity with _cap_verdict)
     return text.rsplit(" ", 1)[0].rstrip(",. ").strip()
 
 
@@ -9100,8 +9110,11 @@ def _build_event_header(
                 league_key=target_league or "",
             )
             broadcast_line = bc.get("broadcast", "")
-            # If broadcast DB knows a better kickoff, use it
-            if bc.get("kickoff") and bc["kickoff"] != "TBC" and kickoff == "TBC":
+            # BUILD-KICKOFF-RESTORE-02: use broadcast kickoff when kickoff is empty.
+            # Before BUILD-KOTIME-FINAL-01, missing kickoffs were "TBC"; the old
+            # guard `kickoff == "TBC"` was dead code after that change.  Fix:
+            # accept the broadcast time whenever we have no kickoff yet.
+            if bc.get("kickoff") and bc["kickoff"] != "TBC" and not kickoff:
                 kickoff = bc["kickoff"]
         except Exception:
             pass
