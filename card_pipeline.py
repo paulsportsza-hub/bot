@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 # ── Model config ──────────────────────────────────────────────────────────────
 _HAIKU_MODEL = "claude-haiku-4-5-20251001"
 _HAIKU_TEMP = 0.3
-_HAIKU_MAX_TOKENS = 200
+_HAIKU_MAX_TOKENS = 120
 
 # ── Haiku circuit breaker (BUILD-SPEED) ───────────────────────────────────────
 _haiku_failures: int = 0
@@ -90,7 +90,7 @@ _TIPSTER_DB_PATH = str(_SCRAPERS_DIR / "tipsters" / "tipster_predictions.db")
 
 # ── Prompt template (LOCKED — do not add general knowledge) ──────────────────
 CARD_ANALYSIS_PROMPT = """\
-You are a concise sports betting analyst. Write exactly 2-3 lines of analysis (≤280 characters total).
+You are a concise sports betting analyst. Write exactly 1-2 sentences of analysis (max 180 characters total).
 
 STRICT RULE: Use ONLY the data provided below. Do not add any information from your training data. \
 If data is missing for a field, omit it. Never guess, infer, or hallucinate facts.
@@ -98,7 +98,7 @@ If data is missing for a field, omit it. Never guess, infer, or hallucinate fact
 DATA:
 {data_block}
 
-Write 2-3 lines that explain the key betting angle based ONLY on the data above. \
+Write 1-2 sentences that explain the key betting angle based ONLY on the data above. \
 No markdown, no bullet points, plain sentences only."""
 
 
@@ -1243,9 +1243,9 @@ def generate_card_analysis(match_key: str, verified_data: dict) -> str:
     text = _call_haiku_with_breaker(client, prompt)
     if not text:
         return ""  # Circuit open or API failure — callers serve card without analysis
-    # Hard cap at 280 chars
-    if len(text) > 280:
-        text = text[:277] + "..."
+    # Hard cap at 180 chars
+    if len(text) > 180:
+        text = text[:177] + "..."
     return text
 
 
