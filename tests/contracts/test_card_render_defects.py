@@ -80,13 +80,25 @@ def test_d1_cap_verdict_trims_to_word_boundary():
 
 
 def test_d1_trim_to_last_sentence_handles_mid_word_truncation():
-    """_trim_to_last_sentence must return complete sentence or empty string."""
+    """BUILD-VERDICT-TRIM-HARDEN-03: _trim_to_last_sentence NEVER returns empty for non-empty input."""
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
     from bot import _trim_to_last_sentence
 
-    # Mid-sentence truncation should return empty (no terminal punctuation)
+    # Empty input → empty output
+    assert _trim_to_last_sentence("") == ""
+    assert _trim_to_last_sentence("   ") == ""
+
+    # Non-empty input with no sentence boundary → word-boundary fallback (NOT empty)
     partial = "Lucknow Super"
-    assert _trim_to_last_sentence(partial) == ""
+    result_partial = _trim_to_last_sentence(partial)
+    assert result_partial != "", "HARDEN-03: must not return empty for non-empty input"
+    assert result_partial in ("Lucknow Super", "Lucknow")  # word-boundary or full (fits in 140)
+
+    # The regression case from the brief (137 chars, no .!?)
+    regression = "Royal Challengers Bengaluru at 1.61 on WSB — they've won four of their last five while Lucknow Super Giants have lost their last three"
+    result_reg = _trim_to_last_sentence(regression, max_chars=140)
+    assert result_reg != "", "HARDEN-03: regression case must not return empty"
+    assert len(result_reg) <= 140
 
     # Complete sentence within limit
     complete = "Back Chiefs at home. They are in fine form."
@@ -97,8 +109,8 @@ def test_d1_trim_to_last_sentence_handles_mid_word_truncation():
     # Over-long input gets trimmed to last sentence boundary
     long_sentence = "Chiefs are flying. " + "x" * 200
     result2 = _trim_to_last_sentence(long_sentence, max_chars=140)
-    # Should end at sentence boundary
-    assert result2.endswith((".", "!", "?")) or result2 == ""
+    assert result2 != "", "HARDEN-03: over-long input must not return empty"
+    assert len(result2) <= 140
 
 
 def test_d1_deterministic_fallbacks_all_capped_in_constrained():
