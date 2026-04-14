@@ -7446,7 +7446,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=35,  # BUILD-CARD-RENDER-01-PATCH: 35 tok ≈ 140 chars — 10-char safety margin vs 150-char container
+            max_tokens=60,  # BUILD-VERDICT-TRUNCATE-02: 60 tok ≈ 240 chars max; _trim_to_last_sentence caps to ≤140
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -7456,6 +7456,10 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             if hasattr(block, "text") and block.text:
                 text += block.text
         text = text.strip()
+        text = _trim_to_last_sentence(text, max_chars=140)
+        if not text:
+            log.warning("_generate_verdict: no complete sentence in output")
+            return ""
 
         # Echo detection: if LLM returned its input data dump instead of a verdict
         _ECHO_MARKERS = [
@@ -7566,6 +7570,26 @@ def _fact_check_verdict(verdict: str, spec: dict) -> str | None:
     return cleaned
 
 
+def _cap_verdict(text: str, limit: int = 140) -> str:
+    """BUILD-VERDICT-CAP-01: Truncate verdict to word boundary at limit chars."""
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0].rstrip(",. ")
+    return text
+
+
+def _trim_to_last_sentence(text: str, max_chars: int = 140) -> str:
+    """BUILD-VERDICT-TRUNCATE-02: Trim Sonnet output to last complete sentence within max_chars."""
+    if not text:
+        return ""
+    text = text.strip()
+    if len(text) > max_chars:
+        text = text[:max_chars]
+    last = max(text.rfind('.'), text.rfind('!'), text.rfind('?'))
+    if last >= 20:
+        return text[:last + 1].strip()
+    return ""
+
+
 def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
     """VERDICT-UPGRADE-02: Pre-computation verdict with ALLOWED fields only + personality layer.
 
@@ -7573,7 +7597,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
     - ALLOWED fields only — no narrative_snippet, home_context, away_context, key_injury, coach
     - Adds team nicknames, manager names, plain-English form (team_data.py)
     - EV% removed from output (banned in new prompt)
-    - max_tokens=35, temp=0.5 — BUILD-CARD-RENDER-01-PATCH: 35 tok ≈ 140 chars
+    - max_tokens=60, temp=0.5 — BUILD-VERDICT-TRUNCATE-02: 60 tok; _trim_to_last_sentence caps to ≤140
     - Calls _fact_check_verdict() after generation
     - Falls back to _render_verdict(spec) from narrative_spec if fact-check strips >50%
     """
@@ -7599,7 +7623,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         if not home.strip() or not away.strip():
             log.warning("_generate_verdict_constrained: empty team names for %s", matchup or "unknown match")
             if isinstance(spec, NarrativeSpec):
-                return _render_verdict_deterministic(spec)
+                return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
         # Plain-English form descriptions (VERDICT-UPGRADE-02)
@@ -7659,7 +7683,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             lines.append(f"signals_active: {', '.join(signals_active)}")
         if not lines:
             if isinstance(spec, NarrativeSpec):
-                return _render_verdict_deterministic(spec)
+                return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
         system_prompt = (
@@ -7734,7 +7758,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=35,  # BUILD-CARD-RENDER-01-PATCH: 35 tok ≈ 140 chars — 10-char safety margin vs 150-char container
+            max_tokens=60,  # BUILD-VERDICT-TRUNCATE-02: 60 tok; _trim_to_last_sentence caps to ≤140
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -7744,6 +7768,10 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             if hasattr(block, "text") and block.text:
                 text += block.text
         text = text.strip()
+        text = _trim_to_last_sentence(text, max_chars=140)
+        if not text:
+            log.warning("_generate_verdict_constrained: no complete sentence in output")
+            return ""
 
         # Echo detection: if LLM returned its input data dump instead of a verdict
         _ECHO_MARKERS_C = [
@@ -7764,7 +7792,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         if _echo_hits_c >= 2:
             log.warning("_generate_verdict_constrained: echo-detected — LLM parroted input: %s", text[:80])
             if isinstance(spec, NarrativeSpec):
-                return _render_verdict_deterministic(spec)
+                return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
         # Field-name leak guard: prompt field names must never appear in verdict output
@@ -7777,19 +7805,19 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         if any(fn in text.lower() for fn in _FIELD_NAME_LEAK_C):
             log.warning("_generate_verdict_constrained: field-name leak detected, discarding: %s", text[:80])
             if isinstance(spec, NarrativeSpec):
-                return _render_verdict_deterministic(spec)
+                return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
         # Blacklist check (matches _generate_verdict)
         if any(p in text.lower() for p in _VERDICT_BLACKLIST):
             log.warning("_generate_verdict_constrained: blacklisted phrase, discarding: %s", text[:80])
             if isinstance(spec, NarrativeSpec):
-                return _render_verdict_deterministic(spec)
+                return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
         if not text:
             if isinstance(spec, NarrativeSpec):
-                return _render_verdict_deterministic(spec)
+                return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
         # Fact-check the output
@@ -7797,7 +7825,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         if checked is None:
             # >50% stripped or empty — fall back to deterministic
             if isinstance(spec, NarrativeSpec):
-                return _render_verdict_deterministic(spec)
+                return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
         return checked
@@ -7806,7 +7834,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         try:
             from narrative_spec import _render_verdict as _rv_fallback, NarrativeSpec
             if isinstance(spec, NarrativeSpec):
-                return _rv_fallback(spec)
+                return _cap_verdict(_rv_fallback(spec))
         except Exception:
             pass
         return ""

@@ -1809,6 +1809,9 @@ async def _generate_one(
             _verdict_html = _generate_verdict_constrained(spec, _allowed)
             if not _verdict_html:
                 _verdict_html = _rv_det(spec)
+            # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store
+            if _verdict_html and len(_verdict_html) > 140:
+                _verdict_html = _verdict_html[:140].rsplit(" ", 1)[0].rstrip(",. ")
             log.info("PIPELINE-BUILD-01: verdict generated for %s (constrained=%s)",
                      match_key, bool(_verdict_html))
         except Exception as _verd_err:
@@ -1816,6 +1819,9 @@ async def _generate_one(
             try:
                 from narrative_spec import _render_verdict as _rv_fb
                 _verdict_html = _rv_fb(spec)
+                # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store
+                if _verdict_html and len(_verdict_html) > 140:
+                    _verdict_html = _verdict_html[:140].rsplit(" ", 1)[0].rstrip(",. ")
             except Exception:
                 pass
 

@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # ── D1 — Verdict max_tokens cap ───────────────────────────────────────────────
 
 def test_d1_generate_verdict_max_tokens_capped():
-    """_generate_verdict max_tokens must be ≤ 35 (container fits ≈150 chars; 35 tok ≈ 140 chars)."""
+    """_generate_verdict max_tokens must be ≤ 60 (BUILD-VERDICT-TRUNCATE-02: trim-to-sentence caps output at ≤140 chars)."""
     bot_path = os.path.join(os.path.dirname(__file__), "..", "..", "bot.py")
     source = open(bot_path).read()
 
@@ -39,14 +39,14 @@ def test_d1_generate_verdict_max_tokens_capped():
     token_values = re.findall(r"max_tokens=(\d+)", fn_body)
     assert token_values, "No max_tokens found in _generate_verdict"
     for tv in token_values:
-        assert int(tv) <= 35, (
-            f"_generate_verdict max_tokens={tv} exceeds safe limit of 35 "
-            f"(card container fits ≈150 chars; 35 tokens ≈ 140 chars — 10-char safety margin)"
+        assert int(tv) <= 60, (
+            f"_generate_verdict max_tokens={tv} exceeds safe limit of 60 "
+            f"(card container fits ≈150 chars; _trim_to_last_sentence caps at 140 chars)"
         )
 
 
 def test_d1_generate_verdict_constrained_max_tokens_capped():
-    """_generate_verdict_constrained max_tokens must also be ≤ 35."""
+    """_generate_verdict_constrained max_tokens must also be ≤ 60."""
     bot_path = os.path.join(os.path.dirname(__file__), "..", "..", "bot.py")
     source = open(bot_path).read()
 
@@ -57,9 +57,71 @@ def test_d1_generate_verdict_constrained_max_tokens_capped():
     token_values = re.findall(r"max_tokens=(\d+)", fn_body)
     assert token_values, "No max_tokens found in _generate_verdict_constrained"
     for tv in token_values:
-        assert int(tv) <= 35, (
-            f"_generate_verdict_constrained max_tokens={tv} exceeds safe limit of 35"
+        assert int(tv) <= 60, (
+            f"_generate_verdict_constrained max_tokens={tv} exceeds safe limit of 60"
         )
+
+
+def test_d1_cap_verdict_trims_to_word_boundary():
+    """_cap_verdict must truncate at word boundary, never mid-word."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+    from bot import _cap_verdict
+
+    long_text = "A" * 50 + " " + "B" * 50 + " " + "C" * 50
+    result = _cap_verdict(long_text, limit=140)
+    assert len(result) <= 140
+    # Must not end mid-word
+    assert not result.endswith("A") or " " not in long_text[:141], (
+        "cap_verdict must truncate at word boundary"
+    )
+    # Short text passes through unchanged
+    short = "Back Chiefs."
+    assert _cap_verdict(short) == short
+
+
+def test_d1_trim_to_last_sentence_handles_mid_word_truncation():
+    """_trim_to_last_sentence must return complete sentence or empty string."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+    from bot import _trim_to_last_sentence
+
+    # Mid-sentence truncation should return empty (no terminal punctuation)
+    partial = "Lucknow Super"
+    assert _trim_to_last_sentence(partial) == ""
+
+    # Complete sentence within limit
+    complete = "Back Chiefs at home. They are in fine form."
+    result = _trim_to_last_sentence(complete, max_chars=140)
+    assert result.endswith((".", "!", "?"))
+    assert len(result) <= 140
+
+    # Over-long input gets trimmed to last sentence boundary
+    long_sentence = "Chiefs are flying. " + "x" * 200
+    result2 = _trim_to_last_sentence(long_sentence, max_chars=140)
+    # Should end at sentence boundary
+    assert result2.endswith((".", "!", "?")) or result2 == ""
+
+
+def test_d1_deterministic_fallbacks_all_capped_in_constrained():
+    """Every return _render_verdict_deterministic(spec) in _generate_verdict_constrained must be wrapped with _cap_verdict."""
+    bot_path = os.path.join(os.path.dirname(__file__), "..", "..", "bot.py")
+    source = open(bot_path).read()
+
+    m = re.search(r"^def _generate_verdict_constrained\b(.+?)^def _normalise_mm_event_id", source, re.DOTALL | re.MULTILINE)
+    assert m, "_generate_verdict_constrained body not found in bot.py"
+    fn_body = m.group(1)
+
+    # Every bare return must be wrapped
+    bare_returns = re.findall(r"return _render_verdict_deterministic\(spec\)(?!\s*#)", fn_body)
+    assert bare_returns == [], (
+        f"Found {len(bare_returns)} unwrapped return _render_verdict_deterministic(spec) in "
+        f"_generate_verdict_constrained — must be return _cap_verdict(_render_verdict_deterministic(spec))"
+    )
+
+    bare_fallback = re.findall(r"return _rv_fallback\(spec\)(?!\s*#)", fn_body)
+    assert bare_fallback == [], (
+        f"Found {len(bare_fallback)} unwrapped return _rv_fallback(spec) in "
+        f"_generate_verdict_constrained — must be return _cap_verdict(_rv_fallback(spec))"
+    )
 
 
 def test_d1_verdict_within_cap_survives_context_build():

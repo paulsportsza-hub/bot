@@ -189,8 +189,8 @@ def test_max_tokens_is_100():
         _generate_verdict(tip, verified)
 
     call_kwargs = mock_client.messages.create.call_args
-    assert call_kwargs.kwargs.get("max_tokens") == 35, (
-        f"max_tokens should be 35 (BUILD-CARD-RENDER-01-PATCH: 35 tok ≈ 140 chars, 10-char safety margin), got {call_kwargs.kwargs.get('max_tokens')}"
+    assert call_kwargs.kwargs.get("max_tokens") == 60, (
+        f"max_tokens should be 60 (BUILD-VERDICT-TRUNCATE-02: 60 tok, _trim_to_last_sentence caps at 140 chars), got {call_kwargs.kwargs.get('max_tokens')}"
     )
 
 
@@ -217,10 +217,10 @@ def test_system_prompt_param_used():
 # ── D-01: truncation safety net ───────────────────────────────────────────────
 
 def test_truncation_appends_period_when_missing():
-    """VERDICT-UPGRADE-01: no truncation cap — verdict section has room. Long text passes through."""
+    """BUILD-VERDICT-TRUNCATE-02: long Sonnet output is trimmed to last sentence boundary within 140 chars."""
     from bot import _generate_verdict
 
-    # 410-char text — no truncation, returned as-is (max_tokens=180 prevents this in production)
+    # 410-char text — _trim_to_last_sentence caps it to ≤140 chars
     long_text = (
         "Arsenal priced 8% tight at 1.85 with a +9.2% pricing gap — "
         "line movement backs the pick and tipster consensus sits at 72% — "
@@ -240,8 +240,10 @@ def test_truncation_appends_period_when_missing():
     with patch("anthropic.Anthropic", return_value=mock_client):
         result = _generate_verdict(tip, verified)
 
-    # No truncation — full text returned
-    assert result == long_text.strip()
+    # _trim_to_last_sentence caps at 140 chars; result ends with sentence terminal or is empty
+    assert len(result) <= 140, f"Result exceeds 140 chars: {len(result)}"
+    if result:
+        assert result.endswith(('.', '!', '?')), f"Result does not end at sentence boundary: {result!r}"
 
 
 # ── D-16: template emoji ───────────────────────────────────────────────────────
