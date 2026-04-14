@@ -1795,6 +1795,8 @@ async def _generate_one(
             # Build ALLOWED fields for constrained verdict
             _allowed = {
                 "matchup": f"{home} vs {away}",
+                "home_team": home,
+                "away_team": away,
                 "pick": tips[0]["outcome"] if tips else "",
                 "odds": tips[0]["odds"] if tips else 0,
                 "ev": tips[0]["ev"] if tips else 0,

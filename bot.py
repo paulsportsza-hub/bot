@@ -6588,7 +6588,13 @@ def _fetch_mm_odds_map(
             """, list(mid_to_event.keys())).fetchall()
         finally:
             conn.close()
-    except Exception:
+    except Exception as _e:
+        log.warning("scraper_boundary_failure site=odds_fetch_6592 err=%s", _e)
+        if sentry_sdk:
+            with sentry_sdk.push_scope() as scope:
+                scope.set_tag("contract_violation", "scraper_boundary")
+                scope.set_tag("boundary_site", "odds_fetch_6592")
+                sentry_sdk.capture_exception(_e)
         return {}
 
     for row in rows:
@@ -7446,7 +7452,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=60,  # BUILD-VERDICT-TRUNCATE-02: 60 tok ≈ 240 chars max; _trim_to_last_sentence caps to ≤140
+            max_tokens=120,  # BUILD-VERDICT-PROMPT-04: 120 tok; _trim_to_last_sentence caps to ≤140
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -7764,7 +7770,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=60,  # BUILD-VERDICT-TRUNCATE-02: 60 tok; _trim_to_last_sentence caps to ≤140
+            max_tokens=120,  # BUILD-VERDICT-PROMPT-04: 120 tok; _trim_to_last_sentence caps to ≤140
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -9775,7 +9781,12 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
                 return (mk, float(result["predicted_ev"]))
             return (mk, None)
         except Exception as _e:
-            log.debug("_refresh_tip_evs calc failed for %s: %s", mk, _e)
+            log.warning("scraper_boundary_failure site=edge_v2_9479 err=%s", _e)
+            if sentry_sdk:
+                with sentry_sdk.push_scope() as scope:
+                    scope.set_tag("contract_violation", "scraper_boundary")
+                    scope.set_tag("boundary_site", "edge_v2_9479")
+                    sentry_sdk.capture_exception(_e)
             return (mk, None)
 
     # BUILD-QA22-FIX P1-1: Use partial results on timeout instead of discarding all
@@ -12797,7 +12808,13 @@ def _quick_edge_tier_lookup(match_id: str) -> str | None:
         if row and row[0]:
             return row[0].strip().lower()
         return None
-    except Exception:
+    except Exception as _e:
+        log.warning("scraper_boundary_failure site=edge_tracker_12808 err=%s", _e)
+        if sentry_sdk:
+            with sentry_sdk.push_scope() as scope:
+                scope.set_tag("contract_violation", "scraper_boundary")
+                scope.set_tag("boundary_site", "edge_tracker_12808")
+                sentry_sdk.capture_exception(_e)
         return None
 
 
@@ -13126,10 +13143,51 @@ async def _store_narrative_cache(
                 ),
             )
             conn.commit()
+        except sqlite3.IntegrityError as e:
+            if sentry_sdk:
+                with sentry_sdk.push_scope() as scope:
+                    scope.set_tag("contract", "contract_violation:narrative_cache")
+                    scope.set_tag("match_id", match_id)
+                    sentry_sdk.capture_exception(e)
+            log.warning("Narrative cache IntegrityError for %s: %s", match_id, e)
         except sqlite3.OperationalError as e:
             if "locked" in str(e).lower():
-                # Expected during scraper write windows — silent, not a failure
-                log.debug("Narrative cache persist deferred (DB contention) for %s: %s", match_id, e)
+                import time as _time
+                log.warning("Narrative cache persist deferred (DB contention) for %s: %s", match_id, e)
+                _time.sleep(0.1)
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO narrative_cache "
+                        "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
+                        "evidence_json, narrative_source, coverage_json, created_at, expires_at, "
+                        "structured_card_json, verdict_html, evidence_class, tone_band, "
+                        "spec_json, context_json, generation_ms) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            match_id, html, model, edge_tier,
+                            json.dumps(tips, default=str),
+                            odds_hash,
+                            evidence_json,
+                            narrative_source,
+                            coverage_json,
+                            now.isoformat(),
+                            expires.isoformat(),
+                            structured_card_json,
+                            verdict_html,
+                            evidence_class,
+                            tone_band,
+                            spec_json,
+                            context_json,
+                            generation_ms,
+                        ),
+                    )
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    if sentry_sdk:
+                        sentry_sdk.capture_message(
+                            f"Narrative cache persist still locked after retry for {match_id}",
+                            level="warning",
+                        )
             else:
                 log.warning("Narrative cache persist failed for %s: %s", match_id, e)
         finally:
@@ -25476,7 +25534,25 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
             # R12-BUILD-02: Refresh authoritative outcomes before any cache writes
             await asyncio.to_thread(_refresh_er_outcomes_cache)
-            tips = await _fetch_hot_tips_from_db()
+            # BUILD-EDGE-COUNT-FIX-01: Stable path — edge_results (18 tips / 15 football).
+            # _fetch_hot_tips_from_db_inner() (fragile) returns only 3 tips / 0 football.
+            # Draw exclusion and MAX_RECOMMENDED_ODDS ceiling are already applied inside
+            # _load_tips_from_edge_results(). Fallback to fragile path only when empty.
+            _er_tips = await asyncio.to_thread(_load_tips_from_edge_results, 20)
+            if _er_tips:
+                tips = _er_tips
+                _hot_tips_cache["global"] = {
+                    "tips": tips,
+                    "ts": _t.time(),
+                    "thin_slate": len(tips) < 3,
+                }
+                log.info("Precompute: %d tips from edge_results (stable path)", len(tips))
+            else:
+                log.warning(
+                    "Precompute: edge_results empty — fallback to _fetch_hot_tips_from_db()",
+                    extra={"contract_violation": "edge_results_empty"},
+                )
+                tips = await _fetch_hot_tips_from_db()
             # CARD-BUILD-01: Population gate — suppress tips that can't produce valid cards
             from card_pipeline import verify_card_populates, _log_card_population_failure
             _gated_tips = []

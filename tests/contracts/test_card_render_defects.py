@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # ── D1 — Verdict max_tokens cap ───────────────────────────────────────────────
 
 def test_d1_generate_verdict_max_tokens_capped():
-    """_generate_verdict max_tokens must be ≤ 60 (BUILD-VERDICT-TRUNCATE-02: trim-to-sentence caps output at ≤140 chars)."""
+    """_generate_verdict max_tokens must be ≤ 120 (BUILD-VERDICT-PROMPT-04: trim-to-sentence caps output at ≤140 chars)."""
     bot_path = os.path.join(os.path.dirname(__file__), "..", "..", "bot.py")
     source = open(bot_path).read()
 
@@ -39,14 +39,14 @@ def test_d1_generate_verdict_max_tokens_capped():
     token_values = re.findall(r"max_tokens=(\d+)", fn_body)
     assert token_values, "No max_tokens found in _generate_verdict"
     for tv in token_values:
-        assert int(tv) <= 60, (
-            f"_generate_verdict max_tokens={tv} exceeds safe limit of 60 "
+        assert int(tv) <= 120, (
+            f"_generate_verdict max_tokens={tv} exceeds safe limit of 120 "
             f"(card container fits ≈150 chars; _trim_to_last_sentence caps at 140 chars)"
         )
 
 
 def test_d1_generate_verdict_constrained_max_tokens_capped():
-    """_generate_verdict_constrained max_tokens must also be ≤ 60."""
+    """_generate_verdict_constrained max_tokens must also be ≤ 120."""
     bot_path = os.path.join(os.path.dirname(__file__), "..", "..", "bot.py")
     source = open(bot_path).read()
 
@@ -57,8 +57,8 @@ def test_d1_generate_verdict_constrained_max_tokens_capped():
     token_values = re.findall(r"max_tokens=(\d+)", fn_body)
     assert token_values, "No max_tokens found in _generate_verdict_constrained"
     for tv in token_values:
-        assert int(tv) <= 60, (
-            f"_generate_verdict_constrained max_tokens={tv} exceeds safe limit of 60"
+        assert int(tv) <= 120, (
+            f"_generate_verdict_constrained max_tokens={tv} exceeds safe limit of 120"
         )
 
 

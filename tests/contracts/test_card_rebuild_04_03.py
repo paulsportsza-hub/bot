@@ -189,8 +189,8 @@ def test_max_tokens_is_100():
         _generate_verdict(tip, verified)
 
     call_kwargs = mock_client.messages.create.call_args
-    assert call_kwargs.kwargs.get("max_tokens") == 60, (
-        f"max_tokens should be 60 (BUILD-VERDICT-TRUNCATE-02: 60 tok, _trim_to_last_sentence caps at 140 chars), got {call_kwargs.kwargs.get('max_tokens')}"
+    assert call_kwargs.kwargs.get("max_tokens") == 120, (
+        f"max_tokens should be 120 (BUILD-VERDICT-PROMPT-04: 120 tok, _trim_to_last_sentence caps at 140 chars), got {call_kwargs.kwargs.get('max_tokens')}"
     )
 
 
