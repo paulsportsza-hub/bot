@@ -7578,16 +7578,22 @@ def _cap_verdict(text: str, limit: int = 140) -> str:
 
 
 def _trim_to_last_sentence(text: str, max_chars: int = 140) -> str:
-    """BUILD-VERDICT-TRUNCATE-02: Trim Sonnet output to last complete sentence within max_chars."""
+    """BUILD-VERDICT-TRUNCATE-02 / -HARDEN-03: Trim Sonnet output to last complete
+    sentence within max_chars. If no sentence boundary exists, fall back to
+    word-boundary truncation. NEVER returns empty for non-empty input.
+    """
     if not text:
         return ""
     text = text.strip()
+    if not text:
+        return ""
     if len(text) > max_chars:
         text = text[:max_chars]
     last = max(text.rfind('.'), text.rfind('!'), text.rfind('?'))
     if last >= 20:
         return text[:last + 1].strip()
-    return ""
+    # Fallback: word-boundary trim (parity with _cap_verdict)
+    return text.rsplit(" ", 1)[0].rstrip(",. ").strip()
 
 
 def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
@@ -18954,9 +18960,12 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                             asyncio.to_thread(_bcd_ac7, event_id, None, include_analysis=False),
                             timeout=5.0,
                         )
+                        # ALGO-FIX-01 parity — block draw cards from AC-7 fast path (INV-DRAW-REGRESSION-01)
+                        if (_ac7_card.get("outcome") or "").lower() == "draw":
+                            _ac7_card = None  # force fall-through to full pipeline with filtering
                         # CARD-GATE-INV-01: Require positive EV + valid odds. Without a tip,
                         # build_card_data may pull odds from wrong market type (btts/o_u).
-                        if _ac7_card.get("odds") and float(_ac7_card.get("ev") or 0) > 0:
+                        if _ac7_card and _ac7_card.get("odds") and float(_ac7_card.get("ev") or 0) > 0:
                             _ac7_html = _rch_ac7(_ac7_card)
                             if _ac7_html:
                                 _ac7_tip = {
@@ -19293,6 +19302,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     if db_match and db_match.get("outcomes"):
         # Build tips from odds.db data
         for outcome_key, outcome_data in db_match["outcomes"].items():
+            if outcome_key == "draw":
+                continue  # ALGO-FIX-01 parity (INV-DRAW-REGRESSION-01)
             all_bk = outcome_data.get("all_bookmakers", {})
             if not all_bk:
                 continue
@@ -19386,6 +19397,8 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                             "away_team": away,
                         })
 
+    # ALGO-FIX-01 parity — strip draws before sort/cache (INV-DRAW-REGRESSION-01)
+    tips = [t for t in tips if (t.get("outcome") or "").lower() != "draw"]
     # Sort and cache tips if we have any
     if tips:
         tips.sort(key=lambda t: t["ev"], reverse=True)
@@ -20180,12 +20193,13 @@ def _build_game_buttons(
     match_key = tips[0].get("match_id", event_id) if tips else event_id
 
     if tips:
+        _non_draw_tips = [t for t in tips if (t.get("outcome") or "").lower() != "draw"]
         # Button 1: Recommended bet CTA — prefer selected_outcome, fallback to highest-EV
         # R9-BUILD-03: selected_outcome keeps the CTA aligned with the narrative verdict.
         if selected_outcome:
             _sel_lo = selected_outcome.lower()
             _matched_tip = next(
-                (t for t in tips if t.get("ev", 0) > 0 and (
+                (t for t in _non_draw_tips if t.get("ev", 0) > 0 and (
                     _sel_lo == (t.get("outcome") or "").lower()
                     or _sel_lo in (t.get("outcome") or "").lower()
                     or (t.get("outcome") or "").lower() in _sel_lo
@@ -20193,13 +20207,13 @@ def _build_game_buttons(
                 None,
             )
             best_ev_tip = _matched_tip or max(
-                (t for t in tips if t.get("ev", 0) > 0),
+                (t for t in _non_draw_tips if t.get("ev", 0) > 0),
                 key=lambda t: t["ev"],
                 default=None,
             )
         else:
             best_ev_tip = max(
-                (t for t in tips if t["ev"] > 0),
+                (t for t in _non_draw_tips if t.get("ev", 0) > 0),
                 key=lambda t: t["ev"],
                 default=None,
             )
