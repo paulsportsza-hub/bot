@@ -1,10 +1,10 @@
-"""BUILD-VERDICT-INJURY-SPLIT-01 — Contract tests.
+"""BUILD-VERDICT-INJURY-SPLIT-01 / BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01 — Contract tests.
 
 Verifies:
 1. _build_verdict_with_injuries() is removed from card_data.
 2. build_edge_detail_data() passes verdict raw (no injury appended).
 3. home_injuries / away_injuries are separate template variables.
-4. edge_detail.html injury section renders player names only — no status text.
+4. edge_detail.html injury section is NOT rendered (widget moved to My Matches only).
 """
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def test_injuries_default_to_empty_lists():
     assert data["away_injuries"] == []
 
 
-# ── 4. Template renders injury section with names only ────────────────────────
+# ── 4. edge_detail.html must NOT render injury section (BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01)
 
 def _render_template(template_vars: dict) -> str:
     """Render edge_detail.html via Jinja2 (no Playwright required)."""
@@ -147,51 +147,31 @@ def _minimal_tip_data(**overrides) -> dict:
     return base
 
 
-def test_template_injury_section_shows_names_only():
-    """Injury section renders player names without status text."""
+def test_template_injury_section_absent_on_edge_card():
+    """BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01: Injury widget must NOT render on Edge cards,
+    even when injury data is present. Widget lives on My Matches (match_detail.html) only."""
     data = _minimal_tip_data(
         home_injuries=["Patrick Maswanganyi (knee ligament)", "Edmilson Dove (hamstring)"],
         away_injuries=["Tshegofatso Mabasa (thigh)"],
     )
     html = _render_template(data)
 
-    assert "INJURIES" in html, "Injury section header missing"
-    assert "Patrick Maswanganyi" in html
-    assert "Edmilson Dove" in html
-    assert "Mabasa" in html
-
-    # Status text must not appear
-    assert "knee ligament" not in html, "Status text 'knee ligament' must not appear"
-    assert "hamstring" not in html, "Status text 'hamstring' must not appear"
-    assert "thigh" not in html, "Status text 'thigh' must not appear"
+    assert "INJURIES" not in html, "Injury section must not appear on Edge cards"
+    assert 'class="injury-section"' not in html, "injury-section div must not render on Edge cards"
+    assert "🏥" not in html, "Injury emoji must not appear on Edge cards"
+    assert "Patrick Maswanganyi" not in html, "Player names must not appear on Edge cards"
 
 
-def test_template_injury_section_max_two_per_team():
-    """Template caps players at 2 per team via Jinja slice."""
-    data = _minimal_tip_data(
-        home_injuries=[
-            "Player One (knee)",
-            "Player Two (hamstring)",
-            "Player Three (calf)",
-        ],
-        away_injuries=[],
-    )
-    html = _render_template(data)
-    assert "Player One" in html
-    assert "Player Two" in html
-    assert "Player Three" not in html, "Third player must be hidden (max 2 per team)"
-
-
-def test_template_injury_section_hidden_when_no_injuries():
-    """Injury section div must not render when both lists are empty."""
+def test_template_injury_section_absent_when_no_injuries():
+    """Injury section absent regardless of injury data."""
     data = _minimal_tip_data(home_injuries=[], away_injuries=[])
     html = _render_template(data)
-    assert "INJURIES" not in html, "Injury section must be hidden when no injuries"
+    assert "INJURIES" not in html
     assert 'class="injury-section"' not in html
 
 
-def test_template_injury_section_hidden_when_vars_absent():
-    """Template gracefully omits section when template vars are falsy."""
+def test_template_injury_section_absent_when_vars_absent():
+    """Template gracefully handles missing injury vars — section still absent."""
     data = _minimal_tip_data()
     html = _render_template(data)
     assert "INJURIES" not in html

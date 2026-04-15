@@ -7462,7 +7462,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             if hasattr(block, "text") and block.text:
                 text += block.text
         text = text.strip()
-        text = _trim_to_last_sentence(text, max_chars=140)
+        text = _trim_to_last_sentence(text, max_chars=300)
         if not text:
             log.warning("_generate_verdict: no complete sentence in output")
             return ""
@@ -7576,14 +7576,14 @@ def _fact_check_verdict(verdict: str, spec: dict) -> str | None:
     return cleaned
 
 
-def _cap_verdict(text: str, limit: int = 140) -> str:
-    """BUILD-VERDICT-CAP-01: Truncate verdict to word boundary at limit chars."""
+def _cap_verdict(text: str, limit: int = 300) -> str:
+    """BUILD-VERDICT-CAP-01 / BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01: Truncate verdict to word boundary at limit chars."""
     if len(text) > limit:
         text = text[:limit].rsplit(" ", 1)[0].rstrip(",. ")
     return text
 
 
-def _trim_to_last_sentence(text: str, max_chars: int = 140) -> str:
+def _trim_to_last_sentence(text: str, max_chars: int = 300) -> str:
     """BUILD-VERDICT-TRUNCATE-02 / -HARDEN-03 / -HARDEN-04: Trim Sonnet output to last
     complete sentence within max_chars.
 
@@ -7777,11 +7777,14 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "\"Small stake. +2.0% EV at current pricing. Main risk: factor that in.\""
         )
 
+        # BUILD-VERDICT-ENRICHMENT-FIX-01: tier-split temperature + raised max_tokens/ceiling
+        _tier_for_temp = getattr(spec, "edge_tier", "bronze").lower() if hasattr(spec, "edge_tier") else "bronze"
+        _temperature = 0.7 if _tier_for_temp in ("gold", "diamond") else 0.5
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=120,  # BUILD-VERDICT-PROMPT-04: 120 tok; _trim_to_last_sentence caps to ≤140
-            temperature=0.5,
+            max_tokens=220,  # BUILD-VERDICT-ENRICHMENT-FIX-01: raised from 120; ceiling ≤300
+            temperature=_temperature,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
         )
@@ -7790,7 +7793,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             if hasattr(block, "text") and block.text:
                 text += block.text
         text = text.strip()
-        text = _trim_to_last_sentence(text, max_chars=140)
+        text = _trim_to_last_sentence(text, max_chars=300)
         if not text:
             log.warning("_generate_verdict_constrained: no complete sentence in output")
             return ""
@@ -12677,11 +12680,11 @@ def _ensure_narrative_cache_table() -> None:
         # PIPELINE-BUILD-01: indexes for staleness + tier queries
         conn.execute("CREATE INDEX IF NOT EXISTS idx_nc_expires ON narrative_cache(expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_nc_tier ON narrative_cache(edge_tier)")
-        # BUILD-VERDICT-CAP-01: Purge cached verdicts that exceed the 140-char cap.
-        # These were generated before the cap was applied and will regenerate on next view.
+        # BUILD-VERDICT-CAP-01 / BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01: Purge cached verdicts
+        # that exceed the 300-char cap. Will regenerate on next view.
         try:
             _pv_result = conn.execute(
-                "DELETE FROM narrative_cache WHERE LENGTH(verdict_html) > 140"
+                "DELETE FROM narrative_cache WHERE LENGTH(verdict_html) > 300"
             )
             if _pv_result.rowcount:
                 log.info(

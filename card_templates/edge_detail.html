@@ -375,22 +375,7 @@
         .h2h-lbl-draw { font-size: 9px; color: #777777; }
         .h2h-lbl-away { font-size: 9px; color: #FF5252; }
 
-        /* ── 7. Injuries ─────────────────────────────────────── */
-        .injury-section {
-            padding: 6px 14px;
-            border-top: 1px solid #2A2A2A;
-            background: #141414;
-        }
-        .injury-names {
-            font-size: 11px;
-            color: #999;
-            margin-top: 3px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        /* ── 8. Verdict ──────────────────────────────────────── */
+        /* ── 7. Verdict (BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01: injury removed) */
         .verdict-section {
             flex-grow: 1;
             min-height: 90px;
@@ -564,19 +549,8 @@
     </div>
     {% endif %}
 
-    <!-- ── 7. Injuries ──────────────────────────────────────── -->
-    {% if home_injuries or away_injuries %}
-    <div class="injury-section">
-        <span class="section-hdr" style="color: #999;">🏥 INJURIES</span>
-        <div class="injury-names">
-            {% if home_injuries %}{{ home }}: {% for inj in home_injuries[:2] %}{{ inj.split('(')[0].strip() }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
-            {% if home_injuries and away_injuries %} · {% endif %}
-            {% if away_injuries %}{{ away }}: {% for inj in away_injuries[:2] %}{{ inj.split('(')[0].strip() }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- ── 8. Verdict (edge only) ──────────────────────────── -->
+    <!-- ── 7. Verdict (edge only) ──────────────────────────── -->
+    <!-- BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01: injury widget removed from Edge cards -->
     {% if tier and verdict %}
     <div class="verdict-section">
         <div class="section-hdr" style="color: #FFB300;">🏆 VERDICT</div>
