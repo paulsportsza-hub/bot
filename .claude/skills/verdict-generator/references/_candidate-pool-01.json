@@ -1,0 +1,1809 @@
+{
+  "generated_at": "2026-04-15",
+  "stats": {
+    "total": 64,
+    "rejected": 13,
+    "reject_rate": "13/64",
+    "by_tier": {
+      "diamond": 16,
+      "gold": 24,
+      "silver": 16,
+      "bronze": 8
+    },
+    "sport_mix": "cricket:2, rugby:9, soccer:21"
+  },
+  "candidates_by_tier": {
+    "diamond": [
+      {
+        "fixture": "arsenal_vs_sporting_cp_2026-04-15",
+        "sport": "soccer",
+        "league": "champions_league",
+        "tier": "diamond",
+        "candidate_idx": 1,
+        "verdict": "The Gunners at home in the Champions League is the call — Arteta's side carry a price edge at SuperSportBet that the market hasn't fully corrected, and with Sporting dealing with injury concerns, this is a spot the numbers are screaming at. At 1.",
+        "char_count": 246,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Arsenal vs Sporting Cp",
+          "pick": "Home Win",
+          "odds": 1.58,
+          "bookmaker": "supersportbet",
+          "ev": 4.2,
+          "confidence_tier": "MAX",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": [
+            "R. Calafiori (Questionable/Questionable)",
+            "M. Odegaard (Questionable/Questionable)",
+            "D. Rice (Questionable/Questionable)",
+            "B. Saka (Questionable/Questionable)",
+            "J. Timber (Questionable/Questionable)"
+          ],
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.58 @ supersportbet, EV +4.2%",
+          "Signals: price_edge, home_injury",
+          "Home injuries: R. Calafiori (Questionable/Questionable), M. Odegaard (Questionable/Questionable)"
+        ]
+      },
+      {
+        "fixture": "arsenal_vs_sporting_cp_2026-04-15",
+        "sport": "soccer",
+        "league": "champions_league",
+        "tier": "diamond",
+        "candidate_idx": 2,
+        "verdict": "The Gunners at home on supersportbet is the MAX confidence call — Arteta's side carry a clear price edge here and the home injury signal is already baked into these odds. Sporting arrive at the Emirates with no meaningful advantage to exploit, and the market is still giving us 1.",
+        "char_count": 280,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Arsenal vs Sporting Cp",
+          "pick": "Home Win",
+          "odds": 1.58,
+          "bookmaker": "supersportbet",
+          "ev": 4.2,
+          "confidence_tier": "MAX",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": [
+            "R. Calafiori (Questionable/Questionable)",
+            "M. Odegaard (Questionable/Questionable)",
+            "D. Rice (Questionable/Questionable)",
+            "B. Saka (Questionable/Questionable)",
+            "J. Timber (Questionable/Questionable)"
+          ],
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.58 @ supersportbet, EV +4.2%",
+          "Signals: price_edge, home_injury",
+          "Home injuries: R. Calafiori (Questionable/Questionable), M. Odegaard (Questionable/Questionable)"
+        ]
+      },
+      {
+        "fixture": "liverpool_vs_paris_saint_germain_2026-04-15",
+        "sport": "soccer",
+        "league": "champions_league",
+        "tier": "diamond",
+        "candidate_idx": 1,
+        "verdict": "The Reds at 1.80 on Betway is where the value sits — the price edge signal is firing loud on this one, and Slot's Liverpool at Anfield in European nights is not a place visiting sides come to collect points.",
+        "char_count": 207,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Liverpool vs Paris Saint Germain",
+          "pick": "Home Win",
+          "odds": 1.8,
+          "bookmaker": "betway",
+          "ev": 5.1,
+          "confidence_tier": "MAX",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.80 @ betway, EV +5.1%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "liverpool_vs_paris_saint_germain_2026-04-15",
+        "sport": "soccer",
+        "league": "champions_league",
+        "tier": "diamond",
+        "candidate_idx": 2,
+        "verdict": "The Reds at 1.80 on Betway is the sharp call — Slot's Liverpool are being undervalued at home in a Champions League knockout tie and the price edge is firing loud. PSG away from Paris in this competition is a different animal, and Anfield under the lights is no place for tourists.\n\nBack The Reds.",
+        "char_count": 297,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Liverpool vs Paris Saint Germain",
+          "pick": "Home Win",
+          "odds": 1.8,
+          "bookmaker": "betway",
+          "ev": 5.1,
+          "confidence_tier": "MAX",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.80 @ betway, EV +5.1%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "atletico_madrid_vs_barcelona_2026-04-15",
+        "sport": "soccer",
+        "league": "champions_league",
+        "tier": "diamond",
+        "candidate_idx": 1,
+        "verdict": "Barca at 2.20 on WSB is where the value sits, and the price edge signal is firing loud on this one. Atletico at home is always a test, but the market is underrating what Barca bring to this fixture right now.\n\nBack Barca.",
+        "char_count": 221,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Atletico Madrid vs Barcelona",
+          "pick": "Away Win",
+          "odds": 2.2,
+          "bookmaker": "wsb",
+          "ev": 6.3,
+          "confidence_tier": "MAX",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.20 @ wsb, EV +6.3%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "atletico_madrid_vs_barcelona_2026-04-15",
+        "sport": "soccer",
+        "league": "champions_league",
+        "tier": "diamond",
+        "candidate_idx": 2,
+        "verdict": "Barca at 2.20 on WSB is the standout price — the market's undervaluing them here and the edge signal is screaming value on the away win. MAX confidence means this is the sharpest call on the card right now.\n\nBack Barca.",
+        "char_count": 219,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Atletico Madrid vs Barcelona",
+          "pick": "Away Win",
+          "odds": 2.2,
+          "bookmaker": "wsb",
+          "ev": 6.3,
+          "confidence_tier": "MAX",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.20 @ wsb, EV +6.3%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "brighton_vs_chelsea_2026-04-21",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "diamond",
+        "candidate_idx": 1,
+        "verdict": "Chelsea at 2.70 with WSB is the value play — the price edge is firing and Maresca's side are the sharper outfit here. That kind of odds on Chelsea away tells you the market has left money on the table.\n\nBack Chelsea.",
+        "char_count": 216,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Brighton vs Chelsea",
+          "pick": "Away Win",
+          "odds": 2.7,
+          "bookmaker": "wsb",
+          "ev": 2.3,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.70 @ wsb, EV +2.3%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "brighton_vs_chelsea_2026-04-21",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "diamond",
+        "candidate_idx": 2,
+        "verdict": "Chelsea away at WSB for 2.70 is where the edge sits — the price is moving in our favour and Maresca's side are the sharper value here. The signal is clear: this line is priced wrong and the smart money knows it.\n\nBack Chelsea.",
+        "char_count": 226,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Brighton vs Chelsea",
+          "pick": "Away Win",
+          "odds": 2.7,
+          "bookmaker": "wsb",
+          "ev": 2.3,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.70 @ wsb, EV +2.3%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "manchester_city_vs_arsenal_2026-04-19",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "diamond",
+        "candidate_idx": 1,
+        "verdict": "The Gunners at 4.25 with WSB is the call — the line has been shortening all week, which tells you the sharp money is riding with Arteta's side. An injury concern in the away camp is already priced in, and the odds are still drifting the Gunners' way.\n\nBack the Gunners.",
+        "char_count": 269,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Manchester City vs Arsenal",
+          "pick": "Away Win",
+          "odds": 4.25,
+          "bookmaker": "wsb",
+          "ev": 10.1,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": [
+            "R. Calafiori (Questionable/Questionable)",
+            "M. Odegaard (Questionable/Questionable)",
+            "D. Rice (Questionable/Questionable)",
+            "B. Saka (Questionable/Questionable)",
+            "J. Timber (Questionable/Questionable)"
+          ],
+          "line_movement": "shortening"
+        },
+        "evidence_bullets": [
+          "Odds: 4.25 @ wsb, EV +10.1%",
+          "Line movement: shortening",
+          "Signals: line_movement:shortening, away_injury",
+          "Away injuries: R. Calafiori (Questionable/Questionable), M. Odegaard (Questionable/Questionable)"
+        ]
+      },
+      {
+        "fixture": "manchester_city_vs_arsenal_2026-04-19",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "diamond",
+        "candidate_idx": 2,
+        "verdict": "Arteta's Gunners at 4.25 on WSB is the value play — the line has been shortening all week, which tells you the sharp money is already moving their way. City have an injury concern in the away_injury signal, and that's enough to make this price look generous.\n\nBack the Gunners.",
+        "char_count": 277,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Manchester City vs Arsenal",
+          "pick": "Away Win",
+          "odds": 4.25,
+          "bookmaker": "wsb",
+          "ev": 10.1,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": [
+            "R. Calafiori (Questionable/Questionable)",
+            "M. Odegaard (Questionable/Questionable)",
+            "D. Rice (Questionable/Questionable)",
+            "B. Saka (Questionable/Questionable)",
+            "J. Timber (Questionable/Questionable)"
+          ],
+          "line_movement": "shortening"
+        },
+        "evidence_bullets": [
+          "Odds: 4.25 @ wsb, EV +10.1%",
+          "Line movement: shortening",
+          "Signals: line_movement:shortening, away_injury",
+          "Away injuries: R. Calafiori (Questionable/Questionable), M. Odegaard (Questionable/Questionable)"
+        ]
+      },
+      {
+        "fixture": "wolves_vs_tottenham_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "diamond",
+        "candidate_idx": 1,
+        "verdict": "Wolves at 3.65 on WSB is sharp value — the line has been drifting away from Spurs all week, and Postecoglou's side are giving nothing to back them on the road right now. The price edge is real, and the market is telling you something.\n\nBack Wolves.",
+        "char_count": 248,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Wolves vs Tottenham",
+          "pick": "Home Win",
+          "odds": 3.65,
+          "bookmaker": "wsb",
+          "ev": 4.3,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "drifting"
+        },
+        "evidence_bullets": [
+          "Odds: 3.65 @ wsb, EV +4.3%",
+          "Line movement: drifting",
+          "Signals: line_movement:drifting, price_edge"
+        ]
+      },
+      {
+        "fixture": "wolves_vs_tottenham_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "diamond",
+        "candidate_idx": 2,
+        "verdict": "Wolves at 3.65 on WSB is where the value sits — the line has been drifting Spurs' way all week, which means sharp money is landing on the home side. Postecoglou's Spurs are giving up goals and confidence, and the price edge here is real.\n\nBack Wolves.",
+        "char_count": 251,
+        "passed": false,
+        "fails": [
+          "blacklist:the home side"
+        ],
+        "allowed_data": {
+          "matchup": "Wolves vs Tottenham",
+          "pick": "Home Win",
+          "odds": 3.65,
+          "bookmaker": "wsb",
+          "ev": 4.3,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "drifting"
+        },
+        "evidence_bullets": [
+          "Odds: 3.65 @ wsb, EV +4.3%",
+          "Line movement: drifting",
+          "Signals: line_movement:drifting, price_edge"
+        ]
+      },
+      {
+        "fixture": "ulster_vs_leinster_2026-04-17",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "diamond",
+        "candidate_idx": 1,
+        "verdict": "Leinster away at 2.21 on gbets is where the edge sits — the price signal is firing strong on the visitors here. Ulster at home is never easy, but the line is telling you Leinster are being undervalued at those odds.\n\nBack Leinster.",
+        "char_count": 231,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Ulster vs Leinster",
+          "pick": "Away Win",
+          "odds": 2.21,
+          "bookmaker": "gbets",
+          "ev": 1.9,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.21 @ gbets, EV +1.9%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "ulster_vs_leinster_2026-04-17",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "diamond",
+        "candidate_idx": 2,
+        "verdict": "Leinster away at 2.21 on gbets is where the edge sits — the price signal is firing strong on the visitors here. Leinster are the class act in this competition and Ulster at home doesn't change that equation.\n\nBack Leinster.",
+        "char_count": 223,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Ulster vs Leinster",
+          "pick": "Away Win",
+          "odds": 2.21,
+          "bookmaker": "gbets",
+          "ev": 1.9,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.21 @ gbets, EV +1.9%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "royal_challengers_bengaluru_vs_lucknow_super_giants_2026-04-15",
+        "sport": "cricket",
+        "league": "ipl",
+        "tier": "diamond",
+        "candidate_idx": 1,
+        "verdict": "RCB at 1.51 on WSB is where the value sits — the price edge signal is firing and the line is offering more than it should on the home side. Lucknow come here without the numbers backing them to turn this over.\n\n**Back Royal Challengers Bengaluru.",
+        "char_count": 246,
+        "passed": false,
+        "fails": [
+          "blacklist:the home side"
+        ],
+        "allowed_data": {
+          "matchup": "Royal Challengers Bengaluru vs Lucknow Super Giants",
+          "pick": "Home Win",
+          "odds": 1.51,
+          "bookmaker": "wsb",
+          "ev": 1.3,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.51 @ wsb, EV +1.3%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "royal_challengers_bengaluru_vs_lucknow_super_giants_2026-04-15",
+        "sport": "cricket",
+        "league": "ipl",
+        "tier": "diamond",
+        "candidate_idx": 2,
+        "verdict": "RCB at 1.51 on WSB is the value call here — the price edge signal is firing and the line is sitting shorter than it should for a home side with this much firepower. Lucknow travel to Bengaluru without the numbers backing them to take the points.\n\n**Back Royal Challengers Bengaluru.",
+        "char_count": 282,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Royal Challengers Bengaluru vs Lucknow Super Giants",
+          "pick": "Home Win",
+          "odds": 1.51,
+          "bookmaker": "wsb",
+          "ev": 1.3,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.51 @ wsb, EV +1.3%",
+          "Signals: price_edge"
+        ]
+      }
+    ],
+    "gold": [
+      {
+        "fixture": "everton_vs_liverpool_2026-04-19",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Everton at 3.25 on Sportingbet is the value call here — the Toffees at home in a derby carry genuine upset potential, and that price is too generous to ignore. Slot's Reds haven't had it easy on the road in derby situations, and the signals are pointing Everton's way.\n\nBack Everton.",
+        "char_count": 283,
+        "passed": false,
+        "fails": [
+          "blacklist:derby"
+        ],
+        "allowed_data": {
+          "matchup": "Everton vs Liverpool",
+          "pick": "Home Win",
+          "odds": 3.25,
+          "bookmaker": "sportingbet",
+          "ev": 3.2,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 3.25 @ sportingbet, EV +3.2%"
+        ]
+      },
+      {
+        "fixture": "everton_vs_liverpool_2026-04-19",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Everton at 3.25 on Sportingbet is the value play here — Slot's Reds have been leaking points on the road and the Toffees at home in a derby carry a different kind of edge. The signals are firing on this one, and that price on a home win in a local derby is too good to ignore.\n\nBack Everton.",
+        "char_count": 291,
+        "passed": false,
+        "fails": [
+          "blacklist:derby"
+        ],
+        "allowed_data": {
+          "matchup": "Everton vs Liverpool",
+          "pick": "Home Win",
+          "odds": 3.25,
+          "bookmaker": "sportingbet",
+          "ev": 3.2,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 3.25 @ sportingbet, EV +3.2%"
+        ]
+      },
+      {
+        "fixture": "brentford_vs_fulham_2026-04-18",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Brentford at 2.16 on Supabets is where the value sits — the price is longer than it should be for a home side in a west London derby. The signals are pointing at a pricing edge here, meaning the market has underestimated Brentford on their own patch against Silva's Fulham.\n\nBack Brentford.",
+        "char_count": 290,
+        "passed": false,
+        "fails": [
+          "blacklist:derby"
+        ],
+        "allowed_data": {
+          "matchup": "Brentford vs Fulham",
+          "pick": "Home Win",
+          "odds": 2.16,
+          "bookmaker": "supabets",
+          "ev": 1.6,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.16 @ supabets, EV +1.6%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "brentford_vs_fulham_2026-04-18",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Brentford at 2.16 with Supabets is where the value sits — the price edge is firing and the market is giving us more than we should be getting on the home side. Silva's Fulham travel to West London as the shorter-priced option, and that line looks wrong.\n\nBack Brentford.",
+        "char_count": 270,
+        "passed": false,
+        "fails": [
+          "blacklist:the home side"
+        ],
+        "allowed_data": {
+          "matchup": "Brentford vs Fulham",
+          "pick": "Home Win",
+          "odds": 2.16,
+          "bookmaker": "supabets",
+          "ev": 1.6,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.16 @ supabets, EV +1.6%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "tottenham_vs_brighton_2026-04-18",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Brighton at 2.46 on Supabets is catching smart money — the line has been shortening all week, which tells you where the sharp action is going. The price edge is still live, meaning Supabets haven't caught up to where this should be sitting.\n\nBack Brighton.",
+        "char_count": 256,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Tottenham vs Brighton",
+          "pick": "Away Win",
+          "odds": 2.46,
+          "bookmaker": "supabets",
+          "ev": 1.7,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "shortening"
+        },
+        "evidence_bullets": [
+          "Odds: 2.46 @ supabets, EV +1.7%",
+          "Line movement: shortening",
+          "Signals: line_movement:shortening, price_edge"
+        ]
+      },
+      {
+        "fixture": "tottenham_vs_brighton_2026-04-18",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Brighton at 2.46 on Supabets is where the value sits — the line has been shortening, meaning the sharp money is already moving their way, and Supabets haven't caught up yet. That price edge is real, and you don't ignore it when the market is speaking this clearly.\n\nBack Brighton.",
+        "char_count": 280,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Tottenham vs Brighton",
+          "pick": "Away Win",
+          "odds": 2.46,
+          "bookmaker": "supabets",
+          "ev": 1.7,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "shortening"
+        },
+        "evidence_bullets": [
+          "Odds: 2.46 @ supabets, EV +1.7%",
+          "Line movement: shortening",
+          "Signals: line_movement:shortening, price_edge"
+        ]
+      },
+      {
+        "fixture": "newcastle_vs_bournemouth_2026-04-18",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Bournemouth at 3.50 on WSB is where the value sits — the price is out of line with what the signals are showing on this one. The edge here is in the odds themselves, and WSB haven't adjusted to where this line should be.\n\nBack Bournemouth.",
+        "char_count": 239,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Newcastle vs Bournemouth",
+          "pick": "Away Win",
+          "odds": 3.5,
+          "bookmaker": "wsb",
+          "ev": 2.8,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 3.50 @ wsb, EV +2.8%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "newcastle_vs_bournemouth_2026-04-18",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Bournemouth at 3.50 with WSB carries real price edge here — the market's undervaluing them and that signal is hard to ignore. Howe's Magpies don't have the form data to back up being this heavily favoured.\n\nBack Bournemouth.",
+        "char_count": 224,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Newcastle vs Bournemouth",
+          "pick": "Away Win",
+          "odds": 3.5,
+          "bookmaker": "wsb",
+          "ev": 2.8,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 3.50 @ wsb, EV +2.8%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "west_ham_vs_everton_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Everton away at 2.75 on WSB is where the value lives — the price edge signal is firing loud on this one. The Hammers aren't offering enough reason to back them at home, and the market's underpricing Everton here.\n\nBack Everton.",
+        "char_count": 227,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "West Ham vs Everton",
+          "pick": "Away Win",
+          "odds": 2.75,
+          "bookmaker": "wsb",
+          "ev": 1.9,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.75 @ wsb, EV +1.9%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "west_ham_vs_everton_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Everton away at 2.75 on WSB carries real edge — the price signal is firing strong and the bookmaker hasn't caught up with where this line should be. That gap is exactly where the value lives.\n\nBack Everton.",
+        "char_count": 206,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "West Ham vs Everton",
+          "pick": "Away Win",
+          "odds": 2.75,
+          "bookmaker": "wsb",
+          "ev": 1.9,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.75 @ wsb, EV +1.9%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "fulham_vs_aston_villa_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Villa away at 2.60 on WSB is the play — Emery's side have the tactical nous and squad depth to take three points at Craven Cottage. The signals are firing on Villa here, and that price is too generous to ignore.\n\nBack Villa.",
+        "char_count": 224,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Fulham vs Aston Villa",
+          "pick": "Away Win",
+          "odds": 2.6,
+          "bookmaker": "wsb",
+          "ev": 3.6,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.60 @ wsb, EV +3.6%"
+        ]
+      },
+      {
+        "fixture": "fulham_vs_aston_villa_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Villa away at 2.60 on WSB is the move — Emery's side carry genuine quality and the signals are firing for an away win here. At those odds, there's clear edge on Villa to get the job done at Craven Cottage.\n\nBack Villa.",
+        "char_count": 218,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Fulham vs Aston Villa",
+          "pick": "Away Win",
+          "odds": 2.6,
+          "bookmaker": "wsb",
+          "ev": 3.6,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.60 @ wsb, EV +3.6%"
+        ]
+      },
+      {
+        "fixture": "orlando_pirates_vs_amazulu_2026-04-18",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Signals active: Home Win edge firing STRONG at Hollywoodbets, and the 1.50 line on the Bucs at home is where the value sits. Usuthu away from home is a tough ask, and the signals are pointing firmly in one direction here.\n\nBack the Bucs.",
+        "char_count": 237,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Orlando Pirates vs Amazulu",
+          "pick": "Home Win",
+          "odds": 1.5,
+          "bookmaker": "hollywoodbets",
+          "ev": 6.8,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.50 @ hollywoodbets, EV +6.8%"
+        ]
+      },
+      {
+        "fixture": "orlando_pirates_vs_amazulu_2026-04-18",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Signals active would normally seal this, but even without the form sheet, the Bucs at 1.50 on Hollywoodbets against Usuthu is a line that carries weight — this is a STRONG tier call and Pirates at home is rarely a place Amazulu come to collect.",
+        "char_count": 244,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Orlando Pirates vs Amazulu",
+          "pick": "Home Win",
+          "odds": 1.5,
+          "bookmaker": "hollywoodbets",
+          "ev": 6.8,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.50 @ hollywoodbets, EV +6.8%"
+        ]
+      },
+      {
+        "fixture": "chiefs_vs_hurricanes_2026-04-12",
+        "sport": "rugby",
+        "league": "super_rugby",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Chiefs at 1.70 on WSB is where the value sits — the price edge signal is firing and the market is leaning Hamilton's way. At those odds, the Chiefs at home is a line worth taking.\n\nBack the Chiefs.",
+        "char_count": 197,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Chiefs vs Hurricanes",
+          "pick": "Home Win",
+          "odds": 1.7,
+          "bookmaker": "wsb",
+          "ev": 2.1,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.70 @ wsb, EV +2.1%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "chiefs_vs_hurricanes_2026-04-12",
+        "sport": "rugby",
+        "league": "super_rugby",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Chiefs at home is the call — WSB have them at 1.70 and the price edge signal is firing, meaning the market is undervaluing the Chiefs here. Hamilton is a fortress and the Canes are walking into a trap game.\n\nBack the Chiefs.",
+        "char_count": 224,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Chiefs vs Hurricanes",
+          "pick": "Home Win",
+          "odds": 1.7,
+          "bookmaker": "wsb",
+          "ev": 2.1,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.70 @ wsb, EV +2.1%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "western_force_vs_crusaders_2026-04-12",
+        "sport": "rugby",
+        "league": "super_rugby",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Crusaders at 1.55 on Betway is the play — the price edge signal is firing and the Crusaders are the kind of side you back on the road without needing convincing. They travel to Perth and get the job done.\n\nBack the Crusaders.",
+        "char_count": 225,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Western Force vs Crusaders",
+          "pick": "Away Win",
+          "odds": 1.55,
+          "bookmaker": "betway",
+          "ev": 1.8,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.55 @ betway, EV +1.8%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "western_force_vs_crusaders_2026-04-12",
+        "sport": "rugby",
+        "league": "super_rugby",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Betway's 1.55 on the Crusaders is the move — the price edge signal is firing and the Crusaders don't travel to Perth to lose. They're the benchmark side in Super Rugby and the Force rarely trouble them when it counts.\n\nBack the Crusaders.",
+        "char_count": 238,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Western Force vs Crusaders",
+          "pick": "Away Win",
+          "odds": 1.55,
+          "bookmaker": "betway",
+          "ev": 1.8,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.55 @ betway, EV +1.8%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "blues_vs_highlanders_2026-04-12",
+        "sport": "rugby",
+        "league": "super_rugby",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Blues at home on gBets at 1.65 is the sharp call — the price edge signal is firing and the Landers on the road is a tough ask at the best of times. The line represents real value here and the market hasn't corrected it.\n\nBack the Blues.",
+        "char_count": 236,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Blues vs Highlanders",
+          "pick": "Home Win",
+          "odds": 1.65,
+          "bookmaker": "gbets",
+          "ev": 2.0,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.65 @ gbets, EV +2.0%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "blues_vs_highlanders_2026-04-12",
+        "sport": "rugby",
+        "league": "super_rugby",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Blues at home is the call — gBets have them at 1.65 and the price edge signal is firing loud enough to make this a STRONG play. The Blues are a different animal in front of their home crowd and the Landers haven't been making life easy for themselves on the road.\n\nBack the Blues.",
+        "char_count": 280,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Blues vs Highlanders",
+          "pick": "Home Win",
+          "odds": 1.65,
+          "bookmaker": "gbets",
+          "ev": 2.0,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.65 @ gbets, EV +2.0%",
+          "Signals: price_edge"
+        ]
+      },
+      {
+        "fixture": "mumbai_indians_vs_punjab_kings_2026-04-16",
+        "sport": "cricket",
+        "league": "ipl",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Punjab Kings at 2.20 on Betway is the call — the signals are firing in their favour and the odds represent genuine edge on the away side. The line at that price on a SOLID confidence tier tells you the market is undervaluing Punjab here.\n\nBack Punjab Kings.",
+        "char_count": 257,
+        "passed": false,
+        "fails": [
+          "blacklist:the away side"
+        ],
+        "allowed_data": {
+          "matchup": "Mumbai Indians vs Punjab Kings",
+          "pick": "Away Win",
+          "odds": 2.2,
+          "bookmaker": "betway",
+          "ev": 2.4,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.20 @ betway, EV +2.4%"
+        ]
+      },
+      {
+        "fixture": "mumbai_indians_vs_punjab_kings_2026-04-16",
+        "sport": "cricket",
+        "league": "ipl",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Punjab Kings at 2.20 on Betway is the value call here — the odds are generous enough on an away win that the edge is real. The signals back Punjab Kings to get the job done tonight.\n\nBack Punjab Kings.",
+        "char_count": 201,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Mumbai Indians vs Punjab Kings",
+          "pick": "Away Win",
+          "odds": 2.2,
+          "bookmaker": "betway",
+          "ev": 2.4,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.20 @ betway, EV +2.4%"
+        ]
+      },
+      {
+        "fixture": "dragons_vs_bulls_2026-04-17",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "gold",
+        "candidate_idx": 1,
+        "verdict": "Bulls money at GBets is the call — the line's been drifting their way and the price edge is clearly there at 1.20. The signals are aligned and the Bulls travel well enough to get this done.\n\nBack the Bulls.",
+        "char_count": 206,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Dragons vs Bulls",
+          "pick": "Away Win",
+          "odds": 1.2,
+          "bookmaker": "gbets",
+          "ev": 1.5,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "drifting"
+        },
+        "evidence_bullets": [
+          "Odds: 1.20 @ gbets, EV +1.5%",
+          "Line movement: drifting",
+          "Signals: line_movement:drifting, price_edge"
+        ]
+      },
+      {
+        "fixture": "dragons_vs_bulls_2026-04-17",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "gold",
+        "candidate_idx": 2,
+        "verdict": "Bulls money at gBets is the call — the line's been drifting their way and there's clear price edge on the 1.20. The signals are aligned, and the Bulls don't travel to back down.\n\nBack the Bulls.",
+        "char_count": 194,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Dragons vs Bulls",
+          "pick": "Away Win",
+          "odds": 1.2,
+          "bookmaker": "gbets",
+          "ev": 1.5,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "drifting"
+        },
+        "evidence_bullets": [
+          "Odds: 1.20 @ gbets, EV +1.5%",
+          "Line movement: drifting",
+          "Signals: line_movement:drifting, price_edge"
+        ]
+      }
+    ],
+    "silver": [
+      {
+        "fixture": "manchester_united_vs_brentford_2026-04-27",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "silver",
+        "candidate_idx": 1,
+        "verdict": "Signals active — this is a STRONG edge on Brentford at 4.50 with WSB, and that price is too big to ignore given where the value sits. Amorim's United are struggling at Old Trafford this season and Brentford have the organisation and directness to punish a side low on confidence.\n\nBack Brentford.",
+        "char_count": 296,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Manchester United vs Brentford",
+          "pick": "Away Win",
+          "odds": 4.5,
+          "bookmaker": "wsb",
+          "ev": 5.2,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 4.50 @ wsb, EV +5.2%"
+        ]
+      },
+      {
+        "fixture": "manchester_united_vs_brentford_2026-04-27",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "silver",
+        "candidate_idx": 2,
+        "verdict": "Signals active would be the deciding factor here — Brentford at 4.50 on WSB is a juicy number against a United side that Amorim is still trying to figure out, and the STRONG confidence tier says the edge is real.",
+        "char_count": 212,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Manchester United vs Brentford",
+          "pick": "Away Win",
+          "odds": 4.5,
+          "bookmaker": "wsb",
+          "ev": 5.2,
+          "confidence_tier": "STRONG",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 4.50 @ wsb, EV +5.2%"
+        ]
+      },
+      {
+        "fixture": "lions_vs_glasgow_2026-04-18",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "silver",
+        "candidate_idx": 1,
+        "verdict": "Glasgow at 4.25 on WSB is the value play — the line has been shortening on the visitors all week, which tells you where the sharp money is landing. That kind of movement at those odds means the market knows something, and you don't ignore it.\n\nBack Glasgow.",
+        "char_count": 257,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Lions vs Glasgow",
+          "pick": "Away Win",
+          "odds": 4.25,
+          "bookmaker": "wsb",
+          "ev": 2.0,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "shortening"
+        },
+        "evidence_bullets": [
+          "Odds: 4.25 @ wsb, EV +2.0%",
+          "Line movement: shortening",
+          "Signals: line_movement:shortening"
+        ]
+      },
+      {
+        "fixture": "lions_vs_glasgow_2026-04-18",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "silver",
+        "candidate_idx": 2,
+        "verdict": "Glasgow at 4.25 on WSB is worth jumping on — the line has been shortening, meaning sharp money is moving their way ahead of kick-off. That kind of market movement doesn't lie, and the odds still offer real value before they tighten further.\n\nBack Glasgow.",
+        "char_count": 255,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Lions vs Glasgow",
+          "pick": "Away Win",
+          "odds": 4.25,
+          "bookmaker": "wsb",
+          "ev": 2.0,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "shortening"
+        },
+        "evidence_bullets": [
+          "Odds: 4.25 @ wsb, EV +2.0%",
+          "Line movement: shortening",
+          "Signals: line_movement:shortening"
+        ]
+      },
+      {
+        "fixture": "benetton_treviso_vs_munster_2026-04-18",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "silver",
+        "candidate_idx": 1,
+        "verdict": "Munster at 1.77 on WSB is the move — the signals back them to get the job done away from home against Benetton Treviso. The odds are generous enough on a SOLID-tier edge that the value is clear.\n\nBack Munster.",
+        "char_count": 209,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Benetton Treviso vs Munster",
+          "pick": "Away Win",
+          "odds": 1.77,
+          "bookmaker": "wsb",
+          "ev": 1.5,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.77 @ wsb, EV +1.5%"
+        ]
+      },
+      {
+        "fixture": "benetton_treviso_vs_munster_2026-04-18",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "silver",
+        "candidate_idx": 2,
+        "verdict": "Munster at 1.77 on WSB is the move — the signals are firing on the away side here, and that's a number worth taking. Munster travel well in the URC and the edge points clearly in their direction.\n\nBack Munster.",
+        "char_count": 210,
+        "passed": false,
+        "fails": [
+          "blacklist:the away side"
+        ],
+        "allowed_data": {
+          "matchup": "Benetton Treviso vs Munster",
+          "pick": "Away Win",
+          "odds": 1.77,
+          "bookmaker": "wsb",
+          "ev": 1.5,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.77 @ wsb, EV +1.5%"
+        ]
+      },
+      {
+        "fixture": "ospreys_vs_sharks_2026-04-18",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "silver",
+        "candidate_idx": 1,
+        "verdict": "The Sharks away at WSB for 1.80 is the call — the signals are firing and the odds are sharp enough to back. This is a SOLID edge, and the Sharks are built for exactly this kind of road assignment.\n\nBack the Sharks.",
+        "char_count": 214,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Ospreys vs Sharks",
+          "pick": "Away Win",
+          "odds": 1.8,
+          "bookmaker": "wsb",
+          "ev": 1.8,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.80 @ wsb, EV +1.8%"
+        ]
+      },
+      {
+        "fixture": "ospreys_vs_sharks_2026-04-18",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "silver",
+        "candidate_idx": 2,
+        "verdict": "The Sharks away at WSB on 1.80 is the play — the signals are firing and the odds represent real edge on the Durban side to get the job done in Wales. Back the Sharks.",
+        "char_count": 166,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Ospreys vs Sharks",
+          "pick": "Away Win",
+          "odds": 1.8,
+          "bookmaker": "wsb",
+          "ev": 1.8,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.80 @ wsb, EV +1.8%"
+        ]
+      },
+      {
+        "fixture": "scarlets_vs_cardiff_2026-04-18",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "silver",
+        "candidate_idx": 1,
+        "verdict": "Cardiff away at WSB is the call — the signals are firing on this one and 1.95 is a price worth jumping on. The edge here is clear enough that this lands as a SOLID play without needing the form book to spell it out.\n\nBack Cardiff.",
+        "char_count": 230,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Scarlets vs Cardiff",
+          "pick": "Away Win",
+          "odds": 1.95,
+          "bookmaker": "wsb",
+          "ev": 1.5,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.95 @ wsb, EV +1.5%"
+        ]
+      },
+      {
+        "fixture": "scarlets_vs_cardiff_2026-04-18",
+        "sport": "rugby",
+        "league": "urc",
+        "tier": "silver",
+        "candidate_idx": 2,
+        "verdict": "Cardiff away at WSB is the call — the signals are firing on the Blues and 1.95 is a price worth taking in a derby where they carry the edge. The line points clearly in Cardiff's favour and WSB have them priced just right to back.\n\nBack Cardiff.",
+        "char_count": 244,
+        "passed": false,
+        "fails": [
+          "blacklist:derby"
+        ],
+        "allowed_data": {
+          "matchup": "Scarlets vs Cardiff",
+          "pick": "Away Win",
+          "odds": 1.95,
+          "bookmaker": "wsb",
+          "ev": 1.5,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.95 @ wsb, EV +1.5%"
+        ]
+      },
+      {
+        "fixture": "liverpool_vs_crystal_palace_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "silver",
+        "candidate_idx": 1,
+        "verdict": "Palace at 5.90 on SuperSportBet is the value call here — Slot's Reds are heavy favourites but the market is overcooked and the signals are pointing the Eagles' way. At nearly 6-to-1, you only need Palace to nick it once and the edge is real.\n\nBack Palace.",
+        "char_count": 255,
+        "passed": false,
+        "fails": [
+          "no_pick_reference"
+        ],
+        "allowed_data": {
+          "matchup": "Liverpool vs Crystal Palace",
+          "pick": "Away Win",
+          "odds": 5.9,
+          "bookmaker": "supersportbet",
+          "ev": 3.3,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 5.90 @ supersportbet, EV +3.3%"
+        ]
+      },
+      {
+        "fixture": "liverpool_vs_crystal_palace_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "silver",
+        "candidate_idx": 2,
+        "verdict": "Palace at 5.90 on SuperSportBet is the value call here — Slot's Reds are heavy favourites but the market is overreacting, and there's a real edge on the visitors at this price. The signals are firing for an upset, and Palace away at big odds is exactly the kind of play sharp money targets.",
+        "char_count": 290,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Liverpool vs Crystal Palace",
+          "pick": "Away Win",
+          "odds": 5.9,
+          "bookmaker": "supersportbet",
+          "ev": 3.3,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 5.90 @ supersportbet, EV +3.3%"
+        ]
+      },
+      {
+        "fixture": "polokwane_city_vs_kaizer_chiefs_2026-04-15",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "silver",
+        "candidate_idx": 1,
+        "verdict": "Amakhosi at 2.10 on Hollywoodbets is the pick — the odds on a Chiefs away win are too good to leave on the table. The signals are firing in their favour and the market is backing them to get the job done in Polokwane.\n\nBack Amakhosi.",
+        "char_count": 233,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Polokwane City vs Kaizer Chiefs",
+          "pick": "Away Win",
+          "odds": 2.1,
+          "bookmaker": "hollywoodbets",
+          "ev": 1.8,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.10 @ hollywoodbets, EV +1.8%"
+        ]
+      },
+      {
+        "fixture": "polokwane_city_vs_kaizer_chiefs_2026-04-15",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "silver",
+        "candidate_idx": 2,
+        "verdict": "Amakhosi at 2.10 on Hollywoodbets is the value play here — the odds are generous for a Chiefs side that travels well and carries genuine quality in this fixture. Rise and Shine at home is no walkover, but the price on Kaizer Chiefs away is too good to leave on the table.\n\nBack Amakhosi.",
+        "char_count": 287,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Polokwane City vs Kaizer Chiefs",
+          "pick": "Away Win",
+          "odds": 2.1,
+          "bookmaker": "hollywoodbets",
+          "ev": 1.8,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.10 @ hollywoodbets, EV +1.8%"
+        ]
+      },
+      {
+        "fixture": "stellenbosch_vs_sekhukhune_united_2026-04-15",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "silver",
+        "candidate_idx": 1,
+        "verdict": "Babina Ntwa at 2.90 on Gbets is the value play here — the odds are generous for a side that carries genuine away threat in the PSL. The line is long enough to make this worth riding, and Gbets have left money on the table.\n\nBack Babina Ntwa.",
+        "char_count": 241,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Stellenbosch vs Sekhukhune United",
+          "pick": "Away Win",
+          "odds": 2.9,
+          "bookmaker": "gbets",
+          "ev": 2.0,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.90 @ gbets, EV +2.0%"
+        ]
+      },
+      {
+        "fixture": "stellenbosch_vs_sekhukhune_united_2026-04-15",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "silver",
+        "candidate_idx": 2,
+        "verdict": "Babina Ntwa at 2.90 on Gbets is where the value sits, and the signals are pointing away from Stellies here. The odds on offer reflect a market that's underestimating Sekhukhune's chances on the road.\n\nBack Babina Ntwa.",
+        "char_count": 218,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Stellenbosch vs Sekhukhune United",
+          "pick": "Away Win",
+          "odds": 2.9,
+          "bookmaker": "gbets",
+          "ev": 2.0,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.90 @ gbets, EV +2.0%"
+        ]
+      }
+    ],
+    "bronze": [
+      {
+        "fixture": "arsenal_vs_newcastle_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "bronze",
+        "candidate_idx": 1,
+        "verdict": "Newcastle away at 6.00 on WSB is the value play — the line's been drifting away from the Gunners all week, and with a home injury concern flagged, Arteta's side aren't at full strength to defend this price.",
+        "char_count": 206,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Arsenal vs Newcastle",
+          "pick": "Away Win",
+          "odds": 6.0,
+          "bookmaker": "wsb",
+          "ev": 2.6,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": [
+            "R. Calafiori (Questionable/Questionable)",
+            "M. Odegaard (Questionable/Questionable)",
+            "D. Rice (Questionable/Questionable)",
+            "B. Saka (Questionable/Questionable)",
+            "J. Timber (Questionable/Questionable)"
+          ],
+          "away_injuries": null,
+          "line_movement": "drifting"
+        },
+        "evidence_bullets": [
+          "Odds: 6.00 @ wsb, EV +2.6%",
+          "Line movement: drifting",
+          "Signals: line_movement:drifting, home_injury",
+          "Home injuries: R. Calafiori (Questionable/Questionable), M. Odegaard (Questionable/Questionable)"
+        ]
+      },
+      {
+        "fixture": "arsenal_vs_newcastle_2026-04-25",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "bronze",
+        "candidate_idx": 2,
+        "verdict": "Newcastle away at 6.00 on WSB is the value call — the line's been drifting and there's injury concern in the Gunners camp, which is exactly when Howe's Magpies punish you. At those odds, the market is handing you a price that doesn't reflect what's happening on the ground right now.",
+        "char_count": 283,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Arsenal vs Newcastle",
+          "pick": "Away Win",
+          "odds": 6.0,
+          "bookmaker": "wsb",
+          "ev": 2.6,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": [
+            "R. Calafiori (Questionable/Questionable)",
+            "M. Odegaard (Questionable/Questionable)",
+            "D. Rice (Questionable/Questionable)",
+            "B. Saka (Questionable/Questionable)",
+            "J. Timber (Questionable/Questionable)"
+          ],
+          "away_injuries": null,
+          "line_movement": "drifting"
+        },
+        "evidence_bullets": [
+          "Odds: 6.00 @ wsb, EV +2.6%",
+          "Line movement: drifting",
+          "Signals: line_movement:drifting, home_injury",
+          "Home injuries: R. Calafiori (Questionable/Questionable), M. Odegaard (Questionable/Questionable)"
+        ]
+      },
+      {
+        "fixture": "magesi_vs_kaizer_chiefs_2026-04-15",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "bronze",
+        "candidate_idx": 1,
+        "verdict": "Magesi at 4.60 on Betway is catching eyes — the line has been drifting, which tells you the sharp money isn't rushing to back Amakhosi here. At those odds, there's genuine value on the home side to cause an upset.\n\nBack Magesi.",
+        "char_count": 227,
+        "passed": false,
+        "fails": [
+          "blacklist:the home side"
+        ],
+        "allowed_data": {
+          "matchup": "Magesi vs Kaizer Chiefs",
+          "pick": "Home Win",
+          "odds": 4.6,
+          "bookmaker": "betway",
+          "ev": 3.3,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "drifting"
+        },
+        "evidence_bullets": [
+          "Odds: 4.60 @ betway, EV +3.3%",
+          "Line movement: drifting",
+          "Signals: line_movement:drifting"
+        ]
+      },
+      {
+        "fixture": "magesi_vs_kaizer_chiefs_2026-04-15",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "bronze",
+        "candidate_idx": 2,
+        "verdict": "Magesi at 4.60 on Betway is catching eyes — the line has been drifting, which tells you the sharp money isn't rushing to back Amakhosi here. At those odds, Magesi represent genuine value against a Chiefs side that the market is quietly cooling on.\n\nBack Magesi.",
+        "char_count": 261,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Magesi vs Kaizer Chiefs",
+          "pick": "Home Win",
+          "odds": 4.6,
+          "bookmaker": "betway",
+          "ev": 3.3,
+          "confidence_tier": "SOLID",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": "drifting"
+        },
+        "evidence_bullets": [
+          "Odds: 4.60 @ betway, EV +3.3%",
+          "Line movement: drifting",
+          "Signals: line_movement:drifting"
+        ]
+      },
+      {
+        "fixture": "ts_galaxy_vs_richards_bay_2026-04-15",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "bronze",
+        "candidate_idx": 1,
+        "verdict": "Galaxy at 2.10 on Hollywoodbets is the call here — home advantage counts in the PSL and Richards Bay haven't been making life difficult for anyone on the road. The odds offer enough cushion to make the home win worth backing at this price.\n\nBack Galaxy.",
+        "char_count": 253,
+        "passed": false,
+        "fails": [
+          "blacklist:home advantage"
+        ],
+        "allowed_data": {
+          "matchup": "Ts Galaxy vs Richards Bay",
+          "pick": "Home Win",
+          "odds": 2.1,
+          "bookmaker": "hollywoodbets",
+          "ev": 1.5,
+          "confidence_tier": "MILD",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.10 @ hollywoodbets, EV +1.5%"
+        ]
+      },
+      {
+        "fixture": "ts_galaxy_vs_richards_bay_2026-04-15",
+        "sport": "soccer",
+        "league": "psl",
+        "tier": "bronze",
+        "candidate_idx": 2,
+        "verdict": "Galaxy at 2.10 on Hollywoodbets is the lean here — home advantage counts in the PSL and Richards Bay haven't been making life difficult for anyone on their travels. The odds offer enough cushion to make the home side worth backing at this price.\n\nBack Galaxy.",
+        "char_count": 259,
+        "passed": false,
+        "fails": [
+          "blacklist:home advantage"
+        ],
+        "allowed_data": {
+          "matchup": "Ts Galaxy vs Richards Bay",
+          "pick": "Home Win",
+          "odds": 2.1,
+          "bookmaker": "hollywoodbets",
+          "ev": 1.5,
+          "confidence_tier": "MILD",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 2.10 @ hollywoodbets, EV +1.5%"
+        ]
+      },
+      {
+        "fixture": "manchester_city_vs_southampton_2026-04-19",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "bronze",
+        "candidate_idx": 1,
+        "verdict": "City at home against the Saints at WSB is the play — Guardiola's side are heavy favourites for good reason, and Southampton have been one of the division's softest sides all season. The 1.25 is short, but this is a MILD edge, not a banker, so the signal is there even if the return is modest.",
+        "char_count": 292,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Manchester City vs Southampton",
+          "pick": "Home Win",
+          "odds": 1.25,
+          "bookmaker": "wsb",
+          "ev": 1.0,
+          "confidence_tier": "MILD",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.25 @ wsb, EV +1.0%"
+        ]
+      },
+      {
+        "fixture": "manchester_city_vs_southampton_2026-04-19",
+        "sport": "soccer",
+        "league": "epl",
+        "tier": "bronze",
+        "candidate_idx": 2,
+        "verdict": "**City at 1.25 on WSB is still the call** — Guardiola's side are heavy favourites at home against a Saints outfit that has struggled all season, and the signals back the home win here. The short odds reflect just how one-sided this matchup looks on paper.\n\nBack City.",
+        "char_count": 267,
+        "passed": true,
+        "fails": [],
+        "allowed_data": {
+          "matchup": "Manchester City vs Southampton",
+          "pick": "Home Win",
+          "odds": 1.25,
+          "bookmaker": "wsb",
+          "ev": 1.0,
+          "confidence_tier": "MILD",
+          "h2h_summary": "H2H data unavailable",
+          "home_injuries": null,
+          "away_injuries": null,
+          "line_movement": null
+        },
+        "evidence_bullets": [
+          "Odds: 1.25 @ wsb, EV +1.0%"
+        ]
+      }
+    ]
+  }
+}
