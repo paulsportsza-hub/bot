@@ -1740,6 +1740,116 @@ async def _generate_one(
                 narrative = w82_baseline
                 narrative_source = "w82"
 
+    # BUILD-VERDICT-QUALITY-GATE-01: Gold/Diamond tier quality gate.
+    # If the final narrative's verdict is content-empty, attempt ONE Sonnet
+    # retry.  If the retry also fails, mark gold_verdict_failed and abort —
+    # do NOT serve the deterministic baseline for Gold/Diamond tier.
+    _gold_verdict_failed = False
+    _pregen_edge_tier = edge.get("tier", "bronze")
+    if narrative and _pregen_edge_tier in ("gold", "diamond") and not _is_non_edge:
+        from narrative_spec import min_verdict_quality, _extract_verdict_text
+        _verdict_text_raw = _extract_verdict_text(narrative)
+        if not min_verdict_quality(_verdict_text_raw):
+            log.warning(
+                "GOLD-QUALITY-GATE: verdict failed quality check for %s "
+                "(tier=%s, verdict_len=%d) — attempting Sonnet retry",
+                match_key, _pregen_edge_tier, len(_verdict_text_raw),
+            )
+            # Retry: one more Sonnet generation attempt
+            _retry_narrative = ""
+            try:
+                if evidence_pack is not None and spec is not None:
+                    _retry_prompt = format_evidence_prompt(evidence_pack, spec)
+                    _retry_resp = await claude.messages.create(
+                        model=SHADOW_MODEL,
+                        max_tokens=1200,
+                        messages=[{"role": "user", "content": _retry_prompt}],
+                        timeout=45.0,
+                    )
+                    _retry_draft = _strip_preamble(
+                        _extract_text_from_response(_retry_resp)
+                    ).strip()
+                    _retry_draft = sanitize_ai_response(_retry_draft)
+                    _retry_passed, _retry_report = verify_shadow_narrative(
+                        _retry_draft, evidence_pack, spec
+                    )
+                    if _retry_passed:
+                        _retry_narrative = (
+                            _retry_report.get("sanitized_draft") or _retry_draft
+                        )
+            except Exception as _gq_retry_err:
+                log.warning(
+                    "GOLD-QUALITY-GATE: retry error for %s: %s",
+                    match_key, _gq_retry_err,
+                )
+            # Evaluate retry result
+            if _retry_narrative:
+                _retry_verdict = _extract_verdict_text(_retry_narrative)
+                if min_verdict_quality(_retry_verdict):
+                    narrative = _retry_narrative
+                    narrative_source = "w84_quality_retry"
+                    log.info(
+                        "GOLD-QUALITY-GATE: retry succeeded for %s", match_key
+                    )
+                else:
+                    _gold_verdict_failed = True
+                    log.error(
+                        "GOLD-QUALITY-GATE: second attempt also failed for %s "
+                        "(tier=%s) — marking gold_verdict_failed",
+                        match_key, _pregen_edge_tier,
+                    )
+            else:
+                _gold_verdict_failed = True
+                log.error(
+                    "GOLD-QUALITY-GATE: retry returned no narrative for %s "
+                    "(tier=%s) — marking gold_verdict_failed",
+                    match_key, _pregen_edge_tier,
+                )
+
+    if _gold_verdict_failed:
+        # Alert EdgeOps: write to gold_verdict_failed_edges table
+        try:
+            from db_connection import get_connection as _gvf_conn
+            _db_p = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "data", "mzansiedge.db",
+            )
+            _gvf_c = _gvf_conn(_db_p, timeout_ms=3000)
+            try:
+                _gvf_c.execute(
+                    "CREATE TABLE IF NOT EXISTS gold_verdict_failed_edges ("
+                    "match_key TEXT PRIMARY KEY, edge_tier TEXT NOT NULL, "
+                    "fixture TEXT NOT NULL, pick TEXT NOT NULL, "
+                    "failure_reason TEXT NOT NULL, "
+                    "failed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+                )
+                _gvf_pick = (
+                    tips[0].get("outcome", "?") if tips else "?"
+                )
+                _gvf_c.execute(
+                    "INSERT OR REPLACE INTO gold_verdict_failed_edges "
+                    "(match_key, edge_tier, fixture, pick, failure_reason) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        match_key,
+                        _pregen_edge_tier,
+                        f"{home} vs {away}",
+                        _gvf_pick,
+                        "verdict_quality_gate_double_fail",
+                    ),
+                )
+                _gvf_c.commit()
+            finally:
+                _gvf_c.close()
+        except Exception as _gvf_err:
+            log.warning("GOLD-QUALITY-GATE: failed to write alert row: %s", _gvf_err)
+        return {
+            "match_key": match_key,
+            "success": False,
+            "gold_verdict_failed": True,
+            "duration": time.time() - t0,
+        }
+
     # 8. Build the full HTML message (simplified — no user-specific gating)
     from html import escape as h
     hf, af = "", ""

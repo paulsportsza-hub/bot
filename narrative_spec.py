@@ -140,6 +140,102 @@ def lookup_coach(team_name: str) -> str:
     return ""
 
 
+# ── Verdict Quality Gate (BUILD-VERDICT-QUALITY-GATE-01) ──────────────────────
+
+# TODO(INV-VERDICT-GOLD-TRACE-01): calibrate MIN_VERDICT_CHARS from 20-sample
+# Sonnet Gold distribution.  Replace 80 with the calibrated value when
+# INV-VERDICT-GOLD-TRACE-01 completes.
+MIN_VERDICT_CHARS: int = 80
+
+# Regexes that match trivially thin / content-empty verdicts.
+# Gate fires if ANY pattern matches the stripped verdict text.
+BANNED_TRIVIAL_VERDICT_TEMPLATES: list[re.Pattern] = [
+    # "Team at score/odds." — bare name + number, no reasoning
+    re.compile(r"^[\w'\u2019\s]+ at \d[\d.]*\.?\s*$", re.IGNORECASE),
+    # Single action word + bare subject: "Back Arsenal." / "Lean X."
+    re.compile(r"^(?:back|lean|monitor|pass|skip)\s+[\w'\s]+\.?\s*$", re.IGNORECASE),
+    # Score-only prediction: "Arsenal 2-1 Chelsea."
+    re.compile(r"^[\w'\s]+ \d+-\d+ [\w'\s]+\.?\s*$", re.IGNORECASE),
+]
+
+# Analytical vocabulary for word-count gate.
+# A verdict with fewer than 3 of these words is content-empty by definition.
+# Keep tight — do not add generic English words.
+ANALYTICAL_VOCABULARY: frozenset = frozenset({
+    # From brief's example list
+    "form", "edge", "odds", "value", "injury", "home", "away", "defend", "attack",
+    "record", "last", "recent", "goals", "clean", "shots", "run", "unbeaten",
+    "pressure", "back", "lean", "expect", "favour", "reckon",
+    # Essential betting/analytical terms
+    "price", "stake", "signal", "movement", "monitor", "probability",
+    "support", "align", "positive", "expected", "speculative",
+    "confirming", "exposure", "standard",
+})
+
+
+def analytical_word_count(verdict: str) -> int:
+    """Count distinct analytical vocabulary words present in verdict text.
+
+    Uses word-boundary prefix matching so "supported" counts as "support",
+    "signals" counts as "signal", "backed" counts as "back", etc.
+    """
+    lower = verdict.lower()
+    return sum(
+        1 for word in ANALYTICAL_VOCABULARY
+        if re.search(r"\b" + re.escape(word), lower)
+    )
+
+
+def min_verdict_quality(verdict: str) -> bool:
+    """Return True if verdict passes the minimum quality floor.
+
+    BUILD-VERDICT-QUALITY-GATE-01.
+
+    Rejects verdicts that:
+    1. Are shorter than MIN_VERDICT_CHARS characters.
+    2. Match a banned trivial template (content-empty patterns).
+    3. Contain fewer than 3 analytical vocabulary words.
+
+    AC-1 contract: min_verdict_quality("Arteta's Gunners at 4.") is False.
+    """
+    text = verdict.strip()
+    # Gate 1 — minimum character length
+    if len(text) < MIN_VERDICT_CHARS:
+        return False
+    # Gate 2 — banned trivial templates
+    for pattern in BANNED_TRIVIAL_VERDICT_TEMPLATES:
+        if pattern.match(text):
+            return False
+    # Gate 3 — analytical vocabulary count
+    if analytical_word_count(text) < 3:
+        return False
+    return True
+
+
+def _extract_verdict_text(narrative_html: str) -> str:
+    """Extract the plain-text Verdict section from a narrative HTML block.
+
+    Looks for the 🏆 Verdict header and returns the text that follows,
+    stripped of HTML tags.  Returns empty string if section not found.
+    """
+    idx = narrative_html.find("\U0001f3c6")  # 🏆
+    if idx == -1:
+        return ""
+    verdict_section = narrative_html[idx:]
+    # Strip HTML tags
+    clean = re.sub(r"<[^>]+>", "", verdict_section)
+    # Remove the header line ("🏆 Verdict — …")
+    lines = clean.splitlines()
+    body_lines = []
+    for i, line in enumerate(lines):
+        if i == 0:
+            continue  # skip header line
+        stripped = line.strip()
+        if stripped:
+            body_lines.append(stripped)
+    return " ".join(body_lines).strip()
+
+
 # ── NarrativeSpec Dataclass ───────────────────────────────────────────────────
 
 @dataclass

@@ -12690,6 +12690,42 @@ def _ensure_narrative_cache_table() -> None:
                 )
         except Exception as _pv_exc:
             log.warning("VERDICT_CAP_PURGE failed: %s", _pv_exc)
+        # BUILD-VERDICT-QUALITY-GATE-01: quality_status column + tables
+        if "quality_status" not in cols:
+            conn.execute(
+                "ALTER TABLE narrative_cache ADD COLUMN quality_status TEXT"
+            )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS gold_verdict_failed_edges (
+                match_key TEXT PRIMARY KEY,
+                edge_tier TEXT NOT NULL,
+                fixture TEXT NOT NULL,
+                pick TEXT NOT NULL,
+                failure_reason TEXT NOT NULL,
+                failed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS regen_queue (
+                match_key TEXT PRIMARY KEY,
+                edge_tier TEXT NOT NULL,
+                invalidated_reason TEXT NOT NULL,
+                queued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                status TEXT NOT NULL DEFAULT 'pending'
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS narrative_integrity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal TEXT NOT NULL,
+                value INTEGER NOT NULL,
+                recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nil_signal_time "
+            "ON narrative_integrity_log(signal, recorded_at)"
+        )
         conn.commit()
     finally:
         conn.close()
