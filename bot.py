@@ -22662,24 +22662,32 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _blw_fire_tips(tips, "channel")
 
     # BUILD-W3 / TG-SURFACE-SPLIT-01B: broadcast Edge Summary card to @MzansiEdgeAlerts at 08:00 SAST.
-    # Routed through publisher/channels/telegram_alerts.post_card() so the broadcast uses the
-    # same channel abstraction as all other Alerts posts (no hardcoded ctx.bot.send_photo).
+    # TG-G1-COMPLIANCE-FIX-01: routed through publisher compliance gate with post_type="teaser"
+    # before calling post_card(). No 18+ footer for teaser type (compliance.py line 13).
     if tips and current_hour == 8:
         try:
             import sys as _sys
+            _PUB_DIR = "/home/paulsportsza/publisher"
             _PUB_CHANNELS = "/home/paulsportsza/publisher/channels"
+            if _PUB_DIR not in _sys.path:
+                _sys.path.insert(0, _PUB_DIR)
             if _PUB_CHANNELS not in _sys.path:
                 _sys.path.insert(0, _PUB_CHANNELS)
             from telegram_alerts import post_card as _tg_alerts_post_card  # type: ignore[import]
+            from compliance import run_gate as _run_gate  # type: ignore[import]
             _ch_data = build_edge_summary_data(tips)
             _ch_png = await asyncio.to_thread(render_card_sync, "edge_summary.html", _ch_data)
             _tg_token = os.environ.get("TELEGRAM_PUBLISHER_BOT_TOKEN", "")
             _ch_reply_markup = {
                 "inline_keyboard": [[{"text": "💎 Open Bot", "url": "https://t.me/mzansiedge_bot"}]]
             }
+            # Compliance gate — post_type="teaser" → banned-phrase check, no 18+ footer
+            _ch_caption, _ch_warnings = _run_gate("Telegram Alerts", "", post_type="teaser")
+            if _ch_warnings:
+                log.warning("G1 teaser compliance warnings: %s", _ch_warnings)
             await asyncio.to_thread(
                 _tg_alerts_post_card,
-                _tg_token, str(_CHANNEL_ID), _ch_png, "", _ch_reply_markup,
+                _tg_token, str(_CHANNEL_ID), _ch_png, _ch_caption, _ch_reply_markup,
             )
             log.info("Edge Summary card broadcast to channel at hour=%d", current_hour)
         except Exception as _ch_err:
