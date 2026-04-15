@@ -4384,6 +4384,19 @@ def render_performance_content(conn) -> str:
     avg_edge = round(float(summary["avg_edge"] or 0), 1) if summary else 0.0
     net_pl   = round(float(summary["net_pl"]   or 0), 0) if summary else 0.0
 
+    # ---- CLV summary ----
+    clv_summary = q_one(conn, """
+        SELECT ROUND(AVG(clv), 3) as mean_clv,
+               ROUND(AVG(CASE WHEN clv > 0 THEN 1.0 ELSE 0 END) * 100, 1) as pct_positive,
+               COUNT(*) as n_clv
+        FROM clv_tracking
+    """)
+    clv_val = float(clv_summary['mean_clv'] or 0) if clv_summary else 0
+    clv_pct_positive = float(clv_summary['pct_positive'] or 0) if clv_summary else 0
+    clv_n = int(clv_summary['n_clv'] or 0) if clv_summary else 0
+    clv_cls = 'c-green' if clv_val > 0 else ('c-red' if clv_val < 0 else 'c-text')
+    clv_sign = '+' if clv_val > 0 else ''
+
     # ---- Current streak ----
     recent_rows = q_all(conn, """
         SELECT result FROM edge_results
@@ -4408,7 +4421,11 @@ def render_performance_content(conn) -> str:
                SUM(CASE WHEN result='miss' THEN 1 ELSE 0 END) as losses,
                ROUND(SUM(CASE WHEN result='hit' THEN 1.0 ELSE 0 END)*100.0/COUNT(*),1) as hit_rate,
                ROUND(AVG(predicted_ev),1) as avg_edge,
-               ROUND(AVG(recommended_odds),2) as avg_odds
+               ROUND(AVG(CASE WHEN result='hit' THEN recommended_odds END),2) as win_odds,
+               ROUND(AVG(CASE WHEN result='miss' THEN recommended_odds END),2) as loss_odds,
+               ROUND(SUM(CASE WHEN result='hit' THEN actual_return - 100.0 ELSE -100.0 END),0) as net_pl,
+               ROUND(SUM(CASE WHEN result='hit' THEN actual_return - 100.0 ELSE -100.0 END)
+                     / (COUNT(*) * 100.0) * 100, 1) as roi_pct
         FROM edge_results WHERE result IN ('hit','miss')
         GROUP BY edge_tier
     """)
@@ -4504,6 +4521,11 @@ def render_performance_content(conn) -> str:
     <div class="kpi-val {streak_cls}">{streak_label}</div>
     <div class="kpi-sub">consecutive</div>
   </div>
+  <div class="kpi">
+    <div class="kpi-lbl">Mean CLV</div>
+    <div class="kpi-val {clv_cls}">{clv_sign}{clv_val:.3f}</div>
+    <div class="kpi-sub">{clv_pct_positive}% positive ({clv_n} samples)</div>
+  </div>
 </div>"""
 
     # ---- By Tier table ----
@@ -4515,28 +4537,76 @@ def render_performance_content(conn) -> str:
                 continue
             cfg = _TIER_CONFIG.get(t, {"label": t.title(), "cls": "tier-bronze"})
             hr_c = "s-green" if row["hit_rate"] >= 50 else ("s-amber" if row["hit_rate"] >= 35 else "s-red")
+            _net_pl = float(row["net_pl"] or 0)
+            _roi_pct = float(row["roi_pct"] or 0)
+            _pl_sign = "+" if _net_pl >= 0 else ""
+            _roi_cls = "s-green" if _roi_pct >= 0 else "s-red"
+            _pl_cls = "s-green" if _net_pl >= 0 else "s-red"
             tier_rows_html += f"""
       <tr>
         <td><span class="tier-badge {cfg['cls']}">{cfg['label']}</span></td>
         <td>{int(row['cnt'])}</td>
-        <td class="s-green">{int(row['wins'])}</td>
-        <td class="s-red">{int(row['losses'])}</td>
+        <td>{int(row['wins'])}/{int(row['losses'])}</td>
         <td class="{hr_c}">{row['hit_rate']}%</td>
-        <td>{row['avg_edge']}%</td>
-        <td>{row['avg_odds']}</td>
+        <td class="{_roi_cls}">{_pl_sign}{_roi_pct}%</td>
+        <td class="{_pl_cls}">{_pl_sign}R{int(_net_pl):,}</td>
+        <td>{row['win_odds']}</td>
+        <td>{row['loss_odds']}</td>
       </tr>"""
         tier_table = f"""
 <div class="tbl-wrap">
   <table class="tbl">
     <thead><tr>
-      <th>Tier</th><th>Total</th><th>Wins</th><th>Losses</th>
-      <th>Hit Rate</th><th>Avg Edge</th><th>Avg Odds</th>
+      <th>Tier</th><th>Total</th><th>W/L</th>
+      <th>Hit Rate</th><th>ROI%</th><th>Net P/L</th>
+      <th>Win Odds</th><th>Loss Odds</th>
     </tr></thead>
     <tbody>{tier_rows_html}</tbody>
   </table>
 </div>"""
     else:
         tier_table = '<div class="perf-empty">No tier data yet.</div>'
+
+    # ---- CLV by Tier table ----
+    clv_rows = q_all(conn, """
+        SELECT er.edge_tier,
+               COUNT(ct.clv) as n_clv,
+               ROUND(AVG(ct.clv), 3) as mean_clv,
+               ROUND(AVG(CASE WHEN ct.clv > 0 THEN 1.0 ELSE 0 END) * 100, 1) as pct_positive
+        FROM clv_tracking ct
+        JOIN edge_results er ON er.match_key = ct.match_key
+        WHERE er.result IN ('hit','miss')
+        GROUP BY er.edge_tier
+    """)
+    if clv_rows:
+        clv_rows_html = ""
+        clv_tier_map = {row["edge_tier"]: row for row in clv_rows}
+        for t in _TIER_ORDER:
+            row = clv_tier_map.get(t)
+            if not row:
+                continue
+            cfg = _TIER_CONFIG.get(t, {"label": t.title(), "cls": "tier-bronze"})
+            _mc = float(row["mean_clv"] or 0)
+            _mc_cls = "s-green" if _mc > 0 else ("s-red" if _mc < 0 else "")
+            _mc_sign = "+" if _mc > 0 else ""
+            clv_rows_html += f"""
+      <tr>
+        <td><span class="tier-badge {cfg['cls']}">{cfg['label']}</span></td>
+        <td>{int(row['n_clv'])}</td>
+        <td class="{_mc_cls}">{_mc_sign}{_mc:.3f}</td>
+        <td>{row['pct_positive']}%</td>
+      </tr>"""
+        clv_table = f"""
+<div class="tbl-wrap">
+  <table class="tbl">
+    <thead><tr>
+      <th>Tier</th><th>Sample</th><th>Mean CLV</th><th>% Positive</th>
+    </tr></thead>
+    <tbody>{clv_rows_html}</tbody>
+  </table>
+</div>"""
+    else:
+        clv_table = '<div class="perf-empty">No CLV data yet.</div>'
 
     # ---- By Sport table ----
     if sport_rows:
@@ -4705,6 +4775,13 @@ def render_performance_content(conn) -> str:
         <span class="panel-sub">{total} edges</span>
       </div>
       {tier_table}
+    </div>
+    <div class="panel panel-orange-accent">
+      <div class="panel-head">
+        <span class="panel-title">CLV by Tier</span>
+        <span class="panel-sub">{clv_n} samples</span>
+      </div>
+      {clv_table}
     </div>
     <div class="panel panel-orange-accent">
       <div class="panel-head">
