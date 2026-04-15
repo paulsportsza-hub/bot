@@ -1299,8 +1299,42 @@ def _build_minimal_haiku_prompt(
         "",
         "Keep analysis factual and concise. Do not recommend bets.",
         "Do not use 'back', 'stake', or 'value play'. Mention both team names.",
+        "",
+        "BANNED PHRASES (automated rejection if used):",
+        "- 'proceed with caution', 'value play', 'grab it before', 'move fast'",
+        "- 'one to watch, not back', 'this one to watch', 'won't last forever'",
+        "- 'knockout football', 'knockout stakes', 'knockout stage'",
+        "- 'pure pricing call', 'thin support', 'numbers-only play'",
     ])
     return "\n".join(parts)
+
+
+def _recover_missing_emoji_headers(text: str) -> str:
+    """Inject emoji section headers when text name is present but emoji is missing.
+
+    INV-SONNET-FALLBACK-01 RC-1: Haiku sometimes returns markdown or plain-text
+    headers instead of emoji headers. sanitize_ai_response() strips markdown but
+    does not always inject emojis. This recovery pass fills the gap.
+    """
+    _HEADER_PAIRS = [
+        ("\U0001f4cb", "The Setup"),   # 📋
+        ("\U0001f3af", "The Edge"),    # 🎯
+        ("\u26a0\ufe0f", "The Risk"),  # ⚠️
+        ("\U0001f3c6", "Verdict"),     # 🏆
+    ]
+    for emoji, header in _HEADER_PAIRS:
+        if emoji in text:
+            continue  # Emoji already present
+        # Try bare header text (with or without <b> tags, case-insensitive)
+        pattern = re.compile(
+            rf'^(\s*)(?:<b>)?\s*(?:The\s+)?{re.escape(header.replace("The ", ""))}(?:</b>)?\s*$',
+            re.MULTILINE | re.IGNORECASE,
+        )
+        match = pattern.search(text)
+        if match:
+            replacement = f"{match.group(1)}{emoji} <b>{header}</b>"
+            text = text[:match.start()] + replacement + text[match.end():]
+    return text
 
 
 def _validate_preview_polish(polished: str, spec) -> bool:
@@ -1544,6 +1578,8 @@ async def _generate_one(
                 model_draft = _strip_preamble(_extract_text_from_response(resp)).strip()
                 sanitized_draft = sanitize_ai_response(model_draft)
                 sanitized_draft = _suppress_shadow_banned_phrases(sanitized_draft)
+                # INV-SONNET-FALLBACK-01 RC-1: recover missing emoji headers
+                sanitized_draft = _recover_missing_emoji_headers(sanitized_draft)
                 if _validate_preview_polish(sanitized_draft, spec):
                     narrative = sanitized_draft
                     narrative_source = "w84"

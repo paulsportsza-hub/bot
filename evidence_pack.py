@@ -2311,6 +2311,12 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "🏆 <b>Verdict</b>",
             "1-2 sentences. Give a match outlook — who you lean toward and how the match might play out.",
             "Do NOT recommend a bet or mention bet sizing.",
+            "",
+            "BANNED PHRASES (automated rejection if used):",
+            "- 'proceed with caution', 'value play', 'grab it before', 'move fast'",
+            "- 'one to watch, not back', 'this one to watch', 'won't last forever'",
+            "- 'knockout football', 'knockout stakes', 'knockout stage'",
+            "- 'pure pricing call', 'thin support', 'numbers-only play'",
         ])
     else:
         prompt_parts.extend([
@@ -3738,6 +3744,17 @@ KNOWN_PROPER_NOUNS: set[str] = {
     "st james",                         # St James' Park — Newcastle
     "goodison",                         # Goodison Park — Everton
     "stamford",                         # Stamford Bridge — Chelsea (single word, rare)
+    # ── SA bookmaker names (INV-SONNET-FALLBACK-01 RC-3) ───────────────────
+    "wsb", "world sport betting", "world sports betting",
+    "hollywoodbets", "hollywood",
+    "betway",
+    "sportingbet",
+    "supabets",
+    "playabets",
+    "gbets",
+    "supersportbet",
+    # ── Analytical terms capitalised in section headers ─────────────────────
+    "monitor",
 }
 
 _SETTLEMENT_CONTEXT_PATTERNS = (
@@ -4455,7 +4472,9 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
             market_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages["market_implied"])
             sharp_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages["sharp_implied"])
             # R13-BUILD-01 Fix 3: Check Elo-derived probabilities
-            elo_ok = any(abs(value - allowed) <= 2.0 for allowed in accepted_percentages.get("elo", set()))
+            # INV-SONNET-FALLBACK-01 RC-4: 3.0pp tolerance for Elo/model probs
+            # (Sonnet rounds model probs e.g. 68.7% → "around 70%")
+            elo_ok = any(abs(value - allowed) <= 3.0 for allowed in accepted_percentages.get("elo", set()))
             if not (direct_ok or market_ok or sharp_ok or elo_ok):
                 ev_pct_failures.append(value)
             continue

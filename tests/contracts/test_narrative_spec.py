@@ -1081,6 +1081,35 @@ class TestRenderVerdict:
                 f"for support_level=1 speculative punt. Verdict: {verdict!r}"
             )
 
+    def test_all_verdict_actions_capped_at_140(self):
+        """BUILD-VERDICT-CAP-01: Every verdict action × sizing combination renders ≤ 140 chars."""
+        cases = [
+            ("pass", "monitor", "cautious"),
+            ("monitor", "monitor", "cautious"),
+            ("speculative punt", "tiny exposure", "cautious"),
+            ("lean", "small stake", "moderate"),
+            ("back", "standard stake", "confident"),
+            ("strong back", "confident stake", "strong"),
+        ]
+        for action, sizing, tone in cases:
+            spec = NarrativeSpec(
+                home_name="Mamelodi Sundowns", away_name="Orlando Pirates",
+                competition="Premier League", sport="soccer",
+                home_story_type="neutral", away_story_type="neutral",
+                evidence_class="supported", tone_band=tone,
+                verdict_action=action, verdict_sizing=sizing,
+                outcome="home", outcome_label="Mamelodi Sundowns win",
+                bookmaker="Hollywoodbets", odds=2.10,
+                support_level=2, ev_pct=8.5,
+                risk_factors=["Standard match variance applies."],
+                risk_severity="moderate", stale_minutes=30,
+                movement_direction="neutral",
+            )
+            verdict = _render_verdict(spec)
+            assert len(verdict) <= 140, (
+                f"Verdict for action={action!r} exceeds 140 chars ({len(verdict)}): {verdict!r}"
+            )
+
 
 # ── W82-RENDER: _render_baseline structure tests ──────────────────────────────
 
@@ -1307,21 +1336,23 @@ class TestVerdictCoherenceIntegration:
         defaults.update(overrides)
         return NarrativeSpec(**defaults)
 
-    def test_back_verdict_includes_ev(self):
-        """Back verdict mentions the EV percentage."""
+    def test_back_verdict_capped_at_140(self):
+        """BUILD-VERDICT-CAP-01: Back verdict is ≤ 140 chars. EV not appended."""
         spec = self._spec()
         verdict = _render_verdict(spec)
-        assert "+12.4% EV" in verdict
+        assert len(verdict) <= 140, f"Verdict exceeds 140 chars ({len(verdict)}): {verdict!r}"
+        assert "EV" not in verdict
 
-    def test_speculative_verdict_includes_ev(self):
-        """Speculative verdict also includes evidence."""
+    def test_speculative_verdict_capped_at_140(self):
+        """BUILD-VERDICT-CAP-01: Speculative verdict is ≤ 140 chars. EV not appended."""
         spec = self._spec(
             verdict_action="speculative punt", verdict_sizing="tiny exposure",
             evidence_class="speculative", tone_band="cautious",
             ev_pct=3.2, bookmaker_count=3,
         )
         verdict = _render_verdict(spec)
-        assert "+3.2% EV" in verdict
+        assert len(verdict) <= 140, f"Verdict exceeds 140 chars ({len(verdict)}): {verdict!r}"
+        assert "EV" not in verdict
 
     def test_monitor_verdict_no_evidence(self):
         """Monitor/pass verdicts don't get evidence clauses."""
@@ -1330,24 +1361,26 @@ class TestVerdictCoherenceIntegration:
         assert "EV" not in verdict
         assert "monitor" in verdict.lower()
 
-    def test_strong_back_verdict_includes_ev(self):
-        """Strong back verdict includes evidence."""
+    def test_strong_back_verdict_capped_at_140(self):
+        """BUILD-VERDICT-CAP-01: Strong back verdict is ≤ 140 chars. EV not appended."""
         spec = self._spec(
             verdict_action="strong back", verdict_sizing="confident stake",
             evidence_class="conviction", tone_band="strong",
             ev_pct=16.5, bookmaker_count=5,
         )
         verdict = _render_verdict(spec)
-        assert "+16.5% EV across 5 bookmakers" in verdict
+        assert len(verdict) <= 140, f"Verdict exceeds 140 chars ({len(verdict)}): {verdict!r}"
+        assert "EV" not in verdict
 
-    def test_verdict_includes_risk_clause(self):
-        """Verdict includes main risk when specific risk exists."""
+    def test_verdict_excludes_risk_clause(self):
+        """BUILD-VERDICT-CAP-01: Evidence clauses are not appended — no Main risk in verdict."""
         spec = self._spec(risk_factors=["2 tipster sources lean the other way."])
         verdict = _render_verdict(spec)
-        assert "Main risk:" in verdict
+        assert "Main risk:" not in verdict
+        assert len(verdict) <= 140
 
     def test_verdict_still_passes_banned_phrase_check(self):
-        """Evidence clauses don't introduce banned phrases."""
+        """Verdict postures don't contain banned tone-band phrases."""
         for action, sizing, tone in (
             ("speculative punt", "tiny exposure", "cautious"),
             ("lean", "small stake", "moderate"),
@@ -1359,7 +1392,7 @@ class TestVerdictCoherenceIntegration:
             verdict = _render_verdict(spec)
             for phrase in TONE_BANDS[tone]["banned"]:
                 assert phrase.lower() not in verdict.lower(), (
-                    f"Banned phrase {phrase!r} in {action} verdict with evidence"
+                    f"Banned phrase {phrase!r} in {action} verdict"
                 )
 
 

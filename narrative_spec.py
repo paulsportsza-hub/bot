@@ -31,7 +31,8 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
         "banned": [
             "market has this wrong", "market completely wrong",
             "strong edge", "must back", "lock it in", "slam dunk",
-            "huge value", "no-brainer", "confident", "clear edge",
+            "huge value", "no-brainer", "high confidence", "confident back",
+            "confident stake", "clear edge",
             "obvious value", "one of the best plays",
             "numbers-only play", "thin support", "price is interesting",
             "the numbers alone", "limited pre-match context",
@@ -1821,18 +1822,33 @@ def _render_risk(spec: NarrativeSpec) -> str:
     return (factors_text.strip() or "Ordinary match uncertainty is the main thing left to respect.").strip()
 
 
+# ── BUILD-VERDICT-CAP-01: Deterministic verdict fallback cap ───────────────────
+
+_VERDICT_MAX_CHARS = 140
+
+
+def _cap_verdict(text: str) -> str:
+    """BUILD-VERDICT-CAP-01: Hard-cap verdict output at _VERDICT_MAX_CHARS characters.
+    Clips at the last word boundary to avoid mid-word truncation.
+    """
+    if len(text) <= _VERDICT_MAX_CHARS:
+        return text
+    clipped = text[:_VERDICT_MAX_CHARS].rsplit(" ", 1)[0].rstrip(".,;")
+    return clipped + "."
+
+
 def _render_verdict(spec: NarrativeSpec) -> str:
     """Verdict capped by tone_band. Never uses phrases banned by tone_band.
 
-    VERDICT-COHERENCE-FIX: After the posture + sizing text, appends match-specific
-    evidence clauses (EV%, signals, risk) from already-computed NarrativeSpec data.
+    BUILD-VERDICT-CAP-01: All posture variants render ≤ 140 chars with typical inputs.
+    Evidence clauses are NOT appended — they bloated verdicts beyond mobile-readable length.
+    _cap_verdict() is applied on every return path as a hard safety net.
     """
     outcome = spec.outcome_label or "this outcome"
     odds_str = f"{spec.odds:.2f}" if spec.odds else "?"
     bk = spec.bookmaker or "the market"
     action = spec.verdict_action
     sizing = spec.verdict_sizing
-    support_line = _verdict_support_line(spec)
 
     _seed = (spec.home_name or "") + (spec.away_name or "")
 
@@ -1845,21 +1861,14 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     if sizing == "confident stake":
         sizing = "full stake"
 
-    # VERDICT-COHERENCE-FIX: evidence clauses appended after posture text
-    evidence = _build_evidence_clauses(spec)
-
     if action in ("pass", "monitor"):
         # W84-Q13 / VERDICT-FIX: Zero/negative EV — neutral monitor posture, no PASS recommendation
-        # BASELINE-VERDICT-FIX: Include match-specific details so Verdict is an assessment,
-        # not a generic disclaimer that echoes Risk. Risk = match uncertainties.
-        # Verdict = overall assessment of the pricing + recommended action.
         if odds_str != "?" and bk != "the market":
-            return (
-                f"No confirmed edge on {outcome} at {odds_str} with {bk} — "
-                f"the current pricing doesn't present a clear opportunity. "
+            return _cap_verdict(
+                f"No confirmed edge on {outcome} at {odds_str} ({bk}). "
                 f"Monitor for line movement before committing."
             )
-        return (
+        return _cap_verdict(
             f"No positive expected value at current pricing — "
             f"monitor for line movement until the price improves."
         )
@@ -1873,114 +1882,106 @@ def _render_verdict(spec: NarrativeSpec) -> str:
         if spec.support_level >= 1:
             _sp_variants = [
                 (
-                    f"One signal aligns but the edge is penalty-adjusted — "
-                    f"{outcome} at {odds_str} ({bk}) warrants only minimal exposure. "
-                    f"Verify the price before committing. {_sentence_case(sizing)}."
+                    f"Penalty-adjusted — {outcome} at {odds_str} ({bk}). "
+                    f"One signal aligns. Minimal exposure. {_sentence_case(sizing)}."
                 ),
                 (
-                    f"If you back this at all, keep exposure very tight — {outcome} at {odds_str} ({bk}). "
-                    f"Monitor the line before kickoff. {_sentence_case(sizing)}."
+                    f"Keep exposure tight — {outcome} at {odds_str} ({bk}). "
+                    f"Monitor line before kickoff. {_sentence_case(sizing)}."
                 ),
                 (
-                    f"A speculative angle on {outcome} at {odds_str} with {bk} — "
-                    f"one indicator aligns, but the overall posture remains cautious. "
-                    f"Monitor the line before committing. {_sentence_case(sizing)}."
+                    f"Speculative angle on {outcome} at {odds_str} ({bk}) — "
+                    f"signal aligns, posture cautious. {_sentence_case(sizing)}."
                 ),
                 (
                     f"Cautious lean on {outcome} at {odds_str} ({bk}) — "
-                    f"a signal points this way but the price or market context reduces confidence. "
-                    f"Monitor the line before committing. {_sentence_case(sizing)}."
+                    f"signal present, confidence is reduced. {_sentence_case(sizing)}."
                 ),
             ]
         else:
             _sp_variants = [
                 # W84-Q15: Disciplined posture — no "worth a unit", no "take the edge"
                 (
-                    f"The price is the only reason {outcome} ({bk} @ {odds_str}) is on the board — "
-                    f"no confirming signal backs it. Only take it with minimal exposure and a clear head. "
-                    f"{_sentence_case(sizing)}."
+                    f"Price-only angle — {outcome} at {odds_str} ({bk}). "
+                    f"No confirming signal. Minimal exposure. {_sentence_case(sizing)}."
                 ),
                 (
-                    f"If you back this at all, keep exposure very tight — {outcome} at {odds_str} ({bk}). "
-                    f"Monitor the line before kickoff. {_sentence_case(sizing)}."
+                    f"Keep exposure tight — {outcome} at {odds_str} ({bk}). "
+                    f"Monitor line before kickoff. {_sentence_case(sizing)}."
                 ),
                 (
-                    f"A speculative angle on {outcome} at {odds_str} with {bk} — "
-                    f"the price is right, the signals aren't there yet. Monitor the line before committing. {_sentence_case(sizing)}."
+                    f"Speculative on {outcome} at {odds_str} ({bk}) — "
+                    f"price is right, signals aren't there yet. {_sentence_case(sizing)}."
                 ),
                 (
-                    f"Hold on {outcome} at {odds_str} ({bk}) until a confirming signal emerges — "
-                    f"the price is the only thing keeping this on the board. "
-                    f"Monitor the line before committing. {_sentence_case(sizing)}."
+                    f"Hold on {outcome} at {odds_str} ({bk}) — "
+                    f"price alone isn't enough. Wait for a confirming signal. {_sentence_case(sizing)}."
                 ),
             ]
-        posture = _sp_variants[_v]
-        return f"{posture} {evidence}".rstrip() if evidence else posture
+        return _cap_verdict(_sp_variants[_v])
 
     elif action == "lean":
         _v = _pick(_seed, 4)
         _lean_variants = [
             (
                 f"Lean on {outcome} at {odds_str} ({bk}) — "
-                f"there is enough support to keep it in play, not enough to press. {_sentence_case(sizing)}."
+                f"there's support here, but not enough to press. {_sentence_case(sizing)}."
             ),
             (
-                f"A measured lean: {outcome} at {odds_str} with {bk}. "
-                f"Keep stakes controlled and stay proportionate with the edge. {_sentence_case(sizing)}."
+                f"Measured lean on {outcome} at {odds_str} ({bk}). "
+                f"Keep stakes proportionate with the edge. {_sentence_case(sizing)}."
             ),
             (
-                f"Cautious nod to {outcome} at {odds_str} ({bk}). "
-                f"One signal points the right way, so it is worth tracking without overstating the case. {_sentence_case(sizing)}."
+                f"Cautious lean on {outcome} at {odds_str} ({bk}) — "
+                f"one signal aligns, don't overstate it. {_sentence_case(sizing)}."
             ),
             (
                 f"Lean on {outcome} at {odds_str} ({bk}) — "
                 f"supported by data and priced with value. {_sentence_case(sizing)}."
             ),
         ]
-        posture = _lean_variants[_v]
-        return f"{posture} {evidence}".rstrip() if evidence else posture
+        return _cap_verdict(_lean_variants[_v])
 
     elif action == "back":
         _v = _pick(_seed, 3)
+        support_line = _verdict_support_line(spec)
         _back_variants = [
             (
                 f"Back {outcome} at {odds_str} with {bk} — "
                 f"{support_line or 'the case is there at the current number.'} {_sentence_case(sizing)}."
             ),
             (
-                f"{outcome} at {odds_str} ({bk}) is backable here. "
-                f"{support_line or 'The price still does enough to justify the play.'} {_sentence_case(sizing)}."
+                f"{outcome} at {odds_str} ({bk}) — backable here. "
+                f"{support_line or 'The price justifies the play.'} {_sentence_case(sizing)}."
             ),
             (
-                f"This one gets the green light: {outcome} at {odds_str} with {bk}. "
-                f"{support_line or 'Supported and priced right.'} {_sentence_case(sizing)}."
+                f"Green light on {outcome} at {odds_str} ({bk}) — "
+                f"supported and priced right. {_sentence_case(sizing)}."
             ),
         ]
-        posture = _back_variants[_v]
-        return f"{posture} {evidence}".rstrip() if evidence else posture
+        return _cap_verdict(_back_variants[_v])
 
     else:  # strong back
         _v = _pick(_seed, 4)
         _strong_variants = [
             (
                 f"Strong back on {outcome} at {odds_str} ({bk}) — "
-                f"this has the depth of support most edges don't get. {_sentence_case(sizing)}."
+                f"depth of support most edges don't get. {_sentence_case(sizing)}."
             ),
             (
-                f"Back {outcome} at {odds_str} with {bk} with conviction. "
-                f"Everything lines up — signals, price, model agreement. {_sentence_case(sizing)}."
+                f"Back {outcome} at {odds_str} with {bk} with conviction — "
+                f"signals, price, model all aligned. {_sentence_case(sizing)}."
             ),
             (
                 f"Premium play: {outcome} at {odds_str} ({bk}). "
-                f"The signals, the price, and the model all point the same way. {_sentence_case(sizing)}."
+                f"Price, signals, model all aligned. {_sentence_case(sizing)}."
             ),
             (
                 f"Back {outcome} at {odds_str} ({bk}) with confidence — "
-                f"the edge is clear and the price is right. {_sentence_case(sizing)}."
+                f"edge is clear and price is right. {_sentence_case(sizing)}."
             ),
         ]
-        posture = _strong_variants[_v]
-        return f"{posture} {evidence}".rstrip() if evidence else posture
+        return _cap_verdict(_strong_variants[_v])
 
 
 def _render_baseline(spec: NarrativeSpec) -> str:
