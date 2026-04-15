@@ -1730,19 +1730,21 @@ def _sidebar_js() -> str:
 # -- Source Health Monitor helpers -------------------------------------------
 
 _CATEGORY_DISPLAY = {
-    "bookmaker":  "Bookmaker Odds (8)",
-    "sharp":      "Sharp Benchmark (4)",
-    "rating":     "Ratings & Results (3)",
-    "fixture":    "Fixtures & Lineups (5)",
-    "tipster":    "Tipster Predictions (9)",
-    "enrichment": "News & Enrichment (4)",
-    "settlement": "Edge & Settlement (4)",
-    "bot_job":    "Bot Jobs (5)",
+    "bookmaker":   "Bookmaker Odds (8)",
+    "sharp":       "Sharp Benchmark (4)",
+    "rating":      "Ratings & Results (3)",
+    "fixture":     "Fixtures & Lineups (5)",
+    "tipster":     "Tipster Predictions (9)",
+    "enrichment":  "News & Enrichment (4)",
+    "settlement":  "Edge & Settlement (4)",
+    "bot_job":     "Bot Jobs (5)",
+    "Data Feeds":  "Data Feeds (1)",
 }
 
 _CATEGORY_ORDER = [
     "bookmaker", "sharp", "rating", "fixture",
     "tipster", "enrichment", "settlement", "bot_job",
+    "Data Feeds",
 ]
 
 _STATUS_DOT = {
@@ -4755,6 +4757,91 @@ def render_performance_content(conn) -> str:
     else:
         recent_table = '<div class="perf-empty">No settled edges yet. Results will appear here once the settlement pipeline runs.</div>'
 
+    # ---- Tier Health vs Baseline (EDGE-TIER-HEALTH-WATCH-01) ----
+    _TIER_BASELINE = {
+        "diamond": -20.0, "gold": 33.2, "silver": 12.9, "bronze": 1.6,
+    }
+    _th_rows = q_all(conn, """
+        SELECT edge_tier,
+               COUNT(*) as cnt,
+               SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END) as wins,
+               ROUND(SUM(CASE WHEN result='hit' THEN 1.0 ELSE 0 END)*100.0/COUNT(*),1) as hit_rate,
+               ROUND(SUM(CASE WHEN result='hit' THEN recommended_odds - 1.0 ELSE -1.0 END)
+                     / COUNT(*) * 100, 1) as roi_pct
+        FROM edge_results
+        WHERE result IN ('hit','miss')
+          AND settled_at >= datetime('now', '-7 days')
+        GROUP BY edge_tier
+    """)
+    _th_map = {row["edge_tier"]: row for row in _th_rows}
+
+    # Freshness sentinel
+    _th_fresh_cls = ""
+    _th_fresh_txt = "Never run"
+    _th_sentinel = os.path.expanduser("~/scrapers/edge/.tier_health_last_run")
+    try:
+        with open(_th_sentinel) as _thf:
+            from datetime import timezone as _tz
+            _th_last = datetime.fromisoformat(_thf.read().strip())
+            _th_age_h = round((datetime.now(_tz.utc) - _th_last).total_seconds() / 3600, 1)
+            _th_fresh_cls = "s-red" if _th_age_h > 13.0 else "s-green"
+            _th_fresh_txt = f"{_th_age_h}h ago"
+            if _th_age_h > 13.0:
+                _th_fresh_txt += " (STALE)"
+    except (OSError, ValueError):
+        _th_fresh_cls = "s-red"
+
+    _th_rows_html = ""
+    for _thn in _TIER_ORDER:
+        _thr = _th_map.get(_thn)
+        _bl_roi = _TIER_BASELINE.get(_thn, 0.0)
+        _tcfg = _TIER_CONFIG.get(_thn, {"label": _thn.title(), "cls": "tier-bronze"})
+        if _thr:
+            _live_roi = float(_thr["roi_pct"] or 0)
+            _div_pp = round(abs(_live_roi - _bl_roi), 1)
+            _n = int(_thr["cnt"])
+            _wr = float(_thr["hit_rate"] or 0)
+            if _n < 30:
+                _status, _st_cls = "GREEN", "s-green"
+            elif _div_pp > 30:
+                _status, _st_cls = "RED", "s-red"
+            elif _div_pp > 20:
+                _status, _st_cls = "AMBER", "s-amber"
+            else:
+                _status, _st_cls = "GREEN", "s-green"
+            _note = " (n&lt;30)" if _n < 30 else ""
+        else:
+            _live_roi, _div_pp, _n, _wr = 0.0, 0.0, 0, 0.0
+            _status, _st_cls, _note = "GREEN", "s-green", " (n=0)"
+        _roi_cls = "s-green" if _live_roi >= 0 else "s-red"
+        _th_rows_html += f"""
+      <tr>
+        <td><span class="tier-badge {_tcfg['cls']}">{_tcfg['label']}</span></td>
+        <td class="{_roi_cls}">{_live_roi}%</td>
+        <td>{_bl_roi}%</td>
+        <td>{_div_pp}pp</td>
+        <td>{_n}</td>
+        <td>{_wr}%</td>
+        <td class="{_st_cls}" style="font-weight:700">{_status}{_note}</td>
+      </tr>"""
+
+    tier_health_panel = f"""
+<div class="panel panel-orange-accent" style="margin-bottom:16px;">
+  <div class="panel-head">
+    <span class="panel-title">Tier Health vs Baseline</span>
+    <span class="panel-sub">7-day rolling · INV-03 counterfactual · Last check: <span class="{_th_fresh_cls}">{_th_fresh_txt}</span></span>
+  </div>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr>
+        <th>Tier</th><th>Live ROI%</th><th>Baseline ROI%</th>
+        <th>Divergence</th><th>n</th><th>Win Rate</th><th>Status</th>
+      </tr></thead>
+      <tbody>{_th_rows_html}</tbody>
+    </table>
+  </div>
+</div>"""
+
     # ---- Assemble page ----
     return f"""
 <style>{_perf_css()}</style>
@@ -4768,6 +4855,7 @@ def render_performance_content(conn) -> str:
 </div>
 <div class="page">
   {kpi_html}
+  {tier_health_panel}
   <div class="grid-2">
     <div class="panel panel-orange-accent">
       <div class="panel-head">
