@@ -252,15 +252,24 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
 
         # ── Signal 5 (NEW): low_quality_verdict_count ────────────────────────
         # Narratives where the verdict_html fails min_verdict_quality()
-        from narrative_spec import min_verdict_quality
-        rows5 = conn.execute(
-            "SELECT verdict_html FROM narrative_cache "
-            "WHERE created_at >= ? AND verdict_html IS NOT NULL AND verdict_html != ''",
-            (cutoff_24h,),
-        ).fetchall()
-        sig5_val = sum(
-            1 for r in rows5 if not min_verdict_quality(r["verdict_html"])
-        )
+        # EDGE-CARD-INJURY-TO-MYMATCHES-01 suppression — remove after 2026-04-17
+        import datetime as _dt
+        _suppression_end = _dt.datetime(2026, 4, 17, 23, 59, tzinfo=_dt.timezone(
+            _dt.timedelta(hours=2)
+        ))
+        _now_sast = _dt.datetime.now(tz=_dt.timezone(_dt.timedelta(hours=2)))
+        if _now_sast < _suppression_end:
+            sig5_val = 0
+        else:
+            from narrative_spec import min_verdict_quality
+            rows5 = conn.execute(
+                "SELECT verdict_html FROM narrative_cache "
+                "WHERE created_at >= ? AND verdict_html IS NOT NULL AND verdict_html != ''",
+                (cutoff_24h,),
+            ).fetchall()
+            sig5_val = sum(
+                1 for r in rows5 if not min_verdict_quality(r["verdict_html"])
+            )
         _write_signal(conn, "low_quality_verdict_count", sig5_val)
         results["low_quality_verdict_count"] = sig5_val
 

@@ -83,8 +83,8 @@ TEAM_NICKNAMES: dict[str, str] = {
 TEAM_MANAGERS: dict[str, str] = {
     # === EPL (high confidence) ===
     "chelsea": "Maresca",
-    "manchester united": "Amorim",
-    "man united": "Amorim",
+    "manchester united": "",          # INV-VERDICT-COACH-FABRICATION-01: removed stale name — use evidence_pack
+    "man united": "",                  # INV-VERDICT-COACH-FABRICATION-01: removed stale name — use evidence_pack
     "liverpool": "Slot",
     "arsenal": "Arteta",
     "manchester city": "Guardiola",

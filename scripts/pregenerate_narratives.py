@@ -1749,7 +1749,15 @@ async def _generate_one(
     if narrative and _pregen_edge_tier in ("gold", "diamond") and not _is_non_edge:
         from narrative_spec import min_verdict_quality, _extract_verdict_text
         _verdict_text_raw = _extract_verdict_text(narrative)
-        if not min_verdict_quality(_verdict_text_raw):
+        # INV-VERDICT-COACH-FABRICATION-01: build manager evidence for quality gate
+        _mgr_ep = None
+        if evidence_pack is not None:
+            _ep_espn_qg = getattr(evidence_pack, "espn_context", None)
+            _mgr_ep = {
+                "home_manager": ((getattr(_ep_espn_qg, "home_team", {}) or {}).get("coach") if _ep_espn_qg else None),
+                "away_manager": ((getattr(_ep_espn_qg, "away_team", {}) or {}).get("coach") if _ep_espn_qg else None),
+            }
+        if not min_verdict_quality(_verdict_text_raw, tier=_pregen_edge_tier, evidence_pack=_mgr_ep):
             log.warning(
                 "GOLD-QUALITY-GATE: verdict failed quality check for %s "
                 "(tier=%s, verdict_len=%d) — attempting Sonnet retry",
@@ -1785,7 +1793,7 @@ async def _generate_one(
             # Evaluate retry result
             if _retry_narrative:
                 _retry_verdict = _extract_verdict_text(_retry_narrative)
-                if min_verdict_quality(_retry_verdict):
+                if min_verdict_quality(_retry_verdict, tier=_pregen_edge_tier, evidence_pack=_mgr_ep):
                     narrative = _retry_narrative
                     narrative_source = "w84_quality_retry"
                     log.info(
@@ -1938,7 +1946,15 @@ async def _generate_one(
         _tone_band = getattr(spec, "tone_band", None)
         try:
             from narrative_spec import _render_verdict as _rv_det
-            # Build ALLOWED fields for constrained verdict
+            # BUILD-ALLOWED-ENRICHMENT-FIX-01: feed the Sonnet prompt with full context
+            # Source all values from the upstream evidence_pack — no re-query.
+            _ep = evidence_pack
+            _ep_espn = getattr(_ep, "espn_context", None) if _ep else None
+            _ep_h2h = getattr(_ep, "h2h", None) if _ep else None
+            _ep_inj = getattr(_ep, "injuries", None) if _ep else None
+            _ep_mov = getattr(_ep, "movements", None) if _ep else None
+            _ep_edge = getattr(_ep, "edge_state", None) if _ep else None
+            _ep_sa = getattr(_ep, "sa_odds", None) if _ep else None
             _allowed = {
                 "matchup": f"{home} vs {away}",
                 "home_team": home,
@@ -1953,13 +1969,39 @@ async def _generate_one(
                     "SOLID" if (edge.get("composite_score") or 0) >= 70 else
                     "SELECTIVE"
                 ),
+                # Enrichment keys — sourced from upstream evidence_pack
+                "form": (getattr(_ep_espn, "home_team", {}) or {}).get("form") if _ep_espn else None,
+                "recent_form": (getattr(_ep_espn, "home_team", {}) or {}).get("form") if _ep_espn else None,
+                "h2h": (getattr(_ep_h2h, "summary", {}) or {}) if _ep_h2h else None,
+                "head_to_head": getattr(_ep_h2h, "summary_text", None) if _ep_h2h else None,
+                "injuries": getattr(_ep_inj, "api_football", None) if _ep_inj else None,
+                "home_injuries": getattr(_ep_inj, "home_injuries", None) if _ep_inj else None,
+                "away_injuries": getattr(_ep_inj, "away_injuries", None) if _ep_inj else None,
+                "line_movement": getattr(_ep_mov, "net_direction", None) if _ep_mov else None,
+                "tipster": edge.get("tipster_score") or (getattr(_ep_edge, "tipster_score", None) if _ep_edge else None),
+                "venue": None,
+                "weather": None,
+                "pitch": None,
+                "momentum": (getattr(_ep_edge, "signals", {}) or {}) if _ep_edge else None,
+                "price_edge_bps": int((edge.get("price_edge_score") or (getattr(_ep_edge, "price_edge_score", 0.0) if _ep_edge else 0.0)) * 10000),
+                "market_consensus": getattr(_ep_sa, "bookmaker_count", None) if _ep_sa else None,
+                "squad": None,
+                # INV-VERDICT-COACH-FABRICATION-01: feed manager names from evidence_pack
+                "home_manager": (getattr(_ep_espn, "home_team", {}) or {}).get("coach") if _ep_espn else None,
+                "away_manager": (getattr(_ep_espn, "away_team", {}) or {}).get("coach") if _ep_espn else None,
             }
             _verdict_html = _generate_verdict_constrained(spec, _allowed)
+            # INV-VERDICT-COACH-FABRICATION-01: validate manager names in verdict
+            if _verdict_html:
+                from narrative_spec import validate_manager_names as _vmn
+                if not _vmn(_verdict_html, _allowed):
+                    log.warning("COACH-FABRICATION-GATE: verdict rejected for %s — unknown manager name", match_key)
+                    _verdict_html = ""
             if not _verdict_html:
                 _verdict_html = _rv_det(spec)
-            # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store
-            if _verdict_html and len(_verdict_html) > 140:
-                _verdict_html = _verdict_html[:140].rsplit(" ", 1)[0].rstrip(",. ")
+            # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store (ceiling raised to 300 by BUILD-VERDICT-ENRICHMENT-FIX-01)
+            if _verdict_html and len(_verdict_html) > 300:
+                _verdict_html = _verdict_html[:300].rsplit(" ", 1)[0].rstrip(",. ")
             log.info("PIPELINE-BUILD-01: verdict generated for %s (constrained=%s)",
                      match_key, bool(_verdict_html))
         except Exception as _verd_err:
@@ -1967,9 +2009,9 @@ async def _generate_one(
             try:
                 from narrative_spec import _render_verdict as _rv_fb
                 _verdict_html = _rv_fb(spec)
-                # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store
-                if _verdict_html and len(_verdict_html) > 140:
-                    _verdict_html = _verdict_html[:140].rsplit(" ", 1)[0].rstrip(",. ")
+                # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store (ceiling raised to 300 by BUILD-VERDICT-ENRICHMENT-FIX-01)
+                if _verdict_html and len(_verdict_html) > 300:
+                    _verdict_html = _verdict_html[:300].rsplit(" ", 1)[0].rstrip(",. ")
             except Exception:
                 pass
 

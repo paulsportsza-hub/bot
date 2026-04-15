@@ -57,8 +57,9 @@ def test_d1_generate_verdict_constrained_max_tokens_capped():
     token_values = re.findall(r"max_tokens=(\d+)", fn_body)
     assert token_values, "No max_tokens found in _generate_verdict_constrained"
     for tv in token_values:
-        assert int(tv) <= 120, (
-            f"_generate_verdict_constrained max_tokens={tv} exceeds safe limit of 120"
+        assert int(tv) <= 220, (
+            f"_generate_verdict_constrained max_tokens={tv} exceeds safe limit of 220"
+            " (raised from 120 by BUILD-VERDICT-ENRICHMENT-FIX-01)"
         )
 
 

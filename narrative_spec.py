@@ -145,7 +145,16 @@ def lookup_coach(team_name: str) -> str:
 # TODO(INV-VERDICT-GOLD-TRACE-01): calibrate MIN_VERDICT_CHARS from 20-sample
 # Sonnet Gold distribution.  Replace 80 with the calibrated value when
 # INV-VERDICT-GOLD-TRACE-01 completes.
-MIN_VERDICT_CHARS: int = 80
+MIN_VERDICT_CHARS: int = 80  # legacy flat constant — use MIN_VERDICT_CHARS_BY_TIER for new gates
+
+# BUILD-VERDICT-ENRICHMENT-FIX-01: tier-specific length gates
+MIN_VERDICT_CHARS_BY_TIER: dict[str, int] = {
+    "diamond": 160,
+    "gold": 140,
+    "silver": 110,
+    "bronze": 90,
+}
+MAX_VERDICT_CHARS: int = 300
 
 # Regexes that match trivially thin / content-empty verdicts.
 # Gate fires if ANY pattern matches the stripped verdict text.
@@ -186,21 +195,101 @@ def analytical_word_count(verdict: str) -> int:
     )
 
 
-def min_verdict_quality(verdict: str) -> bool:
+def validate_manager_names(verdict: str, evidence_pack: dict) -> bool:
+    """Return True if verdict passes manager name validation.
+
+    INV-VERDICT-COACH-FABRICATION-01: HARD gate.
+    Returns False if verdict names a manager/coach not present in evidence_pack.
+
+    Logic:
+    - Find possessive manager-name patterns (e.g. "Amorim's side") and
+      "under Name" patterns in the verdict text.
+    - Check each found last-name (case-insensitive) against evidence_pack
+      home_manager and away_manager fields.
+    - If at least one evidence manager is populated and a non-matching name is
+      found, HARD FAIL.
+    - If no evidence managers are populated (both None/empty), no-op (pass).
+    """
+    home_mgr = (evidence_pack.get("home_manager") or "").strip()
+    away_mgr = (evidence_pack.get("away_manager") or "").strip()
+
+    # If no manager data at all, can't validate — pass (no-op)
+    if not home_mgr and not away_mgr:
+        return True
+
+    # Build set of valid name tokens (case-insensitive)
+    valid_names: set[str] = set()
+    for mgr in (home_mgr, away_mgr):
+        if mgr:
+            for token in mgr.split():
+                if len(token) >= 3:
+                    valid_names.add(token.lower())
+
+    # Known team-adjacent words that are NOT manager names (false-positive guard)
+    _TEAM_WORDS = frozenset({
+        "united", "city", "spurs", "reds", "gunners", "blues", "hammers",
+        "chiefs", "pirates", "sundowns", "galaxy", "celtic", "rovers",
+        "wanderers", "hotspur", "forest", "villa", "palace", "everton",
+        "burnley", "fulham", "brentford", "bournemouth", "wolves",
+        "leicester", "brighton", "newcastle", "southampton", "west",
+        "ham", "crystal", "nottingham", "aston",
+    })
+
+    # Possessive manager patterns: "Name's side/men/team/..."
+    _POSSESSIVE_RE = re.compile(
+        r"\b([A-Z][a-z]{2,})[\u2019']s\s+(?:side|men|team|lads|boys|squad|"
+        r"approach|style|tactics|formation|setup|plan|system|"
+        r"United|City|Spurs|Reds|Gunners|Blues|Hammers|Chiefs|Pirates|"
+        r"Sundowns|charges|reign|era|tenure)\b"
+    )
+    # "under Name" patterns
+    _UNDER_RE = re.compile(r"\bunder\s+([A-Z][a-z]{2,})\b")
+
+    found_names: set[str] = set()
+    for m in _POSSESSIVE_RE.finditer(verdict):
+        candidate = m.group(1).lower()
+        if candidate not in _TEAM_WORDS:
+            found_names.add(candidate)
+    for m in _UNDER_RE.finditer(verdict):
+        candidate = m.group(1).lower()
+        if candidate not in _TEAM_WORDS:
+            found_names.add(candidate)
+
+    if not found_names:
+        return True  # No manager references detected
+
+    # Check each found name against valid evidence names
+    for name in found_names:
+        if name not in valid_names:
+            return False  # Unknown manager name — HARD FAIL
+
+    return True
+
+
+def min_verdict_quality(verdict: str, tier: str = "bronze",
+                        evidence_pack: dict | None = None) -> bool:
     """Return True if verdict passes the minimum quality floor.
 
     BUILD-VERDICT-QUALITY-GATE-01.
+    BUILD-VERDICT-ENRICHMENT-FIX-01: accepts tier parameter for tier-specific floors.
+    INV-VERDICT-COACH-FABRICATION-01: accepts evidence_pack for manager name validation.
 
     Rejects verdicts that:
-    1. Are shorter than MIN_VERDICT_CHARS characters.
-    2. Match a banned trivial template (content-empty patterns).
-    3. Contain fewer than 3 analytical vocabulary words.
+    1. Are shorter than the tier-specific MIN_VERDICT_CHARS_BY_TIER floor.
+    2. Are longer than MAX_VERDICT_CHARS (300).
+    3. Match a banned trivial template (content-empty patterns).
+    4. Contain fewer than 3 analytical vocabulary words.
+    5. Name a manager/coach not present in evidence_pack (hard fail).
 
     AC-1 contract: min_verdict_quality("Arteta's Gunners at 4.") is False.
     """
     text = verdict.strip()
-    # Gate 1 — minimum character length
-    if len(text) < MIN_VERDICT_CHARS:
+    # Gate 1 — tier-specific minimum character length + ceiling
+    _tier_key = (tier or "bronze").lower()
+    _floor = MIN_VERDICT_CHARS_BY_TIER.get(_tier_key, MIN_VERDICT_CHARS_BY_TIER["bronze"])
+    if len(text) < _floor:
+        return False
+    if len(text) > MAX_VERDICT_CHARS:
         return False
     # Gate 2 — banned trivial templates
     for pattern in BANNED_TRIVIAL_VERDICT_TEMPLATES:
@@ -209,6 +298,10 @@ def min_verdict_quality(verdict: str) -> bool:
     # Gate 3 — analytical vocabulary count
     if analytical_word_count(text) < 3:
         return False
+    # Gate 5 — INV-VERDICT-COACH-FABRICATION-01: manager name fabrication check
+    if evidence_pack is not None:
+        if not validate_manager_names(text, evidence_pack):
+            return False
     return True
 
 

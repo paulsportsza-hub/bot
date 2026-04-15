@@ -7075,7 +7075,8 @@ _mm_games_snapshot: dict[int, list] = {}  # user_id → flat match list at last 
 # X-CARD-PIPE-01: per-match dedup guard — each Gold match_key queued at most once per run
 _x_queued_keys: set[str] = set()
 # BUILD-W3: @MzansiEdgeAlerts subscriber broadcast channel
-_CHANNEL_ID = -1003789410835
+# TG-SURFACE-SPLIT-01: read from env (TELEGRAM_ALERTS_CHANNEL_ID); hardcoded value is fallback
+_CHANNEL_ID = int(os.environ.get("TELEGRAM_ALERTS_CHANNEL_ID", "-1003789410835"))
 _ht_detail_origin: dict[tuple[int, str], int] = {}  # (user_id, match_key) → source page
 # P3-02: /today digest snapshot — per-user tips frozen at last DigestMessage render
 _today_digest_snapshot: dict[int, list] = {}  # user_id → tips list
@@ -7328,10 +7329,11 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         form_away_plain = form_to_plain(_af) or tip.get("form_away_plain") or ""
 
         # Nicknames and manager names (VERDICT-UPGRADE-02)
+        # INV-VERDICT-COACH-FABRICATION-01: prefer evidence_pack managers over stale team_data.py
         nickname_home = get_nickname(home)
         nickname_away = get_nickname(away)
-        manager_home = get_manager(home)
-        manager_away = get_manager(away)
+        manager_home = tip.get("home_manager") or get_manager(home)
+        manager_away = tip.get("away_manager") or get_manager(away)
 
         # H2H summary from h2h dict
         # ENRICH-FIX-01: check pre-set fallback string when h2h dict is empty
@@ -7388,7 +7390,8 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "Data you receive:\n"
             "- home_team / away_team: official team names\n"
             "- nickname_home / nickname_away: fan nicknames — USE THESE in your verdict instead of the full name where they exist\n"
-            "- manager_home / manager_away: current manager surnames — USE THESE when they add personality (e.g. 'Maresca's side', 'under Amorim'). SKIP if the field is empty.\n"
+            "- manager_home / manager_away: current manager surnames — USE THESE when they add personality (e.g. 'Maresca's side', 'under Slot'). SKIP if the field is empty.\n"
+            "  ZERO-TOLERANCE RULE: NEVER name a manager, coach, or head coach unless their name appears verbatim in manager_home or manager_away. If the field is null, missing, or empty, omit the name entirely and refer to the side by team name or nickname only. This is an absolute hard gate — naming a manager not in the verified data is a fabrication that will be rejected.\n"
             "- form_home_plain / form_away_plain: plain English form summaries — USE THESE directly in sentences. Never restate them as letter strings (WWLLL etc).\n"
             "- pick: what we are backing\n"
             "- odds: the odds on offer\n"
@@ -7435,7 +7438,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "\n"
             "Examples of good verdicts:\n"
             "\n"
-            "\"Draw money at WSB is the play. Maresca's Chelsea are in terrible form — four losses from their last five — but Amorim's United don't come here and run riot. Back the draw.\"\n"
+            "\"Draw money at WSB is the play. Maresca's Chelsea are in terrible form — four losses from their last five — but United don't come here and run riot. Back the draw.\"\n"
             "\n"
             "\"Amakhosi at home is the call. Chiefs have won four of their last five and the Bucs are in poor nick on the road. Back Amakhosi.\"\n"
             "\n"
@@ -7654,10 +7657,11 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         form_away_plain = form_to_plain(_af) or allowed_data.get("form_away_plain") or ""
 
         # Nicknames and manager names (VERDICT-UPGRADE-02)
+        # INV-VERDICT-COACH-FABRICATION-01: prefer evidence_pack managers over stale team_data.py
         nickname_home = get_nickname(home)
         nickname_away = get_nickname(away)
-        manager_home = get_manager(home)
-        manager_away = get_manager(away)
+        manager_home = allowed_data.get("home_manager") or get_manager(home)
+        manager_away = allowed_data.get("away_manager") or get_manager(away)
 
         # H2H summary
         # ENRICH-FIX-01: check pre-set fallback string when h2h dict is empty
@@ -7716,7 +7720,8 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "Data you receive:\n"
             "- home_team / away_team: official team names\n"
             "- nickname_home / nickname_away: fan nicknames — USE THESE in your verdict instead of the full name where they exist\n"
-            "- manager_home / manager_away: current manager surnames — USE THESE when they add personality (e.g. 'Maresca's side', 'under Amorim'). SKIP if the field is empty.\n"
+            "- manager_home / manager_away: current manager surnames — USE THESE when they add personality (e.g. 'Maresca's side', 'under Slot'). SKIP if the field is empty.\n"
+            "  ZERO-TOLERANCE RULE: NEVER name a manager, coach, or head coach unless their name appears verbatim in manager_home or manager_away. If the field is null, missing, or empty, omit the name entirely and refer to the side by team name or nickname only. This is an absolute hard gate — naming a manager not in the verified data is a fabrication that will be rejected.\n"
             "- form_home_plain / form_away_plain: plain English form summaries — USE THESE directly in sentences. Never restate them as letter strings (WWLLL etc).\n"
             "- pick: what we are backing\n"
             "- odds: the odds on offer\n"
@@ -7763,7 +7768,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "\n"
             "Examples of good verdicts:\n"
             "\n"
-            "\"Draw money at WSB is the play. Maresca's Chelsea are in terrible form — four losses from their last five — but Amorim's United don't come here and run riot. Back the draw.\"\n"
+            "\"Draw money at WSB is the play. Maresca's Chelsea are in terrible form — four losses from their last five — but United don't come here and run riot. Back the draw.\"\n"
             "\n"
             "\"Amakhosi at home is the call. Chiefs have won four of their last five and the Bucs are in poor nick on the road. Back Amakhosi.\"\n"
             "\n"
@@ -12928,12 +12933,23 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
     def _fetch():
         conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
         try:
-            row = conn.execute(
-                "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
-                "evidence_json, narrative_source, coverage_json, created_at "
-                "FROM narrative_cache WHERE match_id = ?",
-                (match_id,),
-            ).fetchone()
+            # INV-VERDICT-COACH-FABRICATION-01: exclude quarantined rows
+            try:
+                row = conn.execute(
+                    "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
+                    "evidence_json, narrative_source, coverage_json, created_at "
+                    "FROM narrative_cache WHERE match_id = ? "
+                    "AND COALESCE(quarantined, 0) = 0",
+                    (match_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                # quarantined column may not exist in older DBs
+                row = conn.execute(
+                    "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
+                    "evidence_json, narrative_source, coverage_json, created_at "
+                    "FROM narrative_cache WHERE match_id = ?",
+                    (match_id,),
+                ).fetchone()
             if not row:
                 return None
             html, model, tier, tips_json, stored_hash, expires_at, evidence_json, narrative_source, coverage_json, created_at_raw = row
@@ -22619,15 +22635,26 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if tips:
         _blw_fire_tips(tips, "channel")
 
-    # BUILD-W3: broadcast Edge Summary card to @MzansiEdgeAlerts at 08:00 SAST
+    # BUILD-W3 / TG-SURFACE-SPLIT-01B: broadcast Edge Summary card to @MzansiEdgeAlerts at 08:00 SAST.
+    # Routed through publisher/channels/telegram_alerts.post_card() so the broadcast uses the
+    # same channel abstraction as all other Alerts posts (no hardcoded ctx.bot.send_photo).
     if tips and current_hour == 8:
         try:
+            import sys as _sys
+            _PUB_CHANNELS = "/home/paulsportsza/publisher/channels"
+            if _PUB_CHANNELS not in _sys.path:
+                _sys.path.insert(0, _PUB_CHANNELS)
+            from telegram_alerts import post_card as _tg_alerts_post_card  # type: ignore[import]
             _ch_data = build_edge_summary_data(tips)
             _ch_png = await asyncio.to_thread(render_card_sync, "edge_summary.html", _ch_data)
-            _ch_markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton("💎 Open Bot", url="https://t.me/mzansiedge_bot"),
-            ]])
-            await ctx.bot.send_photo(chat_id=_CHANNEL_ID, photo=_ch_png, reply_markup=_ch_markup)
+            _tg_token = os.environ.get("TELEGRAM_PUBLISHER_BOT_TOKEN", "")
+            _ch_reply_markup = {
+                "inline_keyboard": [[{"text": "💎 Open Bot", "url": "https://t.me/mzansiedge_bot"}]]
+            }
+            await asyncio.to_thread(
+                _tg_alerts_post_card,
+                _tg_token, str(_CHANNEL_ID), _ch_png, "", _ch_reply_markup,
+            )
             log.info("Edge Summary card broadcast to channel at hour=%d", current_hour)
         except Exception as _ch_err:
             log.warning("Channel broadcast failed: %s", _ch_err)
