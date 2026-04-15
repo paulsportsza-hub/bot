@@ -4880,6 +4880,91 @@ def render_performance_content(conn) -> str:
   </div>
 </div>"""
 
+    # ---- CLV Pipeline Health panel (SO #36, EDGE-REMEDIATION-02) ----
+    _clv_components = [
+        {"name": "closing_capture", "sla_min": 30, "log": "closing_capture"},
+        {"name": "clv_backfill", "sla_min": 45, "log": "clv_backfill"},
+        {"name": "clv_tracker", "sla_min": 90, "log": "clv_tracker"},
+        {"name": "clv_kill_monitor", "sla_min": 180, "log": "clv_kill_monitor"},
+    ]
+    _clv_pipe_rows = ""
+    _clv_any_breach = False
+    for _cp in _clv_components:
+        _cp_name = _cp["name"]
+        _cp_sla = _cp["sla_min"]
+        # Try to get last run from log files
+        _cp_last_run = None
+        _cp_status = "unknown"
+        _cp_items = "—"
+        import glob as _glob
+        _log_path = os.path.expanduser(f"~/logs/{_cp['log']}.log")
+        try:
+            if os.path.exists(_log_path):
+                _mtime = os.path.getmtime(_log_path)
+                _cp_last_run = datetime.fromtimestamp(_mtime, tz=timezone.utc)
+                _age_min = (datetime.now(timezone.utc) - _cp_last_run).total_seconds() / 60
+                _cp_status = "ok" if _age_min <= _cp_sla else "stale"
+                if _cp_status == "stale":
+                    _clv_any_breach = True
+        except Exception:
+            pass
+
+        # Get item counts from DB
+        try:
+            if _cp_name == "closing_capture":
+                _row = q_one(conn, "SELECT COUNT(*) as cnt FROM odds_closing_sa WHERE captured_at > datetime('now', '-1 day')")
+                _cp_items = str(_row["cnt"]) if _row else "0"
+            elif _cp_name == "clv_backfill":
+                _row = q_one(conn, "SELECT COUNT(*) as cnt FROM bet_recommendations_log WHERE clv IS NOT NULL AND closed_at > datetime('now', '-1 day')")
+                _cp_items = str(_row["cnt"]) if _row else "0"
+            elif _cp_name == "clv_tracker":
+                _row = q_one(conn, "SELECT COUNT(*) as cnt FROM clv_tracking WHERE calculated_at > datetime('now', '-1 day')")
+                _cp_items = str(_row["cnt"]) if _row else "0"
+            elif _cp_name == "clv_kill_monitor":
+                _row = q_one(conn, "SELECT last_evaluated_at FROM model_kill_flags WHERE flag_name='clv_tracking'")
+                if _row and _row["last_evaluated_at"]:
+                    _cp_last_run = datetime.fromisoformat(_row["last_evaluated_at"]).replace(tzinfo=timezone.utc)
+                    _age_min = (datetime.now(timezone.utc) - _cp_last_run).total_seconds() / 60
+                    _cp_status = "ok" if _age_min <= _cp_sla else "stale"
+                    if _cp_status == "stale":
+                        _clv_any_breach = True
+                _km_row = q_one(conn, "SELECT enabled, window_neg_pct FROM model_kill_flags WHERE flag_name='clv_tracking'")
+                if _km_row:
+                    _km_enabled = _km_row["enabled"]
+                    _neg_pct = _km_row["window_neg_pct"]
+                    _cp_items = f"{'active' if _km_enabled else 'KILLED'}"
+                    if _neg_pct is not None:
+                        _cp_items += f" ({_neg_pct:.0%} neg)"
+        except Exception:
+            pass
+
+        _ts_str = _cp_last_run.strftime("%H:%M") if _cp_last_run else "never"
+        _s_cls = "s-green" if _cp_status == "ok" else ("s-red" if _cp_status == "stale" else "s-grey")
+        _s_dot = "🟢" if _cp_status == "ok" else ("🔴" if _cp_status == "stale" else "⚪")
+        _clv_pipe_rows += f"""
+      <tr>
+        <td>{_s_dot} {_cp_name}</td>
+        <td class="{_s_cls}">{_ts_str}</td>
+        <td>{_cp_sla}m</td>
+        <td>{_cp_items}</td>
+      </tr>"""
+
+    _clv_pipe_panel = f"""
+<div class="panel {'panel-red-accent' if _clv_any_breach else 'panel-orange-accent'}" style="margin-bottom:16px;">
+  <div class="panel-head">
+    <span class="panel-title">CLV Pipeline Health</span>
+    <span class="panel-sub">{'⚠️ SLA BREACH' if _clv_any_breach else '✅ All healthy'}</span>
+  </div>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr>
+        <th>Component</th><th>Last Run</th><th>SLA</th><th>Items (24h)</th>
+      </tr></thead>
+      <tbody>{_clv_pipe_rows}</tbody>
+    </table>
+  </div>
+</div>"""
+
     # ---- Assemble page ----
     return f"""
 <style>{_perf_css()}</style>
@@ -4893,6 +4978,7 @@ def render_performance_content(conn) -> str:
 </div>
 <div class="page">
   {kpi_html}
+  {_clv_pipe_panel}
   {tier_health_panel}
   <div class="grid-2">
     <div class="panel panel-orange-accent">

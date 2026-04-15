@@ -11412,6 +11412,30 @@ async def _blw_log_tip(tip: dict, user_id_str: str) -> None:
         model_prob_raw = tip.get("prob")  # stored as 0-100 integer
         model_prob = float(model_prob_raw) / 100.0 if model_prob_raw else None
 
+        # BUG-CLV-01: Extract kickoff from tip or fixture_mapping
+        _blw_kickoff = tip.get("commence_time") or tip.get("_bc_kickoff") or None
+        if not _blw_kickoff:
+            # Look up kickoff from fixture_mapping
+            try:
+                _blw_fm = await asyncio.to_thread(
+                    lambda: (lambda c: (
+                        c.execute(
+                            "SELECT kickoff FROM fixture_mapping WHERE match_key = ? LIMIT 1",
+                            (match_key,),
+                        ).fetchone(),
+                        c.close(),
+                    )[0])(__import__("scrapers.db_connect", fromlist=["connect_odds_db"]).connect_odds_db(_BLW_DB))
+                )
+                if _blw_fm:
+                    _blw_kickoff = _blw_fm[0]
+            except Exception:
+                pass
+
+        # BUG-CLV-02: Extract fair_odds from model probability (Shin devigged)
+        _blw_fair_odds = None
+        if model_prob and model_prob > 0.01 and model_prob < 1.0:
+            _blw_fair_odds = round(1.0 / model_prob, 4)
+
         await _blw_rec(
             edge_id=edge_id,
             match_key=match_key,
@@ -11427,6 +11451,8 @@ async def _blw_log_tip(tip: dict, user_id_str: str) -> None:
             confirming_signals=(
                 _v2.get("confirming_signals") if isinstance(_v2, dict) else None
             ),
+            kickoff=_blw_kickoff,
+            fair_odds=_blw_fair_odds,
         )
         log.debug("P4-07: logged edge_id=%s match=%s user=%s", edge_id, match_key, user_id_str)
     except Exception as _blw_exc:
