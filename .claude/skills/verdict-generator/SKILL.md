@@ -218,6 +218,46 @@ Monitor function: `narrative_integrity_monitor.py::FRESHNESS_CHECK()`
 
 ---
 
+## Exemplar Bank (INJECT-EXEMPLARS-TO-BANK-01 — 2026-04-15)
+
+Promoted verdict exemplars are stored in `bot/data/prose_exemplars.json` under the
+`verdict_bank` key. These are injected at prompt-build time for style guidance.
+
+| Field | Value |
+|-------|-------|
+| **Location** | `bot/data/prose_exemplars.json` → `verdict_bank` array |
+| **Count** | 12 locked exemplars |
+| **Last updated** | 2026-04-15 |
+| **Loader** | `load_exemplars()` in `bot.py` (line ~17256) — cached on first call, cleared on restart |
+
+### Promotion Criteria
+
+1. Score **10/10** from forge validator (all HG gates pass), **OR** explicit Paul approval from
+   the forge rating session.
+2. Covers a **distinct shape** — no two exemplars with identical `(tier, sport, shape)` triple
+   unless the second demonstrates a unique capability (e.g. dual-manager, SA locale, nickname-forward).
+3. **HG-3 applied**: orphan `Back X.` back-lines joined to predecessor with em dash before storage.
+4. **Plain text only**: no markdown formatting in `verdict_text`.
+
+### Bank Contents (12 entries)
+
+| ID | Tier | Sport | Shape | Source | Notes |
+|----|------|-------|-------|--------|-------|
+| forge_01_001 | Diamond | Soccer | home_fav | FORGE-01 | Paul 10/10 — Liverpool vs PSG |
+| forge_01_002 | Diamond | Soccer | away_underdog | FORGE-01 | Paul 10/10 — Man City vs Arsenal |
+| forge_01_003 | Diamond | Rugby | road_fav | FORGE-01 | Paul 10/10 — Ulster vs Leinster |
+| forge_01_004 | Diamond | Soccer | road_fav | FORGE-01 | Diverse — Atletico vs Barcelona |
+| forge_01_005 | Gold | Soccer | home_fav | FORGE-01 | Diverse — PSL/SA locale |
+| forge_01_006 | Gold | Rugby | home_fav | FORGE-01 | Diverse — Super Rugby |
+| forge_01_007 | Gold | Cricket | road_fav | FORGE-01 | Diverse — IPL |
+| forge_01_008 | Silver | Soccer | road_fav | FORGE-01 | Diverse — PSL lower tier |
+| forge_02_001 | Diamond | Soccer | road_fav | FORGE-02 | Dual-manager — MU vs Arsenal |
+| forge_02_002 | Gold | Soccer | home_underdog | FORGE-02 | Dual-manager — Newcastle vs City |
+| forge_02_003 | Gold | Soccer | home_fav | FORGE-02 | Dual-manager + PSL + SA nicknames |
+| forge_02_004 | Bronze | Combat | away_underdog | FORGE-02 | Nickname-forward — DDP vs Chimaev |
+
+---
+
 ## Related Files
 
 | File | Role |
@@ -225,6 +265,7 @@ Monitor function: `narrative_integrity_monitor.py::FRESHNESS_CHECK()`
 | `bot/bot.py` | `_generate_verdict()`, `_generate_verdict_constrained()`, `_strip_markdown()`, `_fix_orphan_back()` |
 | `bot/narrative_spec.py` | `validate_manager_names()`, `validate_diamond_price_prefix()`, `validate_no_markdown_leak()`, `min_verdict_quality()` |
 | `bot/data/coaches.json` | Curated manager list with `last_verified` dates |
+| `bot/data/prose_exemplars.json` | Style-guide exemplars + `verdict_bank` (12 locked exemplars) |
 | `bot/narrative_integrity_monitor.py` | `FRESHNESS_CHECK()` — stale coach alert |
 | `.claude/skills/verdict-generator/assets/verdict-prompt-template.md` | Prompt template reference |
 | `.claude/skills/verdict-generator/references/banned-templates.md` | Rejected pattern catalogue |

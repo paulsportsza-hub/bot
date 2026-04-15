@@ -1,0 +1,601 @@
+{
+  "setup": {
+    "title_push": [
+      {
+        "sport": "soccer",
+        "example": "Arsenal look unstoppable right now. Arteta's side sit top on 67 points and haven't lost at the Emirates all season — 12 wins from 14 at home tells you everything about their title credentials. The recent run (WWWDD) has been more grinding than devastating, and that scrappy 1-0 at Brighton suggests they're winning ugly rather than in full flow. But winning ugly is still winning.",
+        "data_used": {
+          "position": 1, "points": 67, "form": "WWWDD",
+          "home_record": "W12 D2 L0", "last_result": "beating Brighton 1-0 away",
+          "coach": "Mikel Arteta"
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "Ireland are bulldozing through this Six Nations, and Farrell has them purring. Top of the table and playing the kind of rugby that makes opponents dread the first scrum (P5 W5, 183 points scored). Their unbeaten run at the Aviva is now 12 games. The last five? Four wins and a draw — and the draw was against France in Paris. That's not a wobble. That's just how hard France are to beat away from home.",
+        "data_used": {
+          "position": 1, "form": "WWWDW", "home_record": "unbeaten last 12",
+          "coach": "Andy Farrell", "points_for": 183, "games_played": 5
+        }
+      },
+      {
+        "sport": "soccer",
+        "example": "Sundowns are doing what Sundowns do — sitting pretty at the top and making everyone else look ordinary. Rulani has them clicking: 58 points from 22 games, and they've only dropped points at home twice all season. You can talk about the pressure of chasing them, but the form (WWWWL) tells you the only thing threatening them is complacency — and that 3-2 loss to Pirates last week might have cured that too.",
+        "data_used": {
+          "position": 1, "points": 58, "games_played": 22,
+          "coach": "Rulani Mokwena", "home_record": "W11 D1 L2",
+          "form": "WWWWL", "last_result": "losing to Pirates 3-2"
+        }
+      }
+    ],
+    "fortress": [
+      {
+        "sport": "soccer",
+        "example": "Anfield is still doing what Anfield does. Liverpool have won 11 of their last 12 home games, and that one slip — a 1-1 against Wolves — looks more like a blip than a pattern. Slot has them organised in a way that makes visiting sides feel like they're walking into a trap from the first whistle. Opponents average less than a point per visit here. A lot less.",
+        "data_used": {
+          "home_record": "W11 D1 L0", "coach": "Arne Slot",
+          "last_result": "drawing 1-1 with Wolves at home"
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "Loftus Versfeld does something to visiting sides. The Bulls have made it almost unpassable — one home loss in 18 months, and that was a controversial penalty in extra time. Jake White's side score an average of 38 points per game here, and their set-piece dominance makes the altitude look like a secondary concern. Teams arriving from sea level tend to struggle just to stay in the game.",
+        "data_used": {
+          "home_record": "W14 D0 L1 in last 18 months",
+          "points_for_home_avg": 38, "coach": "Jake White"
+        }
+      },
+      {
+        "sport": "cricket",
+        "example": "SuperSport Park in Centurion is a different beast at altitude. The Titans have lost just once at home in 14 matches, and spinners in particular have found it hard to grip and turn on this surface. The home side averages 287 batting first — well above the national average — and their record chasing is even better. Touring sides often leave here wondering what happened.",
+        "data_used": {
+          "home_record": "W13 L1 last 14", "avg_score_batting_first": 287,
+          "matches_played": 14
+        }
+      }
+    ],
+    "crisis": [
+      {
+        "sport": "soccer",
+        "example": "Luton look like a side that has run out of answers. Five losses from their last six and they sit 19th — effectively in the Championship already, statistically. Rob Edwards seems to be trying everything, but conceding 2.3 per game in this run tells you the real problem isn't tactics, it's confidence. Players making mistakes they'd never make in training. The squad looks like it's bracing for the inevitable.",
+        "data_used": {
+          "position": 19, "form": "LLLWLL", "conceded_per_game": 2.3,
+          "coach": "Rob Edwards"
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "Dragons are in a desperate place. Four consecutive losses in the URC and they've now slipped to 15th — two spots outside the play-off positions with the season running out. Young's side are conceding 35 points a game in this run, and their lineout, historically a strength, has been a lottery. This is a team that knows it's in trouble. Whether they can arrest the slide before the season dies is the only question worth asking.",
+        "data_used": {
+          "position": 15, "form": "LLLL",
+          "conceded_avg": 35, "coach": "David Young"
+        }
+      },
+      {
+        "sport": "cricket",
+        "example": "Zimbabwe are a side that came here to compete but have found international cricket at this level unforgiving. Two games, two defeats, net run rate of -1.8 — the sort of number that makes group-stage progression a mathematical miracle. The bowling attack has conceded 340+ in both innings, and the batting hasn't chased more than 220. There's no gentle way to say it: they're outclassed.",
+        "data_used": {
+          "position": 8, "wins": 0, "losses": 2,
+          "nrr": -1.8, "matches_played": 2
+        }
+      }
+    ],
+    "recovery": [
+      {
+        "sport": "soccer",
+        "example": "Manchester City look like they've remembered who they are. After a three-game wobble that had pundits queuing up to write them off, Guardiola's side put Southampton to the sword — 4-0 at the Etihad, which is about as emphatic as it gets. The form reads LLLWW, which isn't perfect, but the trajectory is the right way. They're not back to their imperious best, but this felt like a team that had found its footing again.",
+        "data_used": {
+          "form": "LLLWW", "last_result": "beating Southampton 4-0 at home",
+          "coach": "Pep Guardiola"
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "Ulster needed that. After losing three consecutive games and watching the top-four chase seem to slip away, they finally put together a performance — 38-14 against Edinburgh. McFarland will be relieved more than satisfied: too many of those 38 points came against a second-half Edinburgh capitulation rather than Ulster excellence. But a win is a win, and the confidence injection might be exactly what this squad needed.",
+        "data_used": {
+          "form": "LLLW", "last_result": "beating Edinburgh 38-14",
+          "coach": "Dan McFarland"
+        }
+      },
+      {
+        "sport": "cricket",
+        "example": "India have steadied the ship. After losing to Australia in what felt like a season-defining defeat, they bounced back against Pakistan with a decisive 67-run victory that puts everything in perspective. Rohit's side had looked short of ideas in that Australia loss — the bowling attack's 8.4 economy rate in the middle overs was alarming. This was better in every department. Recovery confirmed.",
+        "data_used": {
+          "form": "LW", "last_result": "beating Pakistan by 67 runs",
+          "coach": "Rohit Sharma", "prev_economy_concern": 8.4
+        }
+      }
+    ],
+    "momentum": [
+      {
+        "sport": "soccer",
+        "example": "Aston Villa are playing their best football of the season — five wins from six, 18 goals scored, and an Emery-coached side that now genuinely believes it can chase down the top four. The front three have been unstoppable (WWWWLW), and this isn't a hot streak driven by good fortune. Expected goals back them up, their defensive shape is tight, and they've been winning late. That's a team with confidence running through it.",
+        "data_used": {
+          "form": "WWWWLW", "goals_for_last_6": 18,
+          "coach": "Unai Emery"
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "The Sharks have found something. Backed by four wins in a row and their lineout functioning like a genuine weapon again, they've climbed from 9th to 5th and are suddenly a genuine play-off threat. Plumtree has them playing fast, direct rugby that suits Durban's conditions, and the points-for average in this run — 35 per game — suggests they're in form at exactly the right time.",
+        "data_used": {
+          "form": "WWWW", "position": 5,
+          "points_for_avg_run": 35, "coach": "John Plumtree"
+        }
+      },
+      {
+        "sport": "cricket",
+        "example": "New Zealand have been quietly building something. Three consecutive wins in this T20 series, their top order averaging 47 across those games, and the spinners taking 14 wickets between them. Conway, Guptill and Williamson have all fired at least once each — this batting unit is genuinely deep, not reliant on a single batter to produce. They come into this with belief. That matters.",
+        "data_used": {
+          "form": "WWW", "avg_runs_top_order": 47,
+          "spinner_wickets_run": 14
+        }
+      }
+    ],
+    "inconsistent": [
+      {
+        "sport": "soccer",
+        "example": "Brighton are impossible to predict right now — win, lose, win, lose, win (WLWLW) is the exact sequence you'd produce if you were trying to confuse a spreadsheet. Hürzeler's side are clearly capable of good football, but they're also capable of looking completely lost for 45 minutes. They've scored 18 and conceded 17 in their last 10. Someone's going to break this sequence eventually. The question is which version shows up.",
+        "data_used": {
+          "form": "WLWLW", "goals_for_last_10": 18,
+          "goals_against_last_10": 17, "coach": "Fabian Hürzeler"
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "Western Stormers are a head-scratcher this campaign. Beat the champions three weeks ago, then lost to bottom-half Zebre at home last weekend (WWLLW). Dobson himself said 'self-inflicted' — discipline, yellow cards in the first half that completely change the game plan. A squad good enough to beat anyone, undisciplined enough to lose to anyone. Coin toss at this stage.",
+        "data_used": {
+          "form": "WWLLW", "coach": "John Dobson"
+        }
+      },
+      {
+        "sport": "cricket",
+        "example": "England's white-ball side have been all over the place in this series. Two big totals (330+ twice) sandwiching a collapse to 182 all out — (WLW) with wildly different performances each time. Buttler's side can clearly bat beautifully on their day, but 'on their day' is doing a lot of work in that sentence. High ceiling, low floor. Classic England, honestly.",
+        "data_used": {
+          "form": "WLW", "scores": [331, 182, 287], "coach": "Jos Buttler"
+        }
+      }
+    ],
+    "draw_merchants": [
+      {
+        "sport": "soccer",
+        "example": "Newcastle have become specialists in the inconclusive. Six draws from their last nine games, and it's starting to feel less like bad luck and more like tactical inevitability. Howe's side are genuinely hard to beat — only two losses in 14 — but they're equally hard to beat against. Safe, comfortable, uninspiring. If you're looking for a flat result, these are your team.",
+        "data_used": {
+          "form": "WDDLDDWDD", "draws_last_9": 6,
+          "coach": "Eddie Howe", "losses_last_14": 2
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "The Ospreys are playing a brand of rugby that defies clean results. Three draws in five URC games — almost unheard of in professional rugby — suggesting a team that's playing for territory without the finishing sharpness to convert it. Their defence has been exceptional (conceding 12 per game on average), but something's going wrong in the red zone. You can't fault the effort. You can fault the conversion rate.",
+        "data_used": {
+          "form": "WDDDW", "draws": 3, "conceded_avg": 12
+        }
+      },
+      {
+        "sport": "soccer",
+        "example": "Getafe have made a career out of making matches unpleasant. Five draws from eight (WDDDLDD) — and that's not coincidence, that's Bordalás football: defend deep, hit on the counter, accept the point and move on. They're 12th in La Liga. Safe. Boring. Exactly where Bordalás wants them. Against this opposition, you're backing the draw not because the edge demands it, but because that's what Getafe do.",
+        "data_used": {
+          "form": "WDDDLDD", "position": 12,
+          "coach": "Quique Bordalás", "draws_last_8": 5
+        }
+      }
+    ],
+    "setback": [
+      {
+        "sport": "soccer",
+        "example": "Chelsea had to lose one eventually. A 2-1 defeat at Fulham ends an eight-game unbeaten run, and Maresca will know the result was partly deserved — a second-half capitulation after leading for an hour isn't a fluke. The form (WWWWWWWWL) still looks exceptional and one bad afternoon doesn't erase the quality this side has shown. But it does add a question mark about mentality when the game gets tight. Something to watch.",
+        "data_used": {
+          "form": "WWWWWWWWL", "last_result": "losing 2-1 at Fulham",
+          "coach": "Enzo Maresca", "prev_unbeaten_run": 8
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "Leinster's 100% record is gone, and that's going to sting. A 24-19 home defeat to Munster — in a derby that probably should have been handled — brought them back to earth after 11 consecutive URC wins. Cullen will be more concerned about the defensive errors in the final quarter than the result itself. But losing at home to your fiercest rivals always hurts more than the scoreline suggests. They're still first. They're just less inevitable.",
+        "data_used": {
+          "form": "WWWWWWWWWWWL", "last_result": "losing 24-19 to Munster at home",
+          "coach": "Leo Cullen", "prev_unbeaten_run": 11
+        }
+      },
+      {
+        "sport": "cricket",
+        "example": "South Africa's T20 dominance hit a speed bump against Afghanistan. A 2-wicket loss that felt a bit like a car park incident — no serious damage but definitely a jolt. The batting (190/9) was actually decent; the issue was a death-bowling implosion in the final two overs. Markram will demand accountability, but the bigger picture (WWWWL) is still a squad in very good shape. This was a wobble, not a warning sign.",
+        "data_used": {
+          "form": "WWWWL", "last_result": "losing to Afghanistan by 2 wickets",
+          "coach": "Aiden Markram", "score": 190
+        }
+      }
+    ],
+    "anonymous": [
+      {
+        "sport": "soccer",
+        "example": "Brentford are exactly where they've been for three seasons now — mid-table, comfortable, impossible to predict. Thomas Frank has them well-drilled in a way that makes them competitive against the top six but not threatening enough to gate-crash it. The form (WLDWL) is neither good enough to get excited about nor bad enough to worry. A team that fills a fixture on the calendar without making it appointment viewing.",
+        "data_used": {
+          "position": 10, "form": "WLDWL", "coach": "Thomas Frank"
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "Connacht are a solid mid-pack URC side this season, and that's genuinely all that can be said about them right now. No losing streaks, no red-hot form run — just a team taking its points where it finds them. Their last five (WDLWL) mirrors their overall character: dependable in patches, leaky when the intensity drops. Not in contention, not in trouble. Mid-table done professionally.",
+        "data_used": {
+          "position": 7, "form": "WDLWL"
+        }
+      },
+      {
+        "sport": "cricket",
+        "example": "Zimbabwe haven't set this World Cup alight, but they haven't embarrassed themselves either. Two wins from five puts them fifth in the group — somewhere in the middle of the pack where nothing dramatic happens. The batting has been inconsistent and the bowling has mixed decent spells with expensive ones. Doing enough to stay, not enough to push. Mid-table in the most literal sense.",
+        "data_used": {
+          "position": 5, "wins": 2, "losses": 3, "matches_played": 5
+        }
+      }
+    ],
+    "neutral": [
+      {
+        "sport": "soccer",
+        "example": "Not enough data to read much into. Strasbourg are two games into the campaign — one win, one loss — which tells you nothing useful about the direction of this side under the new manager. The squad has quality; the tactical setup hasn't been stress-tested yet. This one requires a read of the market rather than the form.",
+        "data_used": {
+          "matches_played": 2, "wins": 1, "losses": 1
+        }
+      },
+      {
+        "sport": "rugby",
+        "example": "Too early to draw firm conclusions. Three games into the Currie Cup — two wins, one heavy loss — leaves this looking like a work in progress. The backline has talent. Whether the set-piece can carry them over a full season is unclear. Take the form with a grain of salt; the real test comes in the next three weeks.",
+        "data_used": {
+          "matches_played": 3, "wins": 2, "losses": 1
+        }
+      },
+      {
+        "sport": "cricket",
+        "example": "Two matches in the T20 series is not enough to form a view. The first was a washout; the second a comfortable win over a weaker side. Whether this team can handle pressure against quality opposition — we simply don't know yet. The data isn't there. This analysis defers to the market.",
+        "data_used": {
+          "matches_played": 2, "completed_matches": 1, "wins": 1
+        }
+      }
+    ]
+  },
+  "edge": {
+    "strong": [
+      {
+        "example": "GBets' 4.30 on the draw stands out — 12.9% above where this should be priced. When 5 of our 7 indicators back the same play and 7 SA bookmakers cluster within 3%, you're not looking at a pricing error — you're looking at genuine value the market hasn't corrected yet.",
+        "data_used": {
+          "ev": 12.9, "confirming_signals": 5, "total_signals": 7,
+          "bookmakers_count": 7, "bookmaker": "GBets", "odds": 4.30
+        }
+      },
+      {
+        "example": "The away win at 3.80 on Hollywoodbets is the value here. Our benchmark puts this at 3.33 — a 14.1% edge — and the line has been static for 18 hours despite the team news. Five confirming signals. This is the kind of number you want to see before a game.",
+        "data_used": {
+          "ev": 14.1, "confirming_signals": 5, "bookmaker": "Hollywoodbets",
+          "odds": 3.80, "benchmark_odds": 3.33, "stale_hours": 18
+        }
+      }
+    ],
+    "moderate": [
+      {
+        "example": "Betway are offering 2.20 on the home win — 7.1% above where Pinnacle and Betfair price this. The edge is there, and three of our five signals agree. Not the strongest play on the card but legitimate value.",
+        "data_used": {
+          "ev": 7.1, "confirming_signals": 3, "total_signals": 5,
+          "bookmaker": "Betway", "odds": 2.20
+        }
+      },
+      {
+        "example": "The over 2.5 at 1.85 on GBets carries a 5.4% edge — both sides average 1.8+ goals per game at home, and the last four meetings have all gone over. The market is a bit behind the form data here.",
+        "data_used": {
+          "ev": 5.4, "confirming_signals": 3, "bookmaker": "GBets",
+          "odds": 1.85, "h2h_last_4": "all over 2.5"
+        }
+      }
+    ],
+    "thin": [
+      {
+        "example": "There's a 2.2% edge on Hollywoodbets' 1.72 home win — marginal, but consistent with the directional signal. If you're building accumulators, this is the kind of qualifier that earns its place. Standalone, it's a patient bettors' play.",
+        "data_used": {
+          "ev": 2.2, "bookmaker": "Hollywoodbets", "odds": 1.72
+        }
+      },
+      {
+        "example": "WSB have this at 3.20 against a benchmark of 3.13 — a 2.2% edge. Thin but genuine. The signal strength is limited (2 confirming out of 7), so this is a value add to a multi rather than a standalone bet.",
+        "data_used": {
+          "ev": 2.2, "bookmaker": "WSB", "odds": 3.20,
+          "confirming_signals": 2, "total_signals": 7
+        }
+      }
+    ]
+  },
+  "risk": {
+    "opposing_case": [
+      {
+        "example": "The value is on the away win, but Newcastle have been drawing at home all season — only once has a visiting side left St James' Park with three points. Newcastle don't need to be in form to grind a point. Home fortress logic might override the edge here.",
+        "data_used": {
+          "risk_type": "home_advantage",
+          "context": "Newcastle home draw pattern, rare home losses"
+        }
+      },
+      {
+        "example": "The draw is the model's call here, but Ireland haven't drawn a Six Nations match in their last 14. The market's not pricing a draw because historically these two produce a result. There's a strong statistical case for the market, even against the signal.",
+        "data_used": {
+          "risk_type": "historical_pattern",
+          "context": "Ireland rarely draw in Six Nations"
+        }
+      }
+    ],
+    "market_disagrees": [
+      {
+        "example": "The 14.1% edge is real, but it's worth noting that Pinnacle has this closer to 3.33 — same as the benchmark. The wide spread on the soft books isn't the result of a mispricing they haven't spotted. They've spotted it. There's a reason this line hasn't moved. The edge may be there, but the market isn't wrong about the underlying probability.",
+        "data_used": {
+          "risk_type": "sharp_disagreement",
+          "context": "Pinnacle lines tight, soft books lagging",
+          "ev": 14.1, "sharp_benchmark_odds": 3.33
+        }
+      },
+      {
+        "example": "Three bookmakers have shortened the home win in the last 6 hours. That's either injury news we haven't seen yet, or sharp money coming in on the side we're recommending against. Either way, the market movement is a red flag worth acknowledging before you place.",
+        "data_used": {
+          "risk_type": "adverse_movement",
+          "context": "line shortening across 3 books in 6 hours"
+        }
+      }
+    ],
+    "sizing_caveat": [
+      {
+        "example": "This edge is being driven by a 38-hour-old line on Betway. A 5.4% edge on stale data is worth noting but worth sizing conservatively — the real price may well be closer to the benchmark by now. Back it, but don't overweight it.",
+        "data_used": {
+          "risk_type": "stale_pricing",
+          "stale_hours": 38, "bookmaker": "Betway", "ev": 5.4
+        }
+      },
+      {
+        "example": "The model shows value, but only 2 of our 7 signals support this direction. Five signals disagree or are neutral. That's the definition of thin: mathematically real, directionally contested. Stake accordingly.",
+        "data_used": {
+          "risk_type": "weak_signal_count",
+          "confirming_signals": 2, "total_signals": 7
+        }
+      }
+    ]
+  },
+  "verdict": {
+    "strong_back": [
+      {
+        "example": "Back the draw at 5.25 on WSB — 4 indicators confirm this +12.9% edge. This is one of the stronger plays on today's card.",
+        "data_used": {
+          "ev": 12.9, "confirming_signals": 4,
+          "bookmaker": "WSB", "odds": 5.25
+        }
+      },
+      {
+        "example": "The away win at 3.80 on Hollywoodbets is the play. Fair value sits at 3.33, pricing is 18+ hours stale, and all 5 confirming signals agree. This is the kind of value you want to see on a match. Back it.",
+        "data_used": {
+          "ev": 14.1, "confirming_signals": 5,
+          "bookmaker": "Hollywoodbets", "odds": 3.80, "stale_hours": 18
+        }
+      }
+    ],
+    "cautious": [
+      {
+        "example": "The edge is there at 7.1% but it's a single-signal case — the others are mixed. Worth a unit, not worth going large. The value is real; the conviction isn't.",
+        "data_used": {
+          "ev": 7.1, "confirming_signals": 1, "total_signals": 7
+        }
+      },
+      {
+        "example": "Back it at 2.20 on Betway but keep the stake modest. The 7.1% edge is genuine, but the pricing has only been up 4 hours and we'd want more signal confirmation before loading up. Good value — light stake.",
+        "data_used": {
+          "ev": 7.1, "bookmaker": "Betway",
+          "odds": 2.20, "stale_hours": 4
+        }
+      }
+    ],
+    "stale_warning": [
+      {
+        "example": "There's a 5.4% edge here, but this price has been up 38 hours. Any team news since Friday could already be absorbed by the market and just not reflected on Betway. Check the price before betting — it may have moved.",
+        "data_used": {
+          "ev": 5.4, "stale_hours": 38, "bookmaker": "Betway"
+        }
+      },
+      {
+        "example": "Hollywoodbets are showing value at 4.30, but this line is 52 hours old. The market may have woken up. Verify the current price before placing — what looked like 12.9% might be considerably less by now.",
+        "data_used": {
+          "ev": 12.9, "stale_hours": 52,
+          "bookmaker": "Hollywoodbets", "odds": 4.30
+        }
+      }
+    ],
+    "avoid": [
+      {
+        "example": "The model finds a 0.8% edge, but that's mathematical noise — you'd need 1,000 bets to see it statistically. Skip this one and wait for a stronger play.",
+        "data_used": {
+          "ev": 0.8
+        }
+      },
+      {
+        "example": "Only 1 of 7 signals supports this play. A genuine edge requires directional consensus. There isn't one here. Pass.",
+        "data_used": {
+          "confirming_signals": 1, "total_signals": 7
+        }
+      }
+    ]
+  },
+  "verdict_bank": [
+    {
+      "id": "forge_01_001",
+      "tier": "diamond",
+      "sport": "soccer",
+      "shape": "home_fav",
+      "fixture": "liverpool_vs_paris_saint_germain_2026-04-15",
+      "fixture_display": "Liverpool vs Paris Saint-Germain",
+      "pick": "Home Win",
+      "odds": 1.80,
+      "bookmaker": "betway",
+      "verdict_text": "The Reds at 1.80 on Betway is the sharp call — Slot's Liverpool are being undervalued at home in a Champions League knockout tie and the price edge is firing loud. PSG away from Paris in this competition is a different animal, and Anfield under the lights is no place for tourists — Back The Reds.",
+      "score": "10/10",
+      "source": "forge_01",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_01_002",
+      "tier": "diamond",
+      "sport": "soccer",
+      "shape": "away_underdog",
+      "fixture": "manchester_city_vs_arsenal_2026-04-19",
+      "fixture_display": "Manchester City vs Arsenal",
+      "pick": "Away Win",
+      "odds": 4.25,
+      "bookmaker": "wsb",
+      "verdict_text": "The Gunners at 4.25 with WSB is the call — the line has been shortening all week, which tells you the sharp money is riding with Arteta's side. An injury concern in the away camp is already priced in, and the odds are still drifting the Gunners' way — Back the Gunners.",
+      "score": "10/10",
+      "source": "forge_01",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_01_003",
+      "tier": "diamond",
+      "sport": "rugby",
+      "shape": "road_fav",
+      "fixture": "ulster_vs_leinster_2026-04-17",
+      "fixture_display": "Ulster vs Leinster",
+      "pick": "Away Win",
+      "odds": 2.21,
+      "bookmaker": "gbets",
+      "verdict_text": "Leinster away at 2.21 on gbets is where the edge sits — the price signal is firing strong on the visitors here. Leinster are the class act in this competition and Ulster at home doesn't change that equation — Back Leinster.",
+      "score": "10/10",
+      "source": "forge_01",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_01_004",
+      "tier": "diamond",
+      "sport": "soccer",
+      "shape": "road_fav",
+      "fixture": "atletico_madrid_vs_barcelona_2026-04-15",
+      "fixture_display": "Atletico Madrid vs Barcelona",
+      "pick": "Away Win",
+      "odds": 2.20,
+      "bookmaker": "wsb",
+      "verdict_text": "Barca at 2.20 on WSB is where the value sits, and the price edge signal is firing loud on this one. Atletico at home is always a test, but the market is underrating what Barca bring to this fixture right now — Back Barca.",
+      "score": "validator_pass",
+      "source": "forge_01",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_01_005",
+      "tier": "gold",
+      "sport": "soccer",
+      "shape": "home_fav",
+      "fixture": "orlando_pirates_vs_amazulu_2026-04-18",
+      "fixture_display": "Orlando Pirates vs AmaZulu",
+      "pick": "Home Win",
+      "odds": 1.50,
+      "bookmaker": "hollywoodbets",
+      "verdict_text": "Signals active: Home Win edge firing STRONG at Hollywoodbets, and the 1.50 line on the Bucs at home is where the value sits. Usuthu away from home is a tough ask, and the signals are pointing firmly in one direction here — Back the Bucs.",
+      "score": "validator_pass",
+      "source": "forge_01",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_01_006",
+      "tier": "gold",
+      "sport": "rugby",
+      "shape": "home_fav",
+      "fixture": "chiefs_vs_hurricanes_2026-04-12",
+      "fixture_display": "Chiefs vs Hurricanes",
+      "pick": "Home Win",
+      "odds": 1.70,
+      "bookmaker": "wsb",
+      "verdict_text": "Chiefs at 1.70 on WSB is where the value sits — the price edge signal is firing and the market is leaning Hamilton's way. At those odds, the Chiefs at home is a line worth taking — Back the Chiefs.",
+      "score": "validator_pass",
+      "source": "forge_01",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_01_007",
+      "tier": "gold",
+      "sport": "cricket",
+      "shape": "road_fav",
+      "fixture": "mumbai_indians_vs_punjab_kings_2026-04-16",
+      "fixture_display": "Mumbai Indians vs Punjab Kings",
+      "pick": "Away Win",
+      "odds": 2.20,
+      "bookmaker": "betway",
+      "verdict_text": "Punjab Kings at 2.20 on Betway is the value call here — the odds are generous enough on an away win that the edge is real. The signals back Punjab Kings to get the job done tonight — Back Punjab Kings.",
+      "score": "validator_pass",
+      "source": "forge_01",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_01_008",
+      "tier": "silver",
+      "sport": "soccer",
+      "shape": "road_fav",
+      "fixture": "polokwane_city_vs_kaizer_chiefs_2026-04-15",
+      "fixture_display": "Polokwane City vs Kaizer Chiefs",
+      "pick": "Away Win",
+      "odds": 2.10,
+      "bookmaker": "hollywoodbets",
+      "verdict_text": "Amakhosi at 2.10 on Hollywoodbets is the pick — the odds on a Chiefs away win are too good to leave on the table. The signals are firing in their favour and the market is backing them to get the job done in Polokwane — Back Amakhosi.",
+      "score": "validator_pass",
+      "source": "forge_01",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_02_001",
+      "tier": "diamond",
+      "sport": "soccer",
+      "shape": "road_fav",
+      "fixture": "manchester_united_vs_arsenal_2026-04-21",
+      "fixture_display": "Manchester United vs Arsenal",
+      "pick": "Away Win",
+      "odds": 1.85,
+      "bookmaker": "betway",
+      "verdict_text": "The Gunners at 1.85 on Betway is the call — the price edge signal is firing loud and clear on Arteta's side. Amorim's United have been inconsistent and the line is generous on Arsenal to take the three points — Back the Gunners.",
+      "score": "10/10",
+      "source": "forge_02",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_02_002",
+      "tier": "gold",
+      "sport": "soccer",
+      "shape": "home_underdog",
+      "fixture": "newcastle_united_vs_manchester_city_2026-04-20",
+      "fixture_display": "Newcastle United vs Manchester City",
+      "pick": "Home Win",
+      "odds": 5.50,
+      "bookmaker": "sportingbet",
+      "verdict_text": "Newcastle at 5.50 on sportingbet is where the value sits — the price edge signal is firing hard on Howe's Magpies, and that's too big a number to dismiss. Guardiola's City may have history here, but the value is undeniable — Back Newcastle.",
+      "score": "10/10",
+      "source": "forge_02",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_02_003",
+      "tier": "gold",
+      "sport": "soccer",
+      "shape": "home_fav",
+      "fixture": "mamelodi_sundowns_vs_kaizer_chiefs_2026-04-19",
+      "fixture_display": "Mamelodi Sundowns vs Kaizer Chiefs",
+      "pick": "Home Win",
+      "odds": 1.40,
+      "bookmaker": "hollywoodbets",
+      "verdict_text": "Cardoso's Brazilians at Hollywoodbets is the call — the signals are firing strong and the odds on the dominant PSL force are sharp. Nabi's Amakhosi have shown inconsistency on the road this season and the value is firmly with the home side — Back Sundowns.",
+      "score": "10/10",
+      "source": "forge_02",
+      "promoted_date": "2026-04-15"
+    },
+    {
+      "id": "forge_02_004",
+      "tier": "bronze",
+      "sport": "combat",
+      "shape": "away_underdog",
+      "fixture": "dricus_du_plessis_vs_khamzat_chimaev_2026-06-07",
+      "fixture_display": "Dricus Du Plessis vs Khamzat Chimaev",
+      "pick": "Away Win",
+      "odds": 3.50,
+      "bookmaker": "wsb",
+      "verdict_text": "Chimaev at 3.50 on WSB is serious value — the Chechen wrecking machine has been dominant in every fight, and Dricus, for all his talent, is in for the hardest night of his career here — Back Chimaev.",
+      "score": "10/10",
+      "source": "forge_02",
+      "promoted_date": "2026-04-15"
+    }
+  ]
+}
