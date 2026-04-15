@@ -27,7 +27,7 @@ ENV_FILE     = "/home/paulsportsza/publisher/.env"
 LOG_DIR      = Path("/home/paulsportsza/logs")
 BG_ASSETS    = SCRIPT_DIR / "assets"  # bg-{tier}.png lives here
 
-NOTION_TOKEN    = ""
+NOTION_TOKEN    = os.environ.get("NOTION_TOKEN", "")
 TASK_HUB_PAGE   = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
 MOQ_DB_ID       = "9061c15b-e8de-416d-8d61-e6b1d4d37f9f"
 NOTION_VERSION  = "2022-06-28"
