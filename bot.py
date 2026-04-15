@@ -7397,6 +7397,9 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "- nickname_home / nickname_away: fan nicknames — USE THESE in your verdict instead of the full name where they exist\n"
             "- manager_home / manager_away: current manager surnames — USE THESE when they add personality (e.g. 'Maresca's side', 'under Slot'). SKIP if the field is empty.\n"
             "  ZERO-TOLERANCE RULE: NEVER name a manager, coach, or head coach unless their name appears verbatim in manager_home or manager_away. If the field is null, missing, or empty, omit the name entirely and refer to the side by team name or nickname only. This is an absolute hard gate — naming a manager not in the verified data is a fabrication that will be rejected.\n"
+            "  NULL MANAGER CONDITIONAL (INV-ADV-A-MANAGER-LEAKTHROUGH-01): If manager_home is empty, null, or not present in the data you receive, you MUST NOT name any manager or coach for the home side. Refer to the home side by team name or nickname ONLY. This applies even if you recognise the team and believe you know who manages them from your training knowledge. Your training knowledge is IRRELEVANT — the evidence_pack is the ONLY valid source. If the field is empty, the answer is: do not name anyone. Same rule applies for manager_away. Violating this rule will cause the verdict to be rejected.\n"
+            "  WRONG example (REJECTED): manager_home is empty; verdict says \"Guardiola's side are the play\".\n"
+            "  RIGHT example (CORRECT): manager_home is empty; verdict says \"City are the play\".\n"
             "- form_home_plain / form_away_plain: plain English form summaries — USE THESE directly in sentences. Never restate them as letter strings (WWLLL etc).\n"
             "- pick: what we are backing\n"
             "- odds: the odds on offer\n"
@@ -7511,7 +7514,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             log.warning("verdict blacklisted: %s", text)
             return ""
 
-        return _fix_orphan_back(text)
+        return _fix_orphan_back(_strip_markdown(text))
     except Exception as exc:
         log.warning("_generate_verdict: Sonnet call failed: %s", exc)
         # Programmatic fallback — always show something rather than blank verdict
@@ -7589,6 +7592,39 @@ def _cap_verdict(text: str, limit: int = 300) -> str:
     """BUILD-VERDICT-CAP-01 / BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01: Truncate verdict to word boundary at limit chars."""
     if len(text) > limit:
         text = text[:limit].rsplit(" ", 1)[0].rstrip(",. ")
+    return text
+
+
+def _strip_markdown(text: str) -> str:
+    """BUILD-SANITIZER-MARKDOWN-STRIP-01: Strip markdown formatting from verdict text.
+
+    Applied BEFORE _fix_orphan_back() in both verdict generators.
+    Order matters: strip markdown first, then orphan-back fix (orphan-back
+    works on prose, not markdown-decorated text).
+
+    Strips: bold (**x** / __x__ → x), italic (*x* / _x_ → x),
+    headers (# at start of line → removed), backticks (`x` → x),
+    bullets at line start (- x or * x → x), blockquotes (> x → x).
+    Preserves: em dashes —, quotes, apostrophes, parentheses, ?!
+    """
+    if not text:
+        return text
+    # Bold: **x** → x
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    # Bold: __x__ → x
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    # Italic: *x* → x (not touching **)
+    text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', text)
+    # Italic: _x_ → x (word-boundary guard)
+    text = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'\1', text)
+    # Headers: # ## ### ... at start of line → removed
+    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+    # Backticks: `x` → x
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    # Bullets at line start: - x or * x → x (not mid-line *)
+    text = re.sub(r'^[\-\*]\s+', '', text, flags=re.MULTILINE)
+    # Blockquotes: > x → x
+    text = re.sub(r'^>\s*', '', text, flags=re.MULTILINE)
     return text
 
 
@@ -7884,7 +7920,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
                 return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
-        return _fix_orphan_back(checked)
+        return _fix_orphan_back(_strip_markdown(checked))
     except Exception as exc:
         log.warning("_generate_verdict_constrained failed: %s", exc)
         try:
@@ -22675,14 +22711,37 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 _sys.path.insert(0, _PUB_CHANNELS)
             from telegram_alerts import post_card as _tg_alerts_post_card  # type: ignore[import]
             from compliance import run_gate as _run_gate  # type: ignore[import]
+            from telegram_news_formatter import format_teaser as _fmt_teaser  # type: ignore[import]
             _ch_data = build_edge_summary_data(tips)
             _ch_png = await asyncio.to_thread(render_card_sync, "edge_summary.html", _ch_data)
             _tg_token = os.environ.get("TELEGRAM_PUBLISHER_BOT_TOKEN", "")
             _ch_reply_markup = {
                 "inline_keyboard": [[{"text": "💎 Open Bot", "url": "https://t.me/mzansiedge_bot"}]]
             }
+            # G1 caption — 10-section teaser from top tip (TG-AUTOGEN-REWRITE-01 Phase 2)
+            _top = tips[0] if tips else {}
+            _g1_home = _top.get("home_team", "")
+            _g1_away = _top.get("away_team", "")
+            _g1_match = f"{_g1_home} vs {_g1_away}" if _g1_home and _g1_away else "Today's Top Edge"
+            _g1_tier = _top.get("display_tier") or _top.get("edge_rating") or "gold"
+            _g1_league = _top.get("league_display") or _top.get("league") or ""
+            _g1_caption_text = _fmt_teaser(
+                match=_g1_match,
+                tier=_g1_tier,
+                league=_g1_league,
+                kickoff="",
+                broadcast="",
+                edge_data={
+                    "outcome": _top.get("outcome", ""),
+                    "odds": _top.get("odds", 0),
+                    "bookmaker": _top.get("bookmaker", ""),
+                    "ev": _top.get("ev", 0),
+                    "edge_score": _top.get("edge_score", 0),
+                },
+                link="https://t.me/mzansiedge_bot",
+            )
             # Compliance gate — post_type="teaser" → banned-phrase check, no 18+ footer
-            _ch_caption, _ch_warnings = _run_gate("Telegram Alerts", "", post_type="teaser")
+            _ch_caption, _ch_warnings = _run_gate("Telegram Alerts", _g1_caption_text, post_type="teaser")
             if _ch_warnings:
                 log.warning("G1 teaser compliance warnings: %s", _ch_warnings)
             await asyncio.to_thread(

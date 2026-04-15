@@ -282,6 +282,19 @@ def validate_diamond_price_prefix(verdict: str, tier: str) -> bool:
     return not bool(_DIAMOND_PRICE_PREFIX_RE.match(verdict.strip()))
 
 
+_MARKDOWN_LEAK_RE = re.compile(r'\*\*|__|`|^#+\s|^>\s', re.MULTILINE)
+
+
+def validate_no_markdown_leak(verdict: str) -> bool:
+    """BUILD-SANITIZER-MARKDOWN-STRIP-01: Return True if verdict contains no markdown.
+
+    Hard fail if any markdown formatting survives post-sanitizer.
+    Checks: bold/italic markers (**/__), backticks (`), headers (#),
+    blockquotes (>). Returns False (fail) if any leak detected.
+    """
+    return not bool(_MARKDOWN_LEAK_RE.search(verdict))
+
+
 def min_verdict_quality(verdict: str, tier: str = "bronze",
                         evidence_pack: dict | None = None) -> bool:
     """Return True if verdict passes the minimum quality floor.
@@ -296,6 +309,8 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
     3. Match a banned trivial template (content-empty patterns).
     4. Contain fewer than 3 analytical vocabulary words.
     5. Name a manager/coach not present in evidence_pack (hard fail).
+    6. Begin with "At <price>" for Diamond tier.
+    7. Contain residual markdown formatting (**/__/`/#/>) (hard fail).
 
     AC-1 contract: min_verdict_quality("Arteta's Gunners at 4.") is False.
     """
@@ -320,6 +335,9 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
             return False
     # Gate 6 — BUILD-VERDICT-RENDER-FIXES-01: Diamond price-prefix hard gate
     if not validate_diamond_price_prefix(text, tier):
+        return False
+    # Gate 7 — BUILD-SANITIZER-MARKDOWN-STRIP-01: markdown leak hard gate
+    if not validate_no_markdown_leak(text):
         return False
     return True
 

@@ -35,6 +35,38 @@ Amorim was NOT the current United manager — hallucinated from training data
 
 ---
 
+## B22 — Markdown formatting in verdict text (BUILD-SANITIZER-MARKDOWN-STRIP-01)
+
+**Rule**: Verdict text MUST NOT contain raw markdown formatting. Any `**bold**`,
+`__bold__`, `*italic*`, `_italic_`, `` `backtick` ``, `# headers`, `> blockquotes`,
+or `- / * bullets` that survive into the final verdict string are a defect.
+
+**Origin**: FORGE-VERDICT-EXEMPLARS-02 candidate #11 (Ospreys v Leinster).
+Sonnet emitted `**Signals active**` in the verdict — text landed in the card
+unsanitised, corrupting the rendered output.
+
+**Enforcement path** (BUILD-SANITIZER-MARKDOWN-STRIP-01):
+1. `_strip_markdown(text)` in `bot.py` — strips all markdown patterns. Applied in
+   BOTH `_generate_verdict()` and `_generate_verdict_constrained()` BEFORE
+   `_fix_orphan_back()`. Order: markdown strip → orphan-back fix.
+2. `validate_no_markdown_leak(verdict)` in `narrative_spec.py` — hard FAIL regex
+   `r'\*\*|__|`|^#+\s|^>\s'` checks for any leaked markdown POST-sanitizer.
+3. Wired into `min_verdict_quality()` as **Gate 7** — a verdict with residual
+   markdown will never reach the card renderer.
+4. Contract tests: `tests/contracts/test_sanitizer_markdown_strip_01.py`
+
+**Examples of REJECTED verdicts** (pre-sanitizer):
+- `"**Signals active** are doing the heavy lifting here..."`  (`**` leaked)
+- `"*Back* the away side at 1.80..."`  (`*` italic leaked)
+- `"Back the home side at \`1.85\`"`  (backtick leaked)
+- `"> This is a strong pick"` (blockquote leaked)
+
+**Examples of ACCEPTED verdicts** (post-sanitizer):
+- `"Signals active are doing the heavy lifting here..."`
+- `"Back the away side at 1.80..."`
+
+---
+
 ## B28 — Diamond verdict 'At \<price\>' opening prefix (BUILD-VERDICT-RENDER-FIXES-01)
 
 **Rule**: Any Diamond-tier verdict that begins with `At <price>` MUST be rejected.
