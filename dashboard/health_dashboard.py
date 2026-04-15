@@ -1764,7 +1764,7 @@ _CATEGORY_DISPLAY = {
 _CATEGORY_ORDER = [
     "bookmaker", "sharp", "rating", "fixture",
     "tipster", "enrichment", "settlement", "bot_job",
-    "Data Feeds",
+    "Data Feeds", "Monitoring",
 ]
 
 _STATUS_DOT = {
@@ -2737,7 +2737,9 @@ function copyPrompt(metricName, currentValue, expectedValue, lastTs, dbPath) {{
 # -- Automation content renderer ----------------------------------------------
 
 def render_automation_content() -> str:
-    """Render the Social Media view inner content HTML."""
+    """Render the Social Ops unified view: Channel Health Grid + inner tabs."""
+    import html as _html_mod
+
     notion_ok = True
     cache_age_str = ""
 
@@ -2764,14 +2766,29 @@ def render_automation_content() -> str:
     updated = now_sast.strftime("%Y-%m-%d %H:%M:%S")
     fourteen_days = now_utc + timedelta(days=14)
 
-    # Categorise items
+    # ── SLA config for Channel Health Grid ─────────────────────────────────
+    _CHANNEL_SLA: dict[str, float] = {
+        "telegram_alerts":    6.0,
+        "telegram_community": 12.0,
+        "whatsapp_channel":   6.0,
+        "instagram":          24.0,
+        "tiktok":             48.0,
+        "threads":            24.0,
+        "fb_groups":          72.0,
+        "quora":              168.0,
+    }
+    # LinkedIn uses post-age bands, not SLA (7d green, 14d amber, >14d red)
+    _LINKEDIN_GREEN_DAYS = 7
+    _LINKEDIN_AMBER_DAYS = 14
+
+    # ── Categorise items ───────────────────────────────────────────────────
     published_today = []
     scheduled = []
     awaiting_approval = []
     failed_blocked = []
     recent_publishes = []
     all_active = []
-    schedule_items = []   # for Schedule tab: Approved/Awaiting/Drafting/Briefed + has scheduled_time within 14d
+    schedule_items = []
 
     for item in items:
         status = (item.get("status") or "").lower().strip()
@@ -2790,27 +2807,24 @@ def render_automation_content() -> str:
             scheduled.append(item)
         elif status in ("awaiting approval", "draft", "review", "pending", "in review", "awaiting", "in progress"):
             awaiting_approval.append(item)
-        elif status in ("drafting", "briefed"):
-            pass  # fall through to schedule_items below
 
         if status not in ("published", "done", "complete", "archived"):
             all_active.append(item)
 
-        # Schedule tab: approved/awaiting/drafting/briefed + scheduled_time within 14 days
         if status in ("approved", "awaiting approval", "drafting", "briefed", "draft", "ready", "scheduled"):
             sched_dt = parse_ts(sched_raw)
             if sched_dt and now_utc <= sched_dt <= fourteen_days:
                 schedule_items.append(item)
 
-    # Sort
     scheduled.sort(key=lambda x: x.get("scheduled_time") or "9999")
     awaiting_approval.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
     recent_publishes.sort(key=lambda x: x.get("last_edited") or x.get("created") or "9999", reverse=True)
     schedule_items.sort(key=lambda x: x.get("scheduled_time") or "9999")
 
-    # -- Channel stats --
+    # ── Channel stats (automated + manual) ─────────────────────────────────
+    all_channels = _CHANNELS + _MANUAL_CHANNELS
     channel_stats: dict[str, dict] = {}
-    for ch in _CHANNELS:
+    for ch in all_channels:
         channel_stats[ch["key"]] = {
             "last_published": None,
             "last_published_ts": None,
@@ -2849,66 +2863,39 @@ def render_automation_content() -> str:
                     channel_stats[ch_key]["next_scheduled_ts"] = sched_dt
                     channel_stats[ch_key]["next_scheduled"] = sched
 
-    # -- Local helpers --
+    # ── Local helpers ──────────────────────────────────────────────────────
     def _channel_chip(ch_key: str) -> str:
         ch = _CHANNEL_MAP.get(ch_key)
         if not ch:
-            return f'<span class="ch-chip" style="background:rgba(107,114,128,0.15);color:var(--muted)">{ch_key or "?"}</span>'
+            return f'<span class="ch-chip" style="background:rgba(107,114,128,0.15);color:var(--muted)">{_html_mod.escape(ch_key) if ch_key else "?"}</span>'
         return (f'<span class="ch-chip" style="background:{ch["color"]}22;color:{ch["color"]};'
                 f'border:1px solid {ch["color"]}33"><span class="ch-dot" style="background:{ch["color"]}"></span>'
                 f'{ch["label"]}</span>')
 
-    def _status_chip(status: str) -> str:
-        low = status.lower().strip()
-        if low in ("published", "done", "complete"):
-            return '<span class="chip chip-green"><span class="cdot"></span>Published</span>'
-        elif low in ("approved", "ready", "scheduled"):
-            return '<span class="chip chip-amber"><span class="cdot"></span>Scheduled</span>'
-        elif low in ("failed", "blocked", "error"):
-            return '<span class="chip chip-red"><span class="cdot"></span>Failed</span>'
-        elif low in ("awaiting approval", "draft", "review", "pending", "in review", "awaiting", "in progress"):
-            return '<span class="chip chip-gray"><span class="cdot"></span>Awaiting</span>'
-        return f'<span class="chip chip-gray"><span class="cdot"></span>{status}</span>'
-
-    def _media_type_label(asset_link: str = "", channel: str = "", work_type: str = "") -> str:
-        """Smart media type detection: returns 'Video', 'Image', or 'Post'."""
-        ch_low = channel.lower().strip()
-        wt_low = work_type.lower().strip()
-        # TikTok is always video
-        if "tiktok" in ch_low:
-            return "Video"
-        # BRU work type = video (Brand Response Unit)
-        if wt_low == "bru":
-            return "Video"
-        # Detect from asset extension
-        if asset_link and "." in asset_link:
-            ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0]
-            if ext in ("mp4", "mov", "webm", "avi"):
-                return "Video"
-            if ext in ("jpg", "jpeg", "png", "gif", "webp"):
-                return "Image"
-        return "Post"
-
-    def _media_preview(asset_link: str, max_height: str = "300px", channel: str = "", work_type: str = "") -> str:
-        if not asset_link:
-            label = _media_type_label("", channel, work_type)
-            return f'<span style="color:var(--muted);font-size:11px;font-family:var(--font-m)">{label}</span>'
-        ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0] if "." in asset_link else ""
-        if ext in ("mp4", "mov", "webm"):
-            return (f'<video src="{asset_link}" controls '
-                    f'style="max-height:{max_height};border-radius:4px;display:block;margin-top:10px;width:auto;"></video>')
-        elif ext in ("jpg", "jpeg", "png", "gif", "webp"):
-            return (f'<img src="{asset_link}" alt="post asset" '
-                    f'style="max-height:{max_height};border-radius:4px;object-fit:cover;display:block;margin-top:10px;">')
+    def _sla_color(ch_key: str, last_ts) -> tuple[str, str]:
+        """Return (css_color, label) based on SLA for a channel."""
+        if ch_key == "linkedin":
+            if not last_ts:
+                return "var(--red)", "No posts"
+            age_d = (now_utc - last_ts).total_seconds() / 86400
+            if age_d < _LINKEDIN_GREEN_DAYS:
+                return "var(--green)", f"{age_d:.0f}d ago"
+            elif age_d < _LINKEDIN_AMBER_DAYS:
+                return "var(--amber)", f"{age_d:.0f}d ago"
+            else:
+                return "var(--red)", f"{age_d:.0f}d ago"
+        sla_h = _CHANNEL_SLA.get(ch_key, 24.0)
+        if not last_ts:
+            return "var(--muted)", "No publishes"
+        age_h = (now_utc - last_ts).total_seconds() / 3600
+        if age_h < sla_h:
+            return "var(--green)", f"{age_h:.0f}h ago"
+        elif age_h < sla_h * 2:
+            return "var(--amber)", f"{age_h:.0f}h ago"
         else:
-            label = _media_type_label(asset_link, channel, work_type)
-            return f'<span style="color:var(--muted);font-size:11px;font-family:var(--font-m)">{label}</span>'
+            return "var(--red)", f"{age_h:.0f}h ago"
 
-    def _media_thumb(asset_link: str) -> str:
-        """Thumbnail for Recent Publishes table (max 120px)."""
-        return _media_preview(asset_link, max_height="120px")
-
-    # -- Topbar --
+    # ── Topbar ─────────────────────────────────────────────────────────────
     banner = ""
     if cache_age_str:
         banner = f'<div class="banner banner-warn">{cache_age_str}</div>'
@@ -2916,126 +2903,46 @@ def render_automation_content() -> str:
         banner = '<div class="banner banner-err">Notion unavailable -- no cached data</div>'
 
     topbar = f"""<nav class="topbar">
-  <div class="topbar-left"><div class="topbar-pill">Social Media</div></div>
+  <div class="topbar-left"><div class="topbar-pill">Social Ops</div></div>
   <div class="topbar-right"><div class="topbar-meta">Updated <em>{updated} SAST</em></div></div>
 </nav>
 {banner}"""
 
-    # ── KPI numbers (shared across Feed tab) ───────────────────────────────
-    pub_today_count = len(published_today)
-    scheduled_count = len(scheduled)
-    awaiting_count  = len(awaiting_approval)
-    failed_count    = len(failed_blocked)
-    total_queue     = len(all_active)
-
-    pub_cls   = "c-green" if pub_today_count > 0 else "c-text"
-    sched_cls = "c-gold"
-    await_cls = "c-amber" if awaiting_count > 0 else "c-text"
-    fail_cls  = "c-red"   if failed_count > 0  else "c-text"
-
-    kpi_strip = f"""<div class="kpi-strip">
-    <div class="kpi"><div class="kpi-lbl">Published Today</div><div class="kpi-val {pub_cls}">{pub_today_count}</div><div class="kpi-sub">posts sent</div></div>
-    <div class="kpi"><div class="kpi-lbl">Scheduled</div><div class="kpi-val {sched_cls}">{scheduled_count}</div><div class="kpi-sub">approved &amp; queued</div></div>
-    <div class="kpi kpi-clickable" onclick="window._navToView('task_hub')" title="View approval pipeline"><div class="kpi-lbl">Awaiting Approval</div><div class="kpi-val {await_cls}">{awaiting_count}</div><div class="kpi-sub">{"tap to review" if awaiting_count > 0 else "all clear"}</div></div>
-    <div class="kpi"><div class="kpi-lbl">Failed / Blocked</div><div class="kpi-val {fail_cls}">{failed_count}</div><div class="kpi-sub">{"action needed" if failed_count > 0 else "all clear"}</div></div>
-    <div class="kpi"><div class="kpi-lbl">Total Queue</div><div class="kpi-val c-text">{total_queue}</div><div class="kpi-sub">active items</div></div>
-  </div>"""
-
-    # ── Channel Status Grid ────────────────────────────────────────────────
-    channel_cards = ""
-    for ch in _CHANNELS:
+    # ── 1. Channel Health Grid (9 channels: 6 automated + 3 manual) ───────
+    ch_grid_cards = ""
+    for ch in all_channels:
         cs = channel_stats[ch["key"]]
         last_ts = cs.get("last_published_ts")
+        is_manual = ch in _MANUAL_CHANNELS
+        sla_col, sla_label = _sla_color(ch["key"], last_ts)
+
         if cs["last_failed"]:
-            dot_color, dot_title = "var(--red)", "Last action failed"
-        elif last_ts:
-            age_h = (now_utc - last_ts).total_seconds() / 3600
-            if age_h < 6:
-                dot_color, dot_title = "var(--green)", "Active (< 6h)"
-            elif age_h < 24:
-                dot_color, dot_title = "var(--amber)", "Stale (6-24h)"
-            else:
-                dot_color, dot_title = "var(--red)", "Inactive (> 24h)"
-        else:
-            dot_color, dot_title = "var(--muted)", "No publishes yet"
+            sla_col = "var(--red)"
+            sla_label = "Failed"
 
-        last_pub_str = _relative_time(cs["last_published"]) if cs["last_published"] else '<span style="color:var(--muted)">No publishes yet</span>'
-        next_sched_str = _sast_hhmm(cs["next_scheduled"]) + " SAST" if cs["next_scheduled"] else "\u2014"
-        accent_cls = ""
-        if cs["next_scheduled_ts"]:
-            mins_until = (cs["next_scheduled_ts"] - now_utc).total_seconds() / 60
-            if 0 < mins_until < 60:
-                accent_cls = " panel-orange-accent"
+        manual_badge = ' <span class="so-manual-badge">MANUAL</span>' if is_manual else ""
+        queue_info = f'<div class="so-ch-stat">Queue: {cs["queue_depth"]}</div>' if cs["queue_depth"] > 0 else ""
 
-        channel_cards += f"""<div class="channel-card{accent_cls}">
-  <div class="channel-card-head"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{dot_color}" title="{dot_title}"></span><span class="channel-card-name" style="color:{ch['color']}">{ch['label']}</span></div>
-  <div class="channel-card-stat">Last published: <em>{last_pub_str}</em></div>
-  <div class="channel-card-stat">Published today: <em>{cs['published_today']}</em></div>
-  <div class="channel-card-stat">Next scheduled: <em>{next_sched_str}</em></div>
-  <div class="channel-card-stat">Queue depth: <em>{cs['queue_depth']}</em></div>
+        ch_grid_cards += f"""<div class="so-ch-card">
+  <div class="so-ch-dot" style="background:{sla_col}" title="{sla_label}"></div>
+  <div class="so-ch-name" style="color:{ch['color']}">{ch['label']}{manual_badge}</div>
+  <div class="so-ch-age" style="color:{sla_col}">{sla_label}</div>
+  {queue_info}
 </div>"""
 
-    channel_panel = f"""<div class="panel">
-    <div class="panel-head"><span class="panel-title">Channel Status</span><span class="panel-sub">8 channels &middot; last publish freshness</span></div>
-    <div class="channel-grid">{channel_cards}</div>
-  </div>"""
+    channel_health = f"""<div class="panel" style="margin-bottom:20px">
+  <div class="panel-head"><span class="panel-title">Channel Health</span><span class="panel-sub">9 channels &middot; SLA-based freshness</span></div>
+  <div class="so-ch-grid">{ch_grid_cards}</div>
+</div>"""
 
-    # ── Failed & Blocked ───────────────────────────────────────────────────
-    failed_html = ""
-    if failed_blocked:
-        rows = ""
-        for item in failed_blocked:
-            ch_key = _normalise_channel_key(item.get("channel") or "")
-            page_id = item.get("id", "")
-            rows += (
-                f'<tr id="fb-{page_id}">'
-                + td(_channel_chip(ch_key))
-                + td(_truncate(item.get("title"), 50))
-                + td(_status_chip(item.get("status") or ""))
-                + td(_truncate(item.get("error"), 80) or "\u2014", extra_style="color:var(--red)")
-                + td(_sast_hhmm(item.get("scheduled_time")))
-                + td(_relative_time(item.get("created")))
-                + td(f'<button class="btn-dismiss" data-id="{page_id}">Dismiss</button>')
-                + "</tr>"
-            )
-        failed_html = f"""<div class="panel panel-red-accent">
-    <div class="panel-head"><span class="panel-title" style="color:var(--red)">Failed &amp; Blocked</span><span class="panel-sub">{len(failed_blocked)} items need attention</span></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Channel</th><th>Title</th><th>Status</th><th>Error / Reason</th><th>Scheduled</th><th>Age</th><th></th></tr></thead><tbody>{rows}</tbody></table></div>
-  </div>"""
+    # ── 2. Inner tabs: Approve | Reel Kit | Calendar | Tasks ───────────────
 
-    # ── Recent Publishes (with inline media) ───────────────────────────────
-    recent_html = ""
-    if recent_publishes:
-        rows = ""
-        for item in recent_publishes[:30]:
-            ch_key = _normalise_channel_key(item.get("channel") or "")
-            ts = item.get("last_edited") or item.get("scheduled_time") or item.get("created") or ""
-            url = item.get("url") or ""
-            url_cell = f'<a href="{url}" target="_blank" style="color:var(--gold);font-size:11px">View post</a>' if url else "\u2014"
-            media_cell = _media_thumb(item.get("asset_link") or "")
-            rows += (
-                "<tr>"
-                + td(media_cell, css="", extra_style="padding:6px 14px;min-width:100px")
-                + td(_sast_hhmm(ts))
-                + td(_channel_chip(ch_key))
-                + td(_truncate(item.get("title"), 50))
-                + td(url_cell)
-                + td(_truncate(item.get("copy"), 60), extra_style="color:var(--muted);white-space:normal;max-width:300px")
-                + "</tr>"
-            )
-        recent_html = f"""<div class="panel">
-    <div class="panel-head"><span class="panel-title">Recent Publishes</span><span class="panel-sub">Last 24h &middot; {len(recent_publishes)} items</span></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Media</th><th>Time</th><th>Channel</th><th>Title</th><th>URL</th><th>Copy Preview</th></tr></thead><tbody>{rows}</tbody></table></div>
-  </div>"""
-
-    # ── Approval Queue cards ───────────────────────────────────────────────
-    # Strictly match Notion status "Awaiting Approval"
-    approval_queue_items = [i for i in items if (i.get("status") or "").strip().lower() == "awaiting approval"]
-    approval_queue_items.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
-
-    if approval_queue_items:
+    # --- Approve tab content ---
+    approve_items_all = _get_awaiting_items(items, include_overdue=False)
+    n_approve = len(approve_items_all)
+    if approve_items_all:
         appr_cards = ""
-        for item in approval_queue_items:
+        for item in approve_items_all:
             ch_key = _normalise_channel_key(item.get("channel") or "")
             sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
             campaign = _truncate(item.get("campaign_theme") or "", 40)
@@ -3043,23 +2950,31 @@ def render_automation_content() -> str:
             item_channel = item.get("channel") or ""
             item_work_type = item.get("work_type") or ""
             item_platform_notes = item.get("platform_notes") or ""
-            media_html = _media_preview(item.get("asset_link") or "", channel=item_channel, work_type=item_work_type)
-            # TikTok filename from Platform Notes
+            asset_link = item.get("asset_link") or ""
+            media_html = ""
+            if asset_link:
+                ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0] if "." in asset_link else ""
+                if ext in ("mp4", "mov", "webm"):
+                    media_html = (f'<video src="{_html_mod.escape(asset_link)}" controls '
+                                  f'style="max-height:300px;border-radius:4px;display:block;margin-top:10px;width:auto;"></video>')
+                elif ext in ("jpg", "jpeg", "png", "gif", "webp"):
+                    media_html = (f'<img src="{_html_mod.escape(asset_link)}" alt="post asset" '
+                                  f'style="max-height:300px;border-radius:4px;object-fit:cover;display:block;margin-top:10px;">')
             tiktok_file_html = ""
             if "tiktok" in item_channel.lower() and item_platform_notes:
                 _fn_match = re.search(r'[Ff]ile:\s*(.+)', item_platform_notes)
                 if _fn_match:
                     tiktok_file_html = (f'<div style="margin-top:6px;font-size:11px;color:var(--amber);'
                                         f'font-family:var(--font-m)">&#128193; File to upload: '
-                                        f'<code>{_fn_match.group(1).strip()}</code></div>')
+                                        f'<code>{_html_mod.escape(_fn_match.group(1).strip())}</code></div>')
             page_id = item.get("id", "")
-            appr_cards += f"""<div class="appr-card" id="appr-{page_id}">
+            appr_cards += f"""<div class="appr-card" id="so-appr-{page_id}">
   <div class="appr-header">
     {_channel_chip(ch_key)}
     <span class="appr-meta">&#128337; {sched_str}</span>
-    {f'<span class="appr-campaign">{campaign}</span>' if campaign else ""}
+    {f'<span class="appr-campaign">{_html_mod.escape(campaign)}</span>' if campaign else ""}
   </div>
-  <div class="appr-copy">{copy_text}</div>
+  <div class="appr-copy">{_html_mod.escape(copy_text)}</div>
   {media_html}
   {tiktok_file_html}
   <div class="appr-error" style="display:none;color:var(--red);font-size:11px;margin-top:8px"></div>
@@ -3068,12 +2983,51 @@ def render_automation_content() -> str:
     <button class="btn-archive" data-id="{page_id}">Archive</button>
   </div>
 </div>"""
-        approval_tab_content = f'<div id="appr-list">{appr_cards}</div>'
+        approve_tab_html = f'<div id="so-appr-list">{appr_cards}</div>'
     else:
-        approval_tab_content = '<div class="empty-state">No posts awaiting approval.</div>'
+        approve_tab_html = '<div class="empty-state">No posts awaiting approval.</div>'
 
-    # ── Schedule tab: 14-day lookahead table ───────────────────────────────
-    # Map items into cells: {date_str: {ch_key: [items]}}
+    # --- Reel Kit tab content ---
+    reel_kits: list[dict] = []
+    try:
+        reel_kits = _scan_reel_kits(today_str)
+    except Exception:
+        pass
+    n_reel = len(reel_kits)
+
+    _TIER_COLORS = {"diamond": "#00D4FF", "gold": "#F59E0B", "silver": "#94A3B8", "bronze": "#CD7F32"}
+    if reel_kits:
+        rk_cards = ""
+        for kit in reel_kits:
+            pick_id = kit["pick_id"]
+            tier_key = ""
+            for t in ("diamond", "gold", "silver", "bronze"):
+                if pick_id.lower().startswith(t):
+                    tier_key = t
+                    break
+            tier_color = _TIER_COLORS.get(tier_key, "#94A3B8")
+            tier_label = tier_key.title() if tier_key else "Pick"
+            vo_count = len(kit.get("vos", []))
+            has_master = kit.get("has_master", False)
+            if has_master:
+                status_html = '<span style="color:var(--green);font-weight:700">Ready</span>'
+            elif vo_count > 0:
+                status_html = f'<span style="color:var(--amber)">{vo_count} VO{"s" if vo_count != 1 else ""}</span>'
+            else:
+                status_html = '<span style="color:var(--muted)">Card only</span>'
+            thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/card_{pick_id}.png"
+            display_name = pick_id.replace("_", " ").replace("-", " ").title()
+            rk_cards += f"""<div class="rk-card" style="border-top:3px solid {tier_color}">
+  <img class="rk-thumb" src="{_html_mod.escape(thumb_url)}" alt="{_html_mod.escape(display_name)}" loading="lazy">
+  <div class="rk-tier" style="color:{tier_color}">{_html_mod.escape(tier_label)}</div>
+  <div class="rk-name">{_html_mod.escape(display_name)}</div>
+  <div class="rk-status">{status_html}</div>
+</div>"""
+        reel_tab_html = f'<div class="rk-scroll">{rk_cards}</div>'
+    else:
+        reel_tab_html = '<div class="empty-state">No reel kits for today.</div>'
+
+    # --- Calendar tab content (14-day schedule table) ---
     channel_keys = [c["key"] for c in _CHANNELS]
     sched_grid: dict[str, dict[str, list]] = {}
     for i in range(14):
@@ -3101,7 +3055,6 @@ def render_automation_content() -> str:
         else:
             return "var(--muted)"
 
-    # Schedule table header
     ch_headers = "".join(f'<th style="min-width:90px">{c["label"]}</th>' for c in _CHANNELS)
     sched_rows = ""
     for i in range(14):
@@ -3123,26 +3076,179 @@ def render_automation_content() -> str:
                     cell_html += (f'<div class="sched-cell-item" data-id="{page_id}" '
                                   f'style="border-left:2px solid {color};padding:2px 6px;margin-bottom:3px;'
                                   f'cursor:pointer;font-size:11px;font-family:var(--font-m);">'
-                                  f'{title}</div>')
+                                  f'{_html_mod.escape(title)}</div>')
                 cells += f"<td>{cell_html}</td>"
         sched_rows += f"<tr><td style='white-space:nowrap;font-weight:600'>{day_label}</td>{cells}</tr>"
 
-    schedule_table = f"""<div class="panel">
-    <div class="panel-head"><span class="panel-title">14-Day Schedule</span><span class="panel-sub">Approved · Awaiting · Drafting · Briefed</span></div>
-    <div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th>Day</th>{ch_headers}</tr></thead>
-      <tbody id="sched-body">{sched_rows}</tbody>
-    </table></div>
-  </div>
-  <div id="sched-modal" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-top:12px"></div>"""
+    calendar_tab_html = f"""<div class="panel">
+  <div class="panel-head"><span class="panel-title">14-Day Schedule</span><span class="panel-sub">Approved &middot; Awaiting &middot; Drafting &middot; Briefed</span></div>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>Day</th>{ch_headers}</tr></thead>
+    <tbody id="sched-body">{sched_rows}</tbody>
+  </table></div>
+</div>"""
 
-    automation_js = """<style>
+    # --- Tasks tab content (delegates to render_task_hub_content) ---
+    # We fetch the count for the tab badge but render lazily via JS AJAX
+    task_hub_blocks: list[dict] = []
+    n_tasks = 0
+    try:
+        task_hub_blocks = _fetch_task_hub_blocks()
+        in_manual = False
+        for block in task_hub_blocks:
+            btype = block.get("type", "")
+            if not in_manual:
+                if btype == "heading_1" and "Manual Tasks" in _block_plain_text(block):
+                    in_manual = True
+                continue
+            if btype in ("divider", "heading_1"):
+                break
+            if btype == "to_do" and not block.get("to_do", {}).get("checked", False):
+                rt_arr = block.get("to_do", {}).get("rich_text", [])
+                plain = "".join(sp.get("plain_text", "") for sp in rt_arr).strip()
+                if plain:
+                    n_tasks += 1
+    except Exception:
+        pass
+
+    # ── Assemble inner tabs ────────────────────────────────────────────────
+    inner_tabs_html = f"""<div class="so-tabs">
+  <button class="so-tab so-tab-active" data-tab="so-tab-approve">Approve ({n_approve})</button>
+  <button class="so-tab" data-tab="so-tab-reel">Reel Kit ({n_reel})</button>
+  <button class="so-tab" data-tab="so-tab-calendar">Calendar</button>
+  <button class="so-tab" data-tab="so-tab-tasks">Tasks ({n_tasks})</button>
+</div>
+<div class="so-tab-panels">
+  <div class="so-tab-panel so-tab-panel-active" id="so-tab-approve">{approve_tab_html}</div>
+  <div class="so-tab-panel" id="so-tab-reel">{reel_tab_html}</div>
+  <div class="so-tab-panel" id="so-tab-calendar">{calendar_tab_html}</div>
+  <div class="so-tab-panel" id="so-tab-tasks"><div id="so-tasks-slot"><div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--font-m)">Loading tasks...</div></div></div>
+</div>"""
+
+    # ── CSS ────────────────────────────────────────────────────────────────
+    so_css = """<style>
+/* Channel Health Grid */
+.so-ch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;}
+.so-ch-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:4px;}
+.so-ch-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;display:inline-block;margin-bottom:4px;}
+.so-ch-name{font-family:var(--font-d);font-weight:700;font-size:13px;}
+.so-ch-age{font-family:var(--font-m);font-size:11px;}
+.so-ch-stat{font-family:var(--font-m);font-size:11px;color:var(--muted);}
+.so-manual-badge{font-size:9px;background:rgba(107,114,128,.15);color:var(--muted);border-radius:3px;padding:1px 5px;margin-left:4px;vertical-align:middle;font-family:var(--font-d);font-weight:700;letter-spacing:.5px;}
+/* Inner Tabs */
+.so-tabs{display:flex;gap:0;border-bottom:2px solid var(--border);margin:20px 0 0 0;}
+.so-tab{background:none;border:none;border-bottom:2px solid transparent;padding:10px 18px;font-family:var(--font-d);font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;transition:color 150ms,border-color 150ms;margin-bottom:-2px;}
+.so-tab:hover{color:var(--text);}
+.so-tab.so-tab-active{color:var(--gold);border-bottom-color:var(--gold);}
+.so-tab-panels{padding-top:16px;}
+.so-tab-panel{display:none;}
+.so-tab-panel.so-tab-panel-active{display:block;}
+/* Reel Kit cards (reused from Task Hub) */
+.rk-scroll{display:flex;gap:14px;overflow-x:auto;padding:4px 0 12px 0;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
+.rk-scroll::-webkit-scrollbar{height:4px;}.rk-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px;}
+.rk-card{flex:0 0 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;transition:transform 150ms;}
+.rk-card:hover{transform:translateY(-2px);}
+.rk-thumb{width:100%;height:100px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.04);}
+.rk-tier{font-family:var(--font-d);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:8px;}
+.rk-name{font-family:var(--font-m);font-size:12px;color:var(--text);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.rk-status{font-family:var(--font-m);font-size:11px;margin-top:4px;}
+/* Approval cards */
+.appr-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid #22c55e;border-radius:8px;padding:18px;margin-bottom:14px;position:relative;}
+.appr-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+.appr-meta{font-family:var(--font-m);font-size:11px;color:var(--muted);}
+.appr-asset-link,.appr-notion-link{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);text-decoration:none;}
+.appr-copy{font-family:var(--font-m);font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word;}
+.appr-campaign{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);background:rgba(248,200,48,.1);border-radius:4px;padding:2px 8px;}
+.appr-actions{display:flex;gap:10px;margin-top:14px;}
+.btn-approve{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);border-radius:6px;padding:7px 20px;font-family:var(--font-d);font-weight:700;font-size:12px;cursor:pointer;transition:background 150ms;}
+.btn-approve:hover{background:rgba(34,197,94,.25);}
+.btn-archive{background:rgba(107,114,128,.1);color:var(--muted);border:1px solid rgba(107,114,128,.2);border-radius:6px;padding:7px 20px;font-family:var(--font-d);font-weight:700;font-size:12px;cursor:pointer;transition:background 150ms;}
+.btn-archive:hover{background:rgba(107,114,128,.2);}
+.btn-approve:disabled,.btn-archive:disabled{opacity:.5;cursor:not-allowed;}
+.appr-error{display:none;color:var(--red);font-size:11px;margin-top:8px;}
+.toast-success{position:absolute;top:12px;right:14px;background:var(--green);color:#000;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;font-family:var(--font-d);}
+.empty-state{text-align:center;padding:40px;color:var(--muted);font-family:var(--font-m);font-size:14px;}
 .btn-dismiss{background:rgba(239,68,68,.08);color:var(--red);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:5px 14px;font-family:var(--font-d);font-weight:700;font-size:11px;cursor:pointer;transition:background 150ms;white-space:nowrap;}
 .btn-dismiss:hover{background:rgba(239,68,68,.18);}
 .btn-dismiss:disabled{opacity:.5;cursor:not-allowed;}
-</style>
-<script>
+</style>"""
+
+    # ── JS: tab switching + approve/archive + dismiss + tasks lazy load ────
+    so_js = """<script>
 (function(){
+  // Tab switching
+  var tabs = document.querySelectorAll('.so-tab');
+  var panels = document.querySelectorAll('.so-tab-panel');
+  var tasksLoaded = false;
+  tabs.forEach(function(tab){
+    tab.addEventListener('click', function(){
+      tabs.forEach(function(t){ t.classList.remove('so-tab-active'); });
+      panels.forEach(function(p){ p.classList.remove('so-tab-panel-active'); });
+      tab.classList.add('so-tab-active');
+      var target = document.getElementById(tab.dataset.tab);
+      if (target) target.classList.add('so-tab-panel-active');
+      // Lazy-load tasks tab
+      if (tab.dataset.tab === 'so-tab-tasks' && !tasksLoaded) {
+        tasksLoaded = true;
+        fetch('/admin/api/task_hub', {credentials:'same-origin'})
+          .then(function(r){ return r.text(); })
+          .then(function(html){
+            document.getElementById('so-tasks-slot').innerHTML = html;
+          })
+          .catch(function(){
+            document.getElementById('so-tasks-slot').innerHTML = '<div class="empty-state">Failed to load tasks.</div>';
+          });
+      }
+    });
+  });
+  // Handle ?tab= query param
+  var params = new URLSearchParams(window.location.search);
+  var tabParam = params.get('tab');
+  if (tabParam) {
+    var tabMap = {'approve':'so-tab-approve','reel':'so-tab-reel','calendar':'so-tab-calendar','tasks':'so-tab-tasks'};
+    var targetId = tabMap[tabParam];
+    if (targetId) {
+      var targetTab = document.querySelector('.so-tab[data-tab="'+targetId+'"]');
+      if (targetTab) targetTab.click();
+    }
+  }
+
+  // Approve / Archive buttons
+  document.querySelectorAll('.btn-approve,.btn-archive').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = this.dataset.id;
+      var isApprove = this.classList.contains('btn-approve');
+      var newStatus = isApprove ? 'Approved' : 'Archived';
+      var card = document.getElementById('so-appr-' + id) || document.getElementById('appr-' + id) || document.getElementById('th-appr-' + id);
+      if (!card) return;
+      var errEl = card.querySelector('.appr-error');
+      var allBtns = card.querySelectorAll('.btn-approve,.btn-archive');
+      allBtns.forEach(function(b){ b.disabled = true; });
+      fetch('/admin/api/notion/patch', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({page_id: id, status: newStatus})
+      }).then(function(r){
+        if (r.ok) {
+          card.style.transition = 'opacity 0.4s';
+          card.style.opacity = '0.4';
+          var toast = document.createElement('div');
+          toast.className = 'toast-success';
+          toast.textContent = newStatus + ' \\u2714';
+          card.appendChild(toast);
+          setTimeout(function(){ card.remove(); }, 700);
+        } else {
+          if (errEl) { errEl.textContent = 'Error updating Notion'; errEl.style.display = 'block'; }
+          allBtns.forEach(function(b){ b.disabled = false; });
+        }
+      }).catch(function(){
+        if (errEl) { errEl.textContent = 'Network error'; errEl.style.display = 'block'; }
+        allBtns.forEach(function(b){ b.disabled = false; });
+      });
+    });
+  });
+
+  // Dismiss buttons (Failed & Blocked)
   document.querySelectorAll('.btn-dismiss').forEach(function(btn){
     btn.addEventListener('click', function(){
       var id = this.dataset.id;
@@ -3153,7 +3259,7 @@ def render_automation_content() -> str:
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({page_id: id})
       }).then(function(r){
-        if(r.ok){
+        if(r.ok && row){
           row.style.transition='opacity 0.4s';
           row.style.opacity='0';
           setTimeout(function(){ row.remove(); }, 400);
@@ -3164,15 +3270,36 @@ def render_automation_content() -> str:
 })();
 </script>"""
 
-    return f"""{topbar}
+    # ── Failed & Blocked panel ─────────────────────────────────────────────
+    failed_html = ""
+    if failed_blocked:
+        rows = ""
+        for item in failed_blocked:
+            ch_key = _normalise_channel_key(item.get("channel") or "")
+            page_id = item.get("id", "")
+            rows += (
+                f'<tr id="fb-{page_id}">'
+                + td(_channel_chip(ch_key))
+                + td(_truncate(item.get("title"), 50))
+                + td(_truncate(item.get("error"), 80) or "\u2014", extra_style="color:var(--red)")
+                + td(_sast_hhmm(item.get("scheduled_time")))
+                + td(f'<button class="btn-dismiss" data-id="{page_id}">Dismiss</button>')
+                + "</tr>"
+            )
+        failed_html = f"""<div class="panel panel-red-accent" style="margin-bottom:20px">
+    <div class="panel-head"><span class="panel-title" style="color:var(--red)">Failed &amp; Blocked</span><span class="panel-sub">{len(failed_blocked)} items</span></div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Channel</th><th>Title</th><th>Error</th><th>Scheduled</th><th></th></tr></thead><tbody>{rows}</tbody></table></div>
+  </div>"""
+
+    return f"""{so_css}
+{topbar}
 <div class="page">
-  {kpi_strip}
-  {channel_panel}
   {failed_html}
-  {recent_html}
-  <div class="footer">MzansiEdge Social Media &middot; Notion-powered</div>
+  {channel_health}
+  {inner_tabs_html}
+  <div class="footer" style="margin-top:20px">MzansiEdge Social Ops &middot; Notion-powered</div>
 </div>
-{automation_js}"""
+{so_js}"""
 
 
 # -- Approvals view -----------------------------------------------------------
@@ -3418,13 +3545,15 @@ def _classify_task(text: str) -> str:
 
 
 def render_task_hub_content() -> str:
-    """Render the Task Hub inner content HTML."""
+    """Render the Task Hub inner content HTML — 3 sections: Reel Kit, Approve Posts, Manual Tasks."""
+    import html as _html_mod
+
     now_utc = datetime.now(timezone.utc)
     now_sast = now_utc.astimezone(_SAST)
+    today_str = now_sast.strftime("%Y-%m-%d")
     updated = now_sast.strftime("%Y-%m-%d %H:%M:%S")
 
     _ACCENT: dict[str, str] = {
-        "approve_posts": "#22c55e",
         "post_now":      "#E8571F",
         "connect":       "#3b82f6",
         "answer":        "#8b5cf6",
@@ -3432,18 +3561,22 @@ def render_task_hub_content() -> str:
         "reminders":     "#888888",
     }
 
-    _SECTION_META = [
-        ("approve_posts", "Approve Posts",   "📋"),
-        ("post_now",      "Post Now",        "📢"),
-        ("connect",       "Connect",         "🔗"),
-        ("answer",        "Answer",          "✍️"),
-        ("read_reply",    "Read &amp; Reply","💬"),
-        ("reminders",     "Reminders",       "🔔"),
+    _TASK_META = [
+        ("post_now",      "Post Now",        "&#128227;"),
+        ("connect",       "Connect",         "&#128279;"),
+        ("answer",        "Answer",          "&#9997;&#65039;"),
+        ("read_reply",    "Read &amp; Reply", "&#128172;"),
+        ("reminders",     "Reminders",       "&#128276;"),
     ]
 
-    # ── Approve Posts: awaiting approval from Marketing Ops Queue ──────────
-    # I1+I3: Show ALL channels with review status — the Status field is the
-    # source of truth for whether Paul needs to act, not the channel name.
+    _TIER_COLORS = {
+        "diamond": "#00D4FF",
+        "gold":    "#F59E0B",
+        "silver":  "#94A3B8",
+        "bronze":  "#CD7F32",
+    }
+
+    # ── Data fetching ──────────────────────────────────────────────────────
     _fetch_error: str = ""
     try:
         mq_items, _ = _fetch_marketing_queue()
@@ -3452,7 +3585,14 @@ def render_task_hub_content() -> str:
         _fetch_error = f"Failed to fetch Marketing Ops Queue: {_mq_exc}"
     approve_items = _get_awaiting_items(mq_items, include_overdue=False)
 
-    # ── Task sections: scoped to # 📝 Manual Tasks heading ─────────────────
+    # Reel kits for today
+    reel_kits: list[dict] = []
+    try:
+        reel_kits = _scan_reel_kits(today_str)
+    except Exception:
+        pass
+
+    # Task sections: scoped to # Manual Tasks heading
     sections: dict[str, list[dict]] = {
         "post_now": [], "connect": [], "answer": [], "read_reply": [], "reminders": [],
     }
@@ -3461,12 +3601,10 @@ def render_task_hub_content() -> str:
         in_manual = False
         for block in blocks:
             btype = block.get("type", "")
-            # Start scope at heading_1 containing "Manual Tasks"
             if not in_manual:
                 if btype == "heading_1" and "Manual Tasks" in _block_plain_text(block):
                     in_manual = True
                 continue
-            # End scope at next divider or heading_1
             if btype in ("divider", "heading_1"):
                 break
             if btype != "to_do":
@@ -3483,42 +3621,85 @@ def render_task_hub_content() -> str:
         if not _fetch_error:
             _fetch_error = f"Failed to fetch Task Hub blocks: {_blk_exc}"
 
-    # ── Build section HTML ─────────────────────────────────────────────────
+    # ── Helper: channel chip ───────────────────────────────────────────────
     def _channel_chip_th(ch_key: str) -> str:
         ch = _CHANNEL_MAP.get(ch_key)
         if not ch:
             return (f'<span class="ch-chip" style="background:rgba(107,114,128,0.15);'
-                    f'color:var(--muted)">{ch_key or "?"}</span>')
+                    f'color:var(--muted)">{_html_mod.escape(ch_key) if ch_key else "?"}</span>')
         return (f'<span class="ch-chip" style="background:{ch["color"]}22;color:{ch["color"]};'
                 f'border:1px solid {ch["color"]}33"><span class="ch-dot" style="background:{ch["color"]}"></span>'
                 f'{ch["label"]}</span>')
 
     sections_html = ""
 
-    for sec_key, sec_label, sec_emoji in _SECTION_META:
-        accent = _ACCENT.get(sec_key, "#E8571F")
+    # ── Section 1: Reel Kit ────────────────────────────────────────────────
+    if reel_kits:
+        rk_cards = ""
+        for kit in reel_kits:
+            pick_id = kit["pick_id"]
+            # Determine tier from pick_id prefix (e.g. "diamond_foo" or just use first segment)
+            tier_key = ""
+            for t in ("diamond", "gold", "silver", "bronze"):
+                if pick_id.lower().startswith(t):
+                    tier_key = t
+                    break
+            tier_color = _TIER_COLORS.get(tier_key, "#94A3B8")
+            tier_label = tier_key.title() if tier_key else "Pick"
+            # Status
+            vo_count = len(kit.get("vos", []))
+            has_master = kit.get("has_master", False)
+            if has_master:
+                status_html = '<span style="color:var(--green);font-weight:700">Ready</span>'
+            elif vo_count > 0:
+                status_html = f'<span style="color:var(--amber)">{vo_count} VO{"s" if vo_count != 1 else ""}</span>'
+            else:
+                status_html = '<span style="color:var(--muted)">Card only</span>'
+            # Thumbnail
+            thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/card_{pick_id}.png"
+            display_name = pick_id.replace("_", " ").replace("-", " ").title()
+            rk_cards += f"""<div class="rk-card" style="border-top:3px solid {tier_color}">
+  <img class="rk-thumb" src="{thumb_url}" alt="{_html_mod.escape(display_name)}" loading="lazy">
+  <div class="rk-tier" style="color:{tier_color}">{_html_mod.escape(tier_label)}</div>
+  <div class="rk-name">{_html_mod.escape(display_name)}</div>
+  <div class="rk-status">{status_html}</div>
+</div>"""
+        sections_html += f"""<div class="th-section-block" id="th-sec-reel-kit">
+  <div class="section-header">
+    <div class="section-left">
+      <span class="section-icon">&#127916;</span>
+      <span class="section-title">Reel Kit</span>
+      <span class="section-count">{len(reel_kits)} kit{"s" if len(reel_kits) != 1 else ""}</span>
+    </div>
+  </div>
+  <div class="rk-scroll">{rk_cards}</div>
+</div>"""
 
-        if sec_key == "approve_posts":
-            items_for_section = approve_items
-            if not items_for_section:
-                continue
-            n = len(items_for_section)
+    # ── Section 2: Approve Posts (grouped by channel) ──────────────────────
+    if approve_items:
+        # Group by channel
+        channel_groups: dict[str, list[dict]] = {}
+        for item in approve_items:
+            ch_key = _normalise_channel_key(item.get("channel") or "")
+            channel_groups.setdefault(ch_key or "other", []).append(item)
+
+        acc_html = ""
+        for ch_key, ch_items in channel_groups.items():
+            ch = _CHANNEL_MAP.get(ch_key)
+            ch_label = ch["label"] if ch else (ch_key or "Other")
+            ch_color = ch["color"] if ch else "#6b7280"
             cards = ""
-            for item in items_for_section:
-                import html as _html_mod
+            for item in ch_items:
                 title = item.get("title") or ""
-                ch_key = _normalise_channel_key(item.get("channel") or "")
                 sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
                 asset_link = item.get("asset_link") or ""
-                asset_html = (f'<a href="{asset_link}" target="_blank" rel="noopener" '
+                asset_html = (f'<a href="{_html_mod.escape(asset_link)}" target="_blank" rel="noopener" '
                               f'class="appr-asset-link">&#128444;&#65039; View asset</a>') if asset_link else ""
                 page_id = item.get("id", "")
                 notion_url = f"https://www.notion.so/{page_id.replace('-', '')}" if page_id else ""
-                notion_html = (f'<a href="{notion_url}" target="_blank" rel="noopener" '
+                notion_html = (f'<a href="{_html_mod.escape(notion_url)}" target="_blank" rel="noopener" '
                                f'class="appr-notion-link">&#128279; Open in Notion</a>') if notion_url else ""
-                # Copy preview — show the post content Paul needs to review
                 raw_copy = item.get("copy") or ""
-                # Convert <br> to newlines for display, escape HTML, then re-add line breaks
                 copy_text = raw_copy.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
                 copy_text = _html_mod.escape(copy_text).replace("\n", "<br>")
                 copy_html = f'<div class="appr-copy">{copy_text}</div>' if copy_text else ""
@@ -3537,32 +3718,49 @@ def render_task_hub_content() -> str:
     <button class="btn-archive" data-id="{page_id}">Archive</button>
   </div>
 </div>"""
-            sections_html += f"""<div class="task-section" data-section="{sec_key}" id="th-sec-{sec_key}">
+            acc_html += f"""<details class="th-accordion" open>
+  <summary class="th-acc-summary" style="border-left:3px solid {ch_color}">
+    <span class="th-acc-label" style="color:{ch_color}">{_html_mod.escape(ch_label)}</span>
+    <span class="section-count">{len(ch_items)}</span>
+  </summary>
+  <div class="th-acc-body">{cards}</div>
+</details>"""
+
+        n_approve = len(approve_items)
+        sections_html += f"""<div class="th-section-block" id="th-sec-approve">
   <div class="section-header">
     <div class="section-left">
-      <span class="section-icon">{sec_emoji}</span>
-      <span class="section-title">{sec_label}</span>
-      <span class="section-count">{n} pending</span>
+      <span class="section-icon">&#128203;</span>
+      <span class="section-title">Approve Posts</span>
+      <span class="section-count">{n_approve} pending</span>
     </div>
     <div class="section-progress">
-      <span class="progress-text" data-done="0" data-total="{n}">0 / {n} done</span>
+      <span class="progress-text" data-done="0" data-total="{n_approve}">0 / {n_approve} done</span>
       <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
     </div>
   </div>
-  <div class="task-cards-wrap">{cards}</div>
+  {acc_html}
 </div>"""
-        else:
+
+    # ── Section 3: Manual Tasks (5 sub-accordions) ─────────────────────────
+    any_tasks = any(sections.get(k) for k in sections)
+    if any_tasks:
+        tasks_inner = ""
+        total_tasks = 0
+        for sec_key, sec_label, sec_emoji in _TASK_META:
             task_list = sections.get(sec_key, [])
             if not task_list:
                 continue
             n = len(task_list)
+            total_tasks += n
+            accent = _ACCENT.get(sec_key, "#E8571F")
             cards = ""
             for task in task_list:
                 bid = task["block_id"]
                 rt_arr = task["rich_text"]
                 plain = task["plain"]
                 content_html = render_rich_text_html(rt_arr)
-                safe_plain = plain.replace('"', "&quot;").replace("'", "&#39;")
+                safe_plain = _html_mod.escape(plain).replace('"', "&quot;").replace("'", "&#39;")
                 cards += f"""<div class="task-card" data-block-id="{bid}" style="border-left-color:{accent}">
   <div class="task-content">{content_html}</div>
   <div class="task-actions">
@@ -3570,22 +3768,31 @@ def render_task_hub_content() -> str:
     <button class="btn-done" data-block-id="{bid}">Done &#10004;</button>
   </div>
 </div>"""
-            sections_html += f"""<div class="task-section" data-section="{sec_key}" id="th-sec-{sec_key}">
+            tasks_inner += f"""<details class="th-accordion" open>
+  <summary class="th-acc-summary" style="border-left:3px solid {accent}">
+    <span class="th-acc-icon">{sec_emoji}</span>
+    <span class="th-acc-label">{sec_label}</span>
+    <span class="section-count">{n}</span>
+  </summary>
+  <div class="th-acc-body">{cards}</div>
+</details>"""
+
+        sections_html += f"""<div class="th-section-block" id="th-sec-tasks">
   <div class="section-header">
     <div class="section-left">
-      <span class="section-icon">{sec_emoji}</span>
-      <span class="section-title">{sec_label}</span>
-      <span class="section-count">{n} pending</span>
+      <span class="section-icon">&#128221;</span>
+      <span class="section-title">Manual Tasks</span>
+      <span class="section-count">{total_tasks} pending</span>
     </div>
     <div class="section-progress">
-      <span class="progress-text" data-done="0" data-total="{n}">0 / {n} done</span>
+      <span class="progress-text" data-done="0" data-total="{total_tasks}">0 / {total_tasks} done</span>
       <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
     </div>
   </div>
-  <div class="task-cards-wrap">{cards}</div>
+  {tasks_inner}
 </div>"""
 
-    # ── I5: Error banner (observable failures) ────────────────────────────
+    # ── Error banner ───────────────────────────────────────────────────────
     error_banner = ""
     if _fetch_error:
         if _sentry:
@@ -3597,11 +3804,11 @@ def render_task_hub_content() -> str:
         error_banner = (
             '<div class="th-error-banner">'
             '<strong>&#9888; Data fetch error:</strong> '
-            f'{_fetch_error}. Try refreshing or check Notion API credentials.'
+            f'{_html_mod.escape(_fetch_error)}. Try refreshing or check Notion API credentials.'
             '</div>'
         )
 
-    # ── I4: Graceful empty state with timestamp ────────────────────────────
+    # ── Empty state ────────────────────────────────────────────────────────
     if not sections_html:
         page_body = f"""<div class="task-hub-done">
   <div class="task-hub-done-icon">&#9989;</div>
@@ -3613,7 +3820,7 @@ def render_task_hub_content() -> str:
 
     task_hub_css = """<style>
 .task-hub-content{}
-.task-section{margin-bottom:28px;}
+.th-section-block{margin-bottom:28px;}
 .section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
 .section-left{display:flex;align-items:center;gap:8px;}
 .section-icon{font-size:18px;line-height:1;}
@@ -3623,7 +3830,25 @@ def render_task_hub_content() -> str:
 .progress-text{font-family:var(--font-m);font-size:12px;color:var(--muted);white-space:nowrap;}
 .progress-bar{width:100px;height:4px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden;}
 .progress-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,#F8C830,#E8571F);transition:width 0.3s ease;}
-.task-cards-wrap{}
+/* -- Reel Kit horizontal scroll -- */
+.rk-scroll{display:flex;gap:14px;overflow-x:auto;padding:4px 0 12px 0;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
+.rk-scroll::-webkit-scrollbar{height:4px;}.rk-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px;}
+.rk-card{flex:0 0 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;transition:transform 150ms;}
+.rk-card:hover{transform:translateY(-2px);}
+.rk-thumb{width:100%;height:100px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.04);}
+.rk-tier{font-family:var(--font-d);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:8px;}
+.rk-name{font-family:var(--font-m);font-size:12px;color:var(--text);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.rk-status{font-family:var(--font-m);font-size:11px;margin-top:4px;}
+/* -- Accordion -- */
+.th-accordion{margin-bottom:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.th-acc-summary{display:flex;align-items:center;gap:8px;padding:12px 16px;cursor:pointer;background:var(--surface);font-family:var(--font-d);font-weight:700;font-size:13px;color:var(--text);list-style:none;user-select:none;}
+.th-acc-summary::-webkit-details-marker{display:none;}
+.th-acc-summary::before{content:'\\25B6';font-size:10px;color:var(--muted);transition:transform 200ms;flex-shrink:0;}
+details[open]>.th-acc-summary::before{transform:rotate(90deg);}
+.th-acc-icon{font-size:14px;}
+.th-acc-label{flex:1;min-width:0;}
+.th-acc-body{padding:12px 16px;background:var(--surface-alt);}
+/* -- Existing card styles (preserved) -- */
 .task-card{display:flex;gap:16px;justify-content:space-between;background:var(--surface-alt);border:1px solid var(--border);border-left:3px solid #E8571F;border-radius:8px;padding:16px 20px;margin-bottom:10px;transition:opacity 0.25s ease,transform 0.25s ease;}
 .task-card.exiting{opacity:0;transform:translateX(40px);}
 .task-content{flex:1;min-width:0;font-family:var(--font-m);font-size:13px;line-height:1.6;color:var(--text);word-break:break-word;}
@@ -3702,9 +3927,9 @@ a.task-link:hover{background:rgba(232,87,31,.22);}
   }
 
   function checkAllComplete() {
-    var sections = document.querySelectorAll('.task-section');
+    var secs = document.querySelectorAll('.th-section-block');
     var apprCards = document.querySelectorAll('.appr-card');
-    if (sections.length === 0 && apprCards.length === 0) {
+    if (secs.length === 0 && apprCards.length === 0) {
       var content = document.querySelector('.task-hub-content');
       if (content) {
         var now = new Date();
@@ -3721,7 +3946,7 @@ a.task-link:hover{background:rgba(232,87,31,.22);}
     btn.addEventListener('click', function(){
       var blockId = this.dataset.blockId;
       var card = this.closest('.task-card');
-      var sectionEl = card ? card.closest('.task-section') : null;
+      var sectionEl = card ? card.closest('.th-section-block') : null;
       btn.disabled = true;
       fetch('/admin/api/done-block', {
         method: 'POST', credentials: 'same-origin',
@@ -3815,7 +4040,7 @@ a.task-link:hover{background:rgba(232,87,31,.22);}
   <div class="topbar-right"><div class="topbar-meta">Updated <em>{updated} SAST</em></div></div>
 </nav>"""
 
-    # I7: Last-refreshed footer with Refresh Now button
+    # Last-refreshed footer with Refresh Now button
     refresh_footer = f"""<div class="th-refresh-footer">
   <span class="th-refresh-ts">Last refreshed: {updated} SAST</span>
   <button class="btn-refresh" id="th-refresh-btn">Refresh now</button>
@@ -5707,6 +5932,20 @@ def api_automation():
     with _page_cache_lock:
         _page_cache["automation_content"] = (content, now)
 
+    return Response(content, mimetype="text/html")
+
+
+@app.route("/admin/api/social_ops")
+@require_auth
+def api_social_ops():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("social_ops_content")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+    content = render_automation_content()
+    with _page_cache_lock:
+        _page_cache["social_ops_content"] = (content, now)
     return Response(content, mimetype="text/html")
 
 
