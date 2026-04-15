@@ -1,26 +1,26 @@
 # TMUX Startup Workspace
 
-Server-safe tmux TERM for these commands is handled by the remote helper scripts. The direct server address resolved on March 18, 2026 is `178.128.171.28`.
+Server-safe tmux TERM for these commands is handled by the remote helper scripts. The direct server address resolved on March 18, 2026 is `37.27.179.53`.
 
 Optional one-time or anytime bootstrap:
 
 ```bash
-ssh paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_bootstrap.sh'
+ssh paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_bootstrap.sh'
 ```
 
 Ghostty startup commands, one per workspace tab or subtab:
 
 ```bash
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh core-control'
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh core-leaddev-sonnet'
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh core-leaddev-codex'
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh core-leaddev-opus'
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh core-qa-opus'
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh core-qa-sonnet'
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh core-server'
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh web-build-opus'
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh web-ux-opus'
-ssh -t paulsportsza@178.128.171.28 '~/bin/mzansi_tmux_attach.sh web-qa-opus'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh core-control'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh core-leaddev-sonnet'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh core-leaddev-codex'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh core-leaddev-opus'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh core-qa-opus'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh core-qa-sonnet'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh core-server'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh web-build-opus'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh web-ux-opus'
+ssh -t paulsportsza@37.27.179.53 '~/bin/mzansi_tmux_attach.sh web-qa-opus'
 ```
 
 Session behavior:
