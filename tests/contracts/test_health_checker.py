@@ -114,8 +114,8 @@ def test_migration_is_idempotent(tmp_path):
     conn = sqlite3.connect(tmp_db)
     count = conn.execute("SELECT COUNT(*) FROM source_registry").fetchone()[0]
     conn.close()
-    # Should still be exactly 42 after two runs (INSERT OR IGNORE)
-    assert count == 42, f"Expected 42 sources, got {count}"
+    # Should still be exactly 43 after two runs (INSERT OR IGNORE)
+    assert count == 43, f"Expected 43 sources, got {count}"
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ def test_migration_is_idempotent(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_migration_seeds_42_sources(tmp_path):
-    """source_registry should have exactly 42 rows after migration."""
+    """source_registry should have exactly 43 rows after migration."""
     import health_schema_migration as mig
 
     tmp_db = str(tmp_path / "test_seeds.db")
@@ -139,8 +139,8 @@ def test_migration_seeds_42_sources(tmp_path):
     hc_count = conn.execute("SELECT COUNT(*) FROM source_health_current").fetchone()[0]
     conn.close()
 
-    assert count == 42, f"Expected 42 sources in registry, got {count}"
-    assert hc_count == 42, f"Expected 42 rows in health_current, got {hc_count}"
+    assert count == 43, f"Expected 43 sources in registry, got {count}"
+    assert hc_count == 43, f"Expected 43 rows in health_current, got {hc_count}"
 
 
 # ---------------------------------------------------------------------------

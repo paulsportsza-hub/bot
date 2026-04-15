@@ -418,8 +418,8 @@ def test_daily_summary_format(tmp_path):
     msg = sent_messages[0]
     assert '📊' in msg
     assert 'Health Summary' in msg
-    # 41 green, 1 red (news_psl)
-    assert '41/42 green' in msg
+    # 42 green (43 total sources), 1 red (news_psl)
+    assert '42/43 green' in msg
     assert 'red' in msg
     assert 'news_psl' in msg
 

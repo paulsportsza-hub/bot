@@ -1804,12 +1804,25 @@ def build_source_health_monitor(conn):
     sources_by_category = {cat: [] for cat in _CATEGORY_ORDER}
     critical_issues = []
 
+    now_utc = datetime.now(timezone.utc) if hasattr(datetime, 'now') else None
     for row in rows:
         d = dict(row)
         interval = d.get("expected_interval_minutes") or 0
         raw_status = d.get("status") or "black"
         # AC-1: on-demand services (interval=0) with no success show as grey, never red/black
         status = "grey" if (interval == 0 and raw_status == "black") else raw_status
+        # Freshness override: if interval > 0 and last_success exceeds interval, force RED
+        if interval > 0 and now_utc and d.get("last_success_at"):
+            try:
+                _ls = d["last_success_at"].replace("Z", "+00:00")
+                _last_dt = datetime.fromisoformat(_ls)
+                if _last_dt.tzinfo is None:
+                    _last_dt = _last_dt.replace(tzinfo=timezone.utc)
+                _age_min = (now_utc - _last_dt).total_seconds() / 60
+                if _age_min > interval:
+                    status = "red"
+            except (ValueError, TypeError):
+                pass
         d["status"] = status  # update for rendering
         counts[status] = counts.get(status, 0) + 1
         cat = d.get("category", "")
@@ -1823,7 +1836,12 @@ def build_source_health_monitor(conn):
     total = len(rows)
     # Weighted score: exclude GREY (on-demand/idle) from denominator (AC-5)
     # Only score sources with expected_interval > 0
-    scored = [dict(r) for r in rows if (dict(r).get("expected_interval_minutes") or 0) > 0]
+    # Use freshness-overridden status from sources_by_category, not raw DB rows
+    scored = [
+        s for sources in sources_by_category.values()
+        for s in sources
+        if (s.get("expected_interval_minutes") or 0) > 0
+    ]
     if scored:
         s_weights = {"green": 100, "yellow": 60, "red": 20, "black": 0, "grey": 0}
         raw = sum(s_weights.get(d.get("status") or "black", 0) for d in scored)
