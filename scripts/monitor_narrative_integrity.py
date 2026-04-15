@@ -43,12 +43,18 @@ if not log.handlers:
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
+# SO #20: EdgeOps alerts ONLY — never public channel
+EDGE_OPS_CHAT_ID = -1003877525865
+
 # Alert thresholds
 _THRESHOLDS = {
-    "low_quality_verdict_count": 1,     # any low-quality verdict is worth alerting
-    "gold_edge_non_sonnet_count": 1,    # any Gold edge not using Sonnet
-    "empty_verdict_count_24h": 3,       # more than 3 missing verdicts in 24h
-    "w82_fallback_count_24h": 20,       # more than 20 W82 fallbacks in 24h
+    "low_quality_verdict_count": 1,         # any low-quality verdict is worth alerting
+    "gold_edge_non_sonnet_count": 1,        # any Gold edge not using Sonnet
+    "empty_verdict_count_24h": 3,           # more than 3 missing verdicts in 24h
+    "w82_fallback_count_24h": 20,           # more than 20 W82 fallbacks in 24h
+    "validator_reject_rate": 30,            # >30% rejection rate
+    "banned_template_hit_rate": 10,         # >10% banned-template hit rate
+    "manager_name_fabrication_attempts": 1, # any fabrication attempt is worth alerting
 }
 
 # Debounce: 2 hours between repeated alerts for the same signal
@@ -79,17 +85,24 @@ def _ensure_integrity_log_table(conn: sqlite3.Connection) -> None:
             recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Migrate existing table: add recorded_at if the table pre-dates this schema
+    # Migrate existing table: add columns if the table pre-dates this schema
     cols = {row[1] for row in conn.execute("PRAGMA table_info(narrative_integrity_log)").fetchall()}
     if "recorded_at" not in cols:
         conn.execute(
             "ALTER TABLE narrative_integrity_log ADD COLUMN recorded_at TEXT DEFAULT '2000-01-01T00:00:00'"
         )
-    # Use the correct timestamp column for the index
-    ts_col = "recorded_at" if "recorded_at" in cols or True else "ts"
+        cols.add("recorded_at")
+    if "fixture_id" not in cols:
+        conn.execute(
+            "ALTER TABLE narrative_integrity_log ADD COLUMN fixture_id TEXT"
+        )
+    if "details" not in cols:
+        conn.execute(
+            "ALTER TABLE narrative_integrity_log ADD COLUMN details TEXT"
+        )
     conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_nil_signal_time "
-        f"ON narrative_integrity_log(signal, {ts_col})"
+        "CREATE INDEX IF NOT EXISTS idx_nil_signal_time "
+        "ON narrative_integrity_log(signal, recorded_at)"
     )
     conn.commit()
 
@@ -134,54 +147,96 @@ def _debounced(conn: sqlite3.Connection, signal: str) -> bool:
 def _write_signal(conn: sqlite3.Connection, signal: str, value: int) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(narrative_integrity_log)").fetchall()}
     if "band" in cols:
-        # Old schema — provide required NOT NULL columns
+        # Old schema — provide required NOT NULL columns; always set recorded_at explicitly
         conn.execute(
-            "INSERT INTO narrative_integrity_log (signal, value, ts, band, breach) "
-            "VALUES (?, ?, CURRENT_TIMESTAMP, '', 0)",
+            "INSERT INTO narrative_integrity_log (signal, value, ts, band, breach, recorded_at) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP, '', 0, CURRENT_TIMESTAMP)",
             (signal, value),
         )
     else:
         conn.execute(
-            "INSERT INTO narrative_integrity_log (signal, value) VALUES (?, ?)",
+            "INSERT INTO narrative_integrity_log (signal, value, recorded_at) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP)",
             (signal, value),
         )
     conn.commit()
     log.info("MONITOR: %s = %d", signal, value)
 
 
+def write_integrity_event(
+    signal: str,
+    fixture_id: str = "",
+    reason: str = "",
+    db_path: str | None = None,
+) -> None:
+    """Write a single raw integrity event row to narrative_integrity_log.
+
+    Called by pregenerate_narratives.py to log individual rejection/fabrication
+    events. The monitor aggregates these into rates on each 30-min run.
+
+    Safe to call from any context — swallows all exceptions silently.
+    """
+    path = db_path or _get_db_path()
+    try:
+        conn = sqlite3.connect(path, timeout=3)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(narrative_integrity_log)").fetchall()}
+        if not cols:
+            conn.close()
+            return  # Table doesn't exist yet — skip silently
+        if "band" in cols:
+            conn.execute(
+                "INSERT INTO narrative_integrity_log "
+                "(signal, value, ts, band, breach, recorded_at, fixture_id, details) "
+                "VALUES (?, 1, CURRENT_TIMESTAMP, '', 0, CURRENT_TIMESTAMP, ?, ?)",
+                (signal, fixture_id, reason),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO narrative_integrity_log "
+                "(signal, value, recorded_at, fixture_id, details) "
+                "VALUES (?, 1, CURRENT_TIMESTAMP, ?, ?)",
+                (signal, fixture_id, reason),
+            )
+        conn.commit()
+        conn.close()
+    except Exception as _e:
+        log.debug("MONITOR: write_integrity_event failed for %s/%s: %s", signal, fixture_id, _e)
+
+
 def _send_edgeops_alert(signal: str, value: int, detail: str) -> None:
-    """Send an alert to EdgeOps via Telegram Bot API."""
+    """Send an alert to EDGE_OPS_CHAT_ID via Telegram Bot API.
+
+    SO #20: EdgeOps alerts ONLY — never public channel.
+    Mirrors health_monitor.py _send_tier_drift_alert() pattern.
+    """
     try:
         from dotenv import load_dotenv
         load_dotenv(os.path.join(_BOT_DIR, ".env"))
     except Exception:
         pass
     token = os.environ.get("BOT_TOKEN", "")
-    admin_ids_raw = os.environ.get("ADMIN_IDS", "")
-    if not token or not admin_ids_raw:
-        log.warning("MONITOR: EdgeOps alert skipped — BOT_TOKEN or ADMIN_IDS not set")
+    if not token:
+        log.warning("MONITOR: EdgeOps alert skipped — BOT_TOKEN not set")
         return
-    admin_ids = [int(i.strip()) for i in admin_ids_raw.split(",") if i.strip().isdigit()]
     text = (
         f"⚠️ <b>Narrative Integrity Alert</b>\n"
         f"Signal: <code>{signal}</code>\n"
         f"Value: <b>{value}</b>\n"
         f"{detail}"
     )
-    for admin_id in admin_ids:
-        try:
-            payload = json.dumps(
-                {"chat_id": admin_id, "text": text, "parse_mode": "HTML"}
-            ).encode()
-            req = urllib.request.Request(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            urllib.request.urlopen(req, timeout=10)
-            log.info("MONITOR: EdgeOps alert sent to %d for signal %s", admin_id, signal)
-        except Exception as _te:
-            log.warning("MONITOR: EdgeOps alert to %d failed: %s", admin_id, _te)
+    try:
+        payload = json.dumps(
+            {"chat_id": EDGE_OPS_CHAT_ID, "text": text, "parse_mode": "HTML"}
+        ).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=10)
+        log.info("MONITOR: EdgeOps alert sent for signal %s", signal)
+    except Exception as _te:
+        log.warning("MONITOR: EdgeOps alert failed: %s", _te)
 
 
 def run_monitor(db_path: str | None = None) -> dict[str, int]:
@@ -285,6 +340,48 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
         sig6_val = int(row6[0]) if row6 else 0
         _write_signal(conn, "gold_edge_non_sonnet_count", sig6_val)
         results["gold_edge_non_sonnet_count"] = sig6_val
+
+        # ── Signal 7: validator_reject_rate ──────────────────────────────────
+        # % of validator calls that returned False in last 24h
+        # Events written by pregenerate_narratives.py on each verdict quality check
+        _v_attempts = conn.execute(
+            "SELECT COUNT(*) FROM narrative_integrity_log "
+            "WHERE signal = 'validator_attempt' AND recorded_at >= ?",
+            (cutoff_24h,),
+        ).fetchone()
+        _v_attempts_count = int(_v_attempts[0]) if _v_attempts else 0
+        _v_rejects = conn.execute(
+            "SELECT COUNT(*) FROM narrative_integrity_log "
+            "WHERE signal = 'validator_rejection' AND recorded_at >= ?",
+            (cutoff_24h,),
+        ).fetchone()
+        _v_rejects_count = int(_v_rejects[0]) if _v_rejects else 0
+        sig7_val = int(100 * _v_rejects_count / _v_attempts_count) if _v_attempts_count else 0
+        _write_signal(conn, "validator_reject_rate", sig7_val)
+        results["validator_reject_rate"] = sig7_val
+
+        # ── Signal 8: banned_template_hit_rate ───────────────────────────────
+        # % of validator calls that hit a banned template in last 24h
+        _bt_hits = conn.execute(
+            "SELECT COUNT(*) FROM narrative_integrity_log "
+            "WHERE signal = 'banned_template_hit' AND recorded_at >= ?",
+            (cutoff_24h,),
+        ).fetchone()
+        _bt_hits_count = int(_bt_hits[0]) if _bt_hits else 0
+        sig8_val = int(100 * _bt_hits_count / _v_attempts_count) if _v_attempts_count else 0
+        _write_signal(conn, "banned_template_hit_rate", sig8_val)
+        results["banned_template_hit_rate"] = sig8_val
+
+        # ── Signal 9: manager_name_fabrication_attempts ───────────────────────
+        # Count of verdicts rejected for fabricated manager names in last 24h
+        _mgr_fab = conn.execute(
+            "SELECT COUNT(*) FROM narrative_integrity_log "
+            "WHERE signal = 'manager_name_fabrication_attempt' AND recorded_at >= ?",
+            (cutoff_24h,),
+        ).fetchone()
+        sig9_val = int(_mgr_fab[0]) if _mgr_fab else 0
+        _write_signal(conn, "manager_name_fabrication_attempts", sig9_val)
+        results["manager_name_fabrication_attempts"] = sig9_val
 
         # ── EdgeOps alerts (SO #20, 2-hour debounce) ─────────────────────────
         for signal, threshold in _THRESHOLDS.items():

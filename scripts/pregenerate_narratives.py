@@ -542,6 +542,21 @@ _VALID_BK_DISPLAY = {
 }
 
 
+def _log_integrity_event(signal: str, fixture_id: str = "", reason: str = "") -> None:
+    """Write a raw integrity event row to narrative_integrity_log in odds.db.
+
+    MONITOR-P0-FIX-01: Called at verdict quality / manager name rejection sites
+    to instrument validator_reject_rate, banned_template_hit_rate, and
+    manager_name_fabrication_attempts signals.
+    Best-effort — swallows all exceptions silently (never blocks generation).
+    """
+    try:
+        from scripts.monitor_narrative_integrity import write_integrity_event
+        write_integrity_event(signal, fixture_id=fixture_id, reason=reason)
+    except Exception as _lie:
+        log.debug("_log_integrity_event: %s/%s failed: %s", signal, fixture_id, _lie)
+
+
 async def _refresh_edge_from_odds_db(edge: dict) -> dict:
     """Refresh bookmaker+price from odds.db so narrative and odds table agree.
 
@@ -1757,7 +1772,19 @@ async def _generate_one(
                 "home_manager": ((getattr(_ep_espn_qg, "home_team", {}) or {}).get("coach") if _ep_espn_qg else None),
                 "away_manager": ((getattr(_ep_espn_qg, "away_team", {}) or {}).get("coach") if _ep_espn_qg else None),
             }
+        # MONITOR-P0-FIX-01: instrument validator_attempt + bannned_template_hit
+        _log_integrity_event("validator_attempt", fixture_id=match_key)
+        _bt_idx = -1
+        if _verdict_text_raw:
+            from narrative_spec import check_banned_template as _cbt
+            _bt_idx = _cbt(_verdict_text_raw)
+            if _bt_idx >= 0:
+                _log_integrity_event("banned_template_hit", fixture_id=match_key,
+                                     reason=f"template_idx={_bt_idx}")
         if not min_verdict_quality(_verdict_text_raw, tier=_pregen_edge_tier, evidence_pack=_mgr_ep):
+            # MONITOR-P0-FIX-01: instrument validator_rejection
+            _log_integrity_event("validator_rejection", fixture_id=match_key,
+                                 reason=f"tier={_pregen_edge_tier},len={len(_verdict_text_raw)}")
             log.warning(
                 "GOLD-QUALITY-GATE: verdict failed quality check for %s "
                 "(tier=%s, verdict_len=%d) — attempting Sonnet retry",
@@ -1993,8 +2020,16 @@ async def _generate_one(
             _verdict_html = _generate_verdict_constrained(spec, _allowed)
             # INV-VERDICT-COACH-FABRICATION-01: validate manager names in verdict
             if _verdict_html:
-                from narrative_spec import validate_manager_names as _vmn
+                from narrative_spec import validate_manager_names as _vmn, find_fabricated_manager_names as _ffmn
                 if not _vmn(_verdict_html, _allowed):
+                    # MONITOR-P0-FIX-01: instrument manager_name_fabrication_attempt
+                    _fab_names = _ffmn(_verdict_html, _allowed)
+                    _null_fields = [k for k in ("home_manager", "away_manager") if not _allowed.get(k)]
+                    _log_integrity_event(
+                        "manager_name_fabrication_attempt",
+                        fixture_id=match_key,
+                        reason=f"fabricated={','.join(_fab_names)};null_fields={','.join(_null_fields)}",
+                    )
                     log.warning("COACH-FABRICATION-GATE: verdict rejected for %s — unknown manager name", match_key)
                     _verdict_html = ""
             if not _verdict_html:

@@ -266,6 +266,67 @@ def validate_manager_names(verdict: str, evidence_pack: dict) -> bool:
     return True
 
 
+def find_fabricated_manager_names(verdict: str, evidence_pack: dict) -> list[str]:
+    """Return list of manager name references in verdict not found in evidence_pack.
+
+    MONITOR-P0-FIX-01: Provides fabricated names for integrity event logging
+    at the call site (pregenerate_narratives.py).
+    Returns empty list when validation passes or no manager data is available.
+    """
+    home_mgr = (evidence_pack.get("home_manager") or "").strip()
+    away_mgr = (evidence_pack.get("away_manager") or "").strip()
+    if not home_mgr and not away_mgr:
+        return []
+
+    valid_names: set[str] = set()
+    for mgr in (home_mgr, away_mgr):
+        if mgr:
+            for token in mgr.split():
+                if len(token) >= 3:
+                    valid_names.add(token.lower())
+
+    _TEAM_WORDS = frozenset({
+        "united", "city", "spurs", "reds", "gunners", "blues", "hammers",
+        "chiefs", "pirates", "sundowns", "galaxy", "celtic", "rovers",
+        "wanderers", "hotspur", "forest", "villa", "palace", "everton",
+        "burnley", "fulham", "brentford", "bournemouth", "wolves",
+        "leicester", "brighton", "newcastle", "southampton", "west",
+        "ham", "crystal", "nottingham", "aston",
+    })
+    _POSSESSIVE_RE = re.compile(
+        r"\b([A-Z][a-z]{2,})[\u2019']s\s+(?:side|men|team|lads|boys|squad|"
+        r"approach|style|tactics|formation|setup|plan|system|"
+        r"United|City|Spurs|Reds|Gunners|Blues|Hammers|Chiefs|Pirates|"
+        r"Sundowns|charges|reign|era|tenure)\b"
+    )
+    _UNDER_RE = re.compile(r"\bunder\s+([A-Z][a-z]{2,})\b")
+
+    found_names: set[str] = set()
+    for m in _POSSESSIVE_RE.finditer(verdict):
+        candidate = m.group(1).lower()
+        if candidate not in _TEAM_WORDS:
+            found_names.add(candidate)
+    for m in _UNDER_RE.finditer(verdict):
+        candidate = m.group(1).lower()
+        if candidate not in _TEAM_WORDS:
+            found_names.add(candidate)
+
+    return [name for name in found_names if name not in valid_names]
+
+
+def check_banned_template(verdict: str) -> int:
+    """Return index (0-based) of first matching BANNED_TRIVIAL_VERDICT_TEMPLATES, or -1.
+
+    MONITOR-P0-FIX-01: Provides template ID for banned_template_hit event logging
+    at the call site (pregenerate_narratives.py).
+    """
+    text = verdict.strip()
+    for idx, pattern in enumerate(BANNED_TRIVIAL_VERDICT_TEMPLATES):
+        if pattern.match(text):
+            return idx
+    return -1
+
+
 # BUILD-VERDICT-RENDER-FIXES-01: Diamond price-prefix gate
 _DIAMOND_PRICE_PREFIX_RE = re.compile(r'^At\s+[0-9]+\.[0-9]+', re.IGNORECASE)
 

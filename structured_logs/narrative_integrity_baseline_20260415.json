@@ -1,0 +1,15 @@
+{
+  "captured_at": "2026-04-15T20:15:47+00:00",
+  "window_start": "2026-04-15",
+  "signals": {
+    "total_narratives_24h": 51,
+    "w84_rate_24h": 92,
+    "w82_fallback_count_24h": 0,
+    "empty_verdict_count_24h": 0,
+    "low_quality_verdict_count": 0,
+    "gold_edge_non_sonnet_count": 0,
+    "validator_reject_rate": 100,
+    "banned_template_hit_rate": 100,
+    "manager_name_fabrication_attempts": 0
+  }
+}

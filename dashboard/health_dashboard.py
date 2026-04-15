@@ -68,10 +68,7 @@ DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASS = os.getenv("DASHBOARD_PASS", "mzansiedge")
 PORT = int(os.getenv("DASHBOARD_PORT", "8501"))
 
-NOTION_TOKEN = os.getenv(
-    "NOTION_TOKEN",
-    "",
-)
+NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
 NOTION_MARKETING_DB = "58123052-0e48-466a-be63-5308e793e672"
 NOTION_TASK_HUB_PAGE = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
 
