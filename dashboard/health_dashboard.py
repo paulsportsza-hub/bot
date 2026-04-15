@@ -7,6 +7,7 @@ Sidebar navigation with Data Health, Automation, and Customers views.
 """
 
 import functools
+import html
 import json
 import os
 import re
@@ -15,7 +16,10 @@ import subprocess
 import threading
 import time
 import urllib.request
+import zipfile
 from datetime import datetime, timezone, timedelta
+from io import BytesIO
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
@@ -70,6 +74,15 @@ NOTION_TOKEN = os.getenv(
 )
 NOTION_MARKETING_DB = "58123052-0e48-466a-be63-5308e793e672"
 NOTION_TASK_HUB_PAGE = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
+
+# -- Reel Kit constants -------------------------------------------------------
+_REEL_CARDS_ROOT = "/var/www/mzansiedge/assets/reel-cards"
+_REEL_MASTERS_ROOT = "/var/www/mzansiedge/assets/reels"
+_REEL_PUBLIC_BASE = "https://mzansiedge.co.za/assets/reels"
+_REEL_MARKETING_DATA_SOURCE = NOTION_MARKETING_DB
+MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50 MB upload limit (LOCKED)
+_RE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_RE_PICK_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # -- Sentry config ------------------------------------------------------------
 SENTRY_AUTH_TOKEN = os.getenv("SENTRY_AUTH_TOKEN", "")
@@ -138,16 +151,19 @@ BK_DISPLAY = {
 
 # -- Automation channel config ------------------------------------------------
 _CHANNELS = [
-    {"key": "facebook", "label": "Facebook", "color": "#1877F2"},
-    {"key": "instagram", "label": "Instagram", "color": "#E4405F"},
-    {"key": "linkedin", "label": "LinkedIn", "color": "#0A66C2"},
-    {"key": "tiktok", "label": "TikTok", "color": "#ff0050"},
     {"key": "telegram_alerts", "label": "Telegram Alerts", "color": "#26A5E4"},
     {"key": "telegram_community", "label": "Telegram Community", "color": "#179CDE"},
-    {"key": "whatsapp", "label": "WhatsApp", "color": "#25D366"},
-    {"key": "x_twitter", "label": "X / Twitter", "color": "#F5F5F5"},
+    {"key": "whatsapp_channel", "label": "WhatsApp Channel", "color": "#25D366"},
+    {"key": "instagram", "label": "Instagram", "color": "#E4405F"},
+    {"key": "tiktok", "label": "TikTok", "color": "#ff0050"},
+    {"key": "threads", "label": "Threads", "color": "#000000"},
 ]
-_CHANNEL_MAP = {c["key"]: c for c in _CHANNELS}
+_MANUAL_CHANNELS = [
+    {"key": "linkedin", "label": "LinkedIn", "color": "#0A66C2"},
+    {"key": "fb_groups", "label": "FB Groups", "color": "#1877F2"},
+    {"key": "quora", "label": "Quora", "color": "#B92B27"},
+]
+_CHANNEL_MAP = {c["key"]: c for c in _CHANNELS + _MANUAL_CHANNELS}
 
 app = Flask(__name__)
 
@@ -1120,23 +1136,25 @@ def _normalise_channel_key(raw: str) -> str:
             return key
     # Fallback heuristics
     if "fb" in low or "facebook" in low:
-        return "facebook"
+        return "fb_groups"
     if "ig" in low or "insta" in low:
         return "instagram"
     if "linked" in low:
         return "linkedin"
     if "tiktok" in low or "tik" in low:
         return "tiktok"
+    if "thread" in low:
+        return "threads"
     if "telegram" in low:
         if "alert" in low:
             return "telegram_alerts"
         if "community" in low or "comm" in low:
             return "telegram_community"
-        return "telegram_alerts"  # default bare "telegram" to alerts channel
-    if "whatsapp" in low or "wa" in low:
-        return "whatsapp"
-    if "twitter" in low or low == "x":
-        return "x_twitter"
+        return "telegram_alerts"
+    if "whatsapp" in low or "wa " in low or low == "wa":
+        return "whatsapp_channel"
+    if "quora" in low:
+        return "quora"
     return ""
 
 
@@ -1149,6 +1167,9 @@ _APPROVAL_CHANNELS: frozenset[str] = frozenset({
     "Facebook", "Facebook Image",
     "Instagram", "Instagram Image",
     "LinkedIn", "LinkedIn Image",
+    "Threads", "Threads Image",
+    "WhatsApp Channel",
+    "TikTok",
 })
 
 
@@ -1566,10 +1587,9 @@ def _sidebar_html(active_view: str) -> str:
     items = [
         ("health", "System Health", _ICON_SERVER, "/admin/health"),
         ("performance", "Edge Performance", _ICON_CHART, "/admin/performance"),
-        ("automation", "Social Media", _ICON_PLAY, "/admin/automation"),
-        ("task_hub", "Task Hub", _ICON_TASKHUB, "/admin/task-hub"),
+        ("social_ops", "Social Ops", _ICON_PLAY, "/admin/social-ops"),
     ]
-    # Compute pending approval count for Task Hub badge
+    # Compute pending item count for Social Ops badge
     _badge_count = 0
     try:
         _mq, _ = _fetch_marketing_queue()
@@ -1580,7 +1600,7 @@ def _sidebar_html(active_view: str) -> str:
     for key, label, icon, href in items:
         active_cls = " active" if key == active_view else ""
         badge_html = ""
-        if key == "task_hub" and _badge_count > 0:
+        if key == "social_ops" and _badge_count > 0:
             badge_html = f'<span class="nav-badge" id="th-badge">{_badge_count}</span>'
         nav_items += f'<a class="sidebar-item{active_cls}" href="{href}" data-view="{key}"><span class="item-icon">{icon}</span><span class="item-label">{label}{badge_html}</span></a>\n'
 
@@ -3385,13 +3405,13 @@ def _parse_card_zones(rich_text_array: list) -> tuple[str, str, str]:
 def _classify_task(text: str) -> str:
     """Classify a to_do block text into one of the 5 task section keys."""
     lower = text.lower()
-    if "fb group" in lower:
+    if "fb group" in lower or "facebook" in lower:
         return "post_now"
     elif "linkedin" in lower or "li-" in lower:
         return "connect"
     elif "quora" in lower:
         return "answer"
-    elif "reddit" in lower or "mybroadband" in lower:
+    elif "mybroadband" in lower or "forum" in lower:
         return "read_reply"
     else:
         return "reminders"
@@ -5502,22 +5522,28 @@ def admin_health():
     return Response(html, mimetype="text/html")
 
 
-@app.route("/admin/automation")
+@app.route("/admin/social-ops")
 @require_auth
-def admin_automation():
+def admin_social_ops():
     now = time.monotonic()
     with _page_cache_lock:
-        cached = _page_cache.get("automation_full")
+        cached = _page_cache.get("social_ops_full")
         if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
             return Response(cached[0], mimetype="text/html")
 
     content = render_automation_content()
-    html = render_shell("automation", content)
+    html = render_shell("social_ops", content)
 
     with _page_cache_lock:
-        _page_cache["automation_full"] = (html, now)
+        _page_cache["social_ops_full"] = (html, now)
 
     return Response(html, mimetype="text/html")
+
+
+@app.route("/admin/automation")
+@require_auth
+def admin_automation():
+    return redirect("/admin/social-ops", code=302)
 
 
 @app.route("/admin/system")
@@ -5601,9 +5627,7 @@ def api_automation():
 @app.route("/admin/task-hub")
 @require_auth
 def admin_task_hub():
-    content = render_task_hub_content()
-    html = render_shell("task_hub", content)
-    return Response(html, mimetype="text/html")
+    return redirect("/admin/social-ops?tab=tasks", code=302)
 
 
 @app.route("/admin/api/task_hub")
@@ -5642,6 +5666,7 @@ def api_notion_patch():
             _notion_cache.pop("marketing_queue", None)
         with _page_cache_lock:
             _page_cache.pop("automation_full", None)
+            _page_cache.pop("social_ops_full", None)
             _page_cache.pop("automation_content", None)
         return Response('{"ok":true}', mimetype="application/json")
     else:
@@ -5668,10 +5693,188 @@ def api_dismiss_item():
             _notion_cache.pop("marketing_queue", None)
         with _page_cache_lock:
             _page_cache.pop("automation_full", None)
+            _page_cache.pop("social_ops_full", None)
             _page_cache.pop("automation_content", None)
         return Response('{"ok":true}', mimetype="application/json")
     else:
         return Response('{"error":"notion update failed"}', status=502, mimetype="application/json")
+
+
+# -- Reel Kit helpers ---------------------------------------------------------
+
+def _scan_reel_kits(date_str: str) -> list[dict]:
+    """Scan _REEL_CARDS_ROOT/{date} for reel kits (card + optional VOs)."""
+    if not _RE_DATE.match(date_str):
+        return []
+    date_dir = os.path.join(_REEL_CARDS_ROOT, date_str)
+    if not os.path.isdir(date_dir):
+        return []
+    kits: dict[str, dict] = {}
+    for fname in sorted(os.listdir(date_dir)):
+        if fname.startswith("card_") and fname.endswith(".png"):
+            pick_id = fname[5:-4]  # strip "card_" and ".png"
+            if not _RE_PICK_ID.match(pick_id):
+                continue
+            kits.setdefault(pick_id, {"pick_id": pick_id, "card": None, "still": None, "vos": []})
+            kits[pick_id]["card"] = fname
+        elif fname.startswith("still_") and fname.endswith(".png"):
+            pick_id = fname[6:-4]
+            if not _RE_PICK_ID.match(pick_id):
+                continue
+            kits.setdefault(pick_id, {"pick_id": pick_id, "card": None, "still": None, "vos": []})
+            kits[pick_id]["still"] = fname
+        elif fname.startswith("vo_") and fname.endswith(".mp3"):
+            # vo_{pick_id}_v{n}.mp3
+            parts = fname[3:-4].rsplit("_v", 1)
+            if len(parts) == 2:
+                pick_id = parts[0]
+                if _RE_PICK_ID.match(pick_id):
+                    kits.setdefault(pick_id, {"pick_id": pick_id, "card": None, "still": None, "vos": []})
+                    kits[pick_id]["vos"].append(fname)
+    # Check if master already uploaded
+    masters_dir = os.path.join(_REEL_MASTERS_ROOT, date_str)
+    result = []
+    for pick_id, kit in kits.items():
+        if kit["card"] is None:
+            continue
+        master_path = os.path.join(masters_dir, f"{pick_id}_master.mp4") if os.path.isdir(masters_dir) else ""
+        kit["has_master"] = os.path.isfile(master_path) if master_path else False
+        kit["vos"].sort()
+        result.append(kit)
+    return result
+
+
+def _find_reel_card(date_str: str, pick_id: str) -> str | None:
+    """Return absolute path to card PNG if it exists."""
+    if not _RE_DATE.match(date_str) or not _RE_PICK_ID.match(pick_id):
+        return None
+    p = os.path.join(_REEL_CARDS_ROOT, date_str, f"card_{pick_id}.png")
+    return p if os.path.isfile(p) else None
+
+
+def _find_reel_vos(date_str: str, pick_id: str) -> list[str]:
+    """Return sorted list of absolute paths to VO MP3s."""
+    if not _RE_DATE.match(date_str) or not _RE_PICK_ID.match(pick_id):
+        return []
+    date_dir = os.path.join(_REEL_CARDS_ROOT, date_str)
+    if not os.path.isdir(date_dir):
+        return []
+    vos = []
+    for fname in sorted(os.listdir(date_dir)):
+        if fname.startswith(f"vo_{pick_id}_v") and fname.endswith(".mp3"):
+            vos.append(os.path.join(date_dir, fname))
+    return vos
+
+
+# -- Reel Kit API routes -----------------------------------------------------
+
+@app.route("/admin/api/reel-kits")
+@require_auth
+def api_reel_kits():
+    """GET — scan reel-cards root for kits on a date."""
+    date_str = request.args.get("date", "")
+    if not _RE_DATE.match(date_str):
+        return Response('{"error":"invalid date"}', status=400, mimetype="application/json")
+    kits = _scan_reel_kits(date_str)
+    return Response(
+        json.dumps({"date": date_str, "kits": kits}),
+        mimetype="application/json",
+    )
+
+
+@app.route("/admin/api/reel-download", methods=["POST"])
+@require_auth
+def api_reel_download():
+    """POST — return ZIP with card PNG + VO MP3s for a pick."""
+    try:
+        body = request.get_json(force=True)
+        date_str = (body or {}).get("date", "").strip()
+        pick_id = (body or {}).get("pick_id", "").strip()
+    except Exception:
+        return Response('{"error":"bad request"}', status=400, mimetype="application/json")
+
+    if not _RE_DATE.match(date_str) or not _RE_PICK_ID.match(pick_id):
+        return Response('{"error":"invalid params"}', status=400, mimetype="application/json")
+
+    card_path = _find_reel_card(date_str, pick_id)
+    vos = _find_reel_vos(date_str, pick_id)
+    if not card_path:
+        return Response('{"error":"card not found"}', status=404, mimetype="application/json")
+
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(card_path, os.path.basename(card_path))
+        for vo in vos:
+            zf.write(vo, os.path.basename(vo))
+    buf.seek(0)
+    return Response(
+        buf.getvalue(),
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="reel_{pick_id}.zip"'},
+    )
+
+
+@app.route("/admin/api/reel-upload", methods=["POST"])
+@require_auth
+def api_reel_upload():
+    """POST — upload master Reel MP4, create MOQ item for Instagram ONLY."""
+    if request.content_length and request.content_length > MAX_CONTENT_LENGTH:
+        return Response('{"error":"file too large"}', status=413, mimetype="application/json")
+
+    f = request.files.get("file")
+    pick_id = request.form.get("pick_id", "").strip()
+    date_str = request.form.get("date", "").strip()
+    block_id = request.form.get("block_id", "").strip()
+
+    if not f or not pick_id or not date_str:
+        return Response('{"error":"missing file, pick_id, or date"}', status=400, mimetype="application/json")
+    if not _RE_DATE.match(date_str) or not _RE_PICK_ID.match(pick_id):
+        return Response('{"error":"invalid params"}', status=400, mimetype="application/json")
+
+    # Save master MP4
+    masters_dir = os.path.join(_REEL_MASTERS_ROOT, date_str)
+    os.makedirs(masters_dir, exist_ok=True)
+    master_path = os.path.join(masters_dir, f"{pick_id}_master.mp4")
+    f.save(master_path)
+
+    video_url = f"{_REEL_PUBLIC_BASE}/{date_str}/{pick_id}_master.mp4"
+
+    # Schedule for next 3h boundary in SAST
+    _SAST_OFF = timezone(timedelta(hours=2))
+    now_sast = datetime.now(_SAST_OFF)
+    current_3h = now_sast.hour // 3 * 3
+    next_3h = current_3h + 3
+    if next_3h >= 24:
+        sched = now_sast.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    else:
+        sched = now_sast.replace(hour=next_3h, minute=0, second=0, microsecond=0)
+    sched_iso = sched.isoformat()
+
+    # Create ONE MOQ page for Instagram only (Override 2 — TikTok uses B.R.U. drip)
+    moq_title = f"Reel — {pick_id[:8]} ({date_str})"
+    moq_body = {
+        "parent": {"database_id": _REEL_MARKETING_DATA_SOURCE},
+        "properties": {
+            "Name": {"title": [{"text": {"content": moq_title}}]},
+            "Status": {"select": {"name": "Awaiting Approval"}},
+            "Channel": {"select": {"name": "Instagram"}},
+            "Asset Link": {"url": video_url},
+            "Scheduled Time": {"date": {"start": sched_iso}},
+        },
+    }
+    result = _notion_request("pages", body=moq_body)
+    ok = bool(result and result.get("object") == "page")
+
+    # Invalidate cache
+    with _notion_cache_lock:
+        _notion_cache.pop("marketing_queue", None)
+    with _page_cache_lock:
+        _page_cache.pop("social_ops_full", None)
+
+    return Response(
+        json.dumps({"ok": ok, "video_url": video_url, "scheduled": sched_iso, "channel": "Instagram"}),
+        mimetype="application/json",
+    )
 
 
 @app.route("/admin/api/done-block", methods=["POST"])
