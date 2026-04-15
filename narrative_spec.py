@@ -266,6 +266,22 @@ def validate_manager_names(verdict: str, evidence_pack: dict) -> bool:
     return True
 
 
+# BUILD-VERDICT-RENDER-FIXES-01: Diamond price-prefix gate
+_DIAMOND_PRICE_PREFIX_RE = re.compile(r'^At\s+[0-9]+\.[0-9]+', re.IGNORECASE)
+
+
+def validate_diamond_price_prefix(verdict: str, tier: str) -> bool:
+    """Return True if verdict passes the Diamond price-prefix gate.
+
+    BUILD-VERDICT-RENDER-FIXES-01: Diamond verdicts MUST NOT open with 'At <price>'.
+    Gold/Silver/Bronze: always True (no tier gate).
+    Diamond: HARD FAIL if verdict starts with 'At X.XX'.
+    """
+    if (tier or "").lower() != "diamond":
+        return True
+    return not bool(_DIAMOND_PRICE_PREFIX_RE.match(verdict.strip()))
+
+
 def min_verdict_quality(verdict: str, tier: str = "bronze",
                         evidence_pack: dict | None = None) -> bool:
     """Return True if verdict passes the minimum quality floor.
@@ -302,6 +318,9 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
     if evidence_pack is not None:
         if not validate_manager_names(text, evidence_pack):
             return False
+    # Gate 6 — BUILD-VERDICT-RENDER-FIXES-01: Diamond price-prefix hard gate
+    if not validate_diamond_price_prefix(text, tier):
+        return False
     return True
 
 

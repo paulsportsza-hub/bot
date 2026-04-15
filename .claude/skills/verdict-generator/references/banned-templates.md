@@ -32,3 +32,24 @@ Amorim was NOT the current United manager — hallucinated from training data
 - `validate_manager_names()` in `narrative_spec.py` — hard gate
 - Wired into `min_verdict_quality()` via `evidence_pack` parameter
 - Also checked directly after `_generate_verdict_constrained()` output
+
+---
+
+## B28 — Diamond verdict 'At \<price\>' opening prefix (BUILD-VERDICT-RENDER-FIXES-01)
+
+**Rule**: Any Diamond-tier verdict that begins with `At <price>` MUST be rejected.
+Diamond verdicts must lead with the pick, context, or read — never the price.
+
+**Regex**: `^At\s+[0-9]+\.[0-9]+`
+
+**Example FAIL**: `"At 1.85, the Reds are the play — they've dominated their last four and the line hasn't moved."`
+
+**Required**: `"The Reds are the play at 1.85 — dominant recent form and an unchanged line. Back the Reds."`
+
+**Rationale**: See exemplars.md rule #8. Diamond is our highest-conviction tier.
+Opening with a raw price reads as mechanical and undermines the premium framing.
+The pick and its analytical basis must lead. The price is supporting evidence, not the headline.
+
+**Applies to**: Diamond tier only. Gold/Silver/Bronze with 'At 1.XX' openings are acceptable.
+
+**Detection**: `validate_diamond_price_prefix()` in `narrative_spec.py` — tier-conditional hard gate in `min_verdict_quality()`.

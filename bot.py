@@ -7283,6 +7283,11 @@ _VERDICT_BLACKLIST = [
     "limit your stake",
 ]
 
+# BUILD-VERDICT-RENDER-FIXES-01: detect orphan "Back X." sentence at end of verdict
+_ORPHAN_BACK_RE = re.compile(
+    r'\.\s+(Back (?:the )?[A-Z][\w\' \-]+\.)\s*$'
+)
+
 
 def _generate_verdict(tip: dict, verified: dict) -> str:
     """Call Sonnet for a 3-5 sentence SA sports fan verdict.
@@ -7422,6 +7427,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "- Injury information unless it appears in signals_active\n"
             "- Staking advice of any kind: 'small stake', 'keep stakes controlled', 'stay proportionate', 'size your bet', 'measured lean', 'proceed with caution' — we are here to tell them WHERE the edge is, not HOW MUCH to bet\n"
             "- Hedge language: 'worth monitoring', 'keep an eye on', 'factor that in', 'factor this in', 'could be'\n"
+            "- Diamond verdicts MUST NOT begin with 'At <price>' — lead with the pick, context, or read. Never the number. Example fail: 'At 1.85, the Reds are the play…'. Required: lead with pick or context first.\n"
             "\n"
             "SA VOICE — THIS IS NON-NEGOTIABLE:\n"
             "Write like you're telling a mate at the braai why this bet is sharp. "
@@ -7505,7 +7511,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             log.warning("verdict blacklisted: %s", text)
             return ""
 
-        return text
+        return _fix_orphan_back(text)
     except Exception as exc:
         log.warning("_generate_verdict: Sonnet call failed: %s", exc)
         # Programmatic fallback — always show something rather than blank verdict
@@ -7584,6 +7590,25 @@ def _cap_verdict(text: str, limit: int = 300) -> str:
     if len(text) > limit:
         text = text[:limit].rsplit(" ", 1)[0].rstrip(",. ")
     return text
+
+
+def _fix_orphan_back(verdict: str, char_budget: int = 1024) -> str:
+    """BUILD-VERDICT-RENDER-FIXES-01: Join orphan 'Back X.' to previous sentence.
+
+    If verdict ends with a standalone 'Back X.' clause (preceded by '. '), join it
+    to the previous sentence with an em dash. Only strip if joining exceeds
+    char_budget (never in practice — verdict max is 300 chars).
+    """
+    m = _ORPHAN_BACK_RE.search(verdict)
+    if not m:
+        return verdict
+    # Join: replace '. Back X.' with ' — Back X.'
+    joined = _ORPHAN_BACK_RE.sub(lambda _m: f' \u2014 {_m.group(1)}', verdict).strip()
+    if len(joined) <= char_budget:
+        return joined
+    # Strip: remove the 'Back X.' clause entirely
+    stripped = verdict[:m.start()].rstrip() + "."
+    return stripped
 
 
 def _trim_to_last_sentence(text: str, max_chars: int = 300) -> str:
@@ -7752,6 +7777,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "- Injury information unless it appears in signals_active\n"
             "- Staking advice of any kind: 'small stake', 'keep stakes controlled', 'stay proportionate', 'size your bet', 'measured lean', 'proceed with caution' — we are here to tell them WHERE the edge is, not HOW MUCH to bet\n"
             "- Hedge language: 'worth monitoring', 'keep an eye on', 'factor that in', 'factor this in', 'could be'\n"
+            "- Diamond verdicts MUST NOT begin with 'At <price>' — lead with the pick, context, or read. Never the number. Example fail: 'At 1.85, the Reds are the play…'. Required: lead with pick or context first.\n"
             "\n"
             "SA VOICE — THIS IS NON-NEGOTIABLE:\n"
             "Write like you're telling a mate at the braai why this bet is sharp. "
@@ -7858,7 +7884,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
                 return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
-        return checked
+        return _fix_orphan_back(checked)
     except Exception as exc:
         log.warning("_generate_verdict_constrained failed: %s", exc)
         try:
