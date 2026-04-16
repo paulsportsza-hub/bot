@@ -5,11 +5,11 @@ Usage:
     png_bytes = await render_card("edge_summary.html", data, width=480)
     png_bytes = render_card_sync("edge_summary.html", data, width=480)
 
-LOCKED RENDER STANDARD (IMG-PW2R — updated CARD-FIX-L):
-    width=480, height=620, device_scale_factor=2 → 960×1240px physical output.
-    Fixed clip: {"x":0,"y":0,"width":480,"height":620} — every card identical dimensions.
+RENDER STANDARD (IMG-PW2R — updated CARD-FIX-DYN):
+    width=480, device_scale_factor=2 → 960px physical width.
+    Dynamic height: content measured via JS, clip matches actual card height.
     No omit_background (transparent PNG causes grey edges on Telegram Desktop).
-    Do NOT change these defaults without a brief.
+    Brief: QA-MYMATCHES-E2E-TELETHON-01 authorised dynamic height fix.
 
 BROWSER POOL (BUILD-W3):
     A persistent Chromium browser runs in a background daemon thread's event loop.
@@ -116,16 +116,29 @@ async def _render_page(
     template = _env.get_template(template_name)
     html = template.render(**data)
 
-    # CARD-FIX-L: all cards render at fixed 480×620 CSS px → 960×1240px physical
-    _card_height = 620
+    # CARD-FIX-DYN: dynamic height — measure actual content, clip to fit.
+    # Viewport starts tall (1200px) so content renders fully, then we clip
+    # to the real card height. Eliminates blank space on short cards.
+    _max_viewport_height = 1200
     _start = time.monotonic()
     page = await browser.new_page(
-        viewport={"width": width, "height": _card_height},
+        viewport={"width": width, "height": _max_viewport_height},
         device_scale_factor=device_scale_factor,
     )
     try:
         await page.set_content(html, wait_until="networkidle")
         await page.wait_for_timeout(50)  # minimal settle time
+
+        # Measure actual card content height via JS
+        _content_height = await page.evaluate(
+            """() => {
+                const card = document.querySelector('.card');
+                if (card) return Math.ceil(card.getBoundingClientRect().height);
+                return document.body.scrollHeight;
+            }"""
+        )
+        # Clamp: minimum 100px, maximum 1200px
+        _card_height = max(100, min(_content_height, _max_viewport_height))
 
         png_bytes = await page.screenshot(
             type="png",
@@ -136,12 +149,13 @@ async def _render_page(
 
     _elapsed_ms = (time.monotonic() - _start) * 1000
     log.info(
-        "card_render_complete template=%s elapsed_ms=%.1f bytes=%d size=%dx%dpx",
+        "card_render_complete template=%s elapsed_ms=%.1f bytes=%d size=%dx%dpx content_h=%d",
         template_name,
         _elapsed_ms,
         len(png_bytes),
         width * device_scale_factor,
         _card_height * device_scale_factor,
+        _content_height,
     )
     return png_bytes
 
