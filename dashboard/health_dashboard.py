@@ -161,6 +161,17 @@ _MANUAL_CHANNELS = [
     {"key": "quora", "label": "Quora", "color": "#B92B27", "emoji": "\u2753"},
 ]
 _CHANNEL_MAP = {c["key"]: c for c in _CHANNELS + _MANUAL_CHANNELS}
+_CHANNEL_SVG = {
+    "telegram_alerts":    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.2 3.1L1.9 10.5c-1.3.5-1.3 1.3-.2 1.6l4.9 1.5 1.9 5.9c.2.7.4.8.9.3l2.8-2.7 5.5 4c1 .6 1.7.3 2-.9l3.5-16.5c.4-1.4-.5-2-.9-.4z" fill="#26A5E4"/></svg>',
+    "telegram_community": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.2 3.1L1.9 10.5c-1.3.5-1.3 1.3-.2 1.6l4.9 1.5 1.9 5.9c.2.7.4.8.9.3l2.8-2.7 5.5 4c1 .6 1.7.3 2-.9l3.5-16.5c.4-1.4-.5-2-.9-.4z" fill="#179CDE"/></svg>',
+    "whatsapp_channel":   '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M17.5 14.4c-.3-.1-1.6-.8-1.9-.9-.3-.1-.5-.1-.7.1-.2.3-.8 1-1 1.2-.2.2-.3.2-.6.1-.3-.2-1.3-.5-2.4-1.5-.9-.8-1.5-1.8-1.7-2.1-.2-.3 0-.5.1-.6.1-.1.3-.4.4-.5.2-.2.2-.3.3-.5.1-.2 0-.4 0-.5 0-.2-.7-1.6-.9-2.2-.3-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.4s1 2.8 1.2 3c.1.2 2 3.1 4.9 4.3.7.3 1.2.5 1.6.6.7.2 1.3.2 1.8.1.5-.1 1.6-.7 1.9-1.3.2-.6.2-1.2.2-1.3 0-.1-.2-.2-.5-.3zM12 21.8c-1.8 0-3.5-.5-5-1.3l-.4-.2-3.5.9.9-3.4-.2-.4c-1-1.6-1.5-3.4-1.5-5.3 0-5.4 4.4-9.8 9.8-9.8 2.6 0 5.1 1 6.9 2.9 1.8 1.8 2.9 4.3 2.9 6.9-.1 5.4-4.5 9.7-9.9 9.7zm8.3-18.1C18.2 1.6 15.2 0 12 0 5.4 0 0 5.4 0 12c0 2.1.6 4.2 1.6 6L0 24l6.2-1.6c1.7.9 3.7 1.4 5.8 1.4 6.6 0 12-5.4 12-12 0-3.2-1.2-6.2-3.5-8.5l-.2.4z" fill="#25D366"/></svg>',
+    "instagram":          '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" stroke="#E4405F" stroke-width="2" fill="none"/><circle cx="12" cy="12" r="5" stroke="#E4405F" stroke-width="2" fill="none"/><circle cx="17.5" cy="6.5" r="1.5" fill="#E4405F"/></svg>',
+    "tiktok":             '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M16.6 5.8A4.3 4.3 0 0112.3 2H9.2v13.4a2.6 2.6 0 11-1.8-2.5V9.7a5.8 5.8 0 104.9 5.7V9.8c1.2.8 2.6 1.2 4.1 1.2V7.8c-.7 0-1.3-.1-1.8-.4V5.8z" fill="#ff0050"/><path d="M16.6 5.8A4.3 4.3 0 0112.3 2" stroke="#00f2ea" stroke-width="1" fill="none"/></svg>',
+    "threads":            '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M16.3 11.3c-.1 0-.2 0-.3-.1-.2-.8-.7-1.5-1.4-1.9-.7-.4-1.6-.5-2.5-.2-.7.2-1.2.7-1.5 1.3-.3.6-.3 1.3-.1 1.9.2.7.7 1.2 1.3 1.5.7.3 1.4.3 2 .1.5-.1.9-.4 1.2-.8l.1-.1c.2.8.1 1.7-.3 2.4-.5.9-1.4 1.5-2.4 1.5-1.2 0-2.2-.5-2.8-1.5-.5-.8-.8-1.9-.8-3.4 0-1.5.3-2.6.8-3.4.7-1 1.7-1.5 2.8-1.5 1.3 0 2.3.6 2.8 1.7.3.5.4 1.1.5 1.7l.1.1c.5.2.9.5 1.2.9.1-1-.1-2-.5-2.9-.8-1.7-2.3-2.7-4.2-2.7-1.7 0-3 .8-3.8 2.1-.6 1-.9 2.4-.9 4.1s.3 3.1.9 4.1c.8 1.3 2.1 2.1 3.8 2.1 1.5 0 2.7-.6 3.5-1.8.6-1 .9-2.2.8-3.5 0-.1-.1-.3-.3-.4z" fill="#f5f5f5"/><path d="M12 2.5c-5.2 0-9.5 4.3-9.5 9.5s4.3 9.5 9.5 9.5 9.5-4.3 9.5-9.5S17.2 2.5 12 2.5z" stroke="#f5f5f5" stroke-width="1.5" fill="none"/></svg>',
+    "linkedin":           '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M20.4 2H3.6C2.7 2 2 2.7 2 3.6v16.8c0 .9.7 1.6 1.6 1.6h16.8c.9 0 1.6-.7 1.6-1.6V3.6c0-.9-.7-1.6-1.6-1.6zM8.3 18.3H5.7V9.7h2.6v8.6zM7 8.6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm11.4 9.7h-2.6v-4.2c0-1 0-2.3-1.4-2.3s-1.6 1.1-1.6 2.2v4.3h-2.6V9.7h2.5v1.2a2.7 2.7 0 012.5-1.4c2.7 0 3.2 1.8 3.2 4v4.8z" fill="#0A66C2"/></svg>',
+    "fb_groups":          '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M24 12c0-6.6-5.4-12-12-12S0 5.4 0 12c0 6 4.4 11 10.1 11.9v-8.4H7.1V12h3V9.4c0-3 1.8-4.6 4.5-4.6 1.3 0 2.7.2 2.7.2v2.9h-1.5c-1.5 0-2 .9-2 1.9V12h3.3l-.5 3.5h-2.8v8.4C19.6 23 24 18 24 12z" fill="#1877F2"/></svg>',
+    "quora":              '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M11.3 21.8c-.5-1-1.1-2.1-2.3-3.2l.8-1.1c.8.5 1.4 1.2 1.9 2 1.6-1 2.6-2.8 2.6-4.9 0-3.3-2.3-5.9-5.5-5.9S3.3 11.3 3.3 14.6s2.3 5.9 5.5 5.9c.8 0 1.7-.2 2.5-.7zm-2.5-12c2.3 0 3.8 1.8 3.8 4.2s-1.5 4.2-3.8 4.2-3.8-1.8-3.8-4.2 1.5-4.2 3.8-4.2z" fill="#B92B27"/><text x="14" y="10" font-size="10" font-weight="700" fill="#B92B27" font-family="Georgia,serif">Q</text></svg>',
+}
 
 app = Flask(__name__)
 
@@ -2925,10 +2936,10 @@ def render_automation_content() -> str:
         qd = cs["queue_depth"]
         q_html = f'<div class="queue-badge has-items">Q: {qd}</div>' if qd > 0 else '<div class="queue-badge empty">\u2014</div>'
         auto_rows += f"""<div class="channel-row status-{st['cls']}">
-  <div class="channel-icon">{ch.get('emoji', '')}</div>
+  <div class="channel-icon">{_CHANNEL_SVG.get(ch['key'], ch.get('emoji', ''))}</div>
   <div class="channel-name">{ch['label']}</div>
   <div class="freshness-track"><div class="freshness-fill {st['cls']}" style="width:{st['bar']}%"></div></div>
-  <div class="freshness-label {st['cls']}"><span class="time-val">{st['age']}</span> / {st['sla']}</div>
+  <div class="freshness-label {st['cls']}"><span class="time-val">{st['age']}</span> ago &middot; SLA {st['sla']}</div>
   {q_html}
 </div>"""
 
@@ -2944,7 +2955,7 @@ def render_automation_content() -> str:
         qd = cs["queue_depth"]
         q_html = f'<div class="manual-queue">Q: {qd}</div>' if qd > 0 else ""
         manual_cards += f"""<div class="manual-card">
-  <div class="manual-icon">{ch.get('emoji', '')}</div>
+  <div class="manual-icon">{_CHANNEL_SVG.get(ch['key'], ch.get('emoji', ''))}</div>
   <div class="manual-info"><div class="manual-name">{ch['label']}</div><div class="manual-age">{age_html}</div></div>
   {q_html}
 </div>"""
@@ -3154,14 +3165,14 @@ def render_automation_content() -> str:
     # ── CSS ────────────────────────────────────────────────────────────────
     so_css = """<style>
 /* Channel Health — Redesigned (Commit 5.5) */
-.auto-grid{display:flex;flex-direction:column;gap:6px;margin-bottom:28px;}
-.channel-row{display:grid;grid-template-columns:28px 160px 1fr 80px 70px;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-radius:8px;border-left:3px solid transparent;transition:background 150ms;}
+.auto-grid{display:flex;flex-direction:column;gap:6px;margin-bottom:20px;padding:16px 20px 0 20px;}
+.channel-row{display:grid;grid-template-columns:28px 160px 180px 1fr 70px;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-radius:8px;border-left:3px solid transparent;transition:background 150ms;}
 .channel-row:hover{background:var(--surface-alt,#1e2231);}
 .channel-row.status-green{border-left-color:var(--green);}
 .channel-row.status-amber{border-left-color:var(--amber);}
 .channel-row.status-red{border-left-color:var(--red);}
 .channel-row.status-grey{border-left-color:var(--muted);}
-.channel-icon{width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:16px;}
+.channel-icon{width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:16px;} .channel-icon svg{width:18px;height:18px;flex-shrink:0;}
 .channel-name{font-family:var(--font-d);font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;}
 .freshness-track{height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden;position:relative;}
 .freshness-fill{height:100%;border-radius:3px;transition:width .6s ease;}
@@ -3169,7 +3180,7 @@ def render_automation_content() -> str:
 .freshness-fill.amber{background:linear-gradient(90deg,#f59e0b,#d97706);}
 .freshness-fill.red{background:linear-gradient(90deg,#ef4444,#dc2626);}
 .freshness-fill.grey{background:var(--muted);}
-.freshness-label{font-family:var(--font-m);font-size:11px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.freshness-label{font-family:var(--font-m);font-size:11px;color:var(--muted);text-align:left;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .freshness-label .time-val{font-weight:600;}
 .freshness-label.green .time-val{color:#4ade80;}
 .freshness-label.amber .time-val{color:#fbbf24;}
@@ -3178,12 +3189,12 @@ def render_automation_content() -> str:
 .queue-badge{font-family:var(--font-m);font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;text-align:center;font-variant-numeric:tabular-nums;}
 .queue-badge.has-items{background:rgba(59,130,246,.15);color:#60a5fa;}
 .queue-badge.empty{color:var(--muted);}
-.manual-section{margin-top:4px;}
+.manual-section{margin-top:4px;padding:0 20px 16px 20px;}
 .manual-label{font-family:var(--font-d);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;padding-left:4px;}
 .manual-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
 .manual-card{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface);border-radius:8px;border:1px solid var(--border);transition:background 150ms;}
 .manual-card:hover{background:var(--surface-alt,#1e2231);}
-.manual-icon{font-size:18px;width:28px;text-align:center;flex-shrink:0;}
+.manual-icon{width:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0;} .manual-icon svg{width:18px;height:18px;}
 .manual-info{flex:1;min-width:0;}
 .manual-name{font-family:var(--font-d);font-size:13px;font-weight:600;color:var(--text);}
 .manual-age{font-family:var(--font-m);font-size:11px;color:var(--muted);margin-top:1px;}
@@ -3192,7 +3203,7 @@ def render_automation_content() -> str:
 .manual-age .val.amber{color:#fbbf24;}
 .manual-age .val.red{color:#f87171;}
 .manual-queue{font-family:var(--font-m);font-size:11px;font-weight:600;color:#60a5fa;flex-shrink:0;}
-.sla-legend{display:flex;gap:16px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);}
+.sla-legend{padding:12px 20px;display:flex;gap:16px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);}
 .sla-legend-item{display:flex;align-items:center;gap:6px;font-family:var(--font-m);font-size:11px;color:var(--muted);}
 .sla-legend-dot{width:8px;height:8px;border-radius:50%;}
 .sla-legend-dot.green{background:#22c55e;}
