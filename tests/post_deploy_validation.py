@@ -110,16 +110,18 @@ def check_gates() -> list[tuple[bool, str, str]]:
     except ImportError:
         return [(False, "Gate import", "Cannot import tier_gate")]
 
-    # Test matrix: (user_tier, edge_tier, expected_access)
+    # Test matrix: all 12 user_tier × edge_tier combos (TIER-GATE-IMPL-01)
     test_cases = [
         ("bronze", "bronze", "full"),
         ("bronze", "silver", "partial"),
         ("bronze", "gold", "blurred"),
         ("bronze", "diamond", "locked"),
         ("gold", "bronze", "full"),
+        ("gold", "silver", "full"),
         ("gold", "gold", "full"),
-        ("gold", "diamond", "blurred"),
+        ("gold", "diamond", "locked"),
         ("diamond", "bronze", "full"),
+        ("diamond", "silver", "full"),
         ("diamond", "gold", "full"),
         ("diamond", "diamond", "full"),
     ]

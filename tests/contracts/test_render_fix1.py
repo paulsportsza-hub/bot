@@ -96,9 +96,9 @@ class TestRenderFix1GoldLockoutRegression:
     def test_gold_user_sees_bronze_tip_as_full(self):
         assert get_edge_access_level("gold", "bronze") == "full"
 
-    def test_gold_user_sees_diamond_tip_as_blurred(self):
-        """Gold subscribers do NOT see Diamond — it should be blurred."""
-        assert get_edge_access_level("gold", "diamond") == "blurred"
+    def test_gold_user_sees_diamond_tip_as_locked(self):
+        """Gold subscribers do NOT see Diamond — it should be locked (TIER-GATE-IMPL-01)."""
+        assert get_edge_access_level("gold", "diamond") == "locked"
 
 
 class TestRenderFix1BronzeFallback:

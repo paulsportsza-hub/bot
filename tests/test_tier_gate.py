@@ -216,7 +216,7 @@ class TestGetEdgeAccessLevel:
         assert get_edge_access_level("gold", "bronze") == "full"
         assert get_edge_access_level("gold", "silver") == "full"
         assert get_edge_access_level("gold", "gold") == "full"
-        assert get_edge_access_level("gold", "diamond") == "blurred"
+        assert get_edge_access_level("gold", "diamond") == "locked"
 
     def test_bronze_access_levels(self):
         from tier_gate import get_edge_access_level

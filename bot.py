@@ -6283,6 +6283,11 @@ def _format_my_matches_edge_preview(
         locked_tier = str(edge_match.get("display_tier") or edge_tier or "premium").title()
         return f"🔒 {locked_tier} edge detected — /subscribe"
 
+    # TIER-GATE-IMPL-01: PARTIAL — show edge exists, no odds/bookmaker
+    if access == "partial":
+        partial_tier = str(edge_match.get("display_tier") or edge_tier or "silver").title()
+        return f"🥈 {partial_tier} edge available — upgrade for details"
+
     odds_val = tip.get("odds")
     if odds_val in (None, 0):
         odds_val = ((tip.get("edge_v2") or {}).get("best_odds") or 0)
@@ -11226,7 +11231,7 @@ async def _build_hot_tips_page(
             _signal_hint = _premium_signal_hint or _signal_hint
             _signal_hint_suffix = f" · {_signal_hint}" if _signal_hint else ""
 
-        if access in ("full", "partial"):
+        if access == "full":
             # 3-line card: sport emoji + match + tier badge, info, outcome @ odds → return
             outcome = h(tip.get("outcome", ""))
             # Normalise from outcome_key for consistency (positional key → display name)
@@ -11257,6 +11262,17 @@ async def _build_hot_tips_page(
             if _premium_hook:
                 card_lines.append(f"    {_premium_hook}")
             card_lines.append(line3)
+            lines.append("\n".join(card_lines))
+        elif access == "partial":
+            # TIER-GATE-IMPL-01: PARTIAL — return amount visible, NO odds/EV/bookmaker
+            odds_val = tip.get("odds", 0)
+            ret_amount = odds_val * 300 if odds_val else 0
+            ret_str = f"R{ret_amount:,.0f}" if ret_amount else "R?"
+            card_lines = [
+                f"<b>[{i}]</b> {sport_emoji} <b>{home} vs {away}</b> {tier_emoji}{_model_tag}",
+                f"    {info_line}",
+            ]
+            card_lines.append(f"    💰 {ret_str} return on R300 — upgrade for full details")
             lines.append("\n".join(card_lines))
         elif access == "blurred":
             # 3-line card: sport emoji + match + tier badge, info, return only
@@ -20939,8 +20955,8 @@ def _build_game_buttons(
             # Use authoritative edge_tier for badge (W30-GATE)
             tier_emoji = EDGE_EMOJIS.get(edge_tier, "🥉")
 
-            if _bet_access in ("blurred", "locked"):
-                # Locked: show View Plans instead of bookmaker URL
+            if _bet_access in ("partial", "blurred", "locked"):
+                # TIER-GATE-IMPL-01: non-full access → View Plans
                 primary_button = InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")
             else:
                 bk_key = (best_bk or {}).get("bookmaker_key") or ""
@@ -21275,6 +21291,65 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         )
         return
 
+    # ── TIER-GATE-IMPL-01: PARTIAL detail view — return visible, no odds/EV/bookmaker ──
+    if _access_level == "partial":
+        _sport_emoji = _get_sport_emoji_for_api_key(tip.get("sport_key", ""))
+        _pd_home = h(tip.get("home_team", ""))
+        _pd_away = h(tip.get("away_team", ""))
+        try:
+            _pd_bc = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _get_broadcast_details,
+                    home_team=tip.get("home_team", ""),
+                    away_team=tip.get("away_team", ""),
+                    league_key=tip.get("league_key", ""),
+                ),
+                timeout=3.0,
+            )
+        except Exception:
+            _pd_bc = {}
+        if not _pd_bc.get("kickoff") and tip.get("_bc_kickoff"):
+            _pd_bc = {**_pd_bc, "kickoff": tip["_bc_kickoff"]}
+        if not _pd_bc.get("broadcast") and tip.get("_bc_broadcast"):
+            _pd_bc = {**_pd_bc, "broadcast": tip["_bc_broadcast"]}
+        _pd_kickoff = _pd_bc.get("kickoff", "") or _format_kickoff_display(tip.get("commence_time", ""))
+        _pd_broadcast = _pd_bc.get("broadcast", "")
+        _pd_league = tip.get("league", "")
+        _pd_tier_emoji = EDGE_EMOJIS.get(_edge_tier, "🥈")
+
+        _pd_odds_val = tip.get("odds", 0) or 0
+        _pd_ret_amount = _pd_odds_val * 300 if _pd_odds_val else 0
+        _pd_ret_str = f"R{_pd_ret_amount:,.0f}" if _pd_ret_amount else "R?"
+
+        _pd_text = f"{_pd_tier_emoji} <b>{_edge_tier.title()} Edge</b>\n\n"
+        _pd_text += f"{_sport_emoji} <b>{_pd_home} vs {_pd_away}</b>\n"
+        if _pd_kickoff:
+            _pd_text += f"📅 {_pd_kickoff}\n"
+        _pd_text += f"🏆 {_pd_league}\n"
+        if _pd_broadcast:
+            _pd_text += f"{_pd_broadcast}\n"
+        _pd_text += f"\n💰 <b>{_pd_ret_str}</b> return on R300\n\n"
+        _pd_text += "Upgrade to see full odds, bookmaker, EV%, and AI analysis.\n\n"
+        _pd_text += "🥇 <b>Gold — R99/mo</b>\nFull access to Bronze, Silver, and Gold edges.\n\n"
+        _pd_text += "💎 <b>Diamond — R199/mo</b>\nEvery edge, including sharp money data.\n\n"
+        _pd_text += "💰 <b>R799/yr Diamond</b> (save 33%)"
+        _pd_fd = _founding_days_left()
+        if _pd_fd > 0:
+            _pd_text += f"\n🎁 Founding Member: R699/yr — {_pd_fd} days left"
+
+        _pd_buttons = [
+            *_build_hot_tips_detail_rows(
+                user_id,
+                match_key=match_key,
+                primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
+            ),
+        ]
+        await query.edit_message_text(
+            _pd_text, parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(_pd_buttons),
+        )
+        return
+
     analytics_track(user_id, "tip_viewed", {
         "sport": tip.get("sport_key", ""),
         "match": f"{tip.get('home_team', '?')} vs {tip.get('away_team', '?')}",
@@ -21478,7 +21553,39 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
 
 async def _handle_odds_comparison(query, event_id: str) -> None:
     """Show all bookmaker odds for a match (odds:compare:{event_id})."""
+    # TIER-GATE-IMPL-01: Gate odds comparison — no odds for blurred/locked/partial
+    _oc_user_id = query.from_user.id
+    _oc_user_tier = await get_effective_tier(_oc_user_id)
     tips = _game_tips_cache.get(event_id, [])
+    if tips:
+        _oc_edge_tier = str(tips[0].get("display_tier", tips[0].get("edge_rating", "bronze"))).lower().strip()
+        from tier_gate import get_edge_access_level as _oc_access_fn
+        _oc_access = _oc_access_fn(_oc_user_tier, _oc_edge_tier)
+        if _oc_access != "full":
+            _oc_gate_text = "🔒 <b>Odds comparison requires a higher tier.</b>\n\n/subscribe — View plans"
+            if query.message.photo:
+                _oc_gate_cid = query.message.chat_id
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await query.get_bot().send_message(
+                    chat_id=_oc_gate_cid, text=_oc_gate_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
+                        [InlineKeyboardButton("↩️ Back", callback_data=f"yg:game:{event_id}")],
+                    ]),
+                )
+            else:
+                await query.edit_message_text(
+                    _oc_gate_text, parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
+                        [InlineKeyboardButton("↩️ Back", callback_data=f"yg:game:{event_id}")],
+                    ]),
+                )
+            return
     if not tips:
         _oc_fallback_text = "⚠️ Tip data expired. Try Top Edge Picks again."
         _oc_fallback_mk = InlineKeyboardMarkup([

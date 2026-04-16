@@ -703,8 +703,8 @@ class TestResultAlertAccessGating:
         """Silver viewing Gold or Gold viewing Diamond: partial."""
         from tier_gate import get_edge_access_level
         access = get_edge_access_level("gold", "diamond")
-        # Gold seeing Diamond should be partial or blurred depending on implementation
-        assert access in ("partial", "blurred", "locked")
+        # Gold seeing Diamond is locked (TIER-GATE-IMPL-01)
+        assert access == "locked"
 
 
 class TestMondayRecapNoSpoilers:

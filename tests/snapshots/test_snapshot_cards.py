@@ -173,9 +173,9 @@ class TestHotTipsPageSnapshots:
             resource_count=100000,
         )
 
-    def test_gold_blurred_diamond_card(self, update_snapshots):
+    def test_gold_locked_diamond_card(self, update_snapshots):
         _snapshot_page(
-            "card_gold_blurred_diamond",
+            "card_gold_locked_diamond",
             update_snapshots,
             tips=[make_tip(display_tier="diamond", edge_score=62.0)],
             page=0,

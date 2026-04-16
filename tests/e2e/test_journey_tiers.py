@@ -53,7 +53,7 @@ def _callbacks(markup) -> list[str]:
         ("diamond", "gold", "full"),
         ("diamond", "silver", "full"),
         ("diamond", "bronze", "full"),
-        ("gold", "diamond", "blurred"),
+        ("gold", "diamond", "locked"),
         ("gold", "gold", "full"),
         ("gold", "silver", "full"),
         ("gold", "bronze", "full"),
@@ -97,6 +97,7 @@ def test_bronze_list_shows_locked_diamond_copy() -> None:
 
 
 def test_bronze_list_shows_return_not_odds_for_gold() -> None:
+    """Bronze→Gold = BLURRED — return visible, no odds."""
     text, _, _ = asyncio.run(bot._build_hot_tips_page(
         [_tip("gold", edge_score=45, odds=2.15)], user_tier="bronze"
     ))
@@ -104,14 +105,25 @@ def test_bronze_list_shows_return_not_odds_for_gold() -> None:
     assert "@ 2.15" not in text
 
 
-def test_gold_list_blurs_diamond_but_keeps_card_visible() -> None:
+def test_bronze_list_partial_for_silver() -> None:
+    """Bronze→Silver = PARTIAL — return visible, no odds/EV/bookmaker (TIER-GATE-IMPL-01)."""
+    text, _, _ = asyncio.run(bot._build_hot_tips_page(
+        [_tip("silver", edge_score=56, odds=3.20)], user_tier="bronze"
+    ))
+    assert "return on R300" in text
+    assert "@ 3.20" not in text
+    assert "upgrade for full details" in text
+
+
+def test_gold_list_locks_diamond_card() -> None:
+    """Gold→Diamond is LOCKED (TIER-GATE-IMPL-01) — no odds, no return."""
     text, markup, _ = asyncio.run(bot._build_hot_tips_page(
         [_tip("diamond", edge_score=62, odds=1.85)], user_tier="gold"
     ))
     assert "Diamond Home vs Diamond Away" in text
-    assert "return on R300" in text
+    assert "Our highest-conviction pick." in text
     assert "@ 1.85" not in text
-    assert any(cb.startswith("hot:upgrade:") for cb in _callbacks(markup))
+    assert "return on R300" not in text
 
 
 def test_diamond_list_has_no_upgrade_cta() -> None:
@@ -134,7 +146,8 @@ def test_bronze_detail_cta_turns_into_view_plans_for_gold_edge() -> None:
     assert rows[0][0].callback_data == "sub:plans"
 
 
-def test_bronze_detail_cta_keeps_real_bookmaker_for_silver_edge() -> None:
+def test_bronze_detail_cta_view_plans_for_silver_edge() -> None:
+    """Bronze→Silver is PARTIAL (TIER-GATE-IMPL-01) — no bookmaker link."""
     rows = bot._build_game_buttons(
         [_tip("silver", edge_score=39, odds=3.2, outcome="Silver Home")],
         event_id="silver_edge",
@@ -144,8 +157,8 @@ def test_bronze_detail_cta_keeps_real_bookmaker_for_silver_edge() -> None:
         edge_tier="silver",
         selected_outcome="Silver Home",
     )
-    assert rows[0][0].text.startswith("🥈 Back Silver Home on HWB")
-    assert rows[0][0].url
+    assert rows[0][0].text == "📋 View Plans"
+    assert rows[0][0].callback_data == "sub:plans"
 
 
 def test_gold_detail_cta_turns_into_view_plans_for_diamond_edge() -> None:

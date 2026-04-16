@@ -30,7 +30,7 @@ GATE_MATRIX = [
     ("gold",    "bronze",  "full"),
     ("gold",    "silver",  "full"),
     ("gold",    "gold",    "full"),
-    ("gold",    "diamond", "blurred"),
+    ("gold",    "diamond", "locked"),
     ("diamond", "bronze",  "full"),
     ("diamond", "silver",  "full"),
     ("diamond", "gold",    "full"),
@@ -85,11 +85,11 @@ class TestGateBusinessRules:
             f"Bronze->Diamond should be 'locked', got {level!r}"
         )
 
-    def test_gold_sees_diamond_blurred(self):
-        """Gold viewing Diamond must be blurred (teaser + upgrade CTA)."""
+    def test_gold_sees_diamond_locked(self):
+        """Gold viewing Diamond must be locked (TIER-GATE-IMPL-01)."""
         level = get_edge_access_level("gold", "diamond")
-        assert level == "blurred", (
-            f"Gold->Diamond should be 'blurred', got {level!r}"
+        assert level == "locked", (
+            f"Gold->Diamond should be 'locked', got {level!r}"
         )
 
     def test_blurred_never_leaks_full_odds(self):
@@ -98,23 +98,20 @@ class TestGateBusinessRules:
             for edge_tier in ["bronze", "silver", "gold", "diamond"]:
                 level = get_edge_access_level(user_tier, edge_tier)
                 if level == "blurred":
-                    # Valid blurred combos: bronze->gold, gold->diamond
-                    valid = (
-                        (user_tier == "bronze" and edge_tier == "gold")
-                        or (user_tier == "gold" and edge_tier == "diamond")
-                    )
+                    # Valid blurred combos: bronze->gold only (TIER-GATE-IMPL-01)
+                    valid = (user_tier == "bronze" and edge_tier == "gold")
                     assert valid, (
                         f"Unexpected blurred: {user_tier}->{edge_tier}"
                     )
 
     def test_locked_shows_existence_only(self):
-        """Locked combos: bronze->diamond only. Gold->diamond is blurred."""
+        """Locked combos: bronze->diamond AND gold->diamond (TIER-GATE-IMPL-01)."""
         locked_combos = set()
         for user_tier in ["bronze", "gold", "diamond"]:
             for edge_tier in ["bronze", "silver", "gold", "diamond"]:
                 if get_edge_access_level(user_tier, edge_tier) == "locked":
                     locked_combos.add((user_tier, edge_tier))
-        expected = {("bronze", "diamond")}
+        expected = {("bronze", "diamond"), ("gold", "diamond")}
         assert locked_combos == expected, (
             f"Locked combos should be {expected}, got {locked_combos}"
         )

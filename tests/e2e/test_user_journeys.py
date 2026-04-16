@@ -174,7 +174,7 @@ class TestBronzeJourney:
 
 
 class TestGoldJourney:
-    """Gold user: full access to Gold edges, Diamond blurred."""
+    """Gold user: full access to Gold edges, Diamond locked (TIER-GATE-IMPL-01)."""
 
     def test_gold_sees_gold_odds(self):
         """Gold user can see Gold edge odds (full access)."""
@@ -184,14 +184,14 @@ class TestGoldJourney:
         assert get_edge_access_level("gold", "silver") == "full"
         assert get_edge_access_level("gold", "bronze") == "full"
 
-    def test_gold_diamond_blurred(self):
-        """Gold user sees Diamond edges as blurred."""
+    def test_gold_diamond_locked(self):
+        """Gold user sees Diamond edges as locked (TIER-GATE-IMPL-01)."""
         from tier_gate import get_edge_access_level
 
-        assert get_edge_access_level("gold", "diamond") == "blurred"
+        assert get_edge_access_level("gold", "diamond") == "locked"
 
     def test_gold_tips_page(self):
-        """Gold tips page shows odds for Gold edges, blurs Diamond."""
+        """Gold tips page shows odds for Gold edges, locks Diamond (TIER-GATE-IMPL-01)."""
         tips = _multi_tier_tips()
         with _BROADCAST_PATCH, _PORTFOLIO_PATCH, _FOUNDING_PATCH:
             from bot import _build_hot_tips_page
@@ -203,9 +203,9 @@ class TestGoldJourney:
             ))
         # Gold edge (Bulls vs Stormers) should show odds
         assert "1.65" in text
-        # Diamond edge (Arsenal vs Chelsea) should be blurred — odds hidden, return shown
+        # Diamond edge (Arsenal vs Chelsea) should be locked — no odds, no return
         assert "1.85" not in text  # Diamond odds masked for Gold users
-        assert "return on R300" in text  # Blurred card shows return only
+        assert "Our highest-conviction pick." in text  # Locked card text
         # Diamond section header exists in the page
         assert "💎" in text
 

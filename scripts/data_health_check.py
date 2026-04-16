@@ -314,6 +314,49 @@ def update_api_quotas(conn) -> None:
         log.warning(f"Failed to write api_quotas.json: {e}")
 
 
+# ── Gate matrix health check ──────────────────────────────────────────────────
+
+# Canonical GATE_MATRIX (TIER-GATE-IMPL-01) — authoritative truth
+_GATE_MATRIX = [
+    ("bronze",  "bronze",  "full"),
+    ("bronze",  "silver",  "partial"),
+    ("bronze",  "gold",    "blurred"),
+    ("bronze",  "diamond", "locked"),
+    ("gold",    "bronze",  "full"),
+    ("gold",    "silver",  "full"),
+    ("gold",    "gold",    "full"),
+    ("gold",    "diamond", "locked"),
+    ("diamond", "bronze",  "full"),
+    ("diamond", "silver",  "full"),
+    ("diamond", "gold",    "full"),
+    ("diamond", "diamond", "full"),
+]
+
+
+def check_gate_matrix() -> dict:
+    """Verify all 12 gate matrix cells return expected access levels.
+
+    Returns dict with 'status' (🟢/🔴), 'failures' list, 'checked' count.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from tier_gate import get_edge_access_level
+    except ImportError as e:
+        return {"status": "🔴", "failures": [f"Import error: {e}"], "checked": 0}
+
+    failures = []
+    for user_tier, edge_tier, expected in _GATE_MATRIX:
+        actual = get_edge_access_level(user_tier, edge_tier)
+        if actual != expected:
+            failures.append(f"{user_tier}→{edge_tier}: expected={expected}, got={actual}")
+
+    return {
+        "status": "🟢" if not failures else "🔴",
+        "failures": failures,
+        "checked": len(_GATE_MATRIX),
+    }
+
+
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
 def send_alert(message: str) -> None:
@@ -340,7 +383,7 @@ def send_alert(message: str) -> None:
 
 # ── Report builder ────────────────────────────────────────────────────────────
 
-def build_report(coverage, scrapers, espn, api_foot, staleness) -> tuple[str, str, list[str]]:
+def build_report(coverage, scrapers, espn, api_foot, staleness, gate=None) -> tuple[str, str, list[str]]:
     """
     Returns (overall_status, telegram_message, log_lines).
     overall_status: '🟢', '🟡', or '🔴'
@@ -399,6 +442,17 @@ def build_report(coverage, scrapers, espn, api_foot, staleness) -> tuple[str, st
     elif staleness["status"] == "🟡":
         issues_amber.append(f"Narrative staleness: {staleness['detail']}")
 
+    # ── Gate matrix ───────────────────────────────────────────────────────────
+    gate_line = ""
+    if gate is not None:
+        log_lines.append(f"  gate_matrix {gate['status']}: {gate['checked']} cells checked, {len(gate['failures'])} failures")
+        if gate["status"] == "🔴":
+            fail_detail = "; ".join(gate["failures"][:3])
+            issues_red.append(f"GATE MATRIX BROKEN: {fail_detail}")
+            gate_line = f"\n🔒 Gate Matrix: {gate['status']} {len(gate['failures'])} FAILURES\n" + "\n".join(f"  {f}" for f in gate["failures"])
+        else:
+            gate_line = f"\n🔒 Gate Matrix: {gate['status']} {gate['checked']}/12 cells OK"
+
     # ── Overall ───────────────────────────────────────────────────────────────
     if issues_red:
         overall = "🔴"
@@ -424,6 +478,7 @@ def build_report(coverage, scrapers, espn, api_foot, staleness) -> tuple[str, st
         f"\n"
         f"ESPN: {espn['status']} {espn['detail']}\n"
         f"API-Football: {api_foot['status']} {api_foot['detail']}\n"
+        f"{gate_line}\n"
         f"\n"
         f"Action needed: {action_line}"
     )
@@ -449,9 +504,10 @@ def main() -> None:
         espn      = check_espn_freshness(conn)
         api_foot  = check_api_football(conn)
         staleness = check_narrative_staleness(conn)
+        gate      = check_gate_matrix()
 
         overall, telegram_msg, log_lines = build_report(
-            coverage, scrapers, espn, api_foot, staleness
+            coverage, scrapers, espn, api_foot, staleness, gate=gate
         )
 
         for line in log_lines:

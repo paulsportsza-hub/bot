@@ -86,7 +86,7 @@ def get_edge_access_level(user_tier: str, edge_tier: str) -> str:
         return "full"
     if tier == "gold":
         if edge == "diamond":
-            return "blurred"
+            return "locked"
         return "full"
     # Bronze
     if edge == "bronze":
