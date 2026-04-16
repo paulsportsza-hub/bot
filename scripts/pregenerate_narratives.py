@@ -2446,10 +2446,25 @@ if __name__ == "__main__":
         log.warning("pregenerate_narratives.py: another instance is already running — exiting.")
         sys.exit(0)
 
+    # EDGE-FIX-03: wire Sentry boundary — bot Sentry already initialised via
+    # `import bot` above. Set pregen-specific tag so events are filterable.
+    try:
+        import sentry_sdk as _pregen_sentry
+        _pregen_sentry.set_tag("boundary_site", "pregen_narratives")
+    except Exception:
+        _pregen_sentry = None
+
     _pregen_success = False
     try:
         asyncio.run(main(args.sweep, sport=args.sport, limit=args.limit, dry_run=args.dry_run))
         _pregen_success = True
+    except Exception as _pregen_exc:
+        if _pregen_sentry:
+            try:
+                _pregen_sentry.capture_exception(_pregen_exc)
+            except Exception:
+                pass
+        raise
     finally:
         if _pid_fh:
             try:

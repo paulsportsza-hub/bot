@@ -1475,6 +1475,7 @@ def _shared_css() -> str:
   @media(max-width:768px) {
     .sidebar { display: none; }
     .content-area { margin-left: 0 !important; }
+    #loading-bar { left: 0; }
   }
   @media(max-width:1000px) { .kpi-strip { grid-template-columns:repeat(3,1fr); } .grid-2 { grid-template-columns:1fr; } }
   @media(max-width:600px)  { .kpi-strip { grid-template-columns:repeat(2,1fr); } .topbar { padding:10px 14px; } }
@@ -1602,7 +1603,7 @@ def _sidebar_html(active_view: str) -> str:
         nav_items += f'<a class="sidebar-item{active_cls}" href="{href}" data-view="{key}"><span class="item-icon">{icon}</span><span class="item-label">{label}{badge_html}</span></a>\n'
 
     return f"""<aside class="sidebar" id="sidebar">
-  <div class="sidebar-brand"><img src="/static/wordmark.png" alt="MzansiEdge"></div>
+  <div class="sidebar-brand"><img src="/admin/static/wordmark.png" alt="MzansiEdge"></div>
   <nav class="sidebar-nav">{nav_items}</nav>
   <div class="sidebar-bottom">
     <a class="sidebar-item" href="#" title="Settings"><span class="item-icon">{_ICON_GEAR}</span><span class="item-label">Settings</span></a>
@@ -3234,6 +3235,19 @@ def render_automation_content() -> str:
 .btn-dismiss{background:rgba(239,68,68,.08);color:var(--red);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:5px 14px;font-family:var(--font-d);font-weight:700;font-size:11px;cursor:pointer;transition:background 150ms;white-space:nowrap;}
 .btn-dismiss:hover{background:rgba(239,68,68,.18);}
 .btn-dismiss:disabled{opacity:.5;cursor:not-allowed;}
+/* Social Ops responsive */
+@media(max-width:768px){
+  .channel-row{grid-template-columns:28px 1fr 70px;gap:8px;padding:8px 12px;}
+  .freshness-track{display:none;}
+  .manual-grid{grid-template-columns:1fr;}
+  .so-tab{padding:8px 12px;font-size:12px;}
+  .rk-card{flex:0 0 140px;}
+  .appr-actions{flex-wrap:wrap;}
+}
+@media(max-width:480px){
+  .channel-row{grid-template-columns:24px 1fr;gap:6px;}
+  .queue-badge{display:none;}
+}
 </style>"""
 
     # ── JS: tab switching + approve/archive + dismiss + tasks lazy load ────
