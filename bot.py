@@ -1869,6 +1869,39 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 # which is always empty — match_id lives inside _mm_match["_full_tip"] — so
                 # it falls to display-name normalisation that can miss the DB key.
                 _mm_card_key = _mm_tip_key or _normalise_mm_event_id(_mm_match, _mm_match)
+                # Haiku match summary — FIX-HAIKU-SUMMARY-WIRE-02
+                # Call the governed Haiku skill (haiku-match-summary) from this async
+                # context so we can await it. _enrich_tip_for_card (sync) does not call
+                # Haiku; analysis_text set here is passed through via dict(tip).
+                _mh_sport = {
+                    "⚽": "soccer", "🏉": "rugby", "🏏": "cricket", "🥊": "combat",
+                }.get(_mm_match.get("sport_emoji", ""), "soccer")
+                _mh_kickoff = " ".join(
+                    filter(None, [_mm_match.get("date", ""), _mm_match.get("time", "")])
+                ).strip()
+                _mh_odds_sum = ""
+                if _mm_match.get("odds_home"):
+                    _mh_odds_sum = (
+                        f"Home @ {_mm_match['odds_home']:.2f},"
+                        f" Away @ {_mm_match.get('odds_away', 0):.2f}"
+                    )
+                try:
+                    _mm_haiku = await _generate_haiku_match_summary(
+                        match_key=_mm_card_key,
+                        home=_mm_match.get("home", ""),
+                        away=_mm_match.get("away", ""),
+                        league=_mm_match.get("league", ""),
+                        sport=_mh_sport,
+                        kickoff=_mh_kickoff,
+                        odds_summary=_mh_odds_sum,
+                    )
+                    _mm_match["analysis_text"] = _mm_haiku or ""
+                except Exception as _mh_exc:
+                    log.warning(
+                        "FIX-HAIKU-SUMMARY-WIRE-02: _generate_haiku_match_summary"
+                        " failed for %s: %s", _mm_card_key, _mh_exc,
+                    )
+                    _mm_match["analysis_text"] = ""
                 _mm_match_enriched = await asyncio.to_thread(
                     _enrich_tip_for_card, _mm_match, _mm_card_key
                 )
@@ -20590,6 +20623,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             pass
 
         # Haiku match summary — augments cards WITH odds but WITHOUT edge
+        # LEGACY text render path: superseded by FIX-HAIKU-SUMMARY-WIRE-02 for image cards.
         if not _best_edge_v2:
             _main_haiku = ""
             try:

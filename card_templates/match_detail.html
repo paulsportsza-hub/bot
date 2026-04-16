@@ -281,6 +281,18 @@
             border-radius: 4px;
         }
 
+        /* ── 8. Analysis ─────────────────────────────────────── */
+        .analysis-section {
+            padding: 10px 20px;
+            border-top: 1px solid #2A2A2A;
+        }
+        .analysis-text {
+            font-size: 11px;
+            color: #CCCCCC;
+            line-height: 1.6;
+            margin-top: 6px;
+        }
+
         /* ── 7. H2H ──────────────────────────────────────────── */
         .h2h-section {
             padding: 10px 20px;
@@ -363,7 +375,6 @@
     <div class="meta-bar">
         {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
         {% if time %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
-        {% if channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
     </div>
 
     <!-- ── 4. Market Overview ────────────────────────────────── -->
@@ -432,6 +443,14 @@
             {% endfor %}
         </div>
         {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- ── 8. Haiku Analysis ─────────────────────────────────── -->
+    {% if analysis_text %}
+    <div class="analysis-section">
+        <div class="section-hdr" style="color: #9B59B6;">📝 MATCH PREVIEW</div>
+        <p class="analysis-text">{{ analysis_text }}</p>
     </div>
     {% endif %}
 
