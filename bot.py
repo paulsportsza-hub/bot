@@ -11432,6 +11432,12 @@ async def _blw_log_tip(tip: dict, user_id_str: str) -> None:
                     _blw_kickoff = _blw_fm[0]
             except Exception:
                 pass
+        # EDGE-FIX-01: last-resort — extract date from match_key suffix (YYYY-MM-DD)
+        if not _blw_kickoff and match_key:
+            import re as _blw_re
+            _blw_dm = _blw_re.search(r"(\d{4}-\d{2}-\d{2})$", match_key)
+            if _blw_dm:
+                _blw_kickoff = _blw_dm.group(1) + "T00:00:00+00:00"
 
         # BUG-CLV-02: Extract fair_odds from model probability (Shin devigged)
         _blw_fair_odds = None
