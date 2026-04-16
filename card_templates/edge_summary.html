@@ -5,6 +5,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; /* WCAG AA ≥8:1 on dark backgrounds — canonical secondary text */ }
         html, body {
             margin: 0;
             padding: 0;
@@ -50,7 +51,7 @@
         }
         .subtitle {
             font-size: 11px;
-            color: #777777;
+            color: var(--text-secondary);
             margin-top: 4px;
             padding-bottom: 20px;
         }
@@ -125,7 +126,7 @@
         }
         .pick-datetime {
             font-size: 11px;
-            color: #777777;
+            color: var(--text-secondary);
         }
         .pick-odds-row {
             display: flex;
@@ -145,7 +146,7 @@
         /* Fix 3: bookmaker name under odds */
         .pick-bookmaker {
             font-size: 9px;
-            color: #777777;
+            color: var(--text-secondary);
             margin-top: 2px;
         }
         .pick-ev {
@@ -162,7 +163,7 @@
             justify-content: space-between;
             align-items: center;
         }
-        .footer-url { font-size: 10px; color: #555555; }
+        .footer-url { font-size: 10px; color: var(--text-secondary); }
         .footer-logo-img {
             height: 16px;
             width: auto;

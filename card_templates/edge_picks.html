@@ -5,6 +5,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; /* WCAG AA ≥8:1 on dark backgrounds — canonical secondary text */ }
         html, body {
             margin: 0;
             padding: 0;
@@ -70,7 +71,7 @@
         }
         .tier-summary-total {
             font-size: 11px;
-            color: #777777;
+            color: var(--text-secondary);
             font-weight: 400;
             font-family: 'Inter', sans-serif;
             margin-left: 6px;
@@ -196,7 +197,7 @@
         }
         .pick-datetime {
             font-size: 10px;
-            color: #777777;
+            color: var(--text-secondary);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -215,7 +216,7 @@
         }
         .pick-bookie {
             font-size: 9px;
-            color: #777777;
+            color: var(--text-secondary);
             margin-left: 4px;
             white-space: nowrap;
         }
@@ -226,7 +227,7 @@
         }
         .pick-prize {
             font-size: 11px;
-            color: #888888;
+            color: var(--text-secondary);
         }
         .prize-return {
             color: #FFD700;
@@ -237,7 +238,7 @@
         .page-indicator {
             text-align: center;
             font-size: 10px;
-            color: #555555;
+            color: var(--text-secondary);
             margin-top: 8px;
             padding-bottom: 4px;
         }
@@ -285,7 +286,7 @@
                 <span class="pick-number">[{{ pick.number }}]</span>
                 <span class="pick-matchup" style="color: #B9F2FF;">💎 Diamond Edge</span>
                 <div class="pick-odds-group">
-                    <span class="pick-odds" style="color: #555555;">🔒</span>
+                    <span class="pick-odds" style="color: var(--text-secondary);">🔒</span>
                 </div>
             </div>
             <div class="pick-line2">

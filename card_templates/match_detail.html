@@ -5,6 +5,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; /* WCAG AA ≥8:1 on dark backgrounds — canonical secondary text */ }
         html, body {
             margin: 0;
             padding: 0;
@@ -80,7 +81,7 @@
             font-size: 9px;
             font-weight: 600;
             letter-spacing: 1px;
-            color: #777777;
+            color: var(--text-secondary);
         }
 
         /* ── 2. Matchup ──────────────────────────────────────── */
@@ -91,7 +92,7 @@
         .league-line {
             font-size: 10px;
             font-weight: 600;
-            color: #777777;
+            color: var(--text-secondary);
             margin-bottom: 12px;
         }
         .teams-row {
@@ -119,7 +120,7 @@
         .vs-badge {
             font-size: 12px;
             font-weight: 700;
-            color: #555555;
+            color: var(--text-secondary);
             background: #1A1A1A;
             padding: 6px 12px;
             border-radius: 6px;
@@ -160,7 +161,7 @@
         }
         .meta-item {
             font-size: 9px;
-            color: #777777;
+            color: var(--text-secondary);
             white-space: nowrap;
         }
 
@@ -191,7 +192,7 @@
         }
         .odds-outcome-label {
             font-size: 9px;
-            color: #777777;
+            color: var(--text-secondary);
             margin-bottom: 4px;
             text-align: center;
         }
@@ -204,7 +205,7 @@
         }
         .odds-bookie {
             font-size: 8px;
-            color: #555555;
+            color: var(--text-secondary);
         }
         .no-edge-box {
             display: flex;
@@ -243,7 +244,7 @@
         }
         .stat-label {
             font-size: 9px;
-            color: #777777;
+            color: var(--text-secondary);
             margin-bottom: 3px;
         }
         .stat-value {
@@ -255,7 +256,7 @@
         }
         .stat-context {
             font-size: 9px;
-            color: #555555;
+            color: var(--text-secondary);
         }
 
         /* ── 6. Injury Watch ─────────────────────────────────── */
@@ -270,10 +271,10 @@
             gap: 4px;
             margin-top: 5px;
         }
-        .injury-team-name { font-size: 9px; color: #777777; flex-shrink: 0; }
+        .injury-team-name { font-size: 9px; color: var(--text-secondary); flex-shrink: 0; }
         .injury-chip {
             font-size: 9px;
-            color: #AAAAAA;
+            color: var(--text-secondary);
             background: #1A1A1A;
             border: 1px solid #2A2A2A;
             padding: 2px 6px;
@@ -301,7 +302,7 @@
             align-items: center;
         }
         .h2h-lbl-home { font-size: 9px; color: #00E676; }
-        .h2h-lbl-draw { font-size: 9px; color: #777777; }
+        .h2h-lbl-draw { font-size: 9px; color: var(--text-secondary); }
         .h2h-lbl-away { font-size: 9px; color: #FF5252; }
     </style>
 </head>
@@ -437,7 +438,7 @@
     <!-- ── 7. H2H ────────────────────────────────────────────── -->
     {% if h2h_total %}
     <div class="h2h-section">
-        <div class="section-hdr" style="color: #777777;">↔ H2H &middot; {{ h2h_total }} matches</div>
+        <div class="section-hdr" style="color: var(--text-secondary);">↔ H2H &middot; {{ h2h_total }} matches</div>
         <div class="h2h-bar">
             {% if h2h_home_wins %}<div class="h2h-seg-home" style="flex: {{ h2h_home_wins }};"></div>{% endif %}
             {% if h2h_draws %}<div class="h2h-seg-draw" style="flex: {{ h2h_draws }};"></div>{% endif %}

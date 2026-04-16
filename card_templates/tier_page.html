@@ -5,6 +5,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; /* WCAG AA ≥8:1 on dark backgrounds — canonical secondary text */ }
         body {
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
             background: transparent;
@@ -49,7 +50,7 @@
         }
         .tier-pick-count {
             font-size: 10px;
-            color: #777777;
+            color: var(--text-secondary);
             font-weight: 400;
         }
         .tier-logo-img {
@@ -134,7 +135,7 @@
         }
         .pick-datetime {
             font-size: 10px;
-            color: #777777;
+            color: var(--text-secondary);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -154,7 +155,7 @@
         }
         .pick-bookie {
             font-size: 9px;
-            color: #777777;
+            color: var(--text-secondary);
             margin-left: 4px;
             white-space: nowrap;
         }
@@ -169,7 +170,7 @@
             align-items: center;
             margin-top: 4px;
         }
-        .footer-url { font-size: 10px; color: #555555; }
+        .footer-url { font-size: 10px; color: var(--text-secondary); }
         .footer-logo-img {
             height: 16px;
             width: auto;
