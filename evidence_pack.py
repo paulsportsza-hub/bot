@@ -2111,11 +2111,15 @@ def _format_injuries_section(pack: EvidencePack, spec) -> tuple[str | None, str 
         if not items:
             return "none listed"
         formatted = []
-        for item in items[:6]:
+        for item in items[:3]:
             player = item.get("player_name") or item.get("name") or "Unknown player"
             status = item.get("injury_status") or item.get("status") or item.get("reason") or "status unknown"
             formatted.append(f"{player} ({status})")
-        return ", ".join(formatted)
+        extra = len(items) - 3
+        result = ", ".join(formatted)
+        if extra > 0:
+            result += f" + {extra} more"
+        return result
 
     lines = [
         f"{home_name}: {_fmt(block.home_injuries)}",
