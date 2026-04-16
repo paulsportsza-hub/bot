@@ -5580,12 +5580,16 @@ def _build_mm_matches_for_card(
                 date_str = "Tomorrow"
             else:
                 date_str = ct.strftime("%a %-d %b")
+            # DEF-7 fix: derive time directly from parsed commence_time.
+            # Previously read _mm_kickoff (only set after _render_your_games_all runs),
+            # leaving time_str empty on first card render. Use ct directly — always available.
+            _ct_hhmm = ct.strftime("%H:%M")
+            time_str = "" if _ct_hhmm == "02:00" else _ct_hhmm  # drop midnight-UTC sentinel
         else:
             date_str = ""
-        # Time from _mm_kickoff e.g. "16:00 SAST" → "16:00"
-        kickoff = event.get("_mm_kickoff", "")
-        time_str = kickoff.replace(" SAST", "").strip() if kickoff else ""
-        channel_str = event.get("_mm_broadcast", "")
+            # Fallback: _mm_kickoff is set by _render_your_games_all when commence_time absent
+            kickoff = event.get("_mm_kickoff", "")
+            time_str = kickoff.replace(" SAST", "").strip() if kickoff else ""
         league = _get_league_display(
             event.get("league_key", ""),
             event.get("home_team"),
@@ -5597,7 +5601,6 @@ def _build_mm_matches_for_card(
             "league": league,
             "date": date_str,
             "time": time_str,
-            "channel": channel_str,
             "sport_emoji": event.get("sport_emoji", "🏅"),
             "has_edge": bool(ei),
             "_event_id": event_id,  # for mm:match:{N} callback routing
@@ -8311,34 +8314,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     elif not enriched.get("away_odds") and enriched.get("odds_away"):
         enriched["away_odds"] = enriched["odds_away"]
 
-    # 8b) Channel — broadcast lookup when tip["channel"] is empty
-    # CARD-FIX-K: Tips from the global hot_tips_cache (not through _build_hot_tips_page)
-    # never have channel or _bc_broadcast set.  Canonical pattern (see _build_hot_tips_page):
-    #   _bc_broadcast = full string  e.g. "📺 SS EPL (DStv 203)"
-    #   channel       = number only  e.g. "DStv 203"
-    # _channel_fields() in card_data.py reads _bc_broadcast first; build_my_matches_data
-    # and friends read channel directly and pass it as-is to the template.
-    # BUILD-MY-MATCHES-04: previous code stored the full broadcast string in channel
-    # instead of _bc_broadcast, causing "📺 SS EPL (DStv 203)" to appear where the
-    # template expected "DStv 203".
-    if not enriched.get("channel") and not enriched.get("_bc_broadcast"):
-        try:
-            _home_bd = _team_display(home_key) if home_key else tip.get("home_team", "")
-            _away_bd = _team_display(away_key) if away_key else tip.get("away_team", "")
-            _bc_d = _get_broadcast_details(
-                home_team=_home_bd,
-                away_team=_away_bd,
-                league_key=tip.get("sport_key", ""),
-            )
-            if _bc_d.get("broadcast"):
-                _8b_raw = _bc_d["broadcast"]
-                # Canonical field for _channel_fields() — full string with emoji
-                enriched["_bc_broadcast"] = _8b_raw
-                # channel = "DStv NNN" only; other card builders pass this directly to template
-                _8b_ch = re.search(r"\(?(DStv \d+)\)?", _8b_raw)
-                enriched["channel"] = _8b_ch.group(1) if _8b_ch else _8b_raw.replace("📺 ", "")
-        except Exception as _ch_err:
-            log.debug("_enrich_tip_for_card: broadcast lookup failed: %s", _ch_err)
+    # 8b) Channel — removed (FIX-DSTV-CHANNEL-PERM-01). Channel display is permanently off.
 
     # 8d) KO time — BUILD-KO-TIME-FIX-01: sport-aware resolver with fixture-table fallbacks.
     # Never falls back to 'TBC' — returns empty string when no time data exists
@@ -8570,15 +8546,7 @@ def _derive_pref_targets(prefs: list) -> tuple[set[str], set[str]]:
 
 
 def _format_fixture_broadcast(channel_short: str = "", dstv_number: str = "") -> str:
-    """Build a compact broadcast label for fixture preview surfaces."""
-    channel_short = (channel_short or "").strip()
-    dstv_number = (dstv_number or "").strip()
-    if channel_short and dstv_number:
-        return f"📺 {channel_short} (DStv {dstv_number})"
-    if dstv_number:
-        return f"📺 DStv {dstv_number}"
-    if channel_short:
-        return f"📺 {channel_short}"
+    """Channel display permanently removed (FIX-DSTV-CHANNEL-PERM-01)."""
     return ""
 
 
@@ -8690,8 +8658,6 @@ def _format_fixture_preview_lines(fixtures: list[dict], heading: str) -> list[st
             meta.append(h(fixture["league"]))
         if meta:
             lines.append("  " + " · ".join(meta))
-        if fixture.get("broadcast"):
-            lines.append(f"  {h(fixture['broadcast'])}")
     return lines
 
 
@@ -8701,23 +8667,11 @@ def _get_broadcast_line(
     league_key: str = "",
     match_date: str = "",
 ) -> str:
-    """Return broadcast display string from DStv schedule data.
+    """Channel display permanently removed (FIX-DSTV-CHANNEL-PERM-01).
 
-    Calls the synchronous get_broadcast_info() from the scrapers module.
-    Returns simplified display like '📺 DStv 203' or empty string.
+    Returns empty string. Kickoff times are obtained via _get_broadcast_details().
     """
-    try:
-        from scrapers.broadcast_scraper import get_broadcast_info
-        info = get_broadcast_info(
-            home_team=home_team,
-            away_team=away_team,
-            league=league_key,
-            match_date=match_date,
-        )
-        raw = info.get("display", "") or ""
-        return _simplify_broadcast(raw)
-    except Exception:
-        return ""
+    return ""
 
 
 def _get_broadcast_details(
@@ -8764,28 +8718,11 @@ def _get_broadcast_details(
             if start_time_str:
                 result["kickoff"] = _format_kickoff_display(start_time_str)
 
-            # Build broadcast display — raw channel string only (no emoji prefix)
-            ch_num = best.get("dstv_number", "")
-            ch_short = (best.get("channel_short") or "").strip()
-            result["broadcast"] = f"{ch_short} (DStv {ch_num})" if ch_short else f"DStv {ch_num}"
-
-            # Check for free-to-air option
-            for row in matches:
-                row_d = dict(row)
-                if row_d.get("is_free_to_air"):
-                    free_num = row_d.get("dstv_number", "")
-                    result["broadcast"] += f" | FREE DStv {free_num}"
-                    break
-        else:
-            # Fallback: league-level match via existing helper — strip emoji prefix
-            _raw = _get_broadcast_line(
-                home_team=home_team, away_team=away_team,
-                league_key=league_key, match_date=today,
-            )
-            result["broadcast"] = re.sub(r"^📺\s*", "", _raw) if _raw else ""
+            # Channel display permanently removed (FIX-DSTV-CHANNEL-PERM-01).
+            # Only kickoff is returned; broadcast is always "".
+            pass
     except Exception:
         pass
-    # Returns raw channel string only. Template adds emoji prefix.
     return result
 
 
@@ -9240,7 +9177,7 @@ def _build_event_header(
     return {
         "kickoff": kickoff,
         "league_display": _get_league_display(target_league or "", home_raw, away_raw),
-        "broadcast_line": broadcast_line,
+        "broadcast_line": "",  # FIX-DSTV-CHANNEL-PERM-01: channel display permanently off
     }
 
 
@@ -9265,8 +9202,7 @@ def _inject_narrative_header(
         header_lines.append(f"📅 {kickoff}")
     if league_display:
         header_lines.append(f"\U0001f3c6 {league_display}")
-    if broadcast_line:
-        header_lines.append(broadcast_line)
+    # FIX-DSTV-CHANNEL-PERM-01: broadcast_line (channel info) permanently omitted
     header_lines.append("")
     header_text = "\n".join(header_lines)
 
@@ -11179,30 +11115,18 @@ async def _build_hot_tips_page(
         # W84-Q5/Q11: Store computed broadcast + league metadata in tip for detail-view header
         # inheritance. edge:detail instant baseline path reads these back to complete the header.
         tip["_bc_kickoff"] = kickoff
-        tip["_bc_broadcast"] = broadcast_raw
+        tip["_bc_broadcast"] = ""  # FIX-DSTV-CHANNEL-PERM-01: channel display permanently off
         tip["_bc_league"] = league_display
         # BUILD-CARDWIRE: lightweight summary card enrichment — no DB call
         if not tip.get("pick"):
             tip["pick"] = tip.get("outcome") or tip.get("home_team") or ""
-        if not tip.get("channel") and broadcast_raw:
-            # FIX 6 (CARD-REBUILD-02): Extract DStv channel from broadcast string
-            # e.g. "📺 SS EPL (DStv 203)" → "DStv 203"
-            import re as _re_ch
-            _ch_m = _re_ch.search(r"\(?(DStv \d+)\)?", broadcast_raw)
-            tip["channel"] = _ch_m.group(1) if _ch_m else broadcast_raw.replace("📺 ", "")
         tip["all_odds_count"] = len(tip.get("odds_by_bookmaker") or {})
 
-        # Line 2: league · 📅 kickoff · DStv channel
+        # Line 2: league · 📅 kickoff
         # BUILD-PREGEN-FIX Fix 5: 📅 prefix on kickoff for visibility
         info_parts = [league_display]
         if kickoff and kickoff != "TBC":
             info_parts.append(f"📅 {kickoff}")
-        # Extract DStv channel from broadcast line (e.g. "📺 SS PSL (DStv 202)" → "DStv 202")
-        if broadcast_raw:
-            import re as _re
-            _dstv_m = _re.search(r"(DStv \d+)", broadcast_raw)
-            if _dstv_m:
-                info_parts.append(_dstv_m.group(1))
         info_line = " · ".join(info_parts)
 
         match_key = tip.get("match_id") or tip.get("event_id", "")
@@ -19126,6 +19050,47 @@ def _refresh_yg_verdict_sync(html: str, match_key: str) -> str:
 
 # ── BUILD-MYMATCHES-CARD-OVERHAUL-01: Non-Edge card helpers ──────────────
 
+# ── BUILD-HAIKU-SUMMARY-IMPL-01: Banned patterns + validation ──
+_HAIKU_BANNED_PATTERNS = [
+    "guaranteed", "sure bet", "certain to",
+    "historically", "traditionally", "known for", "dating back",
+    "long history", "track record of",
+    "bet on", "place a bet", "punt on", "stake on",
+    "back them", "back the", "lay against",
+    "value bet", "edge rating", "expected value",
+    "our model", "our ai", "our edge", "mzansiedge",
+]
+
+_HAIKU_SPORT_BANNED = {
+    "rugby": ["clean sheet", "penalty kick", "offside trap", "corner kick"],
+    "cricket": ["clean sheet", "penalty kick", "try line", "lineout", "scrum"],
+    "soccer": ["try line", "lineout", "scrum", "ruck", "maul", "conversion"],
+    "combat": ["clean sheet", "try line", "lineout", "offside", "penalty kick"],
+}
+
+
+def _has_haiku_banned_pattern(text: str, sport: str) -> bool:
+    """Return True if Haiku summary contains banned patterns."""
+    lower = text.lower()
+    if any(p in lower for p in _HAIKU_BANNED_PATTERNS):
+        return True
+    sport_banned = _HAIKU_SPORT_BANNED.get(sport.lower(), [])
+    return any(p in lower for p in sport_banned)
+
+
+def _build_injuries_summary(
+    inj_data: dict | None, home: str, away: str, max_per_team: int = 3
+) -> str:
+    """Build capped injury summary string for Haiku context."""
+    if not inj_data:
+        return ""
+    parts = []
+    for side, team in [("home", home), ("away", away)]:
+        entries = inj_data.get(side, [])[:max_per_team]
+        if entries:
+            parts.append(f"{team}: {', '.join(entries)}")
+    return "; ".join(parts)
+
 
 async def _generate_haiku_match_summary(
     match_key: str,
@@ -19195,23 +19160,39 @@ async def _generate_haiku_match_summary(
         ctx_parts.append(f"- Odds overview: {odds_summary}")
     context_block = "\n".join(ctx_parts) if ctx_parts else "Limited pre-match data available."
 
-    prompt = (
-        f"You are a South African sports analyst. Write a 2-3 sentence match "
-        f"preview for {home} vs {away} ({league}, {sport}). Include the key "
-        f"storyline and what to watch. Max 280 characters. No betting language "
-        f"— frame as match intelligence.\n\n"
-        f"Context:\n{context_block}"
+    # ── System + User prompt (BUILD-HAIKU-SUMMARY-IMPL-01) ──
+    system_prompt = (
+        "You are a South African sports analyst writing concise match previews "
+        "for MzansiEdge.\n\n"
+        "RULES:\n"
+        "1. Write exactly 2-3 sentences. Max 280 characters total.\n"
+        "2. Use ONLY the data provided in CONTEXT. Do NOT invent statistics, "
+        "form records, injuries, or historical claims.\n"
+        "3. No betting language: never say 'bet', 'stake', 'punt', 'value', "
+        "'odds', 'edge', 'back', 'lay', 'guaranteed', 'sure bet', or 'winner'.\n"
+        "4. Frame as match intelligence — the key storyline and what to watch.\n"
+        "5. South African conversational tone. Brief, punchy.\n"
+        "6. If context is thin, keep it general — never fabricate details."
     )
 
-    # ── Haiku API call ──
+    user_prompt = (
+        f"Match: {home} vs {away}\n"
+        f"Competition: {league} ({sport})\n"
+        f"Kickoff: {kickoff}\n\n"
+        f"CONTEXT:\n{context_block}\n\n"
+        f"Write the preview now."
+    )
+
+    # ── Haiku API call (temp 0.3, system+user — BUILD-HAIKU-SUMMARY-IMPL-01) ──
     try:
         resp = await asyncio.wait_for(
             asyncio.to_thread(
                 lambda: anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY).messages.create(
                     model="claude-haiku-4-5-20251001",
                     max_tokens=100,
-                    temperature=0.5,
-                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
                 ),
             ),
             timeout=10.0,
@@ -19220,6 +19201,10 @@ async def _generate_haiku_match_summary(
         # Enforce 280-char cap
         if len(summary) > 280:
             summary = summary[:277].rsplit(" ", 1)[0] + "..."
+        # Post-generation validation (BUILD-HAIKU-SUMMARY-IMPL-01)
+        if _has_haiku_banned_pattern(summary, sport):
+            log.warning("Haiku summary rejected (banned pattern) for %s", match_key)
+            return ""
     except Exception as exc:
         log.debug("Haiku match summary failed for %s: %s", match_key, exc)
         return ""
@@ -20460,6 +20445,17 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
     if not narrative and not tips:
         # No data at all — BUILD-MYMATCHES-CARD-OVERHAUL-01: Haiku + H2H + Injuries
+        # Fetch injuries early for both Haiku context and display (BUILD-HAIKU-SUMMARY-IMPL-01)
+        _fb_inj_data: dict | None = None
+        try:
+            _fb_inj_data = await asyncio.wait_for(
+                asyncio.to_thread(get_verified_injuries, home_raw, away_raw,
+                                  sport=_sport_for_prompt, league=_game_db_league or target_league),
+                timeout=3.0,
+            )
+        except Exception:
+            pass
+
         _haiku_summary = ""
         try:
             _hk_form_home = ""
@@ -20481,6 +20477,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 kickoff=kickoff,
                 form_home=_hk_form_home, form_away=_hk_form_away,
                 h2h_summary=_hk_h2h_sum,
+                injuries_summary=_build_injuries_summary(_fb_inj_data, home_raw, away_raw),
             )
         except Exception as _hk_err:
             log.debug("Haiku summary failed in fallback: %s", _hk_err)
@@ -20494,15 +20491,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         if _fb_h2h:
             lines.append(_fb_h2h)
 
-        _fb_inj_data: dict | None = None
-        try:
-            _fb_inj_data = await asyncio.wait_for(
-                asyncio.to_thread(get_verified_injuries, home_raw, away_raw,
-                                  sport=_sport_for_prompt, league=_game_db_league or target_league),
-                timeout=3.0,
-            )
-        except Exception:
-            pass
+        # Reuse already-fetched _fb_inj_data for display
         _fb_inj = _render_injuries_capped(_match_ctx, home_raw, away_raw, _fb_inj_data)
         if _fb_inj:
             lines.append(_fb_inj)
@@ -20589,6 +20578,17 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         if _key_stats_html:
             lines.append(_key_stats_html)
 
+        # Fetch injuries early for both Haiku context and display (BUILD-HAIKU-SUMMARY-IMPL-01)
+        _main_inj_data: dict | None = None
+        try:
+            _main_inj_data = await asyncio.wait_for(
+                asyncio.to_thread(get_verified_injuries, home_raw, away_raw,
+                                  sport=_sport_for_prompt, league=_game_db_league or target_league),
+                timeout=3.0,
+            )
+        except Exception:
+            pass
+
         # Haiku match summary — augments cards WITH odds but WITHOUT edge
         if not _best_edge_v2:
             _main_haiku = ""
@@ -20597,7 +20597,6 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                 _mh_form_away = ""
                 _mh_h2h_sum = ""
                 _mh_odds_sum = ""
-                _mh_inj_sum = ""
                 if _match_ctx and _match_ctx.get("data_available"):
                     _mh_ht = _match_ctx.get("home_team", {})
                     _mh_at = _match_ctx.get("away_team", {})
@@ -20617,6 +20616,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                     kickoff=kickoff,
                     form_home=_mh_form_home, form_away=_mh_form_away,
                     h2h_summary=_mh_h2h_sum, odds_summary=_mh_odds_sum,
+                    injuries_summary=_build_injuries_summary(_main_inj_data, home_raw, away_raw),
                 )
             except Exception as _mh_err:
                 log.debug("Haiku summary failed in main card: %s", _mh_err)
@@ -20631,16 +20631,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         if _main_h2h:
             lines.append(_main_h2h)
 
-        # Injury Watch (capped at 3 per team)
-        _main_inj_data: dict | None = None
-        try:
-            _main_inj_data = await asyncio.wait_for(
-                asyncio.to_thread(get_verified_injuries, home_raw, away_raw,
-                                  sport=_sport_for_prompt, league=_game_db_league or target_league),
-                timeout=3.0,
-            )
-        except Exception:
-            pass
+        # Reuse already-fetched _main_inj_data for display
         _main_inj = _render_injuries_capped(_match_ctx, home_raw, away_raw, _main_inj_data)
         if _main_inj:
             lines.append(_main_inj)

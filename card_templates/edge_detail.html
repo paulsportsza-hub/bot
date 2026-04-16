@@ -463,16 +463,8 @@
     <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
     <div class="meta-bar">
         <span class="meta-item">📅 {{ date }}{% if time and time != 'TBC' %} · {{ time }} SAST{% endif %}</span>
-        {% if channel_number %}
-          {% if channel_is_ss and ss_logo_b64 %}
-          <span class="meta-item"><img src="{{ ss_logo_b64 }}" style="height:18px;vertical-align:middle;margin-right:3px;">{{ channel_number }}</span>
-          {% elif channel_is_ss %}
-          <span class="meta-item">SS {{ channel_number }}</span>
-          {% else %}
-          <span class="meta-item">📺 {{ channel_number }}</span>
-          {% endif %}
-        {% elif channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
         {% if venue %}<span class="meta-item">🏙️ {{ venue }}</span>{% endif %}
+        {#- FIX-DSTV-CHANNEL-PERM-01: channel/broadcast meta item permanently removed -#}
     </div>
 
     {% if tier %}
@@ -517,7 +509,7 @@
             {% for sig in signals %}
             <div class="signal-item">
                 <div class="signal-dot {{ 'active' if sig.active else 'inactive' }}"></div>
-                <span class="signal-lbl" style="color: {{ '#FFFFFF' if sig.active else '#555555' }};">{{ sig.name }}</span>
+                <span class="signal-lbl" style="color: {{ '#FFFFFF' if sig.active else 'var(--text-secondary)' }};">{{ sig.name }}</span>
             </div>
             {% endfor %}
         </div>
