@@ -1290,6 +1290,16 @@ def _shared_css() -> str:
     --trans: cubic-bezier(0.4, 0, 0.2, 1);
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: url('/admin/static/bg-hero.jpg') center/cover no-repeat;
+    opacity: 0.23;
+    z-index: 0;
+    pointer-events: none;
+  }
+  body > * { position: relative; z-index: 1; }
   html, body {
     background: var(--carbon);
     color: var(--text);
@@ -1298,9 +1308,8 @@ def _shared_css() -> str:
     line-height: 1.6;
     min-height: 100vh;
     overflow-x: hidden;
-    background-image:
-      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(248,200,48,0.03) 0%, transparent 60%),
-      radial-gradient(ellipse 50% 40% at 90% 110%, rgba(232,87,31,0.02) 0%, transparent 55%);
+    background-image: none;
+    position: relative;
   }
   ::selection { background: rgba(248,200,48,0.2); color: var(--text); }
   ::-webkit-scrollbar { width: 5px; height: 5px; }
