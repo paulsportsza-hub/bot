@@ -5506,8 +5506,10 @@ def _build_mm_card_markup(
 ) -> "InlineKeyboardMarkup":
     """Build image card markup for My Matches with mm:match:{N}:{e|n} buttons.
     N matches the card's [N] labels — aligned with _sort_mm_snapshot() order.
+    BUILD-MYMATCHES-MEDAL-BUTTONS-01: medal emoji on edge match buttons.
     """
     import math as _math_mm
+    from renderers.edge_renderer import EDGE_EMOJIS as _MM_EMOJIS
     per = GAMES_PER_PAGE
     start = page * per
     page_items = mm_sorted[start: start + per]
@@ -5517,8 +5519,13 @@ def _build_mm_card_markup(
         t = "e" if m.get("has_edge") else "n"
         h = config.abbreviate_team(m.get("home") or "")
         a = config.abbreviate_team(m.get("away") or "")
+        # BUILD-MYMATCHES-MEDAL-BUTTONS-01: show medal badge on edge matches
+        _medal = ""
+        if m.get("has_edge"):
+            _tier = m.get("edge_tier", "bronze")
+            _medal = f" {_MM_EMOJIS.get(_tier, '🔥')}"
         rows.append([InlineKeyboardButton(
-            f"[{n}] {h} vs {a}",
+            f"[{n}] {h} vs {a}{_medal}",
             callback_data=f"mm:match:{n}:{t}",
         )])
     nav = []
@@ -6477,6 +6484,10 @@ def _get_edge_info_for_games(games: list[dict]) -> dict[str, dict]:
 
     Returns dict of event_id → {"display_tier": str, "edge_tier": str,
     "confirming": int, "total_signals": int, "tip": dict} or empty dict if no match found.
+
+    BUILD-MYMATCHES-MEDAL-BUTTONS-01: Uses team_mapper normalisation to bridge
+    Odds API full names (e.g. "Wolverhampton Wanderers") with odds.db display
+    names (e.g. "Wolves"). Plain .lower() comparison misses these.
     """
     cache_entry = _hot_tips_cache.get("global")
     if not cache_entry or not cache_entry.get("tips"):
@@ -6484,21 +6495,31 @@ def _get_edge_info_for_games(games: list[dict]) -> dict[str, dict]:
 
     tips = cache_entry["tips"]
 
-    # Build lookup by normalised team names
+    # Normalise team names through team_mapper for cross-source matching.
+    # Schedule events use raw Odds API names ("Brighton and Hove Albion");
+    # hot tips use odds_normaliser display names ("Brighton").
+    # team_mapper.normalise_team() maps both to the same canonical key.
+    try:
+        from scrapers.utils.team_mapper import normalise_team as _norm_team
+    except ImportError:
+        def _norm_team(n: str) -> str:
+            return n.lower().strip()
+
+    # Build lookup by normalised team keys
     tip_lookup: dict[tuple[str, str], dict] = {}
     for tip in tips:
         if (tip.get("outcome") or "").lower() == "draw":
             continue  # ALGO-FIX-01 parity
-        h_name = (tip.get("home_team") or "").lower().strip()
-        a_name = (tip.get("away_team") or "").lower().strip()
+        h_name = _norm_team(tip.get("home_team") or "")
+        a_name = _norm_team(tip.get("away_team") or "")
         if h_name and a_name:
             tip_lookup[(h_name, a_name)] = tip
 
     result: dict[str, dict] = {}
     for game in games:
         eid = game.get("id", "")
-        h_name = (game.get("home_team") or "").lower().strip()
-        a_name = (game.get("away_team") or "").lower().strip()
+        h_name = _norm_team(game.get("home_team") or "")
+        a_name = _norm_team(game.get("away_team") or "")
         tip = tip_lookup.get((h_name, a_name))
         if not tip:
             continue
@@ -19072,6 +19093,294 @@ def _refresh_yg_verdict_sync(html: str, match_key: str) -> str:
     return html
 
 
+# ── BUILD-MYMATCHES-CARD-OVERHAUL-01: Non-Edge card helpers ──────────────
+
+
+async def _generate_haiku_match_summary(
+    match_key: str,
+    home: str,
+    away: str,
+    league: str,
+    sport: str,
+    kickoff: str,
+    form_home: str = "",
+    form_away: str = "",
+    h2h_summary: str = "",
+    odds_summary: str = "",
+    injuries_summary: str = "",
+) -> str:
+    """Generate a 2-3 sentence match preview via Haiku 4.5, cached 24h.
+
+    Returns max 280-char SA-voice match preview, or '' on failure.
+    No betting language — match intelligence framing only (SO #34).
+    """
+    import json
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    from db_connection import get_connection
+
+    # ── Cache check ──
+    def _check_cache():
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+        try:
+            row = conn.execute(
+                "SELECT narrative_html, expires_at FROM narrative_cache "
+                "WHERE match_id = ? AND narrative_source = 'haiku_preview'",
+                (match_key,),
+            ).fetchone()
+            if not row:
+                return None
+            cached_text, expires_at = row
+            try:
+                exp = datetime.fromisoformat(expires_at)
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > exp:
+                    return None
+            except (ValueError, TypeError):
+                return None
+            return cached_text
+        finally:
+            conn.close()
+
+    try:
+        cached = await asyncio.wait_for(asyncio.to_thread(_check_cache), timeout=2.0)
+        if cached:
+            return cached
+    except Exception:
+        pass
+
+    # ── Build prompt context ──
+    ctx_parts = []
+    if form_home:
+        ctx_parts.append(f"- {home} form: {form_home}")
+    if form_away:
+        ctx_parts.append(f"- {away} form: {form_away}")
+    if h2h_summary:
+        ctx_parts.append(f"- H2H: {h2h_summary}")
+    if injuries_summary:
+        ctx_parts.append(f"- Key absences: {injuries_summary}")
+    if odds_summary:
+        ctx_parts.append(f"- Odds overview: {odds_summary}")
+    context_block = "\n".join(ctx_parts) if ctx_parts else "Limited pre-match data available."
+
+    prompt = (
+        f"You are a South African sports analyst. Write a 2-3 sentence match "
+        f"preview for {home} vs {away} ({league}, {sport}). Include the key "
+        f"storyline and what to watch. Max 280 characters. No betting language "
+        f"— frame as match intelligence.\n\n"
+        f"Context:\n{context_block}"
+    )
+
+    # ── Haiku API call ──
+    try:
+        resp = await asyncio.wait_for(
+            asyncio.to_thread(
+                lambda: anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY).messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=100,
+                    temperature=0.5,
+                    messages=[{"role": "user", "content": prompt}],
+                ),
+            ),
+            timeout=10.0,
+        )
+        summary = resp.content[0].text.strip()
+        # Enforce 280-char cap
+        if len(summary) > 280:
+            summary = summary[:277].rsplit(" ", 1)[0] + "..."
+    except Exception as exc:
+        log.debug("Haiku match summary failed for %s: %s", match_key, exc)
+        return ""
+
+    # ── Store in cache (24h TTL) ──
+    def _store():
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
+        try:
+            now = datetime.now(timezone.utc)
+            expires = now + timedelta(hours=24)
+            conn.execute(
+                "INSERT OR REPLACE INTO narrative_cache "
+                "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
+                "narrative_source, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    match_key, summary, "haiku-4.5", "bronze", "[]", "",
+                    "haiku_preview", now.isoformat(), expires.isoformat(),
+                ),
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            conn.close()
+
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_store), timeout=3.0)
+    except Exception:
+        pass
+
+    return summary
+
+
+def _render_h2h_full_section(match_ctx: dict, home_raw: str, away_raw: str) -> str:
+    """Render full H2H match list (up to 5) for non-Edge cards.
+
+    Returns HTML string or '' if no H2H data.
+    """
+    if not match_ctx:
+        return ""
+
+    h2h = match_ctx.get("h2h") or match_ctx.get("head_to_head") or []
+    if not h2h:
+        return ""
+
+    lines = ["", "⚔️ <b>H2H · Last 5 Matches</b>"]
+    for match in h2h[:5]:
+        if isinstance(match, dict):
+            result = match.get("result", "")
+            comp = match.get("competition", "")
+            date_str = match.get("date", "")
+            score = match.get("score", "")
+            line_parts = []
+            if result:
+                line_parts.append(h(str(result)))
+            if score and score != result:
+                line_parts.append(h(str(score)))
+            detail_parts = []
+            if comp:
+                detail_parts.append(h(str(comp)))
+            if date_str:
+                detail_parts.append(h(str(date_str)))
+            line = " ".join(line_parts)
+            if detail_parts:
+                line += f" <i>({', '.join(detail_parts)})</i>"
+            lines.append(f"• {line}")
+        elif isinstance(match, str):
+            lines.append(f"• {h(match)}")
+
+    if len(lines) <= 1:
+        return ""
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_injuries_capped(
+    match_ctx: dict,
+    home_raw: str,
+    away_raw: str,
+    verified_injuries: dict | None = None,
+) -> str:
+    """Render injury section capped at 3 per team for non-Edge cards.
+
+    Hidden if empty or one-sided with <2 entries total.
+    Returns HTML string or ''.
+    """
+    home_inj: list[str] = []
+    away_inj: list[str] = []
+
+    # Prefer verified injuries from DB (get_verified_injuries format)
+    if verified_injuries:
+        home_inj = verified_injuries.get("home", [])
+        away_inj = verified_injuries.get("away", [])
+    elif match_ctx:
+        # Fallback: context injuries
+        injuries_raw = match_ctx.get("injuries") or []
+        for inj in injuries_raw:
+            if isinstance(inj, dict):
+                team = (inj.get("team") or "").lower()
+                player = inj.get("player") or inj.get("player_name") or ""
+                reason = inj.get("reason") or inj.get("injury_status") or ""
+                entry = f"{player} ({reason})" if reason else player
+                if not entry:
+                    continue
+                if team and home_raw.lower() in team:
+                    home_inj.append(entry)
+                elif team and away_raw.lower() in team:
+                    away_inj.append(entry)
+
+    total = len(home_inj) + len(away_inj)
+    # Hide if empty or one-sided with <2 total
+    if total == 0:
+        return ""
+    one_sided = (len(home_inj) == 0 or len(away_inj) == 0)
+    if one_sided and total < 2:
+        return ""
+
+    lines = ["", "🏥 <b>Injury Watch</b>"]
+
+    def _fmt_team(team_name: str, items: list[str]) -> str:
+        if not items:
+            return ""
+        shown = items[:3]
+        extra = len(items) - 3
+        result = f"<b>{h(team_name)}:</b> {', '.join(h(i) for i in shown)}"
+        if extra > 0:
+            result += f" + {extra} more"
+        return result
+
+    home_line = _fmt_team(home_raw, home_inj)
+    away_line = _fmt_team(away_raw, away_inj)
+    if home_line:
+        lines.append(home_line)
+    if away_line:
+        lines.append(away_line)
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_key_stats(match_ctx: dict, home_raw: str, away_raw: str, tips: list) -> str:
+    """Render structured key stats section from verified context.
+
+    Shows: record, avg score, fair value. Returns HTML or ''.
+    """
+    if not match_ctx or not match_ctx.get("data_available"):
+        return ""
+
+    lines = ["", "📊 <b>Key Stats</b>"]
+    has_content = False
+
+    for side, team_name in (("home_team", home_raw), ("away_team", away_raw)):
+        team = match_ctx.get(side, {})
+        if not team:
+            continue
+        parts = []
+        # Record
+        rec = team.get("record")
+        if isinstance(rec, dict):
+            parts.append(f"W{rec.get('wins', 0)} D{rec.get('draws', 0)} L{rec.get('losses', 0)}")
+        elif isinstance(rec, str) and rec:
+            parts.append(rec)
+        # Goals/game
+        gpg = team.get("goals_per_game")
+        cpg = team.get("conceded_per_game")
+        if gpg is not None:
+            parts.append(f"{gpg:.1f} scored, {cpg:.1f} conceded/game")
+        # Position
+        pos = team.get("league_position")
+        if pos is not None:
+            parts.append(f"#{pos}")
+        if parts:
+            lines.append(f"<b>{h(team_name)}:</b> {' · '.join(parts)}")
+            has_content = True
+
+    # Fair value from tips
+    if tips:
+        best = max(tips, key=lambda t: t.get("ev", 0))
+        prob = best.get("prob")
+        if prob:
+            lines.append(f"<b>Fair value:</b> {prob}% implied probability")
+            has_content = True
+
+    if not has_content:
+        return ""
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: str = "matches") -> None:
     """Generate AI betting tips for a specific game."""
     import time as _time
@@ -20119,14 +20428,62 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     _edge_tier = "bronze"  # W30-GATE: default, overridden below when data exists
 
     if not narrative and not tips:
-        # No data at all — show clean fallback
-        lines.append(
-            "📊 Detailed analysis isn't available for this match yet.\n\n"
-            "We're tracking odds from all major SA bookmakers — "
-            "check back closer to kickoff for full breakdown, "
-            "odds comparison, and edge ratings.\n\n"
-            "💎 Meanwhile, check today's top edges across all sports."
-        )
+        # No data at all — BUILD-MYMATCHES-CARD-OVERHAUL-01: Haiku + H2H + Injuries
+        _haiku_summary = ""
+        try:
+            _hk_form_home = ""
+            _hk_form_away = ""
+            _hk_h2h_sum = ""
+            if _match_ctx and _match_ctx.get("data_available"):
+                _hk_ht = _match_ctx.get("home_team", {})
+                _hk_at = _match_ctx.get("away_team", {})
+                _hk_form_home = _hk_ht.get("form", "")
+                _hk_form_away = _hk_at.get("form", "")
+                _hk_h2h_raw = _match_ctx.get("h2h") or _match_ctx.get("head_to_head") or []
+                if _hk_h2h_raw:
+                    _hk_h2h_sum = f"{len(_hk_h2h_raw)} previous meetings"
+            _haiku_summary = await _generate_haiku_match_summary(
+                match_key=db_match_id or event_id,
+                home=home_raw, away=away_raw,
+                league=league_display or target_league or "",
+                sport=_sport_for_prompt,
+                kickoff=kickoff,
+                form_home=_hk_form_home, form_away=_hk_form_away,
+                h2h_summary=_hk_h2h_sum,
+            )
+        except Exception as _hk_err:
+            log.debug("Haiku summary failed in fallback: %s", _hk_err)
+
+        if _haiku_summary:
+            lines.append("📝 <b>Match Preview</b>")
+            lines.append(f"<i>{h(_haiku_summary)}</i>")
+            lines.append("")
+
+        _fb_h2h = _render_h2h_full_section(_match_ctx, home_raw, away_raw)
+        if _fb_h2h:
+            lines.append(_fb_h2h)
+
+        _fb_inj_data: dict | None = None
+        try:
+            _fb_inj_data = await asyncio.wait_for(
+                asyncio.to_thread(get_verified_injuries, home_raw, away_raw,
+                                  sport=_sport_for_prompt, league=_game_db_league or target_league),
+                timeout=3.0,
+            )
+        except Exception:
+            pass
+        _fb_inj = _render_injuries_capped(_match_ctx, home_raw, away_raw, _fb_inj_data)
+        if _fb_inj:
+            lines.append(_fb_inj)
+
+        if not _haiku_summary and not _fb_h2h:
+            lines.append(
+                "📊 Detailed analysis isn't available for this match yet.\n\n"
+                "We're tracking odds from all major SA bookmakers — "
+                "check back closer to kickoff for full breakdown, "
+                "odds comparison, and edge ratings.\n\n"
+                "💎 Meanwhile, check today's top edges across all sports."
+            )
     else:
         # ── Determine edge tier for gating ──
         # W75-FIX: edge_v2 tier is authoritative — no EV-threshold fallback
@@ -20194,6 +20551,68 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         else:
             lines.append("No SA bookmaker odds available for this match yet.")
             lines.append("Check back closer to kickoff for odds!")
+
+        # ── BUILD-MYMATCHES-CARD-OVERHAUL-01: Key Stats + Haiku + H2H + Injuries ──
+        # Inject structured sections for non-Edge cards (augments V2 narrative)
+        _key_stats_html = _render_key_stats(_match_ctx, home_raw, away_raw, tips)
+        if _key_stats_html:
+            lines.append(_key_stats_html)
+
+        # Haiku match summary — augments cards WITH odds but WITHOUT edge
+        if not _best_edge_v2:
+            _main_haiku = ""
+            try:
+                _mh_form_home = ""
+                _mh_form_away = ""
+                _mh_h2h_sum = ""
+                _mh_odds_sum = ""
+                _mh_inj_sum = ""
+                if _match_ctx and _match_ctx.get("data_available"):
+                    _mh_ht = _match_ctx.get("home_team", {})
+                    _mh_at = _match_ctx.get("away_team", {})
+                    _mh_form_home = _mh_ht.get("form", "")
+                    _mh_form_away = _mh_at.get("form", "")
+                    _mh_h2h_raw = _match_ctx.get("h2h") or _match_ctx.get("head_to_head") or []
+                    if _mh_h2h_raw:
+                        _mh_h2h_sum = f"{len(_mh_h2h_raw)} previous meetings"
+                if tips:
+                    _best_t = max(tips, key=lambda t: t.get("ev", 0))
+                    _mh_odds_sum = f"{_best_t.get('outcome', '')} @ {_best_t.get('odds', 0):.2f}"
+                _main_haiku = await _generate_haiku_match_summary(
+                    match_key=db_match_id or event_id,
+                    home=home_raw, away=away_raw,
+                    league=league_display or target_league or "",
+                    sport=_sport_for_prompt,
+                    kickoff=kickoff,
+                    form_home=_mh_form_home, form_away=_mh_form_away,
+                    h2h_summary=_mh_h2h_sum, odds_summary=_mh_odds_sum,
+                )
+            except Exception as _mh_err:
+                log.debug("Haiku summary failed in main card: %s", _mh_err)
+            if _main_haiku:
+                lines.append("")
+                lines.append("📝 <b>Match Preview</b>")
+                lines.append(f"<i>{h(_main_haiku)}</i>")
+                lines.append("")
+
+        # Full H2H match list
+        _main_h2h = _render_h2h_full_section(_match_ctx, home_raw, away_raw)
+        if _main_h2h:
+            lines.append(_main_h2h)
+
+        # Injury Watch (capped at 3 per team)
+        _main_inj_data: dict | None = None
+        try:
+            _main_inj_data = await asyncio.wait_for(
+                asyncio.to_thread(get_verified_injuries, home_raw, away_raw,
+                                  sport=_sport_for_prompt, league=_game_db_league or target_league),
+                timeout=3.0,
+            )
+        except Exception:
+            pass
+        _main_inj = _render_injuries_capped(_match_ctx, home_raw, away_raw, _main_inj_data)
+        if _main_inj:
+            lines.append(_main_inj)
 
         # Edge V2 signal display — gated by tier (Wave 26A-FIX BUG 4)
         if _best_edge_v2:
@@ -22758,7 +23177,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 _sys.path.insert(0, _PUB_CHANNELS)
             from telegram_alerts import post_card as _tg_alerts_post_card  # type: ignore[import]
             from compliance import run_gate as _run_gate  # type: ignore[import]
-            from telegram_news_formatter import format_teaser as _fmt_teaser  # type: ignore[import]
+            from ai_copy_generator import generate_teaser as _fmt_teaser  # type: ignore[import]
             _ch_data = build_edge_summary_data(tips)
             _ch_png = await asyncio.to_thread(render_card_sync, "edge_summary.html", _ch_data)
             _tg_token = os.environ.get("TELEGRAM_PUBLISHER_BOT_TOKEN", "")
