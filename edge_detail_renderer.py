@@ -823,20 +823,23 @@ def _render_full(data: EdgeDetailData) -> str:
 
 
 def _render_partial(data: EdgeDetailData) -> str:
-    """Partial access — odds visible, breakdown shorter."""
-    parts = [_section_header(data), _section_edge(data)]
+    """Partial access — return amount visible. NO odds/EV/bookmaker. Upgrade CTA.
 
-    # Truncated signal summary
-    if data.confirming_signals > 0:
-        s = "s" if data.confirming_signals != 1 else ""
-        parts.append(
-            f"📡 {data.confirming_signals} signal{s} aligned · "
-            f"Composite {data.composite_score:.0f}/100"
-        )
+    GATE_MATRIX: Bronze viewing Silver = PARTIAL.
+    Shows: match header + return amount. Hides decimal odds, EV%, bookmaker.
+    """
+    parts = [_section_header(data)]
+
+    # Return amount hint — back-calculating odds is intentional per GATE_MATRIX spec
+    if data.recommended_odds > 1.0:
+        ret_amount = round(data.recommended_odds * 300)
+        outcome = h(data.outcome_display) if data.outcome_display else "This pick"
+        parts.append(f"💰 <b>{outcome}</b> — R{ret_amount:,} return on R300")
+    else:
+        parts.append("💰 Potential return available on upgrade")
+
     parts.append("")
-    parts.append(_section_verdict(data))
-    parts.append("")
-    parts.append("🔑 Unlock full analysis → /subscribe")
+    parts.append("🔑 Unlock odds, EV% and full analysis → /subscribe")
     return "\n".join(p for p in parts if p)
 
 
