@@ -179,7 +179,9 @@ async def test_header_count_matches_total_edges(test_edges) -> None:
 
 async def test_cards_show_league_and_kickoff_metadata(test_edges) -> None:
     text, _, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
-    assert "Premier League · 📅 Sat 29 Mar · 17:30 · DStv 202" in text
+    # FIX-DSTV-CHANNEL-PERM-01: DStv channel suffix permanently removed
+    assert "Premier League · 📅 Sat 29 Mar · 17:30" in text
+    assert "DStv" not in text
 
 
 async def test_sport_icon_matches_rugby_tip(test_edges) -> None:
