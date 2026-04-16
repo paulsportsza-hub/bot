@@ -942,6 +942,9 @@ def build_match_detail_data(match: dict) -> dict:
         "home_injuries": (match.get("home_injuries") or [])[:3],
         "away_injuries": (match.get("away_injuries") or [])[:3],
 
+        # Haiku analysis — BUILD-HAIKU-SUMMARY-WIRE-01
+        "analysis_text": match.get("analysis_text") or "",
+
         # Logo
         "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
     }
