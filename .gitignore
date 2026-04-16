@@ -26,3 +26,13 @@ Thumbs.db
 *.session-journal
 node_modules/
 benchmark_models.py
+
+# Backup files
+*.bak
+*.bak-*
+
+# Structured logs and screenshots
+structured_logs/
+
+# Development scratch
+channel-health-mockup.html

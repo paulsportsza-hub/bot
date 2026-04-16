@@ -521,16 +521,8 @@ def _draw_digest_pick_row(
     league_raw = tip.get("league") or tip.get("league_display") or tip.get("league_key") or ""
     league = _league_display(league_raw)
 
-    # TV channel — try all possible keys
-    broadcast_raw = (
-        tip.get("_bc_broadcast") or
-        tip.get("broadcast_channel") or
-        tip.get("broadcast") or
-        tip.get("tv_channel") or
-        tip.get("dstv_channel") or ""
-    )
-    # Strip the "📺 " prefix if already present to avoid doubling
-    broadcast = broadcast_raw[3:] if broadcast_raw.startswith("📺 ") else broadcast_raw
+    # FIX-DSTV-CHANNEL-PERM-01: TV channel display permanently removed
+    broadcast = ""
 
     # Resolve pick team
     pick_team = tip.get("pick_team") or tip.get("pick") or ""
@@ -644,8 +636,7 @@ def _draw_digest_pick_row(
         draw.text((meta_x, y2 + 1), ko_text, font=f_meta, fill=T.TEXT_SECONDARY)
         meta_x += _text_w(ko_text, f_meta) + 10
 
-    if broadcast:
-        draw.text((meta_x, y2 + 1), f"📺 {broadcast}", font=f_meta, fill=T.TEXT_SECONDARY)
+    # FIX-DSTV-CHANNEL-PERM-01: channel drawing permanently removed
 
     # ── Row 3 (cy+76): Pick: TEAM (green) | odds pill | EV: +N% | form dots ──
     y3 = card_y0 + 76

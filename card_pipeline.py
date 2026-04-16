@@ -1424,10 +1424,8 @@ def build_card_data(
     if tip and tip.get("_bc_kickoff"):
         kickoff = tip["_bc_kickoff"]
 
-    # Broadcast from tip
+    # FIX-DSTV-CHANNEL-PERM-01: broadcast (channel info) permanently removed
     broadcast = ""
-    if tip and tip.get("_bc_broadcast"):
-        broadcast = tip["_bc_broadcast"]
 
     # Analysis
     # P0-BUILD-MM-RENDER-01 Cache Seeding: use pre-seeded narrative to skip Haiku when warm
@@ -1497,7 +1495,7 @@ def build_card_data(
         "odds_structured": odds_structured,  # AC-8: {home,draw,away} with bookmaker
         # ── IMG-W1R: edge_digest portrait fields (additive) ───────────────
         "league": (tip.get("league") or tip.get("league_display") or tip.get("league_key") or "") if tip else "",
-        "broadcast_channel": (tip.get("_bc_broadcast") or tip.get("broadcast_channel") or "") if tip else "",
+        "broadcast_channel": "",  # FIX-DSTV-CHANNEL-PERM-01
         "display_tier": tier,
         # CARD-BUILD-01: stealth fallback marker
         "data_status": "no_data" if not tip else "ok",
@@ -1530,7 +1528,7 @@ def render_card_html(card_data: dict) -> str:
     confidence = float(card_data.get("confidence") or 0)
     ev = float(card_data.get("ev") or 0)
     kickoff = h(card_data.get("kickoff", ""))
-    broadcast = card_data.get("broadcast", "")
+    # FIX-DSTV-CHANNEL-PERM-01: broadcast variable removed (channel display permanently off)
     analysis = card_data.get("analysis_text", "")
     tier = (card_data.get("tier") or "bronze").lower()
 
@@ -1564,12 +1562,10 @@ def render_card_html(card_data: dict) -> str:
     if detail_parts:
         lines.append(" · ".join(detail_parts))
 
-    # Line 4: kickoff + broadcast (non-critical, truncated first)
+    # Line 4: kickoff (FIX-DSTV-CHANNEL-PERM-01: broadcast permanently removed)
     meta_parts: list[str] = []
     if kickoff:
         meta_parts.append(f"📅 {kickoff}")
-    if broadcast:
-        meta_parts.append(broadcast)
     meta_line = "  ".join(meta_parts) if meta_parts else ""
 
     # Assemble without analysis to measure base length

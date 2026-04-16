@@ -120,20 +120,29 @@ def test_ko_time_never_shows_tbc():
 
 
 def test_channel_meta_item_has_single_emoji_no_ch_prefix():
-    """D-06 (CARD-FIX-J): channel meta bar supports SS logo path + 📺 fallback, no 'Ch' prefix."""
+    """FIX-DSTV-CHANNEL-PERM-01: channel rendering permanently removed from edge_detail.html.
+
+    Supersedes D-06 (CARD-FIX-J). The entire channel/broadcast block (ss_logo_b64,
+    channel_number, 📺 DStv) was removed permanently. This test now asserts absence.
+    """
     template_path = Path(__file__).parent.parent.parent / "card_templates" / "edge_detail.html"
     content = template_path.read_text(encoding="utf-8")
 
-    # Must have ss_logo_b64 path for SuperSport channels (CARD-FIX-J)
-    assert "ss_logo_b64" in content, "Template must have SS logo path for SuperSport channels"
-    assert "channel_number" in content, "Template must reference channel_number variable"
+    # FIX-DSTV-CHANNEL-PERM-01: these must NOT appear (channel rendering permanently off)
+    assert "ss_logo_b64" not in content, \
+        "ss_logo_b64 must NOT be in edge_detail.html (FIX-DSTV-CHANNEL-PERM-01 removed it)"
+    assert "channel_number" not in content, \
+        "channel_number must NOT be in edge_detail.html (FIX-DSTV-CHANNEL-PERM-01 removed it)"
 
-    # Must still have 📺 fallback for non-SS channels
-    assert "📺" in content, "Template must have 📺 fallback for non-SS channels"
+    # Must NOT have active 📺 channel rendering (Jinja expressions with channel)
+    import re
+    active_channel = re.search(r'📺.*?\{\{|\{\{.*?channel.*?\}\}', content)
+    assert active_channel is None, \
+        "edge_detail.html must not have active 📺/channel Jinja rendering (FIX-DSTV-CHANNEL-PERM-01)"
 
-    # Must NOT have 'Ch' prefix
-    assert "📺 Ch " not in content, "Template must not have '📺 Ch' prefix"
-    assert "Ch {{ channel }}" not in content, "Template must not have 'Ch' before channel variable"
+    # Removal comment must be present
+    assert "FIX-DSTV-CHANNEL-PERM-01" in content, \
+        "edge_detail.html must carry the FIX-DSTV-CHANNEL-PERM-01 removal comment"
 
 
 def test_template_has_no_ko_time_tbc_fallback():

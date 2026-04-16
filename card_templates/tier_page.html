@@ -221,7 +221,7 @@
                         {{- pick.date -}}
                         {%- if pick.date and pick.time %} &middot; {% endif -%}
                         {{- pick.time -}}
-                        {%- if pick.channel %} &middot; Ch {{ pick.channel }}{% endif -%}
+                        {#- FIX-DSTV-CHANNEL-PERM-01: channel display permanently removed -#}
                     </span>
                 </div>
                 <div class="pick-meta-right">

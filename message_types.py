@@ -465,7 +465,7 @@ class DetailMessage:
         sport_emoji = tip.get("sport_emoji") or "🏅"
         league = h(tip.get("league") or "")
         kickoff = tip.get("_bc_kickoff") or tip.get("kickoff") or ""
-        broadcast = tip.get("_bc_broadcast") or tip.get("broadcast") or ""
+        # FIX-DSTV-CHANNEL-PERM-01: broadcast (channel info) permanently removed
         outcome = h(tip.get("outcome") or "")
         odds_val = float(tip.get("odds") or 0.0)
         ev = float(tip.get("ev") or 0.0)
@@ -480,8 +480,6 @@ class DetailMessage:
             lines.append(f"🏆 {league}")
         if kickoff:
             lines.append(f"📅 {kickoff}")
-        if broadcast:
-            lines.append(broadcast)
         lines.append("")
 
         # Narrative in expandable blockquote (P3-04)
