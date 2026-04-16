@@ -148,17 +148,17 @@ BK_DISPLAY = {
 
 # -- Automation channel config ------------------------------------------------
 _CHANNELS = [
-    {"key": "telegram_alerts", "label": "Telegram Alerts", "color": "#26A5E4"},
-    {"key": "telegram_community", "label": "Telegram Community", "color": "#179CDE"},
-    {"key": "whatsapp_channel", "label": "WhatsApp Channel", "color": "#25D366"},
-    {"key": "instagram", "label": "Instagram", "color": "#E4405F"},
-    {"key": "tiktok", "label": "TikTok", "color": "#ff0050"},
-    {"key": "threads", "label": "Threads", "color": "#000000"},
+    {"key": "telegram_alerts", "label": "Telegram Alerts", "color": "#26A5E4", "emoji": "\u2708\ufe0f"},
+    {"key": "telegram_community", "label": "Telegram Community", "color": "#179CDE", "emoji": "\U0001f465"},
+    {"key": "whatsapp_channel", "label": "WhatsApp Channel", "color": "#25D366", "emoji": "\U0001f4ac"},
+    {"key": "instagram", "label": "Instagram", "color": "#E4405F", "emoji": "\U0001f4f8"},
+    {"key": "tiktok", "label": "TikTok", "color": "#ff0050", "emoji": "\U0001f3b5"},
+    {"key": "threads", "label": "Threads", "color": "#000000", "emoji": "\U0001f9f5"},
 ]
 _MANUAL_CHANNELS = [
-    {"key": "linkedin", "label": "LinkedIn", "color": "#0A66C2"},
-    {"key": "fb_groups", "label": "FB Groups", "color": "#1877F2"},
-    {"key": "quora", "label": "Quora", "color": "#B92B27"},
+    {"key": "linkedin", "label": "LinkedIn", "color": "#0A66C2", "emoji": "\U0001f4bc"},
+    {"key": "fb_groups", "label": "FB Groups", "color": "#1877F2", "emoji": "\U0001f46b"},
+    {"key": "quora", "label": "Quora", "color": "#B92B27", "emoji": "\u2753"},
 ]
 _CHANNEL_MAP = {c["key"]: c for c in _CHANNELS + _MANUAL_CHANNELS}
 
@@ -2869,28 +2869,36 @@ def render_automation_content() -> str:
                 f'border:1px solid {ch["color"]}33"><span class="ch-dot" style="background:{ch["color"]}"></span>'
                 f'{ch["label"]}</span>')
 
-    def _sla_color(ch_key: str, last_ts) -> tuple[str, str]:
-        """Return (css_color, label) based on SLA for a channel."""
+    def _sla_status(ch_key: str, last_ts) -> dict:
+        """Return status dict for channel freshness (cls, age, bar, sla)."""
         if ch_key == "linkedin":
+            sla_disp = f"{_LINKEDIN_GREEN_DAYS}d"
             if not last_ts:
-                return "var(--red)", "No posts"
+                return {"cls": "red", "age": "No posts", "bar": 0, "sla": sla_disp}
             age_d = (now_utc - last_ts).total_seconds() / 86400
+            age_lbl = f"{age_d:.0f}d"
             if age_d < _LINKEDIN_GREEN_DAYS:
-                return "var(--green)", f"{age_d:.0f}d ago"
+                return {"cls": "green", "age": age_lbl, "bar": min(100, int(age_d / _LINKEDIN_GREEN_DAYS * 50)), "sla": sla_disp}
             elif age_d < _LINKEDIN_AMBER_DAYS:
-                return "var(--amber)", f"{age_d:.0f}d ago"
-            else:
-                return "var(--red)", f"{age_d:.0f}d ago"
+                return {"cls": "amber", "age": age_lbl, "bar": min(100, int(age_d / _LINKEDIN_GREEN_DAYS * 50)), "sla": sla_disp}
+            return {"cls": "red", "age": age_lbl, "bar": 100, "sla": sla_disp}
         sla_h = _CHANNEL_SLA.get(ch_key, 24.0)
+        sla_disp = f"{sla_h:.0f}h"
         if not last_ts:
-            return "var(--muted)", "No publishes"
+            return {"cls": "grey", "age": "\u2014", "bar": 0, "sla": sla_disp}
         age_h = (now_utc - last_ts).total_seconds() / 3600
-        if age_h < sla_h:
-            return "var(--green)", f"{age_h:.0f}h ago"
-        elif age_h < sla_h * 2:
-            return "var(--amber)", f"{age_h:.0f}h ago"
+        if age_h < 1:
+            age_lbl = f"{int(age_h * 60)}m"
+        elif age_h < 48:
+            age_lbl = f"{age_h:.0f}h"
         else:
-            return "var(--red)", f"{age_h:.0f}h ago"
+            age_lbl = f"{age_h / 24:.0f}d"
+        bar_pct = min(100, int(age_h / sla_h * 50))
+        if age_h < sla_h:
+            return {"cls": "green", "age": age_lbl, "bar": bar_pct, "sla": sla_disp}
+        elif age_h < sla_h * 2:
+            return {"cls": "amber", "age": age_lbl, "bar": bar_pct, "sla": sla_disp}
+        return {"cls": "red", "age": age_lbl, "bar": 100, "sla": sla_disp}
 
     # ── Topbar ─────────────────────────────────────────────────────────────
     banner = ""
@@ -2905,31 +2913,51 @@ def render_automation_content() -> str:
 </nav>
 {banner}"""
 
-    # ── 1. Channel Health Grid (9 channels: 6 automated + 3 manual) ───────
-    ch_grid_cards = ""
-    for ch in all_channels:
+    # ── 1. Channel Health (6 automated rows + 3 manual cards + legend) ──
+    auto_rows = ""
+    for ch in _CHANNELS:
         cs = channel_stats[ch["key"]]
         last_ts = cs.get("last_published_ts")
-        is_manual = ch in _MANUAL_CHANNELS
-        sla_col, sla_label = _sla_color(ch["key"], last_ts)
-
+        st = _sla_status(ch["key"], last_ts)
         if cs["last_failed"]:
-            sla_col = "var(--red)"
-            sla_label = "Failed"
+            st = {"cls": "red", "age": "Failed", "bar": 100, "sla": st["sla"]}
+        qd = cs["queue_depth"]
+        q_html = f'<div class="queue-badge has-items">Q: {qd}</div>' if qd > 0 else '<div class="queue-badge empty">\u2014</div>'
+        auto_rows += f"""<div class="channel-row status-{st['cls']}">
+  <div class="channel-icon">{ch.get('emoji', '')}</div>
+  <div class="channel-name">{ch['label']}</div>
+  <div class="freshness-track"><div class="freshness-fill {st['cls']}" style="width:{st['bar']}%"></div></div>
+  <div class="freshness-label {st['cls']}"><span class="time-val">{st['age']}</span> / {st['sla']}</div>
+  {q_html}
+</div>"""
 
-        manual_badge = ' <span class="so-manual-badge">MANUAL</span>' if is_manual else ""
-        queue_info = f'<div class="so-ch-stat">Queue: {cs["queue_depth"]}</div>' if cs["queue_depth"] > 0 else ""
-
-        ch_grid_cards += f"""<div class="so-ch-card">
-  <div class="so-ch-dot" style="background:{sla_col}" title="{sla_label}"></div>
-  <div class="so-ch-name" style="color:{ch['color']}">{ch['label']}{manual_badge}</div>
-  <div class="so-ch-age" style="color:{sla_col}">{sla_label}</div>
-  {queue_info}
+    manual_cards = ""
+    for ch in _MANUAL_CHANNELS:
+        cs = channel_stats[ch["key"]]
+        last_ts = cs.get("last_published_ts")
+        st = _sla_status(ch["key"], last_ts)
+        if cs["last_failed"]:
+            st["cls"] = "red"
+            st["age"] = "Failed"
+        age_html = f'Last post <span class="val {st["cls"]}">{st["age"]}</span> ago' if st["age"] not in ("\u2014", "No posts", "Failed") else f'<span class="val {st["cls"]}">{st["age"]}</span>'
+        qd = cs["queue_depth"]
+        q_html = f'<div class="manual-queue">Q: {qd}</div>' if qd > 0 else ""
+        manual_cards += f"""<div class="manual-card">
+  <div class="manual-icon">{ch.get('emoji', '')}</div>
+  <div class="manual-info"><div class="manual-name">{ch['label']}</div><div class="manual-age">{age_html}</div></div>
+  {q_html}
 </div>"""
 
     channel_health = f"""<div class="panel" style="margin-bottom:20px">
   <div class="panel-head"><span class="panel-title">Channel Health</span><span class="panel-sub">9 channels &middot; SLA-based freshness</span></div>
-  <div class="so-ch-grid">{ch_grid_cards}</div>
+  <div class="auto-grid">{auto_rows}</div>
+  <div class="manual-section"><div class="manual-label">Manual Channels</div><div class="manual-grid">{manual_cards}</div></div>
+  <div class="sla-legend">
+    <div class="sla-legend-item"><div class="sla-legend-dot green"></div> Within SLA</div>
+    <div class="sla-legend-item"><div class="sla-legend-dot amber"></div> 1\u20132\u00d7 SLA</div>
+    <div class="sla-legend-item"><div class="sla-legend-dot red"></div> Over 2\u00d7 SLA</div>
+    <div class="sla-legend-item"><div class="sla-legend-dot grey"></div> No publishes</div>
+  </div>
 </div>"""
 
     # ── 2. Inner tabs: Approve | Reel Kit | Calendar | Tasks ───────────────
@@ -3124,14 +3152,52 @@ def render_automation_content() -> str:
 
     # ── CSS ────────────────────────────────────────────────────────────────
     so_css = """<style>
-/* Channel Health Grid */
-.so-ch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;}
-.so-ch-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:4px;}
-.so-ch-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;display:inline-block;margin-bottom:4px;}
-.so-ch-name{font-family:var(--font-d);font-weight:700;font-size:13px;}
-.so-ch-age{font-family:var(--font-m);font-size:11px;}
-.so-ch-stat{font-family:var(--font-m);font-size:11px;color:var(--muted);}
-.so-manual-badge{font-size:9px;background:rgba(107,114,128,.15);color:var(--muted);border-radius:3px;padding:1px 5px;margin-left:4px;vertical-align:middle;font-family:var(--font-d);font-weight:700;letter-spacing:.5px;}
+/* Channel Health — Redesigned (Commit 5.5) */
+.auto-grid{display:flex;flex-direction:column;gap:6px;margin-bottom:28px;}
+.channel-row{display:grid;grid-template-columns:28px 160px 1fr 80px 70px;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-radius:8px;border-left:3px solid transparent;transition:background 150ms;}
+.channel-row:hover{background:var(--surface-alt,#1e2231);}
+.channel-row.status-green{border-left-color:var(--green);}
+.channel-row.status-amber{border-left-color:var(--amber);}
+.channel-row.status-red{border-left-color:var(--red);}
+.channel-row.status-grey{border-left-color:var(--muted);}
+.channel-icon{width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:16px;}
+.channel-name{font-family:var(--font-d);font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;}
+.freshness-track{height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden;position:relative;}
+.freshness-fill{height:100%;border-radius:3px;transition:width .6s ease;}
+.freshness-fill.green{background:linear-gradient(90deg,#22c55e,#16a34a);}
+.freshness-fill.amber{background:linear-gradient(90deg,#f59e0b,#d97706);}
+.freshness-fill.red{background:linear-gradient(90deg,#ef4444,#dc2626);}
+.freshness-fill.grey{background:var(--muted);}
+.freshness-label{font-family:var(--font-m);font-size:11px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.freshness-label .time-val{font-weight:600;}
+.freshness-label.green .time-val{color:#4ade80;}
+.freshness-label.amber .time-val{color:#fbbf24;}
+.freshness-label.red .time-val{color:#f87171;}
+.freshness-label.grey .time-val{color:var(--muted);}
+.queue-badge{font-family:var(--font-m);font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;text-align:center;font-variant-numeric:tabular-nums;}
+.queue-badge.has-items{background:rgba(59,130,246,.15);color:#60a5fa;}
+.queue-badge.empty{color:var(--muted);}
+.manual-section{margin-top:4px;}
+.manual-label{font-family:var(--font-d);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;padding-left:4px;}
+.manual-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.manual-card{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface);border-radius:8px;border:1px solid var(--border);transition:background 150ms;}
+.manual-card:hover{background:var(--surface-alt,#1e2231);}
+.manual-icon{font-size:18px;width:28px;text-align:center;flex-shrink:0;}
+.manual-info{flex:1;min-width:0;}
+.manual-name{font-family:var(--font-d);font-size:13px;font-weight:600;color:var(--text);}
+.manual-age{font-family:var(--font-m);font-size:11px;color:var(--muted);margin-top:1px;}
+.manual-age .val{font-weight:600;}
+.manual-age .val.green{color:#4ade80;}
+.manual-age .val.amber{color:#fbbf24;}
+.manual-age .val.red{color:#f87171;}
+.manual-queue{font-family:var(--font-m);font-size:11px;font-weight:600;color:#60a5fa;flex-shrink:0;}
+.sla-legend{display:flex;gap:16px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);}
+.sla-legend-item{display:flex;align-items:center;gap:6px;font-family:var(--font-m);font-size:11px;color:var(--muted);}
+.sla-legend-dot{width:8px;height:8px;border-radius:50%;}
+.sla-legend-dot.green{background:#22c55e;}
+.sla-legend-dot.amber{background:#f59e0b;}
+.sla-legend-dot.red{background:#ef4444;}
+.sla-legend-dot.grey{background:var(--muted);}
 /* Inner Tabs */
 .so-tabs{display:flex;gap:0;border-bottom:2px solid var(--border);margin:20px 0 0 0;}
 .so-tab{background:none;border:none;border-bottom:2px solid transparent;padding:10px 18px;font-family:var(--font-d);font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;transition:color 150ms,border-color 150ms;margin-bottom:-2px;}
