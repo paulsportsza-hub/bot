@@ -488,8 +488,8 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
         _PUB_DIR = "/home/paulsportsza/publisher"
         if _PUB_DIR not in sys.path:
             sys.path.insert(0, _PUB_DIR)
-        from telegram_news_formatter import format_teaser as _fmt_teaser  # type: ignore[import]
-        from telegram_news_formatter import format_build_up as _fmt_build_up  # type: ignore[import]
+        from ai_copy_generator import generate_teaser as _fmt_teaser  # type: ignore[import]
+        from ai_copy_generator import generate_build_up as _fmt_build_up  # type: ignore[import]
 
         _edge_data_alerts = {
             "outcome": pick_team,

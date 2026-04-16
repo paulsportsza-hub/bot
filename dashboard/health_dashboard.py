@@ -7,6 +7,8 @@ Sidebar navigation with Data Health, Automation, and Customers views.
 """
 
 import functools
+import hashlib
+import secrets
 import html
 import json
 import os
@@ -178,9 +180,26 @@ app = Flask(__name__)
 
 # -- Auth ---------------------------------------------------------------------
 
+# -- Auth session cookie (fixes Chrome credential-URL fetch() block) ----------
+_AUTH_COOKIE_NAME = "me_auth"
+_AUTH_COOKIE_SECRET = os.getenv("DASHBOARD_COOKIE_SECRET", secrets.token_hex(32))
+
+def _make_auth_token():
+    msg = f"{DASHBOARD_USER}:{DASHBOARD_PASS}".encode()
+    return hashlib.sha256(msg + _AUTH_COOKIE_SECRET.encode()).hexdigest()[:40]
+
+def _valid_auth_cookie():
+    cookie_val = request.cookies.get(_AUTH_COOKIE_NAME, "")
+    return cookie_val == _make_auth_token()
+
+
 def require_auth(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
+        # Accept valid session cookie (for AJAX calls blocked by Chrome)
+        if _valid_auth_cookie():
+            return f(*args, **kwargs)
+        # Fall back to Basic Auth
         auth = request.authorization
         if not auth or auth.username != DASHBOARD_USER or auth.password != DASHBOARD_PASS:
             return Response(
@@ -188,7 +207,16 @@ def require_auth(f):
                 401,
                 {"WWW-Authenticate": 'Basic realm="MzansiEdge Ops"'},
             )
-        return f(*args, **kwargs)
+        # Basic Auth succeeded -- set session cookie for subsequent AJAX calls
+        resp = f(*args, **kwargs)
+        if isinstance(resp, str):
+            resp = Response(resp, mimetype="text/html")
+        elif not isinstance(resp, Response):
+            resp = Response(resp)
+        resp.set_cookie(_AUTH_COOKIE_NAME, _make_auth_token(),
+                        httponly=True, samesite="Lax", max_age=86400,
+                        path="/admin/")
+        return resp
     return wrapper
 
 
@@ -3056,11 +3084,7 @@ def render_automation_content() -> str:
         rk_cards = ""
         for kit in reel_kits:
             pick_id = kit["pick_id"]
-            tier_key = ""
-            for t in ("diamond", "gold", "silver", "bronze"):
-                if pick_id.lower().startswith(t):
-                    tier_key = t
-                    break
+            tier_key = kit.get("tier") or ""
             tier_color = _TIER_COLORS.get(tier_key, "#94A3B8")
             tier_label = tier_key.title() if tier_key else "Pick"
             vo_count = len(kit.get("vos", []))
@@ -3071,13 +3095,16 @@ def render_automation_content() -> str:
                 status_html = f'<span style="color:var(--amber)">{vo_count} VO{"s" if vo_count != 1 else ""}</span>'
             else:
                 status_html = '<span style="color:var(--muted)">Card only</span>'
-            thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/card_{pick_id}.png"
-            display_name = pick_id.replace("_", " ").replace("-", " ").title()
+            thumb_file = kit.get("thumb") or kit.get("card") or f"card_{pick_id}.png"
+            thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/{thumb_file}"
+            card_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/card_{pick_id}.png"
+            display_name = pick_id[:12].upper()
             rk_cards += f"""<div class="rk-card" style="border-top:3px solid {tier_color}">
   <img class="rk-thumb" src="{_html_mod.escape(thumb_url)}" alt="{_html_mod.escape(display_name)}" loading="lazy">
   <div class="rk-tier" style="color:{tier_color}">{_html_mod.escape(tier_label)}</div>
   <div class="rk-name">{_html_mod.escape(display_name)}</div>
   <div class="rk-status">{status_html}</div>
+  <a class="rk-download" href="{_html_mod.escape(card_url)}" download target="_blank">&#11015; Download</a>
 </div>"""
         reel_tab_html = f'<div class="rk-scroll">{rk_cards}</div>'
     else:
@@ -3169,23 +3196,21 @@ def render_automation_content() -> str:
 
     # ── Assemble inner tabs ────────────────────────────────────────────────
     inner_tabs_html = f"""<div class="so-tabs">
-  <button class="so-tab so-tab-active" data-tab="so-tab-approve">Approve ({n_approve})</button>
+  <button class="so-tab so-tab-active" data-tab="so-tab-tasks">Tasks ({n_tasks})</button>
   <button class="so-tab" data-tab="so-tab-reel">Reel Kit ({n_reel})</button>
   <button class="so-tab" data-tab="so-tab-calendar">Calendar</button>
-  <button class="so-tab" data-tab="so-tab-tasks">Tasks ({n_tasks})</button>
 </div>
 <div class="so-tab-panels">
-  <div class="so-tab-panel so-tab-panel-active" id="so-tab-approve">{approve_tab_html}</div>
+  <div class="so-tab-panel so-tab-panel-active" id="so-tab-tasks"><div id="so-tasks-slot"><div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--font-m)">Loading tasks...</div></div></div>
   <div class="so-tab-panel" id="so-tab-reel">{reel_tab_html}</div>
   <div class="so-tab-panel" id="so-tab-calendar">{calendar_tab_html}</div>
-  <div class="so-tab-panel" id="so-tab-tasks"><div id="so-tasks-slot"><div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--font-m)">Loading tasks...</div></div></div>
 </div>"""
 
     # ── CSS ────────────────────────────────────────────────────────────────
     so_css = """<style>
 /* Channel Health — Redesigned (Commit 5.5) */
-.auto-grid{display:flex;flex-direction:column;gap:6px;margin-bottom:20px;padding:16px 20px 0 20px;}
-.channel-row{display:grid;grid-template-columns:28px 150px 48px 1fr 70px;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-radius:8px;border-left:3px solid transparent;transition:background 150ms;}
+.auto-grid{display:flex;flex-direction:column;gap:3px;margin-bottom:20px;padding:16px 20px 0 20px;}
+.channel-row{display:grid;grid-template-columns:28px 150px 48px 1fr 70px;align-items:center;gap:12px;padding:6px 16px;background:var(--surface);border-radius:8px;border-left:3px solid transparent;transition:background 150ms;}
 .channel-row:hover{background:var(--surface-alt,#1e2231);}
 .channel-row.status-green{border-left-color:var(--green);}
 .channel-row.status-amber{border-left-color:var(--amber);}
@@ -3237,17 +3262,19 @@ def render_automation_content() -> str:
 .so-tab:hover{color:var(--text);}
 .so-tab.so-tab-active{color:var(--gold);border-bottom-color:var(--gold);}
 .so-tab-panels{padding-top:16px;}
-.so-tab-panel{display:none;}
+.so-tab-panel{display:none;max-height:60vh;overflow-y:auto;}
 .so-tab-panel.so-tab-panel-active{display:block;}
 /* Reel Kit cards (reused from Task Hub) */
 .rk-scroll{display:flex;gap:14px;overflow-x:auto;padding:4px 0 12px 0;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
 .rk-scroll::-webkit-scrollbar{height:4px;}.rk-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px;}
-.rk-card{flex:0 0 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;transition:transform 150ms;}
+.rk-card{flex:0 0 200px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;transition:transform 150ms;}
 .rk-card:hover{transform:translateY(-2px);}
-.rk-thumb{width:100%;height:100px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.04);}
+.rk-thumb{width:100%;height:150px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.04);}
 .rk-tier{font-family:var(--font-d);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:8px;}
 .rk-name{font-family:var(--font-m);font-size:12px;color:var(--text);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .rk-status{font-family:var(--font-m);font-size:11px;margin-top:4px;}
+.rk-download{display:block;margin-top:8px;padding:5px 0;background:rgba(248,200,48,.12);color:var(--gold);border:1px solid rgba(248,200,48,.25);border-radius:5px;font-family:var(--font-d);font-size:11px;font-weight:700;text-decoration:none;text-align:center;transition:background 150ms;}
+.rk-download:hover{background:rgba(248,200,48,.22);}
 /* Approval cards */
 .appr-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid #22c55e;border-radius:8px;padding:18px;margin-bottom:14px;position:relative;}
 .appr-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
@@ -3274,7 +3301,7 @@ def render_automation_content() -> str:
   .freshness-text{display:none;}
   .manual-grid{grid-template-columns:1fr;}
   .so-tab{padding:8px 12px;font-size:12px;}
-  .rk-card{flex:0 0 140px;}
+  .rk-card{flex:0 0 170px;}
   .appr-actions{flex-wrap:wrap;}
 }
 @media(max-width:480px){
@@ -3748,12 +3775,7 @@ def render_task_hub_content() -> str:
         rk_cards = ""
         for kit in reel_kits:
             pick_id = kit["pick_id"]
-            # Determine tier from pick_id prefix (e.g. "diamond_foo" or just use first segment)
-            tier_key = ""
-            for t in ("diamond", "gold", "silver", "bronze"):
-                if pick_id.lower().startswith(t):
-                    tier_key = t
-                    break
+            tier_key = kit.get("tier") or ""
             tier_color = _TIER_COLORS.get(tier_key, "#94A3B8")
             tier_label = tier_key.title() if tier_key else "Pick"
             # Status
@@ -3765,14 +3787,17 @@ def render_task_hub_content() -> str:
                 status_html = f'<span style="color:var(--amber)">{vo_count} VO{"s" if vo_count != 1 else ""}</span>'
             else:
                 status_html = '<span style="color:var(--muted)">Card only</span>'
-            # Thumbnail
-            thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/card_{pick_id}.png"
-            display_name = pick_id.replace("_", " ").replace("-", " ").title()
+            # Thumbnail — subdir layout: {date}/{pick_id}/thumb or card
+            thumb_file = kit.get("thumb") or kit.get("card") or f"card_{pick_id}.png"
+            thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/{thumb_file}"
+            card_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/card_{pick_id}.png"
+            display_name = pick_id[:12].upper()
             rk_cards += f"""<div class="rk-card" style="border-top:3px solid {tier_color}">
   <img class="rk-thumb" src="{thumb_url}" alt="{_html_mod.escape(display_name)}" loading="lazy">
   <div class="rk-tier" style="color:{tier_color}">{_html_mod.escape(tier_label)}</div>
   <div class="rk-name">{_html_mod.escape(display_name)}</div>
   <div class="rk-status">{status_html}</div>
+  <a class="rk-download" href="{_html_mod.escape(card_url)}" download target="_blank">&#11015; Download</a>
 </div>"""
         sections_html += f"""<div class="th-section-block" id="th-sec-reel-kit">
   <div class="section-header">
@@ -3943,9 +3968,9 @@ def render_task_hub_content() -> str:
 /* -- Reel Kit horizontal scroll -- */
 .rk-scroll{display:flex;gap:14px;overflow-x:auto;padding:4px 0 12px 0;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
 .rk-scroll::-webkit-scrollbar{height:4px;}.rk-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px;}
-.rk-card{flex:0 0 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;transition:transform 150ms;}
+.rk-card{flex:0 0 200px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;transition:transform 150ms;}
 .rk-card:hover{transform:translateY(-2px);}
-.rk-thumb{width:100%;height:100px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.04);}
+.rk-thumb{width:100%;height:150px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.04);}
 .rk-tier{font-family:var(--font-d);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:8px;}
 .rk-name{font-family:var(--font-m);font-size:12px;color:var(--text);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .rk-status{font-family:var(--font-m);font-size:11px;margin-top:4px;}
@@ -6138,40 +6163,39 @@ def api_dismiss_item():
 # -- Reel Kit helpers ---------------------------------------------------------
 
 def _scan_reel_kits(date_str: str) -> list[dict]:
-    """Scan _REEL_CARDS_ROOT/{date} for reel kits (card + optional VOs)."""
+    """Scan _REEL_CARDS_ROOT/{date}/{pick_id}/ subdirs for reel kits."""
     if not _RE_DATE.match(date_str):
         return []
     date_dir = os.path.join(_REEL_CARDS_ROOT, date_str)
     if not os.path.isdir(date_dir):
         return []
     kits: dict[str, dict] = {}
-    for fname in sorted(os.listdir(date_dir)):
-        if fname.startswith("card_") and fname.endswith(".png"):
-            pick_id = fname[5:-4]  # strip "card_" and ".png"
-            if not _RE_PICK_ID.match(pick_id):
-                continue
-            kits.setdefault(pick_id, {"pick_id": pick_id, "card": None, "still": None, "vos": []})
-            kits[pick_id]["card"] = fname
-        elif fname.startswith("still_") and fname.endswith(".png"):
-            pick_id = fname[6:-4]
-            if not _RE_PICK_ID.match(pick_id):
-                continue
-            kits.setdefault(pick_id, {"pick_id": pick_id, "card": None, "still": None, "vos": []})
-            kits[pick_id]["still"] = fname
-        elif fname.startswith("vo_") and fname.endswith(".mp3"):
-            # vo_{pick_id}_v{n}.mp3
-            parts = fname[3:-4].rsplit("_v", 1)
-            if len(parts) == 2:
-                pick_id = parts[0]
-                if _RE_PICK_ID.match(pick_id):
-                    kits.setdefault(pick_id, {"pick_id": pick_id, "card": None, "still": None, "vos": []})
-                    kits[pick_id]["vos"].append(fname)
+    for entry in sorted(os.listdir(date_dir)):
+        sub = os.path.join(date_dir, entry)
+        if not os.path.isdir(sub):
+            continue
+        pick_id = entry
+        if not _RE_PICK_ID.match(pick_id):
+            continue
+        kit = {"pick_id": pick_id, "card": None, "still": None, "thumb": None, "vos": [], "tier": None}
+        for fname in sorted(os.listdir(sub)):
+            if fname.startswith("card_") and fname.endswith(".png"):
+                kit["card"] = fname
+            elif fname.startswith("still_") and fname.endswith(".png"):
+                kit["still"] = fname
+            elif fname.startswith("thumb_") and (fname.endswith(".jpg") or fname.endswith(".png")):
+                kit["thumb"] = fname
+            elif fname.startswith("vo_") and fname.endswith(".mp3"):
+                kit["vos"].append(fname)
+            elif fname.startswith("tier_"):
+                kit["tier"] = fname[5:]  # e.g. "tier_diamond" -> "diamond"
+        if kit["card"] is None:
+            continue
+        kits[pick_id] = kit
     # Check if master already uploaded
     masters_dir = os.path.join(_REEL_MASTERS_ROOT, date_str)
     result = []
     for pick_id, kit in kits.items():
-        if kit["card"] is None:
-            continue
         master_path = os.path.join(masters_dir, f"{pick_id}_master.mp4") if os.path.isdir(masters_dir) else ""
         kit["has_master"] = os.path.isfile(master_path) if master_path else False
         kit["vos"].sort()
@@ -6180,17 +6204,32 @@ def _scan_reel_kits(date_str: str) -> list[dict]:
 
 
 def _find_reel_card(date_str: str, pick_id: str) -> str | None:
-    """Return absolute path to card PNG if it exists."""
+    """Return absolute path to card PNG if it exists (subdir layout)."""
     if not _RE_DATE.match(date_str) or not _RE_PICK_ID.match(pick_id):
         return None
-    p = os.path.join(_REEL_CARDS_ROOT, date_str, f"card_{pick_id}.png")
-    return p if os.path.isfile(p) else None
+    # New layout: {date}/{pick_id}/card_{pick_id}.png
+    p = os.path.join(_REEL_CARDS_ROOT, date_str, pick_id, f"card_{pick_id}.png")
+    if os.path.isfile(p):
+        return p
+    # Fallback: flat layout {date}/card_{pick_id}.png
+    p_flat = os.path.join(_REEL_CARDS_ROOT, date_str, f"card_{pick_id}.png")
+    return p_flat if os.path.isfile(p_flat) else None
 
 
 def _find_reel_vos(date_str: str, pick_id: str) -> list[str]:
-    """Return sorted list of absolute paths to VO MP3s."""
+    """Return sorted list of absolute paths to VO MP3s (subdir layout)."""
     if not _RE_DATE.match(date_str) or not _RE_PICK_ID.match(pick_id):
         return []
+    # New layout: {date}/{pick_id}/vo_*.mp3
+    sub_dir = os.path.join(_REEL_CARDS_ROOT, date_str, pick_id)
+    if os.path.isdir(sub_dir):
+        vos = []
+        for fname in sorted(os.listdir(sub_dir)):
+            if fname.startswith(f"vo_{pick_id}_v") and fname.endswith(".mp3"):
+                vos.append(os.path.join(sub_dir, fname))
+        if vos:
+            return vos
+    # Fallback: flat layout {date}/vo_*.mp3
     date_dir = os.path.join(_REEL_CARDS_ROOT, date_str)
     if not os.path.isdir(date_dir):
         return []
