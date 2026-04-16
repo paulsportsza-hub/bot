@@ -11481,6 +11481,21 @@ async def _blw_log_tip(tip: dict, user_id_str: str) -> None:
         if model_prob and model_prob > 0.01 and model_prob < 1.0:
             _blw_fair_odds = round(1.0 / model_prob, 4)
 
+        # EDGE-FIX-05: DB dedup guard — only log once per (match_key, bet_type) per 24h
+        _blw_exists = await asyncio.to_thread(
+            lambda: (lambda c: (
+                c.execute(
+                    "SELECT 1 FROM bet_recommendations_log "
+                    "WHERE match_key = ? AND bet_type = ? "
+                    "AND logged_at > datetime('now', '-24 hours') LIMIT 1",
+                    (match_key, bet_type),
+                ).fetchone(),
+                c.close(),
+            )[0])(__import__("scrapers.db_connect", fromlist=["connect_odds_db"]).connect_odds_db(_BLW_DB))
+        )
+        if _blw_exists:
+            return  # Already logged — skip duplicate
+
         await _blw_rec(
             edge_id=edge_id,
             match_key=match_key,
