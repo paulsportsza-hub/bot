@@ -9650,6 +9650,7 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
             SELECT e.match_key, e.edge_id, e.edge_tier, e.composite_score, e.bet_type,
                    e.recommended_odds, e.bookmaker, e.predicted_ev, e.league, e.match_date,
                    e.confirming_signals
+                   {extra_cols}
             FROM edge_results e
             {join}
             WHERE e.match_date >= ? AND e.result IS NULL
@@ -9674,6 +9675,7 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         try:
             rows = _conn.execute(
                 _base_sql.format(
+                    extra_cols=", fm.kickoff AS fm_kickoff",
                     join="LEFT JOIN fixture_mapping fm ON fm.match_key = e.match_key",
                     kickoff_filter="AND (fm.kickoff IS NULL OR fm.kickoff > ?)",
                 ),
@@ -9682,7 +9684,7 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
         except Exception:
             # fixture_mapping table absent (test environment) — date-only fallback
             rows = _conn.execute(
-                _base_sql.format(join="", kickoff_filter=""),
+                _base_sql.format(extra_cols="", join="", kickoff_filter=""),
                 (_today, _limit_val),
             ).fetchall()
     except Exception as _e:
@@ -9754,7 +9756,7 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
             "sport_key": _DB_LEAGUE_SPORT.get(league_key, config.LEAGUE_SPORT.get(league_key, "soccer")),
             "home_team": home_display,
             "away_team": away_display,
-            "commence_time": "",
+            "commence_time": row.get("fm_kickoff") or "",
             "outcome": outcome_display,
             "outcome_key": outcome_raw,
             "odds": _rec_odds,
