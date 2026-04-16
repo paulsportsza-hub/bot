@@ -383,8 +383,6 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4, us
             or tip.get("best_bookmaker")
             or ""
         )
-        channel = tip.get("channel") or tip.get("ch") or ""
-
         prize_return = round(200 * odds_val) if odds_val else 0
 
         # TIER-GATE-INV-01: Diamond picks are masked for non-Diamond users
@@ -397,7 +395,7 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4, us
             "league": league,
             "date": date_part,
             "time": time_part,
-            "channel": str(channel) if channel else "",
+            "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
             "odds": "" if _locked else odds_str,
             "ev": "" if _locked else ev_str,
             "pick": "" if _locked else pick_name,
@@ -486,7 +484,6 @@ def build_tier_page_data(tips: list[dict], tier: str) -> dict:
             or tip.get("best_bookmaker")
             or ""
         )
-        channel = tip.get("channel") or tip.get("ch") or ""
         picks.append({
             "home": home,
             "away": away,
@@ -497,7 +494,7 @@ def build_tier_page_data(tips: list[dict], tier: str) -> dict:
             "ev": ev_str,
             "pick": pick_name,
             "bookmaker": bookmaker,
-            "channel": str(channel) if channel else "",
+            "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
         })
 
     pick_count = len(picks)
@@ -528,18 +525,14 @@ def _confidence_tier(pct: float) -> str:
 
 
 def _channel_fields(tip: dict) -> dict:
-    """Parse channel info for SS logo display in the meta bar.
+    """Channel display permanently removed (FIX-DSTV-CHANNEL-PERM-01).
 
-    Returns dict with: channel_number (str), channel_is_ss (bool), ss_logo_b64 (str).
-    Parses from _bc_broadcast first (richest source), then falls back to channel field.
+    Returns empty channel fields so templates render nothing.
     """
-    raw = str(tip.get("_bc_broadcast") or tip.get("channel") or "")
-    number, is_ss = _parse_channel(raw)
-    ss_b64 = logo_b64(_SS_LOGO, max_height=18) if is_ss and number else ""
     return {
-        "channel_number": number,
-        "channel_is_ss": is_ss,
-        "ss_logo_b64": ss_b64,
+        "channel_number": "",
+        "channel_is_ss": False,
+        "ss_logo_b64": "",
     }
 
 
@@ -680,9 +673,8 @@ def build_edge_detail_data(tip: dict) -> dict:
         "away":    away,
         "date":    date_str,
         "time":    time_str,
-        "channel": str(tip.get("channel") or tip.get("ch") or ""),
+        "channel": "",  # FIX-DSTV-CHANNEL-PERM-01: channel display permanently off
         "venue":   tip.get("venue") or "",
-        **_channel_fields(tip),
 
         # Form
         "home_form": tip.get("home_form") or [],
@@ -710,8 +702,9 @@ def build_edge_detail_data(tip: dict) -> dict:
         "h2h_away_wins": h2h_away_wins,
 
         # Injuries — rendered in their own section (BUILD-VERDICT-INJURY-SPLIT-01)
-        "home_injuries": tip.get("home_injuries") or [],
-        "away_injuries": tip.get("away_injuries") or [],
+        # DEF-2: capped at 3 per team to prevent card overflow
+        "home_injuries": (tip.get("home_injuries") or [])[:3],
+        "away_injuries": (tip.get("away_injuries") or [])[:3],
 
         # Verdict — raw, no injury appending (BUILD-VERDICT-INJURY-SPLIT-01)
         "verdict": tip.get("verdict") or "",
@@ -819,8 +812,6 @@ def build_my_matches_data(matches: list[dict], page: int = 1, per_page: int = 4)
         s_emoji = m.get("sport_emoji") or sport_emoji(league)
         date_part = m.get("date") or ""
         time_part = m.get("time") or ""
-        channel = str(m.get("channel") or m.get("ch") or "")
-
         if m.get("has_edge"):
             _et_raw = m.get("edge_tier")
             tier_key = _et_raw.lower() if _et_raw else None
@@ -836,7 +827,7 @@ def build_my_matches_data(matches: list[dict], page: int = 1, per_page: int = 4)
                 "sport_emoji": s_emoji,
                 "date": date_part,
                 "time": time_part,
-                "channel": channel,
+                "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
                 "has_edge": True,
                 "edge_tier": tier_key,
                 "tier_emoji": meta["emoji"],
@@ -853,7 +844,7 @@ def build_my_matches_data(matches: list[dict], page: int = 1, per_page: int = 4)
                 "sport_emoji": s_emoji,
                 "date": date_part,
                 "time": time_part,
-                "channel": channel,
+                "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
                 "has_edge": False,
                 "odds_home": _fmt_odds(m.get("odds_home")),
                 "odds_draw": _fmt_odds(m.get("odds_draw")),
@@ -922,7 +913,7 @@ def build_match_detail_data(match: dict) -> dict:
         "away":    away,
         "date":    match.get("date") or "",
         "time":    match.get("time") or "",
-        "channel": str(match.get("channel") or match.get("ch") or ""),
+        "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
         # Form
         "home_form": match.get("home_form") or [],
         "away_form": match.get("away_form") or [],
@@ -947,9 +938,9 @@ def build_match_detail_data(match: dict) -> dict:
         "h2h_draws":     h2h_draws,
         "h2h_away_wins": h2h_away_wins,
 
-        # Injuries
-        "home_injuries": match.get("home_injuries") or [],
-        "away_injuries": match.get("away_injuries") or [],
+        # Injuries — DEF-2: capped at 3 per team to prevent card overflow
+        "home_injuries": (match.get("home_injuries") or [])[:3],
+        "away_injuries": (match.get("away_injuries") or [])[:3],
 
         # Logo
         "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
