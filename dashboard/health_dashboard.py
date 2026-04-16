@@ -2895,18 +2895,18 @@ def render_automation_content() -> str:
         if ch_key == "linkedin":
             sla_disp = f"{_LINKEDIN_GREEN_DAYS}d"
             if not last_ts:
-                return {"cls": "red", "age": "No posts", "bar": 0, "sla": sla_disp}
+                return {"cls": "red", "age": "No posts", "bar": 0, "sla": sla_disp, "ring_pct": 0, "ratio": ""}
             age_d = (now_utc - last_ts).total_seconds() / 86400
             age_lbl = f"{age_d:.0f}d"
             if age_d < _LINKEDIN_GREEN_DAYS:
-                return {"cls": "green", "age": age_lbl, "bar": min(100, int(age_d / _LINKEDIN_GREEN_DAYS * 50)), "sla": sla_disp}
+                return {"cls": "green", "age": age_lbl, "bar": min(100, int(age_d / _LINKEDIN_GREEN_DAYS * 50)), "sla": sla_disp, "ring_pct": min(1.0, age_d / (_LINKEDIN_GREEN_DAYS * 2)), "ratio": ""}
             elif age_d < _LINKEDIN_AMBER_DAYS:
-                return {"cls": "amber", "age": age_lbl, "bar": min(100, int(age_d / _LINKEDIN_GREEN_DAYS * 50)), "sla": sla_disp}
-            return {"cls": "red", "age": age_lbl, "bar": 100, "sla": sla_disp}
+                return {"cls": "amber", "age": age_lbl, "bar": min(100, int(age_d / _LINKEDIN_GREEN_DAYS * 50)), "sla": sla_disp, "ring_pct": min(1.0, age_d / (_LINKEDIN_GREEN_DAYS * 2)), "ratio": f"{age_d/_LINKEDIN_GREEN_DAYS:.1f}x over"}
+            return {"cls": "red", "age": age_lbl, "bar": 100, "sla": sla_disp, "ring_pct": 1.0, "ratio": f"{age_d/_LINKEDIN_GREEN_DAYS:.1f}x over"}
         sla_h = _CHANNEL_SLA.get(ch_key, 24.0)
         sla_disp = f"{sla_h:.0f}h"
         if not last_ts:
-            return {"cls": "grey", "age": "\u2014", "bar": 0, "sla": sla_disp}
+            return {"cls": "grey", "age": "\u2014", "bar": 0, "sla": sla_disp, "ring_pct": 0, "ratio": ""}
         age_h = (now_utc - last_ts).total_seconds() / 3600
         if age_h < 1:
             age_lbl = f"{int(age_h * 60)}m"
@@ -2915,11 +2915,14 @@ def render_automation_content() -> str:
         else:
             age_lbl = f"{age_h / 24:.0f}d"
         bar_pct = min(100, int(age_h / sla_h * 50))
+        ratio = age_h / sla_h if sla_h else 0
+        ratio_txt = f"{ratio:.1f}x over" if ratio >= 1.0 else ""
+        ring_pct = min(1.0, age_h / (sla_h * 2)) if sla_h else 0
         if age_h < sla_h:
-            return {"cls": "green", "age": age_lbl, "bar": bar_pct, "sla": sla_disp}
+            return {"cls": "green", "age": age_lbl, "bar": bar_pct, "sla": sla_disp, "ring_pct": ring_pct, "ratio": ratio_txt}
         elif age_h < sla_h * 2:
-            return {"cls": "amber", "age": age_lbl, "bar": bar_pct, "sla": sla_disp}
-        return {"cls": "red", "age": age_lbl, "bar": 100, "sla": sla_disp}
+            return {"cls": "amber", "age": age_lbl, "bar": bar_pct, "sla": sla_disp, "ring_pct": ring_pct, "ratio": ratio_txt}
+        return {"cls": "red", "age": age_lbl, "bar": 100, "sla": sla_disp, "ring_pct": 1.0, "ratio": ratio_txt}
 
     # ── Topbar ─────────────────────────────────────────────────────────────
     banner = ""
@@ -2944,11 +2947,18 @@ def render_automation_content() -> str:
             st = {"cls": "red", "age": "Failed", "bar": 100, "sla": st["sla"]}
         qd = cs["queue_depth"]
         q_html = f'<div class="queue-badge has-items">Q: {qd}</div>' if qd > 0 else '<div class="queue-badge empty">\u2014</div>'
+        _circ = 94.25
+        _offset = _circ * (1 - st.get('ring_pct', 0))
+        _ratio_span = f" &middot; {st['ratio']}" if st.get('ratio') else ""
+        if st['age'] == '\u2014' or st['age'] == 'No posts' or st['age'] == 'Failed':
+            _age_text = f"<span class='time-val'>{st['age']}</span> &middot; SLA {st['sla']}"
+        else:
+            _age_text = f"<span class='time-val'>{st['age']}</span> ago &middot; SLA {st['sla']}{_ratio_span}"
         auto_rows += f"""<div class="channel-row status-{st['cls']}">
   <div class="channel-icon">{_CHANNEL_SVG.get(ch['key'], ch.get('emoji', ''))}</div>
   <div class="channel-name">{ch['label']}</div>
-  <div class="freshness-track"><div class="freshness-fill {st['cls']}" style="width:{st['bar']}%"></div></div>
-  <div class="freshness-label {st['cls']}"><span class="time-val">{st['age']}</span> ago &middot; SLA {st['sla']}</div>
+  <div class="ring-cell"><svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="15" fill="none" stroke-width="4" class="ring-bg"/><circle cx="20" cy="20" r="15" fill="none" stroke-width="4" class="ring-fill {st['cls']}" stroke-dasharray="{_circ}" stroke-dashoffset="{_offset:.1f}" stroke-linecap="round" transform="rotate(-90 20 20)"/></svg></div>
+  <div class="freshness-text {st['cls']}">{_age_text}</div>
   {q_html}
 </div>"""
 
@@ -3175,7 +3185,7 @@ def render_automation_content() -> str:
     so_css = """<style>
 /* Channel Health — Redesigned (Commit 5.5) */
 .auto-grid{display:flex;flex-direction:column;gap:6px;margin-bottom:20px;padding:16px 20px 0 20px;}
-.channel-row{display:grid;grid-template-columns:28px 160px 180px 1fr 70px;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-radius:8px;border-left:3px solid transparent;transition:background 150ms;}
+.channel-row{display:grid;grid-template-columns:28px 150px 48px 1fr 70px;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-radius:8px;border-left:3px solid transparent;transition:background 150ms;}
 .channel-row:hover{background:var(--surface-alt,#1e2231);}
 .channel-row.status-green{border-left-color:var(--green);}
 .channel-row.status-amber{border-left-color:var(--amber);}
@@ -3183,18 +3193,20 @@ def render_automation_content() -> str:
 .channel-row.status-grey{border-left-color:var(--muted);}
 .channel-icon{width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:16px;} .channel-icon svg{width:18px;height:18px;flex-shrink:0;}
 .channel-name{font-family:var(--font-d);font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;}
-.freshness-track{height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden;position:relative;}
-.freshness-fill{height:100%;border-radius:3px;transition:width .6s ease;}
-.freshness-fill.green{background:linear-gradient(90deg,#22c55e,#16a34a);}
-.freshness-fill.amber{background:linear-gradient(90deg,#f59e0b,#d97706);}
-.freshness-fill.red{background:linear-gradient(90deg,#ef4444,#dc2626);}
-.freshness-fill.grey{background:var(--muted);}
-.freshness-label{font-family:var(--font-m);font-size:11px;color:var(--muted);text-align:left;font-variant-numeric:tabular-nums;white-space:nowrap;}
-.freshness-label .time-val{font-weight:600;}
-.freshness-label.green .time-val{color:#4ade80;}
-.freshness-label.amber .time-val{color:#fbbf24;}
-.freshness-label.red .time-val{color:#f87171;}
-.freshness-label.grey .time-val{color:var(--muted);}
+.ring-cell{display:flex;align-items:center;justify-content:center;}
+.ring-cell svg{width:40px;height:40px;}
+.ring-bg{stroke:#2a2d3a;}
+.ring-fill{transition:stroke-dashoffset .8s ease;}
+.ring-fill.green{stroke:#22c55e;}
+.ring-fill.amber{stroke:#f59e0b;}
+.ring-fill.red{stroke:#ef4444;}
+.ring-fill.grey{stroke:#475569;}
+.freshness-text{font-family:var(--font-m);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.freshness-text .time-val{font-weight:600;}
+.freshness-text.green .time-val{color:#4ade80;}
+.freshness-text.amber .time-val{color:#fbbf24;}
+.freshness-text.red .time-val{color:#f87171;}
+.freshness-text.grey .time-val{color:var(--muted);}
 .queue-badge{font-family:var(--font-m);font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;text-align:center;font-variant-numeric:tabular-nums;}
 .queue-badge.has-items{background:rgba(59,130,246,.15);color:#60a5fa;}
 .queue-badge.empty{color:var(--muted);}
@@ -3258,7 +3270,8 @@ def render_automation_content() -> str:
 /* Social Ops responsive */
 @media(max-width:768px){
   .channel-row{grid-template-columns:28px 1fr 70px;gap:8px;padding:8px 12px;}
-  .freshness-track{display:none;}
+  .ring-cell{display:none;}
+  .freshness-text{display:none;}
   .manual-grid{grid-template-columns:1fr;}
   .so-tab{padding:8px 12px;font-size:12px;}
   .rk-card{flex:0 0 140px;}
