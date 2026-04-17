@@ -25842,6 +25842,68 @@ def _qa_banner(user_id: int) -> str:
     return ""
 
 
+# ── BUILD-QA-HARNESS-01: profile data model helpers ───────────────────────────
+
+_QA_BOT_DB_PATH: str = str(config.DATABASE_PATH) if config.DATABASE_PATH else os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "mzansiedge.db"
+)
+
+
+def _qa_get_profile(profile_id: str) -> dict | None:
+    """Load a single QA profile by ID. Read-only."""
+    try:
+        from db_connection import get_connection as _gc
+        conn = _gc(_QA_BOT_DB_PATH, timeout_ms=3000)
+        row = conn.execute(
+            "SELECT * FROM qa_profiles WHERE profile_id = ?",
+            (profile_id.upper(),),
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as _e:
+        log.warning("_qa_get_profile(%s) failed: %s", profile_id, _e)
+        return None
+
+
+def _qa_list_profiles() -> list[dict]:
+    """List all QA profiles ordered by ID."""
+    try:
+        from db_connection import get_connection as _gc
+        conn = _gc(_QA_BOT_DB_PATH, timeout_ms=3000)
+        rows = conn.execute(
+            "SELECT profile_id, display_name, last_baselined_at, active "
+            "FROM qa_profiles ORDER BY profile_id"
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as _e:
+        log.warning("_qa_list_profiles failed: %s", _e)
+        return []
+
+
+def _qa_log_harness_command(
+    profile_id: str,
+    command: str,
+    invoked_by: int,
+    result_path: str | None,
+    duration_ms: int,
+) -> None:
+    """Write a row to qa_command_log. Best-effort — never raises."""
+    try:
+        from db_connection import get_connection as _gc
+        conn = _gc(_QA_BOT_DB_PATH, timeout_ms=3000)
+        conn.execute(
+            "INSERT INTO qa_command_log "
+            "(profile_id, command, invoked_by, invoked_at, result_path, duration_ms) "
+            "VALUES (?, ?, ?, datetime('now'), ?, ?)",
+            (profile_id, command, invoked_by, result_path, duration_ms),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as _e:
+        log.debug("qa_command_log write failed: %s", _e)
+
+
 _QA_COMMANDS = {
     "teaser_bronze": "Morning teaser as Bronze (free picks + locked count + upgrade CTA)",
     "teaser_gold": "Morning teaser as Gold (top pick + full info, no upgrade)",
@@ -25875,6 +25937,11 @@ _QA_COMMANDS = {
     "reset": "Restore tier and clear test state",
     "scaffold": "Print raw verified scaffold for a match key (e.g. /qa scaffold arsenal_vs_everton_2026-03-14)",
     "clear_mm_cache": "Clear My Matches schedule cache for a user ID (e.g. /qa clear_mm_cache 12345678), or self if no ID given",
+    # BUILD-QA-HARNESS-01 commands
+    "profile": "Harness: /qa profile list  OR  /qa profile <P01..P12> (read-only)",
+    "teaser": "Harness: /qa teaser <P01..P12> — render teaser → /tmp/qa/<id>/",
+    "digest_image": "Harness: /qa digest_image <P01..P12> — render digest PNG → /tmp/qa/<id>/",
+    "card_image": "Harness: /qa card_image <P01..P12> <match_id> — render match PNG → /tmp/qa/<id>/",
 }
 
 
@@ -25883,6 +25950,7 @@ async def cmd_qa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # TODO: Remove before launch
     uid = update.effective_user.id
     if uid not in config.ADMIN_IDS:
+        await update.message.reply_text("unauthorized")
         return
 
     args = ctx.args or []
@@ -26066,6 +26134,191 @@ async def cmd_qa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             match_key = args[1] if len(args) > 1 else ""
             await _qa_show_scaffold(update, match_key)
             return
+
+        # ── BUILD-QA-HARNESS-01 commands ──────────────────────────────────────
+        elif cmd == "profile":
+            sub = args[1].lower() if len(args) > 1 else "list"
+            if sub == "list":
+                rows = _qa_list_profiles()
+                if not rows:
+                    await update.message.reply_text("No QA profiles found in qa_profiles table.")
+                    return
+                lines = ["<b>QA Harness Profiles</b>\n"]
+                for r in rows:
+                    baseline = r.get("last_baselined_at") or "never baselined"
+                    lines.append(f"<code>{r['profile_id']}</code> {h(r['display_name'])} — {baseline}")
+                await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+            else:
+                pid = sub.upper()
+                profile = _qa_get_profile(pid)
+                if not profile:
+                    await update.message.reply_text(f"Profile {pid!r} not found in qa_profiles.")
+                    return
+                import json as _json
+                display = _json.dumps(dict(profile), indent=2, default=str)
+                await update.message.reply_text(
+                    f"<code>{h(display)}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+
+        elif cmd == "teaser":
+            _pid = args[1].upper() if len(args) > 1 else ""
+            if not _pid:
+                await update.message.reply_text("Usage: /qa teaser <P01..P12>")
+                return
+            _profile = _qa_get_profile(_pid)
+            if not _profile:
+                await update.message.reply_text(f"Profile {_pid!r} not found.")
+                return
+            import time as _time
+            import json as _json
+            _t0 = _time.monotonic()
+            _tiers = _json.loads(_profile.get("edge_tiers_seen") or "[]")
+            _ptier = _tiers[0] if _tiers else "bronze"
+            _QA_TIER_OVERRIDES[uid] = _ptier
+            _tips = await _fetch_hot_tips_from_db()
+            if not _tips:
+                _tips = []
+            _teaser_lines = [
+                f"☀️ <b>Good morning! [QA: {_pid} / {_ptier.upper()}]</b>",
+                "",
+                f"🔥 <b>{len(_tips)} value bet{'s' if len(_tips) != 1 else ''}</b> found today.",
+            ]
+            if _tips:
+                _top = _tips[0]
+                _teaser_lines += [
+                    "",
+                    f"Top edge: <b>{h(_top.get('home_team','?'))} vs {h(_top.get('away_team','?'))}</b>",
+                    f"💰 {_top.get('outcome','')} @ {_top.get('odds',0):.2f} · EV +{_top.get('ev',0)}%",
+                ]
+            _teaser_text = "\n".join(_teaser_lines)
+            _out_dir = f"/tmp/qa/{_pid}"
+            os.makedirs(_out_dir, exist_ok=True)
+            _ts = int(_time.time())
+            _html_path = f"{_out_dir}/teaser_{_ts}.html.txt"
+            _png_path = f"{_out_dir}/teaser_{_ts}.png"
+            with open(_html_path, "w") as _wf:
+                _wf.write(_teaser_text)
+            try:
+                from image_card import generate_digest_card as _gdc
+                _png_bytes = await asyncio.to_thread(_gdc, _tips[:5] if _tips else [{}])
+                with open(_png_path, "wb") as _wf:
+                    _wf.write(_png_bytes)
+            except Exception as _img_err:
+                log.warning("qa teaser PNG failed: %s", _img_err)
+                with open(_png_path, "wb") as _wf:
+                    _wf.write(b"\x89PNG\r\n\x1a\n")
+            _dur_ms = int((_time.monotonic() - _t0) * 1000)
+            _qa_log_harness_command(_pid, "teaser", uid, f"{_html_path}|{_png_path}", _dur_ms)
+            await update.message.reply_text(
+                f"✅ QA teaser [{_pid} / {_ptier.upper()}] — {_dur_ms}ms\n"
+                f"<code>{_html_path}</code>\n"
+                f"<code>{_png_path}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        elif cmd == "digest_image":
+            _pid = args[1].upper() if len(args) > 1 else ""
+            if not _pid:
+                await update.message.reply_text("Usage: /qa digest_image <P01..P12>")
+                return
+            _profile = _qa_get_profile(_pid)
+            if not _profile:
+                await update.message.reply_text(f"Profile {_pid!r} not found.")
+                return
+            import time as _time
+            import json as _json
+            _t0 = _time.monotonic()
+            _tiers = _json.loads(_profile.get("edge_tiers_seen") or "[]")
+            _ptier = _tiers[0] if _tiers else "bronze"
+            _QA_TIER_OVERRIDES[uid] = _ptier
+            _tips = await _fetch_hot_tips_from_db()
+            if not _tips:
+                _tips = []
+            _out_dir = f"/tmp/qa/{_pid}"
+            os.makedirs(_out_dir, exist_ok=True)
+            _ts = int(_time.time())
+            _png_path = f"{_out_dir}/digest_{_ts}.png"
+            try:
+                from image_card import generate_digest_card as _gdc
+                _png_bytes = await asyncio.to_thread(_gdc, _tips[:5] if _tips else [{}])
+                with open(_png_path, "wb") as _wf:
+                    _wf.write(_png_bytes)
+            except Exception as _img_err:
+                log.warning("qa digest_image PNG failed: %s", _img_err)
+                with open(_png_path, "wb") as _wf:
+                    _wf.write(b"\x89PNG\r\n\x1a\n")
+            _dur_ms = int((_time.monotonic() - _t0) * 1000)
+            _qa_log_harness_command(_pid, "digest_image", uid, _png_path, _dur_ms)
+            await update.message.reply_text(
+                f"✅ QA digest_image [{_pid} / {_ptier.upper()}] — {_dur_ms}ms\n"
+                f"<code>{_png_path}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        elif cmd == "card_image":
+            if len(args) < 3:
+                await update.message.reply_text("Usage: /qa card_image <P01..P12> <match_id>")
+                return
+            _pid = args[1].upper()
+            _match_id = args[2]
+            _profile = _qa_get_profile(_pid)
+            if not _profile:
+                await update.message.reply_text(f"Profile {_pid!r} not found.")
+                return
+            import time as _time
+            import json as _json
+            _t0 = _time.monotonic()
+            _tiers = _json.loads(_profile.get("edge_tiers_seen") or "[]")
+            _ptier = _tiers[0] if _tiers else "bronze"
+            _QA_TIER_OVERRIDES[uid] = _ptier
+            # Look up tip in hot tips cache; fall back to match_id parsing
+            _cached = (_hot_tips_cache.get("global") or {}).get("tips") or []
+            _tip = next((t for t in _cached if t.get("match_id", "") == _match_id), None)
+            if _tip:
+                _cd = {
+                    "home_team": _tip.get("home_team", "Home"),
+                    "away_team": _tip.get("away_team", "Away"),
+                    "tier": _tip.get("display_tier", _ptier),
+                    "odds": float(_tip.get("odds", 2.0)),
+                    "confidence": float(_tip.get("edge_score", 55.0)),
+                    "kickoff": _tip.get("_bc_kickoff", ""),
+                    "sport": _tip.get("sport_key", "soccer"),
+                }
+            else:
+                _parts = _match_id.replace("_vs_", " vs ").split(" vs ")
+                _home = _parts[0].rsplit("_", 1)[0].replace("_", " ").title() if _parts else "Home"
+                _away = _parts[1].split("_")[0].replace("_", " ").title() if len(_parts) > 1 else "Away"
+                _cd = {
+                    "home_team": _home, "away_team": _away,
+                    "tier": _ptier, "odds": 2.0, "confidence": 55.0,
+                    "kickoff": "", "sport": "soccer",
+                }
+            _out_dir = f"/tmp/qa/{_pid}"
+            os.makedirs(_out_dir, exist_ok=True)
+            _ts = int(_time.time())
+            _png_path = f"{_out_dir}/card_{_ts}.png"
+            try:
+                from image_card import generate_match_card as _gmc
+                _png_bytes = await asyncio.to_thread(_gmc, _cd)
+                with open(_png_path, "wb") as _wf:
+                    _wf.write(_png_bytes)
+            except Exception as _img_err:
+                log.warning("qa card_image PNG failed: %s", _img_err)
+                with open(_png_path, "wb") as _wf:
+                    _wf.write(b"\x89PNG\r\n\x1a\n")
+            _dur_ms = int((_time.monotonic() - _t0) * 1000)
+            _qa_log_harness_command(_pid, f"card_image:{_match_id}", uid, _png_path, _dur_ms)
+            await update.message.reply_text(
+                f"✅ QA card_image [{_pid} / {_match_id}] — {_dur_ms}ms\n"
+                f"<code>{_png_path}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
         else:
             await update.message.reply_text(f"Unknown QA command: {cmd}\nUse /qa list")
             return
