@@ -971,9 +971,10 @@ def build_health_alerts_history(conn) -> list[dict]:
         rows = q_all(conn, """
             SELECT ha.source_id, ha.alert_type, ha.severity, ha.message,
                    ha.fired_at, ha.resolved_at, ha.acknowledged,
-                   sr.source_name
+                   sr.source_name, shc.status as current_status
             FROM health_alerts ha
             LEFT JOIN source_registry sr ON sr.source_id = ha.source_id
+            LEFT JOIN source_health_current shc ON shc.source_id = ha.source_id
             WHERE ha.fired_at >= datetime('now', '-24 hours')
             ORDER BY ha.fired_at DESC
             LIMIT 60
@@ -991,6 +992,7 @@ def build_health_alerts_history(conn) -> list[dict]:
             "message": r["message"] or "",
             "fired_at": r["fired_at"],
             "resolved": resolved,
+            "current_status": r.get("current_status") or "",
             "ts": _sast_hhmm(r["fired_at"]),
             "ts_rel": _relative_time(r["fired_at"]),
         })
@@ -2231,6 +2233,9 @@ def _render_exception_source_health(shm: dict) -> str:
         return '<div class="panel"><div class="panel-head"><span class="panel-title">Source Health Monitor</span></div><div style="padding:16px;color:#6b7280;font-family:var(--font-m);font-size:12px">Schema not migrated.</div></div>'
 
     yellow = shm["yellow_count"]
+    red_cnt = shm.get("red_count", 0)
+    black_cnt = shm.get("black_count", 0)
+    total_degraded = yellow + red_cnt + black_cnt
     total = shm.get("total_count", 42)
     score = shm["system_score"]
     score_cls = "c-green" if score >= 80 else ("c-amber" if score >= 50 else "c-red")
@@ -2253,18 +2258,18 @@ def _render_exception_source_health(shm: dict) -> str:
             f'</div>'
         )
 
-    # Warn block: yellow sources
+    # Warn block: all non-green/non-grey sources
     warn_html = ""
-    if yellow > 0:
+    if total_degraded > 0:
         warn_src = [
             d for cat in _CATEGORY_ORDER
             for d in shm["sources_by_category"].get(cat, [])
-            if (d.get("status") or "black") == "yellow"
+            if (d.get("status") or "black") not in ("green", "grey", None)
         ]
         if warn_src:
             rows = "".join(
                 f'<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;font-family:var(--font-m)">'
-                f'{_STATUS_DOT.get("yellow","")} '
+                f'{_STATUS_DOT.get(d.get("status","black"),"")} '
                 f'<span style="color:var(--text);flex:1">{d.get("source_name","")}</span>'
                 f'<span style="color:var(--muted)">{_relative_time(d.get("last_success_at",""))}</span>'
                 f'</div>'
@@ -2273,7 +2278,7 @@ def _render_exception_source_health(shm: dict) -> str:
             warn_html = (
                 f'<details style="margin-bottom:8px">'
                 f'<summary style="cursor:pointer;font-size:12px;font-family:var(--font-m);color:#f59e0b;padding:4px 0">'
-                f'&#9679; {yellow} source{"s" if yellow != 1 else ""} degraded — expand</summary>'
+                f'&#9679; {total_degraded} source{"s" if total_degraded != 1 else ""} degraded — expand</summary>'
                 f'<div style="padding:6px 0 4px">{rows}</div>'
                 f'</details>'
             )
@@ -3009,9 +3014,6 @@ def render_automation_content() -> str:
         ("instagram",          "Instagram"),
         ("tiktok",             "TikTok"),
         ("threads",            "Threads"),
-        ("linkedin",           "LinkedIn"),
-        ("fb_groups",          "Facebook"),
-        ("quora",              "Quora"),
     ]
 
     def _icon_for(wt: str, ck: str) -> str:
@@ -3061,19 +3063,21 @@ def render_automation_content() -> str:
             _smins = _ss.hour * 60 + _ss.minute
             _adt   = parse_ts(_it.get("last_edited") or "")
             _ahhmm = (_adt.astimezone(_SAST).strftime("%H:%M") if _adt else "")
+            _raw_st = (_it.get("status") or "").lower().strip()
+            _disp_st = "queued" if _raw_st == "approved" else _raw_st
             _posts.append({
                 "id":     _it.get("id", ""),
                 "title":  (_it.get("title") or _it.get("copy") or "")[:60],
                 "type":   _it.get("work_type") or "",
                 "icon":   _icon_for(_it.get("work_type") or "", _ck),
-                "status": (_it.get("status") or "").lower().strip(),
+                "status": _disp_st,
                 "mins":   _smins,
                 "sched":  f"{_ss.hour:02d}:{_ss.minute:02d}",
                 "actual": _ahhmm,
                 "error":  _it.get("error") or "",
                 "ch_lbl": _clbl,
             })
-        _tl_chans.append({"key": _ck, "label": _clbl, "posts": _posts})
+        _tl_chans.append({"key": _ck, "label": _clbl, "icon": _so_platform_icon_svg(_ck), "posts": _posts})
 
     _tl_json = _json_mod.dumps({
         "day":      _today_str,
@@ -3124,8 +3128,10 @@ def render_automation_content() -> str:
 .so-tl-hour-lbl{position:absolute;font-family:var(--font-m);font-size:10px;color:var(--muted);transform:translateX(-50%);top:4px;pointer-events:none;}
 .so-tl-row{display:flex;align-items:center;height:52px;border-bottom:1px solid rgba(48,54,61,0.4);}
 .so-tl-row:last-child{border-bottom:none;}
-.so-tl-row:focus{outline:2px solid var(--gold);outline-offset:-2px;}
-.so-tl-row-lbl{width:112px;flex-shrink:0;padding:0 8px 0 12px;font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.so-tl-row:focus{outline:none;}
+.so-tl-row-lbl{width:112px;flex-shrink:0;padding:0 8px 0 10px;font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px;}
+.so-tl-ch-icon{flex-shrink:0;display:flex;align-items:center;color:var(--muted);transition:color 150ms;}
+.so-tl-row:hover .so-tl-ch-icon{color:var(--gold);}
 .so-tl-bar{flex:1;position:relative;height:52px;overflow:visible;}
 .so-tl-gl{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.04);pointer-events:none;}
 .so-tl-icon-btn{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;cursor:pointer;padding:2px;z-index:5;transition:transform 150ms;}
@@ -3133,15 +3139,16 @@ def render_automation_content() -> str:
 .so-tl-icon-btn:focus{outline:2px solid var(--gold);outline-offset:2px;border-radius:3px;z-index:10;}
 .so-tl-icon-btn svg{width:20px;height:20px;stroke:currentColor;stroke-width:1.5;fill:none;color:var(--muted);transition:color 150ms;}
 .so-tl-icon-btn:hover svg,.so-tl-icon-btn:focus svg{color:var(--gold);}
-.so-tl-icon-btn.so-active svg{color:var(--gold);}
+.so-tl-icon-btn.so-active svg{color:var(--gold);filter:drop-shadow(0 0 4px rgba(248,200,48,0.7));transform:scale(1.2);}
 .so-tl-status-bar{width:28px;height:4px;border-radius:2px;position:relative;}
 .so-tl-status-ic{position:absolute;top:-1px;left:0;right:0;text-align:center;font-size:7px;line-height:6px;color:rgba(0,0,0,0.75);font-weight:700;}
 .so-tl-chip{position:absolute;top:50%;transform:translate(-50%,-50%);background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-family:var(--font-m);font-size:10px;color:var(--muted);cursor:pointer;white-space:nowrap;z-index:5;}
 .so-tl-chip:hover{border-color:var(--gold);color:var(--text);}
-.so-tl-now-line{position:absolute;top:0;width:2px;background:var(--gold);z-index:20;pointer-events:none;filter:drop-shadow(0 0 6px rgba(248,200,48,0.6));}
+.so-tl-now-line{position:absolute;top:0;width:2px;background:linear-gradient(180deg,#F8C830,#F0A020,#E8571F);z-index:20;pointer-events:none;filter:drop-shadow(0 0 6px rgba(248,200,48,0.6));}
 .so-tl-now-lbl{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-family:var(--font-m);font-size:9px;color:var(--gold);white-space:nowrap;background:var(--surface-alt);padding:1px 4px;border-radius:2px;border:1px solid rgba(248,200,48,0.3);}
-.so-preview{width:400px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;min-height:500px;}
-@media(max-width:1279px){.so-preview{width:100%;min-height:300px;}}
+.so-preview{width:400px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;height:386px;max-height:386px;overflow-y:auto;}
+.so-preview::-webkit-scrollbar{width:4px;}.so-preview::-webkit-scrollbar-track{background:transparent;}.so-preview::-webkit-scrollbar-thumb{background:var(--muted);border-radius:2px;opacity:0.5;}
+@media(max-width:1279px){.so-preview{width:100%;height:auto;max-height:420px;}}
 .so-pv-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:14px;padding:32px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5;}
 .so-pv-empty svg{opacity:0.18;}
 .so-pv-skel{flex:1;padding:16px;display:flex;flex-direction:column;gap:10px;}
@@ -3322,7 +3329,7 @@ function renderRow(ch,ri){
       '</button>';
   }).join('');
   return '<div class="so-tl-row" role="row" aria-label="'+eA(ch.label)+'" data-row-idx="'+ri+'" tabindex="0">'+
-    '<div class="so-tl-row-lbl">'+eH(ch.label)+'</div>'+
+    '<div class="so-tl-row-lbl">'+(ch.icon?'<span class="so-tl-ch-icon">'+ch.icon+'</span>':'')+eH(ch.label)+'</div>'+
     '<div class="so-tl-bar" id="so-bar-'+ri+'">'+
     '<div class="so-tl-gl" style="left:0%"></div>'+
     '<div class="so-tl-gl" style="left:25%"></div>'+
@@ -4713,6 +4720,50 @@ def _pbar(pct, label: str) -> str:
     )
 
 
+# -- Publisher exception health -----------------------------------------------
+
+_PUBLISHER_EXCEPTIONS_LOG = Path("/home/paulsportsza/publisher/logs/exceptions.jsonl")
+
+
+def _read_publisher_exceptions() -> dict:
+    """Read publisher exception signals from append-only JSONL log."""
+    result = {
+        "publisher_last_exception_at": None,
+        "publisher_exceptions_24h": 0,
+        "publisher_exceptions_72h": 0,
+        "recent": [],
+    }
+    if not _PUBLISHER_EXCEPTIONS_LOG.exists():
+        return result
+    try:
+        now = datetime.now(timezone.utc)
+        cutoff_24h = now - timedelta(hours=24)
+        cutoff_72h = now - timedelta(hours=72)
+        events = []
+        with open(_PUBLISHER_EXCEPTIONS_LOG) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                    ts_str = ev.get("timestamp", "")
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    ev["_ts"] = ts
+                    events.append(ev)
+                except Exception:
+                    continue
+        events.sort(key=lambda e: e["_ts"], reverse=True)
+        if events:
+            result["publisher_last_exception_at"] = events[0]["timestamp"]
+        result["publisher_exceptions_24h"] = sum(1 for e in events if e["_ts"] >= cutoff_24h)
+        result["publisher_exceptions_72h"] = sum(1 for e in events if e["_ts"] >= cutoff_72h)
+        result["recent"] = events[:5]
+    except Exception:
+        pass
+    return result
+
+
 # -- System Health renderer ---------------------------------------------------
 
 def render_system_health_content(conn) -> str:
@@ -4721,6 +4772,7 @@ def render_system_health_content(conn) -> str:
     res      = _read_server_resources()
     procs    = _read_process_monitor()
     api_rows = _build_api_health(conn)
+    pub_exc  = _read_publisher_exceptions()
     updated  = datetime.now(_SAST).strftime("%Y-%m-%d %H:%M:%S")
 
     topbar = f"""<nav class="topbar">
@@ -4902,6 +4954,52 @@ def render_system_health_content(conn) -> str:
         f'<tbody>{api_table_rows}</tbody></table></div></div>'
     )
 
+    # ── Panel 5: Publisher Exception Health ───────────────────────────────────
+    exc_24h = pub_exc["publisher_exceptions_24h"]
+    exc_72h = pub_exc["publisher_exceptions_72h"]
+    last_exc = pub_exc["publisher_last_exception_at"] or "—"
+    if exc_24h >= 1:
+        pub_css = "var(--red)"
+        pub_status_label = "RED — exception in last 24h"
+    elif exc_72h > 0:
+        pub_css = "var(--amber)"
+        pub_status_label = "AMBER — exception in last 72h"
+    else:
+        pub_css = "var(--green)"
+        pub_status_label = "GREEN — no recent exceptions"
+    pub_dot = f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:{pub_css};margin-right:8px;vertical-align:middle"></span>'
+    recent_rows = ""
+    for ev in pub_exc["recent"]:
+        ts_disp = ev.get("timestamp", "")[:19].replace("T", " ")
+        exc_type = ev.get("exception_type", "")
+        msg = ev.get("message", "")[:80]
+        recent_rows += (
+            f'<tr>'
+            f'<td style="padding:5px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{ts_disp}</td>'
+            f'<td style="padding:5px 12px;font-family:var(--font-d);font-size:11px;font-weight:600">{exc_type}</td>'
+            f'<td style="padding:5px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{msg}</td>'
+            f'</tr>'
+        )
+    recent_table = (
+        f'<div class="tbl-wrap"><table class="tbl">'
+        f'<thead><tr><th>Timestamp (UTC)</th><th>Exception</th><th>Message</th></tr></thead>'
+        f'<tbody>{recent_rows if recent_rows else "<tr><td colspan=3 style=padding:12px;color:var(--muted);text-align:center>No exceptions logged</td></tr>"}</tbody>'
+        f'</table></div>'
+    ) if pub_exc["recent"] or True else ""
+    publisher_exc_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Publisher Exception Health</span>'
+        f'<span class="panel-sub">publisher/logs/exceptions.jsonl</span>'
+        f'</div>'
+        f'<div style="padding:12px 16px;display:flex;gap:24px;flex-wrap:wrap;align-items:center">'
+        f'<div style="font-family:var(--font-d);font-size:12px">{pub_dot}<span style="color:{pub_css};font-weight:700">{pub_status_label}</span></div>'
+        f'<div style="font-family:var(--font-m);font-size:12px;color:var(--muted)">publisher_exceptions_24h: <b style="color:{"var(--red)" if exc_24h else "var(--green)"}">{exc_24h}</b></div>'
+        f'<div style="font-family:var(--font-m);font-size:12px;color:var(--muted)">publisher_last_exception_at: <b>{last_exc}</b></div>'
+        f'</div>'
+        f'{recent_table}'
+        f'</div>'
+    )
+
     return f"""{topbar}
 <div class="page">
   <div class="grid-2">
@@ -4909,6 +5007,7 @@ def render_system_health_content(conn) -> str:
     {resources_panel}
     {processes_panel}
     {api_panel}
+    {publisher_exc_panel}
   </div>
   <div class="footer">Auto-refreshes in <span id="sh-countdown2">1:00</span> &middot; MzansiEdge Ops &middot; Read-only</div>
 </div>
@@ -5478,6 +5577,7 @@ def render_performance_content(conn) -> str:
         pass
     _clv_pipe_rows = ""
     _clv_any_breach = False
+    _clv_breach_count = 0
     for _src_id in _CLV_SOURCE_IDS:
         _cp_name = _src_id.replace("sharp_", "", 1)
         _cp_reg = _clv_reg.get(_src_id)
@@ -5500,6 +5600,8 @@ def render_performance_content(conn) -> str:
 
         if _db_status in ("red", "black"):
             _clv_any_breach = True
+        if _db_status not in ("green", "unknown"):
+            _clv_breach_count += 1
 
         # Get item counts from DB
         try:
@@ -5513,13 +5615,6 @@ def render_performance_content(conn) -> str:
                 _row = q_one(conn, "SELECT COUNT(*) as cnt FROM clv_tracking WHERE calculated_at > datetime('now', '-1 day')")
                 _cp_items = str(_row["cnt"]) if _row else "0"
             elif _cp_name == "clv_kill_monitor":
-                _row = q_one(conn, "SELECT last_evaluated_at FROM model_kill_flags WHERE flag_name='clv_tracking'")
-                if _row and _row["last_evaluated_at"]:
-                    _cp_last_run = datetime.fromisoformat(_row["last_evaluated_at"]).replace(tzinfo=timezone.utc)
-                    _age_min = (datetime.now(timezone.utc) - _cp_last_run).total_seconds() / 60
-                    _cp_status = "ok" if _age_min <= _cp_sla else "stale"
-                    if _cp_status == "stale":
-                        _clv_any_breach = True
                 _km_row = q_one(conn, "SELECT enabled, window_neg_pct FROM model_kill_flags WHERE flag_name='clv_tracking'")
                 if _km_row:
                     _km_enabled = _km_row["enabled"]
@@ -5535,8 +5630,10 @@ def render_performance_content(conn) -> str:
             _s_cls, _s_dot = "s-green", "🟢"
         elif _db_status == "yellow":
             _s_cls, _s_dot = "s-amber", "🟡"
-        elif _db_status in ("red", "black"):
+        elif _db_status == "red":
             _s_cls, _s_dot = "s-red", "🔴"
+        elif _db_status == "black":
+            _s_cls, _s_dot = "s-black", "⚫"
         else:
             _s_cls, _s_dot = "s-grey", "⚪"
         _sla_display = f"{_cp_sla}m" if _cp_reg else "—"
@@ -5552,7 +5649,7 @@ def render_performance_content(conn) -> str:
 <div class="panel {'panel-red-accent' if _clv_any_breach else 'panel-orange-accent'}" style="margin-bottom:16px;">
   <div class="panel-head">
     <span class="panel-title">CLV Pipeline Health</span>
-    <span class="panel-sub">{'⚠️ SLA BREACH' if _clv_any_breach else '✅ All healthy'}</span>
+    <span class="panel-sub">{'✅ HEALTHY' if _clv_breach_count == 0 else f'⚠️ {_clv_breach_count} BREACHING'}</span>
   </div>
   <div class="tbl-wrap">
     <table class="tbl">
@@ -5624,6 +5721,7 @@ def render_unified_health_content(conn, db_status: str) -> str:
     res      = _read_server_resources()
     procs    = _read_process_monitor()
     api_rows = _build_api_health(conn)
+    pub_exc  = _read_publisher_exceptions()
     coverage = build_coverage_matrix(conn)
     scrapers  = build_scraper_health(conn)
     sources   = build_source_freshness(conn)
@@ -5760,13 +5858,19 @@ def render_unified_health_content(conn, db_status: str) -> str:
             'border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;font-family:var(--font-d);margin-left:6px">Resolved</span>'
             if a["resolved"] else ""
         )
+        _cur_st = a.get("current_status") or ""
+        still_degraded_badge = (
+            '<span style="background:rgba(245,158,11,0.1);color:var(--amber);border:1px solid rgba(245,158,11,0.2);'
+            'border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;font-family:var(--font-d);margin-left:6px">source still degraded</span>'
+            if a["resolved"] and _cur_st and _cur_st not in ("green", "") else ""
+        )
         return (
             f'<div class="alert-row">'
             f'<span class="alert-ts">{a["ts"]} SAST</span>'
             f'<span style="color:{sev_col};font-size:13px;flex-shrink:0">{sev_icon}</span>'
             f'<div style="min-width:0">'
             f'<div style="font-family:var(--font-d);font-size:11px;font-weight:700;color:var(--text)">{a["source_name"]}</div>'
-            f'<div class="alert-msg">{_truncate(a["message"], 120)}{resolved_badge}</div>'
+            f'<div class="alert-msg">{_truncate(a["message"], 120)}{resolved_badge}{still_degraded_badge}</div>'
             f'</div>'
             f'</div>'
         )
@@ -6030,10 +6134,54 @@ def render_unified_health_content(conn, db_status: str) -> str:
         f'<tbody>{proc_rows}</tbody></table></div>{cron_html}</div>'
     )
 
+    # ── Publisher Exception Health panel ─────────────────────────────────────
+    _exc_24h = pub_exc["publisher_exceptions_24h"]
+    _exc_72h = pub_exc["publisher_exceptions_72h"]
+    _last_exc = pub_exc["publisher_last_exception_at"] or "—"
+    if _exc_24h >= 1:
+        _pub_css = "var(--red)"
+        _pub_lbl = "RED — exception in last 24h"
+    elif _exc_72h > 0:
+        _pub_css = "var(--amber)"
+        _pub_lbl = "AMBER — exception in last 72h, clean last 24h"
+    else:
+        _pub_css = "var(--green)"
+        _pub_lbl = "GREEN — no recent exceptions"
+    _pub_dot = f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:{_pub_css};margin-right:8px;vertical-align:middle"></span>'
+    _exc_rows = ""
+    for _ev in pub_exc["recent"]:
+        _ts_d = _ev.get("timestamp", "")[:19].replace("T", " ")
+        _exc_t = _ev.get("exception_type", "")
+        _msg   = _ev.get("message", "")[:80]
+        _exc_rows += (
+            f'<tr>'
+            f'<td style="padding:5px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted)">{_ts_d}</td>'
+            f'<td style="padding:5px 12px;font-family:var(--font-d);font-size:11px;font-weight:600">{_exc_t}</td>'
+            f'<td style="padding:5px 12px;font-family:var(--font-m);font-size:11px;color:var(--muted);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{_msg}</td>'
+            f'</tr>'
+        )
+    _no_exc_row = '<tr><td colspan="3" style="padding:12px;color:var(--muted);text-align:center">No exceptions logged</td></tr>'
+    publisher_exc_panel = (
+        f'<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Publisher Exception Health</span>'
+        f'<span class="panel-sub">publisher/logs/exceptions.jsonl</span>'
+        f'</div>'
+        f'<div style="padding:12px 16px;display:flex;gap:24px;flex-wrap:wrap;align-items:center">'
+        f'<div style="font-family:var(--font-d);font-size:12px">{_pub_dot}<span style="color:{_pub_css};font-weight:700">{_pub_lbl}</span></div>'
+        f'<div style="font-family:var(--font-m);font-size:12px;color:var(--muted)">publisher_exceptions_24h:&nbsp;<b style="color:{"var(--red)" if _exc_24h else "var(--green)"}">{_exc_24h}</b></div>'
+        f'<div style="font-family:var(--font-m);font-size:12px;color:var(--muted)">publisher_last_exception_at:&nbsp;<b>{_last_exc}</b></div>'
+        f'</div>'
+        f'<div class="tbl-wrap"><table class="tbl">'
+        f'<thead><tr><th>Timestamp (UTC)</th><th>Exception</th><th>Message</th></tr></thead>'
+        f'<tbody>{_exc_rows if _exc_rows else _no_exc_row}</tbody></table></div>'
+        f'</div>'
+    )
+
     tab_system = f"""<div id="tab-system" class="tab-pane">
   <div class="grid-2">
     {resources_panel}
     {processes_panel}
+    {publisher_exc_panel}
   </div>
 </div>"""
 
@@ -6331,9 +6479,6 @@ _SO_TL_CH = [
     ("instagram",          "Instagram"),
     ("tiktok",             "TikTok"),
     ("threads",            "Threads"),
-    ("linkedin",           "LinkedIn"),
-    ("fb_groups",          "Facebook"),
-    ("quora",              "Quora"),
 ]
 _SO_POSTED_ST = {"published", "done", "complete", "posted"}
 _SO_PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
@@ -6372,6 +6517,27 @@ def _so_norm_channel(ch_raw: str) -> str:
     if "group" in c and ("whatsapp" in c or " wa" in c or c.startswith("wa")):
         return "whatsapp_group"
     return _normalise_channel_key(ch_raw)
+
+
+def _so_platform_icon_svg(ck: str) -> str:
+    """Inline SVG platform icon for the 7 publisher channels. 20×20, currentColor stroke."""
+    _ICONS = {
+        "telegram_alerts":
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
+        "telegram_community":
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="13" y2="14"/></svg>',
+        "whatsapp_channel":
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/><polyline points="9 11 12 14 15 11"/></svg>',
+        "whatsapp_group":
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+        "instagram":
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg>',
+        "tiktok":
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>',
+        "threads":
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 8c-2.8 0-5 1.8-5 5s2.2 5 5 5c3 0 5-1.5 5-4"/><path d="M12 8c0-3 1.5-5 4-5"/></svg>',
+    }
+    return _ICONS.get(ck, "")
 
 
 def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> dict:
@@ -6415,19 +6581,21 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
             smins = ss.hour * 60 + ss.minute
             adt   = parse_ts(it.get("last_edited") or "")
             ahhmm = adt.astimezone(_SAST).strftime("%H:%M") if adt else ""
+            raw_st = (it.get("status") or "").lower().strip()
+            disp_st = "queued" if raw_st == "approved" else raw_st
             posts.append({
                 "id":     it.get("id", ""),
                 "title":  (it.get("title") or it.get("copy") or "")[:60],
                 "type":   it.get("work_type") or "",
                 "icon":   _so_icon_for(it.get("work_type") or "", ck),
-                "status": (it.get("status") or "").lower().strip(),
+                "status": disp_st,
                 "mins":   smins,
                 "sched":  f"{ss.hour:02d}:{ss.minute:02d}",
                 "actual": ahhmm,
                 "error":  it.get("error") or "",
                 "ch_lbl": clbl,
             })
-        channels.append({"key": ck, "label": clbl, "posts": posts})
+        channels.append({"key": ck, "label": clbl, "icon": _so_platform_icon_svg(ck), "posts": posts})
 
     return {
         "day":      day_str,
@@ -6503,7 +6671,7 @@ def api_so_post(post_id: str):
         "hashtags":      hashtags,
         "scheduled":     sdt.astimezone(_SAST).strftime("%Y-%m-%d %H:%M") if sdt else "",
         "actual":        adt.astimezone(_SAST).strftime("%Y-%m-%d %H:%M") if adt else "",
-        "status":        (item.get("status") or "").lower().strip(),
+        "status":        ("queued" if (item.get("status") or "").lower().strip() == "approved" else (item.get("status") or "").lower().strip()),
         "permalink":     item.get("url") or "",
         "error_message": item.get("error") or "",
         "campaign":      item.get("campaign_theme") or "",
