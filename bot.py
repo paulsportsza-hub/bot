@@ -24612,46 +24612,58 @@ def _map_webhook_state(event: dict) -> tuple[str, str]:
 
 
 async def _process_stitch_event(event: dict) -> dict[str, object]:
-    data = event.get("data", {})
-    provider_payment_id = data.get("id", "")
-    provider_reference = data.get("beneficiaryReference", "")
-    external_ref = data.get("externalReference", "")
-    provider_event_id = event.get("id")
-    plan_code = _derive_plan_code_from_reference(provider_reference)
-
-    payment = None
-    if provider_reference:
-        payment = await db.get_payment_by_reference("stitch", provider_reference)
-    if not payment and provider_payment_id:
-        payment = await db.get_payment_by_provider_payment_id("stitch", provider_payment_id)
-
-    if payment:
-        plan_code = payment.plan_code
-        provider_reference = payment.provider_reference
-
-    if not provider_reference:
-        provider_reference = f"stitch-{external_ref or provider_payment_id}"
-
-    amount_obj = data.get("amount", {})
-    amount_quantity = amount_obj.get("quantity", "0")
     try:
-        amount_cents = int(round(float(amount_quantity) * 100))
-    except (TypeError, ValueError):
-        amount_cents = payment.amount_cents if payment else 0
+        data = event.get("data", {})
+        provider_payment_id = data.get("id", "")
+        provider_reference = data.get("beneficiaryReference", "")
+        external_ref = data.get("externalReference", "")
+        provider_event_id = event.get("id")
+        plan_code = _derive_plan_code_from_reference(provider_reference)
 
-    event_status, billing_status = _map_webhook_state(event)
-    outcome = await db.apply_payment_event(
-        provider="stitch",
-        provider_reference=provider_reference,
-        provider_payment_id=provider_payment_id,
-        provider_event_id=provider_event_id,
-        plan_code=plan_code or "founding_diamond",
-        amount_cents=amount_cents,
-        event_status=event_status,
-        billing_status=billing_status,
-        raw_event=json.dumps(event, sort_keys=True),
-    )
-    return outcome
+        payment = None
+        if provider_reference:
+            payment = await db.get_payment_by_reference("stitch", provider_reference)
+        if not payment and provider_payment_id:
+            payment = await db.get_payment_by_provider_payment_id("stitch", provider_payment_id)
+
+        if payment:
+            plan_code = payment.plan_code
+            provider_reference = payment.provider_reference
+
+        if not provider_reference:
+            provider_reference = f"stitch-{external_ref or provider_payment_id}"
+
+        amount_obj = data.get("amount", {})
+        amount_quantity = amount_obj.get("quantity", "0")
+        try:
+            amount_cents = int(round(float(amount_quantity) * 100))
+        except (TypeError, ValueError):
+            amount_cents = payment.amount_cents if payment else 0
+
+        event_status, billing_status = _map_webhook_state(event)
+        outcome = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference=provider_reference,
+            provider_payment_id=provider_payment_id,
+            provider_event_id=provider_event_id,
+            plan_code=plan_code or "founding_diamond",
+            amount_cents=amount_cents,
+            event_status=event_status,
+            billing_status=billing_status,
+            raw_event=json.dumps(event, sort_keys=True),
+        )
+        return outcome
+    except Exception as _exc:
+        if sentry_sdk:
+            try:
+                sentry_sdk.set_context("stitch_event", {
+                    "type": event.get("type", ""),
+                    "id": event.get("id"),
+                })
+                sentry_sdk.capture_exception(_exc)
+            except Exception:
+                pass
+        raise
 
 
 def _subscribe_plan_text(user_tier: str = "bronze") -> tuple[str, InlineKeyboardMarkup]:
@@ -25112,6 +25124,11 @@ async def _run_webhook_server(app_instance) -> None:
 
         if not config.STITCH_MOCK_MODE and not stitch_service.verify_webhook(headers, body):
             log.warning("Invalid Stitch webhook signature")
+            if sentry_sdk:
+                sentry_sdk.capture_message(
+                    "stitch webhook signature verification failed",
+                    level="warning",
+                )
             return web.Response(status=400)
 
         event = stitch_service.parse_webhook_event(body)

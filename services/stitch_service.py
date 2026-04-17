@@ -1,16 +1,25 @@
 """Stitch payment service for MzansiEdge Premium subscriptions.
 
 Stitch (stitch.money) provides Pay By Bank, Card, Apple Pay, and Google Pay
-via their LinkPay checkout. Uses GraphQL API with OAuth2 client credentials.
+via their LinkPay checkout.
 
-When STITCH_MOCK_MODE=true, delegates to stitch_mock for local development
-(Stitch has no test environment).
+OAuth flow: client_credentials grant against https://secure.stitch.money/connect/token
+using the client_paymentrequest scope. A sandbox environment is available at
+secure.stitch.money with a separate client_id.
+
+Payment creation: clientPaymentInitiationRequestCreate GraphQL mutation posted to
+https://api.stitch.money/graphql with a Bearer token.
+
+Webhook verification: Stitch delivers webhooks via Svix. The STITCH_WEBHOOK_SECRET
+env var holds the full whsec_... string. Verification is performed by
+svix.webhooks.Webhook.verify() which checks the svix-id, svix-timestamp, and
+svix-signature headers and enforces replay protection (±5 min tolerance).
+
+When STITCH_MOCK_MODE=true, delegates to stitch_mock for local development.
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import logging
 import time
@@ -18,6 +27,11 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import aiohttp
+
+try:
+    import sentry_sdk as _sentry_sdk
+except ImportError:
+    _sentry_sdk = None
 
 import config
 
@@ -252,17 +266,30 @@ class StitchService:
                 }
 
     def verify_webhook(self, headers: dict[str, str], body: bytes) -> bool:
-        """Verify Stitch webhook HMAC-SHA256 signature (Svix delivery)."""
-        signature = headers.get("x-stitch-signature", headers.get("X-Stitch-Signature", ""))
-        if not signature or not self.webhook_secret:
-            return False
+        """Verify Stitch webhook Svix signature.
 
-        expected = hmac.new(
-            self.webhook_secret.encode("utf-8"),
-            body,
-            hashlib.sha256,
-        ).hexdigest()
-        return hmac.compare_digest(expected, signature)
+        Expects svix-id, svix-timestamp, svix-signature headers.
+        STITCH_WEBHOOK_SECRET must be the full whsec_... string — do not strip it.
+        Svix enforces ±5 min replay protection automatically.
+        """
+        if not self.webhook_secret:
+            return False
+        from svix.webhooks import Webhook, WebhookVerificationError
+        try:
+            Webhook(self.webhook_secret).verify(body, headers)
+            return True
+        except WebhookVerificationError:
+            if _sentry_sdk:
+                _sentry_sdk.add_breadcrumb(
+                    category="stitch.webhook.verify",
+                    message="signature verification failed",
+                    level="warning",
+                    data={
+                        "svix_id": headers.get("svix-id", "missing"),
+                        "has_timestamp": bool(headers.get("svix-timestamp")),
+                    },
+                )
+            return False
 
     @staticmethod
     def parse_webhook_event(body: bytes) -> dict[str, Any]:
