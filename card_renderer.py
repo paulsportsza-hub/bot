@@ -16,6 +16,31 @@ BROWSER POOL (BUILD-W3):
     render_card_sync() submits page-render coroutines via run_coroutine_threadsafe —
     browser cold-start only happens once per process lifetime (~1-2s), not per render.
     Individual renders create + close one page each (~200-400ms).
+
+## Canonical Card Dimensions (BUILD-CARD-DIMENSIONS-LOCK-01)
+
+Two explicit dimension variants are declared for all templates in card_templates/.
+Every template must belong to exactly one variant.
+
+Variant DETAIL — fixed 480×620
+    .card { width: 480px; height: 620px }
+    Templates:
+        edge_detail.html
+    Rationale: detail cards have consistent content shape; fixed dimensions give
+    predictable composition. The 620px height was locked in commit 5885fa9.
+
+Variant LIST — dynamic 480×N where N ∈ [100, 1200]
+    .card { width: 100% } (no fixed height — dynamic measurement via JS)
+    Templates:
+        edge_picks.html
+        my_matches.html
+        match_detail.html
+        edge_summary.html
+        tier_page.html
+    Rationale: list-like content varies in item count — dynamic height eliminates
+    blank-space padding.
+
+Enforcement note: Validated by tests/contracts/test_card_dimensions.py.
 """
 from __future__ import annotations
 import asyncio

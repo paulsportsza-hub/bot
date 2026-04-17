@@ -273,14 +273,17 @@
             font-size: 9px;
             color: var(--text-secondary);
         }
+        /* FIX-REGRESS-D1-BOOKMAKER-LINE-01: nowrap + overflow:hidden — wrapping is
+           physically impossible. Count drop (4→3→2) is enforced in the data layer
+           via card_width threshold before this template renders. */
         .bookie-chips-row {
             display: flex;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            overflow: hidden;
             gap: 6px;
             padding: 8px 16px 4px;
             margin-top: -2px;
         }
-        /* D-INV-6: let flex-wrap handle layout; no truncation */
         .odds-pill {
             font-family: 'JetBrains Mono', monospace;
             font-size: 11px;
@@ -288,6 +291,16 @@
             border-radius: 4px;
             border: 1px solid;
             white-space: nowrap;
+            flex-shrink: 0;
+        }
+        /* FIX-REGRESS-D1-BOOKMAKER-LINE-01: injury row — collapses when empty */
+        .injuries-line {
+            font-size: 10px;
+            color: #FFB347;
+            padding: 2px 16px 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         /* ── 5. Edge Signals ─────────────────────────────────── */
@@ -462,7 +475,9 @@
 
     <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
     <div class="meta-bar">
-        <span class="meta-item">📅 {{ date }}{% if time and time != 'TBC' %} · {{ time }} SAST{% endif %}</span>
+        <span class="meta-item">📅 {{ date }}</span>
+        {#- FIX-REGRESS-D1-BOOKMAKER-LINE-01: kickoff time as dedicated meta item -#}
+        {% if time %}<span class="meta-item">⏰ {{ time }} SAST</span>{% endif %}
         {% if venue %}<span class="meta-item">🏙️ {{ venue }}</span>{% endif %}
         {#- FIX-DSTV-CHANNEL-PERM-01: channel/broadcast meta item permanently removed -#}
     </div>
@@ -498,6 +513,10 @@
         {% endif %}
         {% endfor %}
     </div>
+    {% endif %}
+    {#- FIX-REGRESS-D1-BOOKMAKER-LINE-01: injury row — renders only when populated, collapses when absent -#}
+    {% if important_injuries %}
+    <div class="injuries-line">⚠️ {{ important_injuries }}</div>
     {% endif %}
     {% endif %}
 

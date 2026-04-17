@@ -537,7 +537,32 @@ def _channel_fields(tip: dict) -> dict:
 
 
 
-def build_edge_detail_data(tip: dict) -> dict:
+def _build_important_injuries(home_injuries: list, away_injuries: list) -> str:
+    """Build compact single-line injuries string from home/away injury lists.
+
+    Returns up to 3 player names with status, empty string when no data.
+    FIX-REGRESS-D1-BOOKMAKER-LINE-01: feeds the injuries-line that replaces
+    the freed row from single-line bookmaker fix.
+    """
+    items: list[str] = []
+    for inj_list in (home_injuries, away_injuries):
+        for inj in inj_list:
+            if isinstance(inj, dict):
+                name = (inj.get("player") or inj.get("name") or "").strip()
+                status = (inj.get("reason") or inj.get("status") or "").strip()
+                if name:
+                    s = name
+                    if status:
+                        s += f" ({status[:10]})"
+                    items.append(s)
+            elif isinstance(inj, str) and inj.strip():
+                items.append(inj.strip()[:25])
+            if len(items) >= 3:
+                return ", ".join(items)
+    return ", ".join(items) if items else ""
+
+
+def build_edge_detail_data(tip: dict, card_width: int = 480) -> dict:
     """Build edge_detail.html template data from a single tip/edge.
 
     Parameters
@@ -563,6 +588,9 @@ def build_edge_detail_data(tip: dict) -> dict:
             h2h / h2h_total,h2h_home_wins...   -> H2H data
             home_injuries, away_injuries       -> lists of injury strings
             verdict                            -> verdict text string
+    card_width:
+        Rendered card width in pixels (default 480). Controls max bookmaker
+        pill count: ≥480 → 4, ≥360 → 3, <360 → 2 (FIX-REGRESS-D1-BOOKMAKER-LINE-01).
     """
     # FIX 2: display_tier=None means no edge — suppress tier/pick/verdict in template.
     # Also gates on edge_tier so a tip with ONLY edge_tier set still resolves correctly.
@@ -608,12 +636,16 @@ def build_edge_detail_data(tip: dict) -> dict:
             "odds_float": odds_f,
             "is_pick": bool(o.get("is_pick")),
         })
-    # D-12: Pixel Ref Rule 8 — min 2 chips (hide pills row if <2), max 6 sorted by odds desc
+    # FIX-REGRESS-D1-BOOKMAKER-LINE-01: deterministic count-drop based on card width.
+    # 480px → max 4 pills · 360px → max 3 · <360px → max 2.
+    # Row has nowrap+overflow:hidden so wrapping is impossible — extra pills are hidden.
+    _max_bk = 4 if card_width >= 480 else (3 if card_width >= 360 else 2)
     all_odds.sort(key=lambda x: x["odds_float"], reverse=True)
+    # D-12: min 2 chips (hide pills row if <2)
     if len(all_odds) < 2:
         all_odds = []
-    elif len(all_odds) > 6:
-        all_odds = all_odds[:6]
+    elif len(all_odds) > _max_bk:
+        all_odds = all_odds[:_max_bk]
 
     # Signals — normalise from dict or list
     _SIGNAL_DISPLAY = {
@@ -705,6 +737,12 @@ def build_edge_detail_data(tip: dict) -> dict:
         # DEF-2: capped at 3 per team to prevent card overflow
         "home_injuries": (tip.get("home_injuries") or [])[:3],
         "away_injuries": (tip.get("away_injuries") or [])[:3],
+        # FIX-REGRESS-D1-BOOKMAKER-LINE-01: compact single-line string for injury row.
+        # Empty string → template collapses row (no placeholder rendered).
+        "important_injuries": _build_important_injuries(
+            (tip.get("home_injuries") or [])[:3],
+            (tip.get("away_injuries") or [])[:3],
+        ),
 
         # Verdict — raw, no injury appending (BUILD-VERDICT-INJURY-SPLIT-01)
         "verdict": tip.get("verdict") or "",
