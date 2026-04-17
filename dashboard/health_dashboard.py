@@ -1634,8 +1634,6 @@ def _sidebar_html(active_view: str) -> str:
         ("health", "System Health", _ICON_SERVER, "/admin/health"),
         ("performance", "Edge Performance", _ICON_CHART, "/admin/performance"),
         ("social_ops", "Social Ops", _ICON_PLAY, "/admin/social-ops"),
-        ("reel_kit", "Reel Kit", '<span style="font-size:16px">&#127902;</span>', "/admin/reel-kit"),
-        ("calendar", "Calendar", '<span style="font-size:16px">&#128197;</span>', "/admin/calendar"),
     ]
     # Compute pending item count for Social Ops badge
     _badge_count = 0
@@ -5458,33 +5456,50 @@ def render_performance_content(conn) -> str:
 </div>"""
 
     # ---- CLV Pipeline Health panel (SO #36, EDGE-REMEDIATION-02) ----
-    _clv_components = [
-        {"name": "closing_capture", "sla_min": 30, "log": "closing_capture"},
-        {"name": "clv_backfill", "sla_min": 45, "log": "clv_backfill"},
-        {"name": "clv_tracker", "sla_min": 90, "log": "clv_tracker"},
-        {"name": "clv_kill_monitor", "sla_min": 180, "log": "clv_kill_monitor"},
-    ]
+    _CLV_SOURCE_IDS = (
+        "sharp_closing_capture",
+        "sharp_clv_backfill",
+        "sharp_clv_tracker",
+        "sharp_clv_kill_monitor",
+    )
+    _clv_reg: dict = {}
+    _clv_health_map: dict = {}
+    try:
+        if table_exists(conn, "source_registry"):
+            for _r in q_all(conn, "SELECT source_id, expected_interval_minutes FROM source_registry WHERE source_id IN (?,?,?,?)", _CLV_SOURCE_IDS):
+                _clv_reg[_r["source_id"]] = _r
+    except Exception:
+        pass
+    try:
+        if table_exists(conn, "source_health_current"):
+            for _r in q_all(conn, "SELECT source_id, status, last_success_at, consecutive_failures FROM source_health_current WHERE source_id IN (?,?,?,?)", _CLV_SOURCE_IDS):
+                _clv_health_map[_r["source_id"]] = _r
+    except Exception:
+        pass
     _clv_pipe_rows = ""
     _clv_any_breach = False
-    for _cp in _clv_components:
-        _cp_name = _cp["name"]
-        _cp_sla = _cp["sla_min"]
-        # Try to get last run from log files
-        _cp_last_run = None
+    for _src_id in _CLV_SOURCE_IDS:
+        _cp_name = _src_id.replace("sharp_", "", 1)
+        _cp_reg = _clv_reg.get(_src_id)
+        _cp_h = _clv_health_map.get(_src_id)
+        _cp_sla = _cp_reg["expected_interval_minutes"] if _cp_reg else 99999
         _cp_status = "unknown"
         _cp_items = "—"
-        import glob as _glob
-        _log_path = os.path.expanduser(f"~/logs/{_cp['log']}.log")
-        try:
-            if os.path.exists(_log_path):
-                _mtime = os.path.getmtime(_log_path)
-                _cp_last_run = datetime.fromtimestamp(_mtime, tz=timezone.utc)
-                _age_min = (datetime.now(timezone.utc) - _cp_last_run).total_seconds() / 60
-                _cp_status = "ok" if _age_min <= _cp_sla else "stale"
-                if _cp_status == "stale":
-                    _clv_any_breach = True
-        except Exception:
-            pass
+
+        # Status + last_success from canonical source_health_current
+        if _cp_h:
+            _db_status = _cp_h["status"] or "unknown"
+            _db_last = _cp_h["last_success_at"]
+            try:
+                _cp_last_run = datetime.fromisoformat(_db_last.replace("Z", "+00:00")) if _db_last else None
+            except (ValueError, AttributeError):
+                _cp_last_run = None
+        else:
+            _db_status = "unknown"
+            _cp_last_run = None
+
+        if _db_status in ("red", "black"):
+            _clv_any_breach = True
 
         # Get item counts from DB
         try:
@@ -5516,13 +5531,20 @@ def render_performance_content(conn) -> str:
             pass
 
         _ts_str = _cp_last_run.strftime("%H:%M") if _cp_last_run else "never"
-        _s_cls = "s-green" if _cp_status == "ok" else ("s-red" if _cp_status == "stale" else "s-grey")
-        _s_dot = "🟢" if _cp_status == "ok" else ("🔴" if _cp_status == "stale" else "⚪")
+        if _db_status == "green":
+            _s_cls, _s_dot = "s-green", "🟢"
+        elif _db_status == "yellow":
+            _s_cls, _s_dot = "s-amber", "🟡"
+        elif _db_status in ("red", "black"):
+            _s_cls, _s_dot = "s-red", "🔴"
+        else:
+            _s_cls, _s_dot = "s-grey", "⚪"
+        _sla_display = f"{_cp_sla}m" if _cp_reg else "—"
         _clv_pipe_rows += f"""
       <tr>
         <td>{_s_dot} {_cp_name}</td>
         <td class="{_s_cls}">{_ts_str}</td>
-        <td>{_cp_sla}m</td>
+        <td>{_sla_display}</td>
         <td>{_cp_items}</td>
       </tr>"""
 
