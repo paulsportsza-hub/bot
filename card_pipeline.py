@@ -450,6 +450,30 @@ def _compute_match_detail_stats(
             if row:
                 season = row[0]
 
+        # BUG-STATS-SEASON-FILTER-01: hard-fail when league provided but no
+        # matching season found. Falling back to all-time records here would
+        # label ALL-TIME aggregates as current-season records — a product lie.
+        if league and not season:
+            log.warning(
+                "_compute_match_detail_stats: season_filter_mismatch "
+                "league=%r not found in match_results — omitting Key Stats "
+                "(match_key=%r)",
+                league,
+                match_key,
+            )
+            try:
+                import sentry_sdk as _sentry_mod
+                if _sentry_mod:
+                    _sentry_mod.add_breadcrumb(
+                        category="stats",
+                        message="season_filter_mismatch",
+                        level="warning",
+                        data={"match_key": match_key, "league": league},
+                    )
+            except Exception:
+                pass
+            return []
+
         season_clause = "AND season = ?" if season else ""
         season_params: tuple = (season,) if season else ()
 
