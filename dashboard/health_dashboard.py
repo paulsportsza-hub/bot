@@ -1634,6 +1634,8 @@ def _sidebar_html(active_view: str) -> str:
         ("health", "System Health", _ICON_SERVER, "/admin/health"),
         ("performance", "Edge Performance", _ICON_CHART, "/admin/performance"),
         ("social_ops", "Social Ops", _ICON_PLAY, "/admin/social-ops"),
+        ("reel_kit", "Reel Kit", '<span style="font-size:16px">&#127902;</span>', "/admin/reel-kit"),
+        ("calendar", "Calendar", '<span style="font-size:16px">&#128197;</span>', "/admin/calendar"),
     ]
     # Compute pending item count for Social Ops badge
     _badge_count = 0
@@ -2783,305 +2785,479 @@ function copyPrompt(metricName, currentValue, expectedValue, lastTs, dbPath) {{
 # -- Automation content renderer ----------------------------------------------
 
 def render_automation_content() -> str:
-    """Render the Social Ops unified view: Channel Health Grid + inner tabs."""
+    """Render Social Ops split-pane: tasks left, channels right (UI-SOCIAL-OPS-REDESIGN-01)."""
     import html as _html_mod
 
     notion_ok = True
-    cache_age_str = ""
-
+    items: list[dict] = []
+    fetch_time = time.monotonic()
     try:
         items, fetch_time = _fetch_marketing_queue()
-        cache_age_min = (time.monotonic() - fetch_time) / 60
-        if cache_age_min > 2:
-            cache_age_str = f"Showing cached data ({cache_age_min:.0f}m ago)"
     except Exception:
-        items = []
         notion_ok = False
         with _notion_cache_lock:
             cached = _notion_cache.get("marketing_queue")
             if cached:
                 items = cached[0]
-                cache_age_min = (time.monotonic() - cached[1]) / 60
-                cache_age_str = f"Notion unavailable -- showing cached data ({cache_age_min:.0f}m ago)"
-            else:
-                cache_age_str = "Notion unavailable -- no cached data"
+                fetch_time = cached[1]
+
+    age_s = max(0, int(time.monotonic() - fetch_time))
+    if age_s < 60:
+        sync_label = f"Synced {age_s}s ago"
+    elif age_s < 3600:
+        sync_label = f"Synced {age_s // 60}m ago"
+    else:
+        sync_label = f"Synced {age_s // 3600}h ago"
 
     now_utc = datetime.now(timezone.utc)
-    now_sast = now_utc.astimezone(_SAST)
-    today_str = now_sast.strftime("%Y-%m-%d")
-    updated = now_sast.strftime("%Y-%m-%d %H:%M:%S")
-    fourteen_days = now_utc + timedelta(days=14)
 
-    # ── SLA config for Channel Health Grid ─────────────────────────────────
     _CHANNEL_SLA: dict[str, float] = {
-        "telegram_alerts":    6.0,
-        "telegram_community": 12.0,
-        "whatsapp_channel":   6.0,
-        "instagram":          24.0,
-        "tiktok":             48.0,
-        "threads":            24.0,
-        "fb_groups":          72.0,
-        "quora":              168.0,
+        "telegram_alerts": 6.0, "telegram_community": 12.0, "whatsapp_channel": 6.0,
+        "instagram": 24.0, "tiktok": 48.0, "threads": 24.0,
+        "fb_groups": 72.0, "quora": 168.0,
     }
-    # LinkedIn uses post-age bands, not SLA (7d green, 14d amber, >14d red)
-    _LINKEDIN_GREEN_DAYS = 7
-    _LINKEDIN_AMBER_DAYS = 14
+    _LK_GREEN_DAYS, _LK_AMBER_DAYS = 7, 14
 
-    # ── Categorise items ───────────────────────────────────────────────────
-    published_today = []
-    scheduled = []
-    awaiting_approval = []
-    failed_blocked = []
-    recent_publishes = []
-    all_active = []
-    schedule_items = []
-
-    for item in items:
-        status = (item.get("status") or "").lower().strip()
-        sched_raw = item.get("scheduled_time") or ""
-
-        if status in ("published", "done", "complete"):
-            created = item.get("last_edited") or item.get("created") or ""
-            if created and today_str in created[:10]:
-                published_today.append(item)
-            dt = parse_ts(created or item.get("scheduled_time"))
-            if dt and (now_utc - dt).total_seconds() < 86400:
-                recent_publishes.append(item)
-        elif status in ("failed", "blocked", "error"):
-            failed_blocked.append(item)
-        elif status in ("approved", "ready", "scheduled"):
-            scheduled.append(item)
-        elif status in ("awaiting approval", "draft", "review", "pending", "in review", "awaiting", "in progress"):
-            awaiting_approval.append(item)
-
-        if status not in ("published", "done", "complete", "archived"):
-            all_active.append(item)
-
-        if status in ("approved", "awaiting approval", "drafting", "briefed", "draft", "ready", "scheduled"):
-            sched_dt = parse_ts(sched_raw)
-            if sched_dt and now_utc <= sched_dt <= fourteen_days:
-                schedule_items.append(item)
-
-    scheduled.sort(key=lambda x: x.get("scheduled_time") or "9999")
-    awaiting_approval.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
-    recent_publishes.sort(key=lambda x: x.get("last_edited") or x.get("created") or "9999", reverse=True)
-    schedule_items.sort(key=lambda x: x.get("scheduled_time") or "9999")
-
-    # ── Channel stats (automated + manual) ─────────────────────────────────
     all_channels = _CHANNELS + _MANUAL_CHANNELS
-    channel_stats: dict[str, dict] = {}
-    for ch in all_channels:
-        channel_stats[ch["key"]] = {
-            "last_published": None,
-            "last_published_ts": None,
-            "published_today": 0,
-            "next_scheduled": None,
-            "next_scheduled_ts": None,
-            "queue_depth": 0,
-            "last_failed": False,
-        }
-
+    channel_stats: dict[str, dict] = {
+        ch["key"]: {"last_published_ts": None, "queue_depth": 0, "approvals": 0,
+                    "last_failed": False, "items": []}
+        for ch in all_channels
+    }
+    failed_blocked: list[dict] = []
     for item in items:
         ch_key = _normalise_channel_key(item.get("channel") or "")
-        if not ch_key or ch_key not in channel_stats:
+        if ch_key not in channel_stats:
             continue
         status = (item.get("status") or "").lower().strip()
         ts_raw = item.get("last_edited") or item.get("scheduled_time") or item.get("created") or ""
-
         if status in ("published", "done", "complete"):
             dt = parse_ts(ts_raw)
-            if dt:
-                if channel_stats[ch_key]["last_published_ts"] is None or dt > channel_stats[ch_key]["last_published_ts"]:
-                    channel_stats[ch_key]["last_published_ts"] = dt
-                    channel_stats[ch_key]["last_published"] = ts_raw
-                if today_str in ts_raw[:10]:
-                    channel_stats[ch_key]["published_today"] += 1
+            if dt and (channel_stats[ch_key]["last_published_ts"] is None
+                       or dt > channel_stats[ch_key]["last_published_ts"]):
+                channel_stats[ch_key]["last_published_ts"] = dt
         elif status in ("failed", "blocked", "error"):
             channel_stats[ch_key]["last_failed"] = True
+            failed_blocked.append(item)
         elif status not in ("archived",):
             channel_stats[ch_key]["queue_depth"] += 1
+        if status in ("awaiting approval", "draft", "review", "pending", "in review", "awaiting"):
+            channel_stats[ch_key]["approvals"] += 1
+        channel_stats[ch_key]["items"].append(item)
 
-        if status in ("approved", "ready", "scheduled", "awaiting approval"):
-            sched = item.get("scheduled_time") or ""
-            sched_dt = parse_ts(sched)
-            if sched_dt and sched_dt > now_utc:
-                if channel_stats[ch_key]["next_scheduled_ts"] is None or sched_dt < channel_stats[ch_key]["next_scheduled_ts"]:
-                    channel_stats[ch_key]["next_scheduled_ts"] = sched_dt
-                    channel_stats[ch_key]["next_scheduled"] = sched
-
-    # ── Local helpers ──────────────────────────────────────────────────────
-    def _channel_chip(ch_key: str) -> str:
-        ch = _CHANNEL_MAP.get(ch_key)
-        if not ch:
-            return f'<span class="ch-chip" style="background:rgba(107,114,128,0.15);color:var(--muted)">{_html_mod.escape(ch_key) if ch_key else "?"}</span>'
-        return (f'<span class="ch-chip" style="background:{ch["color"]}22;color:{ch["color"]};'
-                f'border:1px solid {ch["color"]}33"><span class="ch-dot" style="background:{ch["color"]}"></span>'
-                f'{ch["label"]}</span>')
-
-    def _sla_status(ch_key: str, last_ts) -> dict:
-        """Return status dict for channel freshness (cls, age, bar, sla)."""
+    def _sla_state(ch_key: str, last_ts) -> dict:
+        sev_color = {"healthy": "var(--green)", "watch": "var(--amber)",
+                     "breached": "var(--red)", "dormant": "#6E7681"}
         if ch_key == "linkedin":
-            sla_disp = f"{_LINKEDIN_GREEN_DAYS}d"
+            sla_disp = f"{_LK_GREEN_DAYS}d"
             if not last_ts:
-                return {"cls": "red", "age": "No posts", "bar": 0, "sla": sla_disp, "ring_pct": 0, "ratio": ""}
+                return {"sev": "dormant", "color": sev_color["dormant"], "age": "\u2014",
+                        "sla": sla_disp, "ratio": "\u2014"}
             age_d = (now_utc - last_ts).total_seconds() / 86400
-            age_lbl = f"{age_d:.0f}d"
-            if age_d < _LINKEDIN_GREEN_DAYS:
-                return {"cls": "green", "age": age_lbl, "bar": min(100, int(age_d / _LINKEDIN_GREEN_DAYS * 50)), "sla": sla_disp, "ring_pct": min(1.0, age_d / (_LINKEDIN_GREEN_DAYS * 2)), "ratio": ""}
-            elif age_d < _LINKEDIN_AMBER_DAYS:
-                return {"cls": "amber", "age": age_lbl, "bar": min(100, int(age_d / _LINKEDIN_GREEN_DAYS * 50)), "sla": sla_disp, "ring_pct": min(1.0, age_d / (_LINKEDIN_GREEN_DAYS * 2)), "ratio": f"{age_d/_LINKEDIN_GREEN_DAYS:.1f}x over"}
-            return {"cls": "red", "age": age_lbl, "bar": 100, "sla": sla_disp, "ring_pct": 1.0, "ratio": f"{age_d/_LINKEDIN_GREEN_DAYS:.1f}x over"}
+            if age_d < _LK_GREEN_DAYS:
+                sev = "healthy"
+            elif age_d < _LK_AMBER_DAYS:
+                sev = "watch"
+            else:
+                sev = "breached"
+            return {"sev": sev, "color": sev_color[sev], "age": f"{age_d:.0f}d",
+                    "sla": sla_disp, "ratio": f"{age_d:.0f}d / {_LK_GREEN_DAYS}d"}
         sla_h = _CHANNEL_SLA.get(ch_key, 24.0)
         sla_disp = f"{sla_h:.0f}h"
         if not last_ts:
-            return {"cls": "grey", "age": "\u2014", "bar": 0, "sla": sla_disp, "ring_pct": 0, "ratio": ""}
+            return {"sev": "dormant", "color": sev_color["dormant"], "age": "\u2014",
+                    "sla": sla_disp, "ratio": "\u2014"}
         age_h = (now_utc - last_ts).total_seconds() / 3600
         if age_h < 1:
             age_lbl = f"{int(age_h * 60)}m"
         elif age_h < 48:
-            age_lbl = f"{age_h:.0f}h"
+            age_lbl = f"{age_h:.1f}h"
         else:
             age_lbl = f"{age_h / 24:.0f}d"
-        bar_pct = min(100, int(age_h / sla_h * 50))
-        ratio = age_h / sla_h if sla_h else 0
-        ratio_txt = f"{ratio:.1f}x over" if ratio >= 1.0 else ""
-        ring_pct = min(1.0, age_h / (sla_h * 2)) if sla_h else 0
         if age_h < sla_h:
-            return {"cls": "green", "age": age_lbl, "bar": bar_pct, "sla": sla_disp, "ring_pct": ring_pct, "ratio": ratio_txt}
+            sev = "healthy"
         elif age_h < sla_h * 2:
-            return {"cls": "amber", "age": age_lbl, "bar": bar_pct, "sla": sla_disp, "ring_pct": ring_pct, "ratio": ratio_txt}
-        return {"cls": "red", "age": age_lbl, "bar": 100, "sla": sla_disp, "ring_pct": 1.0, "ratio": ratio_txt}
-
-    # ── Topbar ─────────────────────────────────────────────────────────────
-    banner = ""
-    if cache_age_str:
-        banner = f'<div class="banner banner-warn">{cache_age_str}</div>'
-    elif not notion_ok:
-        banner = '<div class="banner banner-err">Notion unavailable -- no cached data</div>'
-
-    topbar = f"""<nav class="topbar">
-  <div class="topbar-left"><div class="topbar-pill">Social Ops</div></div>
-  <div class="topbar-right"><div class="topbar-meta">Updated <em>{updated} SAST</em></div></div>
-</nav>
-{banner}"""
-
-    # ── 1. Channel Health (6 automated rows + 3 manual cards + legend) ──
-    auto_rows = ""
-    for ch in _CHANNELS:
-        cs = channel_stats[ch["key"]]
-        last_ts = cs.get("last_published_ts")
-        st = _sla_status(ch["key"], last_ts)
-        if cs["last_failed"]:
-            st = {"cls": "red", "age": "Failed", "bar": 100, "sla": st["sla"]}
-        qd = cs["queue_depth"]
-        q_html = f'<div class="queue-badge has-items">Q: {qd}</div>' if qd > 0 else '<div class="queue-badge empty">\u2014</div>'
-        _circ = 94.25
-        _offset = _circ * (1 - st.get('ring_pct', 0))
-        _ratio_span = f" &middot; {st['ratio']}" if st.get('ratio') else ""
-        if st['age'] == '\u2014' or st['age'] == 'No posts' or st['age'] == 'Failed':
-            _age_text = f"<span class='time-val'>{st['age']}</span> &middot; SLA {st['sla']}"
+            sev = "watch"
         else:
-            _age_text = f"<span class='time-val'>{st['age']}</span> ago &middot; SLA {st['sla']}{_ratio_span}"
-        auto_rows += f"""<div class="channel-row status-{st['cls']}">
-  <div class="channel-icon">{_CHANNEL_SVG.get(ch['key'], ch.get('emoji', ''))}</div>
-  <div class="channel-name">{ch['label']}</div>
-  <div class="ring-cell"><svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="15" fill="none" stroke-width="4" class="ring-bg"/><circle cx="20" cy="20" r="15" fill="none" stroke-width="4" class="ring-fill {st['cls']}" stroke-dasharray="{_circ}" stroke-dashoffset="{_offset:.1f}" stroke-linecap="round" transform="rotate(-90 20 20)"/></svg></div>
-  <div class="freshness-text {st['cls']}">{_age_text}</div>
-  {q_html}
-</div>"""
+            sev = "breached"
+        return {"sev": sev, "color": sev_color[sev], "age": age_lbl,
+                "sla": sla_disp, "ratio": f"{age_lbl} / {sla_disp}"}
 
-    manual_cards = ""
-    for ch in _MANUAL_CHANNELS:
+    _SEV_ORDER = {"breached": 0, "watch": 1, "dormant": 2, "healthy": 3}
+    rows_data = []
+    for ch in all_channels:
         cs = channel_stats[ch["key"]]
-        last_ts = cs.get("last_published_ts")
-        st = _sla_status(ch["key"], last_ts)
+        st = _sla_state(ch["key"], cs["last_published_ts"])
         if cs["last_failed"]:
-            st["cls"] = "red"
-            st["age"] = "Failed"
-        age_html = f'Last post <span class="val {st["cls"]}">{st["age"]}</span> ago' if st["age"] not in ("\u2014", "No posts", "Failed") else f'<span class="val {st["cls"]}">{st["age"]}</span>'
-        qd = cs["queue_depth"]
-        q_html = f'<div class="manual-queue">Q: {qd}</div>' if qd > 0 else ""
-        manual_cards += f"""<div class="manual-card">
-  <div class="manual-icon">{_CHANNEL_SVG.get(ch['key'], ch.get('emoji', ''))}</div>
-  <div class="manual-info"><div class="manual-name">{ch['label']}</div><div class="manual-age">{age_html}</div></div>
-  {q_html}
-</div>"""
+            st = {"sev": "breached", "color": "var(--red)", "age": "Failed",
+                  "sla": st["sla"], "ratio": "Failed"}
+        rows_data.append({"ch": ch, "st": st, "approvals": cs["approvals"],
+                          "queue": cs["queue_depth"], "last_ts": cs["last_published_ts"]})
 
-    channel_health = f"""<div class="panel" style="margin-bottom:20px">
-  <div class="panel-head"><span class="panel-title">Channel Health</span><span class="panel-sub">9 channels &middot; SLA-based freshness</span></div>
-  <div class="auto-grid">{auto_rows}</div>
-  <div class="manual-section"><div class="manual-label">Manual Channels</div><div class="manual-grid">{manual_cards}</div></div>
-  <div class="sla-legend">
-    <div class="sla-legend-item"><div class="sla-legend-dot green"></div> Within SLA</div>
-    <div class="sla-legend-item"><div class="sla-legend-dot amber"></div> 1\u20132\u00d7 SLA</div>
-    <div class="sla-legend-item"><div class="sla-legend-dot red"></div> Over 2\u00d7 SLA</div>
-    <div class="sla-legend-item"><div class="sla-legend-dot grey"></div> No publishes</div>
+    def _sort_key(r):
+        sev = r["st"]["sev"]
+        ts = r["last_ts"].timestamp() if r["last_ts"] else 0
+        secondary = -ts if sev != "healthy" else ts
+        return (_SEV_ORDER[sev], secondary)
+    rows_data.sort(key=_sort_key)
+
+    def _row_html(r: dict) -> str:
+        ch, st = r["ch"], r["st"]
+        is_dormant = st["sev"] == "dormant"
+        dot_style = (f'background:transparent;border:1.5px solid {st["color"]}'
+                     if is_dormant else f'background:{st["color"]};border:1.5px solid {st["color"]}')
+        appr_badge = (f'<span class="so-ch-appr-badge">\u00d7{r["approvals"]}</span>'
+                      if r["approvals"] > 0 else "")
+        if r["last_ts"]:
+            age_h = (now_utc - r["last_ts"]).total_seconds() / 3600
+            if age_h < 1:
+                last_pub = f"{int(age_h * 60)}m ago"
+            elif age_h < 48:
+                last_pub = f"{age_h:.1f}h ago"
+            else:
+                last_pub = f"{age_h / 24:.0f}d ago"
+        else:
+            last_pub = "no posts"
+        icon_svg = _CHANNEL_SVG.get(ch["key"], "")
+        return (
+            f'<div class="so-ch-row" data-severity="{st["sev"]}" data-channel="{ch["key"]}">'
+            f'<span class="so-ch-dot" style="{dot_style}"></span>'
+            f'<span class="so-ch-icon">{icon_svg}</span>'
+            f'<span class="so-ch-name">{_html_mod.escape(ch["label"])}</span>'
+            f'<span class="so-ch-last">{last_pub}</span>'
+            f'<span class="so-ch-sla">{st["ratio"]}</span>'
+            f'{appr_badge}'
+            f'</div>'
+        )
+
+    channel_rows_html = "".join(_row_html(r) for r in rows_data)
+
+    fb_banner_html = ""
+    if failed_blocked:
+        fb_count = len(failed_blocked)
+        fb_first = failed_blocked[:3]
+        fb_summary_parts = []
+        for it in fb_first:
+            ch_key = _normalise_channel_key(it.get("channel") or "")
+            ch_lbl = _CHANNEL_MAP.get(ch_key, {}).get("label", ch_key or "?")
+            err = _truncate(it.get("error") or it.get("title") or "issue", 60)
+            fb_summary_parts.append(f'{_html_mod.escape(ch_lbl)}: {_html_mod.escape(err)}')
+        more = (f' <span class="so-fb-more">+{fb_count - 3} more</span>'
+                if fb_count > 3 else "")
+        fb_banner_html = (
+            '<div class="so-fb-banner">'
+            f'<span class="so-fb-count">{fb_count} failed/blocked</span>'
+            f'<span class="so-fb-list">{" \u00b7 ".join(fb_summary_parts)}</span>'
+            f'{more}</div>'
+        )
+
+    task_rows_html = ""
+    task_count = 0
+    try:
+        blocks = _fetch_task_hub_blocks()
+        in_manual = False
+        rendered: list[str] = []
+        for block in blocks:
+            btype = block.get("type", "")
+            if not in_manual:
+                if btype == "heading_1" and "Manual Tasks" in _block_plain_text(block):
+                    in_manual = True
+                continue
+            if btype in ("divider", "heading_1"):
+                break
+            if btype != "to_do" or block.get("to_do", {}).get("checked"):
+                continue
+            rt_arr = block.get("to_do", {}).get("rich_text", [])
+            plain = "".join(sp.get("plain_text", "") for sp in rt_arr).strip()
+            if not plain:
+                continue
+            cat = _classify_task(plain)
+            block_id = block.get("id", "")
+            tit_html = render_rich_text_html(rt_arr)
+            url_match = re.search(r'href="([^"]+)"', tit_html)
+            url = url_match.group(1) if url_match else ""
+            copy_btn = (f'<button class="so-tk-copy" data-text="{_html_mod.escape(url)}">Copy</button>'
+                        if url else "")
+            open_btn = (f'<a class="so-tk-open" href="{_html_mod.escape(url)}" target="_blank">Open</a>'
+                        if url else "")
+            rendered.append(
+                f'<div class="so-tk-row" data-cat="{cat}" data-block="{block_id}">'
+                f'<input type="checkbox" class="so-tk-check" data-block="{block_id}">'
+                f'<span class="so-tk-text">{tit_html}</span>'
+                f'<span class="so-tk-chip so-tk-chip-{cat}">{cat}</span>'
+                f'<span class="so-tk-actions">{copy_btn}{open_btn}'
+                f'<button class="so-tk-skip" data-block="{block_id}">Skip</button></span>'
+                f'</div>'
+            )
+        task_count = len(rendered)
+        task_rows_html = "".join(rendered) if rendered else (
+            '<div class="so-empty">No tasks right now.</div>'
+        )
+    except Exception:
+        task_rows_html = '<div class="so-empty">No tasks right now.</div>'
+
+    drawers_html = ""
+    for ch in all_channels:
+        cs = channel_stats[ch["key"]]
+        items_for_ch = [
+            it for it in cs["items"]
+            if (it.get("status") or "").lower().strip() in
+            ("awaiting approval", "draft", "review", "pending", "in review", "awaiting")
+        ]
+        if not items_for_ch:
+            continue
+        body = ""
+        for it in items_for_ch:
+            page_id = it.get("id", "")
+            sched = _sast_hhmm(it.get("scheduled_time")) + " SAST" if it.get("scheduled_time") else "\u2014"
+            copy_text = _html_mod.escape(it.get("copy") or "")
+            body += (
+                f'<div class="so-dw-item" id="so-appr-{page_id}">'
+                f'<div class="so-dw-meta">{sched}</div>'
+                f'<div class="so-dw-copy">{copy_text}</div>'
+                f'<div class="so-dw-actions">'
+                f'<button class="btn-approve" data-id="{page_id}">Approve</button>'
+                f'<button class="btn-archive" data-id="{page_id}">Archive</button>'
+                f'</div></div>'
+            )
+        drawers_html += f'<template class="so-dw-tpl" data-channel="{ch["key"]}">{body}</template>'
+
+    notion_warn = '' if notion_ok else (
+        '<div class="so-warn">Notion unavailable \u2014 showing cached data</div>'
+    )
+
+    css = """<style>
+.so-page{font-family:var(--font-b);color:var(--text);background:var(--carbon);min-height:100vh;padding:16px 20px;}
+.so-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.so-h1{font-size:18px;font-weight:600;letter-spacing:-0.01em;margin:0;color:var(--text);}
+.so-controls{display:flex;align-items:center;gap:10px;}
+.so-sync-pill{font-family:var(--font-m);font-size:12px;color:var(--muted);
+  background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:4px 10px;}
+.so-toggle{display:inline-flex;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+.so-toggle button{background:none;border:none;color:var(--muted);font-family:var(--font-b);font-size:12px;padding:5px 10px;cursor:pointer;}
+.so-toggle button.so-toggle-on{color:var(--text);background:rgba(88,166,255,0.10);}
+.so-warn{font-size:12px;color:var(--amber);margin-bottom:10px;}
+.so-grid{display:grid;grid-template-columns: 58% 42%;gap:16px;}
+@media(max-width:1199px){.so-grid{grid-template-columns:1fr;}}
+.so-pane{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.so-pane-head{padding:10px 14px;border-bottom:1px solid var(--border);font-size:13px;font-weight:600;color:var(--text);
+  display:flex;align-items:center;justify-content:space-between;}
+.so-pane-head .so-pane-count{font-family:var(--font-m);font-size:12px;color:var(--muted);font-weight:400;}
+.so-pane-body{padding:6px 0;}
+.so-fb-banner{background:rgba(248,81,73,0.10);border-bottom:1px solid rgba(248,81,73,0.40);
+  color:var(--red);font-family:var(--font-m);font-size:12px;padding:6px 14px;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;line-height:1.4;}
+.so-fb-count{font-weight:600;}
+.so-fb-list{color:var(--text);}
+.so-fb-more{color:var(--muted);cursor:pointer;text-decoration:underline;}
+.so-ch-row{display:grid;grid-template-columns:14px 22px 1fr 90px 90px auto;gap:10px;align-items:center;
+  height:36px;padding:0 14px;border-bottom:1px solid rgba(48,54,61,0.5);cursor:pointer;
+  font-size:13px;color:var(--text);}
+.so-ch-row:hover{background:rgba(88,166,255,0.05);}
+.so-ch-row:last-child{border-bottom:none;}
+.so-ch-dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
+.so-ch-icon{display:flex;align-items:center;justify-content:center;}
+.so-ch-icon svg{width:18px;height:18px;}
+.so-ch-name{font-weight:600;font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.so-ch-last{font-family:var(--font-m);font-size:12px;color:var(--muted);text-align:right;}
+.so-ch-sla{font-family:var(--font-m);font-size:12px;color:var(--muted);text-align:right;}
+.so-ch-appr-badge{font-family:var(--font-m);font-size:11px;font-weight:600;
+  background:rgba(88,166,255,0.15);color:var(--gold);border-radius:10px;padding:1px 8px;}
+.so-tk-row{display:grid;grid-template-columns:16px 1fr auto auto;gap:10px;align-items:center;
+  height:40px;padding:0 14px;border-bottom:1px solid rgba(48,54,61,0.5);font-size:13px;}
+.so-tk-row:hover{background:rgba(88,166,255,0.05);}
+.so-tk-row:last-child{border-bottom:none;}
+.so-tk-row.so-tk-done{opacity:0.4;text-decoration:line-through;transition:opacity 200ms;}
+.so-tk-check{width:16px;height:16px;cursor:pointer;}
+.so-tk-text{font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.so-tk-text a{color:var(--gold);text-decoration:none;}
+.so-tk-text a:hover{text-decoration:underline;}
+.so-tk-chip{font-family:var(--font-m);font-size:11px;padding:1px 6px;border-radius:3px;text-transform:lowercase;}
+.so-tk-chip-post{background:rgba(88,166,255,0.15);color:var(--gold);}
+.so-tk-chip-connect{background:rgba(174,129,255,0.15);color:#AE81FF;}
+.so-tk-chip-answer{background:rgba(255,166,87,0.15);color:#FFA657;}
+.so-tk-chip-remind{background:rgba(125,133,144,0.15);color:var(--muted);}
+.so-tk-actions{display:flex;align-items:center;gap:6px;visibility:hidden;}
+.so-tk-row:hover .so-tk-actions{visibility:visible;}
+.so-tk-actions button,.so-tk-actions a{font-family:var(--font-m);font-size:11px;
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  border-radius:3px;padding:2px 8px;cursor:pointer;text-decoration:none;}
+.so-tk-actions button:hover,.so-tk-actions a:hover{color:var(--text);border-color:var(--gold);}
+.so-tk-copy.so-tk-copied{color:var(--green);border-color:var(--green);}
+.so-empty{padding:30px 14px;text-align:center;color:var(--muted);font-size:13px;}
+.so-drawer-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:80;}
+.so-drawer-backdrop.open{display:block;}
+.so-drawer{position:fixed;top:0;right:0;bottom:0;width:min(420px,100vw);background:var(--surface);
+  border-left:1px solid var(--border);z-index:81;transform:translateX(100%);transition:transform 200ms;
+  display:flex;flex-direction:column;}
+.so-drawer.open{transform:translateX(0);}
+.so-dw-head{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.so-dw-title{font-size:14px;font-weight:600;color:var(--text);}
+.so-dw-close{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;}
+.so-dw-body{overflow-y:auto;padding:8px 0;}
+.so-dw-item{padding:10px 16px;border-bottom:1px solid rgba(48,54,61,0.5);}
+.so-dw-meta{font-family:var(--font-m);font-size:11px;color:var(--muted);margin-bottom:4px;}
+.so-dw-copy{font-size:13px;color:var(--text);white-space:pre-wrap;line-height:1.4;margin-bottom:8px;}
+.so-dw-actions{display:flex;gap:8px;}
+.btn-approve{background:rgba(63,185,80,0.15);color:var(--green);border:1px solid rgba(63,185,80,0.30);
+  border-radius:4px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;}
+.btn-archive{background:rgba(125,133,144,0.10);color:var(--muted);border:1px solid var(--border);
+  border-radius:4px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;}
+</style>"""
+
+    js = """<script>
+(function(){
+  var btnAll = document.getElementById('so-toggle-all');
+  var btnBlocked = document.getElementById('so-toggle-blocked');
+  var rows = document.querySelectorAll('.so-ch-row');
+  function applyFilter(blockedOnly){
+    rows.forEach(function(r){
+      if (blockedOnly){
+        r.style.display = (r.dataset.severity === 'breached' || r.dataset.severity === 'watch') ? 'grid' : 'none';
+      } else { r.style.display = 'grid'; }
+    });
+  }
+  if (btnAll) btnAll.addEventListener('click', function(){
+    btnAll.classList.add('so-toggle-on'); btnBlocked.classList.remove('so-toggle-on'); applyFilter(false);
+  });
+  if (btnBlocked) btnBlocked.addEventListener('click', function(){
+    btnBlocked.classList.add('so-toggle-on'); btnAll.classList.remove('so-toggle-on'); applyFilter(true);
+  });
+
+  var backdrop = document.getElementById('so-drawer-backdrop');
+  var drawer = document.getElementById('so-drawer');
+  var drawerTitle = document.getElementById('so-drawer-title');
+  var drawerBody = document.getElementById('so-drawer-body');
+  function closeDrawer(){
+    if (drawer) drawer.classList.remove('open');
+    if (backdrop) backdrop.classList.remove('open');
+  }
+  function openDrawer(channelKey, label){
+    if (!drawer || !drawerBody || !drawerTitle) return;
+    drawerTitle.textContent = label;
+    var tpl = document.querySelector('template.so-dw-tpl[data-channel="' + channelKey + '"]');
+    drawerBody.innerHTML = tpl ? tpl.innerHTML : '<div class="so-empty">No items awaiting.</div>';
+    drawer.classList.add('open');
+    backdrop.classList.add('open');
+  }
+  document.querySelectorAll('.so-ch-row').forEach(function(row){
+    row.addEventListener('click', function(){
+      var ch = row.dataset.channel;
+      var label = row.querySelector('.so-ch-name').textContent;
+      openDrawer(ch, label);
+    });
+  });
+  if (backdrop) backdrop.addEventListener('click', closeDrawer);
+  var closeBtn = document.getElementById('so-drawer-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+
+  document.addEventListener('click', function(e){
+    var btn = e.target;
+    if (!btn.classList || (!btn.classList.contains('btn-approve') && !btn.classList.contains('btn-archive'))) return;
+    var id = btn.dataset.id; if (!id) return;
+    var card = document.getElementById('so-appr-' + id); if (!card) return;
+    var newStatus = btn.classList.contains('btn-approve') ? 'Approved' : 'Archived';
+    card.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
+    fetch('/admin/api/notion/patch', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({page_id:id, status:newStatus})
+    }).then(function(r){
+      if (r.ok){ card.style.transition='opacity 0.4s'; card.style.opacity='0.3'; setTimeout(function(){ card.remove(); }, 400); }
+      else { card.querySelectorAll('button').forEach(function(b){ b.disabled = false; }); }
+    }).catch(function(){ card.querySelectorAll('button').forEach(function(b){ b.disabled = false; }); });
+  });
+
+  document.querySelectorAll('.so-tk-check').forEach(function(cb){
+    cb.addEventListener('change', function(){
+      if (!cb.checked) return;
+      var blockId = cb.dataset.block;
+      var row = cb.closest('.so-tk-row');
+      cb.disabled = true;
+      fetch('/admin/api/done-block', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({block_id: blockId})
+      }).then(function(r){
+        if (r.ok && row){
+          row.classList.add('so-tk-done');
+          setTimeout(function(){ row.remove(); }, 400);
+        } else { cb.disabled = false; cb.checked = false; }
+      }).catch(function(){ cb.disabled = false; cb.checked = false; });
+    });
+  });
+
+  document.querySelectorAll('.so-tk-skip').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var row = btn.closest('.so-tk-row'); if (!row) return;
+      row.classList.add('so-tk-done');
+      setTimeout(function(){ row.remove(); }, 400);
+    });
+  });
+
+  document.querySelectorAll('.so-tk-copy').forEach(function(btn){
+    btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      var text = btn.dataset.text || '';
+      navigator.clipboard.writeText(text).then(function(){
+        btn.textContent = 'Copied'; btn.classList.add('so-tk-copied');
+        setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.remove('so-tk-copied'); }, 1500);
+      }).catch(function(){});
+    });
+  });
+})();
+</script>"""
+
+    return f"""{css}
+<div class="so-page">
+  <div class="so-topbar">
+    <h1 class="so-h1">Social Ops</h1>
+    <div class="so-controls">
+      <span class="so-sync-pill">{sync_label}</span>
+      <div class="so-toggle">
+        <button id="so-toggle-all" class="so-toggle-on">All</button>
+        <button id="so-toggle-blocked">Blocked only</button>
+      </div>
+    </div>
   </div>
-</div>"""
-
-    # ── 2. Inner tabs: Approve | Reel Kit | Calendar | Tasks ───────────────
-
-    # --- Approve tab content ---
-    approve_items_all = _get_awaiting_items(items, include_overdue=False)
-    n_approve = len(approve_items_all)
-    if approve_items_all:
-        appr_cards = ""
-        for item in approve_items_all:
-            ch_key = _normalise_channel_key(item.get("channel") or "")
-            sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
-            campaign = _truncate(item.get("campaign_theme") or "", 40)
-            copy_text = item.get("copy") or ""
-            item_channel = item.get("channel") or ""
-            item_work_type = item.get("work_type") or ""
-            item_platform_notes = item.get("platform_notes") or ""
-            asset_link = item.get("asset_link") or ""
-            media_html = ""
-            if asset_link:
-                ext = asset_link.rsplit(".", 1)[-1].lower().split("?")[0] if "." in asset_link else ""
-                if ext in ("mp4", "mov", "webm"):
-                    media_html = (f'<video src="{_html_mod.escape(asset_link)}" controls '
-                                  f'style="max-height:300px;border-radius:4px;display:block;margin-top:10px;width:auto;"></video>')
-                elif ext in ("jpg", "jpeg", "png", "gif", "webp"):
-                    media_html = (f'<img src="{_html_mod.escape(asset_link)}" alt="post asset" '
-                                  f'style="max-height:300px;border-radius:4px;object-fit:cover;display:block;margin-top:10px;">')
-            tiktok_file_html = ""
-            if "tiktok" in item_channel.lower() and item_platform_notes:
-                _fn_match = re.search(r'[Ff]ile:\s*(.+)', item_platform_notes)
-                if _fn_match:
-                    tiktok_file_html = (f'<div style="margin-top:6px;font-size:11px;color:var(--amber);'
-                                        f'font-family:var(--font-m)">&#128193; File to upload: '
-                                        f'<code>{_html_mod.escape(_fn_match.group(1).strip())}</code></div>')
-            page_id = item.get("id", "")
-            appr_cards += f"""<div class="appr-card" id="so-appr-{page_id}">
-  <div class="appr-header">
-    {_channel_chip(ch_key)}
-    <span class="appr-meta">&#128337; {sched_str}</span>
-    {f'<span class="appr-campaign">{_html_mod.escape(campaign)}</span>' if campaign else ""}
+  {notion_warn}
+  <div class="so-grid">
+    <div class="so-pane">
+      <div class="so-pane-head">Tasks <span class="so-pane-count">{task_count}</span></div>
+      <div class="so-pane-body">{task_rows_html}</div>
+    </div>
+    <div class="so-pane">
+      {fb_banner_html}
+      <div class="so-pane-head">Channels <span class="so-pane-count">{len(rows_data)}</span></div>
+      <div class="so-pane-body">{channel_rows_html}</div>
+    </div>
   </div>
-  <div class="appr-copy">{_html_mod.escape(copy_text)}</div>
-  {media_html}
-  {tiktok_file_html}
-  <div class="appr-error" style="display:none;color:var(--red);font-size:11px;margin-top:8px"></div>
-  <div class="appr-actions">
-    <button class="btn-approve" data-id="{page_id}">Approve</button>
-    <button class="btn-archive" data-id="{page_id}">Archive</button>
-  </div>
-</div>"""
-        approve_tab_html = f'<div id="so-appr-list">{appr_cards}</div>'
-    else:
-        approve_tab_html = '<div class="empty-state">No posts awaiting approval.</div>'
+  <div class="so-drawer-backdrop" id="so-drawer-backdrop"></div>
+  <aside class="so-drawer" id="so-drawer" aria-hidden="true">
+    <div class="so-dw-head">
+      <span class="so-dw-title" id="so-drawer-title">Channel</span>
+      <button class="so-dw-close" id="so-drawer-close" aria-label="Close">\u00d7</button>
+    </div>
+    <div class="so-dw-body" id="so-drawer-body"></div>
+  </aside>
+  {drawers_html}
+</div>
+{js}"""
 
-    # --- Reel Kit tab content ---
-    reel_kits: list[dict] = []
+
+def render_reel_kit_page() -> str:
+    """Render the dedicated Reel Kit gallery page (UI-SOCIAL-OPS-REDESIGN-01)."""
+    import html as _html_mod
+    now_sast = datetime.now(timezone.utc).astimezone(_SAST)
+    today_str = now_sast.strftime("%Y-%m-%d")
     try:
         reel_kits = _scan_reel_kits(today_str)
     except Exception:
-        pass
-    n_reel = len(reel_kits)
+        reel_kits = []
 
     _TIER_COLORS = {"diamond": "#00D4FF", "gold": "#F59E0B", "silver": "#94A3B8", "bronze": "#CD7F32"}
     if reel_kits:
-        rk_cards = ""
+        cards = ""
         for kit in reel_kits:
             pick_id = kit["pick_id"]
             tier_key = kit.get("tier") or ""
@@ -3099,18 +3275,65 @@ def render_automation_content() -> str:
             thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/{thumb_file}"
             card_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/card_{pick_id}.png"
             display_name = pick_id[:12].upper()
-            rk_cards += f"""<div class="rk-card" style="border-top:3px solid {tier_color}">
+            cards += f"""<div class="rk-card" style="border-top:3px solid {tier_color}">
   <img class="rk-thumb" src="{_html_mod.escape(thumb_url)}" alt="{_html_mod.escape(display_name)}" loading="lazy">
   <div class="rk-tier" style="color:{tier_color}">{_html_mod.escape(tier_label)}</div>
   <div class="rk-name">{_html_mod.escape(display_name)}</div>
   <div class="rk-status">{status_html}</div>
-  <a class="rk-download" href="{_html_mod.escape(card_url)}" download target="_blank">&#11015; Download</a>
+  <a class="rk-download" href="{_html_mod.escape(card_url)}" download target="_blank">\u2b07 Download</a>
 </div>"""
-        reel_tab_html = f'<div class="rk-scroll">{rk_cards}</div>'
+        body = f'<div class="rk-grid">{cards}</div>'
     else:
-        reel_tab_html = '<div class="empty-state">No reel kits for today.</div>'
+        body = '<div class="rk-empty">No reel kits for today.</div>'
 
-    # --- Calendar tab content (14-day schedule table) ---
+    return f"""<style>
+.rk-page{{font-family:var(--font-b);color:var(--text);background:var(--carbon);min-height:100vh;padding:20px;}}
+.rk-h1{{font-size:18px;font-weight:600;margin:0 0 16px 0;}}
+.rk-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;}}
+.rk-card{{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;}}
+.rk-thumb{{width:100%;height:160px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.04);}}
+.rk-tier{{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:8px;}}
+.rk-name{{font-family:var(--font-m);font-size:12px;color:var(--text);margin-top:4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+.rk-status{{font-family:var(--font-m);font-size:11px;margin-top:4px;}}
+.rk-download{{display:block;margin-top:8px;padding:6px 0;background:rgba(88,166,255,.12);color:var(--gold);
+  border:1px solid rgba(88,166,255,.30);border-radius:5px;font-weight:700;font-size:11px;
+  text-decoration:none;}}
+.rk-download:hover{{background:rgba(88,166,255,.22);}}
+.rk-empty{{text-align:center;padding:60px 0;color:var(--muted);}}
+</style>
+<div class="rk-page">
+  <h1 class="rk-h1">Reel Kit \u2014 {today_str}</h1>
+  {body}
+</div>"""
+
+
+def render_calendar_page() -> str:
+    """Render the dedicated Calendar (14-day schedule) page (UI-SOCIAL-OPS-REDESIGN-01)."""
+    import html as _html_mod
+    now_utc = datetime.now(timezone.utc)
+    now_sast = now_utc.astimezone(_SAST)
+    fourteen_days = now_utc + timedelta(days=14)
+
+    items: list[dict] = []
+    try:
+        items, _ = _fetch_marketing_queue()
+    except Exception:
+        with _notion_cache_lock:
+            cached = _notion_cache.get("marketing_queue")
+            if cached:
+                items = cached[0]
+
+    schedule_items: list[dict] = []
+    for item in items:
+        status = (item.get("status") or "").lower().strip()
+        if status not in ("approved", "awaiting approval", "drafting", "briefed", "draft", "ready", "scheduled"):
+            continue
+        sched_dt = parse_ts(item.get("scheduled_time") or "")
+        if sched_dt and now_utc <= sched_dt <= fourteen_days:
+            schedule_items.append(item)
+    schedule_items.sort(key=lambda x: x.get("scheduled_time") or "9999")
+
     channel_keys = [c["key"] for c in _CHANNELS]
     sched_grid: dict[str, dict[str, list]] = {}
     for i in range(14):
@@ -3129,17 +3352,16 @@ def render_automation_content() -> str:
         if ch_key in sched_grid[day_key]:
             sched_grid[day_key][ch_key].append(item)
 
-    def _sched_status_color(status: str) -> str:
-        low = status.lower().strip()
-        if low in ("approved", "ready", "scheduled"):
+    def _color(status: str) -> str:
+        s = status.lower().strip()
+        if s in ("approved", "ready", "scheduled"):
             return "var(--green)"
-        elif low in ("awaiting approval", "awaiting"):
+        if s in ("awaiting approval", "awaiting"):
             return "var(--amber)"
-        else:
-            return "var(--muted)"
+        return "var(--muted)"
 
-    ch_headers = "".join(f'<th style="min-width:90px">{c["label"]}</th>' for c in _CHANNELS)
-    sched_rows = ""
+    ch_headers = "".join(f'<th>{c["label"]}</th>' for c in _CHANNELS)
+    rows = ""
     for i in range(14):
         day_dt = now_sast + timedelta(days=i)
         day_key = day_dt.strftime("%Y-%m-%d")
@@ -3149,294 +3371,32 @@ def render_automation_content() -> str:
             day_items = sched_grid[day_key].get(ch["key"], [])
             if not day_items:
                 cells += "<td></td>"
-            else:
-                cell_html = ""
-                for it in day_items:
-                    title = _truncate(it.get("title") or it.get("copy") or "", 40)
-                    status = it.get("status") or ""
-                    color = _sched_status_color(status)
-                    page_id = it.get("id", "")
-                    cell_html += (f'<div class="sched-cell-item" data-id="{page_id}" '
-                                  f'style="border-left:2px solid {color};padding:2px 6px;margin-bottom:3px;'
-                                  f'cursor:pointer;font-size:11px;font-family:var(--font-m);">'
-                                  f'{_html_mod.escape(title)}</div>')
-                cells += f"<td>{cell_html}</td>"
-        sched_rows += f"<tr><td style='white-space:nowrap;font-weight:600'>{day_label}</td>{cells}</tr>"
-
-    calendar_tab_html = f"""<div class="panel">
-  <div class="panel-head"><span class="panel-title">14-Day Schedule</span><span class="panel-sub">Approved &middot; Awaiting &middot; Drafting &middot; Briefed</span></div>
-  <div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>Day</th>{ch_headers}</tr></thead>
-    <tbody id="sched-body">{sched_rows}</tbody>
-  </table></div>
-</div>"""
-
-    # --- Tasks tab content (delegates to render_task_hub_content) ---
-    # We fetch the count for the tab badge but render lazily via JS AJAX
-    task_hub_blocks: list[dict] = []
-    n_tasks = 0
-    try:
-        task_hub_blocks = _fetch_task_hub_blocks()
-        in_manual = False
-        for block in task_hub_blocks:
-            btype = block.get("type", "")
-            if not in_manual:
-                if btype == "heading_1" and "Manual Tasks" in _block_plain_text(block):
-                    in_manual = True
                 continue
-            if btype in ("divider", "heading_1"):
-                break
-            if btype == "to_do" and not block.get("to_do", {}).get("checked", False):
-                rt_arr = block.get("to_do", {}).get("rich_text", [])
-                plain = "".join(sp.get("plain_text", "") for sp in rt_arr).strip()
-                if plain:
-                    n_tasks += 1
-    except Exception:
-        pass
+            cell = ""
+            for it in day_items:
+                title = _truncate(it.get("title") or it.get("copy") or "", 40)
+                color = _color(it.get("status") or "")
+                cell += (f'<div class="cal-item" style="border-left:2px solid {color};">'
+                         f'{_html_mod.escape(title)}</div>')
+            cells += f"<td>{cell}</td>"
+        rows += f'<tr><td class="cal-day">{day_label}</td>{cells}</tr>'
 
-    # ── Assemble inner tabs ────────────────────────────────────────────────
-    inner_tabs_html = f"""<div class="so-tabs">
-  <button class="so-tab so-tab-active" data-tab="so-tab-tasks">Tasks ({n_tasks})</button>
-  <button class="so-tab" data-tab="so-tab-reel">Reel Kit ({n_reel})</button>
-  <button class="so-tab" data-tab="so-tab-calendar">Calendar</button>
-</div>
-<div class="so-tab-panels">
-  <div class="so-tab-panel so-tab-panel-active" id="so-tab-tasks"><div id="so-tasks-slot"><div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--font-m)">Loading tasks...</div></div></div>
-  <div class="so-tab-panel" id="so-tab-reel">{reel_tab_html}</div>
-  <div class="so-tab-panel" id="so-tab-calendar">{calendar_tab_html}</div>
+    return f"""<style>
+.cal-page{{font-family:var(--font-b);color:var(--text);background:var(--carbon);min-height:100vh;padding:20px;}}
+.cal-h1{{font-size:18px;font-weight:600;margin:0 0 16px 0;}}
+.cal-tbl{{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;}}
+.cal-tbl th,.cal-tbl td{{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;font-size:12px;}}
+.cal-tbl th{{background:var(--surface-alt);color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;}}
+.cal-day{{font-weight:600;white-space:nowrap;color:var(--text);}}
+.cal-item{{padding:2px 6px;margin-bottom:3px;font-family:var(--font-m);font-size:11px;color:var(--text);}}
+</style>
+<div class="cal-page">
+  <h1 class="cal-h1">14-Day Schedule</h1>
+  <table class="cal-tbl">
+    <thead><tr><th>Day</th>{ch_headers}</tr></thead>
+    <tbody>{rows}</tbody>
+  </table>
 </div>"""
-
-    # ── CSS ────────────────────────────────────────────────────────────────
-    so_css = """<style>
-/* Channel Health — Redesigned (Commit 5.5) */
-.auto-grid{display:flex;flex-direction:column;gap:3px;margin-bottom:20px;padding:16px 20px 0 20px;}
-.channel-row{display:grid;grid-template-columns:28px 150px 48px 1fr 70px;align-items:center;gap:12px;padding:6px 16px;background:var(--surface);border-radius:8px;border-left:3px solid transparent;transition:background 150ms;}
-.channel-row:hover{background:var(--surface-alt,#1e2231);}
-.channel-row.status-green{border-left-color:var(--green);}
-.channel-row.status-amber{border-left-color:var(--amber);}
-.channel-row.status-red{border-left-color:var(--red);}
-.channel-row.status-grey{border-left-color:var(--muted);}
-.channel-icon{width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:16px;} .channel-icon svg{width:18px;height:18px;flex-shrink:0;}
-.channel-name{font-family:var(--font-d);font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;}
-.ring-cell{display:flex;align-items:center;justify-content:center;}
-.ring-cell svg{width:40px;height:40px;}
-.ring-bg{stroke:#2a2d3a;}
-.ring-fill{transition:stroke-dashoffset .8s ease;}
-.ring-fill.green{stroke:#22c55e;}
-.ring-fill.amber{stroke:#f59e0b;}
-.ring-fill.red{stroke:#ef4444;}
-.ring-fill.grey{stroke:#475569;}
-.freshness-text{font-family:var(--font-m);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;}
-.freshness-text .time-val{font-weight:600;}
-.freshness-text.green .time-val{color:#4ade80;}
-.freshness-text.amber .time-val{color:#fbbf24;}
-.freshness-text.red .time-val{color:#f87171;}
-.freshness-text.grey .time-val{color:var(--muted);}
-.queue-badge{font-family:var(--font-m);font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;text-align:center;font-variant-numeric:tabular-nums;}
-.queue-badge.has-items{background:rgba(59,130,246,.15);color:#60a5fa;}
-.queue-badge.empty{color:var(--muted);}
-.manual-section{margin-top:4px;padding:0 20px 16px 20px;}
-.manual-label{font-family:var(--font-d);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;padding-left:4px;}
-.manual-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
-.manual-card{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface);border-radius:8px;border:1px solid var(--border);transition:background 150ms;}
-.manual-card:hover{background:var(--surface-alt,#1e2231);}
-.manual-icon{width:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0;} .manual-icon svg{width:18px;height:18px;}
-.manual-info{flex:1;min-width:0;}
-.manual-name{font-family:var(--font-d);font-size:13px;font-weight:600;color:var(--text);}
-.manual-age{font-family:var(--font-m);font-size:11px;color:var(--muted);margin-top:1px;}
-.manual-age .val{font-weight:600;}
-.manual-age .val.green{color:#4ade80;}
-.manual-age .val.amber{color:#fbbf24;}
-.manual-age .val.red{color:#f87171;}
-.manual-queue{font-family:var(--font-m);font-size:11px;font-weight:600;color:#60a5fa;flex-shrink:0;}
-.sla-legend{padding:12px 20px;display:flex;gap:16px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);}
-.sla-legend-item{display:flex;align-items:center;gap:6px;font-family:var(--font-m);font-size:11px;color:var(--muted);}
-.sla-legend-dot{width:8px;height:8px;border-radius:50%;}
-.sla-legend-dot.green{background:#22c55e;}
-.sla-legend-dot.amber{background:#f59e0b;}
-.sla-legend-dot.red{background:#ef4444;}
-.sla-legend-dot.grey{background:var(--muted);}
-/* Inner Tabs */
-.so-tabs{display:flex;gap:0;border-bottom:2px solid var(--border);margin:20px 0 0 0;}
-.so-tab{background:none;border:none;border-bottom:2px solid transparent;padding:10px 18px;font-family:var(--font-d);font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;transition:color 150ms,border-color 150ms;margin-bottom:-2px;}
-.so-tab:hover{color:var(--text);}
-.so-tab.so-tab-active{color:var(--gold);border-bottom-color:var(--gold);}
-.so-tab-panels{padding-top:16px;}
-.so-tab-panel{display:none;max-height:60vh;overflow-y:auto;}
-.so-tab-panel.so-tab-panel-active{display:block;}
-/* Reel Kit cards (reused from Task Hub) */
-.rk-scroll{display:flex;gap:14px;overflow-x:auto;padding:4px 0 12px 0;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
-.rk-scroll::-webkit-scrollbar{height:4px;}.rk-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px;}
-.rk-card{flex:0 0 200px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;transition:transform 150ms;}
-.rk-card:hover{transform:translateY(-2px);}
-.rk-thumb{width:100%;height:150px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.04);}
-.rk-tier{font-family:var(--font-d);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:8px;}
-.rk-name{font-family:var(--font-m);font-size:12px;color:var(--text);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.rk-status{font-family:var(--font-m);font-size:11px;margin-top:4px;}
-.rk-download{display:block;margin-top:8px;padding:5px 0;background:rgba(248,200,48,.12);color:var(--gold);border:1px solid rgba(248,200,48,.25);border-radius:5px;font-family:var(--font-d);font-size:11px;font-weight:700;text-decoration:none;text-align:center;transition:background 150ms;}
-.rk-download:hover{background:rgba(248,200,48,.22);}
-/* Approval cards */
-.appr-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid #22c55e;border-radius:8px;padding:18px;margin-bottom:14px;position:relative;}
-.appr-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
-.appr-meta{font-family:var(--font-m);font-size:11px;color:var(--muted);}
-.appr-asset-link,.appr-notion-link{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);text-decoration:none;}
-.appr-copy{font-family:var(--font-m);font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word;}
-.appr-campaign{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);background:rgba(248,200,48,.1);border-radius:4px;padding:2px 8px;}
-.appr-actions{display:flex;gap:10px;margin-top:14px;}
-.btn-approve{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);border-radius:6px;padding:7px 20px;font-family:var(--font-d);font-weight:700;font-size:12px;cursor:pointer;transition:background 150ms;}
-.btn-approve:hover{background:rgba(34,197,94,.25);}
-.btn-archive{background:rgba(107,114,128,.1);color:var(--muted);border:1px solid rgba(107,114,128,.2);border-radius:6px;padding:7px 20px;font-family:var(--font-d);font-weight:700;font-size:12px;cursor:pointer;transition:background 150ms;}
-.btn-archive:hover{background:rgba(107,114,128,.2);}
-.btn-approve:disabled,.btn-archive:disabled{opacity:.5;cursor:not-allowed;}
-.appr-error{display:none;color:var(--red);font-size:11px;margin-top:8px;}
-.toast-success{position:absolute;top:12px;right:14px;background:var(--green);color:#000;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;font-family:var(--font-d);}
-.empty-state{text-align:center;padding:40px;color:var(--muted);font-family:var(--font-m);font-size:14px;}
-.btn-dismiss{background:rgba(239,68,68,.08);color:var(--red);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:5px 14px;font-family:var(--font-d);font-weight:700;font-size:11px;cursor:pointer;transition:background 150ms;white-space:nowrap;}
-.btn-dismiss:hover{background:rgba(239,68,68,.18);}
-.btn-dismiss:disabled{opacity:.5;cursor:not-allowed;}
-/* Social Ops responsive */
-@media(max-width:768px){
-  .channel-row{grid-template-columns:28px 1fr 70px;gap:8px;padding:8px 12px;}
-  .ring-cell{display:none;}
-  .freshness-text{display:none;}
-  .manual-grid{grid-template-columns:1fr;}
-  .so-tab{padding:8px 12px;font-size:12px;}
-  .rk-card{flex:0 0 170px;}
-  .appr-actions{flex-wrap:wrap;}
-}
-@media(max-width:480px){
-  .channel-row{grid-template-columns:24px 1fr;gap:6px;}
-  .queue-badge{display:none;}
-}
-</style>"""
-
-    # ── JS: tab switching + approve/archive + dismiss + tasks lazy load ────
-    so_js = """<script>
-(function(){
-  // Tab switching
-  var tabs = document.querySelectorAll('.so-tab');
-  var panels = document.querySelectorAll('.so-tab-panel');
-  var tasksLoaded = false;
-  tabs.forEach(function(tab){
-    tab.addEventListener('click', function(){
-      tabs.forEach(function(t){ t.classList.remove('so-tab-active'); });
-      panels.forEach(function(p){ p.classList.remove('so-tab-panel-active'); });
-      tab.classList.add('so-tab-active');
-      var target = document.getElementById(tab.dataset.tab);
-      if (target) target.classList.add('so-tab-panel-active');
-      // Lazy-load tasks tab
-      if (tab.dataset.tab === 'so-tab-tasks' && !tasksLoaded) {
-        tasksLoaded = true;
-        fetch('/admin/api/task_hub', {credentials:'same-origin'})
-          .then(function(r){ return r.text(); })
-          .then(function(html){
-            document.getElementById('so-tasks-slot').innerHTML = html;
-          })
-          .catch(function(){
-            document.getElementById('so-tasks-slot').innerHTML = '<div class="empty-state">Failed to load tasks.</div>';
-          });
-      }
-    });
-  });
-  // Handle ?tab= query param
-  var params = new URLSearchParams(window.location.search);
-  var tabParam = params.get('tab');
-  if (tabParam) {
-    var tabMap = {'approve':'so-tab-approve','reel':'so-tab-reel','calendar':'so-tab-calendar','tasks':'so-tab-tasks'};
-    var targetId = tabMap[tabParam];
-    if (targetId) {
-      var targetTab = document.querySelector('.so-tab[data-tab="'+targetId+'"]');
-      if (targetTab) targetTab.click();
-    }
-  }
-
-  // Approve / Archive buttons
-  document.querySelectorAll('.btn-approve,.btn-archive').forEach(function(btn){
-    btn.addEventListener('click', function(){
-      var id = this.dataset.id;
-      var isApprove = this.classList.contains('btn-approve');
-      var newStatus = isApprove ? 'Approved' : 'Archived';
-      var card = document.getElementById('so-appr-' + id) || document.getElementById('appr-' + id) || document.getElementById('th-appr-' + id);
-      if (!card) return;
-      var errEl = card.querySelector('.appr-error');
-      var allBtns = card.querySelectorAll('.btn-approve,.btn-archive');
-      allBtns.forEach(function(b){ b.disabled = true; });
-      fetch('/admin/api/notion/patch', {
-        method: 'POST', credentials: 'same-origin',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({page_id: id, status: newStatus})
-      }).then(function(r){
-        if (r.ok) {
-          card.style.transition = 'opacity 0.4s';
-          card.style.opacity = '0.4';
-          var toast = document.createElement('div');
-          toast.className = 'toast-success';
-          toast.textContent = newStatus + ' \\u2714';
-          card.appendChild(toast);
-          setTimeout(function(){ card.remove(); }, 700);
-        } else {
-          if (errEl) { errEl.textContent = 'Error updating Notion'; errEl.style.display = 'block'; }
-          allBtns.forEach(function(b){ b.disabled = false; });
-        }
-      }).catch(function(){
-        if (errEl) { errEl.textContent = 'Network error'; errEl.style.display = 'block'; }
-        allBtns.forEach(function(b){ b.disabled = false; });
-      });
-    });
-  });
-
-  // Dismiss buttons (Failed & Blocked)
-  document.querySelectorAll('.btn-dismiss').forEach(function(btn){
-    btn.addEventListener('click', function(){
-      var id = this.dataset.id;
-      var row = document.getElementById('fb-' + id);
-      btn.disabled = true;
-      fetch('/admin/api/dismiss-item', {
-        method:'POST', credentials:'same-origin',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({page_id: id})
-      }).then(function(r){
-        if(r.ok && row){
-          row.style.transition='opacity 0.4s';
-          row.style.opacity='0';
-          setTimeout(function(){ row.remove(); }, 400);
-        } else { btn.disabled = false; }
-      }).catch(function(){ btn.disabled = false; });
-    });
-  });
-})();
-</script>"""
-
-    # ── Failed & Blocked panel ─────────────────────────────────────────────
-    failed_html = ""
-    if failed_blocked:
-        rows = ""
-        for item in failed_blocked:
-            ch_key = _normalise_channel_key(item.get("channel") or "")
-            page_id = item.get("id", "")
-            rows += (
-                f'<tr id="fb-{page_id}">'
-                + td(_channel_chip(ch_key))
-                + td(_truncate(item.get("title"), 50))
-                + td(_truncate(item.get("error"), 80) or "\u2014", extra_style="color:var(--red)")
-                + td(_sast_hhmm(item.get("scheduled_time")))
-                + td(f'<button class="btn-dismiss" data-id="{page_id}">Dismiss</button>')
-                + "</tr>"
-            )
-        failed_html = f"""<div class="panel panel-red-accent" style="margin-bottom:20px">
-    <div class="panel-head"><span class="panel-title" style="color:var(--red)">Failed &amp; Blocked</span><span class="panel-sub">{len(failed_blocked)} items</span></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Channel</th><th>Title</th><th>Error</th><th>Scheduled</th><th></th></tr></thead><tbody>{rows}</tbody></table></div>
-  </div>"""
-
-    return f"""{so_css}
-{topbar}
-<div class="page">
-  {failed_html}
-  {channel_health}
-  {inner_tabs_html}
-  <div class="footer" style="margin-top:20px">MzansiEdge Social Ops &middot; Notion-powered</div>
-</div>
-{so_js}"""
 
 
 # -- Approvals view -----------------------------------------------------------
@@ -3667,18 +3627,15 @@ def _parse_card_zones(rich_text_array: list) -> tuple[str, str, str]:
 
 
 def _classify_task(text: str) -> str:
-    """Classify a to_do block text into one of the 5 task section keys."""
+    """Classify a to_do block text into one of 4 buckets (W-UI-SOCIAL-OPS-REDESIGN-01)."""
     lower = text.lower()
     if "fb group" in lower or "facebook" in lower:
-        return "post_now"
-    elif "linkedin" in lower or "li-" in lower:
+        return "post"
+    if "linkedin" in lower or "li-" in lower:
         return "connect"
-    elif "quora" in lower:
+    if "quora" in lower or "mybroadband" in lower or "forum" in lower:
         return "answer"
-    elif "mybroadband" in lower or "forum" in lower:
-        return "read_reply"
-    else:
-        return "reminders"
+    return "remind"
 
 
 def render_task_hub_content() -> str:
@@ -6084,10 +6041,74 @@ def api_social_ops():
     return Response(content, mimetype="text/html")
 
 
+@app.route("/admin/api/reel_kit")
+@require_auth
+def api_reel_kit():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("reel_kit_content")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+    content = render_reel_kit_page()
+    with _page_cache_lock:
+        _page_cache["reel_kit_content"] = (content, now)
+    return Response(content, mimetype="text/html")
+
+
+@app.route("/admin/api/calendar")
+@require_auth
+def api_calendar():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("calendar_content")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+    content = render_calendar_page()
+    with _page_cache_lock:
+        _page_cache["calendar_content"] = (content, now)
+    return Response(content, mimetype="text/html")
+
+
 @app.route("/admin/task-hub")
 @require_auth
 def admin_task_hub():
-    return redirect("/admin/social-ops?tab=tasks", code=302)
+    return redirect("/admin/social-ops", code=302)
+
+
+@app.route("/admin/reel-kit")
+@require_auth
+def admin_reel_kit():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("reel_kit_full")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+
+    content = render_reel_kit_page()
+    html = render_shell("reel_kit", content)
+
+    with _page_cache_lock:
+        _page_cache["reel_kit_full"] = (html, now)
+
+    return Response(html, mimetype="text/html")
+
+
+@app.route("/admin/calendar")
+@require_auth
+def admin_calendar():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("calendar_full")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+
+    content = render_calendar_page()
+    html = render_shell("calendar", content)
+
+    with _page_cache_lock:
+        _page_cache["calendar_full"] = (html, now)
+
+    return Response(html, mimetype="text/html")
 
 
 @app.route("/admin/api/task_hub")

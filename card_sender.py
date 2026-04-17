@@ -18,6 +18,17 @@ from card_renderer import render_card_sync
 log = logging.getLogger(__name__)
 
 
+def _truncate_caption(text: str, limit: int = 1024) -> str:
+    """Truncate to limit at a word boundary, never mid-word."""
+    if len(text) <= limit:
+        return text
+    trunc = text[:limit]
+    last_space = trunc.rfind(" ")
+    if last_space > limit // 2:
+        return trunc[:last_space]
+    return trunc
+
+
 async def send_card_or_fallback(
     bot,
     chat_id: int,
@@ -50,10 +61,16 @@ async def send_card_or_fallback(
     """
     try:
         png = await asyncio.to_thread(render_card_sync, template, data)
+        _caption = _truncate_caption(text_fallback) if text_fallback else None
+        _parse_mode = ParseMode.HTML if (_caption and "<" in _caption) else None
         if message_to_edit and message_to_edit.photo:
             # photo → photo: edit in-place (no flicker)
             await message_to_edit.edit_media(
-                media=InputMediaPhoto(media=png),
+                media=InputMediaPhoto(
+                    media=png,
+                    caption=_caption,
+                    parse_mode=_parse_mode,
+                ),
                 reply_markup=markup,
             )
         else:
@@ -65,6 +82,8 @@ async def send_card_or_fallback(
             await bot.send_photo(
                 chat_id=chat_id,
                 photo=png,
+                caption=_caption,
+                parse_mode=_parse_mode,
                 reply_markup=markup,
             )
     except Exception as exc:
