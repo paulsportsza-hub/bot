@@ -155,13 +155,9 @@ _CHANNELS = [
     {"key": "whatsapp_channel", "label": "WhatsApp Channel", "color": "#25D366", "emoji": "\U0001f4ac"},
     {"key": "instagram", "label": "Instagram", "color": "#E4405F", "emoji": "\U0001f4f8"},
     {"key": "tiktok", "label": "TikTok", "color": "#ff0050", "emoji": "\U0001f3b5"},
-    {"key": "threads", "label": "Threads", "color": "#000000", "emoji": "\U0001f9f5"},
+    {"key": "threads", "label": "Threads", "color": "#ffffff", "emoji": "\U0001f9f5"},
 ]
-_MANUAL_CHANNELS = [
-    {"key": "linkedin", "label": "LinkedIn", "color": "#0A66C2", "emoji": "\U0001f4bc"},
-    {"key": "fb_groups", "label": "FB Groups", "color": "#1877F2", "emoji": "\U0001f46b"},
-    {"key": "quora", "label": "Quora", "color": "#B92B27", "emoji": "\u2753"},
-]
+_MANUAL_CHANNELS = []
 _CHANNEL_MAP = {c["key"]: c for c in _CHANNELS + _MANUAL_CHANNELS}
 _CHANNEL_SVG = {
     "telegram_alerts":    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.2 3.1L1.9 10.5c-1.3.5-1.3 1.3-.2 1.6l4.9 1.5 1.9 5.9c.2.7.4.8.9.3l2.8-2.7 5.5 4c1 .6 1.7.3 2-.9l3.5-16.5c.4-1.4-.5-2-.9-.4z" fill="#26A5E4"/></svg>',
@@ -362,6 +358,12 @@ def _sast_hhmm(ts_str: str | None) -> str:
         return "--:--"
     sast = dt.astimezone(_SAST)
     return sast.strftime("%H:%M")
+
+
+def _render_sast(dt) -> str:
+    """Format an aware datetime as 'D Mon HH:MM' in SAST."""
+    s = dt.astimezone(_SAST)
+    return s.strftime("%-d %b %H:%M")
 
 
 def _truncate(text: str | None, max_len: int) -> str:
@@ -992,7 +994,7 @@ def build_health_alerts_history(conn) -> list[dict]:
             "message": r["message"] or "",
             "fired_at": r["fired_at"],
             "resolved": resolved,
-            "current_status": r.get("current_status") or "",
+            "current_status": r["current_status"] or "",
             "ts": _sast_hhmm(r["fired_at"]),
             "ts_rel": _relative_time(r["fired_at"]),
         })
@@ -3010,7 +3012,6 @@ def render_automation_content() -> str:
         ("telegram_alerts",    "TG Alerts"),
         ("telegram_community", "TG Community"),
         ("whatsapp_channel",   "WA Channel"),
-        ("whatsapp_group",     "WA Group"),
         ("instagram",          "Instagram"),
         ("tiktok",             "TikTok"),
         ("threads",            "Threads"),
@@ -3072,12 +3073,13 @@ def render_automation_content() -> str:
                 "icon":   _icon_for(_it.get("work_type") or "", _ck),
                 "status": _disp_st,
                 "mins":   _smins,
-                "sched":  f"{_ss.hour:02d}:{_ss.minute:02d}",
+                "sched":      f"{_ss.hour:02d}:{_ss.minute:02d}",
+                "sched_full": _render_sast(_sdt),
                 "actual": _ahhmm,
                 "error":  _it.get("error") or "",
                 "ch_lbl": _clbl,
             })
-        _tl_chans.append({"key": _ck, "label": _clbl, "icon": _so_platform_icon_svg(_ck), "posts": _posts})
+        _tl_chans.append({"key": _ck, "label": _clbl, "icon": _so_platform_icon_svg(_ck), "color": _CHANNEL_MAP.get(_ck, {}).get("color", "#888888"), "posts": _posts})
 
     _tl_json = _json_mod.dumps({
         "day":      _today_str,
@@ -3097,7 +3099,7 @@ def render_automation_content() -> str:
     )
 
     css = """<style>
-.so-page{font-family:var(--font-b);color:var(--text);background:var(--carbon);min-height:100vh;padding:16px 20px;}
+.so-page{font-family:var(--font-b);color:var(--text);min-height:100vh;padding:16px 20px;}
 .so-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap;}
 .so-h1{font-size:18px;font-weight:600;letter-spacing:-0.01em;margin:0;color:var(--text);display:flex;align-items:center;gap:8px;}
 .so-live-dot{color:var(--green);font-size:10px;animation:so-blink 2s ease-in-out infinite;}
@@ -3124,29 +3126,26 @@ def render_automation_content() -> str:
 @media(max-width:1279px){.so-main{flex-direction:column;}}
 .so-tl-wrap{flex:1;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;}
 .so-tl-content{position:relative;}
-.so-tl-hours-row{position:relative;height:22px;margin-left:112px;border-bottom:1px solid var(--border-sub);background:var(--surface-alt);}
+.so-tl-hours-row{position:relative;height:22px;margin-left:140px;border-bottom:1px solid var(--border-sub);background:var(--surface-alt);}
 .so-tl-hour-lbl{position:absolute;font-family:var(--font-m);font-size:10px;color:var(--muted);transform:translateX(-50%);top:4px;pointer-events:none;}
 .so-tl-row{display:flex;align-items:center;height:52px;border-bottom:1px solid rgba(48,54,61,0.4);}
 .so-tl-row:last-child{border-bottom:none;}
 .so-tl-row:focus{outline:none;}
-.so-tl-row-lbl{width:112px;flex-shrink:0;padding:0 8px 0 10px;font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px;}
-.so-tl-ch-icon{flex-shrink:0;display:flex;align-items:center;color:var(--muted);transition:color 150ms;}
-.so-tl-row:hover .so-tl-ch-icon{color:var(--gold);}
+.so-tl-row-lbl{width:140px;flex-shrink:0;padding:0 8px 0 10px;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px;}
+.so-tl-ch-icon{flex-shrink:0;display:flex;align-items:center;}
 .so-tl-bar{flex:1;position:relative;height:52px;overflow:visible;}
 .so-tl-gl{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.04);pointer-events:none;}
 .so-tl-icon-btn{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;cursor:pointer;padding:2px;z-index:5;transition:transform 150ms;}
 .so-tl-icon-btn:hover{transform:translate(-50%,-60%);z-index:10;}
-.so-tl-icon-btn:focus{outline:2px solid var(--gold);outline-offset:2px;border-radius:3px;z-index:10;}
-.so-tl-icon-btn svg{width:20px;height:20px;stroke:currentColor;stroke-width:1.5;fill:none;color:var(--muted);transition:color 150ms;}
+.so-tl-icon-btn:focus{outline:none;z-index:10;}
+.so-tl-icon-btn svg{width:20px;height:20px;stroke:currentColor;stroke-width:1.5;fill:none;color:var(--status-color,var(--muted));transition:color 150ms;}
 .so-tl-icon-btn:hover svg,.so-tl-icon-btn:focus svg{color:var(--gold);}
 .so-tl-icon-btn.so-active svg{color:var(--gold);filter:drop-shadow(0 0 4px rgba(248,200,48,0.7));transform:scale(1.2);}
-.so-tl-status-bar{width:28px;height:4px;border-radius:2px;position:relative;}
-.so-tl-status-ic{position:absolute;top:-1px;left:0;right:0;text-align:center;font-size:7px;line-height:6px;color:rgba(0,0,0,0.75);font-weight:700;}
 .so-tl-chip{position:absolute;top:50%;transform:translate(-50%,-50%);background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-family:var(--font-m);font-size:10px;color:var(--muted);cursor:pointer;white-space:nowrap;z-index:5;}
 .so-tl-chip:hover{border-color:var(--gold);color:var(--text);}
-.so-tl-now-line{position:absolute;top:0;width:2px;background:linear-gradient(180deg,#F8C830,#F0A020,#E8571F);z-index:20;pointer-events:none;filter:drop-shadow(0 0 6px rgba(248,200,48,0.6));}
+.so-tl-now-line{position:absolute;top:0;width:2px;background:var(--grad);z-index:20;pointer-events:none;filter:drop-shadow(0 0 6px rgba(248,200,48,0.6));}
 .so-tl-now-lbl{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-family:var(--font-m);font-size:9px;color:var(--gold);white-space:nowrap;background:var(--surface-alt);padding:1px 4px;border-radius:2px;border:1px solid rgba(248,200,48,0.3);}
-.so-preview{width:400px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;height:386px;max-height:386px;overflow-y:auto;}
+.so-preview{width:400px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;height:334px;max-height:334px;overflow-y:auto;}
 .so-preview::-webkit-scrollbar{width:4px;}.so-preview::-webkit-scrollbar-track{background:transparent;}.so-preview::-webkit-scrollbar-thumb{background:var(--muted);border-radius:2px;opacity:0.5;}
 @media(max-width:1279px){.so-preview{width:100%;height:auto;max-height:420px;}}
 .so-pv-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:14px;padding:32px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5;}
@@ -3261,7 +3260,7 @@ function updateNowLine(){
   var sm=(uh*60+um+120)%1440;
   var cont=document.getElementById('so-tl-content');
   if(!cont||!nl)return;
-  var lw=112,tw=cont.offsetWidth;
+  var lw=140,tw=cont.offsetWidth;
   if(tw<=lw)return;
   var x=lw+(sm/1440)*(tw-lw);
   nl.style.left=x+'px';
@@ -3318,18 +3317,16 @@ function renderRow(ch,ri){
     }
     var off=it.off?'margin-top:'+it.off+'px;':'';
     var al=eA([p.type||'Post',ch.label,'scheduled '+p.sched,p.status||'unknown'].join(' · '));
-    return '<button class="so-tl-icon-btn" style="left:'+pct+';'+off+'" '+
+    return '<button class="so-tl-icon-btn" style="left:'+pct+';'+off+';--status-color:'+stColor(p.status)+'" '+
       'data-post-id="'+eA(p.id)+'" data-row-idx="'+ri+'" data-col-idx="'+ci+'" '+
-      'data-title="'+eA(p.title)+'" data-sched="'+eA(p.sched)+'" data-status="'+eA(p.status)+'" '+
+      'data-title="'+eA(p.title)+'" data-sched="'+eA(p.sched)+'" data-sched-full="'+eA(p.sched_full||'')+'" data-status="'+eA(p.status)+'" '+
       'data-ch="'+eA(ch.label)+'" data-type="'+eA(p.type)+'" '+
       'aria-label="'+al+'" tabindex="-1" role="gridcell">'+
       svgI(p.icon||'help-circle')+
-      '<div class="so-tl-status-bar" style="background:'+stColor(p.status)+'">'+
-      '<span class="so-tl-status-ic" aria-hidden="true">'+stMark(p.status)+'</span></div>'+
       '</button>';
   }).join('');
   return '<div class="so-tl-row" role="row" aria-label="'+eA(ch.label)+'" data-row-idx="'+ri+'" tabindex="0">'+
-    '<div class="so-tl-row-lbl">'+(ch.icon?'<span class="so-tl-ch-icon">'+ch.icon+'</span>':'')+eH(ch.label)+'</div>'+
+    '<div class="so-tl-row-lbl" style="color:'+eA(ch.color||'')+'">'+(ch.icon?'<span class="so-tl-ch-icon">'+ch.icon+'</span>':'')+eH(ch.label)+'</div>'+
     '<div class="so-tl-bar" id="so-bar-'+ri+'">'+
     '<div class="so-tl-gl" style="left:0%"></div>'+
     '<div class="so-tl-gl" style="left:25%"></div>'+
@@ -3372,7 +3369,7 @@ function focusIcon(ri,ci){
 // ── Tooltip ───────────────────────────────────────────────────────────
 function showTip(e,ds){
   if(!_tipEl)return;
-  _tipEl.innerHTML=[ds.title?eH(ds.title):'(no title)',[ds.ch,ds.type].filter(Boolean).join(' · '),'Scheduled '+(ds.sched||'?')+' · '+(ds.status||'unknown')].join('<br>');
+  _tipEl.innerHTML=[ds.title?eH(ds.title):'(no title)',[ds.ch,ds.type].filter(Boolean).join(' · '),eH(ds.ch||'?')+' \u2014 '+(ds.schedFull?eH(ds.schedFull):ds.sched||'?')+' SAST'].join('<br>');
   _tipEl.style.display='block';
   _tipEl.style.left=(e.clientX+12)+'px';_tipEl.style.top=(e.clientY-8)+'px';
 }
@@ -3394,7 +3391,7 @@ function showPreview(p){
   var chips=[
     '<span class="so-pv-chip">'+eH(p.channel||'?')+'</span>',
     p.type?'<span class="so-pv-chip">'+eH(p.type)+'</span>':'',
-    p.scheduled?'<span class="so-pv-chip">📅 '+eH(p.scheduled)+'</span>':'',
+    p.scheduled?'<span class="so-pv-chip">📅 '+eH(p.scheduled)+' SAST</span>':'',
     p.actual?'<span class="so-pv-chip">\u2713 '+eH(p.actual)+'</span>':'',
     '<span class="so-pv-chip" style="color:'+sc+';border-color:'+sc+'50;">'+sm2+' '+eH(p.status||'unknown')+'</span>',
     p.id?'<span class="so-pv-chip" title="Post ID">#'+eH(p.id.slice(0,8))+'</span>':'',
@@ -6475,7 +6472,6 @@ _SO_TL_CH = [
     ("telegram_alerts",    "TG Alerts"),
     ("telegram_community", "TG Community"),
     ("whatsapp_channel",   "WA Channel"),
-    ("whatsapp_group",     "WA Group"),
     ("instagram",          "Instagram"),
     ("tiktok",             "TikTok"),
     ("threads",            "Threads"),
@@ -6590,12 +6586,13 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
                 "icon":   _so_icon_for(it.get("work_type") or "", ck),
                 "status": disp_st,
                 "mins":   smins,
-                "sched":  f"{ss.hour:02d}:{ss.minute:02d}",
+                "sched":      f"{ss.hour:02d}:{ss.minute:02d}",
+                "sched_full": _render_sast(sdt),
                 "actual": ahhmm,
                 "error":  it.get("error") or "",
                 "ch_lbl": clbl,
             })
-        channels.append({"key": ck, "label": clbl, "icon": _so_platform_icon_svg(ck), "posts": posts})
+        channels.append({"key": ck, "label": clbl, "icon": _so_platform_icon_svg(ck), "color": _CHANNEL_MAP.get(ck, {}).get("color", "#888888"), "posts": posts})
 
     return {
         "day":      day_str,
