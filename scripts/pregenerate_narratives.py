@@ -1391,6 +1391,18 @@ def _validate_preview_polish(polished: str, spec) -> bool:
     return True
 
 
+def _is_past_kickoff(match_key: str, cutoff_hours: int = 24) -> bool:
+    """Return True if match_key's date suffix is more than cutoff_hours in the past."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})$", str(match_key or ""))
+    if not m:
+        return False
+    try:
+        kickoff = datetime.fromisoformat(m.group(1) + "T00:00:00+00:00")
+        return (datetime.now(timezone.utc) - kickoff).total_seconds() > cutoff_hours * 3600
+    except ValueError:
+        return False
+
+
 async def _generate_one(
     edge: dict,
     model_id: str,
@@ -1403,6 +1415,11 @@ async def _generate_one(
     """
     t0 = time.time()
     match_key = edge.get("match_key", "")
+
+    # BUILD-PREGEN-KICKOFF-FILTER-01: skip fixtures >24h past kickoff
+    if _is_past_kickoff(match_key):
+        log.info("PREGEN-SKIP: %s is >24h past kickoff — skipping", match_key)
+        return {"match_key": match_key, "success": False, "skipped_past_kickoff": True, "duration": time.time() - t0}
     home = edge.get("home_team", "")
     away = edge.get("away_team", "")
     home_key = ""
@@ -2181,6 +2198,39 @@ async def _verify_and_fill_cache(
     log.info("Cache coverage after gap fill: %.0f%% (%d/%d)", coverage, len(edges) - still_missing, len(edges))
 
 
+def _quarantine_stale_cache_rows(db_path: str | None = None) -> int:
+    """Mark existing narrative_cache rows past their kickoff by >24h as quarantined=1.
+
+    Idempotent — safe to call on every pregen run.
+    Returns the number of rows newly quarantined.
+    """
+    path = db_path or str(bot._NARRATIVE_DB_PATH)
+    # Use today's date as cutoff: any match dated before today is ≥24h old at midnight UTC.
+    # This matches _is_past_kickoff which checks total_seconds > 24 * 3600.
+    cutoff_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        conn = sqlite3.connect(path, timeout=5.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            cur = conn.execute(
+                "UPDATE narrative_cache "
+                "SET quarantined = 1 "
+                "WHERE COALESCE(quarantined, 0) = 0 "
+                "  AND substr(match_id, -10) < ?",
+                (cutoff_date,),
+            )
+            count = cur.rowcount
+            conn.commit()
+            if count:
+                log.info("PREGEN-QUARANTINE: marked %d stale narrative_cache rows as quarantined", count)
+            return count
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning("PREGEN-QUARANTINE: failed to quarantine stale rows: %s", exc)
+        return 0
+
+
 async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: bool = False) -> None:
     """Run the pre-generation sweep."""
     model_id = MODELS.get(sweep, MODELS["refresh"])
@@ -2193,6 +2243,10 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         f" sport={sport}" if sport else "",
         " [DRY RUN]" if dry_run else "",
     )
+
+    # BUILD-PREGEN-KICKOFF-FILTER-01: quarantine any stale past-kickoff cache rows
+    if not dry_run:
+        await asyncio.to_thread(_quarantine_stale_cache_rows)
 
     # BUILD-16a: No scraper lock dependency. Pregen reads via WAL mode —
     # concurrent with scraper writes. No waiting, no deferral.

@@ -3,10 +3,15 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+
+# BUILD-PREGEN-KICKOFF-FILTER-01: use a future match date so the kickoff filter
+# never skips these canary fixtures.
+_FUTURE_DATE = (datetime.now(timezone.utc) + timedelta(days=60)).strftime("%Y-%m-%d")
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
@@ -21,12 +26,12 @@ import scripts.pregenerate_narratives as pregen
 
 def _edge() -> dict:
     return {
-        "match_key": "arsenal_vs_bournemouth_2026-03-21",
+        "match_key": f"arsenal_vs_bournemouth_{_FUTURE_DATE}",
         "home_team": "Arsenal",
         "away_team": "Bournemouth",
         "league": "Premier League",
         "sport": "soccer",
-        "commence_time": "2026-03-21 15:00 UTC",
+        "commence_time": f"{_FUTURE_DATE} 15:00 UTC",
         "best_odds": 2.10,
         "best_bookmaker": "Betway",
         "edge_pct": 5.2,

@@ -15,9 +15,14 @@ import os
 import sys
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# BUILD-PREGEN-KICKOFF-FILTER-01: always use a future date so the kickoff filter
+# does not skip test fixtures.
+_FUTURE_DATE = (datetime.now(timezone.utc) + timedelta(days=60)).strftime("%Y-%m-%d")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -206,7 +211,7 @@ class TestGoldEdgeModelGate(unittest.TestCase):
 
         # Build a minimal edge dict for a Gold edge
         edge = {
-            "match_key": "man_city_vs_arsenal_2026-04-10",
+            "match_key": f"man_city_vs_arsenal_{_FUTURE_DATE}",
             "home_team": "Man City",
             "away_team": "Arsenal",
             "tier": "gold",
