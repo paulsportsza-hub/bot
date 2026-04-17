@@ -74,6 +74,30 @@ _THRESHOLDS = {
 # Debounce: 2 hours between repeated alerts for the same signal
 _DEBOUNCE_HOURS = 2
 
+# Signals that fire as severity='critical' in health_alerts
+_CRITICAL_SIGNALS = frozenset({
+    "sonnet_firing_rate",
+    "staleness_pct",
+    "empty_verdict_count_24h",
+    "gold_edge_non_sonnet_count",
+    "manager_name_fabrication_attempts",
+})
+
+# source_id registered in source_registry for all narrative monitor alerts
+_SOURCE_ID = "narrative_integrity_monitor"
+
+
+def _severity_for(signal: str) -> str:
+    return "critical" if signal in _CRITICAL_SIGNALS else "warning"
+
+
+def _compute_int_band(signal: str, value: int) -> tuple[str, int]:
+    """Return (band, breach) for an integer-valued signal using _THRESHOLDS."""
+    threshold = _THRESHOLDS.get(signal)
+    if threshold is not None and value >= threshold:
+        return "ALERT", 1
+    return "GREEN", 0
+
 
 def _get_db_path() -> str:
     """Return path to the odds.db that holds narrative_cache."""
@@ -158,14 +182,13 @@ def _debounced(conn: sqlite3.Connection, signal: str) -> bool:
     return (now - last) < timedelta(hours=_DEBOUNCE_HOURS)
 
 
-def _write_signal(conn: sqlite3.Connection, signal: str, value: int) -> None:
+def _write_signal(conn: sqlite3.Connection, signal: str, value: int, band: str = "", breach: int = 0) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(narrative_integrity_log)").fetchall()}
     if "band" in cols:
-        # Old schema — provide required NOT NULL columns; always set recorded_at explicitly
         conn.execute(
             "INSERT INTO narrative_integrity_log (signal, value, ts, band, breach, recorded_at) "
-            "VALUES (?, ?, CURRENT_TIMESTAMP, '', 0, CURRENT_TIMESTAMP)",
-            (signal, value),
+            "VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP)",
+            (signal, value, band, breach),
         )
     else:
         conn.execute(
@@ -174,7 +197,7 @@ def _write_signal(conn: sqlite3.Connection, signal: str, value: int) -> None:
             (signal, value),
         )
     conn.commit()
-    log.info("MONITOR: %s = %d", signal, value)
+    log.info("MONITOR: %s = %s [%s]", signal, value, band or "—")
 
 
 def write_integrity_event(
@@ -336,10 +359,216 @@ SIGNAL_FNS = [
 ]
 
 
-def run_monitor(db_path: str | None = None) -> dict[str, int]:
+# ── Health-alerts integration ──────────────────────────────────────────────────
+
+def _last_ha_fired_at(conn: sqlite3.Connection, signal: str) -> datetime | None:
+    """Return fired_at of the most recent open health_alert for this signal, or None."""
+    try:
+        row = conn.execute(
+            "SELECT fired_at FROM health_alerts "
+            "WHERE source_id=? AND alert_type='quality_signal' "
+            "AND resolved_at IS NULL "
+            "AND json_extract(meta, '$.signal_name') = ? "
+            "ORDER BY fired_at DESC LIMIT 1",
+            (_SOURCE_ID, signal),
+        ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    try:
+        ts = row[0]
+        if isinstance(ts, str):
+            ts = ts.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+    except Exception:
+        return None
+
+
+def _ha_debounced(conn: sqlite3.Connection, signal: str) -> bool:
+    """Return True if an open health_alert for this signal was fired within _DEBOUNCE_HOURS."""
+    last = _last_ha_fired_at(conn, signal)
+    if last is None:
+        return False
+    now = datetime.now(tz=timezone.utc)
+    return (now - last) < timedelta(hours=_DEBOUNCE_HOURS)
+
+
+def _insert_health_alert(
+    conn: sqlite3.Connection,
+    signal: str,
+    value,
+    severity: str,
+    message: str,
+    meta: dict | None = None,
+    dry_run: bool = False,
+) -> None:
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    meta_str = json.dumps(meta) if meta else None
+    if dry_run:
+        log.info("DRY-RUN: would insert health_alert signal=%s severity=%s", signal, severity)
+        return
+    try:
+        conn.execute(
+            "INSERT INTO health_alerts "
+            "(source_id, alert_type, severity, message, fired_at, telegram_sent, meta) "
+            "VALUES (?, 'quality_signal', ?, ?, ?, 0, ?)",
+            (_SOURCE_ID, severity, message, now_iso, meta_str),
+        )
+        conn.commit()
+    except Exception as _e:
+        log.warning("MONITOR: failed to insert health_alert for %s: %s", signal, _e)
+
+
+def _fire_cycle_alerts(
+    conn: sqlite3.Connection,
+    cycle_signals: list[dict],
+    dry_run: bool = False,
+) -> None:
+    """Insert health_alerts rows + send EdgeOps for every ALERT+breach signal in this cycle."""
+    now_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    for sig in cycle_signals:
+        signal_name = sig.get("signal", "")
+        band = sig.get("band", "GREEN")
+        breach = sig.get("breach", 0)
+        value = sig.get("value", 0)
+        if band != "ALERT" or not breach:
+            continue
+        if _ha_debounced(conn, signal_name):
+            log.info("MONITOR: %s ALERT debounced — open health_alert <2h old", signal_name)
+            continue
+        severity = _severity_for(signal_name)
+        message = f"Narrative signal {signal_name} breached ALERT threshold — value={value}"
+        meta = {"signal_name": signal_name, "value": value, "band": band, "fired_ts": now_str}
+        _insert_health_alert(conn, signal_name, value, severity, message, meta, dry_run=dry_run)
+        detail = (
+            f"Severity: <b>{severity}</b>\n"
+            f"Band: ALERT\n"
+            f"Detected at: {now_str}"
+        )
+        if not dry_run:
+            _send_edgeops_alert(signal_name, value, detail)
+            if _sentry:
+                _sentry.capture_message(
+                    f"narrative_integrity: {signal_name} ALERT — value={value}",
+                    level="error" if severity == "critical" else "warning",
+                )
+        else:
+            log.info("DRY-RUN: would send EdgeOps alert signal=%s value=%s", signal_name, value)
+
+
+def _auto_resolve_alerts(
+    conn: sqlite3.Connection,
+    cycle_signals: list[dict],
+    dry_run: bool = False,
+) -> None:
+    """Resolve open health_alerts rows whose signal returned to GREEN or WARN this cycle."""
+    try:
+        open_rows = conn.execute(
+            "SELECT id, meta FROM health_alerts "
+            "WHERE source_id=? AND alert_type='quality_signal' AND resolved_at IS NULL",
+            (_SOURCE_ID,),
+        ).fetchall()
+    except Exception as _e:
+        log.warning("MONITOR: _auto_resolve_alerts query failed: %s", _e)
+        return
+
+    signal_bands = {s.get("signal"): s.get("band") for s in cycle_signals}
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
+
+    for row_id, meta_str in open_rows:
+        try:
+            meta = json.loads(meta_str or "{}")
+            signal_name = meta.get("signal_name") or meta.get("signal")
+        except Exception:
+            continue
+        if not signal_name:
+            continue
+        band = signal_bands.get(signal_name)
+        if band in ("GREEN", "WARN"):
+            if dry_run:
+                log.info("DRY-RUN: would resolve health_alert id=%d signal=%s band=%s", row_id, signal_name, band)
+                continue
+            try:
+                conn.execute(
+                    "UPDATE health_alerts SET resolved_at=? WHERE id=?",
+                    (now_iso, row_id),
+                )
+            except Exception as _e:
+                log.warning("MONITOR: failed to resolve health_alert id=%d: %s", row_id, _e)
+
+    if not dry_run:
+        try:
+            conn.commit()
+        except Exception:
+            pass
+
+
+def _backfill_stale_alerts(conn: sqlite3.Connection, dry_run: bool = False) -> None:
+    """Insert health_alerts for any signal stuck in ALERT+breach with no open alert row.
+
+    Idempotent — skips signals that already have an open health_alerts row.
+    Fires EdgeOps once per stale signal (debounce prevents re-fire next cycle).
+    """
+    try:
+        stale = conn.execute("""
+            SELECT n.signal, n.value, n.band, n.breach
+            FROM narrative_integrity_log n
+            INNER JOIN (
+                SELECT signal, MAX(recorded_at) AS max_ts
+                FROM narrative_integrity_log
+                GROUP BY signal
+            ) latest ON n.signal = latest.signal AND n.recorded_at = latest.max_ts
+            WHERE n.band = 'ALERT' AND n.breach = 1
+        """).fetchall()
+    except Exception as _e:
+        log.warning("MONITOR: _backfill_stale_alerts query failed: %s", _e)
+        return
+
+    now_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    for signal, value, band, breach in stale:
+        # Skip if already has an open health_alert
+        try:
+            existing = conn.execute(
+                "SELECT id FROM health_alerts "
+                "WHERE source_id=? AND alert_type='quality_signal' "
+                "AND resolved_at IS NULL "
+                "AND json_extract(meta, '$.signal_name') = ?",
+                (_SOURCE_ID, signal),
+            ).fetchone()
+        except Exception:
+            existing = None
+        if existing:
+            continue
+
+        severity = _severity_for(signal)
+        message = f"Narrative signal {signal} ALERT backfill — value={value} (alert missed before deploy)"
+        meta = {
+            "signal_name": signal,
+            "value": value,
+            "band": band,
+            "fired_ts": now_str,
+            "backfilled": True,
+        }
+        _insert_health_alert(conn, signal, value, severity, message, meta, dry_run=dry_run)
+        if not dry_run:
+            detail = (
+                f"Severity: <b>{severity}</b>\n"
+                f"Band: ALERT (backfilled — signal was breached before deploy)\n"
+                f"Detected at: {now_str}"
+            )
+            _send_edgeops_alert(signal, value, detail)
+        else:
+            log.info("DRY-RUN: would backfill alert signal=%s value=%s severity=%s", signal, value, severity)
+
+
+def run_monitor(db_path: str | None = None, dry_run: bool = False) -> dict[str, int]:
     """Run all signal checks and write results to narrative_integrity_log.
 
-    Returns dict of {signal: value} for all 6 signals.
+    Returns dict of {signal: value} for all signals.
     """
     path = db_path or _get_db_path()
     if not os.path.exists(path):
@@ -349,9 +578,13 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
     conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
     results: dict[str, int] = {}
+    cycle_signals: list[dict] = []
 
     try:
         _ensure_integrity_log_table(conn)
+
+        # Backfill any stale ALERT signals not yet in health_alerts
+        _backfill_stale_alerts(conn, dry_run=dry_run)
 
         cutoff_24h = (
             datetime.now(tz=timezone.utc) - timedelta(hours=24)
@@ -363,11 +596,12 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
             (cutoff_24h,),
         ).fetchone()
         sig1_val = int(row[0]) if row else 0
-        _write_signal(conn, "total_narratives_24h", sig1_val)
+        band1, breach1 = _compute_int_band("total_narratives_24h", sig1_val)
+        _write_signal(conn, "total_narratives_24h", sig1_val, band1, breach1)
         results["total_narratives_24h"] = sig1_val
+        cycle_signals.append({"signal": "total_narratives_24h", "value": sig1_val, "band": band1, "breach": breach1})
 
         # ── Signal 2: w84_rate_24h ─────────────────────────────────────────
-        # Percentage of narratives in last 24h that used W84 (Sonnet/Opus)
         if sig1_val > 0:
             row2 = conn.execute(
                 "SELECT COUNT(*) FROM narrative_cache "
@@ -378,8 +612,10 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
             sig2_val = int(100 * w84_count / sig1_val)
         else:
             sig2_val = 0
-        _write_signal(conn, "w84_rate_24h", sig2_val)
+        band2, breach2 = _compute_int_band("w84_rate_24h", sig2_val)
+        _write_signal(conn, "w84_rate_24h", sig2_val, band2, breach2)
         results["w84_rate_24h"] = sig2_val
+        cycle_signals.append({"signal": "w84_rate_24h", "value": sig2_val, "band": band2, "breach": breach2})
 
         # ── Signal 3: w82_fallback_count_24h ─────────────────────────────────
         row3 = conn.execute(
@@ -388,22 +624,24 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
             (cutoff_24h,),
         ).fetchone()
         sig3_val = int(row3[0]) if row3 else 0
-        _write_signal(conn, "w82_fallback_count_24h", sig3_val)
+        band3, breach3 = _compute_int_band("w82_fallback_count_24h", sig3_val)
+        _write_signal(conn, "w82_fallback_count_24h", sig3_val, band3, breach3)
         results["w82_fallback_count_24h"] = sig3_val
+        cycle_signals.append({"signal": "w82_fallback_count_24h", "value": sig3_val, "band": band3, "breach": breach3})
 
         # ── Signal 4: empty_verdict_count_24h ────────────────────────────────
-        # Narratives where the verdict section (🏆) is absent in narrative_html
         row4 = conn.execute(
             "SELECT COUNT(*) FROM narrative_cache "
             "WHERE created_at >= ? AND (verdict_html IS NULL OR verdict_html = '')",
             (cutoff_24h,),
         ).fetchone()
         sig4_val = int(row4[0]) if row4 else 0
-        _write_signal(conn, "empty_verdict_count_24h", sig4_val)
+        band4, breach4 = _compute_int_band("empty_verdict_count_24h", sig4_val)
+        _write_signal(conn, "empty_verdict_count_24h", sig4_val, band4, breach4)
         results["empty_verdict_count_24h"] = sig4_val
+        cycle_signals.append({"signal": "empty_verdict_count_24h", "value": sig4_val, "band": band4, "breach": breach4})
 
-        # ── Signal 5 (NEW): low_quality_verdict_count ────────────────────────
-        # Narratives where the verdict_html fails min_verdict_quality()
+        # ── Signal 5: low_quality_verdict_count ──────────────────────────────
         # EDGE-CARD-INJURY-TO-MYMATCHES-01 suppression — remove after 2026-04-17
         import datetime as _dt
         _suppression_end = _dt.datetime(2026, 4, 17, 23, 59, tzinfo=_dt.timezone(
@@ -422,11 +660,12 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
             sig5_val = sum(
                 1 for r in rows5 if not min_verdict_quality(r["verdict_html"])
             )
-        _write_signal(conn, "low_quality_verdict_count", sig5_val)
+        band5, breach5 = _compute_int_band("low_quality_verdict_count", sig5_val)
+        _write_signal(conn, "low_quality_verdict_count", sig5_val, band5, breach5)
         results["low_quality_verdict_count"] = sig5_val
+        cycle_signals.append({"signal": "low_quality_verdict_count", "value": sig5_val, "band": band5, "breach": breach5})
 
-        # ── Signal 6 (NEW): gold_edge_non_sonnet_count ───────────────────────
-        # Gold/Diamond edges in last 24h where narrative was NOT from Sonnet
+        # ── Signal 6: gold_edge_non_sonnet_count ─────────────────────────────
         row6 = conn.execute(
             "SELECT COUNT(*) FROM narrative_cache "
             "WHERE created_at >= ? "
@@ -435,12 +674,12 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
             (cutoff_24h,),
         ).fetchone()
         sig6_val = int(row6[0]) if row6 else 0
-        _write_signal(conn, "gold_edge_non_sonnet_count", sig6_val)
+        band6, breach6 = _compute_int_band("gold_edge_non_sonnet_count", sig6_val)
+        _write_signal(conn, "gold_edge_non_sonnet_count", sig6_val, band6, breach6)
         results["gold_edge_non_sonnet_count"] = sig6_val
+        cycle_signals.append({"signal": "gold_edge_non_sonnet_count", "value": sig6_val, "band": band6, "breach": breach6})
 
         # ── Signal 7: validator_reject_rate ──────────────────────────────────
-        # % of validator calls that returned False in last 24h
-        # Events written by pregenerate_narratives.py on each verdict quality check
         _v_attempts = conn.execute(
             "SELECT COUNT(*) FROM narrative_integrity_log "
             "WHERE signal = 'validator_attempt' AND recorded_at >= ?",
@@ -454,11 +693,12 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
         ).fetchone()
         _v_rejects_count = int(_v_rejects[0]) if _v_rejects else 0
         sig7_val = int(100 * _v_rejects_count / _v_attempts_count) if _v_attempts_count else 0
-        _write_signal(conn, "validator_reject_rate", sig7_val)
+        band7, breach7 = _compute_int_band("validator_reject_rate", sig7_val)
+        _write_signal(conn, "validator_reject_rate", sig7_val, band7, breach7)
         results["validator_reject_rate"] = sig7_val
+        cycle_signals.append({"signal": "validator_reject_rate", "value": sig7_val, "band": band7, "breach": breach7})
 
         # ── Signal 8: banned_template_hit_rate ───────────────────────────────
-        # % of validator calls that hit a banned template in last 24h
         _bt_hits = conn.execute(
             "SELECT COUNT(*) FROM narrative_integrity_log "
             "WHERE signal = 'banned_template_hit' AND recorded_at >= ?",
@@ -466,51 +706,35 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
         ).fetchone()
         _bt_hits_count = int(_bt_hits[0]) if _bt_hits else 0
         sig8_val = int(100 * _bt_hits_count / _v_attempts_count) if _v_attempts_count else 0
-        _write_signal(conn, "banned_template_hit_rate", sig8_val)
+        band8, breach8 = _compute_int_band("banned_template_hit_rate", sig8_val)
+        _write_signal(conn, "banned_template_hit_rate", sig8_val, band8, breach8)
         results["banned_template_hit_rate"] = sig8_val
+        cycle_signals.append({"signal": "banned_template_hit_rate", "value": sig8_val, "band": band8, "breach": breach8})
 
         # ── Signal 9: manager_name_fabrication_attempts ───────────────────────
-        # Count of verdicts rejected for fabricated manager names in last 24h
         _mgr_fab = conn.execute(
             "SELECT COUNT(*) FROM narrative_integrity_log "
             "WHERE signal = 'manager_name_fabrication_attempt' AND recorded_at >= ?",
             (cutoff_24h,),
         ).fetchone()
         sig9_val = int(_mgr_fab[0]) if _mgr_fab else 0
-        _write_signal(conn, "manager_name_fabrication_attempts", sig9_val)
+        band9, breach9 = _compute_int_band("manager_name_fabrication_attempts", sig9_val)
+        _write_signal(conn, "manager_name_fabrication_attempts", sig9_val, band9, breach9)
         results["manager_name_fabrication_attempts"] = sig9_val
-
-        # ── EdgeOps alerts (SO #20, 2-hour debounce) ─────────────────────────
-        for signal, threshold in _THRESHOLDS.items():
-            value = results.get(signal, 0)
-            if value >= threshold and not _debounced(conn, signal):
-                detail = (
-                    f"Threshold: {threshold}\n"
-                    f"Detected at: {datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
-                )
-                _send_edgeops_alert(signal, value, detail)
+        cycle_signals.append({"signal": "manager_name_fabrication_attempts", "value": sig9_val, "band": band9, "breach": breach9})
 
         # ── Coach freshness signals (BUILD-COACHES-MONITOR-WIRE-01) ─────────
         for fn in SIGNAL_FNS:
             sig = fn()
             signal_name = sig["signal"]
-            # narrative_integrity_log stores value as INTEGER; round pct to nearest int
             sig_int = int(round(sig["value"]))
-            _write_signal(conn, signal_name, sig_int)
+            _write_signal(conn, signal_name, sig_int, sig["band"], sig["breach"])
             results[signal_name] = sig_int
+            cycle_signals.append(sig)
 
-            if sig["breach"] and not _debounced(conn, signal_name):
-                detail = (
-                    f"Band: {sig['band']}\n"
-                    f"Details: {sig.get('details', '')}\n"
-                    f"Detected at: {datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
-                )
-                _send_edgeops_alert(signal_name, sig_int, detail)
-                if _sentry:
-                    _sentry.capture_message(
-                        f"narrative_integrity: {signal_name} breached — {sig['value']}",
-                        level="warning",
-                    )
+        # ── Unified alerter (BUILD-NARRATIVE-ALERT-WIRE-01) ─────────────────
+        _fire_cycle_alerts(conn, cycle_signals, dry_run=dry_run)
+        _auto_resolve_alerts(conn, cycle_signals, dry_run=dry_run)
 
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
@@ -524,7 +748,13 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
 
 
 if __name__ == "__main__":
-    results = run_monitor()
+    _dry_run = "--dry-run" in sys.argv
+    if _dry_run:
+        logging.basicConfig(level=logging.INFO)
+        log.info("DRY-RUN mode — no DB writes, no Telegram messages")
+    results = run_monitor(dry_run=_dry_run)
     print(json.dumps(results, indent=2))
     distinct = len(results)
     print(f"\nDistinct signals: {distinct}")
+    if _dry_run:
+        print("(dry-run — no alerts fired, no health_alerts rows inserted)")
