@@ -229,6 +229,17 @@ SA_BOOKMAKERS = {
 - `/settings` — User preferences (risk profile, notifications, sports, bankroll, profile reset)
 - `/stats` — Legacy stats command (user count, tip results)
 
+## QA Harness (BUILD-QA-HARNESS-01 — 2026-04-17)
+- `qa_profiles` (9 cols) + `qa_command_log` (7 cols) tables in `mzansiedge.db`
+- 12 synthetic personas P01–P12 seeded via `scripts/create_qa_tables.py` (safe to re-run, INSERT OR IGNORE)
+- `/qa profile list|<id>` — read-only profile inspection
+- `/qa teaser <id>` — renders teaser HTML + digest PNG → `/tmp/qa/<id>/teaser_<ts>.*`
+- `/qa digest_image <id>` — renders digest card PNG → `/tmp/qa/<id>/digest_<ts>.png`
+- `/qa card_image <id> <match_id>` — renders match card PNG → `/tmp/qa/<id>/card_<ts>.png`
+- All harness commands logged to `qa_command_log` with `duration_ms`
+- Admin-only gate: non-admin gets "unauthorized"
+- BUILD-QA-HARNESS-02 will add the capture-engine (screenshot + structured diff) on top of this foundation
+
 ## Onboarding Quiz Flow (5 steps — Phase 0D)
 1. **Step 1: Experience level** — Experienced / Casual / Newbie
 2. **Step 2: Sports selection** — Category-based grid (Soccer, Rugby, Cricket, Combat Sports)
