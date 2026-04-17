@@ -562,7 +562,11 @@ def _build_important_injuries(home_injuries: list, away_injuries: list) -> str:
                         s += f" ({status[:10]})"
                     items.append(s)
             elif isinstance(inj, str) and inj.strip():
-                items.append(inj.strip()[:25])
+                _s = inj.strip()[:25]
+                # Close any unclosed parenthesis caused by truncation
+                if "(" in _s and not _s.rstrip().endswith(")"):
+                    _s = _s.rstrip() + ")"
+                items.append(_s)
             if len(items) >= 3:
                 return ", ".join(items)
     return ", ".join(items) if items else ""
@@ -1006,9 +1010,11 @@ def _split_kickoff(kickoff: str) -> tuple[str, str]:
         sep = "\u00b7" if "\u00b7" in kickoff else "·"
         parts = kickoff.split(sep, 1)
         return parts[0].strip(), parts[1].strip()
-    # Try space before HH:MM pattern
+    # Try space before HH:MM pattern — strip trailing timezone suffix first
+    # e.g. "Tomorrow 14:55 SAST" → "Tomorrow 14:55" so regex can match
     import re
-    m = re.match(r"^(.*?)\s+(\d{1,2}:\d{2})$", kickoff.strip())
+    kickoff_clean = re.sub(r'\s+[A-Z]{2,4}$', '', kickoff.strip())
+    m = re.match(r"^(.*?)\s+(\d{1,2}:\d{2})$", kickoff_clean)
     if m:
         return m.group(1).strip(), m.group(2)
     # Just date

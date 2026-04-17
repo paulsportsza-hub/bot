@@ -2147,10 +2147,12 @@ _VERDICT_MAX_CHARS = 140
 def _cap_verdict(text: str) -> str:
     """BUILD-VERDICT-CAP-01: Hard-cap verdict output at _VERDICT_MAX_CHARS characters.
     Clips at the last word boundary to avoid mid-word truncation.
+    FIX-KICKOFF-RELATIVE-01/D2: clip to _VERDICT_MAX_CHARS - 1 before appending "."
+    so the final string is always <= _VERDICT_MAX_CHARS (was 141 due to off-by-one).
     """
     if len(text) <= _VERDICT_MAX_CHARS:
         return text
-    clipped = text[:_VERDICT_MAX_CHARS].rsplit(" ", 1)[0].rstrip(".,;")
+    clipped = text[:_VERDICT_MAX_CHARS - 1].rsplit(" ", 1)[0].rstrip(".,;")
     return clipped + "."
 
 

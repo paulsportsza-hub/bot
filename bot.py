@@ -8499,7 +8499,9 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
                 log.info("VERDICT_BLACKLISTED_CACHED: %s, will regenerate", match_key)
                 _use_cached_verdict = False
             elif _cv_text:
-                enriched["verdict"] = _cv_text
+                # FIX-KICKOFF-RELATIVE-01/D2: re-cap on serve — stale cache entries
+                # from older codepaths may exceed _VERDICT_MAX_CHARS.
+                enriched["verdict"] = _cap_verdict(_cv_text, limit=_VERDICT_MAX_CHARS)
             else:
                 _use_cached_verdict = False
         if not _use_cached_verdict:
