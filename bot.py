@@ -122,7 +122,7 @@ from card_data import (
     build_edge_summary_data,
 )
 from card_renderer import render_card_sync, warm_chromium as _warm_chromium
-from narrative_spec import _VERDICT_MAX_CHARS, _reject_llm_meta_strings
+from narrative_spec import _VERDICT_MAX_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings
 
 # ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
 from logging.handlers import RotatingFileHandler
@@ -7361,6 +7361,8 @@ _VERDICT_BLACKLIST = [
     "stake manageable",
     "size your stake",
     "limit your stake",
+    # FIX-D1-VERDICT-BLACKLIST-01: import LLM meta-markers from narrative_spec (single source of truth)
+    *_LLM_META_MARKERS,
 ]
 
 # BUILD-VERDICT-RENDER-FIXES-01: detect orphan "Back X." sentence at end of verdict
