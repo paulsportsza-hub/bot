@@ -10592,11 +10592,34 @@ def _resolve_kickoff_time(
                         (match_key,),
                     ).fetchone()
                     if _row and _row[0]:
-                        d, t = _fmt_iso_utc(_row[0])
-                        if d:
-                            log.debug("_resolve_kickoff_time[soccer:fixture_mapping] %s → %s %s",
-                                      match_key, d, t)
-                            return (d, t)
+                        # FIX-REGRESS-D2-DATE-PILL-01: on-demand stale invalidation.
+                        # If fixture_mapping.kickoff is >2h in the past, the cache is
+                        # stale (fixture rescheduled or incorrect). Skip to next source.
+                        _ko_stale = False
+                        try:
+                            _ko_raw = _row[0].strip().replace("Z", "+00:00")
+                            if "T" not in _ko_raw and " " in _ko_raw:
+                                _ko_raw = _ko_raw.replace(" ", "T")
+                            _ko_dt = _dt.fromisoformat(_ko_raw)
+                            if _ko_dt.tzinfo is None:
+                                _ko_dt = _ko_dt.replace(tzinfo=_ZI("UTC"))
+                            if _ko_dt < _dt.now(_ZI("UTC")) - _td(hours=2):
+                                log.warning(
+                                    "_resolve_kickoff_time: fixture_mapping stale for %s "
+                                    "(kickoff=%s) — skipping to broadcast_schedule",
+                                    match_key, _row[0],
+                                )
+                                _ko_stale = True
+                        except Exception:
+                            pass  # parse failure → not stale, use value
+                        if not _ko_stale:
+                            d, t = _fmt_iso_utc(_row[0])
+                            if d:
+                                log.debug(
+                                    "_resolve_kickoff_time[soccer:fixture_mapping] %s → %s %s",
+                                    match_key, d, t,
+                                )
+                                return (d, t)
                 finally:
                     _c.close()
             except Exception as exc:

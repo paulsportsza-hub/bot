@@ -235,8 +235,12 @@ def _pick_top(tips: list[dict]) -> dict | None:
     tier = _resolve_tier(best)
     tier_color = _TIER_META.get(tier, {"color": "#A0AEC0"})["color"]
 
-    # Parse kickoff into date + time parts
+    # Parse kickoff into date + time parts.
+    # FIX-REGRESS-D2-DATE-PILL-01: fall back to commence_time (fixture_mapping.kickoff)
+    # when _bc_kickoff is absent (tips not yet passed through _build_hot_tips_page).
     kickoff_raw = best.get("_bc_kickoff") or best.get("kickoff") or ""
+    if not kickoff_raw:
+        kickoff_raw = _format_commence_time_sast(best.get("commence_time") or "")
     date_part, time_part = _split_kickoff(kickoff_raw)
 
     # Home/away
@@ -359,6 +363,8 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4, us
             or ""
         )
         kickoff_raw = tip.get("_bc_kickoff") or tip.get("kickoff") or ""
+        if not kickoff_raw:
+            kickoff_raw = _format_commence_time_sast(tip.get("commence_time") or "")
         # Support pre-split date/time fields (from SAMPLE_PICKS)
         date_part = tip.get("date") or ""
         time_part = tip.get("time") or ""
@@ -682,7 +688,10 @@ def build_edge_detail_data(tip: dict, card_width: int = 480) -> dict:
     # populates tip["time"] via _resolve_kickoff_time() (sport-aware fixture table
     # lookups). For sports with no time data (rugby, mma), time_str is empty and
     # the template renders date-only gracefully.
+    # FIX-REGRESS-D2-DATE-PILL-01: fall back to commence_time when _bc_kickoff absent.
     kickoff_raw = tip.get("_bc_kickoff") or tip.get("kickoff") or ""
+    if not kickoff_raw:
+        kickoff_raw = _format_commence_time_sast(tip.get("commence_time") or "")
     date_part, time_part = _split_kickoff(kickoff_raw)
     date_str = tip.get("date") or date_part
     _raw_time = tip.get("time") or time_part
@@ -1004,3 +1013,44 @@ def _split_kickoff(kickoff: str) -> tuple[str, str]:
         return m.group(1).strip(), m.group(2)
     # Just date
     return kickoff.strip(), ""
+
+
+def _format_commence_time_sast(iso_str: str) -> str:
+    """Convert UTC ISO kickoff to SAST display string for date-pill rendering.
+
+    FIX-REGRESS-D2-DATE-PILL-01: fallback for tips that carry commence_time
+    (fixture_mapping.kickoff) but have no _bc_kickoff or kickoff field set.
+    Returns "Today 19:30", "Tomorrow 19:30", "Thu 17 Apr 19:30", or "" on failure.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import timedelta, timezone
+        _SAST = ZoneInfo("Africa/Johannesburg")
+        s = (iso_str or "").strip()
+        if not s:
+            return ""
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        if "T" not in s and " " in s:
+            s = s.replace(" ", "T")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt_sast = dt.astimezone(_SAST)
+        today = datetime.now(_SAST).date()
+        delta = (dt_sast.date() - today).days
+        if delta == 0:
+            date_part = "Today"
+        elif delta == 1:
+            date_part = "Tomorrow"
+        elif delta < 0:
+            date_part = dt_sast.strftime("%-d %b")
+        else:
+            date_part = dt_sast.strftime("%a %-d %b")
+        time_part = dt_sast.strftime("%H:%M")
+        # 00:00 UTC = 02:00 SAST is a placeholder, not a real kickoff time
+        if time_part == "02:00":
+            return date_part
+        return f"{date_part} {time_part}"
+    except Exception:
+        return ""
