@@ -2011,7 +2011,7 @@ async def _generate_one(
                     "MAX" if (edge.get("composite_score") or 0) >= 95 else
                     "STRONG" if (edge.get("composite_score") or 0) >= 85 else
                     "SOLID" if (edge.get("composite_score") or 0) >= 70 else
-                    "SELECTIVE"
+                    "MILD"
                 ),
                 # Enrichment keys — sourced from upstream evidence_pack
                 "form": (getattr(_ep_espn, "home_team", {}) or {}).get("form") if _ep_espn else None,

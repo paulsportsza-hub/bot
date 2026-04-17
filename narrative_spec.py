@@ -154,8 +154,6 @@ MIN_VERDICT_CHARS_BY_TIER: dict[str, int] = {
     "silver": 110,
     "bronze": 90,
 }
-MAX_VERDICT_CHARS: int = 300
-
 # Regexes that match trivially thin / content-empty verdicts.
 # Gate fires if ANY pattern matches the stripped verdict text.
 BANNED_TRIVIAL_VERDICT_TEMPLATES: list[re.Pattern] = [
@@ -193,6 +191,38 @@ def analytical_word_count(verdict: str) -> int:
         1 for word in ANALYTICAL_VOCABULARY
         if re.search(r"\b" + re.escape(word), lower)
     )
+
+
+# ── FIX-REGRESS-D1-VERDICT-GUARD-01: LLM meta-reply leak guard ────────────────
+
+# Substrings that only appear in Sonnet's error/apology replies, never in a
+# legitimate verdict. Lowercase; checked against lowercased verdict text.
+_LLM_META_MARKERS: tuple[str, ...] = (
+    "i notice",
+    "i understand",
+    "confidence_tier",
+    "selective",
+    "not one of",
+    "isn't one of",
+    "valid tiers",
+    "four valid",
+    "valid options",
+    "i apologize",
+)
+
+
+def _reject_llm_meta_strings(verdict: str) -> bool:
+    """Return True when the verdict text leaks LLM meta-reply patterns.
+
+    FIX-REGRESS-D1-VERDICT-GUARD-01: catches Sonnet error-replies about
+    invalid tier values, input-field references, and apologies shipping as
+    the production verdict. Caller must fall back to the deterministic
+    baseline and emit a Sentry breadcrumb `verdict_rejected_llm_meta`.
+    """
+    if not verdict:
+        return False
+    low = verdict.lower()
+    return any(m in low for m in _LLM_META_MARKERS)
 
 
 def validate_manager_names(verdict: str, evidence_pack: dict) -> bool:
@@ -366,7 +396,7 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
 
     Rejects verdicts that:
     1. Are shorter than the tier-specific MIN_VERDICT_CHARS_BY_TIER floor.
-    2. Are longer than MAX_VERDICT_CHARS (300).
+    2. Are longer than _VERDICT_MAX_CHARS (140).
     3. Match a banned trivial template (content-empty patterns).
     4. Contain fewer than 3 analytical vocabulary words.
     5. Name a manager/coach not present in evidence_pack (hard fail).
@@ -381,7 +411,7 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
     _floor = MIN_VERDICT_CHARS_BY_TIER.get(_tier_key, MIN_VERDICT_CHARS_BY_TIER["bronze"])
     if len(text) < _floor:
         return False
-    if len(text) > MAX_VERDICT_CHARS:
+    if len(text) > _VERDICT_MAX_CHARS:
         return False
     # Gate 2 — banned trivial templates
     for pattern in BANNED_TRIVIAL_VERDICT_TEMPLATES:
