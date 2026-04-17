@@ -8885,20 +8885,12 @@ async def _serve_card_detail(
             edge_tier=edge_tier, back_page=back_page,
         )
 
-        # DetailMessage.build_card_photo handles image + caption rendering
-        _cd_img, _cd_caption, _cd_markup = DetailMessage.build_card_photo(
+        # DetailMessage.build_card_photo handles image + button rendering
+        _cd_img, _, _cd_markup = DetailMessage.build_card_photo(
             _cd_card,
             buttons=_cd_btns,
             back_cb=f"hot:back:{back_page}",
         )
-
-        # QA banner
-        _cd_banner = _qa_banner(user_id)
-        if _cd_banner:
-            _cd_caption = _cd_banner + _cd_caption
-            # Re-enforce 1024-char Telegram photo caption limit
-            if len(_cd_caption) > 1024:
-                _cd_caption = _cd_caption[:1021] + "..."
 
         # Transition: delete text list message → send photo
         _cd_chat_id = query.message.chat_id
@@ -8907,12 +8899,9 @@ async def _serve_card_detail(
         except Exception:
             pass
 
-        from telegram.constants import ParseMode as _cd_PM
         await query.get_bot().send_photo(
             chat_id=_cd_chat_id,
             photo=_cd_io.BytesIO(_cd_img),
-            caption=_cd_caption,
-            parse_mode=_cd_PM.HTML,
             reply_markup=_cd_markup,
         )
         log.info("PERF: edge:detail CARD-PIPELINE served for %s", match_key)
@@ -24625,6 +24614,10 @@ def _map_webhook_state(event: dict) -> tuple[str, str]:
         return "failed", "failed"
     if event_type in {"payment.expired", "subscription.expired"}:
         return "expired", "expired"
+    if event_type == "mandate.created":
+        return "pending", "pending"
+    if event_type == "mandate.authorization_succeeded":
+        return "confirmed", "active"
     return "confirmed", "active"
 
 
@@ -25163,6 +25156,12 @@ async def _run_webhook_server(app_instance) -> None:
             analytics_track(int(user_id), "subscription_cancelled")
         elif user_id and event_type == "payment.failed":
             analytics_track(int(user_id), "payment_failed")
+        elif user_id and event_type == "mandate.authorization_succeeded":
+            analytics_track(int(user_id), "mandate_authorized", {
+                "outcome": outcome.get("outcome", "unknown"),
+            })
+        elif user_id and event_type == "mandate.created":
+            analytics_track(int(user_id), "mandate_created")
 
         try:
             await _notify_payment_outcome(app_instance.bot.send_message, outcome)

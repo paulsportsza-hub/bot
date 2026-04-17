@@ -299,6 +299,108 @@ class StitchService:
         except json.JSONDecodeError:
             return {}
 
+    async def create_recurring_mandate(
+        self,
+        user_id: int,
+        amount_cents: int,
+        frequency: str = "monthly",
+    ) -> dict[str, Any]:
+        """Create a Tokenised Card recurring mandate via Stitch LinkPay.
+
+        Uses clientPaymentInitiationRequestCreate with card-only payer constraint
+        and linkedPaymentMethodConstraints to enable card tokenisation.
+
+        First charge is an immediate one-off. Stitch tokenises the card for
+        subsequent re-charges (cron-based re-charge worker is a follow-up brief).
+
+        Returns {mandate_url, mandate_id, reference}.
+        """
+        if self._is_mock():
+            from services.stitch_mock import MockStitchService
+            result = await MockStitchService().create_payment(user_id, amount_cents, None)
+            return {
+                "mandate_url": self.build_checkout_url(result["payment_url"]),
+                "mandate_id": result["payment_id"],
+                "reference": result["reference"],
+            }
+
+        import uuid
+        reference = f"mze-mand-{user_id}-{uuid.uuid4().hex[:8]}"
+        token = await self.get_client_token()
+        amount_rands = amount_cents / 100
+
+        mutation = """
+        mutation CreateTokenisedCardMandate(
+            $amount: MoneyInput!,
+            $payerReference: String!,
+            $beneficiaryReference: String!,
+            $externalReference: String
+        ) {
+            clientPaymentInitiationRequestCreate(input: {
+                amount: $amount,
+                payerReference: $payerReference,
+                beneficiaryReference: $beneficiaryReference,
+                externalReference: $externalReference,
+                payerConstraints: {
+                    allowedPaymentMethods: [card]
+                },
+                linkedPaymentMethodConstraints: {
+                    allowUserInteraction: true,
+                    relinkUserInteraction: true
+                }
+            }) {
+                paymentInitiationRequest {
+                    id
+                    url
+                    status {
+                        __typename
+                    }
+                }
+            }
+        }
+        """
+
+        variables = {
+            "amount": {"quantity": str(amount_rands), "currency": "ZAR"},
+            "payerReference": f"MzansiEdge-{user_id}",
+            "beneficiaryReference": reference,
+            "externalReference": str(user_id),
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.GRAPHQL_URL,
+                json={"query": mutation, "variables": variables},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+            ) as resp:
+                body = await resp.json()
+
+                errors = body.get("errors")
+                if errors:
+                    log.error("Stitch mandate GraphQL errors: %s", errors)
+                    raise RuntimeError(
+                        f"Stitch mandate failed: {errors[0].get('message', errors)}"
+                    )
+
+                pir = body["data"]["clientPaymentInitiationRequestCreate"][
+                    "paymentInitiationRequest"
+                ]
+                result = {
+                    "mandate_url": self.build_checkout_url(pir["url"]),
+                    "mandate_id": pir["id"],
+                    "reference": reference,
+                }
+                log.info(
+                    "Stitch tokenised card mandate created: %s (user=%s freq=%s)",
+                    result["mandate_id"],
+                    user_id,
+                    frequency,
+                )
+                return result
+
     async def build_mock_webhook_event(
         self,
         payment_id: str,

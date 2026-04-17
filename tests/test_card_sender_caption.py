@@ -1,9 +1,14 @@
-"""Unit tests for card_sender caption pass-through (ARBITER-IMAGE-CARD-FIX-01)."""
+"""Unit tests — card_sender IMAGE ONLY compliance (BUG-KILL-TEXT-DUMPS-01).
+
+Verifies:
+- No caption= is passed to send_photo or edit_media (IMAGE ONLY rule)
+- No text message is sent on render failure (log + Sentry only)
+- text_fallback parameter is accepted but silently ignored
+"""
 from __future__ import annotations
 
-import asyncio
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -29,8 +34,8 @@ def _make_bot():
 
 
 @pytest.mark.asyncio
-async def test_send_photo_caption_present_when_text_fallback_given():
-    """send_photo must include caption= when text_fallback is non-empty."""
+async def test_send_photo_has_no_caption():
+    """send_photo must NOT include caption= (IMAGE ONLY rule)."""
     bot = _make_bot()
     with patch("card_sender.render_card_sync", return_value=_FAKE_PNG):
         import card_sender
@@ -44,14 +49,12 @@ async def test_send_photo_caption_present_when_text_fallback_given():
         )
     bot.send_photo.assert_called_once()
     kwargs = bot.send_photo.call_args.kwargs
-    assert "caption" in kwargs, "caption= must be passed to send_photo"
-    assert kwargs["caption"], "caption must not be empty"
-    assert len(kwargs["caption"]) <= 1024
+    assert "caption" not in kwargs, "caption= must NOT be passed to send_photo (IMAGE ONLY)"
 
 
 @pytest.mark.asyncio
 async def test_send_photo_no_caption_when_text_fallback_empty():
-    """send_photo must NOT include a truthy caption= when text_fallback is empty."""
+    """send_photo must NOT include caption= even when text_fallback is empty."""
     bot = _make_bot()
     with patch("card_sender.render_card_sync", return_value=_FAKE_PNG):
         import card_sender
@@ -65,14 +68,34 @@ async def test_send_photo_no_caption_when_text_fallback_empty():
         )
     bot.send_photo.assert_called_once()
     kwargs = bot.send_photo.call_args.kwargs
-    assert not kwargs.get("caption"), "caption must be absent or falsy when text_fallback is empty"
+    assert "caption" not in kwargs, "caption= must never be passed to send_photo"
 
 
 @pytest.mark.asyncio
-async def test_caption_truncated_at_word_boundary():
-    """Caption exceeding 1024 chars is truncated at a word boundary."""
-    long_text = "word " * 300  # ~1500 chars
+async def test_no_text_message_on_render_failure():
+    """On render failure, bot must NOT send a text message (log + Sentry only)."""
     bot = _make_bot()
+    with patch("card_sender.render_card_sync", side_effect=RuntimeError("render boom")):
+        import card_sender
+        await card_sender.send_card_or_fallback(
+            bot=bot,
+            chat_id=999,
+            template="edge_picks.html",
+            data={},
+            text_fallback="<b>Fallback text</b>",
+            markup=MagicMock(),
+        )
+    bot.send_message.assert_not_called()
+    bot.send_photo.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_edit_media_has_no_caption():
+    """edit_media (photo→photo) must NOT include caption= on InputMediaPhoto."""
+    bot = _make_bot()
+    msg = MagicMock()
+    msg.photo = [MagicMock()]
+    msg.edit_media = AsyncMock()
     with patch("card_sender.render_card_sync", return_value=_FAKE_PNG):
         import card_sender
         await card_sender.send_card_or_fallback(
@@ -80,26 +103,13 @@ async def test_caption_truncated_at_word_boundary():
             chat_id=999,
             template="edge_picks.html",
             data={},
-            text_fallback=long_text,
+            text_fallback="some text",
             markup=MagicMock(),
+            message_to_edit=msg,
         )
-    kwargs = bot.send_photo.call_args.kwargs
-    caption = kwargs.get("caption", "")
-    assert len(caption) <= 1024
-    assert not caption.endswith("wor"), "should not truncate mid-word"
-
-
-def test_truncate_caption_under_limit():
-    """Short captions pass through unchanged."""
-    from card_sender import _truncate_caption
-    text = "Short caption"
-    assert _truncate_caption(text) == text
-
-
-def test_truncate_caption_at_word_boundary():
-    """Long captions are cut at last space before limit."""
-    from card_sender import _truncate_caption
-    text = " ".join(["word"] * 300)  # ~1499 chars
-    result = _truncate_caption(text)
-    assert len(result) <= 1024
-    assert result.endswith("word")  # ends at a complete word
+    msg.edit_media.assert_called_once()
+    call_kwargs = msg.edit_media.call_args.kwargs
+    media = call_kwargs.get("media")
+    assert media is not None
+    # InputMediaPhoto must not carry caption
+    assert not getattr(media, "caption", None), "InputMediaPhoto must not have caption= (IMAGE ONLY)"

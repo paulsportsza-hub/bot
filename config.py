@@ -59,6 +59,7 @@ STITCH_CLIENT_SECRET: str = os.environ.get("STITCH_CLIENT_SECRET", "")
 STITCH_WEBHOOK_SECRET: str = os.environ.get("STITCH_WEBHOOK_SECRET", "")
 STITCH_MOCK_MODE: bool = os.environ.get("STITCH_MOCK_MODE", "true").lower() == "true"
 STITCH_REDIRECT_URI: str = os.environ.get("STITCH_REDIRECT_URI", "")
+STITCH_WEBHOOK_ENDPOINT_ID: str = os.environ.get("STITCH_WEBHOOK_ENDPOINT_ID", "")
 
 # ── Subscription Tiers ───────────────────────────────────
 TIER_PRICES: dict[str, int] = {
