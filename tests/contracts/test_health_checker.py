@@ -199,6 +199,49 @@ def test_migration_no_raw_sqlite():
 
 
 # ---------------------------------------------------------------------------
+# Test 11: CLV family uses identical 36h lookback windows (BUILD-HEALTH-CLVBF-WINDOW-01)
+# ---------------------------------------------------------------------------
+
+def test_clv_family_uses_identical_windows():
+    """_check_sharp_closing, _check_clv_tracker, _check_clv_backfill must all
+    use window_hours=36 (primary) and '-36 hours' (fallback SQL).
+
+    Regression guard: prevents overnight BLACK caused by a 6h window that ages
+    out during the 12h off-window gap (22:30→10:30 UTC).
+    """
+    import re
+
+    checker_path = '/home/paulsportsza/scripts/health_checker.py'
+    with open(checker_path, 'r') as f:
+        source = f.read()
+
+    # Extract body of each check function (from def line to next def at same indent)
+    def _extract_fn_body(src, fn_name):
+        pattern = rf'def {re.escape(fn_name)}\(.*?(?=\ndef |\Z)'
+        m = re.search(pattern, src, re.DOTALL)
+        assert m, f"{fn_name} not found in health_checker.py"
+        return m.group(0)
+
+    bodies = {
+        fn: _extract_fn_body(source, fn)
+        for fn in ('_check_sharp_closing', '_check_clv_tracker', '_check_clv_backfill')
+    }
+
+    # All three must share the same primary window (36h covers the 12h overnight gap)
+    for fn, body in bodies.items():
+        assert 'window_hours=36' in body, (
+            f"{fn}: expected window_hours=36 but found different value. "
+            "All CLV-family functions must use 36h to survive the 12h overnight gap."
+        )
+
+    # _check_clv_backfill fallback SQL must also use 36h (was 6h — the root-cause bug)
+    assert "'-36 hours'" in bodies['_check_clv_backfill'], (
+        "_check_clv_backfill: SQL fallback must use '-36 hours' (was '-6 hours'). "
+        "Short fallback window caused BLACK status overnight."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 11: status_from_minutes boundary conditions
 # ---------------------------------------------------------------------------
 
