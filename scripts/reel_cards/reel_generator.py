@@ -27,6 +27,21 @@ ENV_FILE     = "/home/paulsportsza/publisher/.env"
 LOG_DIR      = Path("/home/paulsportsza/logs")
 BG_ASSETS    = SCRIPT_DIR / "assets"  # bg-{tier}.png lives here
 
+# ── Early env loader ──────────────────────────────────────────────────────────
+# _load_env() below runs at main() time; module-level constants (NOTION_TOKEN)
+# evaluate at import. This block hydrates os.environ from publisher/.env BEFORE
+# the constants below are evaluated so secrets never live in the source file.
+try:
+    with open(ENV_FILE) as _envf:
+        for _line in _envf:
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+except Exception:
+    pass
+
 NOTION_TOKEN    = os.environ.get("NOTION_TOKEN", "")
 TASK_HUB_PAGE   = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
 MOQ_DB_ID       = "9061c15b-e8de-416d-8d61-e6b1d4d37f9f"
@@ -74,6 +89,52 @@ def _parse_teams_from_match_key(match_key: str) -> tuple[str, str]:
     else:
         home, away = match_key, match_key
     return home, away
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TEAM NAME ABBREVIATIONS — used to avoid card geometry overflow on long names.
+# Applied after .upper() at pick dict construction. Teams not in the dict render
+# as-is. Adding a team here applies to home_team, away_team, AND pick_team.
+# Canonical v6.4 lock 17 Apr 2026. See .auto-memory/project_card_regression_17apr.md
+# ──────────────────────────────────────────────────────────────────────────────
+TEAM_ABBREVIATIONS = {
+    # IPL (cricket)
+    "KOLKATA KNIGHT RIDERS":      "KKR",
+    "ROYAL CHALLENGERS BANGALORE":"RCB",
+    "ROYAL CHALLENGERS BENGALURU":"RCB",
+    "CHENNAI SUPER KINGS":        "CSK",
+    "SUNRISERS HYDERABAD":        "SRH",
+    "LUCKNOW SUPER GIANTS":       "LSG",
+    "RAJASTHAN ROYALS":           "RAJASTHAN",
+    "PUNJAB KINGS":               "PUNJAB",
+    "DELHI CAPITALS":             "DELHI",
+    "MUMBAI INDIANS":             "MUMBAI",
+    "GUJARAT TITANS":             "GUJARAT",
+    # EPL (football) — long names only
+    "MANCHESTER UNITED":          "MAN UTD",
+    "MANCHESTER CITY":            "MAN CITY",
+    "TOTTENHAM HOTSPUR":          "SPURS",
+    "NEWCASTLE UNITED":           "NEWCASTLE",
+    "WEST HAM UNITED":            "WEST HAM",
+    "NOTTINGHAM FOREST":          "FOREST",
+    "BRIGHTON HOVE ALBION":       "BRIGHTON",
+    "BRIGHTON & HOVE ALBION":     "BRIGHTON",
+    "WOLVERHAMPTON WANDERERS":    "WOLVES",
+    "LEICESTER CITY":             "LEICESTER",
+    "SHEFFIELD UNITED":           "SHEFFIELD",
+    "LUTON TOWN":                 "LUTON",
+    # Rugby URC (SA franchises)
+    "VODACOM BULLS":              "BULLS",
+    "HOLLYWOODBETS SHARKS":       "SHARKS",
+    "DHL STORMERS":               "STORMERS",
+    "EMIRATES LIONS":             "LIONS",
+}
+
+def abbr(name: str) -> str:
+    """Return abbreviated team name if listed, else the original. Input expected uppercase."""
+    if not name:
+        return name
+    return TEAM_ABBREVIATIONS.get(name.strip(), name)
 
 
 def _resolve_pick_team(bet_type: str, home: str, away: str) -> str:
@@ -164,12 +225,17 @@ def render_card(row: dict, tier: str, today: str) -> tuple[str, str, dict] | Non
     stake  = 100
     profit = round(stake * (odds - 1))
 
+    # CARD-CASE-LOCK-01 — template geometry (render_reel_card.py) is tuned for UPPERCASE
+    # caps-height glyphs only. Lowercase descenders (g/j/p/q/y) break gradient mask alignment
+    # in _draw_gradient_text and clip team names. Force .upper() at render boundary.
+    # Do NOT remove even if upstream DB is clean — historical regressions have let mixed-case
+    # reach this function (see .auto-memory/project_card_regression_17apr.md).
     pick = {
         "tier":          tier,
-        "home_team":     home,
-        "away_team":     away,
-        "pick_team":     pick_team,
-        "league":        row["league"].replace("_", " ").title(),
+        "home_team":     abbr(home.upper()),
+        "away_team":     abbr(away.upper()),
+        "pick_team":     abbr(pick_team.upper()),
+        "league":        row["league"].replace("_", " ").upper(),
         "bet_type":      row["bet_type"],
         "recommended_odds": odds,
         "composite_score":  row["composite_score"],
