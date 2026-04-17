@@ -1,4 +1,4 @@
-"""FIX-REGRESS-D1-VERDICT-GUARD-01: LLM meta-reply leak validator tests.
+"""FIX-REGRESS-D1-VERDICT-GUARD-01 + FIX-NARRATIVE-META-MARKERS-01: LLM meta-reply leak validator tests.
 
 Validator `_reject_llm_meta_strings(verdict: str) -> bool` returns True when the
 verdict text contains LLM error-reply meta-strings such as:
@@ -7,6 +7,9 @@ verdict text contains LLM error-reply meta-strings such as:
   - "SELECTIVE" (an invalid tier value the Sonnet prompt rejects by echoing it)
   - "not one of", "isn't one of"
   - "valid tiers", "four valid", "valid options"
+  - "i cannot", "i can't produce" (LLM refusal phrases — FIX-NARRATIVE-META-MARKERS-01)
+  - "no form, h2h", "no form data, h2h", "no manager names", "also noting"
+    (data-absence meta-commentary — FIX-NARRATIVE-META-MARKERS-01)
 
 On reject, the bot callers fall back to the deterministic baseline verdict and
 emit a Sentry breadcrumb `verdict_rejected_llm_meta`. This test guards the
@@ -75,6 +78,32 @@ class TestRejectLLMMetaStrings(unittest.TestCase):
 
     def test_accepts_empty_string(self):
         self.assertFalse(_reject_llm_meta_strings(""))
+
+    # FIX-NARRATIVE-META-MARKERS-01: 6 new markers
+
+    def test_rejects_i_cannot(self):
+        verdict = "I cannot produce a valid verdict for this match because the data is missing."
+        self.assertTrue(_reject_llm_meta_strings(verdict))
+
+    def test_rejects_i_cant_produce(self):
+        verdict = "I can't produce a verdict for this match — the confidence tier is invalid."
+        self.assertTrue(_reject_llm_meta_strings(verdict))
+
+    def test_rejects_no_form_h2h(self):
+        verdict = "Also, no form, H2H, manager, or signals data was provided, so proceed cautiously."
+        self.assertTrue(_reject_llm_meta_strings(verdict))
+
+    def test_rejects_no_form_data_h2h(self):
+        verdict = "Also, no form data, H2H summary, manager names, or signals were provided."
+        self.assertTrue(_reject_llm_meta_strings(verdict))
+
+    def test_rejects_no_manager_names(self):
+        verdict = "Note: No manager names, form data, or H2H summary were provided for this fixture."
+        self.assertTrue(_reject_llm_meta_strings(verdict))
+
+    def test_rejects_also_noting(self):
+        verdict = "Also noting: no manager names, no form data, no H2H summary were included."
+        self.assertTrue(_reject_llm_meta_strings(verdict))
 
 
 if __name__ == "__main__":

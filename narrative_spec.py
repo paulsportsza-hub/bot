@@ -193,11 +193,14 @@ def analytical_word_count(verdict: str) -> int:
     )
 
 
-# ── FIX-REGRESS-D1-VERDICT-GUARD-01: LLM meta-reply leak guard ────────────────
+# ── FIX-REGRESS-D1-VERDICT-GUARD-01 + FIX-NARRATIVE-META-MARKERS-01 ──────────
 
 # Substrings that only appear in Sonnet's error/apology replies, never in a
 # legitimate verdict. Lowercase; checked against lowercased verdict text.
+# FIX-NARRATIVE-META-MARKERS-01: extended with data-absence meta-commentary
+# patterns observed in pregen.log cascade (i cannot / no form, h2h / etc.)
 _LLM_META_MARKERS: tuple[str, ...] = (
+    # Tier-validation error replies (original 10)
     "i notice",
     "i understand",
     "confidence_tier",
@@ -208,16 +211,25 @@ _LLM_META_MARKERS: tuple[str, ...] = (
     "four valid",
     "valid options",
     "i apologize",
+    # LLM refusal phrases (cascade source — escape all existing guards)
+    "i cannot",
+    "i can't produce",
+    # Data-absence meta-commentary (most common cascade pattern in pregen logs)
+    "no form, h2h",
+    "no form data, h2h",
+    "no manager names",
+    "also noting",
 )
 
 
 def _reject_llm_meta_strings(verdict: str) -> bool:
     """Return True when the verdict text leaks LLM meta-reply patterns.
 
-    FIX-REGRESS-D1-VERDICT-GUARD-01: catches Sonnet error-replies about
-    invalid tier values, input-field references, and apologies shipping as
-    the production verdict. Caller must fall back to the deterministic
-    baseline and emit a Sentry breadcrumb `verdict_rejected_llm_meta`.
+    FIX-REGRESS-D1-VERDICT-GUARD-01 + FIX-NARRATIVE-META-MARKERS-01: catches
+    Sonnet error-replies about invalid tier values, input-field references,
+    apologies, refusals, and data-absence meta-commentary shipping as the
+    production verdict. Caller must fall back to the deterministic baseline
+    and emit a Sentry breadcrumb `verdict_rejected_llm_meta`.
     """
     if not verdict:
         return False
