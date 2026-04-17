@@ -375,3 +375,41 @@ class TestBackfillStaleAlerts:
         rows = _get_open_alerts(conn, "sonnet_firing_rate")
         assert len(rows) == 0
         conn.close()
+
+    # ── BUILD-ALERTER-FRESHNESS-GUARD-01 ────────────────────────────────────
+
+    def test_stale_row_above_threshold_no_alert(self, tmp_path):
+        """A row written 3 h ago must not fire an alert (freshness guard)."""
+        db_path = _make_db(tmp_path)
+        conn = _open(db_path)
+        # Insert in SQLite format so datetime('now', '-2 hours') comparison is valid.
+        conn.execute(
+            "INSERT INTO narrative_integrity_log (signal, value, band, breach, recorded_at) "
+            "VALUES (?, ?, 'ALERT', 1, datetime('now', '-3 hours'))",
+            ("sonnet_firing_rate", 0.10),
+        )
+        conn.commit()
+        with patch.object(_mod, "_send_edgeops_alert") as mock_send:
+            _mod._backfill_stale_alerts(conn, dry_run=False)
+        mock_send.assert_not_called()
+        rows = _get_open_alerts(conn, "sonnet_firing_rate")
+        assert len(rows) == 0, "Stale ALERT row must not produce a health_alert"
+        conn.close()
+
+    def test_fresh_breach_still_alerts(self, tmp_path):
+        """A row written 30 min ago must still fire an alert (live-signal path unaffected)."""
+        db_path = _make_db(tmp_path)
+        conn = _open(db_path)
+        conn.execute(
+            "INSERT INTO narrative_integrity_log (signal, value, band, breach, recorded_at) "
+            "VALUES (?, ?, 'ALERT', 1, datetime('now', '-30 minutes'))",
+            ("staleness_pct", 78.0),
+        )
+        conn.commit()
+        with patch.object(_mod, "_send_edgeops_alert"):
+            _mod._backfill_stale_alerts(conn, dry_run=False)
+        rows = _get_open_alerts(conn, "staleness_pct")
+        assert len(rows) == 1, "Fresh ALERT row must still produce a health_alert"
+        meta = json.loads(rows[0]["meta"])
+        assert meta.get("backfilled") is True
+        conn.close()

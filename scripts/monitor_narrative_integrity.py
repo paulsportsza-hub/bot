@@ -523,6 +523,7 @@ def _backfill_stale_alerts(conn: sqlite3.Connection, dry_run: bool = False) -> N
                 GROUP BY signal
             ) latest ON n.signal = latest.signal AND n.recorded_at = latest.max_ts
             WHERE n.band = 'ALERT' AND n.breach = 1
+            AND n.recorded_at > datetime('now', '-2 hours')
         """).fetchall()
     except Exception as _e:
         log.warning("MONITOR: _backfill_stale_alerts query failed: %s", _e)
