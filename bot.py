@@ -1885,21 +1885,38 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         f"Home @ {_mm_match['odds_home']:.2f},"
                         f" Away @ {_mm_match.get('odds_away', 0):.2f}"
                     )
-                try:
-                    _mm_haiku = await _generate_haiku_match_summary(
-                        match_key=_mm_card_key,
-                        home=_mm_match.get("home", ""),
-                        away=_mm_match.get("away", ""),
-                        league=_mm_match.get("league", ""),
-                        sport=_mh_sport,
-                        kickoff=_mh_kickoff,
-                        odds_summary=_mh_odds_sum,
-                    )
-                    _mm_match["analysis_text"] = _mm_haiku or ""
-                except Exception as _mh_exc:
-                    log.warning(
-                        "FIX-HAIKU-SUMMARY-WIRE-02: _generate_haiku_match_summary"
-                        " failed for %s: %s", _mm_card_key, _mh_exc,
+                # BUG-HAIKU-GROUNDING-01: grounding inputs not yet wired at this
+                # call site — guard prevents hallucinated tactical prose.
+                _mh_form_home = ""
+                _mh_form_away = ""
+                _mh_h2h = ""
+                _mh_injuries = ""
+                if _mh_form_home and _mh_form_away and _mh_h2h and _mh_injuries:
+                    try:
+                        _mm_haiku = await _generate_haiku_match_summary(
+                            match_key=_mm_card_key,
+                            home=_mm_match.get("home", ""),
+                            away=_mm_match.get("away", ""),
+                            league=_mm_match.get("league", ""),
+                            sport=_mh_sport,
+                            kickoff=_mh_kickoff,
+                            odds_summary=_mh_odds_sum,
+                            form_home=_mh_form_home,
+                            form_away=_mh_form_away,
+                            h2h_summary=_mh_h2h,
+                            injuries_summary=_mh_injuries,
+                        )
+                        _mm_match["analysis_text"] = _mm_haiku or ""
+                    except Exception as _mh_exc:
+                        log.warning(
+                            "BUG-HAIKU-GROUNDING-01: _generate_haiku_match_summary"
+                            " failed for %s: %s", _mm_card_key, _mh_exc,
+                        )
+                        _mm_match["analysis_text"] = ""
+                else:
+                    log.info(
+                        "BUG-HAIKU-GROUNDING-01: skipping Haiku for %s"
+                        " — missing inputs", _mm_card_key,
                     )
                     _mm_match["analysis_text"] = ""
                 _mm_match_enriched = await asyncio.to_thread(
