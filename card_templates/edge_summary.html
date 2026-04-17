@@ -42,6 +42,15 @@
             margin: 10px 20px;
             border-radius: 2px;
         }
+        .digest-header {
+            font-size: 18px;
+            font-weight: 600;
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            letter-spacing: 2px;
+            color: #F5A623;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
         /* Fix 4: letter-spacing on title */
         .title {
             font-size: 13px;
@@ -182,6 +191,7 @@
         <div style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
         {% endif %}
         <div class="orange-bar"></div>
+        <div class="digest-header">🌅 MORNING DIGEST</div>
         <div class="title">TODAY'S EDGE PICKS</div>
         <div class="subtitle">{{ total_edges }} edge{{ 's' if total_edges != 1 else '' }} live &middot; {{ date_label }}</div>
     </div>

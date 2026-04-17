@@ -122,6 +122,7 @@ from card_data import (
     build_edge_summary_data,
 )
 from card_renderer import render_card_sync, warm_chromium as _warm_chromium
+from narrative_spec import _VERDICT_MAX_CHARS, _reject_llm_meta_strings
 
 # ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
 from logging.handlers import RotatingFileHandler
@@ -7558,7 +7559,24 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             if hasattr(block, "text") and block.text:
                 text += block.text
         text = text.strip()
-        text = _trim_to_last_sentence(text, max_chars=300)
+
+        # FIX-REGRESS-D1-VERDICT-GUARD-01: reject LLM meta-reply leaks before trim
+        if _reject_llm_meta_strings(text):
+            log.warning("_generate_verdict: LLM meta-leak detected, rejecting: %s", text[:60])
+            try:
+                import sentry_sdk as _sentry_mod
+                if _sentry_mod:
+                    _sentry_mod.add_breadcrumb(
+                        category="verdict",
+                        message="verdict_rejected_llm_meta",
+                        level="warning",
+                        data={"rejected": text[:60]},
+                    )
+            except Exception:
+                pass
+            return ""
+
+        text = _trim_to_last_sentence(text, max_chars=_VERDICT_MAX_CHARS)
         if not text:
             log.warning("_generate_verdict: no complete sentence in output")
             return ""
@@ -7731,7 +7749,7 @@ def _fix_orphan_back(verdict: str, char_budget: int = 1024) -> str:
     return stripped
 
 
-def _trim_to_last_sentence(text: str, max_chars: int = 300) -> str:
+def _trim_to_last_sentence(text: str, max_chars: int = 140) -> str:
     """BUILD-VERDICT-TRUNCATE-02 / -HARDEN-03 / -HARDEN-04: Trim Sonnet output to last
     complete sentence within max_chars.
 
@@ -7952,7 +7970,26 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             if hasattr(block, "text") and block.text:
                 text += block.text
         text = text.strip()
-        text = _trim_to_last_sentence(text, max_chars=300)
+
+        # FIX-REGRESS-D1-VERDICT-GUARD-01: reject LLM meta-reply leaks before trim
+        if _reject_llm_meta_strings(text):
+            log.warning("_generate_verdict_constrained: LLM meta-leak detected, rejecting: %s", text[:60])
+            try:
+                import sentry_sdk as _sentry_mod
+                if _sentry_mod:
+                    _sentry_mod.add_breadcrumb(
+                        category="verdict",
+                        message="verdict_rejected_llm_meta",
+                        level="warning",
+                        data={"rejected": text[:60]},
+                    )
+            except Exception:
+                pass
+            if isinstance(spec, NarrativeSpec):
+                return _cap_verdict(_render_verdict_deterministic(spec))
+            return ""
+
+        text = _trim_to_last_sentence(text, max_chars=_VERDICT_MAX_CHARS)
         if not text:
             log.warning("_generate_verdict_constrained: no complete sentence in output")
             return ""
@@ -23307,6 +23344,21 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # Fetch ALL tips once for all users (primary: odds.db, fallback: Odds API)
     tips = await _fetch_hot_tips_from_db()
     if not tips:
+        # LOUD: silent empty-digest is forbidden — alert before falling back
+        log.error(
+            "MORNING_DIGEST_EMPTY: tips-table returned 0 edges at hour=%d SAST"
+            " — check edge_results / odds_snapshots pipeline",
+            current_hour,
+        )
+        try:
+            import sentry_sdk as _sentry_mt
+            _sentry_mt.capture_message(
+                "MORNING_DIGEST tips-table empty",
+                level="error",
+                extras={"hour_sast": current_hour},
+            )
+        except Exception:
+            pass
         try:
             tips = await _fetch_hot_tips_all_sports()
         except Exception:

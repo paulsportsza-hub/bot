@@ -325,8 +325,13 @@ def _draw_header(
     # Gradient accent line
     _gradient_line(draw, _PAD_X, gradient_y, _W - _PAD_X, height=4)
 
+    # Morning origin header — unambiguous push-notification marker
+    _DIGEST_COLOR = (245, 166, 35)  # #F5A623 brand accent fallback (Brand Bible unconfirmed)
+    digest_y = gradient_y + 18
+    draw.text((_W // 2, digest_y), "🌅 MORNING DIGEST", font=_font("bold", 18), fill=_DIGEST_COLOR, anchor="mt")
+
     # Section title
-    title_y = gradient_y + 18
+    title_y = digest_y + 36  # 28px row + 8px breathing room
     draw.text((_W // 2, title_y), "TODAY'S EDGE PICKS", font=f_title, fill=_FG, anchor="mt")
 
     # Count sub-line
