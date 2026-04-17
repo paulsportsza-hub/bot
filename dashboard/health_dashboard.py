@@ -1858,7 +1858,7 @@ def build_source_health_monitor(conn):
         rows = q_all(conn, """
             SELECT
                 r.source_id, r.source_name, r.category, r.critical,
-                r.expected_interval_minutes,
+                r.expected_interval_minutes, r.cron_schedule,
                 h.status, h.last_success_at, h.consecutive_failures, h.last_rows_produced
             FROM source_registry r
             LEFT JOIN source_health_current h ON h.source_id = r.source_id
@@ -1880,6 +1880,7 @@ def build_source_health_monitor(conn):
         # AC-1: on-demand services (interval=0) with no success show as grey, never red/black
         status = "grey" if (interval == 0 and raw_status == "black") else raw_status
         # Freshness override: if interval > 0 and last_success exceeds interval, force RED
+        # Uses cron-window-aware logic so time-window scrapers don't fire overnight false alarms
         if interval > 0 and now_utc and d.get("last_success_at"):
             try:
                 _ls = d["last_success_at"].replace("Z", "+00:00")
@@ -1887,7 +1888,27 @@ def build_source_health_monitor(conn):
                 if _last_dt.tzinfo is None:
                     _last_dt = _last_dt.replace(tzinfo=timezone.utc)
                 _age_min = (now_utc - _last_dt).total_seconds() / 60
-                if _age_min > interval:
+
+                _truly_stale = True
+                _cron_sched = d.get("cron_schedule") or ""
+                if _cron_sched and _cron_sched.strip() not in ("on-demand", "@reboot"):
+                    try:
+                        import importlib.util as _ilu
+                        _cw_spec = _ilu.spec_from_file_location(
+                            "_cron_window",
+                            os.path.join(os.path.expanduser("~"), "scripts", "cron_window.py")
+                        )
+                        _cw = _ilu.module_from_spec(_cw_spec)
+                        _cw_spec.loader.exec_module(_cw)
+                        _windows = _cw.parse_multi(_cron_sched)
+                        if _windows and not _cw.is_in_any_window(_windows, now_utc):
+                            _last_close = _cw.last_window_close(_windows, now_utc)
+                            if _last_close is None or _last_dt >= _last_close - timedelta(minutes=interval):
+                                _truly_stale = False  # outside window and caught the last window
+                    except Exception:
+                        pass  # cron_window unavailable — fall back to raw interval check
+
+                if _truly_stale and _age_min > interval:
                     status = "red"
             except (ValueError, TypeError):
                 pass
@@ -2951,76 +2972,123 @@ def render_automation_content() -> str:
             f'{more}</div>'
         )
 
-    task_rows_html = ""
-    task_count = 0
-    try:
-        blocks = _fetch_task_hub_blocks()
-        in_manual = False
-        rendered: list[str] = []
-        for block in blocks:
-            btype = block.get("type", "")
-            if not in_manual:
-                if btype == "heading_1" and "Manual Tasks" in _block_plain_text(block):
-                    in_manual = True
-                continue
-            if btype in ("divider", "heading_1"):
-                break
-            if btype != "to_do" or block.get("to_do", {}).get("checked"):
-                continue
-            rt_arr = block.get("to_do", {}).get("rich_text", [])
-            plain = "".join(sp.get("plain_text", "") for sp in rt_arr).strip()
-            if not plain:
-                continue
-            cat = _classify_task(plain)
-            block_id = block.get("id", "")
-            tit_html = render_rich_text_html(rt_arr)
-            url_match = re.search(r'href="([^"]+)"', tit_html)
-            url = url_match.group(1) if url_match else ""
-            copy_btn = (f'<button class="so-tk-copy" data-text="{_html_mod.escape(url)}">Copy</button>'
-                        if url else "")
-            open_btn = (f'<a class="so-tk-open" href="{_html_mod.escape(url)}" target="_blank">Open</a>'
-                        if url else "")
-            rendered.append(
-                f'<div class="so-tk-row" data-cat="{cat}" data-block="{block_id}">'
-                f'<input type="checkbox" class="so-tk-check" data-block="{block_id}">'
-                f'<span class="so-tk-text">{tit_html}</span>'
-                f'<span class="so-tk-chip so-tk-chip-{cat}">{cat}</span>'
-                f'<span class="so-tk-actions">{copy_btn}{open_btn}'
-                f'<button class="so-tk-skip" data-block="{block_id}">Skip</button></span>'
-                f'</div>'
-            )
-        task_count = len(rendered)
-        task_rows_html = "".join(rendered) if rendered else (
-            '<div class="so-empty">No tasks right now.</div>'
-        )
-    except Exception:
-        task_rows_html = '<div class="so-empty">No tasks right now.</div>'
+    # ── KPI computation (02B) ───────────────────────────────────────────
+    import json as _json_mod
+    _POSTED_ST = {"published", "done", "complete", "posted"}
+    _PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
+    _FAILED_ST  = {"failed", "error", "blocked"}
+    _cutoff24   = now_utc - timedelta(hours=24)
+    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue = 0
+    for _it in items:
+        _st  = (_it.get("status") or "").lower().strip()
+        _ts  = parse_ts(_it.get("last_edited") or _it.get("scheduled_time") or _it.get("created") or "")
+        _sch = parse_ts(_it.get("scheduled_time") or "")
+        if _st in _POSTED_ST:
+            if _ts and _ts >= _cutoff24:
+                kpi_posted += 1
+        elif _st in _FAILED_ST:
+            if _ts and _ts >= _cutoff24:
+                kpi_failed += 1
+            kpi_queue += 1
+        elif _st != "archived":
+            kpi_queue += 1
+            if _st in _PENDING_ST:
+                kpi_pending += 1
+            elif _st in ("awaiting approval", "draft", "review", "in review", "awaiting"):
+                if _sch and _sch < now_utc:
+                    kpi_overdue += 1
 
-    drawers_html = ""
-    for ch in all_channels:
-        cs = channel_stats[ch["key"]]
-        items_for_ch = [
-            it for it in cs["items"]
-            if (it.get("status") or "").lower().strip() in
-            ("awaiting approval", "draft", "review", "pending", "in review", "awaiting")
-        ]
-        if not items_for_ch:
-            continue
-        body = ""
-        for it in items_for_ch:
-            page_id = it.get("id", "")
-            sched = _sast_hhmm(it.get("scheduled_time")) + " SAST" if it.get("scheduled_time") else "\u2014"
-            copy_text = _html_mod.escape(it.get("copy") or "")
-            body += (
-                f'<div class="so-dw-item" id="so-appr-{page_id}">'
-                f'<div class="so-dw-meta">{sched}</div>'
-                f'<div class="so-dw-copy">{copy_text}</div>'
-                f'<div class="so-dw-actions">'
-                f'<button class="btn-approve" data-id="{page_id}">Approve</button>'
-                f'<button class="btn-archive" data-id="{page_id}">Archive</button>'
-                f'</div></div>'
-            )
-        drawers_html += f'<template class="so-dw-tpl" data-channel="{ch["key"]}">{body}</template>'
+    # ── Timeline init data (02B) ─────────────────────────────────────────
+    _today_sast = now_utc.astimezone(_SAST)
+    _today_str  = _today_sast.strftime("%Y-%m-%d")
+    _now_mins   = _today_sast.hour * 60 + _today_sast.minute
+
+    _TL_CH = [
+        ("telegram_alerts",    "TG Alerts"),
+        ("telegram_community", "TG Community"),
+        ("whatsapp_channel",   "WA Channel"),
+        ("whatsapp_group",     "WA Group"),
+        ("instagram",          "Instagram"),
+        ("tiktok",             "TikTok"),
+        ("threads",            "Threads"),
+        ("linkedin",           "LinkedIn"),
+        ("fb_groups",          "Facebook"),
+        ("quora",              "Quora"),
+    ]
+
+    def _icon_for(wt: str, ck: str) -> str:
+        w = (wt or "").lower()
+        if "seed chat" in w:                 return "message-circle"
+        if "morning" in w:                   return "sun"
+        if "news" in w:                      return "newspaper"
+        if "edge card" in w or "diamond" in w or "edge" in w: return "diamond"
+        if "recap" in w:                     return "trophy"
+        if "teaser" in w:                    return "eye"
+        if "poll" in w or "discuss" in w:    return "message-square-more"
+        if "alert" in w:                     return "bell"
+        if "reel" in w:                      return "play-circle"
+        if "carousel" in w:                  return "layers"
+        if "story" in w:                     return "circle"
+        if "b.r.u" in w or "bru" in w:       return "bot"
+        if "article" in w:                   return "book-open"
+        if "answer" in w:                    return "message-square-quote"
+        if "image" in w or "photo" in w:     return "image"
+        if "chat" in w:                      return "message-circle"
+        _fb = {"tiktok": "bot", "telegram_alerts": "message-circle",
+               "telegram_community": "message-square-more",
+               "whatsapp_channel": "bell", "whatsapp_group": "message-square-more",
+               "instagram": "image", "linkedin": "briefcase",
+               "fb_groups": "message-square", "quora": "message-square-quote",
+               "threads": "at-sign"}
+        return _fb.get(ck, "help-circle")
+
+    def _norm_wg(ch_raw: str) -> str:
+        c = (ch_raw or "").lower()
+        if "group" in c and ("whatsapp" in c or " wa" in c or c.startswith("wa")):
+            return "whatsapp_group"
+        return _normalise_channel_key(ch_raw)
+
+    _tl_chans: list[dict] = []
+    for _ck, _clbl in _TL_CH:
+        _posts: list[dict] = []
+        for _it in items:
+            if _norm_wg(_it.get("channel") or "") != _ck:
+                continue
+            _sdt = parse_ts(_it.get("scheduled_time") or "")
+            if not _sdt:
+                continue
+            _ss = _sdt.astimezone(_SAST)
+            if _ss.strftime("%Y-%m-%d") != _today_str:
+                continue
+            _smins = _ss.hour * 60 + _ss.minute
+            _adt   = parse_ts(_it.get("last_edited") or "")
+            _ahhmm = (_adt.astimezone(_SAST).strftime("%H:%M") if _adt else "")
+            _posts.append({
+                "id":     _it.get("id", ""),
+                "title":  (_it.get("title") or _it.get("copy") or "")[:60],
+                "type":   _it.get("work_type") or "",
+                "icon":   _icon_for(_it.get("work_type") or "", _ck),
+                "status": (_it.get("status") or "").lower().strip(),
+                "mins":   _smins,
+                "sched":  f"{_ss.hour:02d}:{_ss.minute:02d}",
+                "actual": _ahhmm,
+                "error":  _it.get("error") or "",
+                "ch_lbl": _clbl,
+            })
+        _tl_chans.append({"key": _ck, "label": _clbl, "posts": _posts})
+
+    _tl_json = _json_mod.dumps({
+        "day":      _today_str,
+        "now_mins": _now_mins,
+        "channels": _tl_chans,
+        "kpis": {
+            "posted_24h":  kpi_posted,
+            "pending":     kpi_pending,
+            "failed_24h":  kpi_failed,
+            "queue_depth": kpi_queue,
+            "overdue":     kpi_overdue,
+        },
+    })
 
     notion_warn = '' if notion_ok else (
         '<div class="so-warn">Notion unavailable \u2014 showing cached data</div>'
@@ -3028,220 +3096,412 @@ def render_automation_content() -> str:
 
     css = """<style>
 .so-page{font-family:var(--font-b);color:var(--text);background:var(--carbon);min-height:100vh;padding:16px 20px;}
-.so-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
-.so-h1{font-size:18px;font-weight:600;letter-spacing:-0.01em;margin:0;color:var(--text);}
+.so-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap;}
+.so-h1{font-size:18px;font-weight:600;letter-spacing:-0.01em;margin:0;color:var(--text);display:flex;align-items:center;gap:8px;}
+.so-live-dot{color:var(--green);font-size:10px;animation:so-blink 2s ease-in-out infinite;}
+@keyframes so-blink{0%,100%{opacity:1;}50%{opacity:0.3;}}
 .so-controls{display:flex;align-items:center;gap:10px;}
-.so-sync-pill{font-family:var(--font-m);font-size:12px;color:var(--muted);
-  background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:4px 10px;}
-.so-toggle{display:inline-flex;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;}
-.so-toggle button{background:none;border:none;color:var(--muted);font-family:var(--font-b);font-size:12px;padding:5px 10px;cursor:pointer;}
-.so-toggle button.so-toggle-on{color:var(--text);background:rgba(88,166,255,0.10);}
+.so-sync-pill{font-family:var(--font-m);font-size:12px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:4px 10px;}
 .so-warn{font-size:12px;color:var(--amber);margin-bottom:10px;}
-.so-grid{display:grid;grid-template-columns: 58% 42%;gap:16px;}
-@media(max-width:1199px){.so-grid{grid-template-columns:1fr;}}
-.so-pane{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;}
-.so-pane-head{padding:10px 14px;border-bottom:1px solid var(--border);font-size:13px;font-weight:600;color:var(--text);
-  display:flex;align-items:center;justify-content:space-between;}
-.so-pane-head .so-pane-count{font-family:var(--font-m);font-size:12px;color:var(--muted);font-weight:400;}
-.so-pane-body{padding:6px 0;}
-.so-fb-banner{background:rgba(248,81,73,0.10);border-bottom:1px solid rgba(248,81,73,0.40);
-  color:var(--red);font-family:var(--font-m);font-size:12px;padding:6px 14px;
+.so-stale-badge{font-family:var(--font-m);font-size:10px;color:var(--amber);background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:1px 6px;}
+.so-day-picker{display:flex;align-items:center;gap:6px;}
+.so-day-btn{background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;width:26px;height:26px;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;transition:color 150ms,border-color 150ms;line-height:1;padding:0;}
+.so-day-btn:hover:not(:disabled){color:var(--text);border-color:var(--gold);}
+.so-day-btn:disabled{opacity:0.3;cursor:default;}
+.so-day-lbl{font-family:var(--font-m);font-size:12px;color:var(--text);min-width:58px;text-align:center;}
+.so-kpi-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px;}
+@media(max-width:900px){.so-kpi-strip{grid-template-columns:repeat(3,1fr);}}
+.so-fb-banner{background:rgba(248,81,73,0.10);border:1px solid rgba(248,81,73,0.30);border-radius:6px;
+  color:var(--red);font-family:var(--font-m);font-size:12px;padding:6px 14px;margin-bottom:14px;
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;line-height:1.4;}
 .so-fb-count{font-weight:600;}
-.so-fb-list{color:var(--text);}
-.so-fb-more{color:var(--muted);cursor:pointer;text-decoration:underline;}
-.so-ch-row{display:grid;grid-template-columns:14px 22px 1fr 90px 90px auto;gap:10px;align-items:center;
-  height:36px;padding:0 14px;border-bottom:1px solid rgba(48,54,61,0.5);cursor:pointer;
-  font-size:13px;color:var(--text);}
-.so-ch-row:hover{background:rgba(88,166,255,0.05);}
-.so-ch-row:last-child{border-bottom:none;}
-.so-ch-dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
-.so-ch-icon{display:flex;align-items:center;justify-content:center;}
-.so-ch-icon svg{width:18px;height:18px;}
-.so-ch-name{font-weight:600;font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.so-ch-last{font-family:var(--font-m);font-size:12px;color:var(--muted);text-align:right;}
-.so-ch-sla{font-family:var(--font-m);font-size:12px;color:var(--muted);text-align:right;}
-.so-ch-appr-badge{font-family:var(--font-m);font-size:11px;font-weight:600;
-  background:rgba(88,166,255,0.15);color:var(--gold);border-radius:10px;padding:1px 8px;}
-.so-tk-row{display:grid;grid-template-columns:16px 1fr auto auto;gap:10px;align-items:center;
-  height:40px;padding:0 14px;border-bottom:1px solid rgba(48,54,61,0.5);font-size:13px;}
-.so-tk-row:hover{background:rgba(88,166,255,0.05);}
-.so-tk-row:last-child{border-bottom:none;}
-.so-tk-row.so-tk-done{opacity:0.4;text-decoration:line-through;transition:opacity 200ms;}
-.so-tk-check{width:16px;height:16px;cursor:pointer;}
-.so-tk-text{font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.so-tk-text a{color:var(--gold);text-decoration:none;}
-.so-tk-text a:hover{text-decoration:underline;}
-.so-tk-chip{font-family:var(--font-m);font-size:11px;padding:1px 6px;border-radius:3px;text-transform:lowercase;}
-.so-tk-chip-post{background:rgba(88,166,255,0.15);color:var(--gold);}
-.so-tk-chip-connect{background:rgba(174,129,255,0.15);color:#AE81FF;}
-.so-tk-chip-answer{background:rgba(255,166,87,0.15);color:#FFA657;}
-.so-tk-chip-remind{background:rgba(125,133,144,0.15);color:var(--muted);}
-.so-tk-actions{display:flex;align-items:center;gap:6px;visibility:hidden;}
-.so-tk-row:hover .so-tk-actions{visibility:visible;}
-.so-tk-actions button,.so-tk-actions a{font-family:var(--font-m);font-size:11px;
-  background:transparent;border:1px solid var(--border);color:var(--muted);
-  border-radius:3px;padding:2px 8px;cursor:pointer;text-decoration:none;}
-.so-tk-actions button:hover,.so-tk-actions a:hover{color:var(--text);border-color:var(--gold);}
-.so-tk-copy.so-tk-copied{color:var(--green);border-color:var(--green);}
-.so-empty{padding:30px 14px;text-align:center;color:var(--muted);font-size:13px;}
-.so-drawer-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:80;}
-.so-drawer-backdrop.open{display:block;}
-.so-drawer{position:fixed;top:0;right:0;bottom:0;width:min(420px,100vw);background:var(--surface);
-  border-left:1px solid var(--border);z-index:81;transform:translateX(100%);transition:transform 200ms;
-  display:flex;flex-direction:column;}
-.so-drawer.open{transform:translateX(0);}
-.so-dw-head{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
-.so-dw-title{font-size:14px;font-weight:600;color:var(--text);}
-.so-dw-close{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;}
-.so-dw-body{overflow-y:auto;padding:8px 0;}
-.so-dw-item{padding:10px 16px;border-bottom:1px solid rgba(48,54,61,0.5);}
-.so-dw-meta{font-family:var(--font-m);font-size:11px;color:var(--muted);margin-bottom:4px;}
-.so-dw-copy{font-size:13px;color:var(--text);white-space:pre-wrap;line-height:1.4;margin-bottom:8px;}
-.so-dw-actions{display:flex;gap:8px;}
-.btn-approve{background:rgba(63,185,80,0.15);color:var(--green);border:1px solid rgba(63,185,80,0.30);
-  border-radius:4px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;}
-.btn-archive{background:rgba(125,133,144,0.10);color:var(--muted);border:1px solid var(--border);
-  border-radius:4px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;}
+.so-fb-list{color:var(--text);flex:1;}
+.so-fb-more{color:var(--muted);}
+.so-fb-cta{background:rgba(248,81,73,0.15);color:var(--red);border:1px solid rgba(248,81,73,0.30);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;text-decoration:none;white-space:nowrap;}
+.so-main{display:flex;gap:16px;align-items:flex-start;}
+@media(max-width:1279px){.so-main{flex-direction:column;}}
+.so-tl-wrap{flex:1;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;}
+.so-tl-content{position:relative;}
+.so-tl-hours-row{position:relative;height:22px;margin-left:112px;border-bottom:1px solid var(--border-sub);background:var(--surface-alt);}
+.so-tl-hour-lbl{position:absolute;font-family:var(--font-m);font-size:10px;color:var(--muted);transform:translateX(-50%);top:4px;pointer-events:none;}
+.so-tl-row{display:flex;align-items:center;height:52px;border-bottom:1px solid rgba(48,54,61,0.4);}
+.so-tl-row:last-child{border-bottom:none;}
+.so-tl-row:focus{outline:2px solid var(--gold);outline-offset:-2px;}
+.so-tl-row-lbl{width:112px;flex-shrink:0;padding:0 8px 0 12px;font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.so-tl-bar{flex:1;position:relative;height:52px;overflow:visible;}
+.so-tl-gl{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.04);pointer-events:none;}
+.so-tl-icon-btn{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;cursor:pointer;padding:2px;z-index:5;transition:transform 150ms;}
+.so-tl-icon-btn:hover{transform:translate(-50%,-60%);z-index:10;}
+.so-tl-icon-btn:focus{outline:2px solid var(--gold);outline-offset:2px;border-radius:3px;z-index:10;}
+.so-tl-icon-btn svg{width:20px;height:20px;stroke:currentColor;stroke-width:1.5;fill:none;color:var(--muted);transition:color 150ms;}
+.so-tl-icon-btn:hover svg,.so-tl-icon-btn:focus svg{color:var(--gold);}
+.so-tl-icon-btn.so-active svg{color:var(--gold);}
+.so-tl-status-bar{width:28px;height:4px;border-radius:2px;position:relative;}
+.so-tl-status-ic{position:absolute;top:-1px;left:0;right:0;text-align:center;font-size:7px;line-height:6px;color:rgba(0,0,0,0.75);font-weight:700;}
+.so-tl-chip{position:absolute;top:50%;transform:translate(-50%,-50%);background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-family:var(--font-m);font-size:10px;color:var(--muted);cursor:pointer;white-space:nowrap;z-index:5;}
+.so-tl-chip:hover{border-color:var(--gold);color:var(--text);}
+.so-tl-now-line{position:absolute;top:0;width:2px;background:var(--gold);z-index:20;pointer-events:none;filter:drop-shadow(0 0 6px rgba(248,200,48,0.6));}
+.so-tl-now-lbl{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-family:var(--font-m);font-size:9px;color:var(--gold);white-space:nowrap;background:var(--surface-alt);padding:1px 4px;border-radius:2px;border:1px solid rgba(248,200,48,0.3);}
+.so-preview{width:400px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;min-height:500px;}
+@media(max-width:1279px){.so-preview{width:100%;min-height:300px;}}
+.so-pv-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:14px;padding:32px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5;}
+.so-pv-empty svg{opacity:0.18;}
+.so-pv-skel{flex:1;padding:16px;display:flex;flex-direction:column;gap:10px;}
+.skel-b{background:var(--surface-alt);border-radius:4px;animation:skel-p 1.2s ease-in-out infinite alternate;}
+@keyframes skel-p{from{opacity:0.4;}to{opacity:0.8;}}
+.so-pv-meta{font-family:var(--font-m);font-size:11px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border);}
+.so-pv-chip{background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:1px 8px;}
+.so-pv-body{flex:1;overflow-y:auto;padding:14px;}
+.so-pv-actions{padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;}
+.so-pv-actions button,.so-pv-actions a{font-family:var(--font-m);font-size:11px;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 10px;cursor:pointer;text-decoration:none;transition:color 150ms,border-color 150ms;}
+.so-pv-actions button:hover,.so-pv-actions a:hover{color:var(--text);border-color:var(--gold);}
+.pv-tg{background:#0d1f2d;border:1px solid rgba(38,165,228,0.25);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
+.pv-wa{background:#0d1f15;border:1px solid rgba(37,211,102,0.25);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
+.pv-ig{background:linear-gradient(135deg,#1a1025 0%,#0d1520 100%);border:1px solid rgba(228,64,95,0.25);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);}
+.pv-tk{background:#0a0a0a;border:1px solid rgba(255,0,80,0.25);border-radius:10px;padding:14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
+.pv-li{background:#060e17;border:1px solid rgba(10,102,194,0.25);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);}
+.pv-gen{background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
+.pv-media-badge{display:inline-block;font-family:var(--font-m);font-size:10px;background:rgba(228,64,95,0.15);color:#E4405F;border-radius:3px;padding:1px 6px;margin-bottom:6px;}
+.so-tip{position:fixed;background:var(--surface-alt);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:var(--font-m);font-size:11px;color:var(--text);z-index:9999;pointer-events:none;max-width:220px;line-height:1.4;box-shadow:var(--glow);display:none;}
 </style>"""
 
-    js = """<script>
+    js = (
+        """<script>
 (function(){
-  var btnAll = document.getElementById('so-toggle-all');
-  var btnBlocked = document.getElementById('so-toggle-blocked');
-  var rows = document.querySelectorAll('.so-ch-row');
-  function applyFilter(blockedOnly){
-    rows.forEach(function(r){
-      if (blockedOnly){
-        r.style.display = (r.dataset.severity === 'breached' || r.dataset.severity === 'watch') ? 'grid' : 'none';
-      } else { r.style.display = 'grid'; }
+var ICONS={
+'message-circle':'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+'newspaper':'<path d="M4 3h13a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 7h8M8 11h8M8 15h4"/>',
+'sun':'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
+'diamond':'<path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.41 0Z"/>',
+'trophy':'<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/>',
+'eye':'<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+'message-square-more':'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/>',
+'bell':'<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+'play-circle':'<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/>',
+'layers':'<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9A1 1 0 0 0 21.4 6.08z"/><path d="m22 12.65-8.58 3.91a2 2 0 0 1-1.66 0L3.42 12.65"/><path d="m22 17.65-8.58 3.91a2 2 0 0 1-1.66 0L3.42 17.65"/>',
+'circle':'<circle cx="12" cy="12" r="10"/>',
+'image':'<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+'bot':'<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M22 14h-2M15 13v2M9 13v2"/>',
+'at-sign':'<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/>',
+'briefcase':'<rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+'book-open':'<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+'message-square':'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+'message-square-quote':'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm0 0v2"/><path d="M12 10a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm0 0v2"/>',
+'help-circle':'<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>'
+};
+function svgI(name){var p=ICONS[name]||ICONS['help-circle'];return'<svg viewBox="0 0 24 24" aria-hidden="true">'+p+'</svg>';}
+
+var _data=null,_currentDay=null,_dayOffset=0,_todayStr=null,_activePostId=null,_tipEl=null;
+
+var SO_INIT="""
+        + _tl_json
+        + """;
+_data=SO_INIT;_currentDay=SO_INIT.day;_todayStr=SO_INIT.day;
+
+// ── Status helpers ────────────────────────────────────────────────────
+var ST_COLOR={'posted':'#22c55e','published':'#22c55e','done':'#22c55e','complete':'#22c55e',
+  'failed':'#ef4444','error':'#ef4444','blocked':'#ef4444','skipped':'#6b7280','archived':'#6b7280'};
+var ST_MARK={'posted':'✓','published':'✓','done':'✓','complete':'✓',
+  'failed':'!','error':'!','blocked':'!','skipped':'×','archived':'×'};
+function stColor(s){return ST_COLOR[s]||'#f59e0b';}
+function stMark(s){return ST_MARK[s]||'○';}
+
+// ── DOM ready ─────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',function(){
+  _tipEl=document.getElementById('so-tip');
+  renderTimeline(SO_INIT);
+  updateNowLine();
+  updateDayPicker();
+  setupDayPicker();
+  setupKeyboard();
+  setInterval(updateNowLine,60000);
+  setInterval(refreshTimeline,60000);
+});
+
+// ── Day picker ────────────────────────────────────────────────────────
+function updateDayPicker(){
+  var lbl=document.getElementById('so-day-lbl');
+  var nb=document.getElementById('so-day-next');
+  var pb=document.getElementById('so-day-prev');
+  if(lbl)lbl.textContent=_dayOffset===0?'Today':(_dayOffset===-1?'Yesterday':_currentDay);
+  if(nb)nb.disabled=_dayOffset>=0;
+  if(pb)pb.disabled=_dayOffset<=-7;
+}
+function setupDayPicker(){
+  var p=document.getElementById('so-day-prev'),n=document.getElementById('so-day-next');
+  if(p)p.addEventListener('click',function(){if(_dayOffset>-7){_dayOffset--;_currentDay=_offsetDay(_todayStr,_dayOffset);updateDayPicker();refreshTimeline();}});
+  if(n)n.addEventListener('click',function(){if(_dayOffset<0){_dayOffset++;_currentDay=_offsetDay(_todayStr,_dayOffset);updateDayPicker();refreshTimeline();}});
+}
+function _offsetDay(base,off){var d=new Date(base+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+off);return d.toISOString().slice(0,10);}
+
+// ── Refresh ───────────────────────────────────────────────────────────
+function refreshTimeline(){
+  fetch('/admin/api/social-ops/timeline?day='+_currentDay,{credentials:'same-origin'})
+    .then(function(r){if(!r.ok)throw 0;return r.json();})
+    .then(function(d){_data=d;renderTimeline(d);updateNowLine();if(d.kpis)updateKPIs(d.kpis);clearStale();})
+    .catch(showStale);
+}
+function updateKPIs(k){
+  var m={'kpi-posted':k.posted_24h,'kpi-pending':k.pending,'kpi-failed':k.failed_24h,'kpi-queue':k.queue_depth,'kpi-overdue':k.overdue};
+  for(var id in m){var el=document.getElementById(id);if(el&&m[id]!==undefined)el.textContent=m[id];}
+}
+function showStale(){var e=document.getElementById('so-stale-badge');if(e)e.style.display='';}
+function clearStale(){var e=document.getElementById('so-stale-badge');if(e)e.style.display='none';}
+
+// ── Now line ──────────────────────────────────────────────────────────
+function updateNowLine(){
+  var nl=document.getElementById('so-tl-now');
+  if(_dayOffset!==0){if(nl)nl.style.display='none';return;}
+  var now=new Date(),uh=now.getUTCHours(),um=now.getUTCMinutes();
+  var sm=(uh*60+um+120)%1440;
+  var cont=document.getElementById('so-tl-content');
+  if(!cont||!nl)return;
+  var lw=112,tw=cont.offsetWidth;
+  if(tw<=lw)return;
+  var x=lw+(sm/1440)*(tw-lw);
+  nl.style.left=x+'px';
+  nl.style.height=cont.offsetHeight+'px';
+  nl.style.display='block';
+  var hh=String(Math.floor(sm/60)).padStart(2,'0'),mm=String(sm%60).padStart(2,'0');
+  var ll=document.getElementById('so-tl-now-lbl');
+  if(ll)ll.textContent='now '+hh+':'+mm;
+}
+
+// ── Timeline rendering ────────────────────────────────────────────────
+function renderTimeline(data){
+  var cont=document.getElementById('so-tl-rows');
+  if(!cont)return;
+  cont.innerHTML=(data.channels||[]).map(renderRow).join('');
+  cont.querySelectorAll('[data-post-id]').forEach(function(btn){
+    btn.addEventListener('click',function(){loadPreview(btn.dataset.postId);setActive(btn);});
+    btn.addEventListener('mouseenter',function(e){showTip(e,btn.dataset);});
+    btn.addEventListener('mouseleave',hideTip);
+    btn.addEventListener('focus',function(e){showTip(e,btn.dataset);});
+    btn.addEventListener('blur',hideTip);
+  });
+  cont.querySelectorAll('[data-chip]').forEach(function(chip){
+    chip.addEventListener('click',function(){
+      try{var posts=JSON.parse(chip.dataset.chip);if(posts.length)loadPreview(posts[0].id);}catch(e){}
     });
+  });
+  updateNowLine();
+}
+function setActive(btn){
+  document.querySelectorAll('.so-tl-icon-btn').forEach(function(b){b.classList.remove('so-active');});
+  if(btn)btn.classList.add('so-active');
+}
+function resolveCollisions(posts){
+  if(!posts||!posts.length)return[];
+  var s=posts.slice().sort(function(a,b){return a.mins-b.mins;}),res=[],i=0;
+  while(i<s.length){
+    var g=[s[i]],j=i+1;
+    while(j<s.length&&s[j].mins-s[i].mins<30)g.push(s[j++]);
+    if(g.length===1){res.push({p:g[0],off:0,chip:false});}
+    else if(g.length===2){res.push({p:g[0],off:-9,chip:false});res.push({p:g[1],off:9,chip:false});}
+    else{res.push({p:g[0],off:0,chip:true,n:g.length,grp:g});}
+    i=j;
   }
-  if (btnAll) btnAll.addEventListener('click', function(){
-    btnAll.classList.add('so-toggle-on'); btnBlocked.classList.remove('so-toggle-on'); applyFilter(false);
-  });
-  if (btnBlocked) btnBlocked.addEventListener('click', function(){
-    btnBlocked.classList.add('so-toggle-on'); btnAll.classList.remove('so-toggle-on'); applyFilter(true);
-  });
+  return res;
+}
+function renderRow(ch,ri){
+  var its=resolveCollisions(ch.posts);
+  var icons=its.map(function(it,ci){
+    var p=it.p,pct=(p.mins/1440*100).toFixed(3)+'%';
+    if(it.chip){
+      var cp=JSON.stringify(it.grp.map(function(g){return{id:g.id};})).replace(/"/g,'&quot;');
+      return '<button class="so-tl-chip" style="left:'+pct+'" data-chip="'+cp+'" tabindex="-1">+'+it.n+'</button>';
+    }
+    var off=it.off?'margin-top:'+it.off+'px;':'';
+    var al=eA([p.type||'Post',ch.label,'scheduled '+p.sched,p.status||'unknown'].join(' · '));
+    return '<button class="so-tl-icon-btn" style="left:'+pct+';'+off+'" '+
+      'data-post-id="'+eA(p.id)+'" data-row-idx="'+ri+'" data-col-idx="'+ci+'" '+
+      'data-title="'+eA(p.title)+'" data-sched="'+eA(p.sched)+'" data-status="'+eA(p.status)+'" '+
+      'data-ch="'+eA(ch.label)+'" data-type="'+eA(p.type)+'" '+
+      'aria-label="'+al+'" tabindex="-1" role="gridcell">'+
+      svgI(p.icon||'help-circle')+
+      '<div class="so-tl-status-bar" style="background:'+stColor(p.status)+'">'+
+      '<span class="so-tl-status-ic" aria-hidden="true">'+stMark(p.status)+'</span></div>'+
+      '</button>';
+  }).join('');
+  return '<div class="so-tl-row" role="row" aria-label="'+eA(ch.label)+'" data-row-idx="'+ri+'" tabindex="0">'+
+    '<div class="so-tl-row-lbl">'+eH(ch.label)+'</div>'+
+    '<div class="so-tl-bar" id="so-bar-'+ri+'">'+
+    '<div class="so-tl-gl" style="left:0%"></div>'+
+    '<div class="so-tl-gl" style="left:25%"></div>'+
+    '<div class="so-tl-gl" style="left:50%"></div>'+
+    '<div class="so-tl-gl" style="left:75%"></div>'+
+    icons+'</div></div>';
+}
 
-  var backdrop = document.getElementById('so-drawer-backdrop');
-  var drawer = document.getElementById('so-drawer');
-  var drawerTitle = document.getElementById('so-drawer-title');
-  var drawerBody = document.getElementById('so-drawer-body');
-  function closeDrawer(){
-    if (drawer) drawer.classList.remove('open');
-    if (backdrop) backdrop.classList.remove('open');
-  }
-  function openDrawer(channelKey, label){
-    if (!drawer || !drawerBody || !drawerTitle) return;
-    drawerTitle.textContent = label;
-    var tpl = document.querySelector('template.so-dw-tpl[data-channel="' + channelKey + '"]');
-    drawerBody.innerHTML = tpl ? tpl.innerHTML : '<div class="so-empty">No items awaiting.</div>';
-    drawer.classList.add('open');
-    backdrop.classList.add('open');
-  }
-  document.querySelectorAll('.so-ch-row').forEach(function(row){
-    row.addEventListener('click', function(){
-      var ch = row.dataset.channel;
-      var label = row.querySelector('.so-ch-name').textContent;
-      openDrawer(ch, label);
-    });
+// ── Keyboard navigation ───────────────────────────────────────────────
+function setupKeyboard(){
+  document.addEventListener('keydown',function(e){
+    var a=document.activeElement;if(!a)return;
+    var isIcon=!!(a.dataset&&a.dataset.postId);
+    var isRow=!isIcon&&a.classList.contains('so-tl-row');
+    if(!isIcon&&!isRow)return;
+    var ri=parseInt((isIcon?a:a).dataset.rowIdx||'0');
+    var ci=parseInt((isIcon?a.dataset.colIdx:'-1')||'0');
+    if(isRow){
+      if(e.key==='ArrowDown'){e.preventDefault();focusRow(ri+1);}
+      else if(e.key==='ArrowUp'){e.preventDefault();focusRow(ri-1);}
+      else if(e.key==='ArrowRight'||e.key==='Enter'){e.preventDefault();focusIcon(ri,0);}
+    } else {
+      if(e.key==='ArrowLeft'){e.preventDefault();focusIcon(ri,ci-1);}
+      else if(e.key==='ArrowRight'){e.preventDefault();focusIcon(ri,ci+1);}
+      else if(e.key==='ArrowUp'){e.preventDefault();focusRow(ri-1);}
+      else if(e.key==='ArrowDown'){e.preventDefault();focusRow(ri+1);}
+      else if(e.key==='Enter'){e.preventDefault();loadPreview(a.dataset.postId);setActive(a);}
+      else if(e.key==='Escape'){e.preventDefault();closePreview();focusRow(ri);}
+    }
   });
-  if (backdrop) backdrop.addEventListener('click', closeDrawer);
-  var closeBtn = document.getElementById('so-drawer-close');
-  if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+}
+function focusRow(idx){var rows=document.querySelectorAll('[role="row"]');if(idx>=0&&idx<rows.length)rows[idx].focus();}
+function focusIcon(ri,ci){
+  var bar=document.getElementById('so-bar-'+ri);if(!bar)return;
+  var icons=bar.querySelectorAll('[data-post-id]');
+  if(!icons.length){focusRow(ri);return;}
+  icons[Math.max(0,Math.min(ci,icons.length-1))].focus();
+}
 
-  document.addEventListener('click', function(e){
-    var btn = e.target;
-    if (!btn.classList || (!btn.classList.contains('btn-approve') && !btn.classList.contains('btn-archive'))) return;
-    var id = btn.dataset.id; if (!id) return;
-    var card = document.getElementById('so-appr-' + id); if (!card) return;
-    var newStatus = btn.classList.contains('btn-approve') ? 'Approved' : 'Archived';
-    card.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
-    fetch('/admin/api/notion/patch', {
-      method:'POST', credentials:'same-origin',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({page_id:id, status:newStatus})
-    }).then(function(r){
-      if (r.ok){ card.style.transition='opacity 0.4s'; card.style.opacity='0.3'; setTimeout(function(){ card.remove(); }, 400); }
-      else { card.querySelectorAll('button').forEach(function(b){ b.disabled = false; }); }
-    }).catch(function(){ card.querySelectorAll('button').forEach(function(b){ b.disabled = false; }); });
-  });
+// ── Tooltip ───────────────────────────────────────────────────────────
+function showTip(e,ds){
+  if(!_tipEl)return;
+  _tipEl.innerHTML=[ds.title?eH(ds.title):'(no title)',[ds.ch,ds.type].filter(Boolean).join(' · '),'Scheduled '+(ds.sched||'?')+' · '+(ds.status||'unknown')].join('<br>');
+  _tipEl.style.display='block';
+  _tipEl.style.left=(e.clientX+12)+'px';_tipEl.style.top=(e.clientY-8)+'px';
+}
+function hideTip(){if(_tipEl)_tipEl.style.display='none';}
 
-  document.querySelectorAll('.so-tk-check').forEach(function(cb){
-    cb.addEventListener('change', function(){
-      if (!cb.checked) return;
-      var blockId = cb.dataset.block;
-      var row = cb.closest('.so-tk-row');
-      cb.disabled = true;
-      fetch('/admin/api/done-block', {
-        method:'POST', credentials:'same-origin',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({block_id: blockId})
-      }).then(function(r){
-        if (r.ok && row){
-          row.classList.add('so-tk-done');
-          setTimeout(function(){ row.remove(); }, 400);
-        } else { cb.disabled = false; cb.checked = false; }
-      }).catch(function(){ cb.disabled = false; cb.checked = false; });
-    });
-  });
+// ── Preview pane ──────────────────────────────────────────────────────
+function loadPreview(id){
+  if(!id)return;_activePostId=id;
+  document.getElementById('so-pv-empty').style.display='none';
+  document.getElementById('so-pv-loaded').style.display='none';
+  document.getElementById('so-pv-skel').style.display='flex';
+  fetch('/admin/api/social-ops/post/'+id,{credentials:'same-origin'})
+    .then(function(r){if(!r.ok)throw 0;return r.json();})
+    .then(showPreview).catch(showPvErr);
+}
+function showPreview(p){
+  document.getElementById('so-pv-skel').style.display='none';
+  var sc=stColor(p.status||''),sm2=stMark(p.status||'');
+  var chips=[
+    '<span class="so-pv-chip">'+eH(p.channel||'?')+'</span>',
+    p.type?'<span class="so-pv-chip">'+eH(p.type)+'</span>':'',
+    p.scheduled?'<span class="so-pv-chip">📅 '+eH(p.scheduled)+'</span>':'',
+    p.actual?'<span class="so-pv-chip">\u2713 '+eH(p.actual)+'</span>':'',
+    '<span class="so-pv-chip" style="color:'+sc+';border-color:'+sc+'50;">'+sm2+' '+eH(p.status||'unknown')+'</span>',
+    p.id?'<span class="so-pv-chip" title="Post ID">#'+eH(p.id.slice(0,8))+'</span>':'',
+    p.error?'<span class="so-pv-chip" style="color:var(--red);" title="'+eA(p.error)+'">Error</span>':'',
+  ].filter(Boolean).join('');
+  document.getElementById('so-pv-meta').innerHTML=chips;
+  document.getElementById('so-pv-body').innerHTML=renderPvBody(p);
+  var acts=[];
+  if((p.status||'').match(/fail|error|block/i))acts.push('<button onclick="alert(\\'Retry: use Notion to re-queue this post\\')">Retry</button>');
+  if((p.status||'').match(/pending|queue|sched|ready|await/i))acts.push('<button onclick="alert(\\'Skip: use Notion to update status\\')">Skip</button>');
+  if(p.permalink)acts.push('<a href="'+eA(p.permalink)+'" target="_blank" rel="noopener">Open original \u2197</a>');
+  acts.push('<button onclick="navigator.clipboard.writeText('+JSON.stringify(JSON.stringify(p))+')">Copy payload</button>');
+  document.getElementById('so-pv-actions').innerHTML=acts.join('');
+  var ld=document.getElementById('so-pv-loaded');ld.style.display='flex';ld.style.flexDirection='column';ld.style.flex='1';
+}
+function renderPvBody(p){
+  var ch=(p.channel||'').toLowerCase();
+  var body=eH(p.body_markdown||p.copy||p.caption||'(no content)');
+  var ttl=p.title?'<b>'+eH(p.title)+'</b><br><br>':'';
+  if(ch.includes('telegram'))return'<div class="pv-tg">'+ttl+body+'</div>';
+  if(ch.includes('whatsapp'))return'<div class="pv-wa">'+ttl+body+'</div>';
+  if(ch.includes('instagram'))return'<div class="pv-ig"><span class="pv-media-badge">'+eH(p.type||'Post')+'</span><br>'+ttl+body+'</div>';
+  if(ch.includes('tiktok'))return'<div class="pv-tk">'+ttl+body+'</div>';
+  if(ch.includes('linkedin'))return'<div class="pv-li">'+ttl+body+'</div>';
+  return'<div class="pv-gen">'+ttl+body+'</div>';
+}
+function showPvErr(){
+  document.getElementById('so-pv-skel').style.display='none';
+  document.getElementById('so-pv-loaded').style.display='none';
+  var e=document.getElementById('so-pv-empty');e.style.display='flex';
+  e.innerHTML='<svg viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" stroke-width="1" fill="none"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg><p>Could not load post.</p>';
+}
+function closePreview(){
+  _activePostId=null;
+  document.getElementById('so-pv-skel').style.display='none';
+  document.getElementById('so-pv-loaded').style.display='none';
+  document.getElementById('so-pv-empty').style.display='flex';
+}
 
-  document.querySelectorAll('.so-tk-skip').forEach(function(btn){
-    btn.addEventListener('click', function(){
-      var row = btn.closest('.so-tk-row'); if (!row) return;
-      row.classList.add('so-tk-done');
-      setTimeout(function(){ row.remove(); }, 400);
-    });
-  });
+// ── Helpers ───────────────────────────────────────────────────────────
+function eH(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
-  document.querySelectorAll('.so-tk-copy').forEach(function(btn){
-    btn.addEventListener('click', function(e){
-      e.stopPropagation();
-      var text = btn.dataset.text || '';
-      navigator.clipboard.writeText(text).then(function(){
-        btn.textContent = 'Copied'; btn.classList.add('so-tk-copied');
-        setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.remove('so-tk-copied'); }, 1500);
-      }).catch(function(){});
-    });
-  });
 })();
 </script>"""
+    )
 
     return f"""{css}
 <div class="so-page">
   <div class="so-topbar">
-    <h1 class="so-h1">Social Ops</h1>
+    <h1 class="so-h1">
+      <span class="so-live-dot" aria-hidden="true">&#9679;</span>
+      Social Ops
+      <span class="so-stale-badge" id="so-stale-badge" style="display:none">stale</span>
+    </h1>
     <div class="so-controls">
       <span class="so-sync-pill">{sync_label}</span>
-      <div class="so-toggle">
-        <button id="so-toggle-all" class="so-toggle-on">All</button>
-        <button id="so-toggle-blocked">Blocked only</button>
+      <div class="so-day-picker" role="group" aria-label="Day navigation">
+        <button class="so-day-btn" id="so-day-prev" aria-label="Previous day">&#9664;</button>
+        <span class="so-day-lbl" id="so-day-lbl">Today</span>
+        <button class="so-day-btn" id="so-day-next" aria-label="Next day" disabled>&#9654;</button>
       </div>
     </div>
   </div>
   {notion_warn}
-  <div class="so-grid">
-    <div class="so-pane">
-      <div class="so-pane-head">Tasks <span class="so-pane-count">{task_count}</span></div>
-      <div class="so-pane-body">{task_rows_html}</div>
+  <div class="so-kpi-strip">
+    <div class="kpi"><div class="kpi-lbl">Posted 24h</div><div class="kpi-val c-green" id="kpi-posted">{kpi_posted}</div></div>
+    <div class="kpi"><div class="kpi-lbl">Pending now</div><div class="kpi-val" id="kpi-pending">{kpi_pending}</div></div>
+    <div class="kpi"><div class="kpi-lbl">Failed 24h</div><div class="kpi-val c-red" id="kpi-failed">{kpi_failed}</div></div>
+    <div class="kpi"><div class="kpi-lbl">Queue depth</div><div class="kpi-val" id="kpi-queue">{kpi_queue}</div></div>
+    <div class="kpi"><div class="kpi-lbl">Overdue appr</div><div class="kpi-val c-gold" id="kpi-overdue">{kpi_overdue}</div></div>
+  </div>
+  {fb_banner_html}
+  <div class="so-main">
+    <div class="so-tl-wrap">
+      <div id="so-tl-content" class="so-tl-content">
+        <div class="so-tl-hours-row" aria-hidden="true">
+          <span class="so-tl-hour-lbl" style="left:0%">00</span>
+          <span class="so-tl-hour-lbl" style="left:25%">06</span>
+          <span class="so-tl-hour-lbl" style="left:50%">12</span>
+          <span class="so-tl-hour-lbl" style="left:75%">18</span>
+        </div>
+        <div class="so-tl-now-line" id="so-tl-now" style="display:none" aria-hidden="true">
+          <span class="so-tl-now-lbl" id="so-tl-now-lbl">now 00:00</span>
+        </div>
+        <div id="so-tl-rows" role="grid" aria-label="24-hour post timeline"></div>
+      </div>
     </div>
-    <div class="so-pane">
-      {fb_banner_html}
-      <div class="so-pane-head">Channels <span class="so-pane-count">{len(rows_data)}</span></div>
-      <div class="so-pane-body">{channel_rows_html}</div>
+    <div class="so-preview" id="so-preview" aria-label="Post preview" aria-live="polite">
+      <div class="so-pv-empty" id="so-pv-empty" style="display:flex;flex:1">
+        <svg viewBox="0 0 24 24" width="52" height="52" stroke="currentColor" stroke-width="1" fill="none" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <path d="M3 9h18M9 21V9"/>
+        </svg>
+        <p>Click a post on the timeline<br>to preview it here.</p>
+      </div>
+      <div class="so-pv-skel" id="so-pv-skel" style="display:none">
+        <div class="skel-b" style="height:18px;width:55%"></div>
+        <div class="skel-b" style="height:14px;width:38%"></div>
+        <div class="skel-b" style="height:110px;width:100%"></div>
+        <div class="skel-b" style="height:13px;width:75%"></div>
+        <div class="skel-b" style="height:13px;width:50%"></div>
+      </div>
+      <div id="so-pv-loaded" style="display:none">
+        <div class="so-pv-meta" id="so-pv-meta"></div>
+        <div class="so-pv-body" id="so-pv-body"></div>
+        <div class="so-pv-actions" id="so-pv-actions"></div>
+      </div>
     </div>
   </div>
-  <div class="so-drawer-backdrop" id="so-drawer-backdrop"></div>
-  <aside class="so-drawer" id="so-drawer" aria-hidden="true">
-    <div class="so-dw-head">
-      <span class="so-dw-title" id="so-drawer-title">Channel</span>
-      <button class="so-dw-close" id="so-drawer-close" aria-label="Close">\u00d7</button>
-    </div>
-    <div class="so-dw-body" id="so-drawer-body"></div>
-  </aside>
-  {drawers_html}
 </div>
+<div class="so-tip" id="so-tip" role="tooltip" aria-hidden="true"></div>
 {js}"""
 
 
@@ -6039,6 +6299,195 @@ def api_social_ops():
     with _page_cache_lock:
         _page_cache["social_ops_content"] = (content, now)
     return Response(content, mimetype="text/html")
+
+
+_SO_TL_CH = [
+    ("telegram_alerts",    "TG Alerts"),
+    ("telegram_community", "TG Community"),
+    ("whatsapp_channel",   "WA Channel"),
+    ("whatsapp_group",     "WA Group"),
+    ("instagram",          "Instagram"),
+    ("tiktok",             "TikTok"),
+    ("threads",            "Threads"),
+    ("linkedin",           "LinkedIn"),
+    ("fb_groups",          "Facebook"),
+    ("quora",              "Quora"),
+]
+_SO_POSTED_ST = {"published", "done", "complete", "posted"}
+_SO_PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
+_SO_FAILED_ST  = {"failed", "error", "blocked"}
+
+
+def _so_icon_for(wt: str, ck: str) -> str:
+    w = (wt or "").lower()
+    if "seed chat" in w:                 return "message-circle"
+    if "morning" in w:                   return "sun"
+    if "news" in w:                      return "newspaper"
+    if "edge card" in w or "diamond" in w or "edge" in w: return "diamond"
+    if "recap" in w:                     return "trophy"
+    if "teaser" in w:                    return "eye"
+    if "poll" in w or "discuss" in w:    return "message-square-more"
+    if "alert" in w:                     return "bell"
+    if "reel" in w:                      return "play-circle"
+    if "carousel" in w:                  return "layers"
+    if "story" in w:                     return "circle"
+    if "b.r.u" in w or "bru" in w:       return "bot"
+    if "article" in w:                   return "book-open"
+    if "answer" in w:                    return "message-square-quote"
+    if "image" in w or "photo" in w:     return "image"
+    if "chat" in w:                      return "message-circle"
+    _fb = {"tiktok": "bot", "telegram_alerts": "message-circle",
+           "telegram_community": "message-square-more",
+           "whatsapp_channel": "bell", "whatsapp_group": "message-square-more",
+           "instagram": "image", "linkedin": "briefcase",
+           "fb_groups": "message-square", "quora": "message-square-quote",
+           "threads": "at-sign"}
+    return _fb.get(ck, "help-circle")
+
+
+def _so_norm_channel(ch_raw: str) -> str:
+    c = (ch_raw or "").lower()
+    if "group" in c and ("whatsapp" in c or " wa" in c or c.startswith("wa")):
+        return "whatsapp_group"
+    return _normalise_channel_key(ch_raw)
+
+
+def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> dict:
+    """Build timeline + KPI payload for a given SAST day string (YYYY-MM-DD)."""
+    cutoff24 = now_utc - timedelta(hours=24)
+    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue = 0
+    for it in items:
+        st  = (it.get("status") or "").lower().strip()
+        ts  = parse_ts(it.get("last_edited") or it.get("scheduled_time") or it.get("created") or "")
+        sch = parse_ts(it.get("scheduled_time") or "")
+        if st in _SO_POSTED_ST:
+            if ts and ts >= cutoff24:
+                kpi_posted += 1
+        elif st in _SO_FAILED_ST:
+            if ts and ts >= cutoff24:
+                kpi_failed += 1
+            kpi_queue += 1
+        elif st != "archived":
+            kpi_queue += 1
+            if st in _SO_PENDING_ST:
+                kpi_pending += 1
+            elif st in ("awaiting approval", "draft", "review", "in review", "awaiting"):
+                if sch and sch < now_utc:
+                    kpi_overdue += 1
+
+    now_sast = now_utc.astimezone(_SAST)
+    now_mins = now_sast.hour * 60 + now_sast.minute if day_str == now_sast.strftime("%Y-%m-%d") else -1
+
+    channels = []
+    for ck, clbl in _SO_TL_CH:
+        posts = []
+        for it in items:
+            if _so_norm_channel(it.get("channel") or "") != ck:
+                continue
+            sdt = parse_ts(it.get("scheduled_time") or "")
+            if not sdt:
+                continue
+            ss = sdt.astimezone(_SAST)
+            if ss.strftime("%Y-%m-%d") != day_str:
+                continue
+            smins = ss.hour * 60 + ss.minute
+            adt   = parse_ts(it.get("last_edited") or "")
+            ahhmm = adt.astimezone(_SAST).strftime("%H:%M") if adt else ""
+            posts.append({
+                "id":     it.get("id", ""),
+                "title":  (it.get("title") or it.get("copy") or "")[:60],
+                "type":   it.get("work_type") or "",
+                "icon":   _so_icon_for(it.get("work_type") or "", ck),
+                "status": (it.get("status") or "").lower().strip(),
+                "mins":   smins,
+                "sched":  f"{ss.hour:02d}:{ss.minute:02d}",
+                "actual": ahhmm,
+                "error":  it.get("error") or "",
+                "ch_lbl": clbl,
+            })
+        channels.append({"key": ck, "label": clbl, "posts": posts})
+
+    return {
+        "day":      day_str,
+        "now_mins": now_mins,
+        "channels": channels,
+        "kpis": {
+            "posted_24h":  kpi_posted,
+            "pending":     kpi_pending,
+            "failed_24h":  kpi_failed,
+            "queue_depth": kpi_queue,
+            "overdue":     kpi_overdue,
+        },
+    }
+
+
+@app.route("/admin/api/social-ops/timeline")
+@require_auth
+def api_so_timeline():
+    from datetime import date as _date
+    now_utc = datetime.now(timezone.utc)
+    today_sast = now_utc.astimezone(_SAST)
+
+    day_param = request.args.get("day", "").strip()
+    if day_param:
+        try:
+            _date.fromisoformat(day_param)
+            day_str = day_param
+        except ValueError:
+            return Response(json.dumps({"error": "Invalid day format, expected YYYY-MM-DD"}),
+                            status=400, mimetype="application/json")
+    else:
+        day_str = today_sast.strftime("%Y-%m-%d")
+
+    items, _ = _fetch_marketing_queue()
+    payload = _build_so_timeline(day_str, items, now_utc)
+    return Response(json.dumps(payload), mimetype="application/json")
+
+
+@app.route("/admin/api/social-ops/post/<post_id>")
+@require_auth
+def api_so_post(post_id: str):
+    items, _ = _fetch_marketing_queue()
+    item = next((it for it in items if it.get("id") == post_id), None)
+    if item is None:
+        return Response(json.dumps({"error": "Post not found"}),
+                        status=404, mimetype="application/json")
+
+    sdt = parse_ts(item.get("scheduled_time") or "")
+    adt = parse_ts(item.get("last_edited") or "")
+    copy_raw = item.get("copy") or item.get("title") or ""
+
+    hashtags: list[str] = []
+    caption_lines: list[str] = []
+    for line in copy_raw.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            hashtags.extend(t for t in stripped.split() if t.startswith("#"))
+        else:
+            caption_lines.append(stripped)
+    caption = "\n".join(caption_lines).strip()
+
+    asset = item.get("asset_link") or ""
+    media_urls = [asset] if asset else []
+
+    payload = {
+        "id":            post_id,
+        "channel":       item.get("channel") or "",
+        "channel_key":   _so_norm_channel(item.get("channel") or ""),
+        "type":          item.get("work_type") or "",
+        "body_markdown": copy_raw,
+        "media_urls":    media_urls,
+        "caption":       caption,
+        "hashtags":      hashtags,
+        "scheduled":     sdt.astimezone(_SAST).strftime("%Y-%m-%d %H:%M") if sdt else "",
+        "actual":        adt.astimezone(_SAST).strftime("%Y-%m-%d %H:%M") if adt else "",
+        "status":        (item.get("status") or "").lower().strip(),
+        "permalink":     item.get("url") or "",
+        "error_message": item.get("error") or "",
+        "campaign":      item.get("campaign_theme") or "",
+        "platform_notes": item.get("platform_notes") or "",
+    }
+    return Response(json.dumps(payload), mimetype="application/json")
 
 
 @app.route("/admin/api/reel_kit")

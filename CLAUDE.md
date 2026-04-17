@@ -2951,3 +2951,29 @@ Two distinct `edge:detail` paths, both missing header data:
 - Live validation (w84_rt1): 9/10 (1 pre-existing)
 - Live validation (w84_p1): 33/34 (1 pre-existing timing flakiness)
 - Narrative validation: 54/56 (2 pre-existing)
+
+## Data Feeds
+
+### Data Feeds → Coach Data (manual curation)
+
+**Files**
+- `scrapers/coaches.json` — structured `{sport: {team_key: {"name": "...", "last_verified": "YYYY-MM-DD", "note": "..."}}}`. System of record. Loaded by `bot/narrative_spec.lookup_coach()` and `scrapers/match_context_fetcher._get_coach()`.
+- `bot/data/coaches.json` — flat `{team_key: ["First Last", "Surname"]}`. Mirror for the fact-checker whitelist (`evidence_pack._build_verified_coaches`). Must stay in sync with the soccer section of the structured file.
+
+**Cadence** — audit every 14 d, or immediately on any public head-coach change for EPL / La Liga / Bundesliga / Serie A / Ligue 1 / UCL / PSL / URC / Super Rugby / Six Nations / IPL / SA20 / T20 World Cup.
+
+**Audit procedure**
+1. Pull top of `scrapers/coaches.json`. Identify entries with `last_verified > 7 d` (get counts from `bot/narrative_integrity_monitor.py::freshness_check`).
+2. Cross-check against club official sites, Wikipedia (history table, not the infobox), BBC/SuperSport editorial.
+3. Edit `scrapers/coaches.json`: update `name` if it changed, set `last_verified` to today's ISO date. If unable to confirm, keep the value and set `note: "Unverified in audit YYYY-MM-DD — carried forward"`.
+4. If a soccer entry changed, mirror into `bot/data/coaches.json` using flat format `["First Last", "Surname"]`.
+5. Commit with message `audit(coaches): verify N teams, update K coaches (INV/audit wave)` on `main`. No runtime restart required — both files are read fresh on lookup (no in-process cache).
+
+**Automated drift detection** (after BUILD-COACHES-MONITOR-WIRE-01 ships)
+- `scripts/monitor_narrative_integrity.py` runs every 30 min; a new `coach_freshness` signal flags when ≥ 10 % of entries are older than 7 d.
+- EdgeOps receives Telegram alert + GlitchTip event. 2 h debounce.
+
+**Do not**
+- Do not re-enable `scrapers/transfermarkt_coaches.py` — WAF block persists (INV-COACHES-TRANSFERMARKT-RESCUE-01).
+- Do not add `coaches.json` as an edge signal. It is narrative-only by design.
+- Do not delete stale entries — `note` them; deletion breaks the fact-checker whitelist.

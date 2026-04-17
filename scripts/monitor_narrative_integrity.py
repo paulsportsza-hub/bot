@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUILD-VERDICT-QUALITY-GATE-01: Narrative Integrity Monitor.
+"""BUILD-VERDICT-QUALITY-GATE-01 + BUILD-COACHES-MONITOR-WIRE-01: Narrative Integrity Monitor.
 
 Runs signal checks against narrative_cache and writes results to
 narrative_integrity_log.  Sends EdgeOps alerts when signals breach
@@ -8,13 +8,18 @@ thresholds.  2-hour debounce per signal.
 Usage:
     python scripts/monitor_narrative_integrity.py
 
-Signals produced (6 distinct values):
+Signals produced (11 distinct values):
     1. total_narratives_24h         — all cache writes in last 24h
     2. w84_rate_24h                 — % of W84 (Sonnet) narratives
     3. w82_fallback_count_24h       — count of W82 fallback narratives
     4. empty_verdict_count_24h      — narratives missing a verdict section
     5. low_quality_verdict_count    — verdicts failing min_verdict_quality()
     6. gold_edge_non_sonnet_count   — Gold/Diamond edges NOT served by Sonnet
+    7. validator_reject_rate        — % of validator calls rejected
+    8. banned_template_hit_rate     — % of validator calls hitting a banned template
+    9. manager_name_fabrication_attempts — count of fabricated manager name attempts
+   10. coach_freshness_pct          — % of coaches.json entries stale >7 days
+   11. bot_coaches_sync             — mismatches between bot/data/coaches.json and scrapers version
 """
 from __future__ import annotations
 
@@ -33,6 +38,15 @@ sys.path.insert(0, _BOT_DIR)
 sys.path.insert(0, os.path.dirname(_BOT_DIR))
 
 from config import SCRAPERS_ROOT
+
+# ── GlitchTip ─────────────────────────────────────────────────────────────────
+_SCRAPERS_DIR = os.path.join(os.path.dirname(_BOT_DIR), "scrapers")
+sys.path.insert(0, _SCRAPERS_DIR)
+try:
+    from _sentry_init import init_sentry as _init_sentry
+    _sentry = _init_sentry("narrative_integrity_monitor")
+except Exception:
+    _sentry = None
 
 _ODDS_DB = os.path.join(str(SCRAPERS_ROOT.parent), "scrapers", "odds.db")
 
@@ -239,6 +253,89 @@ def _send_edgeops_alert(signal: str, value: int, detail: str) -> None:
         log.warning("MONITOR: EdgeOps alert failed: %s", _te)
 
 
+def signal_coach_freshness_pct() -> dict:
+    """Pct of coaches.json entries stale beyond 7 days.
+
+    Bands: GREEN ≤10%, WARN ≤25%, ALERT >25%.
+    """
+    try:
+        from narrative_integrity_monitor import freshness_check
+        result = freshness_check(max_age_days=7)
+    except Exception as exc:
+        log.warning("MONITOR: signal_coach_freshness_pct import error: %s", exc)
+        return {
+            "signal": "coach_freshness_pct",
+            "value": 0.0,
+            "band": "GREEN",
+            "breach": 0,
+            "details": json.dumps({"error": str(exc)}),
+        }
+
+    checked = result.get("checked", 0)
+    stale = len(result.get("stale", []))
+    missing = len(result.get("missing", []))
+
+    if checked == 0:
+        pct = 0.0
+    else:
+        pct = round((stale + missing) / checked * 100, 2)
+
+    if pct <= 10:
+        band = "GREEN"
+    elif pct <= 25:
+        band = "WARN"
+    else:
+        band = "ALERT"
+
+    return {
+        "signal": "coach_freshness_pct",
+        "value": pct,
+        "band": band,
+        "breach": 1 if band == "ALERT" else 0,
+        "details": json.dumps(
+            {"stale": stale, "missing": missing, "checked": checked, "pct": pct}
+        ),
+    }
+
+
+def signal_bot_coaches_sync() -> dict:
+    """Mismatch count between bot/data/coaches.json and scrapers/coaches.json.
+
+    Bands: GREEN = 0 mismatches, ALERT ≥ 1.
+    """
+    try:
+        from narrative_integrity_monitor import bot_coaches_sync_check
+        result = bot_coaches_sync_check()
+    except Exception as exc:
+        log.warning("MONITOR: signal_bot_coaches_sync import error: %s", exc)
+        return {
+            "signal": "bot_coaches_sync",
+            "value": 0.0,
+            "band": "GREEN",
+            "breach": 0,
+            "details": json.dumps({"error": str(exc)}),
+        }
+
+    mismatches = len(result.get("mismatches", []))
+    band = "GREEN" if mismatches == 0 else "ALERT"
+
+    return {
+        "signal": "bot_coaches_sync",
+        "value": float(mismatches),
+        "band": band,
+        "breach": 1 if band == "ALERT" else 0,
+        "details": json.dumps({"mismatches": mismatches, "ok": result.get("ok", True)}),
+    }
+
+
+# SIGNAL_FNS: new-style signals that return {signal, value, band, breach, details}
+# Appended to run_monitor() after the existing 9 integer signals.
+SIGNAL_FNS = [
+    signal_coach_freshness_pct,
+    signal_bot_coaches_sync,
+]
+
+
 def run_monitor(db_path: str | None = None) -> dict[str, int]:
     """Run all signal checks and write results to narrative_integrity_log.
 
@@ -392,6 +489,28 @@ def run_monitor(db_path: str | None = None) -> dict[str, int]:
                     f"Detected at: {datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
                 )
                 _send_edgeops_alert(signal, value, detail)
+
+        # ── Coach freshness signals (BUILD-COACHES-MONITOR-WIRE-01) ─────────
+        for fn in SIGNAL_FNS:
+            sig = fn()
+            signal_name = sig["signal"]
+            # narrative_integrity_log stores value as INTEGER; round pct to nearest int
+            sig_int = int(round(sig["value"]))
+            _write_signal(conn, signal_name, sig_int)
+            results[signal_name] = sig_int
+
+            if sig["breach"] and not _debounced(conn, signal_name):
+                detail = (
+                    f"Band: {sig['band']}\n"
+                    f"Details: {sig.get('details', '')}\n"
+                    f"Detected at: {datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+                )
+                _send_edgeops_alert(signal_name, sig_int, detail)
+                if _sentry:
+                    _sentry.capture_message(
+                        f"narrative_integrity: {signal_name} breached — {sig['value']}",
+                        level="warning",
+                    )
 
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
