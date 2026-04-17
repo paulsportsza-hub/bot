@@ -7503,6 +7503,8 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "- Active voice, present tense\n"
             "- NO hallucination: only use the exact fields provided. No invented injuries, no invented player names, no invented stats.\n"
             "\n"
+            "FORBIDDEN OUTPUT SHAPE: Do not return \"TEAM at PRICE.\" or \"NAME at NUMBER.\" as the entire verdict. That is a banned template. Every verdict must include at least one reason clause (form, matchup, xG edge, line value, etc.). Minimum two sentences OR one sentence of \u226514 words.\n"
+            "\n"
             "ABSOLUTELY FORBIDDEN — these will make the verdict wrong and unacceptable:\n"
             "- Stadium or venue names (Stamford Bridge, Old Trafford, FNB Stadium, DHL Newlands, etc.) — venue data is NOT in our database. If you mention a stadium name, you are inventing it. Never do this.\n"
             "- Player names (Salah, Rashford, Osimhen, Khune, etc.) — player data is NOT verified in our system. Never name a player.\n"
@@ -7551,7 +7553,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=120,  # BUILD-VERDICT-PROMPT-04: 120 tok; _trim_to_last_sentence caps to ≤140
+            max_tokens=128,  # FIX-NARRATIVE-VERDICT-MAXTOKENS-01: raised to 128; _trim_to_last_sentence caps to ≤140
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],

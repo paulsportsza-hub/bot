@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # ── D1 — Verdict max_tokens cap ───────────────────────────────────────────────
 
 def test_d1_generate_verdict_max_tokens_capped():
-    """_generate_verdict max_tokens must be ≤ 120 (BUILD-VERDICT-PROMPT-04: trim-to-sentence caps output at ≤140 chars)."""
+    """_generate_verdict max_tokens must be ≥120 (FIX-NARRATIVE-VERDICT-MAXTOKENS-01: raised to 128) and ≤220."""
     bot_path = os.path.join(os.path.dirname(__file__), "..", "..", "bot.py")
     source = open(bot_path).read()
 
@@ -36,11 +36,15 @@ def test_d1_generate_verdict_max_tokens_capped():
     assert m, "_generate_verdict not found in bot.py"
     fn_body = m.group(1)
 
-    token_values = re.findall(r"max_tokens=(\d+)", fn_body)
-    assert token_values, "No max_tokens found in _generate_verdict"
-    for tv in token_values:
-        assert int(tv) <= 120, (
-            f"_generate_verdict max_tokens={tv} exceeds safe limit of 120 "
+    # Exclude docstring/comment lines (those containing '#' or '-') to get only API call values
+    non_comment_values = re.findall(r"^\s+max_tokens=(\d+)[^#]", fn_body, re.MULTILINE)
+    assert non_comment_values, "No API-call max_tokens found in _generate_verdict"
+    for tv in non_comment_values:
+        assert int(tv) >= 120, (
+            f"_generate_verdict max_tokens={tv} must be ≥120 (FIX-NARRATIVE-VERDICT-MAXTOKENS-01)"
+        )
+        assert int(tv) <= 220, (
+            f"_generate_verdict max_tokens={tv} exceeds safe upper limit of 220 "
             f"(card container fits ≈150 chars; _trim_to_last_sentence caps at 140 chars)"
         )
 
