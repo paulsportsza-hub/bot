@@ -152,7 +152,7 @@ _in_progress_matches: set[str] = set()
 # per fixture within this process run. After 3, mark narrative_cache as
 # skipped_banned_shape so the serving layer falls back to programmatic verdict.
 _banned_shape_reject_count: dict[str, int] = {}
-_BANNED_SHAPE_SKIP_THRESHOLD = 3
+_BANNED_SHAPE_SKIP_THRESHOLD = 1  # INV-SONNET-SPIKE-01: reduced 3→1; one retry is sufficient, 3 triples cost
 
 _RUNTIME_SCHEMA_REQUIREMENTS = {
     "narrative_cache": {
