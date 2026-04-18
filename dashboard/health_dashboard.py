@@ -8,6 +8,7 @@ Sidebar navigation with Data Health, Automation, and Customers views.
 
 import functools
 import hashlib
+import logging
 import secrets
 import html
 import json
@@ -17,11 +18,15 @@ import sqlite3
 import subprocess
 import threading
 import time
+import urllib.parse
 import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 try:
     from dotenv import load_dotenv
@@ -29,7 +34,7 @@ try:
 except ImportError:
     pass
 
-from flask import Flask, Response, request, redirect
+from flask import Flask, Response, request, redirect, send_from_directory, abort
 
 try:
     import sentry_sdk as _sentry
@@ -40,6 +45,27 @@ except ImportError:
 _page_cache: dict[str, tuple[str, float]] = {}
 _page_cache_lock = threading.Lock()
 _PAGE_CACHE_TTL = 60  # seconds
+# stale-while-revalidate window: serve cache up to this age while a background
+# thread refreshes. Keeps the p99 user-facing response snappy after the first
+# hit even when Notion is slow.
+_PAGE_CACHE_SWR = 600  # seconds
+_page_refresh_inflight: set[str] = set()
+
+# -- Cache key constants (single source of truth) ----------------------------
+_CK_SOCIAL_OPS    = "social_ops_full"
+_CK_TASK_HUB      = "task_hub_full"
+_CK_TASK_HUB_CONT = "task_hub_content"
+_CK_HEALTH        = "health_full"
+_CK_HEALTH_CONT   = "health_content"
+_CK_AUTO_CONT     = "automation_content"
+_CK_SO_CONT       = "social_ops_content"
+_CK_REEL_KIT      = "reel_kit_full"
+_CK_REEL_KIT_CONT = "reel_kit_content"
+_CK_CALENDAR      = "calendar_full"
+_CK_CAL_CONT      = "calendar_content"
+
+# -- Request timing log -------------------------------------------------------
+_TIMING_LOG = Path("/home/paulsportsza/logs/dashboard_timing.log")
 
 # -- Notion cache for Automation view ----------------------------------------
 _notion_cache: dict[str, tuple[list, float]] = {}
@@ -73,11 +99,34 @@ PORT = int(os.getenv("DASHBOARD_PORT", "8501"))
 NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
 NOTION_MARKETING_DB = "58123052-0e48-466a-be63-5308e793e672"
 NOTION_TASK_HUB_PAGE = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
+# Task Hub data sources (17 Apr 2026 — rewired to real DSs, old IDs were empty scaffold pages)
+# LinkedIn has no separate ledger DB — reads from MOQ Channel=LinkedIn
+NOTION_LINKEDIN_DB = os.getenv(
+    "NOTION_LINKEDIN_DB", "320d9048-d73c-818d-8c7e-c4d06d1e3461"
+)  # DEPRECATED — kept for env compat; fetch function now uses MOQ
+NOTION_QUORA_DB = os.getenv(
+    "NOTION_QUORA_DB", "dcb0e810-c714-4b92-b3b5-fad18c4a2452"
+)  # 🌐 GEO Quora Pipeline
+NOTION_FB_GROUPS_LEDGER = os.getenv(
+    "NOTION_FB_GROUPS_LEDGER", "693414a9-5154-45d6-a548-70e84409d439"
+)  # 📋 FB Groups Posting Ledger (group registry)
+_NOTION_LEDGER_CACHE_TTL = 300  # seconds (LinkedIn / Quora ledgers)
 
 # -- Reel Kit constants -------------------------------------------------------
 _REEL_CARDS_ROOT = "/var/www/mzansiedge/assets/reel-cards"
 _REEL_MASTERS_ROOT = "/var/www/mzansiedge/assets/reels"
 _REEL_PUBLIC_BASE = "https://mzansiedge.co.za/assets/reels"
+
+# -- Social Ops asset roots ---------------------------------------------------
+# MOQ "Image URL" / "Video URL" columns frequently store Claude-session-scoped
+# URLs (computer:///sessions/<id>/mnt/MzansiEdge/assets/<subdir>/<file>) that
+# are not browser-loadable. _resolve_media_url() maps the trailing
+# "<subdir>/<file>" portion onto one of _SO_ASSET_ROOTS and returns a
+# dashboard-served path. See /admin/social-ops/asset/<subpath> route.
+_SO_ASSET_ROOTS = (
+    "/home/paulsportsza/assets",
+    "/home/paulsportsza/MzansiEdge/assets",
+)
 _REEL_MARKETING_DATA_SOURCE = NOTION_MARKETING_DB
 MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50 MB upload limit (LOCKED)
 _RE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -214,6 +263,30 @@ def require_auth(f):
                         path="/admin/")
         return resp
     return wrapper
+
+
+# -- Request timing middleware ------------------------------------------------
+
+_timing_log_lock = threading.Lock()
+
+@app.before_request
+def _req_start():
+    request._t0 = time.monotonic()
+    request._cache_state = "miss"
+
+@app.after_request
+def _req_end(response):
+    try:
+        elapsed_ms = int((time.monotonic() - request._t0) * 1000)
+        state = getattr(request, "_cache_state", "miss")
+        ts = datetime.now(timezone.utc).isoformat()
+        line = f"{ts} route={request.path} ms={elapsed_ms} cache={state}\n"
+        with _timing_log_lock:
+            with open(_TIMING_LOG, "a") as _tf:
+                _tf.write(line)
+    except Exception:
+        pass
+    return response
 
 
 # -- DB helpers ---------------------------------------------------------------
@@ -1060,7 +1133,15 @@ def _notion_request(endpoint: str, body: dict | None = None, method: str | None 
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except Exception:
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8")[:300]
+        except Exception:
+            body = ""
+        log.warning(f"[notion] HTTP {e.code} on {endpoint}: {body}")
+        return None
+    except Exception as e:
+        log.warning(f"[notion] request failed on {endpoint}: {e}")
         return None
 
 
@@ -1096,10 +1177,10 @@ def _get_page_prop(page: dict, prop_name: str) -> str | None:
     ptype = prop.get("type", "")
     if ptype == "title":
         arr = prop.get("title", [])
-        return arr[0]["plain_text"] if arr else None
+        return "".join(e.get("plain_text", "") for e in arr) if arr else None
     elif ptype == "rich_text":
         arr = prop.get("rich_text", [])
-        return arr[0]["plain_text"] if arr else None
+        return "".join(e.get("plain_text", "") for e in arr) if arr else None
     elif ptype == "select":
         sel = prop.get("select")
         return sel["name"] if sel else None
@@ -1134,11 +1215,12 @@ def _fetch_marketing_queue() -> tuple[list[dict], float]:
         if cached and (now - cached[1]) < _NOTION_CACHE_TTL:
             return cached[0], cached[1]
 
+    # Option A (FIX-DASH-PERF-02): cap at 3 pages cold (<200 rows) → <2s target
     raw_pages = _query_notion_db(
         NOTION_MARKETING_DB,
         sorts=[{"timestamp": "last_edited_time", "direction": "descending"}],
         page_size=100,
-        max_pages=10,
+        max_pages=3,
     )
     items = []
     for page in raw_pages:
@@ -1150,6 +1232,11 @@ def _fetch_marketing_queue() -> tuple[list[dict], float]:
             "scheduled_time": _get_page_prop(page, "Scheduled Time") or _get_page_prop(page, "Scheduled") or "",
             "copy": _get_page_prop(page, "Final Copy") or _get_page_prop(page, "Copy") or _get_page_prop(page, "Copy Preview") or _get_page_prop(page, "Body") or "",
             "asset_link": _get_page_prop(page, "Asset Link") or _get_page_prop(page, "Asset") or _get_page_prop(page, "Media") or "",
+            "image_url": _get_page_prop(page, "Image URL") or _get_page_prop(page, "Image") or "",
+            "video_url": _get_page_prop(page, "Video URL") or _get_page_prop(page, "Video") or "",
+            "asset_url": _get_page_prop(page, "Asset URL") or "",
+            "media_url": _get_page_prop(page, "Media URL") or "",
+            "ready_for_automation": _get_page_prop(page, "Ready for Automation?") or _get_page_prop(page, "Ready for Automation") or "",
             "url": _get_page_prop(page, "URL") or _get_page_prop(page, "Published URL") or "",
             "campaign_theme": _get_page_prop(page, "Campaign / Theme") or _get_page_prop(page, "Campaign") or _get_page_prop(page, "Theme") or "",
             "error": _get_page_prop(page, "Error") or _get_page_prop(page, "Reason") or "",
@@ -1164,6 +1251,353 @@ def _fetch_marketing_queue() -> tuple[list[dict], float]:
         _notion_cache[cache_key] = (items, now)
 
     return items, now
+
+
+def _th_search_daily_sheet(query: str, today_patterns: list[str]):
+    """Search Notion for a daily sheet page whose title matches `query` AND contains
+    one of today's date patterns. Returns (page_id, title) or (None, None)."""
+    body = json.dumps({"query": query, "filter": {"value": "page", "property": "object"}, "page_size": 30}).encode("utf-8")
+    req = urllib.request.Request("https://api.notion.com/v1/search", data=body,
+                                  headers={"Authorization": f"Bearer {NOTION_TOKEN}",
+                                           "Notion-Version": "2025-09-03",
+                                           "Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            d = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        log.warning(f"[task-hub] search({query!r}) failed: {e}")
+        return (None, None)
+    for p in d.get("results", []):
+        title = ""
+        for pv in p.get("properties", {}).values():
+            if pv.get("type") == "title":
+                title = "".join(t.get("plain_text", "") for t in pv.get("title", []))
+                break
+        if any(pat.lower() in title.lower() for pat in today_patterns):
+            return (p.get("id"), title)
+    return (None, None)
+
+
+def _th_fetch_blocks(page_id: str, max_pages: int = 4):
+    """Fetch all blocks (paginated) for a Notion page. Returns list of block dicts."""
+    out = []
+    cursor = None
+    for _ in range(max_pages):
+        url = f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=100"
+        if cursor:
+            url += f"&start_cursor={cursor}"
+        req = urllib.request.Request(url,
+                                      headers={"Authorization": f"Bearer {NOTION_TOKEN}",
+                                               "Notion-Version": "2025-09-03"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                d = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            log.warning(f"[task-hub] blocks({page_id}) failed: {e}")
+            break
+        out.extend(d.get("results", []))
+        if not d.get("has_more"):
+            break
+        cursor = d.get("next_cursor")
+    return out
+
+
+def _th_block_text(b: dict) -> str:
+    t = b.get("type")
+    content = b.get(t, {}) or {}
+    if "rich_text" in content:
+        return "".join(p.get("plain_text", "") for p in content.get("rich_text", []))
+    return ""
+
+
+def _th_block_url(b: dict) -> str:
+    """Extract first URL from block's rich_text href annotations."""
+    t = b.get("type")
+    content = b.get(t, {}) or {}
+    for p in content.get("rich_text", []):
+        href = p.get("href")
+        if href:
+            return href
+    return ""
+
+
+def _th_today_patterns() -> list[str]:
+    """Date fragments we match against daily-sheet titles."""
+    sast = timezone(timedelta(hours=2))
+    t = datetime.now(sast)
+    pats = [
+        t.strftime("%d %B %Y"),           # 17 April 2026
+        t.strftime("%-d %B %Y") if hasattr(t, 'strftime') else t.strftime("%d %B %Y").lstrip("0"),
+        t.strftime("%d %b %Y"),           # 17 Apr 2026
+        t.strftime("%Y-%m-%d"),           # 2026-04-17
+    ]
+    # Dedupe + drop leading-zero variants
+    pats.append(str(t.day) + t.strftime(" %B %Y"))
+    pats.append(str(t.day) + t.strftime(" %b %Y"))
+    return list(dict.fromkeys([p for p in pats if p]))
+
+
+def _fetch_linkedin_ledger() -> list[dict]:
+    """LinkedIn outreach targets parsed from today's '🔗 LinkedIn Connects — <date>' daily sheet.
+    Block pattern: to_do (name — role, company — LinkedIn) + code (outreach message) — repeated.
+    (Rewired 17 Apr 2026 v2: reads daily sheet child pages, not DBs.)"""
+    cache_key = "linkedin_daily"
+    now = time.monotonic()
+    with _notion_cache_lock:
+        cached = _notion_cache.get(cache_key)
+        if cached and (now - cached[1]) < _NOTION_LEDGER_CACHE_TTL:
+            return cached[0]
+
+    rows: list[dict] = []
+    try:
+        pats = _th_today_patterns()
+        page_id, page_title = _th_search_daily_sheet("LinkedIn Connects", pats)
+        if not page_id:
+            log.info(f"[task-hub] no LinkedIn daily sheet found for {pats[0]}")
+        else:
+            blocks = _th_fetch_blocks(page_id)
+            current = None
+            for b in blocks:
+                t = b.get("type")
+                if t == "to_do":
+                    txt = _th_block_text(b)
+                    url = _th_block_url(b)
+                    if not txt:
+                        continue
+                    # Parse "Name — Role, Company — LinkedIn" (em-dash separator)
+                    parts = [x.strip() for x in txt.split("—")]
+                    name = parts[0] if parts else txt
+                    role_company = parts[1] if len(parts) > 1 else ""
+                    if "," in role_company:
+                        role, company = role_company.split(",", 1)
+                        role = role.strip(); company = company.strip()
+                    else:
+                        role = role_company; company = ""
+                    posted = bool((b.get("to_do") or {}).get("checked"))
+                    current = {
+                        "id":           b.get("id", ""),
+                        "name":         name,
+                        "role":         role,
+                        "company":      company,
+                        "note":         "",
+                        "url":          url,
+                        "status":       "Posted" if posted else "Ready",
+                        "posted":       posted,
+                        "last_edited":  b.get("last_edited_time", ""),
+                    }
+                    rows.append(current)
+                elif t == "code" and current is not None:
+                    current["note"] = _th_block_text(b)[:500]
+                    current = None  # message consumed
+    except Exception as e:
+        log.warning(f"[task-hub] linkedin daily parse failed: {e}")
+        rows = []
+
+    with _notion_cache_lock:
+        _notion_cache[cache_key] = (rows, now)
+    return rows
+
+
+def _fetch_quora_ledger() -> list[dict]:
+    """Quora questions parsed from today's '📝 Quora Daily — <date>' daily sheet.
+    Block pattern per Q: heading_2 (Qn: question) + paragraph (Priority: …) + paragraph (View on Quora)
+    + paragraph (<details><summary>) + N answer paragraphs + paragraph (</details>) + to_do (Posted).
+    (Rewired 17 Apr 2026 v2.)"""
+    cache_key = "quora_daily"
+    now = time.monotonic()
+    with _notion_cache_lock:
+        cached = _notion_cache.get(cache_key)
+        if cached and (now - cached[1]) < _NOTION_LEDGER_CACHE_TTL:
+            return cached[0]
+
+    rows: list[dict] = []
+    try:
+        pats = _th_today_patterns()
+        page_id, _ = _th_search_daily_sheet("Quora Daily", pats)
+        if not page_id:
+            log.info(f"[task-hub] no Quora daily sheet found for {pats[0]}")
+        else:
+            blocks = _th_fetch_blocks(page_id)
+            current = None
+            in_answer = False
+            answer_buf: list[str] = []
+            for b in blocks:
+                t = b.get("type")
+                txt = _th_block_text(b)
+                if t == "heading_2":
+                    # flush previous
+                    if current:
+                        current["answer"] = "\n".join(answer_buf)[:800]
+                        rows.append(current)
+                    # new question (strip leading "Q1:", "Q12:", etc)
+                    q = txt
+                    m = re.match(r"^Q\d+[:.]?\s*", q)
+                    if m:
+                        q = q[m.end():]
+                    current = {"id": b.get("id", ""), "question": q, "priority": "",
+                               "url": "", "answer": "", "status": "Ready", "posted": False,
+                               "topic": "Quora", "notes": "", "last_edited": b.get("last_edited_time", "")}
+                    answer_buf = []
+                    in_answer = False
+                elif current is None:
+                    continue
+                elif t == "paragraph":
+                    if txt.lower().startswith("priority:"):
+                        current["priority"] = txt.split(":", 1)[1].strip().split("—")[0].strip()
+                    elif "view on quora" in txt.lower() or txt.lower().startswith("url:"):
+                        url = _th_block_url(b)
+                        if url:
+                            current["url"] = url
+                    elif "<details" in txt.lower():
+                        in_answer = True
+                    elif "</details>" in txt.lower():
+                        in_answer = False
+                    elif in_answer:
+                        if txt:
+                            answer_buf.append(txt)
+                elif t == "to_do" and txt.lower().startswith("posted"):
+                    current["posted"] = bool((b.get("to_do") or {}).get("checked"))
+                    current["status"] = "Posted" if current["posted"] else "Ready"
+            if current:
+                current["answer"] = "\n".join(answer_buf)[:800]
+                rows.append(current)
+    except Exception as e:
+        log.warning(f"[task-hub] quora daily parse failed: {e}")
+        rows = []
+
+    with _notion_cache_lock:
+        _notion_cache[cache_key] = (rows, now)
+    return rows
+
+
+def _fetch_fb_groups_today() -> list[dict]:
+    """FB Group posts parsed from today's '📱 FB Groups — <date>' daily sheet.
+    Block pattern per post: heading_3 (Group Name (size) — Category) + paragraphs for
+    Image / Phase / Group URL / Headline char count + code (post text) + divider.
+    (New 17 Apr 2026 v2 — supersedes MOQ filter.)"""
+    cache_key = "fb_daily"
+    now = time.monotonic()
+    with _notion_cache_lock:
+        cached = _notion_cache.get(cache_key)
+        if cached and (now - cached[1]) < _NOTION_LEDGER_CACHE_TTL:
+            return cached[0]
+
+    rows: list[dict] = []
+    try:
+        pats = _th_today_patterns()
+        page_id, _ = _th_search_daily_sheet("FB Groups", pats)
+        if not page_id:
+            log.info(f"[task-hub] no FB Groups daily sheet found for {pats[0]}")
+        else:
+            blocks = _th_fetch_blocks(page_id)
+            current = None
+            for b in blocks:
+                t = b.get("type")
+                txt = _th_block_text(b)
+                if t == "heading_3":
+                    if current:
+                        rows.append(current)
+                    # "Group Name (1.2K) — Category"
+                    name = txt
+                    size = ""
+                    m = re.search(r"\(([^)]+)\)", txt)
+                    if m:
+                        size = m.group(1)
+                        name = txt[:m.start()].strip()
+                    if "—" in txt:
+                        name_clean = name.split("—")[0].strip()
+                        category = txt.split("—", 1)[1].strip() if "—" in txt else ""
+                        name = name_clean
+                    else:
+                        category = ""
+                    current = {"id": b.get("id", ""), "group": name, "size": size,
+                               "category": category, "group_url": "", "image_url": "",
+                               "phase": "", "final_copy": "", "title": name,
+                               "status": "Ready", "posted": False, "last_edited": b.get("last_edited_time", "")}
+                elif current is None:
+                    continue
+                elif t == "paragraph":
+                    tl = txt.lower()
+                    if tl.startswith("group url:"):
+                        current["group_url"] = txt.split(":", 1)[1].strip()
+                    elif tl.startswith("image"):
+                        url = _th_block_url(b)
+                        if url:
+                            current["image_url"] = url
+                    elif tl.startswith("phase:"):
+                        current["phase"] = txt.split(":", 1)[1].strip()
+                elif t == "code":
+                    current["final_copy"] = _th_block_text(b)
+                elif t == "to_do" and txt.lower().startswith(("posted", "done")):
+                    current["posted"] = bool((b.get("to_do") or {}).get("checked"))
+                    current["status"] = "Posted" if current["posted"] else "Ready"
+            if current:
+                rows.append(current)
+    except Exception as e:
+        log.warning(f"[task-hub] fb daily parse failed: {e}")
+        rows = []
+
+    # Enrich group_url from ledger registry where the daily sheet has no URL
+    if rows:
+        registry = _fetch_fb_ledger_registry()
+        if registry:
+            for row in rows:
+                if not row["group_url"]:
+                    name_key = row["group"].lower()
+                    url = registry.get(name_key)
+                    if not url:
+                        for reg_name, reg_url in registry.items():
+                            if reg_name in name_key or name_key in reg_name:
+                                url = reg_url
+                                break
+                    if url:
+                        row["group_url"] = url
+                    else:
+                        log.warning(f"[task-hub] no registry URL for FB group: {row['group']!r}")
+
+    with _notion_cache_lock:
+        _notion_cache[cache_key] = (rows, now)
+    return rows
+
+
+def _fetch_fb_ledger_registry() -> dict[str, str]:
+    """Fetch group name → URL from the FB Groups Posting Ledger registry.
+    Returns empty dict on any failure (integration may not have access yet)."""
+    cache_key = "fb_ledger_registry"
+    now = time.monotonic()
+    with _notion_cache_lock:
+        cached = _notion_cache.get(cache_key)
+        if cached and (now - cached[1]) < _NOTION_LEDGER_CACHE_TTL:
+            return cached[0]
+
+    registry: dict[str, str] = {}
+    try:
+        result = _notion_request(f"databases/{NOTION_FB_GROUPS_LEDGER}/query", body={"page_size": 100})
+        if result and result.get("results"):
+            for page in result["results"]:
+                props = page.get("properties", {})
+                name = None
+                url = None
+                for prop in props.values():
+                    ptype = prop.get("type", "")
+                    if ptype == "title" and name is None:
+                        arr = prop.get("title", [])
+                        name = "".join(e.get("plain_text", "") for e in arr).strip()
+                    elif ptype == "url" and url is None:
+                        url = prop.get("url") or ""
+                    elif ptype == "rich_text" and url is None:
+                        arr = prop.get("rich_text", [])
+                        val = "".join(e.get("plain_text", "") for e in arr).strip()
+                        if val.startswith("https://www.facebook.com"):
+                            url = val
+                if name and url:
+                    registry[name.lower()] = url
+    except Exception as e:
+        log.warning(f"[task-hub] fb ledger registry fetch failed: {e}")
+
+    with _notion_cache_lock:
+        _notion_cache[cache_key] = (registry, now)
+    return registry
 
 
 def _normalise_channel_key(raw: str) -> str:
@@ -1443,7 +1877,7 @@ def _shared_css() -> str:
     border-color: rgba(248,200,48,0.1);
     transform: translateY(-1px);
   }
-  .kpi::after { content:''; position:absolute; top:0; left:0; right:0; height:2px; background: var(--grad); opacity: 0.7; transition: opacity 300ms var(--trans); }
+  .kpi::after { content:''; position:absolute; top:0; left:0; right:0; height:2px; background: var(--grad); opacity: 0.45; transition: opacity 300ms var(--trans); }
   .kpi:hover::after { opacity: 1; }
   .kpi::before { content:''; position:absolute; top:0; left:0; width:100%; height:100%; background: radial-gradient(ellipse 60% 50% at 0% 0%, rgba(248,200,48,0.025) 0%, transparent 70%); pointer-events:none; }
   .kpi-lbl { font-size: 10px; font-family: var(--font-d); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
@@ -1459,13 +1893,13 @@ def _shared_css() -> str:
   .c-text  { color: var(--text); }
 
   /* PANELS */
-  .panel { background: var(--surface); border: 1px solid rgba(255,255,255,0.05); border-radius: var(--r); overflow: hidden; margin-bottom: 16px; box-shadow: var(--glow); transition: box-shadow 300ms var(--trans), border-color 300ms var(--trans); }
+  .panel { background: var(--surface); border: 1px solid rgba(255,255,255,0.05); border-radius: var(--r); overflow: hidden; position: relative; margin-bottom: 16px; box-shadow: var(--glow); transition: box-shadow 300ms var(--trans), border-color 300ms var(--trans); }
   .panel:hover { box-shadow: var(--glow-hover); border-color: rgba(248,200,48,0.08); }
   .panel-head { padding: 11px 18px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; align-items: center; justify-content: space-between; gap: 12px; background: rgba(0,0,0,0.2); backdrop-filter: blur(4px); }
   .panel-title { font-family: var(--font-d); font-weight: 700; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text); }
   .panel-sub { font-size: 11px; font-family: var(--font-m); color: var(--muted); text-align: right; }
   .panel-red-accent { border-left: 3px solid var(--red); }
-  .panel-orange-accent { border-top: 2px solid; border-image: var(--grad) 1; }
+  .panel-orange-accent::after { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:var(--grad); opacity:0.45; pointer-events:none; z-index:1; }
 
   /* TABLES */
   .tbl-wrap { overflow-x: auto; }
@@ -1638,12 +2072,23 @@ def _sidebar_html(active_view: str) -> str:
         ("health", "System Health", _ICON_SERVER, "/admin/health"),
         ("performance", "Edge Performance", _ICON_CHART, "/admin/performance"),
         ("social_ops", "Social Ops", _ICON_PLAY, "/admin/social-ops"),
+        ("task_hub", "Task Hub", _ICON_TASKHUB, "/admin/task-hub"),
     ]
-    # Compute pending item count for Social Ops badge
+    # Badge counts only genuinely failed/blocked items — awaiting approvals do not
+    # surface here, since those live in-screen on the Social Ops view itself.
+    # Read from the Notion cache without triggering a fetch. A cold cache must
+    # never block server-side sidebar rendering; the client-side poll against
+    # /admin/api/task_hub_badge will correct the value once data arrives.
     _badge_count = 0
     try:
-        _mq, _ = _fetch_marketing_queue()
-        _badge_count = len(_get_awaiting_items(_mq, include_overdue=False))
+        with _notion_cache_lock:
+            _cached = _notion_cache.get("marketing_queue")
+        if _cached:
+            _mq = _cached[0]
+            _badge_count = sum(
+                1 for _it in _mq
+                if (_it.get("status") or "").lower().strip() in ("failed", "blocked", "error")
+            )
     except Exception:
         pass
     nav_items = ""
@@ -1718,7 +2163,7 @@ def _sidebar_js() -> str:
           if (c > 0) { badge.textContent = c; }
           else { badge.remove(); }
         } else if (c > 0) {
-          var thLink = document.querySelector('.sidebar-item[data-view="task_hub"] .item-label');
+          var thLink = document.querySelector('.sidebar-item[data-view="social_ops"] .item-label');
           if (thLink) {
             var b = document.createElement('span');
             b.className = 'nav-badge'; b.id = 'th-badge'; b.textContent = c;
@@ -2961,33 +3406,41 @@ def render_automation_content() -> str:
     fb_banner_html = ""
     if failed_blocked:
         fb_count = len(failed_blocked)
-        fb_first = failed_blocked[:3]
-        fb_summary_parts = []
-        for it in fb_first:
+        fb_item_parts = []
+        for it in failed_blocked:
+            pid = _html_mod.escape(it.get("id") or "")
+            if not pid:
+                continue
             ch_key = _normalise_channel_key(it.get("channel") or "")
             ch_lbl = _CHANNEL_MAP.get(ch_key, {}).get("label", ch_key or "?")
-            err = _truncate(it.get("error") or it.get("title") or "issue", 60)
-            fb_summary_parts.append(f'{_html_mod.escape(ch_lbl)}: {_html_mod.escape(err)}')
-        more = (f' <span class="so-fb-more">+{fb_count - 3} more</span>'
-                if fb_count > 3 else "")
+            err = _truncate(it.get("error") or it.get("title") or "issue", 80)
+            fb_item_parts.append(
+                f'<span class="so-fb-item" data-page-id="{pid}">'
+                f'<span class="so-fb-item-text">{_html_mod.escape(ch_lbl)}: {_html_mod.escape(err)}</span>'
+                f'<button type="button" class="so-fb-item-dismiss" '
+                f'title="Dismiss notification" onclick="__soDismissFB(this)" '
+                f'aria-label="Dismiss">&times;</button>'
+                f'</span>'
+            )
         fb_banner_html = (
-            '<div class="so-fb-banner">'
-            f'<span class="so-fb-count">{fb_count} failed/blocked</span>'
-            f'<span class="so-fb-list">{" \u00b7 ".join(fb_summary_parts)}</span>'
-            f'{more}</div>'
+            '<div class="so-fb-banner" id="so-fb-banner">'
+            f'<span class="so-fb-count" id="so-fb-count">{fb_count} failed/blocked</span>'
+            f'<span class="so-fb-list">{"".join(fb_item_parts)}</span>'
+            '</div>'
         )
-
-    # ── KPI computation (02B) ───────────────────────────────────────────
+    # ── KPI computation (BUILD-SOCIAL-OPS-DASH-BOTTOM-01) ───────────────
     import json as _json_mod
     _POSTED_ST = {"published", "done", "complete", "posted"}
     _PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
     _FAILED_ST  = {"failed", "error", "blocked"}
+    _OVERDUE_QUEUE_ST = {"pending", "ready", "queued"}
     _cutoff24   = now_utc - timedelta(hours=24)
-    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue = 0
+    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue_queue = 0
     for _it in items:
         _st  = (_it.get("status") or "").lower().strip()
         _ts  = parse_ts(_it.get("last_edited") or _it.get("scheduled_time") or _it.get("created") or "")
         _sch = parse_ts(_it.get("scheduled_time") or "")
+        _rfa = (_it.get("ready_for_automation") or "").lower().strip()
         if _st in _POSTED_ST:
             if _ts and _ts >= _cutoff24:
                 kpi_posted += 1
@@ -2999,9 +3452,10 @@ def render_automation_content() -> str:
             kpi_queue += 1
             if _st in _PENDING_ST:
                 kpi_pending += 1
-            elif _st in ("awaiting approval", "draft", "review", "in review", "awaiting"):
-                if _sch and _sch < now_utc:
-                    kpi_overdue += 1
+        if (_st in _OVERDUE_QUEUE_ST
+                and _sch and _sch < now_utc
+                and _rfa in ("yes", "true", "1", "y")):
+            kpi_overdue_queue += 1
 
     # ── Timeline init data (02B) ─────────────────────────────────────────
     _today_sast = now_utc.astimezone(_SAST)
@@ -3090,7 +3544,7 @@ def render_automation_content() -> str:
             "pending":     kpi_pending,
             "failed_24h":  kpi_failed,
             "queue_depth": kpi_queue,
-            "overdue":     kpi_overdue,
+            "overdue_queue_count": kpi_overdue_queue,
         },
     })
 
@@ -3099,7 +3553,7 @@ def render_automation_content() -> str:
     )
 
     css = """<style>
-.so-page{font-family:var(--font-b);color:var(--text);min-height:100vh;padding:16px 20px;}
+.so-page{font-family:var(--font-b);color:var(--text);height:100vh;padding:16px 20px;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;}
 .so-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap;}
 .so-h1{font-size:18px;font-weight:600;letter-spacing:-0.01em;margin:0;color:var(--text);display:flex;align-items:center;gap:8px;}
 .so-live-dot{color:var(--green);font-size:10px;animation:so-blink 2s ease-in-out infinite;}
@@ -3115,16 +3569,66 @@ def render_automation_content() -> str:
 .so-day-lbl{font-family:var(--font-m);font-size:12px;color:var(--text);min-width:58px;text-align:center;}
 .so-kpi-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px;}
 @media(max-width:900px){.so-kpi-strip{grid-template-columns:repeat(3,1fr);}}
-.so-fb-banner{background:rgba(248,81,73,0.10);border:1px solid rgba(248,81,73,0.30);border-radius:6px;
-  color:var(--red);font-family:var(--font-m);font-size:12px;padding:6px 14px;margin-bottom:14px;
+.so-fb-banner{background:rgba(248,81,73,0.08);border:1px solid rgba(248,81,73,0.28);border-radius:6px;
+  color:var(--red);font-family:var(--font-m);font-size:12px;padding:6px 10px;margin-bottom:10px;
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;line-height:1.4;}
-.so-fb-count{font-weight:600;}
-.so-fb-list{color:var(--text);flex:1;}
-.so-fb-more{color:var(--muted);}
-.so-fb-cta{background:rgba(248,81,73,0.15);color:var(--red);border:1px solid rgba(248,81,73,0.30);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;text-decoration:none;white-space:nowrap;}
-.so-main{display:flex;gap:16px;align-items:flex-start;}
-@media(max-width:1279px){.so-main{flex-direction:column;}}
-.so-tl-wrap{flex:1;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;}
+.so-fb-count{font-weight:600;text-transform:uppercase;letter-spacing:.3px;font-size:11px;flex-shrink:0;}
+.so-fb-list{display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1;min-width:0;}
+.so-fb-item{display:inline-flex;align-items:center;gap:4px;background:rgba(248,81,73,0.10);
+  border:1px solid rgba(248,81,73,0.28);border-radius:4px;padding:2px 2px 2px 9px;max-width:100%;}
+.so-fb-item-text{font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px;}
+.so-fb-item-dismiss{background:transparent;border:none;color:var(--red);cursor:pointer;
+  font-size:14px;line-height:1;padding:1px 7px;border-radius:3px;font-family:inherit;}
+.so-fb-item-dismiss:hover{background:rgba(248,81,73,0.22);}
+.so-fb-item-dismiss:disabled{opacity:0.4;cursor:wait;}
+.so-main{display:grid;grid-template-columns:minmax(0,65fr) minmax(0,35fr);gap:16px;align-items:stretch;flex:1;min-height:0;overflow:hidden;}
+@media(max-width:1279px){.so-main{grid-template-columns:minmax(0,1fr);flex:0 0 auto;height:auto;overflow:visible;}}
+.so-left{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;overflow:hidden;}
+.so-bottom-grid{display:flex;flex-direction:column;gap:12px;flex:1;min-height:0;}
+.so-queue{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;min-width:0;display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;box-shadow:var(--glow);}
+.so-queue::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.45;pointer-events:none;z-index:1;}
+.so-panel-h{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.so-panel-title{font-size:12px;font-weight:600;color:var(--text);margin:0;letter-spacing:.3px;text-transform:uppercase;}
+.so-panel-sub{font-family:var(--font-m);font-size:10px;color:var(--muted);}
+.so-queue-body{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px;}
+.so-queue-body::-webkit-scrollbar{width:6px;}.so-queue-body::-webkit-scrollbar-track{background:transparent;}.so-queue-body::-webkit-scrollbar-thumb{background:var(--muted);border-radius:3px;opacity:.5;}
+.so-queue-row{position:relative;display:flex;align-items:center;gap:12px;padding:12px 14px 12px 18px;border-radius:8px;cursor:pointer;border:1px solid var(--border);background:var(--surface-alt);transition:border-color 150ms,transform 150ms,background 150ms;min-height:60px;overflow:hidden;}
+.so-queue-row::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--so-ch,#888);}
+.so-queue-row:hover{border-color:var(--so-ch,var(--gold));transform:translateY(-1px);background:var(--surface);}
+.so-queue-row-logo{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:rgba(255,255,255,0.03);border:1px solid var(--border-sub);}
+.so-queue-row-logo svg{width:22px;height:22px;}
+.so-queue-row-main{min-width:0;flex:1;display:flex;flex-direction:column;gap:4px;}
+.so-queue-row-title{font-size:14px;font-weight:500;color:var(--text);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.so-queue-row-meta{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);}
+.so-queue-row-ch{font-family:var(--font-m);font-size:10px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:var(--so-ch,var(--muted));}
+.so-queue-row-type{color:var(--text);opacity:.75;font-size:11px;}
+.so-queue-row-dot{width:3px;height:3px;border-radius:50%;background:var(--muted);opacity:.6;flex-shrink:0;}
+.so-queue-row-status{padding:1px 7px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;font-family:var(--font-m);flex-shrink:0;}
+.so-queue-row-status.st-queued,.so-queue-row-status.st-approved,.so-queue-row-status.st-pending{background:rgba(248,200,48,0.12);color:var(--gold);border:1px solid rgba(248,200,48,0.28);}
+.so-queue-row-status.st-ready{background:rgba(56,139,253,0.15);color:#58a6ff;border:1px solid rgba(56,139,253,0.30);}
+.so-queue-row-status.st-scheduled{background:rgba(163,113,247,0.15);color:#bc8cff;border:1px solid rgba(163,113,247,0.30);}
+.so-queue-row-when{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;text-align:right;}
+.so-queue-row-time{font-family:var(--font-m);font-size:13px;color:var(--gold);font-weight:600;white-space:nowrap;}
+.so-queue-row-rel{font-family:var(--font-m);font-size:10px;color:var(--muted);white-space:nowrap;}
+.so-queue-empty{font-family:var(--font-m);font-size:11px;color:var(--muted);text-align:center;padding:30px 6px;}
+.so-tile{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:12px;min-height:200px;display:flex;flex-direction:column;min-width:0;box-shadow:var(--glow);}
+.so-tile::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.45;pointer-events:none;z-index:1;}
+.so-tile-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;}
+.so-tile-title{font-size:12px;font-weight:600;color:var(--text);margin:0;letter-spacing:.3px;text-transform:uppercase;display:flex;align-items:center;gap:6px;}
+.so-tile-count{font-family:var(--font-m);font-size:10px;color:var(--muted);background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:1px 8px;}
+.so-tile-body{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;max-height:260px;}
+.so-tile-body::-webkit-scrollbar{width:4px;}.so-tile-body::-webkit-scrollbar-track{background:transparent;}.so-tile-body::-webkit-scrollbar-thumb{background:var(--muted);opacity:.5;border-radius:2px;}
+.so-tile-row{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--surface-alt);border:1px solid var(--border);border-radius:6px;cursor:pointer;text-decoration:none;color:inherit;transition:border-color 150ms;}
+.so-tile-row:hover{border-color:var(--gold);}
+.so-tile-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.so-tile-row-title{font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.so-tile-row-sub{font-family:var(--font-m);font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.so-tile-empty{font-family:var(--font-m);font-size:11px;color:var(--muted);text-align:center;padding:20px 6px;}
+.so-tile-thumb{width:28px;height:28px;border-radius:4px;object-fit:cover;background:var(--surface-alt);flex-shrink:0;}
+.so-tile-tag{font-family:var(--font-m);font-size:9px;text-transform:uppercase;letter-spacing:.5px;padding:1px 5px;border-radius:3px;flex-shrink:0;border:1px solid var(--border);color:var(--muted);}
+.so-tile-skel{background:var(--surface-alt);border-radius:4px;height:14px;animation:skel-p 1.2s ease-in-out infinite alternate;}
+.so-tl-wrap{position:relative;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--glow);}
+.so-tl-wrap::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.7;pointer-events:none;z-index:1;}
 .so-tl-content{position:relative;}
 .so-tl-hours-row{position:relative;height:22px;margin-left:140px;border-bottom:1px solid var(--border-sub);background:var(--surface-alt);}
 .so-tl-hour-lbl{position:absolute;font-family:var(--font-m);font-size:10px;color:var(--muted);transform:translateX(-50%);top:4px;pointer-events:none;}
@@ -3135,6 +3639,8 @@ def render_automation_content() -> str:
 .so-tl-ch-icon{flex-shrink:0;display:flex;align-items:center;}
 .so-tl-bar{flex:1;position:relative;height:52px;overflow:visible;}
 .so-tl-gl{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.04);pointer-events:none;}
+.so-tl-gl-mid{background:rgba(255,255,255,0.025);}
+.so-tl-hour-lbl-mid{opacity:0.5;}
 .so-tl-icon-btn{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;cursor:pointer;padding:2px;z-index:5;transition:transform 150ms;}
 .so-tl-icon-btn:hover{transform:translate(-50%,-60%);z-index:10;}
 .so-tl-icon-btn:focus{outline:none;z-index:10;}
@@ -3145,9 +3651,14 @@ def render_automation_content() -> str:
 .so-tl-chip:hover{border-color:var(--gold);color:var(--text);}
 .so-tl-now-line{position:absolute;top:0;width:2px;background:var(--grad);z-index:20;pointer-events:none;filter:drop-shadow(0 0 6px rgba(248,200,48,0.6));}
 .so-tl-now-lbl{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-family:var(--font-m);font-size:9px;color:var(--gold);white-space:nowrap;background:var(--surface-alt);padding:1px 4px;border-radius:2px;border:1px solid rgba(248,200,48,0.3);}
-.so-preview{width:400px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;height:334px;max-height:334px;overflow-y:auto;}
+.so-preview{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;height:100%;max-height:100%;overflow-y:auto;min-width:0;min-height:0;box-shadow:var(--glow);}
+.so-preview::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.7;pointer-events:none;z-index:10;}
 .so-preview::-webkit-scrollbar{width:4px;}.so-preview::-webkit-scrollbar-track{background:transparent;}.so-preview::-webkit-scrollbar-thumb{background:var(--muted);border-radius:2px;opacity:0.5;}
-@media(max-width:1279px){.so-preview{width:100%;height:auto;max-height:420px;}}
+@media(max-width:1279px){.so-preview{height:auto;max-height:420px;}}
+.so-pv-media{position:relative;width:100%;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+.so-pv-media img,.so-pv-media video{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block;}
+.so-pv-media.aspect-9-16{aspect-ratio:9/16;max-height:60vh;}
+.so-pv-media.aspect-16-9{aspect-ratio:16/9;}
 .so-pv-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:14px;padding:32px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5;}
 .so-pv-empty svg{opacity:0.18;}
 .so-pv-skel{flex:1;padding:16px;display:flex;flex-direction:column;gap:10px;}
@@ -3220,6 +3731,9 @@ document.addEventListener('DOMContentLoaded',function(){
   setupKeyboard();
   setInterval(updateNowLine,60000);
   setInterval(refreshTimeline,60000);
+  // Queue: initial + interval load
+  fetchQueue();
+  setInterval(fetchQueue,60000);
 });
 
 // ── Day picker ────────────────────────────────────────────────────────
@@ -3246,7 +3760,7 @@ function refreshTimeline(){
     .catch(showStale);
 }
 function updateKPIs(k){
-  var m={'kpi-posted':k.posted_24h,'kpi-pending':k.pending,'kpi-failed':k.failed_24h,'kpi-queue':k.queue_depth,'kpi-overdue':k.overdue};
+  var m={'kpi-posted':k.posted_24h,'kpi-pending':k.pending,'kpi-failed':k.failed_24h,'kpi-queue':k.queue_depth,'kpi-overdue':k.overdue_queue_count};
   for(var id in m){var el=document.getElementById(id);if(el&&m[id]!==undefined)el.textContent=m[id];}
 }
 function showStale(){var e=document.getElementById('so-stale-badge');if(e)e.style.display='';}
@@ -3329,9 +3843,13 @@ function renderRow(ch,ri){
     '<div class="so-tl-row-lbl" style="color:'+eA(ch.color||'')+'">'+(ch.icon?'<span class="so-tl-ch-icon">'+ch.icon+'</span>':'')+eH(ch.label)+'</div>'+
     '<div class="so-tl-bar" id="so-bar-'+ri+'">'+
     '<div class="so-tl-gl" style="left:0%"></div>'+
+    '<div class="so-tl-gl so-tl-gl-mid" style="left:12.5%"></div>'+
     '<div class="so-tl-gl" style="left:25%"></div>'+
+    '<div class="so-tl-gl so-tl-gl-mid" style="left:37.5%"></div>'+
     '<div class="so-tl-gl" style="left:50%"></div>'+
+    '<div class="so-tl-gl so-tl-gl-mid" style="left:62.5%"></div>'+
     '<div class="so-tl-gl" style="left:75%"></div>'+
+    '<div class="so-tl-gl so-tl-gl-mid" style="left:87.5%"></div>'+
     icons+'</div></div>';
 }
 
@@ -3411,12 +3929,24 @@ function renderPvBody(p){
   var ch=(p.channel||'').toLowerCase();
   var body=eH(p.body_markdown||p.copy||p.caption||'(no content)');
   var ttl=p.title?'<b>'+eH(p.title)+'</b><br><br>':'';
-  if(ch.includes('telegram'))return'<div class="pv-tg">'+ttl+body+'</div>';
-  if(ch.includes('whatsapp'))return'<div class="pv-wa">'+ttl+body+'</div>';
-  if(ch.includes('instagram'))return'<div class="pv-ig"><span class="pv-media-badge">'+eH(p.type||'Post')+'</span><br>'+ttl+body+'</div>';
-  if(ch.includes('tiktok'))return'<div class="pv-tk">'+ttl+body+'</div>';
-  if(ch.includes('linkedin'))return'<div class="pv-li">'+ttl+body+'</div>';
-  return'<div class="pv-gen">'+ttl+body+'</div>';
+  var media=renderPvMedia(p);
+  if(ch.includes('telegram'))return media+'<div class="pv-tg">'+ttl+body+'</div>';
+  if(ch.includes('whatsapp'))return media+'<div class="pv-wa">'+ttl+body+'</div>';
+  if(ch.includes('instagram'))return media+'<div class="pv-ig"><span class="pv-media-badge">'+eH(p.type||'Post')+'</span><br>'+ttl+body+'</div>';
+  if(ch.includes('tiktok'))return media+'<div class="pv-tk">'+ttl+body+'</div>';
+  if(ch.includes('linkedin'))return media+'<div class="pv-li">'+ttl+body+'</div>';
+  return media+'<div class="pv-gen">'+ttl+body+'</div>';
+}
+function renderPvMedia(p){
+  if(!p.image_url && !p.video_url)return'';
+  var aspectCls=p.media_aspect==='9:16'?'aspect-9-16':(p.media_aspect==='16:9'?'aspect-16-9':'');
+  var inner='';
+  if(p.video_url){
+    inner='<video controls preload="metadata" playsinline src="'+eA(p.video_url)+'"></video>';
+  }else if(p.image_url){
+    inner='<img loading="lazy" alt="" src="'+eA(p.image_url)+'">';
+  }
+  return'<div class="so-pv-media '+aspectCls+'" style="margin-bottom:10px;border-radius:8px;">'+inner+'</div>';
 }
 function showPvErr(){
   document.getElementById('so-pv-skel').style.display='none';
@@ -3429,6 +3959,96 @@ function closePreview(){
   document.getElementById('so-pv-skel').style.display='none';
   document.getElementById('so-pv-loaded').style.display='none';
   document.getElementById('so-pv-empty').style.display='flex';
+}
+
+// ── Failed/Blocked banner dismiss ─────────────────────────────────────
+window.__soDismissFB=function(btn){
+  var item=btn.closest('.so-fb-item');
+  if(!item)return;
+  var pageId=item.getAttribute('data-page-id');
+  if(!pageId)return;
+  btn.disabled=true;
+  fetch('/admin/api/dismiss-item',{
+    method:'POST',
+    credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({page_id:pageId})
+  }).then(function(r){
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.json().catch(function(){return{ok:true};});
+  }).then(function(){
+    item.remove();
+    var banner=document.getElementById('so-fb-banner');
+    if(!banner)return;
+    var remaining=banner.querySelectorAll('.so-fb-item').length;
+    if(remaining===0){
+      banner.style.display='none';
+      return;
+    }
+    var cnt=document.getElementById('so-fb-count');
+    if(cnt)cnt.textContent=remaining+' failed/blocked';
+  }).catch(function(e){
+    btn.disabled=false;
+    console.error('Dismiss failed:',e);
+    alert('Could not dismiss: '+(e&&e.message?e.message:'unknown error'));
+  });
+};
+
+// ── Queue ─────────────────────────────────────────────────────────────
+function _soRelWhen(mins){
+  if(mins==null)return '';
+  if(mins<1)return 'now';
+  if(mins<60)return 'in '+mins+'m';
+  var h=Math.floor(mins/60),m=mins%60;
+  return 'in '+h+'h'+(m?' '+m+'m':'');
+}
+function _soStatusCls(st){return 'st-'+String(st||'').toLowerCase().replace(/[^a-z]/g,'');}
+function fetchQueue(){
+  fetch('/admin/api/social-ops/queue?hours=12',{credentials:'same-origin'})
+    .then(function(r){if(!r.ok)throw 0;return r.json();})
+    .then(renderQueue)
+    .catch(function(){var b=document.getElementById('so-queue-body');if(b)b.innerHTML='<div class="so-queue-empty">Could not load.</div>';});
+}
+function renderQueue(d){
+  var c=document.getElementById('so-queue-count');
+  var b=document.getElementById('so-queue-body');
+  if(!c||!b)return;
+  var posts=(d&&d.posts)||[];
+  c.textContent=posts.length+' in next '+((d&&d.horizon_hours)||12)+'h';
+  if(!posts.length){b.innerHTML='<div class="so-queue-empty">Nothing scheduled in the next 12 hours.</div>';return;}
+  var html='';
+  for(var i=0;i<posts.length&&i<80;i++){
+    var p=posts[i];
+    var color=p.channel_color||'#888';
+    var logo=p.channel_icon_svg||'';
+    var lbl=p.channel_label||(p.channel_key||p.channel||'').replace(/_/g,' ');
+    var st=(p.status||'').toLowerCase();
+    var stCls=_soStatusCls(st);
+    var rel=_soRelWhen(p.mins_until);
+    html+='<div class="so-queue-row" data-post-id="'+eA(p.id)+'" title="'+eA(p.sched_full||'')+'" style="--so-ch:'+eA(color)+';">'+
+      '<div class="so-queue-row-logo" style="color:'+eA(color)+';">'+logo+'</div>'+
+      '<div class="so-queue-row-main">'+
+        '<div class="so-queue-row-title">'+eH(p.title||'Untitled post')+'</div>'+
+        '<div class="so-queue-row-meta">'+
+          '<span class="so-queue-row-ch">'+eH(lbl)+'</span>'+
+          (p.type?'<span class="so-queue-row-dot"></span><span class="so-queue-row-type">'+eH(p.type)+'</span>':'')+
+          (st?'<span class="so-queue-row-status '+stCls+'">'+eH(st)+'</span>':'')+
+        '</div>'+
+      '</div>'+
+      '<div class="so-queue-row-when">'+
+        '<span class="so-queue-row-time">'+eH(p.sched||'')+'</span>'+
+        (rel?'<span class="so-queue-row-rel">'+eH(rel)+'</span>':'')+
+      '</div>'+
+    '</div>';
+  }
+  b.innerHTML=html;
+  var rows=b.querySelectorAll('.so-queue-row');
+  for(var j=0;j<rows.length;j++){
+    rows[j].addEventListener('click',function(){
+      var id=this.getAttribute('data-post-id');
+      if(id&&typeof loadPreview==='function')loadPreview(id);
+    });
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -3462,22 +4082,41 @@ function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'
     <div class="kpi"><div class="kpi-lbl">Pending now</div><div class="kpi-val" id="kpi-pending">{kpi_pending}</div></div>
     <div class="kpi"><div class="kpi-lbl">Failed 24h</div><div class="kpi-val c-red" id="kpi-failed">{kpi_failed}</div></div>
     <div class="kpi"><div class="kpi-lbl">Queue depth</div><div class="kpi-val" id="kpi-queue">{kpi_queue}</div></div>
-    <div class="kpi"><div class="kpi-lbl">Overdue appr</div><div class="kpi-val c-gold" id="kpi-overdue">{kpi_overdue}</div></div>
+    <div class="kpi"><div class="kpi-lbl">OVERDUE QUEUE</div><div class="kpi-val c-gold" id="kpi-overdue">{kpi_overdue_queue}</div></div>
   </div>
   {fb_banner_html}
   <div class="so-main">
-    <div class="so-tl-wrap">
-      <div id="so-tl-content" class="so-tl-content">
-        <div class="so-tl-hours-row" aria-hidden="true">
-          <span class="so-tl-hour-lbl" style="left:0%">00</span>
-          <span class="so-tl-hour-lbl" style="left:25%">06</span>
-          <span class="so-tl-hour-lbl" style="left:50%">12</span>
-          <span class="so-tl-hour-lbl" style="left:75%">18</span>
+    <div class="so-left">
+      <div class="so-tl-wrap">
+        <div id="so-tl-content" class="so-tl-content">
+          <div class="so-tl-hours-row" aria-hidden="true">
+            <span class="so-tl-hour-lbl" style="left:0%">00</span>
+            <span class="so-tl-hour-lbl so-tl-hour-lbl-mid" style="left:12.5%">03</span>
+            <span class="so-tl-hour-lbl" style="left:25%">06</span>
+            <span class="so-tl-hour-lbl so-tl-hour-lbl-mid" style="left:37.5%">09</span>
+            <span class="so-tl-hour-lbl" style="left:50%">12</span>
+            <span class="so-tl-hour-lbl so-tl-hour-lbl-mid" style="left:62.5%">15</span>
+            <span class="so-tl-hour-lbl" style="left:75%">18</span>
+            <span class="so-tl-hour-lbl so-tl-hour-lbl-mid" style="left:87.5%">21</span>
+          </div>
+          <div class="so-tl-now-line" id="so-tl-now" style="display:none" aria-hidden="true">
+            <span class="so-tl-now-lbl" id="so-tl-now-lbl">now 00:00</span>
+          </div>
+          <div id="so-tl-rows" role="grid" aria-label="24-hour post timeline"></div>
         </div>
-        <div class="so-tl-now-line" id="so-tl-now" style="display:none" aria-hidden="true">
-          <span class="so-tl-now-lbl" id="so-tl-now-lbl">now 00:00</span>
+      </div>
+      <div class="so-bottom-grid">
+        <div class="so-queue" aria-label="Next 12 hours queue">
+          <div class="so-panel-h">
+            <div class="so-panel-title">Next 12h Queue</div>
+            <div class="so-panel-sub" id="so-queue-count">--</div>
+          </div>
+          <div class="so-queue-body" id="so-queue-body">
+            <div class="so-tile-skel" style="width:80%"></div>
+            <div class="so-tile-skel" style="width:60%"></div>
+            <div class="so-tile-skel" style="width:70%"></div>
+          </div>
         </div>
-        <div id="so-tl-rows" role="grid" aria-label="24-hour post timeline"></div>
       </div>
     </div>
     <div class="so-preview" id="so-preview" aria-label="Post preview" aria-live="polite">
@@ -3808,606 +4447,657 @@ def render_approvals_content() -> str:
 
 # -- Task Hub helpers ---------------------------------------------------------
 
-def _fetch_task_hub_blocks() -> list[dict]:
-    """Fetch all blocks from Task Hub Notion page with pagination."""
-    cache_key = "task_hub_blocks"
-    now = time.monotonic()
-    with _notion_cache_lock:
-        cached = _notion_cache.get(cache_key)
-        if cached and (now - cached[1]) < _NOTION_CACHE_TTL:
-            return cached[0]
-
-    all_blocks: list[dict] = []
-    start_cursor: str | None = None
-    for _ in range(20):
-        params = "?page_size=100"
-        if start_cursor:
-            params += f"&start_cursor={start_cursor}"
-        result = _notion_request(f"blocks/{NOTION_TASK_HUB_PAGE}/children{params}")
-        if not result or "results" not in result:
-            break
-        all_blocks.extend(result["results"])
-        if result.get("has_more") and result.get("next_cursor"):
-            start_cursor = result["next_cursor"]
-        else:
-            break
-
-    with _notion_cache_lock:
-        _notion_cache[cache_key] = (all_blocks, now)
-    return all_blocks
+def _today_sast_str() -> str:
+    """Return today's date in SAST as YYYY-MM-DD."""
+    return datetime.now(_SAST).strftime("%Y-%m-%d")
 
 
-def _block_plain_text(block: dict) -> str:
-    """Extract plain text from a Notion block's rich_text array."""
-    btype = block.get("type", "")
-    type_data = block.get(btype, {})
-    rich_text = type_data.get("rich_text", [])
-    return "".join(rt.get("plain_text", "") for rt in rich_text)
-
-
-def render_rich_text_html(rich_text_array: list) -> str:
-    """Render a Notion rich_text array to HTML, preserving links, bold, italic, code."""
-    import html as _html_lib
-    parts = []
-    for span in rich_text_array:
-        text = span.get("plain_text", "")
-        if not text:
-            continue
-        href = span.get("href")
-        if not href:
-            link_obj = (span.get("text") or {}).get("link")
-            if isinstance(link_obj, dict):
-                href = link_obj.get("url")
-        ann = span.get("annotations", {})
-        esc = _html_lib.escape(text)
-        if href:
-            parts.append(f'<a href="{_html_lib.escape(href)}" target="_blank" class="task-link">{esc}</a>')
-        elif ann.get("bold"):
-            parts.append(f'<strong>{esc}</strong>')
-        elif ann.get("italic"):
-            parts.append(f'<em>{esc}</em>')
-        elif ann.get("code"):
-            parts.append(f'<code>{esc}</code>')
-        else:
-            parts.append(esc)
-    return "".join(parts)
-
-
-def _parse_card_zones(rich_text_array: list) -> tuple[str, str, str]:
-    """Split a rich_text array into (title_html, desc_html, links_html) at ' — ' separator."""
-    full_html = render_rich_text_html(rich_text_array)
-    sep = " \u2014 "  # " — "
-    html_parts = full_html.split(sep)
-    if len(html_parts) >= 2:
-        title_html = html_parts[0]
-        desc_html = sep.join(html_parts[1:])
-    else:
-        title_html = full_html
-        desc_html = ""
-    links_html = "".join(re.findall(r'<a[^>]*class="task-link"[^>]*>.*?</a>', full_html, re.DOTALL))
-    return title_html, desc_html, links_html
-
-
-def _classify_task(text: str) -> str:
-    """Classify a to_do block text into one of 4 buckets (W-UI-SOCIAL-OPS-REDESIGN-01)."""
-    lower = text.lower()
-    if "fb group" in lower or "facebook" in lower:
-        return "post"
-    if "linkedin" in lower or "li-" in lower:
-        return "connect"
-    if "quora" in lower or "mybroadband" in lower or "forum" in lower:
-        return "answer"
-    return "remind"
-
-
-def render_task_hub_content() -> str:
-    """Render the Task Hub inner content HTML — 3 sections: Reel Kit, Approve Posts, Manual Tasks."""
-    import html as _html_mod
-
-    now_utc = datetime.now(timezone.utc)
-    now_sast = now_utc.astimezone(_SAST)
-    today_str = now_sast.strftime("%Y-%m-%d")
-    updated = now_sast.strftime("%Y-%m-%d %H:%M:%S")
-
-    _ACCENT: dict[str, str] = {
-        "post_now":      "#E8571F",
-        "connect":       "#3b82f6",
-        "answer":        "#8b5cf6",
-        "read_reply":    "#06b6d4",
-        "reminders":     "#888888",
-    }
-
-    _TASK_META = [
-        ("post_now",      "Post Now",        "&#128227;"),
-        ("connect",       "Connect",         "&#128279;"),
-        ("answer",        "Answer",          "&#9997;&#65039;"),
-        ("read_reply",    "Read &amp; Reply", "&#128172;"),
-        ("reminders",     "Reminders",       "&#128276;"),
-    ]
-
-    _TIER_COLORS = {
-        "diamond": "#00D4FF",
-        "gold":    "#F59E0B",
-        "silver":  "#94A3B8",
-        "bronze":  "#CD7F32",
-    }
-
-    # ── Data fetching ──────────────────────────────────────────────────────
-    _fetch_error: str = ""
+def _is_today_sast(iso_str: str) -> bool:
+    """True if the given ISO timestamp (or YYYY-MM-DD) falls on today in SAST."""
+    if not iso_str:
+        return False
     try:
-        mq_items, _ = _fetch_marketing_queue()
-    except Exception as _mq_exc:
-        mq_items = []
-        _fetch_error = f"Failed to fetch Marketing Ops Queue: {_mq_exc}"
-    approve_items = _get_awaiting_items(mq_items, include_overdue=False)
-
-    # Reel kits for today
-    reel_kits: list[dict] = []
-    try:
-        reel_kits = _scan_reel_kits(today_str)
+        # Accept bare date strings (YYYY-MM-DD) or full ISO timestamps
+        if len(iso_str) == 10 and iso_str[4] == "-":
+            return iso_str == _today_sast_str()
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_SAST).strftime("%Y-%m-%d") == _today_sast_str()
     except Exception:
-        pass
+        return False
 
-    # Task sections: scoped to # Manual Tasks heading
-    sections: dict[str, list[dict]] = {
-        "post_now": [], "connect": [], "answer": [], "read_reply": [], "reminders": [],
+
+def _filter_fb_today(rows: list[dict]) -> list[dict]:
+    """Exclude already-posted items. (v2: daily-sheet rows, not MOQ.)"""
+    return [r for r in rows if not r.get("posted")]
+
+
+# Kept for backwards-compat callers; now a pass-through no-op filter
+def _filter_fb_today_from_moq(mq_items: list[dict]) -> list[dict]:
+    return []
+
+
+def _filter_quora_today(rows: list[dict]) -> list[dict]:
+    """Exclude posted items, sort by priority. (v2: daily-sheet rows.)"""
+    PRIO = {"high": 0, "medium": 1, "low": 2}
+    out = [r for r in rows if not r.get("posted")]
+    out.sort(key=lambda x: PRIO.get((x.get("priority") or "").lower(), 9))
+    return out
+
+
+def _filter_linkedin_today(rows: list[dict]) -> list[dict]:
+    """Exclude already-sent/posted targets. (v2: daily-sheet rows.)"""
+    return [r for r in rows if not r.get("posted")]
+
+
+def _fetch_task_hub_data() -> dict:
+    """Assemble the four Task Hub panes. Daily sheets + on-disk reel kits.
+    (Rewired 17 Apr 2026 v2 — FB/Quora/LinkedIn come from daily sheet child pages.)
+    (FIX-DASH-PERF-02: parallelised via ThreadPoolExecutor — target <1.5s cold.)"""
+    today = _today_sast_str()
+
+    def _do_reels():
+        try:
+            return _scan_reel_kits(today)
+        except Exception as e:
+            log.warning(f"[task-hub] reel scan failed: {e}")
+            return []
+
+    def _do_fb():
+        try:
+            return _filter_fb_today(_fetch_fb_groups_today())
+        except Exception as e:
+            log.warning(f"[task-hub] fb fetch failed: {e}")
+            return []
+
+    def _do_quora():
+        try:
+            return _filter_quora_today(_fetch_quora_ledger())
+        except Exception as e:
+            log.warning(f"[task-hub] quora fetch failed: {e}")
+            return []
+
+    def _do_linkedin():
+        try:
+            return _filter_linkedin_today(_fetch_linkedin_ledger())
+        except Exception as e:
+            log.warning(f"[task-hub] linkedin fetch failed: {e}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=4) as _pool:
+        f_reels   = _pool.submit(_do_reels)
+        f_fb      = _pool.submit(_do_fb)
+        f_quora   = _pool.submit(_do_quora)
+        f_linkedin = _pool.submit(_do_linkedin)
+        reels        = f_reels.result()
+        fb_today     = f_fb.result()
+        quora_today  = f_quora.result()
+        linkedin_today = f_linkedin.result()
+
+    return {
+        "date": today,
+        "reels": reels,
+        "fb": fb_today,
+        "quora": quora_today,
+        "linkedin": linkedin_today,
     }
+
+
+def _bg_refresh_task_hub() -> None:
     try:
-        blocks = _fetch_task_hub_blocks()
-        in_manual = False
-        for block in blocks:
-            btype = block.get("type", "")
-            if not in_manual:
-                if btype == "heading_1" and "Manual Tasks" in _block_plain_text(block):
-                    in_manual = True
-                continue
-            if btype in ("divider", "heading_1"):
-                break
-            if btype != "to_do":
-                continue
-            if block.get("to_do", {}).get("checked", False):
-                continue
-            rt_arr = block.get("to_do", {}).get("rich_text", [])
-            plain = "".join(sp.get("plain_text", "") for sp in rt_arr).strip()
-            if not plain:
-                continue
-            key = _classify_task(plain)
-            sections[key].append({"block_id": block["id"], "rich_text": rt_arr, "plain": plain})
-    except Exception as _blk_exc:
-        if not _fetch_error:
-            _fetch_error = f"Failed to fetch Task Hub blocks: {_blk_exc}"
+        data = _fetch_task_hub_data()
+        content = render_task_hub_tabbed(data)
+        html_out = render_shell("task_hub", content)
+        with _page_cache_lock:
+            _page_cache["task_hub_full"] = (html_out, time.monotonic())
+    except Exception:
+        if _sentry is not None:
+            _sentry.capture_exception()
+    finally:
+        with _page_cache_lock:
+            _page_refresh_inflight.discard("task_hub_full")
 
-    # ── Helper: channel chip ───────────────────────────────────────────────
-    def _channel_chip_th(ch_key: str) -> str:
-        ch = _CHANNEL_MAP.get(ch_key)
-        if not ch:
-            return (f'<span class="ch-chip" style="background:rgba(107,114,128,0.15);'
-                    f'color:var(--muted)">{_html_mod.escape(ch_key) if ch_key else "?"}</span>')
-        return (f'<span class="ch-chip" style="background:{ch["color"]}22;color:{ch["color"]};'
-                f'border:1px solid {ch["color"]}33"><span class="ch-dot" style="background:{ch["color"]}"></span>'
-                f'{ch["label"]}</span>')
 
-    sections_html = ""
+# -- Task Hub inline SVG icons (NO EMOJI in rendered HTML) --------------------
+_TH_SVG_PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>'
+_TH_SVG_HEADPHONES = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>'
+_TH_SVG_DOWNLOAD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
+_TH_SVG_UPLOAD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>'
+_TH_SVG_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+_TH_SVG_EXTLINK = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>'
+_TH_SVG_CLIPBOARD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>'
+_TH_SVG_IMAGE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'
 
-    # ── Section 1: Reel Kit ────────────────────────────────────────────────
-    if reel_kits:
-        rk_cards = ""
-        for kit in reel_kits:
-            pick_id = kit["pick_id"]
-            tier_key = kit.get("tier") or ""
-            tier_color = _TIER_COLORS.get(tier_key, "#94A3B8")
-            tier_label = tier_key.title() if tier_key else "Pick"
-            # Status
-            vo_count = len(kit.get("vos", []))
-            has_master = kit.get("has_master", False)
-            if has_master:
-                status_html = '<span style="color:var(--green);font-weight:700">Ready</span>'
-            elif vo_count > 0:
-                status_html = f'<span style="color:var(--amber)">{vo_count} VO{"s" if vo_count != 1 else ""}</span>'
-            else:
-                status_html = '<span style="color:var(--muted)">Card only</span>'
-            # Thumbnail — subdir layout: {date}/{pick_id}/thumb or card
-            thumb_file = kit.get("thumb") or kit.get("card") or f"card_{pick_id}.png"
-            thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/{thumb_file}"
-            card_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/card_{pick_id}.png"
-            display_name = pick_id[:12].upper()
-            rk_cards += f"""<div class="rk-card" style="border-top:3px solid {tier_color}">
-  <img class="rk-thumb" src="{thumb_url}" alt="{_html_mod.escape(display_name)}" loading="lazy">
-  <div class="rk-tier" style="color:{tier_color}">{_html_mod.escape(tier_label)}</div>
-  <div class="rk-name">{_html_mod.escape(display_name)}</div>
-  <div class="rk-status">{status_html}</div>
-  <a class="rk-download" href="{_html_mod.escape(card_url)}" download target="_blank">&#11015; Download</a>
-</div>"""
-        sections_html += f"""<div class="th-section-block" id="th-sec-reel-kit">
-  <div class="section-header">
-    <div class="section-left">
-      <span class="section-icon">&#127916;</span>
-      <span class="section-title">Reel Kit</span>
-      <span class="section-count">{len(reel_kits)} kit{"s" if len(reel_kits) != 1 else ""}</span>
-    </div>
-  </div>
-  <div class="rk-scroll">{rk_cards}</div>
-</div>"""
 
-    # ── Section 2: Approve Posts (grouped by channel) ──────────────────────
-    if approve_items:
-        # Group by channel
-        channel_groups: dict[str, list[dict]] = {}
-        for item in approve_items:
-            ch_key = _normalise_channel_key(item.get("channel") or "")
-            channel_groups.setdefault(ch_key or "other", []).append(item)
+def _th_badge_for_tier(tier: str | None) -> str:
+    t = (tier or "").lower().strip()
+    if t == "diamond":
+        return '<span class="badge diamond">Diamond</span>'
+    if t == "gold":
+        return '<span class="badge gold">Gold</span>'
+    if t == "silver":
+        return '<span class="badge silver">Silver</span>'
+    return '<span class="badge silver">Ready</span>'
 
-        acc_html = ""
-        for ch_key, ch_items in channel_groups.items():
-            ch = _CHANNEL_MAP.get(ch_key)
-            ch_label = ch["label"] if ch else (ch_key or "Other")
-            ch_color = ch["color"] if ch else "#6b7280"
-            cards = ""
-            for item in ch_items:
-                title = item.get("title") or ""
-                sched_str = _sast_hhmm(item.get("scheduled_time")) + " SAST" if item.get("scheduled_time") else "\u2014"
-                asset_link = item.get("asset_link") or ""
-                asset_html = (f'<a href="{_html_mod.escape(asset_link)}" target="_blank" rel="noopener" '
-                              f'class="appr-asset-link">&#128444;&#65039; View asset</a>') if asset_link else ""
-                page_id = item.get("id", "")
-                notion_url = f"https://www.notion.so/{page_id.replace('-', '')}" if page_id else ""
-                notion_html = (f'<a href="{_html_mod.escape(notion_url)}" target="_blank" rel="noopener" '
-                               f'class="appr-notion-link">&#128279; Open in Notion</a>') if notion_url else ""
-                raw_copy = item.get("copy") or ""
-                copy_text = raw_copy.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-                copy_text = _html_mod.escape(copy_text).replace("\n", "<br>")
-                copy_html = f'<div class="appr-copy">{copy_text}</div>' if copy_text else ""
-                cards += f"""<div class="appr-card" id="th-appr-{page_id}">
-  <div class="appr-title">{_html_mod.escape(title)}</div>
-  <div class="appr-header">
-    {_channel_chip_th(ch_key)}
-    <span class="appr-meta">&#128337; {sched_str}</span>
-    {asset_html}
-    {notion_html}
-  </div>
-  {copy_html}
-  <div class="appr-error" style="display:none;color:var(--red);font-size:11px;margin-top:8px"></div>
-  <div class="appr-actions">
-    <button class="btn-approve" data-id="{page_id}">Approve</button>
-    <button class="btn-archive" data-id="{page_id}">Archive</button>
-  </div>
-</div>"""
-            acc_html += f"""<details class="th-accordion" open>
-  <summary class="th-acc-summary" style="border-left:3px solid {ch_color}">
-    <span class="th-acc-label" style="color:{ch_color}">{_html_mod.escape(ch_label)}</span>
-    <span class="section-count">{len(ch_items)}</span>
-  </summary>
-  <div class="th-acc-body">{cards}</div>
-</details>"""
 
-        n_approve = len(approve_items)
-        sections_html += f"""<div class="th-section-block" id="th-sec-approve">
-  <div class="section-header">
-    <div class="section-left">
-      <span class="section-icon">&#128203;</span>
-      <span class="section-title">Approve Posts</span>
-      <span class="section-count">{n_approve} pending</span>
-    </div>
-    <div class="section-progress">
-      <span class="progress-text" data-done="0" data-total="{n_approve}">0 / {n_approve} done</span>
-      <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
-    </div>
-  </div>
-  {acc_html}
-</div>"""
+def _th_escape(s: str) -> str:
+    return html.escape(s or "", quote=True)
 
-    # ── Section 3: Manual Tasks (5 sub-accordions) ─────────────────────────
-    any_tasks = any(sections.get(k) for k in sections)
-    if any_tasks:
-        tasks_inner = ""
-        total_tasks = 0
-        for sec_key, sec_label, sec_emoji in _TASK_META:
-            task_list = sections.get(sec_key, [])
-            if not task_list:
-                continue
-            n = len(task_list)
-            total_tasks += n
-            accent = _ACCENT.get(sec_key, "#E8571F")
-            cards = ""
-            for task in task_list:
-                bid = task["block_id"]
-                rt_arr = task["rich_text"]
-                plain = task["plain"]
-                content_html = render_rich_text_html(rt_arr)
-                safe_plain = _html_mod.escape(plain).replace('"', "&quot;").replace("'", "&#39;")
-                cards += f"""<div class="task-card" data-block-id="{bid}" style="border-left-color:{accent}">
-  <div class="task-content">{content_html}</div>
-  <div class="task-actions">
-    <button class="btn-copy" data-text="{safe_plain}">Copy</button>
-    <button class="btn-done" data-block-id="{bid}">Done &#10004;</button>
-  </div>
-</div>"""
-            tasks_inner += f"""<details class="th-accordion" open>
-  <summary class="th-acc-summary" style="border-left:3px solid {accent}">
-    <span class="th-acc-icon">{sec_emoji}</span>
-    <span class="th-acc-label">{sec_label}</span>
-    <span class="section-count">{n}</span>
-  </summary>
-  <div class="th-acc-body">{cards}</div>
-</details>"""
 
-        sections_html += f"""<div class="th-section-block" id="th-sec-tasks">
-  <div class="section-header">
-    <div class="section-left">
-      <span class="section-icon">&#128221;</span>
-      <span class="section-title">Manual Tasks</span>
-      <span class="section-count">{total_tasks} pending</span>
-    </div>
-    <div class="section-progress">
-      <span class="progress-text" data-done="0" data-total="{total_tasks}">0 / {total_tasks} done</span>
-      <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
-    </div>
-  </div>
-  {tasks_inner}
-</div>"""
+def _th_truncate(s: str, n: int = 240) -> str:
+    s = (s or "").strip()
+    if len(s) <= n:
+        return s
+    return s[: n - 1].rstrip() + "…"
 
-    # ── Error banner ───────────────────────────────────────────────────────
-    error_banner = ""
-    if _fetch_error:
-        if _sentry:
-            _sentry.capture_message(
-                _fetch_error,
-                level="error",
-                fingerprint=["admin.task_hub.fetch_failed"],
-            )
-        error_banner = (
-            '<div class="th-error-banner">'
-            '<strong>&#9888; Data fetch error:</strong> '
-            f'{_html_mod.escape(_fetch_error)}. Try refreshing or check Notion API credentials.'
-            '</div>'
+
+def _th_render_reel_card(kit: dict, date: str) -> str:
+    pick = kit.get("pick_id") or ""
+    tier_raw = (kit.get("tier") or "").strip()
+    # Only show a tier badge when we actually know the tier. Otherwise the
+    # silver "Ready" fallback duplicates the state badge below it.
+    tier_badge = _th_badge_for_tier(tier_raw) if tier_raw else ""
+    has_master = bool(kit.get("has_master"))
+    state_badge = (
+        '<span class="badge done">Uploaded</span>' if has_master
+        else '<span class="badge pending">Ready</span>'
+    )
+    card_file = kit.get("card") or ""
+    card_url = (
+        f"https://mzansiedge.co.za/assets/reel-cards/{date}/{pick}/{card_file}"
+        if card_file else ""
+    )
+    if has_master:
+        thumb_inner = f'<div class="thumb bru">master.mp4 {_TH_SVG_CHECK}</div>'
+    elif card_url:
+        # Real 1080x1920 card PNG as preview — much more useful than a
+        # generic play-icon placeholder. Play button overlay still clickable.
+        thumb_inner = (
+            f'<div class="thumb thumb-real" '
+            f'style="background-image:url(\'{_th_escape(card_url)}\');">'
+            f'<div class="play">{_TH_SVG_PLAY}</div>'
+            f'</div>'
         )
-
-    # ── Empty state ────────────────────────────────────────────────────────
-    if not sections_html:
-        page_body = f"""<div class="task-hub-done">
-  <div class="task-hub-done-icon">&#9989;</div>
-  <div class="task-hub-done-text">Task Hub clear.</div>
-  <div class="task-hub-done-sub">Nothing needs your attention right now. Last checked {updated} SAST.</div>
-</div>"""
     else:
-        page_body = f'<div class="task-hub-content">{sections_html}</div>'
+        thumb_inner = f'<div class="thumb"><div class="play">{_TH_SVG_PLAY}</div></div>'
+    vos = kit.get("vos") or []
+    vo_btn = (
+        f'<button type="button" onclick="thReelVO(\'{_th_escape(date)}\',\'{_th_escape(pick)}\')">{_TH_SVG_HEADPHONES} VO preview</button>'
+        if vos else ""
+    )
+    dl_btn = (
+        f'<button type="button" onclick="thReelDownload(\'{_th_escape(date)}\',\'{_th_escape(pick)}\')">{_TH_SVG_DOWNLOAD} Download kit</button>'
+    )
+    if has_master:
+        upload_zone = (
+            f'<div class="upload-zone done">{_TH_SVG_CHECK} Uploaded · queued to MOQ</div>'
+        )
+    else:
+        upload_zone = (
+            f'<div class="upload-zone" data-pick="{_th_escape(pick)}" data-date="{_th_escape(date)}">'
+            f'{_TH_SVG_UPLOAD} Drop finished master.mp4 here or click'
+            f'<input type="file" accept="video/mp4" style="display:none" />'
+            f'</div>'
+        )
+    # Header: "<Tier> — <TEAM> — <Bookmaker>" when metadata available.
+    pick_team = (kit.get("pick_team") or "").strip()
+    bookmaker_key = (kit.get("bookmaker") or "").strip().lower()
+    if tier_raw and pick_team and bookmaker_key:
+        bk_display = _REEL_BK_DISPLAY.get(bookmaker_key, bookmaker_key.title())
+        header_title = f"{tier_raw.title()} \u2014 {pick_team} \u2014 {bk_display}"
+    else:
+        pick_short = pick[:8] if len(pick) > 8 else pick
+        header_title = f"Reel \u00b7 {pick_short}"
+    head_left = (
+        f'{tier_badge}'
+        f'<div class="meta" style="margin-top:6px;"><strong>{_th_escape(header_title)}</strong></div>'
+        f'<div class="meta">{len(vos)} VO clip(s)</div>'
+    )
+    return f"""
+    <div class="card" data-pick="{_th_escape(pick)}">
+      <div class="head">
+        <div>
+          {head_left}
+        </div>
+        {state_badge}
+      </div>
+      {thumb_inner}
+      <div class="row-actions">
+        {dl_btn}
+        {vo_btn}
+      </div>
+      {upload_zone}
+    </div>
+    """
 
-    task_hub_css = """<style>
-.task-hub-content{}
-.th-section-block{margin-bottom:28px;}
-.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
-.section-left{display:flex;align-items:center;gap:8px;}
-.section-icon{font-size:18px;line-height:1;}
-.section-title{font-family:var(--font-d);font-size:15px;font-weight:700;color:var(--text);}
-.section-count{font-family:var(--font-m);font-size:12px;color:var(--muted);background:rgba(107,114,128,.12);border-radius:12px;padding:2px 9px;}
-.section-progress{display:flex;align-items:center;gap:8px;}
-.progress-text{font-family:var(--font-m);font-size:12px;color:var(--muted);white-space:nowrap;}
-.progress-bar{width:100px;height:4px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden;}
-.progress-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,#F8C830,#E8571F);transition:width 0.3s ease;}
-/* -- Reel Kit horizontal scroll -- */
-.rk-scroll{display:flex;gap:14px;overflow-x:auto;padding:4px 0 12px 0;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
-.rk-scroll::-webkit-scrollbar{height:4px;}.rk-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px;}
-.rk-card{flex:0 0 200px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;transition:transform 150ms;}
-.rk-card:hover{transform:translateY(-2px);}
-.rk-thumb{width:100%;height:150px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.04);}
-.rk-tier{font-family:var(--font-d);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:8px;}
-.rk-name{font-family:var(--font-m);font-size:12px;color:var(--text);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.rk-status{font-family:var(--font-m);font-size:11px;margin-top:4px;}
-/* -- Accordion -- */
-.th-accordion{margin-bottom:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
-.th-acc-summary{display:flex;align-items:center;gap:8px;padding:12px 16px;cursor:pointer;background:var(--surface);font-family:var(--font-d);font-weight:700;font-size:13px;color:var(--text);list-style:none;user-select:none;}
-.th-acc-summary::-webkit-details-marker{display:none;}
-.th-acc-summary::before{content:'\\25B6';font-size:10px;color:var(--muted);transition:transform 200ms;flex-shrink:0;}
-details[open]>.th-acc-summary::before{transform:rotate(90deg);}
-.th-acc-icon{font-size:14px;}
-.th-acc-label{flex:1;min-width:0;}
-.th-acc-body{padding:12px 16px;background:var(--surface-alt);}
-/* -- Existing card styles (preserved) -- */
-.task-card{display:flex;gap:16px;justify-content:space-between;background:var(--surface-alt);border:1px solid var(--border);border-left:3px solid #E8571F;border-radius:8px;padding:16px 20px;margin-bottom:10px;transition:opacity 0.25s ease,transform 0.25s ease;}
-.task-card.exiting{opacity:0;transform:translateX(40px);}
-.task-content{flex:1;min-width:0;font-family:var(--font-m);font-size:13px;line-height:1.6;color:var(--text);word-break:break-word;}
-.task-actions{display:flex;gap:8px;flex-shrink:0;align-items:flex-start;}
-a.task-link{background:rgba(232,87,31,.12);color:#F8C830;border:1px solid rgba(248,200,48,.25);border-radius:5px;padding:4px 10px;font-size:12px;font-family:var(--font-m);text-decoration:none;display:inline-block;}
-a.task-link:hover{background:rgba(232,87,31,.22);}
-.btn-copy{background:rgba(107,114,128,.12);color:var(--muted);border:1px solid rgba(107,114,128,.2);border-radius:6px;padding:5px 14px;font-family:var(--font-d);font-weight:700;font-size:11px;cursor:pointer;transition:background 150ms,color 150ms;white-space:nowrap;}
-.btn-copy:hover{background:rgba(107,114,128,.22);}
-.btn-copy.copied{background:rgba(34,197,94,.12);color:var(--green);border-color:rgba(34,197,94,.3);}
-.btn-done{background:rgba(34,197,94,.12);color:var(--green);border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:5px 14px;font-family:var(--font-d);font-weight:700;font-size:11px;cursor:pointer;transition:background 150ms;white-space:nowrap;}
-.btn-done:hover{background:rgba(34,197,94,.22);}
-.btn-done:disabled{opacity:.5;cursor:not-allowed;}
-.appr-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid #22c55e;border-radius:8px;padding:18px;margin-bottom:14px;position:relative;}
-.appr-title{font-family:var(--font-d);font-weight:700;font-size:14px;color:var(--text);margin-bottom:8px;}
-.appr-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
-.appr-meta{font-family:var(--font-m);font-size:11px;color:var(--muted);}
-.appr-asset-link,.appr-notion-link{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);text-decoration:none;}
-.appr-asset-link:hover,.appr-notion-link:hover{text-decoration:underline;}
-.appr-notion-link{color:var(--muted);}
-.appr-campaign{font-family:var(--font-d);font-size:11px;font-weight:600;color:var(--gold);background:rgba(248,200,48,.1);border-radius:4px;padding:2px 8px;}
-.appr-copy{font-family:var(--font-m);font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word;}
-.appr-actions{display:flex;gap:10px;margin-top:14px;}
-.btn-approve{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);border-radius:6px;padding:7px 20px;font-family:var(--font-d);font-weight:700;font-size:12px;cursor:pointer;transition:background 150ms;}
-.btn-approve:hover{background:rgba(34,197,94,.25);}
-.btn-archive{background:rgba(107,114,128,.1);color:var(--muted);border:1px solid rgba(107,114,128,.2);border-radius:6px;padding:7px 20px;font-family:var(--font-d);font-weight:700;font-size:12px;cursor:pointer;transition:background 150ms;}
-.btn-archive:hover{background:rgba(107,114,128,.2);}
-.btn-approve:disabled,.btn-archive:disabled{opacity:.5;cursor:not-allowed;}
-.appr-error{display:none;color:var(--red);font-size:11px;margin-top:8px;}
-.toast-success{position:absolute;top:12px;right:14px;background:var(--green);color:#000;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;font-family:var(--font-d);}
-.task-hub-done{text-align:center;padding:80px 40px;}
-.task-hub-done-icon{font-size:48px;margin-bottom:16px;}
-.task-hub-done-text{font-family:var(--font-d);font-size:22px;font-weight:700;color:var(--text);}
-.task-hub-done-sub{font-family:var(--font-m);font-size:14px;color:var(--muted);margin-top:8px;}
-.th-error-banner{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:14px 18px;margin-bottom:20px;font-family:var(--font-m);font-size:13px;color:#ef4444;line-height:1.5;}
-.th-refresh-footer{display:flex;align-items:center;justify-content:space-between;padding:14px 0;margin-top:20px;border-top:1px solid var(--border);}
-.th-refresh-ts{font-family:var(--font-m);font-size:12px;color:var(--muted);}
-.btn-refresh{background:rgba(248,200,48,.12);color:var(--gold);border:1px solid rgba(248,200,48,.25);border-radius:6px;padding:6px 16px;font-family:var(--font-d);font-weight:700;font-size:11px;cursor:pointer;transition:background 150ms;}
-.btn-refresh:hover{background:rgba(248,200,48,.22);}
-</style>"""
 
-    task_hub_js = """<script>
-(function(){
-  // Live badge update — keeps sidebar badge in sync after approve/archive/done
-  function _updateBadge(delta) {
-    var badge = document.getElementById('th-badge');
-    if (!badge) return;
-    var cur = parseInt(badge.textContent, 10) || 0;
-    var nv = Math.max(0, cur + delta);
-    if (nv > 0) {
-      badge.textContent = nv;
-    } else {
-      badge.remove();
+def _th_render_fb_card(item: dict) -> str:
+    pid = item.get("id") or ""
+    group_name = item.get("group") or item.get("title") or "(untitled)"
+    final_copy = item.get("final_copy") or ""
+    # Preserve double-newline paragraph breaks in HTML display (per feedback_fb_paragraph_spacing)
+    copy_html = _th_escape(final_copy).replace("\n\n", "<br><br>").replace("\n", "<br>")
+    image_url = item.get("image_url") or ""
+    status = (item.get("status") or "Ready").strip()
+    group_url = item.get("group_url") or ""
+
+    badge = (
+        '<span class="badge done">' + _th_escape(status) + '</span>'
+        if status.lower() in ("posted", "sent", "done")
+        else '<span class="badge pending">' + _th_escape(status) + '</span>'
+    )
+    # Fall back to Facebook group search when no direct URL
+    if group_url:
+        open_label = "Open group ↗"
+    else:
+        group_url = "https://www.facebook.com/search/groups/?q=" + urllib.parse.quote(group_name)
+        open_label = "Search Facebook ↗"
+    thumb = (
+        f'<div class="thumb thumb-fb" style="background-image:url(\'{_th_escape(image_url)}\');background-size:cover;background-position:center"></div>'
+        if image_url else
+        f'<div class="thumb thumb-fb">{_TH_SVG_IMAGE}</div>'
+    )
+    open_link = f'<a href="{_th_escape(group_url)}" target="_blank" rel="noopener" style="color:var(--cyan);font-size:11px">{_TH_SVG_EXTLINK} {open_label}</a>'
+    return f"""
+    <div class="card" data-id="{_th_escape(pid)}">
+      <div class="head">
+        <div style="flex:1">
+          <div class="fb-group-name">{_th_escape(group_name)}</div>
+          <div class="meta">{open_link}</div>
+        </div>
+        {badge}
+      </div>
+      {thumb}
+      <div class="copy-preview">{copy_html}</div>
+      <div class="row-actions">
+        <button type="button" onclick="thCopyText(this,{json.dumps(final_copy)})">{_TH_SVG_CLIPBOARD} Copy text</button>
+        <button type="button" class="primary" onclick="thFbPosted('{_th_escape(pid)}',this)">{_TH_SVG_CHECK} Mark posted</button>
+      </div>
+    </div>
+    """
+
+
+def _th_render_quora_card(item: dict) -> str:
+    pid = item.get("id") or ""
+    q = item.get("question") or "(untitled question)"
+    topic = item.get("topic") or ""
+    url = item.get("url") or ""
+    status = (item.get("status") or "Draft").strip()
+    badge = (
+        '<span class="badge done">' + _th_escape(status) + '</span>'
+        if status.lower() in ("posted", "answered", "published")
+        else '<span class="badge pending">' + _th_escape(status) + '</span>'
+    )
+    link_html = (
+        f'<a href="{_th_escape(url)}" target="_blank" rel="noopener" style="color:var(--cyan);font-size:11px">{_TH_SVG_EXTLINK} Open on Quora</a>'
+        if url else ""
+    )
+    return f"""
+    <div class="card" data-id="{_th_escape(pid)}">
+      <div class="head">
+        <div style="flex:1">
+          <div class="question-title">{_th_escape(q)}</div>
+          <div class="meta">{_th_escape(topic) or 'Quora'} {link_html}</div>
+        </div>
+        {badge}
+      </div>
+      <div class="row-actions">
+        <button type="button" class="primary" onclick="thQuoraPosted('{_th_escape(pid)}',this)">{_TH_SVG_CHECK} Mark posted</button>
+      </div>
+    </div>
+    """
+
+
+def _th_render_linkedin_card(item: dict) -> str:
+    pid = item.get("id") or ""
+    name = item.get("name") or "(unknown)"
+    company = item.get("company") or ""
+    role = item.get("role") or ""
+    full_msg = item.get("note") or ""
+    note = _th_truncate(full_msg, 220)
+    url = item.get("url") or ""
+    status = (item.get("status") or "Draft").strip()
+    initials = "".join([w[0] for w in name.split()[:2] if w])[:2].upper() or "?"
+    badge = (
+        '<span class="badge sent">' + _th_escape(status) + '</span>'
+        if status.lower() in ("sent", "connected", "replied")
+        else '<span class="badge pending">' + _th_escape(status) + '</span>'
+    )
+    link_html = (
+        f'<a href="{_th_escape(url)}" target="_blank" rel="noopener" style="color:var(--cyan);font-size:11px">{_TH_SVG_EXTLINK} Profile</a>'
+        if url else ""
+    )
+    msg_block = (
+        f'<div class="li-msg-wrap">'
+        f'<button type="button" class="li-copy-icon" onclick="thCopyIcon(this,{json.dumps(full_msg)})"'
+        f' aria-label="Copy message" title="Copy message">{_TH_SVG_CLIPBOARD}</button>'
+        f'<div class="copy-preview">{_th_escape(note)}</div>'
+        f'</div>'
+        if full_msg else ""
+    )
+    return f"""
+    <div class="card" data-id="{_th_escape(pid)}">
+      <div class="head">
+        <div class="linkedin-head" style="flex:1">
+          <div class="avatar">{_th_escape(initials)}</div>
+          <div>
+            <div class="linkedin-name">{_th_escape(name)}</div>
+            <div class="linkedin-role">{_th_escape(role)}{(' · ' + _th_escape(company)) if company else ''}</div>
+            <div class="meta">{link_html}</div>
+          </div>
+        </div>
+        {badge}
+      </div>
+      {msg_block}
+      <div class="row-actions">
+        <button type="button" class="primary" onclick="thLinkedinSent('{_th_escape(pid)}',this)">{_TH_SVG_CHECK} Mark sent</button>
+      </div>
+    </div>
+    """
+
+
+def render_task_hub_tabbed(data: dict) -> str:
+    """Render the 4-pane Task Hub dashboard from assembled data."""
+    reels = data.get("reels") or []
+    fb = data.get("fb") or []
+    quora = data.get("quora") or []
+    linkedin = data.get("linkedin") or []
+    date_str = data.get("date") or _today_sast_str()
+    total = len(reels) + len(fb) + len(quora) + len(linkedin)
+    try:
+        pretty_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A %d %B %Y")
+    except Exception:
+        pretty_date = date_str
+
+    reel_cards = "\n".join(_th_render_reel_card(k, date_str) for k in reels) or '<div class="meta" style="padding:24px;text-align:center">No reel kits scanned for today.</div>'
+    fb_cards = "\n".join(_th_render_fb_card(i) for i in fb) or '<div class="meta" style="padding:24px;text-align:center">No FB group posts scheduled for today.</div>'
+    quora_cards = "\n".join(_th_render_quora_card(i) for i in quora) or '<div class="meta" style="padding:24px;text-align:center">No Quora drafts pending.</div>'
+    linkedin_cards = "\n".join(_th_render_linkedin_card(i) for i in linkedin) or '<div class="meta" style="padding:24px;text-align:center">No LinkedIn targets open.</div>'
+
+    css = """
+    <style>
+      .th-root{color:var(--text);font-family:var(--font-b);font-size:14px;line-height:1.6;min-height:100vh;padding:16px 20px;box-sizing:border-box}
+      .th-root *{box-sizing:border-box}
+      .th-root .th-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap}
+      .th-root .th-h1{font-size:18px;font-weight:600;letter-spacing:-0.01em;margin:0;color:var(--text);display:flex;align-items:center;gap:8px;font-family:var(--font-b)}
+      .th-root .th-sync-pill{font-family:var(--font-m,var(--font-b));font-size:12px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:4px 10px}
+      /* v3: Task Hub KPIs now share the softer (0.45) global gradient top-line */
+      .th-root .kpi-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
+      .th-root .kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;position:relative;overflow:hidden;transition:all .18s var(--trans)}
+      .th-root .kpi:hover{border-color:rgba(248,200,48,.25);background:var(--surface)}
+      .th-root .kpi-lbl{font-size:10px;font-family:var(--font-d);font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+      .th-root .kpi-val{font-size:26px;font-family:var(--font-d);font-weight:700;line-height:1;color:var(--text)}
+      .th-root .kpi-val.c-gold{color:var(--gold);text-shadow:0 0 18px rgba(248,200,48,.22)}
+      .th-root .kpi-val.c-green{color:var(--green);text-shadow:0 0 14px rgba(34,197,94,.2)}
+      .th-root .kpi-val.c-text{color:var(--text)}
+      .th-root .kpi-sub{font-size:11px;font-family:var(--font-m);color:var(--muted);margin-top:6px}
+      @media(max-width:1000px){.th-root .kpi-strip{grid-template-columns:repeat(3,1fr)}}
+      @media(max-width:600px){.th-root .kpi-strip{grid-template-columns:repeat(2,1fr)}}
+      .th-root .tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);padding:0 4px;background:transparent;margin-bottom:16px}
+      .th-root .tab{padding:12px 18px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;font-size:13px;font-family:var(--font-b);display:flex;align-items:center;gap:8px;user-select:none;transition:all .18s var(--trans)}
+      .th-root .tab:hover{color:var(--text)}
+      .th-root .tab.active{color:var(--gold);border-bottom-color:var(--gold)}
+      .th-root .tab .count{background:var(--surface-alt);padding:2px 8px;border-radius:10px;font-size:11px;color:var(--muted);border:1px solid var(--border)}
+      .th-root .tab.active .count{background:rgba(248,200,48,.14);color:var(--gold);border-color:rgba(248,200,48,.3)}
+      .th-root main{padding:0}
+      .th-root .pane{display:none}
+      .th-root .pane.active{display:block}
+      .th-root .pane-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:16px}
+      .th-root .pane-title{font-family:var(--font-d);font-size:15px;font-weight:600;color:var(--text)}
+      .th-root .pane-sub{color:var(--muted);font-size:12px;margin-top:3px}
+      .th-root button{background:var(--surface-alt);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:var(--r);font-size:12px;cursor:pointer;font-family:var(--font-b);display:inline-flex;align-items:center;gap:6px;transition:all .18s var(--trans)}
+      .th-root button:hover{border-color:var(--gold);background:var(--surface)}
+      .th-root button.primary{background:var(--grad);color:#0A0A0A;border-color:transparent;font-weight:600}
+      .th-root button.primary:hover{filter:brightness(1.08)}
+      .th-root .grid{display:grid;gap:14px}
+      .th-root .grid.reels{grid-template-columns:repeat(3,1fr)}
+      .th-root .grid.fb{grid-template-columns:repeat(2,1fr)}
+      .th-root .grid.quora{grid-template-columns:1fr}
+      .th-root .grid.linkedin{grid-template-columns:repeat(2,1fr)}
+      @media (max-width:1100px){.th-root .grid.reels,.th-root .grid.fb,.th-root .grid.linkedin{grid-template-columns:1fr}}
+      .th-root .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--glow);transition:all .18s var(--trans);position:relative;overflow:hidden}
+      .th-root .card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.45;pointer-events:none;z-index:1}
+      .th-root .card:hover{border-color:rgba(248,200,48,.3);box-shadow:var(--glow-hover)}
+      .th-root .card:hover::before{opacity:0.7}
+      .th-root .card .head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+      .th-root .badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;font-family:var(--font-b)}
+      .th-root .badge.gold{background:rgba(248,200,48,.14);color:var(--gold);border:1px solid rgba(248,200,48,.3)}
+      .th-root .badge.silver{background:rgba(245,245,245,.08);color:var(--text);border:1px solid var(--border)}
+      .th-root .badge.diamond{background:rgba(248,200,48,.14);color:var(--gold);border:1px solid rgba(248,200,48,.3)}
+      .th-root .badge.done{background:rgba(34,197,94,.14);color:var(--green);border:1px solid rgba(34,197,94,.3)}
+      .th-root .badge.pending{background:rgba(245,158,11,.14);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+      .th-root .badge.sent{background:rgba(34,197,94,.14);color:var(--green);border:1px solid rgba(34,197,94,.3)}
+      .th-root .meta{color:var(--muted);font-size:12px}
+      .th-root .meta strong{color:var(--text)}
+      .th-root .thumb{width:100%;aspect-ratio:925/1364;background:var(--surface-alt) center/cover no-repeat;border:1px solid var(--border);border-radius:var(--r);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;overflow:hidden;position:relative}
+      .th-root .thumb.thumb-real{background-size:cover;background-position:center;border-color:rgba(248,200,48,.3)}
+      .th-root .thumb.thumb-real .play{background:rgba(10,10,10,.55);color:#fff;backdrop-filter:blur(4px)}
+      .th-root .thumb.bru{background:var(--grad);color:#0A0A0A;font-weight:600;font-size:13px;gap:6px;border-color:transparent}
+      .th-root .thumb .play{width:36px;height:36px;border-radius:50%;background:rgba(245,245,245,.9);color:var(--carbon);display:flex;align-items:center;justify-content:center;position:absolute;inset:0;margin:auto}
+      .th-root .thumb-fb{aspect-ratio:1/1}
+      .th-root .copy-preview{background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-size:12px;color:var(--muted);line-height:1.55;max-height:80px;overflow:hidden;position:relative}
+      .th-root .copy-preview::after{content:'';position:absolute;bottom:0;left:0;right:0;height:20px;background:linear-gradient(180deg,transparent,var(--surface-alt))}
+      .th-root .row-actions{display:flex;gap:6px;flex-wrap:wrap}
+      .th-root .row-actions button{font-size:11px;padding:5px 10px}
+      .th-root .upload-zone{border:1px dashed rgba(248,200,48,.5);border-radius:var(--r);padding:10px;text-align:center;color:var(--gold);font-size:11px;cursor:pointer;position:relative;transition:all .18s var(--trans)}
+      .th-root .upload-zone:hover{background:rgba(248,200,48,.05);border-color:var(--gold)}
+      .th-root .upload-zone.done{border-color:var(--green);color:var(--green);border-style:solid;background:rgba(34,197,94,.06)}
+      .th-root .upload-zone.dragover{background:rgba(248,200,48,.10)}
+      .th-root .upload-zone.uploading{opacity:.65;cursor:wait}
+      .th-root .question-title{font-family:var(--font-d);font-size:14px;font-weight:600;margin-bottom:4px;color:var(--text)}
+      .th-root .linkedin-head{display:flex;gap:12px;align-items:center}
+      .th-root .avatar{width:42px;height:42px;border-radius:50%;background:var(--grad);display:flex;align-items:center;justify-content:center;color:#0A0A0A;font-family:var(--font-d);font-weight:700;font-size:15px;flex-shrink:0}
+      .th-root .linkedin-name{font-size:13px;font-weight:600;color:var(--text)}
+      .th-root .linkedin-role{color:var(--muted);font-size:11px}
+      .th-root .li-msg-wrap{position:relative}
+      .th-root .li-copy-icon{position:absolute;top:6px;right:6px;z-index:1;background:none;border:none;cursor:pointer;padding:4px;color:var(--muted);opacity:.45;border-radius:4px;display:flex;align-items:center;justify-content:center;line-height:1;transition:opacity .15s}
+      .th-root .li-copy-icon:hover{opacity:1;background:var(--surface)}
+      .th-root .fb-group-name{font-size:12px;color:var(--gold);font-weight:600;margin-bottom:2px}
+      .th-root a{color:var(--gold);text-decoration:none}
+      .th-root a:hover{text-decoration:underline}
+    </style>
+    """
+
+    js = """
+    <script>
+    (function(){
+      var root = document.getElementById('th-root');
+      if(!root) return;
+      // Tab switching
+      root.querySelectorAll('.tab').forEach(function(t){
+        t.addEventListener('click', function(){
+          var key = t.getAttribute('data-tab');
+          root.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active');});
+          root.querySelectorAll('.pane').forEach(function(x){x.classList.remove('active');});
+          t.classList.add('active');
+          var pane = root.querySelector('.pane[data-pane="'+key+'"]');
+          if(pane) pane.classList.add('active');
+        });
+      });
+      // Upload zones (reel masters)
+      root.querySelectorAll('.upload-zone[data-pick]').forEach(function(zone){
+        var input = zone.querySelector('input[type=file]');
+        zone.addEventListener('click', function(){ if(input) input.click(); });
+        zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('dragover'); });
+        zone.addEventListener('dragleave', function(){ zone.classList.remove('dragover'); });
+        zone.addEventListener('drop', function(e){
+          e.preventDefault();
+          zone.classList.remove('dragover');
+          var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+          if(f) thReelUpload(zone, f);
+        });
+        if(input){
+          input.addEventListener('change', function(){
+            if(input.files && input.files[0]) thReelUpload(zone, input.files[0]);
+          });
+        }
+      });
+    })();
+
+    function thReelDownload(date, pick){
+      fetch('/admin/api/reel-download', {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({date:date, pick_id:pick})})
+        .then(function(r){ if(!r.ok) throw new Error('download failed'); return r.blob(); })
+        .then(function(b){
+          var url = URL.createObjectURL(b);
+          var a = document.createElement('a'); a.href = url; a.download = 'reel_'+pick+'.zip';
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(url); }, 500);
+        })
+        .catch(function(err){ alert('Download failed: '+err.message); });
     }
-  }
 
-  function updateSectionProgress(sectionEl) {
-    var pt = sectionEl.querySelector('.progress-text');
-    var pf = sectionEl.querySelector('.progress-fill');
-    if (!pt || !pf) return;
-    var total = parseInt(pt.dataset.total, 10);
-    var done = parseInt(pt.dataset.done, 10) + 1;
-    pt.dataset.done = done;
-    pt.textContent = done + ' / ' + total + ' done';
-    var pct = total > 0 ? Math.round(done * 100 / total) : 0;
-    pf.style.width = pct + '%';
-    if (done >= total) {
-      setTimeout(function() {
-        sectionEl.style.transition = 'opacity 0.3s';
-        sectionEl.style.opacity = '0';
-        setTimeout(function() {
-          sectionEl.remove();
-          checkAllComplete();
-        }, 300);
-      }, 500);
+    function thReelVO(date, pick){
+      var url = '/admin/social-ops/asset/' + encodeURIComponent('reel-cards/'+date+'/'+pick+'/vo_'+pick+'_v1.mp3');
+      var a = new Audio(url);
+      a.play().catch(function(){ window.open(url, '_blank'); });
     }
-  }
 
-  function checkAllComplete() {
-    var secs = document.querySelectorAll('.th-section-block');
-    var apprCards = document.querySelectorAll('.appr-card');
-    if (secs.length === 0 && apprCards.length === 0) {
-      var content = document.querySelector('.task-hub-content');
-      if (content) {
-        var now = new Date();
-        var ts = now.toLocaleString('en-ZA', {timeZone:'Africa/Johannesburg', hour12:false});
-        content.innerHTML = '<div class="task-hub-done"><div class="task-hub-done-icon">&#9989;</div>'
-          + '<div class="task-hub-done-text">Task Hub clear.</div>'
-          + '<div class="task-hub-done-sub">Nothing needs your attention right now. Last checked ' + ts + ' SAST.</div></div>';
+    function thReelUpload(zone, file){
+      if(!file) return;
+      zone.classList.add('uploading');
+      var pick = zone.getAttribute('data-pick');
+      var date = zone.getAttribute('data-date');
+      var fd = new FormData();
+      fd.append('file', file);
+      fd.append('pick_id', pick);
+      fd.append('date', date);
+      fetch('/admin/api/task-hub/reel/'+encodeURIComponent(pick)+'/upload', {method:'POST', body: fd, credentials:'same-origin'})
+        .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, body:j}; }); })
+        .then(function(res){
+          zone.classList.remove('uploading');
+          if(res.ok && res.body && res.body.ok){
+            zone.classList.add('done');
+            zone.textContent = 'Uploaded \u2713 queued to MOQ';
+          } else {
+            alert('Upload failed');
+          }
+        })
+        .catch(function(err){
+          zone.classList.remove('uploading');
+          alert('Upload error: '+err.message);
+        });
+    }
+
+    function thCopyText(btn, text){
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(function(){
+          var old = btn.innerHTML; btn.innerHTML = 'Copied'; setTimeout(function(){ btn.innerHTML = old; }, 1200);
+        });
+      } else {
+        var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+        ta.select(); try { document.execCommand('copy'); } catch(e){}
+        document.body.removeChild(ta);
       }
     }
-  }
 
-  // Done buttons (task cards)
-  document.querySelectorAll('.btn-done').forEach(function(btn){
-    btn.addEventListener('click', function(){
-      var blockId = this.dataset.blockId;
-      var card = this.closest('.task-card');
-      var sectionEl = card ? card.closest('.th-section-block') : null;
+    function thCopyIcon(btn, text){
+      var svgCheck = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      var old = btn.innerHTML;
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(function(){
+          btn.innerHTML = svgCheck; btn.style.opacity='1'; btn.style.color='#22c55e';
+          setTimeout(function(){ btn.innerHTML = old; btn.style.opacity=''; btn.style.color=''; }, 1500);
+        }).catch(function(){ thCopyText(btn, text); });
+      } else { thCopyText(btn, text); }
+    }
+
+    function _thMarkPostedGeneric(url, btn, card){
       btn.disabled = true;
-      fetch('/admin/api/done-block', {
-        method: 'POST', credentials: 'same-origin',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({block_id: blockId})
-      }).then(function(r){
-        if (r.ok) {
-          _updateBadge(-1);
-          card.classList.add('exiting');
-          setTimeout(function(){
-            card.remove();
-            if (sectionEl) updateSectionProgress(sectionEl);
-          }, 260);
-        } else { btn.disabled = false; }
-      }).catch(function(){ btn.disabled = false; });
-    });
-  });
+      fetch(url, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:'{}'})
+        .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, body:j}; }); })
+        .then(function(res){
+          if(res.ok && res.body && res.body.ok){
+            if(card){ card.style.opacity='0.4'; }
+            btn.innerHTML = 'Posted';
+          } else {
+            btn.disabled = false;
+            alert('Update failed');
+          }
+        })
+        .catch(function(err){
+          btn.disabled = false;
+          alert('Error: '+err.message);
+        });
+    }
 
-  // Copy buttons
-  document.querySelectorAll('.btn-copy').forEach(function(btn){
-    btn.addEventListener('click', function(){
-      var text = this.dataset.text;
-      var self = this;
-      navigator.clipboard.writeText(text).then(function(){
-        self.textContent = 'Copied \u2714';
-        self.classList.add('copied');
-        setTimeout(function(){
-          self.textContent = 'Copy';
-          self.classList.remove('copied');
-        }, 1500);
-      }).catch(function(){});
-    });
-  });
+    function thFbPosted(pid, btn){
+      var card = btn.closest('.card');
+      _thMarkPostedGeneric('/admin/api/task-hub/fb/'+encodeURIComponent(pid)+'/posted', btn, card);
+    }
+    function thQuoraPosted(pid, btn){
+      var card = btn.closest('.card');
+      _thMarkPostedGeneric('/admin/api/task-hub/quora/'+encodeURIComponent(pid)+'/posted', btn, card);
+    }
+    function thLinkedinSent(pid, btn){
+      var card = btn.closest('.card');
+      _thMarkPostedGeneric('/admin/api/task-hub/linkedin/'+encodeURIComponent(pid)+'/sent', btn, card);
+    }
+    </script>
+    """
 
-  // Approve / Archive (Approve Posts section)
-  document.querySelectorAll('.btn-approve,.btn-archive').forEach(function(btn){
-    btn.addEventListener('click', function(){
-      var id = this.dataset.id;
-      var isApprove = this.classList.contains('btn-approve');
-      var newStatus = isApprove ? 'Approved' : 'Archived';
-      var card = document.getElementById('th-appr-' + id);
-      var errEl = card.querySelector('.appr-error');
-      var allBtns = card.querySelectorAll('.btn-approve,.btn-archive');
-      allBtns.forEach(function(b){ b.disabled = true; });
-      fetch('/admin/api/notion/patch', {
-        method: 'POST', credentials: 'same-origin',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({page_id: id, status: newStatus})
-      }).then(function(r){
-        if (r.ok) {
-          _updateBadge(-1);
-          card.style.transition = 'opacity 0.4s';
-          card.style.opacity = '0.4';
-          var toast = document.createElement('div');
-          toast.className = 'toast-success';
-          toast.textContent = newStatus + ' \u2714';
-          card.appendChild(toast);
-          setTimeout(function(){
-            card.remove();
-            checkAllComplete();
-          }, 700);
-        } else {
-          errEl.textContent = 'Error updating Notion \u2014 try again';
-          errEl.style.display = 'block';
-          allBtns.forEach(function(b){ b.disabled = false; });
-        }
-      }).catch(function(){
-        errEl.textContent = 'Network error \u2014 try again';
-        errEl.style.display = 'block';
-        allBtns.forEach(function(b){ b.disabled = false; });
-      });
-    });
-  });
-
-  // Refresh Now button — bypasses cache by hitting API endpoint with bust param
-  var refreshBtn = document.getElementById('th-refresh-btn');
-  if (refreshBtn) {
-    refreshBtn.addEventListener('click', function(){
-      refreshBtn.disabled = true;
-      refreshBtn.textContent = 'Refreshing...';
-      fetch('/admin/api/task_hub_refresh', {method:'POST', credentials:'same-origin'})
-        .then(function(){ window.location.reload(); })
-        .catch(function(){ window.location.reload(); });
-    });
-  }
-})();
-</script>"""
-
-    topbar = f"""<nav class="topbar">
-  <div class="topbar-left"><div class="topbar-pill">Task Hub</div></div>
-  <div class="topbar-right"><div class="topbar-meta">Updated <em>{updated} SAST</em></div></div>
-</nav>"""
-
-    # Last-refreshed footer with Refresh Now button
-    refresh_footer = f"""<div class="th-refresh-footer">
-  <span class="th-refresh-ts">Last refreshed: {updated} SAST</span>
-  <button class="btn-refresh" id="th-refresh-btn">Refresh now</button>
-</div>"""
-
-    return f"""{task_hub_css}
-{topbar}
-<div class="page">
-  {error_banner}
-  {page_body}
-  {refresh_footer}
+    workstreams = sum(1 for c in (reels, fb, quora, linkedin) if c)
+    return f"""
+<div id="th-root" class="th-root">
+{css}
+<div class="th-topbar">
+  <h1 class="th-h1">Task Hub</h1>
+  <span class="th-sync-pill">{_th_escape(pretty_date)} · {workstreams} workstreams · {total} items open</span>
 </div>
-{task_hub_js}"""
+<div class="kpi-strip">
+  <div class="kpi"><div class="kpi-lbl">Reel kits</div><div class="kpi-val c-gold">{len(reels)}</div><div class="kpi-sub">to produce</div></div>
+  <div class="kpi"><div class="kpi-lbl">FB group posts</div><div class="kpi-val c-text">{len(fb)}</div><div class="kpi-sub">scheduled today</div></div>
+  <div class="kpi"><div class="kpi-lbl">Quora drafts</div><div class="kpi-val c-text">{len(quora)}</div><div class="kpi-sub">ready to post</div></div>
+  <div class="kpi"><div class="kpi-lbl">LinkedIn targets</div><div class="kpi-val c-text">{len(linkedin)}</div><div class="kpi-sub">open</div></div>
+  <div class="kpi"><div class="kpi-lbl">Total open</div><div class="kpi-val c-green">{total}</div><div class="kpi-sub">items</div></div>
+</div>
+<nav class="tabs">
+  <div class="tab active" data-tab="reels">Reel Kits <span class="count">{len(reels)}</span></div>
+  <div class="tab" data-tab="fb">FB Group Posts <span class="count">{len(fb)}</span></div>
+  <div class="tab" data-tab="quora">Quora Answers <span class="count">{len(quora)}</span></div>
+  <div class="tab" data-tab="linkedin">LinkedIn Connections <span class="count">{len(linkedin)}</span></div>
+</nav>
+<main>
+  <section class="pane active" data-pane="reels">
+    <div class="pane-header">
+      <div>
+        <div class="pane-title">Reel Kits — ready for production</div>
+        <div class="pane-sub">Download kit · produce .mp4 in Premiere · upload master → auto-publishes to IG + TikTok</div>
+      </div>
+    </div>
+    <div class="grid reels">{reel_cards}</div>
+  </section>
+  <section class="pane" data-pane="fb">
+    <div class="pane-header">
+      <div>
+        <div class="pane-title">FB Group Posts — scheduled for today</div>
+        <div class="pane-sub">Copy text · post to the group · mark done when live</div>
+      </div>
+    </div>
+    <div class="grid fb">{fb_cards}</div>
+  </section>
+  <section class="pane" data-pane="quora">
+    <div class="pane-header">
+      <div>
+        <div class="pane-title">Quora Answers — drafts ready to post</div>
+        <div class="pane-sub">Open on Quora · post the draft · mark done</div>
+      </div>
+    </div>
+    <div class="grid quora">{quora_cards}</div>
+  </section>
+  <section class="pane" data-pane="linkedin">
+    <div class="pane-header">
+      <div>
+        <div class="pane-title">LinkedIn Connections — outreach queue</div>
+        <div class="pane-sub">Open profile · send connect/message · mark sent</div>
+      </div>
+    </div>
+    <div class="grid linkedin">{linkedin_cards}</div>
+  </section>
+</main>
+</div>
+{js}
+"""
 
 
 # -- System Health data builders ----------------------------------------------
@@ -5072,6 +5762,16 @@ def _perf_css() -> str:
   /* Empty state */
   .perf-empty { padding:48px 24px; text-align:center; color:var(--muted);
     font-family:var(--font-m); font-size:13px; }
+  /* Performance scope — one-line KPI strip + gradient top line on every panel */
+  .perf-scope .kpi-strip { grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 16px; }
+  .perf-scope .kpi { padding: 10px 12px; }
+  .perf-scope .kpi-lbl { font-size: 9px; margin-bottom: 6px; }
+  .perf-scope .kpi-val { font-size: 20px; }
+  .perf-scope .kpi-sub { font-size: 10px; margin-top: 3px; }
+  .perf-scope .panel { box-shadow: var(--glow); }
+  .perf-scope .panel::after { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:var(--grad); opacity:0.45; pointer-events:none; z-index:1; }
+  @media (max-width: 1200px) { .perf-scope .kpi-strip { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 700px)  { .perf-scope .kpi-strip { grid-template-columns: repeat(2, 1fr); } }
 """
 
 
@@ -5661,6 +6361,7 @@ def render_performance_content(conn) -> str:
     # ---- Assemble page ----
     return f"""
 <style>{_perf_css()}</style>
+<div class="perf-scope">
 <div class="topbar">
   <div class="topbar-left">
     <span class="topbar-pill">Edge Performance</span>
@@ -5705,6 +6406,7 @@ def render_performance_content(conn) -> str:
     {recent_table}
   </div>
   <div class="footer">MzansiEdge Admin · Edge Performance · {updated}</div>
+</div>
 </div>"""
 
 
@@ -6352,22 +7054,71 @@ def admin_health():
     return Response(html, mimetype="text/html")
 
 
+def _bg_refresh_social_ops() -> None:
+    try:
+        content = render_automation_content()
+        html_out = render_shell("social_ops", content)
+        with _page_cache_lock:
+            _page_cache["social_ops_full"] = (html_out, time.monotonic())
+    except Exception:
+        if _sentry is not None:
+            _sentry.capture_exception()
+    finally:
+        with _page_cache_lock:
+            _page_refresh_inflight.discard("social_ops_full")
+
+
+
+# --- v3 cache-control helper -----------------------------------------
+def _no_store(resp: 'Response') -> 'Response':
+    """Add headers so Paul's browser never serves a stale Task Hub /
+    Social Ops page. We use SWR in-process cache on the server side
+    already; the browser must always revalidate."""
+    try:
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+    except Exception:
+        pass
+    return resp
+
+
 @app.route("/admin/social-ops")
 @require_auth
 def admin_social_ops():
     now = time.monotonic()
+    should_refresh = False
     with _page_cache_lock:
         cached = _page_cache.get("social_ops_full")
-        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
-            return Response(cached[0], mimetype="text/html")
+        age = (now - cached[1]) if cached else None
+        if cached and age is not None and age < _PAGE_CACHE_SWR:
+            # Fresh enough to serve. If stale (past TTL) but within SWR window,
+            # kick off a single background refresh — never block the response.
+            if age >= _PAGE_CACHE_TTL and "social_ops_full" not in _page_refresh_inflight:
+                _page_refresh_inflight.add("social_ops_full")
+                should_refresh = True
+            payload = cached[0]
+        else:
+            payload = None
+
+    if should_refresh:
+        threading.Thread(
+            target=_bg_refresh_social_ops,
+            name="so-refresh",
+            daemon=True,
+        ).start()
+
+    if payload is not None:
+        request._cache_state = "swr-refresh" if should_refresh else "hit"
+        return _no_store(Response(payload, mimetype="text/html"))
 
     content = render_automation_content()
-    html = render_shell("social_ops", content)
+    html_out = render_shell("social_ops", content)
 
     with _page_cache_lock:
-        _page_cache["social_ops_full"] = (html, now)
+        _page_cache["social_ops_full"] = (html_out, now)
 
-    return Response(html, mimetype="text/html")
+    return _no_store(Response(html_out, mimetype="text/html"))
 
 
 @app.route("/admin/automation")
@@ -6388,25 +7139,17 @@ def admin_customers_redirect():
     return redirect("/admin/system", code=302)
 
 
-# -- Task Hub cache flush (Refresh Now button) --------------------------------
-
-@app.route("/admin/api/task_hub_refresh", methods=["POST"])
-@require_auth
-def api_task_hub_refresh():
-    """Flush Task Hub caches so the next load fetches fresh data from Notion."""
-    with _notion_cache_lock:
-        _notion_cache.pop("marketing_queue", None)
-        _notion_cache.pop("task_hub_blocks", None)
-    return Response('{"ok":true}', mimetype="application/json")
-
 
 @app.route("/admin/api/task_hub_badge")
 @require_auth
 def api_task_hub_badge():
-    """Return live Task Hub badge count (pending approvals + manual tasks)."""
+    """Return live badge count for Social Ops — only failed/blocked items."""
     try:
         mq, _ = _fetch_marketing_queue()
-        count = len(_get_awaiting_items(mq, include_overdue=False))
+        count = sum(
+            1 for it in mq
+            if (it.get("status") or "").lower().strip() in ("failed", "blocked", "error")
+        )
     except Exception:
         count = 0
     return Response(json.dumps({"count": count}), mimetype="application/json")
@@ -6421,7 +7164,8 @@ def api_health():
     with _page_cache_lock:
         cached = _page_cache.get("health_content")
         if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
-            return Response(cached[0], mimetype="text/html")
+            request._cache_state = "hit"
+            return _no_store(Response(cached[0], mimetype="text/html"))
 
     conn = db_connect(SCRAPERS_DB)
     db_status = "Connected" if conn else "Unreachable"
@@ -6434,7 +7178,7 @@ def api_health():
     with _page_cache_lock:
         _page_cache["health_content"] = (content, now)
 
-    return Response(content, mimetype="text/html")
+    return _no_store(Response(content, mimetype="text/html"))
 
 
 @app.route("/admin/api/automation")
@@ -6444,14 +7188,15 @@ def api_automation():
     with _page_cache_lock:
         cached = _page_cache.get("automation_content")
         if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
-            return Response(cached[0], mimetype="text/html")
+            request._cache_state = "hit"
+            return _no_store(Response(cached[0], mimetype="text/html"))
 
     content = render_automation_content()
 
     with _page_cache_lock:
         _page_cache["automation_content"] = (content, now)
 
-    return Response(content, mimetype="text/html")
+    return _no_store(Response(content, mimetype="text/html"))
 
 
 @app.route("/admin/api/social_ops")
@@ -6461,11 +7206,11 @@ def api_social_ops():
     with _page_cache_lock:
         cached = _page_cache.get("social_ops_content")
         if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
-            return Response(cached[0], mimetype="text/html")
+            return _no_store(Response(cached[0], mimetype="text/html"))
     content = render_automation_content()
     with _page_cache_lock:
         _page_cache["social_ops_content"] = (content, now)
-    return Response(content, mimetype="text/html")
+    return _no_store(Response(content, mimetype="text/html"))
 
 
 _SO_TL_CH = [
@@ -6515,6 +7260,64 @@ def _so_norm_channel(ch_raw: str) -> str:
     return _normalise_channel_key(ch_raw)
 
 
+_SO_COMPUTER_URL_RE = re.compile(
+    r"^computer://[^/]*/sessions/[^/]+/mnt/(?:MzansiEdge/)?assets/(.+)$"
+)
+
+
+def _resolve_media_url(raw: str) -> str:
+    """Translate an MOQ-stored URL into a browser-loadable URL.
+
+    MOQ "Image URL"/"Video URL"/"Asset URL" columns often contain Claude-session
+    paths (``computer:///sessions/<id>/mnt/MzansiEdge/assets/<sub>/<file>``) which
+    no browser can resolve — they render as black <img> boxes. This helper maps
+    the trailing ``<sub>/<file>`` segment onto the first existing file under
+    _SO_ASSET_ROOTS and returns a dashboard-served path. Real HTTP(S) URLs and
+    paths already rooted at '/' are passed through untouched. Unresolvable URLs
+    return "" so the frontend renders the text-only branch (no black box).
+    """
+    if not raw:
+        return ""
+    s = raw.strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if low.startswith(("http://", "https://", "//")):
+        return s
+    if s.startswith("/admin/social-ops/asset/") or s.startswith("/static/"):
+        return s
+    m = _SO_COMPUTER_URL_RE.match(s)
+    if not m:
+        return ""
+    rel = m.group(1).lstrip("/")
+    if ".." in rel.split("/"):
+        return ""
+    for root in _SO_ASSET_ROOTS:
+        candidate = os.path.normpath(os.path.join(root, rel))
+        if not candidate.startswith(os.path.normpath(root) + os.sep):
+            continue
+        if os.path.isfile(candidate):
+            return f"/admin/social-ops/asset/{rel}"
+    return ""
+
+
+def _so_extract_pick_id(item: dict) -> str:
+    """Best-effort pick_id extraction from a Notion MOQ item.
+
+    Looks at title + copy for a pick_id-shaped token (alnum + _/-, 6-40 chars).
+    Returns "" when nothing confidently matches.
+    """
+    for field in ("title", "copy", "campaign_theme", "platform_notes"):
+        text = item.get(field) or ""
+        if not text:
+            continue
+        for token in re.findall(r"\b([A-Za-z0-9][A-Za-z0-9_-]{5,39})\b", text):
+            if "_" in token or "-" in token:
+                if _RE_PICK_ID.match(token):
+                    return token
+    return ""
+
+
 def _so_platform_icon_svg(ck: str) -> str:
     """Inline SVG platform icon for the 7 publisher channels. 20×20, currentColor stroke."""
     _ICONS = {
@@ -6536,14 +7339,18 @@ def _so_platform_icon_svg(ck: str) -> str:
     return _ICONS.get(ck, "")
 
 
+_SO_OVERDUE_QUEUE_ST = {"pending", "ready", "queued"}
+
+
 def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> dict:
     """Build timeline + KPI payload for a given SAST day string (YYYY-MM-DD)."""
     cutoff24 = now_utc - timedelta(hours=24)
-    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue = 0
+    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue_queue = 0
     for it in items:
         st  = (it.get("status") or "").lower().strip()
         ts  = parse_ts(it.get("last_edited") or it.get("scheduled_time") or it.get("created") or "")
         sch = parse_ts(it.get("scheduled_time") or "")
+        rfa = (it.get("ready_for_automation") or "").lower().strip()
         if st in _SO_POSTED_ST:
             if ts and ts >= cutoff24:
                 kpi_posted += 1
@@ -6555,9 +7362,10 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
             kpi_queue += 1
             if st in _SO_PENDING_ST:
                 kpi_pending += 1
-            elif st in ("awaiting approval", "draft", "review", "in review", "awaiting"):
-                if sch and sch < now_utc:
-                    kpi_overdue += 1
+        if (st in _SO_OVERDUE_QUEUE_ST
+                and sch and sch < now_utc
+                and rfa in ("yes", "true", "1", "y")):
+            kpi_overdue_queue += 1
 
     now_sast = now_utc.astimezone(_SAST)
     now_mins = now_sast.hour * 60 + now_sast.minute if day_str == now_sast.strftime("%Y-%m-%d") else -1
@@ -6603,7 +7411,7 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
             "pending":     kpi_pending,
             "failed_24h":  kpi_failed,
             "queue_depth": kpi_queue,
-            "overdue":     kpi_overdue,
+            "overdue_queue_count": kpi_overdue_queue,
         },
     }
 
@@ -6631,6 +7439,61 @@ def api_so_timeline():
     return Response(json.dumps(payload), mimetype="application/json")
 
 
+def _build_so_queue(items: list[dict], now_utc: datetime, horizon_hours: int = 12) -> dict:
+    """Next `horizon_hours` of scheduled posts across all channels, sorted by scheduled time."""
+    horizon = now_utc + timedelta(hours=horizon_hours)
+    posts: list[dict] = []
+    for it in items:
+        st = (it.get("status") or "").lower().strip()
+        if st in _SO_POSTED_ST or st in _SO_FAILED_ST or st == "archived":
+            continue
+        sch = parse_ts(it.get("scheduled_time") or "")
+        if not sch or sch < now_utc or sch > horizon:
+            continue
+        ch_key = _so_norm_channel(it.get("channel") or "")
+        ss = sch.astimezone(_SAST)
+        raw_st = (it.get("status") or "").lower().strip()
+        disp_st = "queued" if raw_st == "approved" else raw_st
+        ch_meta = _CHANNEL_MAP.get(ch_key, {})
+        ch_label = next((lbl for (ck, lbl) in _SO_TL_CH if ck == ch_key), ch_meta.get("label", ""))
+        posts.append({
+            "id":               it.get("id", ""),
+            "title":            (it.get("title") or it.get("copy") or "")[:80],
+            "channel_key":      ch_key,
+            "channel":          it.get("channel") or "",
+            "channel_label":    ch_label,
+            "channel_color":    ch_meta.get("color", "#888888"),
+            "channel_icon_svg": _CHANNEL_SVG.get(ch_key, _so_platform_icon_svg(ch_key)),
+            "type":             it.get("work_type") or "",
+            "icon":             _so_icon_for(it.get("work_type") or "", ch_key),
+            "status":           disp_st,
+            "sched":            ss.strftime("%a %H:%M"),
+            "sched_full":       _render_sast(sch),
+            "sched_iso":        sch.astimezone(_SAST).isoformat(),
+            "mins_until":       int((sch - now_utc).total_seconds() // 60),
+        })
+    posts.sort(key=lambda p: p["sched_iso"])
+    return {
+        "horizon_hours": horizon_hours,
+        "count":         len(posts),
+        "posts":         posts,
+    }
+
+
+@app.route("/admin/api/social-ops/queue")
+@require_auth
+def api_so_queue():
+    now_utc = datetime.now(timezone.utc)
+    try:
+        horizon = int(request.args.get("hours", "12"))
+    except ValueError:
+        horizon = 12
+    horizon = max(1, min(horizon, 72))
+    items, _ = _fetch_marketing_queue()
+    payload = _build_so_queue(items, now_utc, horizon)
+    return _no_store(Response(json.dumps(payload), mimetype="application/json"))
+
+
 @app.route("/admin/api/social-ops/post/<post_id>")
 @require_auth
 def api_so_post(post_id: str):
@@ -6654,16 +7517,62 @@ def api_so_post(post_id: str):
             caption_lines.append(stripped)
     caption = "\n".join(caption_lines).strip()
 
-    asset = item.get("asset_link") or ""
-    media_urls = [asset] if asset else []
+    explicit_image = item.get("image_url") or ""
+    explicit_video = item.get("video_url") or ""
+    asset = item.get("asset_link") or item.get("asset_url") or item.get("media_url") or ""
+
+    channel_key = _so_norm_channel(item.get("channel") or "")
+    is_vertical = channel_key in ("instagram", "tiktok")
+
+    image_url = ""
+    video_url = ""
+
+    if explicit_video:
+        video_url = explicit_video
+    if explicit_image:
+        image_url = explicit_image
+
+    if not video_url and not image_url and asset:
+        asset_lower = asset.lower()
+        if asset_lower.endswith((".mp4", ".mov", ".webm", ".m4v")):
+            video_url = asset
+        elif asset_lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+            image_url = asset
+        else:
+            image_url = asset
+
+    if is_vertical and not video_url and sdt:
+        pick_id = _so_extract_pick_id(item)
+        if pick_id:
+            date_str = sdt.astimezone(_SAST).strftime("%Y-%m-%d")
+            master_rel = f"{date_str}/{pick_id}_master.mp4"
+            master_path = os.path.join(_REEL_MASTERS_ROOT, master_rel)
+            if os.path.isfile(master_path):
+                video_url = f"{_REEL_PUBLIC_BASE}/{master_rel}"
+
+    # Resolve computer:// and other unservable schemes to dashboard-served
+    # paths. Drops URLs we cannot serve so the frontend renders text-only
+    # instead of a black box.
+    image_url = _resolve_media_url(image_url)
+    video_url = _resolve_media_url(video_url)
+
+    media_urls = [u for u in (video_url, image_url) if u]
+
+    if video_url or image_url:
+        media_aspect = "9:16" if is_vertical else "16:9"
+    else:
+        media_aspect = None
 
     payload = {
         "id":            post_id,
         "channel":       item.get("channel") or "",
-        "channel_key":   _so_norm_channel(item.get("channel") or ""),
+        "channel_key":   channel_key,
         "type":          item.get("work_type") or "",
         "body_markdown": copy_raw,
         "media_urls":    media_urls,
+        "image_url":     image_url,
+        "video_url":     video_url,
+        "media_aspect":  media_aspect,
         "caption":       caption,
         "hashtags":      hashtags,
         "scheduled":     sdt.astimezone(_SAST).strftime("%Y-%m-%d %H:%M") if sdt else "",
@@ -6677,6 +7586,20 @@ def api_so_post(post_id: str):
     return Response(json.dumps(payload), mimetype="application/json")
 
 
+@app.route("/admin/social-ops/asset/<path:subpath>")
+@require_auth
+def so_serve_asset(subpath: str):
+    if ".." in subpath.split("/") or subpath.startswith("/"):
+        abort(404)
+    for root in _SO_ASSET_ROOTS:
+        candidate = os.path.normpath(os.path.join(root, subpath))
+        if not candidate.startswith(os.path.normpath(root) + os.sep):
+            continue
+        if os.path.isfile(candidate):
+            return send_from_directory(root, subpath, conditional=True)
+    abort(404)
+
+
 @app.route("/admin/api/reel_kit")
 @require_auth
 def api_reel_kit():
@@ -6684,11 +7607,90 @@ def api_reel_kit():
     with _page_cache_lock:
         cached = _page_cache.get("reel_kit_content")
         if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
-            return Response(cached[0], mimetype="text/html")
+            return _no_store(Response(cached[0], mimetype="text/html"))
     content = render_reel_kit_page()
     with _page_cache_lock:
         _page_cache["reel_kit_content"] = (content, now)
-    return Response(content, mimetype="text/html")
+    return _no_store(Response(content, mimetype="text/html"))
+
+
+@app.route("/admin/api/social-ops/reel-kits")
+@require_auth
+def api_so_reel_kits():
+    """Scan last 3 SAST days for reel kits awaiting a master upload."""
+    try:
+        now_sast = datetime.now(timezone.utc).astimezone(_SAST)
+        days: list[str] = []
+        for d in range(3):
+            days.append((now_sast - timedelta(days=d)).strftime("%Y-%m-%d"))
+
+        outstanding: list[dict] = []
+        ready_count = 0
+        for date_str in days:
+            try:
+                kits = _scan_reel_kits(date_str)
+            except Exception:
+                kits = []
+            for k in kits:
+                pick_id = k.get("pick_id") or ""
+                tier = k.get("tier") or ""
+                card = k.get("card") or ""
+                still = k.get("still") or ""
+                thumb = k.get("thumb") or card or ""
+                vos = k.get("vos") or []
+                has_master = bool(k.get("has_master"))
+                if has_master:
+                    ready_count += 1
+                    continue
+                thumb_url = (
+                    f"https://mzansiedge.co.za/assets/reel-cards/{date_str}/{pick_id}/{thumb}"
+                    if thumb else ""
+                )
+                outstanding.append({
+                    "date":       date_str,
+                    "pick_id":    pick_id,
+                    "tier":       tier,
+                    "card":       card,
+                    "still":      still,
+                    "thumb":      thumb,
+                    "thumb_url":  thumb_url,
+                    "vo_count":   len(vos),
+                    "has_master": False,
+                })
+        return _no_store(Response(
+            json.dumps({
+                "days": days,
+                "rows": outstanding,
+                "ready_count": ready_count,
+                "outstanding_count": len(outstanding),
+            }),
+            mimetype="application/json",
+        ))
+    except Exception:
+        return _no_store(Response(
+            json.dumps({"days": [], "rows": [], "ready_count": 0, "outstanding_count": 0}),
+            mimetype="application/json",
+        ))
+
+
+@app.route("/admin/api/social-ops/linkedin")
+@require_auth
+def api_so_linkedin():
+    rows = _fetch_linkedin_ledger()
+    return Response(
+        json.dumps({"rows": rows, "count": len(rows)}),
+        mimetype="application/json",
+    )
+
+
+@app.route("/admin/api/social-ops/quora")
+@require_auth
+def api_so_quora():
+    rows = _fetch_quora_ledger()
+    return Response(
+        json.dumps({"rows": rows, "count": len(rows)}),
+        mimetype="application/json",
+    )
 
 
 @app.route("/admin/api/calendar")
@@ -6698,17 +7700,155 @@ def api_calendar():
     with _page_cache_lock:
         cached = _page_cache.get("calendar_content")
         if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
-            return Response(cached[0], mimetype="text/html")
+            return _no_store(Response(cached[0], mimetype="text/html"))
     content = render_calendar_page()
     with _page_cache_lock:
         _page_cache["calendar_content"] = (content, now)
-    return Response(content, mimetype="text/html")
+    return _no_store(Response(content, mimetype="text/html"))
 
 
 @app.route("/admin/task-hub")
 @require_auth
 def admin_task_hub():
-    return redirect("/admin/social-ops", code=302)
+    """Task Hub — tabbed inbox: Reel Kits, FB Group Posts, Quora Answers, LinkedIn.
+
+    Serves cached HTML immediately (stale-while-revalidate up to 10min) and kicks
+    off a background refresh when the TTL has expired. Cold first hit blocks.
+    """
+    now = time.monotonic()
+    should_refresh = False
+    payload = None
+    with _page_cache_lock:
+        cached = _page_cache.get("task_hub_full")
+        if cached:
+            age = now - cached[1]
+            if age < _PAGE_CACHE_TTL:
+                payload = cached[0]
+            elif age < _PAGE_CACHE_SWR and "task_hub_full" not in _page_refresh_inflight:
+                _page_refresh_inflight.add("task_hub_full")
+                should_refresh = True
+                payload = cached[0]
+            elif age < _PAGE_CACHE_SWR:
+                payload = cached[0]
+
+    if should_refresh:
+        threading.Thread(target=_bg_refresh_task_hub, daemon=True).start()
+
+    if payload is not None:
+        request._cache_state = "swr-refresh" if should_refresh else "hit"
+        return _no_store(Response(payload, mimetype="text/html"))
+
+    # Cold path — render fully
+    data = _fetch_task_hub_data()
+    content = render_task_hub_tabbed(data)
+    html = render_shell("task_hub", content)
+    with _page_cache_lock:
+        _page_cache["task_hub_full"] = (html, time.monotonic())
+    return _no_store(Response(html, mimetype="text/html"))
+
+
+@app.route("/admin/api/task-hub/data")
+@require_auth
+def api_task_hub_data():
+    """JSON payload for client-side refresh of tab counts + lists."""
+    data = _fetch_task_hub_data()
+    return _no_store(Response(json.dumps(data), mimetype="application/json"))
+
+
+@app.route("/admin/api/task_hub")
+@require_auth
+def api_task_hub_content():
+    """HTML partial for SPA sidebar navigation. Returns inner content only (no shell)."""
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("task_hub_content")
+        if cached and (now - cached[1]) < _PAGE_CACHE_TTL:
+            request._cache_state = "hit"
+            return _no_store(Response(cached[0], mimetype="text/html"))
+    data = _fetch_task_hub_data()
+    content = render_task_hub_tabbed(data)
+    with _page_cache_lock:
+        _page_cache["task_hub_content"] = (content, now)
+    return _no_store(Response(content, mimetype="text/html"))
+
+
+def _mark_notion_status_posted(page_id: str, extra_props: dict | None = None) -> bool:
+    """PATCH a Notion page Status → Posted. Returns True on success."""
+    from datetime import datetime as _dt
+    if not page_id:
+        return False
+    now_iso = _dt.now(_SAST).isoformat()
+    props = {
+        "Status": {"select": {"name": "Posted"}},
+        "Posted At": {"date": {"start": now_iso}},
+    }
+    if extra_props:
+        props.update(extra_props)
+    body = {"properties": props}
+    try:
+        result = _notion_request(f"pages/{page_id}", body=body, method="PATCH")
+        return bool(result and result.get("object") == "page")
+    except Exception:
+        return False
+
+
+@app.route("/admin/api/task-hub/fb/<page_id>/posted", methods=["POST"])
+@require_auth
+def api_task_hub_fb_posted(page_id: str):
+    ok = _mark_notion_status_posted(page_id)
+    if ok:
+        with _notion_cache_lock:
+            _notion_cache.pop("marketing_queue", None)
+        with _page_cache_lock:
+            _page_cache.pop("task_hub_full", None)
+            _page_cache.pop("task_hub_content", None)
+            _page_cache.pop("social_ops_full", None)
+    return Response(json.dumps({"ok": ok}), mimetype="application/json")
+
+
+@app.route("/admin/api/task-hub/quora/<page_id>/posted", methods=["POST"])
+@require_auth
+def api_task_hub_quora_posted(page_id: str):
+    from datetime import datetime as _dt
+    now_iso = _dt.now(_SAST).isoformat()
+    extra = {"Answered At": {"date": {"start": now_iso}}}
+    # Quora ledger may use a different status column name — try generic Posted first.
+    ok = _mark_notion_status_posted(page_id, extra_props=extra)
+    if ok:
+        with _notion_cache_lock:
+            _notion_cache.pop("quora_ledger", None)
+            _notion_cache.pop("marketing_queue", None)
+        with _page_cache_lock:
+            _page_cache.pop("task_hub_full", None)
+            _page_cache.pop("task_hub_content", None)
+            _page_cache.pop("social_ops_full", None)
+    return Response(json.dumps({"ok": ok}), mimetype="application/json")
+
+
+@app.route("/admin/api/task-hub/linkedin/<page_id>/sent", methods=["POST"])
+@require_auth
+def api_task_hub_linkedin_sent(page_id: str):
+    from datetime import datetime as _dt
+    now_iso = _dt.now(_SAST).isoformat()
+    props = {
+        "Status": {"select": {"name": "Sent"}},
+        "Sent At": {"date": {"start": now_iso}},
+    }
+    body = {"properties": props}
+    try:
+        result = _notion_request(f"pages/{page_id}", body=body, method="PATCH")
+        ok = bool(result and result.get("object") == "page")
+    except Exception:
+        ok = False
+    if ok:
+        with _notion_cache_lock:
+            _notion_cache.pop("linkedin_ledger", None)
+            _notion_cache.pop("marketing_queue", None)
+        with _page_cache_lock:
+            _page_cache.pop("task_hub_full", None)
+            _page_cache.pop("task_hub_content", None)
+            _page_cache.pop("social_ops_full", None)
+    return Response(json.dumps({"ok": ok}), mimetype="application/json")
 
 
 @app.route("/admin/reel-kit")
@@ -6747,12 +7887,6 @@ def admin_calendar():
     return Response(html, mimetype="text/html")
 
 
-@app.route("/admin/api/task_hub")
-@require_auth
-def api_task_hub():
-    content = render_task_hub_content()
-    return Response(content, mimetype="text/html")
-
 
 @app.route("/admin/api/system_health")
 @require_auth
@@ -6782,9 +7916,10 @@ def api_notion_patch():
         with _notion_cache_lock:
             _notion_cache.pop("marketing_queue", None)
         with _page_cache_lock:
-            _page_cache.pop("automation_full", None)
             _page_cache.pop("social_ops_full", None)
             _page_cache.pop("automation_content", None)
+            _page_cache.pop("task_hub_full", None)
+            _page_cache.pop("task_hub_content", None)
         return Response('{"ok":true}', mimetype="application/json")
     else:
         return Response('{"error":"notion update failed"}', status=502, mimetype="application/json")
@@ -6809,15 +7944,92 @@ def api_dismiss_item():
         with _notion_cache_lock:
             _notion_cache.pop("marketing_queue", None)
         with _page_cache_lock:
-            _page_cache.pop("automation_full", None)
             _page_cache.pop("social_ops_full", None)
             _page_cache.pop("automation_content", None)
+            _page_cache.pop("task_hub_full", None)
+            _page_cache.pop("task_hub_content", None)
         return Response('{"ok":true}', mimetype="application/json")
     else:
         return Response('{"error":"notion update failed"}', status=502, mimetype="application/json")
 
 
 # -- Reel Kit helpers ---------------------------------------------------------
+
+_REEL_BK_DISPLAY: dict[str, str] = {
+    "hollywoodbets": "HWB", "betway": "Betway", "supabets": "Supabets",
+    "sportingbet": "Sportingbet", "gbets": "GBets", "wsb": "WSB",
+    "playabets": "PlayaBets", "supersportbet": "SuperSportBet",
+}
+
+_REEL_TEAM_ABBREV: dict[str, str] = {
+    "KOLKATA KNIGHT RIDERS": "KKR", "ROYAL CHALLENGERS BANGALORE": "RCB",
+    "ROYAL CHALLENGERS BENGALURU": "RCB", "CHENNAI SUPER KINGS": "CSK",
+    "SUNRISERS HYDERABAD": "SRH", "LUCKNOW SUPER GIANTS": "LSG",
+    "RAJASTHAN ROYALS": "RAJASTHAN", "PUNJAB KINGS": "PUNJAB",
+    "DELHI CAPITALS": "DELHI", "MUMBAI INDIANS": "MUMBAI", "GUJARAT TITANS": "GUJARAT",
+    "MANCHESTER UNITED": "MAN UTD", "MANCHESTER CITY": "MAN CITY",
+    "TOTTENHAM HOTSPUR": "SPURS", "NEWCASTLE UNITED": "NEWCASTLE",
+    "WEST HAM UNITED": "WEST HAM", "NOTTINGHAM FOREST": "FOREST",
+    "BRIGHTON HOVE ALBION": "BRIGHTON", "BRIGHTON & HOVE ALBION": "BRIGHTON",
+    "WOLVERHAMPTON WANDERERS": "WOLVES", "LEICESTER CITY": "LEICESTER",
+    "SHEFFIELD UNITED": "SHEFFIELD", "LUTON TOWN": "LUTON",
+    "VODACOM BULLS": "BULLS", "HOLLYWOODBETS SHARKS": "SHARKS",
+    "DHL STORMERS": "STORMERS", "EMIRATES LIONS": "LIONS",
+}
+
+
+def _reel_abbr(name: str) -> str:
+    u = (name or "").strip().upper()
+    return _REEL_TEAM_ABBREV.get(u, u)
+
+
+def _reel_pick_team_from_bet(bet_type: str, home: str, away: str) -> str:
+    bt = (bet_type or "").lower()
+    if "away" in bt:
+        return away
+    return home  # home win, draw, or unknown → home team
+
+
+def _reel_teams_from_match_key(match_key: str) -> tuple[str, str]:
+    key = re.sub(r'_\d{4}-\d{2}-\d{2}$', '', match_key)
+    if '_vs_' in key:
+        home_raw, away_raw = key.split('_vs_', 1)
+        return home_raw.replace('_', ' ').title(), away_raw.replace('_', ' ').title()
+    return match_key, match_key
+
+
+def _resolve_reel_meta_from_db(pick_ids: list[str]) -> dict[str, dict]:
+    """Backfill pick_team/bookmaker/tier for kits that have no meta.json."""
+    if not pick_ids:
+        return {}
+    result: dict[str, dict] = {}
+    try:
+        conn = db_connect(SCRAPERS_DB)
+        if conn is None:
+            return result
+        rows = conn.execute(
+            "SELECT edge_id, bet_type, bookmaker, edge_tier, match_key"
+            " FROM edge_results ORDER BY recommended_at DESC"
+        ).fetchall()
+        conn.close()
+        pid_set = set(pick_ids)
+        for row in rows:
+            pid = hashlib.md5(row["edge_id"].encode()).hexdigest()[:12]
+            if pid not in pid_set or pid in result:
+                continue
+            home, away = _reel_teams_from_match_key(row["match_key"])
+            pick_team = _reel_abbr(_reel_pick_team_from_bet(row["bet_type"], home, away))
+            result[pid] = {
+                "pick_team": pick_team,
+                "bookmaker": row["bookmaker"],
+                "tier": row["edge_tier"],
+            }
+            if len(result) == len(pid_set):
+                break
+    except Exception:
+        pass
+    return result
+
 
 def _scan_reel_kits(date_str: str) -> list[dict]:
     """Scan _REEL_CARDS_ROOT/{date}/{pick_id}/ subdirs for reel kits."""
@@ -6834,7 +8046,8 @@ def _scan_reel_kits(date_str: str) -> list[dict]:
         pick_id = entry
         if not _RE_PICK_ID.match(pick_id):
             continue
-        kit = {"pick_id": pick_id, "card": None, "still": None, "thumb": None, "vos": [], "tier": None}
+        kit: dict = {"pick_id": pick_id, "card": None, "still": None, "thumb": None,
+                     "vos": [], "tier": None, "pick_team": None, "bookmaker": None}
         for fname in sorted(os.listdir(sub)):
             if fname.startswith("card_") and fname.endswith(".png"):
                 kit["card"] = fname
@@ -6846,9 +8059,31 @@ def _scan_reel_kits(date_str: str) -> list[dict]:
                 kit["vos"].append(fname)
             elif fname.startswith("tier_"):
                 kit["tier"] = fname[5:]  # e.g. "tier_diamond" -> "diamond"
+            elif fname == "meta.json":
+                try:
+                    with open(os.path.join(sub, fname)) as fh:
+                        meta = json.load(fh)
+                    kit["pick_team"] = meta.get("pick_team") or kit["pick_team"]
+                    kit["bookmaker"] = meta.get("bookmaker") or kit["bookmaker"]
+                    if meta.get("tier") and not kit["tier"]:
+                        kit["tier"] = meta["tier"]
+                except Exception:
+                    pass
         if kit["card"] is None:
             continue
         kits[pick_id] = kit
+    # For kits still missing pick_team/bookmaker, backfill from edge_results DB.
+    missing = [pid for pid, k in kits.items() if not k["pick_team"] or not k["bookmaker"]]
+    if missing:
+        db_meta = _resolve_reel_meta_from_db(missing)
+        for pid, meta in db_meta.items():
+            if pid in kits:
+                if not kits[pid]["pick_team"]:
+                    kits[pid]["pick_team"] = meta.get("pick_team")
+                if not kits[pid]["bookmaker"]:
+                    kits[pid]["bookmaker"] = meta.get("bookmaker")
+                if not kits[pid]["tier"]:
+                    kits[pid]["tier"] = meta.get("tier")
     # Check if master already uploaded
     masters_dir = os.path.join(_REEL_MASTERS_ROOT, date_str)
     result = []
@@ -6946,14 +8181,15 @@ def api_reel_download():
 
 
 @app.route("/admin/api/reel-upload", methods=["POST"])
+@app.route("/admin/api/task-hub/reel/<pick_id>/upload", methods=["POST"])
 @require_auth
-def api_reel_upload():
+def api_reel_upload(pick_id=None):
     """POST — upload master Reel MP4, create MOQ item for Instagram ONLY."""
     if request.content_length and request.content_length > MAX_CONTENT_LENGTH:
         return Response('{"error":"file too large"}', status=413, mimetype="application/json")
 
     f = request.files.get("file")
-    pick_id = request.form.get("pick_id", "").strip()
+    pick_id = request.form.get("pick_id", "").strip() or (pick_id or "")
     date_str = request.form.get("date", "").strip()
     block_id = request.form.get("block_id", "").strip()
 
@@ -7187,9 +8423,29 @@ def healthz():
 
 # -- Entry point --------------------------------------------------------------
 
+def _prime_cache_on_boot() -> None:
+    """Warm social-ops and task-hub caches 10s after boot (avoids cold hits on first open)."""
+    import urllib.request as _ur
+    time.sleep(10)
+    base = f"http://localhost:{PORT}"
+    creds = f"{DASHBOARD_USER}:{DASHBOARD_PASS}"
+    import base64 as _b64
+    auth_hdr = "Basic " + _b64.b64encode(creds.encode()).decode()
+    for path in ("/admin/social-ops", "/admin/task-hub"):
+        try:
+            req = _ur.Request(base + path, headers={"Authorization": auth_hdr})
+            with _ur.urlopen(req, timeout=30):
+                pass
+            log.info(f"[prime-cache] warmed {path}")
+        except Exception as _e:
+            log.debug(f"[prime-cache] {path} skipped: {_e}")
+
+
 if __name__ == "__main__":
     print(f"MzansiEdge Admin Panel starting on port {PORT}")
     print(f"  URL:  http://localhost:{PORT}/admin/health")
     print(f"  Auth: {DASHBOARD_USER}:***")
     print(f"  DB:   {SCRAPERS_DB}")
+    if os.getenv("PRIME_CACHE_ON_BOOT", "1") != "0":
+        threading.Thread(target=_prime_cache_on_boot, daemon=True, name="cache-primer").start()
     app.run(host="0.0.0.0", port=PORT, debug=False)
