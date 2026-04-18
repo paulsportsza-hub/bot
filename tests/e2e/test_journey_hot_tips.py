@@ -84,7 +84,7 @@ async def test_build_hot_tips_page_shows_edge_cards(test_edges) -> None:
     text, _, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
     assert "Arsenal vs Chelsea" in text
     assert "Premier League" in text
-    assert "Sat 29 Mar" in text
+    assert "Sun 29 Mar" in text
 
 
 async def test_page_zero_has_next_button(test_edges) -> None:
@@ -180,7 +180,7 @@ async def test_header_count_matches_total_edges(test_edges) -> None:
 async def test_cards_show_league_and_kickoff_metadata(test_edges) -> None:
     text, _, _ = await bot._build_hot_tips_page(test_edges, page=0, user_tier="diamond")
     # FIX-DSTV-CHANNEL-PERM-01: DStv channel suffix permanently removed
-    assert "Premier League · 📅 Sat 29 Mar · 17:30" in text
+    assert "Premier League · 📅 Sun 29 Mar, 17:30 SAST" in text
     assert "DStv" not in text
 
 

@@ -649,7 +649,7 @@ def build_edge_detail_data(tip: dict, card_width: int = 480) -> dict:
     # FIX-REGRESS-D1-BOOKMAKER-LINE-01: deterministic count-drop based on card width.
     # 480px → max 4 pills · 360px → max 3 · <360px → max 2.
     # Row has nowrap+overflow:hidden so wrapping is impossible — extra pills are hidden.
-    _max_bk = 4 if card_width >= 480 else (3 if card_width >= 360 else 2)
+    _max_bk = 3  # max 3 bookmaker chips always (UX contract)
     all_odds.sort(key=lambda x: x["odds_float"], reverse=True)
     # D-12: min 2 chips (hide pills row if <2)
     if len(all_odds) < 2:
@@ -985,9 +985,9 @@ def build_match_detail_data(match: dict) -> dict:
         "h2h_draws":     h2h_draws,
         "h2h_away_wins": h2h_away_wins,
 
-        # Injuries — DEF-2: capped at 3 per team to prevent card overflow
-        "home_injuries": (match.get("home_injuries") or [])[:3],
-        "away_injuries": (match.get("away_injuries") or [])[:3],
+        # Injuries — FIX-INJURY-SUPPRESS-02: suppressed on My Matches detail cards
+        "home_injuries": [],
+        "away_injuries": [],
 
         # Haiku analysis — BUILD-HAIKU-SUMMARY-WIRE-01
         "analysis_text": match.get("analysis_text") or "",
