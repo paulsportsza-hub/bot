@@ -7827,8 +7827,15 @@ def _trim_to_last_sentence(text: str, max_chars: int = 140) -> str:
         return ""
     if len(text) > max_chars:
         text = text[:max_chars]
-    # 1. Sentence-terminal boundary
-    last = max(text.rfind('.'), text.rfind('!'), text.rfind('?'))
+    # 1. Sentence-terminal boundary — exclude decimal periods (digit.digit)
+    period_matches = [i for i, c in enumerate(text)
+                      if c == '.' and not (
+                          i > 0 and text[i-1].isdigit()
+                          and i + 1 < len(text) and text[i+1].isdigit()
+                      )]
+    other_terminals = [i for i, c in enumerate(text) if c in '!?']
+    all_terminals = period_matches + other_terminals
+    last = max(all_terminals) if all_terminals else -1
     if last >= 20:
         return text[:last + 1].strip()
     # 2. Em-dash / en-dash as soft boundary (BUILD-VERDICT-TRIM-HARDEN-04)
