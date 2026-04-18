@@ -17,3 +17,4 @@ hypothesis>=6.0
 aiohttp>=3.9
 numpy>=1.24
 Pillow>=10.0
+jinja2>=3.1
