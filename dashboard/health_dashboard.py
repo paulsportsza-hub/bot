@@ -7230,7 +7230,7 @@ def api_social_ops():
 
 
 # -- Expected-slot cadence contract (BUILD-SOCIAL-OPS-PILLS-HEALTH-01) -------
-SHOW_REEL_KIT_ON_TIMELINE = False  # FIX-REEL-KIT-TIMELINE-01 flips this to True
+SHOW_REEL_KIT_ON_TIMELINE = True  # FIX-REEL-KIT-TIMELINE-01 flipped
 
 TODAY_EXPECTED_SLOTS: list[dict] = [
     # Telegram Alerts (Edge picks) — daily
@@ -7754,7 +7754,7 @@ def api_reel_kit():
     return _no_store(Response(content, mimetype="text/html"))
 
 
-_RE_NOTION_REEL_KIT = re.compile(r"^🎥 Reel Kit (\d{4}-\d{2}-\d{2})$")
+_RE_NOTION_REEL_KIT = re.compile(r"^🎥 Reel Kit (\d{4}-\d{2}-\d{2})")
 
 
 def _fetch_overdue_notion_reel_kits() -> list[dict]:

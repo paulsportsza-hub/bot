@@ -121,9 +121,9 @@ class TestCadenceContract(unittest.TestCase):
         mon_slots = hd._slots_for_dow(_MONDAY_DOW)
         self.assertEqual(len(mon_slots), 13)
 
-    def test_show_reel_kit_flag_false(self):
-        """SHOW_REEL_KIT_ON_TIMELINE must be False before FIX-REEL-KIT-TIMELINE-01."""
-        self.assertFalse(hd.SHOW_REEL_KIT_ON_TIMELINE)
+    def test_show_reel_kit_flag_true(self):
+        """SHOW_REEL_KIT_ON_TIMELINE is True after FIX-REEL-KIT-TIMELINE-01."""
+        self.assertTrue(hd.SHOW_REEL_KIT_ON_TIMELINE)
 
 
 # ---------------------------------------------------------------------------

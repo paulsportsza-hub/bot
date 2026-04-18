@@ -24,7 +24,7 @@ log = logging.getLogger("reel_kit_sweep")
 
 NOTION_VERSION = "2022-06-28"
 TASK_HUB_PAGE_ID = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
-_RE_REEL_KIT = re.compile(r"^🎥 Reel Kit (\d{4}-\d{2}-\d{2})$")
+_RE_REEL_KIT = re.compile(r"^🎥 Reel Kit (\d{4}-\d{2}-\d{2})")
 _SAST = timezone(timedelta(hours=2))
 
 
