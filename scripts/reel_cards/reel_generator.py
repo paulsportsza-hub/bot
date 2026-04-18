@@ -20,6 +20,7 @@ from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR   = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))  # ensure sibling modules (render_reel_card) import from any cwd
 BOT_DIR      = SCRIPT_DIR.parents[1]          # /home/paulsportsza/bot
 SCRAPERS_DB  = "/home/paulsportsza/scrapers/odds.db"
 OUTPUT_ROOT  = Path("/var/www/mzansiedge/assets/reel-cards")
@@ -252,6 +253,12 @@ def render_card(row: dict, tier: str, today: str) -> tuple[str, str, dict] | Non
     try:
         render_reel_card(pick, output_path)
         log.info("[RENDER] %s card → %s", tier.upper(), output_path)
+        # Save pick metadata so the Task Hub dashboard can display the header
+        # without a DB round-trip. Fields: pick_team (abbr, upper), bookmaker, tier.
+        meta_path = str(out_dir / "meta.json")
+        with open(meta_path, "w") as fh:
+            json.dump({"pick_team": pick["pick_team"], "bookmaker": row["bookmaker"],
+                       "tier": tier}, fh)
         return pid, output_path, pick
     except Exception as exc:
         log.error("[RENDER] %s tier failed: %s", tier, exc)
