@@ -3722,7 +3722,7 @@ function stColor(s){return ST_COLOR[s]||'#f59e0b';}
 function stMark(s){return ST_MARK[s]||'○';}
 
 // ── DOM ready ─────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded',function(){
+function soInit(){
   _tipEl=document.getElementById('so-tip');
   renderTimeline(SO_INIT);
   updateNowLine();
@@ -3734,7 +3734,8 @@ document.addEventListener('DOMContentLoaded',function(){
   // Queue: initial + interval load
   fetchQueue();
   setInterval(fetchQueue,60000);
-});
+}
+if(document.readyState!=='loading'){soInit();}else{document.addEventListener('DOMContentLoaded',soInit);}
 
 // ── Day picker ────────────────────────────────────────────────────────
 function updateDayPicker(){
@@ -6942,7 +6943,7 @@ function initCoverageChart() {{
 }}
 
 // Init chart when coverage accordion is opened
-document.addEventListener('DOMContentLoaded', function() {{
+function coverageInit() {{
   var details = document.querySelector('#tab-overview details');
   if (details) {{
     details.addEventListener('toggle', function() {{
@@ -6951,7 +6952,8 @@ document.addEventListener('DOMContentLoaded', function() {{
   }}
   // Also try init immediately if accordion already open
   initCoverageChart();
-}});
+}}
+if (document.readyState !== 'loading') {{ coverageInit(); }} else {{ document.addEventListener('DOMContentLoaded', coverageInit); }}
 
 document.addEventListener('healthViewLoaded', function() {{
   setTimeout(initCoverageChart, 100);
