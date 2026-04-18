@@ -99,6 +99,8 @@ PORT = int(os.getenv("DASHBOARD_PORT", "8501"))
 NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
 NOTION_MARKETING_DB = "58123052-0e48-466a-be63-5308e793e672"
 NOTION_TASK_HUB_PAGE = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
+# BUILD-REEL-KIT-DATE-RULE-01 (Piece B): set True when BUILD-SOCIAL-OPS-URGENT-PILLS-01 lands
+SHOW_REEL_KIT_ON_TIMELINE = False
 # Task Hub data sources (17 Apr 2026 — rewired to real DSs, old IDs were empty scaffold pages)
 # LinkedIn has no separate ledger DB — reads from MOQ Channel=LinkedIn
 NOTION_LINKEDIN_DB = os.getenv(
@@ -7616,6 +7618,36 @@ def api_reel_kit():
     return _no_store(Response(content, mimetype="text/html"))
 
 
+_RE_NOTION_REEL_KIT = re.compile(r"^🎥 Reel Kit (\d{4}-\d{2}-\d{2})$")
+
+
+def _fetch_overdue_notion_reel_kits() -> list[dict]:
+    """Fetch past-dated unchecked 🎥 Reel Kit to_do blocks from Task Hub.
+
+    Returns list of {date, text, block_id} for blocks where date < today SAST.
+    Returns [] when SHOW_REEL_KIT_ON_TIMELINE is False (PILLS-01 not landed).
+    SO-31: single fetch from Task Hub — no per-block requests.
+    """
+    if not SHOW_REEL_KIT_ON_TIMELINE:
+        return []
+    today = datetime.now(timezone.utc).astimezone(_SAST).date().isoformat()
+    data = _notion_request(f"blocks/{NOTION_TASK_HUB_PAGE}/children?page_size=100")
+    if not data:
+        return []
+    overdue = []
+    for block in data.get("results", []):
+        if block.get("type") != "to_do":
+            continue
+        todo = block.get("to_do", {})
+        if todo.get("checked"):
+            continue
+        text = "".join(t["plain_text"] for t in todo.get("rich_text", []))
+        m = _RE_NOTION_REEL_KIT.match(text)
+        if m and m.group(1) < today:
+            overdue.append({"date": m.group(1), "text": text, "block_id": block["id"]})
+    return overdue
+
+
 @app.route("/admin/api/social-ops/reel-kits")
 @require_auth
 def api_so_reel_kits():
@@ -7659,18 +7691,24 @@ def api_so_reel_kits():
                     "vo_count":   len(vos),
                     "has_master": False,
                 })
+        overdue_notion = _fetch_overdue_notion_reel_kits()
         return _no_store(Response(
             json.dumps({
                 "days": days,
                 "rows": outstanding,
                 "ready_count": ready_count,
                 "outstanding_count": len(outstanding),
+                "overdue_notion": overdue_notion,
+                "show_rk_timeline": SHOW_REEL_KIT_ON_TIMELINE,
             }),
             mimetype="application/json",
         ))
     except Exception:
         return _no_store(Response(
-            json.dumps({"days": [], "rows": [], "ready_count": 0, "outstanding_count": 0}),
+            json.dumps({
+                "days": [], "rows": [], "ready_count": 0, "outstanding_count": 0,
+                "overdue_notion": [], "show_rk_timeline": False,
+            }),
             mimetype="application/json",
         ))
 
