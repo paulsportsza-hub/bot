@@ -7,13 +7,6 @@
         "callback_data": "yg:all:0",
         "url": ""
       }
-    ],
-    [
-      {
-        "text": "↩️ Menu",
-        "callback_data": "nav:main",
-        "url": ""
-      }
     ]
   ]
 }

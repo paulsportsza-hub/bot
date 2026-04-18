@@ -1878,6 +1878,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                             _mm_card_served = await _serve_card_detail(
                                 query, _mm_tip_key, _mm_full_tip, user_id, _mm_ut,
                                 _mm_edge_tier, back_page=_mm_back_pg, include_analysis=True,
+                                source="matches",
                             )
                             if _mm_card_served:
                                 return
@@ -8342,6 +8343,13 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
                 _od = _display_bookmaker_name(_obk)
                 if not any(o["bookie"] == _od for o in all_odds):
                     all_odds.append({"bookie": _od, "odds": _ov})
+    # Deduplicate by display name — keep highest odds per bookmaker
+    _seen_bk: dict[str, dict] = {}
+    for o in all_odds:
+        bk = o["bookie"]
+        if bk not in _seen_bk or o["odds"] > _seen_bk[bk]["odds"]:
+            _seen_bk[bk] = o
+    all_odds = list(_seen_bk.values())
     # CARD-FIX-K: Use bookmaker_key (raw DB key) not bookmaker (display name) so that
     # _display_bookmaker_name maps correctly — tip["bookmaker"] already IS the display
     # name ("HWB"), passing it through _display_bookmaker_name returns "Hwb" (wrong).
@@ -8366,7 +8374,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     _pick_chips = [o for o in all_odds if o.get("is_pick")]
     _other_chips = [o for o in all_odds if not o.get("is_pick")]
     _other_chips.sort(key=lambda x: x["odds"])  # ascending = lowest first = worst
-    enriched["all_odds"] = _pick_chips + _other_chips[:3]
+    enriched["all_odds"] = (_pick_chips + _other_chips)[:3]
 
     # 3) Form — last 5 results per team as ['W','D','L'] lists
     # CARD-REBUILD-04-02: asymmetric guard + most-recent-RIGHT reversal.
@@ -8967,6 +8975,7 @@ async def _serve_card_detail(
     edge_tier: str,
     back_page: int = 0,
     include_analysis: bool = True,
+    source: str = "edge_picks",
 ) -> bool:
     """P1P3-WIRE-DETAIL: Serve card_pipeline photo detail view.
 
@@ -9012,7 +9021,7 @@ async def _serve_card_detail(
         _cd_tips = [tip_data] if tip_data else [{"ev": 0, "match_id": match_key}]
         _cd_btns = _build_game_buttons(
             _cd_tips, match_key, user_id,
-            source="edge_picks", user_tier=user_tier,
+            source=source, user_tier=user_tier,
             edge_tier=edge_tier, back_page=back_page,
         )
 
@@ -11281,10 +11290,13 @@ async def _build_hot_tips_page(
         league_display = tip.get("league", "")
 
         # Broadcast details — use pre-fetched result (BUILD-CTA-FIX Fix 3+4)
+        # BUILD-DATE-KICKOFF-PRIORITY-01: commence_time is authoritative; bc_data is fallback
         bc_data = _ht_bc_infos[i - start - 1]
-        kickoff = bc_data.get("kickoff", "")
-        if not kickoff and tip.get("commence_time"):
+        kickoff = ""
+        if tip.get("commence_time"):
             kickoff = _format_kickoff_display(tip["commence_time"])
+        if not kickoff:
+            kickoff = bc_data.get("kickoff", "")
         # Fallback: extract date from match_id (e.g. "...vs_team_2026-03-05")
         if not kickoff:
             import re as _re_mid
