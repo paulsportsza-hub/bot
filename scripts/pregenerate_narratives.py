@@ -148,6 +148,12 @@ if _missing:
 # Module-level so it persists across multiple main() invocations within a process.
 _in_progress_matches: set[str] = set()
 
+# AC3 F5 — FIX-VERDICT-SHAPE-GUARD-01: track consecutive banned-shape rejections
+# per fixture within this process run. After 3, mark narrative_cache as
+# skipped_banned_shape so the serving layer falls back to programmatic verdict.
+_banned_shape_reject_count: dict[str, int] = {}
+_BANNED_SHAPE_SKIP_THRESHOLD = 3
+
 _RUNTIME_SCHEMA_REQUIREMENTS = {
     "narrative_cache": {
         "match_id",
@@ -1807,56 +1813,87 @@ async def _generate_one(
                 "(tier=%s, verdict_len=%d) — attempting Sonnet retry",
                 match_key, _pregen_edge_tier, len(_verdict_text_raw),
             )
-            # Retry: one more Sonnet generation attempt
-            _retry_narrative = ""
-            try:
-                if evidence_pack is not None and spec is not None:
-                    _retry_prompt = format_evidence_prompt(evidence_pack, spec)
-                    _retry_resp = await claude.messages.create(
-                        model=SHADOW_MODEL,
-                        max_tokens=1200,
-                        messages=[{"role": "user", "content": _retry_prompt}],
-                        timeout=45.0,
-                    )
-                    _retry_draft = _strip_preamble(
-                        _extract_text_from_response(_retry_resp)
-                    ).strip()
-                    _retry_draft = sanitize_ai_response(_retry_draft)
-                    _retry_passed, _retry_report = verify_shadow_narrative(
-                        _retry_draft, evidence_pack, spec
-                    )
-                    if _retry_passed:
-                        _retry_narrative = (
-                            _retry_report.get("sanitized_draft") or _retry_draft
-                        )
-            except Exception as _gq_retry_err:
+
+            # AC3 F5 — FIX-VERDICT-SHAPE-GUARD-01: increment and check rejection count.
+            # After _BANNED_SHAPE_SKIP_THRESHOLD consecutive rejections for the same
+            # fixture, stop retrying and mark narrative_cache as skipped_banned_shape.
+            _cur_rejections = _banned_shape_reject_count.get(match_key, 0) + 1
+            _banned_shape_reject_count[match_key] = _cur_rejections
+            if _cur_rejections >= _BANNED_SHAPE_SKIP_THRESHOLD:
                 log.warning(
-                    "GOLD-QUALITY-GATE: retry error for %s: %s",
-                    match_key, _gq_retry_err,
+                    "GOLD-QUALITY-GATE: %s has %d consecutive banned-shape rejections "
+                    "— marking skipped_banned_shape",
+                    match_key, _cur_rejections,
                 )
-            # Evaluate retry result
-            if _retry_narrative:
-                _retry_verdict = _extract_verdict_text(_retry_narrative)
-                if min_verdict_quality(_retry_verdict, tier=_pregen_edge_tier, evidence_pack=_mgr_ep):
-                    narrative = _retry_narrative
-                    narrative_source = "w84_quality_retry"
-                    log.info(
-                        "GOLD-QUALITY-GATE: retry succeeded for %s", match_key
+                try:
+                    from scrapers.db_connect import connect_odds_db as _sbs_conn
+                    _sbs_db = str(SCRAPERS_ROOT / "odds.db")
+                    _sbs_c = _sbs_conn(_sbs_db, timeout=3)
+                    try:
+                        _sbs_c.execute(
+                            "UPDATE narrative_cache SET quality_status=? WHERE match_id=?",
+                            ("skipped_banned_shape", match_key),
+                        )
+                        _sbs_c.commit()
+                    finally:
+                        _sbs_c.close()
+                except Exception as _sbs_err:
+                    log.warning(
+                        "AC3: could not mark skipped_banned_shape for %s: %s",
+                        match_key, _sbs_err,
                     )
+                _gold_verdict_failed = True
+            else:
+                # Retry: one more Sonnet generation attempt
+                _retry_narrative = ""
+                try:
+                    if evidence_pack is not None and spec is not None:
+                        _retry_prompt = format_evidence_prompt(evidence_pack, spec)
+                        _retry_resp = await claude.messages.create(
+                            model=SHADOW_MODEL,
+                            max_tokens=1200,
+                            messages=[{"role": "user", "content": _retry_prompt}],
+                            timeout=45.0,
+                        )
+                        _retry_draft = _strip_preamble(
+                            _extract_text_from_response(_retry_resp)
+                        ).strip()
+                        _retry_draft = sanitize_ai_response(_retry_draft)
+                        _retry_passed, _retry_report = verify_shadow_narrative(
+                            _retry_draft, evidence_pack, spec
+                        )
+                        if _retry_passed:
+                            _retry_narrative = (
+                                _retry_report.get("sanitized_draft") or _retry_draft
+                            )
+                except Exception as _gq_retry_err:
+                    log.warning(
+                        "GOLD-QUALITY-GATE: retry error for %s: %s",
+                        match_key, _gq_retry_err,
+                    )
+                # Evaluate retry result
+                if _retry_narrative:
+                    _retry_verdict = _extract_verdict_text(_retry_narrative)
+                    if min_verdict_quality(_retry_verdict, tier=_pregen_edge_tier, evidence_pack=_mgr_ep):
+                        narrative = _retry_narrative
+                        narrative_source = "w84_quality_retry"
+                        log.info(
+                            "GOLD-QUALITY-GATE: retry succeeded for %s", match_key
+                        )
+                    else:
+                        _gold_verdict_failed = True
+                        log.error(
+                            "GOLD-QUALITY-GATE: second attempt also failed for %s "
+                            "(tier=%s) — marking gold_verdict_failed",
+                            match_key, _pregen_edge_tier,
+                        )
                 else:
                     _gold_verdict_failed = True
                     log.error(
-                        "GOLD-QUALITY-GATE: second attempt also failed for %s "
+                        "GOLD-QUALITY-GATE: retry returned no narrative for %s "
                         "(tier=%s) — marking gold_verdict_failed",
                         match_key, _pregen_edge_tier,
                     )
-            else:
-                _gold_verdict_failed = True
-                log.error(
-                    "GOLD-QUALITY-GATE: retry returned no narrative for %s "
-                    "(tier=%s) — marking gold_verdict_failed",
-                    match_key, _pregen_edge_tier,
-                )
 
     if _gold_verdict_failed:
         # Alert EdgeOps: write to gold_verdict_failed_edges table

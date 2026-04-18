@@ -122,7 +122,10 @@ from card_data import (
     build_edge_summary_data,
 )
 from card_renderer import render_card_sync, warm_chromium as _warm_chromium
-from narrative_spec import _VERDICT_MAX_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings
+from narrative_spec import (
+    _VERDICT_MAX_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
+    check_banned_template, BANNED_TRIVIAL_VERDICT_TEMPLATES, _DIAMOND_PRICE_PREFIX_RE,
+)
 
 # ── Logging setup (BUG-008: RotatingFileHandler so bot.log is always written) ──
 from logging.handlers import RotatingFileHandler
@@ -7564,8 +7567,53 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
                 text += block.text
         text = text.strip()
 
+        # F1 shape-guard + F4 observability — FIX-VERDICT-SHAPE-GUARD-01
+        # Fires BEFORE trim so the raw Sonnet output is checked, not a truncated fragment.
+        _bt_idx = check_banned_template(text)
+        if _bt_idx >= 0:
+            log.warning(
+                "verdict_rejected_banned_template: tier=%s len=%d template_idx=%d text=%r",
+                confidence_tier, len(text), _bt_idx, text[:200],
+            )
+            # Retry once with elevated temperature and a reason-first hint.
+            _sg_retry_text = ""
+            try:
+                _sg_resp = client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=128,
+                    temperature=0.85,
+                    system=system_prompt,
+                    messages=[
+                        {"role": "user", "content": "\n".join(lines)},
+                        {"role": "assistant", "content": text},
+                        {"role": "user", "content": (
+                            "The previous attempt opened with the price. "
+                            "Lead with a REASON (form, matchup, price movement), not the price."
+                        )},
+                    ],
+                )
+                _sg_raw = "".join(
+                    b.text for b in _sg_resp.content if hasattr(b, "text") and b.text
+                ).strip()
+                if check_banned_template(_sg_raw) < 0:
+                    _sg_retry_text = _sg_raw
+            except Exception as _sg_exc:
+                log.warning("_generate_verdict: shape-guard retry failed: %s", _sg_exc)
+            if _sg_retry_text:
+                text = _sg_retry_text
+            else:
+                # Both attempts matched banned template — fall through to programmatic fallback.
+                raise ValueError(
+                    f"shape_guard: banned_template idx={_bt_idx} on both attempts"
+                )
+
         # FIX-REGRESS-D1-VERDICT-GUARD-01: reject LLM meta-reply leaks before trim
         if _reject_llm_meta_strings(text):
+            # F4 observability — meta-marker rejection path (FIX-VERDICT-SHAPE-GUARD-01)
+            log.warning(
+                "verdict_rejected_banned_template: tier=%s len=%d template_idx=-1 text=%r",
+                confidence_tier, len(text), text[:200],
+            )
             log.warning("_generate_verdict: LLM meta-leak detected, rejecting: %s", text[:60])
             try:
                 import sentry_sdk as _sentry_mod
@@ -7583,6 +7631,15 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         text = _trim_to_last_sentence(text, max_chars=_VERDICT_MAX_CHARS)
         if not text:
             log.warning("_generate_verdict: no complete sentence in output")
+            return ""
+
+        # F4 observability — banned-opener match path (FIX-VERDICT-SHAPE-GUARD-01)
+        # Catches "At 1.85, the Reds are the play." style openers banned in all tiers.
+        if _DIAMOND_PRICE_PREFIX_RE.match(text):
+            log.warning(
+                "verdict_rejected_banned_template: tier=%s len=%d template_idx=-2 text=%r",
+                confidence_tier, len(text), text[:200],
+            )
             return ""
 
         # Echo detection: if LLM returned its input data dump instead of a verdict
