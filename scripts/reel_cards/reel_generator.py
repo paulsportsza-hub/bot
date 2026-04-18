@@ -516,11 +516,11 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
                     "Gap noted: MOQ DB not shared with integration.", MOQ_DB_ID)
         return False
 
-    # Archive existing today's Awaiting Approval Reel Still items
+    # Archive existing today's Approved Reel Still items (idempotent re-run guard)
     existing = _notion_request("POST", f"/databases/{MOQ_DB_ID}/query", {
         "filter": {
             "and": [
-                {"property": "Status", "select": {"equals": "Awaiting Approval"}},
+                {"property": "Status", "select": {"equals": "Approved"}},
                 {"property": "Title", "rich_text": {"contains": f"Reel Still"}},
                 {"property": "Title", "rich_text": {"contains": today}},
             ]
@@ -532,7 +532,7 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
         _notion_request("PATCH", f"/pages/{page['id']}", {"archived": True})
         archived += 1
     if archived:
-        log.info("[MOQ] Archived %d stale Awaiting Approval item(s) for %s", archived, today)
+        log.info("[MOQ] Archived %d stale Approved item(s) for %s", archived, today)
 
     props_schema = schema.get("properties", {})
     status_field = None
@@ -624,7 +624,7 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
         for channel, asset, copy, emoji, post_type_val in tg_channels:
             moq_props: dict = {
                 "Title": {"title": [{"text": {"content": f"{emoji} Reel Still — {tier_upper} — {channel} — {today}"}}]},
-                "Status": {"select": {"name": "Awaiting Approval"}},
+                "Status": {"select": {"name": "Approved"}},
                 "Channel": {"select": {"name": channel}},
                 "Asset Link": {"url": asset},
                 "Final Copy": {"rich_text": [{"text": {"content": copy}}]},
