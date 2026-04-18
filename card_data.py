@@ -750,12 +750,8 @@ def build_edge_detail_data(tip: dict, card_width: int = 480) -> dict:
         # DEF-2: capped at 3 per team to prevent card overflow
         "home_injuries": (tip.get("home_injuries") or [])[:3],
         "away_injuries": (tip.get("away_injuries") or [])[:3],
-        # FIX-REGRESS-D1-BOOKMAKER-LINE-01: compact single-line string for injury row.
-        # Empty string → template collapses row (no placeholder rendered).
-        "important_injuries": _build_important_injuries(
-            (tip.get("home_injuries") or [])[:3],
-            (tip.get("away_injuries") or [])[:3],
-        ),
+        # FIX-INJURY-SUPPRESS-01: always empty — injury line suppressed on Edge Detail cards.
+        "important_injuries": "",
 
         # Verdict — raw, no injury appending (BUILD-VERDICT-INJURY-SPLIT-01)
         "verdict": tip.get("verdict") or "",
