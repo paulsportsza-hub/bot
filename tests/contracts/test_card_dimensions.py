@@ -178,7 +178,7 @@ def test_build_edge_detail_data_max_bookmakers_at_360():
 
 
 def test_build_edge_detail_data_injuries_line_populated():
-    """important_injuries is non-empty when home/away injuries present."""
+    """important_injuries is always empty on Edge Detail cards (FIX-INJURY-SUPPRESS-01)."""
     from card_data import build_edge_detail_data
 
     tip = {
@@ -187,8 +187,9 @@ def test_build_edge_detail_data_injuries_line_populated():
         "away_injuries": [{"player": "Salah", "reason": "doubt"}],
     }
     data = build_edge_detail_data(tip)
-    assert data["important_injuries"] != "", "important_injuries should be non-empty"
-    assert "Saka" in data["important_injuries"]
+    assert data["important_injuries"] == "", (
+        "important_injuries must always be empty on Edge Detail cards (FIX-INJURY-SUPPRESS-01)"
+    )
 
 
 def test_build_edge_detail_data_injuries_line_empty_when_no_injuries():
@@ -199,4 +200,21 @@ def test_build_edge_detail_data_injuries_line_empty_when_no_injuries():
     data = build_edge_detail_data(tip)
     assert data["important_injuries"] == "", (
         "important_injuries must be empty string — no placeholder allowed"
+    )
+
+
+def test_build_match_detail_data_injuries_always_empty():
+    """home_injuries and away_injuries are always [] on My Matches detail cards (FIX-INJURY-SUPPRESS-02)."""
+    from card_data import build_match_detail_data
+
+    match = {
+        "home_injuries": [{"player": "Saka", "reason": "hamstring"}],
+        "away_injuries": [{"player": "Salah", "reason": "doubt"}, {"player": "Diaz", "reason": "knock"}],
+    }
+    data = build_match_detail_data(match)
+    assert data["home_injuries"] == [], (
+        "home_injuries must always be [] on My Matches detail cards (FIX-INJURY-SUPPRESS-02)"
+    )
+    assert data["away_injuries"] == [], (
+        "away_injuries must always be [] on My Matches detail cards (FIX-INJURY-SUPPRESS-02)"
     )

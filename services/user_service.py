@@ -39,6 +39,33 @@ def _infer_leagues_for_team(team: str, sport_key: str) -> list[str]:
     return leagues
 
 
+def resolve_user_league_keys(prefs) -> tuple[set, set]:
+    """Return (user_teams, league_keys) with auto-inference for prefs with league=None.
+
+    Canonical source for both _render_your_games_all and _fetch_schedule_games.
+    FIX-MY-MATCHES-INFERENCE-01.
+    """
+    user_teams: set = set()
+    league_keys: set = set()
+    for pref in prefs:
+        if pref.team_name:
+            user_teams.add(pref.team_name.lower())
+        if pref.league:
+            league_keys.add(pref.league)
+        elif pref.team_name:
+            team_name = pref.team_name
+            inferred = config.TEAM_TO_LEAGUES.get(team_name, [])
+            if not inferred:
+                canonical = config.TEAM_ALIASES.get(team_name.lower(), "")
+                if canonical:
+                    inferred = config.TEAM_TO_LEAGUES.get(canonical, [])
+            sport_key = pref.sport_key or ""
+            for ilk in inferred:
+                if not sport_key or config.LEAGUE_SPORT.get(ilk) == sport_key:
+                    league_keys.add(ilk)
+    return user_teams, league_keys
+
+
 def classify_archetype(
     experience: str, risk: str, num_sports: int,
 ) -> tuple[str, float]:

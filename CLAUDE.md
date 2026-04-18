@@ -784,7 +784,7 @@ CLI agents push markdown reports to Notion via push-report script. Reports land 
 - Source: /home/paulsportsza/push-report.py
 - Zero external deps — Python 3 stdlib only (urllib.request)
 - Features: Multi-page splitting (>95 blocks → linked pages of 90), h4+ heading fix, 30s timeout
-- Config: PROJECT = "MzansiEdge", VALID_AGENTS = ["QA", "LeadDev", "Dataminer", "UX"], NOTION_DB_ID = "a7cd424d700a4ab684ec10bd08c9948b"
+- Config: PROJECT = "MzansiEdge", CANONICAL_AGENTS = ["Opus Max Effort - COO", "Opus Max Effort - AUDITOR", "Opus Max Effort - LEAD", "Opus - COO", "Opus - AUDITOR", "Opus - LEAD", "Sonnet - COO", "Sonnet - AUDITOR", "Sonnet - LEAD"], NOTION_DB_ID = "a7cd424d700a4ab684ec10bd08c9948b"
 
 ### Environment Variables (set in /etc/environment AND ~/.bashrc)
     NOTION_TOKEN=(set in ~/.bashrc — do not commit)
@@ -800,8 +800,8 @@ If INVALID: token has been rotated. Ask Ops Hub for the current NOTION_TOKEN and
 The push-report script silently returns ✅ even on auth failure — always verify with curl first.
 
 ### Usage
-    push-report --agent QA --wave 9A /home/paulsportsza/reports/qa-wave9a-20260225-1527.md
-    push-report --agent LeadDev --wave 9B --status "Action Taken" --title "Merge Complete" report.md
+    push-report --agent "Sonnet - AUDITOR" --wave 9A /home/paulsportsza/reports/qa-wave9a-20260225-1527.md
+    push-report --agent "Sonnet - LEAD" --wave 9B --status "Action Taken" --title "Merge Complete" report.md
 
 ### Agent Brief Template (REPORT section)
 Every agent brief MUST end with a REPORT section containing:

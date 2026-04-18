@@ -37,6 +37,16 @@ import config
 
 log = logging.getLogger("mzansiedge.stitch")
 
+# FIX-STITCH-CLOUDFLARE-UA-01: Cloudflare blocks default Python/aiohttp UA on Hetzner.
+# All outbound Stitch requests must use this factory.
+_STITCH_HEADERS = {"User-Agent": "MzansiEdge/1.0"}
+
+
+def _stitch_session() -> aiohttp.ClientSession:
+    """Return a ClientSession with headers that clear Cloudflare's ASN block."""
+    return aiohttp.ClientSession(headers=_STITCH_HEADERS)
+
+
 # ── Cached client token ──────────────────────────────────
 _token_cache: dict[str, Any] = {}  # {"token": str, "expires_at": float}
 
@@ -82,7 +92,7 @@ class StitchService:
         if cached and time.time() < expires_at:
             return cached
 
-        async with aiohttp.ClientSession() as session:
+        async with _stitch_session() as session:
             async with session.post(
                 self.TOKEN_URL,
                 data={
@@ -160,7 +170,7 @@ class StitchService:
             "externalReference": str(user_id),
         }
 
-        async with aiohttp.ClientSession() as session:
+        async with _stitch_session() as session:
             async with session.post(
                 self.GRAPHQL_URL,
                 json={"query": mutation, "variables": variables},
@@ -229,7 +239,7 @@ class StitchService:
         }
         """
 
-        async with aiohttp.ClientSession() as session:
+        async with _stitch_session() as session:
             async with session.post(
                 self.GRAPHQL_URL,
                 json={"query": query, "variables": {"paymentId": payment_id}},
@@ -367,7 +377,7 @@ class StitchService:
             "externalReference": str(user_id),
         }
 
-        async with aiohttp.ClientSession() as session:
+        async with _stitch_session() as session:
             async with session.post(
                 self.GRAPHQL_URL,
                 json={"query": mutation, "variables": variables},
