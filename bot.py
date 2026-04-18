@@ -1863,26 +1863,44 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 # Edge cards must render as edge cards regardless of entry point
                 _mm_tip_key = ""  # P0-BUILD-MM-RENDER-01: canonical key from edge tip; used in fallthrough
                 if _mm_kind == "e":
-                    _mm_full_tip = _mm_match.get("_full_tip")
-                    if _mm_full_tip:
-                        _mm_tip_key = _mm_full_tip.get("match_id", "")
-                        if _mm_tip_key:
-                            # P0-BUILD-MM-RENDER-01 Cache Seeding: inject pre-generated narrative
-                            # so Haiku circuit breaker open does not produce an empty card body
-                            _mm_cached_entry = _analysis_cache.get(_mm_tip_key)
-                            if _mm_cached_entry and _mm_cached_entry[0]:
-                                _mm_full_tip = {**_mm_full_tip, "_analysis_text": _mm_cached_entry[0]}
-                            _mm_ut = await get_effective_tier(user_id)
-                            _mm_edge_tier = _mm_match.get("edge_tier", "bronze")
-                            _mm_back_pg = _ht_page_state.get(user_id, 0)
-                            _mm_card_served = await _serve_card_detail(
-                                query, _mm_tip_key, _mm_full_tip, user_id, _mm_ut,
-                                _mm_edge_tier, back_page=_mm_back_pg, include_analysis=True,
-                                source="matches",
-                            )
-                            if _mm_card_served:
-                                return
-                    # Fallthrough: _full_tip missing (cached session) or card pipeline failed
+                    _mm_full_tip  = _mm_match.get("_full_tip")
+                    _mm_ut        = await get_effective_tier(user_id)
+                    _mm_edge_tier = _mm_match.get("edge_tier", "bronze")
+                    _mm_back_pg   = _ht_page_state.get(user_id, 0)
+
+                    # Root Cause A fix: access gate — only entitled users see edge card
+                    from tier_gate import get_edge_access_level as _gal
+                    _mm_access = _gal(_mm_ut, _mm_edge_tier)
+
+                    if _mm_access in ("full", "partial"):
+                        if _mm_full_tip:
+                            _mm_tip_key = _mm_full_tip.get("match_id", "")
+                            # Root Cause C fix: normalise UUID -> canonical key so edge path is not bypassed
+                            if not _mm_tip_key or "_vs_" not in _mm_tip_key:
+                                _mm_tip_key = _normalise_mm_event_id(_mm_full_tip, _mm_match)
+
+                            if _mm_tip_key:
+                                # P0-BUILD-MM-RENDER-01 Cache Seeding: inject pre-generated narrative
+                                # so Haiku circuit breaker open does not produce an empty card body
+                                _mm_cached_entry = _analysis_cache.get(_mm_tip_key)
+                                if _mm_cached_entry and _mm_cached_entry[0]:
+                                    _mm_full_tip = {**_mm_full_tip, "_analysis_text": _mm_cached_entry[0]}
+                                _mm_card_served = await _serve_card_detail(
+                                    query, _mm_tip_key, _mm_full_tip, user_id, _mm_ut,
+                                    _mm_edge_tier, back_page=_mm_back_pg, include_analysis=True,
+                                    source="matches",
+                                )
+                                if _mm_card_served:
+                                    return
+
+                        # Root Cause B fix: card pipeline failed / tip missing for entitled user
+                        # Fall back to AI narrative, NOT match_detail.html
+                        _mm_eid = _mm_match.get("_event_id", "")
+                        if _mm_eid:
+                            await _generate_game_tips_safe(query, ctx, _mm_eid, user_id, source="matches")
+                            return
+
+                    # blurred / locked access — intentional fallthrough to match_detail.html below
                 # MM-04: Both edge and non-edge use match_detail.html (data-only card:
                 # market overview, key stats, injury watch, H2H — COO-locked 9 Apr 2026)
                 # P0-BUILD-MM-RENDER-01 Fallthrough Hardening: when match_id was already
