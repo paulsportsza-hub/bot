@@ -86,6 +86,13 @@ from config import ODDS_DB_PATH, ensure_scrapers_importable
 # One-time path setup: replaces all scattered sys.path.insert blocks
 ensure_scrapers_importable()
 
+# FIX-TIMEZONE-CANON-01B: canonical timezone utilities from publisher
+import sys as _sys_tz
+_pub_tz_path = str(pathlib.Path(__file__).resolve().parent.parent / "publisher")
+if _pub_tz_path not in _sys_tz.path:
+    _sys_tz.path.insert(0, _pub_tz_path)
+from timezone_utils import assume_utc, assume_sast, to_sast
+
 import db
 from scripts.odds_client import (
     fetch_odds, format_odds_message,
@@ -2224,7 +2231,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                                 from datetime import datetime as _dt16c, timezone as _tz16c
                                 _ca_dt = _dt16c.fromisoformat(str(_ca_raw))
                                 if _ca_dt.tzinfo is None:
-                                    _ca_dt = _ca_dt.replace(tzinfo=_tz16c.utc)
+                                    _ca_dt = assume_utc(_ca_dt)
                                 _age_min = (_dt16c.now(_tz16c.utc) - _ca_dt).total_seconds() / 60
                                 _b16c_stale = _age_min > 30
                         except (ValueError, TypeError):
@@ -4323,7 +4330,7 @@ def _coerce_profile_dt(value):
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=_dt.timezone.utc)
+        return assume_utc(value)
     return value.astimezone(_dt.timezone.utc)
 
 
@@ -5364,7 +5371,7 @@ def _parse_date(commence_time: str):
         ct = dt_cls.fromisoformat(commence_time.replace("Z", "+00:00"))
         if ct.tzinfo is None:
             # Naive datetime — assume it's already in SAST (e.g. from broadcast_schedule)
-            ct = ct.replace(tzinfo=tz)
+            ct = assume_sast(ct)
         return ct.astimezone(tz)
     except Exception:
         return None
@@ -6447,7 +6454,7 @@ async def _get_cached_match_card_context(
             try:
                 expires = datetime.fromisoformat(expires_at)
                 if expires.tzinfo is None:
-                    expires = expires.replace(tzinfo=timezone.utc)
+                    expires = assume_utc(expires)
                 return datetime.now(timezone.utc) <= expires
             except (TypeError, ValueError):
                 return False
@@ -9335,7 +9342,7 @@ def _build_event_header(
     try:
         ct = _dt.fromisoformat(commence.replace("Z", "+00:00"))
         if ct.tzinfo is None:
-            ct = ct.replace(tzinfo=_ZI(config.TZ))
+            ct = assume_sast(ct)
         ct_sa = ct.astimezone(_ZI(config.TZ))
         if not (ct_sa.hour == 2 and ct_sa.minute == 0):
             kickoff = ct_sa.strftime("%a %-d %b, %H:%M") + " SAST"
@@ -9652,9 +9659,11 @@ def _format_freshness(minutes_ago: int, same_day_match: bool = False, odds_ts: s
         # ODDS-FRESHNESS-01: same-day match with odds >90 min old — show explicit warning
         if odds_ts:
             try:
-                from datetime import datetime, timezone, timedelta
+                from datetime import datetime
                 _ts = datetime.fromisoformat(odds_ts.replace("Z", "+00:00"))
-                _sast = _ts + timedelta(hours=2)
+                if _ts.tzinfo is None:
+                    _ts = assume_utc(_ts)
+                _sast = to_sast(_ts)
                 _time_str = _sast.strftime("%H:%M")
                 return f"<i>⚠️ Odds as of {_time_str} SAST — verify on bookmaker before placing</i>"
             except Exception:
@@ -10622,7 +10631,7 @@ def _resolve_kickoff_time(
             dt_obj = _dt.fromisoformat(s)
             if dt_obj.tzinfo is None:
                 # sportmonks_fixtures match_date is UTC
-                dt_obj = dt_obj.replace(tzinfo=_ZI("UTC"))
+                dt_obj = assume_utc(dt_obj)
             return _fmt_sast_dt(dt_obj.astimezone(_SAST))
         except Exception:
             return ("", "")
@@ -10637,7 +10646,7 @@ def _resolve_kickoff_time(
                 s = s.replace(" ", "T")
             dt_obj = _dt.fromisoformat(s)
             if dt_obj.tzinfo is None:
-                dt_obj = dt_obj.replace(tzinfo=_SAST)
+                dt_obj = assume_sast(dt_obj)
             return _fmt_sast_dt(dt_obj.astimezone(_SAST))
         except Exception:
             return ("", "")
@@ -10723,7 +10732,7 @@ def _resolve_kickoff_time(
                                 _ko_raw = _ko_raw.replace(" ", "T")
                             _ko_dt = _dt.fromisoformat(_ko_raw)
                             if _ko_dt.tzinfo is None:
-                                _ko_dt = _ko_dt.replace(tzinfo=_ZI("UTC"))
+                                _ko_dt = assume_utc(_ko_dt)
                             if _ko_dt < _dt.now(_ZI("UTC")) - _td(hours=2):
                                 log.warning(
                                     "_resolve_kickoff_time: fixture_mapping stale for %s "
@@ -13105,7 +13114,7 @@ def _cleanup_expired_narrative_cache_rows(limit: int | None = None) -> int:
             try:
                 exp = datetime.fromisoformat(expires_at)
                 if exp.tzinfo is None:
-                    exp = exp.replace(tzinfo=timezone.utc)
+                    exp = assume_utc(exp)
             except (TypeError, ValueError):
                 expired_ids.append(match_id)
                 continue
@@ -13257,7 +13266,7 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
             try:
                 exp = datetime.fromisoformat(expires_at)
                 if exp.tzinfo is None:
-                    exp = exp.replace(tzinfo=timezone.utc)
+                    exp = assume_utc(exp)
                 if datetime.now(timezone.utc) > exp:
                     return None  # Expired
             except (ValueError, TypeError):
@@ -13742,7 +13751,7 @@ def _is_verdict_stale(cached: dict) -> bool:
     try:
         created = datetime.fromisoformat(created_str)
         if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
+            created = assume_utc(created)
         age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
         if age_hours > 24:
             return True
@@ -14762,7 +14771,7 @@ def _parse_narrative_timestamp(value: str | None):
     if dt_value is None:
         return None
     if dt_value.tzinfo is None:
-        return dt_value.replace(tzinfo=timezone.utc)
+        return assume_utc(dt_value)
     return dt_value.astimezone(timezone.utc)
 
 
@@ -19345,7 +19354,7 @@ async def _generate_haiku_match_summary(
             try:
                 exp = datetime.fromisoformat(expires_at)
                 if exp.tzinfo is None:
-                    exp = exp.replace(tzinfo=timezone.utc)
+                    exp = assume_utc(exp)
                 if datetime.now(timezone.utc) > exp:
                     return None
             except (ValueError, TypeError):
@@ -20214,7 +20223,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     try:
         ct = dt_cls.fromisoformat(target_event["commence_time"].replace("Z", "+00:00"))
         if ct.tzinfo is None:
-            ct = ct.replace(tzinfo=ZoneInfo(config.TZ))
+            ct = assume_sast(ct)
         ct_sa = ct.astimezone(ZoneInfo(config.TZ))
         kickoff = ct_sa.strftime("%a %d %b, %H:%M") + " SAST"
     except Exception:
@@ -25594,7 +25603,7 @@ def _kickoff_for_match_key(match_key: str):
             return None
         dt = datetime.fromisoformat(str(row[0]))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=ZoneInfo("Africa/Johannesburg"))
+            dt = assume_sast(dt)
         return dt
     except Exception as exc:
         log.debug("_kickoff_for_match_key(%s) failed: %s", match_key, exc)
