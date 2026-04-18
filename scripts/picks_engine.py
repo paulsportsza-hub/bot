@@ -7,10 +7,18 @@ ranks by edge size, and formats pick cards.
 from __future__ import annotations
 
 import logging
+import pathlib
+import sys
 from datetime import datetime
 from typing import Any, Optional
 
 import config
+
+# FIX-TIMEZONE-CANON-01C: canonical timezone utilities from publisher
+_pub_path = str(pathlib.Path(__file__).resolve().parents[2] / "publisher")
+if _pub_path not in sys.path:
+    sys.path.insert(0, _pub_path)
+from timezone_utils import to_sast  # noqa: E402
 from scripts.odds_client import (
     calculate_ev,
     ev_confidence,
@@ -387,10 +395,10 @@ def format_pick_card(pick: dict, index: int, experience: str = "casual") -> str:
     bookie = config.get_active_display_name()
     market = pick["market"]
 
-    # Parse commence time
+    # Parse commence time — convert UTC to SAST for display
     try:
         ct = datetime.fromisoformat(pick["commence_time"].replace("Z", "+00:00"))
-        kickoff = ct.strftime("%a %d %b, %H:%M")
+        kickoff = to_sast(ct).strftime("%a %d %b, %H:%M")
     except Exception:
         kickoff = "TBC"
 
