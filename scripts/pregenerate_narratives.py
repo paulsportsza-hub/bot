@@ -61,13 +61,13 @@ log.setLevel(logging.INFO)
 
 # Model IDs
 MODELS = {
-    "full": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514"),
-    "refresh": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514"),
-    "uncached_only": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514"),
+    "full": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6"),
+    "refresh": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6"),
+    "uncached_only": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6"),
 }
 SHADOW_MODEL = os.environ.get(
     "NARRATIVE_SHADOW_MODEL",
-    os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514"),
+    os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6"),
 )
 # BUILD-DUAL-MODEL-PREGEN: Haiku for non-edge match previews (~12x cheaper than Sonnet).
 HAIKU_MODEL = os.environ.get("NARRATIVE_HAIKU_MODEL", "claude-haiku-4-5-20251001")

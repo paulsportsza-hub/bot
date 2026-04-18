@@ -3618,7 +3618,7 @@ async def handle_ai(query, action: str) -> None:
 
     try:
         resp = await claude.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             messages=[
@@ -12052,7 +12052,7 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         resp = await claude.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
@@ -12901,7 +12901,7 @@ def _build_odds_compare_back_button(user_id: int, event_id: str) -> InlineKeyboa
 _NARRATIVE_CACHE_TTL = 21600  # 6 hours in seconds (BUILD-16b/FIX-2A: extended from 2h)
 _NARRATIVE_DB_PATH = str(ODDS_DB_PATH)
 # W75-FIX: Cache miss uses Sonnet (not Haiku) for quality parity with pre-gen
-_NARRATIVE_MODEL = os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-20250514")
+_NARRATIVE_MODEL = os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6")
 
 
 def _ensure_narrative_cache_table() -> None:
