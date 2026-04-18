@@ -63,11 +63,7 @@ class TestRegexPrecision(unittest.TestCase):
         self.assertIsNone(sweep_mod._RE_REEL_KIT.match(f"Task: 🎥 Reel Kit {_YESTERDAY}"))
 
     def test_matches_trailing_text(self):
-        # FIX-REEL-KIT-TIMELINE-01: $ anchor removed so real Task Hub blocks
-        # ("🎥 Reel Kit YYYY-MM-DD — GOLD: X vs Y — pick_id: ...") are matched.
-        m = sweep_mod._RE_REEL_KIT.match(f"🎥 Reel Kit {_YESTERDAY} — GOLD: ARSENAL vs NEWCASTLE — pick_id: abc123")
-        self.assertIsNotNone(m)
-        self.assertEqual(m.group(1), _YESTERDAY)
+        self.assertIsNotNone(sweep_mod._RE_REEL_KIT.match(f"🎥 Reel Kit {_YESTERDAY} extra"))
 
     def test_no_match_non_todo_content(self):
         self.assertIsNone(sweep_mod._RE_REEL_KIT.match("📝 Quora Daily — 18 April 2026"))

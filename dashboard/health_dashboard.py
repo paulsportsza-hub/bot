@@ -100,7 +100,7 @@ NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
 NOTION_MARKETING_DB = "58123052-0e48-466a-be63-5308e793e672"
 NOTION_TASK_HUB_PAGE = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
 # BUILD-REEL-KIT-DATE-RULE-01 (Piece B): set True when BUILD-SOCIAL-OPS-URGENT-PILLS-01 lands
-SHOW_REEL_KIT_ON_TIMELINE = False
+SHOW_REEL_KIT_ON_TIMELINE = True
 # Task Hub data sources (17 Apr 2026 — rewired to real DSs, old IDs were empty scaffold pages)
 # LinkedIn has no separate ledger DB — reads from MOQ Channel=LinkedIn
 NOTION_LINKEDIN_DB = os.getenv(
@@ -3629,10 +3629,6 @@ def render_automation_content() -> str:
 .so-tile-thumb{width:28px;height:28px;border-radius:4px;object-fit:cover;background:var(--surface-alt);flex-shrink:0;}
 .so-tile-tag{font-family:var(--font-m);font-size:9px;text-transform:uppercase;letter-spacing:.5px;padding:1px 5px;border-radius:3px;flex-shrink:0;border:1px solid var(--border);color:var(--muted);}
 .so-tile-skel{background:var(--surface-alt);border-radius:4px;height:14px;animation:skel-p 1.2s ease-in-out infinite alternate;}
-@keyframes pill-pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
-.pill-overdue{position:absolute;top:50%;transform:translate(-50%,-50%);background:#dc2626;color:#fff;border-radius:10px;padding:1px 8px;font-family:var(--font-m);font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;white-space:nowrap;z-index:5;animation:pill-pulse 1.5s ease-in-out infinite;border:none;cursor:default;}
-.pill-upcoming{position:absolute;top:50%;transform:translate(-50%,-50%);background:var(--surface-alt);color:var(--muted);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-family:var(--font-m);font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;white-space:nowrap;z-index:5;cursor:default;}
-.rk-overdue{background:#dc2626;color:#fff;border-radius:10px;padding:1px 8px;font-family:var(--font-m);font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;animation:pill-pulse 1.5s ease-in-out infinite;}
 .so-tl-wrap{position:relative;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--glow);}
 .so-tl-wrap::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.7;pointer-events:none;z-index:1;}
 .so-tl-content{position:relative;}
@@ -3829,9 +3825,7 @@ function resolveCollisions(posts){
   return res;
 }
 function renderRow(ch,ri){
-  var regularPosts=(ch.posts||[]).filter(function(p){return p.kind!=='overdue'&&p.kind!=='upcoming';});
-  var expectedSlots=(ch.posts||[]).filter(function(p){return p.kind==='overdue'||p.kind==='upcoming';});
-  var its=resolveCollisions(regularPosts);
+  var its=resolveCollisions(ch.posts);
   var icons=its.map(function(it,ci){
     var p=it.p,pct=(p.mins/1440*100).toFixed(3)+'%';
     if(it.chip){
@@ -3848,12 +3842,6 @@ function renderRow(ch,ri){
       svgI(p.icon||'help-circle')+
       '</button>';
   }).join('');
-  var pills=expectedSlots.map(function(p){
-    var pct=(p.mins/1440*100).toFixed(3)+'%';
-    var pillCls=p.kind==='overdue'?'pill-overdue':'pill-upcoming';
-    var lbl=p.slot_label||p.sched||'?';
-    return '<span class="'+pillCls+'" style="left:'+pct+'" title="'+eA(lbl+' · '+p.sched)+' SAST">'+eH(lbl)+'</span>';
-  }).join('');
   return '<div class="so-tl-row" role="row" aria-label="'+eA(ch.label)+'" data-row-idx="'+ri+'" tabindex="0">'+
     '<div class="so-tl-row-lbl" style="color:'+eA(ch.color||'')+'">'+(ch.icon?'<span class="so-tl-ch-icon">'+ch.icon+'</span>':'')+eH(ch.label)+'</div>'+
     '<div class="so-tl-bar" id="so-bar-'+ri+'">'+
@@ -3865,7 +3853,7 @@ function renderRow(ch,ri){
     '<div class="so-tl-gl so-tl-gl-mid" style="left:62.5%"></div>'+
     '<div class="so-tl-gl" style="left:75%"></div>'+
     '<div class="so-tl-gl so-tl-gl-mid" style="left:87.5%"></div>'+
-    icons+pills+'</div></div>';
+    icons+'</div></div>';
 }
 
 // ── Keyboard navigation ───────────────────────────────────────────────
@@ -7229,122 +7217,6 @@ def api_social_ops():
     return _no_store(Response(content, mimetype="text/html"))
 
 
-# -- Expected-slot cadence contract (BUILD-SOCIAL-OPS-PILLS-HEALTH-01) -------
-SHOW_REEL_KIT_ON_TIMELINE = True  # FIX-REEL-KIT-TIMELINE-01 flipped
-
-TODAY_EXPECTED_SLOTS: list[dict] = [
-    # Telegram Alerts (Edge picks) — daily
-    {"channel": "Telegram Alerts",    "slot_time_sast": "07:30", "slot_label": "Edge Pick #1",    "dow": [0,1,2,3,4,5,6]},
-    {"channel": "Telegram Alerts",    "slot_time_sast": "13:00", "slot_label": "Edge Pick #2",    "dow": [0,1,2,3,4,5,6]},
-    {"channel": "Telegram Alerts",    "slot_time_sast": "18:00", "slot_label": "Edge Pick #3",    "dow": [0,1,2,3,4,5,6]},
-    # Telegram Community (group updates) — daily
-    {"channel": "Telegram Community", "slot_time_sast": "08:00", "slot_label": "Morning Brief",   "dow": [0,1,2,3,4,5,6]},
-    {"channel": "Telegram Community", "slot_time_sast": "12:00", "slot_label": "Midday Update",   "dow": [0,1,2,3,4,5,6]},
-    {"channel": "Telegram Community", "slot_time_sast": "15:00", "slot_label": "Afternoon Check", "dow": [0,1,2,3,4,5,6]},
-    {"channel": "Telegram Community", "slot_time_sast": "20:00", "slot_label": "Evening Wrap",    "dow": [0,1,2,3,4,5,6]},
-    # WhatsApp Channel (newsletter briefs) — daily
-    {"channel": "WhatsApp Channel",   "slot_time_sast": "08:00", "slot_label": "Morning Brief",   "dow": [0,1,2,3,4,5,6]},
-    {"channel": "WhatsApp Channel",   "slot_time_sast": "13:00", "slot_label": "Midday Update",   "dow": [0,1,2,3,4,5,6]},
-    {"channel": "WhatsApp Channel",   "slot_time_sast": "18:00", "slot_label": "Evening Cards",   "dow": [0,1,2,3,4,5,6]},
-    # WhatsApp direct broadcast — daily
-    {"channel": "WhatsApp",           "slot_time_sast": "09:00", "slot_label": "WA Brief #1",     "dow": [0,1,2,3,4,5,6]},
-    {"channel": "WhatsApp",           "slot_time_sast": "19:00", "slot_label": "WA Brief #2",     "dow": [0,1,2,3,4,5,6]},
-    # Instagram Reel — daily
-    {"channel": "Instagram Reel",     "slot_time_sast": "18:00", "slot_label": "IG Reel",         "dow": [0,1,2,3,4,5,6]},
-    # TikTok — Saturday only (B.R.U clip rotation)
-    {"channel": "TikTok",             "slot_time_sast": "11:00", "slot_label": "B.R.U clip",      "dow": [5]},
-]
-
-
-def _slots_for_dow(dow: int) -> list[dict]:
-    """Return expected slots active on the given day of week (0=Mon, 6=Sun)."""
-    return [s for s in TODAY_EXPECTED_SLOTS if dow in s["dow"]]
-
-
-def _merge_expected_slots(
-    day_str: str,
-    items: list[dict],
-    now_utc: datetime,
-) -> tuple[dict, int]:
-    """
-    Compute unmatched expected slots for a given SAST day.
-
-    Returns (extra, overdue_count) where:
-      extra          — dict: channel_key -> list[post_dict] for unmatched slots
-      overdue_count  — number of overdue unmatched expected slots
-
-    Matching rule: a posted MOQ item on the same channel whose scheduled time
-    is within ±30 minutes of the slot time cancels that slot.
-    """
-    from datetime import date as _date
-    try:
-        day = _date.fromisoformat(day_str)
-    except ValueError:
-        return {}, 0
-
-    dow = day.weekday()
-    today_slots = _slots_for_dow(dow)
-    if not today_slots:
-        return {}, 0
-
-    now_sast  = now_utc.astimezone(_SAST)
-    is_today  = day_str == now_sast.strftime("%Y-%m-%d")
-    now_mins  = now_sast.hour * 60 + now_sast.minute if is_today else 1440
-
-    # Build set of (channel_key, slot_mins) for posted MOQ items on this day
-    posted_buckets: set[tuple[str, int]] = set()
-    for it in items:
-        st  = (it.get("status") or "").lower().strip()
-        if st not in _SO_POSTED_ST:
-            continue
-        sch = parse_ts(it.get("scheduled_time") or "")
-        if not sch:
-            continue
-        ss = sch.astimezone(_SAST)
-        if ss.strftime("%Y-%m-%d") != day_str:
-            continue
-        ck = _so_norm_channel(it.get("channel") or "")
-        if not ck:
-            continue
-        posted_buckets.add((ck, ss.hour * 60 + ss.minute))
-
-    extra: dict[str, list[dict]] = {}
-    overdue_count = 0
-
-    for slot in today_slots:
-        ck = _so_norm_channel(slot["channel"])
-        if not ck:
-            continue
-        h, m = map(int, slot["slot_time_sast"].split(":"))
-        slot_mins = h * 60 + m
-
-        # Skip if a posted item matches within ±30 min on the same channel
-        if any(pk == ck and abs(pm - slot_mins) <= 30 for pk, pm in posted_buckets):
-            continue
-
-        kind = "overdue" if slot_mins < now_mins else "upcoming"
-        if kind == "overdue":
-            overdue_count += 1
-
-        extra.setdefault(ck, []).append({
-            "id":         f"expected__{ck}__{slot_mins}",
-            "title":      slot["slot_label"],
-            "slot_label": slot["slot_label"],
-            "kind":       kind,
-            "mins":       slot_mins,
-            "sched":      slot["slot_time_sast"],
-            "sched_full": f"{slot['slot_time_sast']} SAST (expected)",
-            "status":     kind,
-            "type":       "expected",
-            "icon":       "clock",
-            "ch_lbl":     slot["channel"],
-            "error":      "",
-            "actual":     "",
-        })
-
-    return extra, overdue_count
-
-
 _SO_TL_CH = [
     ("telegram_alerts",    "TG Alerts"),
     ("telegram_community", "TG Community"),
@@ -7502,10 +7374,6 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
     now_sast = now_utc.astimezone(_SAST)
     now_mins = now_sast.hour * 60 + now_sast.minute if day_str == now_sast.strftime("%Y-%m-%d") else -1
 
-    # Merge expected cadence slots (BUILD-SOCIAL-OPS-PILLS-HEALTH-01)
-    expected_extra, expected_overdue = _merge_expected_slots(day_str, items, now_utc)
-    kpi_overdue_queue += expected_overdue
-
     channels = []
     for ck, clbl in _SO_TL_CH:
         posts = []
@@ -7529,7 +7397,6 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
                 "type":   it.get("work_type") or "",
                 "icon":   _so_icon_for(it.get("work_type") or "", ck),
                 "status": disp_st,
-                "kind":   "posted" if raw_st in _SO_POSTED_ST else disp_st,
                 "mins":   smins,
                 "sched":      f"{ss.hour:02d}:{ss.minute:02d}",
                 "sched_full": _render_sast(sdt),
@@ -7537,9 +7404,6 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
                 "error":  it.get("error") or "",
                 "ch_lbl": clbl,
             })
-        # Append unmatched expected slot pills for this channel
-        posts.extend(expected_extra.get(ck, []))
-        posts.sort(key=lambda p: p["mins"])
         channels.append({"key": ck, "label": clbl, "icon": _so_platform_icon_svg(ck), "color": _CHANNEL_MAP.get(ck, {}).get("color", "#888888"), "posts": posts})
 
     return {
