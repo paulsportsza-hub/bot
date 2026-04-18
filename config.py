@@ -52,6 +52,7 @@ ADMIN_IDS: list[int] = [int(i) for i in os.environ["ADMIN_IDS"].split(",")]
 # ── External APIs ──────────────────────────────────────────
 ODDS_API_KEY: str = os.environ["ODDS_API_KEY"]
 ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
+OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_MANAGEMENT_KEY", "")
 
 # ── Stitch (subscriptions — active) ──────────────────────
 STITCH_CLIENT_ID: str = os.environ.get("STITCH_CLIENT_ID", "")

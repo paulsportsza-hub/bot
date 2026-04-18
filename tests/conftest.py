@@ -14,6 +14,7 @@ os.environ["SENTRY_DSN"] = ""  # NEVER send test errors to production Sentry
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("ODDS_API_KEY", "test-odds-key")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
+os.environ.setdefault("OPENROUTER_API_KEY", "test-openrouter-key")
 os.environ.setdefault("ADMIN_IDS", "123456")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 

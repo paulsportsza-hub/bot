@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 _bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_bot_dir, ".env"))
 
-import anthropic
+import openrouter_client as anthropic
 from validators.sport_context import validate_sport_text  # REGFIX-03 wiring
 from evidence_pack import (
     _build_h2h_injection,
@@ -2340,7 +2340,7 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         return
 
     # Initialize Claude client
-    claude = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    claude = anthropic.AsyncAnthropic(api_key=os.getenv("OPENROUTER_API_KEY"))
 
     results = {
         "success": 0,

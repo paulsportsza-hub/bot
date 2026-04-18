@@ -274,7 +274,7 @@ class TestGoldEdgeModelGate(unittest.TestCase):
                 patch.object(pregen, "_verdict_bookmaker_aligned", return_value=True),
                 patch.object(pregen, "validate_sport_text", return_value=(True, [])),
                 # Make the Sonnet call always return the bad narrative
-                patch("anthropic.AsyncAnthropic") as mock_anthropic,
+                patch("openrouter_client.AsyncAnthropic") as mock_anthropic,
                 # Patch the DB write so no file access needed
                 patch("db_connection.get_connection") as mock_db,
             ):

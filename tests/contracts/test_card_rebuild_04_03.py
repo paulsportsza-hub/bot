@@ -79,7 +79,7 @@ def test_verdict_complete_sentence(case):
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
 
-    with patch("anthropic.Anthropic", return_value=mock_client):
+    with patch("openrouter_client.Anthropic", return_value=mock_client):
         result = _generate_verdict(case["tip"], case["verified"])
 
     assert result.endswith((".", "!")), f"Verdict must end with . or !: {result!r}"
@@ -94,7 +94,7 @@ def test_verdict_within_80_chars(case):
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
 
-    with patch("anthropic.Anthropic", return_value=mock_client):
+    with patch("openrouter_client.Anthropic", return_value=mock_client):
         result = _generate_verdict(case["tip"], case["verified"])
 
     assert len(result) <= 80, f"Verdict exceeds 80 chars ({len(result)}): {result!r}"
@@ -110,7 +110,7 @@ def test_verdict_contains_digit(case):
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
 
-    with patch("anthropic.Anthropic", return_value=mock_client):
+    with patch("openrouter_client.Anthropic", return_value=mock_client):
         result = _generate_verdict(case["tip"], case["verified"])
 
     assert re.search(r"\d", result), f"Verdict contains no digit: {result!r}"
@@ -125,7 +125,7 @@ def test_verdict_no_blacklisted_phrase(case):
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_resp
 
-    with patch("anthropic.Anthropic", return_value=mock_client):
+    with patch("openrouter_client.Anthropic", return_value=mock_client):
         result = _generate_verdict(case["tip"], case["verified"])
 
     lowered = result.lower()
@@ -147,7 +147,7 @@ def test_blacklist_rejects_home_advantage():
     tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2}
     verified = {"matchup": "Arsenal vs Chelsea", "tipster": {}}
 
-    with patch("anthropic.Anthropic", return_value=mock_client):
+    with patch("openrouter_client.Anthropic", return_value=mock_client):
         result = _generate_verdict(tip, verified)
 
     assert result == "", f"Expected '' for blacklisted verdict, got: {result!r}"
@@ -166,7 +166,7 @@ def test_each_blacklisted_phrase_triggers_rejection(phrase):
     tip = {"pick": "Team A", "odds": 2.10, "ev": 5.0}
     verified = {"matchup": "Team A vs Team B", "tipster": {}}
 
-    with patch("anthropic.Anthropic", return_value=mock_client):
+    with patch("openrouter_client.Anthropic", return_value=mock_client):
         result = _generate_verdict(tip, verified)
 
     assert result == "", f"Phrase {phrase!r} should trigger rejection, got: {result!r}"
@@ -185,7 +185,7 @@ def test_max_tokens_is_100():
     tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2, "home": "Arsenal", "away": "Chelsea"}
     verified = {"matchup": "Arsenal vs Chelsea", "tipster": {}}
 
-    with patch("anthropic.Anthropic", return_value=mock_client):
+    with patch("openrouter_client.Anthropic", return_value=mock_client):
         _generate_verdict(tip, verified)
 
     call_kwargs = mock_client.messages.create.call_args
@@ -205,7 +205,7 @@ def test_system_prompt_param_used():
     tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2, "home": "Arsenal", "away": "Chelsea"}
     verified = {"matchup": "Arsenal vs Chelsea", "tipster": {}}
 
-    with patch("anthropic.Anthropic", return_value=mock_client):
+    with patch("openrouter_client.Anthropic", return_value=mock_client):
         _generate_verdict(tip, verified)
 
     call_kwargs = mock_client.messages.create.call_args
@@ -237,7 +237,7 @@ def test_truncation_appends_period_when_missing():
     tip = {"pick": "Arsenal", "odds": 1.85, "ev": 9.2, "home": "Arsenal", "away": "Chelsea"}
     verified = {"matchup": "Arsenal vs Chelsea", "tipster": {}}
 
-    with patch("anthropic.Anthropic", return_value=mock_client):
+    with patch("openrouter_client.Anthropic", return_value=mock_client):
         result = _generate_verdict(tip, verified)
 
     # _trim_to_last_sentence caps at 140 chars; result ends with sentence terminal or is empty

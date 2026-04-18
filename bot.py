@@ -62,7 +62,7 @@ import textwrap
 from hashlib import md5 as _md5
 from html import escape as h
 
-import anthropic
+import openrouter_client as anthropic
 from telegram import (
     InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto,
     KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove,
@@ -99,6 +99,7 @@ from services.user_service import (
     classify_archetype,
     get_profile_data,
     persist_onboarding,
+    resolve_user_league_keys,
 )
 from services.picks_service import get_picks as svc_get_picks
 from services.schedule_service import get_schedule, get_game_tips_data
@@ -216,7 +217,7 @@ class _CronMonitor:
             self._cm = None
 
 
-claude = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
+claude = anthropic.AsyncAnthropic(api_key=config.OPENROUTER_API_KEY)
 
 # ── Onboarding state machine ─────────────────────────────
 # Steps: experience → sports → favourites → edge_explainer → risk → bankroll → notify → summary → plan
@@ -1638,13 +1639,21 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 # BUILD-W3: Back → Edge Picks card (photo→photo or text→photo)
                 # P0-FIX-02: use _bt_rendered (filtered+sorted) — NOT raw _bt_tips.
-                _bt_card_data = build_edge_picks_data(_bt_rendered, page=_back_page + 1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_bt_tier)
-                await send_card_or_fallback(
-                    bot=ctx.bot, chat_id=query.message.chat_id,
-                    template="edge_picks.html", data=_bt_card_data,
-                    text_fallback=_bt_text, markup=_bt_markup,
-                    message_to_edit=query.message,
-                )
+                # FIX-HOT-TIPS-EMPTY-CARD-01: skip card when no renderable tips.
+                if _bt_rendered:
+                    _bt_card_data = build_edge_picks_data(_bt_rendered, page=_back_page + 1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_bt_tier)
+                    await send_card_or_fallback(
+                        bot=ctx.bot, chat_id=query.message.chat_id,
+                        template="edge_picks.html", data=_bt_card_data,
+                        text_fallback=_bt_text, markup=_bt_markup,
+                        message_to_edit=query.message,
+                    )
+                else:
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    await ctx.bot.send_message(query.message.chat_id, _bt_text, parse_mode=ParseMode.HTML, reply_markup=_bt_markup)
                 _ht_page_state[user_id] = _back_page  # W84-HT2: keep state in sync
             else:
                 # Cache cold — fallback to full flow
@@ -1751,13 +1760,21 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 # BUILD-W3: photo→photo pagination with Edge Picks card
                 # P0-FIX-02: use _pg_rendered (filtered+sorted) — NOT raw tips.
-                _pg_card_data = build_edge_picks_data(_pg_rendered, page=page_num + 1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_user_tier)
-                await send_card_or_fallback(
-                    bot=ctx.bot, chat_id=query.message.chat_id,
-                    template="edge_picks.html", data=_pg_card_data,
-                    text_fallback=text, markup=markup,
-                    message_to_edit=query.message,
-                )
+                # FIX-HOT-TIPS-EMPTY-CARD-01: skip card when no renderable tips.
+                if _pg_rendered:
+                    _pg_card_data = build_edge_picks_data(_pg_rendered, page=page_num + 1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_user_tier)
+                    await send_card_or_fallback(
+                        bot=ctx.bot, chat_id=query.message.chat_id,
+                        template="edge_picks.html", data=_pg_card_data,
+                        text_fallback=text, markup=markup,
+                        message_to_edit=query.message,
+                    )
+                else:
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    await ctx.bot.send_message(query.message.chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
                 # W84-HT2: freeze page identity so detail back returns here
                 # R7-BUILD-03: snapshot already seeded on page 0 — do not re-assign here
                 _ht_page_state[user_id] = page_num
@@ -1972,13 +1989,21 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     edge_tracker_summary=_ed_summ,
                 )
                 # P0-FIX-02: use _ed_rendered (filtered+sorted) — NOT raw _ed_tips.
-                _ed_card_data = build_edge_picks_data(_ed_rendered, page=_ed_pg + 1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_ed_tier)
-                await send_card_or_fallback(
-                    bot=ctx.bot, chat_id=query.message.chat_id,
-                    template="edge_picks.html", data=_ed_card_data,
-                    text_fallback=_ed_text, markup=_ed_markup,
-                    message_to_edit=query.message,
-                )
+                # FIX-HOT-TIPS-EMPTY-CARD-01: skip card when no renderable tips.
+                if _ed_rendered:
+                    _ed_card_data = build_edge_picks_data(_ed_rendered, page=_ed_pg + 1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_ed_tier)
+                    await send_card_or_fallback(
+                        bot=ctx.bot, chat_id=query.message.chat_id,
+                        template="edge_picks.html", data=_ed_card_data,
+                        text_fallback=_ed_text, markup=_ed_markup,
+                        message_to_edit=query.message,
+                    )
+                else:
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    await ctx.bot.send_message(query.message.chat_id, _ed_text, parse_mode=ParseMode.HTML, reply_markup=_ed_markup)
                 _ht_page_state[user_id] = _ed_pg
             else:
                 await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
@@ -5717,8 +5742,7 @@ async def _render_your_games_all(
         games = await _fetch_schedule_games(user_id)
 
     prefs = await db.get_user_sport_prefs(user_id)
-    user_teams = {p.team_name.lower() for p in prefs if p.team_name}
-    league_keys = {p.league for p in prefs if p.league}
+    user_teams, league_keys = resolve_user_league_keys(prefs)
 
     if not league_keys:
         text = (
@@ -7387,7 +7411,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
     - Returns "" on any failure — never blocks rendering
     """
     try:
-        import anthropic as _anthropic
+        import openrouter_client as _anthropic
         from team_data import get_nickname, get_manager, form_to_plain
         odds = float(tip.get("odds") or tip.get("pick_odds") or 0)
         pick = tip.get("pick") or tip.get("outcome") or ""
@@ -7858,7 +7882,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
     - Falls back to _render_verdict(spec) from narrative_spec if fact-check strips >50%
     """
     try:
-        import anthropic as _anthropic
+        import openrouter_client as _anthropic
         from narrative_spec import _render_verdict as _render_verdict_deterministic, NarrativeSpec
         from team_data import get_nickname, get_manager, form_to_plain
 
@@ -11683,12 +11707,16 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
         # P0-FIX-02: use _wm_rendered (filtered+sorted) — NOT raw _cached_tips.
         # Raw cache may contain ev<=0 or edge_score<40 tips that buttons exclude.
-        _wm_card_data = build_edge_picks_data(_wm_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_wm_tier)
-        await send_card_or_fallback(
-            bot=bot, chat_id=chat_id,
-            template="edge_picks.html", data=_wm_card_data,
-            text_fallback=_wm_text, markup=_wm_markup,
-        )
+        # FIX-HOT-TIPS-EMPTY-CARD-01: skip card when no renderable tips.
+        if _wm_rendered:
+            _wm_card_data = build_edge_picks_data(_wm_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_wm_tier)
+            await send_card_or_fallback(
+                bot=bot, chat_id=chat_id,
+                template="edge_picks.html", data=_wm_card_data,
+                text_fallback=_wm_text, markup=_wm_markup,
+            )
+        else:
+            await bot.send_message(chat_id, _wm_text, parse_mode=ParseMode.HTML, reply_markup=_wm_markup)
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
@@ -11753,12 +11781,16 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         )
         # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
         # P0-FIX-02: use _fast_rendered (filtered+sorted) — NOT raw _fast_tips.
-        _fast_card_data = build_edge_picks_data(_fast_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_fast_tier)
-        await send_card_or_fallback(
-            bot=bot, chat_id=chat_id,
-            template="edge_picks.html", data=_fast_card_data,
-            text_fallback=_fast_text, markup=_fast_markup,
-        )
+        # FIX-HOT-TIPS-EMPTY-CARD-01: skip card when no renderable tips.
+        if _fast_rendered:
+            _fast_card_data = build_edge_picks_data(_fast_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_fast_tier)
+            await send_card_or_fallback(
+                bot=bot, chat_id=chat_id,
+                template="edge_picks.html", data=_fast_card_data,
+                text_fallback=_fast_text, markup=_fast_markup,
+            )
+        else:
+            await bot.send_message(chat_id, _fast_text, parse_mode=ParseMode.HTML, reply_markup=_fast_markup)
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
@@ -11896,12 +11928,16 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     )
     # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
     # P0-FIX-02: use _rendered_tips (filtered+sorted) — NOT raw tips.
-    _cold_card_data = build_edge_picks_data(_rendered_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=user_tier)
-    await send_card_or_fallback(
-        bot=bot, chat_id=chat_id,
-        template="edge_picks.html", data=_cold_card_data,
-        text_fallback=text, markup=markup,
-    )
+    # FIX-HOT-TIPS-EMPTY-CARD-01: skip card when no renderable tips.
+    if _rendered_tips:
+        _cold_card_data = build_edge_picks_data(_rendered_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=user_tier)
+        await send_card_or_fallback(
+            bot=bot, chat_id=chat_id,
+            template="edge_picks.html", data=_cold_card_data,
+            text_fallback=text, markup=markup,
+        )
+    else:
+        await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
     # W84-HT2: freeze page identity at render time (cold path)
     if user_id:
         _ht_page_state[user_id] = 0
@@ -12292,27 +12328,7 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
     from services.odds_service import LEAGUE_MARKET_TYPE
 
     prefs = await db.get_user_sport_prefs(user_id)
-    user_teams: set[str] = set()
-    league_keys: set[str] = set()
-    for pref in prefs:
-        if pref.team_name:
-            user_teams.add(pref.team_name.lower())
-        if pref.league:
-            league_keys.add(pref.league)
-        elif pref.team_name:
-            # Infer league for prefs with league=None (e.g. "Manchester United" → epl)
-            # Try exact name first, then resolve via TEAM_ALIASES
-            team_name = pref.team_name
-            inferred = config.TEAM_TO_LEAGUES.get(team_name, [])
-            if not inferred:
-                # Resolve alias: "Manchester United" → "Man United" → TEAM_TO_LEAGUES
-                canonical = config.TEAM_ALIASES.get(team_name.lower(), "")
-                if canonical:
-                    inferred = config.TEAM_TO_LEAGUES.get(canonical, [])
-            sport_key = pref.sport_key or ""
-            for ilk in inferred:
-                if not sport_key or config.LEAGUE_SPORT.get(ilk) == sport_key:
-                    league_keys.add(ilk)
+    user_teams, league_keys = resolve_user_league_keys(prefs)
 
     all_events: list[dict] = []
     # Track normalised match_ids to deduplicate across Odds API + DB sources
@@ -19356,7 +19372,7 @@ async def _generate_haiku_match_summary(
     try:
         resp = await asyncio.wait_for(
             asyncio.to_thread(
-                lambda: anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY).messages.create(
+                lambda: anthropic.Anthropic(api_key=config.OPENROUTER_API_KEY).messages.create(
                     model="claude-haiku-4-5-20251001",
                     max_tokens=100,
                     temperature=0.3,
@@ -26700,9 +26716,6 @@ async def _background_pregen_fill() -> None:
     BASELINE-FIX: single-flight via _pregen_active bool set BEFORE lock acquisition.
     No yield point between check and set — TOCTOU-free by construction.
     """
-    # P0-KILL: Anthropic API cost emergency — background pregen disabled 2026-04-06
-    log.warning("P0-KILL: _background_pregen_fill DISABLED — Anthropic API cost emergency")
-    return
     global _pregen_active
     if _pregen_active:
         log.info("Pregen [background]: DROPPED — sweep already active")
@@ -26941,9 +26954,6 @@ async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     Runs hourly, gated to 04:00, 10:00, 16:00 UTC (06:00, 12:00, 18:00 SAST).
     06:00 = Opus full sweep, 12:00/18:00 = Sonnet refresh sweep.
     """
-    # P0-KILL: Anthropic API cost emergency — narrative pregen job disabled 2026-04-06
-    log.warning("P0-KILL: _narrative_pregenerate_job DISABLED — Anthropic API cost emergency")
-    return
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -26987,9 +26997,6 @@ async def _narrative_health_check_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     Extracts factual claims, verifies via Haiku + web search, alerts admin on mismatches.
     """
-    # P0-KILL: Anthropic API cost emergency — health check (Haiku calls) disabled 2026-04-06
-    log.warning("P0-KILL: _narrative_health_check_job DISABLED — Anthropic API cost emergency")
-    return
     from db_connection import get_connection as _sql_get
     import random as _rand
 
@@ -27014,7 +27021,7 @@ async def _narrative_health_check_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     samples = _rand.sample(rows, min(2, len(rows)))
 
     try:
-        _claude = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        _claude = anthropic.AsyncAnthropic(api_key=os.getenv("OPENROUTER_API_KEY"))
     except Exception:
         return
 

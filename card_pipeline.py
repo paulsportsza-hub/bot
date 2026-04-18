@@ -1193,10 +1193,10 @@ def generate_card_analysis(match_key: str, verified_data: dict) -> str:
         NEVER blocks rendering — callers must handle empty string gracefully.
     """
     try:
-        import anthropic
+        import openrouter_client as anthropic
         client = anthropic.Anthropic()
     except Exception as exc:
-        log.debug("card_pipeline: anthropic import failed: %s", exc)
+        log.debug("card_pipeline: openrouter_client import failed: %s", exc)
         return ""
 
     # Build compact data block for the prompt
