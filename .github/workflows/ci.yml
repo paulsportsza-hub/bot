@@ -22,7 +22,7 @@ jobs:
           path: bot
       - uses: actions/checkout@v4
         with:
-          repository: paulsportsza/scrapers
+          repository: paulsportsza-hub/scrapers
           path: scrapers
           token: ${{ secrets.SCRAPERS_REPO_TOKEN }}
       - uses: actions/setup-python@v5
