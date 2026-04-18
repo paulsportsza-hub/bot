@@ -408,9 +408,6 @@ def _insert_health_alert(
 ) -> None:
     now_iso = datetime.now(tz=timezone.utc).isoformat()
     meta_str = json.dumps(meta) if meta else None
-    if dry_run:
-        log.info("DRY-RUN: would insert health_alert signal=%s severity=%s", signal, severity)
-        return
     try:
         conn.execute(
             "INSERT INTO health_alerts "
@@ -419,6 +416,7 @@ def _insert_health_alert(
             (_SOURCE_ID, severity, message, now_iso, meta_str),
         )
         conn.commit()
+        log.info("MONITOR: inserted health_alert signal=%s severity=%s", signal, severity)
     except Exception as _e:
         log.warning("MONITOR: failed to insert health_alert for %s: %s", signal, _e)
 
@@ -489,14 +487,12 @@ def _auto_resolve_alerts(
             continue
         band = signal_bands.get(signal_name)
         if band in ("GREEN", "WARN"):
-            if dry_run:
-                log.info("DRY-RUN: would resolve health_alert id=%d signal=%s band=%s", row_id, signal_name, band)
-                continue
             try:
                 conn.execute(
                     "UPDATE health_alerts SET resolved_at=? WHERE id=?",
                     (now_iso, row_id),
                 )
+                log.info("MONITOR: resolved health_alert id=%d signal=%s band=%s", row_id, signal_name, band)
             except Exception as _e:
                 log.warning("MONITOR: failed to resolve health_alert id=%d: %s", row_id, _e)
 

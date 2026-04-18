@@ -149,10 +149,10 @@ MIN_VERDICT_CHARS: int = 80  # legacy flat constant — use MIN_VERDICT_CHARS_BY
 
 # BUILD-VERDICT-ENRICHMENT-FIX-01: tier-specific length gates
 MIN_VERDICT_CHARS_BY_TIER: dict[str, int] = {
-    "diamond": 160,
-    "gold": 140,
-    "silver": 110,
-    "bronze": 90,
+    "diamond": 140,
+    "gold": 110,
+    "silver": 80,
+    "bronze": 60,
 }
 # Regexes that match trivially thin / content-empty verdicts.
 # Gate fires if ANY pattern matches the stripped verdict text.
@@ -2153,7 +2153,7 @@ def _render_risk(spec: NarrativeSpec) -> str:
 
 # ── BUILD-VERDICT-CAP-01: Deterministic verdict fallback cap ───────────────────
 
-_VERDICT_MAX_CHARS = 140
+_VERDICT_MAX_CHARS = 200
 
 
 def _cap_verdict(text: str) -> str:

@@ -225,14 +225,14 @@ class TestFireCycleAlerts:
         assert rows[0]["severity"] == "warning"
         conn.close()
 
-    def test_dry_run_inserts_nothing(self, tmp_path):
+    def test_dry_run_still_inserts_after_ac4(self, tmp_path):
         db_path = _make_db(tmp_path)
         conn = _open(db_path)
         cycle = [{"signal": "empty_verdict_count_24h", "value": 5, "band": "ALERT", "breach": 1}]
         with patch.object(_mod, "_send_edgeops_alert") as mock_send:
             _mod._fire_cycle_alerts(conn, cycle, dry_run=True)
         rows = _get_open_alerts(conn, "empty_verdict_count_24h")
-        assert len(rows) == 0
+        assert len(rows) == 1
         mock_send.assert_not_called()
         conn.close()
 
@@ -289,14 +289,14 @@ class TestAutoResolveAlerts:
         row = conn.execute("SELECT resolved_at FROM health_alerts WHERE id=?", (row_id,)).fetchone()
         assert row["resolved_at"] is None  # different signal — not touched
 
-    def test_dry_run_does_not_resolve(self, tmp_path):
+    def test_dry_run_still_resolves_after_ac4(self, tmp_path):
         db_path = _make_db(tmp_path)
         conn = _open(db_path)
         row_id = self._insert_open_alert(conn, "empty_verdict_count_24h")
         cycle = [{"signal": "empty_verdict_count_24h", "value": 0, "band": "GREEN", "breach": 0}]
         _mod._auto_resolve_alerts(conn, cycle, dry_run=True)
         row = conn.execute("SELECT resolved_at FROM health_alerts WHERE id=?", (row_id,)).fetchone()
-        assert row["resolved_at"] is None
+        assert row["resolved_at"] is not None
 
 
 class TestBackfillStaleAlerts:
@@ -341,7 +341,7 @@ class TestBackfillStaleAlerts:
         assert len(rows) == 0
         conn.close()
 
-    def test_dry_run_inserts_nothing(self, tmp_path):
+    def test_dry_run_still_inserts_after_ac4(self, tmp_path):
         db_path = _make_db(tmp_path)
         conn = _open(db_path)
         _insert_nil_row(conn, "staleness_pct", 75.0, "ALERT", 1)
@@ -349,7 +349,7 @@ class TestBackfillStaleAlerts:
             _mod._backfill_stale_alerts(conn, dry_run=True)
         mock_send.assert_not_called()
         rows = _get_open_alerts(conn, "staleness_pct")
-        assert len(rows) == 0
+        assert len(rows) == 1
         conn.close()
 
     def test_backfill_uses_latest_row_per_signal(self, tmp_path):
