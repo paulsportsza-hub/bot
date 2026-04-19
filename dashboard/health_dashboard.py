@@ -206,7 +206,6 @@ _CHANNELS = [
     {"key": "whatsapp_channel", "label": "WhatsApp Channel", "color": "#25D366", "emoji": "\U0001f4ac"},
     {"key": "instagram", "label": "Instagram", "color": "#E4405F", "emoji": "\U0001f4f8"},
     {"key": "tiktok", "label": "TikTok", "color": "#ff0050", "emoji": "\U0001f3b5"},
-    {"key": "threads", "label": "Threads", "color": "#ffffff", "emoji": "\U0001f9f5"},
 ]
 _MANUAL_CHANNELS = []
 _CHANNEL_MAP = {c["key"]: c for c in _CHANNELS + _MANUAL_CHANNELS}
@@ -3286,7 +3285,7 @@ def render_automation_content() -> str:
 
     _CHANNEL_SLA: dict[str, float] = {
         "telegram_alerts": 6.0, "telegram_community": 12.0, "whatsapp_channel": 6.0,
-        "instagram": 24.0, "tiktok": 48.0, "threads": 24.0,
+        "instagram": 24.0, "tiktok": 48.0,
         "fb_groups": 72.0, "quora": 168.0,
     }
     _LK_GREEN_DAYS, _LK_AMBER_DAYS = 7, 14
@@ -3475,7 +3474,6 @@ def render_automation_content() -> str:
         ("whatsapp_channel",   "WA Channel"),
         ("instagram",          "Instagram"),
         ("tiktok",             "TikTok"),
-        ("threads",            "Threads"),
     ]
 
     def _icon_for(wt: str, ck: str) -> str:
@@ -3716,6 +3714,8 @@ def render_automation_content() -> str:
 .so-tl-chip:hover{border-color:var(--gold);color:var(--text);}
 .so-tl-now-line{position:absolute;top:0;width:2px;background:var(--grad);z-index:20;pointer-events:none;filter:drop-shadow(0 0 6px rgba(248,200,48,0.6));}
 .so-tl-now-lbl{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-family:var(--font-m);font-size:9px;color:var(--gold);white-space:nowrap;background:var(--surface-alt);padding:1px 4px;border-radius:2px;border:1px solid rgba(248,200,48,0.3);}
+.so-tl-bru-empty{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:var(--font-m);font-size:10px;color:var(--muted);white-space:nowrap;pointer-events:none;opacity:0.7;}
+.so-tl-bru-badge{position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--gold);pointer-events:none;}
 .so-preview{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;height:100%;max-height:100%;overflow-y:auto;min-width:0;min-height:0;box-shadow:var(--glow);}
 .so-preview::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.7;pointer-events:none;z-index:10;}
 .so-preview::-webkit-scrollbar{width:4px;}.so-preview::-webkit-scrollbar-track{background:transparent;}.so-preview::-webkit-scrollbar-thumb{background:var(--muted);border-radius:2px;opacity:0.5;}
@@ -3914,6 +3914,7 @@ function resolveCollisions(posts){
 }
 function renderRow(ch,ri){
   var its=resolveCollisions(ch.posts);
+  var emptyLabel=ch.bru_empty?'<div class="so-tl-bru-empty">No B.R.U. videos queued</div>':'';
   var icons=its.map(function(it,ci){
     var p=it.p,pct=(p.mins/1440*100).toFixed(3)+'%';
     if(it.chip){
@@ -3922,17 +3923,18 @@ function renderRow(ch,ri){
     }
     var off=it.off?'margin-top:'+it.off+'px;':'';
     var al=eA([p.type||'Post',ch.label,'scheduled '+p.sched,p.status||'unknown'].join(' · '));
+    var badge=p.bru_mismatch?'<span class="so-tl-bru-badge"></span>':'';
     return '<button class="so-tl-icon-btn" style="left:'+pct+';'+off+';--status-color:'+stColor(p.status)+'" '+
       'data-post-id="'+eA(p.id)+'" data-row-idx="'+ri+'" data-col-idx="'+ci+'" '+
       'data-title="'+eA(p.title)+'" data-sched="'+eA(p.sched)+'" data-sched-full="'+eA(p.sched_full||'')+'" data-status="'+eA(p.status)+'" '+
       'data-ch="'+eA(ch.label)+'" data-type="'+eA(p.type)+'" data-asset-url="'+eA(p.asset_url||'')+'" '+
       'aria-label="'+al+'" tabindex="-1" role="gridcell">'+
-      svgI(p.icon||'help-circle')+
+      svgI(p.icon||'help-circle')+badge+
       '</button>';
   }).join('');
   return '<div class="so-tl-row" role="row" aria-label="'+eA(ch.label)+'" data-row-idx="'+ri+'" tabindex="0">'+
     '<div class="so-tl-row-lbl" style="color:'+eA(ch.color||'')+'">'+(ch.icon?'<span class="so-tl-ch-icon">'+ch.icon+'</span>':'')+eH(ch.label)+'</div>'+
-    '<div class="so-tl-bar" id="so-bar-'+ri+'">'+
+    '<div class="so-tl-bar" id="so-bar-'+ri+'">'+emptyLabel+
     '<div class="so-tl-gl" style="left:0%"></div>'+
     '<div class="so-tl-gl so-tl-gl-mid" style="left:12.5%"></div>'+
     '<div class="so-tl-gl" style="left:25%"></div>'+
@@ -3979,7 +3981,7 @@ function focusIcon(ri,ci){
 function showTip(e,ds){
   if(!_tipEl)return;
   var au=ds.assetUrl||'';
-  var imgHtml=au&&au.indexOf('://')>0?'<img src="'+eA(au)+'" class="so-tip-thumb" loading="lazy" onerror="this.style.display=\'none\'" alt="">':'';
+  var imgHtml=au&&au.indexOf('://')>0?'<img src="'+eA(au)+'" class="so-tip-thumb" loading="lazy" onerror="this.remove()" alt="">':'';
   _tipEl.innerHTML=imgHtml+[ds.title?eH(ds.title):'(no title)',[ds.ch,ds.type].filter(Boolean).join(' \u00b7 '),eH(ds.ch||'?')+' \u2014 '+(ds.schedFull?eH(ds.schedFull):ds.sched||'?')+' SAST'].join('<br>');
   _tipEl.style.display='block';
   _tipEl.style.left=(e.clientX+12)+'px';_tipEl.style.top=(e.clientY-8)+'px';
@@ -4003,7 +4005,7 @@ function loadChipStack(posts){
   var stack='<div class="so-chip-stack">';
   for(var i=0;i<posts.length;i++){
     var p=posts[i];
-    stack+='<button class="so-chip-stack-item" onclick="loadPreview(\''+eA(p.id||'')+'\')">'+
+    stack+='<button class="so-chip-stack-item" onclick="loadPreview(&#39;'+eA(p.id||'')+'&#39;)">'+
       '<span class="so-chip-stack-ch">'+eH(p.ch||'')+'</span>'+
       '<span class="so-chip-stack-time">'+eH(p.sched||'')+'</span>'+
       '<span class="so-chip-stack-title">'+eH(p.title||'(no title)')+'</span>'+
@@ -7356,7 +7358,6 @@ _SO_TL_CH = [
     ("whatsapp_channel",   "WA Channel"),
     ("instagram",          "Instagram"),
     ("tiktok",             "TikTok"),
-    ("threads",            "Threads"),
 ]
 _SO_POSTED_ST = {"published", "done", "complete", "posted"}
 _SO_PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
@@ -7479,6 +7480,101 @@ def _so_platform_icon_svg(ck: str) -> str:
 _SO_OVERDUE_QUEUE_ST = {"pending", "ready", "queued"}
 
 
+def _bru_drip_items_for_day(day_str: str) -> list[dict]:
+    """Return B.R.U. drip virtual post items for the given SAST day.
+
+    Reads the bru_drip sidecar queue (state/bru_queue.json) and reconstructs
+    the video list using the same deterministic shuffle as bru_drip.py.
+    Dashboard read-only — never modifies bru_drip.py or the queue.
+
+    Cron: 0 9 */2 * * → 09:00 SAST on odd days of month.
+    Epoch: 2026-04-19 → fires video at queue position 1.
+    Returns [] when queue exhausted or day is not a drip day.
+    """
+    import json as _json
+    import random as _random
+    from datetime import date as _date, timedelta as _timedelta, datetime as _dt
+    from pathlib import Path as _Path
+    from zoneinfo import ZoneInfo as _ZI
+
+    _QUEUE_FILE = _Path("/home/paulsportsza/publisher/state/bru_queue.json")
+    _PHASE2_DIR = _Path("/var/www/mzansiedge-wp/assets/bru/phase2")
+    _PHASE3_DIR = _Path("/var/www/mzansiedge-wp/assets/bru/phase3")
+    _SHUFFLE_SEED = 2026
+    _DRIP_EPOCH    = _date(2026, 4, 19)  # First drip day; fires video at position 1
+    _DRIP_EPOCH_POS = 1                  # Queue position on epoch date
+    _DRIP_HOUR     = 9                   # 09:00 SAST
+
+    try:
+        day = _date.fromisoformat(day_str)
+    except ValueError:
+        return []
+
+    # Cron fires on odd days of month only
+    if day.day % 2 == 0:
+        return []
+
+    try:
+        state = _json.loads(_QUEUE_FILE.read_text())
+    except (OSError, ValueError):
+        return []
+
+    # Count drip days between epoch (exclusive) and requested day (inclusive)
+    # to derive the video index for that day.
+    offset = 0
+    cur = _DRIP_EPOCH
+    while cur < day:
+        cur += _timedelta(days=1)
+        if cur.day % 2 == 1:
+            offset += 1
+    video_idx = _DRIP_EPOCH_POS + offset
+
+    # Reconstruct video list — mirrors bru_drip._scan_videos exactly
+    videos: list[dict] = []
+    if _PHASE2_DIR.is_dir():
+        for mp4 in sorted(_PHASE2_DIR.glob("*.mp4")):
+            slug = mp4.stem.rsplit("-", 1)[-1] if "-" in mp4.stem else mp4.stem
+            videos.append({"slug": slug, "filename": mp4.name, "phase": 2})
+    phase3: list[dict] = []
+    if _PHASE3_DIR.is_dir():
+        for mp4 in sorted(_PHASE3_DIR.glob("*.mp4")):
+            slug = mp4.stem.rsplit("-", 1)[-1] if "-" in mp4.stem else mp4.stem
+            phase3.append({"slug": slug, "filename": mp4.name, "phase": 3})
+    _rng = _random.Random(_SHUFFLE_SEED)
+    _rng.shuffle(phase3)
+    videos.extend(phase3)
+
+    if not videos or video_idx >= len(videos):
+        return []  # Queue exhausted for this date
+
+    current_pos = state.get("position", 0)
+    history_positions = {h.get("position") for h in state.get("history", [])}
+    video = videos[video_idx]
+
+    # Determine publish status from queue history
+    already_published = (video_idx in history_positions) or (
+        video_idx < current_pos and bool(state.get("last_published"))
+    )
+
+    sched_sast = _dt(day.year, day.month, day.day, _DRIP_HOUR, 0, 0,
+                     tzinfo=_ZI("Africa/Johannesburg"))
+    title = f"B.R.U. Drip \u2014 {video['slug'].replace('-', ' ').title()} (Phase {video['phase']})"
+    return [{
+        "id":         f"bru_drip_{video_idx}",
+        "title":      title,
+        "type":       "B.R.U. Video",
+        "icon":       "bot",
+        "status":     "published" if already_published else "scheduled",
+        "mins":       _DRIP_HOUR * 60,
+        "sched":      f"{_DRIP_HOUR:02d}:00",
+        "sched_full": _render_sast(sched_sast),
+        "actual":     "",
+        "error":      "",
+        "ch_lbl":     "TikTok",
+        "is_bru_drip": True,
+    }]
+
+
 def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> dict:
     """Build timeline + KPI payload for a given SAST day string (YYYY-MM-DD)."""
     cutoff24 = now_utc - timedelta(hours=24)
@@ -7542,7 +7638,22 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
                 "error":  it.get("error") or "",
                 "ch_lbl": clbl,
             })
-        channels.append({"key": ck, "label": clbl, "icon": _so_platform_icon_svg(ck), "color": _CHANNEL_MAP.get(ck, {}).get("color", "#888888"), "posts": posts})
+        ch_dict: dict = {"key": ck, "label": clbl, "icon": _so_platform_icon_svg(ck),
+                         "color": _CHANNEL_MAP.get(ck, {}).get("color", "#888888"), "posts": posts}
+        if ck == "tiktok":
+            bru_items = _bru_drip_items_for_day(day_str)
+            moq_mins = {p["mins"] for p in posts}
+            for bru in bru_items:
+                conflict = any(abs(bru["mins"] - m) < 30 for m in moq_mins)
+                if conflict:
+                    # MOQ wins — badge the conflicting MOQ post to flag the mismatch
+                    for p in posts:
+                        if abs(p["mins"] - bru["mins"]) < 30:
+                            p["bru_mismatch"] = True
+                else:
+                    posts.append(bru)
+            ch_dict["bru_empty"] = not posts and not bru_items
+        channels.append(ch_dict)
 
     return {
         "day":      day_str,
