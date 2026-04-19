@@ -167,6 +167,26 @@
             width: auto;
             vertical-align: middle;
         }
+        .ss-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: transparent;
+            border-radius: 4px;
+            padding: 1px 4px 1px 2px;
+        }
+        .ss-icon {
+            height: 18px;
+            width: 18px;
+            vertical-align: middle;
+            object-fit: contain;
+        }
+        .ss-num {
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            line-height: 1;
+        }
 
         /* ── 4. Market Overview ──────────────────────────────── */
         .market-section {
@@ -378,7 +398,8 @@
     <div class="meta-bar">
         {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
         {% if time %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
-        {% if channel %}{% if channel_logo_url %}<div class="meta-item channel-logo"><img src="{{ channel_logo_url }}" alt="{{ channel }}" class="channel-logo-img" /></div>{% else %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}{% endif %}
+        {#- FIX-DSTV-CHANNEL-PERM-01 superseded by BUILD-CHANNEL-LOGOS-01: SS icon+DStv badge or text fallback -#}
+        {% if channel %}{% if channel_dstv_num and ss_icon_b64 %}<span class="meta-item"><span class="ss-badge"><img src="data:image/png;base64,{{ ss_icon_b64 }}" class="ss-icon" alt="SS"><span class="ss-num">{{ channel_dstv_num }}</span></span></span>{% else %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}{% endif %}
     </div>
 
     <!-- ── 4. Market Overview ────────────────────────────────── -->

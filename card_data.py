@@ -7,8 +7,17 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import re as _re
 from datetime import datetime
 from pathlib import Path
+
+
+def _extract_dstv_num(channel: str) -> str:
+    """Extract DStv channel number from channel string e.g. 'SuperSport (DStv 203)' → '203'."""
+    if not channel:
+        return ""
+    m = _re.search(r"DStv\s+(\d+)", channel)
+    return m.group(1) if m else ""
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +28,23 @@ _ASSETS_DIR = _BOT_DIR.parent / "assets"
 _HEADER_LOGO = _BOT_DIR / "assets" / "LOGO" / "mzansiedge-wordmark-dark-transparent.png"
 _FOOTER_LOGO = _ASSETS_DIR / "LOGO" / "mzansiedge-micro-mark-e-transparent.png"
 _SS_LOGO = _BOT_DIR.parent / "assets" / "icons" / "ss.png"
+_SS_ICON_40 = _BOT_DIR.parent / "assets" / "icons" / "ss_40.png"
+
+
+def _load_ss_icon_b64() -> str:
+    """Load SuperSport icon as base64 data URL (40×40 PNG)."""
+    import PIL.Image
+    try:
+        path = _SS_ICON_40 if _SS_ICON_40.exists() else _SS_LOGO
+        with PIL.Image.open(path) as img:
+            buf = io.BytesIO()
+            img.convert("RGBA").resize((40, 40), PIL.Image.LANCZOS).save(buf, format="PNG", optimize=True)
+            return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
+
+
+_SS_ICON_B64: str = _load_ss_icon_b64()
 
 
 def _parse_channel(raw: str) -> tuple[str, bool]:
@@ -720,6 +746,8 @@ def build_edge_detail_data(tip: dict, card_width: int = 480) -> dict:
         "time":    time_str,
         "channel": tip.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
         "channel_logo_url": tip.get("channel_logo_url") or "",  # BUILD-CHANNEL-LOGOS-01
+        "channel_dstv_num": _extract_dstv_num(tip.get("channel") or ""),  # BUILD-CHANNEL-LOGOS-01
+        "ss_icon_b64": _SS_ICON_B64,  # BUILD-CHANNEL-LOGOS-01: SuperSport icon for badge
         "venue":   tip.get("venue") or "",
 
         # Form
@@ -963,6 +991,8 @@ def build_match_detail_data(match: dict) -> dict:
         "time":    match.get("time") or "",
         "channel": match.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
         "channel_logo_url": match.get("channel_logo_url") or "",  # BUILD-CHANNEL-LOGOS-01
+        "channel_dstv_num": _extract_dstv_num(match.get("channel") or ""),  # BUILD-CHANNEL-LOGOS-01
+        "ss_icon_b64": _SS_ICON_B64,  # BUILD-CHANNEL-LOGOS-01: SuperSport icon for badge
         # Form
         "home_form": match.get("home_form") or [],
         "away_form": match.get("away_form") or [],

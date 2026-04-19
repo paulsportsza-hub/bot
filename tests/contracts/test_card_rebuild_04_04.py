@@ -135,10 +135,10 @@ def test_channel_meta_item_has_single_emoji_no_ch_prefix():
     assert "channel_number" not in content, \
         "channel_number must NOT be in edge_detail.html (FIX-DSTV-CHANNEL-PERM-01 removed it)"
 
-    # BUILD-CHANNEL-LOGOS-01: channel_logo_url must be present (logo rendering active)
+    # BUILD-CHANNEL-LOGOS-01: channel_dstv_num must be present (SS text badge active)
     import re
-    assert "channel_logo_url" in content, \
-        "edge_detail.html must render channel_logo_url (BUILD-CHANNEL-LOGOS-01)"
+    assert "channel_dstv_num" in content, \
+        "edge_detail.html must render channel_dstv_num SS badge (BUILD-CHANNEL-LOGOS-01)"
 
     # FIX-DSTV-CHANNEL-PERM-01 supersession comment must be present
     assert "FIX-DSTV-CHANNEL-PERM-01" in content, \

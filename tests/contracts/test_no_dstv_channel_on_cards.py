@@ -271,11 +271,11 @@ class TestTemplatesChannelRendering(unittest.TestCase):
             "match_detail.html must render 📺 {{ channel }} as fallback inside {% if channel %} "
             "(BUILD-KO-SUPERSPORT-PRIMARY-01 + BUILD-CHANNEL-LOGOS-01)"
         )
-        # Must also use channel_logo_url for the logo path
+        # Must use channel_dstv_num for the SS text badge (logo approach superseded by text badge)
         self.assertIn(
-            "channel_logo_url",
+            "channel_dstv_num",
             src,
-            "match_detail.html must render channel_logo_url image (BUILD-CHANNEL-LOGOS-01)"
+            "match_detail.html must render channel_dstv_num SS badge (BUILD-CHANNEL-LOGOS-01)"
         )
         # Must not have legacy DStv-number channel patterns
         legacy = self._get_legacy_channel_hits(t)
@@ -291,11 +291,11 @@ class TestTemplatesChannelRendering(unittest.TestCase):
         if not t.exists():
             self.skipTest("edge_detail.html not found")
         src = t.read_text()
-        # Must render channel with logo-or-text logic
+        # Must use channel_dstv_num for the SS text badge (logo approach superseded by text badge)
         self.assertIn(
-            "channel_logo_url",
+            "channel_dstv_num",
             src,
-            "edge_detail.html must use channel_logo_url (BUILD-CHANNEL-LOGOS-01)"
+            "edge_detail.html must use channel_dstv_num SS badge (BUILD-CHANNEL-LOGOS-01)"
         )
         self.assertIn("📺", src, "edge_detail.html must have 📺 text fallback for channel")
         # Must not have legacy patterns
