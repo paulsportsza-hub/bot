@@ -2020,18 +2020,31 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             if not _mme_tip_key or "_vs_" not in _mme_tip_key:
                 _mme_tip_key = _normalise_mm_event_id(_mme_full_tip, _mme_match)
             if _mme_tip_key:
-                _mme_cached = _analysis_cache.get(_mme_tip_key)
-                if _mme_cached and _mme_cached[0]:
-                    _mme_full_tip = {**_mme_full_tip, "_analysis_text": _mme_cached[0]}
-                _mme_served = await _serve_card_detail(
-                    query, _mme_tip_key, _mme_full_tip, user_id,
-                    _mme_user_tier, _mme_edge_tier,
-                    back_page=0, include_analysis=True,
-                    source="matches",
+                _mme_tip_enriched = await asyncio.to_thread(
+                    _enrich_tip_for_card, _mme_full_tip, _mme_tip_key
+                )
+                _mme_data = build_edge_detail_data(_mme_tip_enriched)
+                _mme_btn_rows = _build_game_buttons(
+                    [_mme_full_tip], event_id=_mme_tip_key, user_id=user_id,
+                    source="matches", user_tier=_mme_user_tier,
+                    edge_tier=_mme_edge_tier,
                     back_cb_override=_mme_back_cb,
                 )
-                if _mme_served:
+                _mme_markup = InlineKeyboardMarkup(_mme_btn_rows)
+                _mme_fallback = (
+                    f"<b>{h(_mme_full_tip.get('home', ''))} vs "
+                    f"{h(_mme_full_tip.get('away', ''))}</b>"
+                )
+                try:
+                    await send_card_or_fallback(
+                        bot=ctx.bot, chat_id=query.message.chat_id,
+                        template="edge_detail.html", data=_mme_data,
+                        text_fallback=_mme_fallback, markup=_mme_markup,
+                        message_to_edit=query.message,
+                    )
                     return
+                except Exception as _mme_err:
+                    log.warning("mme edge_detail render failed for %s: %s", _mme_tip_key, _mme_err)
         # blurred / locked / fallback → upgrade prompt
         _mme_tier_pretty = _mme_edge_tier.title()
         _mme_lines = [
