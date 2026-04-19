@@ -5688,8 +5688,9 @@ def _build_mm_matches_for_card(
             # DEF-7 fix: derive time directly from parsed commence_time.
             # Previously read _mm_kickoff (only set after _render_your_games_all runs),
             # leaving time_str empty on first card render. Use ct directly — always available.
+            _utc_hhmm = ct.astimezone(_ZI("UTC")).strftime("%H:%M") if ct.tzinfo else ""
             _ct_hhmm = ct.strftime("%H:%M")
-            time_str = "" if _ct_hhmm == "02:00" else _ct_hhmm  # drop midnight-UTC sentinel
+            time_str = "" if _utc_hhmm == "00:00" else _ct_hhmm
         else:
             date_str = ""
             # Fallback: _mm_kickoff is set by _render_your_games_all when commence_time absent

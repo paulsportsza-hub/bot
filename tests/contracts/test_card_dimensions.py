@@ -203,18 +203,26 @@ def test_build_edge_detail_data_injuries_line_empty_when_no_injuries():
     )
 
 
-def test_build_match_detail_data_injuries_always_empty():
-    """home_injuries and away_injuries are always [] on My Matches detail cards (FIX-INJURY-SUPPRESS-02)."""
+def test_build_match_detail_data_injuries_passthrough():
+    """home_injuries and away_injuries pass through from match dict (BUILD-MM-INJURY-RESTORE-01)."""
     from card_data import build_match_detail_data
 
-    match = {
-        "home_injuries": [{"player": "Saka", "reason": "hamstring"}],
-        "away_injuries": [{"player": "Salah", "reason": "doubt"}, {"player": "Diaz", "reason": "knock"}],
-    }
+    home = [{"player": "Saka", "reason": "hamstring"}]
+    away = [{"player": "Salah", "reason": "doubt"}, {"player": "Diaz", "reason": "knock"}]
+    match = {"home_injuries": home, "away_injuries": away}
     data = build_match_detail_data(match)
-    assert data["home_injuries"] == [], (
-        "home_injuries must always be [] on My Matches detail cards (FIX-INJURY-SUPPRESS-02)"
+    assert data["home_injuries"] == home, (
+        "home_injuries must pass through from match dict (BUILD-MM-INJURY-RESTORE-01)"
     )
-    assert data["away_injuries"] == [], (
-        "away_injuries must always be [] on My Matches detail cards (FIX-INJURY-SUPPRESS-02)"
+    assert data["away_injuries"] == away, (
+        "away_injuries must pass through from match dict (BUILD-MM-INJURY-RESTORE-01)"
     )
+
+
+def test_build_match_detail_data_injuries_default_empty_when_absent():
+    """home_injuries and away_injuries default to [] when match dict omits them."""
+    from card_data import build_match_detail_data
+
+    data = build_match_detail_data({})
+    assert data["home_injuries"] == []
+    assert data["away_injuries"] == []

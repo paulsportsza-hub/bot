@@ -985,9 +985,8 @@ def build_match_detail_data(match: dict) -> dict:
         "h2h_draws":     h2h_draws,
         "h2h_away_wins": h2h_away_wins,
 
-        # Injuries — FIX-INJURY-SUPPRESS-02: suppressed on My Matches detail cards
-        "home_injuries": [],
-        "away_injuries": [],
+        "home_injuries": match.get("home_injuries") or [],
+        "away_injuries": match.get("away_injuries") or [],
 
         # Haiku analysis — BUILD-HAIKU-SUMMARY-WIRE-01
         "analysis_text": match.get("analysis_text") or "",
