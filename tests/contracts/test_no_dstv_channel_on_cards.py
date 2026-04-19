@@ -1,13 +1,17 @@
 """
-Contract: FIX-DSTV-CHANNEL-PERM-01 — DStv channel display permanently removed.
+Contract: BUILD-KO-SUPERSPORT-PRIMARY-01 — SuperSport is the primary authoritative
+source for kickoff times AND broadcast channels across ALL sports. SUPERSEDES
+FIX-DSTV-CHANNEL-PERM-01 which permanently removed channel display.
 
-These tests are the regression guard that prevents channel data from ever
-appearing on cards again. They verify every layer of the defense-in-depth:
-
-  Layer 1 — Source functions return empty broadcast
-  Layer 2 — card_data builders produce empty channel fields
-  Layer 3 — Templates contain no active channel rendering
-  Layer 4 — card_pipeline.render_card_html() produces no channel content
+Layers:
+  Layer 1 — Legacy broadcast-line stub functions stay inert (pre-existing DStv
+            text builders must remain empty; channel now flows via dedicated
+            _get_supersport_channel() helper + tip["channel"] pass-through).
+  Layer 2 — card_data builders MUST pass tip["channel"] through (no hardcoded "").
+  Layer 3 — Templates MUST render the channel as a meta-item when present.
+  Layer 4 — card_pipeline.render_card_html() keeps its broadcast_channel="" guard
+            (unrelated to the new text-based channel line — no reintroduction of
+            the old DStv-number hardcoded pipeline).
 """
 
 import importlib
@@ -164,7 +168,7 @@ class TestCardDataBuilders(unittest.TestCase):
         self.assertIn('"ss_logo_b64": ""', body,
                       "_channel_fields must return empty ss_logo_b64")
 
-    def _assert_channel_empty_in_builder(self, fn_name: str):
+    def _assert_channel_pass_through_in_builder(self, fn_name: str):
         src_path = pathlib.Path(__file__).parent.parent.parent / "card_data.py"
         src = src_path.read_text()
         fn_match = re.search(
@@ -173,96 +177,111 @@ class TestCardDataBuilders(unittest.TestCase):
         )
         self.assertIsNotNone(fn_match, f"{fn_name}() not found in card_data.py")
         body = fn_match.group(1)
-        # channel key must be hardcoded to ""
-        self.assertIn('"channel": ""', body,
-                      f'{fn_name} must hardcode "channel": "" (FIX-DSTV-CHANNEL-PERM-01)')
+        # channel key MUST NOT be hardcoded empty (BUILD-KO-SUPERSPORT-PRIMARY-01
+        # supersedes FIX-DSTV-CHANNEL-PERM-01 — SuperSport data must flow through).
+        self.assertNotIn(
+            '"channel": ""', body,
+            f'{fn_name} must not hardcode "channel": "" '
+            '(BUILD-KO-SUPERSPORT-PRIMARY-01 requires pass-through)'
+        )
+        # Must read channel from the source dict (tip/m/match).get("channel").
+        self.assertRegex(
+            body,
+            r'"channel":\s*\w+\.get\("channel"\)',
+            f'{fn_name} must pass channel through via .get("channel") '
+            '(BUILD-KO-SUPERSPORT-PRIMARY-01)'
+        )
 
-    def test_build_match_detail_data_channel_empty(self):
-        self._assert_channel_empty_in_builder("build_match_detail_data")
+    def test_build_match_detail_data_channel_pass_through(self):
+        self._assert_channel_pass_through_in_builder("build_match_detail_data")
 
-    def test_build_edge_detail_data_channel_empty(self):
-        self._assert_channel_empty_in_builder("build_edge_detail_data")
+    def test_build_edge_detail_data_channel_pass_through(self):
+        self._assert_channel_pass_through_in_builder("build_edge_detail_data")
 
-    def test_build_my_matches_data_channel_empty(self):
-        self._assert_channel_empty_in_builder("build_my_matches_data")
+    def test_build_my_matches_data_channel_pass_through(self):
+        self._assert_channel_pass_through_in_builder("build_my_matches_data")
 
 
 # ---------------------------------------------------------------------------
 # Layer 3 — Templates contain no active channel rendering
 # ---------------------------------------------------------------------------
 
-class TestTemplatesNoChannelOutput(unittest.TestCase):
-    """HTML templates must contain no active channel rendering."""
+class TestTemplatesChannelRendering(unittest.TestCase):
+    """BUILD-KO-SUPERSPORT-PRIMARY-01: match_detail.html MUST render the channel
+    as a conditional meta-item. Other templates still must not emit DStv-number
+    legacy patterns (channel_number / CSS-class-based channel blocks)."""
 
     TEMPLATES_DIR = pathlib.Path(__file__).parent.parent.parent / "card_templates"
 
-    ACTIVE_CHANNEL_PATTERNS = [
-        r'\{%-?\s*if\s+channel\s*-?%\}',          # {% if channel %}
+    # Legacy patterns that must NEVER return (DStv-number-based channel rendering).
+    LEGACY_CHANNEL_PATTERNS = [
         r'\{%-?\s*if\s+channel_number\s*-?%\}',    # {% if channel_number %}
-        r'📺\s*\{\{',                               # 📺 {{ ... }}
-        r'\{\{\s*channel\s*\}\}',                   # {{ channel }}
         r'\{\{\s*channel_number\s*\}\}',            # {{ channel_number }}
-        r'class=".*?channel.*?"',                   # CSS class for channel
+        r'class=".*?channel.*?"',                   # CSS class for channel block
     ]
 
-    def _get_active_channel_hits(self, template_path: pathlib.Path) -> list[str]:
+    def _get_legacy_channel_hits(self, template_path: pathlib.Path) -> list[str]:
         src = template_path.read_text()
         hits = []
-        for pat in self.ACTIVE_CHANNEL_PATTERNS:
+        for pat in self.LEGACY_CHANNEL_PATTERNS:
             for m in re.finditer(pat, src):
                 line = src[:m.start()].count("\n") + 1
                 hits.append(f"line {line}: {m.group()!r}")
         return hits
 
-    def test_match_detail_no_active_channel(self):
+    def test_match_detail_renders_channel_meta_item(self):
+        """match_detail.html MUST render 📺 {{ channel }} gated by {% if channel %}."""
         t = self.TEMPLATES_DIR / "match_detail.html"
         if not t.exists():
             self.skipTest("match_detail.html not found")
-        hits = self._get_active_channel_hits(t)
-        self.assertEqual(hits, [],
-                         f"match_detail.html has active channel rendering:\n" +
-                         "\n".join(hits))
+        src = t.read_text()
+        # Must render channel conditionally as a meta-item
+        self.assertRegex(
+            src,
+            r'\{%-?\s*if\s+channel\s*-?%\}.*?📺\s*\{\{\s*channel\s*\}\}',
+            "match_detail.html must render 📺 {{ channel }} inside {% if channel %} "
+            "(BUILD-KO-SUPERSPORT-PRIMARY-01)"
+        )
+        # Must not have legacy DStv-number channel patterns
+        legacy = self._get_legacy_channel_hits(t)
+        self.assertEqual(
+            legacy, [],
+            "match_detail.html must not contain legacy DStv-number channel rendering:\n"
+            + "\n".join(legacy)
+        )
 
-    def test_edge_detail_no_active_channel(self):
+    def test_edge_detail_no_legacy_channel(self):
         t = self.TEMPLATES_DIR / "edge_detail.html"
         if not t.exists():
             self.skipTest("edge_detail.html not found")
-        hits = self._get_active_channel_hits(t)
-        self.assertEqual(hits, [],
-                         f"edge_detail.html has active channel rendering:\n" +
-                         "\n".join(hits))
+        legacy = self._get_legacy_channel_hits(t)
+        self.assertEqual(
+            legacy, [],
+            "edge_detail.html must not contain legacy DStv-number channel rendering:\n"
+            + "\n".join(legacy)
+        )
 
-    def test_my_matches_no_active_channel(self):
+    def test_my_matches_no_legacy_channel(self):
         t = self.TEMPLATES_DIR / "my_matches.html"
         if not t.exists():
             self.skipTest("my_matches.html not found")
-        hits = self._get_active_channel_hits(t)
-        self.assertEqual(hits, [],
-                         f"my_matches.html has active channel rendering:\n" +
-                         "\n".join(hits))
+        legacy = self._get_legacy_channel_hits(t)
+        self.assertEqual(
+            legacy, [],
+            "my_matches.html must not contain legacy DStv-number channel rendering:\n"
+            + "\n".join(legacy)
+        )
 
-    def test_tier_page_no_active_channel(self):
+    def test_tier_page_no_legacy_channel(self):
         t = self.TEMPLATES_DIR / "tier_page.html"
         if not t.exists():
             self.skipTest("tier_page.html not found")
-        hits = self._get_active_channel_hits(t)
-        self.assertEqual(hits, [],
-                         f"tier_page.html has active channel rendering:\n" +
-                         "\n".join(hits))
-
-    def test_all_templates_have_perm_comment(self):
-        """Every template that previously had channel rendering must carry the removal comment."""
-        required_templates = [
-            "my_matches.html",
-            "tier_page.html",
-        ]
-        for name in required_templates:
-            t = self.TEMPLATES_DIR / name
-            if not t.exists():
-                continue
-            src = t.read_text()
-            self.assertIn("FIX-DSTV-CHANNEL-PERM-01", src,
-                          f"{name} must contain FIX-DSTV-CHANNEL-PERM-01 comment")
+        legacy = self._get_legacy_channel_hits(t)
+        self.assertEqual(
+            legacy, [],
+            "tier_page.html must not contain legacy DStv-number channel rendering:\n"
+            + "\n".join(legacy)
+        )
 
 
 # ---------------------------------------------------------------------------

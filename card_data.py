@@ -401,7 +401,7 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4, us
             "league": league,
             "date": date_part,
             "time": time_part,
-            "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
+            "channel": tip.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
             "odds": "" if _locked else odds_str,
             "ev": "" if _locked else ev_str,
             "pick": "" if _locked else pick_name,
@@ -500,7 +500,7 @@ def build_tier_page_data(tips: list[dict], tier: str) -> dict:
             "ev": ev_str,
             "pick": pick_name,
             "bookmaker": bookmaker,
-            "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
+            "channel": tip.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
         })
 
     pick_count = len(picks)
@@ -718,7 +718,7 @@ def build_edge_detail_data(tip: dict, card_width: int = 480) -> dict:
         "away":    away,
         "date":    date_str,
         "time":    time_str,
-        "channel": "",  # FIX-DSTV-CHANNEL-PERM-01: channel display permanently off
+        "channel": tip.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
         "venue":   tip.get("venue") or "",
 
         # Form
@@ -874,7 +874,7 @@ def build_my_matches_data(matches: list[dict], page: int = 1, per_page: int = 4)
                 "sport_emoji": s_emoji,
                 "date": date_part,
                 "time": time_part,
-                "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
+                "channel": m.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
                 "has_edge": True,
                 "edge_tier": tier_key,
                 "tier_emoji": meta["emoji"],
@@ -891,7 +891,7 @@ def build_my_matches_data(matches: list[dict], page: int = 1, per_page: int = 4)
                 "sport_emoji": s_emoji,
                 "date": date_part,
                 "time": time_part,
-                "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
+                "channel": m.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
                 "has_edge": False,
                 "odds_home": _fmt_odds(m.get("odds_home")),
                 "odds_draw": _fmt_odds(m.get("odds_draw")),
@@ -960,7 +960,7 @@ def build_match_detail_data(match: dict) -> dict:
         "away":    away,
         "date":    match.get("date") or "",
         "time":    match.get("time") or "",
-        "channel": "",  # FIX-DSTV-CHANNEL-PERM-01
+        "channel": match.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
         # Form
         "home_form": match.get("home_form") or [],
         "away_form": match.get("away_form") or [],

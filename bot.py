@@ -8533,7 +8533,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     # _bc_kickoff is set — it may be date-only (no time component) from the scraper.
     if not enriched.get("time"):
         try:
-            _match_key = tip.get("match_id") or tip.get("match_key") or ""
+            _match_key = tip.get("match_id") or tip.get("match_key") or match_key or ""
             _sport = (
                 tip.get("sport")
                 or tip.get("sport_key")
@@ -8557,6 +8557,20 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
                 enriched["time"] = _kt
         except Exception as _ke:
             log.debug("_enrich_tip_for_card: _resolve_kickoff_time failed: %s", _ke)
+
+    # 8e) Channel — BUILD-KO-SUPERSPORT-PRIMARY-01: supersport_scraper is the
+    # primary authoritative source for broadcast channels across all sports.
+    # Supersedes FIX-DSTV-CHANNEL-PERM-01 (channel was permanently off).
+    if not enriched.get("channel"):
+        try:
+            _mk_ch = tip.get("match_id") or tip.get("match_key") or match_key or ""
+            _home_ch = _team_display(home_key) if home_key else tip.get("home_team", "")
+            _away_ch = _team_display(away_key) if away_key else tip.get("away_team", "")
+            _ch = _get_supersport_channel(_home_ch, _away_ch, _mk_ch)
+            if _ch:
+                enriched["channel"] = _ch
+        except Exception as _ce:
+            log.debug("_enrich_tip_for_card: _get_supersport_channel failed: %s", _ce)
 
     # 9) Pick name — outcome display for summary and detail cards
     if not enriched.get("pick"):
@@ -10542,6 +10556,81 @@ def _load_fixture_kickoffs(match_ids: list) -> dict:
         return {}
 
 
+def _get_supersport_channel(home: str, away: str, match_key: str) -> str:
+    """Resolve broadcast channel string from supersport_scraper rows.
+
+    BUILD-KO-SUPERSPORT-PRIMARY-01: supersport_scraper is the PRIMARY and sole
+    authoritative source for broadcast channels across all sports. Returns a
+    display string such as "SuperSport PSL (DStv 202)" or "SuperSport PSL",
+    or empty string if no SuperSport match is available for this fixture.
+
+    Date-filtered first via YYYY-MM-DD suffix on match_key; falls back to the
+    last 50 SuperSport rows when match_key has no date. match_confidence ties
+    are broken by earliest start_time.
+    """
+    if not home and not away:
+        return ""
+
+    _match_date = ""
+    try:
+        import re as _re
+        _m = _re.search(r"(\d{4}-\d{2}-\d{2})$", match_key or "")
+        if _m:
+            _match_date = _m.group(1)
+    except Exception:
+        pass
+
+    try:
+        from scrapers.db_connect import connect_odds_db as _cfn
+        from scrapers.edge.edge_config import DB_PATH as _DP
+        from scrapers.broadcast_matcher import fuzzy_match_broadcast
+        import sqlite3 as _sq
+
+        _c = _cfn(_DP)
+        _c.row_factory = _sq.Row
+        try:
+            if _match_date:
+                _rows = _c.execute(
+                    """
+                    SELECT * FROM broadcast_schedule
+                    WHERE source = 'supersport_scraper'
+                      AND home_team IS NOT NULL AND away_team IS NOT NULL
+                      AND start_time IS NOT NULL
+                      AND DATE(start_time) = ?
+                    ORDER BY match_confidence DESC, start_time ASC
+                    """,
+                    (_match_date,),
+                ).fetchall()
+            else:
+                _rows = _c.execute(
+                    """
+                    SELECT * FROM broadcast_schedule
+                    WHERE source = 'supersport_scraper'
+                      AND home_team IS NOT NULL AND away_team IS NOT NULL
+                      AND start_time IS NOT NULL
+                    ORDER BY start_time DESC LIMIT 50
+                    """,
+                ).fetchall()
+
+            _matches = fuzzy_match_broadcast(_rows, home, away) if _rows else []
+            if not _matches:
+                return ""
+            _best = _matches[0]
+            _ch_name = (_best.get("channel_name") or "").strip()
+            _ch_short = (_best.get("channel_short") or "").strip()
+            _dstv = (_best.get("dstv_number") or "").strip()
+            # Prefer full channel_name (e.g. "SuperSport PSL"), append DStv number when present.
+            _label = _ch_name or _ch_short
+            if _label and _dstv:
+                return f"{_label} (DStv {_dstv})"
+            return _label
+        finally:
+            _c.close()
+    except Exception as exc:
+        log.debug("_get_supersport_channel: lookup failed (%s, %s): %s", home, away, exc)
+        return ""
+
+
 def _resolve_kickoff_time(
     sport: str,
     match_key: str,
@@ -10682,14 +10771,17 @@ def _resolve_kickoff_time(
     # catches PSL/cup rows stored with short team names (e.g. "Polokwane" vs
     # "Polokwane City" — won't match full-name LIKE).
     def _from_broadcast_schedule() -> tuple[str, str]:
-        """Resolve (date, time) from broadcast_schedule using fuzzy_match_broadcast.
-        
-        Delegates to fuzzy_match_broadcast for robust team name matching
-        (handles abbreviations like "Kaizer" vs "Kaizer Chiefs").
+        """Resolve (date, time) from broadcast_schedule, prioritising SuperSport.
+
+        BUILD-KO-SUPERSPORT-PRIMARY-01: supersport_scraper is the PRIMARY source
+        for kickoff times across all sports (football, rugby, cricket). Two-pass:
+        Pass 1 — source='supersport_scraper' + match_date. Pass 2 (fallback) —
+        any source + match_date, or no-date last-50 query. SuperSport rows carry
+        authoritative kickoff from the SuperSport guide with confidence=1.0.
         """
         if not home and not away:
             return ("", "")
-        
+
         _match_date = ""
         try:
             import re as _re
@@ -10698,30 +10790,52 @@ def _resolve_kickoff_time(
                 _match_date = _m.group(1)
         except Exception:
             pass
-        
+
         try:
             from scrapers.db_connect import connect_odds_db as _cfn
             from scrapers.edge.edge_config import DB_PATH as _DP
             from scrapers.broadcast_matcher import fuzzy_match_broadcast
-            
+
             _c = _cfn(_DP)
             _c.row_factory = __import__("sqlite3").Row
             try:
-                # Query all broadcast rows for the match date
-                if _match_date:
-                    _rows = _c.execute(
-                        """
-                        SELECT * FROM broadcast_schedule
-                        WHERE home_team IS NOT NULL AND away_team IS NOT NULL
-                          AND start_time IS NOT NULL
-                          AND DATE(start_time) = ?
-                        ORDER BY start_time ASC
-                        """,
-                        (_match_date,),
-                    ).fetchall()
-                else:
-                    # No date available; query recent broadcasts only
-                    _rows = _c.execute(
+                def _fetch_rows(supersport_only: bool) -> list:
+                    if _match_date:
+                        if supersport_only:
+                            return _c.execute(
+                                """
+                                SELECT * FROM broadcast_schedule
+                                WHERE source = 'supersport_scraper'
+                                  AND home_team IS NOT NULL AND away_team IS NOT NULL
+                                  AND start_time IS NOT NULL
+                                  AND DATE(start_time) = ?
+                                ORDER BY match_confidence DESC, start_time ASC
+                                """,
+                                (_match_date,),
+                            ).fetchall()
+                        return _c.execute(
+                            """
+                            SELECT * FROM broadcast_schedule
+                            WHERE home_team IS NOT NULL AND away_team IS NOT NULL
+                              AND start_time IS NOT NULL
+                              AND DATE(start_time) = ?
+                            ORDER BY start_time ASC
+                            """,
+                            (_match_date,),
+                        ).fetchall()
+                    # No date — last-50 window
+                    if supersport_only:
+                        return _c.execute(
+                            """
+                            SELECT * FROM broadcast_schedule
+                            WHERE source = 'supersport_scraper'
+                              AND home_team IS NOT NULL AND away_team IS NOT NULL
+                              AND start_time IS NOT NULL
+                            ORDER BY start_time DESC
+                            LIMIT 50
+                            """,
+                        ).fetchall()
+                    return _c.execute(
                         """
                         SELECT * FROM broadcast_schedule
                         WHERE home_team IS NOT NULL AND away_team IS NOT NULL
@@ -10730,9 +10844,16 @@ def _resolve_kickoff_time(
                         LIMIT 50
                         """,
                     ).fetchall()
-                
-                # Delegate to fuzzy_match_broadcast for robust matching
-                _matches = fuzzy_match_broadcast(_rows, home, away)
+
+                # Pass 1 — SuperSport only (primary authoritative source)
+                _rows = _fetch_rows(supersport_only=True)
+                _matches = fuzzy_match_broadcast(_rows, home, away) if _rows else []
+
+                # Pass 2 — any source fallback (only if SuperSport missed)
+                if not _matches:
+                    _rows = _fetch_rows(supersport_only=False)
+                    _matches = fuzzy_match_broadcast(_rows, home, away) if _rows else []
+
                 if _matches:
                     _best = _matches[0]
                     _start_time = _best.get("start_time") or _best[5]  # fallback to tuple index
@@ -10746,8 +10867,16 @@ def _resolve_kickoff_time(
 
 
     # ── Football path ────────────────────────────────────────
+    # BUILD-KO-SUPERSPORT-PRIMARY-01: broadcast_schedule (SuperSport-first) is
+    # the PRIMARY source. fixture_mapping is now a fallback because API-Football
+    # kickoffs can lag / drift for PSL; SuperSport guide is authoritative for SA.
     if _sport == "soccer":
-        # 1) fixture_mapping (primary — API-Football kickoffs, UTC ISO)
+        # 1) broadcast_schedule (SuperSport-first, authoritative for SA)
+        d, t = _from_broadcast_schedule()
+        if d:
+            log.debug("_resolve_kickoff_time[soccer:broadcast] %s → %s %s", match_key, d, t)
+            return (d, t)
+        # 2) fixture_mapping (API-Football kickoffs, UTC ISO)
         if match_key:
             try:
                 from scrapers.db_connect import connect_odds_db as _cfn
@@ -10774,7 +10903,7 @@ def _resolve_kickoff_time(
                             if _ko_dt < _dt.now(_ZI("UTC")) - _td(hours=2):
                                 log.warning(
                                     "_resolve_kickoff_time: fixture_mapping stale for %s "
-                                    "(kickoff=%s) — skipping to broadcast_schedule",
+                                    "(kickoff=%s) — skipping to commence_time",
                                     match_key, _row[0],
                                 )
                                 _ko_stale = True
@@ -10792,12 +10921,7 @@ def _resolve_kickoff_time(
                     _c.close()
             except Exception as exc:
                 log.debug("_resolve_kickoff_time[soccer]: fixture_mapping failed: %s", exc)
-        # 2) broadcast_schedule
-        d, t = _from_broadcast_schedule()
-        if d:
-            log.debug("_resolve_kickoff_time[soccer:broadcast] %s → %s %s", match_key, d, t)
-            return (d, t)
-        # 3) commence_time (Odds API)
+        # 3) commence_time (Odds API / Sportmonks)
         d, t = _fmt_iso_utc(commence_time)
         if d:
             log.debug("_resolve_kickoff_time[soccer:commence_time] %s → %s %s", match_key, d, t)
@@ -10806,8 +10930,15 @@ def _resolve_kickoff_time(
         return _date_from_match_key()
 
     # ── Cricket path ─────────────────────────────────────────
+    # BUILD-KO-SUPERSPORT-PRIMARY-01: broadcast_schedule (SuperSport-first) is
+    # the PRIMARY source. Sportmonks match_date is fallback only.
     if _sport == "cricket":
-        # 1) sportmonks_fixtures (primary — team names are display-style, match_date UTC)
+        # 1) broadcast_schedule (SuperSport-first, authoritative for SA)
+        d, t = _from_broadcast_schedule()
+        if d:
+            log.debug("_resolve_kickoff_time[cricket:broadcast] %s → %s %s", match_key, d, t)
+            return (d, t)
+        # 2) sportmonks_fixtures (team names are display-style, match_date UTC)
         if home and away:
             try:
                 from scrapers.db_connect import connect_odds_db as _cfn
@@ -10834,11 +10965,6 @@ def _resolve_kickoff_time(
                     _c.close()
             except Exception as exc:
                 log.debug("_resolve_kickoff_time[cricket]: sportmonks_fixtures failed: %s", exc)
-        # 2) broadcast_schedule
-        d, t = _from_broadcast_schedule()
-        if d:
-            log.debug("_resolve_kickoff_time[cricket:broadcast] %s → %s %s", match_key, d, t)
-            return (d, t)
         # 3) commence_time
         d, t = _fmt_iso_utc(commence_time)
         if d:
@@ -10848,8 +10974,16 @@ def _resolve_kickoff_time(
         return _date_from_match_key()
 
     # ── Rugby path ───────────────────────────────────────────
+    # BUILD-KO-SUPERSPORT-PRIMARY-01: broadcast_schedule (SuperSport-first) is
+    # the PRIMARY source and is the ONLY path that provides a time component for
+    # rugby. rugby_fixtures is date-only and remains as a date fallback.
     if _sport == "rugby":
-        # 1) rugby_fixtures (date-only)
+        # 1) broadcast_schedule (SuperSport-first, authoritative for SA)
+        d, t = _from_broadcast_schedule()
+        if d:
+            log.debug("_resolve_kickoff_time[rugby:broadcast] %s → %s %s", match_key, d, t)
+            return (d, t)
+        # 2) rugby_fixtures (date-only fallback)
         if home and away:
             try:
                 from scrapers.db_connect import connect_odds_db as _cfn
@@ -10869,12 +11003,6 @@ def _resolve_kickoff_time(
                     if _row and _row[0]:
                         d, t = _fmt_date_only(_row[0])
                         if d:
-                            # Try broadcast_schedule as a time-only upgrade
-                            _d2, _t2 = _from_broadcast_schedule()
-                            if _t2 and _d2 == d:
-                                log.debug("_resolve_kickoff_time[rugby:rugby_fixtures+broadcast] %s → %s %s",
-                                          match_key, d, _t2)
-                                return (d, _t2)
                             log.debug("_resolve_kickoff_time[rugby:rugby_fixtures] %s → %s (date-only)",
                                       match_key, d)
                             return (d, "")
@@ -10882,10 +11010,6 @@ def _resolve_kickoff_time(
                     _c.close()
             except Exception as exc:
                 log.debug("_resolve_kickoff_time[rugby]: rugby_fixtures failed: %s", exc)
-        # 2) broadcast_schedule
-        d, t = _from_broadcast_schedule()
-        if d:
-            return (d, t)
         # 3) commence_time
         d, t = _fmt_iso_utc(commence_time)
         if d:
