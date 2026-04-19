@@ -1857,13 +1857,45 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             if _mm_snap and 0 <= _mm_snap_idx < len(_mm_snap):
                 _mm_match = _mm_snap[_mm_snap_idx]
                 _mm_event_id = _mm_match.get("_event_id", "")
-                _mm_back_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("↩️ My Matches", callback_data="md:back")],
-                ])
                 _mm_fallback = (
                     f"<b>{h(_mm_match.get('home', ''))} vs "
                     f"{h(_mm_match.get('away', ''))}</b>"
                 )
+
+                # BUILD-MM-EDGE-INDICATOR-01: detect edge tier for this card
+                _mm_has_edge   = bool(_mm_match.get("_full_tip"))
+                _mm_edge_tier_card = (_mm_match.get("edge_tier") or "bronze").lower()
+                _mm_user_tier_card = await get_effective_tier(user_id)
+                _mm_badge_emoji_map = {
+                    "diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉",
+                }
+                _mm_badge_label_map = {
+                    "diamond": "DIAMOND", "gold": "GOLD",
+                    "silver": "SILVER", "bronze": "BRONZE",
+                }
+
+                # Build back markup — include "View Edge" button when edge present
+                _mm_back_rows: list[list[InlineKeyboardButton]] = []
+                if _mm_has_edge:
+                    from tier_gate import get_edge_access_level as _mm_gal
+                    _mm_ve_access = _mm_gal(_mm_user_tier_card, _mm_edge_tier_card)
+                    _mm_tier_label = _mm_badge_label_map.get(_mm_edge_tier_card, "BRONZE")
+                    _mm_tier_pretty = _mm_tier_label.title()
+                    if _mm_ve_access in ("full", "partial"):
+                        _mm_ve_emoji = _mm_badge_emoji_map.get(_mm_edge_tier_card, "🥉")
+                        _mm_ve_text = f"{_mm_ve_emoji} View {_mm_tier_pretty} Edge ↗"
+                    else:
+                        _mm_ve_text = f"🔒 View {_mm_tier_pretty} Edge"
+                    _mm_back_rows.append([
+                        InlineKeyboardButton(
+                            _mm_ve_text,
+                            callback_data=f"mme:{_mm_card_n}",
+                        )
+                    ])
+                _mm_back_rows.append(
+                    [InlineKeyboardButton("↩️ My Matches", callback_data="md:back")]
+                )
+                _mm_back_markup = InlineKeyboardMarkup(_mm_back_rows)
                 # Override of MM-04 lock — founder instruction 2026-04-10
                 # Edge cards must render as edge cards regardless of entry point
                 _mm_tip_key = ""  # P0-BUILD-MM-RENDER-01: canonical key from edge tip; used in fallthrough
@@ -1967,6 +1999,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _mm_match_enriched = await asyncio.to_thread(
                     _enrich_tip_for_card, _mm_match, _mm_card_key
                 )
+                # BUILD-MM-EDGE-INDICATOR-01: inject badge fields when edge present
+                if _mm_has_edge:
+                    _mm_match_enriched["edge_badge_tier"]  = _mm_edge_tier_card
+                    _mm_match_enriched["edge_badge_label"] = _mm_badge_label_map.get(
+                        _mm_edge_tier_card, "BRONZE"
+                    )
+                    _mm_match_enriched["edge_badge_emoji"] = _mm_badge_emoji_map.get(
+                        _mm_edge_tier_card, "🥉"
+                    )
                 _mm_md_data = build_match_detail_data(_mm_match_enriched)
                 await send_card_or_fallback(
                     bot=ctx.bot, chat_id=query.message.chat_id,
@@ -1978,6 +2019,76 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _ut = await get_effective_tier(user_id)
             _md_text, _md_markup = await _render_your_games_all(user_id, user_tier=_ut, skip_broadcast=True)
             await query.edit_message_text(_md_text, parse_mode=ParseMode.HTML, reply_markup=_md_markup)
+    elif prefix == "mme":
+        # BUILD-MM-EDGE-INDICATOR-01: View Edge from My Matches detail card.
+        # Routes to edge_detail card (same as Hot Tips) but back → match_detail.
+        user_id = query.from_user.id
+        try:
+            _mme_card_n = int(action)
+        except (ValueError, TypeError):
+            _mme_card_n = 1
+        _mme_snap = _mm_games_snapshot.get(user_id, [])
+        _mme_idx = _mme_card_n - 1
+        if not _mme_snap or not (0 <= _mme_idx < len(_mme_snap)):
+            # Snapshot lost — bounce back to My Matches list
+            _ut = await get_effective_tier(user_id)
+            _md_text, _md_markup = await _render_your_games_all(
+                user_id, user_tier=_ut, skip_broadcast=True,
+            )
+            await query.edit_message_text(
+                _md_text, parse_mode=ParseMode.HTML, reply_markup=_md_markup,
+            )
+            return
+        _mme_match = _mme_snap[_mme_idx]
+        _mme_full_tip = _mme_match.get("_full_tip")
+        _mme_edge_tier = (_mme_match.get("edge_tier") or "bronze").lower()
+        _mme_user_tier = await get_effective_tier(user_id)
+        from tier_gate import get_edge_access_level as _mme_gal
+        _mme_access = _mme_gal(_mme_user_tier, _mme_edge_tier)
+        _mme_back_cb = f"mm:match:{_mme_card_n}:n"
+
+        if _mme_access in ("full", "partial") and _mme_full_tip:
+            _mme_tip_key = _mme_full_tip.get("match_id", "")
+            if not _mme_tip_key or "_vs_" not in _mme_tip_key:
+                _mme_tip_key = _normalise_mm_event_id(_mme_full_tip, _mme_match)
+            if _mme_tip_key:
+                _mme_cached = _analysis_cache.get(_mme_tip_key)
+                if _mme_cached and _mme_cached[0]:
+                    _mme_full_tip = {**_mme_full_tip, "_analysis_text": _mme_cached[0]}
+                _mme_served = await _serve_card_detail(
+                    query, _mme_tip_key, _mme_full_tip, user_id,
+                    _mme_user_tier, _mme_edge_tier,
+                    back_page=0, include_analysis=True,
+                    source="matches",
+                    back_cb_override=_mme_back_cb,
+                )
+                if _mme_served:
+                    return
+        # blurred / locked / fallback → upgrade prompt
+        _mme_tier_pretty = _mme_edge_tier.title()
+        _mme_lines = [
+            f"🔒 <b>{_mme_tier_pretty} Edge — Locked</b>",
+            "",
+            "This edge is available on a higher plan.",
+            "Upgrade to view the full breakdown, odds, and bookmaker.",
+        ]
+        _mme_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb)],
+        ])
+        _mme_text = "\n".join(_mme_lines)
+        _mme_chat_id = query.message.chat_id
+        # match_detail renders as a photo — delete and send a fresh text message
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await ctx.bot.send_message(
+            chat_id=_mme_chat_id,
+            text=_mme_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=_mme_markup,
+        )
     elif prefix == "ed":
         # BUILD-W3: Edge Detail card back button (ed:back:{page}) → back to Edge Picks
         user_id = query.from_user.id
@@ -8566,7 +8677,8 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             _mk_ch = tip.get("match_id") or tip.get("match_key") or match_key or ""
             _home_ch = _team_display(home_key) if home_key else tip.get("home_team", "")
             _away_ch = _team_display(away_key) if away_key else tip.get("away_team", "")
-            _ch, _ch_logo = _get_supersport_channel(_home_ch, _away_ch, _mk_ch)
+            _league_ch = (tip.get("league") or tip.get("league_key") or "").lower()
+            _ch, _ch_logo = _get_supersport_channel(_home_ch, _away_ch, _mk_ch, league=_league_ch)
             if _ch:
                 enriched["channel"] = _ch
             if _ch_logo and not enriched.get("channel_logo_url"):
@@ -9015,6 +9127,7 @@ async def _serve_card_detail(
     back_page: int = 0,
     include_analysis: bool = True,
     source: str = "edge_picks",
+    back_cb_override: str | None = None,
 ) -> bool:
     """P1P3-WIRE-DETAIL: Serve card_pipeline photo detail view.
 
@@ -9062,13 +9175,14 @@ async def _serve_card_detail(
             _cd_tips, match_key, user_id,
             source=source, user_tier=user_tier,
             edge_tier=edge_tier, back_page=back_page,
+            back_cb_override=back_cb_override,
         )
 
         # DetailMessage.build_card_photo handles image + button rendering
         _cd_img, _, _cd_markup = DetailMessage.build_card_photo(
             _cd_card,
             buttons=_cd_btns,
-            back_cb=f"hot:back:{back_page}",
+            back_cb=back_cb_override or f"hot:back:{back_page}",
         )
 
         # Transition: delete text list message → send photo
@@ -10558,7 +10672,42 @@ def _load_fixture_kickoffs(match_ids: list) -> dict:
         return {}
 
 
-def _get_supersport_channel(home: str, away: str, match_key: str) -> tuple[str, str]:
+# BUILD-CHANNEL-LOGOS-01: league/sport → (channel_display, dstv_number) for logo fallback.
+# Used when broadcast_schedule has no specific entry for a match.
+_LEAGUE_CHANNEL_DEFAULTS: dict[str, tuple[str, str]] = {
+    # EPL
+    "epl": ("SuperSport EPL", "203"),
+    "premier league": ("SuperSport EPL", "203"),
+    "premier_league": ("SuperSport EPL", "203"),
+    # UEFA Champions League
+    "champions_league": ("SuperSport Football", "205"),
+    "champions league": ("SuperSport Football", "205"),
+    "ucl": ("SuperSport Football", "205"),
+    # PSL
+    "psl": ("SuperSport PSL", "202"),
+    # La Liga
+    "la_liga": ("SuperSport La Liga", "204"),
+    "la liga": ("SuperSport La Liga", "204"),
+    # Bundesliga / Serie A / Ligue 1 — SS Football
+    "bundesliga": ("SuperSport Football", "205"),
+    "serie_a": ("SuperSport Football", "205"),
+    "serie a": ("SuperSport Football", "205"),
+    "ligue_1": ("SuperSport Variety 4", "209"),
+    "ligue 1": ("SuperSport Variety 4", "209"),
+    # Rugby
+    "urc": ("SuperSport Rugby", "211"),
+    "super_rugby": ("SuperSport Rugby", "211"),
+    "six_nations": ("SuperSport Rugby", "211"),
+    "rugby_championship": ("SuperSport Rugby", "211"),
+    # Cricket
+    "sa20": ("SuperSport Cricket", "212"),
+    "ipl": ("SuperSport Cricket", "212"),
+    "test_cricket": ("SuperSport Cricket", "212"),
+    "t20_world_cup": ("SuperSport Cricket", "212"),
+}
+
+
+def _get_supersport_channel(home: str, away: str, match_key: str, league: str = "") -> tuple[str, str]:
     """Resolve broadcast channel info from supersport_scraper rows.
 
     BUILD-KO-SUPERSPORT-PRIMARY-01: supersport_scraper is the PRIMARY and sole
@@ -10621,6 +10770,56 @@ def _get_supersport_channel(home: str, away: str, match_key: str) -> tuple[str, 
             _ch_short = (_best.get("channel_short") or "").strip()
             _dstv = (_best.get("dstv_number") or "").strip()
             _logo_url = (_best.get("channel_logo_url") or "").strip()
+
+            # BUILD-CHANNEL-LOGOS-01 — two-pass logo resolution:
+            # Pass 1: supersport_scraper rows have accurate match data but often
+            #   have channel_short='SS' with no dstv_number (RSC payload lacked
+            #   squareIcon for this fixture).  If dstv_number is empty, do a second
+            #   query across ALL sources — the legacy program-guide rows (source=NULL)
+            #   carry specific dstv_number/channel info for the same match windows.
+            if not _dstv:
+                _window_rows = _c.execute(
+                    """
+                    SELECT * FROM broadcast_schedule
+                    WHERE home_team IS NOT NULL AND away_team IS NOT NULL
+                      AND start_time IS NOT NULL
+                      AND (dstv_number IS NOT NULL AND dstv_number != '')
+                      AND DATE(start_time) BETWEEN DATE(?,'-7 days') AND DATE(?,'+7 days')
+                    ORDER BY match_confidence DESC, start_time ASC
+                    LIMIT 200
+                    """,
+                    (_match_date or "now", _match_date or "now"),
+                ).fetchall()
+                _win_matches = fuzzy_match_broadcast(_window_rows, home, away) if _window_rows else []
+                if _win_matches:
+                    _wb = dict(_win_matches[0])
+                    _ch_name = _ch_name or (_wb.get("channel_name") or "").strip()
+                    _ch_short = _ch_short or (_wb.get("channel_short") or "").strip()
+                    _dstv = (_wb.get("dstv_number") or "").strip()
+                    _logo_url = (_wb.get("channel_logo_url") or "").strip()
+
+            # Pass 2: if we now have a dstv_number but still no logo URL, derive it
+            #   from the locally-downloaded asset (covers backfilled rows and any rows
+            #   where channel_logo_url wasn't updated yet).
+            if not _logo_url and _dstv:
+                import os as _os
+                if _os.path.exists(f"/home/paulsportsza/assets/channels/{_dstv}.png"):
+                    _logo_url = f"https://mzansiedge.co.za/assets/channels/{_dstv}.png"
+
+            # Pass 3: league-based default channel — final fallback when DB has no
+            # dstv_number for this match (covers future EPL/UCL/PSL fixtures that
+            # haven't been loaded into broadcast_schedule yet).
+            if not _dstv and league:
+                _lk = league.lower().strip()
+                for _key, (_def_label, _def_dstv) in _LEAGUE_CHANNEL_DEFAULTS.items():
+                    if _key in _lk or _lk in _key:
+                        import os as _os2
+                        if _os2.path.exists(f"/home/paulsportsza/assets/channels/{_def_dstv}.png"):
+                            _ch_name = _ch_name or _def_label
+                            _dstv = _def_dstv
+                            _logo_url = f"https://mzansiedge.co.za/assets/channels/{_def_dstv}.png"
+                        break
+
             # Prefer full channel_name (e.g. "SuperSport PSL"), append DStv number when present.
             _label = _ch_name or _ch_short
             if _label and _dstv:
@@ -21269,6 +21468,7 @@ def _build_game_buttons(
     tips: list[dict], event_id: str, user_id: int, source: str = "matches",
     user_tier: str = "diamond", edge_tier: str = "bronze", back_page: int = 0,
     selected_outcome: str | None = None,
+    back_cb_override: str | None = None,
 ) -> list[list[InlineKeyboardButton]]:
     """Build simplified game breakdown buttons (North Star: recommend, compare, nav).
 
@@ -21452,7 +21652,8 @@ def _build_game_buttons(
 
     if primary_button is not None:
         buttons.append([primary_button])
-    buttons.append([InlineKeyboardButton("↩️ Back", callback_data="yg:all:0")])
+    _back_cb = back_cb_override or "yg:all:0"
+    buttons.append([InlineKeyboardButton("↩️ Back", callback_data=_back_cb)])
 
     return buttons
 

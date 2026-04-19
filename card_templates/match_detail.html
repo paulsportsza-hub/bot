@@ -81,6 +81,26 @@
             letter-spacing: 1px;
             color: var(--text-secondary);
         }
+        .badge-edge {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 14px;
+            border-radius: 20px;
+        }
+        .badge-edge-text {
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 2px;
+        }
+        .badge-edge-diamond { background: #B9F2FF10; border: 1px solid #B9F2FF25; }
+        .badge-edge-diamond .badge-edge-text { color: #B9F2FF; }
+        .badge-edge-gold    { background: #FFD70010; border: 1px solid #FFD70025; }
+        .badge-edge-gold    .badge-edge-text { color: #FFD700; }
+        .badge-edge-silver  { background: #A0AEC010; border: 1px solid #A0AEC025; }
+        .badge-edge-silver  .badge-edge-text { color: #CBD5E0; }
+        .badge-edge-bronze  { background: #CD7F3210; border: 1px solid #CD7F3225; }
+        .badge-edge-bronze  .badge-edge-text { color: #E8A87C; }
 
         /* ── 2. Matchup ──────────────────────────────────────── */
         .matchup {
@@ -356,9 +376,16 @@
                 <span style="font-size: 11px;">{{ sport_emoji }}</span>
                 <span class="badge-my-match-text">MY MATCH</span>
             </div>
+            {% if edge_badge_tier %}
+            <div class="badge-edge badge-edge-{{ edge_badge_tier }}">
+                <span style="font-size: 11px;">{{ edge_badge_emoji }}</span>
+                <span class="badge-edge-text">{{ edge_badge_label }}</span>
+            </div>
+            {% else %}
             <div class="badge-no-edge">
                 <span class="badge-no-edge-text">NO EDGE</span>
             </div>
+            {% endif %}
         </div>
     </div>
 

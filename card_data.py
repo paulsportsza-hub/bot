@@ -1023,6 +1023,11 @@ def build_match_detail_data(match: dict) -> dict:
         # Haiku analysis — BUILD-HAIKU-SUMMARY-WIRE-01
         "analysis_text": match.get("analysis_text") or "",
 
+        # Edge badge — BUILD-MM-EDGE-INDICATOR-01
+        "edge_badge_tier":  match.get("edge_badge_tier") or "",
+        "edge_badge_label": match.get("edge_badge_label") or "",
+        "edge_badge_emoji": match.get("edge_badge_emoji") or "",
+
         # Logo
         "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
     }
