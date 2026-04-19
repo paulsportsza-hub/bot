@@ -30,6 +30,7 @@ async def send_card_or_fallback(
     text_fallback: str,
     markup,
     message_to_edit=None,
+    width: int | None = None,
 ) -> None:
     """Render an HTML card to PNG and send/edit in Telegram.
 
@@ -51,9 +52,16 @@ async def send_card_or_fallback(
         Existing Message object to edit (None = send as a new message).
         - If message_to_edit.photo → edit_media (photo→photo, no flicker).
         - If message_to_edit is text → delete then send_photo.
+    width:
+        Optional explicit render width in CSS pixels (physical = width × DSF).
+        When None, render_card_sync's default (480) applies. Pass 540 for
+        match_detail.html to produce 1080px output; other templates keep 480.
     """
     try:
-        png = await asyncio.to_thread(render_card_sync, template, data)
+        if width is None:
+            png = await asyncio.to_thread(render_card_sync, template, data)
+        else:
+            png = await asyncio.to_thread(render_card_sync, template, data, width)
         if message_to_edit and message_to_edit.photo:
             await message_to_edit.edit_media(
                 media=InputMediaPhoto(media=png),

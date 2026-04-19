@@ -120,8 +120,6 @@ from tier_gate import gate_edges, gate_narrative, record_view, get_upgrade_messa
 from message_types import DigestMessage, DetailMessage, AlertMessage, ResultMessage, is_stale_hash
 # BUILD-W3: image card pipeline
 from card_sender import send_card_or_fallback
-# X-CARD-PIPE-01: queue Gold Edge cards for X Publisher
-from x_card_queue import queue_gold_card_for_x
 from card_data import (
     build_edge_picks_data,
     build_my_matches_data,
@@ -1975,6 +1973,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     template="match_detail.html", data=_mm_md_data,
                     text_fallback=_mm_fallback, markup=_mm_back_markup,
                     message_to_edit=query.message,
+                    width=540,
                 )
                 return
             _ut = await get_effective_tier(user_id)
@@ -3644,7 +3643,7 @@ async def handle_ai(query, action: str) -> None:
 
     try:
         resp = await claude.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             messages=[
@@ -5705,6 +5704,7 @@ def _build_mm_matches_for_card(
             "home": event.get("home_team") or "",
             "away": event.get("away_team") or "",
             "league": league,
+            "league_key": event.get("league_key") or event.get("league") or "",
             "date": date_str,
             "time": time_str,
             "sport_emoji": event.get("sport_emoji", "🏅"),
@@ -7206,8 +7206,6 @@ _ht_page_state: dict[int, int] = {}    # user_id → last rendered page number
 _ht_tips_snapshot: dict[int, list] = {}  # user_id → shallow copy of tips at last render
 # BUILD-W3: My Matches card snapshot
 _mm_games_snapshot: dict[int, list] = {}  # user_id → flat match list at last render
-# X-CARD-PIPE-01: per-match dedup guard — each Gold match_key queued at most once per run
-_x_queued_keys: set[str] = set()
 # BUILD-W3: @MzansiEdgeAlerts subscriber broadcast channel
 # TG-SURFACE-SPLIT-01: read from env (TELEGRAM_ALERTS_CHANNEL_ID); hardcoded value is fallback
 _CHANNEL_ID = int(os.environ.get("TELEGRAM_ALERTS_CHANNEL_ID", "-1003789410835"))
@@ -8545,7 +8543,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             )
             _home_d = _team_display(home_key) if home_key else tip.get("home_team", "")
             _away_d = _team_display(away_key) if away_key else tip.get("away_team", "")
-            _ct = tip.get("commence_time") or tip.get("starts_at") or ""
+            _ct = tip.get("_commence_time") or tip.get("commence_time") or tip.get("starts_at") or ""
             _kd, _kt = _resolve_kickoff_time(
                 sport=_sport,
                 match_key=_match_key,
@@ -9071,14 +9069,6 @@ async def _serve_card_detail(
             reply_markup=_cd_markup,
         )
         log.info("PERF: edge:detail CARD-PIPELINE served for %s", match_key)
-
-        # X-CARD-PIPE-01: queue Gold cards for X Publisher (fire-and-forget, deduped)
-        _cd_tier = (_cd_card.get("tier") or "").lower()
-        if _cd_tier == "gold" and match_key not in _x_queued_keys:
-            _x_queued_keys.add(match_key)
-            asyncio.create_task(
-                asyncio.to_thread(queue_gold_card_for_x, match_key, _cd_img, _cd_card)
-            )
 
         return True
     except Exception as _cd_err:
@@ -10680,28 +10670,84 @@ def _resolve_kickoff_time(
         return ("", "")
 
     # Broadcast schedule query — shared across sports
+    # BUILD-MM-DETAIL-FIX-01 Fix 4: date-filtered two-attempt lookup.
+    # 1) full-name LIKE + DATE(start_time)=match_date
+    # 2) fallback to first-word LIKE + same date filter (guard: first token ≥6 chars)
+    # Date filter prevents picking future rebroadcast rows. First-word fallback
+    # catches PSL/cup rows stored with short team names (e.g. "Polokwane" vs
+    # "Polokwane City" — won't match full-name LIKE).
     def _from_broadcast_schedule() -> tuple[str, str]:
         if not home and not away:
             return ("", "")
+        _match_date = ""
+        try:
+            import re as _re
+            _m = _re.search(r"(\d{4}-\d{2}-\d{2})$", match_key or "")
+            if _m:
+                _match_date = _m.group(1)
+        except Exception:
+            pass
         try:
             from scrapers.db_connect import connect_odds_db as _cfn
             from scrapers.edge.edge_config import DB_PATH as _DP
             _c = _cfn(_DP)
             try:
-                _row = _c.execute(
-                    """
-                    SELECT start_time FROM broadcast_schedule
-                    WHERE home_team IS NOT NULL AND away_team IS NOT NULL
-                      AND start_time IS NOT NULL
-                      AND (home_team LIKE ? OR away_team LIKE ?)
-                      AND (home_team LIKE ? OR away_team LIKE ?)
-                    ORDER BY start_time DESC
-                    LIMIT 1
-                    """,
-                    (f"%{home}%", f"%{home}%", f"%{away}%", f"%{away}%"),
-                ).fetchone()
+                # Attempt 1: full names + optional date filter
+                if _match_date:
+                    _row = _c.execute(
+                        """
+                        SELECT start_time FROM broadcast_schedule
+                        WHERE home_team IS NOT NULL AND away_team IS NOT NULL
+                          AND start_time IS NOT NULL
+                          AND (home_team LIKE ? OR away_team LIKE ?)
+                          AND (home_team LIKE ? OR away_team LIKE ?)
+                          AND DATE(start_time) = ?
+                        ORDER BY start_time DESC
+                        LIMIT 1
+                        """,
+                        (f"%{home}%", f"%{home}%", f"%{away}%", f"%{away}%", _match_date),
+                    ).fetchone()
+                else:
+                    _row = _c.execute(
+                        """
+                        SELECT start_time FROM broadcast_schedule
+                        WHERE home_team IS NOT NULL AND away_team IS NOT NULL
+                          AND start_time IS NOT NULL
+                          AND (home_team LIKE ? OR away_team LIKE ?)
+                          AND (home_team LIKE ? OR away_team LIKE ?)
+                        ORDER BY start_time DESC
+                        LIMIT 1
+                        """,
+                        (f"%{home}%", f"%{home}%", f"%{away}%", f"%{away}%"),
+                    ).fetchone()
                 if _row and _row[0]:
                     return _fmt_iso_local(_row[0])
+                # Attempt 2: first-word fallback (requires date + ≥6-char token).
+                # Only engages when the first word is ≥6 chars, to avoid false
+                # positives on short tokens like "AS", "FC", "Al".
+                if _match_date:
+                    _home_first = (home or "").split(" ", 1)[0].strip()
+                    _away_first = (away or "").split(" ", 1)[0].strip()
+                    _h_short_ok = len(_home_first) >= 6
+                    _a_short_ok = len(_away_first) >= 6
+                    if _h_short_ok or _a_short_ok:
+                        _h = _home_first if _h_short_ok else home
+                        _a = _away_first if _a_short_ok else away
+                        _row2 = _c.execute(
+                            """
+                            SELECT start_time FROM broadcast_schedule
+                            WHERE home_team IS NOT NULL AND away_team IS NOT NULL
+                              AND start_time IS NOT NULL
+                              AND (home_team LIKE ? OR away_team LIKE ?)
+                              AND (home_team LIKE ? OR away_team LIKE ?)
+                              AND DATE(start_time) = ?
+                            ORDER BY start_time DESC
+                            LIMIT 1
+                            """,
+                            (f"%{_h}%", f"%{_h}%", f"%{_a}%", f"%{_a}%", _match_date),
+                        ).fetchone()
+                        if _row2 and _row2[0]:
+                            return _fmt_iso_local(_row2[0])
             finally:
                 _c.close()
         except Exception as exc:
@@ -12092,7 +12138,7 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         resp = await claude.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
