@@ -7767,83 +7767,104 @@ def _so_norm_channel(ch_raw: str) -> str:
 def _pick_glyph_for_row(row: dict) -> str:
     """Return the inline-SVG glyph string for a MOQ row.
 
-    Selection priority:
-    1. BRU / TikTok
-    2. Match thread — sport auto-select (Football / Rugby / Cricket)
-       Unknown sport → discussion_seed fallback + one Sentry WARNING per (sport, day)
-    3. TG Alerts lane — P&L recap vs edge pick card
-    4. Content-type keywords (poll, discuss, morning, reel, carousel, story…)
-    5. Channel-level defaults
+    Work-type keywords are the primary driver; channel is only used as a
+    tiebreaker where the same keyword can mean different things on different
+    lanes (e.g. "recap" → bar_chart on TG Alerts, newspaper on WA Channel),
+    and as a final fallback when no keyword matches.
+
+    Keyword → glyph mapping (from mockup social-ops-icons-19apr.html):
+      bru/b.r.u or tiktok channel  → bru
+      match + sport field          → football / rugby / cricket / discussion_seed
+      poll                         → poll
+      seed / discuss               → discussion_seed
+      p&l / pnl / chart / stat     → bar_chart
+      recap / wrap / weekly / summary
+        on TG Alerts               → bar_chart  (performance summary)
+        elsewhere                  → newspaper  (content digest)
+      morning / evening / digest / news → newspaper
+      reel                         → card_diamond
+      carousel                     → stacked_cards
+      story / photo / image        → photo_frame
+      alert / edge / diamond / card / teaser → card_diamond
+      channel fallback:
+        telegram_alerts            → card_diamond
+        whatsapp_*                 → newspaper
+        telegram_community         → discussion_seed
+        instagram                  → photo_frame
     """
     from datetime import date as _date
 
-    w  = (row.get("work_type") or "").lower()
+    # Combine work_type + title so keyword checks work against real Notion data.
+    # work_type is always "Social"/"BRU"/empty; the actual post type lives in title.
+    w  = ((row.get("work_type") or "") + " " + (row.get("title") or "")).lower()
     ch = _so_norm_channel(row.get("channel") or "")
 
-    # BRU always wins
-    if "b.r.u" in w or "bru" in w or ch == "tiktok":
+    # ── BRU / TikTok ──────────────────────────────────────────────────────
+    if ch == "tiktok" or "b.r.u" in w or "bru" in w:
         return _SO_GLYPHS["bru"]
 
-    # Match thread — sport auto-select
-    if "match" in w:
-        sport = (row.get("Sport") or row.get("sport") or "").lower().strip()
-        if "football" in sport or "soccer" in sport:
-            return _SO_GLYPHS["football"]
-        if "rugby" in sport:
+    # ── Match thread — sport inferred from title (Sport field always empty) ─
+    if "match thread" in w:
+        if "rugby" in w or "urc" in w or "stormers" in w or "bulls" in w or "sharks" in w or "lions" in w or "springbok" in w:
             return _SO_GLYPHS["rugby"]
-        if "cricket" in sport:
+        if "cricket" in w or "ipl" in w or "proteas" in w or "sa20" in w or "t20" in w:
             return _SO_GLYPHS["cricket"]
-        # Unknown or missing sport
-        if sport:
-            _key = (sport, _date.today().isoformat())
-            if _key not in _SO_UNKNOWN_SPORT_WARNED:
-                _SO_UNKNOWN_SPORT_WARNED.add(_key)
-                try:
-                    import sentry_sdk as _sentry
-                    _sentry.capture_message(
-                        f"SO timeline: unknown sport '{sport}' on match-thread row — falling back to discussion-seed glyph",
-                        level="warning",
-                    )
-                except Exception:
-                    pass
-        return _SO_GLYPHS["discussion_seed"]
+        # Default match thread = football/soccer
+        return _SO_GLYPHS["football"]
 
-    # TG Alerts
-    if ch == "telegram_alerts":
-        if "recap" in w or "p&l" in w or "pnl" in w or "chart" in w:
-            return _SO_GLYPHS["bar_chart"]
-        return _SO_GLYPHS["card_diamond"]
-
-    # Poll
+    # ── Poll ──────────────────────────────────────────────────────────────
     if "poll" in w:
         return _SO_GLYPHS["poll"]
 
-    # Discussion seed / seed chat
+    # ── Discussion / seed chat ────────────────────────────────────────────
     if "seed" in w or "discuss" in w:
         return _SO_GLYPHS["discussion_seed"]
 
-    # Newspaper (WA digests + anything news-shaped)
-    if "morning" in w or "digest" in w or "evening" in w or "news" in w:
-        return _SO_GLYPHS["newspaper"]
-    if "recap" in w and ch in ("whatsapp_channel", "whatsapp_group"):
+    # ── Hard stats / P&L → bar_chart ─────────────────────────────────────
+    if "p&l" in w or "pnl" in w or "chart" in w or "stat" in w:
+        return _SO_GLYPHS["bar_chart"]
+
+    # ── Recap / wrap / weekly / summary ──────────────────────────────────
+    # TG Alerts: performance summary → bar_chart
+    # All other channels: content digest → newspaper
+    if "recap" in w or "wrap" in w or "weekly" in w or "summary" in w:
+        return _SO_GLYPHS["bar_chart"] if ch == "telegram_alerts" else _SO_GLYPHS["newspaper"]
+
+    # ── Morning / evening / digest → newspaper ───────────────────────────
+    # "news" excluded here: "TG News" on telegram_alerts is an alert post (card_diamond),
+    # not a digest. Channel fallback handles that case below.
+    if "morning" in w or "evening" in w or "digest" in w or "brief" in w or "midday" in w:
         return _SO_GLYPHS["newspaper"]
 
-    # Instagram subtypes
+    # ── Instagram subtypes (channel-specific) ─────────────────────────────
     if ch == "instagram":
         if "reel" in w:
             return _SO_GLYPHS["card_diamond"]
         if "carousel" in w:
             return _SO_GLYPHS["stacked_cards"]
-        return _SO_GLYPHS["photo_frame"]  # story + single post
+        return _SO_GLYPHS["photo_frame"]
 
-    # Edge / alert / card
-    if "alert" in w or "edge" in w or "diamond" in w or "card" in w:
+    # ── Reel / carousel / photo (non-Instagram fallback) ──────────────────
+    if "reel" in w:
+        return _SO_GLYPHS["card_diamond"]
+    if "carousel" in w:
+        return _SO_GLYPHS["stacked_cards"]
+    if "story" in w or "photo" in w or "image" in w:
+        return _SO_GLYPHS["photo_frame"]
+
+    # ── Edge picks / alerts / cards ───────────────────────────────────────
+    if "alert" in w or "edge" in w or "diamond" in w or "card" in w or "teaser" in w:
         return _SO_GLYPHS["card_diamond"]
 
-    # Channel-level defaults
+    # ── Channel-level fallbacks ───────────────────────────────────────────
+    if ch == "telegram_alerts":
+        return _SO_GLYPHS["card_diamond"]
+    if ch in ("whatsapp_channel", "whatsapp_group"):
+        return _SO_GLYPHS["newspaper"]
     if ch == "telegram_community":
         return _SO_GLYPHS["discussion_seed"]
-
+    if ch == "instagram":
+        return _SO_GLYPHS["photo_frame"]
     return _SO_GLYPHS["discussion_seed"]
 
 
