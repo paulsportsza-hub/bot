@@ -162,6 +162,11 @@
             color: var(--text-secondary);
             white-space: nowrap;
         }
+        .channel-logo-img {
+            height: 20px;
+            width: auto;
+            vertical-align: middle;
+        }
 
         /* ── 4. Market Overview ──────────────────────────────── */
         .market-section {
@@ -373,7 +378,7 @@
     <div class="meta-bar">
         {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
         {% if time %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
-        {% if channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
+        {% if channel %}{% if channel_logo_url %}<div class="meta-item channel-logo"><img src="{{ channel_logo_url }}" alt="{{ channel }}" class="channel-logo-img" /></div>{% else %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}{% endif %}
     </div>
 
     <!-- ── 4. Market Overview ────────────────────────────────── -->

@@ -8566,9 +8566,11 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             _mk_ch = tip.get("match_id") or tip.get("match_key") or match_key or ""
             _home_ch = _team_display(home_key) if home_key else tip.get("home_team", "")
             _away_ch = _team_display(away_key) if away_key else tip.get("away_team", "")
-            _ch = _get_supersport_channel(_home_ch, _away_ch, _mk_ch)
+            _ch, _ch_logo = _get_supersport_channel(_home_ch, _away_ch, _mk_ch)
             if _ch:
                 enriched["channel"] = _ch
+            if _ch_logo and not enriched.get("channel_logo_url"):
+                enriched["channel_logo_url"] = _ch_logo
         except Exception as _ce:
             log.debug("_enrich_tip_for_card: _get_supersport_channel failed: %s", _ce)
 
@@ -10556,20 +10558,19 @@ def _load_fixture_kickoffs(match_ids: list) -> dict:
         return {}
 
 
-def _get_supersport_channel(home: str, away: str, match_key: str) -> str:
-    """Resolve broadcast channel string from supersport_scraper rows.
+def _get_supersport_channel(home: str, away: str, match_key: str) -> tuple[str, str]:
+    """Resolve broadcast channel info from supersport_scraper rows.
 
     BUILD-KO-SUPERSPORT-PRIMARY-01: supersport_scraper is the PRIMARY and sole
-    authoritative source for broadcast channels across all sports. Returns a
-    display string such as "SuperSport PSL (DStv 202)" or "SuperSport PSL",
-    or empty string if no SuperSport match is available for this fixture.
+    authoritative source for broadcast channels across all sports.
+    BUILD-CHANNEL-LOGOS-01: also returns channel_logo_url from the DB row.
 
-    Date-filtered first via YYYY-MM-DD suffix on match_key; falls back to the
-    last 50 SuperSport rows when match_key has no date. match_confidence ties
-    are broken by earliest start_time.
+    Returns (channel_display_str, channel_logo_url). Both empty on no match.
+    channel_display_str e.g. "SuperSport PSL (DStv 202)".
+    channel_logo_url e.g. "https://mzansiedge.co.za/assets/channels/202.png".
     """
     if not home and not away:
-        return ""
+        return "", ""
 
     _match_date = ""
     try:
@@ -10614,21 +10615,22 @@ def _get_supersport_channel(home: str, away: str, match_key: str) -> str:
 
             _matches = fuzzy_match_broadcast(_rows, home, away) if _rows else []
             if not _matches:
-                return ""
+                return "", ""
             _best = dict(_matches[0])
             _ch_name = (_best.get("channel_name") or "").strip()
             _ch_short = (_best.get("channel_short") or "").strip()
             _dstv = (_best.get("dstv_number") or "").strip()
+            _logo_url = (_best.get("channel_logo_url") or "").strip()
             # Prefer full channel_name (e.g. "SuperSport PSL"), append DStv number when present.
             _label = _ch_name or _ch_short
             if _label and _dstv:
-                return f"{_label} (DStv {_dstv})"
-            return _label
+                return f"{_label} (DStv {_dstv})", _logo_url
+            return _label, _logo_url
         finally:
             _c.close()
     except Exception as exc:
         log.debug("_get_supersport_channel: lookup failed (%s, %s): %s", home, away, exc)
-        return ""
+        return "", ""
 
 
 def _resolve_kickoff_time(

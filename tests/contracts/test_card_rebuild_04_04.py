@@ -120,29 +120,33 @@ def test_ko_time_never_shows_tbc():
 
 
 def test_channel_meta_item_has_single_emoji_no_ch_prefix():
-    """FIX-DSTV-CHANNEL-PERM-01: channel rendering permanently removed from edge_detail.html.
+    """BUILD-CHANNEL-LOGOS-01 supersedes FIX-DSTV-CHANNEL-PERM-01.
 
-    Supersedes D-06 (CARD-FIX-J). The entire channel/broadcast block (ss_logo_b64,
-    channel_number, 📺 DStv) was removed permanently. This test now asserts absence.
+    FIX-DSTV-CHANNEL-PERM-01 banned ss_logo_b64/channel_number (old DStv pipeline).
+    BUILD-CHANNEL-LOGOS-01 re-introduces channel rendering via logo+fallback pattern.
+    This test validates the new pattern: logo URL present, old DStv identifiers absent.
     """
     template_path = Path(__file__).parent.parent.parent / "card_templates" / "edge_detail.html"
     content = template_path.read_text(encoding="utf-8")
 
-    # FIX-DSTV-CHANNEL-PERM-01: these must NOT appear (channel rendering permanently off)
+    # FIX-DSTV-CHANNEL-PERM-01: old DStv identifiers must NOT appear
     assert "ss_logo_b64" not in content, \
         "ss_logo_b64 must NOT be in edge_detail.html (FIX-DSTV-CHANNEL-PERM-01 removed it)"
     assert "channel_number" not in content, \
         "channel_number must NOT be in edge_detail.html (FIX-DSTV-CHANNEL-PERM-01 removed it)"
 
-    # Must NOT have active 📺 channel rendering (Jinja expressions with channel)
+    # BUILD-CHANNEL-LOGOS-01: channel_logo_url must be present (logo rendering active)
     import re
-    active_channel = re.search(r'📺.*?\{\{|\{\{.*?channel.*?\}\}', content)
-    assert active_channel is None, \
-        "edge_detail.html must not have active 📺/channel Jinja rendering (FIX-DSTV-CHANNEL-PERM-01)"
+    assert "channel_logo_url" in content, \
+        "edge_detail.html must render channel_logo_url (BUILD-CHANNEL-LOGOS-01)"
 
-    # Removal comment must be present
+    # FIX-DSTV-CHANNEL-PERM-01 supersession comment must be present
     assert "FIX-DSTV-CHANNEL-PERM-01" in content, \
-        "edge_detail.html must carry the FIX-DSTV-CHANNEL-PERM-01 removal comment"
+        "edge_detail.html must carry the FIX-DSTV-CHANNEL-PERM-01 supersession comment"
+
+    # Text fallback (📺 {{ channel }}) must also be present for graceful degradation
+    assert re.search(r'📺.*?\{\{\s*channel\s*\}\}', content), \
+        "edge_detail.html must have 📺 {{ channel }} text fallback (BUILD-CHANNEL-LOGOS-01 AC-7)"
 
 
 def test_template_has_no_ko_time_tbc_fallback():

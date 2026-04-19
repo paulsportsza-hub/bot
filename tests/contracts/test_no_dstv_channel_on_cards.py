@@ -3,12 +3,18 @@ Contract: BUILD-KO-SUPERSPORT-PRIMARY-01 — SuperSport is the primary authorita
 source for kickoff times AND broadcast channels across ALL sports. SUPERSEDES
 FIX-DSTV-CHANNEL-PERM-01 which permanently removed channel display.
 
+BUILD-CHANNEL-LOGOS-01 extends this: channel logo images are now rendered from
+broadcast_schedule.channel_logo_url (downloaded from SuperSport CDN and hosted
+locally). Text fallback retained for fixtures without a logo.
+
 Layers:
   Layer 1 — Legacy broadcast-line stub functions stay inert (pre-existing DStv
             text builders must remain empty; channel now flows via dedicated
             _get_supersport_channel() helper + tip["channel"] pass-through).
-  Layer 2 — card_data builders MUST pass tip["channel"] through (no hardcoded "").
-  Layer 3 — Templates MUST render the channel as a meta-item when present.
+  Layer 2 — card_data builders MUST pass tip["channel"] and tip["channel_logo_url"]
+            through (no hardcoded "").
+  Layer 3 — Templates MUST render the channel logo when available, with 📺 text
+            fallback. channel-logo CSS classes are legitimate (BUILD-CHANNEL-LOGOS-01).
   Layer 4 — card_pipeline.render_card_html() keeps its broadcast_channel="" guard
             (unrelated to the new text-based channel line — no reintroduction of
             the old DStv-number hardcoded pipeline).
@@ -201,6 +207,27 @@ class TestCardDataBuilders(unittest.TestCase):
     def test_build_my_matches_data_channel_pass_through(self):
         self._assert_channel_pass_through_in_builder("build_my_matches_data")
 
+    def _assert_logo_url_pass_through_in_builder(self, fn_name: str):
+        src_path = pathlib.Path(__file__).parent.parent.parent / "card_data.py"
+        src = src_path.read_text()
+        fn_match = re.search(
+            rf'def {re.escape(fn_name)}\(.*?\).*?:\n(.*?)(?=\ndef |\Z)',
+            src, re.DOTALL
+        )
+        self.assertIsNotNone(fn_match, f"{fn_name}() not found in card_data.py")
+        body = fn_match.group(1)
+        self.assertIn(
+            '"channel_logo_url"',
+            body,
+            f'{fn_name} must pass channel_logo_url through (BUILD-CHANNEL-LOGOS-01)'
+        )
+
+    def test_build_match_detail_data_logo_url_pass_through(self):
+        self._assert_logo_url_pass_through_in_builder("build_match_detail_data")
+
+    def test_build_edge_detail_data_logo_url_pass_through(self):
+        self._assert_logo_url_pass_through_in_builder("build_edge_detail_data")
+
 
 # ---------------------------------------------------------------------------
 # Layer 3 — Templates contain no active channel rendering
@@ -214,10 +241,10 @@ class TestTemplatesChannelRendering(unittest.TestCase):
     TEMPLATES_DIR = pathlib.Path(__file__).parent.parent.parent / "card_templates"
 
     # Legacy patterns that must NEVER return (DStv-number-based channel rendering).
+    # NOTE: CSS class check removed — channel-logo* classes are legitimate (BUILD-CHANNEL-LOGOS-01).
     LEGACY_CHANNEL_PATTERNS = [
         r'\{%-?\s*if\s+channel_number\s*-?%\}',    # {% if channel_number %}
         r'\{\{\s*channel_number\s*\}\}',            # {{ channel_number }}
-        r'class=".*?channel.*?"',                   # CSS class for channel block
     ]
 
     def _get_legacy_channel_hits(self, template_path: pathlib.Path) -> list[str]:
@@ -230,17 +257,25 @@ class TestTemplatesChannelRendering(unittest.TestCase):
         return hits
 
     def test_match_detail_renders_channel_meta_item(self):
-        """match_detail.html MUST render 📺 {{ channel }} gated by {% if channel %}."""
+        """match_detail.html MUST render channel logo (BUILD-CHANNEL-LOGOS-01) or
+        📺 text fallback, gated by {% if channel %}."""
         t = self.TEMPLATES_DIR / "match_detail.html"
         if not t.exists():
             self.skipTest("match_detail.html not found")
         src = t.read_text()
-        # Must render channel conditionally as a meta-item
+        # Must render channel with logo-or-text logic gated by {% if channel %}
+        # BUILD-CHANNEL-LOGOS-01: logo when channel_logo_url available, text fallback otherwise
         self.assertRegex(
             src,
             r'\{%-?\s*if\s+channel\s*-?%\}.*?📺\s*\{\{\s*channel\s*\}\}',
-            "match_detail.html must render 📺 {{ channel }} inside {% if channel %} "
-            "(BUILD-KO-SUPERSPORT-PRIMARY-01)"
+            "match_detail.html must render 📺 {{ channel }} as fallback inside {% if channel %} "
+            "(BUILD-KO-SUPERSPORT-PRIMARY-01 + BUILD-CHANNEL-LOGOS-01)"
+        )
+        # Must also use channel_logo_url for the logo path
+        self.assertIn(
+            "channel_logo_url",
+            src,
+            "match_detail.html must render channel_logo_url image (BUILD-CHANNEL-LOGOS-01)"
         )
         # Must not have legacy DStv-number channel patterns
         legacy = self._get_legacy_channel_hits(t)
@@ -250,10 +285,20 @@ class TestTemplatesChannelRendering(unittest.TestCase):
             + "\n".join(legacy)
         )
 
-    def test_edge_detail_no_legacy_channel(self):
+    def test_edge_detail_renders_channel_meta_item(self):
+        """edge_detail.html MUST render channel logo or text fallback (BUILD-CHANNEL-LOGOS-01)."""
         t = self.TEMPLATES_DIR / "edge_detail.html"
         if not t.exists():
             self.skipTest("edge_detail.html not found")
+        src = t.read_text()
+        # Must render channel with logo-or-text logic
+        self.assertIn(
+            "channel_logo_url",
+            src,
+            "edge_detail.html must use channel_logo_url (BUILD-CHANNEL-LOGOS-01)"
+        )
+        self.assertIn("📺", src, "edge_detail.html must have 📺 text fallback for channel")
+        # Must not have legacy patterns
         legacy = self._get_legacy_channel_hits(t)
         self.assertEqual(
             legacy, [],

@@ -231,7 +231,7 @@ def render_card_sync(
     _data_hash = hashlib.md5(
         json.dumps(data, sort_keys=True, default=str).encode()
     ).hexdigest()[:12]
-    _cache_key = f"{template_name}:{_data_hash}"
+    _cache_key = f"{template_name}:{width}x{device_scale_factor}:{_data_hash}"
 
     _cached = _cc.get(_cache_key)
     if _cached is not None:

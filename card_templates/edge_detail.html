@@ -227,6 +227,11 @@
             color: var(--text-secondary);
             white-space: nowrap;
         }
+        .channel-logo-img {
+            height: 20px;
+            width: auto;
+            vertical-align: middle;
+        }
 
         /* ── 4. The Pick ─────────────────────────────────────── */
         .pick-section {
@@ -479,7 +484,8 @@
         {#- FIX-REGRESS-D1-BOOKMAKER-LINE-01: kickoff time as dedicated meta item -#}
         {% if time %}<span class="meta-item">⏰ {{ time }} SAST</span>{% endif %}
         {% if venue %}<span class="meta-item">🏙️ {{ venue }}</span>{% endif %}
-        {#- FIX-DSTV-CHANNEL-PERM-01: channel/broadcast meta item permanently removed -#}
+        {#- FIX-DSTV-CHANNEL-PERM-01 superseded by BUILD-CHANNEL-LOGOS-01: channel logo or text fallback -#}
+        {% if channel %}{% if channel_logo_url %}<div class="meta-item channel-logo"><img src="{{ channel_logo_url }}" alt="{{ channel }}" class="channel-logo-img" /></div>{% else %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}{% endif %}
     </div>
 
     {% if tier %}

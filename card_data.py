@@ -719,6 +719,7 @@ def build_edge_detail_data(tip: dict, card_width: int = 480) -> dict:
         "date":    date_str,
         "time":    time_str,
         "channel": tip.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
+        "channel_logo_url": tip.get("channel_logo_url") or "",  # BUILD-CHANNEL-LOGOS-01
         "venue":   tip.get("venue") or "",
 
         # Form
@@ -961,6 +962,7 @@ def build_match_detail_data(match: dict) -> dict:
         "date":    match.get("date") or "",
         "time":    match.get("time") or "",
         "channel": match.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
+        "channel_logo_url": match.get("channel_logo_url") or "",  # BUILD-CHANNEL-LOGOS-01
         # Form
         "home_form": match.get("home_form") or [],
         "away_form": match.get("away_form") or [],

@@ -2335,6 +2335,59 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         log.info("%s mode: %d/%d edges need regeneration", sweep, len(filtered), len(edges))
         edges = filtered
 
+    # BUILD-SONNET-BURN-FIX-01 FIX-5: full-sweep conditional skip.
+    # Skip when: cache exists (banned-phrase gate already passed inside
+    # _get_cached_narrative), cache is ≤24h old, and odds_hash matches
+    # the current snapshot (proxy for "evidence unchanged"). This cuts
+    # Sonnet spend on every full sweep while still regenerating when
+    # anything material has changed.
+    if sweep == "full":
+        from datetime import datetime, timezone
+        filtered_full = []
+        skipped_full = 0
+        for edge in edges:
+            mk = edge.get("match_key", "")
+            cached = await _get_cached_narrative(mk)
+            if not cached:
+                filtered_full.append(edge)
+                continue
+
+            created_at_raw = cached.get("created_at_raw") or cached.get("created_at")
+            age_ok = False
+            try:
+                if created_at_raw:
+                    created_at = datetime.fromisoformat(str(created_at_raw).replace("Z", "+00:00"))
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    age_sec = (datetime.now(timezone.utc) - created_at).total_seconds()
+                    age_ok = age_sec <= 24 * 3600
+            except (ValueError, TypeError):
+                age_ok = False
+
+            if not age_ok:
+                filtered_full.append(edge)
+                continue
+
+            stored_hash = cached.get("odds_hash") or ""
+            try:
+                current_hash = await asyncio.to_thread(_compute_odds_hash, mk)
+            except Exception:
+                current_hash = ""
+
+            if stored_hash and current_hash and stored_hash == current_hash:
+                skipped_full += 1
+                continue
+
+            filtered_full.append(edge)
+
+        log.info(
+            "full mode: %d/%d edges need regeneration (%d skipped via BUILD-SONNET-BURN-FIX-01 gate)",
+            len(filtered_full),
+            len(edges),
+            skipped_full,
+        )
+        edges = filtered_full
+
     if not edges:
         log.info("All edges have fresh cache — nothing to do")
         return

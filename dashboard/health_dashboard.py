@@ -660,6 +660,20 @@ def build_source_freshness(conn) -> list[dict]:
         out.append({"name": "Sportmonks Cricket", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
 
 
+    # SuperSport.com (KO times + DStv channels via broadcast_schedule)
+    if table_exists(conn, "broadcast_schedule"):
+        r = q_one(conn, "SELECT MAX(scraped_at) as last FROM broadcast_schedule WHERE source='supersport_scraper'")
+        c = q_one(conn, "SELECT COUNT(*) as c FROM broadcast_schedule WHERE source='supersport_scraper' AND scraped_at >= datetime('now','-24 hours')")
+        c7 = q_one(conn, "SELECT COUNT(*) as c FROM broadcast_schedule WHERE source='supersport_scraper' AND scraped_at >= datetime('now','-7 days')")
+        c14 = q_one(conn, "SELECT COUNT(*) as c FROM broadcast_schedule WHERE source='supersport_scraper' AND scraped_at >= datetime('now','-14 days') AND scraped_at < datetime('now','-7 days')")
+        trend = _trend_indicator(c7["c"] if c7 else 0, c14["c"] if c14 else 0)
+        if r and r["last"]:
+            row("SuperSport Fixtures", r["last"], c["c"] if c else 0, trend)
+        else:
+            out.append({"name": "SuperSport Fixtures", "last_pull": "No data", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+    else:
+        out.append({"name": "SuperSport Fixtures", "last_pull": "Not Connected", "records_24h": 0, "css": "s-grey", "trend_7d": "\u2014"})
+
     # Tipster Sources
     tip_conn = db_connect(TIPSTER_DB)
     if tip_conn:
@@ -3704,12 +3718,20 @@ def render_automation_content() -> str:
 .so-tl-gl{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.04);pointer-events:none;}
 .so-tl-gl-mid{background:rgba(255,255,255,0.025);}
 .so-tl-hour-lbl-mid{opacity:0.5;}
-.so-tl-icon-btn{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;cursor:pointer;padding:2px;z-index:5;transition:transform 150ms;}
-.so-tl-icon-btn:hover{transform:translate(-50%,-60%);z-index:10;}
-.so-tl-icon-btn:focus{outline:none;z-index:10;}
+.so-tl-icon-btn{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;cursor:pointer;padding:2px;z-index:25;transition:transform 150ms;}
+.so-tl-icon-btn:hover{transform:translate(-50%,-60%);z-index:30;}
+.so-tl-icon-btn:focus{outline:none;z-index:30;}
 .so-tl-icon-btn svg{width:20px;height:20px;stroke:currentColor;stroke-width:1.5;fill:none;color:var(--status-color,var(--muted));transition:color 150ms;}
 .so-tl-icon-btn:hover svg,.so-tl-icon-btn:focus svg{color:var(--gold);}
 .so-tl-icon-btn.so-active svg{color:var(--gold);filter:drop-shadow(0 0 4px rgba(248,200,48,0.7));transform:scale(1.2);}
+@keyframes so-tl-reel-pulse{0%,100%{color:#ef4444;filter:drop-shadow(0 0 2px rgba(239,68,68,0.3));}50%{color:#fca5a5;filter:drop-shadow(0 0 8px rgba(239,68,68,0.9));}}
+.so-tl-icon-btn.so-tl-reel-flash svg{animation:so-tl-reel-pulse 900ms ease-in-out infinite;color:#ef4444;}
+.so-tl-reel-check{position:absolute;top:-4px;right:-6px;font-size:10px;color:#22c55e;font-weight:700;line-height:1;text-shadow:0 0 3px rgba(34,197,94,0.6);}
+@keyframes so-tl-reel-empty-pulse{0%,100%{border-color:#ef4444;color:#ef4444;box-shadow:0 0 2px rgba(239,68,68,0.3);}50%{border-color:#fca5a5;color:#fca5a5;box-shadow:0 0 10px rgba(239,68,68,0.8);}}
+.so-tl-reel-empty{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:22px;height:22px;border:2px dashed #ef4444;border-radius:4px;background:rgba(239,68,68,0.08);color:#ef4444;font-size:13px;font-weight:700;line-height:1;cursor:help;z-index:26;animation:so-tl-reel-empty-pulse 900ms ease-in-out infinite;user-select:none;}
+.so-tl-reel-empty:hover{background:rgba(239,68,68,0.18);}
+.so-tl-icon-btn.so-tl-icon-empty{--status-color:#ef4444;}
+.so-tl-icon-btn.so-tl-icon-empty svg{animation:so-tl-reel-pulse 900ms ease-in-out infinite;color:#ef4444;stroke-dasharray:3 3;}
 .so-tl-chip{position:absolute;top:50%;transform:translate(-50%,-50%);background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-family:var(--font-m);font-size:10px;color:var(--muted);cursor:pointer;white-space:nowrap;z-index:5;}
 .so-tl-chip:hover{border-color:var(--gold);color:var(--text);}
 .so-tl-now-line{position:absolute;top:0;width:2px;background:var(--grad);z-index:20;pointer-events:none;filter:drop-shadow(0 0 6px rgba(248,200,48,0.6));}
@@ -3724,6 +3746,20 @@ def render_automation_content() -> str:
 .so-pv-media img,.so-pv-media video{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block;}
 .so-pv-media.aspect-9-16{aspect-ratio:9/16;max-height:60vh;}
 .so-pv-media.aspect-16-9{aspect-ratio:16/9;}
+.so-pv-media.pv-carousel-wrap{aspect-ratio:9/16;max-height:60vh;background:#000;display:block;overflow:hidden;position:relative;}
+.pv-carousel{display:flex;flex-direction:row;height:100%;width:100%;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;scrollbar-width:none;scroll-behavior:smooth;}
+.pv-carousel::-webkit-scrollbar{display:none;}
+.pv-carousel-slide{position:relative;flex:0 0 100%;width:100%;height:100%;scroll-snap-align:center;scroll-snap-stop:always;background:#000;display:flex;align-items:center;justify-content:center;}
+.pv-carousel-slide img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;}
+.pv-carousel-num{position:absolute;top:8px;right:8px;font-family:var(--font-m);font-size:11px;background:rgba(0,0,0,0.65);color:#fff;padding:3px 8px;border-radius:10px;letter-spacing:.3px;z-index:2;}
+.pv-carousel-nav{position:absolute;top:50%;transform:translateY(-50%);width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,0.55);color:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1;z-index:3;transition:background .15s,opacity .15s;user-select:none;}
+.pv-carousel-nav:hover{background:rgba(0,0,0,0.8);}
+.pv-carousel-nav[disabled]{opacity:0.25;cursor:default;}
+.pv-carousel-nav.prev{left:8px;}
+.pv-carousel-nav.next{right:8px;}
+.pv-carousel-dots{position:absolute;bottom:10px;left:0;right:0;display:flex;justify-content:center;gap:5px;z-index:2;pointer-events:none;}
+.pv-carousel-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,0.5);transition:background .15s,transform .15s;}
+.pv-carousel-dot.active{background:#fff;transform:scale(1.25);}
 .so-pv-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:14px;padding:32px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5;}
 .so-pv-empty svg{opacity:0.18;}
 .so-pv-skel{flex:1;padding:16px;display:flex;flex-direction:column;gap:10px;}
@@ -3735,13 +3771,113 @@ def render_automation_content() -> str:
 .so-pv-actions{padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;}
 .so-pv-actions button,.so-pv-actions a{font-family:var(--font-m);font-size:11px;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 10px;cursor:pointer;text-decoration:none;transition:color 150ms,border-color 150ms;}
 .so-pv-actions button:hover,.so-pv-actions a:hover{color:var(--text);border-color:var(--gold);}
-.pv-tg{background:#0d1f2d;border:1px solid rgba(38,165,228,0.25);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
-.pv-wa{background:#0d1f15;border:1px solid rgba(37,211,102,0.25);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
-.pv-ig{background:linear-gradient(135deg,#1a1025 0%,#0d1520 100%);border:1px solid rgba(228,64,95,0.25);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);}
-.pv-tk{background:#0a0a0a;border:1px solid rgba(255,0,80,0.25);border-radius:10px;padding:14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
-.pv-li{background:#060e17;border:1px solid rgba(10,102,194,0.25);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);}
+/* ── Platform-native preview frames ─────────────────────────── */
+.pv-frame{max-width:420px;margin:0 auto;font-size:13px;line-height:1.5;color:var(--text);}
+.pv-frame-hdr{display:flex;align-items:center;gap:10px;padding:10px 12px;}
+.pv-avatar{width:32px;height:32px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:var(--font-d);font-weight:700;font-size:13px;color:#fff;}
+.pv-handle{font-family:var(--font-d);font-weight:600;font-size:13px;color:var(--text);}
+.pv-sub{font-family:var(--font-m);font-size:11px;color:var(--muted);}
+.pv-verified{display:inline-block;color:#3897f0;font-size:11px;margin-left:3px;vertical-align:top;line-height:1.2;}
+
+/* Instagram */
+.pv-ig-frame{background:#000;border:1px solid #262626;border-radius:8px;overflow:hidden;color:#f5f5f5;}
+.pv-ig-hdr{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid #1a1a1a;}
+.pv-ig-avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888);padding:2px;flex-shrink:0;}
+.pv-ig-avatar-inner{width:100%;height:100%;border-radius:50%;background:#0a0a0a;display:flex;align-items:center;justify-content:center;font-family:var(--font-d);font-weight:700;font-size:12px;color:#f5f5f5;}
+.pv-ig-handle{font-family:var(--font-d);font-weight:600;font-size:13px;color:#f5f5f5;flex:1;}
+.pv-ig-more{color:#f5f5f5;font-size:18px;letter-spacing:2px;}
+.pv-ig-media{position:relative;background:#000;}
+.pv-ig-media.aspect-1-1{aspect-ratio:1/1;}
+.pv-ig-media.aspect-4-5{aspect-ratio:4/5;}
+.pv-ig-media.aspect-9-16{aspect-ratio:9/16;max-height:70vh;}
+.pv-ig-media img,.pv-ig-media video{display:block;width:100%;height:100%;object-fit:cover;}
+.pv-ig-actions{display:flex;align-items:center;gap:14px;padding:10px 12px;font-size:22px;color:#f5f5f5;}
+.pv-ig-actions .sp{flex:1;}
+.pv-ig-actions svg{width:24px;height:24px;stroke:#f5f5f5;stroke-width:2;fill:none;cursor:pointer;}
+.pv-ig-likes{padding:0 12px 4px;font-family:var(--font-d);font-weight:600;font-size:13px;color:#f5f5f5;}
+.pv-ig-caption{padding:4px 12px;font-size:13px;color:#f5f5f5;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;}
+.pv-ig-caption b{font-weight:600;margin-right:4px;}
+.pv-ig-caption .more{color:#8e8e8e;cursor:pointer;}
+.pv-ig-tags{padding:0 12px 2px;font-size:13px;color:#e0f1ff;}
+.pv-ig-tags a,.pv-ig-tags span{color:#e0f1ff;}
+.pv-ig-comments{padding:4px 12px;font-size:13px;color:#8e8e8e;cursor:pointer;}
+.pv-ig-time{padding:2px 12px 12px;font-family:var(--font-m);font-size:10px;color:#8e8e8e;text-transform:uppercase;letter-spacing:.3px;}
+.pv-ig-slide-cap{position:absolute;left:12px;right:60px;bottom:12px;padding:8px 10px;background:rgba(0,0,0,0.55);border-radius:6px;font-size:12px;line-height:1.4;color:#fff;backdrop-filter:blur(4px);max-height:40%;overflow-y:auto;z-index:2;pointer-events:none;white-space:pre-wrap;}
+.pv-ig-dots-top{position:absolute;top:10px;right:10px;display:flex;gap:3px;z-index:3;}
+.pv-ig-dots-top .d{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,0.55);transition:background .15s,transform .15s;}
+.pv-ig-dots-top .d.active{background:#fff;transform:scale(1.3);}
+.pv-ig-count{position:absolute;top:10px;right:10px;padding:3px 9px;background:rgba(38,38,38,0.85);color:#fff;border-radius:12px;font-family:var(--font-m);font-size:11px;font-weight:600;z-index:3;}
+
+/* TikTok */
+.pv-tt-frame{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:9/16;max-height:70vh;color:#fff;}
+.pv-tt-frame video,.pv-tt-frame img{width:100%;height:100%;object-fit:cover;display:block;}
+.pv-tt-top{position:absolute;top:0;left:0;right:0;padding:12px 14px;display:flex;justify-content:center;gap:18px;z-index:3;background:linear-gradient(to bottom,rgba(0,0,0,0.35),transparent);font-family:var(--font-d);font-weight:600;font-size:14px;color:#fff;}
+.pv-tt-top .tab{opacity:0.6;}
+.pv-tt-top .tab.active{opacity:1;border-bottom:2px solid #fff;padding-bottom:2px;}
+.pv-tt-side{position:absolute;right:8px;bottom:90px;display:flex;flex-direction:column;gap:18px;align-items:center;z-index:3;}
+.pv-tt-side-item{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;}
+.pv-tt-side-item svg{width:32px;height:32px;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.6));}
+.pv-tt-side-item .n{font-family:var(--font-d);font-weight:600;font-size:11px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.6);}
+.pv-tt-profile{width:46px;height:46px;border-radius:50%;border:2px solid #fff;background:#111;position:relative;display:flex;align-items:center;justify-content:center;font-family:var(--font-d);font-weight:700;color:#fff;}
+.pv-tt-follow{position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);width:20px;height:20px;border-radius:50%;background:#ff0050;color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;font-weight:700;}
+.pv-tt-disc{width:46px;height:46px;border-radius:50%;background:radial-gradient(circle,#333 20%,#000 22%,#000 60%,#333 62%);display:flex;align-items:center;justify-content:center;animation:tt-spin 5s linear infinite;}
+@keyframes tt-spin{to{transform:rotate(360deg);}}
+.pv-tt-bottom{position:absolute;left:0;right:70px;bottom:0;padding:14px 16px 18px;z-index:3;background:linear-gradient(to top,rgba(0,0,0,0.55),transparent);}
+.pv-tt-handle{font-family:var(--font-d);font-weight:700;font-size:15px;color:#fff;margin-bottom:6px;text-shadow:0 1px 2px rgba(0,0,0,0.6);}
+.pv-tt-cap{font-size:13px;line-height:1.45;color:#fff;margin-bottom:8px;text-shadow:0 1px 2px rgba(0,0,0,0.6);white-space:pre-wrap;word-wrap:break-word;max-height:8em;overflow-y:auto;}
+.pv-tt-music{display:flex;align-items:center;gap:6px;font-family:var(--font-m);font-size:11px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.6);}
+
+/* Telegram */
+.pv-tg-frame{background:#17212b;border-radius:10px;overflow:hidden;border:1px solid #1f2c38;}
+.pv-tg-hdr{display:flex;align-items:center;gap:10px;padding:10px 12px;background:#17212b;border-bottom:1px solid #0e1621;}
+.pv-tg-hdr .pv-avatar{background:#3390ec;}
+.pv-tg-name{font-family:var(--font-d);font-weight:600;font-size:14px;color:#fff;}
+.pv-tg-sub{font-family:var(--font-m);font-size:11px;color:#7d8b98;}
+.pv-tg-bubble{background:#182533;margin:10px 10px 12px;border-radius:10px;padding:4px 4px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.35);position:relative;}
+.pv-tg-bubble-media{border-radius:8px;overflow:hidden;background:#000;}
+.pv-tg-bubble-media img,.pv-tg-bubble-media video{display:block;width:100%;max-height:420px;object-fit:cover;}
+.pv-tg-bubble-text{padding:8px 10px 2px;font-size:14px;line-height:1.45;color:#fff;white-space:pre-wrap;word-wrap:break-word;}
+.pv-tg-bubble-text b{font-weight:600;}
+.pv-tg-bubble-text a{color:#6ab3f3;}
+.pv-tg-meta{display:flex;justify-content:flex-end;align-items:center;gap:6px;padding:4px 12px 2px;font-family:var(--font-m);font-size:11px;color:#7d8b98;}
+.pv-tg-meta .views::before{content:"\1F441";margin-right:3px;}
+.pv-tg-reactions{display:flex;gap:6px;padding:4px 12px 8px;flex-wrap:wrap;}
+.pv-tg-react{background:rgba(51,144,236,0.15);border:1px solid rgba(51,144,236,0.35);border-radius:12px;padding:2px 8px;font-family:var(--font-m);font-size:11px;color:#6ab3f3;}
+
+/* WhatsApp */
+.pv-wa-frame{background:#0b141a;border-radius:10px;overflow:hidden;border:1px solid #1f2c33;}
+.pv-wa-hdr{display:flex;align-items:center;gap:10px;padding:10px 12px;background:#202c33;}
+.pv-wa-hdr .pv-avatar{background:#00a884;}
+.pv-wa-name{font-family:var(--font-d);font-weight:600;font-size:14px;color:#e9edef;}
+.pv-wa-sub{font-family:var(--font-m);font-size:11px;color:#8696a0;}
+.pv-wa-body{padding:12px;background:#0b141a;background-image:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.01) 2px,rgba(255,255,255,0.01) 3px);min-height:120px;}
+.pv-wa-bubble{background:#005c4b;max-width:85%;margin-left:auto;border-radius:8px;padding:3px 3px 6px;box-shadow:0 1px 1px rgba(0,0,0,0.35);position:relative;}
+.pv-wa-bubble::after{content:"";position:absolute;right:-6px;top:0;width:0;height:0;border-style:solid;border-width:0 0 8px 8px;border-color:transparent transparent transparent #005c4b;}
+.pv-wa-bubble-media{border-radius:6px;overflow:hidden;background:#000;}
+.pv-wa-bubble-media img,.pv-wa-bubble-media video{display:block;width:100%;max-height:360px;object-fit:cover;}
+.pv-wa-bubble-text{padding:6px 8px 0;font-size:14px;line-height:1.4;color:#e9edef;white-space:pre-wrap;word-wrap:break-word;}
+.pv-wa-meta{display:flex;justify-content:flex-end;align-items:center;gap:4px;padding:2px 8px 2px;font-family:var(--font-m);font-size:10px;color:#8696a0;}
+.pv-wa-ticks{color:#53bdeb;letter-spacing:-2px;}
+
+/* LinkedIn */
+.pv-li-frame{background:#1b1f23;border-radius:8px;overflow:hidden;border:1px solid #38434f;color:#e7e9ea;}
+.pv-li-hdr{display:flex;align-items:flex-start;gap:10px;padding:12px 16px 10px;}
+.pv-li-hdr .pv-avatar{background:#0a66c2;border-radius:4px;}
+.pv-li-name{font-family:var(--font-d);font-weight:600;font-size:14px;color:#e7e9ea;}
+.pv-li-sub{font-family:var(--font-m);font-size:11px;color:#b0b7bd;line-height:1.4;}
+.pv-li-follow{margin-left:auto;color:#70b5f9;font-family:var(--font-m);font-size:12px;font-weight:600;padding:4px 10px;border:1px solid #70b5f9;border-radius:16px;}
+.pv-li-text{padding:0 16px 10px;font-size:14px;line-height:1.5;color:#e7e9ea;white-space:pre-wrap;word-wrap:break-word;}
+.pv-li-text .more{color:#b0b7bd;cursor:pointer;}
+.pv-li-media{background:#000;}
+.pv-li-media img,.pv-li-media video{display:block;width:100%;max-height:460px;object-fit:cover;}
+.pv-li-stats{display:flex;gap:6px;padding:8px 16px 4px;font-family:var(--font-m);font-size:11px;color:#b0b7bd;border-bottom:1px solid #38434f;}
+.pv-li-actions{display:flex;padding:4px 8px;border-top:0;}
+.pv-li-action{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px;font-family:var(--font-d);font-weight:600;font-size:12px;color:#b0b7bd;cursor:pointer;border-radius:4px;}
+.pv-li-action:hover{background:#2a3137;}
+.pv-li-action svg{width:20px;height:20px;stroke:#b0b7bd;stroke-width:1.8;fill:none;}
+
+/* Generic fallback */
 .pv-gen{background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
-.pv-media-badge{display:inline-block;font-family:var(--font-m);font-size:10px;background:rgba(228,64,95,0.15);color:#E4405F;border-radius:3px;padding:1px 6px;margin-bottom:6px;}
 .so-tip{position:fixed;background:var(--surface-alt);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:var(--font-m);font-size:11px;color:var(--text);z-index:9999;pointer-events:none;max-width:240px;line-height:1.4;box-shadow:var(--glow);display:none;}
 .so-tip-thumb{display:block;width:96px;height:96px;object-fit:cover;border-radius:4px;margin-bottom:6px;background:var(--surface);}
 .so-chip-stack{display:flex;flex-direction:column;gap:6px;padding:4px 0;}
@@ -3808,6 +3944,10 @@ function soInit(){
   updateDayPicker();
   setupDayPicker();
   setupKeyboard();
+  // Force live API refresh on first paint so stale SWR-cached SO_INIT
+  // (e.g. yesterday's non-drip-day payload served today) is replaced with
+  // fresh data within ~300ms instead of waiting a full 60s interval.
+  setTimeout(refreshTimeline,0);
   setInterval(updateNowLine,60000);
   setInterval(refreshTimeline,60000);
   // Queue: initial + interval load
@@ -3923,13 +4063,22 @@ function renderRow(ch,ri){
     }
     var off=it.off?'margin-top:'+it.off+'px;':'';
     var al=eA([p.type||'Post',ch.label,'scheduled '+p.sched,p.status||'unknown'].join(' · '));
+    // DASH-POLISH-STORIES-01 / AC1: empty-slot flash (distinct from overdue).
+    if(p.reel_state==='empty'){
+      var emTitle=eA(p.title||"No IG Reel queued for today's 19:00 slot");
+      var emSvg=p.glyph||svgI(p.icon||'help-circle');
+      return '<button class="so-tl-icon-btn so-tl-icon-empty" style="left:'+pct+'" title="'+emTitle+'" aria-label="'+emTitle+'" role="gridcell" tabindex="-1">'+emSvg+'</button>';
+    }
     var badge=p.bru_mismatch?'<span class="so-tl-bru-badge"></span>':'';
-    return '<button class="so-tl-icon-btn" style="left:'+pct+';'+off+';--status-color:'+stColor(p.status)+'" '+
+    if(p.reel_state==='published')badge+='<span class="so-tl-reel-check" aria-hidden="true">✓</span>';
+    var cls='so-tl-icon-btn'+(p.reel_state==='overdue'?' so-tl-reel-flash':'');
+    return '<button class="'+cls+'" style="left:'+pct+';'+off+';--status-color:'+stColor(p.status)+'" '+
       'data-post-id="'+eA(p.id)+'" data-row-idx="'+ri+'" data-col-idx="'+ci+'" '+
       'data-title="'+eA(p.title)+'" data-sched="'+eA(p.sched)+'" data-sched-full="'+eA(p.sched_full||'')+'" data-status="'+eA(p.status)+'" '+
       'data-ch="'+eA(ch.label)+'" data-type="'+eA(p.type)+'" data-asset-url="'+eA(p.asset_url||'')+'" '+
+      'data-reel-state="'+eA(p.reel_state||'')+'" '+
       'aria-label="'+al+'" tabindex="-1" role="gridcell">'+
-      svgI(p.icon||'help-circle')+badge+
+      (p.glyph||svgI(p.icon||'help-circle'))+badge+
       '</button>';
   }).join('');
   return '<div class="so-tl-row" role="row" aria-label="'+eA(ch.label)+'" data-row-idx="'+ri+'" tabindex="0">'+
@@ -4039,6 +4188,7 @@ function showPreview(p){
   ].filter(Boolean).join('');
   document.getElementById('so-pv-meta').innerHTML=chips;
   document.getElementById('so-pv-body').innerHTML=renderPvBody(p);
+  initPvCarousels();
   var acts=[];
   if((p.status||'').match(/fail|error|block/i))acts.push('<button onclick="alert(\\'Retry: use Notion to re-queue this post\\')">Retry</button>');
   if((p.status||'').match(/pending|queue|sched|ready|await/i))acts.push('<button onclick="alert(\\'Skip: use Notion to update status\\')">Skip</button>');
@@ -4047,32 +4197,230 @@ function showPreview(p){
   document.getElementById('so-pv-actions').innerHTML=acts.join('');
   var ld=document.getElementById('so-pv-loaded');ld.style.display='flex';ld.style.flexDirection='column';ld.style.flex='1';
 }
+function _pvBrand(ch){
+  if(ch.includes('instagram'))return{handle:'mzansiedge',display:'MzansiEdge',avatar:'M',sub:'Sponsored'};
+  if(ch.includes('tiktok'))return{handle:'@mzansiedge',display:'MzansiEdge',avatar:'M',sub:'original sound'};
+  if(ch.includes('telegram_community'))return{handle:'MzansiEdge Community',display:'MzansiEdge Community',avatar:'M',sub:'Group'};
+  if(ch.includes('telegram'))return{handle:'MzansiEdge Alerts',display:'MzansiEdge Alerts',avatar:'M',sub:'Channel'};
+  if(ch.includes('whatsapp'))return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:'Channel'};
+  if(ch.includes('linkedin'))return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:'Sports intelligence · Johannesburg · Sponsored'};
+  return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:''};
+}
+function _pvCaption(p,ch){
+  if(ch.includes('telegram'))return p.telegram_caption||p.caption_final||p.caption||p.body_markdown||'';
+  if(ch.includes('instagram'))return p.ig_caption||p.caption_final||p.caption||p.body_markdown||'';
+  return p.caption_final||p.caption||p.body_markdown||'';
+}
+function _pvEscHtml(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function _pvLineBreaks(s){return _pvEscHtml(s).replace(/\\n/g,'<br>');}
+function _pvHashLine(p){
+  if(!p.hashtags_str)return'';
+  var tags=eH(p.hashtags_str).split(/\\s+/).filter(Boolean);
+  return'<span>'+tags.join(' ')+'</span>';
+}
+function _pvTimeLabel(p){
+  if(p.scheduled)return eH(p.scheduled);
+  if(p.created_at)return eH(p.created_at);
+  return'Just now';
+}
+function renderIgFrame(p,media){
+  var br=_pvBrand('instagram');
+  var cap=_pvCaption(p,'instagram');
+  var hasCarousel=p.carousel_images && p.carousel_images.length>1;
+  var capHtml=cap?'<div class="pv-ig-caption"><b>'+eH(br.handle)+'</b>'+_pvLineBreaks(cap)+'</div>':'';
+  var tagHtml=p.hashtags_str?'<div class="pv-ig-tags">'+_pvHashLine(p)+'</div>':'';
+  var hdr='<div class="pv-ig-hdr"><div class="pv-ig-avatar"><div class="pv-ig-avatar-inner">'+eH(br.avatar)+'</div></div><div class="pv-ig-handle">'+eH(br.handle)+' <span style="color:#8e8e8e;font-weight:400;">· '+eH(br.sub)+'</span></div><div class="pv-ig-more">⋯</div></div>';
+  var actions=''+
+    '<div class="pv-ig-actions">'+
+      '<svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'+
+      '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'+
+      '<svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'+
+      '<span class="sp"></span>'+
+      '<svg viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'+
+    '</div>';
+  var likes='<div class="pv-ig-likes">1,247 likes</div>';
+  var comments='<div class="pv-ig-comments">View all 38 comments</div>';
+  var time='<div class="pv-ig-time">'+_pvTimeLabel(p)+'</div>';
+  return'<div class="pv-ig-frame">'+hdr+media+actions+likes+capHtml+tagHtml+comments+time+'</div>';
+}
+function renderTikTokFrame(p,media){
+  var br=_pvBrand('tiktok');
+  var cap=_pvCaption(p,'tiktok');
+  var tags=p.hashtags_str?'<div style="color:#fff;font-weight:600;margin-top:4px;">'+eH(p.hashtags_str)+'</div>':'';
+  var top='<div class="pv-tt-top"><span class="tab">Following</span><span class="tab active">For You</span></div>';
+  var side=''+
+    '<div class="pv-tt-side">'+
+      '<div class="pv-tt-side-item">'+
+        '<div class="pv-tt-profile">'+eH(br.avatar)+'<span class="pv-tt-follow">+</span></div>'+
+      '</div>'+
+      '<div class="pv-tt-side-item">'+
+        '<svg viewBox="0 0 48 48" fill="#fff"><path d="M24 42s-14-8.35-14-18a8 8 0 0 1 14-5.3A8 8 0 0 1 38 24c0 9.65-14 18-14 18z"/></svg>'+
+        '<span class="n">45.2K</span>'+
+      '</div>'+
+      '<div class="pv-tt-side-item">'+
+        '<svg viewBox="0 0 48 48" fill="#fff"><path d="M42 22c0 9.4-8 17-18 17-2.8 0-5.5-.6-7.8-1.7L8 40l2.7-8.2C8.4 29 7 25.6 7 22 7 12.6 15.5 5 24 5s18 7.6 18 17z"/></svg>'+
+        '<span class="n">1,247</span>'+
+      '</div>'+
+      '<div class="pv-tt-side-item">'+
+        '<svg viewBox="0 0 48 48" fill="#fff"><path d="M12 4v40l12-8 12 8V4z"/></svg>'+
+        '<span class="n">892</span>'+
+      '</div>'+
+      '<div class="pv-tt-side-item">'+
+        '<svg viewBox="0 0 48 48" fill="#fff"><path d="M4 24l20-12v8c12 0 20 8 20 20-4-6-10-10-20-10v8z"/></svg>'+
+        '<span class="n">Share</span>'+
+      '</div>'+
+      '<div class="pv-tt-disc"></div>'+
+    '</div>';
+  var bottom=''+
+    '<div class="pv-tt-bottom">'+
+      '<div class="pv-tt-handle">'+eH(br.handle)+'</div>'+
+      '<div class="pv-tt-cap">'+_pvLineBreaks(cap)+tags+'</div>'+
+      '<div class="pv-tt-music">🎵 '+eH(br.sub)+' · '+eH(br.display)+'</div>'+
+    '</div>';
+  return'<div class="pv-tt-frame">'+media+top+side+bottom+'</div>';
+}
+function renderTelegramFrame(p,media){
+  var br=_pvBrand((p.channel||'').toLowerCase());
+  var cap=_pvCaption(p,'telegram');
+  var bodyHtml=cap.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>');
+  var hdr='<div class="pv-tg-hdr"><div class="pv-avatar">'+eH(br.avatar)+'</div><div><div class="pv-tg-name">'+eH(br.display)+'</div><div class="pv-tg-sub">'+eH(br.sub)+'</div></div></div>';
+  var bubbleMedia=media?'<div class="pv-tg-bubble-media">'+media+'</div>':'';
+  var bubbleText=bodyHtml?'<div class="pv-tg-bubble-text">'+bodyHtml+'</div>':'';
+  var hashInline=p.hashtags_str?'<div class="pv-tg-bubble-text" style="padding-top:2px;"><span style="color:#6ab3f3;">'+eH(p.hashtags_str)+'</span></div>':'';
+  var meta='<div class="pv-tg-meta"><span class="views">12.4K</span><span>'+_pvTimeLabel(p)+'</span></div>';
+  var react='<div class="pv-tg-reactions"><span class="pv-tg-react">🔥 284</span><span class="pv-tg-react">👀 1.1K</span><span class="pv-tg-react">💎 92</span></div>';
+  return'<div class="pv-tg-frame">'+hdr+'<div class="pv-tg-bubble">'+bubbleMedia+bubbleText+hashInline+meta+'</div>'+react+'</div>';
+}
+function renderWhatsAppFrame(p,media){
+  var br=_pvBrand('whatsapp');
+  var cap=_pvCaption(p,'whatsapp');
+  var bodyHtml=_pvLineBreaks(cap);
+  var hashInline=p.hashtags_str?'<br><br><span style="color:#53bdeb;">'+eH(p.hashtags_str)+'</span>':'';
+  var hdr='<div class="pv-wa-hdr"><div class="pv-avatar">'+eH(br.avatar)+'</div><div><div class="pv-wa-name">'+eH(br.display)+'</div><div class="pv-wa-sub">'+eH(br.sub)+' · Broadcast</div></div></div>';
+  var bubbleMedia=media?'<div class="pv-wa-bubble-media">'+media+'</div>':'';
+  var bubbleText=bodyHtml?'<div class="pv-wa-bubble-text">'+bodyHtml+hashInline+'</div>':'';
+  var meta='<div class="pv-wa-meta"><span>'+_pvTimeLabel(p)+'</span><span class="pv-wa-ticks">✓✓</span></div>';
+  return'<div class="pv-wa-frame">'+hdr+'<div class="pv-wa-body"><div class="pv-wa-bubble">'+bubbleMedia+bubbleText+meta+'</div></div></div>';
+}
+function renderLinkedInFrame(p,media){
+  var br=_pvBrand('linkedin');
+  var cap=_pvCaption(p,'linkedin');
+  var bodyHtml=_pvLineBreaks(cap);
+  var hashInline=p.hashtags_str?'<br><br><span style="color:#70b5f9;">'+eH(p.hashtags_str)+'</span>':'';
+  var hdr='<div class="pv-li-hdr"><div class="pv-avatar" style="background:#0a66c2;border-radius:4px;">'+eH(br.avatar)+'</div><div><div class="pv-li-name">'+eH(br.display)+'</div><div class="pv-li-sub">'+eH(br.sub)+'<br>'+_pvTimeLabel(p)+' · <span title="Public">🌐</span></div></div><div class="pv-li-follow">+ Follow</div></div>';
+  var text=bodyHtml?'<div class="pv-li-text">'+bodyHtml+hashInline+'</div>':'';
+  var mediaWrap=media?'<div class="pv-li-media">'+media+'</div>':'';
+  var stats='<div class="pv-li-stats"><span>🔥 284 · 💡 92</span><span style="margin-left:auto;">38 comments · 12 reposts</span></div>';
+  var actions=''+
+    '<div class="pv-li-actions">'+
+      '<div class="pv-li-action"><svg viewBox="0 0 24 24"><path d="M7 10v12M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7"/></svg>Like</div>'+
+      '<div class="pv-li-action"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Comment</div>'+
+      '<div class="pv-li-action"><svg viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>Repost</div>'+
+      '<div class="pv-li-action"><svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>Send</div>'+
+    '</div>';
+  return'<div class="pv-li-frame">'+hdr+text+mediaWrap+stats+actions+'</div>';
+}
 function renderPvBody(p){
   var ch=(p.channel||'').toLowerCase();
-  var isTg=ch.includes('telegram');
-  var isIg=ch.includes('instagram');
-  var rawCaption=isTg?(p.telegram_caption||p.caption_final||p.caption||p.body_markdown||'(no content)'):(isIg?(p.ig_caption||p.caption_final||p.caption||p.body_markdown||'(no content)'):(p.caption_final||p.caption||p.body_markdown||'(no content)'));
-  var body=isTg?rawCaption.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):eH(rawCaption);
+  var media=renderPvMedia(p,ch);
+  if(ch.includes('instagram'))return renderIgFrame(p,media);
+  if(ch.includes('tiktok'))return renderTikTokFrame(p,media);
+  if(ch.includes('telegram'))return renderTelegramFrame(p,media);
+  if(ch.includes('whatsapp'))return renderWhatsAppFrame(p,media);
+  if(ch.includes('linkedin'))return renderLinkedInFrame(p,media);
+  var cap=_pvCaption(p,ch);
   var ttl=p.title?'<b>'+eH(p.title)+'</b><br><br>':'';
   var hashHtml=p.hashtags_str?'<div class="pv-hashtags">'+eH(p.hashtags_str)+'</div>':'';
-  var media=renderPvMedia(p);
-  if(isTg)return media+'<div class="pv-caption-label">Telegram caption (exact)</div><div class="pv-tg">'+ttl+body+'</div>'+hashHtml;
-  if(ch.includes('whatsapp'))return media+'<div class="pv-caption-label">WhatsApp caption</div><div class="pv-wa">'+ttl+body+'</div>'+hashHtml;
-  if(isIg)return media+'<div class="pv-ig"><span class="pv-media-badge">'+eH(p.type||'Post')+'</span><br>'+ttl+body+'</div>'+hashHtml;
-  if(ch.includes('tiktok'))return media+'<div class="pv-caption-label">TikTok caption</div><div class="pv-tk">'+ttl+body+'</div>'+hashHtml;
-  if(ch.includes('linkedin'))return media+'<div class="pv-caption-label">LinkedIn caption</div><div class="pv-li">'+ttl+body+'</div>'+hashHtml;
-  return media+'<div class="pv-gen">'+ttl+body+'</div>'+hashHtml;
+  return media+'<div class="pv-gen">'+ttl+_pvLineBreaks(cap)+'</div>'+hashHtml;
 }
-function renderPvMedia(p){
-  if(!p.image_url && !p.video_url)return'';
-  var aspectCls=p.media_aspect==='9:16'?'aspect-9-16':(p.media_aspect==='16:9'?'aspect-16-9':'');
+function renderPvMedia(p,ch){
+  ch=ch||(p.channel||'').toLowerCase();
+  var hasCarousel=p.carousel_images && p.carousel_images.length>1;
+  if(!p.image_url && !p.video_url && !hasCarousel)return'';
+  var aspectCls='';
+  if(ch.includes('instagram')){
+    aspectCls='pv-ig-media '+(p.media_aspect==='9:16'?'aspect-9-16':(p.media_aspect==='4:5'?'aspect-4-5':'aspect-1-1'));
+  }
   var inner='';
   if(p.video_url){
     inner='<video controls preload="metadata" playsinline src="'+eA(p.video_url)+'"></video>';
+  }else if(hasCarousel){
+    var total=p.carousel_images.length;
+    var captions=p.slide_captions||[];
+    var hasSlideCaps=captions.length===total;
+    var slides=p.carousel_images.map(function(u,i){
+      var capOverlay='';
+      if(ch.includes('instagram') && hasSlideCaps){
+        capOverlay='<div class="pv-ig-slide-cap">'+_pvLineBreaks(captions[i])+'</div>';
+      }
+      return '<div class="pv-carousel-slide">'+capOverlay+'<img loading="lazy" alt="Slide '+(i+1)+'" src="'+eA(u)+'"></div>';
+    }).join('');
+    var dots=p.carousel_images.map(function(_,i){
+      return '<span class="pv-carousel-dot'+(i===0?' active':'')+'" data-idx="'+i+'"></span>';
+    }).join('');
+    var igDots='';
+    if(ch.includes('instagram')){
+      igDots='<div class="pv-ig-dots-top">'+p.carousel_images.map(function(_,i){return'<span class="d'+(i===0?' active':'')+'"></span>';}).join('')+'</div>'+
+             '<span class="pv-ig-count" data-ig-count>1/'+total+'</span>';
+    }
+    inner=igDots+
+          '<div class="pv-carousel" data-carousel>'+slides+'</div>'+
+          (ch.includes('instagram')?'':'<span class="pv-carousel-num" data-carousel-num>1/'+total+'</span>')+
+          '<button class="pv-carousel-nav prev" data-carousel-prev aria-label="Previous slide" disabled>‹</button>'+
+          '<button class="pv-carousel-nav next" data-carousel-next aria-label="Next slide">›</button>'+
+          '<div class="pv-carousel-dots" data-carousel-dots>'+dots+'</div>';
   }else if(p.image_url){
     inner='<img loading="lazy" alt="" src="'+eA(p.image_url)+'">';
   }
-  return'<div class="so-pv-media '+aspectCls+'" style="margin-bottom:10px;border-radius:8px;">'+inner+'</div>';
+  var wrapCls=ch.includes('instagram')?aspectCls:'so-pv-media '+(hasCarousel?'pv-carousel-wrap aspect-1-1':'');
+  if(hasCarousel && !ch.includes('instagram'))wrapCls+=' pv-carousel-wrap';
+  else if(hasCarousel && ch.includes('instagram'))wrapCls+=' pv-carousel-wrap';
+  return'<div class="'+wrapCls+'">'+inner+'</div>';
+}
+function initPvCarousels(){
+  document.querySelectorAll('.pv-carousel-wrap').forEach(function(wrap){
+    var track=wrap.querySelector('[data-carousel]');
+    if(!track||track.dataset.pvInit)return;
+    track.dataset.pvInit='1';
+    var prev=wrap.querySelector('[data-carousel-prev]');
+    var next=wrap.querySelector('[data-carousel-next]');
+    var dotsEl=wrap.querySelector('[data-carousel-dots]');
+    var numEl=wrap.querySelector('[data-carousel-num]');
+    var igCountEl=wrap.querySelector('[data-ig-count]');
+    var igDotsWrap=wrap.querySelector('.pv-ig-dots-top');
+    var igDots=igDotsWrap?Array.prototype.slice.call(igDotsWrap.querySelectorAll('.d')):[];
+    var dots=dotsEl?Array.prototype.slice.call(dotsEl.querySelectorAll('.pv-carousel-dot')):[];
+    var slides=track.querySelectorAll('.pv-carousel-slide');
+    var total=slides.length;
+    var current=0;
+    function update(){
+      if(numEl)numEl.textContent=(current+1)+'/'+total;
+      if(igCountEl)igCountEl.textContent=(current+1)+'/'+total;
+      dots.forEach(function(d,i){d.classList.toggle('active',i===current);});
+      igDots.forEach(function(d,i){d.classList.toggle('active',i===current);});
+      if(prev)prev.disabled=current<=0;
+      if(next)next.disabled=current>=total-1;
+    }
+    function goto(i){
+      current=Math.max(0,Math.min(total-1,i));
+      var target=slides[current];
+      if(target)track.scrollTo({left:target.offsetLeft,behavior:'smooth'});
+      update();
+    }
+    if(prev)prev.addEventListener('click',function(e){e.preventDefault();goto(current-1);});
+    if(next)next.addEventListener('click',function(e){e.preventDefault();goto(current+1);});
+    dots.forEach(function(d){d.style.pointerEvents='auto';d.style.cursor='pointer';d.addEventListener('click',function(){goto(parseInt(d.dataset.idx,10)||0);});});
+    var scrollTimer=null;
+    track.addEventListener('scroll',function(){
+      if(scrollTimer)clearTimeout(scrollTimer);
+      scrollTimer=setTimeout(function(){
+        var w=track.clientWidth||1;
+        var idx=Math.round(track.scrollLeft/w);
+        if(idx!==current){current=idx;update();}
+      },80);
+    },{passive:true});
+    update();
+  });
 }
 function showPvErr(){
   document.getElementById('so-pv-skel').style.display='none';
@@ -7364,6 +7712,24 @@ _SO_PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
 _SO_FAILED_ST  = {"failed", "error", "blocked"}
 
 
+_SO_GLYPHS: dict[str, str] = {
+    "card_diamond":    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg>',
+    "bar_chart":       '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="14" width="3.5" height="7" rx="0.5"/><rect x="8.5" y="10" width="3.5" height="11" rx="0.5"/><rect x="14" y="6" width="3.5" height="15" rx="0.5"/><rect x="19.5" y="12" width="3.5" height="9" rx="0.5"/></svg>',
+    "poll":            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 5 Q3 3 5 3 H19 Q21 3 21 5 V14 Q21 16 19 16 H10 L6 20 V16 Q3 16 3 14 Z"/><rect x="7" y="10" width="2" height="4" fill="currentColor" stroke="none"/><rect x="11" y="8" width="2" height="6" fill="currentColor" stroke="none"/><rect x="15" y="6" width="2" height="8" fill="currentColor" stroke="none"/></svg>',
+    "football":        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 5 L15 8 L14 12 L10 12 L9 8 Z" fill="currentColor" opacity="0.3"/><path d="M12 5 V3"/><path d="M15 8 L18 7"/><path d="M14 12 L17 14"/><path d="M10 12 L7 14"/><path d="M9 8 L6 7"/></svg>',
+    "rugby":           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9" ry="5.5" transform="rotate(-30 12 12)"/><line x1="7" y1="14" x2="17" y2="9.5"/><line x1="9" y1="15" x2="10.3" y2="14.5"/><line x1="11.3" y1="13.5" x2="12.6" y2="13"/><line x1="13.7" y1="12" x2="15" y2="11.5"/></svg>',
+    "cricket":         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="14" y="2" width="3" height="16" rx="1" transform="rotate(25 15.5 10)" fill="currentColor" opacity="0.6"/><line x1="12" y1="18" x2="14" y2="20" stroke-width="2.2"/><circle cx="7" cy="17" r="3"/><line x1="5.5" y1="16" x2="6" y2="16.8"/><line x1="7" y1="15.5" x2="7.3" y2="16.4"/></svg>',
+    "discussion_seed": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2 6 Q2 4 4 4 H13 Q15 4 15 6 V11 Q15 13 13 13 H7 L4 15.5 V13 Q2 13 2 11 Z"/><path d="M9 10 Q9 8.5 10.5 8.5 H20 Q22 8.5 22 10.5 V15 Q22 17 20 17 H16 L19 20 V17" fill="#111111"/></svg>',
+    "newspaper":       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1"/><rect x="5" y="6.5" width="6.5" height="4" fill="currentColor" opacity="0.25"/><line x1="13" y1="7" x2="19" y2="7"/><line x1="13" y1="9" x2="19" y2="9"/><line x1="5" y1="13" x2="19" y2="13"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="5" y1="17" x2="14" y2="17"/></svg>',
+    "stacked_cards":   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="13" height="13" rx="2" fill="#111111"/><rect x="4" y="7" width="13" height="13" rx="2" fill="#111111"/></svg>',
+    "photo_frame":     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15 L16 10 L5 21"/></svg>',
+    "bru":             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="2.5"/><line x1="12" y1="4" x2="12" y2="7"/><circle cx="12" cy="3.5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1.2" fill="currentColor"/><circle cx="15" cy="12" r="1.2" fill="currentColor"/><line x1="9" y1="16" x2="15" y2="16"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg>',
+}
+
+# Rate-limit unknown-sport Sentry warnings: one per (sport_value, YYYY-MM-DD)
+_SO_UNKNOWN_SPORT_WARNED: set[tuple[str, str]] = set()
+
+
 def _so_icon_for(wt: str, ck: str) -> str:
     w = (wt or "").lower()
     if "seed chat" in w:                 return "message-circle"
@@ -7396,6 +7762,89 @@ def _so_norm_channel(ch_raw: str) -> str:
     if "group" in c and ("whatsapp" in c or " wa" in c or c.startswith("wa")):
         return "whatsapp_group"
     return _normalise_channel_key(ch_raw)
+
+
+def _pick_glyph_for_row(row: dict) -> str:
+    """Return the inline-SVG glyph string for a MOQ row.
+
+    Selection priority:
+    1. BRU / TikTok
+    2. Match thread — sport auto-select (Football / Rugby / Cricket)
+       Unknown sport → discussion_seed fallback + one Sentry WARNING per (sport, day)
+    3. TG Alerts lane — P&L recap vs edge pick card
+    4. Content-type keywords (poll, discuss, morning, reel, carousel, story…)
+    5. Channel-level defaults
+    """
+    from datetime import date as _date
+
+    w  = (row.get("work_type") or "").lower()
+    ch = _so_norm_channel(row.get("channel") or "")
+
+    # BRU always wins
+    if "b.r.u" in w or "bru" in w or ch == "tiktok":
+        return _SO_GLYPHS["bru"]
+
+    # Match thread — sport auto-select
+    if "match" in w:
+        sport = (row.get("Sport") or row.get("sport") or "").lower().strip()
+        if "football" in sport or "soccer" in sport:
+            return _SO_GLYPHS["football"]
+        if "rugby" in sport:
+            return _SO_GLYPHS["rugby"]
+        if "cricket" in sport:
+            return _SO_GLYPHS["cricket"]
+        # Unknown or missing sport
+        if sport:
+            _key = (sport, _date.today().isoformat())
+            if _key not in _SO_UNKNOWN_SPORT_WARNED:
+                _SO_UNKNOWN_SPORT_WARNED.add(_key)
+                try:
+                    import sentry_sdk as _sentry
+                    _sentry.capture_message(
+                        f"SO timeline: unknown sport '{sport}' on match-thread row — falling back to discussion-seed glyph",
+                        level="warning",
+                    )
+                except Exception:
+                    pass
+        return _SO_GLYPHS["discussion_seed"]
+
+    # TG Alerts
+    if ch == "telegram_alerts":
+        if "recap" in w or "p&l" in w or "pnl" in w or "chart" in w:
+            return _SO_GLYPHS["bar_chart"]
+        return _SO_GLYPHS["card_diamond"]
+
+    # Poll
+    if "poll" in w:
+        return _SO_GLYPHS["poll"]
+
+    # Discussion seed / seed chat
+    if "seed" in w or "discuss" in w:
+        return _SO_GLYPHS["discussion_seed"]
+
+    # Newspaper (WA digests + anything news-shaped)
+    if "morning" in w or "digest" in w or "evening" in w or "news" in w:
+        return _SO_GLYPHS["newspaper"]
+    if "recap" in w and ch in ("whatsapp_channel", "whatsapp_group"):
+        return _SO_GLYPHS["newspaper"]
+
+    # Instagram subtypes
+    if ch == "instagram":
+        if "reel" in w:
+            return _SO_GLYPHS["card_diamond"]
+        if "carousel" in w:
+            return _SO_GLYPHS["stacked_cards"]
+        return _SO_GLYPHS["photo_frame"]  # story + single post
+
+    # Edge / alert / card
+    if "alert" in w or "edge" in w or "diamond" in w or "card" in w:
+        return _SO_GLYPHS["card_diamond"]
+
+    # Channel-level defaults
+    if ch == "telegram_community":
+        return _SO_GLYPHS["discussion_seed"]
+
+    return _SO_GLYPHS["discussion_seed"]
 
 
 _SO_COMPUTER_URL_RE = re.compile(
@@ -7503,7 +7952,7 @@ def _bru_drip_items_for_day(day_str: str) -> list[dict]:
     _SHUFFLE_SEED = 2026
     _DRIP_EPOCH    = _date(2026, 4, 19)  # First drip day; fires video at position 1
     _DRIP_EPOCH_POS = 1                  # Queue position on epoch date
-    _DRIP_HOUR     = 9                   # 09:00 SAST
+    _DRIP_HOUR     = 11                  # 11:00 SAST (matches cron `0 9 */2 * *` UTC — see PUBLISHER-HYGIENE-SWEEP-01)
 
     try:
         day = _date.fromisoformat(day_str)
@@ -7572,7 +8021,132 @@ def _bru_drip_items_for_day(day_str: str) -> list[dict]:
         "error":      "",
         "ch_lbl":     "TikTok",
         "is_bru_drip": True,
+        "glyph":       _SO_GLYPHS["bru"],
     }]
+
+
+_BRU_PUBLIC_BASE = "https://mzansiedge.co.za/assets/bru"
+_BRU_HOOKS = (
+    "This is B.R.U. Welcome to the Edge.",
+    "B.R.U. sees what you see. Only sharper.",
+    "Built for the culture. Sharpened by data.",
+    "Your AI edge in the wild.",
+    "The future of SA sports intelligence.",
+    "No cap. Just edge.",
+    "B.R.U. doesn't miss.",
+    "From the streets to the stats.",
+)
+_BRU_TOPIC_TAGS: dict[str, list[str]] = {
+    "robotatrobot": ["Johannesburg", "StreetCulture"],
+    "taxirank":     ["TaxiCulture", "Johannesburg"],
+    "braai":        ["Braai", "SouthAfricanCulture"],
+    "smartshopper": ["SmartShopper", "SALife"],
+    "pothole":      ["SAProblems", "SouthAfrica"],
+    "engen":        ["SALife", "RoadTrip"],
+    "prison1":      ["SAStories", "SouthAfrica"],
+    "prison2":      ["SAStories", "SouthAfrica"],
+    "sangoma":      ["SACulture", "Heritage"],
+    "sars":         ["SARS", "SAHumour"],
+    "discovery":    ["DiscoverySA", "SALife"],
+    "groupchat":    ["SAHumour", "WhatsAppSA"],
+    "gameranger":   ["Gaming", "SAGaming"],
+    "saa":          ["SAA", "SouthAfrica"],
+    "ponty":        ["SAStories", "SouthAfrica"],
+    "hero-intro":   ["MzansiEdge", "BRU"],
+}
+_BRU_BANNED_TAGS = frozenset({
+    "betting", "gambling", "bets", "sportsbetting", "odds",
+    "wager", "casino", "slots", "bet", "gamble", "punting",
+})
+
+
+def _bru_drip_preview_payload(video_idx: int) -> dict | None:
+    """Reconstruct BRU drip preview payload for the given queue position.
+
+    Mirrors bru_drip._scan_videos + _format_caption exactly. BRU drip posts
+    are synthetic (not in the Notion marketing queue) so the standard
+    api_so_post lookup returns 404 — this helper rebuilds the payload from
+    the source-of-truth video assets + queue state.
+    """
+    import json as _json
+    import random as _random
+    from pathlib import Path as _Path
+
+    _QUEUE_FILE = _Path("/home/paulsportsza/publisher/state/bru_queue.json")
+    _PHASE2_DIR = _Path("/var/www/mzansiedge-wp/assets/bru/phase2")
+    _PHASE3_DIR = _Path("/var/www/mzansiedge-wp/assets/bru/phase3")
+    _SHUFFLE_SEED = 2026
+
+    videos: list[dict] = []
+    if _PHASE2_DIR.is_dir():
+        for mp4 in sorted(_PHASE2_DIR.glob("*.mp4")):
+            slug = mp4.stem.rsplit("-", 1)[-1] if "-" in mp4.stem else mp4.stem
+            videos.append({"slug": slug, "filename": mp4.name, "phase": 2})
+    phase3: list[dict] = []
+    if _PHASE3_DIR.is_dir():
+        for mp4 in sorted(_PHASE3_DIR.glob("*.mp4")):
+            slug = mp4.stem.rsplit("-", 1)[-1] if "-" in mp4.stem else mp4.stem
+            phase3.append({"slug": slug, "filename": mp4.name, "phase": 3})
+    _rng = _random.Random(_SHUFFLE_SEED)
+    _rng.shuffle(phase3)
+    videos.extend(phase3)
+
+    if video_idx < 0 or video_idx >= len(videos):
+        return None
+
+    v = videos[video_idx]
+    video_url = f"{_BRU_PUBLIC_BASE}/phase{v['phase']}/{v['filename']}"
+
+    hook = _BRU_HOOKS[video_idx % len(_BRU_HOOKS)]
+    slug = v["slug"]
+    topic_tags = _BRU_TOPIC_TAGS.get(slug, ["SouthAfrica"])
+    tags = ["MzansiEdge", "BRU"]
+    for t in topic_tags:
+        if t.lower() not in _BRU_BANNED_TAGS:
+            tags.append(t)
+    tags.append("SouthAfrica")
+    tag_line = " ".join(f"#{t}" for t in dict.fromkeys(tags))
+    caption_body = f"{hook}\n\n{tag_line}"
+    hashtags = tag_line.split()
+
+    try:
+        state = _json.loads(_QUEUE_FILE.read_text())
+    except (OSError, ValueError):
+        state = {"position": 0, "history": [], "last_published": None}
+    history_positions = {h.get("position") for h in state.get("history", [])}
+    current_pos = state.get("position", 0)
+    already_published = (video_idx in history_positions) or (
+        video_idx < current_pos and bool(state.get("last_published"))
+    )
+
+    title = f"B.R.U. Drip \u2014 {slug.replace('-', ' ').title()} (Phase {v['phase']})"
+
+    return {
+        "id":               f"bru_drip_{video_idx}",
+        "channel":          "TikTok",
+        "channel_key":      "tiktok",
+        "type":             "B.R.U. Video",
+        "title":            title,
+        "body_markdown":    caption_body,
+        "media_urls":       [video_url],
+        "image_url":        "",
+        "video_url":        video_url,
+        "carousel_images":  [],
+        "media_aspect":     "9:16",
+        "caption":          caption_body,
+        "caption_final":    caption_body,
+        "telegram_caption": caption_body,
+        "ig_caption":       caption_body,
+        "hashtags":         hashtags,
+        "hashtags_str":     tag_line,
+        "scheduled":        "11:00 SAST",
+        "actual":           "",
+        "status":           "published" if already_published else "scheduled",
+        "permalink":        "",
+        "error_message":    "",
+        "campaign":         "B.R.U. Drip",
+        "platform_notes":   f"phase{v['phase']}/{v['filename']} \u2014 deterministic shuffle seed={_SHUFFLE_SEED}",
+    }
 
 
 def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> dict:
@@ -7625,11 +8199,27 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
             ahhmm = adt.astimezone(_SAST).strftime("%H:%M") if adt else ""
             raw_st = (it.get("status") or "").lower().strip()
             disp_st = "queued" if raw_st == "approved" else raw_st
+            # SOCIAL-OPS-TIMELINE-INTEGRITY-01: state-aware reel indicator on IG lane.
+            # reel_state ∈ {published, overdue, queued}. Front-end reads this to
+            # apply the flashing-red keyframe (overdue) or checkmark (published).
+            reel_state = ""
+            if ck == "instagram":
+                _wt = (it.get("work_type") or "").lower()
+                _ttl_lc = (it.get("title") or "").lower()
+                _is_reel = ("reel" in _wt) or ("reel still" in _ttl_lc) or ("reel" in _ttl_lc)
+                if _is_reel:
+                    if raw_st in _SO_POSTED_ST:
+                        reel_state = "published"
+                    elif sdt < now_utc and raw_st not in _SO_POSTED_ST:
+                        reel_state = "overdue"
+                    else:
+                        reel_state = "queued"
             posts.append({
                 "id":     it.get("id", ""),
                 "title":  (it.get("title") or it.get("copy") or "")[:60],
                 "type":   it.get("work_type") or "",
                 "icon":   _so_icon_for(it.get("work_type") or "", ck),
+                "glyph":  _pick_glyph_for_row(it),
                 "status": disp_st,
                 "mins":   smins,
                 "sched":      f"{ss.hour:02d}:{ss.minute:02d}",
@@ -7637,7 +8227,32 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
                 "actual": ahhmm,
                 "error":  it.get("error") or "",
                 "ch_lbl": clbl,
+                "reel_state": reel_state,
             })
+        # DASH-POLISH-STORIES-01 / AC1: empty-slot flash for today's 19:00 IG Reel.
+        # If day is today (SAST) and no IG Reel row exists in MOQ for any state
+        # (published/queued/overdue), emit a virtual "empty" marker at 19:00.
+        if ck == "instagram" and day_str == now_sast.strftime("%Y-%m-%d"):
+            _has_reel = any(
+                (p.get("reel_state") or "") in ("published", "queued", "overdue")
+                for p in posts
+            )
+            if not _has_reel:
+                posts.append({
+                    "id":     "__ig_reel_empty__",
+                    "title":  "No IG Reel queued for today's 19:00 slot — reel_generator.py 06:00 UTC may have skipped or failed.",
+                    "type":   "reel",
+                    "icon":   "film",
+                    "status": "empty",
+                    "mins":   1140,  # 19:00 SAST
+                    "sched":      "19:00",
+                    "sched_full": "19:00 SAST",
+                    "actual": "",
+                    "error":  "",
+                    "ch_lbl": clbl,
+                    "reel_state": "empty",
+                    "glyph":  _SO_GLYPHS["card_diamond"],
+                })
         ch_dict: dict = {"key": ck, "label": clbl, "icon": _so_platform_icon_svg(ck),
                          "color": _CHANNEL_MAP.get(ck, {}).get("color", "#888888"), "posts": posts}
         if ck == "tiktok":
@@ -7752,6 +8367,19 @@ def api_so_queue():
 @app.route("/admin/api/social-ops/post/<post_id>")
 @require_auth
 def api_so_post(post_id: str):
+    # BRU drip posts are synthetic (not in Notion marketing queue) — rebuild
+    # the preview payload directly from the video asset + queue state.
+    if post_id.startswith("bru_drip_"):
+        try:
+            _video_idx = int(post_id.rsplit("_", 1)[-1])
+        except ValueError:
+            _video_idx = -1
+        _bru_payload = _bru_drip_preview_payload(_video_idx) if _video_idx >= 0 else None
+        if _bru_payload is not None:
+            return Response(json.dumps(_bru_payload), mimetype="application/json")
+        return Response(json.dumps({"error": "BRU drip video not found"}),
+                        status=404, mimetype="application/json")
+
     items, _ = _fetch_marketing_queue()
     item = next((it for it in items if it.get("id") == post_id), None)
     if item is None:
@@ -7775,6 +8403,21 @@ def api_so_post(post_id: str):
     explicit_image = item.get("image_url") or ""
     explicit_video = item.get("video_url") or ""
     asset = item.get("asset_link") or item.get("asset_url") or item.get("media_url") or ""
+
+    # IG Carousel rows pack multiple slide URLs separated by '|' into either
+    # image_url or asset_link. Split into a list and use the first URL as the
+    # primary image preview; keep the rest for the carousel renderer.
+    carousel_images: list[str] = []
+    for _src_name, _src_val in (("image", explicit_image), ("asset", asset)):
+        if "|" in _src_val:
+            _parts = [u.strip() for u in _src_val.split("|") if u.strip()]
+            if len(_parts) > 1:
+                carousel_images = _parts
+                if _src_name == "image":
+                    explicit_image = _parts[0]
+                else:
+                    asset = _parts[0]
+                break
 
     channel_key = _so_norm_channel(item.get("channel") or "")
     is_vertical = channel_key in ("instagram", "tiktok")
@@ -7811,9 +8454,46 @@ def api_so_post(post_id: str):
     image_url = _resolve_media_url(image_url)
     video_url = _resolve_media_url(video_url)
 
-    media_urls = [u for u in (video_url, image_url) if u]
+    if carousel_images:
+        media_urls = [video_url] if video_url else []
+        media_urls.extend(carousel_images)
+    else:
+        media_urls = [u for u in (video_url, image_url) if u]
 
-    if video_url or image_url:
+    # Per-slide captions for IG Carousel. Splits caption on blank lines or
+    # numbered/bulleted list markers. If segment count matches slide count,
+    # each slide gets its own caption; otherwise the global caption is used.
+    slide_captions: list[str] = []
+    if carousel_images and len(carousel_images) > 1:
+        _slide_n = len(carousel_images)
+        _segments: list[str] = []
+        import re as _re2
+        _slide_split = _re2.split(r'(?im)^\s*SLIDE\s+\d+\s*[:\.\-]?\s*', caption or "")
+        _slide_parts = [s.strip() for s in _slide_split if s and s.strip()]
+        if len(_slide_parts) == _slide_n:
+            _segments = _slide_parts
+        if not _segments:
+            _blocks = [b.strip() for b in (caption or "").split("\n\n") if b.strip()]
+            if len(_blocks) == _slide_n:
+                _segments = _blocks
+        if not _segments:
+            _numbered = _re2.findall(r'^\s*(?:\d+[\.\)]\s*|[•\-\u2013]\s*)(.+)$', caption or "", flags=_re2.M)
+            if len(_numbered) == _slide_n:
+                _segments = [s.strip() for s in _numbered]
+        if _segments:
+            # Strip trailing meta block from the last slide — publishers often
+            # append `---\nCAPTION:\n...` (the post caption) after the final
+            # SLIDE N: marker. That belongs in `caption`, not on slide N.
+            _last = _segments[-1]
+            _cut = _re2.search(r'(?im)^\s*(?:-{3,}|CAPTION\s*:)\s*$', _last)
+            if _cut:
+                _last = _last[:_cut.start()].rstrip()
+            _segments[-1] = _last
+            slide_captions = _segments
+
+    if carousel_images:
+        media_aspect = "1:1"
+    elif video_url or image_url:
         media_aspect = "9:16" if is_vertical else "16:9"
     else:
         media_aspect = None
@@ -7829,6 +8509,8 @@ def api_so_post(post_id: str):
         "media_urls":      media_urls,
         "image_url":       image_url,
         "video_url":       video_url,
+        "carousel_images": carousel_images,
+        "slide_captions":  slide_captions,
         "media_aspect":    media_aspect,
         "caption":         caption,
         "caption_final":   caption,

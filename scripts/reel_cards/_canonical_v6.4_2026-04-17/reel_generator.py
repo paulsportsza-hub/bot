@@ -20,7 +20,6 @@ from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR   = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPT_DIR))  # ensure sibling modules (render_reel_card) import from any cwd
 BOT_DIR      = SCRIPT_DIR.parents[1]          # /home/paulsportsza/bot
 SCRAPERS_DB  = "/home/paulsportsza/scrapers/odds.db"
 OUTPUT_ROOT  = Path("/var/www/mzansiedge/assets/reel-cards")
@@ -253,12 +252,6 @@ def render_card(row: dict, tier: str, today: str) -> tuple[str, str, dict] | Non
     try:
         render_reel_card(pick, output_path)
         log.info("[RENDER] %s card → %s", tier.upper(), output_path)
-        # Save pick metadata so the Task Hub dashboard can display the header
-        # without a DB round-trip. Fields: pick_team (abbr, upper), bookmaker, tier.
-        meta_path = str(out_dir / "meta.json")
-        with open(meta_path, "w") as fh:
-            json.dump({"pick_team": pick["pick_team"], "bookmaker": row["bookmaker"],
-                       "tier": tier}, fh)
         return pid, output_path, pick
     except Exception as exc:
         log.error("[RENDER] %s tier failed: %s", tier, exc)
@@ -516,11 +509,11 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
                     "Gap noted: MOQ DB not shared with integration.", MOQ_DB_ID)
         return False
 
-    # Archive existing today's Approved Reel Still items (idempotent re-run guard)
+    # Archive existing today's Awaiting Approval Reel Still items
     existing = _notion_request("POST", f"/databases/{MOQ_DB_ID}/query", {
         "filter": {
             "and": [
-                {"property": "Status", "select": {"equals": "Approved"}},
+                {"property": "Status", "select": {"equals": "Awaiting Approval"}},
                 {"property": "Title", "rich_text": {"contains": f"Reel Still"}},
                 {"property": "Title", "rich_text": {"contains": today}},
             ]
@@ -532,7 +525,7 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
         _notion_request("PATCH", f"/pages/{page['id']}", {"archived": True})
         archived += 1
     if archived:
-        log.info("[MOQ] Archived %d stale Approved item(s) for %s", archived, today)
+        log.info("[MOQ] Archived %d stale Awaiting Approval item(s) for %s", archived, today)
 
     props_schema = schema.get("properties", {})
     status_field = None
@@ -616,29 +609,20 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
             tg_emoji     = "🎬"
             tg_post_type = "build_up"
 
-        # SOCIAL-OPS-TIMELINE-INTEGRITY-01 — Scheduled Time on approval.
-        # Default 19:00 SAST per MARKETING-CORE.md so the reel icon renders at
-        # its target slot on the Social Ops timeline instead of unscheduled.
-        sched_iso = f"{today}T19:00:00+02:00"
-
         # One MOQ item per channel (Channel is a select, not multi-select)
-        # Instagram entry added so the IG lane shows the scheduled reel slot
-        # that AC1's state-aware indicator keys off.
         tg_channels = [
             (tg_channel, tg_asset, tg_caption, tg_emoji, tg_post_type),
             ("WhatsApp Channel", still_url, alerts_caption, "🖼️", "teaser"),
-            ("Instagram", video_url, community_caption, "🎬", "reel"),
         ]
         for channel, asset, copy, emoji, post_type_val in tg_channels:
             moq_props: dict = {
                 "Title": {"title": [{"text": {"content": f"{emoji} Reel Still — {tier_upper} — {channel} — {today}"}}]},
-                "Status": {"select": {"name": "Approved"}},
+                "Status": {"select": {"name": "Awaiting Approval"}},
                 "Channel": {"select": {"name": channel}},
                 "Asset Link": {"url": asset},
                 "Final Copy": {"rich_text": [{"text": {"content": copy}}]},
                 "Lane": {"select": {"name": "Content/Social"}},
                 "Post Type": {"select": {"name": post_type_val}},
-                "Scheduled Time": {"date": {"start": sched_iso}},
             }
             body = {
                 "parent": {"database_id": MOQ_DB_ID},

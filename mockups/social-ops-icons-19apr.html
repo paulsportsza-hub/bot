@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Social Ops — Icon Pitch — 19 Apr 2026</title>
+<style>
+  :root {
+    --bg: #0a0b0f;
+    --panel: #13151b;
+    --grid: #1f232c;
+    --grid-line: #2a2f3a;
+    --text: #e7e9ee;
+    --muted: #6b7280;
+    --now: #f59e0b;
+    --published: #22c55e;
+    --queued: #fbbf24;
+    --overdue: #ef4444;
+    --empty: #ef4444;
+    --tg-alerts: #3b82f6;
+    --tg-community: #38bdf8;
+    --wa: #22c55e;
+    --ig: #ec4899;
+    --tiktok: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    font-size: 14px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; letter-spacing: -0.01em; }
+  .meta { color: var(--muted); font-size: 12px; margin-bottom: 24px; }
+  h2 { font-size: 13px; margin: 32px 0 12px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; }
+
+  /* ---------- Timeline ---------- */
+  .timeline {
+    background: var(--panel);
+    border-radius: 8px;
+    padding: 16px 8px 8px;
+    position: relative;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04), 0 8px 32px rgba(0,0,0,0.4);
+  }
+  .timeline-grid {
+    display: grid;
+    grid-template-columns: 180px repeat(24, 1fr);
+    position: relative;
+  }
+  .hour-row { display: contents; }
+  .hour-label {
+    grid-column: span 3;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: left;
+    padding-left: 4px;
+    padding-bottom: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  .hour-label:first-of-type { grid-column: 2 / span 3; }
+  .lane {
+    display: contents;
+  }
+  .lane-label {
+    grid-column: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 12px;
+    font-weight: 600;
+    font-size: 13px;
+    border-top: 1px solid var(--grid-line);
+  }
+  .lane-icon { width: 18px; height: 18px; }
+  .lane-label.tg-alerts { color: var(--tg-alerts); }
+  .lane-label.tg-community { color: var(--tg-community); }
+  .lane-label.wa { color: var(--wa); }
+  .lane-label.ig { color: var(--ig); }
+  .lane-label.tiktok { color: var(--tiktok); }
+
+  .cell {
+    height: 56px;
+    border-top: 1px solid var(--grid-line);
+    border-right: 1px solid var(--grid-line);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .cell:nth-child(25n+2) { border-left: 1px solid var(--grid-line); }
+
+  .now-line {
+    position: absolute;
+    top: 24px;
+    bottom: 0;
+    width: 2px;
+    background: var(--now);
+    box-shadow: 0 0 12px var(--now);
+    pointer-events: none;
+  }
+
+  /* Icon states */
+  .glyph {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .glyph svg { width: 100%; height: 100%; }
+  .glyph.published { color: var(--published); }
+  .glyph.queued { color: var(--queued); }
+  .glyph.overdue {
+    color: var(--overdue);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .glyph.empty {
+    color: var(--empty);
+    animation: pulse 1.4s ease-in-out infinite;
+    opacity: 0.85;
+  }
+  .glyph.empty svg { stroke-dasharray: 3 3; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(0.92); }
+  }
+
+  /* ---------- Legend ---------- */
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .legend-card {
+    background: var(--panel);
+    border-radius: 8px;
+    padding: 14px 16px;
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  .legend-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .legend-glyph {
+    width: 28px;
+    height: 28px;
+    color: #c7cad1;
+  }
+  .legend-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .legend-lane {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 2px;
+  }
+  .legend-states {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  .state-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .state-item .glyph { width: 22px; height: 22px; }
+
+  /* ---------- Compare ---------- */
+  .compare {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 10px;
+  }
+  .compare-row {
+    background: var(--panel);
+    border-radius: 6px;
+    padding: 10px 14px;
+    display: grid;
+    grid-template-columns: 1fr 32px 32px 32px 1fr;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  .compare-row .label { color: var(--muted); }
+  .compare-row .label.new { text-align: right; color: var(--text); font-weight: 500; }
+  .compare-row .arrow { color: var(--muted); text-align: center; }
+  .compare-row .glyph { color: #9ca3af; }
+  .compare-row .glyph.new-icon { color: var(--queued); }
+
+  .note {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 12px;
+    line-height: 1.5;
+  }
+  .badge {
+    display: inline-block;
+    background: rgba(251, 191, 36, 0.12);
+    color: var(--queued);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<h1>Social Ops Timeline — Icon Pitch</h1>
+<div class="meta">19 Apr 2026 · preview before dispatch · "now" pinned at 12:30 SAST for demonstration</div>
+
+<h2>1. Timeline — new icons in context</h2>
+<div class="timeline">
+  <div class="timeline-grid" id="grid-wrap">
+    <!-- Hour header row -->
+    <div></div>
+    <div class="hour-label">00</div>
+    <div class="hour-label">03</div>
+    <div class="hour-label">06</div>
+    <div class="hour-label">09</div>
+    <div class="hour-label">12</div>
+    <div class="hour-label">15</div>
+    <div class="hour-label">18</div>
+    <div class="hour-label">21</div>
+
+    <!-- Now line — absolutely positioned inside timeline container -->
+    <div class="now-line" style="left: calc(180px + ((12.5/24) * (100% - 180px)));"></div>
+
+    <!-- TG Alerts -->
+    <div class="lane-label tg-alerts">
+      <svg class="lane-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12 L22 2 L18 22 L12 14 Z"/><path d="M12 14 L22 2"/></svg>
+      TG Alerts
+    </div>
+    <div class="cell" data-h="0"></div>
+    <div class="cell" data-h="1"></div>
+    <div class="cell" data-h="2"></div>
+    <div class="cell" data-h="3"></div>
+    <div class="cell" data-h="4"></div>
+    <div class="cell" data-h="5"></div>
+    <div class="cell" data-h="6"></div>
+    <div class="cell" data-h="7">
+      <div class="glyph published" title="Edge Pick card — published 07:30">
+        <!-- Card with diamond -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="8"></div>
+    <div class="cell" data-h="9"></div>
+    <div class="cell" data-h="10"></div>
+    <div class="cell" data-h="11">
+      <div class="glyph published" title="P&L recap — published 11:55">
+        <svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="14" width="3.5" height="7" rx="0.5"/><rect x="8.5" y="10" width="3.5" height="11" rx="0.5"/><rect x="14" y="6" width="3.5" height="15" rx="0.5"/><rect x="19.5" y="12" width="3.5" height="9" rx="0.5"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="12"></div>
+    <div class="cell" data-h="13">
+      <div class="glyph queued" title="Edge Pick card — queued 13:00">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="14"></div>
+    <div class="cell" data-h="15"></div>
+    <div class="cell" data-h="16"></div>
+    <div class="cell" data-h="17"></div>
+    <div class="cell" data-h="18">
+      <div class="glyph queued" title="Edge Pick card — queued 18:00">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="19"></div>
+    <div class="cell" data-h="20"></div>
+    <div class="cell" data-h="21">
+      <div class="glyph queued" title="P&L recap — queued 21:55">
+        <svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="14" width="3.5" height="7" rx="0.5"/><rect x="8.5" y="10" width="3.5" height="11" rx="0.5"/><rect x="14" y="6" width="3.5" height="15" rx="0.5"/><rect x="19.5" y="12" width="3.5" height="9" rx="0.5"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="22"></div>
+    <div class="cell" data-h="23"></div>
+
+    <!-- TG Community -->
+    <div class="lane-label tg-community">
+      <svg class="lane-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5 Q3 3 5 3 H19 Q21 3 21 5 V15 Q21 17 19 17 H9 L5 21 V17 Q3 17 3 15 Z"/></svg>
+      TG Community
+    </div>
+    <div class="cell" data-h="0"></div>
+    <div class="cell" data-h="1"></div>
+    <div class="cell" data-h="2"></div>
+    <div class="cell" data-h="3"></div>
+    <div class="cell" data-h="4"></div>
+    <div class="cell" data-h="5"></div>
+    <div class="cell" data-h="6"></div>
+    <div class="cell" data-h="7"></div>
+    <div class="cell" data-h="8">
+      <div class="glyph published" title="Poll — published 08:00">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 5 Q3 3 5 3 H19 Q21 3 21 5 V14 Q21 16 19 16 H10 L6 20 V16 Q3 16 3 14 Z"/><rect x="7" y="10" width="2" height="4" fill="currentColor" stroke="none"/><rect x="11" y="8" width="2" height="6" fill="currentColor" stroke="none"/><rect x="15" y="6" width="2" height="8" fill="currentColor" stroke="none"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="9"></div>
+    <div class="cell" data-h="10"></div>
+    <div class="cell" data-h="11"></div>
+    <div class="cell" data-h="12">
+      <div class="glyph published" title="Discussion seed — published 12:00">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2 6 Q2 4 4 4 H13 Q15 4 15 6 V11 Q15 13 13 13 H7 L4 15.5 V13 Q2 13 2 11 Z"/><path d="M9 10 Q9 8.5 10.5 8.5 H20 Q22 8.5 22 10.5 V15 Q22 17 20 17 H16 L19 20 V17" fill="var(--panel)"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="13"></div>
+    <div class="cell" data-h="14"></div>
+    <div class="cell" data-h="15">
+      <div class="glyph queued" title="Match thread — Rugby — queued 15:00">
+        <!-- Rugby ball -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9" ry="5.5" transform="rotate(-30 12 12)"/><line x1="7" y1="14" x2="17" y2="9.5"/><line x1="9" y1="15" x2="10.3" y2="14.5"/><line x1="11.3" y1="13.5" x2="12.6" y2="13"/><line x1="13.7" y1="12" x2="15" y2="11.5"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="16"></div>
+    <div class="cell" data-h="17"></div>
+    <div class="cell" data-h="18"></div>
+    <div class="cell" data-h="19"></div>
+    <div class="cell" data-h="20">
+      <div class="glyph queued" title="Discussion seed — queued 20:00">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2 6 Q2 4 4 4 H13 Q15 4 15 6 V11 Q15 13 13 13 H7 L4 15.5 V13 Q2 13 2 11 Z"/><path d="M9 10 Q9 8.5 10.5 8.5 H20 Q22 8.5 22 10.5 V15 Q22 17 20 17 H16 L19 20 V17" fill="var(--panel)"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="21"></div>
+    <div class="cell" data-h="22"></div>
+    <div class="cell" data-h="23"></div>
+
+    <!-- WA Channel -->
+    <div class="lane-label wa">
+      <svg class="lane-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12 Q10 16 12 16 Q14 16 16 12"/></svg>
+      WA Channel
+    </div>
+    <div class="cell" data-h="0"></div>
+    <div class="cell" data-h="1"></div>
+    <div class="cell" data-h="2"></div>
+    <div class="cell" data-h="3"></div>
+    <div class="cell" data-h="4"></div>
+    <div class="cell" data-h="5"></div>
+    <div class="cell" data-h="6"></div>
+    <div class="cell" data-h="7"></div>
+    <div class="cell" data-h="8"></div>
+    <div class="cell" data-h="9">
+      <div class="glyph published" title="Morning digest — published 09:00">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1"/><rect x="5" y="6.5" width="6.5" height="4" fill="currentColor" opacity="0.25"/><line x1="13" y1="7" x2="19" y2="7"/><line x1="13" y1="9" x2="19" y2="9"/><line x1="5" y1="13" x2="19" y2="13"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="5" y1="17" x2="14" y2="17"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="10"></div>
+    <div class="cell" data-h="11"></div>
+    <div class="cell" data-h="12"></div>
+    <div class="cell" data-h="13"></div>
+    <div class="cell" data-h="14"></div>
+    <div class="cell" data-h="15"></div>
+    <div class="cell" data-h="16"></div>
+    <div class="cell" data-h="17"></div>
+    <div class="cell" data-h="18"></div>
+    <div class="cell" data-h="19">
+      <div class="glyph queued" title="Evening recap — queued 19:00">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1"/><rect x="5" y="6.5" width="6.5" height="4" fill="currentColor" opacity="0.25"/><line x1="13" y1="7" x2="19" y2="7"/><line x1="13" y1="9" x2="19" y2="9"/><line x1="5" y1="13" x2="19" y2="13"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="5" y1="17" x2="14" y2="17"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="20"></div>
+    <div class="cell" data-h="21"></div>
+    <div class="cell" data-h="22"></div>
+    <div class="cell" data-h="23"></div>
+
+    <!-- Instagram -->
+    <div class="lane-label ig">
+      <svg class="lane-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.8" fill="currentColor"/></svg>
+      Instagram
+    </div>
+    <div class="cell" data-h="0"></div>
+    <div class="cell" data-h="1"></div>
+    <div class="cell" data-h="2"></div>
+    <div class="cell" data-h="3"></div>
+    <div class="cell" data-h="4"></div>
+    <div class="cell" data-h="5"></div>
+    <div class="cell" data-h="6"></div>
+    <div class="cell" data-h="7"></div>
+    <div class="cell" data-h="8"></div>
+    <div class="cell" data-h="9">
+      <div class="glyph published" title="Story — published 09:00">
+        <!-- Photo frame (keep as-is) -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15 L16 10 L5 21"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="10"></div>
+    <div class="cell" data-h="11">
+      <div class="glyph published" title="Carousel — published 11:00">
+        <!-- Stacked cards -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="13" height="13" rx="2" fill="var(--panel)"/><rect x="4" y="7" width="13" height="13" rx="2" fill="var(--panel)"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="12"></div>
+    <div class="cell" data-h="13"></div>
+    <div class="cell" data-h="14"></div>
+    <div class="cell" data-h="15">
+      <div class="glyph queued" title="Story — queued 15:00">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15 L16 10 L5 21"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="16"></div>
+    <div class="cell" data-h="17"></div>
+    <div class="cell" data-h="18"></div>
+    <div class="cell" data-h="19">
+      <!-- Reel — card with diamond -->
+      <div class="glyph queued" title="Reel — queued 19:00">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="20"></div>
+    <div class="cell" data-h="21"></div>
+    <div class="cell" data-h="22"></div>
+    <div class="cell" data-h="23"></div>
+
+    <!-- TikTok -->
+    <div class="lane-label tiktok">
+      <svg class="lane-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M19.5 6.5 C18 6.5 16.8 5.3 16.8 3.8 V3 H13.5 V15 C13.5 16.4 12.4 17.5 11 17.5 C9.6 17.5 8.5 16.4 8.5 15 C8.5 13.6 9.6 12.5 11 12.5 V9.3 C7.8 9.3 5.3 11.8 5.3 15 C5.3 18.2 7.8 20.7 11 20.7 C14.2 20.7 16.7 18.2 16.7 15 V9 C17.5 9.5 18.5 9.8 19.5 9.8 V6.5 Z"/></svg>
+      TikTok
+    </div>
+    <div class="cell" data-h="0"></div>
+    <div class="cell" data-h="1"></div>
+    <div class="cell" data-h="2"></div>
+    <div class="cell" data-h="3"></div>
+    <div class="cell" data-h="4"></div>
+    <div class="cell" data-h="5"></div>
+    <div class="cell" data-h="6"></div>
+    <div class="cell" data-h="7"></div>
+    <div class="cell" data-h="8"></div>
+    <div class="cell" data-h="9"></div>
+    <div class="cell" data-h="10">
+      <div class="glyph published" title="B.R.U. drop — published 10:30">
+        <!-- BRU face -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="2.5"/><line x1="12" y1="4" x2="12" y2="7"/><circle cx="12" cy="3.5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1.2" fill="currentColor"/><circle cx="15" cy="12" r="1.2" fill="currentColor"/><line x1="9" y1="16" x2="15" y2="16"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="11"></div>
+    <div class="cell" data-h="12"></div>
+    <div class="cell" data-h="13"></div>
+    <div class="cell" data-h="14"></div>
+    <div class="cell" data-h="15"></div>
+    <div class="cell" data-h="16"></div>
+    <div class="cell" data-h="17"></div>
+    <div class="cell" data-h="18">
+      <div class="glyph queued" title="B.R.U. drop — queued 18:30">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="2.5"/><line x1="12" y1="4" x2="12" y2="7"/><circle cx="12" cy="3.5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1.2" fill="currentColor"/><circle cx="15" cy="12" r="1.2" fill="currentColor"/><line x1="9" y1="16" x2="15" y2="16"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg>
+      </div>
+    </div>
+    <div class="cell" data-h="19"></div>
+    <div class="cell" data-h="20"></div>
+    <div class="cell" data-h="21"></div>
+    <div class="cell" data-h="22"></div>
+    <div class="cell" data-h="23"></div>
+  </div>
+</div>
+
+<div class="note">
+  <strong>Legend</strong> — <span style="color: var(--published)">green</span> = published ·
+  <span style="color: var(--queued)">amber</span> = queued ·
+  <span style="color: var(--overdue)">red pulse</span> = overdue ·
+  <span style="color: var(--empty)">red dashed pulse</span> = empty slot (nothing queued for today).
+  Orange line = current time.
+</div>
+
+<!-- ========== LEGEND ========== -->
+<h2>2. Icon legend — full set with states</h2>
+<div class="legend">
+
+  <!-- Card with diamond -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg></div>
+      <div>
+        <div class="legend-title">Card with diamond</div>
+        <div class="legend-lane">TG Alerts · IG Reels — Edge Pick cards</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg></div>overdue</div>
+      <div class="state-item"><div class="glyph empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M12 7.5 L15.5 12 L12 16.5 L8.5 12 Z" fill="currentColor" stroke="none"/></svg></div>empty</div>
+    </div>
+  </div>
+
+  <!-- Bar chart -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="14" width="3.5" height="7" rx="0.5"/><rect x="8.5" y="10" width="3.5" height="11" rx="0.5"/><rect x="14" y="6" width="3.5" height="15" rx="0.5"/><rect x="19.5" y="12" width="3.5" height="9" rx="0.5"/></svg></div>
+      <div>
+        <div class="legend-title">Bar chart</div>
+        <div class="legend-lane">TG Alerts — P&L recap</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="14" width="3.5" height="7" rx="0.5"/><rect x="8.5" y="10" width="3.5" height="11" rx="0.5"/><rect x="14" y="6" width="3.5" height="15" rx="0.5"/><rect x="19.5" y="12" width="3.5" height="9" rx="0.5"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="14" width="3.5" height="7" rx="0.5"/><rect x="8.5" y="10" width="3.5" height="11" rx="0.5"/><rect x="14" y="6" width="3.5" height="15" rx="0.5"/><rect x="19.5" y="12" width="3.5" height="9" rx="0.5"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="14" width="3.5" height="7" rx="0.5"/><rect x="8.5" y="10" width="3.5" height="11" rx="0.5"/><rect x="14" y="6" width="3.5" height="15" rx="0.5"/><rect x="19.5" y="12" width="3.5" height="9" rx="0.5"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+  <!-- Poll -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 5 Q3 3 5 3 H19 Q21 3 21 5 V14 Q21 16 19 16 H10 L6 20 V16 Q3 16 3 14 Z"/><rect x="7" y="10" width="2" height="4" fill="currentColor" stroke="none"/><rect x="11" y="8" width="2" height="6" fill="currentColor" stroke="none"/><rect x="15" y="6" width="2" height="8" fill="currentColor" stroke="none"/></svg></div>
+      <div>
+        <div class="legend-title">Bars in bubble</div>
+        <div class="legend-lane">TG Community — Poll</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 5 Q3 3 5 3 H19 Q21 3 21 5 V14 Q21 16 19 16 H10 L6 20 V16 Q3 16 3 14 Z"/><rect x="7" y="10" width="2" height="4" fill="currentColor" stroke="none"/><rect x="11" y="8" width="2" height="6" fill="currentColor" stroke="none"/><rect x="15" y="6" width="2" height="8" fill="currentColor" stroke="none"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 5 Q3 3 5 3 H19 Q21 3 21 5 V14 Q21 16 19 16 H10 L6 20 V16 Q3 16 3 14 Z"/><rect x="7" y="10" width="2" height="4" fill="currentColor" stroke="none"/><rect x="11" y="8" width="2" height="6" fill="currentColor" stroke="none"/><rect x="15" y="6" width="2" height="8" fill="currentColor" stroke="none"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 5 Q3 3 5 3 H19 Q21 3 21 5 V14 Q21 16 19 16 H10 L6 20 V16 Q3 16 3 14 Z"/><rect x="7" y="10" width="2" height="4" fill="currentColor" stroke="none"/><rect x="11" y="8" width="2" height="6" fill="currentColor" stroke="none"/><rect x="15" y="6" width="2" height="8" fill="currentColor" stroke="none"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+  <!-- Two overlapping bubbles -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2 6 Q2 4 4 4 H13 Q15 4 15 6 V11 Q15 13 13 13 H7 L4 15.5 V13 Q2 13 2 11 Z"/><path d="M9 10 Q9 8.5 10.5 8.5 H20 Q22 8.5 22 10.5 V15 Q22 17 20 17 H16 L19 20 V17" fill="var(--panel)"/></svg></div>
+      <div>
+        <div class="legend-title">Two overlapping bubbles</div>
+        <div class="legend-lane">TG Community — Discussion seed</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2 6 Q2 4 4 4 H13 Q15 4 15 6 V11 Q15 13 13 13 H7 L4 15.5 V13 Q2 13 2 11 Z"/><path d="M9 10 Q9 8.5 10.5 8.5 H20 Q22 8.5 22 10.5 V15 Q22 17 20 17 H16 L19 20 V17" fill="var(--panel)"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2 6 Q2 4 4 4 H13 Q15 4 15 6 V11 Q15 13 13 13 H7 L4 15.5 V13 Q2 13 2 11 Z"/><path d="M9 10 Q9 8.5 10.5 8.5 H20 Q22 8.5 22 10.5 V15 Q22 17 20 17 H16 L19 20 V17" fill="var(--panel)"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2 6 Q2 4 4 4 H13 Q15 4 15 6 V11 Q15 13 13 13 H7 L4 15.5 V13 Q2 13 2 11 Z"/><path d="M9 10 Q9 8.5 10.5 8.5 H20 Q22 8.5 22 10.5 V15 Q22 17 20 17 H16 L19 20 V17" fill="var(--panel)"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+  <!-- Rugby ball -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9" ry="5.5" transform="rotate(-30 12 12)"/><line x1="7" y1="14" x2="17" y2="9.5"/><line x1="9" y1="15" x2="10.3" y2="14.5"/><line x1="11.3" y1="13.5" x2="12.6" y2="13"/><line x1="13.7" y1="12" x2="15" y2="11.5"/></svg></div>
+      <div>
+        <div class="legend-title">Rugby ball</div>
+        <div class="legend-lane">TG Community — Rugby match thread</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9" ry="5.5" transform="rotate(-30 12 12)"/><line x1="7" y1="14" x2="17" y2="9.5"/><line x1="9" y1="15" x2="10.3" y2="14.5"/><line x1="11.3" y1="13.5" x2="12.6" y2="13"/><line x1="13.7" y1="12" x2="15" y2="11.5"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9" ry="5.5" transform="rotate(-30 12 12)"/><line x1="7" y1="14" x2="17" y2="9.5"/><line x1="9" y1="15" x2="10.3" y2="14.5"/><line x1="11.3" y1="13.5" x2="12.6" y2="13"/><line x1="13.7" y1="12" x2="15" y2="11.5"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9" ry="5.5" transform="rotate(-30 12 12)"/><line x1="7" y1="14" x2="17" y2="9.5"/><line x1="9" y1="15" x2="10.3" y2="14.5"/><line x1="11.3" y1="13.5" x2="12.6" y2="13"/><line x1="13.7" y1="12" x2="15" y2="11.5"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+  <!-- Football -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 5 L15 8 L14 12 L10 12 L9 8 Z" fill="currentColor" opacity="0.3"/><path d="M12 5 V3"/><path d="M15 8 L18 7"/><path d="M14 12 L17 14"/><path d="M10 12 L7 14"/><path d="M9 8 L6 7"/></svg></div>
+      <div>
+        <div class="legend-title">Football</div>
+        <div class="legend-lane">TG Community — Football match thread</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 5 L15 8 L14 12 L10 12 L9 8 Z" fill="currentColor" opacity="0.3"/><path d="M12 5 V3"/><path d="M15 8 L18 7"/><path d="M14 12 L17 14"/><path d="M10 12 L7 14"/><path d="M9 8 L6 7"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 5 L15 8 L14 12 L10 12 L9 8 Z" fill="currentColor" opacity="0.3"/><path d="M12 5 V3"/><path d="M15 8 L18 7"/><path d="M14 12 L17 14"/><path d="M10 12 L7 14"/><path d="M9 8 L6 7"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 5 L15 8 L14 12 L10 12 L9 8 Z" fill="currentColor" opacity="0.3"/><path d="M12 5 V3"/><path d="M15 8 L18 7"/><path d="M14 12 L17 14"/><path d="M10 12 L7 14"/><path d="M9 8 L6 7"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+  <!-- Cricket -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="14" y="2" width="3" height="16" rx="1" transform="rotate(25 15.5 10)" fill="currentColor" opacity="0.6"/><line x1="12" y1="18" x2="14" y2="20" stroke-width="2.2"/><circle cx="7" cy="17" r="3"/><line x1="5.5" y1="16" x2="6" y2="16.8"/><line x1="7" y1="15.5" x2="7.3" y2="16.4"/></svg></div>
+      <div>
+        <div class="legend-title">Cricket bat + ball</div>
+        <div class="legend-lane">TG Community — Cricket match thread</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="14" y="2" width="3" height="16" rx="1" transform="rotate(25 15.5 10)" fill="currentColor" opacity="0.6"/><line x1="12" y1="18" x2="14" y2="20" stroke-width="2.2"/><circle cx="7" cy="17" r="3"/><line x1="5.5" y1="16" x2="6" y2="16.8"/><line x1="7" y1="15.5" x2="7.3" y2="16.4"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="14" y="2" width="3" height="16" rx="1" transform="rotate(25 15.5 10)" fill="currentColor" opacity="0.6"/><line x1="12" y1="18" x2="14" y2="20" stroke-width="2.2"/><circle cx="7" cy="17" r="3"/><line x1="5.5" y1="16" x2="6" y2="16.8"/><line x1="7" y1="15.5" x2="7.3" y2="16.4"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="14" y="2" width="3" height="16" rx="1" transform="rotate(25 15.5 10)" fill="currentColor" opacity="0.6"/><line x1="12" y1="18" x2="14" y2="20" stroke-width="2.2"/><circle cx="7" cy="17" r="3"/><line x1="5.5" y1="16" x2="6" y2="16.8"/><line x1="7" y1="15.5" x2="7.3" y2="16.4"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+  <!-- Newspaper -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1"/><rect x="5" y="6.5" width="6.5" height="4" fill="currentColor" opacity="0.25"/><line x1="13" y1="7" x2="19" y2="7"/><line x1="13" y1="9" x2="19" y2="9"/><line x1="5" y1="13" x2="19" y2="13"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="5" y1="17" x2="14" y2="17"/></svg></div>
+      <div>
+        <div class="legend-title">Newspaper</div>
+        <div class="legend-lane">WA Channel — Morning digest + Evening recap</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1"/><rect x="5" y="6.5" width="6.5" height="4" fill="currentColor" opacity="0.25"/><line x1="13" y1="7" x2="19" y2="7"/><line x1="13" y1="9" x2="19" y2="9"/><line x1="5" y1="13" x2="19" y2="13"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="5" y1="17" x2="14" y2="17"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1"/><rect x="5" y="6.5" width="6.5" height="4" fill="currentColor" opacity="0.25"/><line x1="13" y1="7" x2="19" y2="7"/><line x1="13" y1="9" x2="19" y2="9"/><line x1="5" y1="13" x2="19" y2="13"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="5" y1="17" x2="14" y2="17"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1"/><rect x="5" y="6.5" width="6.5" height="4" fill="currentColor" opacity="0.25"/><line x1="13" y1="7" x2="19" y2="7"/><line x1="13" y1="9" x2="19" y2="9"/><line x1="5" y1="13" x2="19" y2="13"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="5" y1="17" x2="14" y2="17"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+  <!-- Stacked cards -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="13" height="13" rx="2" fill="var(--panel)"/><rect x="4" y="7" width="13" height="13" rx="2" fill="var(--panel)"/></svg></div>
+      <div>
+        <div class="legend-title">Stacked cards</div>
+        <div class="legend-lane">Instagram — Carousel</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="13" height="13" rx="2" fill="#13151b"/><rect x="4" y="7" width="13" height="13" rx="2" fill="#13151b"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="13" height="13" rx="2" fill="#13151b"/><rect x="4" y="7" width="13" height="13" rx="2" fill="#13151b"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="13" height="13" rx="2" fill="#13151b"/><rect x="4" y="7" width="13" height="13" rx="2" fill="#13151b"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+  <!-- Photo frame (keep as-is) -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15 L16 10 L5 21"/></svg></div>
+      <div>
+        <div class="legend-title">Photo frame <span class="badge">unchanged</span></div>
+        <div class="legend-lane">Instagram — Story · Single post</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15 L16 10 L5 21"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15 L16 10 L5 21"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15 L16 10 L5 21"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+  <!-- BRU -->
+  <div class="legend-card">
+    <div class="legend-header">
+      <div class="legend-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="2.5"/><line x1="12" y1="4" x2="12" y2="7"/><circle cx="12" cy="3.5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1.2" fill="currentColor"/><circle cx="15" cy="12" r="1.2" fill="currentColor"/><line x1="9" y1="16" x2="15" y2="16"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg></div>
+      <div>
+        <div class="legend-title">B.R.U. face <span class="badge">unchanged</span></div>
+        <div class="legend-lane">TikTok — B.R.U. drop</div>
+      </div>
+    </div>
+    <div class="legend-states">
+      <div class="state-item"><div class="glyph published"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="2.5"/><line x1="12" y1="4" x2="12" y2="7"/><circle cx="12" cy="3.5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1.2" fill="currentColor"/><circle cx="15" cy="12" r="1.2" fill="currentColor"/><line x1="9" y1="16" x2="15" y2="16"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg></div>posted</div>
+      <div class="state-item"><div class="glyph queued"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="2.5"/><line x1="12" y1="4" x2="12" y2="7"/><circle cx="12" cy="3.5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1.2" fill="currentColor"/><circle cx="15" cy="12" r="1.2" fill="currentColor"/><line x1="9" y1="16" x2="15" y2="16"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg></div>queued</div>
+      <div class="state-item"><div class="glyph overdue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="2.5"/><line x1="12" y1="4" x2="12" y2="7"/><circle cx="12" cy="3.5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1.2" fill="currentColor"/><circle cx="15" cy="12" r="1.2" fill="currentColor"/><line x1="9" y1="16" x2="15" y2="16"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg></div>overdue</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="note">
+  <strong>Notes.</strong>
+  Sport glyphs auto-select based on the fixture's sport field in the Notion match thread row (football / rugby / cricket).
+  Other sports can be added: boxing glove, tennis racket, MMA cage, etc. — drop a line if you want more from launch.
+  All icons render at 28px inline SVG with <code>currentColor</code> stroke/fill, so the state classes (published / queued / overdue / empty) control the paint via CSS only.
+</div>
+
+</body>
+</html>
