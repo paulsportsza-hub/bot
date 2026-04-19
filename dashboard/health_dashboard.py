@@ -3437,7 +3437,8 @@ def render_automation_content() -> str:
     _FAILED_ST  = {"failed", "error", "blocked"}
     _OVERDUE_QUEUE_ST = {"pending", "ready", "queued"}
     _cutoff24   = now_utc - timedelta(hours=24)
-    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue_queue = 0
+    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue_queue = kpi_pastdue = kpi_unscheduled = 0
+    _12h_horizon = now_utc + timedelta(hours=12)
     for _it in items:
         _st  = (_it.get("status") or "").lower().strip()
         _ts  = parse_ts(_it.get("last_edited") or _it.get("scheduled_time") or _it.get("created") or "")
@@ -3449,11 +3450,15 @@ def render_automation_content() -> str:
         elif _st in _FAILED_ST:
             if _ts and _ts >= _cutoff24:
                 kpi_failed += 1
-            kpi_queue += 1
         elif _st != "archived":
-            kpi_queue += 1
             if _st in _PENDING_ST:
                 kpi_pending += 1
+            if _sch and now_utc <= _sch <= _12h_horizon:
+                kpi_queue += 1
+            if _sch and _sch < now_utc and _st in _PENDING_ST and _rfa in ("yes", "true", "1", "y"):
+                kpi_pastdue += 1
+            if not _sch and _st in _PENDING_ST:
+                kpi_unscheduled += 1
         if (_st in _OVERDUE_QUEUE_ST
                 and _sch and _sch < now_utc
                 and _rfa in ("yes", "true", "1", "y")):
@@ -3505,6 +3510,60 @@ def render_automation_content() -> str:
             return "whatsapp_group"
         return _normalise_channel_key(ch_raw)
 
+    # ── Reel-kit + IG Story warnings banner (BUILD-SOCIAL-OPS-PREVIEW-UX-01) ──
+    _warn_items: list[dict] = []
+    try:
+        for _rk in _fetch_overdue_notion_reel_kits():
+            _warn_items.append({
+                "id": _rk.get("block_id", ""),
+                "label": f"\U0001f3a5 Reel Kit {_rk['date']} overdue",
+                "href": "/admin/reel-kit",
+            })
+    except Exception:
+        pass
+    for _it in items:
+        _wt = (_it.get("work_type") or "").lower()
+        if "story" not in _wt:
+            continue
+        if _norm_wg(_it.get("channel") or "") != "instagram":
+            continue
+        _sdt2 = parse_ts(_it.get("scheduled_time") or "")
+        if not _sdt2:
+            continue
+        if _sdt2.astimezone(_SAST).strftime("%Y-%m-%d") != _today_str:
+            continue
+        _asset2 = (_it.get("asset_link") or _it.get("asset_url") or _it.get("media_url") or "").strip()
+        _pid2 = _html_mod.escape(_it.get("id") or "")
+        _ttl2 = _it.get("title") or "IG Story"
+        if not _asset2:
+            _warn_items.append({"id": _pid2, "label": f"IG Story missing asset: {_ttl2[:60]}", "href": ""})
+        elif _asset2.lower().startswith("computer://"):
+            _warn_items.append({"id": _pid2, "label": f"IG Story has computer:// URL: {_ttl2[:60]}", "href": ""})
+    warn_banner_html = ""
+    if _warn_items:
+        _wb_count = len(_warn_items)
+        _wb_parts = []
+        for _wi in _warn_items:
+            _wi_label = _html_mod.escape(_wi["label"])
+            _wi_id = _html_mod.escape(_wi.get("id") or "")
+            _wi_href = _html_mod.escape(_wi.get("href") or "")
+            _wi_text = (f'<a href="{_wi_href}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">{_wi_label}</a>'
+                        if _wi_href else _wi_label)
+            _wb_parts.append(
+                f'<span class="so-fb-item" data-page-id="{_wi_id}">'
+                f'<span class="so-fb-item-text">{_wi_text}</span>'
+                f'<button type="button" class="so-fb-item-dismiss" '
+                f'title="Dismiss" onclick="__soWarnDismiss(this)" '
+                f'aria-label="Dismiss">&times;</button>'
+                f'</span>'
+            )
+        warn_banner_html = (
+            '<div class="so-warn-banner" id="so-warn-banner">'
+            f'<span class="so-fb-count" id="so-warn-count">{_wb_count} warning{"s" if _wb_count != 1 else ""}</span>'
+            f'<span class="so-fb-list">{"".join(_wb_parts)}</span>'
+            '</div>'
+        )
+
     _tl_chans: list[dict] = []
     for _ck, _clbl in _TL_CH:
         _posts: list[dict] = []
@@ -3532,8 +3591,9 @@ def render_automation_content() -> str:
                 "sched":      f"{_ss.hour:02d}:{_ss.minute:02d}",
                 "sched_full": _render_sast(_sdt),
                 "actual": _ahhmm,
-                "error":  _it.get("error") or "",
-                "ch_lbl": _clbl,
+                "error":    _it.get("error") or "",
+                "ch_lbl":   _clbl,
+                "asset_url": _resolve_media_url(_it.get("asset_link") or _it.get("asset_url") or _it.get("image_url") or ""),
             })
         _tl_chans.append({"key": _ck, "label": _clbl, "icon": _so_platform_icon_svg(_ck), "color": _CHANNEL_MAP.get(_ck, {}).get("color", "#888888"), "posts": _posts})
 
@@ -3547,6 +3607,8 @@ def render_automation_content() -> str:
             "failed_24h":  kpi_failed,
             "queue_depth": kpi_queue,
             "overdue_queue_count": kpi_overdue_queue,
+            "past_due":    kpi_pastdue,
+            "unscheduled": kpi_unscheduled,
         },
     })
 
@@ -3569,8 +3631,9 @@ def render_automation_content() -> str:
 .so-day-btn:hover:not(:disabled){color:var(--text);border-color:var(--gold);}
 .so-day-btn:disabled{opacity:0.3;cursor:default;}
 .so-day-lbl{font-family:var(--font-m);font-size:12px;color:var(--text);min-width:58px;text-align:center;}
-.so-kpi-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px;}
-@media(max-width:900px){.so-kpi-strip{grid-template-columns:repeat(3,1fr);}}
+.so-kpi-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-bottom:14px;}
+@media(max-width:1100px){.so-kpi-strip{grid-template-columns:repeat(4,1fr);}}
+@media(max-width:750px){.so-kpi-strip{grid-template-columns:repeat(3,1fr);}}
 .so-fb-banner{background:rgba(248,81,73,0.08);border:1px solid rgba(248,81,73,0.28);border-radius:6px;
   color:var(--red);font-family:var(--font-m);font-size:12px;padding:6px 10px;margin-bottom:10px;
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;line-height:1.4;}
@@ -3679,7 +3742,21 @@ def render_automation_content() -> str:
 .pv-li{background:#060e17;border:1px solid rgba(10,102,194,0.25);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);}
 .pv-gen{background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
 .pv-media-badge{display:inline-block;font-family:var(--font-m);font-size:10px;background:rgba(228,64,95,0.15);color:#E4405F;border-radius:3px;padding:1px 6px;margin-bottom:6px;}
-.so-tip{position:fixed;background:var(--surface-alt);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:var(--font-m);font-size:11px;color:var(--text);z-index:9999;pointer-events:none;max-width:220px;line-height:1.4;box-shadow:var(--glow);display:none;}
+.so-tip{position:fixed;background:var(--surface-alt);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:var(--font-m);font-size:11px;color:var(--text);z-index:9999;pointer-events:none;max-width:240px;line-height:1.4;box-shadow:var(--glow);display:none;}
+.so-tip-thumb{display:block;width:96px;height:96px;object-fit:cover;border-radius:4px;margin-bottom:6px;background:var(--surface);}
+.so-chip-stack{display:flex;flex-direction:column;gap:6px;padding:4px 0;}
+.so-chip-stack-item{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface-alt);border:1px solid var(--border);border-radius:6px;cursor:pointer;text-align:left;width:100%;transition:border-color 150ms,background 150ms;}
+.so-chip-stack-item:hover{border-color:var(--gold);background:var(--surface);}
+.so-chip-stack-ch{font-family:var(--font-m);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--gold);flex-shrink:0;min-width:80px;}
+.so-chip-stack-time{font-family:var(--font-m);font-size:11px;color:var(--muted);flex-shrink:0;min-width:38px;}
+.so-chip-stack-title{font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;}
+.so-warn-banner{background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.28);border-radius:6px;color:var(--amber);font-family:var(--font-m);font-size:12px;padding:6px 10px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;line-height:1.4;}
+.so-warn-banner .so-fb-count{color:var(--amber);}
+.so-warn-banner .so-fb-item{background:rgba(245,158,11,0.10);border-color:rgba(245,158,11,0.28);}
+.so-warn-banner .so-fb-item-dismiss{color:var(--amber);}
+.so-warn-banner .so-fb-item-dismiss:hover{background:rgba(245,158,11,0.22);}
+.pv-hashtags{font-family:var(--font-m);font-size:11px;color:#58a6ff;margin-top:8px;line-height:1.6;}
+.pv-caption-label{font-family:var(--font-m);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;opacity:0.7;}
 </style>"""
 
     js = (
@@ -3763,7 +3840,7 @@ function refreshTimeline(){
     .catch(showStale);
 }
 function updateKPIs(k){
-  var m={'kpi-posted':k.posted_24h,'kpi-pending':k.pending,'kpi-failed':k.failed_24h,'kpi-queue':k.queue_depth,'kpi-overdue':k.overdue_queue_count};
+  var m={'kpi-posted':k.posted_24h,'kpi-pending':k.pending,'kpi-failed':k.failed_24h,'kpi-queue':k.queue_depth,'kpi-overdue':k.overdue_queue_count,'kpi-pastdue':k.past_due,'kpi-unscheduled':k.unscheduled};
   for(var id in m){var el=document.getElementById(id);if(el&&m[id]!==undefined)el.textContent=m[id];}
 }
 function showStale(){var e=document.getElementById('so-stale-badge');if(e)e.style.display='';}
@@ -3802,7 +3879,18 @@ function renderTimeline(data){
   });
   cont.querySelectorAll('[data-chip]').forEach(function(chip){
     chip.addEventListener('click',function(){
-      try{var posts=JSON.parse(chip.dataset.chip);if(posts.length)loadPreview(posts[0].id);}catch(e){}
+      try{var posts=JSON.parse(chip.dataset.chip);if(posts.length)loadChipStack(posts);}catch(e){}
+    });
+    chip.addEventListener('mouseenter',function(e){
+      try{var posts=JSON.parse(chip.dataset.chip);showChipTip(e,posts);}catch(_){}
+    });
+    chip.addEventListener('mouseleave',hideTip);
+    chip.addEventListener('focus',function(e){
+      try{var posts=JSON.parse(chip.dataset.chip);showChipTip(e,posts);}catch(_){}
+    });
+    chip.addEventListener('blur',hideTip);
+    chip.addEventListener('keydown',function(e){
+      if(e.key==='Enter'){e.preventDefault();try{var posts=JSON.parse(chip.dataset.chip);if(posts.length)loadChipStack(posts);}catch(_){}}
     });
   });
   updateNowLine();
@@ -3829,15 +3917,15 @@ function renderRow(ch,ri){
   var icons=its.map(function(it,ci){
     var p=it.p,pct=(p.mins/1440*100).toFixed(3)+'%';
     if(it.chip){
-      var cp=JSON.stringify(it.grp.map(function(g){return{id:g.id};})).replace(/"/g,'&quot;');
-      return '<button class="so-tl-chip" style="left:'+pct+'" data-chip="'+cp+'" tabindex="-1">+'+it.n+'</button>';
+      var cp=JSON.stringify(it.grp.map(function(g){return{id:g.id,title:g.title,ch:g.ch_lbl,sched:g.sched};})).replace(/"/g,'&quot;');
+      return '<button class="so-tl-chip" style="left:'+pct+'" data-chip="'+cp+'" tabindex="0" aria-label="'+it.n+' posts">+'+it.n+'</button>';
     }
     var off=it.off?'margin-top:'+it.off+'px;':'';
     var al=eA([p.type||'Post',ch.label,'scheduled '+p.sched,p.status||'unknown'].join(' · '));
     return '<button class="so-tl-icon-btn" style="left:'+pct+';'+off+';--status-color:'+stColor(p.status)+'" '+
       'data-post-id="'+eA(p.id)+'" data-row-idx="'+ri+'" data-col-idx="'+ci+'" '+
       'data-title="'+eA(p.title)+'" data-sched="'+eA(p.sched)+'" data-sched-full="'+eA(p.sched_full||'')+'" data-status="'+eA(p.status)+'" '+
-      'data-ch="'+eA(ch.label)+'" data-type="'+eA(p.type)+'" '+
+      'data-ch="'+eA(ch.label)+'" data-type="'+eA(p.type)+'" data-asset-url="'+eA(p.asset_url||'')+'" '+
       'aria-label="'+al+'" tabindex="-1" role="gridcell">'+
       svgI(p.icon||'help-circle')+
       '</button>';
@@ -3890,11 +3978,40 @@ function focusIcon(ri,ci){
 // ── Tooltip ───────────────────────────────────────────────────────────
 function showTip(e,ds){
   if(!_tipEl)return;
-  _tipEl.innerHTML=[ds.title?eH(ds.title):'(no title)',[ds.ch,ds.type].filter(Boolean).join(' · '),eH(ds.ch||'?')+' \u2014 '+(ds.schedFull?eH(ds.schedFull):ds.sched||'?')+' SAST'].join('<br>');
+  var au=ds.assetUrl||'';
+  var imgHtml=au&&au.indexOf('://')>0?'<img src="'+eA(au)+'" class="so-tip-thumb" loading="lazy" onerror="this.style.display=\'none\'" alt="">':'';
+  _tipEl.innerHTML=imgHtml+[ds.title?eH(ds.title):'(no title)',[ds.ch,ds.type].filter(Boolean).join(' \u00b7 '),eH(ds.ch||'?')+' \u2014 '+(ds.schedFull?eH(ds.schedFull):ds.sched||'?')+' SAST'].join('<br>');
   _tipEl.style.display='block';
   _tipEl.style.left=(e.clientX+12)+'px';_tipEl.style.top=(e.clientY-8)+'px';
 }
 function hideTip(){if(_tipEl)_tipEl.style.display='none';}
+function showChipTip(e,posts){
+  if(!_tipEl)return;
+  var lines=posts.map(function(p){return eH(p.ch||'')+' \u00b7 '+eH(p.sched||'')+' \u00b7 '+eH(p.title||'(no title)');});
+  _tipEl.innerHTML=lines.join('<br>');
+  _tipEl.style.display='block';
+  _tipEl.style.left=(e.clientX+12)+'px';_tipEl.style.top=(e.clientY-8)+'px';
+}
+function loadChipStack(posts){
+  if(!posts||!posts.length)return;
+  _activePostId=null;
+  document.getElementById('so-pv-empty').style.display='none';
+  document.getElementById('so-pv-skel').style.display='none';
+  var ld=document.getElementById('so-pv-loaded');
+  ld.style.display='flex';ld.style.flexDirection='column';ld.style.flex='1';
+  var meta='<div class="so-pv-meta"><span class="so-pv-chip">'+posts.length+' posts at this time</span></div>';
+  var stack='<div class="so-chip-stack">';
+  for(var i=0;i<posts.length;i++){
+    var p=posts[i];
+    stack+='<button class="so-chip-stack-item" onclick="loadPreview(\''+eA(p.id||'')+'\')">'+
+      '<span class="so-chip-stack-ch">'+eH(p.ch||'')+'</span>'+
+      '<span class="so-chip-stack-time">'+eH(p.sched||'')+'</span>'+
+      '<span class="so-chip-stack-title">'+eH(p.title||'(no title)')+'</span>'+
+      '</button>';
+  }
+  stack+='</div>';
+  ld.innerHTML=meta+'<div class="so-pv-body">'+stack+'</div><div class="so-pv-actions"></div>';
+}
 
 // ── Preview pane ──────────────────────────────────────────────────────
 function loadPreview(id){
@@ -3930,15 +4047,19 @@ function showPreview(p){
 }
 function renderPvBody(p){
   var ch=(p.channel||'').toLowerCase();
-  var body=eH(p.body_markdown||p.copy||p.caption||'(no content)');
+  var isTg=ch.includes('telegram');
+  var isIg=ch.includes('instagram');
+  var rawCaption=isTg?(p.telegram_caption||p.caption_final||p.caption||p.body_markdown||'(no content)'):(isIg?(p.ig_caption||p.caption_final||p.caption||p.body_markdown||'(no content)'):(p.caption_final||p.caption||p.body_markdown||'(no content)'));
+  var body=isTg?rawCaption.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):eH(rawCaption);
   var ttl=p.title?'<b>'+eH(p.title)+'</b><br><br>':'';
+  var hashHtml=p.hashtags_str?'<div class="pv-hashtags">'+eH(p.hashtags_str)+'</div>':'';
   var media=renderPvMedia(p);
-  if(ch.includes('telegram'))return media+'<div class="pv-tg">'+ttl+body+'</div>';
-  if(ch.includes('whatsapp'))return media+'<div class="pv-wa">'+ttl+body+'</div>';
-  if(ch.includes('instagram'))return media+'<div class="pv-ig"><span class="pv-media-badge">'+eH(p.type||'Post')+'</span><br>'+ttl+body+'</div>';
-  if(ch.includes('tiktok'))return media+'<div class="pv-tk">'+ttl+body+'</div>';
-  if(ch.includes('linkedin'))return media+'<div class="pv-li">'+ttl+body+'</div>';
-  return media+'<div class="pv-gen">'+ttl+body+'</div>';
+  if(isTg)return media+'<div class="pv-caption-label">Telegram caption (exact)</div><div class="pv-tg">'+ttl+body+'</div>'+hashHtml;
+  if(ch.includes('whatsapp'))return media+'<div class="pv-caption-label">WhatsApp caption</div><div class="pv-wa">'+ttl+body+'</div>'+hashHtml;
+  if(isIg)return media+'<div class="pv-ig"><span class="pv-media-badge">'+eH(p.type||'Post')+'</span><br>'+ttl+body+'</div>'+hashHtml;
+  if(ch.includes('tiktok'))return media+'<div class="pv-caption-label">TikTok caption</div><div class="pv-tk">'+ttl+body+'</div>'+hashHtml;
+  if(ch.includes('linkedin'))return media+'<div class="pv-caption-label">LinkedIn caption</div><div class="pv-li">'+ttl+body+'</div>'+hashHtml;
+  return media+'<div class="pv-gen">'+ttl+body+'</div>'+hashHtml;
 }
 function renderPvMedia(p){
   if(!p.image_url && !p.video_url)return'';
@@ -3995,6 +4116,15 @@ window.__soDismissFB=function(btn){
     console.error('Dismiss failed:',e);
     alert('Could not dismiss: '+(e&&e.message?e.message:'unknown error'));
   });
+};
+window.__soWarnDismiss=function(btn){
+  var item=btn.closest('.so-fb-item');if(!item)return;
+  item.remove();
+  var banner=document.getElementById('so-warn-banner');
+  if(!banner)return;
+  if(!banner.querySelectorAll('.so-fb-item').length)banner.style.display='none';
+  var cnt=document.getElementById('so-warn-count');
+  if(cnt){var n=banner.querySelectorAll('.so-fb-item').length;if(n>0)cnt.textContent=n+' warning'+(n!==1?'s':'');}
 };
 
 // ── Queue ─────────────────────────────────────────────────────────────
@@ -4084,10 +4214,13 @@ function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'
     <div class="kpi"><div class="kpi-lbl">Posted 24h</div><div class="kpi-val c-green" id="kpi-posted">{kpi_posted}</div></div>
     <div class="kpi"><div class="kpi-lbl">Pending now</div><div class="kpi-val" id="kpi-pending">{kpi_pending}</div></div>
     <div class="kpi"><div class="kpi-lbl">Failed 24h</div><div class="kpi-val c-red" id="kpi-failed">{kpi_failed}</div></div>
-    <div class="kpi"><div class="kpi-lbl">Queue depth</div><div class="kpi-val" id="kpi-queue">{kpi_queue}</div></div>
-    <div class="kpi"><div class="kpi-lbl">OVERDUE QUEUE</div><div class="kpi-val c-gold" id="kpi-overdue">{kpi_overdue_queue}</div></div>
+    <div class="kpi"><div class="kpi-lbl">Queue (12h)</div><div class="kpi-val" id="kpi-queue">{kpi_queue}</div></div>
+    <div class="kpi"><div class="kpi-lbl">Overdue Queue</div><div class="kpi-val c-gold" id="kpi-overdue">{kpi_overdue_queue}</div></div>
+    <div class="kpi"><div class="kpi-lbl">Past-due</div><div class="kpi-val c-red" id="kpi-pastdue">{kpi_pastdue}</div></div>
+    <div class="kpi"><div class="kpi-lbl">Unscheduled</div><div class="kpi-val" id="kpi-unscheduled">{kpi_unscheduled}</div></div>
   </div>
   {fb_banner_html}
+  {warn_banner_html}
   <div class="so-main">
     <div class="so-left">
       <div class="so-tl-wrap">
@@ -7349,7 +7482,8 @@ _SO_OVERDUE_QUEUE_ST = {"pending", "ready", "queued"}
 def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> dict:
     """Build timeline + KPI payload for a given SAST day string (YYYY-MM-DD)."""
     cutoff24 = now_utc - timedelta(hours=24)
-    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue_queue = 0
+    horizon_12h = now_utc + timedelta(hours=12)
+    kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue_queue = kpi_pastdue = kpi_unscheduled = 0
     for it in items:
         st  = (it.get("status") or "").lower().strip()
         ts  = parse_ts(it.get("last_edited") or it.get("scheduled_time") or it.get("created") or "")
@@ -7361,11 +7495,15 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
         elif st in _SO_FAILED_ST:
             if ts and ts >= cutoff24:
                 kpi_failed += 1
-            kpi_queue += 1
         elif st != "archived":
-            kpi_queue += 1
             if st in _SO_PENDING_ST:
                 kpi_pending += 1
+            if sch and now_utc <= sch <= horizon_12h:
+                kpi_queue += 1
+            if sch and sch < now_utc and st in _SO_PENDING_ST and rfa in ("yes", "true", "1", "y"):
+                kpi_pastdue += 1
+            if not sch and st in _SO_PENDING_ST:
+                kpi_unscheduled += 1
         if (st in _SO_OVERDUE_QUEUE_ST
                 and sch and sch < now_utc
                 and rfa in ("yes", "true", "1", "y")):
@@ -7416,6 +7554,8 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
             "failed_24h":  kpi_failed,
             "queue_depth": kpi_queue,
             "overdue_queue_count": kpi_overdue_queue,
+            "past_due":    kpi_pastdue,
+            "unscheduled": kpi_unscheduled,
         },
     }
 
@@ -7567,25 +7707,31 @@ def api_so_post(post_id: str):
     else:
         media_aspect = None
 
+    import re as _re
+    _plain_caption = _re.sub(r'<[^>]+>', '', caption)
     payload = {
-        "id":            post_id,
-        "channel":       item.get("channel") or "",
-        "channel_key":   channel_key,
-        "type":          item.get("work_type") or "",
-        "body_markdown": copy_raw,
-        "media_urls":    media_urls,
-        "image_url":     image_url,
-        "video_url":     video_url,
-        "media_aspect":  media_aspect,
-        "caption":       caption,
-        "hashtags":      hashtags,
-        "scheduled":     sdt.astimezone(_SAST).strftime("%Y-%m-%d %H:%M") if sdt else "",
-        "actual":        adt.astimezone(_SAST).strftime("%Y-%m-%d %H:%M") if adt else "",
-        "status":        ("queued" if (item.get("status") or "").lower().strip() == "approved" else (item.get("status") or "").lower().strip()),
-        "permalink":     item.get("url") or "",
-        "error_message": item.get("error") or "",
-        "campaign":      item.get("campaign_theme") or "",
-        "platform_notes": item.get("platform_notes") or "",
+        "id":              post_id,
+        "channel":         item.get("channel") or "",
+        "channel_key":     channel_key,
+        "type":            item.get("work_type") or "",
+        "body_markdown":   copy_raw,
+        "media_urls":      media_urls,
+        "image_url":       image_url,
+        "video_url":       video_url,
+        "media_aspect":    media_aspect,
+        "caption":         caption,
+        "caption_final":   caption,
+        "telegram_caption": caption,
+        "ig_caption":      _plain_caption,
+        "hashtags":        hashtags,
+        "hashtags_str":    " ".join(hashtags),
+        "scheduled":       sdt.astimezone(_SAST).strftime("%Y-%m-%d %H:%M") if sdt else "",
+        "actual":          adt.astimezone(_SAST).strftime("%Y-%m-%d %H:%M") if adt else "",
+        "status":          ("queued" if (item.get("status") or "").lower().strip() == "approved" else (item.get("status") or "").lower().strip()),
+        "permalink":       item.get("url") or "",
+        "error_message":   item.get("error") or "",
+        "campaign":        item.get("campaign_theme") or "",
+        "platform_notes":  item.get("platform_notes") or "",
     }
     return Response(json.dumps(payload), mimetype="application/json")
 
