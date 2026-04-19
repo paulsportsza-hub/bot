@@ -10615,7 +10615,7 @@ def _get_supersport_channel(home: str, away: str, match_key: str) -> str:
             _matches = fuzzy_match_broadcast(_rows, home, away) if _rows else []
             if not _matches:
                 return ""
-            _best = _matches[0]
+            _best = dict(_matches[0])
             _ch_name = (_best.get("channel_name") or "").strip()
             _ch_short = (_best.get("channel_short") or "").strip()
             _dstv = (_best.get("dstv_number") or "").strip()
@@ -10855,8 +10855,8 @@ def _resolve_kickoff_time(
                     _matches = fuzzy_match_broadcast(_rows, home, away) if _rows else []
 
                 if _matches:
-                    _best = _matches[0]
-                    _start_time = _best.get("start_time") or _best[5]  # fallback to tuple index
+                    _best = dict(_matches[0])
+                    _start_time = _best.get("start_time") or ""
                     if _start_time:
                         return _fmt_iso_local(_start_time)
             finally:
