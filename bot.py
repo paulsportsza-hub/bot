@@ -1973,7 +1973,6 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     template="match_detail.html", data=_mm_md_data,
                     text_fallback=_mm_fallback, markup=_mm_back_markup,
                     message_to_edit=query.message,
-                    width=540,
                 )
                 return
             _ut = await get_effective_tier(user_id)
@@ -10591,8 +10590,13 @@ def _resolve_kickoff_time(
     if _sport in ("boxing", "combat"):
         _sport = "mma"
 
-    def _fmt_sast_dt(dt_obj) -> tuple[str, str]:
-        """Format a tz-aware datetime into (date_label, HH:MM)."""
+    def _fmt_sast_dt(dt_obj, from_utc_conversion=False) -> tuple[str, str]:
+        """Format a tz-aware datetime into (date_label, HH:MM).
+        
+        Args:
+            dt_obj: datetime object in SAST timezone
+            from_utc_conversion: True if this came from UTC→SAST conversion (enables sentinel check)
+        """
         now = _dt.now(_SAST)
         today = now.date()
         d = dt_obj.date()
@@ -10604,7 +10608,8 @@ def _resolve_kickoff_time(
             date_str = dt_obj.strftime("%a %d %b")
         time_str = dt_obj.strftime("%H:%M")
         # Midnight-UTC sentinel (00:00 UTC → 02:00 SAST) = placeholder, not real time
-        if time_str == "02:00":
+        # Only apply to times that came from UTC conversion, not local broadcast_schedule times
+        if from_utc_conversion and time_str == "02:00":
             return (date_str, "")
         return (date_str, time_str)
 
@@ -10623,7 +10628,7 @@ def _resolve_kickoff_time(
             if dt_obj.tzinfo is None:
                 # sportmonks_fixtures match_date is UTC
                 dt_obj = assume_utc(dt_obj)
-            return _fmt_sast_dt(dt_obj.astimezone(_SAST))
+            return _fmt_sast_dt(dt_obj.astimezone(_SAST), from_utc_conversion=True)
         except Exception:
             return ("", "")
 
@@ -10677,8 +10682,14 @@ def _resolve_kickoff_time(
     # catches PSL/cup rows stored with short team names (e.g. "Polokwane" vs
     # "Polokwane City" — won't match full-name LIKE).
     def _from_broadcast_schedule() -> tuple[str, str]:
+        """Resolve (date, time) from broadcast_schedule using fuzzy_match_broadcast.
+        
+        Delegates to fuzzy_match_broadcast for robust team name matching
+        (handles abbreviations like "Kaizer" vs "Kaizer Chiefs").
+        """
         if not home and not away:
             return ("", "")
+        
         _match_date = ""
         try:
             import re as _re
@@ -10687,72 +10698,52 @@ def _resolve_kickoff_time(
                 _match_date = _m.group(1)
         except Exception:
             pass
+        
         try:
             from scrapers.db_connect import connect_odds_db as _cfn
             from scrapers.edge.edge_config import DB_PATH as _DP
+            from scrapers.broadcast_matcher import fuzzy_match_broadcast
+            
             _c = _cfn(_DP)
+            _c.row_factory = __import__("sqlite3").Row
             try:
-                # Attempt 1: full names + optional date filter
+                # Query all broadcast rows for the match date
                 if _match_date:
-                    _row = _c.execute(
+                    _rows = _c.execute(
                         """
-                        SELECT start_time FROM broadcast_schedule
+                        SELECT * FROM broadcast_schedule
                         WHERE home_team IS NOT NULL AND away_team IS NOT NULL
                           AND start_time IS NOT NULL
-                          AND (home_team LIKE ? OR away_team LIKE ?)
-                          AND (home_team LIKE ? OR away_team LIKE ?)
                           AND DATE(start_time) = ?
-                        ORDER BY start_time DESC
-                        LIMIT 1
+                        ORDER BY start_time ASC
                         """,
-                        (f"%{home}%", f"%{home}%", f"%{away}%", f"%{away}%", _match_date),
-                    ).fetchone()
+                        (_match_date,),
+                    ).fetchall()
                 else:
-                    _row = _c.execute(
+                    # No date available; query recent broadcasts only
+                    _rows = _c.execute(
                         """
-                        SELECT start_time FROM broadcast_schedule
+                        SELECT * FROM broadcast_schedule
                         WHERE home_team IS NOT NULL AND away_team IS NOT NULL
                           AND start_time IS NOT NULL
-                          AND (home_team LIKE ? OR away_team LIKE ?)
-                          AND (home_team LIKE ? OR away_team LIKE ?)
                         ORDER BY start_time DESC
-                        LIMIT 1
+                        LIMIT 50
                         """,
-                        (f"%{home}%", f"%{home}%", f"%{away}%", f"%{away}%"),
-                    ).fetchone()
-                if _row and _row[0]:
-                    return _fmt_iso_local(_row[0])
-                # Attempt 2: first-word fallback (requires date + ≥6-char token).
-                # Only engages when the first word is ≥6 chars, to avoid false
-                # positives on short tokens like "AS", "FC", "Al".
-                if _match_date:
-                    _home_first = (home or "").split(" ", 1)[0].strip()
-                    _away_first = (away or "").split(" ", 1)[0].strip()
-                    _h_short_ok = len(_home_first) >= 6
-                    _a_short_ok = len(_away_first) >= 6
-                    if _h_short_ok or _a_short_ok:
-                        _h = _home_first if _h_short_ok else home
-                        _a = _away_first if _a_short_ok else away
-                        _row2 = _c.execute(
-                            """
-                            SELECT start_time FROM broadcast_schedule
-                            WHERE home_team IS NOT NULL AND away_team IS NOT NULL
-                              AND start_time IS NOT NULL
-                              AND (home_team LIKE ? OR away_team LIKE ?)
-                              AND (home_team LIKE ? OR away_team LIKE ?)
-                              AND DATE(start_time) = ?
-                            ORDER BY start_time DESC
-                            LIMIT 1
-                            """,
-                            (f"%{_h}%", f"%{_h}%", f"%{_a}%", f"%{_a}%", _match_date),
-                        ).fetchone()
-                        if _row2 and _row2[0]:
-                            return _fmt_iso_local(_row2[0])
+                    ).fetchall()
+                
+                # Delegate to fuzzy_match_broadcast for robust matching
+                _matches = fuzzy_match_broadcast(_rows, home, away)
+                if _matches:
+                    _best = _matches[0]
+                    _start_time = _best.get("start_time") or _best[5]  # fallback to tuple index
+                    if _start_time:
+                        return _fmt_iso_local(_start_time)
             finally:
                 _c.close()
         except Exception as exc:
             log.debug("_resolve_kickoff_time: broadcast_schedule lookup failed: %s", exc)
         return ("", "")
+
 
     # ── Football path ────────────────────────────────────────
     if _sport == "soccer":
@@ -26761,6 +26752,33 @@ async def _build_morning_report() -> str:
 # Only ONE edge_precompute cycle may run at a time.
 _pregen_lock = asyncio.Lock()
 _pregen_active = False   # BASELINE-FIX: single-flight flag — set before lock acquisition, no TOCTOU
+
+# BUILD-SONNET-BURN-FIX-02: warm-cache threshold for startup pregen guard.
+# 5+ fresh narratives within last 12h = cache is warm, skip sweep.
+_PREGEN_WARM_THRESHOLD = 5
+_PREGEN_WARM_WINDOW_HOURS = 12
+
+
+def _count_warm_narratives() -> int:
+    """Count narrative_cache rows created within the last 12h (warm window).
+
+    Returns 0 on any DB error — safe fallback (sweep proceeds).
+    """
+    try:
+        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=2000)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM narrative_cache "
+                "WHERE created_at > datetime('now', '-' || ? || ' hours') "
+                "AND narrative_source IS NOT NULL",
+                (_PREGEN_WARM_WINDOW_HOURS,),
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning("Pregen warm-cache check failed: %s", exc)
+        return 0
 _precompute_lock = asyncio.Lock()
 _precompute_active = False  # BASELINE-FIX: replaces .locked() TOCTOU in _edge_precompute_job
 _last_stale_cleanup: float = 0.0  # BUILD-STALE-PICKS-01: tracks last stale-edge cleanup time
@@ -26806,10 +26824,26 @@ async def _background_pregen_fill() -> None:
     if _pregen_active:
         log.info("Pregen [background]: DROPPED — sweep already active")
         return
+
+    # BUILD-SONNET-BURN-FIX-02: warm-cache guard — skip if today's narrative
+    # cache is already populated. Eliminates redundant sweeps triggered by
+    # _edge_precompute_job after each bot restart (was burning ~200 Sonnet
+    # calls/day via cascade: restart → precompute → cache-miss → background_fill).
+    _warm_count = await asyncio.to_thread(_count_warm_narratives)
+    if _warm_count >= _PREGEN_WARM_THRESHOLD:
+        log.info(
+            "Pregen [background]: SKIPPED — cache warm (%d narratives in last %dh, threshold=%d)",
+            _warm_count, _PREGEN_WARM_WINDOW_HOURS, _PREGEN_WARM_THRESHOLD,
+        )
+        return
+
     _pregen_active = True  # Set synchronously before any await — no race window
     try:
         async with _pregen_lock:
-            log.info("Pregen [background]: started (source=background_fill)")
+            log.info(
+                "Pregen [background]: started (source=background_fill, warm_count=%d)",
+                _warm_count,
+            )
             from scripts.pregenerate_narratives import main as pregen_main
             await pregen_main("refresh")
             log.info("Pregen [background]: complete")
