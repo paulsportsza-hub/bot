@@ -2412,14 +2412,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
             if not _can_view:
                 _limit_summary = await _get_edge_tracker_summary(7)
-                await query.edit_message_text(
+                await _serve_response(
+                    query,
                     get_upgrade_message(
                         _user_tier,
                         context="tip",
                         proof_line=_format_edge_tracker_record_line(_limit_summary),
                     ),
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                    InlineKeyboardMarkup(_build_hot_tips_detail_rows(
                         user_id,
                         match_key=match_key,
                         primary_button=InlineKeyboardButton(
@@ -2750,10 +2750,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _banner = _qa_banner(user_id)
                 _final = (_banner + _w84_html) if _banner else _w84_html
                 try:
-                    await query.edit_message_text(
-                        _final, parse_mode=ParseMode.HTML,
-                        reply_markup=InlineKeyboardMarkup(_btns),
-                    )
+                    # _serve_response handles photo→text transition (e.g. back from
+                    # AI breakdown card) via delete + send_message when needed.
+                    await _serve_response(query, _final, InlineKeyboardMarkup(_btns))
                 except BadRequest as _br:
                     if "not modified" in str(_br).lower():
                         return
@@ -21969,8 +21968,12 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
         )
         return
 
+    from card_data import build_ai_breakdown_data as _build_bd_data
     try:
-        png_bytes = await asyncio.to_thread(render_ai_breakdown_card, match_key)
+        png_bytes, _bd = await asyncio.gather(
+            asyncio.to_thread(render_ai_breakdown_card, match_key),
+            asyncio.to_thread(_build_bd_data, match_key),
+        )
     except Exception as exc:
         log.error("AI breakdown render failed for %s: %s", match_key, exc)
         await query.message.reply_text("❌ Could not render breakdown. Please try again.")
@@ -21981,21 +21984,14 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
         return
 
     # Build buttons matching edge:detail surface (minus Full AI Breakdown).
-    # Row 1: bookmaker CTA (looked up from snapshot → global cache).
+    # Row 1: bookmaker CTA from narrative_cache tips_json.
     # Row 2: back to the edge detail card.
     _rows: list[list[InlineKeyboardButton]] = []
-    _snap_tips = _ht_tips_snapshot.get(user_id, [])
-    _global_tips = _hot_tips_cache.get("global", {}).get("tips", [])
-    _tip = next(
-        (t for t in _snap_tips if _tip_matches_hot_key(t, match_key)),
-        next((t for t in _global_tips if _tip_matches_hot_key(t, match_key)), None),
-    )
-    if _tip and _tip.get("ev", 0) > 0:
-        _bk_key = _tip.get("bookmaker") or ""
-        _aff_url = get_affiliate_url(_bk_key, match_id=match_key) if _bk_key else ""
-        if _aff_url:
-            _bk_display = _display_bookmaker_name(_bk_key)
-            _rows.append([InlineKeyboardButton(f"📲 Bet on {_bk_display} →", url=_aff_url)])
+    _bk_key = (_bd or {}).get("best_bookmaker_key", "")
+    _aff_url = get_affiliate_url(_bk_key, match_id=match_key) if _bk_key else ""
+    if _aff_url:
+        _bk_display = _display_bookmaker_name(_bk_key)
+        _rows.append([InlineKeyboardButton(f"📲 Bet on {_bk_display} →", url=_aff_url)])
     _back_key = _shorten_cb_key(match_key)
     _rows.append([InlineKeyboardButton("↩️ Back to Edge", callback_data=f"edge:detail:{_back_key}")])
     await _serve_response(query, "", InlineKeyboardMarkup(_rows), photo=png_bytes)

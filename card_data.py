@@ -1168,14 +1168,16 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
     }
     tier_label = _TIER_LABELS.get(edge_tier, "EDGE")
 
-    # ── Parse tips_json for ev_pct ────────────────────────────────────────────
+    # ── Parse tips_json for ev_pct + best bookmaker ──────────────────────────
     ev_pct = 0.0
+    best_bookmaker_key = ""
     try:
         tips_list = json.loads(tips_json_raw) if isinstance(tips_json_raw, str) else tips_json_raw
         if tips_list and isinstance(tips_list, list):
             best = max(tips_list, key=lambda t: float(t.get("ev") or 0), default=None)
             if best:
                 ev_pct = float(best.get("ev") or 0)
+                best_bookmaker_key = str(best.get("bookmaker") or "")
     except Exception:
         pass
 
@@ -1255,4 +1257,5 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
         "edge_html": edge_html,
         "risk_html": risk_html,
         "verdict_prose_html": verdict_prose_html,
+        "best_bookmaker_key": best_bookmaker_key,
     }
