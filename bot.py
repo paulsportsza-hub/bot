@@ -2550,12 +2550,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
             # Skip Haiku analysis on cache-hit path (fast); include on cache-miss
             _card_analysis = not bool(_w84_hit)
+            # AI Breakdown button only for W82-quality (NarrativeSpec) Sonnet narratives
+            _has_rich_narrative = bool(_w84_hit) and _w84_hit.get("narrative_source") == "w82"
 
             _card_served = await _serve_card_detail(
                 query, match_key, _card_tip, user_id, _user_tier,
                 _card_edge_tier,
                 back_page=_resolve_hot_tips_back_page(user_id, match_key),
                 include_analysis=_card_analysis,
+                has_narrative=_has_rich_narrative,
             )
             if _card_served:
                 # Background view recording (best-effort)
@@ -9290,6 +9293,7 @@ async def _serve_card_detail(
     include_analysis: bool = True,
     source: str = "edge_picks",
     back_cb_override: str | None = None,
+    has_narrative: bool = False,
 ) -> bool:
     """P1P3-WIRE-DETAIL: Serve card_pipeline photo detail view.
 
@@ -9310,6 +9314,7 @@ async def _serve_card_detail(
             source=source, user_tier=user_tier,
             edge_tier=edge_tier, back_page=back_page,
             back_cb_override=back_cb_override,
+            has_narrative=has_narrative,
         )
 
         # render_card_bytes: build_card_data → CARD-GATE-INV-01 → DetailMessage.build_card_photo
@@ -13403,14 +13408,16 @@ def _build_hot_tips_detail_rows(
     extra_rows: list[list[InlineKeyboardButton]] | None = None,
     fallback_page: int | None = None,
     user_tier: str | None = None,
+    has_narrative: bool = False,
 ) -> list[list[InlineKeyboardButton]]:
     """Build the normalized Hot Tips detail action surface."""
     back_page = _resolve_hot_tips_back_page(user_id, match_key, fallback_page)
     rows: list[list[InlineKeyboardButton]] = []
     if primary_button is not None:
         rows.append([primary_button])
-    # Full AI Breakdown button — only when user_tier is explicitly passed (main analysis view)
-    if user_tier is not None and match_key:
+    # Full AI Breakdown button — only when has_narrative (W82-quality Sonnet narrative exists)
+    # and user_tier is explicitly passed (main analysis view)
+    if has_narrative and user_tier is not None and match_key:
         _bk = _shorten_cb_key(match_key, max_len=64 - len("edge:breakdown:"))
         if user_tier == "diamond":
             rows.append([InlineKeyboardButton(
@@ -21868,16 +21875,17 @@ def _build_game_buttons(
             extra_rows=compare_rows,
             fallback_page=back_page,
             user_tier=user_tier,
+            has_narrative=has_narrative,
         )
 
     if primary_button is not None:
         buttons.append([primary_button])
 
-    # Full AI Breakdown button — only when there is a cached AI narrative (edge cards only)
-    # For source=="edge_picks" the narrative always exists; for "matches" it is gated by has_narrative.
+    # Full AI Breakdown button — only when a W82-quality Sonnet narrative exists.
+    # has_narrative must be explicitly True; source=="edge_picks" no longer overrides.
     # "edge:breakdown:" is 15 chars → Telegram 64-byte limit leaves max 49 chars for the key.
     _BREAKDOWN_KEY_MAX = 64 - len("edge:breakdown:")  # 49
-    _show_breakdown = has_narrative or source == "edge_picks"
+    _show_breakdown = has_narrative
     _breakdown_key = _shorten_cb_key(match_key, max_len=_BREAKDOWN_KEY_MAX) if (match_key and _show_breakdown) else ""
     if _breakdown_key:
         if user_tier == "diamond":
@@ -21966,16 +21974,22 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
         return
 
     # Build buttons matching edge:detail surface (minus Full AI Breakdown).
-    # Row 1: bookmaker CTA from narrative_cache tips_json.
-    # Row 2: back to the edge detail card.
+    # Row 1: bookmaker CTA — best from narrative_cache, fallback to active bookmaker.
+    # Row 2: back to the unified Hot Tips list (hot:back avoids old text-render fallback).
     _rows: list[list[InlineKeyboardButton]] = []
     _bk_key = (_bd or {}).get("best_bookmaker_key", "")
     _aff_url = get_affiliate_url(_bk_key, match_id=match_key) if _bk_key else ""
+    if not _aff_url:
+        # Fallback: active bookmaker (same as edge:detail no-positive-EV path)
+        _active_bk = config.get_active_bookmaker()
+        _bk_key = config.ACTIVE_BOOKMAKER
+        _aff_url = get_affiliate_url(_bk_key, match_id=match_key) or _active_bk.get("website_url", "")
     if _aff_url:
         _bk_display = _display_bookmaker_name(_bk_key)
-        _rows.append([InlineKeyboardButton(f"📲 Bet on {_bk_display} →", url=_aff_url)])
-    _back_key = _shorten_cb_key(match_key)
-    _rows.append([InlineKeyboardButton("↩️ Back to Edge", callback_data=f"edge:detail:{_back_key}")])
+        _cta_label = get_cta_label(_bk_display, match_id=match_key, bookmaker_key=_bk_key)
+        _rows.append([InlineKeyboardButton(f"📲 {_cta_label}", url=_aff_url)])
+    _back_page = _resolve_hot_tips_back_page(user_id, match_key)
+    _rows.append([InlineKeyboardButton("↩️ Back to Edge Picks", callback_data=f"hot:back:{_back_page}")])
     await _serve_response(query, "", InlineKeyboardMarkup(_rows), photo=png_bytes)
 
 
@@ -24245,10 +24259,80 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     "_tier_fire_alerts_job: mark failed for edge_id=%s: %s",
                     _tfa_edge_id, _tfa_mark_exc,
                 )
+            # AC-E: Diamond edges also DM active Diamond subscribers personally.
+            if _tfa_tier == "diamond":
+                await _fire_diamond_edge_dms(ctx, _tfa_tip, _tfa_mk)
         else:
             log.warning(
                 "_tier_fire_alerts_job: post returned None for edge_id=%s tier=%s",
                 _tfa_edge_id, _tfa_tier,
+            )
+
+
+async def _fire_diamond_edge_dms(
+    ctx: "ContextTypes.DEFAULT_TYPE",
+    tip: dict,
+    match_key: str,
+) -> None:
+    """AC-E: DM active Diamond subscribers the canonical edge card on tier-fire.
+
+    Uses same render_card_bytes pipeline as the Alerts channel post so the
+    delivered image bytes are hash-identical (identity SLO).
+    Respects anti-fatigue gate (_can_send_notification) per subscriber.
+    """
+    try:
+        _dd_users = await db.get_active_diamond_users()
+    except Exception as _dd_exc:
+        log.debug("_fire_diamond_edge_dms: DB query failed: %s", _dd_exc)
+        return
+
+    if not _dd_users:
+        return
+
+    def _dd_render() -> bytes:
+        import sys as _dd_sys
+        _bd = "/home/paulsportsza/bot"
+        if _bd not in _dd_sys.path:
+            _dd_sys.path.insert(0, _bd)
+        from card_pipeline import render_card_bytes as _rcb  # type: ignore[import]
+        img_bytes, _, _ = _rcb(match_key, tip, include_analysis=False)
+        return img_bytes
+
+    try:
+        _dd_bytes = await asyncio.wait_for(
+            asyncio.to_thread(_dd_render),
+            timeout=15.0,
+        )
+    except Exception as _dd_exc:
+        log.warning("_fire_diamond_edge_dms: render failed for %s: %s", match_key, _dd_exc)
+        return
+
+    _dd_markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "⚡ View full edge →",
+            url=f"https://t.me/mzansiedge_bot?start=card_{match_key}",
+        )
+    ]])
+
+    import io as _dd_io
+    for _dd_uid in _dd_users:
+        try:
+            if not await _can_send_notification(_dd_uid):
+                continue
+            await ctx.bot.send_photo(
+                chat_id=_dd_uid,
+                photo=_dd_io.BytesIO(_dd_bytes),
+                reply_markup=_dd_markup,
+            )
+            await _after_send(_dd_uid)
+            log.debug(
+                "_fire_diamond_edge_dms: sent to user=%d match_key=%s",
+                _dd_uid, match_key,
+            )
+        except Exception as _dd_send_exc:
+            log.debug(
+                "_fire_diamond_edge_dms: DM failed for user=%d: %s",
+                _dd_uid, _dd_send_exc,
             )
 
 

@@ -53,8 +53,13 @@ def _build_deeplink_markup(match_key: str) -> dict:
 
 
 
-def _sync_render_card(tip: dict) -> bytes:
+def _sync_render_card(tip: dict, buttons: list | None = None) -> bytes:
     """Sync wrapper — calls canonical render_card_bytes pipeline.
+
+    AC-C.1: accepts optional PTB buttons list (None = default no embedded buttons).
+    No hardcoded buttons=[] — callers decide whether to embed PTB keyboard objects.
+    The Telegram reply_markup (deeplink inline keyboard) is constructed separately in
+    post_to_alerts and passed to _post_sync — not embedded in the card image.
 
     Raises CardPopulationError if CARD-GATE-INV-01 fails.
     Raises any other exception on render failure.
@@ -62,7 +67,7 @@ def _sync_render_card(tip: dict) -> bytes:
     _ensure_paths()
     from card_pipeline import render_card_bytes  # type: ignore[import]
     match_key = tip.get("match_key") or tip.get("match_id") or ""
-    img_bytes, _, _ = render_card_bytes(match_key, tip, include_analysis=False, buttons=[])
+    img_bytes, _, _ = render_card_bytes(match_key, tip, include_analysis=False, buttons=buttons)
     return img_bytes
 
 

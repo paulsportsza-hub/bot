@@ -1231,6 +1231,24 @@ async def get_expired_paid_users() -> list[tuple[int, str]]:
         return [(row[0], row[1]) for row in result.all()]
 
 
+async def get_active_diamond_users() -> list[int]:
+    """Return user IDs of active Diamond subscribers for proactive edge DMs (AC-E).
+
+    Used by _fire_diamond_edge_dms in _tier_fire_alerts_job to send canonical
+    edge cards to Diamond subscribers on tier-fire. Respects is_active +
+    onboarding_done; mute/push-cap checked per-user by _can_send_notification.
+    """
+    async with async_session() as s:
+        result = await s.execute(
+            select(User.id).where(
+                User.user_tier == "diamond",
+                User.is_active == True,  # noqa: E712
+                User.onboarding_done == True,  # noqa: E712
+            )
+        )
+        return [row[0] for row in result.all()]
+
+
 # ── Trial helpers ────────────────────────────────────────────
 
 
