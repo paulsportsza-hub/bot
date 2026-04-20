@@ -1697,13 +1697,16 @@ def render_card_bytes(
 ) -> tuple[bytes, str, object]:
     """Render a per-edge detail card.
 
-    Canonical pipeline: build_card_data → verify_card_populates →
-    DetailMessage.build_card_photo.  Safe to call from asyncio.to_thread.
+    Canonical pipeline: build_edge_detail_data + render_card_sync (HTML path).
+    Public signature (img_bytes, caption_html, InlineKeyboardMarkup) unchanged.
+    Safe to call from asyncio.to_thread.
 
     Returns (image_bytes, caption_html, inline_keyboard_markup).
     Raises CardPopulationError if CARD-GATE-INV-01 gate fails.
     """
-    from message_types import DetailMessage
+    from card_data import build_edge_detail_data
+    from card_renderer import render_card_sync
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     card_data = build_card_data(match_key, tip=tip, include_analysis=include_analysis)
     gate_tip = {
@@ -1716,10 +1719,9 @@ def render_card_bytes(
         _log_card_population_failure(match_key, f"render_card_bytes:{reason}", tip)
         raise CardPopulationError(reason)
 
+    detail_data = build_edge_detail_data(tip or {})
+    img = render_card_sync("edge_detail.html", detail_data)
+    caption = render_card_html(card_data)[:_CAPTION_MAX]
     back_cb = back_cb_override or f"hot:back:{back_page}"
-    img, caption, markup = DetailMessage.build_card_photo(
-        card_data,
-        buttons=buttons,
-        back_cb=back_cb,
-    )
+    markup = InlineKeyboardMarkup(buttons or [[InlineKeyboardButton("↩️ Back", callback_data=back_cb)]])
     return img, caption, markup
