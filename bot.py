@@ -13277,12 +13277,26 @@ def _build_hot_tips_detail_rows(
     primary_button: InlineKeyboardButton | None = None,
     extra_rows: list[list[InlineKeyboardButton]] | None = None,
     fallback_page: int | None = None,
+    user_tier: str | None = None,
 ) -> list[list[InlineKeyboardButton]]:
     """Build the normalized Hot Tips detail action surface."""
     back_page = _resolve_hot_tips_back_page(user_id, match_key, fallback_page)
     rows: list[list[InlineKeyboardButton]] = []
     if primary_button is not None:
         rows.append([primary_button])
+    # Full AI Breakdown button — only when user_tier is explicitly passed (main analysis view)
+    if user_tier is not None and match_key:
+        _bk = _shorten_cb_key(match_key)
+        if user_tier == "diamond":
+            rows.append([InlineKeyboardButton(
+                "🤖 Full AI Breakdown",
+                callback_data=f"edge:breakdown:{_bk}",
+            )])
+        else:
+            rows.append([InlineKeyboardButton(
+                "🔒 Full AI Breakdown",
+                callback_data=f"edge:breakdown_gate:{_bk}",
+            )])
     rows.append([InlineKeyboardButton(
         "↩️ Back", callback_data=f"hot:back:{back_page}",
     )])
@@ -21712,6 +21726,7 @@ def _build_game_buttons(
             primary_button=primary_button,
             extra_rows=compare_rows,
             fallback_page=back_page,
+            user_tier=user_tier,
         )
 
     if primary_button is not None:
