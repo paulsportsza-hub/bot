@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -119,6 +120,7 @@ from bot import (
     _add_section_bold,
     _build_polish_prompt,
     _validate_polish,
+    _VERDICT_BLACKLIST,
 )
 import config
 
@@ -1725,8 +1727,17 @@ async def _generate_one(
         return {"match_key": match_key, "success": False, "duration": time.time() - t0}
 
     # 7b. W69-VERIFY Layer 2: Post-generation cross-check (Opus full sweeps only)
+    # BUILD-SONNET-BURN-FIX-03 FIX-4: 1-in-3 sampling for high-confidence narratives
     if use_web_search and narrative:
-        contradictions = await _verify_narrative_claims(narrative, home, away, claude)
+        _confirming = _pregen_edge_data.get("confirming_signals", 0)
+        _should_fact_check = True
+        if _confirming >= 2:
+            _should_fact_check = int(hashlib.md5(match_key.encode()).hexdigest(), 16) % 3 == 0
+            if not _should_fact_check:
+                log.debug("Layer 2 fact-check sampled out for %s (confirming=%d)", match_key, _confirming)
+        contradictions = []
+        if _should_fact_check:
+            contradictions = await _verify_narrative_claims(narrative, home, away, claude)
         if contradictions:
             log.warning("Layer 2 contradictions for %s: %s", match_key, contradictions)
             # Strip lines containing contradicted claims
@@ -2088,6 +2099,12 @@ async def _generate_one(
                     _verdict_html = ""
             if not _verdict_html:
                 _verdict_html = _rv_det(spec)
+            # BUILD-VERDICT-01: blacklist re-check — deterministic fallback can still emit banned phrases
+            if _verdict_html and _VERDICT_BLACKLIST and any(p in _verdict_html.lower() for p in _VERDICT_BLACKLIST):
+                _bv_action = getattr(spec, "verdict_action", "back") or "back"
+                _bv_outcome = getattr(spec, "outcome_label", "") or "this outcome"
+                _bv_odds = getattr(spec, "odds", 0) or 0
+                _verdict_html = f"{_bv_action.title()} — {_bv_outcome} at {_bv_odds:.2f}. Edge confirmed."
             # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store (ceiling raised to 300 by BUILD-VERDICT-ENRICHMENT-FIX-01)
             if _verdict_html and len(_verdict_html) > 300:
                 _verdict_html = _verdict_html[:300].rsplit(" ", 1)[0].rstrip(",. ")
@@ -2098,6 +2115,12 @@ async def _generate_one(
             try:
                 from narrative_spec import _render_verdict as _rv_fb
                 _verdict_html = _rv_fb(spec)
+                # BUILD-VERDICT-01: blacklist re-check on fallback path
+                if _verdict_html and _VERDICT_BLACKLIST and any(p in _verdict_html.lower() for p in _VERDICT_BLACKLIST):
+                    _bv_action = getattr(spec, "verdict_action", "back") or "back"
+                    _bv_outcome = getattr(spec, "outcome_label", "") or "this outcome"
+                    _bv_odds = getattr(spec, "odds", 0) or 0
+                    _verdict_html = f"{_bv_action.title()} — {_bv_outcome} at {_bv_odds:.2f}. Edge confirmed."
                 # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store (ceiling raised to 300 by BUILD-VERDICT-ENRICHMENT-FIX-01)
                 if _verdict_html and len(_verdict_html) > 300:
                     _verdict_html = _verdict_html[:300].rsplit(" ", 1)[0].rstrip(",. ")
@@ -2303,6 +2326,7 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
     # Filter for refresh/uncached_only mode: skip edges with fresh cache
     if sweep in ("refresh", "uncached_only"):
         filtered = []
+        skipped_refresh = 0
         for edge in edges:
             mk = edge.get("match_key", "")
             cached = await _get_cached_narrative(mk)
@@ -2332,7 +2356,13 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                     edge_outcome,
                 )
                 filtered.append(edge)
-        log.info("%s mode: %d/%d edges need regeneration", sweep, len(filtered), len(edges))
+            else:
+                skipped_refresh += 1
+                log.debug("Pregen skip gate (warm cache): skipping %s", mk)
+        log.info(
+            "Pregen skip gate: %d/%d matches skipped (warm cache), %d need regeneration",
+            skipped_refresh, len(edges), len(filtered),
+        )
         edges = filtered
 
     # BUILD-SONNET-BURN-FIX-01 FIX-5: full-sweep conditional skip.
@@ -2376,15 +2406,18 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
 
             if stored_hash and current_hash and stored_hash == current_hash:
                 skipped_full += 1
+                log.debug("Pregen skip gate (full/hash match): skipping %s", mk)
                 continue
+            elif not stored_hash or not current_hash:
+                log.debug("Pregen skip gate (full): hash unavailable for %s, regenerating", mk)
 
             filtered_full.append(edge)
 
         log.info(
-            "full mode: %d/%d edges need regeneration (%d skipped via BUILD-SONNET-BURN-FIX-01 gate)",
-            len(filtered_full),
-            len(edges),
+            "Pregen skip gate: %d/%d matches skipped (warm cache + hash match), %d need regeneration",
             skipped_full,
+            len(edges),
+            len(filtered_full),
         )
         edges = filtered_full
 

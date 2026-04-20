@@ -7670,6 +7670,10 @@ _ORPHAN_BACK_RE = re.compile(
     r'\.\s+(Back (?:the )?[A-Z][\w\' \-]+\.)\s*$'
 )
 
+# BUILD-SONNET-BURN-FIX-03 FIX-1: cap shape-guard Sonnet retry at 1 per match per hour
+_SHAPE_GUARD_RETRY_TIMES: dict[str, float] = {}
+_SHAPE_GUARD_RETRY_TTL = 3600  # seconds
+
 
 def _generate_verdict(tip: dict, verified: dict) -> str:
     """Call Sonnet for a 3-5 sentence SA sports fan verdict.
@@ -7873,6 +7877,18 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
                 confidence_tier, len(text), _bt_idx, text[:200],
             )
             # Retry once with elevated temperature and a reason-first hint.
+            # BUILD-SONNET-BURN-FIX-03 FIX-1: throttle to 1 retry per match per hour
+            import time as _sg_t
+            _sg_mk = tip.get("match_key") or f"{home}_vs_{away}"
+            _sg_now = _sg_t.monotonic()
+            _sg_last = _SHAPE_GUARD_RETRY_TIMES.get(_sg_mk, 0.0)
+            if _sg_now - _sg_last < _SHAPE_GUARD_RETRY_TTL:
+                log.debug(
+                    "Shape-guard retry throttled for %s (last retry %.0fs ago)",
+                    _sg_mk, _sg_now - _sg_last,
+                )
+                return ""
+            _SHAPE_GUARD_RETRY_TIMES[_sg_mk] = _sg_now
             _sg_retry_text = ""
             try:
                 _sg_resp = client.messages.create(
@@ -8869,14 +8885,14 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             _bk_mismatch = bool(_cached_bk and _current_bk and _cached_bk != _current_bk)
             _odds_mismatch = bool(
                 _cached_odds_val and _current_odds
-                and abs(_cached_odds_val - _current_odds) > 0.05
+                and abs(_cached_odds_val - _current_odds) > 0.10  # BUILD-SONNET-BURN-FIX-03 FIX-2
             )
             # EV mismatch: cached verdict embedding a stale EV% should be regenerated
             _cached_ev = float(_cached_verdict.get("cached_ev") or 0)
             _current_ev = float(enriched.get("ev") or tip.get("ev") or tip.get("predicted_ev") or 0)
             _ev_mismatch = bool(
                 _cached_ev and _current_ev
-                and abs(_cached_ev - _current_ev) > 0.3  # 0.3% tolerance
+                and abs(_cached_ev - _current_ev) > 1.0  # BUILD-SONNET-BURN-FIX-03 FIX-2: 1.0% tolerance
             )
             # ODDS-FRESHNESS-01: force regeneration if same-day odds are >90 min stale
             _odds_age_stale = False
@@ -27945,6 +27961,10 @@ async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         log.info("Pregen [job]: released (source=job)")
 
 
+# BUILD-SONNET-BURN-FIX-03 FIX-5: disable pre-launch to eliminate Haiku+web_search spend
+_HEALTH_CHECK_WEB_SEARCH_ENABLED = False
+
+
 async def _narrative_health_check_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """W69-VERIFY Layer 3: Spot-check 2 random cached narratives every 2 hours.
 
@@ -27989,6 +28009,9 @@ async def _narrative_health_check_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         teams = teams_part.replace("_vs_", " vs ").replace("_", " ").title()
 
         claims_text = "\n".join(f"- {c}" for c in claims)
+        if not _HEALTH_CHECK_WEB_SEARCH_ENABLED:
+            log.debug("Health-check web_search disabled (pre-launch mode) for %s", match_id)
+            continue
         try:
             resp = await _claude.messages.create(
                 model="claude-haiku-4-5-20251001",
