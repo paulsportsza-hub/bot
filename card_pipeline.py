@@ -404,6 +404,20 @@ def _compute_key_stats(
     return stats[:4]
 
 
+# Keys where the bookmaker short name differs completely from the match_results canonical name.
+# Format: {odds_snapshots_key: match_results_canonical_key}
+_STATS_KEY_ALIASES: dict[str, str] = {
+    "wolves": "wolverhampton_wanderers",
+    "atletico_madrid": "atl_tico_madrid",   # ESPN unicode-mangled Atlético
+    "reds": "queensland_reds",              # Super Rugby
+    "waratahs": "new_south_wales_waratahs", # Super Rugby
+    "man_city": "manchester_city",          # 'man_city' is not a substring of 'manchester_city'
+    # NOTE: 'blues' and 'chiefs' are stored as-is in match_results — no alias needed.
+    # NOTE: 'bournemouth', 'tottenham', 'newcastle', 'west_ham', 'brighton' all work via
+    #       LIKE %key% because the short key IS a substring of the canonical DB name.
+}
+
+
 def _compute_match_detail_stats(
     match_key: str,
     home_key: str,
@@ -420,6 +434,10 @@ def _compute_match_detail_stats(
     """
     if not home_key or not away_key:
         return []
+
+    # Resolve short bookmaker keys to canonical match_results names where they differ.
+    home_key = _STATS_KEY_ALIASES.get(home_key.lower(), home_key)
+    away_key = _STATS_KEY_ALIASES.get(away_key.lower(), away_key)
 
     conn = _ro_conn(_ODDS_DB_PATH)
     if conn is None:

@@ -129,7 +129,7 @@ from card_data import (
 )
 from card_renderer import render_card_sync, warm_chromium as _warm_chromium
 from narrative_spec import (
-    _VERDICT_MAX_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
+    _VERDICT_MAX_CHARS, _VERDICT_MIN_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
     check_banned_template, BANNED_TRIVIAL_VERDICT_TEMPLATES, _DIAMOND_PRICE_PREFIX_RE,
 )
 
@@ -7506,6 +7506,9 @@ _VERDICT_BLACKLIST = [
     "stake manageable",
     "size your stake",
     "limit your stake",
+    # BUILD-VERDICT-FLOOR-01: standalone "lean" in rendered verdict prose is banned —
+    # triggers LLM-voice leak (e.g. "I lean toward", "lean on home side").
+    " lean",
     # FIX-D1-VERDICT-BLACKLIST-01: import LLM meta-markers from narrative_spec (single source of truth)
     *_LLM_META_MARKERS,
 ]
@@ -8072,12 +8075,9 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             lines.append(f"manager_home: {manager_home}")
         if manager_away:
             lines.append(f"manager_away: {manager_away}")
-        if form_home_plain:
-            lines.append(f"form_home_plain: {form_home_plain}")
-        if form_away_plain:
-            lines.append(f"form_away_plain: {form_away_plain}")
-        if h2h_summary:
-            lines.append(f"h2h_summary: {h2h_summary}")
+        lines.append(f"form_home_plain: {form_home_plain or 'Form data unavailable'}")
+        lines.append(f"form_away_plain: {form_away_plain or 'Form data unavailable'}")
+        lines.append(f"h2h_summary: {h2h_summary or 'No H2H data available'}")
         if signals_active:
             lines.append(f"signals_active: {', '.join(signals_active)}")
         if not lines:
@@ -8143,6 +8143,12 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "If form_home_plain, form_away_plain, or h2h_summary say 'Form data unavailable' or 'H2H data unavailable', "
             "work with the signals and odds data you DO have. Do not explain or apologise for missing data. "
             "Do not mention that data is missing. Focus on what you can confirm from pick, odds, bookmaker, and signals_active.\n"
+            "\n"
+            "For combat sports (UFC, boxing, MMA): "
+            "When form/record data is unavailable, focus on fighting style, reach/weight advantages, "
+            "recent performance narrative, and odds movement. "
+            "Never output meta-commentary about missing data. "
+            "Generate a confident verdict from available context.\n"
             "\n"
             "Examples of good verdicts:\n"
             "\n"
@@ -8321,17 +8327,38 @@ def _enrich_query_form(conn, team_key: str, limit: int = 5) -> list:
         return []
 
 
+# Keys where the bookmaker short name differs completely from match_results canonical name.
+# Mirrors _STATS_KEY_ALIASES in card_pipeline.py — keep in sync on additions.
+_H2H_KEY_ALIASES: dict[str, str] = {
+    "wolves": "wolverhampton_wanderers",
+    "atletico_madrid": "atl_tico_madrid",
+    "reds": "queensland_reds",
+    "waratahs": "new_south_wales_waratahs",
+    "man_city": "manchester_city",          # 'man_city' is not a substring of 'manchester_city'
+    # 'blues' and 'chiefs' are stored as-is in match_results — no alias needed.
+}
+
+
 def _enrich_query_h2h(conn, home_key: str, away_key: str, limit: int = 5) -> list:
-    """Query match_results for H2H meetings between two teams."""
+    """Query match_results for H2H meetings between two teams.
+
+    Uses LIKE %key% patterns so short bookmaker keys (e.g. 'bournemouth') match
+    canonical match_results names (e.g. 'afc_bournemouth').  Completely-different
+    aliases (e.g. wolves→wolverhampton_wanderers) are resolved via _H2H_KEY_ALIASES
+    before pattern construction.
+    """
     if conn is None or not home_key or not away_key:
         return []
+    hk = _H2H_KEY_ALIASES.get(home_key.lower(), home_key.lower())
+    ak = _H2H_KEY_ALIASES.get(away_key.lower(), away_key.lower())
+    hp, ap = f"%{hk}%", f"%{ak}%"
     try:
         rows = conn.execute(
             "SELECT home_team, away_team, home_score, away_score "
             "FROM match_results "
-            "WHERE (home_team = ? AND away_team = ?) OR (home_team = ? AND away_team = ?) "
+            "WHERE (home_team LIKE ? AND away_team LIKE ?) OR (home_team LIKE ? AND away_team LIKE ?) "
             "ORDER BY match_date DESC LIMIT ?",
-            (home_key, away_key, away_key, home_key, limit),
+            (hp, ap, ap, hp, limit),
         ).fetchall()
         return [{"home": r[0], "away": r[1], "home_score": r[2], "away_score": r[3]} for r in rows]
     except Exception:
@@ -8565,7 +8592,9 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
         if not _cur_h2h.get("n"):
             if _fb_conn is None:
                 _fb_conn = _ro_conn(_ODDS_DB_PATH)
-            _h2h_rows = _enrich_query_h2h(_fb_conn, home_key, away_key, limit=5)
+            _h2h_hk = _H2H_KEY_ALIASES.get((home_key or "").lower(), home_key)
+            _h2h_ak = _H2H_KEY_ALIASES.get((away_key or "").lower(), away_key)
+            _h2h_rows = _enrich_query_h2h(_fb_conn, _h2h_hk, _h2h_ak, limit=5)
             _h2h_str = _enrich_format_h2h(_h2h_rows, home_key, away_key)
             if _h2h_str:
                 _h2h_m = _re.match(r"(\d+) meetings: (\d+)W (\d+)D (\d+)A", _h2h_str)
@@ -8789,7 +8818,8 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
     # enriched["stats"]; build_edge_detail_data() uses key_stats from card_pipeline separately.
     try:
         _stats_sport = (tip.get("sport_key") or tip.get("sport") or "soccer").lower()
-        _stats_league = (tip.get("league_key") or tip.get("league") or "").lower()
+        _stats_league_raw = (tip.get("league_key") or tip.get("league") or "").lower()
+        _stats_league = _CONFIG_TO_DB_LEAGUE.get(_stats_league_raw, _stats_league_raw)
         enriched["stats"] = _compute_match_detail_stats(
             match_key, home_key, away_key, _stats_sport, _stats_league, verified
         )
@@ -18645,6 +18675,26 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
         log.warning("POLISH REJECT: quality violations %s", violations)
         return False
 
+    # 8b. BUILD-VERDICT-FLOOR-01: verdict section length gate [140, 200]
+    _verdict_idx = polished.find("🏆")
+    if _verdict_idx != -1:
+        _verdict_body = polished[_verdict_idx:]
+        _vnl = _verdict_body.find("\n")
+        _verdict_text = _verdict_body[_vnl:].strip() if _vnl != -1 else ""
+        if _verdict_text:
+            if len(_verdict_text) < _VERDICT_MIN_CHARS:
+                log.warning(
+                    "POLISH REJECT: verdict %d chars < floor %d",
+                    len(_verdict_text), _VERDICT_MIN_CHARS,
+                )
+                return False
+            if len(_verdict_text) > _VERDICT_MAX_CHARS:
+                log.warning(
+                    "POLISH REJECT: verdict %d chars > ceiling %d",
+                    len(_verdict_text), _VERDICT_MAX_CHARS,
+                )
+                return False
+
     # 9. R5-BUILD-01: verdict_sizing preservation
     _sizing_val = (spec.verdict_sizing or "").lower()
     if _sizing_val and _sizing_val != "pass" and _sizing_val in baseline.lower():
@@ -26394,6 +26444,7 @@ _QA_COMMANDS = {
     "tips_gold": "Hot Tips list as Gold (accessible Gold, locked Diamond)",
     "tips_diamond": "Hot Tips list as Diamond (all accessible, no footer)",
     "set_bronze": "Persist Bronze tier until /qa reset",
+    "set_silver": "Persist Silver tier until /qa reset",
     "set_gold": "Persist Gold tier until /qa reset",
     "set_diamond": "Persist Diamond tier until /qa reset",
     "morning": "Trigger morning system report on demand",
@@ -26463,7 +26514,7 @@ async def cmd_qa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(f"ℹ️ No My Matches cache found for user {_target_id} (already cold or never warmed).")
         return
 
-    if cmd in ("set_bronze", "set_gold", "set_diamond"):
+    if cmd in ("set_bronze", "set_silver", "set_gold", "set_diamond"):
         tier = cmd.split("_", 1)[1]
         _QA_TIER_OVERRIDES[uid] = tier
         log.info("QA tier override: user %d → %s", uid, tier)
