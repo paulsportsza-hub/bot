@@ -24,12 +24,13 @@ _TEMPLATE_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "card_templates")
 )
 
-DETAIL_TEMPLATES = {"edge_detail.html", "match_detail.html", "ai_breakdown.html"}
+DETAIL_TEMPLATES = {"edge_detail.html", "match_detail.html"}
 LIST_TEMPLATES = {
     "edge_picks.html",
     "my_matches.html",
     "edge_summary.html",
     "tier_page.html",
+    "ai_breakdown.html",
 }
 ALL_DECLARED = DETAIL_TEMPLATES | LIST_TEMPLATES
 

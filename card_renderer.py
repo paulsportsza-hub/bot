@@ -27,7 +27,6 @@ Variant DETAIL — fixed 480×620
     Templates:
         edge_detail.html
         match_detail.html
-        ai_breakdown.html
     Rationale: detail cards have consistent content shape; fixed dimensions give
     predictable composition. The 620px height was locked in commit 5885fa9.
 
@@ -38,8 +37,9 @@ Variant LIST — dynamic 480×N where N ∈ [100, 1200]
         my_matches.html
         edge_summary.html
         tier_page.html
+        ai_breakdown.html
     Rationale: list-like content varies in item count — dynamic height eliminates
-    blank-space padding.
+    blank-space padding. ai_breakdown sections vary greatly in prose length.
 
 Enforcement note: Validated by tests/contracts/test_card_dimensions.py.
 """

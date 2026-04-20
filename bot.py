@@ -21952,39 +21952,53 @@ async def handle_unsubscribe(query, event_id: str) -> None:
 
 
 async def _handle_ai_breakdown(query, context, match_key: str) -> None:
-    """Render and send the Full AI Breakdown card for a Diamond user."""
+    """Render and deliver the Full AI Breakdown card for a Diamond user.
+
+    Delivers via _serve_response (same path as edge_detail) so the breakdown
+    card replaces the current message inline using edit_media, not send_photo.
+    This ensures Telegram displays it identically to Edge detail cards.
+    """
     user_id = query.from_user.id
 
     # Server-side tier gate (double-check — button only shown to diamond users)
     tier = await get_effective_tier(user_id)
     if tier != "diamond":
-        # query.answer() already called by on_button — no second answer here
         await query.message.reply_text(
             "💎 Full AI Breakdown is available to Diamond members only. "
             "Tap /subscribe to upgrade."
         )
         return
 
-    # Send loading message
-    loading = await context.bot.send_message(
-        chat_id=query.message.chat_id,
-        text="⏳ Generating full breakdown card...",
-    )
     try:
         png_bytes = await asyncio.to_thread(render_ai_breakdown_card, match_key)
-        if not png_bytes:
-            await loading.edit_text("❌ Breakdown not available for this match yet.")
-            return
-        await context.bot.send_photo(
-            chat_id=query.message.chat_id,
-            photo=png_bytes,
-            caption="🤖 <b>Full AI Breakdown</b>",
-            parse_mode="HTML",
-        )
-        await loading.delete()
     except Exception as exc:
         log.error("AI breakdown render failed for %s: %s", match_key, exc)
-        await loading.edit_text("❌ Could not render breakdown. Please try again.")
+        await query.message.reply_text("❌ Could not render breakdown. Please try again.")
+        return
+
+    if not png_bytes:
+        await query.message.reply_text("❌ Breakdown not available for this match yet.")
+        return
+
+    # Build buttons matching edge:detail surface (minus Full AI Breakdown).
+    # Row 1: bookmaker CTA (looked up from snapshot → global cache).
+    # Row 2: back to the edge detail card.
+    _rows: list[list[InlineKeyboardButton]] = []
+    _snap_tips = _ht_tips_snapshot.get(user_id, [])
+    _global_tips = _hot_tips_cache.get("global", {}).get("tips", [])
+    _tip = next(
+        (t for t in _snap_tips if _tip_matches_hot_key(t, match_key)),
+        next((t for t in _global_tips if _tip_matches_hot_key(t, match_key)), None),
+    )
+    if _tip and _tip.get("ev", 0) > 0:
+        _bk_key = _tip.get("bookmaker") or ""
+        _aff_url = get_affiliate_url(_bk_key, match_id=match_key) if _bk_key else ""
+        if _aff_url:
+            _bk_display = _display_bookmaker_name(_bk_key)
+            _rows.append([InlineKeyboardButton(f"📲 Bet on {_bk_display} →", url=_aff_url)])
+    _back_key = _shorten_cb_key(match_key)
+    _rows.append([InlineKeyboardButton("↩️ Back to Edge", callback_data=f"edge:detail:{_back_key}")])
+    await _serve_response(query, "", InlineKeyboardMarkup(_rows), photo=png_bytes)
 
 
 async def handle_tip_detail(query, ctx, action: str) -> None:
