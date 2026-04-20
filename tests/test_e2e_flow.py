@@ -141,7 +141,7 @@ async def test_sticky_keyboard_layout(client: TelegramClient) -> TestResult:
             return TestResult("sticky_keyboard_layout", False, "No reply keyboard found", time.time() - start)
 
         labels = get_reply_keyboard_labels(kb_msg)
-        expected = ["⚽ My Matches", "💎 Top Edge Picks", "📖 Guide", "👤 Profile", "⚙️ Settings", "❓ Help"]
+        expected = ["🏠 Menu", "⚽ My Matches", "💎 Edge Picks", "👤 Profile", "⚙️ Settings", "❓ Help"]
 
         for exp in expected:
             if exp not in labels:
@@ -262,7 +262,7 @@ async def test_hot_tips_separate_messages(client: TelegramClient) -> TestResult:
     """Verify Top Edge Picks sends tips with edge badges."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
+        msgs = await send_and_wait(client, "💎 Edge Picks", wait=15)
 
         # Find messages from the bot
         bot_msgs = [m for m in msgs if m.text and not m.out]
@@ -298,7 +298,7 @@ async def test_hot_tips_all_sports_scan(client: TelegramClient) -> TestResult:
     """Verify Hot Tips scans all sports (header mentions 'all markets')."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
+        msgs = await send_and_wait(client, "💎 Edge Picks", wait=15)
 
         for msg in msgs:
             if msg.text and "all markets" in msg.text.lower():
@@ -321,7 +321,7 @@ async def test_no_za_flags_in_tips(client: TelegramClient) -> TestResult:
     """
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
+        msgs = await send_and_wait(client, "💎 Edge Picks", wait=15)
 
         za_flag = "🇿🇦"
         for msg in msgs:
@@ -395,7 +395,7 @@ async def test_hot_tips_detail_back(client: TelegramClient) -> TestResult:
     """Flow 1: Hot Tips → Detail → Back. Tap a tip, verify detail loads, back works."""
     start = time.time()
     try:
-        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
+        msgs = await send_and_wait(client, "💎 Edge Picks", wait=15)
         bot_msgs = [m for m in msgs if m.text and not m.out]
         if not bot_msgs:
             return TestResult("hot_tips_detail_back", False, "No bot messages", time.time() - start)
@@ -501,7 +501,7 @@ async def test_no_question_mark_teams(client: TelegramClient) -> TestResult:
                     return TestResult("no_question_marks", False, f"Found '?' team in My Matches: {msg.text[:100]}", time.time() - start)
 
         # Check Hot Tips
-        msgs = await send_and_wait(client, "💎 Top Edge Picks", wait=15)
+        msgs = await send_and_wait(client, "💎 Edge Picks", wait=15)
         for msg in msgs:
             if msg.text and not msg.out:
                 if " ? vs " in msg.text or " vs ? " in msg.text:
