@@ -14073,11 +14073,27 @@ def _get_cached_verdict(match_key: str) -> dict | None:
         try:
             row = conn.execute(
                 "SELECT verdict_html, evidence_class, tone_band, odds_hash, "
-                "created_at, expires_at, tips_json "
+                "created_at, expires_at, tips_json, quality_status "
                 "FROM narrative_cache WHERE match_id = ?",
                 (match_key,),
             ).fetchone()
             if not row or not row[0]:
+                return None
+            # Reject verdicts that failed quality gates during pregeneration —
+            # quality_status='skipped_banned_shape' means the stored verdict_html
+            # is from a partial/failed polish attempt and will be too short or incoherent.
+            if row[7] == "skipped_banned_shape":
+                log.debug(
+                    "_get_cached_verdict: rejecting skipped_banned_shape for %s", match_key
+                )
+                return None
+            # Reject verdicts below the minimum floor — serving a sub-floor verdict
+            # produces the "weak and limp" card quality bug.
+            if len(row[0]) < _VERDICT_MIN_CHARS:
+                log.debug(
+                    "_get_cached_verdict: rejecting short verdict (%d < %d) for %s",
+                    len(row[0]), _VERDICT_MIN_CHARS, match_key,
+                )
                 return None
             # Extract cached odds/bookmaker/ev from tips_json for serve-time staleness checks
             _cached_bookie = ""
@@ -14164,9 +14180,13 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
                 (match_key,),
             ).fetchone()
             if existing:
-                # Update verdict on existing row
+                # Update verdict on existing row; clear skipped_banned_shape so
+                # _get_cached_verdict() serves this fresh verdict next time.
                 conn.execute(
-                    "UPDATE narrative_cache SET verdict_html = ? WHERE match_id = ?",
+                    "UPDATE narrative_cache SET verdict_html = ?, "
+                    "quality_status = CASE WHEN quality_status = 'skipped_banned_shape' "
+                    "THEN NULL ELSE quality_status END "
+                    "WHERE match_id = ?",
                     (verdict_html, match_key),
                 )
             else:
