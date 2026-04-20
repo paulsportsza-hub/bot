@@ -2,10 +2,12 @@
 
 Public API:
     build_edge_summary_data(tips: list[dict]) -> dict
+    build_ai_breakdown_data(match_id: str) -> dict | None
 """
 from __future__ import annotations
 import base64
 import io
+import json
 import logging
 import re as _re
 from datetime import datetime
@@ -1092,3 +1094,165 @@ def _format_commence_time_sast(iso_str: str) -> str:
         return f"{date_part} {time_part}"
     except Exception:
         return ""
+
+
+# ── AI Breakdown card data ─────────────────────────────────────────────────────
+
+def build_ai_breakdown_data(match_id: str) -> dict | None:
+    """Build template data for the Full AI Breakdown card.
+
+    Fetches narrative_html from narrative_cache, parses it into 4 sections,
+    and extracts edge metadata for the template.
+
+    Parameters
+    ----------
+    match_id:
+        Normalised match identifier: ``home_vs_away_YYYY-MM-DD``.
+
+    Returns
+    -------
+    dict suitable for ai_breakdown.html template, or None if no data found.
+    """
+    import os
+    from pathlib import Path as _Path
+    _BOT_DIR = _Path(__file__).parent
+    _SCRAPERS_DIR = _Path(os.environ.get("SCRAPERS_ROOT", str(_BOT_DIR.parent / "scrapers")))
+    _ODDS_DB = str(_SCRAPERS_DIR / "odds.db")
+
+    # ── Fetch narrative_cache row ─────────────────────────────────────────────
+    try:
+        from scrapers.db_connect import connect_odds_db
+        conn = connect_odds_db(_ODDS_DB)
+    except Exception as exc:
+        log.warning("build_ai_breakdown_data: cannot connect to odds.db: %s", exc)
+        return None
+
+    row = None
+    try:
+        row = conn.execute(
+            """SELECT narrative_html, edge_tier, tips_json, verdict_html, evidence_class
+               FROM narrative_cache WHERE match_id = ?""",
+            (match_id,),
+        ).fetchone()
+    except Exception as exc:
+        log.warning("build_ai_breakdown_data: query failed: %s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if not row:
+        return None
+
+    narrative_html = row[0] or ""
+    edge_tier = (row[1] or "bronze").lower()
+    tips_json_raw = row[2] or "[]"
+    verdict_html = row[3] or ""
+    evidence_class = row[4] or ""
+
+    # ── Parse teams from match_id ─────────────────────────────────────────────
+    home, away = "", ""
+    _mid_nodate = _re.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_id)
+    if "_vs_" in _mid_nodate:
+        _h_raw, _a_raw = _mid_nodate.split("_vs_", 1)
+        home = " ".join(w.capitalize() for w in _h_raw.split("_"))
+        away = " ".join(w.capitalize() for w in _a_raw.split("_"))
+
+    # ── Tier label ────────────────────────────────────────────────────────────
+    _TIER_LABELS = {
+        "diamond": "DIAMOND EDGE",
+        "gold": "GOLD EDGE",
+        "silver": "SILVER EDGE",
+        "bronze": "BRONZE EDGE",
+    }
+    tier_label = _TIER_LABELS.get(edge_tier, "EDGE")
+
+    # ── Parse tips_json for ev_pct ────────────────────────────────────────────
+    ev_pct = 0.0
+    try:
+        tips_list = json.loads(tips_json_raw) if isinstance(tips_json_raw, str) else tips_json_raw
+        if tips_list and isinstance(tips_list, list):
+            best = max(tips_list, key=lambda t: float(t.get("ev") or 0), default=None)
+            if best:
+                ev_pct = float(best.get("ev") or 0)
+    except Exception:
+        pass
+
+    # ── Derive verdict_tag from evidence_class / verdict_html ─────────────────
+    ec_lower = (evidence_class or "").lower()
+    vh_lower = (verdict_html or "").lower()
+    if "strong_back" in ec_lower or "strong back" in vh_lower:
+        verdict_tag = "STRONG BACK"
+    elif "back" in ec_lower or " back" in vh_lower:
+        verdict_tag = "BACK"
+    elif "lean" in ec_lower or "lean" in vh_lower:
+        verdict_tag = "MILD LEAN"
+    elif "speculative" in ec_lower or "speculative" in vh_lower:
+        verdict_tag = "SPECULATIVE"
+    elif "monitor" in ec_lower or "monitor" in vh_lower:
+        verdict_tag = "MONITOR"
+    else:
+        verdict_tag = "VERDICT"
+
+    # ── Parse narrative_html into 4 sections ──────────────────────────────────
+    # Section markers (ordered as they appear in the HTML)
+    # Note: title line also starts with 🎯, so anchor Edge section precisely.
+    _SECTION_MARKERS = [
+        ("setup",   r"📋\s*<b>The Setup</b>"),
+        ("edge",    r"🎯\s*<b>The Edge</b>"),
+        ("risk",    r"⚠️\s*<b>The Risk</b>"),
+        ("verdict", r"🏆\s*<b>Verdict</b>"),
+        ("odds",    r"<b>SA Bookmaker Odds:</b>"),
+    ]
+
+    # Find positions of each marker in the HTML
+    _positions: list[tuple[str, int]] = []
+    for _name, _pat in _SECTION_MARKERS:
+        _m = _re.search(_pat, narrative_html)
+        if _m:
+            _positions.append((_name, _m.start()))
+
+    # Sort by position
+    _positions.sort(key=lambda x: x[1])
+
+    def _extract_section(section_name: str) -> str:
+        """Extract prose content for a given section, stripping the header line."""
+        start_idx = next((pos for name, pos in _positions if name == section_name), None)
+        if start_idx is None:
+            return ""
+        # Find the end: beginning of the next section marker
+        _next_pos = None
+        for _name, _pos in _positions:
+            if _pos > start_idx:
+                _next_pos = _pos
+                break
+        section_html = (
+            narrative_html[start_idx:_next_pos].strip()
+            if _next_pos else
+            narrative_html[start_idx:].strip()
+        )
+        # Strip the first line (section header line)
+        _first_newline = section_html.find("\n")
+        if _first_newline != -1:
+            section_html = section_html[_first_newline:].strip()
+        else:
+            section_html = ""
+        return section_html.strip()
+
+    setup_html = _extract_section("setup")
+    edge_html = _extract_section("edge")
+    risk_html = _extract_section("risk")
+    verdict_prose_html = _extract_section("verdict")
+
+    return {
+        "home": home,
+        "away": away,
+        "tier_label": tier_label,
+        "ev_pct": ev_pct,
+        "verdict_tag": verdict_tag,
+        "setup_html": setup_html,
+        "edge_html": edge_html,
+        "risk_html": risk_html,
+        "verdict_prose_html": verdict_prose_html,
+    }

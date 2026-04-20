@@ -128,6 +128,7 @@ from card_data import (
     build_edge_summary_data,
 )
 from card_renderer import render_card_sync, warm_chromium as _warm_chromium
+from card_pipeline import render_ai_breakdown_card  # noqa: F401 — AI breakdown handler
 from narrative_spec import (
     _VERDICT_MAX_CHARS, _VERDICT_MIN_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
     check_banned_template, BANNED_TRIVIAL_VERDICT_TEMPLATES, _DIAMOND_PRICE_PREFIX_RE,
@@ -3381,6 +3382,16 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )),
             )
             log.warning("PERF: edge:detail NO TIP DATA for %s", match_key)
+        elif action.startswith("breakdown:"):
+            match_key = _resolve_cb_key(action[len("breakdown:"):])
+            await _handle_ai_breakdown(update, ctx, match_key)
+        elif action.startswith("breakdown_gate:"):
+            # query.answer() already consumed by on_button — use reply_text (same pattern as _handle_ai_breakdown)
+            await query.message.reply_text(
+                "💎 <b>Full AI Breakdown</b> is exclusive to Diamond members.\n\n"
+                "Upgrade to unlock: /subscribe",
+                parse_mode="HTML",
+            )
     elif prefix == "schedule":
         if action == "noop":
             return
@@ -21705,6 +21716,21 @@ def _build_game_buttons(
 
     if primary_button is not None:
         buttons.append([primary_button])
+
+    # Full AI Breakdown button — last before back/menu (gated by user tier)
+    _breakdown_key = _shorten_cb_key(match_key) if match_key else ""
+    if _breakdown_key:
+        if user_tier == "diamond":
+            buttons.append([InlineKeyboardButton(
+                "🤖 Full AI Breakdown",
+                callback_data=f"edge:breakdown:{_breakdown_key}",
+            )])
+        else:
+            buttons.append([InlineKeyboardButton(
+                "🔒 Full AI Breakdown",
+                callback_data=f"edge:breakdown_gate:{_breakdown_key}",
+            )])
+
     _back_cb = back_cb_override or "yg:all:0"
     buttons.append([InlineKeyboardButton("↩️ Back", callback_data=_back_cb)])
 
@@ -21744,6 +21770,43 @@ async def handle_unsubscribe(query, event_id: str) -> None:
     user_id = query.from_user.id
     await db.unsubscribe_from_game(user_id, event_id)
     await query.answer("🔕 Unfollowed this game.", show_alert=True)
+
+
+async def _handle_ai_breakdown(update, context, match_key: str) -> None:
+    """Render and send the Full AI Breakdown card for a Diamond user."""
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    # Server-side tier gate (double-check — button only shown to diamond users)
+    tier = await get_effective_tier(user_id)
+    if tier != "diamond":
+        # query.answer() already called by on_button — no second answer here
+        await query.message.reply_text(
+            "💎 Full AI Breakdown is available to Diamond members only. "
+            "Tap /subscribe to upgrade."
+        )
+        return
+
+    # Send loading message
+    loading = await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="⏳ Generating full breakdown card...",
+    )
+    try:
+        png_bytes = await asyncio.to_thread(render_ai_breakdown_card, match_key)
+        if not png_bytes:
+            await loading.edit_text("❌ Breakdown not available for this match yet.")
+            return
+        await context.bot.send_photo(
+            chat_id=query.message.chat_id,
+            photo=png_bytes,
+            caption="🤖 <b>Full AI Breakdown</b>",
+            parse_mode="HTML",
+        )
+        await loading.delete()
+    except Exception as exc:
+        log.error("AI breakdown render failed for %s: %s", match_key, exc)
+        await loading.edit_text("❌ Could not render breakdown. Please try again.")
 
 
 async def handle_tip_detail(query, ctx, action: str) -> None:
@@ -27146,7 +27209,8 @@ def _count_warm_narratives() -> int:
     Returns 0 on any DB error — safe fallback (sweep proceeds).
     """
     try:
-        conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=2000)
+        from db_connection import get_connection as _wc_get_connection
+        conn = _wc_get_connection(_NARRATIVE_DB_PATH, timeout_ms=2000)
         try:
             row = conn.execute(
                 "SELECT COUNT(*) FROM narrative_cache "

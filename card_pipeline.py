@@ -1663,3 +1663,15 @@ def render_card_html(card_data: dict) -> str:
     if len(base_with_meta) <= _CAPTION_MAX:
         return base_with_meta
     return base[:_CAPTION_MAX]
+
+
+# ── AI Breakdown card renderer ─────────────────────────────────────────────────
+
+def render_ai_breakdown_card(match_id: str) -> bytes | None:
+    """Render the Full AI Breakdown card for a match. Returns PNG bytes or None."""
+    from card_data import build_ai_breakdown_data
+    from card_renderer import render_card_sync
+    data = build_ai_breakdown_data(match_id)
+    if not data:
+        return None
+    return render_card_sync("ai_breakdown.html", data, width=480, device_scale_factor=2)

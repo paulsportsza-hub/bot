@@ -27,6 +27,7 @@ Variant DETAIL — fixed 480×620
     Templates:
         edge_detail.html
         match_detail.html
+        ai_breakdown.html
     Rationale: detail cards have consistent content shape; fixed dimensions give
     predictable composition. The 620px height was locked in commit 5885fa9.
 
