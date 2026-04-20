@@ -28,9 +28,6 @@ _ALERTS_CHANNEL_ID = "-1003789410835"
 # Not an acquisition CTA — raw t.me deeplink is intentional (no Bitly wrap).
 _DEEPLINK_BASE = "https://t.me/mzansiedge_bot?start=card_"
 
-_TIER_EMOJIS = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}
-_TIER_LABELS = {"diamond": "DIAMOND", "gold": "GOLDEN", "silver": "SILVER", "bronze": "BRONZE"}
-
 
 def _ensure_paths() -> None:
     bot_dir = os.path.dirname(os.path.dirname(__file__))  # bot/
@@ -47,56 +44,36 @@ def _ensure_paths() -> None:
         sys.path.insert(idx, pub_lib)
 
 
-def _build_deeplink_markup(edge_id: str) -> dict:
+def _build_deeplink_markup(match_key: str) -> dict:
     return {
         "inline_keyboard": [[
-            {"text": "⚡ View full edge", "url": f"{_DEEPLINK_BASE}{edge_id}"}
+            {"text": "⚡ View full edge →", "url": f"{_DEEPLINK_BASE}{match_key}"}
         ]]
     }
 
 
-def _build_caption(tip: dict) -> str:
-    tier = (tip.get("display_tier") or tip.get("edge_tier") or tip.get("edge_rating") or "gold").lower()
-    tier_emoji = _TIER_EMOJIS.get(tier, "🥇")
-    tier_label = _TIER_LABELS.get(tier, "GOLDEN")
-    home = tip.get("home_team", "")
-    away = tip.get("away_team", "")
-    outcome = tip.get("outcome", "")
-    odds = float(tip.get("odds") or tip.get("recommended_odds") or 0)
-    bookmaker = tip.get("bookmaker", "")
-    ev = float(tip.get("ev") or tip.get("predicted_ev") or 0)
-    league = tip.get("league") or tip.get("league_display") or ""
-
-    parts = [
-        f"{tier_emoji} <b>{tier_label} EDGE</b>",
-        f"<b>{home} vs {away}</b>",
-    ]
-    if league:
-        parts.append(f"🏆 {league}")
-    if outcome and odds > 1.0:
-        bk_part = f" ({bookmaker})" if bookmaker else ""
-        parts.append(f"💰 {outcome} @ {odds:.2f}{bk_part}")
-    if ev > 0:
-        parts.append(f"📈 EV +{ev:.1f}%")
-    parts.append("")
-    parts.append("Tap ⚡ below for full analysis →")
-    return "\n".join(parts)
-
 
 def _render_edge_card_sync(tip: dict) -> bytes | None:
-    """Render canonical edge_detail.html card synchronously.
-
-    Uses the same renderer as the bot's /edges detail view.
-    NOT render_reel_card.py (retired surface).
-    """
+    """Render canonical edge detail card using the same pipeline as the bot's detail view."""
     _ensure_paths()
     match_key = tip.get("match_id") or tip.get("match_key") or ""
     try:
-        from card_pipeline import build_card_data  # type: ignore[import]
-        from card_renderer import render_card_sync  # type: ignore[import]
-        card_data = build_card_data(match_key, None, tip=tip, include_analysis=False)
-        png = render_card_sync("edge_detail.html", card_data)
-        return png if png else None
+        from card_pipeline import build_card_data, verify_card_populates  # type: ignore[import]
+        from message_types import DetailMessage  # type: ignore[import]
+        card_data = build_card_data(match_key, tip=tip, include_analysis=False)
+        gate_ok, _ = verify_card_populates(
+            {
+                "outcome": card_data.get("outcome", ""),
+                "odds": card_data.get("odds", 0),
+                "bookmaker": card_data.get("bookmaker", ""),
+            },
+            match_key,
+        )
+        if not gate_ok:
+            log.warning("alerts_direct: card gate failed for %s", match_key)
+            return None
+        img_bytes, _, _ = DetailMessage.build_card_photo(card_data, buttons=[], back_cb="hot:go")
+        return img_bytes
     except Exception as exc:
         log.warning("alerts_direct: card render failed for %s: %s", match_key, exc)
         return None
@@ -162,8 +139,9 @@ async def post_to_alerts(
         log.warning("alerts_direct: card render returned empty bytes for edge_id=%s", edge_id)
         return None
 
-    caption = _build_caption(tip)
-    reply_markup = _build_deeplink_markup(edge_id)
+    caption = ""
+    _dl_match_key = tip.get("match_key") or tip.get("match_id") or edge_id
+    reply_markup = _build_deeplink_markup(_dl_match_key)
 
     msg_url = await asyncio.to_thread(_post_sync, token, png_bytes, caption, reply_markup)
 

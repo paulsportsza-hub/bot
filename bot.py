@@ -1082,15 +1082,16 @@ async def _handle_card_deeplink(
     update: "Update",  # type: ignore[name-defined]
     ctx: "ContextTypes.DEFAULT_TYPE",  # type: ignore[name-defined]
     user_id: int,
-    edge_id: str,
+    match_key: str,
 ) -> None:
-    """AC-D: Resolve /start card_<edge_id> deeplink from Alerts channel button.
+    """AC-D: Resolve /start card_<match_key> deeplink from @MzansiEdgeAlerts button.
 
-    Looks up the edge in edge_results, routes to the canonical card detail view.
-    Invalid or expired edge_id → fallback to main menu with soft message.
+    Renders the same card photo the user would see tapping an edge in Hot Tips.
+    match_key format: team_a_vs_team_b_YYYY-MM-DD (URL-safe, no spaces).
+    Invalid or expired match_key → fallback with Top Edge Picks button.
     """
     import re as _re_dl
-    if not _re_dl.match(r"^[a-zA-Z0-9_-]+$", edge_id):
+    if not _re_dl.match(r"^[a-zA-Z0-9_-]+$", match_key):
         await update.message.reply_text(
             "⚠️ That edge link doesn't look right. Here's what's live now:",
             parse_mode=ParseMode.HTML,
@@ -1100,6 +1101,9 @@ async def _handle_card_deeplink(
         )
         return
 
+    # Load tip data from edge_results for this match_key
+    _dl_tip: dict | None = None
+    _dl_tier = "gold"
     try:
         from scrapers.db_connect import connect_odds_db as _dl_conn_fn
         from scrapers.edge.edge_config import DB_PATH as _dl_db
@@ -1108,39 +1112,96 @@ async def _handle_card_deeplink(
         try:
             _dl_row = _dl_conn.execute(
                 "SELECT match_key, edge_tier, bet_type, recommended_odds, bookmaker, "
-                "predicted_ev, league, match_date, result "
-                "FROM edge_results WHERE edge_id = ? LIMIT 1",
-                (edge_id,),
+                "predicted_ev, league, match_date, result, composite_score, confirming_signals "
+                "FROM edge_results WHERE match_key = ? AND result IS NULL "
+                "ORDER BY recommended_at DESC LIMIT 1",
+                (match_key,),
             ).fetchone()
         finally:
             _dl_conn.close()
+        if _dl_row:
+            _dl_tier = (_dl_row.get("edge_tier") or "gold").lower()
+            _dl_home, _dl_away = _teams_from_vs_event_id(match_key)
+            _dl_ok_raw = (_dl_row.get("bet_type") or "Home Win")
+            _dl_ok_key = _dl_ok_raw.lower().replace(" win", "").replace(" ", "")
+            _dl_ok_display = (
+                _display_team_name(_dl_home.lower().replace(" ", "_")) if _dl_ok_key == "home"
+                else _display_team_name(_dl_away.lower().replace(" ", "_")) if _dl_ok_key == "away"
+                else "Draw"
+            )
+            _dl_tip = {
+                "match_id": match_key, "match_key": match_key,
+                "home_team": _dl_home, "away_team": _dl_away,
+                "outcome": _dl_ok_display, "outcome_key": _dl_ok_key,
+                "edge_tier": _dl_tier, "display_tier": _dl_tier, "edge_rating": _dl_tier,
+                "odds": float(_dl_row.get("recommended_odds") or 0),
+                "bookmaker": _dl_row.get("bookmaker") or "",
+                "ev": float(_dl_row.get("predicted_ev") or 0),
+                "edge_score": float(_dl_row.get("composite_score") or 0),
+                "confirming_signals": int(_dl_row.get("confirming_signals") or 0),
+            }
     except Exception as _dl_exc:
-        log.warning("card_deeplink: DB lookup failed for edge_id=%s: %s", edge_id, _dl_exc)
-        _dl_row = None
+        log.warning("card_deeplink: DB lookup failed for match_key=%s: %s", match_key, _dl_exc)
 
-    if not _dl_row:
-        await update.message.reply_text(
-            "That edge has expired — here's what's live now:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
-            ]]),
+    _user_tier = await get_effective_tier(user_id)
+
+    # Send a loading message, then replace with the rendered card photo
+    _dl_loading = None
+    try:
+        _dl_loading = await update.message.reply_text("⚡ Loading edge…")
+    except Exception:
+        pass
+
+    try:
+        from card_pipeline import build_card_data, verify_card_populates
+        from message_types import DetailMessage
+        import io as _dl_io
+
+        _dl_card = await asyncio.wait_for(
+            asyncio.to_thread(build_card_data, match_key, tip=_dl_tip, include_analysis=False),
+            timeout=10.0,
         )
-        return
+        _gate_ok, _ = verify_card_populates(
+            {"outcome": _dl_card.get("outcome", ""), "odds": _dl_card.get("odds", 0),
+             "bookmaker": _dl_card.get("bookmaker", "")},
+            match_key,
+        )
+        if _gate_ok:
+            _dl_tips = [_dl_tip] if _dl_tip else [{"ev": 0, "match_id": match_key}]
+            _dl_btns = _build_game_buttons(
+                _dl_tips, match_key, user_id,
+                source="alerts_deeplink", user_tier=_user_tier,
+                edge_tier=_dl_tier, back_page=0,
+                back_cb_override="hot:go",
+            )
+            _dl_img, _, _dl_markup = DetailMessage.build_card_photo(
+                _dl_card, buttons=_dl_btns, back_cb="hot:go",
+            )
+            if _dl_loading:
+                try:
+                    await _dl_loading.delete()
+                except Exception:
+                    pass
+            await ctx.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=_dl_io.BytesIO(_dl_img),
+                reply_markup=_dl_markup,
+            )
+            return
+    except Exception as _dl_card_err:
+        log.warning("card_deeplink: card pipeline failed for %s: %s", match_key, _dl_card_err)
 
-    match_key = _dl_row.get("match_key", "")
-    # Route to edge detail via the hot-tips callback path, using match_key as event_id.
-    # The existing edge:detail handler handles rendering and gating.
-    _shorten = _shorten_cb_key(match_key, max_len=64 - len("edge:detail:"))
+    # Fallback: show Top Edge Picks if card pipeline failed
+    if _dl_loading:
+        try:
+            await _dl_loading.delete()
+        except Exception:
+            pass
     await update.message.reply_text(
-        "⚡ Loading your edge…",
+        "This edge is no longer available — here's what's live now:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "⚡ Open full edge",
-                callback_data=f"edge:detail:{_shorten}",
-            ),
-            InlineKeyboardButton("💎 All picks", callback_data="hot:go"),
+            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
         ]]),
     )
 
@@ -1154,12 +1215,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not db_user.onboarding_done:
         analytics_track(user.id, "onboarding_start")
 
-    # AC-D: card_<edge_id> deeplink from @MzansiEdgeAlerts inline button.
-    # Pattern: /start card_<edge_id> — route to canonical card detail view.
+    # AC-D: card_<match_key> deeplink from @MzansiEdgeAlerts inline button.
+    # Pattern: /start card_<match_key> — route to canonical card detail view.
     _start_arg = ctx.args[0] if (isinstance(ctx.args, list) and ctx.args and isinstance(ctx.args[0], str)) else ""
     if _start_arg.startswith("card_"):
-        _card_edge_id = _start_arg[len("card_"):]
-        await _handle_card_deeplink(update, ctx, user.id, _card_edge_id)
+        _card_match_key = _start_arg[len("card_"):]
+        await _handle_card_deeplink(update, ctx, user.id, _card_match_key)
         return
 
     if db_user.onboarding_done:
