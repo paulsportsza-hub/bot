@@ -3384,7 +3384,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             log.warning("PERF: edge:detail NO TIP DATA for %s", match_key)
         elif action.startswith("breakdown:"):
             match_key = _resolve_cb_key(action[len("breakdown:"):])
-            await _handle_ai_breakdown(update, ctx, match_key)
+            await _handle_ai_breakdown(query, ctx, match_key)
         elif action.startswith("breakdown_gate:"):
             # query.answer() already consumed by on_button — use reply_text (same pattern as _handle_ai_breakdown)
             await query.message.reply_text(
@@ -21812,9 +21812,8 @@ async def handle_unsubscribe(query, event_id: str) -> None:
     await query.answer("🔕 Unfollowed this game.", show_alert=True)
 
 
-async def _handle_ai_breakdown(update, context, match_key: str) -> None:
+async def _handle_ai_breakdown(query, context, match_key: str) -> None:
     """Render and send the Full AI Breakdown card for a Diamond user."""
-    query = update.callback_query
     user_id = query.from_user.id
 
     # Server-side tier gate (double-check — button only shown to diamond users)
