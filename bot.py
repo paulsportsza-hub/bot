@@ -13612,7 +13612,16 @@ def _quick_edge_tier_lookup(match_id: str) -> str | None:
 
 
 def _quick_ev_lookup(match_id: str) -> float | None:
-    """Single SELECT on edge_results for current predicted_ev. Read-only."""
+    """Single SELECT on edge_results for current predicted_ev. Read-only.
+
+    INV-EV-COHERENCE-01: Only returns EV for recommendations made within the last
+    4 hours. Stale edge_results rows (from when the edge was first logged as positive)
+    cannot be used as a live EV reference — odds may have drifted significantly since
+    recommendation, and log_edge_recommendation() only writes positive edges, so no
+    fresh row is ever written once EV goes negative. Comparing narrative tips_json EV
+    (computed from current odds) against a stale recommendation EV causes a permanent
+    sign-flip that can never resolve until settlement.
+    """
     try:
         from scrapers.db_connect import connect_odds_db as _qev_fn
         from scrapers.edge.edge_config import DB_PATH as _qev_db
@@ -13621,6 +13630,7 @@ def _quick_ev_lookup(match_id: str) -> float | None:
             row = _qev_conn.execute(
                 "SELECT predicted_ev FROM edge_results "
                 "WHERE match_key = ? AND result IS NULL "
+                "AND recommended_at > datetime('now', '-4 hours') "
                 "ORDER BY recommended_at DESC LIMIT 1",
                 (match_id,),
             ).fetchone()
@@ -13861,9 +13871,18 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 # with footer EV. Old threshold was 5.0pp — allowed visible divergence.
                 if _ev_coherence_broken(_cached_ev, _current_er_ev, delta_threshold=1.0):
                     log.warning(
-                        "Cache rejected for %s — EV incoherent: cached=%.3f live=%.3f",
+                        "Cache rejected for %s — EV incoherent: cached=%.3f live=%.3f — deleting stale row",
                         match_id, _cached_ev, _current_er_ev,
                     )
+                    # INV-EV-COHERENCE-01: Delete the incoherent row so _count_warm_narratives()
+                    # does not count it as warm and the pregen "refresh" sweep can regenerate it.
+                    # Without this delete, the rejected row persists in DB, the warm-cache guard
+                    # sees N >= threshold, skips the pregen, and the loop repeats every 15 minutes.
+                    try:
+                        conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                        conn.commit()
+                    except sqlite3.OperationalError as _del_exc:
+                        log.debug("Deferred incoherent cache delete for %s: %s", match_id, _del_exc)
                     return None
 
             return {
@@ -20090,7 +20109,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             # Wave 26A: fetch user tier only when needed (after cache check)
             _ggt_tier = await get_effective_tier(user_id)
             _game_tips_cache[event_id] = cached_tips
-            buttons = _build_game_buttons(cached_tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=cached_edge_tier)
+            buttons = _build_game_buttons(cached_tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=cached_edge_tier, has_narrative=True)
             await query.edit_message_text(
                 cached_msg, parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -20170,7 +20189,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             buttons = _build_game_buttons(
                 _early_db_hit["tips"], event_id, user_id,
                 source=source, user_tier=_ggt_tier,
-                edge_tier=_ea_tier,
+                edge_tier=_ea_tier, has_narrative=True,
             )
             _banner = _qa_banner(user_id)
             _html = (_banner + _ea_html) if _banner else _ea_html
@@ -20237,7 +20256,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
                                 _ac7_buttons = _build_game_buttons(
                                     [_ac7_tip], event_id, user_id,
                                     source=source, user_tier=_ggt_tier,
-                                    edge_tier=_ac7_tier,
+                                    edge_tier=_ac7_tier, has_narrative=True,
                                 )
                                 await query.edit_message_text(
                                     _ac7_html, parse_mode=ParseMode.HTML,
@@ -20405,7 +20424,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             _pre_buttons = _build_game_buttons(
                 _pre_cached["tips"], event_id, user_id,
                 source=source, user_tier=_ggt_tier,
-                edge_tier=_pre_cached["edge_tier"],
+                edge_tier=_pre_cached["edge_tier"], has_narrative=True,
             )
             _pre_banner = _qa_banner(user_id)
             _pre_html = (_pre_banner + _p_html) if _pre_banner else _p_html
@@ -20522,7 +20541,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             buttons = _build_game_buttons(
                 _cached_db["tips"], event_id, user_id,
                 source=source, user_tier=_ggt_tier,
-                edge_tier=_cached_db["edge_tier"],
+                edge_tier=_cached_db["edge_tier"], has_narrative=True,
             )
             _banner = _qa_banner(user_id)
             _html = (_banner + _b_html) if _banner else _b_html
@@ -21401,7 +21420,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
     log.info("PERF: TOTAL _generate_game_tips=%.1fs for %s", _time.time() - _perf_t0, event_id)
 
     # Build simplified buttons (North Star: 4 buttons max, Wave 26A: tier-gated, W30-GATE: edge_tier)
-    buttons = _build_game_buttons(tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=_edge_tier, selected_outcome=_selected_outcome)  # R9-BUILD-03
+    buttons = _build_game_buttons(tips, event_id, user_id, source=source, user_tier=_ggt_tier, edge_tier=_edge_tier, selected_outcome=_selected_outcome, has_narrative=bool(narrative))  # R9-BUILD-03
 
     # Neutral analysis mode: replace primary CTA with informational no-op (COVERAGE-GATE-BUILD)
     if _neutral_analysis and buttons:
@@ -21547,6 +21566,7 @@ def _build_game_buttons(
     user_tier: str = "diamond", edge_tier: str = "bronze", back_page: int = 0,
     selected_outcome: str | None = None,
     back_cb_override: str | None = None,
+    has_narrative: bool = False,
 ) -> list[list[InlineKeyboardButton]]:
     """Build simplified game breakdown buttons (North Star: recommend, compare, nav).
 
@@ -21732,8 +21752,10 @@ def _build_game_buttons(
     if primary_button is not None:
         buttons.append([primary_button])
 
-    # Full AI Breakdown button — last before back/menu (gated by user tier)
-    _breakdown_key = _shorten_cb_key(match_key) if match_key else ""
+    # Full AI Breakdown button — only when there is a cached AI narrative (edge cards only)
+    # For source=="edge_picks" the narrative always exists; for "matches" it is gated by has_narrative.
+    _show_breakdown = has_narrative or source == "edge_picks"
+    _breakdown_key = _shorten_cb_key(match_key) if (match_key and _show_breakdown) else ""
     if _breakdown_key:
         if user_tier == "diamond":
             buttons.append([InlineKeyboardButton(
