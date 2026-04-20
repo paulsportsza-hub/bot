@@ -9293,43 +9293,15 @@ async def _serve_card_detail(
 ) -> bool:
     """P1P3-WIRE-DETAIL: Serve card_pipeline photo detail view.
 
-    Builds a structured card via ``card_pipeline.build_card_data``, generates a
-    single-match Pillow image via ``image_card.generate_match_card``, and sends
+    Builds a structured card via ``card_pipeline.render_card_bytes``, and sends
     as a Telegram photo with ≤1024-char HTML caption.
 
     Returns True on success.  Returns False on any failure so the caller can
     fall through to the old text-based rendering path.
     """
     try:
-        from card_pipeline import build_card_data, verify_card_populates, _log_card_population_failure
-        from message_types import DetailMessage
+        from card_pipeline import render_card_bytes, CardPopulationError
         import io as _cd_io
-
-        # Build structured card data (in thread — DB queries + optional Haiku)
-        _cd_card = await asyncio.wait_for(
-            asyncio.to_thread(
-                build_card_data,
-                match_key,
-                tip=tip_data,
-                include_analysis=include_analysis,
-            ),
-            timeout=10.0,
-        )
-
-        # CARD-GATE-INV-01: Apply population gate to card detail output.
-        # When tip_data=None, build_card_data falls back to build_verified_data_block
-        # which may pull odds from wrong market type (btts/o_u instead of 1x2).
-        # Gate the OUTPUT: if the rendered card has empty pick/odds, reject it.
-        _gate_tip = {
-            "outcome": _cd_card.get("outcome", ""),
-            "odds": _cd_card.get("odds", 0),
-            "bookmaker": _cd_card.get("bookmaker", ""),
-        }
-        _gate_ok, _gate_reason = verify_card_populates(_gate_tip, match_key)
-        if not _gate_ok:
-            _log_card_population_failure(match_key, f"detail_card:{_gate_reason}", tip_data)
-            log.info("CARD-GATE: suppressed empty detail card for %s (reason=%s)", match_key, _gate_reason)
-            return False  # fall through to text-based path
 
         # Build buttons via existing function (handles tier gating, CTA, etc.)
         _cd_tips = [tip_data] if tip_data else [{"ev": 0, "match_id": match_key}]
@@ -9340,11 +9312,18 @@ async def _serve_card_detail(
             back_cb_override=back_cb_override,
         )
 
-        # DetailMessage.build_card_photo handles image + button rendering
-        _cd_img, _, _cd_markup = DetailMessage.build_card_photo(
-            _cd_card,
-            buttons=_cd_btns,
-            back_cb=back_cb_override or f"hot:back:{back_page}",
+        # render_card_bytes: build_card_data → CARD-GATE-INV-01 → DetailMessage.build_card_photo
+        _cd_img, _, _cd_markup = await asyncio.wait_for(
+            asyncio.to_thread(
+                render_card_bytes,
+                match_key,
+                tip_data or {"ev": 0, "match_id": match_key},
+                include_analysis=include_analysis,
+                back_page=back_page,
+                back_cb_override=back_cb_override,
+                buttons=_cd_btns,
+            ),
+            timeout=10.0,
         )
 
         # Transition: delete text list message → send photo
@@ -9362,6 +9341,9 @@ async def _serve_card_detail(
         log.info("PERF: edge:detail CARD-PIPELINE served for %s", match_key)
 
         return True
+    except CardPopulationError as _gate_err:
+        log.info("CARD-GATE: suppressed empty detail card for %s (reason=%s)", match_key, _gate_err)
+        return False
     except Exception as _cd_err:
         log.warning(
             "Card pipeline detail failed for %s: %s — falling back to old path",

@@ -1675,3 +1675,51 @@ def render_ai_breakdown_card(match_id: str) -> bytes | None:
     if not data:
         return None
     return render_card_sync("ai_breakdown.html", data, width=480, device_scale_factor=2)
+
+
+# ── Canonical per-edge detail card helper (BUILD-RENDER-CARD-BYTES-EXTRACT-01) ─
+
+class CardPopulationError(Exception):
+    """Raised by render_card_bytes when CARD-GATE-INV-01 gate fails."""
+
+
+def render_card_bytes(
+    match_key: str,
+    tip: dict,
+    user_id: int | None = None,
+    include_analysis: bool = True,
+    source: str = "",
+    user_tier: str = "",
+    edge_tier: str = "",
+    back_page: int = 0,
+    back_cb_override: str | None = None,
+    buttons: list | None = None,
+) -> tuple[bytes, str, object]:
+    """Render a per-edge detail card.
+
+    Canonical pipeline: build_card_data → verify_card_populates →
+    DetailMessage.build_card_photo.  Safe to call from asyncio.to_thread.
+
+    Returns (image_bytes, caption_html, inline_keyboard_markup).
+    Raises CardPopulationError if CARD-GATE-INV-01 gate fails.
+    """
+    from message_types import DetailMessage
+
+    card_data = build_card_data(match_key, tip=tip, include_analysis=include_analysis)
+    gate_tip = {
+        "outcome": card_data.get("outcome", ""),
+        "odds": card_data.get("odds", 0),
+        "bookmaker": card_data.get("bookmaker", ""),
+    }
+    gate_ok, reason = verify_card_populates(gate_tip, match_key)
+    if not gate_ok:
+        _log_card_population_failure(match_key, f"render_card_bytes:{reason}", tip)
+        raise CardPopulationError(reason)
+
+    back_cb = back_cb_override or f"hot:back:{back_page}"
+    img, caption, markup = DetailMessage.build_card_photo(
+        card_data,
+        buttons=buttons,
+        back_cb=back_cb,
+    )
+    return img, caption, markup

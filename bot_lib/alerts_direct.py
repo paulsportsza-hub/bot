@@ -2,9 +2,9 @@
 
 BUILD-BOT-ALERTS-DIRECT-01 (20 Apr 2026).
 
-Posts canonical edge_detail.html card to @MzansiEdgeAlerts on Gold/Diamond
-tier-fire, without going through the publisher cron. Same renderer as the
-bot's /edges detail view — NOT render_reel_card.py.
+Posts canonical per-edge detail card to @MzansiEdgeAlerts on Gold/Diamond
+tier-fire, without going through the publisher cron. Uses card_pipeline.render_card_bytes —
+same pipeline as the bot's /edges detail view — NOT render_reel_card.py.
 
 Each post carries a View-full-edge deeplink so Founders Floor members can
 tap into the bot's full card view for that exact edge.
@@ -53,30 +53,17 @@ def _build_deeplink_markup(match_key: str) -> dict:
 
 
 
-def _render_edge_card_sync(tip: dict) -> bytes | None:
-    """Render canonical edge detail card using the same pipeline as the bot's detail view."""
+def _sync_render_card(tip: dict) -> bytes:
+    """Sync wrapper — calls canonical render_card_bytes pipeline.
+
+    Raises CardPopulationError if CARD-GATE-INV-01 fails.
+    Raises any other exception on render failure.
+    """
     _ensure_paths()
-    match_key = tip.get("match_id") or tip.get("match_key") or ""
-    try:
-        from card_pipeline import build_card_data, verify_card_populates  # type: ignore[import]
-        from message_types import DetailMessage  # type: ignore[import]
-        card_data = build_card_data(match_key, tip=tip, include_analysis=False)
-        gate_ok, _ = verify_card_populates(
-            {
-                "outcome": card_data.get("outcome", ""),
-                "odds": card_data.get("odds", 0),
-                "bookmaker": card_data.get("bookmaker", ""),
-            },
-            match_key,
-        )
-        if not gate_ok:
-            log.warning("alerts_direct: card gate failed for %s", match_key)
-            return None
-        img_bytes, _, _ = DetailMessage.build_card_photo(card_data, buttons=[], back_cb="hot:go")
-        return img_bytes
-    except Exception as exc:
-        log.warning("alerts_direct: card render failed for %s: %s", match_key, exc)
-        return None
+    from card_pipeline import render_card_bytes  # type: ignore[import]
+    match_key = tip.get("match_key") or tip.get("match_id") or ""
+    img_bytes, _, _ = render_card_bytes(match_key, tip, include_analysis=False, buttons=[])
+    return img_bytes
 
 
 _PUBLISHED_URL_BASE = "https://t.me/c/3789410835"
@@ -122,8 +109,8 @@ async def post_to_alerts(
 ) -> str | None:
     """Render canonical edge card and post to @MzansiEdgeAlerts.
 
-    AC-B: Uses edge_detail.html renderer (canonical bot card, NOT reel still).
-    AC-C: Attaches inline View-full-edge deeplink button.
+    Uses card_pipeline.render_card_bytes (canonical bot card, NOT reel still).
+    Attaches inline View-full-edge deeplink button.
     AC-J: Emits latency telemetry event.
 
     Returns:
@@ -134,13 +121,14 @@ async def post_to_alerts(
         log.error("alerts_direct: TELEGRAM_PUBLISHER_BOT_TOKEN not set")
         return None
 
-    png_bytes = await asyncio.to_thread(_render_edge_card_sync, tip)
-    if not png_bytes:
-        log.warning("alerts_direct: card render returned empty bytes for edge_id=%s", edge_id)
+    _dl_match_key = tip.get("match_key") or tip.get("match_id") or edge_id
+    try:
+        png_bytes = await asyncio.to_thread(_sync_render_card, tip)
+    except Exception as exc:
+        log.warning("alerts_direct: card render failed for %s: %s", _dl_match_key, exc)
         return None
 
     caption = ""
-    _dl_match_key = tip.get("match_key") or tip.get("match_id") or edge_id
     reply_markup = _build_deeplink_markup(_dl_match_key)
 
     msg_url = await asyncio.to_thread(_post_sync, token, png_bytes, caption, reply_markup)
