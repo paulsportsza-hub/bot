@@ -1075,6 +1075,76 @@ def kb_onboarding_bankroll() -> InlineKeyboardMarkup:
     ])
 
 
+# ── /start deeplink resolver ─────────────────────────────
+
+
+async def _handle_card_deeplink(
+    update: "Update",  # type: ignore[name-defined]
+    ctx: "ContextTypes.DEFAULT_TYPE",  # type: ignore[name-defined]
+    user_id: int,
+    edge_id: str,
+) -> None:
+    """AC-D: Resolve /start card_<edge_id> deeplink from Alerts channel button.
+
+    Looks up the edge in edge_results, routes to the canonical card detail view.
+    Invalid or expired edge_id → fallback to main menu with soft message.
+    """
+    import re as _re_dl
+    if not _re_dl.match(r"^[a-zA-Z0-9_-]+$", edge_id):
+        await update.message.reply_text(
+            "⚠️ That edge link doesn't look right. Here's what's live now:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+            ]]),
+        )
+        return
+
+    try:
+        from scrapers.db_connect import connect_odds_db as _dl_conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _dl_db
+        _dl_conn = _dl_conn_fn(_dl_db)
+        _dl_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+        try:
+            _dl_row = _dl_conn.execute(
+                "SELECT match_key, edge_tier, bet_type, recommended_odds, bookmaker, "
+                "predicted_ev, league, match_date, result "
+                "FROM edge_results WHERE edge_id = ? LIMIT 1",
+                (edge_id,),
+            ).fetchone()
+        finally:
+            _dl_conn.close()
+    except Exception as _dl_exc:
+        log.warning("card_deeplink: DB lookup failed for edge_id=%s: %s", edge_id, _dl_exc)
+        _dl_row = None
+
+    if not _dl_row:
+        await update.message.reply_text(
+            "That edge has expired — here's what's live now:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+            ]]),
+        )
+        return
+
+    match_key = _dl_row.get("match_key", "")
+    # Route to edge detail via the hot-tips callback path, using match_key as event_id.
+    # The existing edge:detail handler handles rendering and gating.
+    _shorten = _shorten_cb_key(match_key, max_len=64 - len("edge:detail:"))
+    await update.message.reply_text(
+        "⚡ Loading your edge…",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "⚡ Open full edge",
+                callback_data=f"edge:detail:{_shorten}",
+            ),
+            InlineKeyboardButton("💎 All picks", callback_data="hot:go"),
+        ]]),
+    )
+
+
 # ── /start ────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1083,6 +1153,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     analytics_track(user.id, "user_signed_up", {"returning": db_user.onboarding_done})
     if not db_user.onboarding_done:
         analytics_track(user.id, "onboarding_start")
+
+    # AC-D: card_<edge_id> deeplink from @MzansiEdgeAlerts inline button.
+    # Pattern: /start card_<edge_id> — route to canonical card detail view.
+    _start_arg = ctx.args[0] if (isinstance(ctx.args, list) and ctx.args and isinstance(ctx.args[0], str)) else ""
+    if _start_arg.startswith("card_"):
+        _card_edge_id = _start_arg[len("card_"):]
+        await _handle_card_deeplink(update, ctx, user.id, _card_edge_id)
+        return
 
     if db_user.onboarding_done:
         # MM-01: Pre-warm My Matches cache in background so first tap hits warm path
@@ -23987,6 +24065,140 @@ async def _after_send(user_id: int):
     await db.increment_push_count(user_id)
 
 
+async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """BUILD-BOT-ALERTS-DIRECT-01: Post new Gold/Diamond edges to @MzansiEdgeAlerts.
+
+    Runs every 30 seconds. Queries edge_results for gold/diamond edges with
+    posted_to_alerts_direct=0 and fires the canonical card to the Alerts channel.
+    Marks posted_to_alerts_direct=1 after successful delivery to prevent duplicates
+    (AC-F dedup gate — belt-and-braces with publisher's skip guard in telegram_alerts).
+
+    Gold  → Alerts channel post (Founders Floor experience).
+    Diamond → Alerts channel post + also fire DM to Diamond subscribers (distribution
+              unchanged; render + deeplink updated per AC-E).
+    """
+    import time as _tfa_t
+    try:
+        from scrapers.db_connect import connect_odds_db as _tfa_conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _tfa_db
+        _tfa_conn = _tfa_conn_fn(_tfa_db)
+        _tfa_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+        try:
+            _tfa_rows = _tfa_conn.execute(
+                """
+                SELECT e.edge_id, e.match_key, e.edge_tier, e.bet_type,
+                       e.recommended_odds, e.bookmaker, e.predicted_ev,
+                       e.league, e.match_date, e.recommended_at,
+                       e.composite_score, e.confirming_signals
+                FROM edge_results e
+                WHERE e.result IS NULL
+                  AND e.edge_tier IN ('gold', 'diamond')
+                  AND e.posted_to_alerts_direct = 0
+                  AND e.recommended_at >= datetime('now', '-2 hours')
+                ORDER BY e.recommended_at DESC
+                LIMIT 5
+                """,
+            ).fetchall()
+        finally:
+            _tfa_conn.close()
+    except Exception as _tfa_exc:
+        log.debug("_tier_fire_alerts_job: DB read failed: %s", _tfa_exc)
+        return
+
+    if not _tfa_rows:
+        return
+
+    from bot_lib.alerts_direct import post_to_alerts as _alerts_post
+
+    for _tfa_row in _tfa_rows:
+        _tfa_edge_id = _tfa_row.get("edge_id") or ""
+        _tfa_mk = _tfa_row.get("match_key") or ""
+        _tfa_tier = (_tfa_row.get("edge_tier") or "gold").lower()
+        if not _tfa_edge_id or not _tfa_mk:
+            continue
+
+        # Build a tip dict compatible with alerts_direct and card_pipeline
+        import re as _tfa_re
+        _tfa_mk_nd = _tfa_re.sub(r"_\d{4}-\d{2}-\d{2}$", "", _tfa_mk)
+        if "_vs_" in _tfa_mk_nd:
+            _tfa_home_raw, _tfa_away_raw = _tfa_mk_nd.split("_vs_", 1)
+        else:
+            _tfa_home_raw = _tfa_away_raw = _tfa_mk_nd
+        _tfa_home = _display_team_name(_tfa_home_raw)
+        _tfa_away = _display_team_name(_tfa_away_raw)
+        _tfa_outcome_raw = _tfa_row.get("bet_type") or "home"
+        _tfa_outcome_map = {"Home Win": "home", "Away Win": "away", "Draw": "draw"}
+        _tfa_outcome_key = _tfa_outcome_map.get(_tfa_outcome_raw, _tfa_outcome_raw.lower())
+        _tfa_outcome_labels = {"home": _tfa_home, "away": _tfa_away, "draw": "Draw"}
+        _tfa_outcome_display = _tfa_outcome_labels.get(_tfa_outcome_key, _tfa_outcome_raw)
+        _tfa_league_key = (_tfa_row.get("league") or "").lower()
+        _tfa_ev = float(_tfa_row.get("predicted_ev") or 0)
+        _tfa_odds = float(_tfa_row.get("recommended_odds") or 0)
+        _tfa_bk = _display_bookmaker_name((_tfa_row.get("bookmaker") or "").lower())
+
+        # timestamp for latency tracking (AC-J)
+        _tfa_assigned_at: float | None = None
+        try:
+            from datetime import datetime as _tfa_dt, timezone as _tfa_tz
+            _raw_ts = _tfa_row.get("recommended_at") or ""
+            if _raw_ts:
+                _tfa_assigned_at = _tfa_dt.fromisoformat(
+                    _raw_ts.replace("Z", "+00:00")
+                ).timestamp()
+        except Exception:
+            _tfa_assigned_at = _tfa_t.time()
+
+        _tfa_tip = {
+            "match_id": _tfa_mk,
+            "match_key": _tfa_mk,
+            "edge_id": _tfa_edge_id,
+            "home_team": _tfa_home,
+            "away_team": _tfa_away,
+            "outcome": _tfa_outcome_display,
+            "outcome_key": _tfa_outcome_key,
+            "odds": _tfa_odds,
+            "recommended_odds": _tfa_odds,
+            "bookmaker": _tfa_bk,
+            "ev": _tfa_ev,
+            "predicted_ev": _tfa_ev,
+            "league": _get_league_display(_tfa_league_key, _tfa_home, _tfa_away),
+            "league_key": _tfa_league_key,
+            "edge_tier": _tfa_tier,
+            "display_tier": _tfa_tier,
+            "edge_rating": _tfa_tier,
+            "edge_score": float(_tfa_row.get("composite_score") or 0),
+            "confirming_signals": int(_tfa_row.get("confirming_signals") or 0),
+        }
+
+        _tfa_msg_url = await _alerts_post(_tfa_tip, _tfa_edge_id, _tfa_assigned_at)
+
+        if _tfa_msg_url:
+            # AC-F: mark posted_to_alerts_direct=1 to prevent double-post
+            try:
+                from scrapers.db_connect import connect_odds_db as _tfa_mark_fn
+                from scrapers.edge.edge_config import DB_PATH as _tfa_mark_db
+                _tfa_mark_conn = _tfa_mark_fn(_tfa_mark_db)
+                try:
+                    _tfa_mark_conn.execute(
+                        "UPDATE edge_results SET posted_to_alerts_direct = 1 "
+                        "WHERE edge_id = ?",
+                        (_tfa_edge_id,),
+                    )
+                    _tfa_mark_conn.commit()
+                finally:
+                    _tfa_mark_conn.close()
+            except Exception as _tfa_mark_exc:
+                log.warning(
+                    "_tier_fire_alerts_job: mark failed for edge_id=%s: %s",
+                    _tfa_edge_id, _tfa_mark_exc,
+                )
+        else:
+            log.warning(
+                "_tier_fire_alerts_job: post returned None for edge_id=%s tier=%s",
+                _tfa_edge_id, _tfa_tier,
+            )
+
+
 async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Scheduled job: send morning teaser to users whose notification_hour matches now.
 
@@ -28587,6 +28799,15 @@ async def _post_init(app_instance) -> None:
             name="post_deploy_validation",
         )
         log.info("Scheduled post-deploy validation (30s from now)")
+
+        # BUILD-BOT-ALERTS-DIRECT-01: Tier-fire Alerts posting (every 30s, 60s SLO)
+        job_queue.run_repeating(
+            _tier_fire_alerts_job,
+            interval=30,
+            first=60,  # first check 60s after startup (edge_results warm by then)
+            name="tier_fire_alerts",
+        )
+        log.info("Scheduled tier-fire Alerts job (every 30s)")
 
     # Start webhook listener for Stitch payment notifications
     if config.STITCH_CLIENT_ID or config.STITCH_MOCK_MODE:
