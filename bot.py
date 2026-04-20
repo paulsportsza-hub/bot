@@ -2550,8 +2550,8 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
             # Skip Haiku analysis on cache-hit path (fast); include on cache-miss
             _card_analysis = not bool(_w84_hit)
-            # AI Breakdown button only for W82/W84-quality (NarrativeSpec) Sonnet narratives
-            _has_rich_narrative = bool(_w84_hit) and _w84_hit.get("narrative_source") in ("w82", "w84")
+            # AI Breakdown button only for W84-quality (NarrativeSpec polished) narratives
+            _has_rich_narrative = bool(_w84_hit) and _w84_hit.get("narrative_source") == "w84"
 
             _card_served = await _serve_card_detail(
                 query, match_key, _card_tip, user_id, _user_tier,
