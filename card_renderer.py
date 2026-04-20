@@ -26,6 +26,7 @@ Variant DETAIL — fixed 480×620
     .card { width: 480px; height: 620px }
     Templates:
         edge_detail.html
+        match_detail.html
     Rationale: detail cards have consistent content shape; fixed dimensions give
     predictable composition. The 620px height was locked in commit 5885fa9.
 
@@ -34,7 +35,6 @@ Variant LIST — dynamic 480×N where N ∈ [100, 1200]
     Templates:
         edge_picks.html
         my_matches.html
-        match_detail.html
         edge_summary.html
         tier_page.html
     Rationale: list-like content varies in item count — dynamic height eliminates

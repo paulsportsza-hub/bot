@@ -4,12 +4,12 @@ BUILD-CARD-DIMENSIONS-LOCK-01
 Validates that every template in card_templates/ belongs to a declared variant
 and that its .card CSS matches the variant spec.
 
-  Variant DETAIL — fixed 480×620: edge_detail.html
+  Variant DETAIL — fixed 480×620: edge_detail.html, match_detail.html
   Variant LIST   — dynamic 480×N: all other templates
 
 Failing tests mean:
   test_template_in_declared_variant  → a new template was added without declaring its variant
-  test_detail_variant_fixed_dims     → edge_detail.html lost its fixed 480×620 .card rule
+  test_detail_variant_fixed_dims     → a DETAIL template lost its fixed 480×620 .card rule
   test_list_variant_no_fixed_height  → a LIST template gained a fixed .card height
 
 Validated by: card_renderer.py module docstring ## Canonical Card Dimensions section.
@@ -24,11 +24,10 @@ _TEMPLATE_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "card_templates")
 )
 
-DETAIL_TEMPLATES = {"edge_detail.html"}
+DETAIL_TEMPLATES = {"edge_detail.html", "match_detail.html"}
 LIST_TEMPLATES = {
     "edge_picks.html",
     "my_matches.html",
-    "match_detail.html",
     "edge_summary.html",
     "tier_page.html",
 }

@@ -428,6 +428,9 @@ def _compute_match_detail_stats(
     stats: list[dict] = []
     hk_variants = _h2h_key_variants(home_key)
     ak_variants = _h2h_key_variants(away_key)
+    # LIKE patterns catch canonical expansions, e.g. "newcastle" → "newcastle_united"
+    home_like = home_key.lower() + "_%"
+    away_like = away_key.lower() + "_%"
 
     def _ph(n: int) -> str:
         return ",".join("?" * n)
@@ -480,9 +483,9 @@ def _compute_match_detail_stats(
         # ── Home Record: W-D-L for home_key at home this season ─────────────
         cur.execute(
             f"""SELECT result, COUNT(*) FROM match_results
-               WHERE home_team IN ({_ph(len(hk_variants))}) {season_clause}
+               WHERE (home_team IN ({_ph(len(hk_variants))}) OR home_team LIKE ?) {season_clause}
                GROUP BY result""",
-            (*hk_variants, *season_params),
+            (*hk_variants, home_like, *season_params),
         )
         hw = hd = hl = 0
         for result, cnt in cur.fetchall():
@@ -502,9 +505,9 @@ def _compute_match_detail_stats(
         # ── Away Record: W-D-L for away_key on road this season ─────────────
         cur.execute(
             f"""SELECT result, COUNT(*) FROM match_results
-               WHERE away_team IN ({_ph(len(ak_variants))}) {season_clause}
+               WHERE (away_team IN ({_ph(len(ak_variants))}) OR away_team LIKE ?) {season_clause}
                GROUP BY result""",
-            (*ak_variants, *season_params),
+            (*ak_variants, away_like, *season_params),
         )
         aw = ad = al = 0
         for result, cnt in cur.fetchall():
@@ -524,10 +527,13 @@ def _compute_match_detail_stats(
         # ── Avg Score: average scoreline from last 5 H2H matches ─────────────
         cur.execute(
             f"""SELECT home_score, away_score FROM match_results
-               WHERE (home_team IN ({_ph(len(hk_variants))}) AND away_team IN ({_ph(len(ak_variants))}))
-                  OR (home_team IN ({_ph(len(ak_variants))}) AND away_team IN ({_ph(len(hk_variants))}))
+               WHERE ((home_team IN ({_ph(len(hk_variants))}) OR home_team LIKE ?)
+                       AND (away_team IN ({_ph(len(ak_variants))}) OR away_team LIKE ?))
+                  OR ((home_team IN ({_ph(len(ak_variants))}) OR home_team LIKE ?)
+                       AND (away_team IN ({_ph(len(hk_variants))}) OR away_team LIKE ?))
                ORDER BY match_date DESC LIMIT 5""",
-            (*hk_variants, *ak_variants, *ak_variants, *hk_variants),
+            (*hk_variants, home_like, *ak_variants, away_like,
+             *ak_variants, away_like, *hk_variants, home_like),
         )
         h2h_scores: list[tuple[int, int]] = []
         for hs, as_ in cur.fetchall():
@@ -572,6 +578,14 @@ def _compute_match_detail_stats(
                 if row:
                     mu_home = float(row[0])
                     break
+            if mu_home is None:
+                cur.execute(
+                    "SELECT mu FROM team_ratings WHERE team_name LIKE ? AND sport = ? LIMIT 1",
+                    (home_like, _sport),
+                )
+                row = cur.fetchone()
+                if row:
+                    mu_home = float(row[0])
             for tk in ak_variants:
                 cur.execute(
                     "SELECT mu FROM team_ratings WHERE team_name = ? AND sport = ? LIMIT 1",
@@ -581,6 +595,14 @@ def _compute_match_detail_stats(
                 if row:
                     mu_away = float(row[0])
                     break
+            if mu_away is None:
+                cur.execute(
+                    "SELECT mu FROM team_ratings WHERE team_name LIKE ? AND sport = ? LIMIT 1",
+                    (away_like, _sport),
+                )
+                row = cur.fetchone()
+                if row:
+                    mu_away = float(row[0])
             if mu_home is not None and mu_away is not None:
                 p_home = 1.0 / (1.0 + 10.0 ** (-(mu_home - mu_away) / 400.0))
                 fair_pct = int(round(p_home * 100))
