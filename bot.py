@@ -1948,10 +1948,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _enrich_tip_for_card, _ep_tip, _ep_event_id
                 )
                 _ep_data = build_edge_detail_data(_ep_tip_enriched)
+                # AI Breakdown button only when a valid w84 narrative exists for this match
+                _ep_has_narrative = await asyncio.to_thread(_has_w84_narrative, _ep_event_id)
                 _ep_btn_rows = _build_game_buttons(
                     [_ep_tip], event_id=_ep_event_id, user_id=user_id,
                     source="edge_picks", user_tier=_ep_tier, edge_tier=_ep_edge_tier,
-                    back_page=_ep_back_page,
+                    back_page=_ep_back_page, has_narrative=_ep_has_narrative,
                 )
                 _ep_markup = InlineKeyboardMarkup(_ep_btn_rows)
                 _ep_fallback = (
@@ -13789,6 +13791,38 @@ def _quick_ev_lookup(match_id: str) -> float | None:
         return None
     except Exception:
         return None
+
+
+def _has_w84_narrative(match_id: str) -> bool:
+    """Return True when a non-expired w84 narrative row exists for match_id.
+
+    Lightweight check — does NOT run stale-pattern or ESPN rejection logic.
+    Used to gate the AI Breakdown button in ep:pick:N and mm:match:N paths.
+    """
+    if not match_id:
+        return False
+    try:
+        import sqlite3 as _sl
+        from datetime import datetime as _dt, timezone as _tz
+        from db_connection import get_connection as _gc
+        conn = _gc(_NARRATIVE_DB_PATH, timeout_ms=1500)
+        try:
+            row = conn.execute(
+                "SELECT expires_at FROM narrative_cache "
+                "WHERE match_id = ? AND narrative_source = 'w84' "
+                "AND COALESCE(quarantined, 0) = 0 LIMIT 1",
+                (match_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return False
+        exp_dt = _dt.fromisoformat(row[0])
+        if exp_dt.tzinfo is None:
+            exp_dt = assume_utc(exp_dt)
+        return _dt.now(_tz.utc) < exp_dt
+    except Exception:
+        return False
 
 
 async def _get_cached_narrative(match_id: str) -> dict | None:
