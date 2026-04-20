@@ -18,22 +18,27 @@
             --green: #22c55e;
             --red: #ef4444;
         }
-        html, body {
+        html {
             margin: 0;
             padding: 0;
-            background: var(--bg);
+            background: #0a0a0b;
             width: 480px;
             height: 620px;
             overflow: hidden;
         }
         body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
             width: 480px;
+            max-width: 480px;
             height: 620px;
             overflow: hidden;
         }
         .card {
             width: 480px;
+            max-width: 480px;
             height: 620px;
             display: flex;
             flex-direction: column;
@@ -168,7 +173,10 @@
             font-size: 11px;
             line-height: 1.55;
             color: var(--text-dim);
+            max-width: 100%;
             overflow: hidden;
+            word-break: break-word;
+            overflow-wrap: break-word;
         }
         .prose b, .prose strong {
             color: var(--text);
