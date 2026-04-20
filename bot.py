@@ -13237,9 +13237,14 @@ _CB_MAX_KEY = 51
 _cb_key_map: dict[str, str] = {}  # short_hash → full_match_key
 
 
-def _shorten_cb_key(match_key: str) -> str:
-    """Return a callback-safe key (≤51 chars). Long keys get 10-char hash."""
-    if len(match_key) <= _CB_MAX_KEY:
+def _shorten_cb_key(match_key: str, max_len: int = _CB_MAX_KEY) -> str:
+    """Return a callback-safe key. Long keys get a 10-char MD5 hash stored in _cb_key_map.
+
+    max_len defaults to _CB_MAX_KEY (calibrated for the shortest prefix, edge:detail:).
+    For longer prefixes (e.g. edge:breakdown: = 15 chars) pass max_len explicitly so
+    the total callback_data stays within Telegram's 64-byte hard limit.
+    """
+    if len(match_key) <= max_len:
         return match_key
     import hashlib
     short = hashlib.md5(match_key.encode()).hexdigest()[:10]
@@ -13286,7 +13291,7 @@ def _build_hot_tips_detail_rows(
         rows.append([primary_button])
     # Full AI Breakdown button — only when user_tier is explicitly passed (main analysis view)
     if user_tier is not None and match_key:
-        _bk = _shorten_cb_key(match_key)
+        _bk = _shorten_cb_key(match_key, max_len=64 - len("edge:breakdown:"))
         if user_tier == "diamond":
             rows.append([InlineKeyboardButton(
                 "🤖 Full AI Breakdown",
@@ -14131,14 +14136,10 @@ def _get_cached_verdict(match_key: str) -> dict | None:
                     "_get_cached_verdict: rejecting skipped_banned_shape for %s", match_key
                 )
                 return None
-            # Reject verdicts below the minimum floor — serving a sub-floor verdict
-            # produces the "weak and limp" card quality bug.
-            if len(row[0]) < _VERDICT_MIN_CHARS:
-                log.debug(
-                    "_get_cached_verdict: rejecting short verdict (%d < %d) for %s",
-                    len(row[0]), _VERDICT_MIN_CHARS, match_key,
-                )
-                return None
+            # NOTE: _VERDICT_MIN_CHARS floor is NOT applied here. verdict_html in
+            # narrative_cache is the short card-summary snippet (designed 60-150 chars).
+            # Applying a 140-char minimum here rejects valid short verdicts and forces
+            # fallback to longer padded text with different formatting (regression fix).
             # Extract cached odds/bookmaker/ev from tips_json for serve-time staleness checks
             _cached_bookie = ""
             _cached_odds = 0.0
@@ -21754,8 +21755,10 @@ def _build_game_buttons(
 
     # Full AI Breakdown button — only when there is a cached AI narrative (edge cards only)
     # For source=="edge_picks" the narrative always exists; for "matches" it is gated by has_narrative.
+    # "edge:breakdown:" is 15 chars → Telegram 64-byte limit leaves max 49 chars for the key.
+    _BREAKDOWN_KEY_MAX = 64 - len("edge:breakdown:")  # 49
     _show_breakdown = has_narrative or source == "edge_picks"
-    _breakdown_key = _shorten_cb_key(match_key) if (match_key and _show_breakdown) else ""
+    _breakdown_key = _shorten_cb_key(match_key, max_len=_BREAKDOWN_KEY_MAX) if (match_key and _show_breakdown) else ""
     if _breakdown_key:
         if user_tier == "diamond":
             buttons.append([InlineKeyboardButton(
