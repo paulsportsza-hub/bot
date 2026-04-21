@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -36,11 +36,14 @@ async def test_start_new_user_triggers_onboarding(
     user.first_name = "Newbie"
     mock_update.effective_user = user
 
-    await bot.cmd_start(mock_update, mock_context)
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.cmd_start(mock_update, mock_context)
 
-    assert mock_update.message.reply_text.call_count == 2
-    text = mock_update.message.reply_text.call_args_list[1].args[0]
-    assert "Step 1/6" in text
+    # Two card sends: welcome card then experience card
+    assert mock_card.call_count == 2
+    templates = [c.kwargs.get("template") or c.args[2] for c in mock_card.call_args_list]
+    assert "onboarding_welcome.html" in templates
+    assert "onboarding_experience.html" in templates
 
 
 async def test_start_returning_user_reopens_main_flow(
@@ -88,10 +91,14 @@ async def test_onboarding_manual_team_mode_prompts_for_input() -> None:
     ob["step"] = "favourites"
     query = _make_query(user_id=41005)
 
-    await bot.handle_ob_fav_manual(query, "soccer")
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.handle_ob_fav_manual(query, "soccer")
 
-    text = query.edit_message_text.call_args.args[0]
-    assert "Type a name and send it" in text
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "onboarding_favourites_manual.html"
+    # State should be set for manual input mode
+    assert ob.get("_fav_manual") is True
+    assert ob.get("_fav_manual_sport") == "soccer"
 
 
 async def test_settings_home_is_accessible(test_db) -> None:
@@ -179,21 +186,23 @@ async def test_settings_reset_shows_restart_onboarding_prompt(test_db) -> None:
     await db.upsert_user(41013, "reset", "Reset")
     query = _make_query(user_id=41013)
 
-    await bot.handle_settings(query, "reset")
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.handle_settings(query, "reset")
 
-    text = query.edit_message_text.call_args.args[0]
-    assert "Reset your profile" in text
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "onboarding_restart.html"
 
 
 async def test_handle_ob_restart_returns_to_experience_step() -> None:
     query = _make_query(user_id=41014)
 
-    await bot.handle_ob_restart(query)
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.handle_ob_restart(query)
 
     text = query.message.chat.send_message.await_args.args[0]
     assert "Setting up your profile" in text
-    restart_text = query.edit_message_text.call_args.args[0]
-    assert "Step 1/6" in restart_text
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "onboarding_experience.html"
 
 
 async def test_help_command_shows_help_text(mock_update, mock_context) -> None:

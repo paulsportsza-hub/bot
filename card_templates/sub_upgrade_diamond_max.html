@@ -1,0 +1,99 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; padding: 2px; box-sizing: content-box;
+        }
+        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .header {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title { font-size: 14px; font-weight: 700; color: #B9F2FF; letter-spacing: 3px; }
+        .body { padding: 24px 20px; text-align: center; }
+        .hero-emoji { font-size: 48px; display: block; margin-bottom: 16px; }
+        .hero-text {
+            font-size: 20px; font-weight: 800; color: #FFFFFF;
+            margin-bottom: 8px;
+        }
+        .sub-text {
+            font-size: 13px; color: var(--text-secondary);
+            margin-bottom: 24px; line-height: 1.5;
+        }
+        .stats-grid {
+            display: flex; justify-content: center; gap: 16px;
+            margin-top: 16px; flex-wrap: wrap;
+        }
+        .stat-box {
+            background: #B9F2FF10; border: 1px solid #B9F2FF30;
+            border-radius: 8px; padding: 12px 16px; min-width: 100px;
+        }
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 20px; font-weight: 700; color: #B9F2FF;
+        }
+        .stat-label { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">💎 DIAMOND</div>
+    </div>
+    <div class="body">
+        <span class="hero-emoji">💎</span>
+        <div class="hero-text">You have our best plan!</div>
+        <div class="sub-text">
+            Full access to every edge, AI breakdown,<br>
+            line movement and sharp money alert.
+        </div>
+
+        {% if stats_summary %}
+        <div class="stats-grid">
+            {% if stats_summary.hit_rate is defined %}
+            <div class="stat-box">
+                <div class="stat-value">{{ stats_summary.hit_rate }}%</div>
+                <div class="stat-label">Hit Rate</div>
+            </div>
+            {% endif %}
+            {% if stats_summary.total_edges is defined %}
+            <div class="stat-box">
+                <div class="stat-value">{{ stats_summary.total_edges }}</div>
+                <div class="stat-label">Edges Analysed</div>
+            </div>
+            {% endif %}
+            {% if stats_summary.roi is defined %}
+            <div class="stat-box">
+                <div class="stat-value">+{{ stats_summary.roi }}%</div>
+                <div class="stat-label">Avg ROI</div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+</body>
+</html>

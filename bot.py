@@ -129,6 +129,28 @@ from card_data import (
 )
 from card_renderer import render_card_sync, warm_chromium as _warm_chromium
 from card_pipeline import render_ai_breakdown_card  # noqa: F401 — AI breakdown handler
+# BUILD-WAVE1-SUB-01: subscription card adapters
+# BUILD-WAVE2-ONBOARDING-01: onboarding card adapters
+from card_data_adapters import (
+    build_sub_plans_data, build_sub_upgrade_bronze_data, build_sub_upgrade_gold_data,
+    build_sub_upgrade_diamond_max_data, build_sub_payment_ready_data,
+    build_sub_payment_error_data, build_sub_email_redirect_data,
+    build_sub_status_active_data, build_sub_status_bronze_data,
+    build_sub_billing_active_data, build_sub_billing_inactive_data,
+    build_sub_cancel_confirm_data, build_sub_cancel_done_data,
+    build_sub_founding_confirmed_data, build_sub_founding_soldout_data,
+    build_sub_founding_ended_data, build_sub_founding_live_data,
+    build_sub_expiry_notice_data, build_sub_trial_expiry_data,
+    build_onboarding_welcome_data, build_onboarding_experience_data,
+    build_onboarding_sports_data, build_onboarding_favourites_data,
+    build_onboarding_favourites_manual_data, build_onboarding_fuzzy_suggest_data,
+    build_onboarding_team_celebration_data, build_onboarding_edge_explainer_data,
+    build_onboarding_risk_data, build_onboarding_bankroll_data,
+    build_onboarding_bankroll_custom_data, build_onboarding_notify_data,
+    build_onboarding_summary_data, build_onboarding_done_data,
+    build_story_quiz_step_data, build_story_quiz_complete_data,
+    build_onboarding_restart_data,
+)
 from narrative_spec import (
     _VERDICT_MAX_CHARS, _VERDICT_MIN_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
     check_banned_template, BANNED_TRIVIAL_VERDICT_TEMPLATES, _DIAMOND_PRICE_PREFIX_RE,
@@ -232,6 +254,9 @@ _VERDICT_MODEL = os.environ.get("VERDICT_MODEL", "claude-haiku-4-5-20251001")
 # ── Onboarding state machine ─────────────────────────────
 # Steps: experience → sports → favourites → edge_explainer → risk → bankroll → notify → summary → plan
 ONBOARD_STEPS = ("experience", "sports", "favourites", "edge_explainer", "risk", "bankroll", "notify", "summary", "plan")
+
+# BUILD-WAVE2-ONBOARDING-01: bot instance for handlers called without ctx
+_g_bot = None
 
 # Per-user in-memory onboarding state
 _onboarding_state: dict[int, dict] = {}
@@ -1298,9 +1323,17 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
             <b>Step 1/6:</b> What's your betting experience?
         """)
-        await update.message.reply_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_experience(),
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=update.message.chat_id,
+            template="onboarding_welcome.html",
+            data=build_onboarding_welcome_data(user.first_name or ""),
+            text_fallback=text, markup=None, message_to_edit=None,
+        )
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=update.message.chat_id,
+            template="onboarding_experience.html",
+            data=build_onboarding_experience_data(),
+            text_fallback=text, markup=kb_onboarding_experience(), message_to_edit=None,
         )
 
 
@@ -3666,7 +3699,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         elif action == "plans":
             user_tier = await get_effective_tier(query.from_user.id)
             text, markup = _subscribe_plan_text(user_tier)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            await send_card_or_fallback(
+                bot=query.get_bot(),
+                chat_id=query.message.chat_id,
+                template="sub_plans.html",
+                data=build_sub_plans_data(user_tier, _founding_days_left(), await db.get_remaining_founding_slots()),
+                text_fallback=text,
+                markup=markup,
+                message_to_edit=query.message,
+            )
         elif action == "billing":
             text, markup = await _render_profile_plan_surface(query.from_user.id)
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
@@ -3674,26 +3715,37 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             plan_code = action.split(":", 1)[1]
             await _handle_sub_tier(query, plan_code)
         elif action == "cancel_confirm":
-            await query.edit_message_text(
-                "⚠️ <b>Cancel subscription?</b>\n\n"
-                "You'll be moved to 🥉 Bronze (free tier) immediately.\n"
-                "Your tips and matches stay — just limited.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("❌ Yes, cancel", callback_data="sub:cancel_do")],
-                    [InlineKeyboardButton("↩️ Keep my plan", callback_data="nav:main")],
-                ]),
+            _cancel_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Yes, cancel", callback_data="sub:cancel_do")],
+                [InlineKeyboardButton("↩️ Keep my plan", callback_data="nav:main")],
+            ])
+            await send_card_or_fallback(
+                bot=query.get_bot(),
+                chat_id=query.message.chat_id,
+                template="sub_cancel_confirm.html",
+                data=build_sub_cancel_confirm_data("your plan"),
+                text_fallback="",
+                markup=_cancel_markup,
+                message_to_edit=query.message,
             )
         elif action == "cancel_do":
             user_id = query.from_user.id
             await db.deactivate_subscription(user_id)
             analytics_track(user_id, "subscription_self_cancelled")
-            await query.edit_message_text(
-                "✅ <b>Subscription cancelled</b>\n\n"
-                "You're now on 🥉 Bronze (free tier).\n"
-                "Use /subscribe to re-subscribe any time.",
-                parse_mode=ParseMode.HTML,
+            _cancel_done_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+            ])
+            await send_card_or_fallback(
+                bot=query.get_bot(),
+                chat_id=query.message.chat_id,
+                template="sub_cancel_done.html",
+                data=build_sub_cancel_done_data(),
+                text_fallback="",
+                markup=_cancel_done_markup,
+                message_to_edit=query.message,
             )
+            # Legacy original text block replaced — keep parse_mode reference for compat
     elif prefix == "trial":
         if action == "restart":
             user_id = query.from_user.id
@@ -3988,9 +4040,12 @@ async def handle_ob_experience(query, level: str) -> None:
 
         Tap to toggle. Hit <b>Done</b> when ready.
     """)
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_sports(),
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_sports.html",
+        data=build_onboarding_sports_data(ob["selected_sports"]),
+        text_fallback=text, markup=kb_onboarding_sports(),
+        message_to_edit=query.message,
     )
 
 
@@ -4009,9 +4064,12 @@ async def handle_ob_sport(query, sport_key: str) -> None:
 
         Tap to toggle. Hit <b>Done</b> when ready.
     """)
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_sports(ob["selected_sports"]),
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_sports.html",
+        data=build_onboarding_sports_data(ob["selected_sports"]),
+        text_fallback=text, markup=kb_onboarding_sports(ob["selected_sports"]),
+        message_to_edit=query.message,
     )
 
 
@@ -4037,26 +4095,35 @@ async def handle_ob_nav(query, action: str) -> None:
     elif action == "back_experience":
         ob["step"] = "experience"
         text = "<b>Step 1/6:</b> What's your betting experience?"
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_experience(),
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_experience.html",
+            data=build_onboarding_experience_data(),
+            text_fallback=text, markup=kb_onboarding_experience(),
+            message_to_edit=query.message,
         )
 
     elif action == "back_sports":
         ob["step"] = "sports"
         text = "<b>Step 2/6: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_sports(ob["selected_sports"]),
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_sports.html",
+            data=build_onboarding_sports_data(ob["selected_sports"]),
+            text_fallback=text, markup=kb_onboarding_sports(ob["selected_sports"]),
+            message_to_edit=query.message,
         )
 
     elif action == "edge_done":
         # Edge explainer acknowledged — move to preferences (risk)
         ob["step"] = "risk"
         text = "<b>Step 4/6: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_risk(),
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_risk.html",
+            data=build_onboarding_risk_data(ob.get("risk")),
+            text_fallback=text, markup=kb_onboarding_risk(),
+            message_to_edit=query.message,
         )
 
     elif action == "back_edge":
@@ -4069,9 +4136,12 @@ async def handle_ob_nav(query, action: str) -> None:
         else:
             ob["step"] = "sports"
             text = "<b>Step 2/6: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
-            await query.edit_message_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=kb_onboarding_sports(ob["selected_sports"]),
+            await send_card_or_fallback(
+                bot=_g_bot, chat_id=query.message.chat_id,
+                template="onboarding_sports.html",
+                data=build_onboarding_sports_data(ob["selected_sports"]),
+                text_fallback=text, markup=kb_onboarding_sports(ob["selected_sports"]),
+                message_to_edit=query.message,
             )
 
     elif action == "back_risk":
@@ -4085,9 +4155,12 @@ async def handle_ob_nav(query, action: str) -> None:
             else:
                 ob["step"] = "sports"
                 text = "<b>Step 2/6: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
-                await query.edit_message_text(
-                    text, parse_mode=ParseMode.HTML,
-                    reply_markup=kb_onboarding_sports(ob["selected_sports"]),
+                await send_card_or_fallback(
+                    bot=_g_bot, chat_id=query.message.chat_id,
+                    template="onboarding_sports.html",
+                    data=build_onboarding_sports_data(ob["selected_sports"]),
+                    text_fallback=text, markup=kb_onboarding_sports(ob["selected_sports"]),
+                    message_to_edit=query.message,
                 )
         else:
             ob["step"] = "edge_explainer"
@@ -4097,9 +4170,12 @@ async def handle_ob_nav(query, action: str) -> None:
         # Back from bankroll → risk (within Step 4)
         ob["step"] = "risk"
         text = "<b>Step 4/6: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_risk(),
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_risk.html",
+            data=build_onboarding_risk_data(ob.get("risk")),
+            text_fallback=text, markup=kb_onboarding_risk(),
+            message_to_edit=query.message,
         )
 
     elif action == "back_notify":
@@ -4109,9 +4185,12 @@ async def handle_ob_nav(query, action: str) -> None:
             "<b>Step 4/6: Your preferences — Weekly bankroll</b>\n\n"
             "How much do you set aside for betting each week?"
         )
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_bankroll(),
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_bankroll.html",
+            data=build_onboarding_bankroll_data(ob.get("bankroll")),
+            text_fallback=text, markup=kb_onboarding_bankroll(),
+            message_to_edit=query.message,
         )
 
     elif action == "favourites_done":
@@ -4119,9 +4198,12 @@ async def handle_ob_nav(query, action: str) -> None:
         if ob.get("experience") == "experienced":
             ob["step"] = "risk"
             text = "<b>Step 4/6: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
-            await query.edit_message_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=kb_onboarding_risk(),
+            await send_card_or_fallback(
+                bot=_g_bot, chat_id=query.message.chat_id,
+                template="onboarding_risk.html",
+                data=build_onboarding_risk_data(ob.get("risk")),
+                text_fallback=text, markup=kb_onboarding_risk(),
+                message_to_edit=query.message,
             )
         else:
             ob["step"] = "edge_explainer"
@@ -4145,9 +4227,12 @@ async def handle_ob_nav(query, action: str) -> None:
             f"<b>🔄 Starting fresh, {name}!</b>\n\n"
             "<b>Step 1/6:</b> What's your betting experience?"
         )
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_experience(),
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_experience.html",
+            data=build_onboarding_experience_data(),
+            text_fallback=text, markup=kb_onboarding_experience(),
+            message_to_edit=query.message,
         )
 
 
@@ -4170,9 +4255,12 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
         if ob.get("experience") == "experienced":
             ob["step"] = "risk"
             text = "<b>Step 4/6: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
-            await query.edit_message_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=kb_onboarding_risk(),
+            await send_card_or_fallback(
+                bot=_g_bot, chat_id=query.message.chat_id,
+                template="onboarding_risk.html",
+                data=build_onboarding_risk_data(ob.get("risk")),
+                text_fallback=text, markup=kb_onboarding_risk(),
+                message_to_edit=query.message,
             )
         else:
             ob["step"] = "edge_explainer"
@@ -4184,6 +4272,7 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
     emoji = sport.emoji if sport else "🏅"
     entity = config.fav_label(sport) if sport else "favourite"
     sport_label = sport.label if sport else sport_key
+    fav_type = sport.fav_type if sport else "team"
 
     # Set state for text input
     ob["step"] = "favourites"
@@ -4197,12 +4286,15 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
         f"Max 5 per sport.{example_line}\n"
         f"Or type <b>skip</b> to move on."
     )
-
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏭ Skip", callback_data=f"ob_fav_done:{sport_key}")],
-        ]),
+    skip_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏭ Skip", callback_data=f"ob_fav_done:{sport_key}")],
+    ])
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_favourites_manual.html",
+        data=build_onboarding_favourites_manual_data(sport_key, sport_label, emoji, fav_type, example),
+        text_fallback=text, markup=skip_markup,
+        message_to_edit=query.message,
     )
 
 
@@ -4242,10 +4334,16 @@ async def handle_ob_fav(query, action: str) -> None:
         favs.append(name)
 
     sport = config.ALL_SPORTS.get(sport_key)
+    sport_label = sport.label if sport else sport_key
+    sport_emoji = sport.emoji if sport else "🏅"
     text = _fav_step_text(sport) if sport else "<b>Step 3/6</b>"
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_favourites(sport_key, favs),
+    teams_data = [{"name": t, "selected": t in favs} for t in _get_all_teams_for_sport(sport_key)]
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_favourites.html",
+        data=build_onboarding_favourites_data(sport_key, sport_label, sport_emoji, teams_data, len(favs)),
+        text_fallback=text, markup=kb_onboarding_favourites(sport_key, favs),
+        message_to_edit=query.message,
     )
 
 
@@ -4260,16 +4358,22 @@ async def handle_ob_fav_manual(query, sport_key: str) -> None:
     label = config.fav_label(sport) if sport else "favourite"
     emoji = sport.emoji if sport else "🏅"
     sport_name = sport.label if sport else sport_key
+    fav_type = sport.fav_type if sport else "team"
+    example = config.SPORT_EXAMPLES.get(sport_key, "")
 
     text = (
         f"<b>Step 3/6: Type your {label} for {emoji} {sport_name}</b>\n\n"
         f"Type a name and send it. I'll try to match it."
     )
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("« Back to list", callback_data=f"ob_fav_back:{sport_key}")],
-        ]),
+    back_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("« Back to list", callback_data=f"ob_fav_back:{sport_key}")],
+    ])
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_favourites_manual.html",
+        data=build_onboarding_favourites_manual_data(sport_key, sport_name, emoji, fav_type, example),
+        text_fallback=text, markup=back_markup,
+        message_to_edit=query.message,
     )
 
 
@@ -4322,10 +4426,17 @@ async def handle_ob_fav_suggest(query, action: str) -> None:
 
     # Show favourites with the new selection
     sport = config.ALL_SPORTS.get(sport_key)
+    sport_label = sport.label if sport else sport_key
+    sport_emoji = sport.emoji if sport else "🏅"
     text = _fav_step_text(sport) if sport else "<b>Step 3/6</b>"
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_favourites(sport_key, ob["favourites"][sport_key]),
+    sel = ob["favourites"][sport_key]
+    teams_data = [{"name": t, "selected": t in sel} for t in _get_all_teams_for_sport(sport_key)]
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_favourites.html",
+        data=build_onboarding_favourites_data(sport_key, sport_label, sport_emoji, teams_data, len(sel)),
+        text_fallback=text, markup=kb_onboarding_favourites(sport_key, sel),
+        message_to_edit=query.message,
     )
 
 
@@ -4350,7 +4461,13 @@ async def _show_edge_explainer(query, ob: dict) -> None:
         [InlineKeyboardButton("Got it ✅", callback_data="ob_nav:edge_done")],
         [InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_edge")],
     ])
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_edge_explainer.html",
+        data=build_onboarding_edge_explainer_data(),
+        text_fallback=text, markup=markup,
+        message_to_edit=query.message,
+    )
 
 
 async def handle_ob_risk(query, risk_key: str) -> None:
@@ -4363,9 +4480,12 @@ async def handle_ob_risk(query, risk_key: str) -> None:
     if ob.get("_editing") == "risk":
         ob["step"] = "notify"
         text = "<b>⏰ Change Notification Time</b>\n\nWhen do you want daily picks?"
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_notify(),
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_notify.html",
+            data=build_onboarding_notify_data(ob.get("notify_hour")),
+            text_fallback=text, markup=kb_onboarding_notify(),
+            message_to_edit=query.message,
         )
         return
 
@@ -4376,9 +4496,12 @@ async def handle_ob_risk(query, risk_key: str) -> None:
         "This helps me size my stake suggestions.\n"
         "<i>You can change this anytime in /settings.</i>"
     )
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_bankroll(),
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_bankroll.html",
+        data=build_onboarding_bankroll_data(ob.get("bankroll")),
+        text_fallback=text, markup=kb_onboarding_bankroll(),
+        message_to_edit=query.message,
     )
 
 
@@ -4409,14 +4532,20 @@ async def handle_ob_bankroll(query, value: str) -> None:
     elif value == "custom":
         ob["step"] = "bankroll_custom"
         ob["_bankroll_custom"] = True
-        await query.edit_message_text(
+        custom_text = (
             "<b>Step 4/6: Custom bankroll</b>\n\n"
             "Type your weekly bankroll amount in Rands.\n"
-            "<i>e.g. 750 or 3000</i>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back to presets", callback_data="ob_bankroll:back")],
-            ]),
+            "<i>e.g. 750 or 3000</i>"
+        )
+        back_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("↩️ Back to presets", callback_data="ob_bankroll:back")],
+        ])
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_bankroll_custom.html",
+            data=build_onboarding_bankroll_custom_data(),
+            text_fallback=custom_text, markup=back_markup,
+            message_to_edit=query.message,
         )
         return
     elif value == "back":
@@ -4426,9 +4555,12 @@ async def handle_ob_bankroll(query, value: str) -> None:
             "<b>Step 4/6: Your preferences — Weekly bankroll</b>\n\n"
             "How much do you set aside for betting each week?"
         )
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_bankroll(),
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_bankroll.html",
+            data=build_onboarding_bankroll_data(ob.get("bankroll")),
+            text_fallback=text, markup=kb_onboarding_bankroll(),
+            message_to_edit=query.message,
         )
         return
     else:
@@ -4439,9 +4571,12 @@ async def handle_ob_bankroll(query, value: str) -> None:
 
     ob["step"] = "notify"
     text = "<b>Step 4/6: Your preferences — Daily picks notification</b>\n\nWhen do you want your daily tips?"
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_notify(),
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_notify.html",
+        data=build_onboarding_notify_data(ob.get("notify_hour")),
+        text_fallback=text, markup=kb_onboarding_notify(),
+        message_to_edit=query.message,
     )
 
 
@@ -4498,7 +4633,13 @@ async def _show_summary(query, ob: dict) -> None:
         [InlineKeyboardButton("✏️ Edit Sports & Teams", callback_data="ob_edit:sports")],
         [InlineKeyboardButton("⚙️ Edit Preferences", callback_data="ob_edit:risk")],
     ])
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_summary.html",
+        data=build_onboarding_summary_data(ob),
+        text_fallback=text, markup=kb,
+        message_to_edit=query.message,
+    )
 
 
 async def _show_plan_step(query, ob: dict) -> None:
@@ -5174,17 +5315,25 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "market movers, live scores — choose what updates you want "
             "so I know exactly how to keep you in the game."
         )
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔔 Set Up Edge Alerts", callback_data="story:start")],
-            [
-                InlineKeyboardButton("💎 Show Me Top Edge Picks", callback_data="hot:go"),
-                InlineKeyboardButton("📖 How It Works", callback_data="guide:menu"),
-            ],
-            [InlineKeyboardButton("⏭️ Skip for Now", callback_data="nav:main")],
-            [InlineKeyboardButton("👥 Join the MzansiEdge Community", url="https://t.me/MzansiEdge")],
-        ]),
+    done_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔔 Set Up Edge Alerts", callback_data="story:start")],
+        [
+            InlineKeyboardButton("💎 Show Me Top Edge Picks", callback_data="hot:go"),
+            InlineKeyboardButton("📖 How It Works", callback_data="guide:menu"),
+        ],
+        [InlineKeyboardButton("⏭️ Skip for Now", callback_data="nav:main")],
+        [InlineKeyboardButton("👥 Join the MzansiEdge Community", url="https://t.me/MzansiEdge")],
+    ])
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_done.html",
+        data=build_onboarding_done_data(
+            name, trial_started=trial_started, trial_days=7,
+            founding_offer=(_founding_days_left() > 0),
+            founding_days_left=_founding_days_left(),
+        ),
+        text_fallback=text, markup=done_markup,
+        message_to_edit=query.message,
     )
     # Activate the persistent reply keyboard
     await ctx.bot.send_message(
@@ -5383,23 +5532,29 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
     # Show confirmation — sport emoji header, neutral summary line
     entity_word = config.fav_label(sport).replace("favourite ", "") if sport else "team"
     entity_plural = entity_word + "s" if len(matched) != 1 else entity_word
-    _pick_headers = {
-        "soccer": "Nice picks!",
-        "rugby": "Nice picks!",
-        "cricket": "Nice picks!",
-        "combat": "War room loaded!",
-    }
-    pick_header = _pick_headers.get(sport_key, "Nice picks!")
     team_lines = "\n".join(lines)
-    await update.message.reply_text(
-        f"{s_emoji} {pick_header}\n\n"
-        f"{team_lines}\n\n"
-        f"<b>{len(matched)} {entity_plural} added.</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Continue", callback_data=f"ob_fav_done:{sport_key}")],
-            [InlineKeyboardButton("🔄 Try Again", callback_data=f"ob_fav_retry:{sport_key}")],
-        ]),
+    celebrate_text = (
+        f"{s_emoji} Nice picks!\n\n{team_lines}\n\n"
+        f"<b>{len(matched)} {entity_plural} added.</b>"
+    )
+    celebrate_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Continue", callback_data=f"ob_fav_done:{sport_key}")],
+        [InlineKeyboardButton("🔄 Try Again", callback_data=f"ob_fav_retry:{sport_key}")],
+    ])
+    matched_data = [{"name": m, "cheer": _get_team_cheer(m, sport_key)} for m in matched]
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=update.effective_chat.id,
+        template="onboarding_team_celebration.html",
+        data=build_onboarding_team_celebration_data(
+            sport_key,
+            sport.label if sport else sport_key,
+            s_emoji,
+            matched=matched_data,
+            unmatched=unmatched,
+        ),
+        text_fallback=celebrate_text,
+        markup=celebrate_markup,
+        message_to_edit=None,
     )
 
 
@@ -12694,10 +12849,21 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             for i, s in enumerate(suggestions):
                 rows.append([InlineKeyboardButton(s, callback_data=f"ob_fav_suggest:{sport_key}:{i}")])
             rows.append([InlineKeyboardButton("❌ None of these", callback_data=f"ob_fav_manual:{sport_key}")])
-            await update.message.reply_text(
-                "🤔 Did you mean one of these?",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(rows),
+            _sug_sport = config.ALL_SPORTS.get(sport_key)
+            _sug_dicts = [{"label": s, "confidence": 75} for s in suggestions]
+            await send_card_or_fallback(
+                bot=_g_bot, chat_id=update.effective_chat.id,
+                template="onboarding_fuzzy_suggest.html",
+                data=build_onboarding_fuzzy_suggest_data(
+                    sport_key,
+                    _sug_sport.label if _sug_sport else sport_key,
+                    _sug_sport.emoji if _sug_sport else "🏅",
+                    input_text=text_input,
+                    suggestions=_sug_dicts,
+                ),
+                text_fallback="🤔 Did you mean one of these?",
+                markup=InlineKeyboardMarkup(rows),
+                message_to_edit=None,
             )
         else:
             if sport_key not in ob["favourites"]:
@@ -22899,12 +23065,20 @@ async def _show_story_step(query, chat_id: int) -> None:
     if not prompt:
         return
 
-    text = f"{prompt['title']}\n\n{prompt['body']}"
+    step_num = STORY_STEPS.index(step) + 1 if step in STORY_STEPS else 1
+    total_steps = len(STORY_STEPS)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(prompt["yes"], callback_data=f"story:pref:{step}:yes")],
         [InlineKeyboardButton(prompt["no"], callback_data=f"story:pref:{step}:no")],
     ])
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=chat_id,
+        template="story_quiz_step.html",
+        data=build_story_quiz_step_data(step, prompt, step_num, total_steps),
+        text_fallback=f"{prompt['title']}\n\n{prompt['body']}",
+        markup=kb,
+        message_to_edit=query.message,
+    )
 
 
 async def _advance_story_quiz(query, chat_id: int, user_id: int) -> None:
@@ -22980,13 +23154,17 @@ async def _save_story_prefs(query, chat_id: int, user_id: int) -> None:
         + "\n\nYou can change these anytime in /settings.\n\n"
         "Ready to start? 🚀"
     )
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
-            [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
-            [InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")],
-        ]),
+    complete_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")],
+    ])
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=chat_id,
+        template="story_quiz_complete.html",
+        data=build_story_quiz_complete_data(full_prefs),
+        text_fallback=text, markup=complete_markup,
+        message_to_edit=query.message,
     )
 
 
@@ -23435,11 +23613,18 @@ async def handle_settings(query, action: str) -> None:
 
             Your betting history and stats will <b>NOT</b> be deleted.
         """)
-        kb = InlineKeyboardMarkup([
+        reset_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⚠️ Yes, reset everything", callback_data="settings:reset:confirm")],
             [InlineKeyboardButton("↩️ Cancel", callback_data="settings:home")],
         ])
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        first_name = (user.first_name or "") if user else ""
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="onboarding_restart.html",
+            data=build_onboarding_restart_data(first_name),
+            text_fallback=text, markup=reset_kb,
+            message_to_edit=query.message,
+        )
     elif action == "reset:confirm":
         _settings_sports_state.pop(user_id, None)
         team_state = _team_edit_state.get(user_id)
@@ -23596,9 +23781,12 @@ async def handle_ob_restart(query) -> None:
 
         <b>Step 1/6:</b> What's your betting experience?
     """)
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_experience(),
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_experience.html",
+        data=build_onboarding_experience_data(),
+        text_fallback=text, markup=kb_onboarding_experience(),
+        message_to_edit=query.message,
     )
 
 
@@ -23612,9 +23800,23 @@ async def handle_ob_fav_back(query, sport_key: str) -> None:
     sport = config.ALL_SPORTS.get(sport_key)
     text = _fav_step_text(sport) if sport else "<b>Step 3/6</b>"
     existing = ob["favourites"].get(sport_key, [])
-    await query.edit_message_text(
-        text, parse_mode=ParseMode.HTML,
-        reply_markup=kb_onboarding_favourites(sport_key, existing),
+    teams_data = [
+        {"name": t, "selected": t in existing}
+        for t in _get_all_teams_for_sport(sport_key)
+    ]
+    await send_card_or_fallback(
+        bot=_g_bot, chat_id=query.message.chat_id,
+        template="onboarding_favourites.html",
+        data=build_onboarding_favourites_data(
+            sport_key,
+            sport.label if sport else sport_key,
+            sport.emoji if sport else "🏅",
+            teams=teams_data,
+            selected_count=len(existing),
+        ),
+        text_fallback=text,
+        markup=kb_onboarding_favourites(sport_key, existing),
+        message_to_edit=query.message,
     )
 
 
@@ -24281,16 +24483,21 @@ async def _check_subscription_expiry(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await db.deactivate_subscription(user_id)
             log.info("Downgraded user %d from %s to bronze (expired)", user_id, old_tier)
             try:
-                await ctx.bot.send_message(
-                    chat_id=user_id,
-                    text=(
-                        f"⏰ <b>Subscription expired</b>\n\n"
-                        f"Your {config.TIER_EMOJIS.get(old_tier, '')} {config.TIER_NAMES.get(old_tier, old_tier.title())} "
-                        f"subscription has expired.\n"
-                        "You've been moved to 🥉 Bronze (free tier).\n\n"
-                        "Use /subscribe to re-subscribe."
+                _old_emoji = config.TIER_EMOJIS.get(old_tier, "")
+                _old_name = config.TIER_NAMES.get(old_tier, old_tier.title())
+                _mkp_expiry = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✨ Renew Now", callback_data="sub:plans")],
+                ])
+                await send_card_or_fallback(
+                    ctx.bot, user_id,
+                    "sub_expiry_notice.html",
+                    build_sub_expiry_notice_data(
+                        old_tier=old_tier,
+                        old_tier_emoji=_old_emoji,
                     ),
-                    parse_mode=ParseMode.HTML,
+                    f"⏰ Your {_old_name} subscription has expired.",
+                    _mkp_expiry,
+                    message_to_edit=None,
                 )
             except Exception:
                 pass
@@ -25485,25 +25692,20 @@ async def _check_trial_expiry_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 _fm = f"\n🎁 Founding Member: R699/yr Diamond — {_fl} days left" if _fl > 0 else ""
                 _pf = _get_portfolio_line()
                 _pf_block = f"\n\n{_pf}" if _pf else ""
-                await ctx.bot.send_message(
-                    chat_id=user.id,
-                    text=(
-                        "💎 <b>Your Diamond trial has ended</b>\n\n"
-                        f"Over 7 days you explored {views} edge detail{'s' if views != 1 else ''}.\n\n"
-                        "You're now on our free <b>Bronze</b> plan:\n"
-                        "• Browse all edges (some locked)\n"
-                        "• 3 free detail views per day\n"
-                        f"{_pf_block}\n\n"
-                        "Miss Diamond already? Upgrade anytime.\n\n"
-                        "💎 <b>Diamond: R199/mo or R1,599/yr (save 33%)</b>\n"
-                        f"🥇 <b>Gold: R99/mo or R799/yr (save 33%)</b>{_fm}\n\n"
-                        "Bet responsibly. 18+ only."
+                _mkp_trial = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✨ Upgrade Now", callback_data="sub:plans")],
+                    [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                ])
+                await send_card_or_fallback(
+                    ctx.bot, user.id,
+                    "sub_trial_expiry.html",
+                    build_sub_trial_expiry_data(
+                        days_used=views,
+                        hit_rate=0.0,
                     ),
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✨ Upgrade Now", callback_data="sub:plans")],
-                        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
-                    ]),
+                    "💎 Your Diamond trial has ended.",
+                    _mkp_trial,
+                    message_to_edit=None,
                 )
             except Exception as exc:
                 log.warning("Trial expiry failed for %s: %s", user.id, exc)
@@ -25984,7 +26186,15 @@ async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     text, markup = _subscribe_plan_text(user_tier)
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    await send_card_or_fallback(
+        bot=update.get_bot(),
+        chat_id=update.effective_chat.id,
+        template="sub_plans.html",
+        data=build_sub_plans_data(user_tier, _founding_days_left(), await db.get_remaining_founding_slots()),
+        text_fallback=text,
+        markup=markup,
+        message_to_edit=None,
+    )
     analytics_track(user_id, "subscription_started")
     return ConversationHandler.END
 
@@ -26041,17 +26251,21 @@ async def _handle_sub_tier(query, plan_code: str) -> None:
     price_display = f"R{product['price'] // 100:,}/{product['period'][:2]}"
     _subscribe_state[user_id] = {"plan_code": plan_code}
 
-    text = (
-        f"🎯 <b>Selected: {tier_name} ({price_display})</b>\n\n"
-        "Please enter your <b>email address</b> below.\n"
-        "<i>(Used for payment confirmation — never shared.)</i>"
-    )
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML)
-    # Next text message from user captured by SUB_EMAIL ConversationHandler state
-    # But since we exited ConversationHandler, re-entering requires a different approach.
     # Store state and handle in freetext_handler.
     _subscribe_state[user_id]["awaiting_email"] = True
     analytics_track(user_id, "plan_selected", {"plan": plan_code})
+
+    _er_mkp = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Cancel", callback_data="sub:cancel")],
+    ])
+    await send_card_or_fallback(
+        query.get_bot(), query.message.chat_id,
+        "sub_email_redirect.html",
+        build_sub_email_redirect_data(),
+        f"🎯 Selected: {tier_name} ({price_display}) — please enter your email below.",
+        _er_mkp,
+        message_to_edit=query.message,
+    )
 
 
 async def _handle_sub_email(update: Update, user_id: int) -> bool:
@@ -26089,13 +26303,27 @@ async def _handle_sub_email(update: Update, user_id: int) -> bool:
     if existing_payment and existing_payment.checkout_url and existing_payment.provider_payment_id:
         state["payment_id"] = existing_payment.provider_payment_id
         state["payment_reference"] = existing_payment.provider_reference
-        await update.message.reply_text(
-            _payment_ready_text(plan_code, existing_payment.provider_reference),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_payment_ready_markup(
-                existing_payment.checkout_url,
-                existing_payment.provider_payment_id,
+        _pr_mkp = _payment_ready_markup(
+            existing_payment.checkout_url,
+            existing_payment.provider_payment_id,
+        )
+        _pr_product = config.STITCH_PRODUCTS.get(plan_code, {})
+        _pr_tier = _pr_product.get("tier", "gold")
+        _pr_tier_name = config.TIER_NAMES.get(_pr_tier, _pr_tier.title())
+        _pr_price = _pr_product.get("price", 9900) // 100
+        _pr_period = _pr_product.get("period", "monthly")[:2]
+        await send_card_or_fallback(
+            update.get_bot(), update.effective_chat.id,
+            "sub_payment_ready.html",
+            build_sub_payment_ready_data(
+                plan_name=_pr_tier_name,
+                price_display=f"R{_pr_price}/{_pr_period}",
+                reference=existing_payment.provider_reference,
+                is_founding=bool(_pr_product.get("founding")),
             ),
+            _payment_ready_text(plan_code, existing_payment.provider_reference),
+            _pr_mkp,
+            message_to_edit=None,
         )
         return True
 
@@ -26135,10 +26363,24 @@ async def _handle_sub_email(update: Update, user_id: int) -> bool:
         except Exception:
             pass
 
-        await update.message.reply_text(
+        _pr2_mkp = _payment_ready_markup(payment_url, payment_id)
+        _pr2_product = config.STITCH_PRODUCTS.get(plan_code, {})
+        _pr2_tier = _pr2_product.get("tier", "gold")
+        _pr2_tier_name = config.TIER_NAMES.get(_pr2_tier, _pr2_tier.title())
+        _pr2_price = _pr2_product.get("price", 9900) // 100
+        _pr2_period = _pr2_product.get("period", "monthly")[:2]
+        await send_card_or_fallback(
+            update.get_bot(), update.effective_chat.id,
+            "sub_payment_ready.html",
+            build_sub_payment_ready_data(
+                plan_name=_pr2_tier_name,
+                price_display=f"R{_pr2_price}/{_pr2_period}",
+                reference=reference,
+                is_founding=bool(_pr2_product.get("founding")),
+            ),
             _payment_ready_text(plan_code, reference),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_payment_ready_markup(payment_url, payment_id),
+            _pr2_mkp,
+            message_to_edit=None,
         )
     except Exception as exc:
         log.error("Stitch payment init error: %s", exc)
@@ -26146,9 +26388,17 @@ async def _handle_sub_email(update: Update, user_id: int) -> bool:
             await loading.delete()
         except Exception:
             pass
-        await update.message.reply_text(
+        _pe_mkp = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Try Again", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+        ])
+        await send_card_or_fallback(
+            update.get_bot(), update.effective_chat.id,
+            "sub_payment_error.html",
+            build_sub_payment_error_data(error_message="Could not set up payment. Please try again."),
             "⚠️ Something went wrong setting up payment. Please try again later.",
-            parse_mode=ParseMode.HTML,
+            _pe_mkp,
+            message_to_edit=None,
         )
     return True
 
@@ -26183,40 +26433,52 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     remaining_slots = await db.get_remaining_founding_slots()
 
     if user_tier in ("gold", "diamond"):
-        started = ""
+        _started_str = ""
         if db_user and db_user.subscription_started_at:
-            started = f"\n📅 Member since: <b>{db_user.subscription_started_at.strftime('%d %b %Y')}</b>"
-        founding = ""
-        if db_user and getattr(db_user, "is_founding_member", False):
-            founding = (
-                "\n🎁 <b>Founding Member</b>"
-                f"\n🔢 Slot: <b>#{getattr(db_user, 'founding_slot_number', '—')}</b>"
-                f"\n💰 Price: <b>R{(getattr(db_user, 'founding_price_cents', 0) or config.FOUNDING_MEMBER_PRICE) // 100}/year</b>"
-            )
-        await update.message.reply_text(
-            f"{tier_emoji} <b>MzansiEdge {tier_name}</b>\n\n"
-            f"Status: ✅ <b>Active</b>{started}{founding}\n"
-            f"\n📅 Launch date: <b>{_founding_launch_date_label()}</b>"
-            f"\n📊 Founding slots remaining: <b>{remaining_slots}</b>\n\n"
-            f"You're getting full access to Edge-AI tips and alerts.",
-            parse_mode=ParseMode.HTML,
+            _started_str = db_user.subscription_started_at.strftime("%d %b %Y")
+        _expires_str = ""
+        if db_user and getattr(db_user, "tier_expires_at", None):
+            _expires_str = db_user.tier_expires_at.strftime("%d %b %Y")
+        _is_founding = bool(db_user and getattr(db_user, "is_founding_member", False))
+        _slot_num = int(getattr(db_user, "founding_slot_number", 0) or 0) if _is_founding else 0
+        _bot = update.get_bot()
+        _cid = update.effective_chat.id
+        _mkp_active = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬆️ Upgrade / Change Plan", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+        ])
+        await send_card_or_fallback(
+            _bot, _cid,
+            "sub_status_active.html",
+            build_sub_status_active_data(
+                tier=user_tier,
+                member_since=_started_str,
+                expires_label=_expires_str,
+                founding_slot=_slot_num if _is_founding else None,
+                founding_slots_remaining=remaining_slots,
+            ),
+            f"{tier_emoji} {tier_name} — Active",
+            _mkp_active,
+            message_to_edit=None,
         )
     else:
-        founding_line = ""
-        if open_founding_payment:
-            founding_line = (
-                "\n\n🎁 <b>Founding checkout pending</b>\n"
-                "We are waiting for webhook confirmation before access updates."
-            )
-        await update.message.reply_text(
-            "🥉 <b>MzansiEdge Bronze (Free)</b>\n\n"
-            "Status: 🥉 <b>Free tier</b>\n\n"
-            f"🎁 Founding slots remaining: <b>{remaining_slots}</b>\n"
-            f"📅 Launch date: <b>{_founding_launch_date_label()}</b>\n\n"
-            "Upgrade to Gold or Diamond for unlimited tips.\n"
-            "Use /subscribe to view plans."
-            f"{founding_line}",
-            parse_mode=ParseMode.HTML,
+        _bot = update.get_bot()
+        _cid = update.effective_chat.id
+        _daily_pct = 0
+        _mkp_bronze = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+        ])
+        await send_card_or_fallback(
+            _bot, _cid,
+            "sub_status_bronze.html",
+            build_sub_status_bronze_data(
+                daily_views_used=0,
+                founding_slots_remaining=remaining_slots,
+            ),
+            "🥉 Bronze — Free tier",
+            _mkp_bronze,
+            message_to_edit=None,
         )
 
 
@@ -26228,10 +26490,16 @@ async def cmd_upgrade(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_tier = await get_effective_tier(user_id)
 
     if user_tier == "diamond":
-        await update.message.reply_text(
-            "💎 <b>You're already on Diamond — our highest tier!</b>\n\n"
-            "You have full access to everything MzansiEdge offers.",
-            parse_mode=ParseMode.HTML,
+        _bot = update.get_bot()
+        _cid = update.effective_chat.id
+        _mkp = InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Back", callback_data="nav:main")]])
+        await send_card_or_fallback(
+            _bot, _cid,
+            "sub_upgrade_diamond_max.html",
+            build_sub_upgrade_diamond_max_data(),
+            "💎 You're already on Diamond.",
+            _mkp,
+            message_to_edit=None,
         )
         return
 
@@ -26244,21 +26512,34 @@ async def cmd_upgrade(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if founding_left > 0:
             rows.append([InlineKeyboardButton("🎁 Founding Member — R699/yr", callback_data="sub:tier:founding_diamond")])
         rows.append([InlineKeyboardButton("↩️ Back", callback_data="nav:main")])
-        await update.message.reply_text(
-            "⬆️ <b>Upgrade to Diamond</b>\n\n"
-            "You're currently on 🥇 <b>Gold</b>. Diamond adds:\n"
-            "• Line movement alerts\n"
-            "• Sharp money indicators\n"
-            "• CLV tracking\n"
-            "• Priority support\n",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(rows),
+        _bot = update.get_bot()
+        _cid = update.effective_chat.id
+        await send_card_or_fallback(
+            _bot, _cid,
+            "sub_upgrade_gold.html",
+            build_sub_upgrade_gold_data(founding_left),
+            "⬆️ Upgrade to Diamond.",
+            InlineKeyboardMarkup(rows),
+            message_to_edit=None,
         )
         return
 
     # Bronze user
-    text, markup = _subscribe_plan_text("bronze")
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    _bot = update.get_bot()
+    _cid = update.effective_chat.id
+    _mkp_bronze = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🥇 Gold — R99/mo", callback_data="sub:tier:gold_monthly")],
+        [InlineKeyboardButton("💎 Diamond — R199/mo", callback_data="sub:tier:diamond_monthly")],
+        [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+    ])
+    await send_card_or_fallback(
+        _bot, _cid,
+        "sub_plans.html",
+        build_sub_plans_data(),
+        "Choose a plan to upgrade.",
+        _mkp_bronze,
+        message_to_edit=None,
+    )
 
 
 async def cmd_billing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -26271,48 +26552,52 @@ async def cmd_billing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     open_founding_payment = await db.get_open_payment_for_user(user_id, "founding_diamond")
 
     if user_tier in ("gold", "diamond"):
-        started = ""
+        _started_b = ""
         if db_user and db_user.subscription_started_at:
-            started = f"\n📅 Member since: {db_user.subscription_started_at.strftime('%d %b %Y')}"
-        expires = ""
+            _started_b = db_user.subscription_started_at.strftime("%d %b %Y")
+        _expires_b = ""
         if db_user and getattr(db_user, "tier_expires_at", None):
-            expires = f"\n⏰ Renews: {db_user.tier_expires_at.strftime('%d %b %Y')}"
-        founding = ""
-        if db_user and getattr(db_user, "is_founding_member", False):
-            founding = (
-                "\n🎁 Founding Member"
-                f"\n🔢 Slot: #{getattr(db_user, 'founding_slot_number', '—')}"
-            )
-        plan = ""
-        if db_user and getattr(db_user, "plan_code", None):
-            plan = f"\n📋 Plan: {db_user.plan_code}"
-        billing_state = ""
-        if db_user and getattr(db_user, "billing_status", None):
-            billing_state = f"\n🧾 Billing: {db_user.billing_status}"
-
-        await update.message.reply_text(
-            f"{tier_emoji} <b>MzansiEdge {tier_name} — Billing</b>\n"
-            f"\nStatus: ✅ Active{started}{expires}{founding}{plan}{billing_state}\n\n"
-            "To change or cancel your plan, use the buttons below.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬆️ Change Plan", callback_data="sub:plans")],
-                [InlineKeyboardButton("❌ Cancel Subscription", callback_data="sub:cancel_confirm")],
-                [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
-            ]),
+            _expires_b = db_user.tier_expires_at.strftime("%d %b %Y")
+        _is_founding_b = bool(db_user and getattr(db_user, "is_founding_member", False))
+        _slot_b = int(getattr(db_user, "founding_slot_number", 0) or 0) if _is_founding_b else 0
+        _plan_b = getattr(db_user, "plan_code", "") or "" if db_user else ""
+        _billing_b = getattr(db_user, "billing_status", "") or "" if db_user else ""
+        _bot_b = update.get_bot()
+        _cid_b = update.effective_chat.id
+        _mkp_billing = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬆️ Change Plan", callback_data="sub:plans")],
+            [InlineKeyboardButton("❌ Cancel Subscription", callback_data="sub:cancel_confirm")],
+            [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+        ])
+        await send_card_or_fallback(
+            _bot_b, _cid_b,
+            "sub_billing_active.html",
+            build_sub_billing_active_data(
+                tier=user_tier,
+                plan_code=_plan_b,
+                member_since=_started_b,
+                next_renewal=_expires_b,
+                is_founding=_is_founding_b,
+                founding_slot=_slot_b if _is_founding_b else None,
+            ),
+            f"{tier_emoji} {tier_name} — Billing",
+            _mkp_billing,
+            message_to_edit=None,
         )
     else:
-        pending_note = ""
-        if open_founding_payment:
-            pending_note = (
-                "\n\n🎁 Founding checkout pending.\n"
-                "Webhook confirmation is still outstanding."
-            )
-        await update.message.reply_text(
-            "🥉 <b>MzansiEdge Bronze (Free)</b>\n\n"
-            "No active subscription. Use /subscribe to view plans."
-            f"{pending_note}",
-            parse_mode=ParseMode.HTML,
+        _bot_b = update.get_bot()
+        _cid_b = update.effective_chat.id
+        _mkp_billing_inactive = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+        ])
+        await send_card_or_fallback(
+            _bot_b, _cid_b,
+            "sub_billing_inactive.html",
+            build_sub_billing_inactive_data(),
+            "🥉 Bronze — No active subscription",
+            _mkp_billing_inactive,
+            message_to_edit=None,
         )
 
 
@@ -26322,50 +26607,81 @@ async def cmd_founding(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     founding_left = _founding_days_left()
     db_user = await db.get_user(user_id)
 
+    _bot_f = update.get_bot()
+    _cid_f = update.effective_chat.id
+
     if db_user and getattr(db_user, "is_founding_member", False):
-        await update.message.reply_text(
-            _founding_confirmation_text(int(getattr(db_user, "founding_slot_number", 0) or 0)),
-            parse_mode=ParseMode.HTML,
+        _slot_f = int(getattr(db_user, "founding_slot_number", 0) or 0)
+        _mkp_confirmed = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+        ])
+        await send_card_or_fallback(
+            _bot_f, _cid_f,
+            "sub_founding_confirmed.html",
+            build_sub_founding_confirmed_data(
+                slot_number=_slot_f,
+                founding_price_cents=config.FOUNDING_MEMBER_PRICE,
+            ),
+            _founding_confirmation_text(_slot_f),
+            _mkp_confirmed,
+            message_to_edit=None,
         )
         return
 
     remaining_slots = await db.get_remaining_founding_slots()
     if remaining_slots == 0:
-        await update.message.reply_text(
-            "⏰ <b>Founding slots are sold out</b>\n\n"
-            "The first 100 founding places have been taken.\n"
-            "Use /subscribe to see the current public plans.",
-            parse_mode=ParseMode.HTML,
+        _mkp_soldout = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+        ])
+        await send_card_or_fallback(
+            _bot_f, _cid_f,
+            "sub_founding_soldout.html",
+            build_sub_founding_soldout_data(),
+            "⏰ Founding slots are sold out.",
+            _mkp_soldout,
+            message_to_edit=None,
         )
         return
 
     if founding_left == 0:
-        await update.message.reply_text(
-            "⏰ <b>Founding Member deal has ended</b>\n\n"
-            "The R699/year Diamond deal is no longer available.\n"
-            "Use /subscribe to see current plans.",
-            parse_mode=ParseMode.HTML,
+        _mkp_ended = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+        ])
+        await send_card_or_fallback(
+            _bot_f, _cid_f,
+            "sub_founding_ended.html",
+            build_sub_founding_ended_data(
+                diamond_monthly=config.TIER_PRICES.get("diamond_monthly", 199),
+                diamond_annual=config.TIER_PRICES.get("diamond_annual", 1599),
+            ),
+            "⏰ Founding Member deal has ended.",
+            _mkp_ended,
+            message_to_edit=None,
         )
         return
 
-    await update.message.reply_text(
-        (
-            "🎁 <b>Founding Member Deal</b>\n\n"
-            f"💎 <b>Full Diamond access for R{config.FOUNDING_MEMBER_PRICE // 100}/year</b>\n"
-            "<i>(normally R199/month = R2,388/year)</i>\n\n"
-            "You get everything:\n"
-            "• Unlimited tips · Real-time edges\n"
-            "• Full AI breakdowns · Line movement\n"
-            "• Sharp money · CLV tracking\n\n"
-            f"📊 <b>{remaining_slots}</b> founding slots remaining\n"
-            f"⏰ <b>Only {founding_left} days left until {_founding_launch_date_label()}</b>\n"
-            f"{_founding_terms_line()}"
+    # Live founding offer
+    _annual_price = config.FOUNDING_MEMBER_PRICE // 100
+    _normal_monthly = config.TIER_PRICES.get("diamond_monthly", 199)
+    _mkp_live = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎁 Claim Founding Member Deal", callback_data="sub:tier:founding_diamond")],
+        [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+    ])
+    await send_card_or_fallback(
+        _bot_f, _cid_f,
+        "sub_founding_live.html",
+        build_sub_founding_live_data(
+            annual_price=_annual_price,
+            normal_monthly=_normal_monthly,
+            days_left=founding_left,
+            slots_remaining=remaining_slots,
         ),
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎁 Claim Founding Member Deal", callback_data="sub:tier:founding_diamond")],
-            [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
-        ]),
+        "🎁 Founding Member Deal",
+        _mkp_live,
+        message_to_edit=None,
     )
 
 
@@ -28934,8 +29250,9 @@ def _seconds_until_next_hour() -> float:
 
 async def _post_init(app_instance) -> None:
     """Run on bot startup: init DB, publish guides, register commands, schedule jobs."""
-    global _hot_tips_fetch_lock
+    global _hot_tips_fetch_lock, _g_bot
     _hot_tips_fetch_lock = asyncio.Lock()  # W84-P1: must be created inside async context
+    _g_bot = app_instance.bot  # BUILD-WAVE2-ONBOARDING-01: bot ref for ob handlers without ctx
     await db.init_db()
 
     try:

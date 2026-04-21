@@ -1,0 +1,87 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; padding: 2px; box-sizing: content-box;
+        }
+        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .header {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title { font-size: 13px; font-weight: 700; color: #FFFFFF; letter-spacing: 3px; }
+        .body { padding: 24px 20px; }
+        .expire-icon { font-size: 36px; text-align: center; display: block; margin-bottom: 14px; }
+        .expire-msg {
+            font-size: 16px; font-weight: 800; color: #FFFFFF; text-align: center;
+            margin-bottom: 8px;
+        }
+        .tier-flow {
+            display: flex; align-items: center; justify-content: center;
+            gap: 12px; margin-bottom: 20px;
+        }
+        .tier-chip {
+            background: #111111; border-radius: 6px; padding: 8px 16px;
+            font-size: 13px; font-weight: 700;
+        }
+        .tier-old-gold   { color: #FFD700; border: 1px solid #FFD70040; }
+        .tier-old-diamond{ color: #B9F2FF; border: 1px solid #B9F2FF40; }
+        .tier-arrow { font-size: 16px; color: var(--text-secondary); }
+        .tier-new {
+            background: #CD7F3210; border: 1px solid #CD7F3240;
+            border-radius: 6px; padding: 8px 16px;
+            font-size: 13px; font-weight: 700; color: #CD7F32;
+        }
+        .renew-hint {
+            background: #0F0F0F; border: 1px solid #2A2A2A;
+            border-radius: 8px; padding: 14px 16px; text-align: center;
+            font-size: 13px; color: var(--text-secondary);
+        }
+        .renew-hint strong { color: #F7931A; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">SUBSCRIPTION EXPIRED</div>
+    </div>
+    <div class="body">
+        <span class="expire-icon">⏰</span>
+        <div class="expire-msg">Your subscription has expired</div>
+
+        <div class="tier-flow">
+            <div class="tier-chip tier-old-{{ old_tier }}">{{ old_tier_emoji }} {{ old_tier_name | e }}</div>
+            <div class="tier-arrow">→</div>
+            <div class="tier-new">🥉 Bronze</div>
+        </div>
+
+        <div class="renew-hint">
+            Use <strong>/subscribe</strong> to renew and restore your access.
+        </div>
+    </div>
+</div>
+</body>
+</html>

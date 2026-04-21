@@ -1,0 +1,85 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; margin-bottom: 4px; }
+        .subtitle { font-size: 11px; color: var(--text-secondary); }
+        .body { padding: 18px 20px 20px; }
+        .intro { font-size: 12px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 18px; }
+        .tiers { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+        .tier-row {
+            display: flex; align-items: flex-start; gap: 12px;
+            padding: 12px 14px; border-radius: 8px;
+            background: #111111; border-left: 3px solid transparent;
+        }
+        .tier-emoji { font-size: 22px; width: 28px; flex-shrink: 0; margin-top: 1px; }
+        .tier-content {}
+        .tier-label { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
+        .tier-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.5; }
+        .tier-diamond { border-left-color: #B9F2FF; }
+        .tier-diamond .tier-label { color: #B9F2FF; }
+        .tier-gold { border-left-color: #FFD700; }
+        .tier-gold .tier-label { color: #FFD700; }
+        .tier-silver { border-left-color: #A0AEC0; }
+        .tier-silver .tier-label { color: #A0AEC0; }
+        .tier-bronze { border-left-color: #CD7F32; }
+        .tier-bronze .tier-label { color: #CD7F32; }
+        .pro-tip {
+            padding: 10px 14px; border-radius: 6px;
+            background: #0D1800; border: 1px solid #1E3A00;
+            font-size: 11px; color: #A5D6A7; line-height: 1.6;
+        }
+        .pro-tip-label { font-weight: 700; color: #4CAF50; margin-bottom: 2px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">HOW YOUR EDGE WORKS</div>
+        <div class="subtitle">Edge-AI — your unfair advantage</div>
+    </div>
+    <div class="body">
+        <div class="intro">
+            Our Edge-AI cross-references odds from 5+ SA bookmakers, live form data,
+            historical performance, tipster consensus, and real-time match conditions.
+            When we spot a gap between what the bookies think and what our AI calculates,
+            that's your Edge.
+        </div>
+        <div class="tiers">
+            {% for tier in tiers %}
+            <div class="tier-row tier-{{ tier.emoji | replace('💎','diamond') | replace('🥇','gold') | replace('🥈','silver') | replace('🥉','bronze') }}
+                {% if tier.emoji == '💎' %}tier-diamond{% elif tier.emoji == '🥇' %}tier-gold{% elif tier.emoji == '🥈' %}tier-silver{% else %}tier-bronze{% endif %}">
+                <div class="tier-emoji">{{ tier.emoji }}</div>
+                <div class="tier-content">
+                    <div class="tier-label">{{ tier.label }}</div>
+                    <div class="tier-desc">{{ tier.desc }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="pro-tip">
+            <div class="pro-tip-label">PRO TIP</div>
+            Focus on 💎 Diamond and 🥇 Golden Edges. These are rare — when they appear, act.
+        </div>
+    </div>
+</div>
+</body>
+</html>

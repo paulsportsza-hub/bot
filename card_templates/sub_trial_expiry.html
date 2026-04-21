@@ -1,0 +1,122 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; padding: 2px; box-sizing: content-box;
+        }
+        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .header {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 3px; }
+        .body { padding: 24px 20px; }
+        .trial-header {
+            text-align: center; margin-bottom: 20px;
+        }
+        .trial-icon { font-size: 36px; display: block; margin-bottom: 12px; }
+        .trial-title { font-size: 17px; font-weight: 800; color: #FFFFFF; margin-bottom: 6px; }
+        .trial-sub { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+        .stats-grid {
+            display: flex; gap: 10px; margin-bottom: 20px;
+        }
+        .stat {
+            flex: 1; background: #111111; border: 1px solid #2A2A2A;
+            border-radius: 8px; padding: 12px; text-align: center;
+        }
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 24px; font-weight: 700; color: #FFFFFF;
+        }
+        .stat-label { font-size: 10px; color: var(--text-secondary); margin-top: 3px; }
+        {% if hit_rate_pct > 0 %}
+        .hit-rate-value { color: #4ADE80; }
+        {% endif %}
+        .upgrade-row {
+            display: flex; gap: 8px;
+        }
+        .up-pill {
+            flex: 1; border-radius: 8px; padding: 12px 10px; text-align: center;
+        }
+        .up-gold    { background: #FFD70010; border: 1px solid #FFD70040; }
+        .up-diamond { background: #B9F2FF10; border: 1px solid #B9F2FF40; }
+        .up-emoji   { font-size: 18px; display: block; margin-bottom: 4px; }
+        .up-name    { font-size: 12px; font-weight: 700; }
+        .up-gold .up-name    { color: #FFD700; }
+        .up-diamond .up-name { color: #B9F2FF; }
+        .up-price   { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+        .rg-footer {
+            margin-top: 14px; text-align: center;
+            font-size: 10px; color: #555555;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">TRIAL ENDED</div>
+    </div>
+    <div class="body">
+        <div class="trial-header">
+            <span class="trial-icon">💎</span>
+            <div class="trial-title">Your Diamond trial has ended</div>
+            <div class="trial-sub">
+                You've explored {{ days_used }} day{{ 's' if days_used != 1 }} of full Diamond access.<br>
+                You're now on Bronze — upgrade to keep your edge.
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat">
+                <div class="stat-value">{{ days_used }}</div>
+                <div class="stat-label">days explored</div>
+            </div>
+            {% if hit_rate_pct > 0 %}
+            <div class="stat">
+                <div class="stat-value hit-rate-value">{{ hit_rate_pct }}%</div>
+                <div class="stat-label">edge accuracy</div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="upgrade-row">
+            <div class="up-pill up-gold">
+                <span class="up-emoji">🥇</span>
+                <div class="up-name">Gold</div>
+                <div class="up-price">R99/mo</div>
+            </div>
+            <div class="up-pill up-diamond">
+                <span class="up-emoji">💎</span>
+                <div class="up-name">Diamond</div>
+                <div class="up-price">R199/mo</div>
+            </div>
+        </div>
+
+        <div class="rg-footer">Bet responsibly. 18+ only.</div>
+    </div>
+</div>
+</body>
+</html>

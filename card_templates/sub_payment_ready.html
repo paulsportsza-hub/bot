@@ -1,0 +1,105 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; padding: 2px; box-sizing: content-box;
+        }
+        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .header {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 3px; }
+        .body { padding: 24px 20px; }
+        .plan-name {
+            font-size: 12px; font-weight: 600; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 2px;
+            margin-bottom: 6px;
+        }
+        .price-block {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 36px; font-weight: 700; color: #F7931A;
+            margin-bottom: 20px;
+        }
+        .ref-block {
+            background: #111111; border: 1px solid #2A2A2A;
+            border-radius: 8px; padding: 14px 16px;
+            margin-bottom: 16px;
+        }
+        .ref-label {
+            font-size: 10px; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 1.5px;
+            margin-bottom: 4px;
+        }
+        .ref-code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 16px; font-weight: 700; color: #FFFFFF;
+            letter-spacing: 2px;
+        }
+        .instruction {
+            font-size: 13px; color: var(--text-secondary);
+            line-height: 1.5;
+        }
+        .instruction strong { color: #FFFFFF; }
+        {% if is_founding %}
+        .founding-note {
+            margin-top: 12px;
+            font-size: 11px; color: #F7931A;
+            background: #F7931A10; border: 1px solid #F7931A30;
+            border-radius: 6px; padding: 8px 12px;
+        }
+        {% endif %}
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">PAYMENT READY</div>
+    </div>
+    <div class="body">
+        <div class="plan-name">{{ plan_name | e }}</div>
+        <div class="price-block">{{ price_display | e }}</div>
+
+        {% if reference %}
+        <div class="ref-block">
+            <div class="ref-label">Reference</div>
+            <div class="ref-code">{{ reference | e }}</div>
+        </div>
+        {% endif %}
+
+        <div class="instruction">
+            Tap <strong>Pay Now</strong> to complete your subscription securely.
+        </div>
+
+        {% if is_founding %}
+        <div class="founding-note">
+            🎁 Founding Member price locked in — this rate applies every year.
+        </div>
+        {% endif %}
+    </div>
+</div>
+</body>
+</html>

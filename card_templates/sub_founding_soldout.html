@@ -1,0 +1,82 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; padding: 2px; box-sizing: content-box;
+        }
+        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .header {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 3px; }
+        .body { padding: 32px 20px; text-align: center; }
+        .icon { font-size: 48px; display: block; margin-bottom: 16px; }
+        .main-text { font-size: 18px; font-weight: 800; color: #FFFFFF; margin-bottom: 8px; }
+        .sub-text { font-size: 13px; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.5; }
+        .fallback-box {
+            background: #B9F2FF10; border: 1px solid #B9F2FF40;
+            border-radius: 8px; padding: 14px 16px; text-align: left;
+        }
+        .fallback-title { font-size: 12px; font-weight: 700; color: #B9F2FF; margin-bottom: 8px; }
+        .fallback-row {
+            display: flex; justify-content: space-between;
+            font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;
+        }
+        .fallback-row .price {
+            font-family: 'JetBrains Mono', monospace;
+            color: #FFFFFF; font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">SOLD OUT</div>
+    </div>
+    <div class="body">
+        <span class="icon">⏰</span>
+        <div class="main-text">All 100 founding slots taken</div>
+        <div class="sub-text">
+            The founding member offer has closed.<br>
+            Diamond access is still available at the regular price.
+        </div>
+
+        <div class="fallback-box">
+            <div class="fallback-title">💎 Diamond — Still Available</div>
+            <div class="fallback-row">
+                <span>Monthly</span>
+                <span class="price">R199/mo</span>
+            </div>
+            <div class="fallback-row">
+                <span>Annual (save 33%)</span>
+                <span class="price">R1,599/yr</span>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

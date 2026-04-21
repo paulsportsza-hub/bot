@@ -1,0 +1,55 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .step-badge { font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; margin-bottom: 6px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
+        .progress-bar {
+            height: 3px; background: #1E1E1E; margin: 10px 20px 0; border-radius: 2px; overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%; background: linear-gradient(90deg, #FF6B00, #FFBE45); border-radius: 2px;
+        }
+        .body { padding: 20px 20px 24px; }
+        .notification-key { font-size: 10px; color: #FF6B00; font-weight: 700; letter-spacing: 1px; margin-bottom: 10px; }
+        .question { font-size: 17px; font-weight: 700; color: #FFFFFF; margin-bottom: 10px; line-height: 1.4; }
+        .body-text { font-size: 13px; color: var(--text-secondary); line-height: 1.65; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="step-badge">EDGE ALERTS — {{ step_num }} / {{ total_steps }}</div>
+        <div class="title">NOTIFICATION PREFS</div>
+        <div class="progress-bar">
+            <div class="progress-fill" style="width: {{ (step_num / total_steps * 100) | int }}%;"></div>
+        </div>
+    </div>
+    <div class="body">
+        {% if notification_key %}
+        <div class="notification-key">{{ notification_key | upper | replace('_', ' ') }}</div>
+        {% endif %}
+        <div class="question">{{ title }}</div>
+        <div class="body-text">{{ body }}</div>
+    </div>
+</div>
+</body>
+</html>

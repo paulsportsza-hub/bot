@@ -1,0 +1,66 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; margin-bottom: 4px; }
+        .subtitle { font-size: 11px; color: var(--text-secondary); }
+        .body { padding: 18px 20px 22px; }
+        .summary-line { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; }
+        .count-badge {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 4px 10px; border-radius: 20px;
+            background: #0D1800; border: 1px solid #1E3A00;
+            font-size: 12px; color: #4CAF50; font-weight: 700;
+            margin-bottom: 16px;
+        }
+        .prefs-list { display: flex; flex-direction: column; gap: 8px; }
+        .pref-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: 6px; background: #111111; }
+        .pref-label { font-size: 13px; color: #FFFFFF; }
+        .pref-status { font-size: 11px; font-weight: 700; }
+        .pref-on { color: #4CAF50; }
+        .pref-off { color: #555555; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">EDGE ALERTS — ALL SET</div>
+        <div class="subtitle">Your notification preferences are saved</div>
+    </div>
+    <div class="body">
+        <div class="summary-line">Here's what you'll receive:</div>
+        <div class="count-badge">🔔 {{ enabled_count }} alert type{% if enabled_count != 1 %}s{% endif %} enabled</div>
+        <div class="prefs-list">
+            {% for p in prefs %}
+            <div class="pref-row">
+                <span class="pref-label">{{ p.label }}</span>
+                {% if p.enabled %}
+                <span class="pref-status pref-on">ON ✓</span>
+                {% else %}
+                <span class="pref-status pref-off">OFF</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+</body>
+</html>

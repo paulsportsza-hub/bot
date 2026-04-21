@@ -1,0 +1,72 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .sport-header { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 4px; }
+        .sport-emoji { font-size: 18px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
+        .body { padding: 18px 20px 20px; }
+        .you-typed-label { font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; margin-bottom: 6px; }
+        .you-typed { font-size: 14px; font-weight: 600; color: #FFFFFF; margin-bottom: 16px; font-style: italic; }
+        .suggest-label { font-size: 11px; color: #FF6B00; font-weight: 700; letter-spacing: 1px; margin-bottom: 10px; }
+        .suggestions { display: flex; flex-direction: column; gap: 6px; }
+        .suggestion-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 11px 14px; border-radius: 6px;
+            background: #131313; border: 1px solid #2A2A2A;
+        }
+        .suggestion-name { font-size: 13px; font-weight: 600; color: #FFFFFF; }
+        .confidence { font-size: 10px; color: var(--text-secondary); }
+        .confidence.high { color: #4CAF50; }
+        .confidence.medium { color: #FFB300; }
+        .no-suggestions { font-size: 13px; color: var(--text-secondary); text-align: center; padding: 20px 0; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="sport-header">
+            <span class="sport-emoji">{{ sport.emoji }}</span>
+            <span class="title">DID YOU MEAN?</span>
+        </div>
+    </div>
+    <div class="body">
+        <div class="you-typed-label">YOU TYPED</div>
+        <div class="you-typed">"{{ input }}"</div>
+        {% if suggestions %}
+        <div class="suggest-label">CLOSE MATCHES</div>
+        <div class="suggestions">
+            {% for s in suggestions %}
+            <div class="suggestion-row">
+                <span class="suggestion-name">{{ s.label }}</span>
+                {% if s.confidence >= 90 %}<span class="confidence high">Strong match</span>
+                {% elif s.confidence >= 70 %}<span class="confidence medium">Likely match</span>
+                {% else %}<span class="confidence">Possible match</span>{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="no-suggestions">No close matches found.<br>Try a different spelling or nickname.</div>
+        {% endif %}
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .title { font-size: 15px; font-weight: 700; color: #FFFFFF; letter-spacing: 3px; margin-bottom: 4px; }
+        .subtitle { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
+        .body { padding: 20px 20px 6px; }
+        .greeting { font-size: 22px; font-weight: 800; color: #FFFFFF; margin-bottom: 4px; }
+        .tagline { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; }
+        .badge-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+        .badge {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 4px 10px; border-radius: 20px;
+            font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+        }
+        .badge-trial { background: #1A3A1A; color: #4CAF50; border: 1px solid #2D5A2D; }
+        .badge-founding { background: #2D1B00; color: #FFB300; border: 1px solid #5A3700; }
+        .features { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+        .feature-row { display: flex; align-items: flex-start; gap: 10px; }
+        .feature-emoji { font-size: 18px; width: 24px; flex-shrink: 0; margin-top: 1px; }
+        .feature-text {}
+        .feature-title { font-size: 13px; font-weight: 700; color: #FFFFFF; }
+        .feature-desc { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+        .divider { height: 1px; background: #1E1E1E; margin: 0 20px 14px; }
+        .cta-line { padding: 0 20px 20px; font-size: 12px; color: var(--text-secondary); }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        {% if is_returning %}
+        <div class="title">WELCOME BACK</div>
+        {% else %}
+        <div class="title">WELCOME</div>
+        {% endif %}
+        <div class="subtitle">AI-powered sports betting edge</div>
+    </div>
+    <div class="body">
+        {% if is_returning %}
+        <div class="greeting">Good to have you back, {{ first_name }}.</div>
+        <div class="tagline">Your Edge-AI is ready.</div>
+        {% else %}
+        <div class="greeting">Hey {{ first_name }} 👋</div>
+        <div class="tagline">Let's set up your personal Edge-AI.</div>
+        {% endif %}
+
+        {% if trial_started or founding_offer %}
+        <div class="badge-row">
+            {% if trial_started %}<span class="badge badge-trial">🎁 {{ trial_days }}-Day Free Trial Active</span>{% endif %}
+            {% if founding_offer %}<span class="badge badge-founding">⭐ Founding Member — {{ founding_days_left }} days left</span>{% endif %}
+        </div>
+        {% endif %}
+
+        <div class="features">
+            <div class="feature-row">
+                <div class="feature-emoji">💎</div>
+                <div class="feature-text">
+                    <div class="feature-title">Diamond Edge Analysis</div>
+                    <div class="feature-desc">AI scans 5 SA bookmakers and surfaces only the sharpest edges.</div>
+                </div>
+            </div>
+            <div class="feature-row">
+                <div class="feature-emoji">🎯</div>
+                <div class="feature-text">
+                    <div class="feature-title">Personalised Match Picks</div>
+                    <div class="feature-desc">Tips tailored to your teams, your sport, your risk profile.</div>
+                </div>
+            </div>
+            <div class="feature-row">
+                <div class="feature-emoji">📊</div>
+                <div class="feature-text">
+                    <div class="feature-title">5 SA Bookmaker Comparison</div>
+                    <div class="feature-desc">Always know where the best odds are, in real time.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="divider"></div>
+    <div class="cta-line">Takes about 2 minutes to set up. Let's go.</div>
+</div>
+</body>
+</html>

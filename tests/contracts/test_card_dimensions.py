@@ -24,13 +24,55 @@ _TEMPLATE_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "card_templates")
 )
 
-DETAIL_TEMPLATES = {"edge_detail.html", "match_detail.html"}
+DETAIL_TEMPLATES = {
+    "edge_detail.html",
+    "match_detail.html",
+    # BUILD-WAVE1-SUB-01
+    "sub_plans.html",
+    "sub_founding_live.html",
+}
 LIST_TEMPLATES = {
     "edge_picks.html",
     "my_matches.html",
     "edge_summary.html",
     "tier_page.html",
     "ai_breakdown.html",
+    # BUILD-WAVE1-SUB-01
+    "sub_upgrade_bronze.html",
+    "sub_upgrade_gold.html",
+    "sub_upgrade_diamond_max.html",
+    "sub_payment_ready.html",
+    "sub_payment_error.html",
+    "sub_email_redirect.html",
+    "sub_status_active.html",
+    "sub_status_bronze.html",
+    "sub_billing_active.html",
+    "sub_billing_inactive.html",
+    "sub_cancel_confirm.html",
+    "sub_cancel_done.html",
+    "sub_founding_confirmed.html",
+    "sub_founding_soldout.html",
+    "sub_founding_ended.html",
+    "sub_expiry_notice.html",
+    "sub_trial_expiry.html",
+    # BUILD-WAVE2-ONBOARDING-01
+    "onboarding_welcome.html",
+    "onboarding_experience.html",
+    "onboarding_sports.html",
+    "onboarding_favourites.html",
+    "onboarding_favourites_manual.html",
+    "onboarding_fuzzy_suggest.html",
+    "onboarding_team_celebration.html",
+    "onboarding_edge_explainer.html",
+    "onboarding_risk.html",
+    "onboarding_bankroll.html",
+    "onboarding_bankroll_custom.html",
+    "onboarding_notify.html",
+    "onboarding_summary.html",
+    "onboarding_done.html",
+    "story_quiz_step.html",
+    "story_quiz_complete.html",
+    "onboarding_restart.html",
 }
 ALL_DECLARED = DETAIL_TEMPLATES | LIST_TEMPLATES
 

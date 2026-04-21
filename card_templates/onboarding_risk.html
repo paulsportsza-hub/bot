@@ -1,0 +1,73 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .step-badge { display: inline-block; font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; margin-bottom: 6px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
+        .body { padding: 18px 20px 20px; }
+        .question { font-size: 16px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px; }
+        .hint { font-size: 12px; color: var(--text-secondary); margin-bottom: 18px; }
+        .profiles { display: flex; flex-direction: column; gap: 8px; }
+        .profile-row {
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 14px; border-radius: 8px; border: 1px solid #2A2A2A;
+            background: #131313;
+        }
+        .profile-row.selected { border-color: #FF6B00; background: #1A0E00; }
+        .profile-emoji { font-size: 24px; width: 32px; text-align: center; }
+        .profile-text { flex: 1; }
+        .profile-label { font-size: 14px; font-weight: 700; color: #FFFFFF; }
+        .profile-desc { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+        .profile-ev { font-size: 10px; color: #FF6B00; font-weight: 700; letter-spacing: 0.5px; margin-top: 3px; }
+        .profile-check { font-size: 16px; color: #FF6B00; }
+        .profile-check-empty { width: 20px; height: 20px; border: 1.5px solid #3A3A3A; border-radius: 4px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="step-badge">STEP 4 OF 6</div>
+        <div class="title">RISK PROFILE</div>
+    </div>
+    <div class="body">
+        <div class="question">How do you like to bet?</div>
+        <div class="hint">This sets your minimum edge threshold for tips.</div>
+        <div class="profiles">
+            {% for p in profiles %}
+            <div class="profile-row {% if p.selected %}selected{% endif %}">
+                <div class="profile-emoji">{{ p.emoji }}</div>
+                <div class="profile-text">
+                    <div class="profile-label">{{ p.label }}</div>
+                    <div class="profile-desc">{{ p.desc }}</div>
+                    <div class="profile-ev">Min edge: {{ p.ev }}</div>
+                </div>
+                {% if p.selected %}
+                <span class="profile-check">✓</span>
+                {% else %}
+                <div class="profile-check-empty"></div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+</body>
+</html>

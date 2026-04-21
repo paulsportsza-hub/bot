@@ -1,0 +1,64 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .step-badge { display: inline-block; font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; margin-bottom: 6px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
+        .body { padding: 22px 20px 26px; }
+        .instruction { font-size: 16px; font-weight: 700; color: #FFFFFF; margin-bottom: 8px; }
+        .desc { font-size: 12px; color: var(--text-secondary); margin-bottom: 18px; line-height: 1.6; }
+        .input-mock {
+            padding: 14px 16px; border-radius: 8px;
+            border: 1.5px dashed #3A3A3A; background: #0F0F0F;
+            font-size: 20px; font-family: 'JetBrains Mono', monospace;
+            color: #555555; text-align: center; margin-bottom: 14px;
+        }
+        .min-note { font-size: 11px; color: var(--text-secondary); text-align: center; margin-bottom: 14px; }
+        .error-box {
+            padding: 10px 14px; border-radius: 6px;
+            background: #1A0000; border: 1px solid #3A0000;
+        }
+        .error-text { font-size: 12px; color: #FF6B6B; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="step-badge">STEP 4 OF 6</div>
+        <div class="title">CUSTOM BANKROLL</div>
+    </div>
+    <div class="body">
+        <div class="instruction">Type your weekly amount</div>
+        <div class="desc">
+            Enter a rand amount and send it. This is used to size your
+            personalised stake recommendations.
+        </div>
+        <div class="input-mock">e.g. 750</div>
+        <div class="min-note">Minimum: R{{ min_value }}</div>
+        {% if validation_error %}
+        <div class="error-box">
+            <div class="error-text">⚠️ {{ validation_error }}</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+</body>
+</html>

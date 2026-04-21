@@ -1,0 +1,152 @@
+<!-- VARIANT: DETAIL -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body {
+            margin: 0; padding: 0; background: #000000;
+            width: 480px; height: 620px; overflow: hidden;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; height: 620px; overflow: hidden;
+        }
+        .card {
+            width: 480px; height: 620px;
+            display: flex; flex-direction: column;
+            background: #0A0A0A;
+        }
+        .header {
+            text-align: center;
+            padding: 16px 20px 10px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+            flex-shrink: 0;
+        }
+        .logo-img { height: 26px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 8px 20px; border-radius: 2px;
+        }
+        .title {
+            font-size: 13px; font-weight: 700; color: #FFFFFF;
+            letter-spacing: 3px; margin-bottom: 0;
+        }
+        .plans-wrap {
+            flex: 1; display: flex; flex-direction: column;
+            padding: 10px 16px; gap: 8px; overflow: hidden;
+        }
+        .plan {
+            border-radius: 8px; padding: 10px 14px;
+            border: 1px solid #2A2A2A; background: #111111;
+        }
+        .plan-bronze { border-color: #CD7F3240; background: #CD7F3208; }
+        .plan-gold   { border-color: #FFD70040; background: #FFD70008; }
+        .plan-diamond{ border-color: #B9F2FF40; background: #B9F2FF08; }
+        .plan-header {
+            display: flex; align-items: center;
+            justify-content: space-between; margin-bottom: 6px;
+        }
+        .plan-name {
+            font-size: 13px; font-weight: 700; color: #FFFFFF;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .plan-name .emoji { font-size: 15px; }
+        .plan-bronze .plan-name { color: #CD7F32; }
+        .plan-gold .plan-name   { color: #FFD700; }
+        .plan-diamond .plan-name{ color: #B9F2FF; }
+        .plan-price {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px; font-weight: 700; color: #FFFFFF;
+        }
+        .plan-bronze .plan-price { color: #6B6B6B; }
+        .plan-annual {
+            font-size: 10px; color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        .plan-annual span { color: #F7931A; }
+        .plan-features {
+            display: flex; flex-direction: column; gap: 2px;
+        }
+        .plan-feature {
+            font-size: 10px; color: var(--text-secondary);
+            display: flex; align-items: center; gap: 5px;
+        }
+        .plan-feature::before { content: "•"; color: #F7931A; }
+        .founding-banner {
+            margin: 0 16px 10px;
+            background: linear-gradient(135deg, #1A1200, #2A1E00);
+            border: 1px solid #F7931A50;
+            border-radius: 8px; padding: 10px 14px;
+            flex-shrink: 0;
+        }
+        .founding-title {
+            font-size: 12px; font-weight: 700; color: #F7931A;
+            margin-bottom: 4px; letter-spacing: 0.5px;
+        }
+        .founding-body {
+            font-size: 10px; color: #FFBE45;
+        }
+        .founding-price {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px; font-weight: 700; color: #F7931A;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">PLANS</div>
+    </div>
+
+    <div class="plans-wrap">
+        {% for plan in plans %}
+        <div class="plan plan-{{ plan.tier }}">
+            <div class="plan-header">
+                <div class="plan-name">
+                    <span class="emoji">{{ plan.tier_emoji }}</span>
+                    {{ plan.name | e }}
+                </div>
+                <div class="plan-price">{{ plan.monthly_price | e }}</div>
+            </div>
+            {% if plan.annual_price %}
+            <div class="plan-annual">
+                Annual: {{ plan.annual_price | e }}
+                {% if plan.annual_savings %}<span>({{ plan.annual_savings | e }})</span>{% endif %}
+            </div>
+            {% endif %}
+            <div class="plan-features">
+                {% for feat in plan.features %}
+                <div class="plan-feature">{{ feat | e }}</div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if founding_offer %}
+    <div class="founding-banner">
+        <div class="founding-title">🎁 FOUNDING MEMBER</div>
+        <div class="founding-body">
+            <span class="founding-price">R{{ founding_offer.annual_price }}/year</span>
+            — Full Diamond access locked in.
+            <br>{{ founding_offer.days_left }} days left · {{ founding_offer.slots_remaining }} slots remaining.
+        </div>
+    </div>
+    {% endif %}
+</div>
+</body>
+</html>

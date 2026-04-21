@@ -1,0 +1,84 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; padding: 2px; box-sizing: content-box;
+        }
+        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .header {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 3px; }
+        .body { padding: 28px 20px; text-align: center; }
+        .icon { font-size: 40px; display: block; margin-bottom: 16px; }
+        .main-text { font-size: 17px; font-weight: 800; color: #FFFFFF; margin-bottom: 8px; }
+        .sub-text { font-size: 13px; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.5; }
+        .alt-plans {
+            background: #B9F2FF10; border: 1px solid #B9F2FF40;
+            border-radius: 8px; padding: 16px 18px; text-align: left;
+        }
+        .alt-title { font-size: 12px; font-weight: 700; color: #B9F2FF; margin-bottom: 10px; }
+        .alt-row {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 8px;
+        }
+        .alt-label { font-size: 13px; color: var(--text-secondary); }
+        .alt-price {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 15px; font-weight: 700; color: #FFFFFF;
+        }
+        .alt-savings { font-size: 10px; color: #F7931A; margin-left: 6px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">OFFER ENDED</div>
+    </div>
+    <div class="body">
+        <span class="icon">⏰</span>
+        <div class="main-text">Founding Member deal has ended</div>
+        <div class="sub-text">
+            The R699/year Diamond deal is no longer available.<br>
+            Diamond access is still available at the regular price.
+        </div>
+
+        <div class="alt-plans">
+            <div class="alt-title">💎 Diamond — Current Pricing</div>
+            <div class="alt-row">
+                <div class="alt-label">Monthly</div>
+                <div class="alt-price">R{{ diamond_monthly }}/mo</div>
+            </div>
+            <div class="alt-row">
+                <div class="alt-label">Annual</div>
+                <div class="alt-price">R{{ diamond_annual }}/yr <span class="alt-savings">(save 33%)</span></div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

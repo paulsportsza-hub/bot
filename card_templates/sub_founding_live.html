@@ -1,0 +1,132 @@
+<!-- VARIANT: DETAIL -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body {
+            margin: 0; padding: 0; background: #000000;
+            width: 480px; height: 620px; overflow: hidden;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; height: 620px; overflow: hidden;
+        }
+        .card {
+            width: 480px; height: 620px;
+            display: flex; flex-direction: column;
+            background: linear-gradient(180deg, #0D0A00, #0A0A0A);
+        }
+        .header {
+            text-align: center; padding: 16px 20px 10px;
+            background: linear-gradient(180deg, #150E00, #1A1200);
+            border-bottom: 1px solid #F7931A60; flex-shrink: 0;
+        }
+        .logo-img { height: 26px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #F7931A, #FFBE45, #FFD700);
+            margin: 8px 20px; border-radius: 2px;
+        }
+        .title { font-size: 13px; font-weight: 700; color: #FFBE45; letter-spacing: 3px; }
+        .body {
+            flex: 1; display: flex; flex-direction: column;
+            padding: 12px 20px; overflow: hidden;
+        }
+        .price-hero {
+            text-align: center; margin-bottom: 10px;
+        }
+        .price-label { font-size: 11px; color: #F7931A; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px; }
+        .price-main {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 48px; font-weight: 700; color: #FFD700;
+            line-height: 1;
+        }
+        .price-year { font-size: 16px; color: #FFBE45; }
+        .price-compare {
+            font-size: 12px; color: var(--text-secondary); margin-top: 4px;
+            text-decoration: line-through; opacity: 0.7;
+        }
+        .savings-pill {
+            display: inline-flex; align-items: center;
+            background: #FFD70020; border: 1px solid #FFD70050;
+            border-radius: 20px; padding: 4px 12px;
+            font-size: 12px; font-weight: 700; color: #FFD700;
+            margin-top: 6px;
+        }
+        .monthly-equiv {
+            font-size: 11px; color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        .monthly-equiv strong { color: #F7931A; }
+        .counters {
+            display: flex; gap: 10px; margin-bottom: 10px;
+        }
+        .counter {
+            flex: 1; background: #1A1200; border: 1px solid #F7931A40;
+            border-radius: 8px; padding: 10px; text-align: center;
+        }
+        .counter-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 22px; font-weight: 700; color: #F7931A;
+        }
+        .counter-label { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+        .benefits-list {
+            display: flex; flex-direction: column; gap: 5px; flex: 1;
+        }
+        .benefit {
+            display: flex; align-items: center; gap: 8px;
+            padding: 7px 12px; background: #111111;
+            border: 1px solid #F7931A20; border-radius: 6px;
+            font-size: 11px; color: var(--text-secondary);
+        }
+        .benefit::before { content: "✓"; color: #FFD700; font-weight: 700; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">🎁 FOUNDING MEMBER</div>
+    </div>
+    <div class="body">
+        <div class="price-hero">
+            <div class="price-label">Diamond access — locked in at</div>
+            <div class="price-main">R{{ annual_price }}<span class="price-year">/yr</span></div>
+            <div class="price-compare">normally R{{ normal_monthly }}/mo = R{{ normal_monthly * 12 }}/yr</div>
+            <div class="savings-pill">Save {{ savings_pct }}%</div>
+            <div class="monthly-equiv">Just <strong>R{{ monthly_equiv }}/mo</strong> equivalent</div>
+        </div>
+
+        <div class="counters">
+            <div class="counter">
+                <div class="counter-value">{{ days_left }}</div>
+                <div class="counter-label">days left</div>
+            </div>
+            <div class="counter">
+                <div class="counter-value">{{ slots_remaining }}</div>
+                <div class="counter-label">slots left</div>
+            </div>
+        </div>
+
+        <div class="benefits-list">
+            <div class="benefit">Full Diamond access for 1 year</div>
+            <div class="benefit">Price locked forever — R{{ annual_price }}/yr every renewal</div>
+            <div class="benefit">Real-time edges + full AI breakdowns</div>
+            <div class="benefit">Line movement + sharp money alerts</div>
+            <div class="benefit">Founding member badge and community access</div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

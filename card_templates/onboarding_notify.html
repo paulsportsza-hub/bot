@@ -1,0 +1,62 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .step-badge { display: inline-block; font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; margin-bottom: 6px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
+        .body { padding: 18px 20px 20px; }
+        .question { font-size: 16px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px; }
+        .hint { font-size: 12px; color: var(--text-secondary); margin-bottom: 18px; }
+        .times-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .time-cell {
+            padding: 14px 12px; border-radius: 8px; border: 1px solid #2A2A2A;
+            background: #131313; text-align: center;
+        }
+        .time-cell.selected { border-color: #FF6B00; background: #1A0E00; }
+        .time-emoji { font-size: 22px; margin-bottom: 6px; display: block; }
+        .time-value { font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 700; color: #FFFFFF; }
+        .time-desc { font-size: 10px; color: var(--text-secondary); margin-top: 3px; }
+        .time-check { font-size: 12px; color: #FF6B00; font-weight: 700; margin-top: 4px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="step-badge">STEP 4 OF 6</div>
+        <div class="title">DAILY ALERTS</div>
+    </div>
+    <div class="body">
+        <div class="question">When do you want your Edge picks?</div>
+        <div class="hint">We'll send your personalised daily picks at this time (SAST).</div>
+        <div class="times-grid">
+            {% for h in hours %}
+            <div class="time-cell {% if h.selected %}selected{% endif %}">
+                <span class="time-emoji">{{ h.emoji }}</span>
+                <div class="time-value">{{ h.label }}</div>
+                <div class="time-desc">{{ h.desc }}</div>
+                {% if h.selected %}<div class="time-check">✓ Selected</div>{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .step-badge { display: inline-block; font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; margin-bottom: 6px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
+        .body { padding: 18px 20px 20px; }
+        .question { font-size: 16px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px; }
+        .hint { font-size: 12px; color: var(--text-secondary); margin-bottom: 18px; }
+        .selected-count { font-size: 11px; color: #FF6B00; font-weight: 600; margin-bottom: 14px; }
+        .sports-grid { display: flex; flex-direction: column; gap: 8px; }
+        .sport-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 14px; border-radius: 8px; border: 1px solid #2A2A2A;
+            background: #131313;
+        }
+        .sport-row.selected {
+            border-color: #FF6B00; background: #1A0E00;
+        }
+        .sport-left { display: flex; align-items: center; gap: 10px; }
+        .sport-emoji { font-size: 22px; }
+        .sport-label { font-size: 14px; font-weight: 600; color: #FFFFFF; }
+        .sport-check { font-size: 16px; color: #FF6B00; }
+        .sport-check-empty { width: 20px; height: 20px; border: 1.5px solid #3A3A3A; border-radius: 4px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="step-badge">STEP 2 OF 6</div>
+        <div class="title">PICK YOUR SPORTS</div>
+    </div>
+    <div class="body">
+        <div class="question">Which sports do you follow?</div>
+        <div class="hint">Select all that apply — we'll personalise your tips.</div>
+        {% if selected_count > 0 %}<div class="selected-count">{{ selected_count }} selected</div>{% endif %}
+        <div class="sports-grid">
+            {% for sport in sports %}
+            <div class="sport-row {% if sport.selected %}selected{% endif %}">
+                <div class="sport-left">
+                    <span class="sport-emoji">{{ sport.emoji }}</span>
+                    <span class="sport-label">{{ sport.label }}</span>
+                </div>
+                {% if sport.selected %}
+                <span class="sport-check">✓</span>
+                {% else %}
+                <div class="sport-check-empty"></div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+</body>
+</html>

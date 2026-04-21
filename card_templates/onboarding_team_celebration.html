@@ -1,0 +1,79 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .sport-emoji-big { font-size: 24px; margin-bottom: 4px; display: block; }
+        .header-text { font-size: 15px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
+        .body { padding: 18px 20px 20px; }
+        .matched-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+        .matched-row { display: flex; align-items: center; gap: 8px; }
+        .check-icon { font-size: 14px; color: #4CAF50; width: 18px; flex-shrink: 0; }
+        .team-text {}
+        .team-name { font-size: 13px; font-weight: 700; color: #FFFFFF; }
+        .cheer { font-size: 12px; color: var(--text-secondary); margin-top: 1px; }
+        .unmatched-section { margin-top: 12px; margin-bottom: 14px; }
+        .unmatched-label { font-size: 10px; color: #FF6B00; font-weight: 700; letter-spacing: 1px; margin-bottom: 8px; }
+        .unmatched-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+        .warn-icon { font-size: 14px; color: #FF6B00; width: 18px; flex-shrink: 0; }
+        .unmatched-name { font-size: 13px; color: var(--text-secondary); }
+        .divider { height: 1px; background: #1E1E1E; margin: 12px 0; }
+        .summary { font-size: 13px; font-weight: 600; color: #FFFFFF; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <span class="sport-emoji-big">{{ sport_emoji }}</span>
+        <div class="header-text">{{ header_text | upper }}</div>
+    </div>
+    <div class="body">
+        {% if matched %}
+        <div class="matched-list">
+            {% for m in matched %}
+            <div class="matched-row">
+                <span class="check-icon">✅</span>
+                <div class="team-text">
+                    <div class="team-name">{{ m.name }}</div>
+                    {% if m.cheer %}<div class="cheer">{{ m.cheer }}</div>{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if unmatched %}
+        <div class="unmatched-section">
+            <div class="unmatched-label">NOT RECOGNISED</div>
+            {% for u in unmatched %}
+            <div class="unmatched-item">
+                <span class="warn-icon">⚠️</span>
+                <span class="unmatched-name">{{ u }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="divider"></div>
+        <div class="summary">{{ summary_line }}</div>
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .step-badge { display: inline-block; font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; margin-bottom: 6px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
+        .body { padding: 18px 20px 20px; }
+        .question { font-size: 16px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px; }
+        .hint { font-size: 12px; color: var(--text-secondary); margin-bottom: 18px; }
+        .options { display: flex; flex-direction: column; gap: 8px; }
+        .option {
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 14px; border-radius: 8px;
+            background: #131313; border: 1px solid #2A2A2A;
+        }
+        .option-emoji { font-size: 22px; width: 32px; text-align: center; }
+        .option-text {}
+        .option-label { font-size: 14px; font-weight: 700; color: #FFFFFF; }
+        .option-value { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="step-badge">STEP 1 OF 6</div>
+        <div class="title">EXPERIENCE LEVEL</div>
+    </div>
+    <div class="body">
+        <div class="question">How do you bet?</div>
+        <div class="hint">We'll tailor your experience accordingly.</div>
+        <div class="options">
+            {% for opt in options %}
+            <div class="option">
+                <div class="option-emoji">{{ opt.emoji }}</div>
+                <div class="option-text">
+                    <div class="option-label">{{ opt.label }}</div>
+                    {% if opt.value == "experienced" %}<div class="option-value">Unlock advanced stats and EV metrics</div>{% endif %}
+                    {% if opt.value == "casual" %}<div class="option-value">Simplified tips with clear explanations</div>{% endif %}
+                    {% if opt.value == "newbie" %}<div class="option-value">Full guidance — we'll teach you the ropes</div>{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+</body>
+</html>

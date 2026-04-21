@@ -1,0 +1,98 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .header {
+            text-align: center; padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
+        .step-badge { display: inline-block; font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; margin-bottom: 6px; }
+        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
+        .body { padding: 18px 20px 20px; }
+        .confirm-line { font-size: 14px; font-weight: 700; color: #FFFFFF; margin-bottom: 16px; }
+        .section { margin-bottom: 14px; }
+        .section-label {
+            font-size: 10px; color: var(--text-secondary); font-weight: 700;
+            letter-spacing: 1px; margin-bottom: 6px; text-transform: uppercase;
+        }
+        .section-value { font-size: 14px; font-weight: 600; color: #FFFFFF; }
+        .section-hint { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+        .divider { height: 1px; background: #1E1E1E; margin: 10px 0; }
+        .sports-block { display: flex; flex-direction: column; gap: 8px; }
+        .sport-item {}
+        .sport-name { font-size: 13px; font-weight: 700; color: #FFFFFF; margin-bottom: 3px; }
+        .teams-list { font-size: 12px; color: var(--text-secondary); }
+        .no-teams { font-size: 12px; color: #555555; font-style: italic; }
+        .prefs-row { display: flex; gap: 16px; }
+        .pref-item {}
+        .pref-label { font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 3px; }
+        .pref-value { font-size: 13px; font-weight: 600; color: #FFFFFF; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="orange-bar"></div>
+        <div class="step-badge">STEP 5 OF 6</div>
+        <div class="title">YOUR PROFILE</div>
+    </div>
+    <div class="body">
+        <div class="confirm-line">Looking good — confirm your setup.</div>
+
+        <div class="section">
+            <div class="section-label">Experience</div>
+            <div class="section-value">{{ experience_label }}</div>
+        </div>
+
+        <div class="divider"></div>
+
+        {% if sports %}
+        <div class="section">
+            <div class="section-label">Sports &amp; Teams</div>
+            <div class="sports-block">
+                {% for sp in sports %}
+                <div class="sport-item">
+                    <div class="sport-name">{{ sp.emoji }} {{ sp.label }}</div>
+                    {% if sp.teams %}
+                    <div class="teams-list">{{ sp.teams | join(', ') }}</div>
+                    {% else %}
+                    <div class="no-teams">No teams selected</div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="divider"></div>
+        {% endif %}
+
+        <div class="prefs-row">
+            <div class="pref-item">
+                <div class="pref-label">Risk</div>
+                <div class="pref-value">{{ risk }}</div>
+            </div>
+            <div class="pref-item">
+                <div class="pref-label">Bankroll</div>
+                <div class="pref-value">{{ bankroll_str }}</div>
+            </div>
+            <div class="pref-item">
+                <div class="pref-label">Alerts</div>
+                <div class="pref-value">{{ notify_str }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

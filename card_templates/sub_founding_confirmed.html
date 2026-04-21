@@ -1,0 +1,94 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; padding: 2px; box-sizing: content-box;
+        }
+        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .header {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #0A0800, #141000);
+            border-bottom: 1px solid #F7931A60;
+        }
+        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #F7931A, #FFBE45, #FFD700);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title { font-size: 14px; font-weight: 700; color: #FFBE45; letter-spacing: 3px; }
+        .body { padding: 20px; }
+        .slot-block {
+            text-align: center; margin-bottom: 20px;
+            background: linear-gradient(135deg, #1A1200, #2A1E00);
+            border: 1px solid #FFD70050; border-radius: 12px;
+            padding: 20px;
+        }
+        .slot-label { font-size: 11px; color: #F7931A; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; }
+        .slot-number {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 48px; font-weight: 700; color: #FFD700;
+            line-height: 1;
+        }
+        .slot-hash { font-size: 16px; color: #FFBE45; }
+        .price-locked {
+            font-size: 13px; color: #F7931A; margin-top: 8px;
+        }
+        .price-locked strong {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 18px; color: #FFD700;
+        }
+        .benefits-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px; }
+        .benefit {
+            display: flex; align-items: center; gap: 8px;
+            padding: 9px 14px; background: #111111;
+            border: 1px solid #FFD70020; border-radius: 6px;
+            font-size: 12px; color: #FFFFFF;
+        }
+        .benefit::before { content: "✓"; color: #FFD700; font-weight: 700; }
+        .joined-note {
+            text-align: center; font-size: 11px; color: var(--text-secondary);
+            padding-top: 12px; border-top: 1px solid #1E1E1E;
+        }
+        .joined-note strong { color: #FFBE45; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">FOUNDING MEMBER ✅</div>
+    </div>
+    <div class="body">
+        <div class="slot-block">
+            <div class="slot-label">Your Slot</div>
+            <div class="slot-number"><span class="slot-hash">#</span>{{ slot_number }}</div>
+            <div class="price-locked">Price locked at <strong>{{ founding_price | e }}</strong>/year</div>
+        </div>
+
+        <div class="benefits-list">
+            {% for benefit in benefits %}
+            <div class="benefit">{{ benefit | e }}</div>
+            {% endfor %}
+        </div>
+
+        <div class="joined-note">Joined <strong>{{ joined_label | e }}</strong></div>
+    </div>
+</div>
+</body>
+</html>

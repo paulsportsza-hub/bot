@@ -1,0 +1,115 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; padding: 2px; box-sizing: content-box;
+        }
+        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .header {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title { font-size: 14px; font-weight: 700; color: #B9F2FF; letter-spacing: 3px; }
+        .body { padding: 16px 20px; }
+        .current-tier {
+            font-size: 13px; color: var(--text-secondary);
+            margin-bottom: 14px; padding-bottom: 12px;
+            border-bottom: 1px solid #1E1E1E;
+        }
+        .current-tier strong { color: #FFD700; }
+        .pitch {
+            font-size: 14px; color: #FFFFFF; font-weight: 600;
+            margin-bottom: 14px;
+        }
+        .feature-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+        .feature {
+            display: flex; align-items: flex-start; gap: 10px;
+            padding: 10px 14px; background: #0F0F0F;
+            border-radius: 6px; border-left: 3px solid #B9F2FF;
+        }
+        .feature-icon { font-size: 16px; flex-shrink: 0; }
+        .feature-text { font-size: 12px; color: #FFFFFF; }
+        .feature-text span { color: var(--text-secondary); font-size: 11px; }
+        .price-block {
+            background: #B9F2FF10; border: 1px solid #B9F2FF30;
+            border-radius: 8px; padding: 14px 16px; margin-bottom: 10px;
+        }
+        .price-main {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 22px; font-weight: 700; color: #B9F2FF;
+        }
+        .price-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+        .price-sub span { color: #F7931A; }
+        .founding-banner {
+            background: linear-gradient(135deg, #1A1200, #2A1E00);
+            border: 1px solid #F7931A50; border-radius: 8px;
+            padding: 12px 16px; margin-top: 6px;
+        }
+        .founding-title { font-size: 12px; font-weight: 700; color: #F7931A; margin-bottom: 4px; }
+        .founding-body  { font-size: 11px; color: #FFBE45; }
+        .founding-price {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 15px; font-weight: 700; color: #F7931A;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">UPGRADE TO 💎 DIAMOND</div>
+    </div>
+    <div class="body">
+        <div class="current-tier">You are on <strong>🥇 Gold</strong>.</div>
+        <div class="pitch">{{ diamond_pitch | e }}</div>
+
+        <div class="feature-list">
+            {% set icons = ["📈", "💰", "📊", "🎯"] %}
+            {% for feat in features %}
+            <div class="feature">
+                <div class="feature-icon">{{ icons[loop.index0 % 4] }}</div>
+                <div class="feature-text">{{ feat | e }}</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="price-block">
+            <div class="price-main">R199/mo</div>
+            <div class="price-sub">Annual: R1,599/yr <span>(save 33%)</span></div>
+        </div>
+
+        {% if founding_offer %}
+        <div class="founding-banner">
+            <div class="founding-title">🎁 FOUNDING MEMBER DEAL</div>
+            <div class="founding-body">
+                <span class="founding-price">R{{ founding_offer.annual_price }}/yr</span>
+                — {{ founding_offer.days_left }} days left to lock it in.
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+</body>
+</html>
