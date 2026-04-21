@@ -3576,6 +3576,25 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 "Upgrade to unlock: /subscribe",
                 parse_mode="HTML",
             )
+        elif action.startswith("breakdown_back:"):
+            # Restore the exact detail card captured when breakdown was opened.
+            # Uses Telegram file_id to re-deliver the same PNG without re-rendering.
+            _bbk = _resolve_cb_key(action[len("breakdown_back:"):])
+            _cached_card = _breakdown_back_cache.get((user_id, _bbk))
+            if _cached_card:
+                _bf_id, _bm = _cached_card
+                try:
+                    from telegram import InputMediaPhoto as _IMP
+                    await query.edit_message_media(
+                        media=_IMP(media=_bf_id),
+                        reply_markup=_bm,
+                    )
+                except Exception as _bbe:
+                    log.warning("breakdown_back restore failed for %s: %s", _bbk, _bbe)
+                    await query.answer("Navigation error — please tap the tip again.")
+            else:
+                # Cache miss after bot restart — send a soft nudge
+                await query.answer("Session expired — tap the tip to reload.", show_alert=False)
     elif prefix == "schedule":
         if action == "noop":
             return
@@ -7492,6 +7511,9 @@ _hot_tips_fetch_lock: asyncio.Lock | None = None  # W84-P1: prevents concurrent 
 # so hot:back returns the user to the exact page and tip set they left.
 _ht_page_state: dict[int, int] = {}    # user_id → last rendered page number
 _ht_tips_snapshot: dict[int, list] = {}  # user_id → shallow copy of tips at last render
+# Breakdown back-navigation: stores the exact detail card (file_id + markup) captured
+# at the moment the user opens the breakdown so ↩️ Back can restore it verbatim.
+_breakdown_back_cache: dict[tuple[int, str], tuple[str, "InlineKeyboardMarkup"]] = {}
 # BUILD-W3: My Matches card snapshot
 _mm_games_snapshot: dict[int, list] = {}  # user_id → flat match list at last render
 # BUILD-W3: @MzansiEdgeAlerts subscriber broadcast channel
@@ -22049,6 +22071,18 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
         )
         return
 
+    # Capture the current detail card (photo file_id + markup) BEFORE replacing the
+    # message.  Stored in _breakdown_back_cache so ↩️ Back can restore it verbatim
+    # without re-entering the full edge:detail render chain.
+    _detail_file_id = ""
+    _detail_markup = None
+    try:
+        if query.message and query.message.photo:
+            _detail_file_id = query.message.photo[-1].file_id
+            _detail_markup = query.message.reply_markup
+    except Exception:
+        pass
+
     from card_data import build_ai_breakdown_data as _build_bd_data
     try:
         png_bytes, _bd = await asyncio.gather(
@@ -22064,12 +22098,18 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
         await query.message.reply_text("❌ Breakdown not available for this match yet.")
         return
 
+    # Persist captured detail card state for the back button
+    if _detail_file_id and _detail_markup:
+        _breakdown_back_cache[(user_id, match_key)] = (_detail_file_id, _detail_markup)
+
     # CTA: use the same button as the tip detail card by delegating to _build_game_buttons.
     # source="matches" + has_narrative=False produces exactly [[primary_cta], [back]] —
     # no compare/breakdown buttons.  back_cb_override wires ↩️ Back to the detail card,
     # not the full edge list (issue fix: back should return to summary, not the list).
     _bd_edge_tier = ((_bd or {}).get("tier_label", "") or "bronze").split()[0].lower()
     _tips_for_cta = _game_tips_cache.get(match_key, [])
+    # Back button restores the exact detail card captured above (not a re-render).
+    _back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
     if _tips_for_cta:
         _rows = _build_game_buttons(
             _tips_for_cta,
@@ -22078,7 +22118,7 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
             source="matches",
             user_tier="diamond",
             edge_tier=_bd_edge_tier,
-            back_cb_override=f"edge:detail:{match_key}",
+            back_cb_override=_back_cb,
             has_narrative=False,
         )
     else:
@@ -22093,7 +22133,7 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
         _rows = []
         if _aff_url:
             _rows.append([InlineKeyboardButton(f"📲 {_cta_label}", url=_aff_url)])
-        _rows.append([InlineKeyboardButton("↩️ Back", callback_data=f"edge:detail:{match_key}")])
+        _rows.append([InlineKeyboardButton("↩️ Back", callback_data=_back_cb)])
     await _serve_response(query, "", InlineKeyboardMarkup(_rows), photo=png_bytes)
 
 
