@@ -4684,8 +4684,8 @@ async def _handle_ob_plan(query, action: str, ctx) -> None:
         # Free tier — complete onboarding
         await handle_ob_done(query, ctx)
     elif action == "gold":
-        # Show Gold monthly/annual picker
-        await query.edit_message_text(
+        # Plans screen is a photo card — reply_text sends a new message (edit would fail)
+        await query.message.reply_text(
             "🥇 <b>Gold Plan</b>\n\n"
             "Choose your billing period:",
             parse_mode=ParseMode.HTML,
@@ -4696,8 +4696,8 @@ async def _handle_ob_plan(query, action: str, ctx) -> None:
             ]),
         )
     elif action == "diamond":
-        # Show Diamond monthly/annual picker
-        await query.edit_message_text(
+        # Plans screen is a photo card — reply_text sends a new message (edit would fail)
+        await query.message.reply_text(
             "💎 <b>Diamond Plan</b>\n\n"
             "Choose your billing period:",
             parse_mode=ParseMode.HTML,
@@ -4714,7 +4714,8 @@ async def _handle_ob_plan(query, action: str, ctx) -> None:
         if remaining_slots > 0:
             rows.append([InlineKeyboardButton("✅ Continue to Checkout", callback_data="ob_plan:founding_continue")])
         rows.append([InlineKeyboardButton("↩️ Back", callback_data="ob_nav:plan")])
-        await query.edit_message_text(
+        # Plans screen is a photo card — reply_text sends a new message (edit would fail)
+        await query.message.reply_text(
             disclosure_text,
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(rows),
