@@ -22102,38 +22102,47 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
     if _detail_file_id and _detail_markup:
         _breakdown_back_cache[(user_id, match_key)] = (_detail_file_id, _detail_markup)
 
-    # CTA: use the same button as the tip detail card by delegating to _build_game_buttons.
-    # source="matches" + has_narrative=False produces exactly [[primary_cta], [back]] —
-    # no compare/breakdown buttons.  back_cb_override wires ↩️ Back to the detail card,
-    # not the full edge list (issue fix: back should return to summary, not the list).
-    _bd_edge_tier = ((_bd or {}).get("tier_label", "") or "bronze").split()[0].lower()
-    _tips_for_cta = _game_tips_cache.get(match_key, [])
     # Back button restores the exact detail card captured above (not a re-render).
     _back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
-    if _tips_for_cta:
-        _rows = _build_game_buttons(
-            _tips_for_cta,
-            match_key,
-            user_id,
-            source="matches",
-            user_tier="diamond",
-            edge_tier=_bd_edge_tier,
-            back_cb_override=_back_cb,
-            has_narrative=False,
-        )
-    else:
-        # No live tips in cache — fallback CTA from narrative_cache bookmaker key.
-        _bk_key = (_bd or {}).get("best_bookmaker_key", "") or config.ACTIVE_BOOKMAKER
-        _aff_url = (
-            get_affiliate_url(_bk_key, match_id=match_key)
-            or config.get_active_bookmaker().get("website_url", "")
-        )
-        _bk_display = _display_bookmaker_name(_bk_key)
-        _cta_label = get_cta_label(_bk_display, match_id=match_key, bookmaker_key=_bk_key)
-        _rows = []
-        if _aff_url:
-            _rows.append([InlineKeyboardButton(f"📲 {_cta_label}", url=_aff_url)])
-        _rows.append([InlineKeyboardButton("↩️ Back", callback_data=_back_cb)])
+
+    # CTA: extract the exact URL + label from the detail card's first button row.
+    # The detail card markup was captured above — row 0 button 0 is always the
+    # bookmaker CTA.  Reusing it verbatim guarantees identical link and text.
+    _rows: list[list[InlineKeyboardButton]] = []
+    _cta_extracted = False
+    try:
+        _kb = (_detail_markup.inline_keyboard if _detail_markup else None)
+        if _kb and _kb[0] and getattr(_kb[0][0], "url", None):
+            _rows.append([InlineKeyboardButton(_kb[0][0].text, url=_kb[0][0].url)])
+            _cta_extracted = True
+    except Exception:
+        pass
+
+    if not _cta_extracted:
+        # Fallback: rebuild from live tips or narrative_cache bookmaker key.
+        _bd_edge_tier = ((_bd or {}).get("tier_label", "") or "bronze").split()[0].lower()
+        _tips_for_cta = _game_tips_cache.get(match_key, [])
+        if _tips_for_cta:
+            _built = _build_game_buttons(
+                _tips_for_cta, match_key, user_id,
+                source="matches", user_tier="diamond",
+                edge_tier=_bd_edge_tier, has_narrative=False,
+            )
+            # Take only the primary CTA row (first row), skip the back row
+            if _built:
+                _rows.append(_built[0])
+        else:
+            _bk_key = (_bd or {}).get("best_bookmaker_key", "") or config.ACTIVE_BOOKMAKER
+            _aff_url = (
+                get_affiliate_url(_bk_key, match_id=match_key)
+                or config.get_active_bookmaker().get("website_url", "")
+            )
+            if _aff_url:
+                _bk_display = _display_bookmaker_name(_bk_key)
+                _cta_label = get_cta_label(_bk_display, match_id=match_key, bookmaker_key=_bk_key)
+                _rows.append([InlineKeyboardButton(f"📲 {_cta_label}", url=_aff_url)])
+
+    _rows.append([InlineKeyboardButton("↩️ Back", callback_data=_back_cb)])
     await _serve_response(query, "", InlineKeyboardMarkup(_rows), photo=png_bytes)
 
 
