@@ -1,21 +1,26 @@
-"""Stitch payment service for MzansiEdge Premium subscriptions.
+"""Stitch Express payment service for MzansiEdge Premium subscriptions.
 
-Stitch (stitch.money) provides Pay By Bank, Card, Apple Pay, and Google Pay
-via their LinkPay checkout.
+Stitch Express provides a simplified REST payment API:
+  https://express.stitch.money
 
-OAuth flow: client_credentials grant against https://secure.stitch.money/connect/token
-using the client_paymentrequest scope. A sandbox environment is available at
-secure.stitch.money with a separate client_id.
+Auth flow: POST /api/v1/token with JSON body containing clientId + clientSecret
++ scope. Returns a short-lived (15 min) accessToken.
 
-Payment creation: clientPaymentInitiationRequestCreate GraphQL mutation posted to
-https://api.stitch.money/graphql with a Bearer token.
+Payment creation: POST /api/v1/payment-links — REST, amount in cents (integer).
+Returns a payment link URL at data.payment.link.
 
-Webhook verification: Stitch delivers webhooks via Svix. The STITCH_WEBHOOK_SECRET
-env var holds the full whsec_... string. Verification is performed by
-svix.webhooks.Webhook.verify() which checks the svix-id, svix-timestamp, and
-svix-signature headers and enforces replay protection (±5 min tolerance).
+Payment status: GET /api/v1/payment/{paymentId} — returns data.payment.status
+(PENDING / COMPLETED / CANCELLED / EXPIRED).
+
+Webhook verification: Stitch Express delivers webhooks via Svix. The
+STITCH_WEBHOOK_SECRET env var holds the full whsec_... string (Express-issued).
+Verification is performed by svix.webhooks.Webhook.verify() which checks
+svix-id, svix-timestamp, and svix-signature headers with ±5 min replay protection.
 
 When STITCH_MOCK_MODE=true, delegates to stitch_mock for local development.
+
+NOTE: STITCH_CLIENT_ID and STITCH_CLIENT_SECRET must be Express credentials
+(not Enterprise). The Express token endpoint rejects Enterprise credentials.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ import json
 import logging
 import time
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
 import aiohttp
 
@@ -37,25 +42,27 @@ import config
 
 log = logging.getLogger("mzansiedge.stitch")
 
-# FIX-STITCH-CLOUDFLARE-UA-01: Cloudflare blocks default Python/aiohttp UA on Hetzner.
-# All outbound Stitch requests must use this factory.
+# Cloudflare blocks default Python/aiohttp UA — all Stitch requests use this factory.
 _STITCH_HEADERS = {"User-Agent": "MzansiEdge/1.0"}
 
 
 def _stitch_session() -> aiohttp.ClientSession:
-    """Return a ClientSession with headers that clear Cloudflare's ASN block."""
     return aiohttp.ClientSession(headers=_STITCH_HEADERS)
 
 
 # ── Cached client token ──────────────────────────────────
 _token_cache: dict[str, Any] = {}  # {"token": str, "expires_at": float}
 
+_EXPRESS_TOKEN_TTL = 900  # Express tokens are 15 min; cache until 60s before expiry
+
 
 class StitchService:
-    """Async Stitch payment service."""
+    """Async Stitch Express payment service."""
 
-    GRAPHQL_URL = "https://api.stitch.money/graphql"
-    TOKEN_URL = "https://secure.stitch.money/connect/token"
+    BASE_URL = "https://express.stitch.money"
+    TOKEN_URL = "https://express.stitch.money/api/v1/token"
+    PAYMENT_LINKS_URL = "https://express.stitch.money/api/v1/payment-links"
+    PAYMENT_URL = "https://express.stitch.money/api/v1/payment"
 
     def __init__(self) -> None:
         self.client_id = config.STITCH_CLIENT_ID
@@ -67,26 +74,29 @@ class StitchService:
 
     @staticmethod
     def build_checkout_url(payment_url: str) -> str:
-        """Append a whitelisted Stitch redirect URI when configured."""
+        """Append whitelisted redirect URL when configured.
+
+        Express uses ?redirect_url= (not redirect_uri as in Enterprise).
+        """
         redirect_uri = config.STITCH_REDIRECT_URI.strip()
         if not redirect_uri:
             return payment_url
 
         parsed = urlparse(payment_url)
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        query["redirect_uri"] = redirect_uri
+        query["redirect_url"] = redirect_uri
         return urlunparse(parsed._replace(query=urlencode(query)))
 
     async def get_client_token(self) -> str:
-        """Fetch OAuth2 client token with client_paymentrequest scope.
+        """Fetch Express OAuth2 token.
 
-        Caches the token until 60s before expiry.
+        POST /api/v1/token with JSON body. Returns accessToken (15-min TTL).
+        Caches until 60s before expiry.
         """
         if self._is_mock():
             from services.stitch_mock import MockStitchService
             return await MockStitchService().get_client_token()
 
-        # Return cached token if still valid
         cached = _token_cache.get("token")
         expires_at = _token_cache.get("expires_at", 0)
         if cached and time.time() < expires_at:
@@ -95,24 +105,22 @@ class StitchService:
         async with _stitch_session() as session:
             async with session.post(
                 self.TOKEN_URL,
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
+                json={
+                    "clientId": self.client_id,
+                    "clientSecret": self.client_secret,
                     "scope": "client_paymentrequest",
                 },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                headers={"Content-Type": "application/json"},
             ) as resp:
                 body = await resp.json()
-                if resp.status != 200:
-                    log.error("Stitch token error: %s", body)
-                    raise RuntimeError(f"Stitch token failed: {body}")
+                if resp.status != 200 or not body.get("success"):
+                    log.error("Stitch Express token error %s: %s", resp.status, body)
+                    raise RuntimeError(f"Stitch Express token failed: {body}")
 
-                token = body["access_token"]
-                expires_in = body.get("expires_in", 3600)
+                token = body["data"]["accessToken"]
                 _token_cache["token"] = token
-                _token_cache["expires_at"] = time.time() + expires_in - 60
-                log.info("Stitch client token acquired (expires in %ds)", expires_in)
+                _token_cache["expires_at"] = time.time() + _EXPRESS_TOKEN_TTL - 60
+                log.info("Stitch Express token acquired (TTL ~15 min)")
                 return token
 
     async def create_payment(
@@ -121,10 +129,10 @@ class StitchService:
         amount_cents: int = config.TIER_PRICES.get("gold", 9900),
         reference: str | None = None,
     ) -> dict[str, Any]:
-        """Create a PaymentInitiationRequest via Stitch GraphQL.
+        """Create a payment link via POST /api/v1/payment-links.
 
         Returns {payment_url, payment_id, reference}.
-        The payment_url is a LinkPay checkout supporting Card, EFT, Apple/Google Pay.
+        amount_cents must be an integer (Express takes cents directly).
         """
         if self._is_mock():
             from services.stitch_mock import MockStitchService
@@ -138,42 +146,15 @@ class StitchService:
 
         token = await self.get_client_token()
 
-        amount_rands = amount_cents / 100
-        mutation = """
-        mutation CreatePaymentRequest(
-            $amount: MoneyInput!,
-            $payerReference: String!,
-            $beneficiaryReference: String!,
-            $externalReference: String
-        ) {
-            clientPaymentInitiationRequestCreate(input: {
-                amount: $amount,
-                payerReference: $payerReference,
-                beneficiaryReference: $beneficiaryReference,
-                externalReference: $externalReference
-            }) {
-                paymentInitiationRequest {
-                    id
-                    url
-                    status {
-                        __typename
-                    }
-                }
-            }
-        }
-        """
-
-        variables = {
-            "amount": {"quantity": str(amount_rands), "currency": "ZAR"},
-            "payerReference": f"MzansiEdge-{user_id}",
-            "beneficiaryReference": reference,
-            "externalReference": str(user_id),
+        payload: dict[str, Any] = {
+            "amount": amount_cents,
+            "merchantReference": reference,
         }
 
         async with _stitch_session() as session:
             async with session.post(
-                self.GRAPHQL_URL,
-                json={"query": mutation, "variables": variables},
+                self.PAYMENT_LINKS_URL,
+                json=payload,
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
@@ -181,24 +162,26 @@ class StitchService:
             ) as resp:
                 body = await resp.json()
 
-                errors = body.get("errors")
-                if errors:
-                    log.error("Stitch GraphQL errors: %s", errors)
-                    raise RuntimeError(f"Stitch payment failed: {errors[0].get('message', errors)}")
+                if resp.status != 200 or not body.get("success"):
+                    log.error("Stitch Express payment error %s: %s", resp.status, body)
+                    raise RuntimeError(
+                        f"Stitch Express payment failed: {body.get('generalErrors', body)}"
+                    )
 
-                pir = body["data"]["clientPaymentInitiationRequestCreate"]["paymentInitiationRequest"]
+                payment = body["data"]["payment"]
                 result = {
-                    "payment_url": self.build_checkout_url(pir["url"]),
-                    "payment_id": pir["id"],
+                    "payment_url": self.build_checkout_url(payment["link"]),
+                    "payment_id": payment["id"],
                     "reference": reference,
                 }
-                log.info("Stitch payment created: %s", result["payment_id"])
+                log.info("Stitch Express payment created: %s", result["payment_id"])
                 return result
 
     async def get_payment_status(self, payment_id: str) -> dict[str, Any]:
-        """Query payment status from Stitch.
+        """Query payment status via GET /api/v1/payment/{paymentId}.
 
-        Returns {status, payment_id, ...}.
+        Returns {status, payment_id} where status is one of:
+        success / cancelled / expired / pending / error / unknown.
         """
         if self._is_mock():
             from services.stitch_mock import MockStitchService
@@ -206,80 +189,37 @@ class StitchService:
 
         token = await self.get_client_token()
 
-        query = """
-        query GetPaymentStatus($paymentId: ID!) {
-            node(id: $paymentId) {
-                ... on PaymentInitiationRequest {
-                    id
-                    status {
-                        __typename
-                        ... on PaymentInitiationRequestCompleted {
-                            date
-                            amount {
-                                quantity
-                                currency
-                            }
-                            payer {
-                                ... on PaymentInitiationBankAccountPayer {
-                                    accountNumber
-                                    bankId
-                                }
-                            }
-                        }
-                        ... on PaymentInitiationRequestCancelled {
-                            date
-                            reason
-                        }
-                        ... on PaymentInitiationRequestExpired {
-                            date
-                        }
-                    }
-                }
-            }
-        }
-        """
-
         async with _stitch_session() as session:
-            async with session.post(
-                self.GRAPHQL_URL,
-                json={"query": query, "variables": {"paymentId": payment_id}},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
+            async with session.get(
+                f"{self.PAYMENT_URL}/{payment_id}",
+                headers={"Authorization": f"Bearer {token}"},
             ) as resp:
                 body = await resp.json()
 
-                errors = body.get("errors")
-                if errors:
-                    log.error("Stitch status query error: %s", errors)
+                if resp.status != 200 or not body.get("success"):
+                    log.error("Stitch Express status error %s: %s", resp.status, body)
                     return {"status": "error", "payment_id": payment_id}
 
-                node = body.get("data", {}).get("node")
-                if not node:
-                    return {"status": "unknown", "payment_id": payment_id}
+                payment = body.get("data", {}).get("payment", {})
+                raw_status = payment.get("status", "")
 
-                status_obj = node.get("status", {})
-                type_name = status_obj.get("__typename", "Unknown")
-
-                # Map Stitch status types to simple statuses
                 status_map = {
-                    "PaymentInitiationRequestCompleted": "success",
-                    "PaymentInitiationRequestCancelled": "cancelled",
-                    "PaymentInitiationRequestExpired": "expired",
-                    "PaymentInitiationRequestPending": "pending",
+                    "COMPLETED": "success",
+                    "CANCELLED": "cancelled",
+                    "EXPIRED": "expired",
+                    "PENDING": "pending",
                 }
                 return {
-                    "status": status_map.get(type_name, "pending"),
+                    "status": status_map.get(raw_status, "pending"),
                     "payment_id": payment_id,
-                    "raw_status": type_name,
+                    "raw_status": raw_status,
                 }
 
     def verify_webhook(self, headers: dict[str, str], body: bytes) -> bool:
-        """Verify Stitch webhook Svix signature.
+        """Verify Stitch Express webhook Svix signature.
 
-        Expects svix-id, svix-timestamp, svix-signature headers.
-        STITCH_WEBHOOK_SECRET must be the full whsec_... string — do not strip it.
+        Stitch Express uses Svix for webhook delivery. STITCH_WEBHOOK_SECRET
+        must be the Express-issued whsec_... string (from the Express dashboard).
         Svix enforces ±5 min replay protection automatically.
         """
         if not self.webhook_secret:
@@ -292,7 +232,7 @@ class StitchService:
             if _sentry_sdk:
                 _sentry_sdk.add_breadcrumb(
                     category="stitch.webhook.verify",
-                    message="signature verification failed",
+                    message="Express webhook signature verification failed",
                     level="warning",
                     data={
                         "svix_id": headers.get("svix-id", "missing"),
@@ -315,101 +255,27 @@ class StitchService:
         amount_cents: int,
         frequency: str = "monthly",
     ) -> dict[str, Any]:
-        """Create a Tokenised Card recurring mandate via Stitch LinkPay.
+        """Create a recurring card mandate.
 
-        Uses clientPaymentInitiationRequestCreate with card-only payer constraint
-        and linkedPaymentMethodConstraints to enable card tokenisation.
+        NOTE: Card Consent / recurring payments require the
+        client_recurringpaymentconsentrequest scope and are not available by
+        default on Stitch Express. Contact express-support@stitch.money to
+        enable this feature before implementing this path.
 
-        First charge is an immediate one-off. Stitch tokenises the card for
-        subsequent re-charges (cron-based re-charge worker is a follow-up brief).
-
-        Returns {mandate_url, mandate_id, reference}.
+        Falls back to a one-off payment link in the interim.
         """
-        if self._is_mock():
-            from services.stitch_mock import MockStitchService
-            result = await MockStitchService().create_payment(user_id, amount_cents, None)
-            return {
-                "mandate_url": self.build_checkout_url(result["payment_url"]),
-                "mandate_id": result["payment_id"],
-                "reference": result["reference"],
-            }
-
-        import uuid
-        reference = f"mze-mand-{user_id}-{uuid.uuid4().hex[:8]}"
-        token = await self.get_client_token()
-        amount_rands = amount_cents / 100
-
-        mutation = """
-        mutation CreateTokenisedCardMandate(
-            $amount: MoneyInput!,
-            $payerReference: String!,
-            $beneficiaryReference: String!,
-            $externalReference: String
-        ) {
-            clientPaymentInitiationRequestCreate(input: {
-                amount: $amount,
-                payerReference: $payerReference,
-                beneficiaryReference: $beneficiaryReference,
-                externalReference: $externalReference,
-                payerConstraints: {
-                    allowedPaymentMethods: [card]
-                },
-                linkedPaymentMethodConstraints: {
-                    allowUserInteraction: true,
-                    relinkUserInteraction: true
-                }
-            }) {
-                paymentInitiationRequest {
-                    id
-                    url
-                    status {
-                        __typename
-                    }
-                }
-            }
+        log.warning(
+            "create_recurring_mandate called — Card Consent not enabled on Express by default. "
+            "Falling back to one-off payment link for user=%s amount=%d",
+            user_id,
+            amount_cents,
+        )
+        result = await self.create_payment(user_id, amount_cents)
+        return {
+            "mandate_url": result["payment_url"],
+            "mandate_id": result["payment_id"],
+            "reference": result["reference"],
         }
-        """
-
-        variables = {
-            "amount": {"quantity": str(amount_rands), "currency": "ZAR"},
-            "payerReference": f"MzansiEdge-{user_id}",
-            "beneficiaryReference": reference,
-            "externalReference": str(user_id),
-        }
-
-        async with _stitch_session() as session:
-            async with session.post(
-                self.GRAPHQL_URL,
-                json={"query": mutation, "variables": variables},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-            ) as resp:
-                body = await resp.json()
-
-                errors = body.get("errors")
-                if errors:
-                    log.error("Stitch mandate GraphQL errors: %s", errors)
-                    raise RuntimeError(
-                        f"Stitch mandate failed: {errors[0].get('message', errors)}"
-                    )
-
-                pir = body["data"]["clientPaymentInitiationRequestCreate"][
-                    "paymentInitiationRequest"
-                ]
-                result = {
-                    "mandate_url": self.build_checkout_url(pir["url"]),
-                    "mandate_id": pir["id"],
-                    "reference": reference,
-                }
-                log.info(
-                    "Stitch tokenised card mandate created: %s (user=%s freq=%s)",
-                    result["mandate_id"],
-                    user_id,
-                    frequency,
-                )
-                return result
 
     async def build_mock_webhook_event(
         self,
@@ -420,7 +286,6 @@ class StitchService:
     ) -> dict[str, Any]:
         """Generate a mock webhook event through the same provider facade."""
         from services.stitch_mock import MockStitchService
-
         return await MockStitchService().simulate_webhook_event(
             payment_id,
             status=status,
