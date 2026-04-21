@@ -1796,7 +1796,19 @@ async def _generate_one(
     _gold_verdict_failed = False
     _pregen_edge_tier = edge.get("tier", "bronze")
     if narrative and _pregen_edge_tier in ("gold", "diamond") and not _is_non_edge:
-        from narrative_spec import min_verdict_quality, _extract_verdict_text
+        from narrative_spec import (
+            min_verdict_quality,
+            _extract_verdict_text,
+            cap_verdict_in_narrative,
+        )
+        # W91-VALIDATOR-REJECT Mode 2 fix: W84 Sonnet polish can emit verdicts
+        # up to 291 chars that pass verify_shadow_narrative() and then fail
+        # min_verdict_quality() on the length gate — inflating
+        # validator_reject_rate toward ALERT. Apply the `_cap_verdict` safety
+        # net (already enforced on every baseline render path) to the final
+        # narrative HTML before gating, so the quality check sees the capped
+        # verdict the user will actually receive.
+        narrative = cap_verdict_in_narrative(narrative)
         _verdict_text_raw = _extract_verdict_text(narrative)
         # INV-VERDICT-COACH-FABRICATION-01: build manager evidence for quality gate
         _mgr_ep = None

@@ -213,6 +213,12 @@ def write_integrity_event(
 
     Safe to call from any context — swallows all exceptions silently.
     """
+    # W91-VALIDATOR-REJECT: never write to production integrity log from test runs.
+    # pytest sets PYTEST_CURRENT_TEST for every test; contract tests intentionally
+    # exercise the reject path with bad narratives and would otherwise inflate
+    # validator_reject_rate (ALERT threshold = 30) on every run.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
     path = db_path or _get_db_path()
     try:
         conn = sqlite3.connect(path, timeout=3)

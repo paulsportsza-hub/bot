@@ -52,7 +52,7 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
         "allowed": [
             "mild lean", "slight edge", "numbers suggest",
             "worth considering", "some value here",
-            "lean", "small-to-standard stake",
+            "small-to-standard stake",
         ],
         "banned": [
             "market has this completely wrong", "slam dunk", "lock",
@@ -64,7 +64,7 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
         "allowed": [
             "genuine value", "supported edge", "solid play",
             "numbers and indicators agree", "worth backing",
-            "lean", "standard stake", "supported by data",
+            "standard stake", "supported by data",
         ],
         "banned": [
             "slam dunk", "lock", "no-brainer", "guaranteed",
@@ -467,6 +467,41 @@ def _extract_verdict_text(narrative_html: str) -> str:
         if stripped:
             body_lines.append(stripped)
     return " ".join(body_lines).strip()
+
+
+def cap_verdict_in_narrative(narrative_html: str) -> str:
+    """W91-VALIDATOR-REJECT: Hard safety net — cap the Verdict body in a full
+    narrative HTML block at _VERDICT_MAX_CHARS.
+
+    The baseline renderer (`_render_verdict`) always applies `_cap_verdict` on
+    every return path, but the W84 Sonnet polish path can produce verdicts up
+    to 291 chars that pass `verify_shadow_narrative()` and then fail the final
+    length gate in `min_verdict_quality()` — inflating `validator_reject_rate`.
+
+    This helper finds the Verdict section (🏆), extracts the plain-text body,
+    caps it via `_cap_verdict` if too long, and rewrites the narrative with
+    the capped body while preserving the `🏆 <b>Verdict</b>...` header line.
+    The body's inner HTML formatting is intentionally dropped on cap — this
+    is a last-resort safety net, not a formatter.
+
+    Returns the narrative unchanged when the verdict body is already within
+    the cap or when the 🏆 marker is missing.
+    """
+    idx = narrative_html.find("\U0001f3c6")  # 🏆
+    if idx == -1:
+        return narrative_html
+    head = narrative_html[:idx]
+    tail = narrative_html[idx:]
+    newline_pos = tail.find("\n")
+    if newline_pos == -1:
+        return narrative_html
+    header_line = tail[: newline_pos + 1]
+    body = tail[newline_pos + 1 :]
+    body_plain = re.sub(r"<[^>]+>", "", body).strip()
+    if len(body_plain) <= _VERDICT_MAX_CHARS:
+        return narrative_html
+    capped = _cap_verdict(body_plain)
+    return head + header_line + capped
 
 
 # ── NarrativeSpec Dataclass ───────────────────────────────────────────────────
@@ -2154,6 +2189,7 @@ def _render_risk(spec: NarrativeSpec) -> str:
 # ── BUILD-VERDICT-CAP-01: Deterministic verdict fallback cap ───────────────────
 
 _VERDICT_MAX_CHARS = 200
+_VERDICT_MIN_CHARS: int = 140
 
 
 def _cap_verdict(text: str) -> str:
@@ -2166,6 +2202,71 @@ def _cap_verdict(text: str) -> str:
         return text
     clipped = text[:_VERDICT_MAX_CHARS - 1].rsplit(" ", 1)[0].rstrip(".,;")
     return clipped + "."
+
+
+def _floor_verdict(text: str, spec: NarrativeSpec) -> str:
+    """BUILD-VERDICT-FLOOR-01: Ensure verdict reaches _VERDICT_MIN_CHARS characters.
+
+    Appends support count, EV, and signal clauses in priority order. Never adds
+    "Main risk:" — risk belongs in its own section. Called before _cap_verdict.
+    """
+    if len(text) >= _VERDICT_MIN_CHARS:
+        return text
+
+    base = text.rstrip().rstrip(".")
+    parts = [base]
+
+    # Monitor/pass path: timing clause only, no staking content
+    if (getattr(spec, "verdict_action", None) or "") in ("pass", "monitor"):
+        parts.append(
+            "Check back closer to kickoff — a line shift may unlock value on this one."
+        )
+        joined = " ".join(parts)
+        return joined if joined.endswith(".") else joined + "."
+
+    # Step 1 — support count line (most analytical, lowest char cost)
+    support_line = _verdict_support_line(spec)
+    if support_line and "supporting indicator" not in text.lower():
+        parts.append(support_line.rstrip("."))
+
+    joined = " ".join(parts)
+    if len(joined) + 1 >= _VERDICT_MIN_CHARS:
+        return joined + "."
+
+    # Step 2 — EV clause (no "Main risk:" — risk belongs in its own section)
+    _ev = spec.ev_pct or 0.0
+    if _ev > 0:
+        _bk_count = getattr(spec, "bookmaker_count", 1) or 1
+        if _bk_count >= 2:
+            parts.append(f"+{_ev:.1f}% EV across {_bk_count} SA bookmakers")
+        else:
+            parts.append(f"+{_ev:.1f}% EV at current pricing")
+
+    joined = " ".join(parts)
+    if len(joined) + 1 >= _VERDICT_MIN_CHARS:
+        return joined + "."
+
+    # Step 3 — signal clause (movement + tipster consensus)
+    _sig: list[str] = []
+    if (getattr(spec, "movement_direction", "neutral") or "neutral") == "for":
+        _sig.append("market movement confirms")
+    if getattr(spec, "tipster_agrees", None) is True and getattr(spec, "tipster_available", False):
+        _sig.append("tipster consensus agrees")
+    if _sig:
+        parts.append(f"Key signals: {', '.join(_sig[:2])}")
+
+    joined = " ".join(parts)
+    if len(joined) + 1 >= _VERDICT_MIN_CHARS:
+        return joined + "."
+
+    # Step 4 — movement fallback when no signals found
+    _dir = getattr(spec, "movement_direction", "neutral") or "neutral"
+    if _dir == "against":
+        parts.append("Monitor the closing line before committing")
+    else:
+        parts.append("No adverse line movement — price is stable at this number")
+
+    return " ".join(parts) + "."
 
 
 def _render_verdict(spec: NarrativeSpec) -> str:
@@ -2195,124 +2296,126 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     if action in ("pass", "monitor"):
         # W84-Q13 / VERDICT-FIX: Zero/negative EV — neutral monitor posture, no PASS recommendation
         if odds_str != "?" and bk != "the market":
-            return _cap_verdict(
+            return _cap_verdict(_floor_verdict(
                 f"No confirmed edge on {outcome} at {odds_str} ({bk}). "
-                f"Monitor for line movement before committing."
-            )
-        return _cap_verdict(
+                f"Monitor for line movement before committing.",
+                spec,
+            ))
+        return _cap_verdict(_floor_verdict(
             f"No positive expected value at current pricing — "
-            f"monitor for line movement until the price improves."
-        )
+            f"monitor for line movement until the price improves.",
+            spec,
+        ))
 
     if action == "speculative punt":
         _v = _pick(_seed, 4)
         # SIGNAL-FIX-01: Branch on support_level to prevent false "no signal" claims.
-        # When support_level >= 1, confirming signals exist in the DB (and on the card)
-        # but penalties (stale price / adverse movement) reduce effective support to 0.
-        # Variants must not claim "no confirming signal" when support_level >= 1.
+        # BUILD-VERDICT-01: Rewritten to SA pundit voice — zero banned phrases.
         if spec.support_level >= 1:
             _sp_variants = [
                 (
-                    f"Penalty-adjusted — {outcome} at {odds_str} ({bk}). "
-                    f"One signal aligns. Minimal exposure. {_sentence_case(sizing)}."
+                    f"Punt on {outcome} at {odds_str} ({bk}) — "
+                    f"price gap confirmed. One signal backs it."
                 ),
                 (
-                    f"Keep exposure tight — {outcome} at {odds_str} ({bk}). "
-                    f"Monitor line before kickoff. {_sentence_case(sizing)}."
+                    f"{outcome} at {odds_str} with {bk} — "
+                    f"bookmaker has mispriced this. Worth a punt — one indicator aligns."
                 ),
                 (
-                    f"Speculative angle on {outcome} at {odds_str} ({bk}) — "
-                    f"signal aligns, posture cautious. {_sentence_case(sizing)}."
+                    f"Price edge confirmed on {outcome} at {odds_str} ({bk}). "
+                    f"One signal present — a controlled punt makes sense."
                 ),
                 (
-                    f"Cautious lean on {outcome} at {odds_str} ({bk}) — "
-                    f"signal present, confidence is reduced. {_sentence_case(sizing)}."
+                    f"{outcome} at {odds_str} ({bk}) — "
+                    f"one confirming indicator. Worth a punt at the current price."
                 ),
             ]
         else:
             _sp_variants = [
-                # W84-Q15: Disciplined posture — no "worth a unit", no "take the edge"
                 (
-                    f"Price-only angle — {outcome} at {odds_str} ({bk}). "
-                    f"No confirming signal. Minimal exposure. {_sentence_case(sizing)}."
+                    f"Price edge on {outcome} at {odds_str} ({bk}). "
+                    f"No confirming signal yet — worth a punt at the current number."
                 ),
                 (
-                    f"Keep exposure tight — {outcome} at {odds_str} ({bk}). "
-                    f"Monitor line before kickoff. {_sentence_case(sizing)}."
+                    f"{outcome} at {odds_str} with {bk} — "
+                    f"the number justifies a punt. No signal aligned yet."
                 ),
                 (
-                    f"Speculative on {outcome} at {odds_str} ({bk}) — "
-                    f"price is right, signals aren't there yet. {_sentence_case(sizing)}."
+                    f"Value on {outcome} at {odds_str} ({bk}). "
+                    f"Price is right for a punt — signals not yet confirmed."
                 ),
                 (
-                    f"Hold on {outcome} at {odds_str} ({bk}) — "
-                    f"price alone isn't enough. Wait for a confirming signal. {_sentence_case(sizing)}."
+                    f"{outcome} at {odds_str} ({bk}) — "
+                    f"price alone has edge here. Awaiting signal confirmation."
                 ),
             ]
-        return _cap_verdict(_sp_variants[_v])
+        return _cap_verdict(_floor_verdict(_sp_variants[_v], spec))
 
     elif action == "lean":
+        # BUILD-VERDICT-01: SA pundit voice — zero banned phrases, no staking advice.
         _v = _pick(_seed, 4)
         _lean_variants = [
             (
-                f"Lean on {outcome} at {odds_str} ({bk}) — "
-                f"there's support here, but not enough to press. {_sentence_case(sizing)}."
+                f"{outcome} at {odds_str} ({bk}) — supported by data, priced with value. "
+                f"{_verdict_support_line(spec) or 'Edge confirmed.'}"
             ),
             (
-                f"Measured lean on {outcome} at {odds_str} ({bk}). "
-                f"Keep stakes proportionate with the edge. {_sentence_case(sizing)}."
+                f"Back {outcome} at {odds_str} with {bk}. "
+                f"Supported by data — {_verdict_support_line(spec) or 'edge is there at this number.'}"
             ),
             (
-                f"Cautious lean on {outcome} at {odds_str} ({bk}) — "
-                f"one signal aligns, don't overstate it. {_sentence_case(sizing)}."
+                f"{outcome} at {odds_str} ({bk}) — supported by data. "
+                f"{_verdict_support_line(spec) or 'Take it at the current price.'}"
             ),
             (
-                f"Lean on {outcome} at {odds_str} ({bk}) — "
-                f"supported by data and priced with value. {_sentence_case(sizing)}."
+                f"Take {outcome} at {odds_str} with {bk} — "
+                f"supported by data, priced right. {_verdict_support_line(spec) or 'Edge confirmed.'}"
             ),
         ]
-        return _cap_verdict(_lean_variants[_v])
+        return _cap_verdict(_floor_verdict(_lean_variants[_v], spec))
 
     elif action == "back":
+        # BUILD-VERDICT-01: No staking advice suffix.
         _v = _pick(_seed, 3)
         support_line = _verdict_support_line(spec)
         _back_variants = [
             (
                 f"Back {outcome} at {odds_str} with {bk} — "
-                f"{support_line or 'the case is there at the current number.'} {_sentence_case(sizing)}."
+                f"{support_line or 'the case is there at the current number.'}"
             ),
             (
                 f"{outcome} at {odds_str} ({bk}) — backable here. "
-                f"{support_line or 'The price justifies the play.'} {_sentence_case(sizing)}."
+                f"{support_line or 'The price justifies the play.'}"
             ),
             (
                 f"Green light on {outcome} at {odds_str} ({bk}) — "
-                f"supported and priced right. {_sentence_case(sizing)}."
+                f"supported and priced right."
             ),
         ]
-        return _cap_verdict(_back_variants[_v])
+        return _cap_verdict(_floor_verdict(_back_variants[_v], spec))
 
     else:  # strong back
+        # BUILD-VERDICT-01: No staking advice suffix.
         _v = _pick(_seed, 4)
         _strong_variants = [
             (
                 f"Strong back on {outcome} at {odds_str} ({bk}) — "
-                f"depth of support most edges don't get. {_sentence_case(sizing)}."
+                f"depth of support most edges don't get."
             ),
             (
                 f"Back {outcome} at {odds_str} with {bk} with conviction — "
-                f"signals, price, model all aligned. {_sentence_case(sizing)}."
+                f"signals, price, model all aligned."
             ),
             (
                 f"Premium play: {outcome} at {odds_str} ({bk}). "
-                f"Price, signals, model all aligned. {_sentence_case(sizing)}."
+                f"Price, signals, model all aligned."
             ),
             (
                 f"Back {outcome} at {odds_str} ({bk}) with confidence — "
-                f"edge is clear and price is right. {_sentence_case(sizing)}."
+                f"edge is clear and price is right."
             ),
         ]
-        return _cap_verdict(_strong_variants[_v])
+        return _cap_verdict(_floor_verdict(_strong_variants[_v], spec))
 
 
 def _render_baseline(spec: NarrativeSpec) -> str:

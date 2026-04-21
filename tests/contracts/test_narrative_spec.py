@@ -1081,8 +1081,8 @@ class TestRenderVerdict:
                 f"for support_level=1 speculative punt. Verdict: {verdict!r}"
             )
 
-    def test_all_verdict_actions_capped_at_140(self):
-        """BUILD-VERDICT-CAP-01: Every verdict action × sizing combination renders ≤ 140 chars."""
+    def test_all_verdict_actions_in_length_window(self):
+        """BUILD-VERDICT-FLOOR-01: Every verdict action × sizing renders in [140, 200] chars."""
         cases = [
             ("pass", "monitor", "cautious"),
             ("monitor", "monitor", "cautious"),
@@ -1106,8 +1106,11 @@ class TestRenderVerdict:
                 movement_direction="neutral",
             )
             verdict = _render_verdict(spec)
-            assert len(verdict) <= 140, (
-                f"Verdict for action={action!r} exceeds 140 chars ({len(verdict)}): {verdict!r}"
+            assert len(verdict) >= 140, (
+                f"Verdict for action={action!r} below floor ({len(verdict)} < 140): {verdict!r}"
+            )
+            assert len(verdict) <= 200, (
+                f"Verdict for action={action!r} exceeds ceiling ({len(verdict)} > 200): {verdict!r}"
             )
 
 
@@ -1336,48 +1339,51 @@ class TestVerdictCoherenceIntegration:
         defaults.update(overrides)
         return NarrativeSpec(**defaults)
 
-    def test_back_verdict_capped_at_140(self):
-        """BUILD-VERDICT-CAP-01: Back verdict is ≤ 140 chars. EV not appended."""
+    def test_back_verdict_in_length_window(self):
+        """BUILD-VERDICT-FLOOR-01: Back verdict renders in [140, 200] chars."""
         spec = self._spec()
         verdict = _render_verdict(spec)
-        assert len(verdict) <= 140, f"Verdict exceeds 140 chars ({len(verdict)}): {verdict!r}"
-        assert "EV" not in verdict
+        assert 140 <= len(verdict) <= 200, (
+            f"Back verdict outside [140, 200] ({len(verdict)}): {verdict!r}"
+        )
 
-    def test_speculative_verdict_capped_at_140(self):
-        """BUILD-VERDICT-CAP-01: Speculative verdict is ≤ 140 chars. EV not appended."""
+    def test_speculative_verdict_in_length_window(self):
+        """BUILD-VERDICT-FLOOR-01: Speculative verdict renders in [140, 200] chars."""
         spec = self._spec(
             verdict_action="speculative punt", verdict_sizing="tiny exposure",
             evidence_class="speculative", tone_band="cautious",
             ev_pct=3.2, bookmaker_count=3,
         )
         verdict = _render_verdict(spec)
-        assert len(verdict) <= 140, f"Verdict exceeds 140 chars ({len(verdict)}): {verdict!r}"
-        assert "EV" not in verdict
+        assert 140 <= len(verdict) <= 200, (
+            f"Speculative verdict outside [140, 200] ({len(verdict)}): {verdict!r}"
+        )
 
-    def test_monitor_verdict_no_evidence(self):
-        """Monitor/pass verdicts don't get evidence clauses."""
+    def test_monitor_verdict_no_risk_clause(self):
+        """Monitor/pass verdicts don't get risk clauses — only timing content."""
         spec = self._spec(verdict_action="monitor", verdict_sizing="monitor", ev_pct=0.0)
         verdict = _render_verdict(spec)
-        assert "EV" not in verdict
+        assert "Main risk:" not in verdict
         assert "monitor" in verdict.lower()
 
-    def test_strong_back_verdict_capped_at_140(self):
-        """BUILD-VERDICT-CAP-01: Strong back verdict is ≤ 140 chars. EV not appended."""
+    def test_strong_back_verdict_in_length_window(self):
+        """BUILD-VERDICT-FLOOR-01: Strong back verdict renders in [140, 200] chars."""
         spec = self._spec(
             verdict_action="strong back", verdict_sizing="confident stake",
             evidence_class="conviction", tone_band="strong",
             ev_pct=16.5, bookmaker_count=5,
         )
         verdict = _render_verdict(spec)
-        assert len(verdict) <= 140, f"Verdict exceeds 140 chars ({len(verdict)}): {verdict!r}"
-        assert "EV" not in verdict
+        assert 140 <= len(verdict) <= 200, (
+            f"Strong back verdict outside [140, 200] ({len(verdict)}): {verdict!r}"
+        )
 
     def test_verdict_excludes_risk_clause(self):
-        """BUILD-VERDICT-CAP-01: Evidence clauses are not appended — no Main risk in verdict."""
+        """BUILD-VERDICT-FLOOR-01: Floor never injects 'Main risk:' — risk belongs in Risk section."""
         spec = self._spec(risk_factors=["2 tipster sources lean the other way."])
         verdict = _render_verdict(spec)
         assert "Main risk:" not in verdict
-        assert len(verdict) <= 140
+        assert len(verdict) <= 200
 
     def test_verdict_still_passes_banned_phrase_check(self):
         """Verdict postures don't contain banned tone-band phrases."""
@@ -1517,12 +1523,16 @@ class TestTierConvictionLanguage:
         assert "strong lean" in TONE_BANDS["strong"]["allowed"]
 
     def test_gold_tone_band_allows_moderate_phrases(self):
-        """AC-3: TONE_BANDS['confident'/'moderate'] must allow Gold conviction phrases."""
-        assert "lean" in TONE_BANDS["confident"]["allowed"]
+        """AC-3: TONE_BANDS['confident'/'moderate'] must allow Gold conviction phrases.
+        BUILD-VERDICT-FLOOR-01: 'lean' removed from TONE_BANDS allowed lists in
+        narrative_spec.py to prevent LLM-voice leakage in Sonnet-polished verdicts.
+        """
         assert "standard stake" in TONE_BANDS["confident"]["allowed"]
         assert "supported by data" in TONE_BANDS["confident"]["allowed"]
-        assert "lean" in TONE_BANDS["moderate"]["allowed"]
         assert "small-to-standard stake" in TONE_BANDS["moderate"]["allowed"]
+        # "lean" intentionally removed from TONE_BANDS allowed lists in narrative_spec.py
+        assert "lean" not in TONE_BANDS["confident"]["allowed"]
+        assert "lean" not in TONE_BANDS["moderate"]["allowed"]
 
     def test_diamond_gold_banned_phrases_in_tone_bands(self):
         """AC-2/AC-3: Banned phrases must be in strong and confident tone bands."""
