@@ -31,7 +31,10 @@ import os
 import sqlite3
 import sys
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 
 # Resolve paths
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -169,7 +172,7 @@ def _last_alert_time(conn: sqlite3.Connection, signal: str) -> datetime | None:
         if isinstance(ts, str):
             ts = ts.replace("Z", "+00:00")
             return datetime.fromisoformat(ts)
-        return datetime.fromtimestamp(float(ts), tz=timezone.utc)
+        return datetime.fromtimestamp(float(ts), tz=UTC)
     except Exception:
         return None
 
@@ -179,9 +182,9 @@ def _debounced(conn: sqlite3.Connection, signal: str) -> bool:
     last = _last_alert_time(conn, signal)
     if last is None:
         return False
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(SAST)
     if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
+        last = last.replace(tzinfo=UTC)
     return (now - last) < timedelta(hours=_DEBOUNCE_HOURS)
 
 
@@ -391,7 +394,7 @@ def _last_ha_fired_at(conn: sqlite3.Connection, signal: str) -> datetime | None:
             ts = ts.replace("Z", "+00:00")
             dt = datetime.fromisoformat(ts)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             return dt
     except Exception:
         return None
@@ -402,7 +405,7 @@ def _ha_debounced(conn: sqlite3.Connection, signal: str) -> bool:
     last = _last_ha_fired_at(conn, signal)
     if last is None:
         return False
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(SAST)
     return (now - last) < timedelta(hours=_DEBOUNCE_HOURS)
 
 
@@ -415,7 +418,7 @@ def _insert_health_alert(
     meta: dict | None = None,
     dry_run: bool = False,
 ) -> None:
-    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    now_iso = datetime.now(SAST).isoformat()
     meta_str = json.dumps(meta) if meta else None
     try:
         conn.execute(
@@ -436,7 +439,7 @@ def _fire_cycle_alerts(
     dry_run: bool = False,
 ) -> None:
     """Insert health_alerts rows + send EdgeOps for every ALERT+breach signal in this cycle."""
-    now_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now_str = datetime.now(SAST).strftime("%Y-%m-%d %H:%M UTC")
     for sig in cycle_signals:
         signal_name = sig.get("signal", "")
         band = sig.get("band", "GREEN")
@@ -484,7 +487,7 @@ def _auto_resolve_alerts(
         return
 
     signal_bands = {s.get("signal"): s.get("band") for s in cycle_signals}
-    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    now_iso = datetime.now(SAST).isoformat()
 
     for row_id, meta_str in open_rows:
         try:
@@ -534,7 +537,7 @@ def _backfill_stale_alerts(conn: sqlite3.Connection, dry_run: bool = False) -> N
         log.warning("MONITOR: _backfill_stale_alerts query failed: %s", _e)
         return
 
-    now_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now_str = datetime.now(SAST).strftime("%Y-%m-%d %H:%M UTC")
     for signal, value, band, breach in stale:
         # Skip if already has an open health_alert
         try:
@@ -593,7 +596,7 @@ def run_monitor(db_path: str | None = None, dry_run: bool = False) -> dict[str, 
         _backfill_stale_alerts(conn, dry_run=dry_run)
 
         cutoff_24h = (
-            datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            datetime.now(SAST) - timedelta(hours=24)
         ).isoformat()
 
         # ── Signal 1: total_narratives_24h ────────────────────────────────────
@@ -706,7 +709,7 @@ def run_monitor(db_path: str | None = None, dry_run: bool = False) -> dict[str, 
         sig6b_val = 0
         if os.path.exists(_bot_db_path):
             _cutoff_24h_sql = (
-                datetime.now(tz=timezone.utc) - timedelta(hours=24)
+                datetime.now(SAST) - timedelta(hours=24)
             ).strftime("%Y-%m-%d %H:%M:%S")
             _bot_conn = sqlite3.connect(_bot_db_path, timeout=10)
             try:

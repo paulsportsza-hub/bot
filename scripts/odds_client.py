@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 from pathlib import Path
 from typing import Any
 
@@ -123,7 +126,7 @@ def _read_odds_cache(key: str, ttl_minutes: int) -> list | None:
     try:
         data = json.loads(path.read_text())
         fetched = datetime.fromisoformat(data["fetched_at"])
-        if datetime.now(timezone.utc) - fetched < timedelta(minutes=ttl_minutes):
+        if datetime.now(SAST) - fetched < timedelta(minutes=ttl_minutes):
             return data["payload"]
     except Exception:
         pass
@@ -136,7 +139,7 @@ def _write_odds_cache(key: str, payload: Any) -> None:
     try:
         path.write_text(json.dumps({
             "payload": payload,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "fetched_at": datetime.now(SAST).isoformat(),
         }))
     except Exception:
         pass

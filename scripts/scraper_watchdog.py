@@ -12,8 +12,11 @@ import sys
 import time
 import sqlite3
 import datetime
+from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
+
+_SAST = ZoneInfo("Africa/Johannesburg")
 
 # Load .env from bot working directory
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -24,7 +27,7 @@ LOCK_FILE = "/tmp/mzansi_scraper.lock"
 DB_PATH = "/home/paulsportsza/scrapers/odds.db"
 MAX_LOCK_AGE_SECONDS = 300      # 5 minutes — kill if older
 MAX_FRESHNESS_SECONDS = 900     # 15 minutes — alert if no new data
-PEAK_HOURS_UTC = range(10, 23)  # 10:00-23:00 UTC
+PEAK_HOURS_SAST = list(range(12, 24)) + [0]  # 12:00-00:00 SAST (= UTC 10:00-22:00)
 
 
 def send_alert(message: str):
@@ -90,7 +93,7 @@ def check_lock_file():
 
 def check_data_freshness():
     """Alert if no new odds data written recently (peak hours only)."""
-    if time.gmtime().tm_hour not in PEAK_HOURS_UTC:
+    if datetime.datetime.now(_SAST).hour not in PEAK_HOURS_SAST:
         return  # Off-peak — scraper runs less frequently, skip check
 
     try:
@@ -114,8 +117,8 @@ def check_data_freshness():
     try:
         # scraped_at is ISO 8601 with TZ, e.g. "2026-04-01T13:41:19.089796+00:00"
         dt = datetime.datetime.fromisoformat(str(last_write))
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        age = (now_utc - dt).total_seconds()
+        now_sast = datetime.datetime.now(_SAST)
+        age = (now_sast - dt).total_seconds()
     except (ValueError, TypeError) as e:
         print(f"Freshness check timestamp parse error: {e}", file=sys.stderr)
         return

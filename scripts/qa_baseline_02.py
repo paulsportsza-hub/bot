@@ -22,7 +22,10 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 from pathlib import Path
 
 # ── Setup paths ──────────────────────────────────────────────────────────
@@ -76,7 +79,7 @@ TIERS = ["diamond", "gold", "silver", "bronze"]
 SPORTS = ["soccer", "rugby", "cricket", "mma"]
 SHAPES = ["home_favourite", "home_underdog", "road_favourite"]
 ODDS_DB = BOT_DIR.parent / "scrapers" / "odds.db"
-TS = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+TS = datetime.now(SAST).strftime("%Y%m%dT%H%M%S%z")
 RAW_JSONL = BOT_DIR / "structured_logs" / f"qa_baseline_02_raw_{TS}.jsonl"
 RESULTS_JSON = Path("/home/paulsportsza/reports/qa-baseline-02-results.json")
 

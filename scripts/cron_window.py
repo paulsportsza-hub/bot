@@ -20,7 +20,10 @@ consistent with /etc/crontab on 178.128.171.28.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+SAST_TZ = ZoneInfo("Africa/Johannesburg")
 from typing import Optional
 
 # SAST = UTC+2, no DST
@@ -46,7 +49,7 @@ def _to_sast(dt_utc: datetime) -> datetime:
 
 def _from_sast(dt_sast_naive: datetime) -> datetime:
     """Convert a naive SAST datetime to a UTC-aware datetime."""
-    return (dt_sast_naive - _SAST_OFFSET).replace(tzinfo=timezone.utc)
+    return dt_sast_naive.replace(tzinfo=SAST_TZ)
 
 
 def _parse_field(field: str, lo: int, hi: int) -> frozenset:

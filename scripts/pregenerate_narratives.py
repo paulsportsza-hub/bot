@@ -21,7 +21,10 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 
 # Add project paths
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1043,7 +1046,7 @@ def discover_pregen_targets(
         return []
 
     path = db_path or str(SCRAPERS_ROOT / "odds.db")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(SAST)
     window_start_date = now.strftime("%Y-%m-%d")
     window_end_date = (now + timedelta(hours=hours_ahead)).strftime("%Y-%m-%d")
 
@@ -1406,7 +1409,7 @@ def _is_past_kickoff(match_key: str, cutoff_hours: int = 24) -> bool:
         return False
     try:
         kickoff = datetime.fromisoformat(m.group(1) + "T00:00:00+00:00")
-        return (datetime.now(timezone.utc) - kickoff).total_seconds() > cutoff_hours * 3600
+        return (datetime.now(SAST) - kickoff).total_seconds() > cutoff_hours * 3600
     except ValueError:
         return False
 
@@ -2302,7 +2305,7 @@ def _quarantine_stale_cache_rows(db_path: str | None = None) -> int:
     path = db_path or str(bot._NARRATIVE_DB_PATH)
     # Use today's date as cutoff: any match dated before today is ≥24h old at midnight UTC.
     # This matches _is_past_kickoff which checks total_seconds > 24 * 3600.
-    cutoff_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cutoff_date = datetime.now(SAST).strftime("%Y-%m-%d")
     try:
         conn = sqlite3.connect(path, timeout=5.0)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -2407,7 +2410,7 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
     # Sonnet spend on every full sweep while still regenerating when
     # anything material has changed.
     if sweep == "full":
-        from datetime import datetime, timezone
+        from datetime import datetime
         filtered_full = []
         skipped_full = 0
         for edge in edges:
@@ -2423,8 +2426,8 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                 if created_at_raw:
                     created_at = datetime.fromisoformat(str(created_at_raw).replace("Z", "+00:00"))
                     if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=timezone.utc)
-                    age_sec = (datetime.now(timezone.utc) - created_at).total_seconds()
+                        created_at = created_at.replace(tzinfo=UTC)
+                    age_sec = (datetime.now(SAST) - created_at).total_seconds()
                     age_ok = age_sec <= 24 * 3600
             except (ValueError, TypeError):
                 age_ok = False

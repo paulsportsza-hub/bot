@@ -13,7 +13,10 @@ import logging
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 from typing import Optional
 
 import requests
@@ -104,8 +107,8 @@ def age_hours(ts_str: Optional[str]) -> Optional[float]:
             s += "+00:00"
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+            dt = dt.replace(tzinfo=UTC)
+        return (datetime.now(SAST) - dt).total_seconds() / 3600
     except Exception:
         return None
 
@@ -281,7 +284,7 @@ def update_api_quotas(conn) -> None:
 
     quotas = {
         "_comment": "Updated by scripts/data_health_check.py every 6h",
-        "_updated": datetime.now(timezone.utc).isoformat(),
+        "_updated": datetime.now(SAST).isoformat(),
         "quotas": [
             {
                 "api": "The Odds API",

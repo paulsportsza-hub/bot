@@ -11,7 +11,10 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -91,7 +94,7 @@ async def press_and_wait(client, bot_entity, msg_id, callback_data, wait_secs=4.
 async def main():
     print("=" * 60)
     print("QA-BASELINE-28 — Telethon E2E Card Capture")
-    print(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+    print(f"Timestamp: {datetime.now(SAST).isoformat()}")
     print("=" * 60)
 
     client = await get_client()
@@ -101,7 +104,7 @@ async def main():
     captures = {
         "metadata": {
             "qa_round": "QA-BASELINE-28",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(SAST).isoformat(),
             "source": "telethon_e2e",
         },
         "list_pages": [],
@@ -260,7 +263,7 @@ async def main():
             "text": detail_text,
             "cb_buttons": detail_cb,
             "url_buttons": detail_url,
-            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "captured_at": datetime.now(SAST).isoformat(),
         }
         captures["cards"].append(card_capture)
 

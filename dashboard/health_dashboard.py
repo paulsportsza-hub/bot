@@ -1403,7 +1403,7 @@ def _th_block_url(b: dict) -> str:
 
 def _th_today_patterns() -> list[str]:
     """Date fragments we match against daily-sheet titles."""
-    sast = timezone(timedelta(hours=2))
+    sast = _SAST
     t = datetime.now(sast)
     pats = [
         t.strftime("%d %B %Y"),           # 17 April 2026
@@ -1742,7 +1742,7 @@ def _get_awaiting_items(
             one of these values (exact, case-sensitive). Pass _APPROVAL_CHANNELS
             to enforce the FB/IG/LI-only approval model in the Task Hub.
     """
-    now_utc = datetime.now(_SAST)
+    now_sast = datetime.now(_SAST)
     awaiting: list[dict] = []
     for item in items:
         # Channel gate — apply before anything else
@@ -1757,7 +1757,7 @@ def _get_awaiting_items(
             awaiting.append(item)
         elif include_overdue and status in ("approved", "ready", "scheduled"):
             sched_dt = parse_ts(sched_raw)
-            if sched_dt and sched_dt <= now_utc:
+            if sched_dt and sched_dt <= now_sast:
                 awaiting.append(item)
     awaiting.sort(key=lambda x: x.get("scheduled_time") or x.get("created") or "9999")
     return awaiting
@@ -2399,7 +2399,7 @@ def build_source_health_monitor(conn):
     sources_by_category = {cat: [] for cat in _CATEGORY_ORDER}
     critical_issues = []
 
-    now_utc = datetime.now(_SAST) if hasattr(datetime, 'now') else None
+    now_sast = datetime.now(_SAST) if hasattr(datetime, 'now') else None
     for row in rows:
         d = dict(row)
         interval = d.get("expected_interval_minutes") or 0
@@ -2408,13 +2408,13 @@ def build_source_health_monitor(conn):
         status = "grey" if (interval == 0 and raw_status == "black") else raw_status
         # Freshness override: if interval > 0 and last_success exceeds interval, force RED
         # Uses cron-window-aware logic so time-window scrapers don't fire overnight false alarms
-        if interval > 0 and now_utc and d.get("last_success_at"):
+        if interval > 0 and now_sast and d.get("last_success_at"):
             try:
                 _ls = d["last_success_at"].replace("Z", "+00:00")
                 _last_dt = datetime.fromisoformat(_ls)
                 if _last_dt.tzinfo is None:
                     _last_dt = _last_dt.replace(tzinfo=_UTC)
-                _age_min = (now_utc - _last_dt).total_seconds() / 60
+                _age_min = (now_sast - _last_dt).total_seconds() / 60
 
                 _truly_stale = True
                 _cron_sched = d.get("cron_schedule") or ""
@@ -2428,8 +2428,8 @@ def build_source_health_monitor(conn):
                         _cw = _ilu.module_from_spec(_cw_spec)
                         _cw_spec.loader.exec_module(_cw)
                         _windows = _cw.parse_multi(_cron_sched)
-                        if _windows and not _cw.is_in_any_window(_windows, now_utc):
-                            _last_close = _cw.last_window_close(_windows, now_utc)
+                        if _windows and not _cw.is_in_any_window(_windows, now_sast):
+                            _last_close = _cw.last_window_close(_windows, now_sast)
                             if _last_close is None or _last_dt >= _last_close - timedelta(minutes=interval):
                                 _truly_stale = False  # outside window and caught the last window
                     except Exception:
@@ -3360,7 +3360,7 @@ def render_automation_content() -> str:
     else:
         sync_label = f"Synced {age_s // 3600}h ago"
 
-    now_utc = datetime.now(_SAST)
+    now_sast = datetime.now(_SAST)
 
     _CHANNEL_SLA: dict[str, float] = {
         "telegram_alerts": 6.0, "telegram_community": 12.0, "whatsapp_channel": 6.0,
@@ -3421,7 +3421,7 @@ def render_automation_content() -> str:
             if not last_ts:
                 return {"sev": "dormant", "color": sev_color["dormant"], "age": "\u2014",
                         "sla": sla_disp, "ratio": "\u2014"}
-            age_d = (now_utc - last_ts).total_seconds() / 86400
+            age_d = (now_sast - last_ts).total_seconds() / 86400
             if age_d < _LK_GREEN_DAYS:
                 sev = "healthy"
             elif age_d < _LK_AMBER_DAYS:
@@ -3435,7 +3435,7 @@ def render_automation_content() -> str:
         if not last_ts:
             return {"sev": "dormant", "color": sev_color["dormant"], "age": "\u2014",
                     "sla": sla_disp, "ratio": "\u2014"}
-        age_h = (now_utc - last_ts).total_seconds() / 3600
+        age_h = (now_sast - last_ts).total_seconds() / 3600
         if age_h < 1:
             age_lbl = f"{int(age_h * 60)}m"
         elif age_h < 48:
@@ -3477,7 +3477,7 @@ def render_automation_content() -> str:
         appr_badge = (f'<span class="so-ch-appr-badge">\u00d7{r["approvals"]}</span>'
                       if r["approvals"] > 0 else "")
         if r["last_ts"]:
-            age_h = (now_utc - r["last_ts"]).total_seconds() / 3600
+            age_h = (now_sast - r["last_ts"]).total_seconds() / 3600
             if age_h < 1:
                 last_pub = f"{int(age_h * 60)}m ago"
             elif age_h < 48:
@@ -3531,9 +3531,9 @@ def render_automation_content() -> str:
     _PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
     _FAILED_ST  = {"failed", "error", "blocked"}
     _OVERDUE_QUEUE_ST = {"pending", "ready", "queued"}
-    _cutoff24   = now_utc - timedelta(hours=24)
+    _cutoff24   = now_sast - timedelta(hours=24)
     kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue_queue = kpi_pastdue = kpi_unscheduled = 0
-    _12h_horizon = now_utc + timedelta(hours=12)
+    _12h_horizon = now_sast + timedelta(hours=12)
     for _it in items:
         _st  = (_it.get("status") or "").lower().strip()
         _ts  = parse_ts(_it.get("last_edited") or _it.get("scheduled_time") or _it.get("created") or "")
@@ -3548,19 +3548,19 @@ def render_automation_content() -> str:
         elif _st != "archived":
             if _st in _PENDING_ST:
                 kpi_pending += 1
-            if _sch and now_utc <= _sch <= _12h_horizon:
+            if _sch and now_sast <= _sch <= _12h_horizon:
                 kpi_queue += 1
-            if _sch and _sch < now_utc and _st in _PENDING_ST and _rfa in ("yes", "true", "1", "y"):
+            if _sch and _sch < now_sast and _st in _PENDING_ST and _rfa in ("yes", "true", "1", "y"):
                 kpi_pastdue += 1
             if not _sch and _st in _PENDING_ST:
                 kpi_unscheduled += 1
         if (_st in _OVERDUE_QUEUE_ST
-                and _sch and _sch < now_utc
+                and _sch and _sch < now_sast
                 and _rfa in ("yes", "true", "1", "y")):
             kpi_overdue_queue += 1
 
     # ── Timeline init data (02B) ─────────────────────────────────────────
-    _today_sast = now_utc.astimezone(_SAST)
+    _today_sast = now_sast.astimezone(_SAST)
     _today_str  = _today_sast.strftime("%Y-%m-%d")
     _now_mins   = _today_sast.hour * 60 + _today_sast.minute
 
@@ -4920,9 +4920,9 @@ def render_reel_kit_page() -> str:
 def render_calendar_page() -> str:
     """Render the dedicated Calendar (14-day schedule) page (UI-SOCIAL-OPS-REDESIGN-01)."""
     import html as _html_mod
-    now_utc = datetime.now(_SAST)
-    now_sast = now_utc.astimezone(_SAST)
-    fourteen_days = now_utc + timedelta(days=14)
+    now_sast = datetime.now(_SAST)
+    now_sast = now_sast.astimezone(_SAST)
+    fourteen_days = now_sast + timedelta(days=14)
 
     items: list[dict] = []
     try:
@@ -4939,7 +4939,7 @@ def render_calendar_page() -> str:
         if status not in ("approved", "awaiting approval", "drafting", "briefed", "draft", "ready", "scheduled"):
             continue
         sched_dt = parse_ts(item.get("scheduled_time") or "")
-        if sched_dt and now_utc <= sched_dt <= fourteen_days:
+        if sched_dt and now_sast <= sched_dt <= fourteen_days:
             schedule_items.append(item)
     schedule_items.sort(key=lambda x: x.get("scheduled_time") or "9999")
 
@@ -5014,8 +5014,8 @@ _APPROVALS_NOTION_URL = "https://www.notion.so/Marketing-Ops-Queue"
 
 def render_approvals_content() -> str:
     """Render the Approvals pipeline view inner content HTML."""
-    now_utc = datetime.now(_SAST)
-    now_sast = now_utc.astimezone(_SAST)
+    now_sast = datetime.now(_SAST)
+    now_sast = now_sast.astimezone(_SAST)
     updated = now_sast.strftime("%Y-%m-%d %H:%M:%S")
 
     cache_error = False
@@ -6898,9 +6898,9 @@ def render_performance_content(conn) -> str:
     _th_sentinel = os.path.expanduser("~/scrapers/edge/.tier_health_last_run")
     try:
         with open(_th_sentinel) as _thf:
-            from datetime import timezone as _tz
+            pass  # timezone import removed — using module-level _SAST
             _th_last = datetime.fromisoformat(_thf.read().strip())
-            _th_age_h = round((datetime.now(_tz.utc) - _th_last).total_seconds() / 3600, 1)
+            _th_age_h = round((datetime.now(_SAST) - _th_last).total_seconds() / 3600, 1)
             _th_fresh_cls = "s-red" if _th_age_h > 13.0 else "s-green"
             _th_fresh_txt = f"{_th_age_h}h ago"
             if _th_age_h > 13.0:
@@ -8419,10 +8419,10 @@ def _bru_drip_preview_payload(video_idx: int) -> dict | None:
     }
 
 
-def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime, alerts_sends: list | None = None) -> dict:
+def _build_so_timeline(day_str: str, items: list[dict], now_sast: datetime, alerts_sends: list | None = None) -> dict:
     """Build timeline + KPI payload for a given SAST day string (YYYY-MM-DD)."""
-    cutoff24 = now_utc - timedelta(hours=24)
-    horizon_12h = now_utc + timedelta(hours=12)
+    cutoff24 = now_sast - timedelta(hours=24)
+    horizon_12h = now_sast + timedelta(hours=12)
     kpi_posted = kpi_pending = kpi_failed = kpi_queue = kpi_overdue_queue = kpi_pastdue = kpi_unscheduled = 0
     for it in items:
         st  = (it.get("status") or "").lower().strip()
@@ -8438,18 +8438,18 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime, alert
         elif st != "archived":
             if st in _SO_PENDING_ST:
                 kpi_pending += 1
-            if sch and now_utc <= sch <= horizon_12h:
+            if sch and now_sast <= sch <= horizon_12h:
                 kpi_queue += 1
-            if sch and sch < now_utc and st in _SO_PENDING_ST and rfa in ("yes", "true", "1", "y"):
+            if sch and sch < now_sast and st in _SO_PENDING_ST and rfa in ("yes", "true", "1", "y"):
                 kpi_pastdue += 1
             if not sch and st in _SO_PENDING_ST:
                 kpi_unscheduled += 1
         if (st in _SO_OVERDUE_QUEUE_ST
-                and sch and sch < now_utc
+                and sch and sch < now_sast
                 and rfa in ("yes", "true", "1", "y")):
             kpi_overdue_queue += 1
 
-    now_sast = now_utc.astimezone(_SAST)
+    now_sast = now_sast.astimezone(_SAST)
     now_mins = now_sast.hour * 60 + now_sast.minute if day_str == now_sast.strftime("%Y-%m-%d") else -1
 
     channels = []
@@ -8487,7 +8487,7 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime, alert
                     elif _final_uploaded:
                         reel_state = "queued"  # master uploaded, awaiting publisher cron
                     elif raw_st not in _reel_excl:
-                        if sdt and sdt < now_utc:
+                        if sdt and sdt < now_sast:
                             reel_state = "overdue"      # past scheduled time, no final
                         else:
                             reel_state = "needs_upload" # before scheduled time, no final
@@ -8594,8 +8594,8 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime, alert
 @require_auth
 def api_so_timeline():
     from datetime import date as _date
-    now_utc = datetime.now(_SAST)
-    today_sast = now_utc.astimezone(_SAST)
+    now_sast = datetime.now(_SAST)
+    today_sast = now_sast.astimezone(_SAST)
 
     day_param = request.args.get("day", "").strip()
     if day_param:
@@ -8616,20 +8616,20 @@ def api_so_timeline():
             _alerts_sends2 = _fetch_alerts_send_log(_asl_conn2, limit=50)
         finally:
             _asl_conn2.close()
-    payload = _build_so_timeline(day_str, items, now_utc, alerts_sends=_alerts_sends2)
+    payload = _build_so_timeline(day_str, items, now_sast, alerts_sends=_alerts_sends2)
     return Response(json.dumps(payload), mimetype="application/json")
 
 
-def _build_so_queue(items: list[dict], now_utc: datetime, horizon_hours: int = 12) -> dict:
+def _build_so_queue(items: list[dict], now_sast: datetime, horizon_hours: int = 12) -> dict:
     """Next `horizon_hours` of scheduled posts across all channels, sorted by scheduled time."""
-    horizon = now_utc + timedelta(hours=horizon_hours)
+    horizon = now_sast + timedelta(hours=horizon_hours)
     posts: list[dict] = []
     for it in items:
         st = (it.get("status") or "").lower().strip()
         if st in _SO_POSTED_ST or st in _SO_FAILED_ST or st == "archived":
             continue
         sch = parse_ts(it.get("scheduled_time") or "")
-        if not sch or sch < now_utc or sch > horizon:
+        if not sch or sch < now_sast or sch > horizon:
             continue
         ch_key = _so_norm_channel(it.get("channel") or "")
         ss = sch.astimezone(_SAST)
@@ -8651,7 +8651,7 @@ def _build_so_queue(items: list[dict], now_utc: datetime, horizon_hours: int = 1
             "sched":            ss.strftime("%a %H:%M"),
             "sched_full":       _render_sast(sch),
             "sched_iso":        sch.astimezone(_SAST).isoformat(),
-            "mins_until":       int((sch - now_utc).total_seconds() // 60),
+            "mins_until":       int((sch - now_sast).total_seconds() // 60),
         })
     posts.sort(key=lambda p: p["sched_iso"])
     return {
@@ -8664,14 +8664,14 @@ def _build_so_queue(items: list[dict], now_utc: datetime, horizon_hours: int = 1
 @app.route("/admin/api/social-ops/queue")
 @require_auth
 def api_so_queue():
-    now_utc = datetime.now(_SAST)
+    now_sast = datetime.now(_SAST)
     try:
         horizon = int(request.args.get("hours", "12"))
     except ValueError:
         horizon = 12
     horizon = max(1, min(horizon, 72))
     items, _ = _fetch_marketing_queue()
-    payload = _build_so_queue(items, now_utc, horizon)
+    payload = _build_so_queue(items, now_sast, horizon)
     return _no_store(Response(json.dumps(payload), mimetype="application/json"))
 
 

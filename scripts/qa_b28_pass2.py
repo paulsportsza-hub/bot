@@ -2,7 +2,10 @@
 """QA-BASELINE-28 Pass 2: Capture cards 1-4 from page 1 (fresh trigger)."""
 from __future__ import annotations
 import asyncio, json, os, sys, time
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -114,7 +117,7 @@ async def main():
             "text": detail_text,
             "cb_buttons": detail_cb,
             "url_buttons": detail_url,
-            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "captured_at": datetime.now(SAST).isoformat(),
         })
 
         # Go back - find hot:back button

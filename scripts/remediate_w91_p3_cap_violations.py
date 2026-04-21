@@ -28,7 +28,10 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 from pathlib import Path
 
 BOT_DIR = Path(__file__).resolve().parent.parent
@@ -93,7 +96,7 @@ def main() -> int:
     fixed = 0
     skipped = 0
     untouched = 0
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(SAST).isoformat()
 
     for match_id, html, created_at in rows:
         if not html:

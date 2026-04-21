@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +43,7 @@ def _read_cache(key: str, ttl_hours: int = 24) -> Any | None:
     try:
         data = json.loads(path.read_text())
         fetched = datetime.fromisoformat(data["fetched_at"])
-        if datetime.now(timezone.utc) - fetched < timedelta(hours=ttl_hours):
+        if datetime.now(SAST) - fetched < timedelta(hours=ttl_hours):
             return data["payload"]
     except Exception as e:
         log.warning("Cache read failed for %s: %s", key, e)
@@ -53,7 +56,7 @@ def _write_cache(key: str, payload: Any) -> None:
     try:
         path.write_text(json.dumps({
             "payload": payload,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "fetched_at": datetime.now(SAST).isoformat(),
         }, ensure_ascii=False))
     except Exception as e:
         log.warning("Cache write failed for %s: %s", key, e)

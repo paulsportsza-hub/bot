@@ -12,7 +12,10 @@ Usage:
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
+SAST = ZoneInfo("Africa/Johannesburg")
+UTC = ZoneInfo("UTC")
 
 import requests
 
@@ -39,7 +42,7 @@ def post_deploy_entry(
     """Create a ledger entry in Notion. Returns True on success, False on failure."""
     sha = _git_sha()
     short_sha = sha[:7] if sha != "unknown" else "unknown"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(SAST)
     date_str = now.strftime("%Y-%m-%d")
     ts_iso = now.isoformat()
 
