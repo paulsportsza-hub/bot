@@ -1313,11 +1313,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ob = _get_ob(user.id)
         ob["step"] = "experience"
         name = h(user.first_name or "")
-        # Remove persistent keyboard during onboarding
-        await update.message.reply_text(
-            "🇿🇦 Setting up your profile…",
-            reply_markup=ReplyKeyboardRemove(),
-        )
         text = textwrap.dedent(f"""\
             <b>🇿🇦 Welcome to MzansiEdge, {name}!</b>
 
@@ -1325,11 +1320,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
             <b>Step 1/5:</b> What's your betting experience?
         """)
+        # ReplyKeyboardRemove on the welcome photo dismisses the sticky keyboard without a text message
         await send_card_or_fallback(
             bot=_g_bot, chat_id=update.message.chat_id,
             template="onboarding_welcome.html",
             data=build_onboarding_welcome_data(user.first_name or ""),
-            text_fallback=text, markup=None, message_to_edit=None,
+            text_fallback=text, markup=ReplyKeyboardRemove(), message_to_edit=None,
         )
         await send_card_or_fallback(
             bot=_g_bot, chat_id=update.message.chat_id,
@@ -23776,11 +23772,6 @@ async def handle_ob_restart(query) -> None:
     _onboarding_state.pop(user_id, None)
     ob = _get_ob(user_id)
     ob["step"] = "experience"
-    # Remove sticky keyboard during onboarding
-    await query.message.chat.send_message(
-        "🇿🇦 Setting up your profile…",
-        reply_markup=ReplyKeyboardRemove(),
-    )
     text = textwrap.dedent(f"""\
         <b>🇿🇦 Let's set up your profile!</b>
 

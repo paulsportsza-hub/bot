@@ -199,8 +199,6 @@ async def test_handle_ob_restart_returns_to_experience_step() -> None:
     with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
         await bot.handle_ob_restart(query)
 
-    text = query.message.chat.send_message.await_args.args[0]
-    assert "Setting up your profile" in text
     mock_card.assert_called_once()
     assert mock_card.call_args.kwargs.get("template") == "onboarding_experience.html"
 
