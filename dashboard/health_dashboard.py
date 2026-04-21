@@ -117,6 +117,7 @@ _NOTION_LEDGER_CACHE_TTL = 300  # seconds (LinkedIn / Quora ledgers)
 # -- Reel Kit constants -------------------------------------------------------
 _REEL_CARDS_ROOT = "/var/www/mzansiedge/assets/reel-cards"
 _REEL_MASTERS_ROOT = "/var/www/mzansiedge/assets/reels"
+_REEL_FINALS_ROOT = "/home/paulsportsza/bot/assets/reels"
 _REEL_PUBLIC_BASE = "https://mzansiedge.co.za/assets/reels"
 
 # -- Social Ops asset roots ---------------------------------------------------
@@ -128,6 +129,7 @@ _REEL_PUBLIC_BASE = "https://mzansiedge.co.za/assets/reels"
 _SO_ASSET_ROOTS = (
     "/home/paulsportsza/assets",
     "/home/paulsportsza/MzansiEdge/assets",
+    "/home/paulsportsza/bot/assets",
 )
 _REEL_MARKETING_DATA_SOURCE = NOTION_MARKETING_DB
 MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50 MB upload limit (LOCKED)
@@ -3771,6 +3773,21 @@ def render_automation_content() -> str:
 .so-pv-actions{padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;}
 .so-pv-actions button,.so-pv-actions a{font-family:var(--font-m);font-size:11px;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 10px;cursor:pointer;text-decoration:none;transition:color 150ms,border-color 150ms;}
 .so-pv-actions button:hover,.so-pv-actions a:hover{color:var(--text);border-color:var(--gold);}
+.so-reel-upload-panel{display:flex;flex-direction:column;gap:14px;padding:16px;}
+.so-rup-header{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--text);}
+.so-rup-chip{background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.35);border-radius:10px;padding:2px 10px;font-size:11px;font-weight:600;letter-spacing:.03em;}
+.so-rup-meta{font-size:12px;color:var(--muted);}
+.so-rup-kit-btn button{width:100%;background:var(--surface-alt);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:9px 14px;font-size:12px;font-family:var(--font-m);cursor:pointer;text-align:left;transition:border-color 150ms,background 150ms;}
+.so-rup-kit-btn button:hover{border-color:var(--gold);background:rgba(248,200,48,0.06);}
+.so-rup-drop{border:2px dashed rgba(248,200,48,0.4);border-radius:8px;padding:28px 16px;text-align:center;cursor:pointer;transition:all .18s ease;color:var(--gold);}
+.so-rup-drop:hover,.so-rup-drop.dragover{background:rgba(248,200,48,0.06);border-color:var(--gold);}
+.so-rup-drop svg{display:block;margin:0 auto 10px;opacity:.7;}
+.so-rup-drop-text{font-size:12px;color:var(--muted);}
+.so-rup-browse{color:var(--gold);cursor:pointer;text-decoration:underline;}
+.so-rup-status{font-size:12px;padding:0 2px;}
+.so-rup-status.success{color:#22c55e;}
+.so-rup-status.error{color:#ef4444;}
+.so-rup-uploading{opacity:.55;pointer-events:none;}
 /* ── Platform-native preview frames ─────────────────────────── */
 .pv-frame{max-width:420px;margin:0 auto;font-size:13px;line-height:1.5;color:var(--text);}
 .pv-frame-hdr{display:flex;align-items:center;gap:10px;padding:10px 12px;}
@@ -4154,7 +4171,7 @@ function loadChipStack(posts){
   var stack='<div class="so-chip-stack">';
   for(var i=0;i<posts.length;i++){
     var p=posts[i];
-    stack+='<button class="so-chip-stack-item" onclick="loadPreview(&#39;'+eA(p.id||'')+'&#39;)">'+
+    stack+='<button class="so-chip-stack-item" data-post-id="'+eA(p.id||'')+'">'+
       '<span class="so-chip-stack-ch">'+eH(p.ch||'')+'</span>'+
       '<span class="so-chip-stack-time">'+eH(p.sched||'')+'</span>'+
       '<span class="so-chip-stack-title">'+eH(p.title||'(no title)')+'</span>'+
@@ -4162,6 +4179,9 @@ function loadChipStack(posts){
   }
   stack+='</div>';
   ld.innerHTML=meta+'<div class="so-pv-body">'+stack+'</div><div class="so-pv-actions"></div>';
+  ld.querySelectorAll('.so-chip-stack-item').forEach(function(btn){
+    btn.addEventListener('click',function(){var pid=btn.getAttribute('data-post-id');if(pid)loadPreview(pid);});
+  });
 }
 
 // ── Preview pane ──────────────────────────────────────────────────────
@@ -4189,6 +4209,7 @@ function showPreview(p){
   document.getElementById('so-pv-meta').innerHTML=chips;
   document.getElementById('so-pv-body').innerHTML=renderPvBody(p);
   initPvCarousels();
+  if(p.reel_state==='overdue')soReelUploadInit();
   var acts=[];
   if((p.status||'').match(/fail|error|block/i))acts.push('<button onclick="alert(\\'Retry: use Notion to re-queue this post\\')">Retry</button>');
   if((p.status||'').match(/pending|queue|sched|ready|await/i))acts.push('<button onclick="alert(\\'Skip: use Notion to update status\\')">Skip</button>');
@@ -4322,6 +4343,8 @@ function renderLinkedInFrame(p,media){
 }
 function renderPvBody(p){
   var ch=(p.channel||'').toLowerCase();
+  // Awaiting-upload reel: show specialized upload panel instead of IG preview
+  if(p.reel_state==='overdue'&&ch.includes('instagram')){return renderReelUploadPanel(p);}
   var media=renderPvMedia(p,ch);
   if(ch.includes('instagram'))return renderIgFrame(p,media);
   if(ch.includes('tiktok'))return renderTikTokFrame(p,media);
@@ -4421,6 +4444,88 @@ function initPvCarousels(){
     },{passive:true});
     update();
   });
+}
+// ── Reel upload panel ─────────────────────────────────────────────────────────
+function renderReelUploadPanel(p){
+  var rawSched=p.scheduled||'';
+  var datePart=rawSched.split(' ')[0]||'';
+  var slotPart=rawSched.split(' ')[1]||'19:00';
+  var rowId=p.id||'';
+  return'<div class="so-reel-upload-panel">'+
+    '<div class="so-rup-header">🎥 IG Reel<span class="so-rup-chip">AWAITING UPLOAD</span></div>'+
+    '<div class="so-rup-meta">'+eH(datePart)+' &middot; '+eH(slotPart)+' SAST &middot; Upload your Premiere Pro export to queue this reel.</div>'+
+    '<div class="so-rup-kit-btn">'+
+      '<button onclick="soReelOpenKit('+JSON.stringify(datePart)+')">📦 Open Reel Kit in Task Hub →</button>'+
+    '</div>'+
+    '<div class="so-rup-upload" id="so-rup-zone" data-row="'+eA(rowId)+'" data-date="'+eA(datePart)+'">'+
+      '<div class="so-rup-drop" id="so-rup-drop">'+
+        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>'+
+        '<div class="so-rup-drop-text">Drop <b>master.mp4</b> here or <label class="so-rup-browse" for="so-rup-file">browse</label></div>'+
+        '<input type="file" id="so-rup-file" accept="video/mp4" style="display:none">'+
+      '</div>'+
+    '</div>'+
+    '<div id="so-rup-status" class="so-rup-status"></div>'+
+  '</div>';
+}
+function soReelOpenKit(date){
+  fetch('/admin/api/reel-kit-url?date='+encodeURIComponent(date),{credentials:'same-origin'})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(d.found&&d.url){window.open(d.url,'_blank','noopener,noreferrer');}
+      else{var b=document.getElementById('so-rup-status');if(b){b.textContent='No Reel Kit found for '+date+' — run reel_generator.py first.';b.className='so-rup-status error';}}
+    })
+    .catch(function(){var b=document.getElementById('so-rup-status');if(b){b.textContent='Could not resolve Reel Kit URL.';b.className='so-rup-status error';}});
+}
+function soReelUploadFile(file,rowId,date){
+  var status=document.getElementById('so-rup-status');
+  var zone=document.getElementById('so-rup-zone');
+  var drop=document.getElementById('so-rup-drop');
+  if(!file){return;}
+  if(!file.type.includes('mp4')&&!file.name.endsWith('.mp4')){
+    if(status){status.textContent='Please select an MP4 file.';status.className='so-rup-status error';}
+    return;
+  }
+  if(zone)zone.classList.add('so-rup-uploading');
+  if(status){status.textContent='Uploading…';status.className='so-rup-status';}
+  var fd=new FormData();
+  fd.append('row_id',rowId);
+  fd.append('date',date);
+  fd.append('file',file);
+  fetch('/admin/reel/upload',{method:'POST',body:fd,credentials:'same-origin'})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(zone)zone.classList.remove('so-rup-uploading');
+      if(d.ok){
+        // Show success
+        if(drop)drop.innerHTML='<div style="color:var(--green);text-align:center">✅ Uploaded — queued for 19:00 SAST</div>';
+        if(status){status.textContent='Master MP4 uploaded. Refreshing timeline…';status.className='so-rup-status success';}
+        // Instant local glyph repaint: strip flash class
+        var glyphBtn=document.querySelector('[data-post-id="'+rowId+'"]');
+        if(glyphBtn){glyphBtn.classList.remove('so-tl-reel-flash');}
+        // Force timeline refresh (will confirm queued state from server)
+        if(typeof refreshTimeline==='function')refreshTimeline();
+      } else {
+        if(status){status.textContent='Upload failed: '+(d.error||'unknown error');status.className='so-rup-status error';}
+      }
+    })
+    .catch(function(err){
+      if(zone)zone.classList.remove('so-rup-uploading');
+      if(status){status.textContent='Network error — upload failed.';status.className='so-rup-status error';}
+    });
+}
+function soReelUploadInit(){
+  var zone=document.getElementById('so-rup-zone');
+  if(!zone)return;
+  var drop=document.getElementById('so-rup-drop');
+  var fileInput=document.getElementById('so-rup-file');
+  var rowId=zone.dataset.row;
+  var date=zone.dataset.date;
+  if(!drop||!fileInput||!rowId||!date)return;
+  drop.addEventListener('click',function(e){if(e.target.tagName!=='LABEL')fileInput.click();});
+  drop.addEventListener('dragover',function(e){e.preventDefault();drop.classList.add('dragover');});
+  drop.addEventListener('dragleave',function(){drop.classList.remove('dragover');});
+  drop.addEventListener('drop',function(e){e.preventDefault();drop.classList.remove('dragover');soReelUploadFile(e.dataTransfer.files[0],rowId,date);});
+  fileInput.addEventListener('change',function(){soReelUploadFile(fileInput.files[0],rowId,date);});
 }
 function showPvErr(){
   document.getElementById('so-pv-skel').style.display='none';
@@ -7926,6 +8031,13 @@ def _so_extract_pick_id(item: dict) -> str:
     return ""
 
 
+def _reel_has_final(page_id: str, date_str: str) -> bool:
+    """True if a master MP4 has been uploaded for this MOQ row (Social Ops upload flow)."""
+    if not page_id or not date_str:
+        return False
+    return os.path.isfile(os.path.join(_REEL_FINALS_ROOT, date_str, "final", f"{page_id}.mp4"))
+
+
 def _so_platform_icon_svg(ck: str) -> str:
     """Inline SVG platform icon for the 7 publisher channels. 20×20, currentColor stroke."""
     _ICONS = {
@@ -8229,8 +8341,13 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime) -> di
                 _ttl_lc = (it.get("title") or "").lower()
                 _is_reel = ("reel" in _wt) or ("reel still" in _ttl_lc) or ("reel" in _ttl_lc)
                 if _is_reel:
+                    _reel_date_str = sdt.astimezone(_SAST).strftime("%Y-%m-%d") if sdt else ""
+                    _moq_page_id = it.get("id") or ""
+                    _final_uploaded = _reel_has_final(_moq_page_id, _reel_date_str)
                     if raw_st in _SO_POSTED_ST:
                         reel_state = "published"
+                    elif _final_uploaded:
+                        reel_state = "queued"  # master uploaded, awaiting publisher cron
                     elif sdt < now_utc and raw_st not in _SO_POSTED_ST:
                         reel_state = "overdue"
                     else:
@@ -8521,6 +8638,26 @@ def api_so_post(post_id: str):
 
     import re as _re
     _plain_caption = _re.sub(r'<[^>]+>', '', caption)
+    # Reel metadata for awaiting-upload panel
+    _is_reel_post = (
+        "reel" in (item.get("work_type") or "").lower()
+        or "reel" in (item.get("title") or "").lower()
+    )
+    reel_date_out = sdt.astimezone(_SAST).strftime("%Y-%m-%d") if sdt else ""
+    reel_final_out = _reel_has_final(post_id, reel_date_out) if _is_reel_post else False
+    now_utc_so = datetime.now(timezone.utc)
+    if _is_reel_post and channel_key == "instagram":
+        raw_st_so = (item.get("status") or "").lower().strip()
+        if raw_st_so in _SO_POSTED_ST:
+            reel_state_out = "published"
+        elif reel_final_out:
+            reel_state_out = "queued"
+        elif sdt and sdt < now_utc_so and raw_st_so not in _SO_POSTED_ST:
+            reel_state_out = "overdue"
+        else:
+            reel_state_out = "queued"
+    else:
+        reel_state_out = ""
     payload = {
         "id":              post_id,
         "channel":         item.get("channel") or "",
@@ -8546,6 +8683,9 @@ def api_so_post(post_id: str):
         "error_message":   item.get("error") or "",
         "campaign":        item.get("campaign_theme") or "",
         "platform_notes":  item.get("platform_notes") or "",
+        "reel_state":      reel_state_out,
+        "reel_date":       reel_date_out,
+        "reel_has_final":  reel_final_out,
     }
     return Response(json.dumps(payload), mimetype="application/json")
 
@@ -8579,6 +8719,78 @@ def api_reel_kit():
 
 
 _RE_NOTION_REEL_KIT = re.compile(r"^🎥 Reel Kit (\d{4}-\d{2}-\d{2})")
+
+
+@app.route("/admin/api/reel-kit-url")
+@require_auth
+def api_reel_kit_url():
+    """Return the Notion deep-link for today's Reel Kit block in Task Hub.
+
+    Accepts ?date=YYYY-MM-DD. Returns {found, url} or {found: false}.
+    """
+    date_str = request.args.get("date", "").strip()
+    if not date_str or not _RE_DATE.match(date_str):
+        return Response('{"found":false,"error":"invalid date"}', status=400, mimetype="application/json")
+    data = _notion_request(f"blocks/{NOTION_TASK_HUB_PAGE}/children?page_size=100")
+    if not data:
+        return Response('{"found":false,"error":"task hub unavailable"}', status=502, mimetype="application/json")
+    page_id_clean = NOTION_TASK_HUB_PAGE.replace("-", "")
+    for block in data.get("results", []):
+        if block.get("type") != "to_do":
+            continue
+        texts = block.get("to_do", {}).get("rich_text", [])
+        text = "".join(t["plain_text"] for t in texts)
+        m = _RE_NOTION_REEL_KIT.match(text)
+        if m and m.group(1) == date_str:
+            block_id_clean = block["id"].replace("-", "")
+            notion_url = f"https://www.notion.so/{page_id_clean}#{block_id_clean}"
+            return Response(json.dumps({"found": True, "url": notion_url}), mimetype="application/json")
+    return Response(json.dumps({"found": False}), mimetype="application/json")
+
+
+@app.route("/admin/reel/upload", methods=["POST"])
+@require_auth
+def api_reel_final_upload():
+    """POST — upload master Reel MP4 for an existing MOQ row (Social Ops flow).
+
+    Form fields: row_id (MOQ Notion page ID), date (YYYY-MM-DD), file (MP4).
+    Saves to _REEL_FINALS_ROOT/<date>/final/<row_id>.mp4.
+    Updates the MOQ row's Asset Link in Notion.
+    """
+    if request.content_length and request.content_length > MAX_CONTENT_LENGTH:
+        return Response('{"ok":false,"error":"file too large (max 50 MB)"}', status=413, mimetype="application/json")
+    f = request.files.get("file")
+    row_id = (request.form.get("row_id") or "").strip()
+    date_str = (request.form.get("date") or "").strip()
+    if not f or not row_id or not date_str:
+        return Response('{"ok":false,"error":"missing file, row_id, or date"}', status=400, mimetype="application/json")
+    if not _RE_DATE.match(date_str):
+        return Response('{"ok":false,"error":"invalid date format"}', status=400, mimetype="application/json")
+    # Validate row_id looks like a UUID/Notion page ID
+    if not re.match(r'^[0-9a-f-]{32,36}$', row_id, re.I):
+        return Response('{"ok":false,"error":"invalid row_id"}', status=400, mimetype="application/json")
+    # Save the file
+    finals_dir = os.path.join(_REEL_FINALS_ROOT, date_str, "final")
+    os.makedirs(finals_dir, exist_ok=True)
+    dest_path = os.path.join(finals_dir, f"{row_id}.mp4")
+    try:
+        f.save(dest_path)
+    except OSError as exc:
+        return Response(json.dumps({"ok": False, "error": f"save failed: {exc}"}), status=500, mimetype="application/json")
+    # Served URL via so_serve_asset (auth-gated admin route)
+    video_url = f"/admin/social-ops/asset/reels/{date_str}/final/{row_id}.mp4"
+    # Update the MOQ row's Asset Link in Notion
+    patch_body = {"properties": {"Asset Link": {"url": video_url}}}
+    _notion_request(f"pages/{row_id}", body=patch_body, method="PATCH")
+    # Invalidate Social Ops cache so next timeline fetch shows queued state
+    with _page_cache_lock:
+        _page_cache.pop("social_ops_full", None)
+    with _notion_cache_lock:
+        _notion_cache.pop("marketing_queue", None)
+    return Response(
+        json.dumps({"ok": True, "video_url": video_url, "row_id": row_id}),
+        mimetype="application/json",
+    )
 
 
 def _fetch_overdue_notion_reel_kits() -> list[dict]:
