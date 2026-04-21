@@ -26105,7 +26105,13 @@ async def _handle_sub_email(update: Update, user_id: int) -> bool:
 
     try:
         ref = f"mze-{user_id}-{plan_code}-{os.urandom(3).hex()}"
-        result = await stitch_service.create_payment(user_id, amount_cents=amount, reference=ref)
+        result = await stitch_service.create_payment(
+            user_id,
+            amount_cents=amount,
+            reference=ref,
+            payer_name=getattr(db_user, "first_name", None) if db_user else None,
+            payer_email=state.get("email"),
+        )
         payment_url = result["payment_url"]
         payment_id = result["payment_id"]
         reference = result["reference"]

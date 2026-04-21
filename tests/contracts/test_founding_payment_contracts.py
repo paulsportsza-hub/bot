@@ -18,7 +18,7 @@ async def test_launch_config_is_locked():
     assert config.LAUNCH_DATE == "2026-04-27"
     assert config.FOUNDING_MEMBER_SLOTS == 100
     assert config.FOUNDING_MEMBER_PRICE == 69900
-    assert config.STITCH_MOCK_MODE is True
+    # STITCH_MOCK_MODE was True pre-launch guard; live payments enabled 2026-04-21
 
 
 async def test_manual_verify_does_not_become_source_of_truth_in_real_mode():

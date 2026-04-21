@@ -128,11 +128,14 @@ class StitchService:
         user_id: int,
         amount_cents: int = config.TIER_PRICES.get("gold", 9900),
         reference: str | None = None,
+        payer_name: str | None = None,
+        payer_email: str | None = None,
     ) -> dict[str, Any]:
         """Create a payment link via POST /api/v1/payment-links.
 
         Returns {payment_url, payment_id, reference}.
         amount_cents must be an integer (Express takes cents directly).
+        payer_name is required by Express; falls back to "MzansiEdge Member".
         """
         if self._is_mock():
             from services.stitch_mock import MockStitchService
@@ -149,7 +152,10 @@ class StitchService:
         payload: dict[str, Any] = {
             "amount": amount_cents,
             "merchantReference": reference,
+            "payerName": payer_name or "MzansiEdge Member",
         }
+        if payer_email:
+            payload["payerEmailAddress"] = payer_email
 
         async with _stitch_session() as session:
             async with session.post(
@@ -178,7 +184,11 @@ class StitchService:
                 return result
 
     async def get_payment_status(self, payment_id: str) -> dict[str, Any]:
-        """Query payment status via GET /api/v1/payment/{paymentId}.
+        """Query payment status for a payment link or completed payment.
+
+        Express creates a payment LINK (pending) and a PAYMENT (when money moves).
+        We try GET /api/v1/payment-links/{id} first (covers all link states).
+        Falls back to GET /api/v1/payment/{id} for completed payment records.
 
         Returns {status, payment_id} where status is one of:
         success / cancelled / expired / pending / error / unknown.
@@ -189,31 +199,48 @@ class StitchService:
 
         token = await self.get_client_token()
 
+        status_map = {
+            "COMPLETED": "success",
+            "CANCELLED": "cancelled",
+            "EXPIRED": "expired",
+            "PENDING": "pending",
+        }
+
         async with _stitch_session() as session:
+            # Primary: payment-links endpoint (covers PENDING → COMPLETED arc)
+            async with session.get(
+                f"{self.PAYMENT_LINKS_URL}/{payment_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as resp:
+                if resp.status == 200:
+                    body = await resp.json()
+                    if body.get("success"):
+                        payment = body.get("data", {}).get("payment", {})
+                        raw_status = payment.get("status", "")
+                        return {
+                            "status": status_map.get(raw_status, "pending"),
+                            "payment_id": payment_id,
+                            "raw_status": raw_status,
+                        }
+
+            # Fallback: payment record endpoint (for already-completed payments)
             async with session.get(
                 f"{self.PAYMENT_URL}/{payment_id}",
                 headers={"Authorization": f"Bearer {token}"},
             ) as resp:
-                body = await resp.json()
+                if resp.status == 200:
+                    body = await resp.json()
+                    if body.get("success"):
+                        payment = body.get("data", {}).get("payment", {})
+                        raw_status = payment.get("status", "")
+                        return {
+                            "status": status_map.get(raw_status, "pending"),
+                            "payment_id": payment_id,
+                            "raw_status": raw_status,
+                        }
 
-                if resp.status != 200 or not body.get("success"):
-                    log.error("Stitch Express status error %s: %s", resp.status, body)
-                    return {"status": "error", "payment_id": payment_id}
-
-                payment = body.get("data", {}).get("payment", {})
-                raw_status = payment.get("status", "")
-
-                status_map = {
-                    "COMPLETED": "success",
-                    "CANCELLED": "cancelled",
-                    "EXPIRED": "expired",
-                    "PENDING": "pending",
-                }
-                return {
-                    "status": status_map.get(raw_status, "pending"),
-                    "payment_id": payment_id,
-                    "raw_status": raw_status,
-                }
+        log.error("Stitch Express: could not retrieve status for %s", payment_id)
+        return {"status": "unknown", "payment_id": payment_id}
 
     def verify_webhook(self, headers: dict[str, str], body: bytes) -> bool:
         """Verify Stitch Express webhook Svix signature.
