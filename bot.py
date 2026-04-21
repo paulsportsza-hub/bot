@@ -7903,7 +7903,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "\n"
             "Examples of good verdicts:\n"
             "\n"
-            "\"Draw money at WSB is the play. Maresca's Chelsea are in terrible form — four losses from their last five — but United don't come here and run riot. Back the draw.\"\n"
+            "\"The draw is where the money is. Maresca's Chelsea are in terrible form — four losses from their last five — but United don't come here and run riot. Back the draw.\"\n"
             "\n"
             "\"Amakhosi at home is the call. Chiefs have won four of their last five and the Bucs are in poor nick on the road. Back Amakhosi.\"\n"
             "\n"
@@ -8387,7 +8387,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             "\n"
             "Examples of good verdicts:\n"
             "\n"
-            "\"Draw money at WSB is the play. Maresca's Chelsea are in terrible form — four losses from their last five — but United don't come here and run riot. Back the draw.\"\n"
+            "\"The draw is where the money is. Maresca's Chelsea are in terrible form — four losses from their last five — but United don't come here and run riot. Back the draw.\"\n"
             "\n"
             "\"Amakhosi at home is the call. Chiefs have won four of their last five and the Bucs are in poor nick on the road. Back Amakhosi.\"\n"
             "\n"
@@ -8500,7 +8500,24 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
                 return _cap_verdict(_render_verdict_deterministic(spec))
             return ""
 
-        return _fix_orphan_back(_strip_markdown(checked))
+        _final = _fix_orphan_back(_strip_markdown(checked))
+
+        # INV-VERDICT-CONSTRAINED-FLOOR-01: tier-aware quality gate.
+        # Mirrors the narrative-path gate (min_verdict_quality) so the short
+        # card-field verdict cannot fall below the tier floor. Without this,
+        # outputs like "Villa at 2.00 with WSB is the play." (35 chars) pass
+        # all content gates and land on Gold cards below the 110-char floor.
+        if isinstance(spec, NarrativeSpec):
+            from narrative_spec import min_verdict_quality
+            _tier = (getattr(spec, "edge_tier", "") or "bronze").lower()
+            if not min_verdict_quality(_final, _tier, allowed_data):
+                log.warning(
+                    "_generate_verdict_constrained: quality gate fail (tier=%s, len=%d): %r",
+                    _tier, len(_final), _final[:120],
+                )
+                return _cap_verdict(_render_verdict_deterministic(spec))
+
+        return _final
     except Exception as exc:
         log.warning("_generate_verdict_constrained failed: %s", exc)
         try:
@@ -8995,9 +9012,23 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
                 log.info("VERDICT_BLACKLISTED_CACHED: %s, will regenerate", match_key)
                 _use_cached_verdict = False
             elif _cv_text:
-                # FIX-KICKOFF-RELATIVE-01/D2: re-cap on serve — stale cache entries
-                # from older codepaths may exceed _VERDICT_MAX_CHARS.
-                enriched["verdict"] = _cap_verdict(_cv_text, limit=_VERDICT_MAX_CHARS)
+                # INV-VERDICT-CONSTRAINED-FLOOR-01: serve-time tier-aware length floor.
+                # Defence in depth — reject cached verdicts written before the
+                # generator-side floor landed (pre-2026-04-21 rows). Forces
+                # regeneration via the live path, which now enforces the floor.
+                from narrative_spec import MIN_VERDICT_CHARS_BY_TIER as _MIN_BY_TIER
+                _cv_tier = (tip.get("edge_tier") or enriched.get("edge_tier") or "bronze").lower()
+                _cv_floor = _MIN_BY_TIER.get(_cv_tier, _MIN_BY_TIER["bronze"])
+                if len(_cv_text.strip()) < _cv_floor:
+                    log.info(
+                        "VERDICT_UNDER_FLOOR_CACHED: %s tier=%s len=%d floor=%d, will regenerate",
+                        match_key, _cv_tier, len(_cv_text.strip()), _cv_floor,
+                    )
+                    _use_cached_verdict = False
+                else:
+                    # FIX-KICKOFF-RELATIVE-01/D2: re-cap on serve — stale cache entries
+                    # from older codepaths may exceed _VERDICT_MAX_CHARS.
+                    enriched["verdict"] = _cap_verdict(_cv_text, limit=_VERDICT_MAX_CHARS)
             else:
                 _use_cached_verdict = False
         if not _use_cached_verdict:

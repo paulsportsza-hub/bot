@@ -1789,12 +1789,22 @@ async def _generate_one(
                 narrative = w82_baseline
                 narrative_source = "w82"
 
+    # W91-P3 VERDICT-CAP-ALL-TIERS: apply `_cap_verdict` safety net for ALL
+    # tiers (not just gold/diamond).  Sonnet-polished narratives for silver
+    # and bronze edges have been observed emitting verdicts 220–314 chars,
+    # violating the _VERDICT_MAX_CHARS=200 hard cap documented in
+    # narrative_spec.py.  Applying the cap across every tier ensures
+    # QA tests and end users see a uniform maximum length.
+    _pregen_edge_tier = edge.get("tier", "bronze")
+    if narrative and not _is_non_edge:
+        from narrative_spec import cap_verdict_in_narrative as _cap_all
+        narrative = _cap_all(narrative)
+
     # BUILD-VERDICT-QUALITY-GATE-01: Gold/Diamond tier quality gate.
     # If the final narrative's verdict is content-empty, attempt ONE Sonnet
     # retry.  If the retry also fails, mark gold_verdict_failed and abort —
     # do NOT serve the deterministic baseline for Gold/Diamond tier.
     _gold_verdict_failed = False
-    _pregen_edge_tier = edge.get("tier", "bronze")
     if narrative and _pregen_edge_tier in ("gold", "diamond") and not _is_non_edge:
         from narrative_spec import (
             min_verdict_quality,
@@ -1827,13 +1837,14 @@ async def _generate_one(
             if _bt_idx >= 0:
                 _log_integrity_event("banned_template_hit", fixture_id=match_key,
                                      reason=f"template_idx={_bt_idx}")
+        _failure_reason = "verdict_quality_gate_double_fail"
         if not min_verdict_quality(_verdict_text_raw, tier=_pregen_edge_tier, evidence_pack=_mgr_ep):
             # MONITOR-P0-FIX-01: instrument validator_rejection
             _log_integrity_event("validator_rejection", fixture_id=match_key,
                                  reason=f"tier={_pregen_edge_tier},len={len(_verdict_text_raw)}")
             log.warning(
                 "GOLD-QUALITY-GATE: verdict failed quality check for %s "
-                "(tier=%s, verdict_len=%d) — attempting Sonnet retry",
+                "(tier=%s, verdict_len=%d)",
                 match_key, _pregen_edge_tier, len(_verdict_text_raw),
             )
 
@@ -1845,8 +1856,8 @@ async def _generate_one(
             if _cur_rejections >= _BANNED_SHAPE_SKIP_THRESHOLD:
                 log.warning(
                     "GOLD-QUALITY-GATE: %s has %d consecutive banned-shape rejections "
-                    "— marking skipped_banned_shape",
-                    match_key, _cur_rejections,
+                    "— marking skipped_banned_shape (threshold=%d, retry skipped)",
+                    match_key, _cur_rejections, _BANNED_SHAPE_SKIP_THRESHOLD,
                 )
                 try:
                     from scrapers.db_connect import connect_odds_db as _sbs_conn
@@ -1865,8 +1876,17 @@ async def _generate_one(
                         "AC3: could not mark skipped_banned_shape for %s: %s",
                         match_key, _sbs_err,
                     )
+                _failure_reason = (
+                    f"verdict_quality_gate_first_fail_threshold_skip_"
+                    f"threshold={_BANNED_SHAPE_SKIP_THRESHOLD}"
+                )
                 _gold_verdict_failed = True
             else:
+                log.info(
+                    "GOLD-QUALITY-GATE: attempting Sonnet retry for %s "
+                    "(rejection=%d/%d)",
+                    match_key, _cur_rejections, _BANNED_SHAPE_SKIP_THRESHOLD,
+                )
                 # Retry: one more Sonnet generation attempt
                 _retry_narrative = ""
                 try:
@@ -1896,6 +1916,7 @@ async def _generate_one(
                     )
                 # Evaluate retry result
                 if _retry_narrative:
+                    _retry_narrative = cap_verdict_in_narrative(_retry_narrative)
                     _retry_verdict = _extract_verdict_text(_retry_narrative)
                     if min_verdict_quality(_retry_verdict, tier=_pregen_edge_tier, evidence_pack=_mgr_ep):
                         narrative = _retry_narrative
@@ -1904,6 +1925,7 @@ async def _generate_one(
                             "GOLD-QUALITY-GATE: retry succeeded for %s", match_key
                         )
                     else:
+                        _failure_reason = "verdict_quality_gate_double_fail"
                         _gold_verdict_failed = True
                         log.error(
                             "GOLD-QUALITY-GATE: second attempt also failed for %s "
@@ -1911,6 +1933,7 @@ async def _generate_one(
                             match_key, _pregen_edge_tier,
                         )
                 else:
+                    _failure_reason = "verdict_quality_gate_retry_empty"
                     _gold_verdict_failed = True
                     log.error(
                         "GOLD-QUALITY-GATE: retry returned no narrative for %s "
@@ -1947,7 +1970,7 @@ async def _generate_one(
                         _pregen_edge_tier,
                         f"{home} vs {away}",
                         _gvf_pick,
-                        "verdict_quality_gate_double_fail",
+                        _failure_reason,
                     ),
                 )
                 _gvf_c.commit()

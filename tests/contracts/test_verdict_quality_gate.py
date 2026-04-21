@@ -317,5 +317,129 @@ class TestGoldEdgeModelGate(unittest.TestCase):
         assert "bronze" not in ("gold", "diamond")
 
 
+# ── INV-VERDICT-CONSTRAINED-FLOOR-01 ──────────────────────────────────────────
+
+class TestConstrainedVerdictTierFloor(unittest.TestCase):
+    """_generate_verdict_constrained() must enforce tier-aware length floor.
+
+    Regression guard against the Villa/Tottenham Gold leak (2026-04-21):
+    'Villa at 2.00 with WSB is the play.' (35 chars) passed every content
+    gate (meta-leak, echo, field-leak, blacklist, fact-check) and was
+    stored as the Gold card verdict_html despite being far below the
+    110-char Gold floor. The LLM copied 'WSB' from the system prompt's
+    example verdict even though bookmaker='supabets'.
+
+    Fix: after fact-check, apply min_verdict_quality(text, tier, allowed_data).
+    Below floor → deterministic fallback via _render_verdict(spec).
+    """
+
+    def test_under_floor_llm_output_falls_back_to_deterministic(self):
+        """Short LLM output at Gold tier must be replaced by deterministic renderer."""
+        from unittest.mock import patch, MagicMock
+        from narrative_spec import NarrativeSpec
+
+        spec = NarrativeSpec(
+            home_name="Aston Villa",
+            away_name="Tottenham",
+            competition="epl",
+            sport="soccer",
+            home_story_type="neutral",
+            away_story_type="neutral",
+            outcome_label="Aston Villa",
+            bookmaker="supabets",
+            odds=2.0,
+            ev_pct=3.6,
+            edge_tier="gold",
+            verdict_action="back",
+            verdict_sizing="standard stake",
+        )
+        allowed = {
+            "odds": 2.0,
+            "pick": "Aston Villa",
+            "bookmaker": "supabets",
+            "matchup": "Aston Villa vs Tottenham",
+            "league_key": "epl",
+            "confidence_tier": "SOLID",
+            "home_form": ["W", "W", "D", "L", "W"],
+            "away_form": ["L", "D", "W", "L", "L"],
+            "home_team": "Aston Villa",
+            "away_team": "Tottenham",
+            "home_manager": "Unai Emery",
+            "away_manager": "Ange Postecoglou",
+        }
+
+        # Mock the sync openrouter client to return the original 35-char bug output
+        fake_resp = MagicMock()
+        fake_resp.content = [MagicMock(text="Villa at 2.00 with WSB is the play.")]
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = fake_resp
+
+        import bot as _bot
+        with patch("openrouter_client.Anthropic", return_value=fake_client):
+            with patch.object(_bot, "_fact_check_verdict", side_effect=lambda t, _: t):
+                result = _bot._generate_verdict_constrained(spec, allowed)
+
+        # Must NOT pass through the 35-char LLM output
+        assert result != "Villa at 2.00 with WSB is the play."
+        # Must return a non-empty deterministic fallback string
+        assert result, f"Expected non-empty deterministic fallback, got: {result!r}"
+
+    def test_above_floor_llm_output_passes_through(self):
+        """LLM output above the tier floor must be kept (not replaced)."""
+        from unittest.mock import patch, MagicMock
+        from narrative_spec import NarrativeSpec
+
+        spec = NarrativeSpec(
+            home_name="Arsenal",
+            away_name="Chelsea",
+            competition="epl",
+            sport="soccer",
+            home_story_type="momentum",
+            away_story_type="crisis",
+            outcome_label="Arsenal",
+            bookmaker="betway",
+            odds=1.85,
+            ev_pct=6.2,
+            edge_tier="gold",
+            verdict_action="back",
+            verdict_sizing="standard stake",
+        )
+        allowed = {
+            "odds": 1.85,
+            "pick": "Arsenal",
+            "bookmaker": "betway",
+            "matchup": "Arsenal vs Chelsea",
+            "league_key": "epl",
+            "confidence_tier": "SOLID",
+            "home_form": ["W", "W", "W", "D", "W"],
+            "away_form": ["L", "L", "D", "L", "L"],
+            "home_team": "Arsenal",
+            "away_team": "Chelsea",
+            "home_manager": "Mikel Arteta",
+            "away_manager": "Enzo Maresca",
+        }
+
+        # >= 110 char verdict with real analytical substance
+        good_verdict = (
+            "Arsenal at 1.85 is the proper call. Arteta's side come in with four wins from five "
+            "and Chelsea's road record has been grim. The line is fair value."
+        )
+        assert len(good_verdict) >= 110  # sanity
+
+        fake_resp = MagicMock()
+        fake_resp.content = [MagicMock(text=good_verdict)]
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = fake_resp
+
+        import bot as _bot
+        with patch("openrouter_client.Anthropic", return_value=fake_client):
+            with patch.object(_bot, "_fact_check_verdict", side_effect=lambda t, _: t):
+                result = _bot._generate_verdict_constrained(spec, allowed)
+
+        # Must keep the good verdict (possibly post-processed by _fix_orphan_back/_strip_markdown)
+        assert "Arsenal" in result
+        assert len(result) >= 110
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
