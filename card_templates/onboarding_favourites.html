@@ -44,7 +44,7 @@
     <div class="header">
         {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
         <div class="orange-bar"></div>
-        <div class="step-badge">STEP 3 OF 6</div>
+        <div class="step-badge">STEP 3 OF 5</div>
         <div class="sport-header">
             <span class="sport-emoji">{{ sport.emoji }}</span>
             <span class="title">{{ sport.label | upper }}</span>
@@ -52,7 +52,7 @@
     </div>
     <div class="body">
         <div class="question">Pick your favourite teams</div>
-        <div class="hint">Tap to select — up to 5. Your picks shape every tip.</div>
+        <div class="hint">Select using the buttons below — up to 5. Your picks shape every tip.</div>
         {% if selected_count > 0 %}<div class="selected-info">{{ selected_count }} selected</div>{% endif %}
         <div class="teams-grid">
             {% if teams %}

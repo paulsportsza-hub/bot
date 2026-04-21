@@ -1070,21 +1070,22 @@ def kb_onboarding_risk() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def kb_onboarding_notify() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🌅 07:00", callback_data="ob_notify:7"),
-            InlineKeyboardButton("☀️ 12:00", callback_data="ob_notify:12"),
-        ],
-        [
-            InlineKeyboardButton("🌆 18:00", callback_data="ob_notify:18"),
-            InlineKeyboardButton("🌙 21:00", callback_data="ob_notify:21"),
-        ],
-        [
-            InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_notify"),
-            InlineKeyboardButton("🔄 Start Again", callback_data="ob_nav:restart"),
-        ],
-    ])
+# REMOVED: Daily Alerts step (FIX-ONBOARDING-OB-NAV-01)
+# def kb_onboarding_notify() -> InlineKeyboardMarkup:
+#     return InlineKeyboardMarkup([
+#         [
+#             InlineKeyboardButton("🌅 07:00", callback_data="ob_notify:7"),
+#             InlineKeyboardButton("☀️ 12:00", callback_data="ob_notify:12"),
+#         ],
+#         [
+#             InlineKeyboardButton("🌆 18:00", callback_data="ob_notify:18"),
+#             InlineKeyboardButton("🌙 21:00", callback_data="ob_notify:21"),
+#         ],
+#         [
+#             InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_notify"),
+#             InlineKeyboardButton("🔄 Start Again", callback_data="ob_nav:restart"),
+#         ],
+#     ])
 
 
 def kb_onboarding_bankroll() -> InlineKeyboardMarkup:
@@ -1322,7 +1323,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
             Let's set up your profile in a few quick steps.
 
-            <b>Step 1/6:</b> What's your betting experience?
+            <b>Step 1/5:</b> What's your betting experience?
         """)
         await send_card_or_fallback(
             bot=_g_bot, chat_id=update.message.chat_id,
@@ -1733,8 +1734,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         await handle_ob_risk(query, action)
     elif prefix == "ob_bankroll":
         await handle_ob_bankroll(query, action)
-    elif prefix == "ob_notify":
-        await handle_ob_notify(query, action)
+    # REMOVED: Daily Alerts step (FIX-ONBOARDING-OB-NAV-01)
+    # elif prefix == "ob_notify":
+    #     await handle_ob_notify(query, action)
     elif prefix == "ob_fav":
         await handle_ob_fav(query, action)
     elif prefix == "ob_fav_manual":
@@ -4037,7 +4039,7 @@ async def handle_ob_experience(query, level: str) -> None:
     ob["step"] = "sports"
 
     text = textwrap.dedent("""\
-        <b>Step 2/6: Select your sports</b>
+        <b>Step 2/5: Select your sports</b>
 
         Tap to toggle. Hit <b>Done</b> when ready.
     """)
@@ -4061,7 +4063,7 @@ async def handle_ob_sport(query, sport_key: str) -> None:
         ob["selected_sports"].append(sport_key)
 
     text = textwrap.dedent("""\
-        <b>Step 2/6: Select your sports</b>
+        <b>Step 2/5: Select your sports</b>
 
         Tap to toggle. Hit <b>Done</b> when ready.
     """)
@@ -4095,7 +4097,7 @@ async def handle_ob_nav(query, action: str) -> None:
 
     elif action == "back_experience":
         ob["step"] = "experience"
-        text = "<b>Step 1/6:</b> What's your betting experience?"
+        text = "<b>Step 1/5:</b> What's your betting experience?"
         await send_card_or_fallback(
             bot=_g_bot, chat_id=query.message.chat_id,
             template="onboarding_experience.html",
@@ -4106,7 +4108,7 @@ async def handle_ob_nav(query, action: str) -> None:
 
     elif action == "back_sports":
         ob["step"] = "sports"
-        text = "<b>Step 2/6: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+        text = "<b>Step 2/5: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
         await send_card_or_fallback(
             bot=_g_bot, chat_id=query.message.chat_id,
             template="onboarding_sports.html",
@@ -4118,7 +4120,7 @@ async def handle_ob_nav(query, action: str) -> None:
     elif action == "edge_done":
         # Edge explainer acknowledged — move to preferences (risk)
         ob["step"] = "risk"
-        text = "<b>Step 4/6: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
+        text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
         await send_card_or_fallback(
             bot=_g_bot, chat_id=query.message.chat_id,
             template="onboarding_risk.html",
@@ -4136,7 +4138,7 @@ async def handle_ob_nav(query, action: str) -> None:
             await _show_next_team_prompt(query, ob)
         else:
             ob["step"] = "sports"
-            text = "<b>Step 2/6: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+            text = "<b>Step 2/5: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
             await send_card_or_fallback(
                 bot=_g_bot, chat_id=query.message.chat_id,
                 template="onboarding_sports.html",
@@ -4155,7 +4157,7 @@ async def handle_ob_nav(query, action: str) -> None:
                 await _show_next_team_prompt(query, ob)
             else:
                 ob["step"] = "sports"
-                text = "<b>Step 2/6: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
+                text = "<b>Step 2/5: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
                 await send_card_or_fallback(
                     bot=_g_bot, chat_id=query.message.chat_id,
                     template="onboarding_sports.html",
@@ -4170,7 +4172,7 @@ async def handle_ob_nav(query, action: str) -> None:
     elif action == "back_bankroll":
         # Back from bankroll → risk (within Step 4)
         ob["step"] = "risk"
-        text = "<b>Step 4/6: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
+        text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
         await send_card_or_fallback(
             bot=_g_bot, chat_id=query.message.chat_id,
             template="onboarding_risk.html",
@@ -4179,26 +4181,20 @@ async def handle_ob_nav(query, action: str) -> None:
             message_to_edit=query.message,
         )
 
-    elif action == "back_notify":
-        # Back from notify → bankroll (within Step 4)
-        ob["step"] = "bankroll"
-        text = (
-            "<b>Step 4/6: Your preferences — Weekly bankroll</b>\n\n"
-            "How much do you set aside for betting each week?"
-        )
-        await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
-            template="onboarding_bankroll.html",
-            data=build_onboarding_bankroll_data(ob.get("bankroll")),
-            text_fallback=text, markup=kb_onboarding_bankroll(),
-            message_to_edit=query.message,
-        )
+    # REMOVED: Daily Alerts step — back_notify is unreachable (FIX-ONBOARDING-OB-NAV-01)
+    # elif action == "back_notify":
+    #     ob["step"] = "bankroll"
+    #     text = ("<b>Step 4/5: Your preferences — Weekly bankroll</b>\n\n"
+    #             "How much do you set aside for betting each week?")
+    #     await send_card_or_fallback(bot=_g_bot, chat_id=query.message.chat_id,
+    #         template="onboarding_bankroll.html", data=build_onboarding_bankroll_data(ob.get("bankroll")),
+    #         text_fallback=text, markup=kb_onboarding_bankroll(), message_to_edit=query.message)
 
     elif action == "favourites_done":
         # Experienced users skip edge explainer
         if ob.get("experience") == "experienced":
             ob["step"] = "risk"
-            text = "<b>Step 4/6: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
+            text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
             await send_card_or_fallback(
                 bot=_g_bot, chat_id=query.message.chat_id,
                 template="onboarding_risk.html",
@@ -4226,7 +4222,7 @@ async def handle_ob_nav(query, action: str) -> None:
         name = h(query.from_user.first_name or "")
         text = (
             f"<b>🔄 Starting fresh, {name}!</b>\n\n"
-            "<b>Step 1/6:</b> What's your betting experience?"
+            "<b>Step 1/5:</b> What's your betting experience?"
         )
         await send_card_or_fallback(
             bot=_g_bot, chat_id=query.message.chat_id,
@@ -4255,7 +4251,7 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
         ob["_team_input_sport"] = None
         if ob.get("experience") == "experienced":
             ob["step"] = "risk"
-            text = "<b>Step 4/6: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
+            text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
             await send_card_or_fallback(
                 bot=_g_bot, chat_id=query.message.chat_id,
                 template="onboarding_risk.html",
@@ -4282,7 +4278,7 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
     example = config.SPORT_EXAMPLES.get(sport_key, "")
     example_line = f"\n<i>{example}</i>\n" if example else ""
     text = (
-        f"<b>Step 3/6: {emoji} {sport_label} — who do you follow?</b>\n\n"
+        f"<b>Step 3/5: {emoji} {sport_label} — who do you follow?</b>\n\n"
         f"Type your {entity}s separated by commas.\n"
         f"Max 5 per sport.{example_line}\n"
         f"Or type <b>skip</b> to move on."
@@ -4303,7 +4299,7 @@ def _fav_step_text(sport: config.SportDef) -> str:
     """Build the text for the favourites step."""
     label = config.fav_label(sport)
     return (
-        f"<b>Step 3/6: Select your {label}s for {sport.emoji} {sport.label}</b>\n\n"
+        f"<b>Step 3/5: Select your {label}s for {sport.emoji} {sport.label}</b>\n\n"
         f"Type names separated by commas, or tap Skip."
     )
 
@@ -4337,7 +4333,7 @@ async def handle_ob_fav(query, action: str) -> None:
     sport = config.ALL_SPORTS.get(sport_key)
     sport_label = sport.label if sport else sport_key
     sport_emoji = sport.emoji if sport else "🏅"
-    text = _fav_step_text(sport) if sport else "<b>Step 3/6</b>"
+    text = _fav_step_text(sport) if sport else "<b>Step 3/5</b>"
     teams_data = [{"name": t, "selected": t in favs} for t in _get_all_teams_for_sport(sport_key)]
     await send_card_or_fallback(
         bot=_g_bot, chat_id=query.message.chat_id,
@@ -4363,7 +4359,7 @@ async def handle_ob_fav_manual(query, sport_key: str) -> None:
     example = config.SPORT_EXAMPLES.get(sport_key, "")
 
     text = (
-        f"<b>Step 3/6: Type your {label} for {emoji} {sport_name}</b>\n\n"
+        f"<b>Step 3/5: Type your {label} for {emoji} {sport_name}</b>\n\n"
         f"Type a name and send it. I'll try to match it."
     )
     back_markup = InlineKeyboardMarkup([
@@ -4429,7 +4425,7 @@ async def handle_ob_fav_suggest(query, action: str) -> None:
     sport = config.ALL_SPORTS.get(sport_key)
     sport_label = sport.label if sport else sport_key
     sport_emoji = sport.emoji if sport else "🏅"
-    text = _fav_step_text(sport) if sport else "<b>Step 3/6</b>"
+    text = _fav_step_text(sport) if sport else "<b>Step 3/5</b>"
     sel = ob["favourites"][sport_key]
     teams_data = [{"name": t, "selected": t in sel} for t in _get_all_teams_for_sport(sport_key)]
     await send_card_or_fallback(
@@ -4477,22 +4473,16 @@ async def handle_ob_risk(query, risk_key: str) -> None:
     ob = _get_ob(user_id)
     ob["risk"] = risk_key
 
-    # Check if editing risk+notify — go to notify directly
+    # REMOVED: Daily Alerts step — go to summary after risk edit (FIX-ONBOARDING-OB-NAV-01)
     if ob.get("_editing") == "risk":
-        ob["step"] = "notify"
-        text = "<b>⏰ Change Notification Time</b>\n\nWhen do you want daily picks?"
-        await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
-            template="onboarding_notify.html",
-            data=build_onboarding_notify_data(ob.get("notify_hour")),
-            text_fallback=text, markup=kb_onboarding_notify(),
-            message_to_edit=query.message,
-        )
+        ob["_editing"] = None
+        ob["step"] = "summary"
+        await _show_summary(query, ob)
         return
 
     ob["step"] = "bankroll"
     text = (
-        "<b>Step 4/6: Your preferences — Weekly bankroll</b>\n\n"
+        "<b>Step 4/5: Your preferences — Weekly bankroll</b>\n\n"
         "How much do you set aside for betting each week?\n\n"
         "This helps me size my stake suggestions.\n"
         "<i>You can change this anytime in /settings.</i>"
@@ -4506,21 +4496,19 @@ async def handle_ob_risk(query, risk_key: str) -> None:
     )
 
 
-async def handle_ob_notify(query, hour_str: str) -> None:
-    """Set notification hour during onboarding."""
-    user_id = query.from_user.id
-    ob = _get_ob(user_id)
-    ob["notify_hour"] = int(hour_str)
-
-    # Check if editing risk+notify — go back to summary
-    if ob.get("_editing") == "risk":
-        ob["_editing"] = None
-        ob["step"] = "summary"
-        await _show_summary(query, ob)
-        return
-
-    ob["step"] = "summary"
-    await _show_summary(query, ob)
+# REMOVED: Daily Alerts step (FIX-ONBOARDING-OB-NAV-01)
+# async def handle_ob_notify(query, hour_str: str) -> None:
+#     """Set notification hour during onboarding."""
+#     user_id = query.from_user.id
+#     ob = _get_ob(user_id)
+#     ob["notify_hour"] = int(hour_str)
+#     if ob.get("_editing") == "risk":
+#         ob["_editing"] = None
+#         ob["step"] = "summary"
+#         await _show_summary(query, ob)
+#         return
+#     ob["step"] = "summary"
+#     await _show_summary(query, ob)
 
 
 async def handle_ob_bankroll(query, value: str) -> None:
@@ -4534,7 +4522,7 @@ async def handle_ob_bankroll(query, value: str) -> None:
         ob["step"] = "bankroll_custom"
         ob["_bankroll_custom"] = True
         custom_text = (
-            "<b>Step 4/6: Custom bankroll</b>\n\n"
+            "<b>Step 4/5: Custom bankroll</b>\n\n"
             "Type your weekly bankroll amount in Rands.\n"
             "<i>e.g. 750 or 3000</i>"
         )
@@ -4553,7 +4541,7 @@ async def handle_ob_bankroll(query, value: str) -> None:
         ob["step"] = "bankroll"
         ob.pop("_bankroll_custom", None)
         text = (
-            "<b>Step 4/6: Your preferences — Weekly bankroll</b>\n\n"
+            "<b>Step 4/5: Your preferences — Weekly bankroll</b>\n\n"
             "How much do you set aside for betting each week?"
         )
         await send_card_or_fallback(
@@ -4570,15 +4558,9 @@ async def handle_ob_bankroll(query, value: str) -> None:
         except ValueError:
             ob["bankroll"] = None
 
-    ob["step"] = "notify"
-    text = "<b>Step 4/6: Your preferences — Daily picks notification</b>\n\nWhen do you want your daily tips?"
-    await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
-        template="onboarding_notify.html",
-        data=build_onboarding_notify_data(ob.get("notify_hour")),
-        text_fallback=text, markup=kb_onboarding_notify(),
-        message_to_edit=query.message,
-    )
+    # REMOVED: Daily Alerts step — go directly to summary (FIX-ONBOARDING-OB-NAV-01)
+    ob["step"] = "summary"
+    await _show_summary(query, ob)
 
 
 async def _show_summary(query, ob: dict) -> None:
@@ -4620,7 +4602,7 @@ async def _show_summary(query, ob: dict) -> None:
     exp = ob.get("experience") or "casual"
 
     text = (
-        "<b>Step 5/6: Your profile summary</b>\n\n"
+        "<b>Step 5/5: Your profile summary</b>\n\n"
         f"🎯 <b>Experience:</b> {exp_labels.get(exp, exp)}\n\n"
         + "\n".join(sports_lines)
         + f"\n⚖️ <b>Risk:</b> {risk_label}\n"
@@ -4644,26 +4626,24 @@ async def _show_summary(query, ob: dict) -> None:
 
 
 async def _show_plan_step(query, ob: dict) -> None:
-    """Step 6/6: Choose Your Plan — tier selection during onboarding."""
+    """Choose Your Plan — tier selection during onboarding."""
     ob["step"] = "plan"
     founding_left = _founding_days_left()
 
     text = (
-        "<b>Step 6/6: Choose Your Plan</b>\n\n"
+        "<b>Choose Your Plan</b>\n\n"
         "🥉 <b>Bronze — Free</b>\n"
-        "• 3 tips per day\n"
-        "• 24-hour delayed edges\n"
-        "• Basic narratives\n\n"
+        "• 3 detail views per day\n"
+        "• Gold edges blurred, Diamond locked\n"
+        "• Morning teaser picks\n\n"
         "🥇 <b>Gold — R99/month</b>\n"
-        "• Unlimited tips\n"
-        "• Real-time edges\n"
-        "• Full AI breakdowns\n"
-        "• All signal details\n\n"
+        "• Unlimited detail views — no daily cap\n"
+        "• Full card detail on every Bronze, Silver and Gold pick\n"
+        "• Line movement and full odds comparison unlocked\n\n"
         "💎 <b>Diamond — R199/month</b>\n"
-        "• Everything in Gold\n"
-        "• Line movement alerts\n"
-        "• Sharp money indicators\n"
-        "• CLV tracking\n"
+        "• Every edge unlocked — Diamond picks are Diamond-only\n"
+        "• Full AI Breakdown: Setup, Edge, Risk, Verdict\n"
+        "• Personalised alerts tuned to your teams and bankroll\n"
     )
 
     if founding_left > 0:
@@ -4682,7 +4662,17 @@ async def _show_plan_step(query, ob: dict) -> None:
         rows.append([InlineKeyboardButton("🎁 Founding Member Deal", callback_data="ob_plan:founding")])
     rows.append([InlineKeyboardButton("↩️ Back", callback_data="ob_summary:show")])
 
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
+    user_tier = await get_effective_tier(query.from_user.id)
+    remaining_slots = await db.get_remaining_founding_slots()
+    await send_card_or_fallback(
+        bot=query.get_bot(),
+        chat_id=query.message.chat_id,
+        template="sub_plans.html",
+        data=build_sub_plans_data(user_tier, founding_left, remaining_slots),
+        text_fallback=text,
+        markup=InlineKeyboardMarkup(rows),
+        message_to_edit=query.message,
+    )
 
 
 async def _handle_ob_plan(query, action: str, ctx) -> None:
@@ -5375,7 +5365,7 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
             if ob.get("experience") == "experienced":
                 ob["step"] = "risk"
                 await update.message.reply_text(
-                    "<b>Step 4/6: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?",
+                    "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?",
                     parse_mode=ParseMode.HTML,
                     reply_markup=kb_onboarding_risk(),
                 )
@@ -5412,7 +5402,7 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
             example = config.SPORT_EXAMPLES.get(_sk, "")
             example_line = f"\n<i>{example}</i>\n" if example else ""
             text = (
-                f"<b>Step 3/6: {emoji} {sport_label} — who do you follow?</b>\n\n"
+                f"<b>Step 3/5: {emoji} {sport_label} — who do you follow?</b>\n\n"
                 f"Type your {entity}s separated by commas.\n"
                 f"Max 5 per sport.{example_line}\n"
                 f"Or type <b>skip</b> to move on."
@@ -12809,11 +12799,18 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
                 return
             ob["bankroll"] = amount
             ob.pop("_bankroll_custom", None)
-            ob["step"] = "notify"
-            await update.message.reply_text(
-                "<b>Step 4/6: Your preferences — Daily picks notification</b>\n\nWhen do you want your daily tips?",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb_onboarding_notify(),
+            # REMOVED: Daily Alerts step — go directly to summary (FIX-ONBOARDING-OB-NAV-01)
+            ob["step"] = "summary"
+            await send_card_or_fallback(
+                bot=_g_bot, chat_id=update.message.chat_id,
+                template="onboarding_summary.html",
+                data=build_onboarding_summary_data(ob),
+                text_fallback="<b>Step 5/5: Your profile summary</b>\n\nAll set! Tap Next to choose your plan.",
+                markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("➡️ Next — Choose Plan", callback_data="ob_nav:plan")],
+                    [InlineKeyboardButton("✏️ Edit Sports & Teams", callback_data="ob_edit:sports")],
+                    [InlineKeyboardButton("⚙️ Edit Preferences", callback_data="ob_edit:risk")],
+                ]),
             )
         except ValueError:
             await update.message.reply_text(
@@ -23780,7 +23777,7 @@ async def handle_ob_restart(query) -> None:
     text = textwrap.dedent(f"""\
         <b>🇿🇦 Let's set up your profile!</b>
 
-        <b>Step 1/6:</b> What's your betting experience?
+        <b>Step 1/5:</b> What's your betting experience?
     """)
     await send_card_or_fallback(
         bot=_g_bot, chat_id=query.message.chat_id,
@@ -23799,7 +23796,7 @@ async def handle_ob_fav_back(query, sport_key: str) -> None:
     ob["_fav_manual_sport"] = None
 
     sport = config.ALL_SPORTS.get(sport_key)
-    text = _fav_step_text(sport) if sport else "<b>Step 3/6</b>"
+    text = _fav_step_text(sport) if sport else "<b>Step 3/5</b>"
     existing = ob["favourites"].get(sport_key, [])
     teams_data = [
         {"name": t, "selected": t in existing}
