@@ -156,8 +156,120 @@ _in_progress_matches: set[str] = set()
 # AC3 F5 — FIX-VERDICT-SHAPE-GUARD-01: track consecutive banned-shape rejections
 # per fixture within this process run. After 3, mark narrative_cache as
 # skipped_banned_shape so the serving layer falls back to programmatic verdict.
+#
+# W92-VERDICT-QUALITY P3: backed by narrative_skip_log table in odds.db for
+# cross-process persistence. The module-level dict acts as a write-through cache
+# so hot-loop sweeps avoid a DB hit per iteration. DB is system-of-record.
 _banned_shape_reject_count: dict[str, int] = {}
 _BANNED_SHAPE_SKIP_THRESHOLD = 1  # INV-SONNET-SPIKE-01: reduced 3→1; one retry is sufficient, 3 triples cost
+
+
+# W92-VERDICT-QUALITY P3: narrative_skip_log DDL + helpers. Persistent skip counts
+# survive process restarts and give EdgeOps a durable audit trail of which fixtures
+# hit the banned-shape guard and when.
+_NARRATIVE_SKIP_LOG_DDL = """
+CREATE TABLE IF NOT EXISTS narrative_skip_log (
+    match_key TEXT PRIMARY KEY,
+    skip_count INTEGER NOT NULL DEFAULT 0,
+    skipped_flag INTEGER NOT NULL DEFAULT 0,
+    last_updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
+def _load_skip_count(match_key: str) -> int:
+    """Return persisted skip count for ``match_key`` from narrative_skip_log.
+
+    W92-VERDICT-QUALITY P3. Returns 0 if row absent or on any DB error (fail-open).
+    Uses module dict as write-through cache — first call populates cache, then
+    subsequent calls read from dict without touching the DB.
+    """
+    if not match_key:
+        return 0
+    # Cache hit — avoid DB round trip on hot sweep loop.
+    if match_key in _banned_shape_reject_count:
+        return _banned_shape_reject_count[match_key]
+    try:
+        from scrapers.db_connect import connect_odds_db as _skp_conn
+        conn = _skp_conn(str(SCRAPERS_ROOT / "odds.db"), timeout=3)
+        try:
+            conn.execute(_NARRATIVE_SKIP_LOG_DDL)
+            row = conn.execute(
+                "SELECT skip_count FROM narrative_skip_log WHERE match_key = ?",
+                (match_key,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as err:
+        log.debug("narrative_skip_log load failed for %s: %s", match_key, err)
+        return 0
+    count = int(row[0]) if row else 0
+    _banned_shape_reject_count[match_key] = count
+    return count
+
+
+def _bump_skip_count(match_key: str) -> int:
+    """Increment skip count for ``match_key`` and persist to narrative_skip_log.
+
+    W92-VERDICT-QUALITY P3. Returns the NEW count. Sets ``skipped_flag=1`` when the
+    count reaches ``_BANNED_SHAPE_SKIP_THRESHOLD`` so downstream consumers can
+    distinguish "hit threshold" from "below threshold".
+    Updates the module dict cache. Best-effort — on DB error we still bump the
+    in-memory cache so the process-local retry logic keeps working.
+    """
+    if not match_key:
+        return 0
+    # Always bump the cache first so callers see a consistent increment even on DB error.
+    current = _load_skip_count(match_key)
+    new_count = current + 1
+    _banned_shape_reject_count[match_key] = new_count
+    flag = 1 if new_count >= _BANNED_SHAPE_SKIP_THRESHOLD else 0
+    try:
+        from scrapers.db_connect import connect_odds_db as _skp_conn
+        conn = _skp_conn(str(SCRAPERS_ROOT / "odds.db"), timeout=3)
+        try:
+            conn.execute(_NARRATIVE_SKIP_LOG_DDL)
+            conn.execute(
+                "INSERT INTO narrative_skip_log "
+                "(match_key, skip_count, skipped_flag, last_updated_at) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(match_key) DO UPDATE SET "
+                "skip_count = excluded.skip_count, "
+                "skipped_flag = excluded.skipped_flag, "
+                "last_updated_at = CURRENT_TIMESTAMP",
+                (match_key, new_count, flag),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as err:
+        log.debug("narrative_skip_log bump failed for %s: %s", match_key, err)
+    return new_count
+
+
+def _clear_skip_count(match_key: str) -> None:
+    """Reset skip count for ``match_key`` (cache + DB).
+
+    W92-VERDICT-QUALITY P3. Called after a successful narrative generation so the
+    fixture is not carrying stale rejection history across sweeps. Best-effort.
+    """
+    if not match_key:
+        return
+    _banned_shape_reject_count.pop(match_key, None)
+    try:
+        from scrapers.db_connect import connect_odds_db as _skp_conn
+        conn = _skp_conn(str(SCRAPERS_ROOT / "odds.db"), timeout=3)
+        try:
+            conn.execute(_NARRATIVE_SKIP_LOG_DDL)
+            conn.execute(
+                "DELETE FROM narrative_skip_log WHERE match_key = ?",
+                (match_key,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as err:
+        log.debug("narrative_skip_log clear failed for %s: %s", match_key, err)
 
 _RUNTIME_SCHEMA_REQUIREMENTS = {
     "narrative_cache": {
@@ -1854,8 +1966,10 @@ async def _generate_one(
             # AC3 F5 — FIX-VERDICT-SHAPE-GUARD-01: increment and check rejection count.
             # After _BANNED_SHAPE_SKIP_THRESHOLD consecutive rejections for the same
             # fixture, stop retrying and mark narrative_cache as skipped_banned_shape.
-            _cur_rejections = _banned_shape_reject_count.get(match_key, 0) + 1
-            _banned_shape_reject_count[match_key] = _cur_rejections
+            # W92-VERDICT-QUALITY P3: counter is now persisted in narrative_skip_log
+            # so rejections survive process restarts — _bump_skip_count handles both
+            # the in-memory cache and the DB row.
+            _cur_rejections = _bump_skip_count(match_key)
             if _cur_rejections >= _BANNED_SHAPE_SKIP_THRESHOLD:
                 log.warning(
                     "GOLD-QUALITY-GATE: %s has %d consecutive banned-shape rejections "

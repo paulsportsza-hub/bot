@@ -212,3 +212,19 @@ class TestCriticalFunctions:
         """W82-RENDER: verdict renderer must remain exportable."""
         from narrative_spec import _render_verdict
         assert callable(_render_verdict)
+
+    # ── W92-VERDICT-QUALITY permanent guards ──
+    def test_load_skip_count(self):
+        """W92-VERDICT-QUALITY P3: narrative_skip_log loader must remain exportable."""
+        from scripts.pregenerate_narratives import _load_skip_count
+        assert callable(_load_skip_count)
+
+    def test_bump_skip_count(self):
+        """W92-VERDICT-QUALITY P3: narrative_skip_log incrementer must remain exportable."""
+        from scripts.pregenerate_narratives import _bump_skip_count
+        assert callable(_bump_skip_count)
+
+    def test_clear_skip_count(self):
+        """W92-VERDICT-QUALITY P3: narrative_skip_log reset must remain exportable."""
+        from scripts.pregenerate_narratives import _clear_skip_count
+        assert callable(_clear_skip_count)

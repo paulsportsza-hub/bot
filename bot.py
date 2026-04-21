@@ -14665,12 +14665,52 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
 
     Updates verdict_html column on existing row (from pregenerate or narrative cache).
     If no row exists, creates a minimal one.
+
+    W92-VERDICT-QUALITY P2: enforces min_verdict_quality() gate BEFORE writing. Rejects
+    verdicts that fail the tier-aware quality floor (length, analytical vocabulary,
+    banned shapes, Diamond price-prefix, markdown leak, manager fabrication). A failing
+    verdict is silently SKIPPED (no INSERT) with a Sentry breadcrumb for observability.
     """
     import json
     import sqlite3
     from datetime import datetime, timedelta, timezone
     from db_connection import get_connection
+    from narrative_spec import min_verdict_quality
     if not match_key or not verdict_html:
+        return
+
+    # W92-VERDICT-QUALITY P2: pre-write quality gate.
+    # Tier is carried in tip_data under several possible keys — normalise to lowercase.
+    _tier_raw = (
+        tip_data.get("edge_tier")
+        or tip_data.get("tier")
+        or tip_data.get("display_tier")
+        or "bronze"
+    )
+    _tier = str(_tier_raw).lower().strip() or "bronze"
+    _evidence_pack = tip_data.get("evidence_pack") if isinstance(tip_data, dict) else None
+    if not min_verdict_quality(verdict_html, tier=_tier, evidence_pack=_evidence_pack):
+        log.warning(
+            "_store_verdict_cache_sync: verdict rejected by quality gate "
+            "(match_key=%s tier=%s len=%d sample=%r)",
+            match_key, _tier, len(verdict_html), verdict_html[:60],
+        )
+        try:
+            import sentry_sdk as _sentry_mod
+            if _sentry_mod:
+                _sentry_mod.add_breadcrumb(
+                    category="verdict",
+                    message="verdict_cache_rejected",
+                    level="warning",
+                    data={
+                        "match_id": match_key,
+                        "tier": _tier,
+                        "verdict_len": len(verdict_html),
+                        "sample": verdict_html[:80],
+                    },
+                )
+        except Exception:
+            pass
         return
     try:
         conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)

@@ -408,7 +408,7 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
 
     Rejects verdicts that:
     1. Are shorter than the tier-specific MIN_VERDICT_CHARS_BY_TIER floor.
-    2. Are longer than _VERDICT_MAX_CHARS (140).
+    2. Are longer than _VERDICT_MAX_CHARS.
     3. Match a banned trivial template (content-empty patterns).
     4. Contain fewer than 3 analytical vocabulary words.
     5. Name a manager/coach not present in evidence_pack (hard fail).
@@ -848,8 +848,10 @@ def _build_h2h_summary(
     away_wins = edge_data.get("h2h_b_wins")
     draws = edge_data.get("h2h_draws")
 
-    h2h_counts = (h2h_total, home_wins, away_wins, draws)
-    if all(value is not None for value in h2h_counts):
+    if (isinstance(h2h_total, (int, str, float))
+            and isinstance(home_wins, (int, str, float))
+            and isinstance(away_wins, (int, str, float))
+            and isinstance(draws, (int, str, float))):
         try:
             total_i = int(h2h_total)
             home_i = int(home_wins)

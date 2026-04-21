@@ -2155,10 +2155,41 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
     match_preview=True: match preview mode for non-edge matches — no betting
     recommendation, no verdict constraint, no bookmaker/sizing language.
     """
-    from narrative_spec import TONE_BANDS
+    # W92-VERDICT-QUALITY P1: inject positive verdict-quality constraints into prompt so
+    # Sonnet is told the floor/vocab/banned shapes BEFORE generating, not just checked after.
+    from narrative_spec import (
+        ANALYTICAL_VOCABULARY,
+        MIN_VERDICT_CHARS_BY_TIER,
+        TONE_BANDS,
+    )
 
     tone_band = TONE_BANDS.get(spec.tone_band, {"allowed": [], "banned": []})
     home_name, away_name = _team_names_from_pack(pack, spec)
+
+    # Build verdict quality constraint block (used for edge-mode branch only — preview
+    # mode emits no bet recommendation so tier-length floor does not apply).
+    _tier_key = (getattr(spec, "edge_tier", None) or "bronze").lower()
+    _verdict_char_floor = MIN_VERDICT_CHARS_BY_TIER.get(
+        _tier_key, MIN_VERDICT_CHARS_BY_TIER["bronze"]
+    )
+    # Sort vocabulary for deterministic prompt text (frozenset has no ordering).
+    _analytical_vocab_list = ", ".join(sorted(ANALYTICAL_VOCABULARY))
+    _verdict_quality_lines = [
+        "",
+        "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
+        f"- Verdict MUST be at least {_verdict_char_floor} characters long ({_tier_key} tier floor).",
+        "- Verdict MUST use at least 3 distinct analytical vocabulary terms from this list:",
+        f"  {_analytical_vocab_list}",
+        "- Verdict MUST NOT be a trivial shape. The following patterns are banned:",
+        "    (a) price-only openers like 'At <odds> on <book>' that carry no analytical content,",
+        "    (b) bare name-only shapes like '<Team>'s at <price>' with no reasoning,",
+        "    (c) one-line verdicts that only restate the market price without positional language.",
+    ]
+    if _tier_key == "diamond":
+        _verdict_quality_lines.append(
+            "- DIAMOND TIER ONLY: Do NOT begin the verdict with 'At <price>' "
+            "or any price-prefix construction. Lead with analytical posture, not the price."
+        )
 
     sections: list[tuple[str, str]] = []
     unavailable: list[str] = []
@@ -2316,6 +2347,12 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "1-2 sentences. Give a match outlook — who you lean toward and how the match might play out.",
             "Do NOT recommend a bet or mention bet sizing.",
             "",
+            "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
+            "- Verdict MUST use at least 3 distinct analytical vocabulary terms from this list:",
+            f"  {_analytical_vocab_list}",
+            "- Verdict MUST NOT be a trivial shape (price-only openers, bare name-only shapes,",
+            "  or one-line verdicts that only restate the market price without positional language).",
+            "",
             "BANNED PHRASES (automated rejection if used):",
             "- 'proceed with caution', 'value play', 'grab it before', 'move fast'",
             "- 'one to watch, not back', 'this one to watch', 'won't last forever'",
@@ -2364,6 +2401,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "🏆 <b>Verdict</b>",
             "1-2 sentences. State the action and sizing guidance without upgrading it.",
             f"YOUR VERDICT MUST recommend {getattr(spec, 'bookmaker', '')} at {getattr(spec, 'odds', '')}. This is NON-NEGOTIABLE. Do not substitute any other bookmaker or price.",
+            *_verdict_quality_lines,
         ])
     return "\n".join(prompt_parts).strip()
 

@@ -441,5 +441,117 @@ class TestConstrainedVerdictTierFloor(unittest.TestCase):
         assert len(result) >= 110
 
 
+# ── W92-VERDICT-QUALITY P1: format_evidence_prompt injects quality rules ──────
+
+class TestW92PromptQualityInjection(unittest.TestCase):
+    """W92-VERDICT-QUALITY P1: ``format_evidence_prompt`` must tell Sonnet the
+    tier-specific length floor, analytical vocab requirement, banned trivial
+    shapes, and Diamond price-prefix ban BEFORE generation — not only check
+    them after.
+    """
+
+    def _build_spec(self, tier: str = "gold", tone_band: str = "moderate",
+                    verdict_action: str = "lean"):
+        """Minimal spec stub with attributes that ``format_evidence_prompt`` reads."""
+        spec = types.SimpleNamespace(
+            tone_band=tone_band,
+            verdict_action=verdict_action,
+            verdict_sizing="moderate",
+            edge_tier=tier,
+            evidence_class="standard",
+            competition="Premier League",
+            bookmaker="Betway",
+            odds="1.85",
+        )
+        return spec
+
+    def _build_pack(self):
+        """Build a real ``EvidencePack`` with all source blocks unavailable.
+
+        This mirrors the worst-case "no data" pack shape — a legitimate prod
+        scenario for low-coverage fixtures — and ensures the prompt builder
+        falls through to the constraints block where our new W92 rules live.
+        """
+        from datetime import datetime, timezone
+        from evidence_pack import EvidencePack
+
+        pack = EvidencePack(
+            match_key="arsenal_vs_chelsea_2026-05-01",
+            sport="soccer",
+            league="Premier League",
+            built_at=datetime.now(timezone.utc).isoformat(),
+            pack_version=1,
+            sa_odds=None,
+            edge_state=None,
+            espn_context=None,
+            h2h=None,
+            news=None,
+            sharp_lines=None,
+            settlement_stats=None,
+            movements=None,
+            injuries=None,
+            richness_score="low",
+            sources_available=0,
+            sources_total=8,
+        )
+        return pack
+
+    def test_gold_tier_prompt_mentions_110_char_floor(self):
+        """Gold tier must surface the 110-char MIN_VERDICT_CHARS_BY_TIER floor."""
+        from evidence_pack import format_evidence_prompt
+        spec = self._build_spec(tier="gold")
+        prompt = format_evidence_prompt(self._build_pack(), spec, match_preview=False)
+        assert "110 characters" in prompt
+        assert "gold tier floor" in prompt
+
+    def test_diamond_tier_prompt_mentions_140_char_floor_and_price_prefix_ban(self):
+        """Diamond tier must state 140-char floor AND ban 'At <price>' openers."""
+        from evidence_pack import format_evidence_prompt
+        spec = self._build_spec(tier="diamond", tone_band="strong",
+                                verdict_action="strong_back")
+        prompt = format_evidence_prompt(self._build_pack(), spec, match_preview=False)
+        assert "140 characters" in prompt
+        assert "diamond tier floor" in prompt
+        # Diamond price-prefix ban must be present.
+        assert "DIAMOND TIER ONLY" in prompt
+        assert "'At <price>'" in prompt
+
+    def test_edge_mode_prompt_lists_analytical_vocab_terms_inline(self):
+        """Prompt must enumerate the analytical vocabulary inline and require >=3 terms."""
+        from evidence_pack import format_evidence_prompt
+        spec = self._build_spec(tier="silver")
+        prompt = format_evidence_prompt(self._build_pack(), spec, match_preview=False)
+        assert "at least 3 distinct analytical vocabulary terms" in prompt
+        # Spot-check representative vocabulary entries surface inline.
+        for term in ("probability", "signal", "movement", "expected"):
+            assert term in prompt, f"missing analytical term: {term}"
+
+    def test_edge_mode_prompt_describes_banned_trivial_shapes(self):
+        """Prompt must tell Sonnet the 3 banned trivial verdict shapes."""
+        from evidence_pack import format_evidence_prompt
+        spec = self._build_spec(tier="bronze")
+        prompt = format_evidence_prompt(self._build_pack(), spec, match_preview=False)
+        assert "trivial shape" in prompt
+        # All three shapes should be described.
+        assert "price-only openers" in prompt
+        assert "bare name-only shapes" in prompt
+        assert "only restate the market price" in prompt
+
+    def test_match_preview_prompt_has_vocab_rule_without_tier_floor(self):
+        """Preview mode has no bet tier — it still enforces vocab + shape rules,
+        but the tier-specific character floor does NOT appear in the preview prompt.
+        """
+        from evidence_pack import format_evidence_prompt
+        spec = self._build_spec(tier="gold")
+        prompt = format_evidence_prompt(self._build_pack(), spec, match_preview=True)
+        # Vocab rule still present.
+        assert "at least 3 distinct analytical vocabulary terms" in prompt
+        assert "trivial shape" in prompt
+        # But tier floor language is NOT in preview mode (no bet recommendation).
+        assert "110 characters" not in prompt
+        assert "140 characters" not in prompt
+        assert "DIAMOND TIER ONLY" not in prompt
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
