@@ -120,7 +120,7 @@ class TestCriticalSignalsConstant:
 
     def test_expected_critical_signals_present(self):
         expected = {"sonnet_firing_rate", "staleness_pct", "empty_verdict_count_24h",
-                    "gold_edge_non_sonnet_count", "manager_name_fabrication_attempts"}
+                    "gold_edge_double_fail_count_24h", "manager_name_fabrication_attempts"}
         assert expected <= _mod._CRITICAL_SIGNALS
 
     def test_severity_for_critical(self):

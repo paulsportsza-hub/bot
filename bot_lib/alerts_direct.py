@@ -84,6 +84,52 @@ def _sync_render_card(tip: dict, buttons: list | None = None) -> bytes:
 _PUBLISHED_URL_BASE = "https://t.me/c/3789410835"
 
 
+def _log_send_sync(
+    edge_id: str,
+    match_key: str,
+    tier: str,
+    image_bytes_size: int,
+    msg_url: str | None,
+) -> None:
+    """Persist a successful Alerts send to alerts_send_log in odds.db.
+
+    AC-A (BUILD-SOCIAL-OPS-ALERTS-EVENT-DRIVEN-01): event-driven replacement
+    for the dead MOQ→Alerts path. W81-DBLOCK compliant — uses connect_odds_db.
+    """
+    db_path = os.path.expanduser("~/scrapers/odds.db")
+    try:
+        from scrapers.db_connect import connect_odds_db  # type: ignore[import]
+    except ImportError as exc:
+        log.warning("alerts_direct: _log_send_sync import error: %s", exc)
+        return
+    conn = None
+    try:
+        conn = connect_odds_db(db_path)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS alerts_send_log (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                edge_id          TEXT,
+                match_key        TEXT,
+                tier             TEXT,
+                image_bytes_size INTEGER,
+                msg_url          TEXT,
+                sent_at          REAL NOT NULL
+            )
+        """)
+        conn.execute(
+            "INSERT INTO alerts_send_log"
+            " (edge_id, match_key, tier, image_bytes_size, msg_url, sent_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (edge_id, match_key, tier, image_bytes_size, msg_url, time.time()),
+        )
+        conn.commit()
+    except Exception as exc:
+        log.warning("alerts_direct: alerts_send_log write failed: %s", exc)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _post_sync(token: str, png_bytes: bytes, caption: str, reply_markup: dict) -> str | None:
     """Post card to Alerts channel synchronously (direct HTTP — no publisher imports)."""
     import io
@@ -162,6 +208,11 @@ async def post_to_alerts(
         log.info(
             "alerts_direct: posted edge_id=%s tier=%s latency_ms=%s url=%s",
             edge_id, tier, latency_ms, msg_url,
+        )
+        # AC-A: persist send record for event-driven dashboard feed
+        _mk = tip.get("match_key") or tip.get("match_id") or edge_id
+        await asyncio.to_thread(
+            _log_send_sync, edge_id, _mk, tier, len(png_bytes), msg_url
         )
 
     return msg_url

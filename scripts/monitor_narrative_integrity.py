@@ -8,18 +8,20 @@ thresholds.  2-hour debounce per signal.
 Usage:
     python scripts/monitor_narrative_integrity.py
 
-Signals produced (11 distinct values):
-    1. total_narratives_24h         — all cache writes in last 24h
-    2. w84_rate_24h                 — % of W84 (Sonnet) narratives
-    3. w82_fallback_count_24h       — count of W82 fallback narratives
-    4. empty_verdict_count_24h      — narratives missing a verdict section
-    5. low_quality_verdict_count    — verdicts failing min_verdict_quality()
-    6. gold_edge_non_sonnet_count   — Gold/Diamond edges NOT served by Sonnet
-    7. validator_reject_rate        — % of validator calls rejected
-    8. banned_template_hit_rate     — % of validator calls hitting a banned template
+Signals produced (12 distinct values):
+    1. total_narratives_24h              — all cache writes in last 24h
+    2. w84_rate_24h                      — % of W84 (Sonnet) narratives
+    3. w82_fallback_count_24h            — count of W82 fallback narratives
+    4. empty_verdict_count_24h           — narratives missing a verdict section
+    5. low_quality_verdict_count         — verdicts failing min_verdict_quality()
+    6a. gold_edge_sonnet_fallback_rate   — % of Gold/Diamond served via W82 fallback (warn)
+    6b. gold_edge_double_fail_count_24h  — count of Gold/Diamond where BOTH Sonnet attempts
+                                           failed the verdict quality gate (critical)
+    7. validator_reject_rate             — % of validator calls rejected
+    8. banned_template_hit_rate          — % of validator calls hitting a banned template
     9. manager_name_fabrication_attempts — count of fabricated manager name attempts
-   10. coach_freshness_pct          — % of coaches.json entries stale >7 days
-   11. bot_coaches_sync             — mismatches between bot/data/coaches.json and scrapers version
+   10. coach_freshness_pct               — % of coaches.json entries stale >7 days
+   11. bot_coaches_sync                  — mismatches between bot/data/coaches.json and scrapers version
 """
 from __future__ import annotations
 
@@ -62,13 +64,14 @@ EDGE_OPS_CHAT_ID = -1003877525865
 
 # Alert thresholds
 _THRESHOLDS = {
-    "low_quality_verdict_count": 1,         # any low-quality verdict is worth alerting
-    "gold_edge_non_sonnet_count": 1,        # any Gold edge not using Sonnet
-    "empty_verdict_count_24h": 3,           # more than 3 missing verdicts in 24h
-    "w82_fallback_count_24h": 20,           # more than 20 W82 fallbacks in 24h
-    "validator_reject_rate": 30,            # >30% rejection rate
-    "banned_template_hit_rate": 10,         # >10% banned-template hit rate
-    "manager_name_fabrication_attempts": 1, # any fabrication attempt is worth alerting
+    "low_quality_verdict_count": 1,           # any low-quality verdict is worth alerting
+    "gold_edge_sonnet_fallback_rate": 60,     # warn when >60% of Gold/Diamond fall back from Sonnet to W82
+    "gold_edge_double_fail_count_24h": 3,     # >=3 Gold/Diamond edges with both Sonnet attempts failing the quality gate
+    "empty_verdict_count_24h": 3,             # more than 3 missing verdicts in 24h
+    "w82_fallback_count_24h": 20,             # more than 20 W82 fallbacks in 24h
+    "validator_reject_rate": 30,              # >30% rejection rate
+    "banned_template_hit_rate": 10,           # >10% banned-template hit rate
+    "manager_name_fabrication_attempts": 1,   # any fabrication attempt is worth alerting
 }
 
 # Debounce: 2 hours between repeated alerts for the same signal
@@ -79,7 +82,7 @@ _CRITICAL_SIGNALS = frozenset({
     "sonnet_firing_rate",
     "staleness_pct",
     "empty_verdict_count_24h",
-    "gold_edge_non_sonnet_count",
+    "gold_edge_double_fail_count_24h",
     "manager_name_fabrication_attempts",
 })
 
@@ -668,19 +671,61 @@ def run_monitor(db_path: str | None = None, dry_run: bool = False) -> dict[str, 
         results["low_quality_verdict_count"] = sig5_val
         cycle_signals.append({"signal": "low_quality_verdict_count", "value": sig5_val, "band": band5, "breach": breach5})
 
-        # ── Signal 6: gold_edge_non_sonnet_count ─────────────────────────────
-        row6 = conn.execute(
+        # ── Signal 6a: gold_edge_sonnet_fallback_rate (warn) ─────────────────
+        # Percentage of Gold/Diamond edges served via W82 baseline (Sonnet polish
+        # failed or skipped). Moderate W82 fallback is acceptable — alert only
+        # when it dominates. Warn threshold: >60% in last 24h.
+        _gd_total = conn.execute(
+            "SELECT COUNT(*) FROM narrative_cache "
+            "WHERE created_at >= ? AND edge_tier IN ('gold','diamond')",
+            (cutoff_24h,),
+        ).fetchone()
+        _gd_total_count = int(_gd_total[0]) if _gd_total else 0
+        _gd_non_sonnet = conn.execute(
             "SELECT COUNT(*) FROM narrative_cache "
             "WHERE created_at >= ? "
             "AND edge_tier IN ('gold','diamond') "
             "AND narrative_source NOT IN ('w84','w84_retry','w84_quality_retry')",
             (cutoff_24h,),
         ).fetchone()
-        sig6_val = int(row6[0]) if row6 else 0
-        band6, breach6 = _compute_int_band("gold_edge_non_sonnet_count", sig6_val)
-        _write_signal(conn, "gold_edge_non_sonnet_count", sig6_val, band6, breach6)
-        results["gold_edge_non_sonnet_count"] = sig6_val
-        cycle_signals.append({"signal": "gold_edge_non_sonnet_count", "value": sig6_val, "band": band6, "breach": breach6})
+        _gd_non_sonnet_count = int(_gd_non_sonnet[0]) if _gd_non_sonnet else 0
+        sig6a_val = (
+            int(100 * _gd_non_sonnet_count / _gd_total_count)
+            if _gd_total_count else 0
+        )
+        band6a, breach6a = _compute_int_band("gold_edge_sonnet_fallback_rate", sig6a_val)
+        _write_signal(conn, "gold_edge_sonnet_fallback_rate", sig6a_val, band6a, breach6a)
+        results["gold_edge_sonnet_fallback_rate"] = sig6a_val
+        cycle_signals.append({"signal": "gold_edge_sonnet_fallback_rate", "value": sig6a_val, "band": band6a, "breach": breach6a})
+
+        # ── Signal 6b: gold_edge_double_fail_count_24h (critical) ────────────
+        # Count of Gold/Diamond edges where BOTH Sonnet attempts failed the
+        # verdict quality gate. These edges are NOT served to users at all —
+        # real user-harm signal. Table lives in bot's mzansiedge.db.
+        _bot_db_path = os.path.join(_BOT_DIR, "data", "mzansiedge.db")
+        sig6b_val = 0
+        if os.path.exists(_bot_db_path):
+            _cutoff_24h_sql = (
+                datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            _bot_conn = sqlite3.connect(_bot_db_path, timeout=10)
+            try:
+                _row6b = _bot_conn.execute(
+                    "SELECT COUNT(*) FROM gold_verdict_failed_edges "
+                    "WHERE failed_at >= ? "
+                    "AND failure_reason = 'verdict_quality_gate_double_fail'",
+                    (_cutoff_24h_sql,),
+                ).fetchone()
+                sig6b_val = int(_row6b[0]) if _row6b else 0
+            except sqlite3.OperationalError as _err:
+                if "no such table" not in str(_err).lower():
+                    log.warning("MONITOR: gold_verdict_failed_edges query error: %s", _err)
+            finally:
+                _bot_conn.close()
+        band6b, breach6b = _compute_int_band("gold_edge_double_fail_count_24h", sig6b_val)
+        _write_signal(conn, "gold_edge_double_fail_count_24h", sig6b_val, band6b, breach6b)
+        results["gold_edge_double_fail_count_24h"] = sig6b_val
+        cycle_signals.append({"signal": "gold_edge_double_fail_count_24h", "value": sig6b_val, "band": band6b, "breach": breach6b})
 
         # ── Signal 7: validator_reject_rate ──────────────────────────────────
         _v_attempts = conn.execute(

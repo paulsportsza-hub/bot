@@ -327,6 +327,29 @@ def table_exists(conn, name: str) -> bool:
     return r is not None
 
 
+def _fetch_alerts_send_log(conn, limit: int = 10) -> list[dict]:
+    """Fetch recent Alerts bot sends from alerts_send_log (AC-A event-driven feed)."""
+    if not table_exists(conn, "alerts_send_log"):
+        return []
+    rows = q_all(
+        conn,
+        "SELECT edge_id, match_key, tier, image_bytes_size, msg_url, sent_at"
+        " FROM alerts_send_log ORDER BY sent_at DESC LIMIT ?",
+        (limit,),
+    )
+    return [
+        {
+            "edge_id": r["edge_id"] or "",
+            "match_key": r["match_key"] or "",
+            "tier": r["tier"] or "gold",
+            "image_bytes_size": int(r["image_bytes_size"] or 0),
+            "msg_url": r["msg_url"] or "",
+            "sent_at": float(r["sent_at"] or 0),
+        }
+        for r in rows
+    ]
+
+
 # -- Helpers ------------------------------------------------------------------
 
 def parse_ts(ts_str: str | None) -> datetime | None:
@@ -3313,6 +3336,23 @@ def render_automation_content() -> str:
         for ch in all_channels
     }
     failed_blocked: list[dict] = []
+
+    # AC-A: load Alerts send log (event-driven, replaces dead MOQ→Alerts path)
+    _asl_conn = db_connect(SCRAPERS_DB)
+    _alerts_sends: list[dict] = []
+    if _asl_conn:
+        try:
+            _alerts_sends = _fetch_alerts_send_log(_asl_conn, limit=10)
+        except Exception:
+            pass
+        finally:
+            _asl_conn.close()
+    if _alerts_sends:
+        _most_recent_send = _alerts_sends[0]  # already sorted DESC
+        channel_stats["telegram_alerts"]["last_published_ts"] = datetime.fromtimestamp(
+            _most_recent_send["sent_at"], tz=timezone.utc
+        )
+
     for item in items:
         ch_key = _normalise_channel_key(item.get("channel") or "")
         if ch_key not in channel_stats:
@@ -3611,6 +3651,32 @@ def render_automation_content() -> str:
             })
         _tl_chans.append({"key": _ck, "label": _clbl, "icon": _so_platform_icon_svg(_ck), "color": _CHANNEL_MAP.get(_ck, {}).get("color", "#888888"), "posts": _posts})
 
+    # AC-A: inject today's Alerts bot sends into the telegram_alerts timeline lane
+    for _tl_ch in _tl_chans:
+        if _tl_ch["key"] != "telegram_alerts":
+            continue
+        for _asend in _alerts_sends:
+            _sdt = datetime.fromtimestamp(_asend["sent_at"], tz=timezone.utc).astimezone(_SAST)
+            if _sdt.strftime("%Y-%m-%d") != _today_str:
+                continue
+            _smins2 = _sdt.hour * 60 + _sdt.minute
+            _tier2 = _asend["tier"]
+            _tl_ch["posts"].append({
+                "id":        _asend["edge_id"] or _asend["match_key"],
+                "title":     (_asend["match_key"] or "Edge card")[:60],
+                "type":      f"{_tier2.title()} edge",
+                "icon":      "diamond",
+                "status":    "published",
+                "mins":      _smins2,
+                "sched":     f"{_sdt.hour:02d}:{_sdt.minute:02d}",
+                "sched_full": f"Sent {_sdt.strftime('%H:%M')} SAST",
+                "actual":    f"{_sdt.hour:02d}:{_sdt.minute:02d}",
+                "error":     "",
+                "ch_lbl":    "TG Alerts",
+                "asset_url": "",
+            })
+        break
+
     _tl_json = _json_mod.dumps({
         "day":      _today_str,
         "now_mins": _now_mins,
@@ -3625,6 +3691,36 @@ def render_automation_content() -> str:
             "unscheduled": kpi_unscheduled,
         },
     })
+
+    # AC-A: build Alerts send log panel HTML (event-driven feed)
+    _TIER_EMOJIS_AL = {"diamond": "\U0001f48e", "gold": "\U0001f947", "silver": "\U0001f948", "bronze": "\U0001f949"}
+    _cutoff_24h = time.time() - 86400
+    _al_rows_html = ""
+    for _as in _alerts_sends:
+        if _as["sent_at"] < _cutoff_24h:
+            continue
+        _as_dt = datetime.fromtimestamp(_as["sent_at"], tz=timezone.utc).astimezone(_SAST)
+        _as_time = _as_dt.strftime("%H:%M")
+        _as_tier_emoji = _TIER_EMOJIS_AL.get((_as["tier"] or "").lower(), "\U0001f949")
+        _as_mk = _html_mod.escape((_as["match_key"] or "")[:40])
+        _as_kb = f"{_as['image_bytes_size'] // 1024}KB" if _as["image_bytes_size"] else "\u2014"
+        _as_url = _html_mod.escape(_as["msg_url"] or "")
+        _as_title = _html_mod.escape(_as["match_key"] or "")
+        if _as_url:
+            _mk_display = f'<a href="{_as_url}" target="_blank" rel="noopener" class="so-al-match" title="{_as_title}">{_as_mk}</a>'
+        else:
+            _mk_display = f'<span class="so-al-match" title="{_as_title}">{_as_mk}</span>'
+        _al_rows_html += (
+            f'<div class="so-al-row">'
+            f'<span class="so-al-time">{_as_time}</span>'
+            f'<span class="so-al-tier">{_as_tier_emoji}</span>'
+            f'{_mk_display}'
+            f'<span class="so-al-size">{_as_kb}</span>'
+            f'</div>'
+        )
+    if not _al_rows_html:
+        _al_rows_html = '<div class="so-queue-empty">No sends in the last 24h.</div>'
+    alerts_log_html = _al_rows_html
 
     notion_warn = '' if notion_ok else (
         '<div class="so-warn">Notion unavailable \u2014 showing cached data</div>'
@@ -3910,6 +4006,12 @@ def render_automation_content() -> str:
 .so-warn-banner .so-fb-item-dismiss:hover{background:rgba(245,158,11,0.22);}
 .pv-hashtags{font-family:var(--font-m);font-size:11px;color:#58a6ff;margin-top:8px;line-height:1.6;}
 .pv-caption-label{font-family:var(--font-m);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;opacity:0.7;}
+.so-al-row{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;border:1px solid var(--border-sub);background:var(--surface-alt);min-width:0;}
+.so-al-time{font-family:var(--font-m);font-size:11px;color:var(--gold);min-width:32px;flex-shrink:0;}
+.so-al-tier{font-size:12px;flex-shrink:0;line-height:1;}
+.so-al-match{font-size:11px;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none;}
+.so-al-match:hover{text-decoration:underline;color:var(--gold);}
+.so-al-size{font-family:var(--font-m);font-size:10px;color:var(--muted);flex-shrink:0;}
 </style>"""
 
     js = (
@@ -4707,6 +4809,13 @@ function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'
             <div class="so-tile-skel" style="width:60%"></div>
             <div class="so-tile-skel" style="width:70%"></div>
           </div>
+        </div>
+        <div class="so-queue" aria-label="Alerts send log">
+          <div class="so-panel-h">
+            <div class="so-panel-title">Alerts Send Log</div>
+            <div class="so-panel-sub">Bot sends &middot; event-driven</div>
+          </div>
+          <div class="so-queue-body" id="so-alerts-log-body">{alerts_log_html}</div>
         </div>
       </div>
     </div>
@@ -8500,6 +8609,27 @@ def api_so_queue():
     items, _ = _fetch_marketing_queue()
     payload = _build_so_queue(items, now_utc, horizon)
     return _no_store(Response(json.dumps(payload), mimetype="application/json"))
+
+
+@app.route("/admin/api/social-ops/alerts-log")
+@require_auth
+def api_so_alerts_log():
+    """AC-A: event-driven Alerts send log API endpoint."""
+    conn = db_connect(SCRAPERS_DB)
+    if not conn:
+        return _no_store(Response(
+            json.dumps({"sends": [], "error": "DB unavailable"}),
+            mimetype="application/json",
+        ))
+    try:
+        sends = _fetch_alerts_send_log(conn, limit=20)
+    finally:
+        conn.close()
+    for s in sends:
+        dt = datetime.fromtimestamp(s["sent_at"], tz=timezone.utc).astimezone(_SAST)
+        s["sent_at_sast"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+        s["kb"] = round(s["image_bytes_size"] / 1024, 1) if s["image_bytes_size"] else 0
+    return _no_store(Response(json.dumps({"sends": sends}), mimetype="application/json"))
 
 
 @app.route("/admin/api/social-ops/post/<post_id>")
