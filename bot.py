@@ -614,6 +614,7 @@ def kb_main() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📖 Guide", callback_data="guide:menu"),
         ],
         [InlineKeyboardButton("⚙️ Settings", callback_data="settings:home")],
+        [InlineKeyboardButton("🏠 Community", url="https://t.me/MzansiEdge")],
     ])
 
 
@@ -5182,6 +5183,7 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 InlineKeyboardButton("📖 How It Works", callback_data="guide:menu"),
             ],
             [InlineKeyboardButton("⏭️ Skip for Now", callback_data="nav:main")],
+            [InlineKeyboardButton("👥 Join the MzansiEdge Community", url="https://t.me/MzansiEdge")],
         ]),
     )
     # Activate the persistent reply keyboard
