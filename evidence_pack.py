@@ -3761,6 +3761,21 @@ KNOWN_PROPER_NOUNS: set[str] = {
     "monitor",
 }
 
+# Common English function words (≥4 chars) that are never proper nouns.
+# When a phrase's only long token is one of these, the short companion word
+# (e.g. "WSB"=3, "EV"=2, "Elo"=3) is excluded by the length filter → the
+# phrase gets falsely flagged.  Filtering these out before the name check
+# prevents false positives like "With WSB", "Their Elo", "Take WSB".
+_FABRICATION_STOP_WORDS: frozenset[str] = frozenset({
+    "with", "take", "back", "their", "from", "into", "over", "upon",
+    "both", "more", "less", "when", "only", "also", "even", "than",
+    "about", "after", "will", "have", "your", "this", "that", "them",
+    "here", "there", "then", "just", "been", "were", "they", "what",
+    "each", "some", "such", "much", "very", "once", "well", "view",
+    "pick", "keep", "look", "play", "line", "side", "team", "game",
+    "form", "home", "away", "draw", "odds", "hold",
+})
+
 _SETTLEMENT_CONTEXT_PATTERNS = (
     r"\bsettlement\b",
     r"\bsettled\b",
@@ -4446,6 +4461,7 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
             _strip_possessive_suffix(token).strip()
             for token in re.split(r"[\s\-]+", phrase.lower())
             if len(_strip_possessive_suffix(token).strip()) >= 4
+            and _strip_possessive_suffix(token).strip() not in _FABRICATION_STOP_WORDS
         ]
         if tokens and not any(
             token in verified_names or token in KNOWN_PROPER_NOUNS
