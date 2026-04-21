@@ -5228,13 +5228,19 @@ async def handle_ob_edit(query, action: str) -> None:
 
     elif action == "risk":
         # Re-edit risk → bankroll → notify chain
-        ob["_editing"] = "risk"
+        # Summary is a photo card — must use send_card_or_fallback (not edit_message_text)
+        # Set _editing AFTER the send to avoid corrupted state if render fails
         ob["step"] = "risk"
-        text = "<b>🎯 Change Risk Profile</b>\n\nSelect your risk tolerance:"
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=kb_onboarding_risk(),
+        await send_card_or_fallback(
+            bot=_g_bot,
+            chat_id=query.message.chat_id,
+            template="onboarding_risk.html",
+            data=build_onboarding_risk_data(ob.get("risk")),
+            text_fallback="<b>🎯 Change Risk Profile</b>\n\nSelect your risk tolerance:",
+            markup=kb_onboarding_risk(),
+            message_to_edit=query.message,
         )
+        ob["_editing"] = "risk"
 
 
 async def handle_ob_summary(query, action: str) -> None:
