@@ -22,7 +22,8 @@ import urllib.parse
 import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from io import BytesIO
 from pathlib import Path
 
@@ -33,6 +34,44 @@ try:
     load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 except ImportError:
     pass
+
+# ── Cadence: scheduled slot constants (single source of truth: publisher/cadence.py) ──
+_DASH_REEL_SLOT_FALLBACK = "19:00"
+_DASH_TG_SLOT_FALLBACK   = "20:00"
+_DASH_WA_SLOT_FALLBACK   = "20:00"
+try:
+    import sys as _sys
+    _publisher_root = str(Path(__file__).resolve().parents[2])  # /home/paulsportsza
+    if _publisher_root not in _sys.path:
+        _sys.path.insert(0, _publisher_root)
+    from publisher.cadence import (
+        IG_REEL_SLOT       as _DASH_IG_REEL_SLOT,
+        TG_COMMUNITY_SLOT  as _DASH_TG_COMMUNITY_SLOT,
+        WA_CHANNEL_SLOT    as _DASH_WA_CHANNEL_SLOT,
+    )
+except Exception:
+    _DASH_IG_REEL_SLOT        = _DASH_REEL_SLOT_FALLBACK
+    _DASH_TG_COMMUNITY_SLOT   = _DASH_TG_SLOT_FALLBACK
+    _DASH_WA_CHANNEL_SLOT     = _DASH_WA_SLOT_FALLBACK
+
+
+def _cadence_slots_script() -> str:
+    """Inject cadence slot constants as window.CADENCE_SLOTS for JS template use."""
+    slots = {
+        "ig_reel":      _DASH_IG_REEL_SLOT,
+        "tg_community": _DASH_TG_COMMUNITY_SLOT,
+        "wa_channel":   _DASH_WA_CHANNEL_SLOT,
+    }
+    return f'<script>window.CADENCE_SLOTS={json.dumps(slots)};</script>'
+
+
+def _slot_mins(slot: str) -> int:
+    """Convert 'HH:MM' slot string to minutes since midnight."""
+    hh, mm = slot.split(":")
+    return int(hh) * 60 + int(mm)
+
+_IG_REEL_MINS = _slot_mins(_DASH_IG_REEL_SLOT)
+_IG_REEL_SAST = f"{_DASH_IG_REEL_SLOT} SAST"
 
 from flask import Flask, Response, request, redirect, send_from_directory, abort
 
@@ -150,8 +189,9 @@ _system_health_cache: dict = {}
 _system_health_cache_lock = threading.Lock()
 _SYSTEM_HEALTH_TTL = 60  # seconds
 
-# -- SAST timezone offset -----------------------------------------------------
-_SAST = timezone(timedelta(hours=2))
+# -- Timezones ----------------------------------------------------------------
+_SAST = ZoneInfo("Africa/Johannesburg")
+_UTC = ZoneInfo("UTC")
 
 # -- League chart labels (full names) -----------------------------------------
 
@@ -282,7 +322,7 @@ def _req_end(response):
     try:
         elapsed_ms = int((time.monotonic() - request._t0) * 1000)
         state = getattr(request, "_cache_state", "miss")
-        ts = datetime.now(timezone.utc).isoformat()
+        ts = datetime.now(_SAST).isoformat()
         line = f"{ts} route={request.path} ms={elapsed_ms} cache={state}\n"
         with _timing_log_lock:
             with open(_TIMING_LOG, "a") as _tf:
@@ -361,7 +401,7 @@ def parse_ts(ts_str: str | None) -> datetime | None:
             s += "+00:00"
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=_UTC)
         return dt
     except Exception:
         return None
@@ -372,7 +412,7 @@ def freshness(ts_str: str | None) -> tuple[str, str]:
     dt = parse_ts(ts_str)
     if dt is None:
         return "s-grey", "Never"
-    age_h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+    age_h = (datetime.now(_SAST) - dt).total_seconds() / 3600
     if age_h < 1:
         mins = int(age_h * 60)
         return "s-green", f"{mins}m ago"
@@ -401,7 +441,7 @@ def freshness_rag(ts_str, cycle_minutes: int = 60, offpeak_relaxed: bool = False
     dt = parse_ts(ts_str)
     if dt is None:
         return "s-grey", "No data"  # never ran — show grey not red
-    age_m = (datetime.now(timezone.utc) - dt).total_seconds() / 60
+    age_m = (datetime.now(_SAST) - dt).total_seconds() / 60
     mult = 2 if offpeak_relaxed else 1
     green_max = cycle_minutes * mult
     amber_max = cycle_minutes * 2 * mult
@@ -429,7 +469,7 @@ def _relative_time(ts_str: str | None) -> str:
     dt = parse_ts(ts_str)
     if dt is None:
         return "Never"
-    delta = datetime.now(timezone.utc) - dt
+    delta = datetime.now(_SAST) - dt
     secs = delta.total_seconds()
     if secs < 0:
         # Future
@@ -1702,7 +1742,7 @@ def _get_awaiting_items(
             one of these values (exact, case-sensitive). Pass _APPROVAL_CHANNELS
             to enforce the FB/IG/LI-only approval model in the Task Hub.
     """
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(_SAST)
     awaiting: list[dict] = []
     for item in items:
         # Channel gate — apply before anything else
@@ -2359,7 +2399,7 @@ def build_source_health_monitor(conn):
     sources_by_category = {cat: [] for cat in _CATEGORY_ORDER}
     critical_issues = []
 
-    now_utc = datetime.now(timezone.utc) if hasattr(datetime, 'now') else None
+    now_utc = datetime.now(_SAST) if hasattr(datetime, 'now') else None
     for row in rows:
         d = dict(row)
         interval = d.get("expected_interval_minutes") or 0
@@ -2373,7 +2413,7 @@ def build_source_health_monitor(conn):
                 _ls = d["last_success_at"].replace("Z", "+00:00")
                 _last_dt = datetime.fromisoformat(_ls)
                 if _last_dt.tzinfo is None:
-                    _last_dt = _last_dt.replace(tzinfo=timezone.utc)
+                    _last_dt = _last_dt.replace(tzinfo=_UTC)
                 _age_min = (now_utc - _last_dt).total_seconds() / 60
 
                 _truly_stale = True
@@ -3320,7 +3360,7 @@ def render_automation_content() -> str:
     else:
         sync_label = f"Synced {age_s // 3600}h ago"
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(_SAST)
 
     _CHANNEL_SLA: dict[str, float] = {
         "telegram_alerts": 6.0, "telegram_community": 12.0, "whatsapp_channel": 6.0,
@@ -3350,7 +3390,7 @@ def render_automation_content() -> str:
     if _alerts_sends:
         _most_recent_send = _alerts_sends[0]  # already sorted DESC
         channel_stats["telegram_alerts"]["last_published_ts"] = datetime.fromtimestamp(
-            _most_recent_send["sent_at"], tz=timezone.utc
+            _most_recent_send["sent_at"], tz=_UTC
         )
 
     for item in items:
@@ -3656,7 +3696,7 @@ def render_automation_content() -> str:
         if _tl_ch["key"] != "telegram_alerts":
             continue
         for _asend in _alerts_sends:
-            _sdt = datetime.fromtimestamp(_asend["sent_at"], tz=timezone.utc).astimezone(_SAST)
+            _sdt = datetime.fromtimestamp(_asend["sent_at"], tz=_UTC).astimezone(_SAST)
             if _sdt.strftime("%Y-%m-%d") != _today_str:
                 continue
             _smins2 = _sdt.hour * 60 + _sdt.minute
@@ -3773,7 +3813,7 @@ def render_automation_content() -> str:
 .so-tile-thumb{width:28px;height:28px;border-radius:4px;object-fit:cover;background:var(--surface-alt);flex-shrink:0;}
 .so-tile-tag{font-family:var(--font-m);font-size:9px;text-transform:uppercase;letter-spacing:.5px;padding:1px 5px;border-radius:3px;flex-shrink:0;border:1px solid var(--border);color:var(--muted);}
 .so-tile-skel{background:var(--surface-alt);border-radius:4px;height:14px;animation:skel-p 1.2s ease-in-out infinite alternate;}
-.so-tl-wrap{position:relative;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--glow);}
+.so-tl-wrap{position:relative;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;contain:paint;box-shadow:var(--glow);}
 .so-tl-wrap::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.7;pointer-events:none;z-index:1;}
 .so-tl-content{position:relative;}
 .so-tl-hours-row{position:relative;height:22px;margin-left:140px;border-bottom:1px solid var(--border-sub);background:var(--surface-alt);}
@@ -3801,10 +3841,15 @@ def render_automation_content() -> str:
 .so-tl-reel-empty:hover{background:rgba(239,68,68,0.18);}
 .so-tl-icon-btn.so-tl-icon-empty{--status-color:#ef4444;}
 .so-tl-icon-btn.so-tl-icon-empty svg{animation:so-tl-reel-pulse 900ms ease-in-out infinite;color:#ef4444;stroke-dasharray:3 3;}
+.so-tl-icon-btn.so-tl-reel-overdue svg{color:#c91e1e;}
+.so-tl-reel-state-lbl{position:absolute;bottom:-13px;left:50%;transform:translateX(-50%);background:#ef4444;color:#fff;font-family:var(--font-m);font-size:7px;font-weight:700;letter-spacing:0.04em;padding:1px 4px;border-radius:2px;white-space:nowrap;pointer-events:none;line-height:1.3;}
+.so-tl-icon-btn.so-tl-reel-overdue .so-tl-reel-state-lbl{background:#c91e1e;}
+@keyframes so-tl-reel-lbl-pulse{0%,100%{opacity:1;}50%{opacity:0.65;}}
+.so-tl-icon-btn.so-tl-reel-flash .so-tl-reel-state-lbl{animation:so-tl-reel-lbl-pulse 900ms ease-in-out infinite;}
 .so-tl-chip{position:absolute;top:50%;transform:translate(-50%,-50%);background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-family:var(--font-m);font-size:10px;color:var(--muted);cursor:pointer;white-space:nowrap;z-index:5;}
 .so-tl-chip:hover{border-color:var(--gold);color:var(--text);}
-.so-tl-now-line{position:absolute;top:0;width:2px;background:var(--grad);z-index:20;pointer-events:none;filter:drop-shadow(0 0 6px rgba(248,200,48,0.6));}
-.so-tl-now-lbl{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-family:var(--font-m);font-size:9px;color:var(--gold);white-space:nowrap;background:var(--surface-alt);padding:1px 4px;border-radius:2px;border:1px solid rgba(248,200,48,0.3);}
+.so-tl-now-line{position:absolute;top:0;bottom:0;width:2px;background:var(--grad);z-index:20;pointer-events:none;box-shadow:0 0 6px 2px rgba(248,200,48,0.45);}
+.so-tl-now-lbl{position:absolute;top:3px;left:50%;transform:translateX(-50%);font-family:var(--font-m);font-size:9px;color:var(--gold);white-space:nowrap;background:var(--surface-alt);padding:1px 4px;border-radius:2px;border:1px solid rgba(248,200,48,0.3);z-index:21;}
 .so-tl-bru-empty{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:var(--font-m);font-size:10px;color:var(--muted);white-space:nowrap;pointer-events:none;opacity:0.7;}
 .so-tl-bru-badge{position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--gold);pointer-events:none;}
 .so-preview{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;height:100%;max-height:100%;overflow-y:auto;min-width:0;min-height:0;box-shadow:var(--glow);}
@@ -4155,14 +4200,20 @@ function renderRow(ch,ri){
     }
     var badge=p.bru_mismatch?'<span class="so-tl-bru-badge"></span>':'';
     if(p.reel_state==='published')badge+='<span class="so-tl-reel-check" aria-hidden="true">✓</span>';
-    var cls='so-tl-icon-btn'+(p.reel_state==='overdue'?' so-tl-reel-flash':'');
+    var cls='so-tl-icon-btn';
+    if(p.reel_state==='needs_upload')cls+=' so-tl-reel-flash';
+    else if(p.reel_state==='overdue')cls+=' so-tl-reel-overdue';
+    var reelTooltip=p.reel_state==='needs_upload'?'Reel kit needed — not uploaded yet':p.reel_state==='overdue'?'Reel past scheduled time — missed':'';
+    var reelLblText=p.reel_state==='needs_upload'?'NEEDS UPLOAD':p.reel_state==='overdue'?'MISSED':'';
+    var reelLblBadge=reelLblText?'<span class="so-tl-reel-state-lbl">'+reelLblText+'</span>':'';
     return '<button class="'+cls+'" style="left:'+pct+';'+off+';--status-color:'+stColor(p.status)+'" '+
       'data-post-id="'+eA(p.id)+'" data-row-idx="'+ri+'" data-col-idx="'+ci+'" '+
       'data-title="'+eA(p.title)+'" data-sched="'+eA(p.sched)+'" data-sched-full="'+eA(p.sched_full||'')+'" data-status="'+eA(p.status)+'" '+
       'data-ch="'+eA(ch.label)+'" data-type="'+eA(p.type)+'" data-asset-url="'+eA(p.asset_url||'')+'" '+
       'data-reel-state="'+eA(p.reel_state||'')+'" '+
+      (reelTooltip?'title="'+eA(reelTooltip)+'" ':'')+
       'aria-label="'+al+'" tabindex="-1" role="gridcell">'+
-      (p.glyph||svgI(p.icon||'help-circle'))+badge+
+      (p.glyph||svgI(p.icon||'help-circle'))+badge+reelLblBadge+
       '</button>';
   }).join('');
   return '<div class="so-tl-row" role="row" aria-label="'+eA(ch.label)+'" data-row-idx="'+ri+'" tabindex="0">'+
@@ -4276,7 +4327,7 @@ function showPreview(p){
   document.getElementById('so-pv-meta').innerHTML=chips;
   document.getElementById('so-pv-body').innerHTML=renderPvBody(p);
   initPvCarousels();
-  if(p.reel_state==='overdue')soReelUploadInit();
+  if(p.reel_state==='overdue'||p.reel_state==='needs_upload')soReelUploadInit();
   var acts=[];
   if((p.status||'').match(/fail|error|block/i))acts.push('<button onclick="alert(\\'Retry: use Notion to re-queue this post\\')">Retry</button>');
   if((p.status||'').match(/pending|queue|sched|ready|await/i))acts.push('<button onclick="alert(\\'Skip: use Notion to update status\\')">Skip</button>');
@@ -4288,7 +4339,7 @@ function showPreview(p){
 function _pvBrand(ch){
   if(ch.includes('instagram'))return{handle:'mzansiedge',display:'MzansiEdge',avatar:'M',sub:'Sponsored'};
   if(ch.includes('tiktok'))return{handle:'@mzansiedge',display:'MzansiEdge',avatar:'M',sub:'original sound'};
-  if(ch.includes('telegram_community'))return{handle:'MzansiEdge Community',display:'MzansiEdge Community',avatar:'M',sub:'Group'};
+  if(ch.includes('telegram community')||ch.includes('telegram_community'))return{handle:'MzansiEdge Community',display:'MzansiEdge Community',avatar:'M',sub:'Group'};
   if(ch.includes('telegram'))return{handle:'MzansiEdge Alerts',display:'MzansiEdge Alerts',avatar:'M',sub:'Channel'};
   if(ch.includes('whatsapp'))return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:'Channel'};
   if(ch.includes('linkedin'))return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:'Sports intelligence · Johannesburg · Sponsored'};
@@ -4411,7 +4462,7 @@ function renderLinkedInFrame(p,media){
 function renderPvBody(p){
   var ch=(p.channel||'').toLowerCase();
   // Awaiting-upload reel: show specialized upload panel instead of IG preview
-  if(p.reel_state==='overdue'&&ch.includes('instagram')){return renderReelUploadPanel(p);}
+  if((p.reel_state==='overdue'||p.reel_state==='needs_upload')&&ch.includes('instagram')){return renderReelUploadPanel(p);}
   var media=renderPvMedia(p,ch);
   if(ch.includes('instagram'))return renderIgFrame(p,media);
   if(ch.includes('tiktok'))return renderTikTokFrame(p,media);
@@ -4516,7 +4567,7 @@ function initPvCarousels(){
 function renderReelUploadPanel(p){
   var rawSched=p.scheduled||'';
   var datePart=rawSched.split(' ')[0]||'';
-  var slotPart=rawSched.split(' ')[1]||'19:00';
+  var slotPart=rawSched.split(' ')[1]||window.CADENCE_SLOTS.ig_reel;
   var rowId=p.id||'';
   return'<div class="so-reel-upload-panel">'+
     '<div class="so-rup-header">🎥 IG Reel<span class="so-rup-chip">AWAITING UPLOAD</span></div>'+
@@ -4713,7 +4764,6 @@ function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'
 })();
 </script>"""
     )
-
     return f"""{css}
 <div class="so-page">
   <div class="so-topbar">
@@ -4801,13 +4851,13 @@ function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'
   </div>
 </div>
 <div class="so-tip" id="so-tip" role="tooltip" aria-hidden="true"></div>
-{js}"""
+{_cadence_slots_script()}{js}"""
 
 
 def render_reel_kit_page() -> str:
     """Render the dedicated Reel Kit gallery page (UI-SOCIAL-OPS-REDESIGN-01)."""
     import html as _html_mod
-    now_sast = datetime.now(timezone.utc).astimezone(_SAST)
+    now_sast = datetime.now(_SAST)
     today_str = now_sast.strftime("%Y-%m-%d")
     try:
         reel_kits = _scan_reel_kits(today_str)
@@ -4870,7 +4920,7 @@ def render_reel_kit_page() -> str:
 def render_calendar_page() -> str:
     """Render the dedicated Calendar (14-day schedule) page (UI-SOCIAL-OPS-REDESIGN-01)."""
     import html as _html_mod
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(_SAST)
     now_sast = now_utc.astimezone(_SAST)
     fourteen_days = now_utc + timedelta(days=14)
 
@@ -4964,7 +5014,7 @@ _APPROVALS_NOTION_URL = "https://www.notion.so/Marketing-Ops-Queue"
 
 def render_approvals_content() -> str:
     """Render the Approvals pipeline view inner content HTML."""
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(_SAST)
     now_sast = now_utc.astimezone(_SAST)
     updated = now_sast.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -5120,7 +5170,7 @@ def _is_today_sast(iso_str: str) -> bool:
             return iso_str == _today_sast_str()
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=_UTC)
         return dt.astimezone(_SAST).strftime("%Y-%m-%d") == _today_sast_str()
     except Exception:
         return False
@@ -6081,7 +6131,7 @@ def _read_publisher_exceptions() -> dict:
     if not _PUBLISHER_EXCEPTIONS_LOG.exists():
         return result
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(_SAST)
         cutoff_24h = now - timedelta(hours=24)
         cutoff_72h = now - timedelta(hours=72)
         events = []
@@ -8045,6 +8095,26 @@ _SO_COMPUTER_URL_RE = re.compile(
 )
 
 
+def _cache_bust_mzansi_asset(url: str) -> str:
+    """Append ?v=<mtime> to mzansiedge.co.za/assets URLs so browsers refresh
+    after the generator rewrites the same filename. nginx sends immutable
+    cache headers on this path, so URL-level busting is the only reliable
+    way to serve the fresh PNG on regen."""
+    if not url or "mzansiedge.co.za/assets/" not in url:
+        return url
+    if "?" in url or "#" in url:
+        return url  # already has a query — leave it
+    try:
+        from urllib.parse import urlparse as _urlparse
+        rel = _urlparse(url).path.split("/assets/", 1)[-1]
+        local = os.path.join("/var/www/mzansiedge-wp/assets", rel)
+        if os.path.isfile(local):
+            return f"{url}?v={int(os.path.getmtime(local))}"
+    except Exception:
+        pass
+    return url
+
+
 def _resolve_media_url(raw: str) -> str:
     """Translate an MOQ-stored URL into a browser-loadable URL.
 
@@ -8063,7 +8133,7 @@ def _resolve_media_url(raw: str) -> str:
         return ""
     low = s.lower()
     if low.startswith(("http://", "https://", "//")):
-        return s
+        return _cache_bust_mzansi_asset(s)
     if s.startswith("/admin/social-ops/asset/") or s.startswith("/static/"):
         return s
     m = _SO_COMPUTER_URL_RE.match(s)
@@ -8400,8 +8470,8 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime, alert
             raw_st = (it.get("status") or "").lower().strip()
             disp_st = "queued" if raw_st == "approved" else raw_st
             # SOCIAL-OPS-TIMELINE-INTEGRITY-01: state-aware reel indicator on IG lane.
-            # reel_state ∈ {published, overdue, queued}. Front-end reads this to
-            # apply the flashing-red keyframe (overdue) or checkmark (published).
+            # reel_state ∈ {published, overdue, needs_upload, queued}. Front-end reads this to
+            # apply the flashing-red keyframe (needs_upload), solid-red (overdue), or checkmark (published).
             reel_state = ""
             if ck == "instagram":
                 _wt = (it.get("work_type") or "").lower()
@@ -8411,14 +8481,16 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime, alert
                     _reel_date_str = sdt.astimezone(_SAST).strftime("%Y-%m-%d") if sdt else ""
                     _moq_page_id = it.get("id") or ""
                     _final_uploaded = _reel_has_final(_moq_page_id, _reel_date_str)
+                    _reel_excl = _SO_POSTED_ST | {"archived"}
                     if raw_st in _SO_POSTED_ST:
                         reel_state = "published"
                     elif _final_uploaded:
                         reel_state = "queued"  # master uploaded, awaiting publisher cron
-                    elif sdt < now_utc and raw_st not in _SO_POSTED_ST:
-                        reel_state = "overdue"
-                    else:
-                        reel_state = "queued"
+                    elif raw_st not in _reel_excl:
+                        if sdt and sdt < now_utc:
+                            reel_state = "overdue"      # past scheduled time, no final
+                        else:
+                            reel_state = "needs_upload" # before scheduled time, no final
             posts.append({
                 "id":     it.get("id", ""),
                 "title":  (it.get("title") or it.get("copy") or "")[:60],
@@ -8439,19 +8511,19 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime, alert
         # (published/queued/overdue), emit a virtual "empty" marker at 19:00.
         if ck == "instagram" and day_str == now_sast.strftime("%Y-%m-%d"):
             _has_reel = any(
-                (p.get("reel_state") or "") in ("published", "queued", "overdue")
+                (p.get("reel_state") or "") in ("published", "queued", "overdue", "needs_upload")
                 for p in posts
             )
             if not _has_reel:
                 posts.append({
                     "id":     "__ig_reel_empty__",
-                    "title":  "No IG Reel queued for today's 19:00 slot — reel_generator.py 06:00 UTC may have skipped or failed.",
+                    "title":  f"No IG Reel queued for today's {_DASH_IG_REEL_SLOT} slot — reel_generator.py 06:00 UTC may have skipped or failed.",
                     "type":   "reel",
                     "icon":   "film",
                     "status": "empty",
-                    "mins":   1140,  # 19:00 SAST
-                    "sched":      "19:00",
-                    "sched_full": "19:00 SAST",
+                    "mins":   _IG_REEL_MINS,
+                    "sched":      _DASH_IG_REEL_SLOT,
+                    "sched_full": _IG_REEL_SAST,
                     "actual": "",
                     "error":  "",
                     "ch_lbl": clbl,
@@ -8481,7 +8553,7 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime, alert
             if _ch["key"] != "telegram_alerts":
                 continue
             for _asend in alerts_sends:
-                _sdt = datetime.fromtimestamp(_asend["sent_at"], tz=timezone.utc).astimezone(_SAST)
+                _sdt = datetime.fromtimestamp(_asend["sent_at"], tz=_UTC).astimezone(_SAST)
                 if _sdt.strftime("%Y-%m-%d") != day_str:
                     continue
                 _smins = _sdt.hour * 60 + _sdt.minute
@@ -8522,7 +8594,7 @@ def _build_so_timeline(day_str: str, items: list[dict], now_utc: datetime, alert
 @require_auth
 def api_so_timeline():
     from datetime import date as _date
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(_SAST)
     today_sast = now_utc.astimezone(_SAST)
 
     day_param = request.args.get("day", "").strip()
@@ -8592,7 +8664,7 @@ def _build_so_queue(items: list[dict], now_utc: datetime, horizon_hours: int = 1
 @app.route("/admin/api/social-ops/queue")
 @require_auth
 def api_so_queue():
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(_SAST)
     try:
         horizon = int(request.args.get("hours", "12"))
     except ValueError:
@@ -8747,17 +8819,21 @@ def api_so_post(post_id: str):
     )
     reel_date_out = sdt.astimezone(_SAST).strftime("%Y-%m-%d") if sdt else ""
     reel_final_out = _reel_has_final(post_id, reel_date_out) if _is_reel_post else False
-    now_utc_so = datetime.now(timezone.utc)
+    now_utc_so = datetime.now(_SAST)
     if _is_reel_post and channel_key == "instagram":
         raw_st_so = (item.get("status") or "").lower().strip()
+        _reel_excl_so = _SO_POSTED_ST | {"archived"}
         if raw_st_so in _SO_POSTED_ST:
             reel_state_out = "published"
         elif reel_final_out:
             reel_state_out = "queued"
-        elif sdt and sdt < now_utc_so and raw_st_so not in _SO_POSTED_ST:
-            reel_state_out = "overdue"
+        elif raw_st_so not in _reel_excl_so:
+            if sdt and sdt < now_utc_so:
+                reel_state_out = "overdue"      # past scheduled time, no final
+            else:
+                reel_state_out = "needs_upload" # before scheduled time, no final
         else:
-            reel_state_out = "queued"
+            reel_state_out = ""
     else:
         reel_state_out = ""
     payload = {
@@ -8904,7 +8980,7 @@ def _fetch_overdue_notion_reel_kits() -> list[dict]:
     """
     if not SHOW_REEL_KIT_ON_TIMELINE:
         return []
-    today = datetime.now(timezone.utc).astimezone(_SAST).date().isoformat()
+    today = datetime.now(_SAST).date().isoformat()
     data = _notion_request(f"blocks/{NOTION_TASK_HUB_PAGE}/children?page_size=100")
     if not data:
         return []
@@ -8927,7 +9003,7 @@ def _fetch_overdue_notion_reel_kits() -> list[dict]:
 def api_so_reel_kits():
     """Scan last 3 SAST days for reel kits awaiting a master upload."""
     try:
-        now_sast = datetime.now(timezone.utc).astimezone(_SAST)
+        now_sast = datetime.now(_SAST)
         days: list[str] = []
         for d in range(3):
             days.append((now_sast - timedelta(days=d)).strftime("%Y-%m-%d"))
