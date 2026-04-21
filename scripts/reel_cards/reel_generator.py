@@ -600,22 +600,6 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
             f"https://mzansiedge.co.za/assets/reel-cards/{today}/{pid}/master_{pid}.mp4"
         )
 
-        # TG-SURFACE-SPLIT-01 — tier-based Telegram routing
-        # Gold/Diamond → Telegram Alerts (push-notification, still PNG)
-        # Silver/Bronze → Telegram Community (conversation, video)
-        if tier in ("gold", "diamond"):
-            tg_channel   = "Telegram Alerts"
-            tg_asset     = still_url
-            tg_caption   = alerts_caption
-            tg_emoji     = "🖼️"
-            tg_post_type = "teaser"
-        else:
-            tg_channel   = "Telegram Community"
-            tg_asset     = video_url
-            tg_caption   = community_caption
-            tg_emoji     = "🎬"
-            tg_post_type = "build_up"
-
         # SOCIAL-OPS-TIMELINE-INTEGRITY-01 — Scheduled Time on approval.
         # Default 19:00 SAST per MARKETING-CORE.md so the reel icon renders at
         # its target slot on the Social Ops timeline instead of unscheduled.
@@ -624,8 +608,13 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
         # One MOQ item per channel (Channel is a select, not multi-select)
         # Instagram entry added so the IG lane shows the scheduled reel slot
         # that AC1's state-aware indicator keys off.
-        tg_channels = [
-            (tg_channel, tg_asset, tg_caption, tg_emoji, tg_post_type),
+        # Silver/Bronze reel video → Telegram Community (conversation surface).
+        # Gold/Diamond: no Telegram Alerts entry — HTML edge card is delivered
+        # there by alerts_direct.py on tier-fire (BUILD-REEL-STILL-RETIREMENT-01).
+        tg_channels = (
+            [("Telegram Community", video_url, community_caption, "🎬", "build_up")]
+            if tier not in ("gold", "diamond") else []
+        ) + [
             ("WhatsApp Channel", still_url, alerts_caption, "🖼️", "teaser"),
             ("Instagram", video_url, community_caption, "🎬", "reel"),
         ]
