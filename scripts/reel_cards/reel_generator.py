@@ -516,12 +516,12 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
                     "Gap noted: MOQ DB not shared with integration.", MOQ_DB_ID)
         return False
 
-    # Archive existing today's Approved Reel Still items (idempotent re-run guard)
+    # Archive existing today's Approved Reel Video items (idempotent re-run guard)
     existing = _notion_request("POST", f"/databases/{MOQ_DB_ID}/query", {
         "filter": {
             "and": [
                 {"property": "Status", "select": {"equals": "Approved"}},
-                {"property": "Title", "rich_text": {"contains": f"Reel Still"}},
+                {"property": "Title", "rich_text": {"contains": "Reel Video"}},
                 {"property": "Title", "rich_text": {"contains": today}},
             ]
         },
@@ -552,37 +552,15 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
         odds        = r["recommended_odds"]
         pick_team   = r["pick_team"]
         bookmaker   = r["bookmaker"]
-        composite   = r["composite_score"]
-        card_url    = r["card_url"]
-        still_url   = r.get("still_url", card_url)
         pid         = r["pick_id"]
 
         # TG-AUTOGEN-REWRITE-01 Phase 2: captions via shared formatter (10-section)
         _PUB_DIR = "/home/paulsportsza/publisher"
         if _PUB_DIR not in sys.path:
             sys.path.insert(0, _PUB_DIR)
-        from ai_copy_generator import generate_teaser as _fmt_teaser  # type: ignore[import]
         from ai_copy_generator import generate_build_up as _fmt_build_up  # type: ignore[import]
 
-        _edge_data_alerts = {
-            "outcome": pick_team,
-            "odds": odds,
-            "bookmaker": bookmaker,
-            "composite_score": composite,
-        }
-
-        # G2: Alerts caption — push-notification surface (Gold/Diamond), post_type=teaser
-        alerts_caption = _fmt_teaser(
-            match=f"{home} vs {away}",
-            tier=tier,
-            league=league_upper,
-            kickoff=match_date,
-            broadcast="",
-            edge_data=_edge_data_alerts,
-            link="https://mzansiedge.co.za",
-        )
-
-        # G3: Community caption — conversational surface (Silver/Bronze), post_type=build_up
+        # Instagram caption — conversational surface, post_type=reel
         community_caption = _fmt_build_up(
             match=f"{home} vs {away}",
             league=league_upper,
@@ -595,7 +573,7 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
             },
         )
 
-        # Derive video URL for community items (Silver/Bronze → reel video)
+        # BUILD-REEL-VIDEO-IG-ONLY-01 — Instagram reel video only (WA + Community sidecars retired).
         video_url = (
             f"https://mzansiedge.co.za/assets/reel-cards/{today}/{pid}/master_{pid}.mp4"
         )
@@ -605,22 +583,13 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
         # its target slot on the Social Ops timeline instead of unscheduled.
         sched_iso = f"{today}T19:00:00+02:00"
 
-        # One MOQ item per channel (Channel is a select, not multi-select)
-        # Instagram entry added so the IG lane shows the scheduled reel slot
-        # that AC1's state-aware indicator keys off.
-        # Silver/Bronze reel video → Telegram Community (conversation surface).
-        # Gold/Diamond: no Telegram Alerts entry — HTML edge card is delivered
-        # there by alerts_direct.py on tier-fire (BUILD-REEL-STILL-RETIREMENT-01).
-        tg_channels = (
-            [("Telegram Community", video_url, community_caption, "🎬", "build_up")]
-            if tier not in ("gold", "diamond") else []
-        ) + [
-            ("WhatsApp Channel", still_url, alerts_caption, "🖼️", "teaser"),
+        # One MOQ item: Instagram only. WA Channel and Telegram Community sidecars
+        # are retired (BUILD-REEL-VIDEO-IG-ONLY-01, 2026-04-21).
+        for channel, asset, copy, emoji, post_type_val in [
             ("Instagram", video_url, community_caption, "🎬", "reel"),
-        ]
-        for channel, asset, copy, emoji, post_type_val in tg_channels:
+        ]:
             moq_props: dict = {
-                "Title": {"title": [{"text": {"content": f"{emoji} Reel Still — {tier_upper} — {channel} — {today}"}}]},
+                "Title": {"title": [{"text": {"content": f"{emoji} Reel Video — {tier_upper} — {channel} — {today}"}}]},
                 "Status": {"select": {"name": "Approved"}},
                 "Channel": {"select": {"name": channel}},
                 "Asset Link": {"url": asset},
@@ -717,7 +686,9 @@ def main():
         card_url  = (
             f"https://mzansiedge.co.za/assets/reel-cards/{today}/{pid}/card_{pid}.png"
         )
-        still_url = generate_still(card_path, tier, pid, today) or card_url
+        # Write tier marker for Diamond rarity gate (was written by generate_still, now direct).
+        # BUILD-REEL-VIDEO-IG-ONLY-01: Reel Still retired; still composite no longer generated.
+        (Path(card_path).parent / f"tier_{tier.lower()}").touch()
 
         vos = generate_vos(pick_dict, pid, today, env)
 
@@ -734,7 +705,6 @@ def main():
             "composite_score":  pick_dict["composite_score"],
             "card_path":        card_path,
             "card_url":         card_url,
-            "still_url":        still_url,
             "vo_paths":         vos,
         })
 
