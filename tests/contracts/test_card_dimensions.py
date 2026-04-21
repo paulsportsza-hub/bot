@@ -50,6 +50,7 @@ LIST_TEMPLATES = {
     "sub_billing_inactive.html",
     "sub_cancel_confirm.html",
     "sub_cancel_done.html",
+    "sub_payment_confirmed.html",
     "sub_founding_confirmed.html",
     "sub_founding_soldout.html",
     "sub_founding_ended.html",

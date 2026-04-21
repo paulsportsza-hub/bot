@@ -958,6 +958,8 @@ async def get_user_tier(user_id: int) -> str:
 
     Reconciles user_tier with subscription_status: if user_tier='bronze' but
     subscription_status='active', derives the correct tier from plan_code.
+    Also enforces read-time expiry check (3-day grace) so stale gold/diamond
+    rows don't grant access after expiry without waiting for the hourly cron.
     This prevents stale bronze state after /qa reset or webhook failures.
     """
     async with async_session() as s:
@@ -968,7 +970,15 @@ async def get_user_tier(user_id: int) -> str:
         if tier == "bronze":
             derived = _resolve_tier_from_subscription(user)
             if derived in ("gold", "diamond"):
-                return derived
+                tier = derived
+        # Read-time expiry enforcement (no DB writes — cron handles settlement)
+        if tier in ("gold", "diamond"):
+            expires_at = getattr(user, "tier_expires_at", None)
+            if expires_at is not None:
+                now = dt.datetime.now(dt.timezone.utc)
+                grace_end = expires_at + dt.timedelta(days=3)
+                if now > grace_end:
+                    return "bronze"
         return tier
 
 

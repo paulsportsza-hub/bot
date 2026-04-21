@@ -1,0 +1,154 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-STITCH-GOLD-DIAMOND-01 / GAP-3 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; padding: 2px; box-sizing: content-box;
+        }
+        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+
+        /* Gold tier header */
+        .header-gold {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #0A0800, #141000);
+            border-bottom: 1px solid #FFD70060;
+        }
+        /* Diamond tier header */
+        .header-diamond {
+            text-align: center; padding: 22px 20px 14px;
+            background: linear-gradient(180deg, #080A14, #0E1228);
+            border-bottom: 1px solid #7B8CDE60;
+        }
+
+        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
+        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+
+        .bar-gold {
+            height: 3px;
+            background: linear-gradient(90deg, #F7931A, #FFD700, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .bar-diamond {
+            height: 3px;
+            background: linear-gradient(90deg, #7B8CDE, #A8B4FF, #C8D0FF);
+            margin: 10px 20px; border-radius: 2px;
+        }
+
+        .title-gold   { font-size: 14px; font-weight: 700; color: #FFBE45; letter-spacing: 3px; }
+        .title-diamond { font-size: 14px; font-weight: 700; color: #A8B4FF; letter-spacing: 3px; }
+
+        .body { padding: 20px; }
+
+        /* Greeting */
+        .greeting { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; text-align: center; }
+        .greeting strong { color: #FFFFFF; }
+
+        /* Plan block */
+        .plan-block {
+            text-align: center; margin-bottom: 20px;
+            border-radius: 12px; padding: 20px;
+        }
+        .plan-block-gold {
+            background: linear-gradient(135deg, #1A1200, #2A1E00);
+            border: 1px solid #FFD70050;
+        }
+        .plan-block-diamond {
+            background: linear-gradient(135deg, #0A0C1E, #14183A);
+            border: 1px solid #7B8CDE50;
+        }
+
+        .tier-badge { font-size: 36px; line-height: 1; margin-bottom: 6px; }
+        .plan-label-gold   { font-size: 16px; font-weight: 700; color: #FFD700; margin-bottom: 4px; }
+        .plan-label-diamond { font-size: 16px; font-weight: 700; color: #A8B4FF; margin-bottom: 4px; }
+        .plan-amount { font-family: 'JetBrains Mono', monospace; font-size: 28px; font-weight: 700; color: #FFFFFF; margin-bottom: 4px; }
+        .plan-cadence { font-size: 12px; color: var(--text-secondary); }
+
+        /* Access row */
+        .access-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 14px; background: #111111;
+            border: 1px solid #FFFFFF10; border-radius: 8px; margin-bottom: 10px;
+            font-size: 12px;
+        }
+        .access-label { color: var(--text-secondary); }
+        .access-value-gold    { color: #FFD700; font-weight: 600; }
+        .access-value-diamond { color: #A8B4FF; font-weight: 600; }
+
+        /* Footer note */
+        .footer-note {
+            text-align: center; font-size: 11px; color: var(--text-secondary);
+            padding-top: 12px; border-top: 1px solid #1E1E1E;
+        }
+        .footer-note strong { color: #FFBE45; }
+    </style>
+</head>
+<body>
+<div class="card">
+    {% if tier == 'diamond' %}
+    <div class="header-diamond">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="bar-diamond"></div>
+        <div class="title-diamond">PAYMENT CONFIRMED ✅</div>
+    </div>
+    {% else %}
+    <div class="header-gold">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="bar-gold"></div>
+        <div class="title-gold">PAYMENT CONFIRMED ✅</div>
+    </div>
+    {% endif %}
+
+    <div class="body">
+        {% if first_name %}
+        <div class="greeting">Welcome, <strong>{{ first_name | e }}</strong> — your access is live.</div>
+        {% endif %}
+
+        {% if tier == 'diamond' %}
+        <div class="plan-block plan-block-diamond">
+            <div class="tier-badge">{{ tier_badge }}</div>
+            <div class="plan-label-diamond">{{ plan_label | e }}</div>
+            <div class="plan-amount">{{ amount_zar | e }}</div>
+            <div class="plan-cadence">{{ renewal_cadence | e }}</div>
+        </div>
+        {% else %}
+        <div class="plan-block plan-block-gold">
+            <div class="tier-badge">{{ tier_badge }}</div>
+            <div class="plan-label-gold">{{ plan_label | e }}</div>
+            <div class="plan-amount">{{ amount_zar | e }}</div>
+            <div class="plan-cadence">{{ renewal_cadence | e }}</div>
+        </div>
+        {% endif %}
+
+        {% if tier == 'diamond' %}
+        <div class="access-row">
+            <span class="access-label">Access until</span>
+            <span class="access-value-diamond">{{ expires_at_human | e }}</span>
+        </div>
+        {% else %}
+        <div class="access-row">
+            <span class="access-label">Access until</span>
+            <span class="access-value-gold">{{ expires_at_human | e }}</span>
+        </div>
+        {% endif %}
+
+        <div class="footer-note">Use <strong>/status</strong> any time to view your plan.</div>
+    </div>
+</div>
+</body>
+</html>

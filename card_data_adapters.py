@@ -42,9 +42,11 @@ def build_sub_plans_data(
             "annual_price": None,
             "annual_savings": None,
             "features": [
-                "3 tips per day",
-                "24h delayed edges",
-                "Basic match analysis",
+                "See every edge we post — badges visible across all tiers",
+                "3 full detail views per day across any tier",
+                "Gold edges blurred, Diamond locked until you upgrade",
+                "Season hit rate and portfolio return visible to all",
+                "Morning teaser with the day's top picks",
             ],
         },
         {
@@ -55,9 +57,11 @@ def build_sub_plans_data(
             "annual_price": "R799/yr",
             "annual_savings": "save 33%",
             "features": [
-                "Unlimited tips",
-                "Real-time edges",
-                "Full AI breakdowns",
+                "Unlimited detail views — no daily cap",
+                "Full card detail on every Bronze, Silver and Gold pick",
+                "Line movement and full odds comparison unlocked",
+                "Morning alerts cover Gold picks, not just Bronze teasers",
+                "Diamond edges remain locked — upgrade to reach them",
             ],
         },
         {
@@ -68,9 +72,11 @@ def build_sub_plans_data(
             "annual_price": "R1,599/yr",
             "annual_savings": "save 33%",
             "features": [
-                "Everything in Gold",
-                "Line movement alerts",
-                "Sharp money + CLV",
+                "Every edge unlocked — Diamond picks are Diamond-only",
+                "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match",
+                "Personalised alerts tuned to your teams and bankroll",
+                "Line movement + sharp money + CLV tracking",
+                "Priority support when something doesn't look right",
             ],
         },
     ]
@@ -109,7 +115,12 @@ def build_sub_upgrade_bronze_data(founding_days_left: int = 0) -> dict:
             "tier_emoji": "💎",
             "monthly_price": "R199/mo",
             "annual_price": "R1,599/yr",
-            "differentiator": "Sharp money, CLV + line movement",
+            "differentiator": "The whole edge system, nothing held back.",
+            "features": [
+                "Every edge unlocked — Diamond picks are Diamond-only",
+                "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match",
+                "Personalised alerts tuned to your teams and bankroll",
+            ],
             "callback": "sub:tier:diamond_monthly",
         },
     ]
@@ -140,11 +151,13 @@ def build_sub_upgrade_gold_data(founding_days_left: int = 0) -> dict:
     return {
         "current_tier": "gold",
         "diamond_pitch": "You're one step from our best plan.",
+        "lock_note": "Diamond edges remain locked — upgrade to reach them.",
         "features": [
-            "Line movement alerts",
-            "Sharp money indicators",
-            "CLV tracking",
-            "Priority support",
+            "Every edge unlocked — Diamond picks are Diamond-only",
+            "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match",
+            "Personalised alerts tuned to your teams and bankroll",
+            "Line movement + sharp money + CLV tracking",
+            "Priority support when something doesn't look right",
         ],
         "founding_offer": founding_offer,
         "header_logo_b64": _logo(),
@@ -295,6 +308,59 @@ def build_sub_cancel_confirm_data(
     return {
         "plan_name": plan_name,
         "access_until": access_until,
+        "header_logo_b64": _logo(),
+    }
+
+
+# ── 12b: Payment confirmed (Gold/Diamond non-founding) ──────────────────────
+
+def build_sub_payment_confirmed_data(
+    user,
+    plan_code: str,
+    amount_cents: int,
+    expires_at,
+) -> dict:
+    """Build data dict for sub_payment_confirmed.html card.
+
+    Maps plan_code → plan_label + tier_badge via STITCH_PRODUCTS lookup.
+    Formats expires_at as '21 May 2026'. Amount is in cents.
+    """
+    import config as _cfg
+
+    _plan = _cfg.STITCH_PRODUCTS.get(plan_code, {})
+    _tier = _plan.get("tier", "gold" if "gold" in plan_code else "diamond")
+    _period = _plan.get("period", "annual" if "annual" in plan_code else "monthly")
+    _tier_badge = "💎" if _tier == "diamond" else "🥇"
+
+    # plan_label: e.g. "Gold Monthly", "Diamond Annual"
+    _plan_label = f"{_tier.title()} {_period.title()}"
+
+    # amount_zar: use STITCH_PRODUCTS price if available, else from amount_cents
+    _price_cents = _plan.get("price", amount_cents)
+    _amount_zar = f"R{_price_cents // 100}"
+
+    # renewal_cadence
+    _cadence = "Renews annually" if _period == "annual" else "Renews monthly"
+
+    # expires_at_human: '21 May 2026'
+    if expires_at is not None:
+        try:
+            _expires_str = expires_at.strftime("%-d %b %Y")
+        except Exception:
+            _expires_str = str(expires_at)[:10]
+    else:
+        _expires_str = "—"
+
+    _first_name = getattr(user, "first_name", None) or ""
+
+    return {
+        "first_name": _first_name,
+        "plan_label": _plan_label,
+        "tier": _tier,
+        "tier_badge": _tier_badge,
+        "amount_zar": _amount_zar,
+        "expires_at_human": _expires_str,
+        "renewal_cadence": _cadence,
         "header_logo_b64": _logo(),
     }
 
@@ -472,7 +538,7 @@ def build_onboarding_sports_data(selected_sports: list[str] | None = None) -> di
     return {
         "header_logo_b64": _logo(),
         "step": 2,
-        "total_steps": 6,
+        "total_steps": 5,
         "sports": sports_data,
         "selected_count": len(selected),
     }
@@ -484,7 +550,7 @@ def build_onboarding_favourites_data(sport_key: str, sport_label: str, sport_emo
     return {
         "header_logo_b64": _logo(),
         "step": 3,
-        "total_steps": 6,
+        "total_steps": 5,
         "sport": {"key": sport_key, "emoji": sport_emoji, "label": sport_label},
         "teams": teams or [],
         "selected_count": selected_count,
@@ -497,7 +563,7 @@ def build_onboarding_favourites_manual_data(sport_key: str, sport_label: str,
     return {
         "header_logo_b64": _logo(),
         "step": 3,
-        "total_steps": 6,
+        "total_steps": 5,
         "sport": {"key": sport_key, "emoji": sport_emoji, "label": sport_label},
         "fav_label": fav_label,
         "example": example,
@@ -560,7 +626,7 @@ def build_onboarding_risk_data(current: str | None = None) -> dict:
     return {
         "header_logo_b64": _logo(),
         "step": 4,
-        "total_steps": 6,
+        "total_steps": 5,
         "profiles": profiles,
     }
 
@@ -568,8 +634,8 @@ def build_onboarding_risk_data(current: str | None = None) -> dict:
 def build_onboarding_bankroll_data(current: float | None = None) -> dict:
     return {
         "header_logo_b64": _logo(),
-        "step": 4,
-        "total_steps": 6,
+        "step": 5,
+        "total_steps": 5,
         "amounts": _BANKROLL_OPTIONS,
         "current": f"R{current:,.0f}" if current else None,
     }
@@ -579,8 +645,8 @@ def build_onboarding_bankroll_custom_data(validation_error: str = "",
                                            min_value: int = 20) -> dict:
     return {
         "header_logo_b64": _logo(),
-        "step": 4,
-        "total_steps": 6,
+        "step": 5,
+        "total_steps": 5,
         "validation_error": validation_error,
         "min_value": min_value,
     }
@@ -638,7 +704,7 @@ def build_onboarding_summary_data(ob: dict) -> dict:
     return {
         "header_logo_b64": _logo(),
         "step": 5,
-        "total_steps": 6,
+        "total_steps": 5,
         "experience_label": exp_labels.get(exp, exp),
         "sports": sports,
         "risk": risk_label,

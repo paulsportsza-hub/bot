@@ -138,6 +138,7 @@ from card_data_adapters import (
     build_sub_status_active_data, build_sub_status_bronze_data,
     build_sub_billing_active_data, build_sub_billing_inactive_data,
     build_sub_cancel_confirm_data, build_sub_cancel_done_data,
+    build_sub_payment_confirmed_data,
     build_sub_founding_confirmed_data, build_sub_founding_soldout_data,
     build_sub_founding_ended_data, build_sub_founding_live_data,
     build_sub_expiry_notice_data, build_sub_trial_expiry_data,
@@ -26013,43 +26014,80 @@ def _pending_webhook_text(payment_status: str) -> str:
     )
 
 
-async def _notify_payment_outcome(send_message, outcome: dict[str, object]) -> None:
+async def _notify_payment_outcome(bot, outcome: dict[str, object]) -> None:
     user_id = outcome.get("user_id")
     if not user_id:
         return
+
+    _success_mkp = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        [InlineKeyboardButton("📋 My Status", callback_data="sub:billing")],
+    ])
+
     if outcome.get("outcome") in {"confirmed", "already_founding_member"}:
         slot_number = int(outcome.get("slot_number") or 0)
         if slot_number:
-            text = _founding_confirmation_text(slot_number)
-        else:
-            text = (
-                "✅ <b>Payment confirmed!</b>\n\n"
-                "Your paid access is active now. Use /status to see your plan."
+            # Founding member path — plain text (existing behaviour)
+            await bot.send_message(
+                chat_id=int(user_id),
+                text=_founding_confirmation_text(slot_number),
+                parse_mode=ParseMode.HTML,
+                reply_markup=_success_mkp,
             )
+        else:
+            # Non-founding Gold/Diamond — send confirmation card with plain-text fallback
+            _card_sent = False
+            try:
+                _u = await db.get_user(int(user_id))
+                if _u:
+                    _pc = getattr(_u, "plan_code", "") or ""
+                    _ea = getattr(_u, "tier_expires_at", None)
+                    _ac = config.STITCH_PRODUCTS.get(_pc, {}).get("price", 0)
+                    _cd = build_sub_payment_confirmed_data(_u, _pc, _ac, _ea)
+                    await send_card_or_fallback(
+                        bot, int(user_id),
+                        "sub_payment_confirmed.html",
+                        _cd,
+                        "✅ Payment confirmed! Your paid access is active now.",
+                        _success_mkp,
+                        message_to_edit=None,
+                    )
+                    _card_sent = True
+            except Exception as _ce:
+                log.error("sub_payment_confirmed card failed for user %s: %s", user_id, _ce)
+            if not _card_sent:
+                await bot.send_message(
+                    chat_id=int(user_id),
+                    text="✅ <b>Payment confirmed!</b>\n\nYour paid access is active now. Use /status to see your plan.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_success_mkp,
+                )
     elif outcome.get("outcome") == "no_slot_available":
-        text = _founding_no_slot_text()
+        await bot.send_message(
+            chat_id=int(user_id),
+            text=_founding_no_slot_text(),
+            parse_mode=ParseMode.HTML,
+        )
     elif outcome.get("outcome") == "cancelled":
-        text = (
-            "⚠️ <b>Payment cancelled</b>\n\n"
-            "No founding slot was assigned. Use /founding to try again if slots remain."
+        await bot.send_message(
+            chat_id=int(user_id),
+            text=(
+                "⚠️ <b>Payment cancelled</b>\n\n"
+                "No founding slot was assigned. Use /founding to try again if slots remain."
+            ),
+            parse_mode=ParseMode.HTML,
         )
     elif outcome.get("outcome") == "failed":
-        text = (
-            "⚠️ <b>Payment failed</b>\n\n"
-            "No access changes were made. Use /founding to try again."
+        await bot.send_message(
+            chat_id=int(user_id),
+            text=(
+                "⚠️ <b>Payment failed</b>\n\n"
+                "No access changes were made. Use /founding to try again."
+            ),
+            parse_mode=ParseMode.HTML,
         )
     else:
         return
-
-    await send_message(
-        chat_id=int(user_id),
-        text=text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
-            [InlineKeyboardButton("📋 My Status", callback_data="sub:billing")],
-        ]) if outcome.get("outcome") in {"confirmed", "already_founding_member"} else None,
-    )
 
 
 def _derive_plan_code_from_reference(reference: str) -> str:
@@ -26739,7 +26777,7 @@ async def _run_webhook_server(app_instance) -> None:
             analytics_track(int(user_id), "mandate_created")
 
         try:
-            await _notify_payment_outcome(app_instance.bot.send_message, outcome)
+            await _notify_payment_outcome(app_instance.bot, outcome)
         except Exception as exc:
             log.warning("Failed to send payment outcome notification: %s", exc)
 
