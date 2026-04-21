@@ -1719,7 +1719,87 @@ def render_card_bytes(
         _log_card_population_failure(match_key, f"render_card_bytes:{reason}", tip)
         raise CardPopulationError(reason)
 
-    detail_data = build_edge_detail_data(tip or {})
+    # Enrich tip with DB data — signals, odds chips, form, H2H, injuries, confidence.
+    # Mirrors _enrich_tip_for_card in bot.py but uses card_pipeline functions directly
+    # to avoid a circular import. Without this, build_edge_detail_data receives a raw
+    # tip with no all_odds/signals/form/h2h and renders a skeleton card.
+    _BK_NAMES = {
+        "hollywoodbets": "HWB", "betway": "Betway", "supabets": "Supabets",
+        "sportingbet": "Sportingbet", "gbets": "GBets", "wsb": "WSB",
+        "playabets": "PlayaBets", "supersportbet": "SuperSportBet",
+    }
+    enriched_tip = dict(tip or {})
+    try:
+        _vd = build_verified_data_block(match_key)
+        _hk = _vd.get("home_key", "")
+        _ak = _vd.get("away_key", "")
+        _results = _vd.get("results") or []
+        _injuries = _vd.get("injuries") or []
+
+        enriched_tip["signals"] = _compute_signals(enriched_tip, _vd)
+
+        def _fmt_bk(k: str) -> str:
+            return _BK_NAMES.get((k or "").lower(), (k or "").title())
+
+        _outcome_key = (enriched_tip.get("outcome_key") or "home").lower()
+        if _outcome_key not in ("home", "away", "draw"):
+            _outcome_key = "home"
+        _all_odds: list[dict] = []
+        for _bk, _od in (_vd.get("odds") or {}).items():
+            try:
+                _v = float(_od.get(_outcome_key) or 0)
+            except (TypeError, ValueError):
+                continue
+            if _v > 1.0:
+                _all_odds.append({"bookie": _fmt_bk(_bk), "odds": _v})
+        _pick_bk_raw = (enriched_tip.get("bookmaker_key") or enriched_tip.get("bookmaker") or "").lower()
+        _pick_bk_disp = _fmt_bk(_pick_bk_raw)
+        try:
+            _pick_odds = float(enriched_tip.get("odds") or 0)
+        except (TypeError, ValueError):
+            _pick_odds = 0.0
+        if _pick_bk_raw and _pick_odds > 1.0:
+            if not any(o["bookie"] == _pick_bk_disp for o in _all_odds):
+                _all_odds.append({"bookie": _pick_bk_disp, "odds": _pick_odds, "is_pick": True})
+        for _o in _all_odds:
+            if _o["bookie"] == _pick_bk_disp:
+                _o["is_pick"] = True
+        _pick_chips = [o for o in _all_odds if o.get("is_pick")]
+        _other_chips = sorted([o for o in _all_odds if not o.get("is_pick")], key=lambda x: x["odds"])
+        enriched_tip["all_odds"] = (_pick_chips + _other_chips)[:3]
+
+        _hf = _compute_team_form(_results, _hk) if _hk else []
+        _af = _compute_team_form(_results, _ak) if _ak else []
+        if _hf and _af:
+            _fn = min(len(_hf), len(_af))
+            enriched_tip["home_form"] = _hf[:_fn][::-1]
+            enriched_tip["away_form"] = _af[:_fn][::-1]
+
+        # Use h2h_results (dedicated AND query, both teams guaranteed) not _results
+        # (OR query). _results gives played=0 because key-variant matching fails across
+        # 20 mixed-team rows. h2h_results has 5 Arsenal-Fulham meetings directly.
+        # Only overwrite if not already populated by _enrich_tip_for_card caller.
+        if not (enriched_tip.get("h2h") or {}).get("n"):
+            _h2h_dedicated = _vd.get("h2h_results") or []
+            _h2h = _compute_h2h(_h2h_dedicated if _h2h_dedicated else _results, _hk, _ak)
+            enriched_tip["h2h"] = {
+                "n": _h2h.get("played", 0),
+                "hw": _h2h.get("hw", 0),
+                "d": _h2h.get("d", 0),
+                "aw": _h2h.get("aw", 0),
+            }
+
+        _hi, _ai = _split_injuries(_injuries, _hk, _ak)
+        enriched_tip["home_injuries"] = _hi
+        enriched_tip["away_injuries"] = _ai
+
+        if not enriched_tip.get("confidence") and enriched_tip.get("edge_score"):
+            enriched_tip["confidence"] = int(float(enriched_tip["edge_score"]))
+
+    except Exception as _enrich_exc:
+        log.warning("render_card_bytes: enrichment failed for %s: %s", match_key, _enrich_exc)
+
+    detail_data = build_edge_detail_data(enriched_tip)
     img = render_card_sync("edge_detail.html", detail_data)
     caption = render_card_html(card_data)[:_CAPTION_MAX]
     back_cb = back_cb_override or f"hot:back:{back_page}"

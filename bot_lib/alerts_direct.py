@@ -67,6 +67,16 @@ def _sync_render_card(tip: dict, buttons: list | None = None) -> bytes:
     _ensure_paths()
     from card_pipeline import render_card_bytes  # type: ignore[import]
     match_key = tip.get("match_key") or tip.get("match_id") or ""
+
+    # Hydrate tip with full DB enrichment so the card is identical to ep:pick.
+    # _enrich_tip_for_card (bot.py) is safe to import here: alerts_direct always
+    # runs inside the bot process where bot is already in sys.modules.
+    try:
+        from bot import _enrich_tip_for_card  # type: ignore[import]
+        tip = _enrich_tip_for_card(tip, match_key)
+    except Exception as _hydrate_err:
+        log.warning("alerts_direct: tip hydration failed (%s) — card may be partial", _hydrate_err)
+
     img_bytes, _, _ = render_card_bytes(match_key, tip, include_analysis=False, buttons=buttons)
     return img_bytes
 
@@ -127,6 +137,10 @@ async def post_to_alerts(
         return None
 
     _dl_match_key = tip.get("match_key") or tip.get("match_id") or edge_id
+    # Encode the tier at post time so the deeplink can restore it even if the
+    # scraper later recalculates and changes the DB row's edge_tier.
+    _dl_tier_now = (tip.get("display_tier") or tip.get("edge_tier") or "gold").lower()
+    _dl_key_with_tier = f"{_dl_match_key}_{_dl_tier_now}"
     try:
         png_bytes = await asyncio.to_thread(_sync_render_card, tip)
     except Exception as exc:
@@ -134,7 +148,7 @@ async def post_to_alerts(
         return None
 
     caption = ""
-    reply_markup = _build_deeplink_markup(_dl_match_key)
+    reply_markup = _build_deeplink_markup(_dl_key_with_tier)
 
     msg_url = await asyncio.to_thread(_post_sync, token, png_bytes, caption, reply_markup)
 
