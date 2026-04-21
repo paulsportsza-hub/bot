@@ -770,3 +770,42 @@ def build_onboarding_restart_data(first_name: str = "") -> dict:
         "header_logo_b64": _logo(),
         "first_name": first_name or "",
     }
+
+
+def _sport_emoji(sport: str | None) -> str:
+    if not sport:
+        return "🏆"
+    s = (sport or "").lower()
+    if "soccer" in s or "football" in s:
+        return "⚽"
+    if "rugby" in s:
+        return "🏉"
+    if "cricket" in s:
+        return "🏏"
+    if "tennis" in s:
+        return "🎾"
+    if "basket" in s:
+        return "🏀"
+    if "boxing" in s or "mma" in s:
+        return "🥊"
+    return "🏆"
+
+
+def build_home_winners_data(wins: list) -> dict:
+    """Data for home_winners.html — last 5 resolved wins."""
+    rows = []
+    for tip in wins:
+        odds = tip.odds or 0.0
+        return_zar = round(100 * odds) if odds else None
+        rows.append({
+            "match": tip.match[:40] if tip.match else "Unknown",
+            "prediction": tip.prediction[:30] if tip.prediction else "",
+            "odds": f"{odds:.2f}" if odds else "—",
+            "return_zar": f"R{return_zar}" if return_zar else "—",
+            "sport_emoji": _sport_emoji(tip.sport),
+        })
+    return {
+        "wins": rows,
+        "header_logo_b64": _logo(),
+        "total_count": len(rows),
+    }

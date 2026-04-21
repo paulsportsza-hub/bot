@@ -529,6 +529,18 @@ async def get_recent_tips(limit: int = 10) -> list[Tip]:
         return list(result.scalars().all())
 
 
+async def get_recent_wins(limit: int = 5) -> list[Tip]:
+    """Return the most recently resolved winning edges."""
+    async with async_session() as s:
+        result = await s.execute(
+            select(Tip)
+            .where(Tip.result == "win")
+            .order_by(Tip.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+
 async def save_bet(user_id: int, tip_id: int, stake: float) -> Bet:
     async with async_session() as s:
         bet = Bet(user_id=user_id, tip_id=tip_id, stake=stake)

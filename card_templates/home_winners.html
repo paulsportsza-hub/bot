@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #000000;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+            padding: 2px;
+            box-sizing: content-box;
+        }
+        .card {
+            width: 480px;
+            height: 620px;
+            background: #0A0A0A;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Header ──────────────────────────────────────────── */
+        .header {
+            text-align: center;
+            padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img {
+            height: 32px;
+            width: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
+        }
+        .title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: 3px;
+            margin-bottom: 4px;
+        }
+        .subtitle {
+            font-size: 11px;
+            color: #666666;
+            letter-spacing: 1px;
+        }
+
+        /* ── Rows ────────────────────────────────────────────── */
+        .rows {
+            padding: 8px 0;
+            flex: 1;
+        }
+        .row {
+            padding: 14px 20px;
+            border-bottom: 1px solid #1E1E1E;
+        }
+        .row:last-child {
+            border-bottom: none;
+        }
+        .row-top {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 5px;
+        }
+        .sport-emoji {
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+        .match-name {
+            font-size: 13px;
+            font-weight: 700;
+            color: #FFFFFF;
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .odds-chip {
+            font-size: 12px;
+            font-weight: 700;
+            color: #FF6B00;
+            background: rgba(255, 107, 0, 0.12);
+            border: 1px solid rgba(255, 107, 0, 0.25);
+            border-radius: 4px;
+            padding: 2px 7px;
+            flex-shrink: 0;
+        }
+        .row-bottom {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-left: 24px;
+        }
+        .prediction {
+            font-size: 11px;
+            color: #B0B0B0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 280px;
+        }
+        .return-zar {
+            font-size: 12px;
+            font-weight: 700;
+            color: #4CAF50;
+            flex-shrink: 0;
+        }
+
+        /* ── Empty state ─────────────────────────────────────── */
+        .empty {
+            text-align: center;
+            padding: 48px 24px;
+            color: #666666;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        /* ── Footer ──────────────────────────────────────────── */
+        .footer {
+            padding: 12px 20px;
+            border-top: 1px solid #1E1E1E;
+            text-align: center;
+        }
+        .footer-text {
+            font-size: 9px;
+            color: #666666;
+            letter-spacing: 0.3px;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="data:image/png;base64,{{ header_logo_b64 }}" alt="MzansiEdge">
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">LAST 5 WINS</div>
+        <div class="subtitle">R100 STAKE RETURN</div>
+    </div>
+
+    <div class="rows">
+        {% if wins %}
+            {% for row in wins %}
+            <div class="row">
+                <div class="row-top">
+                    <span class="sport-emoji">{{ row.sport_emoji }}</span>
+                    <span class="match-name">{{ row.match }}</span>
+                    <span class="odds-chip">{{ row.odds }}</span>
+                </div>
+                <div class="row-bottom">
+                    <span class="prediction">{{ row.prediction }}</span>
+                    <span class="return-zar">{{ row.return_zar }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="empty">No resolved picks yet — check back soon.</div>
+        {% endif %}
+    </div>
+
+    <div class="footer">
+        <span class="footer-text">Past performance is not a guarantee of future results.</span>
+    </div>
+</div>
+</body>
+</html>

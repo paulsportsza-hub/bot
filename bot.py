@@ -151,6 +151,7 @@ from card_data_adapters import (
     build_onboarding_summary_data, build_onboarding_done_data,
     build_story_quiz_step_data, build_story_quiz_complete_data,
     build_onboarding_restart_data,
+    build_home_winners_data,
 )
 from narrative_spec import (
     _VERDICT_MAX_CHARS, _VERDICT_MIN_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
@@ -1339,15 +1340,21 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    wins = await db.get_recent_wins(limit=5)
+    if wins:
+        try:
+            data = build_home_winners_data(wins)
+            photo_bytes = await asyncio.to_thread(render_card_sync, "home_winners.html", data)
+            await update.message.reply_photo(
+                photo=photo_bytes,
+                reply_markup=get_main_keyboard(),
+            )
+            return
+        except Exception as exc:
+            logger.warning("home_winners card render failed in cmd_menu: %s", exc)
     name = h(user.first_name or "")
-    text = textwrap.dedent(f"""\
-        <b>🇿🇦 MzansiEdge — Main Menu</b>
-
-        Hey {name}, pick a sport or get an AI tip.
-    """)
-    await update.message.reply_text(
-        text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard(),
-    )
+    text = f"<b>🇿🇦 MzansiEdge — Main Menu</b>\n\nHey {name}, what would you like to do?"
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
 
 
 # ── /help ─────────────────────────────────────────────────
@@ -3871,6 +3878,15 @@ async def _serve_response(query, text: str, markup, photo=None) -> None:
 async def handle_menu(query, action: str) -> None:
     if action == "home":
         user = query.from_user
+        wins = await db.get_recent_wins(limit=5)
+        if wins:
+            try:
+                data = build_home_winners_data(wins)
+                photo_bytes = await asyncio.to_thread(render_card_sync, "home_winners.html", data)
+                await _serve_response(query, "", kb_main(), photo=photo_bytes)
+                return
+            except Exception as exc:
+                logger.warning("home_winners card render failed: %s", exc)
         text = textwrap.dedent(f"""\
             <b>🇿🇦 MzansiEdge — Main Menu</b>
 
@@ -26365,7 +26381,7 @@ async def _handle_sub_email(update: Update, user_id: int) -> bool:
     )
 
     try:
-        ref = f"mze-{user_id}-{plan_code}-{os.urandom(3).hex()}"
+        ref = f"mze-{user_id}-{plan_code.replace('_', '-')}-{os.urandom(3).hex()}"
         result = await stitch_service.create_payment(
             user_id,
             amount_cents=amount,

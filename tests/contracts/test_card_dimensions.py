@@ -30,6 +30,8 @@ DETAIL_TEMPLATES = {
     # BUILD-WAVE1-SUB-01
     "sub_plans.html",
     "sub_founding_live.html",
+    # BUILD-HOME-WINNERS-CARD-01
+    "home_winners.html",
 }
 LIST_TEMPLATES = {
     "edge_picks.html",
