@@ -225,6 +225,10 @@ class _CronMonitor:
 
 claude = anthropic.AsyncAnthropic(api_key=config.OPENROUTER_API_KEY)
 
+# INV-SONNET-BURN-05: verdict generation defaults to Haiku. Override with VERDICT_MODEL env
+# var if a Sonnet-quality verdict is required for a specific deployment.
+_VERDICT_MODEL = os.environ.get("VERDICT_MODEL", "claude-haiku-4-5-20251001")
+
 # ── Onboarding state machine ─────────────────────────────
 # Steps: experience → sports → favourites → edge_explainer → risk → bankroll → notify → summary → plan
 ONBOARD_STEPS = ("experience", "sports", "favourites", "edge_explainer", "risk", "bankroll", "notify", "summary", "plan")
@@ -1101,47 +1105,91 @@ async def _handle_card_deeplink(
         )
         return
 
-    # Load tip data from edge_results for this match_key
+    # Decode tier suffix appended by alerts_direct.post_to_alerts at post time.
+    # This preserves the tier used when the alert was posted even if the scraper
+    # later recalculates the edge_results row with a different tier.
+    _dl_tier_override: str | None = None
+    for _sfx in ("_diamond", "_gold", "_silver", "_bronze"):
+        if match_key.endswith(_sfx):
+            _dl_tier_override = _sfx[1:]
+            match_key = match_key[:-len(_sfx)]
+            break
+
+    # Load canonical tip dict — same format as hot tips list (includes bookmaker_key,
+    # sport_key, odds_by_bookmaker, edge_v2, league_key needed by _enrich_tip_for_card).
     _dl_tip: dict | None = None
-    _dl_tier = "gold"
+    _dl_tier = _dl_tier_override or "gold"
     try:
-        from scrapers.db_connect import connect_odds_db as _dl_conn_fn
-        from scrapers.edge.edge_config import DB_PATH as _dl_db
-        _dl_conn = _dl_conn_fn(_dl_db)
-        _dl_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
-        try:
-            _dl_row = _dl_conn.execute(
-                "SELECT match_key, edge_tier, bet_type, recommended_odds, bookmaker, "
-                "predicted_ev, league, match_date, result, composite_score, confirming_signals "
-                "FROM edge_results WHERE match_key = ? AND result IS NULL "
-                "ORDER BY recommended_at DESC LIMIT 1",
-                (match_key,),
-            ).fetchone()
-        finally:
-            _dl_conn.close()
-        if _dl_row:
-            _dl_tier = (_dl_row.get("edge_tier") or "gold").lower()
-            _dl_home, _dl_away = _teams_from_vs_event_id(match_key)
-            _dl_ok_raw = (_dl_row.get("bet_type") or "Home Win")
-            _dl_ok_key = _dl_ok_raw.lower().replace(" win", "").replace(" ", "")
-            _dl_ok_display = (
-                _display_team_name(_dl_home.lower().replace(" ", "_")) if _dl_ok_key == "home"
-                else _display_team_name(_dl_away.lower().replace(" ", "_")) if _dl_ok_key == "away"
-                else "Draw"
-            )
-            _dl_tip = {
-                "match_id": match_key, "match_key": match_key,
-                "home_team": _dl_home, "away_team": _dl_away,
-                "outcome": _dl_ok_display, "outcome_key": _dl_ok_key,
-                "edge_tier": _dl_tier, "display_tier": _dl_tier, "edge_rating": _dl_tier,
-                "odds": float(_dl_row.get("recommended_odds") or 0),
-                "bookmaker": _dl_row.get("bookmaker") or "",
-                "ev": float(_dl_row.get("predicted_ev") or 0),
-                "edge_score": float(_dl_row.get("composite_score") or 0),
-                "confirming_signals": int(_dl_row.get("confirming_signals") or 0),
-            }
+        _dl_seed = await asyncio.wait_for(
+            asyncio.to_thread(_load_tips_from_edge_results, 100, True),
+            timeout=5.0,
+        )
+        for _dl_candidate in _dl_seed:
+            if (_dl_candidate.get("match_id") or _dl_candidate.get("match_key") or "") == match_key:
+                _dl_tip = {**_dl_candidate, "match_key": match_key}
+                # Only use DB tier if no override was encoded in the deeplink URL.
+                if not _dl_tier_override:
+                    _dl_tier = (_dl_tip.get("display_tier") or _dl_tip.get("edge_tier") or "gold").lower()
+                # Stamp the final tier into the tip dict so card rendering uses it.
+                _dl_tip["display_tier"] = _dl_tier
+                _dl_tip["edge_tier"] = _dl_tier
+                _dl_tip["edge_rating"] = _dl_tier
+                break
     except Exception as _dl_exc:
-        log.warning("card_deeplink: DB lookup failed for match_key=%s: %s", match_key, _dl_exc)
+        log.warning("card_deeplink: canonical tip lookup failed for %s: %s", match_key, _dl_exc)
+
+    # Fallback for settled/expired edges not returned by _load_tips_from_edge_results
+    if _dl_tip is None:
+        try:
+            from scrapers.db_connect import connect_odds_db as _dl_conn_fn
+            from scrapers.edge.edge_config import DB_PATH as _dl_db
+            _dl_conn = _dl_conn_fn(_dl_db)
+            _dl_conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+            try:
+                _dl_row = _dl_conn.execute(
+                    "SELECT match_key, edge_tier, bet_type, recommended_odds, bookmaker, "
+                    "predicted_ev, league, match_date, result, composite_score, confirming_signals "
+                    "FROM edge_results WHERE match_key = ? "
+                    "ORDER BY result IS NULL DESC, recommended_at DESC LIMIT 1",
+                    (match_key,),
+                ).fetchone()
+            finally:
+                _dl_conn.close()
+            if _dl_row:
+                # Only use DB tier if no override was encoded in the deeplink URL.
+                if not _dl_tier_override:
+                    _dl_tier = (_dl_row.get("edge_tier") or "gold").lower()
+                _dl_home, _dl_away = _teams_from_vs_event_id(match_key)
+                _dl_ok_raw = (_dl_row.get("bet_type") or "Home Win")
+                _dl_ok_key = _dl_ok_raw.lower().replace(" win", "").replace(" ", "")
+                _dl_ok_display = (
+                    _display_team_name(_dl_home.lower().replace(" ", "_")) if _dl_ok_key == "home"
+                    else _display_team_name(_dl_away.lower().replace(" ", "_")) if _dl_ok_key == "away"
+                    else "Draw"
+                )
+                _dl_bk_key = (_dl_row.get("bookmaker") or "").strip().lower()
+                _dl_rec_odds = float(_dl_row.get("recommended_odds") or 0)
+                _dl_tip = {
+                    "match_id": match_key, "match_key": match_key,
+                    "home_team": _dl_home, "away_team": _dl_away,
+                    "outcome": _dl_ok_display, "outcome_key": _dl_ok_key,
+                    "edge_tier": _dl_tier, "display_tier": _dl_tier, "edge_rating": _dl_tier,
+                    "odds": _dl_rec_odds,
+                    "bookmaker": _display_bookmaker_name(_dl_bk_key),
+                    "bookmaker_key": _dl_bk_key,
+                    "ev": float(_dl_row.get("predicted_ev") or 0),
+                    "edge_score": float(_dl_row.get("composite_score") or 0),
+                    "confirming_signals": int(_dl_row.get("confirming_signals") or 0),
+                    "odds_by_bookmaker": {_dl_bk_key: _dl_rec_odds} if _dl_bk_key and _dl_rec_odds > 0 else {},
+                    "edge_v2": {
+                        "composite_score": float(_dl_row.get("composite_score") or 0),
+                        "edge_pct": float(_dl_row.get("predicted_ev") or 0),
+                        "outcome": _dl_row.get("bet_type", "home"),
+                        "confirming_signals": int(_dl_row.get("confirming_signals") or 0),
+                    },
+                }
+        except Exception as _dl_fb_exc:
+            log.warning("card_deeplink: fallback DB lookup failed for %s: %s", match_key, _dl_fb_exc)
 
     _user_tier = await get_effective_tier(user_id)
 
@@ -1153,41 +1201,34 @@ async def _handle_card_deeplink(
         pass
 
     try:
-        from card_pipeline import build_card_data, verify_card_populates
-        from message_types import DetailMessage
-        import io as _dl_io
-
-        _dl_card = await asyncio.wait_for(
-            asyncio.to_thread(build_card_data, match_key, tip=_dl_tip, include_analysis=False),
+        _dl_tip_for_render = _dl_tip or {"match_id": match_key, "ev": 0}
+        _dl_tip_enriched = await asyncio.wait_for(
+            asyncio.to_thread(_enrich_tip_for_card, _dl_tip_for_render, match_key),
             timeout=10.0,
         )
-        _gate_ok, _ = verify_card_populates(
-            {"outcome": _dl_card.get("outcome", ""), "odds": _dl_card.get("odds", 0),
-             "bookmaker": _dl_card.get("bookmaker", "")},
-            match_key,
+        _dl_data = build_edge_detail_data(_dl_tip_enriched)
+        _dl_btns = _build_game_buttons(
+            [_dl_tip_for_render], match_key, user_id,
+            source="alerts_deeplink", user_tier=_user_tier,
+            edge_tier=_dl_tier, back_page=0,
+            back_cb_override="hot:go",
         )
-        if _gate_ok:
-            _dl_tips = [_dl_tip] if _dl_tip else [{"ev": 0, "match_id": match_key}]
-            _dl_btns = _build_game_buttons(
-                _dl_tips, match_key, user_id,
-                source="alerts_deeplink", user_tier=_user_tier,
-                edge_tier=_dl_tier, back_page=0,
-                back_cb_override="hot:go",
-            )
-            _dl_img, _, _dl_markup = DetailMessage.build_card_photo(
-                _dl_card, buttons=_dl_btns, back_cb="hot:go",
-            )
-            if _dl_loading:
-                try:
-                    await _dl_loading.delete()
-                except Exception:
-                    pass
-            await ctx.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=_dl_io.BytesIO(_dl_img),
-                reply_markup=_dl_markup,
-            )
-            return
+        _dl_markup = InlineKeyboardMarkup(_dl_btns)
+        _dl_fallback = (
+            f"<b>{h(_dl_tip_for_render.get('home_team', ''))} vs "
+            f"{h(_dl_tip_for_render.get('away_team', ''))}</b>"
+        )
+        if _dl_loading:
+            try:
+                await _dl_loading.delete()
+            except Exception:
+                pass
+        await send_card_or_fallback(
+            bot=ctx.bot, chat_id=update.effective_chat.id,
+            template="edge_detail.html", data=_dl_data,
+            text_fallback=_dl_fallback, markup=_dl_markup,
+        )
+        return
     except Exception as _dl_card_err:
         log.warning("card_deeplink: card pipeline failed for %s: %s", match_key, _dl_card_err)
 
@@ -7858,7 +7899,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
 
         client = _anthropic.Anthropic()
         resp = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=_VERDICT_MODEL,
             max_tokens=128,  # FIX-NARRATIVE-VERDICT-MAXTOKENS-01: raised to 128; _trim_to_last_sentence caps to ≤140
             temperature=0.5,
             system=system_prompt,
@@ -7894,7 +7935,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             _sg_retry_text = ""
             try:
                 _sg_resp = client.messages.create(
-                    model="claude-sonnet-4-6",
+                    model=_VERDICT_MODEL,
                     max_tokens=128,
                     temperature=0.85,
                     system=system_prompt,
@@ -8345,7 +8386,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         _temperature = 0.7 if _tier_for_temp in ("gold", "diamond") else 0.5
         client = _anthropic.Anthropic()
         resp = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=_VERDICT_MODEL,
             max_tokens=220,  # BUILD-VERDICT-ENRICHMENT-FIX-01: raised from 120; ceiling ≤300
             temperature=_temperature,
             system=system_prompt,
@@ -22023,23 +22064,36 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
         await query.message.reply_text("❌ Breakdown not available for this match yet.")
         return
 
-    # Build buttons matching edge:detail surface (minus Full AI Breakdown).
-    # Row 1: bookmaker CTA — best from narrative_cache, fallback to active bookmaker.
-    # Row 2: back to the unified Hot Tips list (hot:back avoids old text-render fallback).
-    _rows: list[list[InlineKeyboardButton]] = []
-    _bk_key = (_bd or {}).get("best_bookmaker_key", "")
-    _aff_url = get_affiliate_url(_bk_key, match_id=match_key) if _bk_key else ""
-    if not _aff_url:
-        # Fallback: active bookmaker (same as edge:detail no-positive-EV path)
-        _active_bk = config.get_active_bookmaker()
-        _bk_key = config.ACTIVE_BOOKMAKER
-        _aff_url = get_affiliate_url(_bk_key, match_id=match_key) or _active_bk.get("website_url", "")
-    if _aff_url:
+    # CTA: use the same button as the tip detail card by delegating to _build_game_buttons.
+    # source="matches" + has_narrative=False produces exactly [[primary_cta], [back]] —
+    # no compare/breakdown buttons.  back_cb_override wires ↩️ Back to the detail card,
+    # not the full edge list (issue fix: back should return to summary, not the list).
+    _bd_edge_tier = ((_bd or {}).get("tier_label", "") or "bronze").split()[0].lower()
+    _tips_for_cta = _game_tips_cache.get(match_key, [])
+    if _tips_for_cta:
+        _rows = _build_game_buttons(
+            _tips_for_cta,
+            match_key,
+            user_id,
+            source="matches",
+            user_tier="diamond",
+            edge_tier=_bd_edge_tier,
+            back_cb_override=f"edge:detail:{match_key}",
+            has_narrative=False,
+        )
+    else:
+        # No live tips in cache — fallback CTA from narrative_cache bookmaker key.
+        _bk_key = (_bd or {}).get("best_bookmaker_key", "") or config.ACTIVE_BOOKMAKER
+        _aff_url = (
+            get_affiliate_url(_bk_key, match_id=match_key)
+            or config.get_active_bookmaker().get("website_url", "")
+        )
         _bk_display = _display_bookmaker_name(_bk_key)
         _cta_label = get_cta_label(_bk_display, match_id=match_key, bookmaker_key=_bk_key)
-        _rows.append([InlineKeyboardButton(f"📲 {_cta_label}", url=_aff_url)])
-    _back_page = _resolve_hot_tips_back_page(user_id, match_key)
-    _rows.append([InlineKeyboardButton("↩️ Back to Edge Picks", callback_data=f"hot:back:{_back_page}")])
+        _rows = []
+        if _aff_url:
+            _rows.append([InlineKeyboardButton(f"📲 {_cta_label}", url=_aff_url)])
+        _rows.append([InlineKeyboardButton("↩️ Back", callback_data=f"edge:detail:{match_key}")])
     await _serve_response(query, "", InlineKeyboardMarkup(_rows), photo=png_bytes)
 
 
@@ -24209,7 +24263,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                        e.composite_score, e.confirming_signals
                 FROM edge_results e
                 WHERE e.result IS NULL
-                  AND e.edge_tier IN ('gold', 'diamond')
+                  AND e.edge_tier = 'gold'
                   AND e.posted_to_alerts_direct = 0
                   AND e.recommended_at >= datetime('now', '-2 hours')
                 ORDER BY e.recommended_at DESC
@@ -24227,31 +24281,17 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     from bot_lib.alerts_direct import post_to_alerts as _alerts_post
 
+    # Load canonical tip dicts — same format and enrichment as the hot tips list.
+    # This ensures _enrich_tip_for_card produces identical output to ep:pick.
+    _tfa_seed = _load_tips_from_edge_results(limit=50, skip_punt_filter=True)
+    _tfa_seed_by_mk = {t.get("match_id", ""): t for t in _tfa_seed}
+
     for _tfa_row in _tfa_rows:
         _tfa_edge_id = _tfa_row.get("edge_id") or ""
         _tfa_mk = _tfa_row.get("match_key") or ""
         _tfa_tier = (_tfa_row.get("edge_tier") or "gold").lower()
         if not _tfa_edge_id or not _tfa_mk:
             continue
-
-        # Build a tip dict compatible with alerts_direct and card_pipeline
-        import re as _tfa_re
-        _tfa_mk_nd = _tfa_re.sub(r"_\d{4}-\d{2}-\d{2}$", "", _tfa_mk)
-        if "_vs_" in _tfa_mk_nd:
-            _tfa_home_raw, _tfa_away_raw = _tfa_mk_nd.split("_vs_", 1)
-        else:
-            _tfa_home_raw = _tfa_away_raw = _tfa_mk_nd
-        _tfa_home = _display_team_name(_tfa_home_raw)
-        _tfa_away = _display_team_name(_tfa_away_raw)
-        _tfa_outcome_raw = _tfa_row.get("bet_type") or "home"
-        _tfa_outcome_map = {"Home Win": "home", "Away Win": "away", "Draw": "draw"}
-        _tfa_outcome_key = _tfa_outcome_map.get(_tfa_outcome_raw, _tfa_outcome_raw.lower())
-        _tfa_outcome_labels = {"home": _tfa_home, "away": _tfa_away, "draw": "Draw"}
-        _tfa_outcome_display = _tfa_outcome_labels.get(_tfa_outcome_key, _tfa_outcome_raw)
-        _tfa_league_key = (_tfa_row.get("league") or "").lower()
-        _tfa_ev = float(_tfa_row.get("predicted_ev") or 0)
-        _tfa_odds = float(_tfa_row.get("recommended_odds") or 0)
-        _tfa_bk = _display_bookmaker_name((_tfa_row.get("bookmaker") or "").lower())
 
         # timestamp for latency tracking (AC-J)
         _tfa_assigned_at: float | None = None
@@ -24265,27 +24305,39 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             _tfa_assigned_at = _tfa_t.time()
 
-        _tfa_tip = {
-            "match_id": _tfa_mk,
-            "match_key": _tfa_mk,
-            "edge_id": _tfa_edge_id,
-            "home_team": _tfa_home,
-            "away_team": _tfa_away,
-            "outcome": _tfa_outcome_display,
-            "outcome_key": _tfa_outcome_key,
-            "odds": _tfa_odds,
-            "recommended_odds": _tfa_odds,
-            "bookmaker": _tfa_bk,
-            "ev": _tfa_ev,
-            "predicted_ev": _tfa_ev,
-            "league": _get_league_display(_tfa_league_key, _tfa_home, _tfa_away),
-            "league_key": _tfa_league_key,
-            "edge_tier": _tfa_tier,
-            "display_tier": _tfa_tier,
-            "edge_rating": _tfa_tier,
-            "edge_score": float(_tfa_row.get("composite_score") or 0),
-            "confirming_signals": int(_tfa_row.get("confirming_signals") or 0),
-        }
+        # Prefer canonical tip from _load_tips_from_edge_results (has bookmaker_key,
+        # sport_key, odds_by_bookmaker, edge_v2, league_key — all needed by
+        # _enrich_tip_for_card to match ep:pick output exactly).
+        _tfa_tip_seed = _tfa_seed_by_mk.get(_tfa_mk)
+        if _tfa_tip_seed:
+            _tfa_tip = {**_tfa_tip_seed, "edge_id": _tfa_edge_id, "match_key": _tfa_mk}
+        else:
+            # Fallback for draws or zero-signal edges filtered by _load_tips_from_edge_results
+            import re as _tfa_re
+            _tfa_mk_nd = _tfa_re.sub(r"_\d{4}-\d{2}-\d{2}$", "", _tfa_mk)
+            _tfa_home_raw, _tfa_away_raw = (_tfa_mk_nd.split("_vs_", 1) + [_tfa_mk_nd])[:2]
+            _tfa_home = _display_team_name(_tfa_home_raw)
+            _tfa_away = _display_team_name(_tfa_away_raw)
+            _tfa_outcome_raw = _tfa_row.get("bet_type") or "home"
+            _tfa_outcome_key = {"Home Win": "home", "Away Win": "away", "Draw": "draw"}.get(_tfa_outcome_raw, _tfa_outcome_raw.lower())
+            _tfa_league_key = (_tfa_row.get("league") or "").lower()
+            _tfa_raw_bk = (_tfa_row.get("bookmaker") or "").lower()
+            _tfa_tip = {
+                "match_id": _tfa_mk, "match_key": _tfa_mk, "edge_id": _tfa_edge_id,
+                "home_team": _tfa_home, "away_team": _tfa_away,
+                "outcome": {"home": _tfa_home, "away": _tfa_away, "draw": "Draw"}.get(_tfa_outcome_key, _tfa_outcome_raw),
+                "outcome_key": _tfa_outcome_key,
+                "odds": float(_tfa_row.get("recommended_odds") or 0),
+                "bookmaker": _display_bookmaker_name(_tfa_raw_bk),
+                "bookmaker_key": _tfa_raw_bk,
+                "ev": float(_tfa_row.get("predicted_ev") or 0),
+                "league": _get_league_display(_tfa_league_key, _tfa_home, _tfa_away),
+                "league_key": _tfa_league_key,
+                "display_tier": _tfa_tier, "edge_tier": _tfa_tier, "edge_rating": _tfa_tier,
+                "edge_score": float(_tfa_row.get("composite_score") or 0),
+                "confirming_signals": int(_tfa_row.get("confirming_signals") or 0),
+                "edge_v2": {"composite_score": float(_tfa_row.get("composite_score") or 0), "confirming_signals": int(_tfa_row.get("confirming_signals") or 0)},
+            }
 
         _tfa_msg_url = await _alerts_post(_tfa_tip, _tfa_edge_id, _tfa_assigned_at)
 
