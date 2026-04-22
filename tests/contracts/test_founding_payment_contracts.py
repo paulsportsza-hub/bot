@@ -24,7 +24,9 @@ async def test_launch_config_is_locked():
 async def test_manual_verify_does_not_become_source_of_truth_in_real_mode():
     query = MagicMock()
     query.from_user = SimpleNamespace(id=777)
+    query.answer = AsyncMock()
     query.edit_message_text = AsyncMock()
+    query.message = MagicMock(photo=None)
 
     with (
         patch.object(bot.config, "STITCH_MOCK_MODE", False),

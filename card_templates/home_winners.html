@@ -1,177 +1,217 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="utf-8">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body {
-            margin: 0;
-            padding: 0;
-            background: #000000;
-        }
-        body {
-            font-family: 'Inter', -apple-system, system-ui, sans-serif;
-            width: 480px;
-            padding: 2px;
-            box-sizing: content-box;
-        }
-        .card {
-            width: 480px;
-            height: 620px;
-            background: #0A0A0A;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+    background: #000;
+    width: 480px;
+}
+body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    width: 480px;
+}
 
-        /* ── Header ──────────────────────────────────────────── */
-        .header {
-            text-align: center;
-            padding: 22px 20px 16px;
-            background: linear-gradient(180deg, #0D0D0D, #141414);
-            border-bottom: 1px solid #2A2A2A;
-        }
-        .logo-img {
-            height: 32px;
-            width: auto;
-            display: block;
-            margin: 0 auto;
-        }
-        .orange-bar {
-            height: 3px;
-            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
-            margin: 10px 20px;
-            border-radius: 2px;
-        }
-        .title {
-            font-size: 15px;
-            font-weight: 700;
-            color: #FFFFFF;
-            letter-spacing: 3px;
-            margin-bottom: 4px;
-        }
-        .subtitle {
-            font-size: 11px;
-            color: #666666;
-            letter-spacing: 1px;
-        }
+.card {
+    width: 480px;
+    height: 620px;
+    background: #0A0A0A;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+}
 
-        /* ── Rows ────────────────────────────────────────────── */
-        .rows {
-            padding: 8px 0;
-            flex: 1;
-        }
-        .row {
-            padding: 14px 20px;
-            border-bottom: 1px solid #1E1E1E;
-        }
-        .row:last-child {
-            border-bottom: none;
-        }
-        .row-top {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 5px;
-        }
-        .sport-emoji {
-            font-size: 16px;
-            flex-shrink: 0;
-        }
-        .match-name {
-            font-size: 13px;
-            font-weight: 700;
-            color: #FFFFFF;
-            flex: 1;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .odds-chip {
-            font-size: 12px;
-            font-weight: 700;
-            color: #FF6B00;
-            background: rgba(255, 107, 0, 0.12);
-            border: 1px solid rgba(255, 107, 0, 0.25);
-            border-radius: 4px;
-            padding: 2px 7px;
-            flex-shrink: 0;
-        }
-        .row-bottom {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding-left: 24px;
-        }
-        .prediction {
-            font-size: 11px;
-            color: #B0B0B0;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 280px;
-        }
-        .return-zar {
-            font-size: 12px;
-            font-weight: 700;
-            color: #4CAF50;
-            flex-shrink: 0;
-        }
+/* ── Hero glow ────────────────────────────────────── */
+.hero-glow {
+    position: absolute;
+    top: -60px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 360px;
+    height: 200px;
+    background: radial-gradient(ellipse, rgba(255,107,0,0.18) 0%, transparent 70%);
+    pointer-events: none;
+}
 
-        /* ── Empty state ─────────────────────────────────────── */
-        .empty {
-            text-align: center;
-            padding: 48px 24px;
-            color: #666666;
-            font-size: 13px;
-            line-height: 1.6;
-        }
+/* ── Header ───────────────────────────────────────── */
+.header {
+    padding: 28px 28px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    position: relative;
+    z-index: 1;
+}
+.logo-img {
+    height: 30px;
+    width: auto;
+    display: block;
+}
+.divider {
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,107,0,0.4), transparent);
+    margin: 16px 0 14px;
+}
+.hero-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #FF6B00;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+.hero-title {
+    font-size: 22px;
+    font-weight: 900;
+    color: #FFFFFF;
+    letter-spacing: -0.3px;
+    text-align: center;
+    line-height: 1.15;
+}
+.hero-sub {
+    font-size: 12px;
+    color: #AAAAAA;
+    margin-top: 5px;
+    text-align: center;
+}
 
-        /* ── Footer ──────────────────────────────────────────── */
-        .footer {
-            padding: 12px 20px;
-            border-top: 1px solid #1E1E1E;
-            text-align: center;
-        }
-        .footer-text {
-            font-size: 9px;
-            color: #666666;
-            letter-spacing: 0.3px;
-        }
-    </style>
+/* ── Pick rows ────────────────────────────────────── */
+.rows {
+    padding: 4px 0 8px;
+    flex: 1;
+}
+.row {
+    padding: 13px 24px;
+    border-bottom: 1px solid #161616;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: background 0.2s;
+}
+.row:last-child { border-bottom: none; }
+
+.row-left {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    width: 40px;
+}
+.sport-emoji {
+    font-size: 18px;
+    line-height: 1;
+}
+.row-body {
+    flex: 1;
+    min-width: 0;
+}
+.match-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #FFFFFF;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 3px;
+}
+.bet-line {
+    font-size: 11px;
+    color: #AAAAAA;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.row-right {
+    flex-shrink: 0;
+    text-align: right;
+}
+.return-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: #555;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+}
+.return-value {
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1;
+}
+.return-value.gold    { color: #F7931A; }
+.return-value.diamond { color: #B9F2FF; }
+.return-value.silver  { color: #4CAF50; }
+.return-value.bronze  { color: #4CAF50; }
+.return-arrow {
+    font-size: 9px;
+    color: #888888;
+    display: block;
+    margin-bottom: 1px;
+}
+
+/* ── Footer ───────────────────────────────────────── */
+.footer {
+    padding: 14px 24px 18px;
+    border-top: 1px solid #1E1E1E;
+    text-align: center;
+    background: linear-gradient(0deg, #0D0D0D, transparent);
+}
+.footer-text {
+    font-size: 10px;
+    color: #666666;
+    line-height: 1.4;
+}
+
+</style>
 </head>
 <body>
 <div class="card">
+    <div class="hero-glow"></div>
+
+    <!-- Header -->
     <div class="header">
         {% if header_logo_b64 %}
-        <img class="logo-img" src="data:image/png;base64,{{ header_logo_b64 }}" alt="MzansiEdge">
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge">
+        {% else %}
+        <div style="font-size:20px;font-weight:900;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">MzansiEdge</div>
         {% endif %}
-        <div class="orange-bar"></div>
-        <div class="title">LAST 5 WINS</div>
-        <div class="subtitle">R100 STAKE RETURN</div>
+        <div class="divider"></div>
+        <div class="hero-label">Recent Performance</div>
+        <div class="hero-title">Last 5 Winning Edges</div>
+        <div class="hero-sub">R100 stake · actual returns</div>
     </div>
 
+    <!-- Pick rows -->
     <div class="rows">
         {% if wins %}
-            {% for row in wins %}
-            <div class="row">
-                <div class="row-top">
-                    <span class="sport-emoji">{{ row.sport_emoji }}</span>
-                    <span class="match-name">{{ row.match }}</span>
-                    <span class="odds-chip">{{ row.odds }}</span>
-                </div>
-                <div class="row-bottom">
-                    <span class="prediction">{{ row.prediction }}</span>
-                    <span class="return-zar">{{ row.return_zar }}</span>
-                </div>
+        {% for row in wins %}
+        <div class="row">
+            <div class="row-left">
+                <span class="sport-emoji">{{ row.sport_emoji }}</span>
             </div>
-            {% endfor %}
+            <div class="row-body">
+                <div class="match-name">{{ row.match }}</div>
+                <div class="bet-line">{{ row.bet_line }}</div>
+            </div>
+            <div class="row-right">
+                <span class="return-arrow">R100 →</span>
+                <span class="return-value {{ row.tier }}">{{ row.return_zar }}</span>
+            </div>
+        </div>
+        {% endfor %}
         {% else %}
-            <div class="empty">No resolved picks yet — check back soon.</div>
+        <div style="text-align:center;padding:48px 24px;color:#444;font-size:13px;">No resolved picks yet — check back soon.</div>
         {% endif %}
     </div>
 
+    <!-- Footer -->
     <div class="footer">
         <span class="footer-text">Past performance is not a guarantee of future results.</span>
     </div>

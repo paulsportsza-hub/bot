@@ -791,19 +791,58 @@ def _sport_emoji(sport: str | None) -> str:
     return "🏆"
 
 
+def _match_key_to_display(match_key: str) -> str:
+    """Convert 'gujarat_titans_vs_mumbai_indians_2026-04-20' -> 'Gujarat Titans vs Mumbai Indians'."""
+    import re as _re
+    cleaned = _re.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_key)
+    parts = cleaned.replace("_", " ").title()
+    parts = _re.sub(r"\bVs\b", "vs", parts)
+    return parts[:45]
+
+
+_TIER_LABELS = {
+    "diamond": "DIA",
+    "gold": "GOLD",
+    "silver": "SIL",
+    "bronze": "BRZ",
+}
+
+
 def build_home_winners_data(wins: list) -> dict:
-    """Data for home_winners.html — last 5 resolved wins."""
+    """Data for home_winners.html — last 5 resolved wins, gold-priority order."""
     rows = []
-    for tip in wins:
-        odds = tip.odds or 0.0
-        return_zar = round(100 * odds) if odds else None
-        rows.append({
-            "match": tip.match[:40] if tip.match else "Unknown",
-            "prediction": tip.prediction[:30] if tip.prediction else "",
-            "odds": f"{odds:.2f}" if odds else "—",
-            "return_zar": f"R{return_zar}" if return_zar else "—",
-            "sport_emoji": _sport_emoji(tip.sport),
-        })
+    for w in wins:
+        if isinstance(w, dict):
+            odds = w.get("recommended_odds") or 0.0
+            actual_return = w.get("actual_return")
+            return_zar = f"R{int(actual_return)}" if actual_return else (f"R{round(100 * odds)}" if odds else "—")
+            tier = (w.get("edge_tier") or "bronze").lower()
+            t_emoji = _TIER_EMOJIS.get(tier, "🥉")
+            bet_type = (w.get("bet_type") or "").strip()
+            odds_str = f"{odds:.2f}" if odds else "—"
+            bet_line = f"{t_emoji} {bet_type} @ {odds_str}" if bet_type else odds_str
+            rows.append({
+                "match": _match_key_to_display(w.get("match_key", "Unknown")),
+                "bet_line": bet_line,
+                "return_zar": return_zar,
+                "sport_emoji": _sport_emoji(w.get("sport", "")),
+                "tier": tier,
+            })
+        else:
+            odds = getattr(w, "odds", None) or 0.0
+            return_zar = round(100 * odds) if odds else None
+            tier = "bronze"
+            t_emoji = _TIER_EMOJIS.get(tier, "🥉")
+            bet_type = (getattr(w, "prediction", None) or "").strip()
+            odds_str = f"{odds:.2f}" if odds else "—"
+            bet_line = f"{t_emoji} {bet_type} @ {odds_str}" if bet_type else odds_str
+            rows.append({
+                "match": (getattr(w, "match", None) or "Unknown")[:40],
+                "bet_line": bet_line,
+                "return_zar": f"R{return_zar}" if return_zar else "—",
+                "sport_emoji": _sport_emoji(getattr(w, "sport", "")),
+                "tier": tier,
+            })
     return {
         "wins": rows,
         "header_logo_b64": _logo(),
