@@ -1121,6 +1121,20 @@ def kb_onboarding_bankroll() -> InlineKeyboardMarkup:
 # ── /start deeplink resolver ─────────────────────────────
 
 
+async def _dl_send_edge_no_longer_available(
+    update: "Update",  # type: ignore[name-defined]
+    ctx: "ContextTypes.DEFAULT_TYPE",  # type: ignore[name-defined]
+    match_key: str,
+) -> None:
+    await update.message.reply_text(
+        "This edge is no longer available — here's what's live now:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+        ]]),
+    )
+
+
 async def _handle_card_deeplink(
     update: "Update",  # type: ignore[name-defined]
     ctx: "ContextTypes.DEFAULT_TYPE",  # type: ignore[name-defined]
@@ -1133,6 +1147,14 @@ async def _handle_card_deeplink(
     match_key format: team_a_vs_team_b_YYYY-MM-DD (URL-safe, no spaces).
     Invalid or expired match_key → fallback with Top Edge Picks button.
     """
+    if match_key.startswith("edge_"):
+        log.warning(
+            "DEEPLINK REJECT: edge_ prefix not produced by any live surface: %r",
+            match_key,
+        )
+        await _dl_send_edge_no_longer_available(update, ctx, match_key)
+        return
+
     import re as _re_dl
     if not _re_dl.match(r"^[a-zA-Z0-9_-]+$", match_key):
         await update.message.reply_text(
@@ -1239,8 +1261,21 @@ async def _handle_card_deeplink(
     except Exception:
         pass
 
+    if not _dl_tip:
+        log.info(
+            "DEEPLINK EMPTY-TIP: routing %r to edge-no-longer-available fallback",
+            match_key,
+        )
+        if _dl_loading:
+            try:
+                await _dl_loading.delete()
+            except Exception:
+                pass
+        await _dl_send_edge_no_longer_available(update, ctx, match_key)
+        return
+
     try:
-        _dl_tip_for_render = _dl_tip or {"match_id": match_key, "ev": 0}
+        _dl_tip_for_render = _dl_tip
         _dl_tip_enriched = await asyncio.wait_for(
             asyncio.to_thread(_enrich_tip_for_card, _dl_tip_for_render, match_key),
             timeout=10.0,
@@ -1281,13 +1316,7 @@ async def _handle_card_deeplink(
             await _dl_loading.delete()
         except Exception:
             pass
-    await update.message.reply_text(
-        "This edge is no longer available — here's what's live now:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
-        ]]),
-    )
+    await _dl_send_edge_no_longer_available(update, ctx, match_key)
 
 
 # ── /start ────────────────────────────────────────────────

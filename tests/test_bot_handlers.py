@@ -3584,3 +3584,73 @@ class TestW81Coaches:
         assert self._get_coach("manchester_united", "epl", "soccer") == "Ruben Amorim"
         # Static lookup must win over stale api_cache which had "Michael Carrick"
         assert self._get_coach("chelsea", "epl", "soccer") == "Enzo Maresca"
+
+
+# ── BUILD-DEEPLINK-HARDEN-01 — /start card_<key> handler guards ──
+
+
+class TestCardDeeplinkHandler:
+    """Validate _handle_card_deeplink rejects malformed keys and reroutes empty tips.
+
+    References:
+    - Part A: edge_ prefix reject → _dl_send_edge_no_longer_available
+    - Part B: valid key but no tip → same fallback (not skeleton-dict render)
+    - Case C: valid key with tip → normal render path
+    """
+
+    @pytest.mark.asyncio
+    async def test_edge_prefix_rejected_and_rerouted(self, mock_update, mock_context):
+        with patch.object(bot, "_dl_send_edge_no_longer_available", new=AsyncMock()) as fb, \
+             patch.object(bot, "_load_tips_from_edge_results") as load_tips, \
+             patch.object(bot, "get_effective_tier", new=AsyncMock(return_value="bronze")):
+            await bot._handle_card_deeplink(
+                mock_update, mock_context, 123, "edge_arsenal_vs_chelsea_2026-04-22"
+            )
+
+        fb.assert_awaited_once()
+        load_tips.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_key_no_tip_reroutes_to_fallback(self, mock_update, mock_context):
+        with patch.object(bot, "_dl_send_edge_no_longer_available", new=AsyncMock()) as fb, \
+             patch.object(bot, "_load_tips_from_edge_results", return_value=[]), \
+             patch.object(bot, "get_effective_tier", new=AsyncMock(return_value="bronze")), \
+             patch("scrapers.db_connect.connect_odds_db") as db_conn:
+            cur = MagicMock()
+            cur.fetchone.return_value = None
+            conn = MagicMock()
+            conn.execute.return_value = cur
+            conn.close = MagicMock()
+            db_conn.return_value = conn
+
+            await bot._handle_card_deeplink(
+                mock_update, mock_context, 123, "arsenal_vs_chelsea_2026-04-22"
+            )
+
+        fb.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_valid_key_with_tip_renders_normally(self, mock_update, mock_context):
+        tip = {
+            "match_id": "arsenal_vs_chelsea_2026-04-22",
+            "match_key": "arsenal_vs_chelsea_2026-04-22",
+            "home_team": "Arsenal",
+            "away_team": "Chelsea",
+            "edge_tier": "gold",
+            "display_tier": "gold",
+            "ev": 5.0,
+        }
+        with patch.object(bot, "_dl_send_edge_no_longer_available", new=AsyncMock()) as fb, \
+             patch.object(bot, "_load_tips_from_edge_results", return_value=[tip]), \
+             patch.object(bot, "_enrich_tip_for_card", return_value=tip), \
+             patch.object(bot, "_has_any_cached_narrative", return_value=False), \
+             patch.object(bot, "build_edge_detail_data", return_value={"home": "Arsenal", "away": "Chelsea"}), \
+             patch.object(bot, "_build_game_buttons", return_value=[]), \
+             patch.object(bot, "send_card_or_fallback", new=AsyncMock()) as send_card, \
+             patch.object(bot, "get_effective_tier", new=AsyncMock(return_value="bronze")):
+            await bot._handle_card_deeplink(
+                mock_update, mock_context, 123, "arsenal_vs_chelsea_2026-04-22"
+            )
+
+        fb.assert_not_called()
+        send_card.assert_awaited_once()
