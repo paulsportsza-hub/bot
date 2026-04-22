@@ -3890,6 +3890,19 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         )
     elif prefix == "ob_fav_back":
         await handle_ob_fav_back(query, action)
+    elif prefix == "mute":
+        if action == "off":
+            _mu_id = query.from_user.id
+            await db.set_muted_until(_mu_id, None)
+            _mute_resume_mkp = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            ])
+            await ctx.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="🔔 <b>Notifications unmuted!</b>\nYou're back — we'll alert you as normal.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=_mute_resume_mkp,
+            )
     else:
         await query.edit_message_text(
             "Unknown action.",
@@ -5765,10 +5778,14 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     # Wave 25A: track last activity
     await db.update_last_active(user_id)
 
-    # Ignore during active onboarding — shouldn't happen but be safe
+    # Ignore during active onboarding — unless DB says onboarding is complete (stale in-memory state)
     ob = _onboarding_state.get(user_id)
     if ob and not ob.get("done"):
-        return
+        db_user = await db.get_user(user_id)
+        if db_user and db_user.onboarding_done:
+            _onboarding_state.pop(user_id, None)
+        else:
+            return
 
     # Handle legacy button labels from cached keyboards
     legacy = _LEGACY_LABELS.get(text)
@@ -27713,13 +27730,10 @@ async def cmd_mute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _mute_resume_mkp = InlineKeyboardMarkup([
             [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
         ])
-        await send_card_or_fallback(
-            bot=update.get_bot(),
-            chat_id=update.effective_chat.id,
-            template="notify_mute_resume.html",
-            data=build_notify_mute_resume_data(resumed_at="Now"),
-            text_fallback="",
-            markup=_mute_resume_mkp,
+        await update.message.reply_text(
+            "🔔 <b>Notifications unmuted!</b>\nYou're back — we'll alert you as normal.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=_mute_resume_mkp,
         )
         return
 
@@ -27742,16 +27756,10 @@ async def cmd_mute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     _mute_confirm_mkp = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔔 Unmute now", callback_data="mute:off")],
     ])
-    await send_card_or_fallback(
-        bot=update.get_bot(),
-        chat_id=update.effective_chat.id,
-        template="notify_mute_confirm.html",
-        data=build_notify_mute_confirm_data(
-            duration_label=label,
-            resumes_at=_resumes_str,
-        ),
-        text_fallback="",
-        markup=_mute_confirm_mkp,
+    await update.message.reply_text(
+        f"🔕 <b>Notifications muted for {label}.</b>\nResumes {_resumes_str}.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=_mute_confirm_mkp,
     )
 
 
