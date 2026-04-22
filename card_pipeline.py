@@ -1448,12 +1448,16 @@ def build_card_data(
             kickoff = date_str
 
     # CARD-FIX-B Task 3: resolve real kickoff from broadcast_schedule
+    # INV-FIX-KICKOFF-SOURCE-AUDIT-02: supersport_scraper-only; DStv EPG
+    # re-airs (source=NULL) share team names but broadcast at ±1h from
+    # the true kickoff.
     if conn is not None and date_str and home_display and away_display:
         try:
             _bs_row = conn.execute(
                 """
                 SELECT start_time FROM broadcast_schedule
                 WHERE broadcast_date = ?
+                  AND source = 'supersport_scraper'
                   AND (home_team LIKE ? OR away_team LIKE ?)
                   AND (home_team LIKE ? OR away_team LIKE ?)
                   AND is_live = 1

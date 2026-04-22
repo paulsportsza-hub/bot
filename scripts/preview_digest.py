@@ -33,12 +33,18 @@ def _parse_teams(match_key: str) -> tuple[str, str]:
 
 
 def _get_broadcast(conn: sqlite3.Connection, home: str, away: str) -> tuple[str, str]:
-    """Try to get kickoff + broadcast from broadcast_schedule."""
+    """Try to get kickoff + broadcast from broadcast_schedule.
+
+    INV-FIX-KICKOFF-SOURCE-AUDIT-02: supersport_scraper-only; DStv EPG
+    re-airs share team names but broadcast at a ±1h offset from the true
+    kickoff.
+    """
     try:
         row = conn.execute(
             """SELECT start_time, channel_short, dstv_number
                FROM broadcast_schedule
-               WHERE home_team LIKE ? OR away_team LIKE ?
+               WHERE source = 'supersport_scraper'
+                 AND (home_team LIKE ? OR away_team LIKE ?)
                ORDER BY start_time LIMIT 1""",
             (f"%{home.split()[0]}%", f"%{away.split()[0]}%"),
         ).fetchone()
