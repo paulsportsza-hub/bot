@@ -14590,12 +14590,47 @@ async def _store_narrative_cache(
     _wg_tier = (edge_tier or "").lower()
     _wg_src = (narrative_source or "").lower()
     if _wg_src in ("w82", "baseline_no_edge") and _wg_tier in ("gold", "diamond"):
+        # FIX-NARRATIVE-CACHE-SILENT-DROP-01 A.1: elevate to warning + named tag so
+        # pregen supervisor + log scrape can distinguish silent drops from success.
         log.warning(
-            "BUILD-NARRATIVE-WATERTIGHT-01 Stream 4: refusing narrative_cache write for %s "
-            "— narrative_source=%s is forbidden for edge_tier=%s (premium-only polish required)",
-            match_id, _wg_src, _wg_tier,
+            "FIX-NARRATIVE-CACHE-SILENT-DROP-01 Stream4Refused match_id=%s "
+            "narrative_source=%s edge_tier=%s verdict_len=%d — premium-only polish required",
+            match_id, _wg_src, _wg_tier, len(verdict_html or ""),
         )
         return
+    # FIX-NARRATIVE-CACHE-SILENT-DROP-01 B.1: Default edge_tier to 'bronze' when pregen
+    # produces an empty/None tier. Observed silent drop: arsenal_vs_fulham generated with
+    # tier='' triggered sqlite3.IntegrityError (NOT NULL constraint failed) which was
+    # caught by the existing handler with only a log.warning. Default here so the legitimate
+    # baseline row lands instead of being swallowed by the NOT NULL constraint.
+    if not edge_tier:
+        log.info(
+            "FIX-NARRATIVE-CACHE-SILENT-DROP-01 TierDefault match_id=%s edge_tier empty → 'bronze'",
+            match_id,
+        )
+        edge_tier = "bronze"
+    # FIX-NARRATIVE-CACHE-SILENT-DROP-01 B.1: schema CHECK constraint enforces
+    # `verdict_html IS NULL OR LENGTH BETWEEN 1 AND 200`. Observed silent drop:
+    # orlando_pirates_vs_kaizer_chiefs generated with verdict_html=211 chars triggered
+    # sqlite3.IntegrityError (CHECK constraint failed) which was caught by the existing
+    # handler with only a log.warning. The verdict text is also embedded in narrative_html,
+    # so the denormalised column is a sweetener, not source of truth — null it out when it
+    # exceeds the schema limit so the row lands instead of being swallowed.
+    if verdict_html is not None and len(verdict_html) > 200:
+        log.info(
+            "FIX-NARRATIVE-CACHE-SILENT-DROP-01 VerdictTrimmed match_id=%s "
+            "verdict_html_len=%d > 200 (schema CHECK) → setting to NULL, narrative_html preserved",
+            match_id, len(verdict_html),
+        )
+        verdict_html = None
+    # FIX-NARRATIVE-CACHE-SILENT-DROP-01 A.1: log the happy path so silent drops are
+    # diagnosable by absence. If we see "Stream4Accepted" for a match but no row
+    # lands, the OperationalError path is the culprit (not Stream 4 F1-F2).
+    log.info(
+        "FIX-NARRATIVE-CACHE-SILENT-DROP-01 Stream4Accepted match_id=%s "
+        "narrative_source=%s edge_tier=%s verdict_len=%d",
+        match_id, _wg_src, edge_tier, len(verdict_html or ""),
+    )
 
     def _store():
         # W84-RT3: 3s timeout — WAL mode handles transient scraper locks up to 3s.
@@ -14636,6 +14671,14 @@ async def _store_narrative_cache(
                 ),
             )
             conn.commit()
+            # FIX-NARRATIVE-CACHE-SILENT-DROP-01 A.1: Confirm the INSERT actually
+            # committed. If we see Stream4Accepted but not CommitOK for a match_id,
+            # the row was silently dropped by an exception swallowed below.
+            log.info(
+                "FIX-NARRATIVE-CACHE-SILENT-DROP-01 CommitOK match_id=%s "
+                "narrative_source=%s edge_tier=%s",
+                match_id, narrative_source, edge_tier,
+            )
         except sqlite3.IntegrityError as e:
             if sentry_sdk:
                 with sentry_sdk.push_scope() as scope:
