@@ -148,14 +148,64 @@ async def check_score_updates(bot) -> None:
 
             # Send notifications to subscribers
             subs = event_subs.get(eid, [])
+            _ls_completed = score_data.get("completed", False)
+            _ls_home_raw = score_data.get("home_team", "")
+            _ls_away_raw = score_data.get("away_team", "")
+            _ls_scores_list = score_data.get("scores") or []
+            _ls_home_score = int(_get_score(_ls_scores_list, _ls_home_raw) or 0)
+            _ls_away_score = int(_get_score(_ls_scores_list, _ls_away_raw) or 0)
+            if _ls_home_score > _ls_away_score:
+                _ls_winner = f"{_ls_home_raw} win"
+            elif _ls_away_score > _ls_home_score:
+                _ls_winner = f"{_ls_away_raw} win"
+            else:
+                _ls_winner = "Draw"
+            _ls_send_fn = None
+            _ls_data_fn = None
+            _ls_ft_data_fn = None
+            try:
+                from card_sender import send_card_or_fallback as _imported_send  # type: ignore[import]
+                from card_data_adapters import (  # type: ignore[import]
+                    build_notify_live_score_data as _imported_data,
+                    build_notify_live_score_ft_data as _imported_ft_data,
+                )
+                _ls_send_fn = _imported_send
+                _ls_data_fn = _imported_data
+                _ls_ft_data_fn = _imported_ft_data
+            except ImportError:
+                pass
             for sub in subs:
                 msg = "\n".join(changes)
                 try:
-                    await bot.send_message(
-                        sub.user_id,
-                        f"⚡ <b>Live Update</b>\n\n{msg}",
-                        parse_mode="HTML",
-                    )
+                    if _ls_send_fn is not None and _ls_data_fn is not None and _ls_ft_data_fn is not None:
+                        _ls_home = _ls_home_raw or sub.home_team or "Home"
+                        _ls_away = _ls_away_raw or sub.away_team or "Away"
+                        if _ls_completed:
+                            _ls_card_data = _ls_ft_data_fn(
+                                home=_ls_home, away=_ls_away,
+                                home_score=_ls_home_score, away_score=_ls_away_score,
+                                event_label="FT", winner_label=_ls_winner,
+                            )
+                            _ls_tmpl = "notify_live_score_ft.html"
+                        else:
+                            _ls_card_data = _ls_data_fn(
+                                home=_ls_home, away=_ls_away,
+                                home_score=_ls_home_score, away_score=_ls_away_score,
+                                event_label="LIVE",
+                            )
+                            _ls_tmpl = "notify_live_score.html"
+                        await _ls_send_fn(
+                            bot=bot, chat_id=sub.user_id,
+                            template=_ls_tmpl, data=_ls_card_data,
+                            text_fallback=f"⚡ <b>Live Update</b>\n\n{msg}",
+                            markup=None,
+                        )
+                    else:
+                        await bot.send_message(
+                            sub.user_id,
+                            f"⚡ <b>Live Update</b>\n\n{msg}",
+                            parse_mode="HTML",
+                        )
                 except Exception as exc:
                     log.warning("Failed to notify user %d: %s", sub.user_id, exc)
 

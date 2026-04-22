@@ -633,6 +633,20 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
                 "bookmaker": bookmaker,
             },
         )
+        # Patch caption into meta.json so the Task Hub dashboard can surface it
+        meta_patch_path = OUTPUT_ROOT / today / pid / "meta.json"
+        try:
+            existing_meta: dict = {}
+            if meta_patch_path.exists():
+                import json as _json
+                with open(meta_patch_path) as _fh:
+                    existing_meta = _json.load(_fh)
+            existing_meta["caption"] = community_caption
+            with open(meta_patch_path, "w") as _fh:
+                import json as _json2
+                _json2.dump(existing_meta, _fh)
+        except Exception as _cap_exc:
+            log.warning("[CAPTION] Could not patch meta.json with caption: %s", _cap_exc)
 
         # BUILD-REEL-VIDEO-IG-ONLY-01 — Instagram reel video only (WA + Community sidecars retired).
         video_url = (

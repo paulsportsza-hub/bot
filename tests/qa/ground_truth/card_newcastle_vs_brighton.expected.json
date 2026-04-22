@@ -1,0 +1,9 @@
+{
+  "match_key": "newcastle_vs_brighton_2026-05-02_gold",
+  "source": "telethon-deeplink-harden-01 test3_regress_3 (alert 106, 22 Apr 2026)",
+  "verdict_text": "Brighton's form is sharp — four wins from five — and the Magpies are in freefall with four losses in their last five. The head-to-head tells the story too: Brighton have won three of the five meetings between these sides — Back Brighton.",
+  "home_team": "Newcastle United",
+  "away_team": "Brighton",
+  "tier_badge": "🥇",
+  "notes": "Card photo only — no Telegram inline keyboard captured, so button_count is expected to be 0."
+}

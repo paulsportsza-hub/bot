@@ -1347,12 +1347,20 @@ def _th_search_daily_sheet(query: str, today_patterns: list[str]):
     except Exception as e:
         log.warning(f"[task-hub] search({query!r}) failed: {e}")
         return (None, None)
+    # Require ALL query words to appear as whole words in the title.
+    # \b word boundaries mean "daily" matches "Quora Daily" but NOT "daily_reel",
+    # and "quora" matches "Quora Daily" but NOT "Quora Ledger Blocked".
+    import re as _re
+    kw_patterns = [_re.compile(r'\b' + _re.escape(w) + r'\b', _re.IGNORECASE)
+                   for w in query.split() if w]
     for p in d.get("results", []):
         title = ""
         for pv in p.get("properties", {}).values():
             if pv.get("type") == "title":
                 title = "".join(t.get("plain_text", "") for t in pv.get("title", []))
                 break
+        if kw_patterns and not all(pat.search(title) for pat in kw_patterns):
+            continue
         if any(pat.lower() in title.lower() for pat in today_patterns):
             return (p.get("id"), title)
     return (None, None)
@@ -1507,7 +1515,9 @@ def _fetch_quora_ledger() -> list[dict]:
                 if t == "heading_2":
                     # flush previous
                     if current:
-                        current["answer"] = "\n".join(answer_buf)[:800]
+                        _full = "\n".join(answer_buf)
+                        current["full_answer"] = _full
+                        current["answer"] = _full[:800]
                         rows.append(current)
                     # new question (strip leading "Q1:", "Q12:", etc)
                     q = txt
@@ -1539,7 +1549,9 @@ def _fetch_quora_ledger() -> list[dict]:
                     current["posted"] = bool((b.get("to_do") or {}).get("checked"))
                     current["status"] = "Posted" if current["posted"] else "Ready"
             if current:
-                current["answer"] = "\n".join(answer_buf)[:800]
+                _full = "\n".join(answer_buf)
+                current["full_answer"] = _full
+                current["answer"] = _full[:800]
                 rows.append(current)
     except Exception as e:
         log.warning(f"[task-hub] quora daily parse failed: {e}")
@@ -1550,6 +1562,10 @@ def _fetch_quora_ledger() -> list[dict]:
     return rows
 
 
+# DEPRECATED 2026-04-22 — FIX-DASH-FB-GROUPS-MOQ-WIRING-01
+# Reads from the manual "📱 FB Groups — <date>" daily sheet written by a now-deprecated
+# Cowork routine. Superseded by _fetch_fb_groups_moq() which reads
+# BUILD-FB-GROUPS-AUTOGEN-01 rows from NOTION_MARKETING_DB. Do not call.
 def _fetch_fb_groups_today() -> list[dict]:
     """FB Group posts parsed from today's '📱 FB Groups — <date>' daily sheet.
     Block pattern per post: heading_3 (Group Name (size) — Category) + paragraphs for
@@ -1634,6 +1650,67 @@ def _fetch_fb_groups_today() -> list[dict]:
                         row["group_url"] = url
                     else:
                         log.warning(f"[task-hub] no registry URL for FB group: {row['group']!r}")
+
+    with _notion_cache_lock:
+        _notion_cache[cache_key] = (rows, now)
+    return rows
+
+
+def _fetch_fb_groups_moq() -> list[dict]:
+    """Canonical FB Groups source since BUILD-FB-GROUPS-AUTOGEN-01.
+    Reads NOTION_MARKETING_DB filtered to Channel=Facebook Groups + Status=Pending,
+    scheduled today SAST. Returns list matching _th_render_fb_card() shape:
+      {id, group, title, final_copy, image_url, status, group_url, scheduled_at}
+    Sorted by scheduled_time ascending."""
+    cache_key = "fb_moq"
+    now = time.monotonic()
+    with _notion_cache_lock:
+        cached = _notion_cache.get(cache_key)
+        if cached and (now - cached[1]) < _NOTION_LEDGER_CACHE_TTL:
+            return cached[0]
+
+    rows: list[dict] = []
+    try:
+        all_items, _ = _fetch_marketing_queue()
+        today = _today_sast_str()
+        pending = [
+            i for i in all_items
+            if (i.get("channel") or "").strip().lower() == "facebook groups"
+            and (i.get("status") or "").strip().lower() == "pending"
+            and _is_today_sast(i.get("scheduled_time") or "")
+        ]
+        pending.sort(key=lambda x: (x.get("scheduled_time") or ""))
+
+        registry = _fetch_fb_ledger_registry()
+        for item in pending:
+            title = item.get("title") or ""
+            # Title format: "FB Group — <group name> — <sport>"
+            parts = [p.strip() for p in title.split(" — ")]
+            group = parts[1] if len(parts) >= 3 else (parts[-1] if parts else title)
+
+            group_url = ""
+            if registry:
+                name_key = group.lower()
+                group_url = registry.get(name_key) or ""
+                if not group_url:
+                    for reg_name, reg_url in registry.items():
+                        if reg_name in name_key or name_key in reg_name:
+                            group_url = reg_url
+                            break
+
+            rows.append({
+                "id": item.get("id") or "",
+                "group": group,
+                "title": title,
+                "final_copy": item.get("copy") or "",
+                "image_url": item.get("asset_link") or item.get("image_url") or "",
+                "status": item.get("status") or "Pending",
+                "group_url": group_url,
+                "scheduled_at": item.get("scheduled_time") or "",
+            })
+    except Exception as e:
+        log.warning(f"[task-hub] fb MOQ fetch failed: {e}")
+        rows = []
 
     with _notion_cache_lock:
         _notion_cache[cache_key] = (rows, now)
@@ -4053,24 +4130,81 @@ def render_automation_content() -> str:
 .so-warn-banner .so-fb-item-dismiss:hover{background:rgba(245,158,11,0.22);}
 .pv-hashtags{font-family:var(--font-m);font-size:11px;color:#58a6ff;margin-top:8px;line-height:1.6;}
 .pv-caption-label{font-family:var(--font-m);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;opacity:0.7;}
-/* ── Task Channel Buttons (FIX-SOCIAL-OPS-TASK-CHANNEL-BUTTONS-01) ── */
-#so-task-pills{display:none;margin-top:10px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);}
-#so-task-pills.has-tasks{display:block;}
+/* ── Brand tokens (FIX-SOCIAL-OPS-TASK-PANE-ACTIONS-01) ── */
+:root{--brand-linkedin:#0A66C2;--brand-facebook:#1877F2;--brand-quora:#B92B27;--brand-instagram-from:#833AB4;--brand-instagram-mid:#FD1D1D;--brand-instagram-to:#F77737;--ok:#22C55E;}
+/* ── Task Channel Buttons ── */
+#so-task-pills{display:block;margin-top:10px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);}
 .so-ch-btns{display:flex;gap:12px;}
 .so-ch-btn{position:relative;display:flex;align-items:center;justify-content:center;width:44px;height:44px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;padding:0;flex-shrink:0;transition:border-color 150ms;}
 .so-ch-btn:hover{border-color:var(--gold);}
-.so-ch-btn svg{width:22px;height:22px;display:block;pointer-events:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
-.so-ch-badge{position:absolute;top:-4px;right:-4px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--surface);border:1px solid var(--border);font-family:var(--font-m);font-size:10px;font-weight:700;color:var(--gold);display:flex;align-items:center;justify-content:center;line-height:1;pointer-events:none;}
-@keyframes so-pulse{0%,100%{box-shadow:0 0 0 0 rgba(248,200,48,.45);}50%{box-shadow:0 0 0 6px rgba(248,200,48,0);}}
+.so-ch-btn svg{width:22px;height:22px;display:block;pointer-events:none;}
+.so-ch-badge{position:absolute;top:-4px;right:-4px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--gold);border:1.5px solid var(--surface);font-family:var(--font-m);font-size:10px;font-weight:700;color:#000;display:none;align-items:center;justify-content:center;line-height:1;pointer-events:none;}
+.so-ch-btn.so-ch-active .so-ch-badge{display:flex;}
+@keyframes so-pulse{0%,100%{box-shadow:0 0 0 0 rgba(212,175,55,.45);}50%{box-shadow:0 0 0 6px rgba(212,175,55,0);}}
 .so-ch-btn.so-ch-active{animation:so-pulse 2s ease-in-out infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
 .so-ch-list{margin:0 -14px;}
-.so-ch-list-row{display:flex;align-items:center;height:32px;padding:0 14px;gap:8px;border-bottom:1px solid var(--border-sub);}
+.so-ch-list-row{display:flex;align-items:flex-start;flex-wrap:wrap;min-height:40px;padding:4px 14px;gap:8px;border-bottom:1px solid var(--border-sub);}
 .so-ch-list-row:last-child{border-bottom:none;}
 .so-ch-list-title{flex:1;font-size:12px;font-family:var(--font-b);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
-.so-ch-list-act{flex-shrink:0;font-family:var(--font-m);font-size:10px;font-weight:600;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center;transition:border-color 150ms,color 150ms;}
+.so-ch-list-actions{display:flex;gap:4px;align-items:flex-start;flex-wrap:wrap;max-width:100%;}
+.so-ch-list-act{font-family:var(--font-m);font-size:10px;font-weight:600;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 7px;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center;gap:3px;transition:border-color 150ms,color 150ms;}
 .so-ch-list-act:hover:not(:disabled){border-color:var(--gold);color:var(--gold);}
-.so-ch-list-act:disabled{opacity:0.5;cursor:default;}
-.so-ch-list-err{font-family:var(--font-m);font-size:10px;color:#ef4444;padding:2px 12px 4px;}
+.so-ch-list-act:disabled{opacity:0.5;cursor:default;pointer-events:none;}
+.so-ch-list-act.so-act-primary{color:#fff;border-color:transparent;}
+.so-ch-list-act.so-act-primary:hover:not(:disabled){filter:brightness(1.1);border-color:transparent;color:#fff;}
+.so-ch-list-act.so-act-linkedin{background:var(--brand-linkedin);}
+.so-ch-list-act.so-act-facebook{background:var(--brand-facebook);}
+.so-ch-list-act.so-act-instagram{background:linear-gradient(135deg,#833AB4 0%,#FD1D1D 55%,#F77737 100%);}
+.so-ch-list-act.so-act-quora{background:var(--brand-quora);}
+.so-ch-list-act.so-act-copy-ok{background:rgba(34,197,94,.15)!important;color:var(--ok)!important;border-color:var(--ok)!important;}
+.so-ch-list-err{font-family:var(--font-m);font-size:10px;color:#ef4444;padding:2px 14px 4px;}
+/* LinkedIn pane polish */
+.so-li-header{position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:1px solid var(--border);padding:7px 14px;font-family:var(--font-m);font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.02em;}
+.so-ch-list--li{margin:0 -14px;}
+.so-ch-list-row--li{display:flex;align-items:center;min-height:48px;padding:6px 14px;gap:10px;border-bottom:1px solid var(--border-sub);transition:background 100ms;}
+.so-ch-list-row--li:last-child{border-bottom:none;}
+.so-ch-list-row--li:hover{background:rgba(255,255,255,0.03);}
+.so-li-avatar{width:32px;height:32px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:var(--font-d);font-weight:700;font-size:13px;color:#fff;user-select:none;}
+.so-li-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.so-li-name{font-size:13px;font-family:var(--font-b);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.so-li-sub{font-size:10px;font-family:var(--font-m);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.so-li-ico-btn{width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;flex-shrink:0;}
+.so-li-ico-btn:focus-visible{outline:2px solid var(--gold);outline-offset:2px;}
+.so-li-ico-dim{opacity:0.35;cursor:default;pointer-events:none;}
+.so-li-sent-all{display:flex;align-items:center;justify-content:center;height:80px;font-family:var(--font-m);font-size:13px;color:var(--ok);gap:6px;}
+.so-ch-empty{display:flex;align-items:center;justify-content:center;min-height:60px;padding:16px;font-family:var(--font-m);font-size:12px;color:var(--muted);text-align:center;}
+.so-ch-empty{padding:14px;font-size:12px;font-family:var(--font-m);color:var(--muted);}
+/* Reel card wrapper (Part B) */
+.so-reel-card-wrap{max-width:320px;width:100%;margin:8px 0;}
+/* Copy-tick for icon-only buttons (Part D) */
+.so-copy-tick{font-size:10px;margin-left:2px;color:var(--ok);vertical-align:super;pointer-events:none;}
+/* Task Hub card CSS subset — enables embedded reel cards in Social Ops pane */
+.th-root .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:12px;position:relative;overflow:hidden;transition:border-color .18s}
+.th-root .card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.45;pointer-events:none;z-index:1}
+.th-root .card:hover{border-color:rgba(248,200,48,.3)}
+.th-root .card:hover::before{opacity:0.7}
+.th-root .card .head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.th-root .badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;font-family:var(--font-b)}
+.th-root .badge.gold{background:rgba(248,200,48,.14);color:var(--gold);border:1px solid rgba(248,200,48,.3)}
+.th-root .badge.silver{background:rgba(245,245,245,.08);color:var(--text);border:1px solid var(--border)}
+.th-root .badge.diamond{background:rgba(248,200,48,.14);color:var(--gold);border:1px solid rgba(248,200,48,.3)}
+.th-root .badge.done{background:rgba(34,197,94,.14);color:var(--green);border:1px solid rgba(34,197,94,.3)}
+.th-root .badge.pending{background:rgba(245,158,11,.14);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+.th-root .meta{color:var(--muted);font-size:12px}
+.th-root .meta strong{color:var(--text)}
+.th-root .thumb{width:100%;aspect-ratio:925/1364;background:var(--surface-alt) center/cover no-repeat;border:1px solid var(--border);border-radius:var(--r);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;overflow:hidden;position:relative}
+.th-root .thumb.thumb-real{background-size:cover;background-position:center;border-color:rgba(248,200,48,.3)}
+.th-root .thumb.bru{background:var(--grad);color:#0A0A0A;font-weight:600;font-size:13px;gap:6px;border-color:transparent}
+.th-root .thumb .play{width:36px;height:36px;border-radius:50%;background:rgba(245,245,245,.9);display:flex;align-items:center;justify-content:center;position:absolute;inset:0;margin:auto}
+.th-root .row-actions{display:flex;gap:6px;flex-wrap:wrap}
+.th-root .row-actions button,.th-root button{background:var(--surface-alt);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:var(--r);font-size:11px;cursor:pointer;font-family:var(--font-b);display:inline-flex;align-items:center;gap:5px;transition:border-color .18s}
+.th-root .row-actions button:hover,.th-root button:hover{border-color:var(--gold);background:var(--surface)}
+.th-root .upload-zone{border:1px dashed rgba(248,200,48,.5);border-radius:var(--r);padding:10px;text-align:center;color:var(--gold);font-size:11px;cursor:pointer;position:relative;transition:all .18s}
+.th-root .upload-zone:hover{background:rgba(248,200,48,.05);border-color:var(--gold)}
+.th-root .upload-zone.done{border-color:var(--green);color:var(--green);border-style:solid;background:rgba(34,197,94,.06)}
+.th-root .upload-zone.dragover{background:rgba(248,200,48,.10)}
+.th-root .upload-zone.uploading{opacity:.65;cursor:wait}
 </style>"""
 
     js = (
@@ -4188,6 +4322,28 @@ function updateNowLine(){
 function renderTimeline(data){
   var cont=document.getElementById('so-tl-rows');
   if(!cont)return;
+  // FIX-DASH-IG-TIMELINE-PREVIEW-MISMATCH-01: capture the active IG reel ID
+  // so the bottom-bar IG icon can open the same MOQ preview row.
+  _soActiveIgReelId=null;
+  (data.channels||[]).forEach(function(ch){
+    var chKey=(ch.key||ch.label||'').toLowerCase();
+    if(chKey!=='instagram'&&!chKey.includes('instagram'))return;
+    var _active_states=['needs_upload','queued','overdue'];
+    (ch.posts||[]).forEach(function(p){
+      if(!_soActiveIgReelId&&p.id&&p.id!=='__ig_reel_empty__'&&
+         _active_states.indexOf(p.reel_state||'')!==-1){
+        _soActiveIgReelId=p.id;
+      }
+    });
+    if(!_soActiveIgReelId){
+      (ch.posts||[]).forEach(function(p){
+        if(!_soActiveIgReelId&&p.id&&p.id!=='__ig_reel_empty__'&&
+           p.reel_state==='published'){
+          _soActiveIgReelId=p.id;
+        }
+      });
+    }
+  });
   cont.innerHTML=(data.channels||[]).map(renderRow).join('');
   cont.querySelectorAll('[data-post-id]').forEach(function(btn){
     btn.addEventListener('click',function(){loadPreview(btn.dataset.postId);setActive(btn);});
@@ -4822,20 +4978,84 @@ function renderQueue(d){
 function eH(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
-// ── Task Channel Buttons (FIX-SOCIAL-OPS-TASK-CHANNEL-BUTTONS-01) ──
+// ── Task Channel Buttons (FIX-SOCIAL-OPS-TASK-PANE-ACTIONS-01) ──
+var _ICO_EXTLINK='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+var _ICO_CLIP='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>';
+var _ICO_PLANE='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+var _ICO_PLAY='<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+var _ICO_DL='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+var _ICO_UPLOAD='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+var _ICO_CHECK='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+var _ICO_IMG='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+var _ICO_SPIN='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation:spin .7s linear infinite;display:inline-block;vertical-align:middle"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0" stroke-dasharray="56" stroke-dashoffset="14"/></svg>';
+var _SVG_LINKEDIN='<svg width="22" height="22" viewBox="0 0 24 24"><path d="M20.4 2H3.6C2.7 2 2 2.7 2 3.6v16.8c0 .9.7 1.6 1.6 1.6h16.8c.9 0 1.6-.7 1.6-1.6V3.6c0-.9-.7-1.6-1.6-1.6zM8.3 18.3H5.7V9.7h2.6v8.6zM7 8.6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm11.4 9.7h-2.6v-4.2c0-1 0-2.3-1.4-2.3s-1.6 1.1-1.6 2.2v4.3h-2.6V9.7h2.5v1.2a2.7 2.7 0 012.5-1.4c2.7 0 3.2 1.8 3.2 4v4.8z" fill="#0A66C2"/></svg>';
+var _SVG_FB='<svg width="22" height="22" viewBox="0 0 24 24"><path d="M24 12c0-6.6-5.4-12-12-12S0 5.4 0 12c0 6 4.4 11 10.1 11.9v-8.4H7.1V12h3V9.4c0-3 1.8-4.6 4.5-4.6 1.3 0 2.7.2 2.7.2v2.9h-1.5c-1.5 0-2 .9-2 1.9V12h3.3l-.5 3.5h-2.8v8.4C19.6 23 24 18 24 12z" fill="#1877F2"/></svg>';
+var _SVG_QUORA='<svg width="22" height="22" viewBox="0 0 24 24"><path d="M11.3 21.8c-.5-1-1.1-2.1-2.3-3.2l.8-1.1c.8.5 1.4 1.2 1.9 2 1.6-1 2.6-2.8 2.6-4.9 0-3.3-2.3-5.9-5.5-5.9S3.3 11.3 3.3 14.6s2.3 5.9 5.5 5.9c.8 0 1.7-.2 2.5-.7zm-2.5-12c2.3 0 3.8 1.8 3.8 4.2s-1.5 4.2-3.8 4.2-3.8-1.8-3.8-4.2 1.5-4.2 3.8-4.2z" fill="#B92B27"/><text x="14" y="10" font-size="10" font-weight="700" fill="#B92B27" font-family="Georgia,serif">Q</text></svg>';
+var _SVG_IG='<svg width="22" height="22" viewBox="0 0 24 24"><defs><linearGradient id="soch-ig" x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" stop-color="#F77737"/><stop offset="55%" stop-color="#FD1D1D"/><stop offset="100%" stop-color="#833AB4"/></linearGradient></defs><rect x="2" y="2" width="20" height="20" rx="5" fill="none" stroke="url(#soch-ig)" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="none" stroke="url(#soch-ig)" stroke-width="2"/><circle cx="17.5" cy="6.5" r="1.5" fill="url(#soch-ig)"/></svg>';
 var _soChData={};
-var _soChCounts={reels:0,fb:0,quora:0,linkedin:0};
+var _soChCounts={linkedin:0,reels:0,fb:0,quora:0};
+// FIX-DASH-IG-TIMELINE-PREVIEW-MISMATCH-01: active IG reel row ID captured at
+// timeline render time so the bottom-bar IG icon opens the same preview.
+var _soActiveIgReelId=null;
 var _SO_CH_CFG=[
-  {key:'reels',   icon:'play-circle',         label:'Reel Kits', actLabel:'Open Kit',    endpoint:null},
-  {key:'fb',      icon:'message-square',       label:'FB Groups', actLabel:'Mark Posted', endpoint:function(t){return '/admin/api/task-hub/fb/'+encodeURIComponent(t.id||t.page_id||t.pick_id||'')+'/posted';}},
-  {key:'quora',   icon:'message-square-quote', label:'Quora',     actLabel:'Mark Posted', endpoint:function(t){return '/admin/api/task-hub/quora/'+encodeURIComponent(t.id||t.page_id||t.pick_id||'')+'/posted';}},
-  {key:'linkedin',icon:'briefcase',            label:'LinkedIn',  actLabel:'Mark Sent',   endpoint:function(t){return '/admin/api/task-hub/linkedin/'+encodeURIComponent(t.id||t.page_id||t.pick_id||'')+'/sent';}}
+  {key:'linkedin',svg:_SVG_LINKEDIN,label:'LinkedIn', actClass:'so-act-linkedin', actIcon:_ICO_PLANE, actLabel:'Mark Sent',    endpoint:function(t){return '/admin/api/task-hub/linkedin/'+encodeURIComponent(t.id||t.page_id||'')+'/sent';}},
+  {key:'reels',   svg:_SVG_IG,      label:'Reel Kits',actClass:'so-act-instagram',actIcon:_ICO_UPLOAD,actLabel:'Mark Uploaded',endpoint:null},
+  {key:'fb',      svg:_SVG_FB,      label:'FB Groups',actClass:'so-act-facebook', actIcon:_ICO_CHECK, actLabel:'Mark Posted',  endpoint:function(t){return '/admin/api/task-hub/fb/'+encodeURIComponent(t.id||t.page_id||'')+'/posted';}},
+  {key:'quora',   svg:_SVG_QUORA,   label:'Quora',    actClass:'so-act-quora',    actIcon:_ICO_CHECK, actLabel:'Mark Posted',  endpoint:function(t){return '/admin/api/task-hub/quora/'+encodeURIComponent(t.id||t.page_id||'')+'/posted';}}
 ];
 function _soChItemLabel(key,t){
   if(key==='reels')return t.pick_team||t.pick_id||String(t.id||'')||'—';
   if(key==='fb')return t.title||t.group||String(t.id||'')||'—';
-  if(key==='quora')return t.question||String(t.id||'')||'—';
+  if(key==='quora'){var q=t.question||String(t.id||'')||'—';return q.length>80?q.slice(0,79)+'…':q;}
   return t.name||String(t.id||'')||'—';
+}
+function _soChItemTitle(key,t){
+  if(key==='quora')return t.question||'';
+  return _soChItemLabel(key,t);
+}
+function _buildRowToolkit(ch,t,tid){
+  var b='';
+  if(ch==='linkedin'){
+    var pUrl=t.url||t.profile_url||'';
+    var msg=t.note||t.connection_message||'';
+    // icon-only buttons with aria-label
+    if(pUrl){b+='<a class="so-ch-list-act so-li-ico-btn" href="'+eA(pUrl)+'" target="_blank" rel="noopener" aria-label="Open profile" title="Open profile">'+_ICO_EXTLINK+'</a>';}
+    else{b+='<span class="so-ch-list-act so-li-ico-btn so-li-ico-dim" aria-label="No profile URL" title="No profile URL">'+_ICO_EXTLINK+'</span>';}
+    if(msg){b+='<button class="so-ch-list-act so-li-ico-btn so-copy-btn" data-copy="'+eA(msg)+'" aria-label="Copy message" title="Copy message">'+_ICO_CLIP+'</button>';}
+    else{b+='<button class="so-ch-list-act so-li-ico-btn so-li-ico-dim" disabled aria-label="No message" title="No message">'+_ICO_CLIP+'</button>';}
+    b+='<button class="so-ch-list-act so-li-ico-btn so-act-primary so-act-linkedin so-action-btn" data-ch="'+eA(ch)+'" data-tid="'+eA(tid)+'" aria-label="Mark sent" title="Mark sent">'+_ICO_PLANE+'</button>';
+  } else if(ch==='reels'){
+    var vUrl=t.video_url||'';
+    var pvUrl=t.preview_url||vUrl;
+    var cap=t.caption||t.ig_caption||'';
+    var pickId=eA(t.pick_id||'');
+    var rdate=eA(t.date||'');
+    var noVid=!pvUrl;
+    var noCap=!cap;
+    // Always render all 4 buttons; disable when data unavailable
+    if(!noVid){b+='<a class="so-ch-list-act" href="'+eA(pvUrl)+'" target="_blank" rel="noopener">'+_ICO_PLAY+' Preview Reel</a>';}
+    else{b+='<button class="so-ch-list-act" disabled title="No video asset yet" aria-disabled="true">'+_ICO_PLAY+' Preview Reel</button>';}
+    if(!noCap){b+='<button class="so-ch-list-act so-copy-btn" data-copy="'+eA(cap)+'">'+_ICO_CLIP+' Copy Caption</button>';}
+    else{b+='<button class="so-ch-list-act" disabled title="No caption yet" aria-disabled="true">'+_ICO_CLIP+' Copy Caption</button>';}
+    if(!noVid&&vUrl){b+='<a class="so-ch-list-act" href="'+eA(vUrl)+'" download>'+_ICO_DL+' Download Video</a>';}
+    else{b+='<button class="so-ch-list-act" disabled title="No video asset yet" aria-disabled="true">'+_ICO_DL+' Download Video</button>';}
+    b+='<label class="so-ch-list-act so-act-primary so-act-instagram" style="cursor:pointer;user-select:none;" title="Mark Uploaded">'+_ICO_UPLOAD+' Mark Uploaded<input type="file" accept="video/mp4" style="display:none" class="so-reel-file-input" data-pick="'+pickId+'" data-date="'+rdate+'" data-tid="'+eA(tid)+'"></label>';
+  } else if(ch==='fb'){
+    var gUrl=t.group_url||'';
+    var post=t.final_copy||t.post_text||'';
+    var imgUrl=t.image_url||'';
+    if(gUrl)b+='<a class="so-ch-list-act" href="'+eA(gUrl)+'" target="_blank" rel="noopener">'+_ICO_EXTLINK+' Open Group</a>';
+    if(post)b+='<button class="so-ch-list-act so-copy-btn" data-copy="'+eA(post)+'">'+_ICO_CLIP+' Copy Post</button>';
+    if(imgUrl)b+='<button class="so-ch-list-act so-copy-btn" data-copy="'+eA(imgUrl)+'">'+_ICO_IMG+' Copy Image URL</button>';
+    b+='<button class="so-ch-list-act so-act-primary so-act-facebook so-action-btn" data-ch="'+eA(ch)+'" data-tid="'+eA(tid)+'">'+_ICO_CHECK+' Mark Posted</button>';
+  } else if(ch==='quora'){
+    var qUrl=t.url||t.question_url||'';
+    var ans=t.full_answer||t.answer||t.answer_text||'';
+    if(qUrl)b+='<a class="so-ch-list-act" href="'+eA(qUrl)+'" target="_blank" rel="noopener">'+_ICO_EXTLINK+' Open Question</a>';
+    if(ans)b+='<button class="so-ch-list-act so-copy-btn" data-copy="'+eA(ans)+'">'+_ICO_CLIP+' Copy Answer</button>';
+    b+='<button class="so-ch-list-act so-act-primary so-act-quora so-action-btn" data-ch="'+eA(ch)+'" data-tid="'+eA(tid)+'">'+_ICO_CHECK+' Mark Posted</button>';
+  }
+  return b;
 }
 function _loadSoTaskPills(){
   var sec=document.getElementById('so-task-pills');
@@ -4847,36 +5067,52 @@ function _loadSoTaskPills(){
 }
 function _renderSoTaskChannelBtns(sec,d){
   _soChData=d;
-  var total=0;
-  var btnsHtml='';
+  var html='';
   _SO_CH_CFG.forEach(function(cfg){
     var cnt=(d[cfg.key]||[]).length;
     _soChCounts[cfg.key]=cnt;
-    total+=cnt;
-    if(cnt===0)return;
-    btnsHtml+='<button class="so-ch-btn so-ch-active" data-ch="'+eA(cfg.key)+'" title="'+eH(cfg.label+' ('+cnt+')')+'">'+
-      svgI(cfg.icon)+
+    var active=cnt>0;
+    var tip=cfg.label+(active?' · '+cnt+' pending':' · all clear');
+    html+='<button class="so-ch-btn'+(active?' so-ch-active':'')+'" data-ch="'+eA(cfg.key)+'" title="'+eH(tip)+'">'+
+      cfg.svg+
       '<span class="so-ch-badge">'+cnt+'</span>'+
     '</button>';
   });
-  if(!total){sec.classList.remove('has-tasks');return;}
-  sec.innerHTML='<div class="so-ch-btns">'+btnsHtml+'</div>';
-  sec.classList.add('has-tasks');
+  sec.innerHTML='<div class="so-ch-btns">'+html+'</div>';
   sec.querySelectorAll('.so-ch-btn').forEach(function(btn){
     btn.addEventListener('click',function(){
-      var ch=btn.getAttribute('data-ch');
-      btn.dispatchEvent(new CustomEvent('so:task-channel-click',{bubbles:true,detail:{type:ch}}));
+      btn.dispatchEvent(new CustomEvent('so:task-channel-click',{bubbles:true,detail:{type:btn.getAttribute('data-ch')}}));
     });
   });
 }
 document.addEventListener('so:task-channel-click',function(ev){
-  var ch=ev.detail&&ev.detail.type;
-  if(!ch)return;
-  var cfg=null;
-  for(var i=0;i<_SO_CH_CFG.length;i++){if(_SO_CH_CFG[i].key===ch){cfg=_SO_CH_CFG[i];break;}}
+  var ch=ev.detail&&ev.detail.type;if(!ch)return;
+  // FIX-DASH-IG-TIMELINE-PREVIEW-MISMATCH-01: bottom-bar IG icon resolves to
+  // the same MOQ row that the timeline card click would open — ensures both
+  // click handlers show byte-identical reel preview content.
+  if(ch==='reels'&&_soActiveIgReelId){loadPreview(_soActiveIgReelId);return;}
+  var cfg=null;for(var i=0;i<_SO_CH_CFG.length;i++){if(_SO_CH_CFG[i].key===ch){cfg=_SO_CH_CFG[i];break;}}
   if(!cfg)return;
   _soOpenChTaskList(ch,cfg,(_soChData[ch]||[]).slice());
 });
+// Deterministic LinkedIn avatar gradient — stable per contact name
+function _soLiAvatarGradient(name){
+  var h=0;for(var i=0;i<name.length;i++){h=(h*31+name.charCodeAt(i))>>>0;}
+  var palettes=[
+    ['#0A66C2','#1a7fd4'],['#0e4f9e','#1a6ac5'],['#1d4e8f','#2a6abf'],
+    ['#0077b5','#1899d6'],['#004182','#0066a0'],['#003057','#005082'],
+    ['#0260a8','#0477c9'],['#1b4f91','#2367b8'],['#084298','#0d55c1'],
+    ['#00395b','#005f99']
+  ];
+  var p=palettes[h%palettes.length];
+  return 'linear-gradient(135deg,'+p[0]+' 0%,'+p[1]+' 100%)';
+}
+function _soLiInitials(name){
+  var words=(name||'').trim().split(/\\s+/);
+  var ini='';
+  for(var i=0;i<words.length&&ini.length<2;i++){if(words[i])ini+=words[i][0].toUpperCase();}
+  return ini||'?';
+}
 function _soOpenChTaskList(ch,cfg,items){
   var empty=document.getElementById('so-pv-empty');
   var skel=document.getElementById('so-pv-skel');
@@ -4892,70 +5128,134 @@ function _soOpenChTaskList(ch,cfg,items){
     '<span class="so-pv-chip">'+items.length+' item'+(items.length!==1?'s':'')+'</span>';
   if(acts)acts.innerHTML='';
   if(!items.length){
-    body.innerHTML='<div style="padding:16px;font-size:12px;color:var(--muted);">No tasks.</div>';
+    if(ch==='linkedin'){
+      body.innerHTML='<div class="so-li-sent-all">✅ All sent — great work</div>';
+    } else {
+      body.innerHTML='<div class="so-ch-empty">No pending '+eH(cfg.label)+' tasks — all caught up.</div>';
+    }
     return;
   }
-  var rows='<div class="so-ch-list">';
-  items.forEach(function(t,idx){
-    var lbl=eH(_soChItemLabel(ch,t));
-    var tid=eA(String(t.id||t.pick_id||t.page_id||idx));
-    var actBtn=cfg.endpoint
-      ?'<button class="so-ch-list-act" data-ch="'+eA(ch)+'" data-tid="'+tid+'">'+eH(cfg.actLabel)+'</button>'
-      :'<a class="so-ch-list-act" href="/admin/reel-kit" target="_blank" rel="noopener">Open Kit ↗</a>';
-    rows+='<div class="so-ch-list-row" data-tid="'+tid+'">'+
-      '<span class="so-ch-list-title" title="'+lbl+'">'+lbl+'</span>'+
-      actBtn+
-    '</div>';
-  });
-  rows+='</div>';
-  body.innerHTML=rows;
-  body.querySelectorAll('.so-ch-list-act[data-tid]').forEach(function(btn){
-    if(btn.tagName==='A')return;
-    btn.addEventListener('click',function(){_soChDoAction(btn,ch,cfg);});
-  });
-}
-function _soChDoAction(btn,ch,cfg){
-  var row=btn.closest('.so-ch-list-row');
-  var tid=btn.getAttribute('data-tid');
-  var items=_soChData[ch]||[];
-  var t=null;
-  for(var i=0;i<items.length;i++){
-    if(String(items[i].id||items[i].pick_id||items[i].page_id||i)===tid){t=items[i];break;}
-  }
-  if(!t||!cfg.endpoint)return;
-  var url=cfg.endpoint(t);
-  if(!url)return;
-  btn.disabled=true;
-  fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'})
-    .then(function(r){return r.json().then(function(j){return{ok:r.ok,body:j};});})
-    .then(function(res){
-      if(res.ok&&res.body&&res.body.ok){
-        if(row)row.remove();
-        _soChDecrement(ch);
-      } else {
-        btn.disabled=false;
-        _soChRowErr(row,(res.body&&res.body.message)||'Update failed');
-      }
-    })
-    .catch(function(e){
-      btn.disabled=false;
-      _soChRowErr(row,(e&&e.message)||'Error');
+  var rows='';
+  if(ch==='linkedin'){
+    rows='<div class="so-li-header" id="so-li-header">LinkedIn outreach · <span id="so-li-remain">'+items.length+'</span> remaining</div>';
+    rows+='<div class="so-ch-list so-ch-list--li">';
+    items.forEach(function(t,idx){
+      var name=t.name||'(unknown)';
+      var role=t.role||'';
+      var company=t.company||'';
+      var sub=role+(company?' · '+company:'');
+      var tid=String(t.id||t.page_id||idx);
+      var toolkit=_buildRowToolkit(ch,t,tid);
+      var ini=_soLiInitials(name);
+      var grad=_soLiAvatarGradient(name);
+      rows+='<div class="so-ch-list-row so-ch-list-row--li" data-tid="'+eA(tid)+'">'+
+        '<div class="so-li-avatar" style="background:'+grad+'" aria-hidden="true">'+eH(ini)+'</div>'+
+        '<div class="so-li-info">'+
+          '<span class="so-li-name">'+eH(name)+'</span>'+
+          (sub?'<span class="so-li-sub">'+eH(sub)+'</span>':'')+
+        '</div>'+
+        '<div class="so-ch-list-actions">'+toolkit+'</div>'+
+      '</div>';
     });
+    rows+='</div>';
+  } else if(ch==='reels'){
+    rows='<div class="so-ch-list">';
+    items.forEach(function(t,idx){
+      var tid=String(t.id||t.pick_id||t.page_id||idx);
+      var cardHtml=t.card_html||'';
+      rows+='<div class="so-ch-list-row" data-tid="'+eA(tid)+'" style="display:block;border-bottom:1px solid var(--border-sub);padding:0 14px 12px 14px;">'+
+        '<div class="th-root so-reel-card-wrap">'+cardHtml+'</div>'+
+      '</div>';
+    });
+    rows+='</div>';
+  } else {
+    rows='<div class="so-ch-list">';
+    items.forEach(function(t,idx){
+      var lbl=_soChItemLabel(ch,t);
+      var fullTitle=_soChItemTitle(ch,t);
+      var tid=String(t.id||t.pick_id||t.page_id||idx);
+      var toolkit=_buildRowToolkit(ch,t,tid);
+      rows+='<div class="so-ch-list-row" data-tid="'+eA(tid)+'">'+
+        '<span class="so-ch-list-title" title="'+eH(fullTitle)+'">'+eH(lbl)+'</span>'+
+        '<div class="so-ch-list-actions">'+toolkit+'</div>'+
+      '</div>';
+    });
+    rows+='</div>';
+  }
+  body.innerHTML=rows;
+  // Wire upload zones inside embedded reel cards
+  if(ch==='reels'){
+    body.querySelectorAll('.th-root .upload-zone[data-pick]').forEach(function(zone){
+      var input=zone.querySelector('input[type=file]');
+      zone.addEventListener('click',function(){if(input)input.click();});
+      zone.addEventListener('dragover',function(e){e.preventDefault();zone.classList.add('dragover');});
+      zone.addEventListener('dragleave',function(){zone.classList.remove('dragover');});
+      zone.addEventListener('drop',function(e){
+        e.preventDefault();zone.classList.remove('dragover');
+        var f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];
+        if(f)thReelUpload(zone,f);
+      });
+      if(input){input.addEventListener('change',function(){if(input.files&&input.files[0])thReelUpload(zone,input.files[0]);});}
+    });
+  }
+  body.querySelectorAll('.so-action-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var row=btn.closest('.so-ch-list-row');
+      var tid=btn.getAttribute('data-tid');
+      var items2=_soChData[ch]||[];
+      var t=null;
+      for(var i=0;i<items2.length;i++){
+        var key2=String(items2[i].id||items2[i].pick_id||items2[i].page_id||i);
+        if(key2===tid){t=items2[i];break;}
+      }
+      if(!t||!cfg.endpoint)return;
+      var url=cfg.endpoint(t);if(!url)return;
+      var rowBtns=row?Array.prototype.slice.call(row.querySelectorAll('button,a,label')):[];
+      rowBtns.forEach(function(b){b.disabled=true;b.style.pointerEvents='none';});
+      var origHtml=btn.innerHTML;
+      btn.innerHTML=_ICO_SPIN+' …';
+      fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'})
+        .then(function(r){return r.json().then(function(j){return{ok:r.ok,body:j};});})
+        .then(function(res){
+          if(res.ok&&res.body&&res.body.ok){
+            if(row){row.style.transition='opacity 150ms';row.style.opacity='0';setTimeout(function(){if(row.parentNode)row.parentNode.removeChild(row);},150);}
+            _soChDecrement(ch);
+          } else {
+            rowBtns.forEach(function(b){b.disabled=false;b.style.pointerEvents='';});
+            btn.innerHTML=origHtml;
+            _soChRowErr(row,(res.body&&res.body.message)||'Update failed');
+          }
+        })
+        .catch(function(e){
+          rowBtns.forEach(function(b){b.disabled=false;b.style.pointerEvents='';});
+          btn.innerHTML=origHtml;
+          _soChRowErr(row,(e&&e.message)||'Error');
+        });
+    });
+  });
 }
 function _soChDecrement(ch){
   _soChCounts[ch]=Math.max(0,(_soChCounts[ch]||0)-1);
+  var cnt=_soChCounts[ch];
   var sec=document.getElementById('so-task-pills');
   if(!sec)return;
   var chBtn=sec.querySelector('.so-ch-btn[data-ch="'+ch+'"]');
-  var cnt=_soChCounts[ch];
-  if(cnt===0){
-    if(chBtn)chBtn.style.display='none';
-  } else {
-    if(chBtn){var badge=chBtn.querySelector('.so-ch-badge');if(badge)badge.textContent=cnt;}
+  if(chBtn){
+    var badge=chBtn.querySelector('.so-ch-badge');
+    if(cnt===0){chBtn.classList.remove('so-ch-active');if(badge)badge.textContent='0';}
+    else{if(badge)badge.textContent=cnt;}
+    var label='';for(var i=0;i<_SO_CH_CFG.length;i++){if(_SO_CH_CFG[i].key===ch){label=_SO_CH_CFG[i].label;break;}}
+    chBtn.title=label+(cnt>0?' · '+cnt+' pending':' · all clear');
   }
-  var anyLeft=false;
-  for(var k in _soChCounts){if(_soChCounts[k]>0){anyLeft=true;break;}}
-  if(!anyLeft)sec.classList.remove('has-tasks');
+  // Update LinkedIn sticky header / show All sent state
+  if(ch==='linkedin'){
+    var rem=document.getElementById('so-li-remain');
+    if(rem)rem.textContent=cnt;
+    if(cnt===0){
+      var body=document.getElementById('so-pv-body');
+      if(body)body.innerHTML='<div class="so-li-sent-all">✅ All sent — great work</div>';
+    }
+  }
 }
 function _soChRowErr(row,msg){
   if(!row)return;
@@ -4966,8 +5266,96 @@ function _soChRowErr(row,msg){
   errEl.textContent=msg;
   row.insertAdjacentElement('afterend',errEl);
 }
+// Copy-to-clipboard handler (Part D: icon-only buttons get tick badge, not text replacement)
+document.addEventListener('click',function(ev){
+  var btn=ev.target.closest&&ev.target.closest('.so-copy-btn');
+  if(!btn)return;
+  var text=btn.getAttribute('data-copy')||'';if(!text)return;
+  var origHtml=btn.innerHTML;
+  var isIcoOnly=btn.classList.contains('so-li-ico-btn');
+  var prom=navigator.clipboard?navigator.clipboard.writeText(text):Promise.reject(new Error('no-clipboard'));
+  prom.then(function(){
+    btn.classList.add('so-act-copy-ok');
+    if(isIcoOnly){
+      var ck=document.createElement('span');ck.className='so-copy-tick';ck.textContent='✓';btn.appendChild(ck);
+      setTimeout(function(){btn.classList.remove('so-act-copy-ok');if(ck.parentNode)ck.parentNode.removeChild(ck);},1800);
+    } else {
+      btn.innerHTML=_ICO_CHECK+' Copied ✓';
+      setTimeout(function(){btn.classList.remove('so-act-copy-ok');btn.innerHTML=origHtml;},1800);
+    }
+  }).catch(function(){
+    var prev=btn.innerHTML;
+    btn.style.color='#ef4444';btn.textContent='Copy failed';
+    setTimeout(function(){btn.innerHTML=prev;btn.style.color='';},1500);
+  });
+});
+// Reel file-upload handler
+document.addEventListener('change',function(ev){
+  var input=ev.target;
+  if(!input||!input.classList.contains('so-reel-file-input'))return;
+  var file=input.files&&input.files[0];if(!file)return;
+  var lbl=input.closest('label');
+  var row=input.closest('.so-ch-list-row');
+  var pickId=input.getAttribute('data-pick')||'';
+  var date=input.getAttribute('data-date')||'';
+  if(!pickId||!date){_soChRowErr(row,'Missing pick_id or date — cannot upload.');return;}
+  var rowBtns=row?Array.prototype.slice.call(row.querySelectorAll('button,a,label')):[];
+  rowBtns.forEach(function(b){b.disabled=true;b.style.pointerEvents='none';});
+  var origHtml=lbl?lbl.innerHTML:'';
+  if(lbl)lbl.innerHTML=_ICO_SPIN+' Uploading…';
+  var fd=new FormData();fd.append('file',file);fd.append('pick_id',pickId);fd.append('date',date);
+  fetch('/admin/api/task-hub/reel/'+encodeURIComponent(pickId)+'/upload',{method:'POST',credentials:'same-origin',body:fd})
+    .then(function(r){return r.json().then(function(j){return{ok:r.ok,body:j};});})
+    .then(function(res){
+      if(res.ok&&res.body&&res.body.ok){
+        if(row){row.style.transition='opacity 150ms';row.style.opacity='0';setTimeout(function(){if(row.parentNode)row.parentNode.removeChild(row);},150);}
+        _soChDecrement('reels');
+      } else {
+        rowBtns.forEach(function(b){b.disabled=false;b.style.pointerEvents='';});
+        if(lbl)lbl.innerHTML=origHtml;
+        _soChRowErr(row,(res.body&&res.body.error)||'Upload failed');
+      }
+    })
+    .catch(function(e){
+      rowBtns.forEach(function(b){b.disabled=false;b.style.pointerEvents='';});
+      if(lbl)lbl.innerHTML=origHtml;
+      _soChRowErr(row,(e&&e.message)||'Upload error');
+    });
+});
 
 })();
+// Conditional TH function stubs — active when Social Ops pane is loaded without Task Hub (Part B)
+if(typeof thReelVO==='undefined'){
+  function thReelVO(date,pick){
+    var url='/admin/social-ops/asset/'+encodeURIComponent('reel-cards/'+date+'/'+pick+'/vo_'+pick+'_v1.mp3');
+    var a=new Audio(url);a.play().catch(function(){window.open(url,'_blank');});
+  }
+}
+if(typeof thReelDownload==='undefined'){
+  function thReelDownload(date,pick){
+    fetch('/admin/api/reel-download',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({date:date,pick_id:pick})})
+      .then(function(r){if(!r.ok)throw new Error('download failed');return r.blob();})
+      .then(function(b){var url=URL.createObjectURL(b);var a=document.createElement('a');a.href=url;a.download='reel_'+pick+'.zip';document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},500);})
+      .catch(function(err){alert('Download failed: '+err.message);});
+  }
+}
+if(typeof thReelUpload==='undefined'){
+  function thReelUpload(zone,file){
+    if(!file)return;
+    zone.classList.add('uploading');
+    var pick=zone.getAttribute('data-pick');
+    var date=zone.getAttribute('data-date');
+    var fd=new FormData();fd.append('file',file);fd.append('pick_id',pick);fd.append('date',date);
+    fetch('/admin/api/task-hub/reel/'+encodeURIComponent(pick)+'/upload',{method:'POST',body:fd,credentials:'same-origin'})
+      .then(function(r){return r.json().then(function(j){return{ok:r.ok,body:j};});})
+      .then(function(res){
+        zone.classList.remove('uploading');
+        if(res.ok&&res.body&&res.body.ok){zone.classList.add('done');zone.textContent='Uploaded ✓ queued to MOQ';}
+        else{alert('Upload failed');}
+      })
+      .catch(function(err){zone.classList.remove('uploading');alert('Upload error: '+err.message);});
+  }
+}
 </script>"""
     )
     return f"""{css}
@@ -5421,9 +5809,9 @@ def _fetch_task_hub_data() -> dict:
 
     def _do_fb():
         try:
-            return _filter_fb_today(_fetch_fb_groups_today())
+            return _fetch_fb_groups_moq()   # MOQ, not legacy daily sheet
         except Exception as e:
-            log.warning(f"[task-hub] fb fetch failed: {e}")
+            log.warning(f"[social-ops] fb MOQ fetch failed: {e}")
             return []
 
     def _do_quora():
@@ -5449,6 +5837,25 @@ def _fetch_task_hub_data() -> dict:
         fb_today     = f_fb.result()
         quora_today  = f_quora.result()
         linkedin_today = f_linkedin.result()
+
+    _REEL_CARDS_PUBLIC = "https://mzansiedge.co.za/assets/reel-cards"
+    for kit in reels:
+        kit.setdefault("date", today)
+        pid = kit.get("pick_id", "")
+        if kit.get("has_master"):
+            kit.setdefault("video_url", f"{_REEL_PUBLIC_BASE}/{today}/{pid}_master.mp4")
+        else:
+            kit.setdefault("video_url", "")
+        # preview_url: master mp4 when available, else the card image (useful for visual check)
+        card_file = kit.get("card") or ""
+        if kit.get("has_master"):
+            kit.setdefault("preview_url", kit["video_url"])
+        elif card_file:
+            kit.setdefault("preview_url", f"{_REEL_CARDS_PUBLIC}/{today}/{pid}/{card_file}")
+        else:
+            kit.setdefault("preview_url", "")
+        kit.setdefault("caption", kit.get("caption") or "")
+        kit["card_html"] = _th_render_reel_card(kit, today)
 
     return {
         "date": today,
@@ -8713,6 +9120,19 @@ def _build_so_timeline(day_str: str, items: list[dict], now_sast: datetime, aler
                 "ch_lbl": clbl,
                 "reel_state": reel_state,
             })
+        # FIX-DASH-IG-TIMELINE-PREVIEW-MISMATCH-01: deduplicate IG reels.
+        # When the MOQ has multiple reel rows for the same day (e.g. a Done reel
+        # from the previous generator run + today's pending reel), keep only ONE.
+        # Prefer the active (non-published) reel; fall back to the first item.
+        if ck == "instagram":
+            _reel_active_st = {"needs_upload", "queued", "overdue"}
+            _reel_any_st    = {"needs_upload", "queued", "overdue", "published"}
+            _reel_posts = [p for p in posts if (p.get("reel_state") or "") in _reel_any_st]
+            _non_reel   = [p for p in posts if (p.get("reel_state") or "") not in _reel_any_st]
+            if len(_reel_posts) > 1:
+                _active = [p for p in _reel_posts if (p.get("reel_state") or "") in _reel_active_st]
+                _best   = _active[0] if _active else _reel_posts[0]
+                posts   = _non_reel + [_best]
         # DASH-POLISH-STORIES-01 / AC1: empty-slot flash for today's 19:00 IG Reel.
         # If day is today (SAST) and no IG Reel row exists in MOQ for any state
         # (published/queued/overdue), emit a virtual "empty" marker at 19:00.
@@ -9396,6 +9816,7 @@ def api_task_hub_fb_posted(page_id: str):
     if ok:
         with _notion_cache_lock:
             _notion_cache.pop("marketing_queue", None)
+            _notion_cache.pop("fb_moq", None)
         with _page_cache_lock:
             _page_cache.pop("task_hub_full", None)
             _page_cache.pop("task_hub_content", None)
@@ -9425,27 +9846,30 @@ def api_task_hub_quora_posted(page_id: str):
 @app.route("/admin/api/task-hub/linkedin/<page_id>/sent", methods=["POST"])
 @require_auth
 def api_task_hub_linkedin_sent(page_id: str):
-    from datetime import datetime as _dt
-    now_iso = _dt.now(_SAST).isoformat()
-    props = {
-        "Status": {"select": {"name": "Sent"}},
-        "Sent At": {"date": {"start": now_iso}},
-    }
-    body = {"properties": props}
+    # page_id is a Notion *block* ID (to_do block in the daily sheet),
+    # not a Notion page ID. Mark it checked via the blocks API.
+    patch_body = {"to_do": {"checked": True}}
     try:
-        result = _notion_request(f"pages/{page_id}", body=body, method="PATCH")
-        ok = bool(result and result.get("object") == "page")
-    except Exception:
+        result = _notion_request(f"blocks/{page_id}", body=patch_body, method="PATCH")
+        ok = bool(result and result.get("object") == "block")
+    except Exception as exc:
+        log.warning(f"[task-hub] linkedin sent block patch failed: {exc}")
         ok = False
     if ok:
         with _notion_cache_lock:
-            _notion_cache.pop("linkedin_ledger", None)
+            _notion_cache.pop("linkedin_daily", None)
             _notion_cache.pop("marketing_queue", None)
         with _page_cache_lock:
             _page_cache.pop("task_hub_full", None)
             _page_cache.pop("task_hub_content", None)
             _page_cache.pop("social_ops_full", None)
-    return Response(json.dumps({"ok": ok}), mimetype="application/json")
+        return Response(json.dumps({"ok": True}), mimetype="application/json")
+    else:
+        return Response(
+            json.dumps({"ok": False, "message": "Notion block update failed — check block ID and token permissions"}),
+            status=502,
+            mimetype="application/json",
+        )
 
 
 @app.route("/admin/reel-kit")
@@ -9662,6 +10086,7 @@ def _scan_reel_kits(date_str: str) -> list[dict]:
                         meta = json.load(fh)
                     kit["pick_team"] = meta.get("pick_team") or kit["pick_team"]
                     kit["bookmaker"] = meta.get("bookmaker") or kit["bookmaker"]
+                    kit["caption"] = meta.get("caption") or kit.get("caption") or ""
                     if meta.get("tier") and not kit["tier"]:
                         kit["tier"] = meta["tier"]
                 except Exception:

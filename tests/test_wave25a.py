@@ -83,6 +83,7 @@ async def test_mute_unmute(fresh_db):
 
 
 @pytest.mark.asyncio
+@patch("bot.NOTIFICATIONS_ENABLED", True)
 async def test_daily_cap_bronze(fresh_db):
     """Bronze users capped at 3 pushes/day."""
     # User is bronze by default
@@ -96,6 +97,7 @@ async def test_daily_cap_bronze(fresh_db):
 
 
 @pytest.mark.asyncio
+@patch("bot.NOTIFICATIONS_ENABLED", True)
 async def test_daily_cap_diamond(fresh_db):
     """Diamond users capped at 5 pushes/day."""
     await db.set_user_tier(111, "diamond")

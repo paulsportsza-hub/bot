@@ -1,0 +1,9 @@
+{
+  "match_key": "mamelodi_sundowns_vs_stellenbosch_2026-04-22_gold",
+  "source": "telethon-deeplink-harden-01 test3_regress_1 (alert 108, 22 Apr 2026)",
+  "verdict_text": "The Brazilians are the play at 1.38 with Betway — they've won five straight and own Stellies completely in head-to-head, with five wins from five meetings.",
+  "home_team": "Mamelodi Sundowns",
+  "away_team": "Stellenbosch",
+  "tier_badge": "🥇",
+  "notes": "Card photo only — no Telegram inline keyboard captured, so button_count is expected to be 0."
+}

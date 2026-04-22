@@ -848,3 +848,340 @@ def build_home_winners_data(wins: list) -> dict:
         "header_logo_b64": _logo(),
         "total_count": len(rows),
     }
+
+
+# ── Wave 3: Notification Templates (BUILD-WAVE3-NOTIFICATIONS-01) ─────────────
+
+def build_notify_morning_bronze_data(
+    free_picks: list | None = None,
+    locked_count: int = 0,
+    upgrade_cta: bool = True,
+    hit_rate_7d: float = 0.0,
+    results_block: str = "",
+) -> dict:
+    """Morning teaser for Bronze users — tease locked picks, drive upgrade."""
+    return {
+        "free_picks": free_picks or [],
+        "locked_count": locked_count,
+        "upgrade_cta": upgrade_cta,
+        "hit_rate_7d": hit_rate_7d,
+        "hit_rate_pct": f"{hit_rate_7d * 100:.0f}",
+        "results_block": results_block,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_morning_gold_data(
+    top_pick: dict | None = None,
+    diamond_fomo: str = "",
+    hit_rate_7d: float = 0.0,
+    tip_count: int = 0,
+    results_block: str = "",
+) -> dict:
+    """Morning teaser for Gold users — best pick + diamond FOMO."""
+    return {
+        "top_pick": top_pick or {},
+        "diamond_fomo": diamond_fomo,
+        "hit_rate_7d": hit_rate_7d,
+        "hit_rate_pct": f"{hit_rate_7d * 100:.0f}",
+        "tip_count": tip_count,
+        "results_block": results_block,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_morning_diamond_data(
+    top_pick: dict | None = None,
+    tip_count: int = 0,
+    results_block: str = "",
+    hit_rate_7d: float = 0.0,
+) -> dict:
+    """Morning teaser for Diamond users — clean, confident, full picture."""
+    return {
+        "top_pick": top_pick or {},
+        "tip_count": tip_count,
+        "results_block": results_block,
+        "hit_rate_7d": hit_rate_7d,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_morning_no_tips_data(
+    tomorrow_preview: list | None = None,
+    browse_cta: str = "Check back later",
+) -> dict:
+    """Morning card when no tips found — keep user engaged."""
+    return {
+        "tomorrow_preview": tomorrow_preview or [],
+        "browse_cta": browse_cta,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_weekend_preview_data(
+    preview_count: int = 0,
+    top_3: list | None = None,
+    weekend_leagues: list | None = None,
+    user_tier: str = "bronze",
+) -> dict:
+    """Thursday 18:00 weekend preview."""
+    return {
+        "preview_count": preview_count,
+        "top_3": top_3 or [],
+        "weekend_leagues": weekend_leagues or [],
+        "user_tier": user_tier,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_monday_recap_data(
+    hit_rate_7d: float = 0.0,
+    total_edges: int = 0,
+    hits: int = 0,
+    top_hits: list | None = None,
+    misses_count: int = 0,
+    portfolio_return: str = "",
+    user_tier: str = "bronze",
+) -> dict:
+    """Monday 08:00 weekend scorecard."""
+    return {
+        "hit_rate_7d": hit_rate_7d,
+        "hit_rate_pct": f"{hit_rate_7d * 100:.0f}",
+        "total_edges": total_edges,
+        "hits": hits,
+        "top_hits": top_hits or [],
+        "misses_count": misses_count,
+        "portfolio_return": portfolio_return,
+        "user_tier": user_tier,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_monthly_report_data(
+    month: str = "",
+    hit_rate: float = 0.0,
+    total_edges: int = 0,
+    hits: int = 0,
+    roi: float = 0.0,
+    best_tier: str = "",
+    total_profit: str = "",
+    tier_breakdown: list | None = None,
+    responsible_footer: bool = True,
+) -> dict:
+    """Monthly account statement — DETAIL 480×620."""
+    return {
+        "month": month,
+        "hit_rate": hit_rate,
+        "hit_rate_pct": f"{hit_rate * 100:.0f}",
+        "total_edges": total_edges,
+        "hits": hits,
+        "roi": roi,
+        "roi_str": f"{roi:+.1f}",
+        "best_tier": best_tier,
+        "total_profit": total_profit,
+        "tier_breakdown": tier_breakdown or [],
+        "responsible_footer": responsible_footer,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_result_hit_data(
+    match: str = "",
+    pick: str = "",
+    odds: float = 0.0,
+    profit_on_R100: str = "",
+    season_accuracy: str = "",
+    tier: str = "bronze",
+    tier_emoji: str = "",
+    score: str = "",
+) -> dict:
+    """Result alert — edge hit."""
+    return {
+        "match": match,
+        "pick": pick,
+        "odds": odds,
+        "odds_str": f"{odds:.2f}",
+        "profit_on_R100": profit_on_R100,
+        "season_accuracy": season_accuracy,
+        "tier": tier,
+        "tier_emoji": tier_emoji,
+        "score": score,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_result_miss_data(
+    match: str = "",
+    pick: str = "",
+    odds: float = 0.0,
+    loss_on_R100: str = "",
+    season_accuracy: str = "",
+    transparency_note: str = "",
+    tier: str = "bronze",
+    tier_emoji: str = "",
+    score: str = "",
+    consecutive_misses: int = 0,
+) -> dict:
+    """Result alert — edge missed."""
+    return {
+        "match": match,
+        "pick": pick,
+        "odds": odds,
+        "odds_str": f"{odds:.2f}",
+        "loss_on_R100": loss_on_R100,
+        "season_accuracy": season_accuracy,
+        "transparency_note": transparency_note,
+        "tier": tier,
+        "tier_emoji": tier_emoji,
+        "score": score,
+        "consecutive_misses": consecutive_misses,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_result_bundle_data(
+    hits: int = 0,
+    misses: int = 0,
+    total: int = 0,
+    net_on_R100: str = "",
+    accuracy_window: str = "",
+) -> dict:
+    """Bundle result when 3+ edges settle together."""
+    return {
+        "hits": hits,
+        "misses": misses,
+        "total": total,
+        "net_on_R100": net_on_R100,
+        "accuracy_window": accuracy_window,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_pre_match_gold_data(
+    match: str = "",
+    kickoff_in: str = "",
+    pick: str = "",
+    odds: float = 0.0,
+    bookmaker_url: str = "",
+    tier: str = "gold",
+    tier_emoji: str = "🥇",
+    league: str = "",
+    ev: float = 0.0,
+) -> dict:
+    """Pre-match Gold/Diamond urgency alert."""
+    return {
+        "match": match,
+        "kickoff_in": kickoff_in,
+        "pick": pick,
+        "odds": odds,
+        "odds_str": f"{odds:.2f}",
+        "bookmaker_url": bookmaker_url,
+        "tier": tier,
+        "tier_emoji": tier_emoji,
+        "league": league,
+        "ev": ev,
+        "ev_str": f"+{ev:.1f}",
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_reengagement_data(
+    days_since_active: int = 0,
+    edges_missed: int = 0,
+    return_cta: str = "",
+    responsible_footer: bool = True,
+    settlement_stats: dict | None = None,
+    best_hit: dict | None = None,
+) -> dict:
+    """Re-engagement nudge — warm, not pushy."""
+    return {
+        "days_since_active": days_since_active,
+        "edges_missed": edges_missed,
+        "return_cta": return_cta,
+        "responsible_footer": responsible_footer,
+        "settlement_stats": settlement_stats or {},
+        "best_hit": best_hit,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_reengagement_lighter_data(
+    days_since_active: int = 0,
+    settlement_stats: dict | None = None,
+    mute_cta: str = "Mute for 7 days with /mute week",
+) -> dict:
+    """Lighter re-engagement — stats-forward, mute option prominent."""
+    return {
+        "days_since_active": days_since_active,
+        "settlement_stats": settlement_stats or {},
+        "mute_cta": mute_cta,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_mute_confirm_data(
+    duration_label: str = "24 hours",
+    resumes_at: str = "",
+) -> dict:
+    """Mute confirmation card."""
+    return {
+        "duration_label": duration_label,
+        "resumes_at": resumes_at,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_mute_resume_data(
+    resumed_at: str = "",
+    next_notification_at: str = "",
+) -> dict:
+    """Mute-lifted notification."""
+    return {
+        "resumed_at": resumed_at,
+        "next_notification_at": next_notification_at,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_live_score_data(
+    home: str = "",
+    away: str = "",
+    home_score: int = 0,
+    away_score: int = 0,
+    event_label: str = "",
+    league: str = "",
+    completed: bool = False,
+) -> dict:
+    """Live score update (in-progress)."""
+    return {
+        "home": home,
+        "away": away,
+        "home_score": home_score,
+        "away_score": away_score,
+        "event_label": event_label,
+        "league": league,
+        "completed": completed,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_notify_live_score_ft_data(
+    home: str = "",
+    away: str = "",
+    home_score: int = 0,
+    away_score: int = 0,
+    event_label: str = "FT",
+    winner_label: str = "",
+    settled_edge: dict | None = None,
+) -> dict:
+    """Full time score — optional settled edge result."""
+    return {
+        "home": home,
+        "away": away,
+        "home_score": home_score,
+        "away_score": away_score,
+        "event_label": event_label,
+        "winner_label": winner_label,
+        "settled_edge": settled_edge,
+        "header_logo_b64": _logo(),
+    }

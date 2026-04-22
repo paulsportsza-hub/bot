@@ -1396,7 +1396,7 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
         except Exception as exc:
-            logger.warning("home_winners card render failed in cmd_menu: %s", exc)
+            log.warning("home_winners card render failed in cmd_menu: %s", exc)
     name = h(user.first_name or "")
     text = f"<b>🇿🇦 MzansiEdge — Main Menu</b>\n\nHey {name}, what would you like to do?"
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
@@ -3972,7 +3972,7 @@ async def handle_menu(query, action: str) -> None:
                 await _serve_response(query, "", kb_main(), photo=photo_bytes)
                 return
             except Exception as exc:
-                logger.warning("home_winners card render failed: %s", exc)
+                log.warning("home_winners card render failed: %s", exc)
         text = textwrap.dedent(f"""\
             <b>🇿🇦 MzansiEdge — Main Menu</b>
 
@@ -5813,7 +5813,7 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
                 )
                 return
             except Exception as exc:
-                logger.warning("home_winners card render failed in keyboard tap: %s", exc)
+                log.warning("home_winners card render failed in keyboard tap: %s", exc)
         name = h(update.effective_user.first_name or "")
         await update.message.reply_text(
             f"<b>🇿🇦 MzansiEdge</b>\n\nHey {name}!",

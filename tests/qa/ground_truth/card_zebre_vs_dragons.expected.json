@@ -1,0 +1,9 @@
+{
+  "match_key": "zebre_vs_dragons_2026-04-24_gold",
+  "source": "telethon-deeplink-harden-01 test3_regress_5 (alert 104, 22 Apr 2026)",
+  "verdict_text": "Zebre at 1.47 (WSB) — supported by data, priced with value. Edge confirmed +2.0% EV at current pricing No adverse line movement — price is stable at this number.",
+  "home_team": "Zebre",
+  "away_team": "Dragons",
+  "tier_badge": "🥇",
+  "notes": "Card photo only — no Telegram inline keyboard captured, so button_count is expected to be 0."
+}
