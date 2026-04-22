@@ -194,9 +194,28 @@ class TestCriticalFunctions:
 
     # ── W82-RENDER permanent guards ──
     def test_render_baseline(self):
-        """W82-RENDER: baseline renderer must remain exportable."""
+        """W82-RENDER: baseline renderer must remain exportable.
+
+        BUILD-NARRATIVE-WATERTIGHT-01 Part F: load-bearing under W93-COST (Silver/Bronze
+        cost-save). DO NOT rename or delete. Rename-protection assertion lives here.
+        """
         from narrative_spec import _render_baseline
         assert callable(_render_baseline)
+
+    def test_generate_narrative_v2_rename_protection(self):
+        """BUILD-NARRATIVE-WATERTIGHT-01 Part F: _generate_narrative_v2 is load-bearing
+        under W93-COST and must remain exportable. Any rename breaks the pregen pipeline
+        and every live_tap=True instant-baseline serve.
+        """
+        from bot import _generate_narrative_v2
+        assert callable(_generate_narrative_v2)
+
+    def test_count_uncached_hot_tips_exported(self):
+        """BUILD-NARRATIVE-WATERTIGHT-01 B.6: per-fixture warm-cache helper must stay
+        exported — _background_pregen_fill depends on it.
+        """
+        from bot import _count_uncached_hot_tips
+        assert callable(_count_uncached_hot_tips)
 
     def test_render_setup(self):
         """W82-RENDER: setup renderer must remain exportable."""

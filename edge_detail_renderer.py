@@ -734,49 +734,96 @@ def _vpick(seed: str, n: int) -> int:
 def _section_verdict(data: EdgeDetailData) -> str:
     """Tier-driven verdict — conviction mapped to signal count.
 
+    BUILD-NARRATIVE-WATERTIGHT-01 B.1: all 12 variants rewritten to satisfy
+    ``min_verdict_quality`` at serve time — 140+ chars, SA-voice marker,
+    terminal punctuation, banned-phrase clean. EV%, bookmaker, and signal
+    count are woven directly into the prose so the verdict references
+    concrete evidence rather than generic posture language.
+
     SERVE-PATH-FIX Fix 3: MD5-deterministic variant selection per match_key
     so different cards show different verdict text.
-
-    VERDICT-COHERENCE-FIX: Appends EV clause so the verdict references
-    specific evidence — not just generic posture language.
     """
     lines = ["🏆 <b>Verdict</b>"]
     badge = render_edge_badge(data.edge_tier)
     seed = data.match_key
+    ev = float(data.predicted_ev or 0.0)
+    bookie = (data.bookmaker or "").strip()
+    bookie_clause = f"at the {bookie} numbers" if bookie else "at these numbers"
 
     if data.confirming_signals == 0:
         variants = [
-            f"{badge} — Monitor the line. Small speculative exposure at best.",
-            f"{badge} — Price-only edge with no confirming signals. Watch, don't chase.",
-            f"{badge} — Speculative angle — if you take it, keep sizing minimal.",
+            (
+                f"{badge} — Pure price divergence here, {ev:.1f}% EV {bookie_clause} with zero "
+                f"confirming signals behind it. Treat it as a small speculative punt — watch the "
+                f"line, keep the stake lekker tight, and don't chase if it shortens."
+            ),
+            (
+                f"{badge} — The {ev:.1f}% EV comes straight off the price structure; no form or "
+                f"context is underwriting it. Size it like the calibration bet it is "
+                f"{bookie_clause} and accept that variance drives the result."
+            ),
+            (
+                f"{badge} — Speculative angle at {ev:.1f}% EV {bookie_clause} — no indicators "
+                f"are confirming the edge, so the bookies may simply have priced the game "
+                f"correctly. Don't stretch the stake; let the result talk and review after settlement."
+            ),
         ]
-        lines.append(variants[_vpick(seed, len(variants))])
     elif data.confirming_signals == 1:
         variants = [
-            f"{badge} — A lean, not a conviction play. Size carefully.",
-            f"{badge} — One signal confirms the price. Moderate exposure warranted.",
-            f"{badge} — Early confirmation but not yet a full picture. Stay measured.",
+            (
+                f"{badge} — One confirming signal sits behind the {ev:.1f}% EV {bookie_clause}, "
+                f"which puts this firmly in lean territory, not conviction. Stake it proportional "
+                f"to that thin support — a measured punt, not a hammer play."
+            ),
+            (
+                f"{badge} — Early confirmation is doing its job at {ev:.1f}% EV {bookie_clause}, "
+                f"but the full picture hasn't landed yet. Back it with a moderate, sensible stake "
+                f"and let the rest of the card carry the heavy sizing."
+            ),
+            (
+                f"{badge} — A single backer of the price at {ev:.1f}% EV {bookie_clause} earns this "
+                f"a lean, not a load-up. Play it at normal sizing, lekker careful, and be ready for "
+                f"variance to punish an under-confirmed edge if the run goes the wrong way."
+            ),
         ]
-        lines.append(variants[_vpick(seed, len(variants))])
-    elif data.confirming_signals >= 3 and data.predicted_ev >= 8:
+    elif data.confirming_signals >= 3 and ev >= 8:
         variants = [
-            f"{badge} — Strong support across indicators. Back with confidence.",
-            f"{badge} — Multiple signals align with the price. This is a conviction play.",
-            f"{badge} — The depth of support here is rare. Execute with full sizing.",
+            (
+                f"{badge} — {data.confirming_signals} indicators line up behind the {ev:.1f}% EV "
+                f"{bookie_clause}, and that is the depth of support most edges never get. Back it "
+                f"with conviction at full sizing — the bookies are on the wrong side of this one."
+            ),
+            (
+                f"{badge} — Strong agreement across {data.confirming_signals} signals and a "
+                f"{ev:.1f}% EV price at the bookies that hasn't caught up yet. Execute sharp "
+                f"{bookie_clause}, stake like you mean it, and let the edge do its proper work."
+            ),
+            (
+                f"{badge} — {data.confirming_signals} signals plus a {ev:.1f}% EV gap "
+                f"{bookie_clause} is as clean a setup as this card gives. Commit with full "
+                f"confidence, size it to the conviction, and trust the numbers on this one."
+            ),
         ]
-        lines.append(variants[_vpick(seed, len(variants))])
     else:
         variants = [
-            f"{badge} — Enough signal to warrant a standard stake.",
-            f"{badge} — Solid supporting evidence. Normal sizing applies.",
-            f"{badge} — The numbers and signals agree. Back it at standard exposure.",
+            (
+                f"{badge} — {data.confirming_signals} signals confirm a {ev:.1f}% EV edge "
+                f"{bookie_clause} — solid footing without being a hammer spot. Stake it at "
+                f"standard exposure for your bankroll; enough backing to commit, not enough to go heavy."
+            ),
+            (
+                f"{badge} — The numbers and the {data.confirming_signals}-signal picture agree on "
+                f"this {ev:.1f}% EV line {bookie_clause}. Normal sizing applies — back it with "
+                f"the calm confidence a supported setup deserves, no more and no less."
+            ),
+            (
+                f"{badge} — {data.confirming_signals} confirming signals plus a {ev:.1f}% EV price "
+                f"{bookie_clause} gives this angle real footing. Commit at a standard stake, keep "
+                f"the sizing tight, and trust the process through the inevitable variance."
+            ),
         ]
-        lines.append(variants[_vpick(seed, len(variants))])
 
-    # VERDICT-COHERENCE-FIX: Append EV clause — the single most differentiating evidence
-    if data.predicted_ev > 0:
-        lines.append(f"+{data.predicted_ev:.1f}% EV at current pricing.")
-
+    lines.append(variants[_vpick(seed, len(variants))])
     return "\n".join(lines)
 
 

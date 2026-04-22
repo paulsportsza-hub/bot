@@ -182,14 +182,32 @@ _BANNED_SHAPE_SKIP_THRESHOLD = 1  # INV-SONNET-SPIKE-01: reduced 3→1; one retr
 # W92-VERDICT-QUALITY P3: narrative_skip_log DDL + helpers. Persistent skip counts
 # survive process restarts and give EdgeOps a durable audit trail of which fixtures
 # hit the banned-shape guard and when.
+# BUILD-NARRATIVE-WATERTIGHT-01 C.2: add ``skip_reason`` TEXT column so EdgeOps can
+# distinguish banned-shape rejections from quality-gate / fact-check / coverage skips.
 _NARRATIVE_SKIP_LOG_DDL = """
 CREATE TABLE IF NOT EXISTS narrative_skip_log (
     match_key TEXT PRIMARY KEY,
     skip_count INTEGER NOT NULL DEFAULT 0,
     skipped_flag INTEGER NOT NULL DEFAULT 0,
-    last_updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    last_updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    skip_reason TEXT
 )
 """
+
+
+def _ensure_skip_reason_column(conn) -> None:
+    """BUILD-NARRATIVE-WATERTIGHT-01 C.2: idempotent migration for existing DBs.
+
+    Adds the ``skip_reason`` column to pre-existing ``narrative_skip_log`` tables
+    created before this wave. Existing rows are preserved (NULL skip_reason).
+    """
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(narrative_skip_log)").fetchall()}
+        if "skip_reason" not in cols:
+            conn.execute("ALTER TABLE narrative_skip_log ADD COLUMN skip_reason TEXT")
+            conn.commit()
+    except Exception as _mig_err:
+        log.debug("narrative_skip_log skip_reason migration skipped: %s", _mig_err)
 
 
 def _load_skip_count(match_key: str) -> int:
@@ -223,12 +241,15 @@ def _load_skip_count(match_key: str) -> int:
     return count
 
 
-def _bump_skip_count(match_key: str) -> int:
+def _bump_skip_count(match_key: str, reason: str = "banned_shape") -> int:
     """Increment skip count for ``match_key`` and persist to narrative_skip_log.
 
     W92-VERDICT-QUALITY P3. Returns the NEW count. Sets ``skipped_flag=1`` when the
     count reaches ``_BANNED_SHAPE_SKIP_THRESHOLD`` so downstream consumers can
     distinguish "hit threshold" from "below threshold".
+    BUILD-NARRATIVE-WATERTIGHT-01 C.2: ``reason`` is persisted in the skip_reason
+    column so EdgeOps can slice skip_log rows by cause (banned_shape, fact_check_strip,
+    empty_verdict, coverage_gap, verdict_quality_gate_double_fail, etc.).
     Updates the module dict cache. Best-effort — on DB error we still bump the
     in-memory cache so the process-local retry logic keeps working.
     """
@@ -244,15 +265,17 @@ def _bump_skip_count(match_key: str) -> int:
         conn = _skp_conn(str(SCRAPERS_ROOT / "odds.db"), timeout=3)
         try:
             conn.execute(_NARRATIVE_SKIP_LOG_DDL)
+            _ensure_skip_reason_column(conn)
             conn.execute(
                 "INSERT INTO narrative_skip_log "
-                "(match_key, skip_count, skipped_flag, last_updated_at) "
-                "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+                "(match_key, skip_count, skipped_flag, last_updated_at, skip_reason) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?) "
                 "ON CONFLICT(match_key) DO UPDATE SET "
                 "skip_count = excluded.skip_count, "
                 "skipped_flag = excluded.skipped_flag, "
+                "skip_reason = excluded.skip_reason, "
                 "last_updated_at = CURRENT_TIMESTAMP",
-                (match_key, new_count, flag),
+                (match_key, new_count, flag, reason),
             )
             conn.commit()
         finally:

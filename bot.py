@@ -14191,7 +14191,10 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 return None
             cleaned = _final_polish(_sanitise_jargon(_strip_preamble(html)))
             parsed_tips = json.loads(tips_json)
-            if narrative_source != "w82":
+            # BUILD-NARRATIVE-WATERTIGHT-01 B.5: apply stale-Setup pattern check to ALL sources,
+            # not just non-w82. w82 baseline can still carry generic "take on" / "limited context"
+            # residue from older caches — rejecting here forces regen with fresh templates.
+            if True:  # All narrative sources subject to stale-Setup patterns
                 stale_setup_reasons = _find_stale_setup_patterns(cleaned)
                 if stale_setup_reasons:
                     log.warning(
@@ -14322,6 +14325,60 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except sqlite3.OperationalError as exc:
                     log.debug("Deferred banned cache delete for %s: %s", match_id, exc)
                 return None
+
+            # BUILD-NARRATIVE-WATERTIGHT-01 C.1: serve-time min_verdict_quality gate.
+            # Reject cached rows whose embedded narrative verdict OR stored verdict_html fails
+            # the unified quality floor (≥ tier floor, ≤ 260 chars, terminal punctuation, no
+            # banned phrases, no markdown, ≥3 analytical words). Cached rejections get DELETE'd
+            # so pregen regenerates them instead of serving thin 42–65 char stubs.
+            try:
+                from narrative_spec import (
+                    min_verdict_quality as _mvq,
+                    _extract_verdict_text as _extract_vt,
+                )
+                _row_verdict_html: str | None = None
+                try:
+                    _row_verdict_html = conn.execute(
+                        "SELECT verdict_html FROM narrative_cache WHERE match_id = ?",
+                        (match_id,),
+                    ).fetchone()
+                    _row_verdict_html = _row_verdict_html[0] if _row_verdict_html else None
+                except sqlite3.OperationalError:
+                    _row_verdict_html = None
+                _embedded_verdict = _extract_vt(cleaned) or ""
+                _tier_for_gate = (tier or "bronze").lower()
+                _embedded_ok = True
+                if _embedded_verdict:
+                    _embedded_ok = _mvq(_embedded_verdict, tier=_tier_for_gate, evidence_pack=None)
+                _standalone_ok = True
+                if _row_verdict_html:
+                    _standalone_plain = re.sub(r"<[^>]+>", "", _row_verdict_html).strip()
+                    if _standalone_plain:
+                        _standalone_ok = _mvq(
+                            _standalone_plain, tier=_tier_for_gate, evidence_pack=None
+                        )
+                if not (_embedded_ok and _standalone_ok):
+                    log.warning(
+                        "BUILD-NARRATIVE-WATERTIGHT-01 C.1: rejecting cached narrative for %s "
+                        "— verdict quality gate failed (embedded_ok=%s, standalone_ok=%s, tier=%s, "
+                        "embedded_len=%d)",
+                        match_id, _embedded_ok, _standalone_ok, _tier_for_gate,
+                        len(_embedded_verdict),
+                    )
+                    try:
+                        conn.execute(
+                            "DELETE FROM narrative_cache WHERE match_id = ?", (match_id,)
+                        )
+                        conn.commit()
+                    except sqlite3.OperationalError as _del_err:
+                        log.debug(
+                            "Deferred serve-time verdict-gate delete for %s: %s",
+                            match_id, _del_err,
+                        )
+                    return None
+            except Exception as _gate_err:
+                # Fail-open: do not block serves on gate-setup errors, but log for monitoring.
+                log.debug("Serve-time verdict quality gate error for %s: %s", match_id, _gate_err)
             # P0-FIX-33: Reject non-w82 entries that lack W84-Q1 HTML section headers.
             # Narratives generated before W82-WIRE (old 3-stage AI rewrite path) used
             # markdown bold (**) or plain text headers — they never contain "<b>The Setup</b>".
@@ -14458,6 +14515,22 @@ async def _store_narrative_cache(
     import sqlite3
     from datetime import datetime, timedelta, timezone
     from db_connection import get_connection
+
+    # BUILD-NARRATIVE-WATERTIGHT-01 Stream 4 F1-F2 (Part D.3 regression guard):
+    # refuse narrative_cache writes where narrative_source is a thin baseline
+    # (w82 / baseline_no_edge) AND edge_tier is premium (gold / diamond).
+    # These combinations produced the "rich then gone" defect observed pre-launch —
+    # Silver / Bronze deliberately keep the baseline path as a cost-save (W93-COST),
+    # but premium tiers must get polished narratives or no row at all.
+    _wg_tier = (edge_tier or "").lower()
+    _wg_src = (narrative_source or "").lower()
+    if _wg_src in ("w82", "baseline_no_edge") and _wg_tier in ("gold", "diamond"):
+        log.warning(
+            "BUILD-NARRATIVE-WATERTIGHT-01 Stream 4: refusing narrative_cache write for %s "
+            "— narrative_source=%s is forbidden for edge_tier=%s (premium-only polish required)",
+            match_id, _wg_src, _wg_tier,
+        )
+        return
 
     def _store():
         # W84-RT3: 3s timeout — WAL mode handles transient scraper locks up to 3s.
@@ -16978,11 +17051,16 @@ def build_verified_narrative(
                 _league_display = v2.get("league", "") or t.get("league", "")
                 break
 
-        # Opening sentence with what we know
+        # Opening sentence with what we know.
+        # BUILD-NARRATIVE-WATERTIGHT-01 B.3: eliminated the duplicate W79-PHASE2
+        # residual placeholder sentence (same root cause as B.2 at bot.py:17186).
         if _league_display:
             setup.append(f"{_home_name} face {_away_name} in {_league_display}.")
         else:
-            setup.append(f"{_home_name} take on {_away_name}.")
+            setup.append(
+                f"{_home_name} and {_away_name} meet without a clean league tag — "
+                f"the analytical read leans on the price structure rather than league-table context."
+            )
 
         # Form from Edge V2 signals
         if tips:
@@ -17179,11 +17257,30 @@ def _build_signal_only_narrative(
     parts: list[str] = []
 
     # ── Setup ──
+    # BUILD-NARRATIVE-WATERTIGHT-01 B.2: eliminated the generic placeholder sentence
+    # that previously rendered when a league tag was missing. When league is unknown
+    # we route to _render_setup via NarrativeSpec so the setup carries analytical
+    # context rather than a shell.
     setup_lines: list[str] = []
     if _league:
         setup_lines.append(f"{_home} face {_away} in {_league}.")
     else:
-        setup_lines.append(f"{_home} take on {_away}.")
+        try:
+            from narrative_spec import build_narrative_spec, _render_setup
+            _empty_spec = build_narrative_spec(
+                ctx_data={"home_team": _home, "away_team": _away},
+                edge_data={"home_team": _home, "away_team": _away, "home": _home, "away": _away},
+                tips=[],
+                sport="soccer",
+            )
+            _setup_text = _render_setup(_empty_spec)
+            if _setup_text:
+                setup_lines.append(_setup_text)
+        except Exception:
+            setup_lines.append(
+                f"{_home} and {_away} meet with no recent head-to-head or league context available — "
+                f"the read here leans on price structure rather than form signals."
+            )
 
     fh = sigs.get("form_h2h", {})
     if fh.get("available"):
@@ -19575,44 +19672,11 @@ async def _generate_narrative_v2(
     if live_tap:
         return baseline  # Instant. No LLM.
 
-    # R5-BUILD-01 Fix 3: W82 narratives bypass polish entirely.
-    # W82 deterministic output is template-diverse by design — the polish pass
-    # adds risk (staking language rewrites, template homogenisation, player name
-    # hallucination) with no upside. When a future non-W82 narrative source is
-    # added, gate this return on narrative_source != "w82".
-    return baseline
-
-    # W82-POLISH: optional constrained LLM polish (pre-gen path only)
-    _match_label = f"{home_team} vs {away_team}" if home_team and away_team else "unknown"
-    try:
-        exemplars = _get_exemplars_for_prompt(
-            spec.home_story_type, spec.away_story_type, spec.ev_pct, sport
-        )
-        prompt = _build_polish_prompt(baseline, spec, exemplars)
-        resp = await claude.messages.create(
-            model=_NARRATIVE_MODEL,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-            timeout=40.0,
-        )
-        polished = _strip_preamble(_extract_text_from_response(resp))
-        if polished and _validate_polish(polished, baseline, spec):
-            log.info("POLISH PASS for %s", _match_label)
-            polished = _sanitise_jargon(polished)
-            polished = _apply_sport_subs(polished, sport)
-            polished = _final_polish(polished, edge_data)
-            polished = _ensure_verdict_not_empty(
-                polished,
-                tips=tips,
-                home_name=spec.home_name,
-                away_name=spec.away_name,
-            )
-            return polished
-        else:
-            log.warning("POLISH FAIL for %s — serving baseline", _match_label)
-    except Exception as exc:
-        log.warning("POLISH ERROR for %s: %s — serving baseline", _match_label, exc)
-
+    # R5-BUILD-01 Fix 3 + BUILD-NARRATIVE-WATERTIGHT-01 B.4: W82 narratives bypass polish
+    # entirely. Decision: remove the previously-dead Sonnet polish block rather than re-enable it.
+    # Rationale: SA-voice enforcement now lives in the deterministic _section_verdict rewrite
+    # (Part B.1) + _generate_verdict Sonnet prompt (Part B.9). The polish pass was known to
+    # homogenise templates and hallucinate player names — risk > reward three days before launch.
     return baseline
 
 
@@ -25786,12 +25850,15 @@ async def _monthly_report_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if user_tier in ("bronze", "gold"):
                 buttons.insert(1, [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")])
 
+            _mrep_tier_emojis = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}
             _mrep_breakdown = [
                 {
                     "tier": t,
+                    "emoji": _mrep_tier_emojis.get(t, ""),
                     "hits": by_tier.get(t, {}).get("hits", 0),
                     "total": by_tier.get(t, {}).get("total", 0),
                     "hit_rate_pct": f"{by_tier.get(t, {}).get('hit_rate', 0) * 100:.0f}",
+                    "rate": by_tier.get(t, {}).get("hit_rate", 0.0),
                 }
                 for t in ("diamond", "gold", "silver", "bronze")
                 if by_tier.get(t, {}).get("total", 0) > 0
@@ -28512,6 +28579,39 @@ def _count_warm_narratives() -> int:
     except Exception as exc:
         log.warning("Pregen warm-cache check failed: %s", exc)
         return 0
+
+
+def _count_uncached_hot_tips(match_keys: list[str]) -> int:
+    """BUILD-NARRATIVE-WATERTIGHT-01 B.6: per-fixture warm-cache check.
+
+    Returns the count of ``match_keys`` that do NOT have a fresh (unexpired)
+    narrative_cache row. Used by ``_background_pregen_fill`` to decide whether
+    a sweep is genuinely needed, replacing the old total-count gate that could
+    starve newly-recommended edges of pre-generation.
+    """
+    if not match_keys:
+        return 0
+    try:
+        from db_connection import get_connection as _uc_get_connection
+        conn = _uc_get_connection(_NARRATIVE_DB_PATH, timeout_ms=2000)
+        try:
+            placeholders = ",".join("?" for _ in match_keys)
+            rows = conn.execute(
+                "SELECT match_id FROM narrative_cache "
+                f"WHERE match_id IN ({placeholders}) "
+                "AND expires_at > CURRENT_TIMESTAMP "
+                "AND COALESCE(quarantined, 0) = 0",
+                tuple(match_keys),
+            ).fetchall()
+            cached = {row[0] for row in rows}
+        finally:
+            conn.close()
+        return sum(1 for mk in match_keys if mk not in cached)
+    except Exception as exc:
+        log.debug("Pregen per-fixture check failed: %s — assuming all uncached", exc)
+        return len(match_keys)
+
+
 _precompute_lock = asyncio.Lock()
 _precompute_active = False  # BASELINE-FIX: replaces .locked() TOCTOU in _edge_precompute_job
 _last_stale_cleanup: float = 0.0  # BUILD-STALE-PICKS-01: tracks last stale-edge cleanup time
@@ -28558,17 +28658,41 @@ async def _background_pregen_fill() -> None:
         log.info("Pregen [background]: DROPPED — sweep already active")
         return
 
-    # BUILD-SONNET-BURN-FIX-02: warm-cache guard — skip if today's narrative
-    # cache is already populated. Eliminates redundant sweeps triggered by
-    # _edge_precompute_job after each bot restart (was burning ~200 Sonnet
-    # calls/day via cascade: restart → precompute → cache-miss → background_fill).
-    _warm_count = await asyncio.to_thread(_count_warm_narratives)
-    if _warm_count >= _PREGEN_WARM_THRESHOLD:
-        log.info(
-            "Pregen [background]: SKIPPED — cache warm (%d narratives in last %dh, threshold=%d)",
-            _warm_count, _PREGEN_WARM_WINDOW_HOURS, _PREGEN_WARM_THRESHOLD,
-        )
-        return
+    # BUILD-NARRATIVE-WATERTIGHT-01 B.6: replace total-count warm-cache gate with per-fixture
+    # check. The old gate skipped ALL sweeps whenever ≥5 narratives existed in the last 12h —
+    # meaning a new Gold/Diamond edge recommended mid-day would never get a narrative until the
+    # next scheduled 06:00 SAST sweep. Per-fixture check asks: "does any current hot tip lack
+    # fresh cache?" — if yes, run pregen refresh (which itself skips fresh entries, bounding cost).
+    try:
+        _hot_keys: list[str] = []
+        _hot = _hot_tips_cache.get("global") or {}
+        for _t in (_hot.get("tips") or []):
+            _mk = _t.get("match_id") or _t.get("match_key")
+            if _mk:
+                _hot_keys.append(_mk)
+        if not _hot_keys:
+            # No hot tips loaded yet — preserve prior warm-count safety to prevent restart burn.
+            _warm_count = await asyncio.to_thread(_count_warm_narratives)
+            if _warm_count >= _PREGEN_WARM_THRESHOLD:
+                log.info(
+                    "Pregen [background]: SKIPPED — no hot tips loaded and cache warm "
+                    "(%d narratives/%dh)", _warm_count, _PREGEN_WARM_WINDOW_HOURS,
+                )
+                return
+        else:
+            _uncached = await asyncio.to_thread(_count_uncached_hot_tips, _hot_keys)
+            if _uncached == 0:
+                log.info(
+                    "Pregen [background]: SKIPPED — every hot tip already has fresh narrative "
+                    "(checked %d match_keys)", len(_hot_keys),
+                )
+                return
+            log.info(
+                "Pregen [background]: per-fixture gate open — %d of %d hot tips need narratives",
+                _uncached, len(_hot_keys),
+            )
+    except Exception as _gate_err:
+        log.debug("Pregen [background]: per-fixture gate error %s — proceeding with sweep", _gate_err)
 
     _pregen_active = True  # Set synchronously before any await — no race window
     try:

@@ -163,11 +163,16 @@ async def test_cache_round_trips_narrative_source(tmp_path) -> None:
         bot._ensure_narrative_cache_table()
         # P0-FIX-33: W84 cached entries must contain HTML section headers.
         # Sections need >30 chars of content to pass _has_empty_sections check.
+        # BUILD-NARRATIVE-WATERTIGHT-01 C.1: verdict must satisfy min_verdict_quality
+        # at the cached tier (silver floor = 120 chars) otherwise the serve-time gate
+        # correctly rejects it. Extended the verdict stub to pass the floor.
         _w84_html = (
             "📋 <b>The Setup</b>\nArsenal sit 2nd on 54 points, in strong form.\n\n"
             "🎯 <b>The Edge</b>\nBookmaker pricing implies 28% but model reads 34%.\n\n"
             "⚠️ <b>The Risk</b>\nBournemouth away record is decent, keep stake measured.\n\n"
-            "🏆 <b>Verdict</b>\nBack Arsenal at home — enough indicators aligned here."
+            "🏆 <b>Verdict</b>\nArteta's Gunners look sharp at the bookies' numbers, "
+            "with three confirming signals lined up behind a 5.2% EV edge. Back them at "
+            "home with a standard stake — enough backing to commit, not enough to overcommit."
         )
         await bot._store_narrative_cache(
             "arsenal_vs_bournemouth_2026-03-21",
@@ -362,6 +367,10 @@ async def test_get_cached_narrative_preserves_w84_h2h_from_evidence(tmp_path) ->
         )
         await bot._store_narrative_cache(
             "stellenbosch_vs_chippa_united_2026-03-21",
+            # BUILD-NARRATIVE-WATERTIGHT-01 C.1: verdict needs to satisfy the serve-time
+            # min_verdict_quality gate at the silver tier (≥120 chars, terminal punct, SA
+            # voice). Extended the stub to pass the floor while still exercising the H2H
+            # evidence path that this canary is asserting on.
             (
                 "📋 <b>The Setup</b>\n"
                 "Head to head: 2 meetings: Stellenbosch 1W 1D 0L, and the last meeting finished 0-0.\n\n"
@@ -370,7 +379,9 @@ async def test_get_cached_narrative_preserves_w84_h2h_from_evidence(tmp_path) ->
                 "⚠️ <b>The Risk</b>\n"
                 "Variance still matters.\n\n"
                 "🏆 <b>Verdict</b>\n"
-                "Lean Stellenbosch at Betway 2.10."
+                "Lean Stellenbosch at the Betway 2.10 numbers — H2H leans their way and the "
+                "model still gives them value at this price, so stake it at a measured standard "
+                "and let the edge do its work across the full card."
             ),
             [{"outcome": "home", "odds": 2.1, "ev": 3.8}],
             "silver",
