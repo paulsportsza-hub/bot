@@ -1892,6 +1892,32 @@ async def _generate_one(
         "tipster_against": _pregen_sigs.get("tipster", {}).get("against_count", 0),
     }
 
+    # BUILD-PREGEN-STUB-GATE-01: Skip pregen when edge_data sentinels are unresolved.
+    # Without this gate, "?" outcome / 0 odds / "?" bookmaker flow into the stub
+    # verdict formatter and ship as "Back — ? at 0.00. Edge confirmed." to subscribers.
+    # Retry on next sweep once upstream populates the edge. Carve-out: the non-edge
+    # baseline/preview path does not share these sentinels — let it through.
+    if not edge.get("is_non_edge", False):
+        _gate_outcome = _pregen_edge_data.get("outcome", "")
+        _gate_odds = _pregen_edge_data.get("best_odds", 0) or 0
+        _gate_bookmaker = _pregen_edge_data.get("best_bookmaker", "")
+        if (
+            _gate_outcome in ("", "?")
+            or not _gate_odds
+            or _gate_bookmaker in ("", "?")
+        ):
+            log.warning(
+                "PREGEN SKIP: incomplete edge_data for %s "
+                "(outcome=%r, odds=%r, bookmaker=%r)",
+                match_key, _gate_outcome, _gate_odds, _gate_bookmaker,
+            )
+            return {
+                "match_key": match_key,
+                "success": False,
+                "skipped_incomplete": True,
+                "duration": time.time() - t0,
+            }
+
     use_web_search = sweep_type == "full"
     model_label = "opus" if "opus" in model_id else "sonnet"
 

@@ -209,7 +209,9 @@ class TestGoldEdgeModelGate(unittest.TestCase):
         attempts fail quality gate for a Gold edge."""
         import asyncio
 
-        # Build a minimal edge dict for a Gold edge
+        # Build a minimal edge dict for a Gold edge.
+        # recommended_outcome is required so BUILD-PREGEN-STUB-GATE-01 does not
+        # short-circuit on the "?" sentinel before the Sonnet quality gate runs.
         edge = {
             "match_key": f"man_city_vs_arsenal_{_FUTURE_DATE}",
             "home_team": "Man City",
@@ -227,6 +229,8 @@ class TestGoldEdgeModelGate(unittest.TestCase):
             "composite_score": 72.0,
             "confirming_signals": 3,
             "signals": {},
+            "recommended_outcome": "home",
+            "outcome": "home",
         }
 
         # A trivially thin narrative that WILL fail min_verdict_quality
