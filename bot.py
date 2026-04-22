@@ -9366,12 +9366,15 @@ async def _get_user_fixture_preview(
         today = datetime.now(tz).date()
         horizon = today + timedelta(days=max(days_ahead, 1))
 
+        # INV-TIMEZONE-POST-SAST-UNIFY-REGRESSION-01: supersport_scraper-only;
+        # DStv EPG re-airs can drift the displayed kickoff by ±1h.
         conn = _get_conn(str(ODDS_DB_PATH))
         rows = conn.execute(
             "SELECT programme_title, channel_short, dstv_number, broadcast_date, "
             "start_time, league, home_team, away_team "
             "FROM broadcast_schedule "
             "WHERE broadcast_date BETWEEN ? AND ? AND is_live = 1 "
+            "  AND source = 'supersport_scraper' "
             "ORDER BY start_time ASC",
             (today.isoformat(), horizon.isoformat()),
         ).fetchall()
@@ -9495,10 +9498,15 @@ def _get_broadcast_details(
         today = now.strftime("%Y-%m-%d")
         week_ahead = (now + timedelta(days=7)).strftime("%Y-%m-%d")
 
+        # INV-TIMEZONE-POST-SAST-UNIFY-REGRESSION-01: supersport_scraper is the
+        # sole authoritative kickoff source. DStv EPG rows (source=NULL) include
+        # re-airs, pre-shows, and late-night repeats that fuzzy-match the same
+        # teams but carry a broadcast time ±1h (or more) off the true kickoff.
         conn = _get_conn(str(ODDS_DB_PATH))
         rows = conn.execute(
             "SELECT * FROM broadcast_schedule "
             "WHERE broadcast_date BETWEEN ? AND ? AND is_live = 1 "
+            "  AND source = 'supersport_scraper' "
             "ORDER BY start_time ASC",
             (today, week_ahead),
         ).fetchall()
@@ -9999,11 +10007,13 @@ def _get_next_fixtures_for_teams(
         today = now.strftime("%Y-%m-%d")
         month_ahead = (now + timedelta(days=30)).strftime("%Y-%m-%d")
 
+        # INV-TIMEZONE-POST-SAST-UNIFY-REGRESSION-01: supersport_scraper-only.
         conn = _get_conn(str(ODDS_DB_PATH))
         rows = conn.execute(
             "SELECT programme_title, home_team, away_team, start_time, league "
             "FROM broadcast_schedule "
             "WHERE broadcast_date BETWEEN ? AND ? AND is_live = 1 "
+            "  AND source = 'supersport_scraper' "
             "ORDER BY start_time ASC",
             (today, month_ahead),
         ).fetchall()
@@ -11435,13 +11445,16 @@ def _resolve_kickoff_time(
     # catches PSL/cup rows stored with short team names (e.g. "Polokwane" vs
     # "Polokwane City" — won't match full-name LIKE).
     def _from_broadcast_schedule() -> tuple[str, str]:
-        """Resolve (date, time) from broadcast_schedule, prioritising SuperSport.
+        """Resolve (date, time) from broadcast_schedule using SuperSport only.
 
-        BUILD-KO-SUPERSPORT-PRIMARY-01: supersport_scraper is the PRIMARY source
-        for kickoff times across all sports (football, rugby, cricket). Two-pass:
-        Pass 1 — source='supersport_scraper' + match_date. Pass 2 (fallback) —
-        any source + match_date, or no-date last-50 query. SuperSport rows carry
-        authoritative kickoff from the SuperSport guide with confidence=1.0.
+        BUILD-KO-SUPERSPORT-PRIMARY-01: supersport_scraper is the authoritative
+        source for kickoff times across all sports (football, rugby, cricket).
+        INV-TIMEZONE-POST-SAST-UNIFY-REGRESSION-01: removed the "any-source"
+        fallback — DStv EPG rows (source=NULL) include re-airs, pre-shows, and
+        late-night repeats that fuzzy-match the same teams but carry a
+        broadcast time ±1h (or more) off the true kickoff. If SuperSport has
+        no row for a fixture, fall through to the sport-specific fallback
+        chain (fixture_mapping / sportmonks_fixtures / commence_time / date).
         """
         if not home and not away:
             return ("", "")
@@ -11463,60 +11476,31 @@ def _resolve_kickoff_time(
             _c = _cfn(_DP)
             _c.row_factory = __import__("sqlite3").Row
             try:
-                def _fetch_rows(supersport_only: bool) -> list:
-                    if _match_date:
-                        if supersport_only:
-                            return _c.execute(
-                                """
-                                SELECT * FROM broadcast_schedule
-                                WHERE source = 'supersport_scraper'
-                                  AND home_team IS NOT NULL AND away_team IS NOT NULL
-                                  AND start_time IS NOT NULL
-                                  AND DATE(start_time) = ?
-                                ORDER BY match_confidence DESC, start_time ASC
-                                """,
-                                (_match_date,),
-                            ).fetchall()
-                        return _c.execute(
-                            """
-                            SELECT * FROM broadcast_schedule
-                            WHERE home_team IS NOT NULL AND away_team IS NOT NULL
-                              AND start_time IS NOT NULL
-                              AND DATE(start_time) = ?
-                            ORDER BY start_time ASC
-                            """,
-                            (_match_date,),
-                        ).fetchall()
-                    # No date — last-50 window
-                    if supersport_only:
-                        return _c.execute(
-                            """
-                            SELECT * FROM broadcast_schedule
-                            WHERE source = 'supersport_scraper'
-                              AND home_team IS NOT NULL AND away_team IS NOT NULL
-                              AND start_time IS NOT NULL
-                            ORDER BY start_time DESC
-                            LIMIT 50
-                            """,
-                        ).fetchall()
-                    return _c.execute(
+                if _match_date:
+                    _rows = _c.execute(
                         """
                         SELECT * FROM broadcast_schedule
-                        WHERE home_team IS NOT NULL AND away_team IS NOT NULL
+                        WHERE source = 'supersport_scraper'
+                          AND home_team IS NOT NULL AND away_team IS NOT NULL
+                          AND start_time IS NOT NULL
+                          AND DATE(start_time) = ?
+                        ORDER BY match_confidence DESC, start_time ASC
+                        """,
+                        (_match_date,),
+                    ).fetchall()
+                else:
+                    _rows = _c.execute(
+                        """
+                        SELECT * FROM broadcast_schedule
+                        WHERE source = 'supersport_scraper'
+                          AND home_team IS NOT NULL AND away_team IS NOT NULL
                           AND start_time IS NOT NULL
                         ORDER BY start_time DESC
                         LIMIT 50
                         """,
                     ).fetchall()
 
-                # Pass 1 — SuperSport only (primary authoritative source)
-                _rows = _fetch_rows(supersport_only=True)
                 _matches = fuzzy_match_broadcast(_rows, home, away) if _rows else []
-
-                # Pass 2 — any source fallback (only if SuperSport missed)
-                if not _matches:
-                    _rows = _fetch_rows(supersport_only=False)
-                    _matches = fuzzy_match_broadcast(_rows, home, away) if _rows else []
 
                 if _matches:
                     _best = dict(_matches[0])
@@ -27082,11 +27066,14 @@ def _kickoff_for_match_key(match_key: str):
         home_kw = home_raw.split("_")[0].lower()[:5]
         away_kw = away_raw.split("_")[0].lower()[:5]
 
+        # INV-TIMEZONE-POST-SAST-UNIFY-REGRESSION-01: supersport_scraper-only;
+        # DStv EPG re-airs would otherwise mislabel the pre-match alert window.
         conn = get_connection(DB_PATH, readonly=True, timeout_ms=3000)
         row = conn.execute(
             """
             SELECT start_time FROM broadcast_schedule
-            WHERE broadcast_date = ?
+            WHERE source = 'supersport_scraper'
+              AND broadcast_date = ?
               AND (LOWER(home_team) LIKE ? OR LOWER(home_team) LIKE ?)
             LIMIT 1
             """,
