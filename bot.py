@@ -1246,11 +1246,15 @@ async def _handle_card_deeplink(
             timeout=10.0,
         )
         _dl_data = build_edge_detail_data(_dl_tip_enriched)
+        # FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: alerts deep-link entry — gate button on
+        # narrative cache presence so users landing from DM alerts see AI Breakdown too.
+        _dl_has_narrative = await asyncio.to_thread(_has_any_cached_narrative, match_key)
         _dl_btns = _build_game_buttons(
             [_dl_tip_for_render], match_key, user_id,
             source="alerts_deeplink", user_tier=_user_tier,
             edge_tier=_dl_tier, back_page=0,
             back_cb_override="hot:go",
+            has_narrative=_dl_has_narrative,
         )
         _dl_markup = InlineKeyboardMarkup(_dl_btns)
         _dl_fallback = (
@@ -2257,11 +2261,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _enrich_tip_for_card, _mme_full_tip, _mme_tip_key
                 )
                 _mme_data = build_edge_detail_data(_mme_tip_enriched)
+                # FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: mm:match edge card — gate button
+                # on any cached narrative row (w84, w82, baseline_no_edge all acceptable).
+                _mme_has_narrative = await asyncio.to_thread(
+                    _has_any_cached_narrative, _mme_tip_key
+                )
                 _mme_btn_rows = _build_game_buttons(
                     [_mme_full_tip], event_id=_mme_tip_key, user_id=user_id,
                     source="matches", user_tier=_mme_user_tier,
                     edge_tier=_mme_edge_tier,
                     back_cb_override=_mme_back_cb,
+                    has_narrative=_mme_has_narrative,
                 )
                 _mme_markup = InlineKeyboardMarkup(_mme_btn_rows)
                 _mme_fallback = (
@@ -2831,12 +2841,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 if _ev_html_match and float(_ev_html_match.group(1)) <= 0:
                     _w84_btn_tips = [{"ev": 0, "match_id": match_key}]
 
+                # FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: W84 cache hit → narrative just
+                # retrieved from narrative_cache, so the AI Breakdown button is valid.
                 _btns = _build_game_buttons(
                     _w84_btn_tips or [{"ev": 0, "match_id": match_key}],
                     match_key, user_id,
                     source="edge_picks", user_tier=_user_tier,
                     edge_tier=_w84_tier,
                     back_page=_resolve_hot_tips_back_page(user_id, match_key),
+                    has_narrative=True,
                 )
 
                 # BUILD-16c: Stale-odds indicator when cached data is >30 min old
@@ -2989,12 +3002,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             if _ev_html_match_cr and float(_ev_html_match_cr.group(1)) <= 0:
                 _cr_tips = [{"ev": 0, "match_id": match_key}]
 
+            # FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: CLEAN-RENDER path — edge_detail_renderer
+            # builds from edge_results, not narrative_cache. Check narrative presence explicitly
+            # so the AI Breakdown button renders when a cached narrative exists for this match.
+            _cr_has_narrative = await asyncio.to_thread(_has_any_cached_narrative, match_key)
             _btns = _build_game_buttons(
                 _cr_tips or [{"ev": 0, "match_id": match_key}],
                 match_key, user_id,
                 source="edge_picks", user_tier=_user_tier,
                 edge_tier=_cr_tier,
                 back_page=_resolve_hot_tips_back_page(user_id, match_key),
+                has_narrative=_cr_has_narrative,
             )
 
             _banner = _qa_banner(user_id)
@@ -3255,11 +3273,14 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
                 # Serve from cache IMMEDIATELY
                 _game_tips_cache[match_key] = _aligned_tips
+                # FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: _cached_content was just retrieved
+                # from narrative_cache → narrative exists, AI Breakdown button is valid.
                 _btns = _build_game_buttons(
                     _aligned_tips, match_key, user_id,
                     source="edge_picks", user_tier=_user_tier,
                     edge_tier=_detail_tier,
                     back_page=_resolve_hot_tips_back_page(user_id, match_key),
+                    has_narrative=True,
                 )
                 _c_base_html = _cached_content["html"]
                 # BYPASS-FIX-B: Deduplicate stale cached H2H paragraphs and keep the newest bridge copy.
@@ -3560,11 +3581,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _ihtml = "\n".join(_ilines)
                 _ihtml = _apply_hot_tip_detail_honesty(_ihtml, _detail_model_state, user_id=user_id)
                 _ihtml = re.sub(r'\n{3,}', '\n\n', _ihtml)
+                # FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: Instant baseline path — narrative
+                # may exist in narrative_cache (pregen) even without a cache-hit above.
+                # build_ai_breakdown_data reads by match_id regardless of source, so gate
+                # the button on any non-quarantined, non-expired row.
+                _ib_has_narrative = await asyncio.to_thread(_has_any_cached_narrative, match_key)
                 _ibtns = _build_game_buttons(
                     _instant_tips, match_key, user_id,
                     source="edge_picks", user_tier=_user_tier, edge_tier=_ie_tier,
                     back_page=_resolve_hot_tips_back_page(user_id, match_key),
                     selected_outcome=_it0.get("outcome"),  # R9-BUILD-03
+                    has_narrative=_ib_has_narrative,
                 )
                 _ibanner = _qa_banner(user_id)
                 _ifinal = (_ibanner + _ihtml) if _ibanner else _ihtml
@@ -14150,6 +14177,39 @@ def _has_w84_narrative(match_id: str) -> bool:
         return False
 
 
+def _has_any_cached_narrative(match_id: str) -> bool:
+    """Return True when ANY non-expired, non-quarantined narrative row exists.
+
+    FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: Gates the AI Breakdown button in
+    edge:detail cache-hit / CLEAN-RENDER / instant-baseline / tip:detail paths.
+    Accepts any narrative_source (w84, w82, baseline_no_edge, verdict-cache) —
+    build_ai_breakdown_data() reads by match_id only, with no source filter.
+    Independent DB check — must not rely on render-path state.
+    """
+    if not match_id:
+        return False
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        from db_connection import get_connection as _gc
+        conn = _gc(_NARRATIVE_DB_PATH, timeout_ms=1500)
+        try:
+            row = conn.execute(
+                "SELECT expires_at FROM narrative_cache "
+                "WHERE match_id = ? AND COALESCE(quarantined, 0) = 0 LIMIT 1",
+                (match_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return False
+        exp_dt = _dt.fromisoformat(row[0])
+        if exp_dt.tzinfo is None:
+            exp_dt = assume_utc(exp_dt)
+        return _dt.now(_tz.utc) < exp_dt
+    except Exception:
+        return False
+
+
 async def _get_cached_narrative(match_id: str) -> dict | None:
     """Fetch cached narrative from persistent DB cache. Returns None if stale/expired."""
     import json
@@ -22967,6 +23027,11 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     if _signal_block:
         text += f"\n\n{_signal_block}"
 
+    # FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: tip:detail path — gate AI Breakdown button
+    # on narrative presence so Diamond / upgrade-gated users can tap through to full card.
+    _td_has_narrative = await asyncio.to_thread(
+        _has_any_cached_narrative, match_key or event_id
+    )
     buttons = _build_game_buttons(
         [tip],
         event_id,
@@ -22975,6 +23040,7 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         user_tier=_user_tier,
         edge_tier=_edge_tier,
         back_page=_resolve_hot_tips_back_page(user_id, match_key),
+        has_narrative=_td_has_narrative,
     )
 
     # First-time Edge Rating tooltip (shown once, only on Gold/Diamond)
