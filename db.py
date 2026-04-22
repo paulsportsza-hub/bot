@@ -987,6 +987,8 @@ async def get_user_tier(user_id: int) -> str:
         if tier in ("gold", "diamond"):
             expires_at = getattr(user, "tier_expires_at", None)
             if expires_at is not None:
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=dt.timezone.utc)
                 now = dt.datetime.now(dt.timezone.utc)
                 grace_end = expires_at + dt.timedelta(days=3)
                 if now > grace_end:

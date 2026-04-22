@@ -68,6 +68,11 @@
             font-family: 'JetBrains Mono', monospace;
             font-size: 15px; font-weight: 700; color: #F7931A;
         }
+        .lock-note {
+            font-size: 11px; color: #B9F2FF80;
+            background: #B9F2FF08; border: 1px solid #B9F2FF20;
+            border-radius: 6px; padding: 8px 12px; margin-bottom: 12px;
+        }
     </style>
 </head>
 <body>
@@ -84,6 +89,10 @@
     <div class="body">
         <div class="current-tier">You are on <strong>🥇 Gold</strong>.</div>
         <div class="pitch">{{ diamond_pitch | e }}</div>
+
+        {% if lock_note is defined and lock_note %}
+        <div class="lock-note">🔒 {{ lock_note | e }}</div>
+        {% endif %}
 
         <div class="feature-list">
             {% set icons = ["📈", "💰", "📊", "🎯"] %}

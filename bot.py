@@ -1340,14 +1340,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    wins = await db.get_recent_wins(limit=5)
+    wins = await asyncio.to_thread(_get_recent_wins_from_edge_results, 5)
     if wins:
         try:
             data = build_home_winners_data(wins)
             photo_bytes = await asyncio.to_thread(render_card_sync, "home_winners.html", data)
             await update.message.reply_photo(
                 photo=photo_bytes,
-                reply_markup=get_main_keyboard(),
+                reply_markup=kb_main(),
             )
             return
         except Exception as exc:
@@ -3695,10 +3695,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             )
         elif action == "cancel":
             _subscribe_state.pop(query.from_user.id, None)
-            await query.edit_message_text(
+            await _serve_response(
+                query,
                 "👍 No worries — you can subscribe any time via /subscribe.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
+                InlineKeyboardMarkup([
                     [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                 ]),
             )
@@ -3878,7 +3878,7 @@ async def _serve_response(query, text: str, markup, photo=None) -> None:
 async def handle_menu(query, action: str) -> None:
     if action == "home":
         user = query.from_user
-        wins = await db.get_recent_wins(limit=5)
+        wins = await asyncio.to_thread(_get_recent_wins_from_edge_results, 5)
         if wins:
             try:
                 data = build_home_winners_data(wins)
@@ -5716,6 +5716,18 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if text == "🏠 Menu":
+        wins = await asyncio.to_thread(_get_recent_wins_from_edge_results, 5)
+        if wins:
+            try:
+                data = build_home_winners_data(wins)
+                photo_bytes = await asyncio.to_thread(render_card_sync, "home_winners.html", data)
+                await update.message.reply_photo(
+                    photo=photo_bytes,
+                    reply_markup=kb_main(),
+                )
+                return
+            except Exception as exc:
+                logger.warning("home_winners card render failed in keyboard tap: %s", exc)
         name = h(update.effective_user.first_name or "")
         await update.message.reply_text(
             f"<b>🇿🇦 MzansiEdge</b>\n\nHey {name}!",
@@ -10324,6 +10336,29 @@ def _get_fresh_tier_from_er(match_key: str) -> str | None:
         return _tier
     except Exception:
         return None
+
+
+def _get_recent_wins_from_edge_results(limit: int = 5) -> list[dict]:
+    """Load recently settled winning edges for the home menu winners card."""
+    try:
+        from scrapers.db_connect import connect_odds_db as _conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+        _conn = _conn_fn(_DB_PATH)
+        _conn.row_factory = lambda cursor, row: dict(
+            zip([col[0] for col in cursor.description], row)
+        )
+        rows = _conn.execute(
+            "SELECT match_key, edge_tier, recommended_odds, actual_return, sport, bet_type "
+            "FROM edge_results WHERE result='hit' "
+            "ORDER BY CASE edge_tier WHEN 'diamond' THEN 1 WHEN 'gold' THEN 2 WHEN 'silver' THEN 3 ELSE 4 END, "
+            "settled_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        _conn.close()
+        return rows
+    except Exception as exc:
+        log.warning("_get_recent_wins_from_edge_results failed: %s", exc)
+        return []
 
 
 def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False, with_clv: bool = False) -> list[dict]:
@@ -25838,9 +25873,7 @@ async def cmd_restart_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
 async def _handle_sub_verify(query, payment_id: str) -> None:
     """Verify payment after user clicks 'I've Paid'."""
     user_id = query.from_user.id
-    await query.edit_message_text(
-        "⏳ <i>Checking payment status…</i>", parse_mode=ParseMode.HTML,
-    )
+    await query.answer("⏳ Checking payment status…")
 
     try:
         result = await stitch_service.get_payment_status(payment_id)
@@ -25866,43 +25899,40 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
                         if slot_number else
                         "✅ <b>Payment confirmed!</b>\n\nYour access is active now."
                     )
-                    await query.edit_message_text(
-                        text,
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=InlineKeyboardMarkup([
+                    await _serve_response(
+                        query, text,
+                        InlineKeyboardMarkup([
                             [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
                             [InlineKeyboardButton("📋 Status", callback_data="sub:billing")],
                         ]),
                     )
                 elif outcome.get("outcome") == "no_slot_available":
-                    await query.edit_message_text(
-                        _founding_no_slot_text(),
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=InlineKeyboardMarkup([
+                    await _serve_response(
+                        query, _founding_no_slot_text(),
+                        InlineKeyboardMarkup([
                             [InlineKeyboardButton("📋 Status", callback_data="sub:billing")],
                             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                         ]),
                     )
                 else:
-                    await query.edit_message_text(
-                        _pending_webhook_text(status),
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=InlineKeyboardMarkup([
+                    await _serve_response(
+                        query, _pending_webhook_text(status),
+                        InlineKeyboardMarkup([
                             [InlineKeyboardButton("🔄 Check Again", callback_data=f"sub:verify:{payment_id}")],
                             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                         ]),
                     )
             else:
-                await query.edit_message_text(
-                    _pending_webhook_text(status),
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup([
+                await _serve_response(
+                    query, _pending_webhook_text(status),
+                    InlineKeyboardMarkup([
                         [InlineKeyboardButton("🔄 Check Again", callback_data=f"sub:verify:{payment_id}")],
                         [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                     ]),
                 )
         else:
-            await query.edit_message_text(
+            await _serve_response(
+                query,
                 _pending_webhook_text(status),
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
@@ -25912,10 +25942,10 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
             )
     except Exception as exc:
         log.error("Payment verification error: %s", exc)
-        await query.edit_message_text(
+        await _serve_response(
+            query,
             "⚠️ Couldn't verify payment right now. Try again in a moment.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
+            InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Try Again", callback_data=f"sub:verify:{payment_id}")],
                 [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
             ]),

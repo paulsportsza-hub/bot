@@ -7,7 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        :root { --text-secondary: #B3B3B3; }
+        :root { --text-secondary: #B0B0B0; }
         html, body {
             margin: 0; padding: 0; background: #000000;
             width: 480px; height: 620px; overflow: hidden;
@@ -23,80 +23,94 @@
         }
         .header {
             text-align: center;
-            padding: 16px 20px 10px;
+            padding: 13px 20px 7px;
             background: linear-gradient(180deg, #0D0D0D, #141414);
             border-bottom: 1px solid #2A2A2A;
             flex-shrink: 0;
         }
-        .logo-img { height: 26px; width: auto; display: block; margin: 0 auto; }
+        .logo-img { height: 24px; width: auto; display: block; margin: 0 auto; }
         .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
         .orange-bar {
             height: 3px;
             background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
-            margin: 8px 20px; border-radius: 2px;
+            margin: 6px 20px; border-radius: 2px;
         }
         .title {
             font-size: 13px; font-weight: 700; color: #FFFFFF;
-            letter-spacing: 3px; margin-bottom: 0;
+            letter-spacing: 3px;
         }
         .plans-wrap {
             flex: 1; display: flex; flex-direction: column;
-            padding: 10px 16px; gap: 8px; overflow: hidden;
+            padding: 8px 14px; gap: 6px; overflow: hidden;
         }
+        /* Bronze & Gold: compact, fixed height */
         .plan {
-            border-radius: 8px; padding: 10px 14px;
+            border-radius: 8px; padding: 8px 13px;
             border: 1px solid #2A2A2A; background: #111111;
+        }
+        /* Diamond: flex-grow to fill remaining space */
+        .plan-diamond {
+            flex: 1;
+            padding: 10px 13px;
         }
         .plan-bronze { border-color: #CD7F3240; background: #CD7F3208; }
         .plan-gold   { border-color: #FFD70040; background: #FFD70008; }
-        .plan-diamond{ border-color: #B9F2FF40; background: #B9F2FF08; }
+        .plan-diamond{ border-color: #B9F2FF60; background: #B9F2FF0C; }
         .plan-header {
             display: flex; align-items: center;
-            justify-content: space-between; margin-bottom: 6px;
+            justify-content: space-between; margin-bottom: 5px;
         }
         .plan-name {
-            font-size: 13px; font-weight: 700; color: #FFFFFF;
+            font-size: 15px; font-weight: 700; color: #FFFFFF;
             display: flex; align-items: center; gap: 6px;
         }
-        .plan-name .emoji { font-size: 15px; }
+        .plan-name .emoji { font-size: 16px; }
         .plan-bronze .plan-name { color: #CD7F32; }
         .plan-gold .plan-name   { color: #FFD700; }
-        .plan-diamond .plan-name{ color: #B9F2FF; }
+        .plan-diamond .plan-name{ color: #B9F2FF; font-size: 16px; }
         .plan-price {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 13px; font-weight: 700; color: #FFFFFF;
+            font-size: 15px; font-weight: 700; color: #FFFFFF;
         }
+        .plan-diamond .plan-price { font-size: 16px; color: #B9F2FF; }
         .plan-bronze .plan-price { color: #6B6B6B; }
         .plan-annual {
-            font-size: 10px; color: var(--text-secondary);
-            margin-bottom: 6px;
+            font-size: 11px; color: var(--text-secondary);
+            margin-bottom: 5px;
         }
         .plan-annual span { color: #F7931A; }
         .plan-features {
-            display: flex; flex-direction: column; gap: 2px;
+            display: flex; flex-direction: column; gap: 3px;
         }
+        .plan-diamond .plan-features { gap: 5px; }
         .plan-feature {
-            font-size: 10px; color: var(--text-secondary);
-            display: flex; align-items: center; gap: 5px;
+            font-size: 12px; color: var(--text-secondary);
+            display: flex; align-items: flex-start; gap: 6px;
+            line-height: 1.3;
         }
-        .plan-feature::before { content: "•"; color: #F7931A; }
+        .plan-diamond .plan-feature {
+            font-size: 12.5px;
+            color: #C8C8C8;
+        }
+        .plan-feature::before { content: "•"; color: #F7931A; flex-shrink: 0; }
+        .plan-diamond .plan-feature::before { color: #B9F2FF; }
         .founding-banner {
-            margin: 0 16px 10px;
+            margin: 0 14px 8px;
             background: linear-gradient(135deg, #1A1200, #2A1E00);
             border: 1px solid #F7931A50;
-            border-radius: 8px; padding: 10px 14px;
+            border-radius: 8px; padding: 8px 13px;
             flex-shrink: 0;
         }
         .founding-title {
-            font-size: 12px; font-weight: 700; color: #F7931A;
-            margin-bottom: 4px; letter-spacing: 0.5px;
+            font-size: 13px; font-weight: 700; color: #F7931A;
+            margin-bottom: 3px; letter-spacing: 0.5px;
         }
         .founding-body {
-            font-size: 10px; color: #FFBE45;
+            font-size: 12px; color: #FFBE45;
         }
         .founding-price {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 14px; font-weight: 700; color: #F7931A;
+            font-size: 15px; font-weight: 700; color: #F7931A;
         }
     </style>
 </head>
@@ -129,9 +143,15 @@
             </div>
             {% endif %}
             <div class="plan-features">
-                {% for feat in plan.features %}
-                <div class="plan-feature">{{ feat | e }}</div>
-                {% endfor %}
+                {% if plan.tier == 'diamond' %}
+                    {% for feat in plan.features %}
+                    <div class="plan-feature">{{ feat | e }}</div>
+                    {% endfor %}
+                {% else %}
+                    {% for feat in plan.features[:3] %}
+                    <div class="plan-feature">{{ feat | e }}</div>
+                    {% endfor %}
+                {% endif %}
             </div>
         </div>
         {% endfor %}

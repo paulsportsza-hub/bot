@@ -73,6 +73,13 @@
             font-family: 'JetBrains Mono', monospace;
             font-size: 15px; font-weight: 700; color: #F7931A;
         }
+        .plan-features { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+        .plan-feature {
+            font-size: 10px; color: var(--text-secondary);
+            display: flex; align-items: flex-start; gap: 5px;
+        }
+        .plan-diamond .plan-feature { color: #B9F2FF99; }
+        .plan-feature::before { content: "•"; color: #F7931A; flex-shrink: 0; }
     </style>
 </head>
 <body>
@@ -99,6 +106,13 @@
             </div>
             <div class="plan-differentiator">{{ plan.differentiator | e }}</div>
             <div class="plan-annual">Annual: {{ plan.annual_price | e }} <span>(save 33%)</span></div>
+            {% if plan.features is defined and plan.features %}
+            <div class="plan-features">
+                {% for feat in plan.features %}
+                <div class="plan-feature">{{ feat | e }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
         {% endfor %}
 
