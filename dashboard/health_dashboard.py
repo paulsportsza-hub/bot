@@ -4053,6 +4053,20 @@ def render_automation_content() -> str:
 .so-warn-banner .so-fb-item-dismiss:hover{background:rgba(245,158,11,0.22);}
 .pv-hashtags{font-family:var(--font-m);font-size:11px;color:#58a6ff;margin-top:8px;line-height:1.6;}
 .pv-caption-label{font-family:var(--font-m);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;opacity:0.7;}
+/* ── Task Pills (BUILD-SOCIAL-OPS-TASK-PILLS-01) ── */
+.so-task-pills{display:none;margin-top:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);}
+.so-task-pills.has-tasks{display:block;}
+.so-task-pills-header{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+.so-task-pills-title{font-family:var(--font-m);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text);}
+.so-task-pills-count{font-family:var(--font-m);font-size:11px;font-weight:700;color:var(--gold);}
+.so-task-pill-groups{display:flex;gap:12px;flex-wrap:wrap;}
+.so-task-pill-group{display:flex;flex-direction:column;gap:6px;min-width:0;}
+.so-task-pill-group-header{display:flex;align-items:center;gap:5px;}
+.so-task-pill-group-label{font-family:var(--font-m);font-size:11px;font-variant:small-caps;font-weight:600;color:var(--muted);letter-spacing:.3px;}
+.so-task-pill-group-count{font-family:var(--font-m);font-size:11px;font-weight:700;color:var(--gold);}
+.so-task-pill-group-pills{display:flex;flex-wrap:wrap;gap:4px;}
+.so-task-pill{display:inline-flex;align-items:center;height:28px;padding:0 10px;border:1px solid var(--border);border-radius:14px;background:var(--surface-alt);color:var(--text);font-size:12px;font-family:var(--font-b);cursor:pointer;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;transition:border-color 150ms,background 150ms;}
+.so-task-pill:hover{border-color:var(--gold);background:var(--surface);}
 </style>"""
 
     js = (
@@ -4113,6 +4127,7 @@ function soInit(){
   // Queue: initial + interval load
   fetchQueue();
   setInterval(fetchQueue,60000);
+  _loadSoTaskPills();
 }
 if(document.readyState!=='loading'){soInit();}else{document.addEventListener('DOMContentLoaded',soInit);}
 
@@ -4803,6 +4818,55 @@ function renderQueue(d){
 function eH(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
+// ── Task Pills (BUILD-SOCIAL-OPS-TASK-PILLS-01) ──────────────────────
+function _loadSoTaskPills(){
+  var sec=document.getElementById('so-task-pills');
+  if(!sec)return;
+  fetch('/admin/api/task-hub/data',{credentials:'same-origin'})
+    .then(function(r){return r.json();})
+    .then(function(d){_renderSoTaskPills(sec,d);})
+    .catch(function(){});
+}
+function _renderSoTaskPills(sec,d){
+  var GROUPS=[
+    {key:'reel_kits',label:'Reel Kits',type:'reel_kit'},
+    {key:'fb_posts',label:'FB Groups',type:'fb'},
+    {key:'quora_answers',label:'Quora',type:'quora'},
+    {key:'linkedin_targets',label:'LinkedIn',type:'linkedin'}
+  ];
+  var total=0;
+  var gHtml='';
+  GROUPS.forEach(function(g){
+    var items=(d[g.key]||[]);
+    total+=items.length;
+    var pills='';
+    items.forEach(function(t){
+      var lbl=eH(t.title||t.label||t.name||String(t.id)||'—');
+      var tid=eA(String(t.id||''));
+      pills+='<button class="so-task-pill" data-task-type="'+eA(g.type)+'" data-task-id="'+tid+'" title="'+lbl+'">'+lbl+'</button>';
+    });
+    gHtml+='<div class="so-task-pill-group">'+
+      '<div class="so-task-pill-group-header">'+
+        '<span class="so-task-pill-group-label">'+eH(g.label)+'</span>'+
+        '<span class="so-task-pill-group-count">'+items.length+'</span>'+
+      '</div>'+
+      '<div class="so-task-pill-group-pills">'+pills+'</div>'+
+    '</div>';
+  });
+  if(!total){sec.classList.remove('has-tasks');return;}
+  sec.innerHTML='<div class="so-task-pills-header">'+
+    '<span class="so-task-pills-title">Tasks</span>'+
+    '<span class="so-task-pills-count">'+total+'</span>'+
+  '</div>'+
+  '<div class="so-task-pill-groups">'+gHtml+'</div>';
+  sec.classList.add('has-tasks');
+  sec.querySelectorAll('.so-task-pill').forEach(function(el){
+    el.addEventListener('click',function(){
+      sec.dispatchEvent(new CustomEvent('so:task-pill-click',{bubbles:true,detail:{type:el.dataset.taskType,id:el.dataset.taskId,pill_el:el}}));
+    });
+  });
+}
+
 })();
 </script>"""
     )
@@ -4868,6 +4932,7 @@ function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'
           </div>
         </div>
       </div>
+      <section id="so-task-pills"></section>
     </div>
     <div class="so-preview" id="so-preview" aria-label="Post preview" aria-live="polite">
       <div class="so-pv-empty" id="so-pv-empty" style="display:flex;flex:1">
