@@ -38,7 +38,10 @@ def _edge() -> dict:
         "fair_probability": 0.52,
         "recommended_outcome": "home",
         "outcome": "home",
-        "tier": "silver",
+        # W93-COST (2026-04-22): Sonnet polish is gated to gold/diamond. Use gold here so
+        # the W84 generation path runs; silver/bronze now deterministically serve the
+        # W82 baseline (see test_generate_one_silver_bronze_skips_w84_polish).
+        "tier": "gold",
         "confirming_signals": 2,
         "composite_score": 58.0,
         "bookmaker_count": 2,
@@ -48,6 +51,9 @@ def _edge() -> dict:
 
 
 def _baseline_text() -> str:
+    # W92-VERDICT-QUALITY: the baseline verdict is served back to gold-tier
+    # canary tests when the W84 path fails verification or errors. It therefore
+    # has to pass the same gold quality gate (≥110 chars, ≥3 analytical words).
     return (
         "📋 <b>The Setup</b>\n"
         "Arsenal host Bournemouth here.\n\n"
@@ -56,11 +62,16 @@ def _baseline_text() -> str:
         "⚠️ <b>The Risk</b>\n"
         "Standard variance applies.\n\n"
         "🏆 <b>Verdict</b>\n"
-        "Lean Arsenal at Betway 2.10."
+        "Lean Arsenal at Betway 2.10, with the price movement and confirming "
+        "signals supporting a measured stake on the home side's recent form."
     )
 
 
 def _w84_text() -> str:
+    # W92-VERDICT-QUALITY: gold-tier verdicts must pass min_verdict_quality
+    # (≥110 chars, ≥3 analytical vocab words, no banned template, no markdown).
+    # Fixture verdict intentionally composed to satisfy these gates so that the
+    # Sonnet polish path can be exercised without tripping the W92 gate.
     return (
         "📋 <b>The Setup</b>\n"
         "W84 setup.\n\n"
@@ -69,7 +80,9 @@ def _w84_text() -> str:
         "⚠️ <b>The Risk</b>\n"
         "W84 risk.\n\n"
         "🏆 <b>Verdict</b>\n"
-        "Back the Arsenal win at 2.10 with Betway."
+        "Signals support backing Arsenal at 2.10 on Betway, with price "
+        "movement and confirming indicators aligning favourably for this "
+        "position."
     )
 
 
@@ -186,7 +199,38 @@ async def test_generate_one_serves_w84_when_verify_passes(monkeypatch: pytest.Mo
 
     assert result["success"] is True
     assert result["_cache"]["narrative_source"] == "w84"
-    assert "Back the Arsenal win at 2.10 with Betway" in result["narrative"]
+    assert "Signals support backing Arsenal at 2.10 on Betway" in result["narrative"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", ["silver", "bronze"])
+async def test_generate_one_silver_bronze_skips_w84_polish(
+    monkeypatch: pytest.MonkeyPatch, tier: str
+) -> None:
+    """W93-COST: silver/bronze tiers must serve the W82 baseline — no Sonnet polish.
+
+    Guards the tier gate in pregenerate_narratives._generate_one that skips the W84
+    polish path for non-premium tiers. Without this gate, cost-target regressions
+    surface as $15+/day spikes (see W93-COST wave notes).
+    """
+    _patch_generate_dependencies(monkeypatch)
+
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec: "prompt")
+    # If the gate leaks, verify_shadow_narrative would be invoked — set a sentinel
+    # that would incorrectly flip the source to w84 if it were ever called.
+    monkeypatch.setattr(
+        pregen,
+        "verify_shadow_narrative",
+        lambda draft, pack, spec: (True, {"sanitized_draft": _w84_text()}),
+    )
+
+    edge = _edge()
+    edge["tier"] = tier
+    result = await pregen._generate_one(edge, "claude-sonnet", _FakeClaude())
+
+    assert result["success"] is True
+    assert result["_cache"]["narrative_source"] == "w82"
+    assert "Lean Arsenal at Betway 2.10" in result["narrative"]
 
 
 @pytest.mark.asyncio
@@ -204,7 +248,7 @@ async def test_generate_one_falls_back_to_w82_when_verify_fails(monkeypatch: pyt
 
     assert result["success"] is True
     assert result["_cache"]["narrative_source"] == "w82"
-    assert "Lean Arsenal at Betway 2.10." in result["narrative"]
+    assert "Lean Arsenal at Betway 2.10" in result["narrative"]
 
 
 @pytest.mark.asyncio
@@ -223,7 +267,7 @@ async def test_generate_one_falls_back_to_w82_on_w84_error(monkeypatch: pytest.M
 
     assert result["success"] is True
     assert result["_cache"]["narrative_source"] == "w82"
-    assert "Lean Arsenal at Betway 2.10." in result["narrative"]
+    assert "Lean Arsenal at Betway 2.10" in result["narrative"]
 
 
 @pytest.mark.asyncio

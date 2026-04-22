@@ -75,6 +75,21 @@ SHADOW_MODEL = os.environ.get(
 )
 # BUILD-DUAL-MODEL-PREGEN: Haiku for non-edge match previews (~12x cheaper than Sonnet).
 HAIKU_MODEL = os.environ.get("NARRATIVE_HAIKU_MODEL", "claude-haiku-4-5-20251001")
+
+
+def _model_family_label(model_id: str) -> str:
+    """W93-COST: Derive the model-family label (haiku/opus/sonnet) from the model string.
+
+    Previously hardcoded "opus" or "sonnet" regardless of the actual model — which
+    mislabelled Haiku fallbacks as Sonnet and kept Opus references after Opus was
+    retired. Used for telemetry + Sentry tagging, not for user-facing copy.
+    """
+    m = (model_id or "").lower()
+    if "haiku" in m:
+        return "haiku"
+    if "opus" in m:
+        return "opus"
+    return "sonnet"
 # W84-CONFIRM-1: W84 is now the permanent default generation path.
 # The W84_SERVE env-var gate has been removed — W84 always serves.
 
@@ -1711,6 +1726,18 @@ async def _generate_one(
             "[COVERAGE-GATE] Skipping Sonnet polish for %s: empty evidence", match_key
         )
 
+    # W93-COST (2026-04-22): Sonnet polish is gated to Gold/Diamond edges only.
+    # Silver/Bronze serve the deterministic W82 baseline — cuts polish calls by ~65%
+    # while preserving premium-tier quality. Non-edge previews stay on the Haiku path.
+    if not _skip_w84 and not _is_non_edge:
+        _pregen_tier_lower = str(edge.get("tier", "bronze") or "bronze").lower()
+        if _pregen_tier_lower not in ("gold", "diamond"):
+            _skip_w84 = True
+            log.info(
+                "[W93-TIER-GATE] Skipping Sonnet polish for %s: tier=%s (baseline only)",
+                match_key, _pregen_tier_lower,
+            )
+
     if narrative and spec is not None and evidence_pack is not None and not _skip_w84:
         try:
             if _is_non_edge:
@@ -1801,7 +1828,7 @@ async def _generate_one(
                     if _verdict_bookmaker_aligned(candidate, _tip_bk, _tip_odds):
                         narrative = candidate
                         narrative_source = "w84"
-                        served_model = "opus" if "opus" in SHADOW_MODEL else "sonnet"
+                        served_model = _model_family_label(SHADOW_MODEL)
                         log.info("W84 SERVED for %s", match_key)
                     else:
                         # Attempt to realign before falling back
@@ -1809,7 +1836,7 @@ async def _generate_one(
                         if _verdict_bookmaker_aligned(realigned, _tip_bk, _tip_odds):
                             narrative = realigned
                             narrative_source = "w84"
-                            served_model = "opus" if "opus" in SHADOW_MODEL else "sonnet"
+                            served_model = _model_family_label(SHADOW_MODEL)
                             log.info(
                                 "W84 SERVED (realigned) for %s: verdict → %s@%.2f",
                                 match_key, _tip_bk, _tip_odds,
@@ -2446,12 +2473,16 @@ def _quarantine_stale_cache_rows(db_path: str | None = None) -> int:
 async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: bool = False) -> None:
     """Run the pre-generation sweep."""
     model_id = MODELS.get(sweep, MODELS["refresh"])
-    model_label = "Opus" if sweep == "full" else "Sonnet"
+    # W93-COST: label derived from the actual model id (Haiku/Opus/Sonnet) — the
+    # sweep/full distinction stopped implying Opus when INV-SONNET-BURN-05 shifted
+    # NARRATIVE_MODEL to Haiku.
+    model_label = _model_family_label(model_id).capitalize()
     log.info(
-        "Starting %s sweep with %s (%s)%s%s",
+        "Starting %s sweep with %s (%s) [shadow=%s]%s%s",
         sweep,
         model_label,
         model_id,
+        _model_family_label(SHADOW_MODEL),
         f" sport={sport}" if sport else "",
         " [DRY RUN]" if dry_run else "",
     )

@@ -13767,7 +13767,7 @@ def _build_odds_compare_back_button(user_id: int, event_id: str) -> InlineKeyboa
     return InlineKeyboardButton("↩️ Back", callback_data=f"yg:game:{event_id}")
 
 # ── W60-CACHE: Persistent narrative cache in odds.db ──────────
-_NARRATIVE_CACHE_TTL = 21600  # 6 hours in seconds (BUILD-16b/FIX-2A: extended from 2h)
+_NARRATIVE_CACHE_TTL = 43200  # 12 hours (W93-COST: halves polish frequency for stable edges)
 _NARRATIVE_DB_PATH = str(ODDS_DB_PATH)
 # W75-FIX: Cache miss uses Sonnet (not Haiku) for quality parity with pre-gen
 _NARRATIVE_MODEL = os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6")
@@ -28499,8 +28499,12 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def _narrative_pregenerate_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """W60-CACHE: Pre-generate narratives for live edges.
 
-    Runs hourly, gated to 04:00, 10:00, 16:00 UTC (06:00, 12:00, 18:00 SAST).
-    06:00 = Opus full sweep, 12:00/18:00 = Sonnet refresh sweep.
+    Runs hourly; gated to 04:00, 10:00, 16:00, 19:00 UTC
+    (06:00, 12:00, 18:00, 21:00 SAST) — four sweeps/day total.
+    06:00 = full sweep (24h-age + hash check). 12:00/18:00/21:00 = refresh sweep
+    (cache-presence + outcome-match check).
+    Model is driven by NARRATIVE_MODEL env var (Haiku by default post INV-SONNET-BURN-05).
+    Sonnet polish — when enabled — is gated to Gold/Diamond edges only (W93-COST).
     """
     from datetime import datetime
     from zoneinfo import ZoneInfo
