@@ -2043,8 +2043,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     _enrich_tip_for_card, _ep_tip, _ep_event_id
                 )
                 _ep_data = build_edge_detail_data(_ep_tip_enriched)
-                # AI Breakdown button only when a valid w84 narrative exists for this match
-                _ep_has_narrative = await asyncio.to_thread(_has_w84_narrative, _ep_event_id)
+                # FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: ep:pick:N is the PRIMARY tap from
+                # the Hot Tips list into a detail card. Match the permissive helper used by
+                # all other edge:detail entry points so the button renders whenever
+                # build_ai_breakdown_data() could serve a narrative (any source, not just w84).
+                _ep_has_narrative = await asyncio.to_thread(
+                    _has_any_cached_narrative, _ep_event_id
+                )
                 _ep_btn_rows = _build_game_buttons(
                     [_ep_tip], event_id=_ep_event_id, user_id=user_id,
                     source="edge_picks", user_tier=_ep_tier, edge_tier=_ep_edge_tier,
