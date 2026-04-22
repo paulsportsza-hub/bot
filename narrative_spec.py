@@ -504,6 +504,227 @@ def cap_verdict_in_narrative(narrative_html: str) -> str:
     return head + header_line + capped
 
 
+# ── NARRATIVE-ACCURACY-01: Derived Claims Pre-processor ──────────────────────
+
+# CURRENT_STADIUMS: club → current 2025/26 ground name (LIVE DATA INTEGRITY).
+# Update immediately on any confirmed ground move — do not wait for next wave.
+# Everton moved to Hill Dickinson Stadium in August 2025.
+CURRENT_STADIUMS: dict[str, str] = {
+    "everton": "Hill Dickinson Stadium",
+    "arsenal": "Emirates Stadium",
+    "chelsea": "Stamford Bridge",
+    "manchester city": "Etihad Stadium",
+    "manchester united": "Old Trafford",
+    "liverpool": "Anfield",
+    "tottenham hotspur": "Tottenham Hotspur Stadium",
+    "tottenham": "Tottenham Hotspur Stadium",
+    "spurs": "Tottenham Hotspur Stadium",
+    "aston villa": "Villa Park",
+    "newcastle united": "St James' Park",
+    "newcastle": "St James' Park",
+    "west ham united": "London Stadium",
+    "west ham": "London Stadium",
+    "brighton": "Amex Stadium",
+    "brentford": "Gtech Community Stadium",
+    "fulham": "Craven Cottage",
+    "crystal palace": "Selhurst Park",
+    "wolverhampton wanderers": "Molineux",
+    "wolves": "Molineux",
+    "nottingham forest": "City Ground",
+    "leicester city": "King Power Stadium",
+    "leicester": "King Power Stadium",
+    "ipswich town": "Portman Road",
+    "ipswich": "Portman Road",
+    "southampton": "St Mary's Stadium",
+    "bournemouth": "Vitality Stadium",
+    "real madrid": "Santiago Bernabéu",
+    "barcelona": "Estadi Olímpic Lluís Companys",
+    "atletico madrid": "Cívitas Metropolitano",
+    "kaizer chiefs": "FNB Stadium",
+    "orlando pirates": "Orlando Stadium",
+    "mamelodi sundowns": "Loftus Versfeld",
+}
+
+
+def _parse_form_counts(form: str) -> tuple[int, int, int]:
+    """Parse form string e.g. 'WWDLD' → (wins, draws, losses)."""
+    return form.count("W"), form.count("D"), form.count("L")
+
+
+def _form_streak(form: str) -> str:
+    """Compute current streak from form string (index 0 = most recent)."""
+    if not form:
+        return ""
+    current = form[0]
+    count = 1
+    for c in form[1:]:
+        if c == current:
+            count += 1
+        else:
+            break
+    labels = {"W": ("won", "win"), "L": ("lost", "loss"), "D": ("drawn", "draw")}
+    verb, noun = labels.get(current, ("", ""))
+    if not verb:
+        return ""
+    if count == 1:
+        return f"{verb} last out"
+    return f"{verb} {count} in a row"
+
+
+def _get_stadium(team_name: str) -> str:
+    """Return current stadium name for team, or empty string if not known."""
+    return CURRENT_STADIUMS.get(team_name.lower().strip(), "")
+
+
+def _derived_soccer(h: dict, a: dict) -> dict:
+    """Pre-compute derived claims for football (soccer) narratives.
+
+    Uses exact field names from match_context_fetcher output.
+    """
+    h_form = h.get("form", "")
+    a_form = a.get("form", "")
+    h_w, h_d, h_l = _parse_form_counts(h_form)
+    a_w, a_d, a_l = _parse_form_counts(a_form)
+    h_name = h.get("name", "")
+    a_name = a.get("name", "")
+    return {
+        "sport": "soccer",
+        "home_form_str": h_form,
+        "home_wins": h_w,
+        "home_draws": h_d,
+        "home_losses": h_l,
+        "home_streak": _form_streak(h_form),
+        "home_games_played": h.get("games_played"),
+        "home_points": h.get("points"),
+        "home_position": h.get("position"),
+        "home_gpg": h.get("goals_per_game"),
+        "home_record": h.get("home_record", ""),   # e.g. "W7 D2 L0" (home games)
+        "home_stadium": _get_stadium(h_name),
+        "home_venue_label": "at home" if h_name else "",
+        "away_form_str": a_form,
+        "away_wins": a_w,
+        "away_draws": a_d,
+        "away_losses": a_l,
+        "away_streak": _form_streak(a_form),
+        "away_games_played": a.get("games_played"),
+        "away_points": a.get("points"),
+        "away_position": a.get("position"),
+        "away_gpg": a.get("goals_per_game"),
+        "away_record": a.get("away_record", ""),   # e.g. "W3 D1 L4" (away games)
+        "away_stadium": _get_stadium(a_name),
+        "away_venue_label": "away from home" if a_name else "",
+    }
+
+
+def _derived_rugby(h: dict, a: dict) -> dict:
+    """Pre-compute derived claims for rugby union narratives.
+
+    Uses tries/bonus-points schema. Prohibits football terminology.
+    """
+    h_form = h.get("form", "")
+    a_form = a.get("form", "")
+    h_w, h_d, h_l = _parse_form_counts(h_form)
+    a_w, a_d, a_l = _parse_form_counts(a_form)
+    return {
+        "sport": "rugby",
+        "home_form_str": h_form,
+        "home_wins": h_w,
+        "home_draws": h_d,
+        "home_losses": h_l,
+        "home_streak": _form_streak(h_form),
+        "home_games_played": h.get("games_played"),
+        "home_points": h.get("points"),
+        "home_tries_for": h.get("tries_for"),
+        "home_tries_against": h.get("tries_against"),
+        "home_bonus_points": h.get("bonus_points"),
+        "away_form_str": a_form,
+        "away_wins": a_w,
+        "away_draws": a_d,
+        "away_losses": a_l,
+        "away_streak": _form_streak(a_form),
+        "away_games_played": a.get("games_played"),
+        "away_points": a.get("points"),
+        "away_tries_for": a.get("tries_for"),
+        "away_tries_against": a.get("tries_against"),
+        "away_bonus_points": a.get("bonus_points"),
+    }
+
+
+def _derived_cricket_ipl(h: dict, a: dict) -> dict:
+    """Pre-compute derived claims for T20/IPL/SA20 cricket narratives.
+
+    NRR is the primary differentiator. Uses runs/wickets vocabulary.
+    """
+    h_form = h.get("form", "")
+    a_form = a.get("form", "")
+    h_w, _h_d, h_l = _parse_form_counts(h_form)
+    a_w, _a_d, a_l = _parse_form_counts(a_form)
+    return {
+        "sport": "cricket_ipl",
+        "home_form_str": h_form,
+        "home_wins": h_w,
+        "home_losses": h_l,
+        "home_streak": _form_streak(h_form),
+        "home_games_played": h.get("games_played"),
+        "home_points": h.get("points"),
+        "home_nrr": h.get("nrr"),
+        "away_form_str": a_form,
+        "away_wins": a_w,
+        "away_losses": a_l,
+        "away_streak": _form_streak(a_form),
+        "away_games_played": a.get("games_played"),
+        "away_points": a.get("points"),
+        "away_nrr": a.get("nrr"),
+    }
+
+
+def _derived_cricket_test(h: dict, a: dict) -> dict:
+    """Pre-compute derived claims for Test cricket narratives.
+
+    Conservative handler for sparse ESPN data. Returns only what is
+    explicitly available — does NOT synthesise or invent stats.
+    """
+    h_form = h.get("form", "")
+    a_form = a.get("form", "")
+    return {
+        "sport": "cricket_test",
+        "home_form_str": h_form,
+        "home_games_played": h.get("games_played"),
+        "home_wins": h.get("wins"),
+        "home_losses": h.get("losses"),
+        "away_form_str": a_form,
+        "away_games_played": a.get("games_played"),
+        "away_wins": a.get("wins"),
+        "away_losses": a.get("losses"),
+    }
+
+
+def build_derived_claims(h: dict, a: dict, sport: str) -> dict:
+    """Pre-compute all derived facts from team context dicts.
+
+    Called BEFORE any LLM generation. Dispatches by sport. The returned
+    dict is injected above raw facts with the instruction:
+    'Do NOT compute your own counts. Every specific number, streak, or
+    venue label MUST appear exactly as written below.'
+
+    Args:
+        h: home team dict from ctx_data["home_team"]
+        a: away team dict from ctx_data["away_team"]
+        sport: "soccer" | "rugby" | "cricket_ipl" | "cricket_test" | other
+    """
+    if not h and not a:
+        return {"sport": sport}
+    s = (sport or "").lower()
+    if s == "rugby":
+        return _derived_rugby(h, a)
+    if s in ("cricket_ipl", "sa20", "ipl", "t20", "t20i"):
+        return _derived_cricket_ipl(h, a)
+    if s == "cricket_test":
+        return _derived_cricket_test(h, a)
+    # Default: soccer (EPL, PSL, UCL, La Liga etc.)
+    return _derived_soccer(h, a)
+
+
 # ── NarrativeSpec Dataclass ───────────────────────────────────────────────────
 
 @dataclass

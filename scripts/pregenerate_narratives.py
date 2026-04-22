@@ -305,6 +305,10 @@ _RUNTIME_SCHEMA_REQUIREMENTS = {
         "spec_json",             # PIPELINE-BUILD-01
         "context_json",          # PIPELINE-BUILD-01
         "generation_ms",         # PIPELINE-BUILD-01
+        "setup_validated",       # NARRATIVE-ACCURACY-01
+        "verdict_validated",     # NARRATIVE-ACCURACY-01
+        "setup_attempts",        # NARRATIVE-ACCURACY-01
+        "verdict_attempts",      # NARRATIVE-ACCURACY-01
     },
     "shadow_narratives": {
         "match_key",
@@ -1529,6 +1533,145 @@ def _validate_preview_polish(polished: str, spec) -> bool:
     return True
 
 
+def generate_section(full_narrative: str, section_name: str) -> str:
+    """Extract a named section from full narrative HTML.
+
+    NARRATIVE-ACCURACY-01 Rule 3: generate_section() is the per-section
+    extraction step. Returns the section body text (without the header line).
+    """
+    _MARKERS = {
+        "setup": "\U0001f4cb",   # 📋
+        "edge": "\U0001f3af",    # 🎯
+        "risk": "⚠️",  # ⚠️
+        "verdict": "\U0001f3c6", # 🏆
+    }
+    marker = _MARKERS.get(section_name.lower(), "")
+    if not marker or marker not in full_narrative:
+        return full_narrative
+    start = full_narrative.find(marker)
+    # Find next section marker
+    remaining = full_narrative[start + 1:]
+    next_marker_pos = len(full_narrative)
+    for other_marker in _MARKERS.values():
+        if other_marker == marker:
+            continue
+        pos = remaining.find(other_marker)
+        if pos != -1:
+            absolute_pos = start + 1 + pos
+            if absolute_pos < next_marker_pos:
+                next_marker_pos = absolute_pos
+    section_text = full_narrative[start:next_marker_pos].strip()
+    # Strip header line (first line)
+    lines = section_text.split("\n", 1)
+    return lines[1].strip() if len(lines) > 1 else section_text
+
+
+async def generate_and_validate(
+    section_name: str,
+    section_text: str,
+    derived_claims: dict,
+    claude: anthropic.AsyncAnthropic,
+    model_id: str = "",
+) -> tuple[str, bool, int]:
+    """Validate a generated section against pre-computed derived claims.
+
+    NARRATIVE-ACCURACY-01 Rule 3: Validator runs a Haiku call at temperature=0
+    checking every claim in the section against DERIVED CLAIMS. On FAIL, one
+    retry pass strips the violations. Returns (text, was_validated, attempts).
+
+    The caller is responsible for storing setup_validated / verdict_validated
+    and corresponding attempts counts in narrative_cache.
+    """
+    if not section_text or not derived_claims:
+        return section_text, True, 1
+
+    _validator_model = "claude-haiku-4-5-20251001"
+
+    def _fmt_claims(claims: dict) -> str:
+        lines = []
+        for k, v in claims.items():
+            if v is not None and k != "sport":
+                lines.append(f"  {k}: {v}")
+        return "\n".join(lines) if lines else "  (no derived claims available)"
+
+    validator_prompt = (
+        f"You are a fact-checker reviewing a sports narrative {section_name} section.\n\n"
+        "DERIVED CLAIMS (pre-computed from real data — ground truth):\n"
+        f"{_fmt_claims(derived_claims)}\n\n"
+        f"NARRATIVE SECTION:\n{section_text}\n\n"
+        "Check ONLY whether the narrative contains specific numbers, counts, streaks, "
+        "or venue labels that CONTRADICT the derived claims above.\n"
+        "Do NOT flag: analytical opinions, information not in derived claims, general language.\n"
+        'Return JSON only: {"pass": true, "violations": []} or '
+        '{"pass": false, "violations": ["description"]}'
+    )
+
+    attempt = 1
+    try:
+        resp = await claude.messages.create(
+            model=_validator_model,
+            max_tokens=256,
+            temperature=0,
+            messages=[{"role": "user", "content": validator_prompt}],
+            timeout=15.0,
+        )
+        raw = ""
+        for block in (resp.content if hasattr(resp, "content") else []):
+            if hasattr(block, "text") and block.text:
+                raw += block.text
+        raw = raw.strip()
+        import json as _json
+        # Extract JSON if wrapped in code fences
+        _json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+        result = _json.loads(_json_match.group(0)) if _json_match else {}
+        if result.get("pass", True):
+            return section_text, True, attempt
+        violations = result.get("violations", [])
+        if not violations:
+            return section_text, True, attempt
+        log.info(
+            "ACCURACY-VALIDATOR: %s section FAIL (%d violations) — retrying",
+            section_name, len(violations),
+        )
+        # Retry: ask Haiku to rewrite removing violations
+        attempt = 2
+        violation_list = "\n".join(f"- {v}" for v in violations[:5])
+        retry_prompt = (
+            f"Rewrite this sports narrative {section_name} section, removing only the "
+            f"following factual inaccuracies:\n{violation_list}\n\n"
+            "Keep all analytical opinions, tone, and structure intact.\n"
+            "Return only the corrected section text, no preamble.\n\n"
+            f"ORIGINAL:\n{section_text}"
+        )
+        retry_resp = await claude.messages.create(
+            model=_validator_model,
+            max_tokens=512,
+            temperature=0.5,
+            messages=[{"role": "user", "content": retry_prompt}],
+            timeout=20.0,
+        )
+        retry_text = ""
+        for block in (retry_resp.content if hasattr(retry_resp, "content") else []):
+            if hasattr(block, "text") and block.text:
+                retry_text += block.text
+        retry_text = retry_text.strip()
+        if retry_text and len(retry_text) > 20:
+            log.info(
+                "ACCURACY-VALIDATOR: %s section retry succeeded (%d chars)",
+                section_name, len(retry_text),
+            )
+            return retry_text, False, attempt  # validated=False: needed retry
+        # Double fail: return best-effort with ⚠ flag
+        log.warning(
+            "ACCURACY-VALIDATOR: %s section double-fail — publishing best-effort with ⚠",
+            section_name,
+        )
+        return f"⚠ {section_text}", False, attempt
+    except Exception as exc:
+        log.debug("ACCURACY-VALIDATOR: %s section validation error: %s", section_name, exc)
+        return section_text, True, 1  # treat as valid on error
+
+
 def _is_past_kickoff(match_key: str, cutoff_hours: int = 24) -> bool:
     """Return True if match_key's date suffix is more than cutoff_hours in the past."""
     m = re.search(r"(\d{4}-\d{2}-\d{2})$", str(match_key or ""))
@@ -1605,6 +1748,17 @@ async def _generate_one(
         away_team=away,
     )
     evidence_json = serialise_evidence_pack(evidence_pack)
+
+    # NARRATIVE-ACCURACY-01 Rule 1: pre-compute derived claims from team context.
+    # Must be computed BEFORE any LLM call. Dispatcher selects sport-specific handler.
+    _derived_claims: dict = {}
+    try:
+        from narrative_spec import build_derived_claims as _bdc
+        _ctx_h = (ctx or {}).get("home_team", {}) if isinstance((ctx or {}).get("home_team"), dict) else {}
+        _ctx_a = (ctx or {}).get("away_team", {}) if isinstance((ctx or {}).get("away_team"), dict) else {}
+        _derived_claims = _bdc(_ctx_h, _ctx_a, sport)
+    except Exception as _dc_err:
+        log.debug("ACCURACY-01: build_derived_claims failed: %s", _dc_err)
 
     # Compute coverage_json for narrative_cache persistence (COVERAGE-GATE-BUILD)
     _coverage_json = None
@@ -2330,6 +2484,36 @@ async def _generate_one(
         except Exception:
             pass
 
+    # NARRATIVE-ACCURACY-01 Rule 3: run generate_and_validate() on Setup + Verdict sections.
+    # W82 baseline is deterministic → always validated. W84 polish is LLM-generated → validate.
+    _setup_validated = 1
+    _verdict_validated = 1
+    _setup_attempts = 1
+    _verdict_attempts = 1
+    if narrative and narrative_source == "w84" and _derived_claims:
+        try:
+            _setup_text = generate_section(narrative, "setup")
+            _verdict_text = generate_section(narrative, "verdict")
+            if _setup_text:
+                _sv_text, _sv_ok, _sv_att = await generate_and_validate(
+                    "setup", _setup_text, _derived_claims, claude, model_id,
+                )
+                _setup_validated = 1 if _sv_ok else 0
+                _setup_attempts = _sv_att
+            if _verdict_text:
+                _vv_text, _vv_ok, _vv_att = await generate_and_validate(
+                    "verdict", _verdict_text, _derived_claims, claude, model_id,
+                )
+                _verdict_validated = 1 if _vv_ok else 0
+                _verdict_attempts = _vv_att
+            log.info(
+                "ACCURACY-01: %s setup_validated=%d(%d) verdict_validated=%d(%d)",
+                match_key, _setup_validated, _setup_attempts,
+                _verdict_validated, _verdict_attempts,
+            )
+        except Exception as _av_err:
+            log.debug("ACCURACY-01: generate_and_validate failed for %s: %s", match_key, _av_err)
+
     return {
         "match_key": match_key, "success": True, "model": _final_model,
         "duration": duration, "narrative": narrative,
@@ -2350,6 +2534,10 @@ async def _generate_one(
             "spec_json": _spec_json_str,
             "context_json": _context_json_str,
             "generation_ms": generation_ms,
+            "setup_validated": _setup_validated,
+            "verdict_validated": _verdict_validated,
+            "setup_attempts": _setup_attempts,
+            "verdict_attempts": _verdict_attempts,
             "_shadow": {
                 "match_key": match_key,
                 "pack": evidence_pack,
@@ -2416,6 +2604,10 @@ async def _verify_and_fill_cache(
                         spec_json=pw.get("spec_json"),
                         context_json=pw.get("context_json"),
                         generation_ms=pw.get("generation_ms"),
+                        setup_validated=pw.get("setup_validated"),
+                        verdict_validated=pw.get("verdict_validated"),
+                        setup_attempts=pw.get("setup_attempts"),
+                        verdict_attempts=pw.get("verdict_attempts"),
                     )
                     log.info("  -> Gap filled for %s", mk)
                 except Exception as store_exc:

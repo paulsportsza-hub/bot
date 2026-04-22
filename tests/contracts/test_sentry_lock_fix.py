@@ -41,7 +41,11 @@ def _create_runtime_tables(db_path: Path, *, include_narrative_source: bool = Tr
             tone_band TEXT,
             spec_json TEXT,
             context_json TEXT,
-            generation_ms REAL
+            generation_ms REAL,
+            setup_validated INTEGER DEFAULT 1,
+            verdict_validated INTEGER DEFAULT 1,
+            setup_attempts INTEGER DEFAULT 1,
+            verdict_attempts INTEGER DEFAULT 1
         )
         """
     )

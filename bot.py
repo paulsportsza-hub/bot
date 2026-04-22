@@ -13861,6 +13861,23 @@ def _ensure_narrative_cache_table() -> None:
             conn.execute(
                 "ALTER TABLE narrative_cache ADD COLUMN quality_status TEXT"
             )
+        # NARRATIVE-ACCURACY-01: validation metadata columns
+        if "setup_validated" not in cols:
+            conn.execute(
+                "ALTER TABLE narrative_cache ADD COLUMN setup_validated INTEGER DEFAULT 1"
+            )
+        if "verdict_validated" not in cols:
+            conn.execute(
+                "ALTER TABLE narrative_cache ADD COLUMN verdict_validated INTEGER DEFAULT 1"
+            )
+        if "setup_attempts" not in cols:
+            conn.execute(
+                "ALTER TABLE narrative_cache ADD COLUMN setup_attempts INTEGER DEFAULT 1"
+            )
+        if "verdict_attempts" not in cols:
+            conn.execute(
+                "ALTER TABLE narrative_cache ADD COLUMN verdict_attempts INTEGER DEFAULT 1"
+            )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS gold_verdict_failed_edges (
                 match_key TEXT PRIMARY KEY,
@@ -14397,6 +14414,10 @@ async def _store_narrative_cache(
     spec_json: str | None = None,
     context_json: str | None = None,
     generation_ms: int | None = None,
+    setup_validated: int | None = None,
+    verdict_validated: int | None = None,
+    setup_attempts: int | None = None,
+    verdict_attempts: int | None = None,
 ) -> None:
     """Persist narrative to DB cache with 6hr TTL.
 
@@ -14425,8 +14446,9 @@ async def _store_narrative_cache(
                 "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
                 "evidence_json, narrative_source, coverage_json, created_at, expires_at, "
                 "structured_card_json, verdict_html, evidence_class, tone_band, "
-                "spec_json, context_json, generation_ms) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "spec_json, context_json, generation_ms, "
+                "setup_validated, verdict_validated, setup_attempts, verdict_attempts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     match_id, html, model, edge_tier,
                     json.dumps(tips, default=str),
@@ -14443,6 +14465,10 @@ async def _store_narrative_cache(
                     spec_json,
                     context_json,
                     generation_ms,
+                    setup_validated,
+                    verdict_validated,
+                    setup_attempts,
+                    verdict_attempts,
                 ),
             )
             conn.commit()
@@ -14464,8 +14490,9 @@ async def _store_narrative_cache(
                         "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
                         "evidence_json, narrative_source, coverage_json, created_at, expires_at, "
                         "structured_card_json, verdict_html, evidence_class, tone_band, "
-                        "spec_json, context_json, generation_ms) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "spec_json, context_json, generation_ms, "
+                        "setup_validated, verdict_validated, setup_attempts, verdict_attempts) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             match_id, html, model, edge_tier,
                             json.dumps(tips, default=str),
@@ -14482,6 +14509,10 @@ async def _store_narrative_cache(
                             spec_json,
                             context_json,
                             generation_ms,
+                            setup_validated,
+                            verdict_validated,
+                            setup_attempts,
+                            verdict_attempts,
                         ),
                     )
                     conn.commit()

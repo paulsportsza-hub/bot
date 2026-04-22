@@ -228,3 +228,25 @@ class TestCriticalFunctions:
         """W92-VERDICT-QUALITY P3: narrative_skip_log reset must remain exportable."""
         from scripts.pregenerate_narratives import _clear_skip_count
         assert callable(_clear_skip_count)
+
+    # ── NARRATIVE-ACCURACY-01 permanent guards ──
+    def test_build_derived_claims(self):
+        """ACCURACY-01 Rule 1: derived claims pre-processor must remain exportable."""
+        from narrative_spec import build_derived_claims
+        assert callable(build_derived_claims)
+
+    def test_current_stadiums(self):
+        """ACCURACY-01 Rule 2: CURRENT_STADIUMS dict must remain importable."""
+        from narrative_spec import CURRENT_STADIUMS
+        assert isinstance(CURRENT_STADIUMS, dict)
+        assert "everton" in CURRENT_STADIUMS, "everton key must be present (Goodison → Hill Dickinson guard)"
+
+    def test_generate_section(self):
+        """ACCURACY-01 Rule 3: section extractor must remain exportable."""
+        from scripts.pregenerate_narratives import generate_section
+        assert callable(generate_section)
+
+    def test_generate_and_validate(self):
+        """ACCURACY-01 Rule 3: validator+retry must remain exportable."""
+        from scripts.pregenerate_narratives import generate_and_validate
+        assert callable(generate_and_validate)
