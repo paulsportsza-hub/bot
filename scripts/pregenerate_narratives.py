@@ -1923,14 +1923,25 @@ async def _generate_one(
     _skip_w84_partial = _partial and (_coverage_level == "empty") and not _is_non_edge
     _skip_w84 = _skip_w84_partial or bool(edge.get("skip_sonnet_polish"))
 
-    # Empty evidence blocks W84 for edge matches only.
+    # Empty evidence blocks W84 for Silver/Bronze edge matches only.
+    # Gold/Diamond: Sonnet polish attempted regardless — SA voice + odds/EV context
+    # produces richer narrative than deterministic baseline even with thin data
+    # (BUILD-NARRATIVE-VOICE-01 Rule 6). Fixes gold/diamond w82 entries for far-out matches.
     # FIX-HAIKU-GATE: Non-edge (is_non_edge=True) bypasses this gate — thin evidence
     # is expected for match previews and the Haiku path uses a minimal context prompt.
     if _coverage_level == "empty" and not _is_non_edge:
-        _skip_w84 = True
-        log.info(
-            "[COVERAGE-GATE] Skipping Sonnet polish for %s: empty evidence", match_key
-        )
+        _pregen_empty_tier = str(edge.get("tier", "bronze") or "bronze").lower()
+        if _pregen_empty_tier not in ("gold", "diamond"):
+            _skip_w84 = True
+            log.info(
+                "[COVERAGE-GATE] Skipping Sonnet polish for %s: empty evidence, tier=%s",
+                match_key, _pregen_empty_tier,
+            )
+        else:
+            log.info(
+                "[COVERAGE-GATE] Gold/Diamond — allowing Sonnet polish despite empty evidence for %s",
+                match_key,
+            )
 
     # W93-COST (2026-04-22): Sonnet polish is gated to Gold/Diamond edges only.
     # Silver/Bronze serve the deterministic W82 baseline — cuts polish calls by ~65%

@@ -152,6 +152,16 @@ from card_data_adapters import (
     build_story_quiz_step_data, build_story_quiz_complete_data,
     build_onboarding_restart_data,
     build_home_winners_data,
+    # BUILD-WAVE3-NOTIFICATIONS-01
+    build_notify_morning_bronze_data, build_notify_morning_gold_data,
+    build_notify_morning_diamond_data, build_notify_morning_no_tips_data,
+    build_notify_weekend_preview_data, build_notify_monday_recap_data,
+    build_notify_monthly_report_data,
+    build_notify_result_hit_data, build_notify_result_miss_data,
+    build_notify_result_bundle_data, build_notify_pre_match_gold_data,
+    build_notify_reengagement_data, build_notify_reengagement_lighter_data,
+    build_notify_mute_confirm_data, build_notify_mute_resume_data,
+    build_notify_live_score_data, build_notify_live_score_ft_data,
 )
 from narrative_spec import (
     _VERDICT_MAX_CHARS, _VERDICT_MIN_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
@@ -14242,6 +14252,22 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     pass
 
+            # BUILD-NARRATIVE-VOICE-01: Gold/Diamond must never serve thin w82/baseline
+            # narratives. Reject unconditionally so pregen re-generates with Sonnet polish.
+            # Root cause of "rich then gone": pregen writes w82 between taps because the
+            # empty-evidence gate blocked Sonnet. Now we reject those at serve time.
+            if narrative_source in ("w82", "baseline_no_edge") and tier in ("gold", "diamond"):
+                log.warning(
+                    "Rejecting w82/baseline narrative for %s — %s tier requires Sonnet polish",
+                    match_id, tier,
+                )
+                try:
+                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.commit()
+                except sqlite3.OperationalError as exc:
+                    log.debug("Deferred gold/diamond w82 cache delete for %s: %s", match_id, exc)
+                return None
+
             # MY-MATCHES-RELIABILITY-FIX: Reject w82 entries for ESPN-covered leagues
             # within 7 days. w82 is the deterministic baseline — if ESPN data is available
             # (or should be), force regeneration so pregen can produce a richer w84 entry.
@@ -25001,11 +25027,23 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                         "",
                         "<i>We will keep scanning and surface anything worth your time before kickoff.</i>",
                     ])
-                teaser = "\n".join(lines)
-                await ctx.bot.send_message(
-                    chat_id=user.id, text=teaser, parse_mode=ParseMode.HTML,
-                    disable_notification=_mt_silent,
-                    reply_markup=InlineKeyboardMarkup([
+                _nt_preview = []
+                if fixtures:
+                    for _f in fixtures[:3]:
+                        _nt_preview.append({
+                            "match": f"{_f.get('home_team', '')} vs {_f.get('away_team', '')}",
+                            "league": _f.get("league", ""),
+                        })
+                await send_card_or_fallback(
+                    bot=ctx.bot,
+                    chat_id=user.id,
+                    template="notify_morning_no_tips.html",
+                    data=build_notify_morning_no_tips_data(
+                        tomorrow_preview=_nt_preview,
+                        browse_cta="Check back later",
+                    ),
+                    text_fallback="",
+                    markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
                         [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                     ]),
@@ -25128,27 +25166,76 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 ])
 
-            # P3-WIRE: send image card digest; fall back to text on Pillow failure
-            _mt_png: bytes | None = None
-            try:
-                from image_card import generate_digest_card as _gen_mt_card
-                _mt_png = await asyncio.to_thread(_gen_mt_card, tips)
-            except (RuntimeError, ImportError) as _mt_img_err:
-                log.warning("Morning teaser image card failed for user %s: %s", user.id, _mt_img_err)
-            if _mt_png is not None:
-                await ctx.bot.send_photo(
-                    chat_id=user.id,
-                    photo=io.BytesIO(_mt_png),
-                    caption=teaser[:1024],
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=markup,
-                    disable_notification=_mt_silent,
+            # BUILD-WAVE3-NOTIFICATIONS-01: tier-specific morning teaser cards
+            if user_tier == "diamond":
+                _mt_top_pick = {
+                    "sport_emoji": sport_emoji,
+                    "match": f"{h(top['home_team'])} vs {h(top['away_team'])}",
+                    "outcome": top.get("outcome", ""),
+                    "odds": f"{top.get('odds', 0):.2f}",
+                    "ev": top.get("ev", 0),
+                    "tier_badge": top_badge,
+                }
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=user.id,
+                    template="notify_morning_diamond.html",
+                    data=build_notify_morning_diamond_data(
+                        top_pick=_mt_top_pick,
+                        tip_count=len(tips),
+                        results_block=results_block,
+                    ),
+                    text_fallback=teaser,
+                    markup=markup,
+                )
+            elif user_tier == "gold":
+                _mt_gold_fomo = ""
+                if yesterday_stats:
+                    _mt_dia_s = yesterday_stats.get("by_tier", {}).get("diamond", {})
+                    if _mt_dia_s.get("total", 0) > 0:
+                        _mt_gold_fomo = f"💎 Diamond: {_mt_dia_s['hit_rate'] * 100:.0f}% yesterday"
+                _mt_top_pick = {
+                    "sport_emoji": sport_emoji,
+                    "match": f"{h(top['home_team'])} vs {h(top['away_team'])}",
+                    "outcome": top.get("outcome", ""),
+                    "odds": f"{top.get('odds', 0):.2f}",
+                    "ev": top.get("ev", 0),
+                    "tier_badge": top_badge,
+                }
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=user.id,
+                    template="notify_morning_gold.html",
+                    data=build_notify_morning_gold_data(
+                        top_pick=_mt_top_pick,
+                        diamond_fomo=_mt_gold_fomo,
+                        hit_rate_7d=0,
+                        tip_count=len(tips),
+                        results_block=results_block,
+                    ),
+                    text_fallback=teaser,
+                    markup=markup,
                 )
             else:
-                await ctx.bot.send_message(
-                    chat_id=user.id, text=teaser, parse_mode=ParseMode.HTML,
-                    reply_markup=markup,
-                    disable_notification=_mt_silent,
+                _mt_free_picks_data = []
+                for _mt_fp in free_tips:
+                    _mt_fp_se = _get_sport_emoji_for_api_key(_mt_fp.get("sport_key", ""))
+                    _mt_fp_dt = _mt_fp.get("display_tier", _mt_fp.get("edge_rating", "bronze"))
+                    _mt_free_picks_data.append({
+                        "sport_emoji": _mt_fp_se,
+                        "match": f"{h(_mt_fp['home_team'])} vs {h(_mt_fp['away_team'])}",
+                        "tier": _mt_fp_dt,
+                    })
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=user.id,
+                    template="notify_morning_bronze.html",
+                    data=build_notify_morning_bronze_data(
+                        free_picks=_mt_free_picks_data,
+                        locked_count=locked_count,
+                        upgrade_cta=(_consec < 3),
+                        hit_rate_7d=0,
+                        results_block=results_block,
+                    ),
+                    text_fallback=teaser,
+                    markup=markup,
                 )
             if not _mt_silent:
                 await asyncio.to_thread(_nb_mt.record_audible, user.id)
@@ -25296,9 +25383,21 @@ async def _weekend_preview_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if user_tier in ("bronze", "gold"):
                 buttons.append([InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")])
 
-            await ctx.bot.send_message(
-                chat_id=user.id, text=text, parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(buttons),
+            await send_card_or_fallback(
+                bot=ctx.bot, chat_id=user.id,
+                template="notify_weekend_preview.html",
+                data=build_notify_weekend_preview_data(
+                    preview_count=upcoming.get("total", 0),
+                    top_3=[
+                        {"tier": t, "count": upcoming.get("by_tier", {}).get(t, {}).get("total", 0)}
+                        for t in ("diamond", "gold", "silver", "bronze")
+                        if upcoming.get("by_tier", {}).get(t, {}).get("total", 0) > 0
+                    ][:3],
+                    weekend_leagues=list(upcoming.get("leagues", []))[:5],
+                    user_tier=user_tier,
+                ),
+                text_fallback=text,
+                markup=InlineKeyboardMarkup(buttons),
             )
             await _after_send(user.id)
             sent += 1
@@ -25545,9 +25644,19 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if user_tier in ("bronze", "gold"):
                 buttons.append([InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")])
 
-            await ctx.bot.send_message(
-                chat_id=user.id, text=text, parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(buttons),
+            await send_card_or_fallback(
+                bot=ctx.bot, chat_id=user.id,
+                template="notify_monday_recap.html",
+                data=build_notify_monday_recap_data(
+                    hit_rate_7d=settled.get("hit_rate", 0) if settled else 0.0,
+                    total_edges=settled.get("total", 0) if settled else 0,
+                    hits=settled.get("hits", 0) if settled else 0,
+                    misses_count=(settled.get("total", 0) - settled.get("hits", 0)) if settled else 0,
+                    portfolio_return=_get_portfolio_line(),
+                    user_tier=user_tier,
+                ),
+                text_fallback=text,
+                markup=InlineKeyboardMarkup(buttons),
             )
             await _after_send(user.id)
             sent += 1
@@ -25677,11 +25786,37 @@ async def _monthly_report_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if user_tier in ("bronze", "gold"):
                 buttons.insert(1, [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")])
 
-            await ctx.bot.send_message(
-                chat_id=user.id,
-                text=base_text + cta + "\n\nBet responsibly. 18+ only.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(buttons),
+            _mrep_breakdown = [
+                {
+                    "tier": t,
+                    "hits": by_tier.get(t, {}).get("hits", 0),
+                    "total": by_tier.get(t, {}).get("total", 0),
+                    "hit_rate_pct": f"{by_tier.get(t, {}).get('hit_rate', 0) * 100:.0f}",
+                }
+                for t in ("diamond", "gold", "silver", "bronze")
+                if by_tier.get(t, {}).get("total", 0) > 0
+            ]
+            _mrep_best_tier = max(
+                (t for t in ("diamond", "gold", "silver", "bronze") if by_tier.get(t, {}).get("total", 0) > 0),
+                key=lambda t: by_tier.get(t, {}).get("hit_rate", 0),
+                default="",
+            )
+            await send_card_or_fallback(
+                bot=ctx.bot, chat_id=user.id,
+                template="notify_monthly_report.html",
+                data=build_notify_monthly_report_data(
+                    month=month_name,
+                    hit_rate=rate,
+                    total_edges=total,
+                    hits=hits,
+                    roi=roi,
+                    best_tier=_mrep_best_tier,
+                    total_profit=_get_portfolio_line(),
+                    tier_breakdown=_mrep_breakdown,
+                    responsible_footer=True,
+                ),
+                text_fallback=base_text + cta + "\n\nBet responsibly. 18+ only.",
+                markup=InlineKeyboardMarkup(buttons),
             )
             await _after_send(user.id)
             sent += 1
@@ -26975,10 +27110,20 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 if user_tier in ("bronze", "gold"):
                     buttons.append([InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")])
 
-                await ctx.bot.send_message(
-                    chat_id=uid, text=text, parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup(buttons),
-                    disable_notification=True,  # AC-3: post-match results always silent
+                _bundle_net = f"+{hits * 10}%" if hits > 0 else ""
+                await send_card_or_fallback(
+                    bot=ctx.bot,
+                    chat_id=uid,
+                    template="notify_result_bundle.html",
+                    data=build_notify_result_bundle_data(
+                        hits=hits,
+                        misses=misses,
+                        total=len(edges),
+                        net_on_R100=_bundle_net,
+                        accuracy_window=f"Season: {season_rate}",
+                    ),
+                    text_fallback="",
+                    markup=InlineKeyboardMarkup(buttons),
                 )
                 await _after_send(uid)
                 sent += 1
@@ -27064,11 +27209,46 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 if result == "hit":
                     await db.update_consecutive_misses(uid, 0)
 
-                await ctx.bot.send_message(
-                    chat_id=uid, text="\n".join(lines), parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup(buttons),
-                    disable_notification=True,  # AC-3: post-match results always silent
-                )
+                _profit_r100 = f"+R{round((odds - 1) * 100)}" if odds > 1 else ""
+                _loss_r100 = f"-R100" if result == "miss" else ""
+                if result == "hit":
+                    await send_card_or_fallback(
+                        bot=ctx.bot,
+                        chat_id=uid,
+                        template="notify_result_hit.html",
+                        data=build_notify_result_hit_data(
+                            match=match_display,
+                            pick=edge.get("bet_type", ""),
+                            odds=odds,
+                            profit_on_R100=_profit_r100,
+                            season_accuracy=season_rate,
+                            tier=tier,
+                            tier_emoji=tier_emoji,
+                            score=score,
+                        ),
+                        text_fallback="",
+                        markup=InlineKeyboardMarkup(buttons),
+                    )
+                else:
+                    await send_card_or_fallback(
+                        bot=ctx.bot,
+                        chat_id=uid,
+                        template="notify_result_miss.html",
+                        data=build_notify_result_miss_data(
+                            match=match_display,
+                            pick=edge.get("bet_type", ""),
+                            odds=odds,
+                            loss_on_R100=_loss_r100,
+                            season_accuracy=season_rate,
+                            transparency_note="The market was right on this one.",
+                            tier=tier,
+                            tier_emoji=tier_emoji,
+                            score=score,
+                            consecutive_misses=consec,
+                        ),
+                        text_fallback="",
+                        markup=InlineKeyboardMarkup(buttons),
+                    )
                 await _after_send(uid)
                 sent += 1
         except Exception:
@@ -27241,26 +27421,39 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
             audible = await asyncio.to_thread(_nb.can_send_audible, user.id)
 
-            # Build a single batch message for all qualifying edges
-            lines = [f"🎯 <b>Pre-Match Alert</b> — kickoff in 2–4h\n"]
-            for edge in qualifying:
-                t_emoji = _pma_emojis.get(edge["edge_tier"], "")
-                match_disp = _display_team_name(edge["match_key"])
-                lines.append(
-                    f"{t_emoji} <b>{match_disp}</b>\n"
-                    f"   💰 {edge['bet_type']} @ {edge['recommended_odds']:.2f}"
-                    f" · EV +{edge['predicted_ev']:.1f}%"
-                )
-            text = "\n\n".join(lines)
+            # Build card for first qualifying edge (most important)
+            _pma_edge = qualifying[0]
+            _pma_match = _display_team_name(_pma_edge["match_key"])
+            _pma_tier = _pma_edge["edge_tier"]
+            _pma_tier_emoji = _pma_emojis.get(_pma_tier, "")
+            _pma_odds = _pma_edge.get("recommended_odds", 0)
+            _pma_ev = _pma_edge.get("predicted_ev", 0)
+            _pma_bk_key = (_pma_edge.get("bookmaker") or "").lower()
+            _pma_league = _pma_edge.get("league", "")
+            _pma_bk_url = config.get_affiliate_url()
+            _pma_hours_h = int(hours_until)
+            _pma_hours_m = int((hours_until - _pma_hours_h) * 60)
+            _pma_kickoff_in = f"{_pma_hours_h}h {_pma_hours_m:02d}m" if _pma_hours_h > 0 else f"{_pma_hours_m}m"
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
             ])
-            await ctx.bot.send_message(
+            await send_card_or_fallback(
+                bot=ctx.bot,
                 chat_id=user.id,
-                text=text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=markup,
-                disable_notification=not audible,
+                template="notify_pre_match_gold.html",
+                data=build_notify_pre_match_gold_data(
+                    match=_pma_match,
+                    kickoff_in=_pma_kickoff_in,
+                    pick=_pma_edge.get("bet_type", ""),
+                    odds=_pma_odds,
+                    bookmaker_url=_pma_bk_url,
+                    tier=_pma_tier,
+                    tier_emoji=_pma_tier_emoji,
+                    league=_pma_league,
+                    ev=_pma_ev,
+                ),
+                text_fallback="",
+                markup=markup,
             )
             if audible:
                 await asyncio.to_thread(_nb.record_audible, user.id)
@@ -27307,9 +27500,16 @@ async def cmd_mute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # /unmute or /mute off → clear mute
     if arg == "off" or (update.message and update.message.text and update.message.text.startswith("/unmute")):
         await db.set_muted_until(user_id, None)
-        await update.message.reply_text(
-            "🔔 <b>Notifications resumed!</b>\n\nYou'll receive edges and alerts again.",
-            parse_mode=ParseMode.HTML,
+        _mute_resume_mkp = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        ])
+        await send_card_or_fallback(
+            bot=update.get_bot(),
+            chat_id=update.effective_chat.id,
+            template="notify_mute_resume.html",
+            data=build_notify_mute_resume_data(resumed_at="Now"),
+            text_fallback="",
+            markup=_mute_resume_mkp,
         )
         return
 
@@ -27327,11 +27527,21 @@ async def cmd_mute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         label = "24 hours"
 
     await db.set_muted_until(user_id, until)
-    await update.message.reply_text(
-        f"🔇 <b>Notifications muted for {label}.</b>\n\n"
-        f"You won't receive push messages until then.\n"
-        f"Use /unmute to resume anytime.",
-        parse_mode=ParseMode.HTML,
+    from zoneinfo import ZoneInfo as _mute_tz
+    _resumes_str = until.astimezone(_mute_tz(config.TZ)).strftime("%a %d %b at %H:%M")
+    _mute_confirm_mkp = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔔 Unmute now", callback_data="mute:off")],
+    ])
+    await send_card_or_fallback(
+        bot=update.get_bot(),
+        chat_id=update.effective_chat.id,
+        template="notify_mute_confirm.html",
+        data=build_notify_mute_confirm_data(
+            duration_label=label,
+            resumes_at=_resumes_str,
+        ),
+        text_fallback="",
+        markup=_mute_confirm_mkp,
     )
 
 
@@ -27432,14 +27642,55 @@ async def _reengagement_nudge_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 if not lighter_tone:
                     lines.append("Your Diamond edges are waiting.")
 
-            lines.append("\nBet responsibly. 18+ only.")
+            # Build settlement stats dict for card adapter
+            _rn_stats = {}
+            if edge_stats and edge_stats.get("total", 0) > 0:
+                _rn_stats = {
+                    "hits": edge_stats.get("hits", 0),
+                    "total": edge_stats["total"],
+                    "rate_pct": f"{edge_stats.get('hit_rate', 0) * 100:.0f}",
+                }
+            _rn_best = None
+            if best_hits:
+                _rn_top = best_hits[0]
+                _rn_mk = _display_team_name(_rn_top.get("match_key", ""))
+                _rn_odds = _rn_top.get("recommended_odds", 0)
+                _rn_best = {
+                    "match": _rn_mk,
+                    "odds": _rn_odds,
+                    "profit_str": format_return(_rn_odds) if _rn_odds > 0 else "",
+                }
+            _pf_line = _get_portfolio_line()
 
-            await ctx.bot.send_message(
-                chat_id=user.id,
-                text="\n".join(lines),
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
+            if lighter_tone:
+                await send_card_or_fallback(
+                    bot=ctx.bot,
+                    chat_id=user.id,
+                    template="notify_reengagement_lighter.html",
+                    data=build_notify_reengagement_lighter_data(
+                        days_since_active=3,
+                        settlement_stats=_rn_stats,
+                        mute_cta="Mute for 7 days with /mute week",
+                    ),
+                    text_fallback="",
+                    markup=InlineKeyboardMarkup(buttons),
+                )
+            else:
+                await send_card_or_fallback(
+                    bot=ctx.bot,
+                    chat_id=user.id,
+                    template="notify_reengagement.html",
+                    data=build_notify_reengagement_data(
+                        days_since_active=3,
+                        edges_missed=_rn_stats.get("total", 0),
+                        return_cta="See what edges are live right now!",
+                        responsible_footer=True,
+                        settlement_stats=_rn_stats,
+                        best_hit=_rn_best,
+                    ),
+                    text_fallback="",
+                    markup=InlineKeyboardMarkup(buttons),
+                )
 
             # Update nudge tracking
             import datetime as _dt
