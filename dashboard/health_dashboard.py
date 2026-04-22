@@ -3608,10 +3608,28 @@ def render_automation_content() -> str:
     _warn_items: list[dict] = []
     try:
         for _rk in _fetch_overdue_notion_reel_kits():
+            # FIX-SOCIAL-OPS-REEL-KIT-INLINE-PREVIEW-01: find the matching MOQ post
+            # so the pill can open the reel in the preview pane instead of navigating away.
+            _rk_date = _rk["date"]
+            _so_post_id = ""
+            for _it in items:
+                if _norm_wg(_it.get("channel") or "") != "instagram":
+                    continue
+                _wt_rk = (_it.get("work_type") or "").lower()
+                _ttl_rk = (_it.get("title") or "").lower()
+                if not (("reel" in _wt_rk) or ("reel still" in _ttl_rk) or ("reel" in _ttl_rk)):
+                    continue
+                _sdt_rk = parse_ts(_it.get("scheduled_time") or "")
+                if not _sdt_rk:
+                    continue
+                if _sdt_rk.astimezone(_SAST).strftime("%Y-%m-%d") == _rk_date:
+                    _so_post_id = _it.get("id") or ""
+                    break
             _warn_items.append({
                 "id": _rk.get("block_id", ""),
-                "label": f"\U0001f3a5 Reel Kit {_rk['date']} overdue",
-                "href": "/admin/reel-kit",
+                "so_post_id": _so_post_id,
+                "label": f"\U0001f3a5 Reel Kit {_rk_date} overdue",
+                "href": "" if _so_post_id else "/admin/reel-kit",
             })
     except Exception:
         pass
@@ -3641,10 +3659,21 @@ def render_automation_content() -> str:
             _wi_label = _html_mod.escape(_wi["label"])
             _wi_id = _html_mod.escape(_wi.get("id") or "")
             _wi_href = _html_mod.escape(_wi.get("href") or "")
-            _wi_text = (f'<a href="{_wi_href}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">{_wi_label}</a>'
-                        if _wi_href else _wi_label)
+            _wi_so_post_id = _html_mod.escape(_wi.get("so_post_id") or "")
+            if _wi_so_post_id:
+                # FIX-SOCIAL-OPS-REEL-KIT-INLINE-PREVIEW-01: open in preview pane
+                _wi_text = (
+                    f'<button type="button" class="so-fb-item-link" '
+                    f'onclick="__soReelKitPillClick(this.closest(\'.so-fb-item\'))">'
+                    f'{_wi_label}</button>'
+                )
+            elif _wi_href:
+                _wi_text = (f'<a href="{_wi_href}" target="_blank" rel="noopener" '
+                            f'style="color:inherit;text-decoration:underline;">{_wi_label}</a>')
+            else:
+                _wi_text = _wi_label
             _wb_parts.append(
-                f'<span class="so-fb-item" data-page-id="{_wi_id}">'
+                f'<span class="so-fb-item" data-page-id="{_wi_id}" data-so-post-id="{_wi_so_post_id}">'
                 f'<span class="so-fb-item-text">{_wi_text}</span>'
                 f'<button type="button" class="so-fb-item-dismiss" '
                 f'title="Dismiss" onclick="__soWarnDismiss(this)" '
@@ -3767,6 +3796,8 @@ def render_automation_content() -> str:
   font-size:14px;line-height:1;padding:1px 7px;border-radius:3px;font-family:inherit;}
 .so-fb-item-dismiss:hover{background:rgba(248,81,73,0.22);}
 .so-fb-item-dismiss:disabled{opacity:0.4;cursor:wait;}
+.so-fb-item-link{background:transparent;border:none;color:inherit;cursor:pointer;font:inherit;font-size:11px;padding:0;text-decoration:underline;text-align:left;}
+.so-fb-item-link:hover{color:var(--gold);}
 .so-main{display:grid;grid-template-columns:minmax(0,65fr) minmax(0,35fr);gap:16px;align-items:stretch;flex:1;min-height:0;overflow:hidden;}
 @media(max-width:1279px){.so-main{grid-template-columns:minmax(0,1fr);flex:0 0 auto;height:auto;overflow:visible;}}
 .so-left{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;overflow:hidden;}
@@ -4698,6 +4729,17 @@ window.__soWarnDismiss=function(btn){
   if(!banner.querySelectorAll('.so-fb-item').length)banner.style.display='none';
   var cnt=document.getElementById('so-warn-count');
   if(cnt){var n=banner.querySelectorAll('.so-fb-item').length;if(n>0)cnt.textContent=n+' warning'+(n!==1?'s':'');}
+};
+// FIX-SOCIAL-OPS-REEL-KIT-INLINE-PREVIEW-01: open reel kit item in preview pane
+window.__soReelKitPillClick=function(item){
+  if(!item)return;
+  var postId=item.getAttribute('data-so-post-id');
+  if(!postId)return;
+  var btn=document.querySelector('[data-post-id="'+postId.replace(/"/g,'&quot;')+'"]');
+  if(btn&&typeof setActive==='function')setActive(btn);
+  if(typeof loadPreview==='function')loadPreview(postId);
+  var pv=document.getElementById('so-preview');
+  if(pv)pv.scrollIntoView({behavior:'smooth',block:'nearest'});
 };
 
 // ── Queue ─────────────────────────────────────────────────────────────
