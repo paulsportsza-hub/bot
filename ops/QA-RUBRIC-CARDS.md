@@ -91,6 +91,25 @@ on paraphrase", always choose the 6.2.
 - "based on the context"
 Replace with a quoted observation or an UNVERIFIABLE marker.
 
+### 1.7 C3 and C5 scoring REQUIRES Telethon receipt — no exceptions
+C3-EDGEDETAIL and C5-MATCHDETAIL are **photo-only cards**. The verdict and
+narrative content are baked into a PNG image. The Telegram message caption
+does NOT contain the verdict text — it may be empty or contain only metadata.
+
+**Any QA run that scores D7a or D7b on C3 or C5 WITHOUT one of the following
+two evidence sources is automatically `QA-INVALID`:**
+
+1. A confirmed `narrative_cache.narrative_html` read (the exact HTML the renderer
+   used to produce the PNG), quoted verbatim in the report.
+2. A vision-model transcription of the downloaded PNG via Telethon (§8.2),
+   with the JSON output included verbatim in the report.
+
+To download the PNG you MUST receive the card via Telethon (`MessageMediaPhoto`
+→ `download_media`) — see §8.2 and §14 for the harness. Scoring from memory,
+from a screenshot taken manually, or from any non-Telethon source is forbidden.
+This applies whether or not the narrative_cache row is available — both evidence
+paths require prior Telethon delivery confirmation of the live card.
+
 ---
 
 ## 2. Navigation Depth Requirements (The Card Taxonomy)
@@ -106,9 +125,9 @@ path, and they are **NOT interchangeable** for scoring purposes.
 | **C0-ONB** | `/start` (fresh user) — each onboarding step | Onboarding step (image + text + buttons) | No | No | Text + InlineKeyboardMarkup |
 | **C1-DIGEST** | `/today` or `/picks` or tap `💎 Top Edge Picks` | Top Edge Picks **list** | No (summary only) | No (best odds per tip line) | **Photo** (PNG caption) OR HTML text (list) |
 | **C2-FILTER** | From C1, tap a tier filter (Diamond/Gold/Silver/Bronze) | Tier-filtered **sub-list** | No | No | HTML text, ≤4 items per page |
-| **C3-EDGEDETAIL** | From C1 or C2, tap `ep:pick:N` → `edge:detail:{match_key}` | **The Edge Detail card** — verdict, signals, risk, setup | **YES** | **YES (access-level gated)** | HTML caption or text |
+| **C3-EDGEDETAIL** | From C1 or C2, tap `ep:pick:N` → `edge:detail:{match_key}` | **The Edge Detail card** — verdict, signals, risk, setup | **YES** | **YES (access-level gated)** | **Photo (PNG) — verdict baked into image, no plain-text verdict in caption; Telethon download required to score D7** |
 | **C4-MM** | Tap `⚽ My Matches` | My Matches list | No | No | HTML text (with 📺 broadcast line) |
-| **C5-MATCHDETAIL** | From C4, tap `yg:game:{event_id}` | Match Detail breakdown (narrative) | YES (narrative verdict) | YES | HTML text, 4-section narrative |
+| **C5-MATCHDETAIL** | From C4, tap `yg:game:{event_id}` | Match Detail breakdown (narrative) | YES (narrative verdict) | YES | **Photo (PNG) — narrative baked into image, no plain-text verdict in caption; Telethon download required to score D7** |
 | **C6-SUBSCRIBE** | `/subscribe` | Plan picker | No | No | HTML text + InlineKeyboardMarkup |
 | **C7-EMAIL** | From C6, tap a plan | Email prompt | No | No | HTML text |
 | **C8-PAYLINK** | After email, Stitch Express fires | Payment link message (checkout URL button) | No | No | HTML text + URL button |
