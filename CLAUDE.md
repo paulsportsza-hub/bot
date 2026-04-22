@@ -3048,3 +3048,26 @@ in NARRATIVE-ACCURACY-01 Part 2 voice testing). The wrong direction (V2) is
 bet-instruction style ("back at 1.45, measured single") — rejected. If a verdict
 reads like a sizing call, that is a voice regression. Refer to the `verdict-generator`
 skill and `narrative_spec.TONE_BANDS` for the allowed/banned phrase sets.
+
+### Rule 6 — SA Braai Voice (BUILD-NARRATIVE-VOICE-01 — LOCKED 22 Apr 2026)
+All LLM-generated narrative sections MUST use SA voice (enforced in prompt by
+`format_evidence_prompt()` in `evidence_pack.py`):
+- Team nicknames: Amakhosi (Chiefs), The Bucs (Pirates), Brazilians/Downs (Sundowns),
+  Bafana (SA soccer), Proteas (SA cricket), Boks/Springboks (SA rugby),
+  Bulls/Stormers/Sharks/Lions (URC franchises)
+- Manager convention: surname-only possessive — Arteta's Arsenal, Slot's Reds, Amorim's United
+- Cite at least ONE specific number in the verdict (odds, EV%, streak, H2H record)
+- FORBIDDEN: "proceed with caution", "worth backing", "value play", "guaranteed",
+  "one to watch", "smart money", and all British hedging phrases
+- Verdict MUST end in a sentence terminator (. ! ? …) — Gate 3 in `min_verdict_quality()`
+- `VERDICT_HARD_MAX = 260` chars (soft target band: 140–200 chars)
+- `max_tokens` for verdict-only Sonnet calls: ≥ 180 (`_generate_verdict()` in bot.py)
+
+### Rule 7 — Tier-Aware Pregen Horizon (BUILD-NARRATIVE-VOICE-01 — LOCKED 22 Apr 2026)
+- Diamond/Gold edges: pregen horizon = 96h ahead
+- Silver/Bronze edges: pregen horizon = 48h ahead
+- Implementation: `discover_pregen_targets(hours_ahead_premium=96)` in
+  `scripts/pregenerate_narratives.py`; queries 96h window, filters out
+  Silver/Bronze fixtures in the 48–96h band
+- DO NOT revert `hours_ahead_premium` default to 48 — Diamond edges need the wider window
+  to avoid the "outside 48h window → legacy path" defect
