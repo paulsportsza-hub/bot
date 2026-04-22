@@ -23787,7 +23787,10 @@ async def handle_settings(query, action: str) -> None:
     if action == "home":
         await _discard_settings_sports_state(user_id)
         text = await format_profile_summary(user_id)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
+        except BadRequest:
+            await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
     elif action == "risk":
         text = "<b>🎯 Change Risk Profile</b>\n\nSelect your risk tolerance:"
         rows = []
