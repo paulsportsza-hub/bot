@@ -263,6 +263,9 @@ claude = anthropic.AsyncAnthropic(api_key=config.OPENROUTER_API_KEY)
 # var if a Sonnet-quality verdict is required for a specific deployment.
 _VERDICT_MODEL = os.environ.get("VERDICT_MODEL", "claude-haiku-4-5-20251001")
 
+# FIX-NOTIFICATIONS-DISABLE-01: feature gate — set True to re-enable proactive notifications
+NOTIFICATIONS_ENABLED = False
+
 # ── Onboarding state machine ─────────────────────────────
 # Steps: experience → sports → favourites → edge_explainer → risk → bankroll → notify → summary → plan
 ONBOARD_STEPS = ("experience", "sports", "favourites", "edge_explainer", "risk", "bankroll", "notify", "summary", "plan")
@@ -725,7 +728,6 @@ def kb_settings() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎯 Risk Profile", callback_data="settings:risk")],
         [InlineKeyboardButton("💰 Bankroll", callback_data="settings:bankroll")],
-        [InlineKeyboardButton("🔔 Notifications", callback_data="settings:notify")],
         [InlineKeyboardButton("⚽ My Sports", callback_data="settings:sports")],
         [InlineKeyboardButton("📊 Alert Preferences", callback_data="settings:prefs")],
         [InlineKeyboardButton("🔄 Reset Profile", callback_data="settings:reset")],
@@ -4702,8 +4704,7 @@ async def _show_summary(query, ob: dict) -> None:
         f"🎯 <b>Experience:</b> {exp_labels.get(exp, exp)}\n\n"
         + "\n".join(sports_lines)
         + f"\n⚖️ <b>Risk:</b> {risk_label}\n"
-        f"💰 <b>Bankroll:</b> {bankroll_str}\n"
-        f"🔔 <b>Daily picks:</b> {notify_str}\n\n"
+        f"💰 <b>Bankroll:</b> {bankroll_str}\n\n"
         "All good? Tap <b>Next</b> to choose your plan."
     )
 
@@ -5080,8 +5081,6 @@ def _build_profile_setup_section(data: dict) -> list[str]:
     ]
     if data.get("bankroll_str") and data["bankroll_str"] != "Not set":
         lines.append(f"💰 <b>Bankroll:</b> {h(data['bankroll_str'])}")
-    if data.get("notify_str") and data["notify_str"] != "Not set":
-        lines.append(f"🔔 <b>Daily picks:</b> {h(data['notify_str'])}")
     return lines
 
 
@@ -5121,7 +5120,6 @@ def _build_settings_profile_summary(data: dict, edge_summary: dict) -> str:
 
     lines.append(f"⚖️ <b>Risk:</b> {data['risk_label']}")
     lines.append(f"💰 <b>Bankroll:</b> {data['bankroll_str']}")
-    lines.append(f"🔔 <b>Daily picks:</b> {data['notify_str']}")
 
     if edge_summary.get("has_data"):
         lines.append("")
@@ -23808,11 +23806,11 @@ async def handle_settings(query, action: str) -> None:
             parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
         )
     elif action in {"notify", "story"}:
-        notify_prefs = db.get_notification_prefs(user)
+        # FIX-NOTIFICATIONS-DISABLE-01: notifications feature disabled — redirect to settings home
         await query.edit_message_text(
-            _build_settings_notifications_text(user, notify_prefs),
+            "⚙️ <b>Settings</b>\n\nChoose a setting to adjust:",
             parse_mode=ParseMode.HTML,
-            reply_markup=_build_settings_notifications_keyboard(user, notify_prefs),
+            reply_markup=kb_settings(),
         )
     elif action.startswith("set_notify:"):
         hour = int(action.split(":", 1)[1])
@@ -24864,6 +24862,8 @@ async def _check_subscription_expiry(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _can_send_notification(user_id: int) -> bool:
     """Central gate for all proactive notifications. Returns False if muted or over daily cap."""
+    if not NOTIFICATIONS_ENABLED:
+        return False
     if await db.is_muted(user_id):
         return False
     user_tier = await get_effective_tier(user_id)
@@ -25085,6 +25085,8 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     Wave 21: Bronze users get tier-segmented teaser showing edge counts, top free
     picks, and locked pick count with upgrade CTA. Gold/Diamond get existing format.
     """
+    if not NOTIFICATIONS_ENABLED:
+        return
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
 
@@ -25564,6 +25566,8 @@ def _format_weekend_fixture_preview(fixtures: list[dict]) -> str:
 
 async def _weekend_preview_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Thursday 18:00 SAST: send tier-segmented weekend preview to all onboarded users."""
+    if not NOTIFICATIONS_ENABLED:
+        return
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
 
@@ -25814,6 +25818,8 @@ def _format_week_ahead_preview(fixtures: list[dict]) -> str:
 
 async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Monday 08:00 SAST: send weekend recap to Bronze and Gold users."""
+    if not NOTIFICATIONS_ENABLED:
+        return
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
 
@@ -25895,6 +25901,8 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _monthly_report_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Monthly cron: send 30-day edge performance report on 1st of each month at 09:00 SAST."""
+    if not NOTIFICATIONS_ENABLED:
+        return
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
 
@@ -27271,6 +27279,8 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     - Diamond (HIT): full CLV data + season stats
     - All (MISS): same prominence as wins, season accuracy always shown
     """
+    if not NOTIFICATIONS_ENABLED:
+        return
     log.info("Result alerts job running")
     _ra_mon = _CronMonitor("settlement-pipeline")
     _ra_mon.begin()
@@ -27541,6 +27551,8 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     AC-2: Gold+ only. Audible if budget allows.
     AC-7: Scheduled from edge_results. No duplicates per day.
     """
+    if not NOTIFICATIONS_ENABLED:
+        return
     from datetime import datetime as dt_cls  # noqa: PLC0415
     from zoneinfo import ZoneInfo  # noqa: PLC0415
     import notification_budget as _nb  # noqa: PLC0415
@@ -27776,6 +27788,8 @@ async def _reengagement_nudge_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     - After 2 consecutive unanswered nudges (14+ days), switch to monthly lighter tone
     - Shows real data, never generic messaging
     """
+    if not NOTIFICATIONS_ENABLED:
+        return
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
 

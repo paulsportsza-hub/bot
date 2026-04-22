@@ -211,6 +211,7 @@ async def test_help_command_shows_help_text(mock_update, mock_context) -> None:
 
 
 async def test_settings_notifications_screen_has_back_button(test_db) -> None:
+    # FIX-NOTIFICATIONS-DISABLE-01: notifications disabled — action redirects to settings home
     await db.upsert_user(41015, "notifyscreen", "NotifyScreen")
     query = _make_query(user_id=41015)
 
@@ -223,4 +224,5 @@ async def test_settings_notifications_screen_has_back_button(test_db) -> None:
         for btn in row
         if btn.callback_data
     ]
-    assert "settings:home" in callbacks
+    # Redirect lands on kb_settings() which uses menu:home for navigation
+    assert "menu:home" in callbacks
