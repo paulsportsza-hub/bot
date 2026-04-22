@@ -296,3 +296,92 @@ class TestDerivedRugbyStructure:
     def test_has_wins(self):
         c = self._claims()
         assert "home_wins" in c or "home_streak" in c
+
+
+# ── BUILD-NARRATIVE-VOICE-01 — Verdict gate contracts ─────────────────────────
+
+class TestVerdictSentenceBoundary:
+    """AC-4: min_verdict_quality() must reject verdicts that don't end in . ! ? …"""
+
+    def test_sentence_ending_passes(self):
+        from narrative_spec import min_verdict_quality
+        # Verdict includes ≥3 analytical vocab words: back, form, edge, expected
+        verdict = (
+            "Back the Reds — Slot's side lead the form table and the edge is confirmed at 1.85 "
+            "with Supabets. Expected value is clear here."
+        )
+        assert min_verdict_quality(verdict, tier="silver") is True
+
+    def test_truncated_verdict_fails(self):
+        """The Man Utd vs Brentford truncation defect — must be rejected."""
+        from narrative_spec import min_verdict_quality
+        truncated = "back them at Supabets (1.89), the strongest price across the board, with a"
+        assert min_verdict_quality(truncated, tier="silver") is False
+
+    def test_comma_ending_fails(self):
+        from narrative_spec import min_verdict_quality
+        verdict = "Amakhosi have the goods at 2.10, the edge is real but the form is inconsistent,"
+        assert min_verdict_quality(verdict, tier="bronze") is False
+
+    def test_ellipsis_ending_passes(self):
+        from narrative_spec import min_verdict_quality
+        # Includes ≥3 analytical words: back, edge, form, expected
+        verdict = (
+            "Back the Boks here — the set-piece edge is real and Betway's 1.75 reflects it. "
+            "Form confirms the lean, expected value is positive…"
+        )
+        assert min_verdict_quality(verdict, tier="gold") is True
+
+
+class TestVerdictHardMax:
+    """AC-12: min_verdict_quality() must reject verdicts longer than VERDICT_HARD_MAX (260)."""
+
+    def test_261_chars_rejected(self):
+        from narrative_spec import min_verdict_quality, VERDICT_HARD_MAX
+        # Build a base verdict with ≥3 analytical vocab words: back, edge, expected, form
+        base = (
+            "Back the Bucs here — the form table, edge analysis and expected value all align. "
+            "1.95 with Betway is the move; the confirming signals are there. "
+        )
+        while len(base) <= VERDICT_HARD_MAX:
+            base += "x"
+        assert len(base) > VERDICT_HARD_MAX
+        if not base.endswith("."):
+            base = base[:-1] + "."
+        assert min_verdict_quality(base, tier="diamond") is False
+
+    def test_260_chars_passes(self):
+        from narrative_spec import min_verdict_quality, VERDICT_HARD_MAX
+        # Build a verdict exactly at VERDICT_HARD_MAX with ≥3 analytical vocab words.
+        base = (
+            "Back the Bucs here — the form table, edge analysis and expected value all align. "
+            "1.95 with Betway is the move; the confirming signals are there. Size it normally."
+        )
+        while len(base) < VERDICT_HARD_MAX:
+            base += " "
+        base = base[:VERDICT_HARD_MAX - 1] + "."
+        assert len(base) == VERDICT_HARD_MAX
+        assert min_verdict_quality(base, tier="diamond") is True
+
+
+class TestTierAwarePregenHorizon:
+    """AC-6: discover_pregen_targets() must apply tier-aware horizon filtering."""
+
+    def test_standard_horizon_default(self):
+        """Function signature must accept hours_ahead_premium kwarg."""
+        import inspect
+        from scripts.pregenerate_narratives import discover_pregen_targets
+        sig = inspect.signature(discover_pregen_targets)
+        assert "hours_ahead_premium" in sig.parameters
+
+    def test_premium_default_is_96(self):
+        from scripts.pregenerate_narratives import discover_pregen_targets
+        import inspect
+        sig = inspect.signature(discover_pregen_targets)
+        assert sig.parameters["hours_ahead_premium"].default == 96
+
+    def test_standard_default_is_48(self):
+        from scripts.pregenerate_narratives import discover_pregen_targets
+        import inspect
+        sig = inspect.signature(discover_pregen_targets)
+        assert sig.parameters["hours_ahead"].default == 48

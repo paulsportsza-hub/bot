@@ -8101,7 +8101,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         client = _anthropic.Anthropic()
         resp = client.messages.create(
             model=_VERDICT_MODEL,
-            max_tokens=128,  # FIX-NARRATIVE-VERDICT-MAXTOKENS-01: raised to 128; _trim_to_last_sentence caps to ≤140
+            max_tokens=180,  # BUILD-NARRATIVE-VOICE-01: raised to 180 (≈260 chars × 0.7 headroom for VERDICT_HARD_MAX)
             temperature=0.5,
             system=system_prompt,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -8137,7 +8137,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             try:
                 _sg_resp = client.messages.create(
                     model=_VERDICT_MODEL,
-                    max_tokens=128,
+                    max_tokens=180,
                     temperature=0.85,
                     system=system_prompt,
                     messages=[

@@ -2161,6 +2161,9 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
         ANALYTICAL_VOCABULARY,
         MIN_VERDICT_CHARS_BY_TIER,
         TONE_BANDS,
+        VERDICT_TARGET_LOW,
+        VERDICT_TARGET_HIGH,
+        VERDICT_HARD_MAX,
     )
 
     tone_band = TONE_BANDS.get(spec.tone_band, {"allowed": [], "banned": []})
@@ -2178,12 +2181,26 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
         "",
         "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
         f"- Verdict MUST be at least {_verdict_char_floor} characters long ({_tier_key} tier floor).",
+        f"- TARGET band: {VERDICT_TARGET_LOW}–{VERDICT_TARGET_HIGH} characters. Hard max: {VERDICT_HARD_MAX} characters.",
         "- Verdict MUST use at least 3 distinct analytical vocabulary terms from this list:",
         f"  {_analytical_vocab_list}",
+        "- Verdict MUST end with a sentence terminator (. ! ? …).",
         "- Verdict MUST NOT be a trivial shape. The following patterns are banned:",
         "    (a) price-only openers like 'At <odds> on <book>' that carry no analytical content,",
         "    (b) bare name-only shapes like '<Team>'s at <price>' with no reasoning,",
         "    (c) one-line verdicts that only restate the market price without positional language.",
+        "",
+        "SA VOICE (REQUIRED — automatic rejection if verdict sounds generic or British):",
+        "- Use SA team nicknames where applicable:",
+        "  Kaizer Chiefs → Amakhosi | Orlando Pirates → The Bucs | Mamelodi Sundowns → Brazilians or Downs",
+        "  Bafana Bafana for SA national soccer | Proteas for SA cricket | Springboks/Boks for SA rugby",
+        "  Bulls, Stormers, Sharks, Lions for URC franchises",
+        "- For non-SA clubs: use manager SURNAME ONLY in possessive (Arteta's Arsenal, Slot's Reds, Amorim's United).",
+        "- Write like a sharp SA pundit: punchy, direct, evidence-grounded. Use plain SA phrases naturally",
+        "  (e.g. 'five on the bounce', 'back the Downs here', 'Amakhosi have the goods').",
+        "- Cite at least ONE specific number (e.g. odds, EV%, streak length, head-to-head record).",
+        "- FORBIDDEN: 'proceed with caution', 'worth backing', 'value play', 'value here',",
+        "  'can't lose', 'guaranteed', 'one to watch', 'smart money'.",
     ]
     if _tier_key == "diamond":
         _verdict_quality_lines.append(
@@ -2231,6 +2248,20 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "",
             "You write like a mate at the braai who actually knows the numbers: punchy, direct,",
             "occasionally irreverent, but always evidence-grounded. You never bluff.",
+            "",
+            "SA VOICE RULES (apply to ALL four sections — violation = AUTOMATIC REJECTION):",
+            "- Use SA team nicknames: Amakhosi (Chiefs), The Bucs (Pirates), Brazilians/Downs (Sundowns),",
+            "  Bafana (SA soccer), Proteas (SA cricket), Boks/Springboks (SA rugby).",
+            "  For URC franchises use Bulls, Stormers, Sharks, Lions directly.",
+            "- For non-SA clubs refer to the manager by SURNAME ONLY in possessive form",
+            "  (e.g. Arteta's Arsenal, Slot's Reds, Amorim's United, Guardiola's City).",
+            "- Use plain SA pundit language naturally: 'five on the bounce', 'back them here',",
+            "  'the Downs have the goods', 'smart bru's pick', 'it's in the numbers'.",
+            "- NEVER use British hedging phrases: 'I would suggest', 'one might argue',",
+            "  'it could be argued', 'perhaps', 'it would appear'.",
+            "- PSL matches: when squad_depth, h2h_last5, or form_last5 data is available",
+            "  in the evidence pack, cite the specific numbers. If absent, pivot to what IS",
+            "  available (Elo, odds structure, tipster consensus) — never fabricate PSL stats.",
             "",
         ]
 

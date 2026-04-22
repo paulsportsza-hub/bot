@@ -154,6 +154,12 @@ MIN_VERDICT_CHARS_BY_TIER: dict[str, int] = {
     "silver": 80,
     "bronze": 60,
 }
+
+# BUILD-NARRATIVE-VOICE-01: unified target band + hard max (supersedes _VERDICT_MAX_CHARS=200)
+# See .claude/skills/verdict-generator/references/tier-bands.md for full table.
+VERDICT_TARGET_LOW: int = 140   # soft target — below this logs verdict_suboptimal_length
+VERDICT_TARGET_HIGH: int = 200  # soft target upper bound
+VERDICT_HARD_MAX: int = 260     # hard reject — prevents box overflow on the card UI
 # Regexes that match trivially thin / content-empty verdicts.
 # Gate fires if ANY pattern matches the stripped verdict text.
 BANNED_TRIVIAL_VERDICT_TEMPLATES: list[re.Pattern] = [
@@ -408,40 +414,53 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
 
     Rejects verdicts that:
     1. Are shorter than the tier-specific MIN_VERDICT_CHARS_BY_TIER floor.
-    2. Are longer than _VERDICT_MAX_CHARS.
-    3. Match a banned trivial template (content-empty patterns).
-    4. Contain fewer than 3 analytical vocabulary words.
-    5. Name a manager/coach not present in evidence_pack (hard fail).
-    6. Begin with "At <price>" for Diamond tier.
-    7. Contain residual markdown formatting (**/__/`/#/>) (hard fail).
+    2. Are longer than VERDICT_HARD_MAX (260).
+    3. Do not end in a sentence terminator (. ! ? …) — BUILD-NARRATIVE-VOICE-01 AC-4.
+    4. Match a banned trivial template (content-empty patterns).
+    5. Contain fewer than 3 analytical vocabulary words.
+    6. Name a manager/coach not present in evidence_pack (hard fail).
+    7. Begin with "At <price>" for Diamond tier.
+    8. Contain residual markdown formatting (**/__/`/#/>) (hard fail).
 
     AC-1 contract: min_verdict_quality("Arteta's Gunners at 4.") is False.
     """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
     text = verdict.strip()
-    # Gate 1 — tier-specific minimum character length + ceiling
     _tier_key = (tier or "bronze").lower()
     _floor = MIN_VERDICT_CHARS_BY_TIER.get(_tier_key, MIN_VERDICT_CHARS_BY_TIER["bronze"])
+    # Gate 1 — tier-specific minimum character floor
     if len(text) < _floor:
         return False
-    if len(text) > _VERDICT_MAX_CHARS:
+    # Gate 2 — BUILD-NARRATIVE-VOICE-01: hard max prevents card box overflow
+    if len(text) > VERDICT_HARD_MAX:
         return False
-    # Gate 2 — banned trivial templates
+    # Gate 3 — BUILD-NARRATIVE-VOICE-01 AC-4: sentence-boundary check
+    if text and text[-1] not in ".!?…":
+        return False
+    # Gate 4 — banned trivial templates
     for pattern in BANNED_TRIVIAL_VERDICT_TEMPLATES:
         if pattern.match(text):
             return False
-    # Gate 3 — analytical vocabulary count
+    # Gate 5 — analytical vocabulary count
     if analytical_word_count(text) < 3:
         return False
-    # Gate 5 — INV-VERDICT-COACH-FABRICATION-01: manager name fabrication check
+    # Gate 6 — INV-VERDICT-COACH-FABRICATION-01: manager name fabrication check
     if evidence_pack is not None:
         if not validate_manager_names(text, evidence_pack):
             return False
-    # Gate 6 — BUILD-VERDICT-RENDER-FIXES-01: Diamond price-prefix hard gate
+    # Gate 7 — BUILD-VERDICT-RENDER-FIXES-01: Diamond price-prefix hard gate
     if not validate_diamond_price_prefix(text, tier):
         return False
-    # Gate 7 — BUILD-SANITIZER-MARKDOWN-STRIP-01: markdown leak hard gate
+    # Gate 8 — BUILD-SANITIZER-MARKDOWN-STRIP-01: markdown leak hard gate
     if not validate_no_markdown_leak(text):
         return False
+    # Soft monitoring: verdict passes all gates but is below TARGET band
+    if len(text) < VERDICT_TARGET_LOW:
+        _log.info(
+            "verdict_suboptimal_length: tier=%s, len=%d < target_low=%d",
+            _tier_key, len(text), VERDICT_TARGET_LOW,
+        )
     return True
 
 
@@ -2411,15 +2430,17 @@ def _render_risk(spec: NarrativeSpec) -> str:
 
 # ── BUILD-VERDICT-CAP-01: Deterministic verdict fallback cap ───────────────────
 
-_VERDICT_MAX_CHARS = 200
+# BUILD-NARRATIVE-VOICE-01: raised from 200 to 260 (tier-aware hard max — see VERDICT_HARD_MAX).
+# _VERDICT_MAX_CHARS is kept as an alias so existing callers don't break.
+_VERDICT_MAX_CHARS = VERDICT_HARD_MAX  # 260
 _VERDICT_MIN_CHARS: int = 140
 
 
 def _cap_verdict(text: str) -> str:
-    """BUILD-VERDICT-CAP-01: Hard-cap verdict output at _VERDICT_MAX_CHARS characters.
+    """BUILD-VERDICT-CAP-01: Hard-cap verdict output at VERDICT_HARD_MAX (260) characters.
     Clips at the last word boundary to avoid mid-word truncation.
-    FIX-KICKOFF-RELATIVE-01/D2: clip to _VERDICT_MAX_CHARS - 1 before appending "."
-    so the final string is always <= _VERDICT_MAX_CHARS (was 141 due to off-by-one).
+    FIX-KICKOFF-RELATIVE-01/D2: clip to cap - 1 before appending "."
+    so the final string is always <= cap.
     """
     if len(text) <= _VERDICT_MAX_CHARS:
         return text

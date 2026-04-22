@@ -1151,12 +1151,18 @@ def _fixture_home_prefix(key: str) -> str:
 def discover_pregen_targets(
     db_path: str | None = None,
     hours_ahead: int = 48,
+    hours_ahead_premium: int = 96,
 ) -> list[dict]:
     """Discover upcoming matches from ALL fixture sources for pregen.
 
     BUILD-ENRICH-09: Scans sportmonks_fixtures (cricket), mma_fixtures (MMA),
     rugby_fixtures (rugby), and odds_snapshots (soccer/existing) for matches
     with commence_time in the next *hours_ahead* hours.
+
+    BUILD-NARRATIVE-VOICE-01 Fix C: Diamond/Gold edges get a wider horizon
+    (hours_ahead_premium, default 96h) so they are pre-generated further in
+    advance. Silver/Bronze edges use the standard hours_ahead window (48h).
+    Fixtures with no edge_results row use the standard window.
 
     Returns a unified list of dicts:
         {match_key, sport, home_team, away_team, league, commence_time, source_table}
@@ -1179,7 +1185,12 @@ def discover_pregen_targets(
     path = db_path or str(SCRAPERS_ROOT / "odds.db")
     now = datetime.now(SAST)
     window_start_date = now.strftime("%Y-%m-%d")
-    window_end_date = (now + timedelta(hours=hours_ahead)).strftime("%Y-%m-%d")
+    # Scan the wider premium window; standard-window filtering applied after discovery.
+    _effective_max_hours = max(hours_ahead, hours_ahead_premium)
+    window_end_date = (now + timedelta(hours=_effective_max_hours)).strftime("%Y-%m-%d")
+    # Cutoff timestamps for tier-aware horizon filtering (applied post-discovery).
+    _standard_cutoff = (now + timedelta(hours=hours_ahead)).strftime("%Y-%m-%d")
+    _premium_cutoff = (now + timedelta(hours=hours_ahead_premium)).strftime("%Y-%m-%d")
 
     targets: list[dict] = []
     # Exact dedup by match_key
@@ -1320,6 +1331,47 @@ def discover_pregen_targets(
             )
             seen_keys.add(mkey)
 
+    # BUILD-NARRATIVE-VOICE-01 Fix C: tier-aware horizon filter.
+    # Targets within the standard window always pass. Targets in the premium-only
+    # band (standard < date <= premium) pass only if they have a Diamond/Gold edge.
+    if hours_ahead_premium > hours_ahead:
+        # Fetch premium-tier match keys from edge_results (Diamond + Gold).
+        _premium_match_keys: set[str] = set()
+        try:
+            _tc = _connect_odds_db(path)
+            _rows = _tc.execute(
+                "SELECT DISTINCT match_key FROM edge_results WHERE edge_tier IN ('diamond','gold')"
+            ).fetchall()
+            _tc.close()
+            _premium_match_keys = {r[0] for r in _rows if r[0]}
+        except Exception as _exc:
+            log.warning("discover_pregen_targets: tier lookup failed (non-fatal): %s", _exc)
+
+        filtered: list[dict] = []
+        for target in targets:
+            date_10 = target["match_key"][-10:] if len(target["match_key"]) >= 10 else ""
+            if date_10 <= _standard_cutoff:
+                # Within standard window — always include.
+                filtered.append(target)
+            elif date_10 <= _premium_cutoff:
+                # In premium-only band — include only for Diamond/Gold edges.
+                if target["match_key"] in _premium_match_keys:
+                    filtered.append(target)
+                else:
+                    log.debug(
+                        "discover_pregen_targets: skipping non-premium target beyond %dh: %s",
+                        hours_ahead, target["match_key"],
+                    )
+        _pre_count = len(targets)
+        targets = filtered
+        log.info(
+            "discover_pregen_targets: tier-aware filter: %d → %d targets "
+            "(%d premium-tier fixtures kept beyond %dh window)",
+            _pre_count, len(targets),
+            sum(1 for t in targets if t["match_key"][-10:] > _standard_cutoff),
+            hours_ahead,
+        )
+
     log.info(
         "discover_pregen_targets: %d targets (%d from odds_snapshots, %d from fixture tables)",
         len(targets),
@@ -1382,7 +1434,7 @@ def _load_pregen_edges(limit: int = 100, sport: str | None = None) -> list[dict]
     # discover_pregen_targets() includes odds_snapshots matches first (already in seen)
     # then fixture-table matches — so only the new ones pass the seen check.
     try:
-        fixture_targets = discover_pregen_targets()
+        fixture_targets = discover_pregen_targets(hours_ahead_premium=96)
         fixture_added = 0
         for target in fixture_targets:
             mkey = target.get("match_key", "")
