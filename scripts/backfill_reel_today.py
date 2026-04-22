@@ -2,7 +2,7 @@
 """
 backfill_reel_today.py — DASH-POLISH-STORIES-01 / AC2
 
-One-shot backfill for today's 19:00 SAST IG Reel MOQ row when the 06:00 UTC
+One-shot backfill for today's 20:30 SAST IG Reel MOQ row when the 06:00 UTC
 reel_generator.py cron skipped or partially failed and left no Instagram row.
 
 Imports reel_generator.py read-only — never modifies it. Creates exactly ONE
@@ -10,7 +10,7 @@ MOQ page:
     Channel        = Instagram
     Post Type      = reel
     Status         = Pending
-    Scheduled Time = {today}T19:00:00+02:00
+    Scheduled Time = {today}T20:30:00+02:00
     Asset Link     = reuse today's rendered master mp4
     Final Copy     = generate_build_up() from publisher/ai_copy_generator
 
@@ -32,6 +32,15 @@ if str(REEL_DIR) not in sys.path:
     sys.path.insert(0, str(REEL_DIR))
 if str(PUB_DIR) not in sys.path:
     sys.path.insert(0, str(PUB_DIR))
+
+_IG_REEL_SLOT_FALLBACK = "20:30"
+try:
+    _publisher_root = str(SCRIPT_DIR.parents[1])  # /home/paulsportsza
+    if _publisher_root not in sys.path:
+        sys.path.insert(0, _publisher_root)
+    from publisher.cadence import IG_REEL_SLOT as _IG_REEL_SLOT
+except ImportError:
+    _IG_REEL_SLOT = _IG_REEL_SLOT_FALLBACK
 
 # Read-only imports from reel_generator.
 from reel_generator import (  # type: ignore[import]
@@ -146,7 +155,7 @@ def main() -> int:
     )
 
     video_url = f"https://mzansiedge.co.za/assets/reel-cards/{today}/{pid}/master_{pid}.mp4"
-    sched_iso = f"{today}T19:00:00+02:00"
+    sched_iso = f"{today}T{_IG_REEL_SLOT}:00+02:00"
     tier_upper = tier.upper()
 
     moq_props = {

@@ -36,7 +36,7 @@ except ImportError:
     pass
 
 # ── Cadence: scheduled slot constants (single source of truth: publisher/cadence.py) ──
-_DASH_REEL_SLOT_FALLBACK = "19:00"
+_DASH_REEL_SLOT_FALLBACK = "20:30"
 _DASH_TG_SLOT_FALLBACK   = "20:00"
 _DASH_WA_SLOT_FALLBACK   = "20:00"
 try:
@@ -3852,8 +3852,6 @@ def render_automation_content() -> str:
 .so-tl-now-lbl{position:absolute;top:3px;left:50%;transform:translateX(-50%);font-family:var(--font-m);font-size:9px;color:var(--gold);white-space:nowrap;background:var(--surface-alt);padding:1px 4px;border-radius:2px;border:1px solid rgba(248,200,48,0.3);z-index:21;}
 .so-tl-bru-empty{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:var(--font-m);font-size:10px;color:var(--muted);white-space:nowrap;pointer-events:none;opacity:0.7;}
 .so-tl-bru-badge{position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--gold);pointer-events:none;}
-.so-tl-reel-slot-marker{position:absolute;top:0;bottom:0;left:calc(105px + 25%);width:calc((100% - 140px) / 24);background:rgba(248,200,48,0.08);z-index:4;pointer-events:none;}
-.so-tl-reel-slot-icon{position:absolute;top:3px;left:50%;transform:translateX(-50%);font-size:11px;line-height:1;pointer-events:none;opacity:0.85;}
 .so-preview{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);display:flex;flex-direction:column;height:100%;max-height:100%;overflow-y:auto;min-width:0;min-height:0;box-shadow:var(--glow);}
 .so-preview::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad);opacity:0.7;pointer-events:none;z-index:10;}
 .so-preview::-webkit-scrollbar{width:4px;}.so-preview::-webkit-scrollbar-track{background:transparent;}.so-preview::-webkit-scrollbar-thumb{background:var(--muted);border-radius:2px;opacity:0.5;}
@@ -4811,9 +4809,6 @@ function eA(s){if(!s)return'';return String(s).replace(/"/g,'&quot;').replace(/'
           </div>
           <div class="so-tl-now-line" id="so-tl-now" style="display:none" aria-hidden="true">
             <span class="so-tl-now-lbl" id="so-tl-now-lbl">now 00:00</span>
-          </div>
-          <div class="so-tl-reel-slot-marker" aria-hidden="true"><!-- hour 6 SAST — source: publisher/cadence.py IG_REEL_SLOT -->
-            <span class="so-tl-reel-slot-icon" title="Daily IG Reel slot — 06:00 SAST">🎬</span>
           </div>
           <div id="so-tl-rows" role="grid" aria-label="24-hour post timeline"></div>
         </div>

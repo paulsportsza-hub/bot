@@ -47,8 +47,10 @@ NOTION_TOKEN    = os.environ.get("NOTION_TOKEN", "")
 TASK_HUB_PAGE   = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
 MOQ_DB_ID       = "9061c15b-e8de-416d-8d61-e6b1d4d37f9f"
 NOTION_VERSION  = "2022-06-28"
+EDGEOPS_CHAT_ID = os.environ.get("EDGEOPS_CHAT_ID", "")
 
 TIERS = ["diamond", "gold", "silver", "bronze"]
+MAX_REELS_PER_DAY = 1
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -58,6 +60,36 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger("reel_generator")
+
+# ── Cadence: IG reel scheduled-time slot ──────────────────────────────────────
+# Single source of truth lives in publisher/cadence.py.  If that file is missing
+# or unparseable, fall back to the hard-wired default and log a WARNING so ops
+# knows the cadence module needs attention.
+_REEL_SLOT_FALLBACK = "20:30"
+try:
+    sys.path.insert(0, str(BOT_DIR.parent))  # expose /home/paulsportsza/ for publisher.*
+    from publisher.cadence import IG_REEL_SLOT as _IG_REEL_SLOT
+    _REEL_SLOT_SOURCE = "cadence.IG_REEL_SLOT"
+except Exception:
+    log.warning(
+        "publisher/cadence.py unavailable — falling back to %s SAST for reel scheduled_time",
+        _REEL_SLOT_FALLBACK,
+    )
+    _IG_REEL_SLOT = _REEL_SLOT_FALLBACK
+    _REEL_SLOT_SOURCE = "fallback (hardcoded %s SAST default)" % _REEL_SLOT_FALLBACK
+
+
+def _reel_sched_iso(date_str: str) -> tuple[str, str]:
+    """Return (ISO-8601 datetime str, human source label) for the IG reel slot.
+
+    Examples:
+        "2026-04-22", cadence.IG_REEL_SLOT="20:30"
+        → ("2026-04-22T20:30:00+02:00", "20:30 SAST (from cadence.IG_REEL_SLOT)")
+    """
+    hh_mm = _IG_REEL_SLOT  # e.g. "19:00" or "20:30"
+    iso = f"{date_str}T{hh_mm}:00+02:00"
+    label = f"{hh_mm} SAST (from {_REEL_SLOT_SOURCE})"
+    return iso, label
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -168,10 +200,33 @@ def _notion_request(method: str, path: str, body: dict | None = None) -> dict | 
         return None
 
 
-# ── Step 1: Query edge picks ───────────────────────────────────────────────────
+def _alert_edge_ops(message: str) -> None:
+    """Send a plain-text alert to the EdgeOps Telegram chat."""
+    token   = os.environ.get("BOT_TOKEN", "")
+    chat_id = EDGEOPS_CHAT_ID
+    if not token or not chat_id:
+        log.warning("[EDGEOPS] BOT_TOKEN or EDGEOPS_CHAT_ID not set — alert skipped")
+        return
+    payload = json.dumps({"chat_id": chat_id, "text": f"[reel_generator] {message}"}).encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=payload, method="POST",
+    )
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            log.info("[EDGEOPS] Alert sent: %s", message)
+    except Exception as exc:
+        log.warning("[EDGEOPS] Alert failed: %s", exc)
 
-def query_top_picks() -> dict:
-    """Return dict of {tier: pick_dict} for tiers that have an unsettled edge."""
+
+# ── Step 1: Select single top-tier pick ───────────────────────────────────────
+
+def _select_top_tier_pick(today: str) -> tuple[str, dict] | None:
+    """Return (tier, row) for the highest-tier qualifying unsettled edge.
+    Tries tiers Diamond → Gold → Silver → Bronze and returns the first match.
+    Respects the Diamond rarity gate (max 1 per 10 days).
+    Returns None when no tier has a qualifying edge."""
     import sqlite3
 
     sql = """
@@ -187,22 +242,28 @@ def query_top_picks() -> dict:
         ORDER BY e.composite_score DESC
         LIMIT 1
     """
-    results = {}
+    diamond_blocked = _diamond_used_recently(today)
+    if diamond_blocked:
+        log.info("[SELECT] Diamond rarity gate active — skipping Diamond for today")
+
+    tiers_to_check = [t for t in TIERS if not (t == "diamond" and diamond_blocked)]
+
     try:
         conn = sqlite3.connect(SCRAPERS_DB, timeout=15)
         conn.row_factory = sqlite3.Row
-        for tier in TIERS:
+        for tier in tiers_to_check:
             row = conn.execute(sql, (tier,)).fetchone()
             if row:
-                results[tier] = dict(row)
-                log.info("[QUERY] %s tier → %s (score=%.1f)", tier.upper(),
-                         row["match_key"], row["composite_score"])
+                log.info("[SELECT] Top-tier pick: %s — %s (composite=%.1f)",
+                         tier.upper(), row["match_key"], row["composite_score"])
+                conn.close()
+                return tier, dict(row)
             else:
-                log.info("[QUERY] %s tier → no unsettled picks", tier.upper())
+                log.info("[SELECT] %s tier — no qualifying edge", tier.upper())
         conn.close()
     except Exception as exc:
-        log.error("[QUERY] DB error: %s", exc)
-    return results
+        log.error("[SELECT] DB error: %s", exc)
+    return None
 
 
 # ── Step 2: Render card PNG ────────────────────────────────────────────────────
@@ -579,9 +640,9 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
         )
 
         # SOCIAL-OPS-TIMELINE-INTEGRITY-01 — Scheduled Time on approval.
-        # Default 19:00 SAST per MARKETING-CORE.md so the reel icon renders at
-        # its target slot on the Social Ops timeline instead of unscheduled.
-        sched_iso = f"{today}T19:00:00+02:00"
+        # Slot is read from publisher/cadence.py (IG_REEL_SLOT) so that one edit
+        # there updates both this insert and the Social Ops dashboard timeline.
+        sched_iso, _ = _reel_sched_iso(today)
 
         # One MOQ item: Instagram only. WA Channel and Telegram Community sidecars
         # are retired (BUILD-REEL-VIDEO-IG-ONLY-01, 2026-04-21).
@@ -610,6 +671,52 @@ def create_moq_items(rendered: list[dict], today: str) -> bool:
                 log.error("[MOQ] Failed to create item for %s / %s", tier_upper, channel)
 
     return created > 0
+
+
+# ── Step 5b: Archive stale same-day reel rows ─────────────────────────────────
+
+def _archive_stale_same_day_reels(today: str) -> int:
+    """Archive same-day Instagram reel MOQ rows that have no asset and a pending status.
+    Sets Status = Archived on each matching row. Returns count archived."""
+    schema = _notion_request("GET", f"/databases/{MOQ_DB_ID}")
+    if schema is None or schema.get("object") == "error":
+        log.warning("[ARCHIVE] MOQ DB not accessible — skipping stale reel archive")
+        return 0
+
+    existing = _notion_request("POST", f"/databases/{MOQ_DB_ID}/query", {
+        "filter": {
+            "and": [
+                {"property": "Channel", "select": {"equals": "Instagram"}},
+                {"property": "Post Type", "select": {"equals": "reel"}},
+                {
+                    "or": [
+                        {"property": "Status", "select": {"equals": "Draft"}},
+                        {"property": "Status", "select": {"equals": "Scheduled"}},
+                        {"property": "Status", "select": {"equals": "Approved"}},
+                        {"property": "Status", "select": {"equals": "Scheduled-Placeholder"}},
+                    ]
+                },
+                {"property": "Asset Link", "url": {"is_empty": True}},
+                {"property": "Scheduled Time", "date": {"equals": today}},
+            ]
+        },
+        "page_size": 50,
+    })
+
+    archived = 0
+    for page in (existing or {}).get("results", []):
+        resp = _notion_request(
+            "PATCH", f"/pages/{page['id']}",
+            {"properties": {"Status": {"select": {"name": "Archived"}}}},
+        )
+        if resp and resp.get("id"):
+            archived += 1
+            log.info("[ARCHIVE] Archived stale reel MOQ row: %s", page["id"])
+    if archived:
+        log.info("[ARCHIVE] %d stale same-day reel MOQ row(s) → Archived for %s", archived, today)
+    else:
+        log.info("[ARCHIVE] No stale same-day reel rows found for %s", today)
+    return archived
 
 
 # ── Step 6: Crontab ────────────────────────────────────────────────────────────
@@ -655,70 +762,106 @@ def add_crontab() -> tuple[int, int]:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="MzansiEdge daily reel generator")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print tier selection + MOQ preview without writing")
+    args = parser.parse_args()
+    dry_run = args.dry_run
+
     log.info("=" * 60)
-    log.info("reel_generator.py starting — %s", datetime.now().isoformat())
+    log.info("reel_generator.py starting — %s%s",
+             datetime.now().isoformat(), " [DRY RUN]" if dry_run else "")
     log.info("=" * 60)
 
     today = datetime.now().strftime("%Y-%m-%d")
     env   = _load_env(ENV_FILE)
 
-    # ── Step 1: Query picks ────────────────────────────────────────────────────
-    picks = query_top_picks()
-    if not picks:
-        log.warning("[MAIN] No unsettled edges found for any tier. Exiting.")
+    # ── Archive stale same-day reel rows (before selecting / inserting) ────────
+    # FIX-REEL-GEN-TOP-TIER-ONLY-01: run before any new row is written so the
+    # archive step always sees the pre-run state.
+    if not dry_run:
+        _archive_stale_same_day_reels(today)
+
+    # ── Step 1: Select single top-tier pick ───────────────────────────────────
+    # MAX_REELS_PER_DAY = 1: pick the highest qualifying tier, ignore the rest.
+    selection = _select_top_tier_pick(today)
+    if selection is None:
+        log.warning("[MAIN] no_reel_today — no qualifying edges for any tier. No reel queued.")
+        if not dry_run:
+            _alert_edge_ops(
+                f"no_reel_today — {today}: no qualifying edge found across all tiers. "
+                "No reel row created."
+            )
         sys.exit(0)
 
-    # Diamond rarity gate: max 1 per 10 days
-    if "diamond" in picks and _diamond_used_recently(today):
-        log.info("[RARITY] Diamond gate — skipping Diamond, promoting to Gold pool")
-        del picks["diamond"]
+    tier, row = selection
 
-    # ── Steps 2+3: Render cards + VOs ─────────────────────────────────────────
-    rendered = []
-    for tier, row in picks.items():
-        result = render_card(row, tier, today)
-        if result is None:
-            continue
-        pid, card_path, pick_dict = result
+    # ── Dry-run preview ────────────────────────────────────────────────────────
+    if dry_run:
+        home = row.get("home_team") or None
+        away = row.get("away_team") or None
+        if not home or not away:
+            home, away = _parse_teams_from_match_key(row["match_key"])
+        _, sched_source = _reel_sched_iso(today)
+        print(f"\n{'=' * 60}")
+        print("DRY RUN — FIX-REEL-GEN-TOP-TIER-ONLY-01")
+        print(f"  Tier selected : {tier.upper()}")
+        print(f"  Match         : {home} vs {away}")
+        print(f"  Bet type      : {row['bet_type']}")
+        print(f"  Odds          : {row['recommended_odds']}")
+        print(f"  Bookmaker     : {row['bookmaker']}")
+        print(f"  Composite     : {row['composite_score']:.1f}")
+        print()
+        print("MOQ Row Preview:")
+        print(f"  Title         : 🎬 Reel Video — {tier.upper()} — Instagram — {today}")
+        print( "  Status        : Approved")
+        print( "  Channel       : Instagram")
+        print( "  Post Type     : reel")
+        print(f"  Scheduled Time: {sched_source}")
+        print( "  Asset Link    : (video URL set post-render)")
+        print(f"{'=' * 60}\n")
+        sys.exit(0)
 
-        home      = pick_dict["home_team"]
-        away      = pick_dict["away_team"]
-        card_url  = (
-            f"https://mzansiedge.co.za/assets/reel-cards/{today}/{pid}/card_{pid}.png"
-        )
-        # Write tier marker for Diamond rarity gate (was written by generate_still, now direct).
-        # BUILD-REEL-VIDEO-IG-ONLY-01: Reel Still retired; still composite no longer generated.
-        (Path(card_path).parent / f"tier_{tier.lower()}").touch()
-
-        vos = generate_vos(pick_dict, pid, today, env)
-
-        rendered.append({
-            "tier":             tier,
-            "pick_id":          pid,
-            "home_team":        home,
-            "away_team":        away,
-            "pick_team":        pick_dict["pick_team"],
-            "league_display":   pick_dict["league"],
-            "match_date":       str(row["match_date"]),
-            "recommended_odds": pick_dict["recommended_odds"],
-            "bookmaker":        pick_dict["bookmaker"],
-            "composite_score":  pick_dict["composite_score"],
-            "card_path":        card_path,
-            "card_url":         card_url,
-            "vo_paths":         vos,
-        })
-
-    if not rendered:
-        log.error("[MAIN] No cards rendered successfully. Exiting.")
+    # ── Steps 2+3: Render card + VOs ──────────────────────────────────────────
+    render_result = render_card(row, tier, today)
+    if render_result is None:
+        log.error("[MAIN] Card render failed for %s tier. Exiting.", tier.upper())
         sys.exit(1)
 
-    log.info("[MAIN] Rendered %d card(s): %s", len(rendered),
-             [r["tier"] for r in rendered])
+    pid, card_path, pick_dict = render_result
+    home      = pick_dict["home_team"]
+    away      = pick_dict["away_team"]
+    card_url  = (
+        f"https://mzansiedge.co.za/assets/reel-cards/{today}/{pid}/card_{pid}.png"
+    )
+    # Write tier marker for Diamond rarity gate.
+    # BUILD-REEL-VIDEO-IG-ONLY-01: Reel Still retired; still composite no longer generated.
+    (Path(card_path).parent / f"tier_{tier.lower()}").touch()
+    vos = generate_vos(pick_dict, pid, today, env)
+
+    rendered = [{
+        "tier":             tier,
+        "pick_id":          pid,
+        "home_team":        home,
+        "away_team":        away,
+        "pick_team":        pick_dict["pick_team"],
+        "league_display":   pick_dict["league"],
+        "match_date":       str(row["match_date"]),
+        "recommended_odds": pick_dict["recommended_odds"],
+        "bookmaker":        pick_dict["bookmaker"],
+        "composite_score":  pick_dict["composite_score"],
+        "card_path":        card_path,
+        "card_url":         card_url,
+        "vo_paths":         vos,
+    }]
+
+    log.info("[MAIN] Single top-tier reel — %s: %s vs %s", tier.upper(), home, away)
 
     # ── Step 4: Task Hub ───────────────────────────────────────────────────────
     add_task_hub_blocks(rendered, today)
 
-    # ── Step 5: MOQ items ──────────────────────────────────────────────────────
+    # ── Step 5: MOQ item ───────────────────────────────────────────────────────
     create_moq_items(rendered, today)
 
     # ── Step 6: Crontab ───────────────────────────────────────────────────────
@@ -726,15 +869,14 @@ def main():
 
     # ── Summary ───────────────────────────────────────────────────────────────
     log.info("=" * 60)
-    log.info("SUMMARY")
-    log.info("  Today: %s", today)
-    log.info("  Cards rendered: %d", len(rendered))
-    for r in rendered:
-        log.info("  [%s] %s vs %s → %s", r["tier"].upper(),
-                 r["home_team"], r["away_team"], r["card_path"])
-        log.info("         VO count: %d", len(r["vo_paths"]))
-        log.info("         URL: %s", r["card_url"])
-    log.info("  Crontab lines: %d → %d", pre_count, post_count)
+    log.info("SUMMARY — single top-tier reel (MAX_REELS_PER_DAY=%d)", MAX_REELS_PER_DAY)
+    log.info("  Today   : %s", today)
+    log.info("  Tier    : %s", tier.upper())
+    log.info("  Match   : %s vs %s", home, away)
+    log.info("  Card    : %s", card_path)
+    log.info("  VOs     : %d", len(vos))
+    log.info("  URL     : %s", card_url)
+    log.info("  Crontab : %d → %d lines", pre_count, post_count)
     log.info("=" * 60)
 
 

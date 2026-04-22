@@ -215,8 +215,9 @@ def get_upgrade_message(user_tier: str, context: str = "tip", proof_line: str = 
             return _with_proof(
                 (
                 "🔒 <b>This is a 💎 Diamond Edge</b>\n\n"
-                "Our highest-conviction picks with sharp money flow "
-                "and line movement analysis.\n\n"
+                "Every edge unlocked — Diamond picks are Diamond-only.\n"
+                "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match.\n"
+                "Personalised alerts tuned to your teams and bankroll.\n\n"
                 f"💎 <b>Diamond: R199/mo or R1,599/yr (save 33%)</b>{fm}\n\n"
                 "/subscribe — View plans"
                 )
@@ -233,8 +234,10 @@ def get_upgrade_message(user_tier: str, context: str = "tip", proof_line: str = 
         return _with_proof(
             (
             "🔒 This is a 💎 <b>Diamond</b> feature.\n\n"
-            "Upgrade to Diamond for line movement alerts, "
-            "sharp money indicators, and CLV tracking.\n\n"
+            "Every edge unlocked — Diamond picks are Diamond-only.\n"
+            "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match.\n"
+            "Personalised alerts tuned to your teams and bankroll.\n"
+            "Line movement + sharp money + CLV tracking.\n\n"
             f"💎 <b>Diamond: R199/mo or R1,599/yr (save 33%)</b>{fm}\n\n"
             "/subscribe — View plans"
             )
