@@ -83,6 +83,31 @@ class MockStitchService:
             "raw_status": raw,
         }
 
+    async def create_subscription(
+        self,
+        *,
+        user_id: int,
+        plan_code: str,
+        amount_cents: int,
+        period: str,
+        payer_name: str,
+        payer_email: str,
+        reference: str | None = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        """Simulate subscription creation."""
+        if not reference:
+            reference = f"mze-{user_id}-{plan_code.replace('_', '-')}-mocksub"
+        sub_id = f"mock-sub-{uuid.uuid4().hex[:12]}"
+        result = {
+            "subscription_id": sub_id,
+            "checkout_url": f"https://mock.stitch.money/subscriptions/{sub_id}",
+            "status": "PENDING",
+            "reference": reference,
+        }
+        log.info("[MOCK] Created subscription: %s for user %s (%s)", sub_id, user_id, plan_code)
+        return result
+
     async def get_payment(self, payment_id: str) -> dict[str, Any]:
         """Return stored mock payment metadata."""
         return dict(_mock_payments.get(payment_id, {}))

@@ -26203,10 +26203,6 @@ def _map_webhook_state(event: dict) -> tuple[str, str]:
         return "failed", "failed"
     if event_type in {"payment.expired", "subscription.expired"}:
         return "expired", "expired"
-    if event_type == "mandate.created":
-        return "pending", "pending"
-    if event_type == "mandate.authorization_succeeded":
-        return "confirmed", "active"
     return "confirmed", "active"
 
 
@@ -26467,16 +26463,32 @@ async def _handle_sub_email(update: Update, user_id: int) -> bool:
 
     try:
         ref = f"mze-{user_id}-{plan_code.replace('_', '-')}-{os.urandom(3).hex()}"
-        result = await stitch_service.create_payment(
-            user_id,
-            amount_cents=amount,
-            reference=ref,
-            payer_name=getattr(db_user, "first_name", None) if db_user else None,
-            payer_email=state.get("email"),
-        )
-        payment_url = result["payment_url"]
-        payment_id = result["payment_id"]
-        reference = result["reference"]
+        _is_subscription = not product.get("founding") and plan_code != "founding_diamond"
+        if _is_subscription:
+            result = await stitch_service.create_subscription(
+                user_id=user_id,
+                plan_code=plan_code,
+                amount_cents=amount,
+                period=product.get("period", "monthly"),
+                payer_name=getattr(db_user, "first_name", None) or "MzansiEdge Member",
+                payer_email=state.get("email", ""),
+                reference=ref,
+            )
+            payment_url = result["checkout_url"]
+            payment_id = result["subscription_id"]
+            reference = result["reference"]
+            await db.update_user_stitch_subscription_id(user_id, payment_id)
+        else:
+            result = await stitch_service.create_payment(
+                user_id,
+                amount_cents=amount,
+                reference=ref,
+                payer_name=getattr(db_user, "first_name", None) if db_user else None,
+                payer_email=state.get("email"),
+            )
+            payment_url = result["payment_url"]
+            payment_id = result["payment_id"]
+            reference = result["reference"]
         state["payment_id"] = payment_id
         state["payment_reference"] = reference
 
@@ -26865,12 +26877,6 @@ async def _run_webhook_server(app_instance) -> None:
             analytics_track(int(user_id), "subscription_cancelled")
         elif user_id and event_type == "payment.failed":
             analytics_track(int(user_id), "payment_failed")
-        elif user_id and event_type == "mandate.authorization_succeeded":
-            analytics_track(int(user_id), "mandate_authorized", {
-                "outcome": outcome.get("outcome", "unknown"),
-            })
-        elif user_id and event_type == "mandate.created":
-            analytics_track(int(user_id), "mandate_created")
 
         try:
             await _notify_payment_outcome(app_instance.bot, outcome)

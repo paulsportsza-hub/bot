@@ -50,8 +50,9 @@ def _stitch_session() -> aiohttp.ClientSession:
     return aiohttp.ClientSession(headers=_STITCH_HEADERS)
 
 
-# ── Cached client token ──────────────────────────────────
-_token_cache: dict[str, Any] = {}  # {"token": str, "expires_at": float}
+# ── Per-scope token cache ────────────────────────────────
+# Keyed by scope string: {scope: {"token": str, "expires_at": float}}
+_token_cache: dict[str, dict[str, Any]] = {}
 
 _EXPRESS_TOKEN_TTL = 900  # Express tokens are 15 min; cache until 60s before expiry
 
@@ -63,6 +64,7 @@ class StitchService:
     TOKEN_URL = "https://express.stitch.money/api/v1/token"
     PAYMENT_LINKS_URL = "https://express.stitch.money/api/v1/payment-links"
     PAYMENT_URL = "https://express.stitch.money/api/v1/payment"
+    SUBSCRIPTIONS_URL = "https://express.stitch.money/api/v1/subscriptions"
 
     def __init__(self) -> None:
         self.client_id = config.STITCH_CLIENT_ID
@@ -87,20 +89,20 @@ class StitchService:
         query["redirect_url"] = redirect_uri
         return urlunparse(parsed._replace(query=urlencode(query)))
 
-    async def get_client_token(self) -> str:
-        """Fetch Express OAuth2 token.
+    async def get_client_token(self, scope: str = "client_paymentrequest") -> str:
+        """Fetch Express OAuth2 token for the given scope.
 
         POST /api/v1/token with JSON body. Returns accessToken (15-min TTL).
-        Caches until 60s before expiry.
+        Caches per-scope until 60s before expiry. Express requires a single scope
+        per token request — do NOT combine scopes.
         """
         if self._is_mock():
             from services.stitch_mock import MockStitchService
             return await MockStitchService().get_client_token()
 
-        cached = _token_cache.get("token")
-        expires_at = _token_cache.get("expires_at", 0)
-        if cached and time.time() < expires_at:
-            return cached
+        entry = _token_cache.get(scope, {})
+        if entry.get("token") and time.time() < entry.get("expires_at", 0):
+            return entry["token"]
 
         async with _stitch_session() as session:
             async with session.post(
@@ -108,7 +110,7 @@ class StitchService:
                 json={
                     "clientId": self.client_id,
                     "clientSecret": self.client_secret,
-                    "scope": "client_paymentrequest",
+                    "scope": scope,
                 },
                 headers={"Content-Type": "application/json"},
             ) as resp:
@@ -118,9 +120,11 @@ class StitchService:
                     raise RuntimeError(f"Stitch Express token failed: {body}")
 
                 token = body["data"]["accessToken"]
-                _token_cache["token"] = token
-                _token_cache["expires_at"] = time.time() + _EXPRESS_TOKEN_TTL - 60
-                log.info("Stitch Express token acquired (TTL ~15 min)")
+                _token_cache[scope] = {
+                    "token": token,
+                    "expires_at": time.time() + _EXPRESS_TOKEN_TTL - 60,
+                }
+                log.info("Stitch Express token acquired scope=%s (TTL ~15 min)", scope)
                 return token
 
     async def create_payment(
@@ -276,33 +280,105 @@ class StitchService:
         except json.JSONDecodeError:
             return {}
 
-    async def create_recurring_mandate(
+    async def create_subscription(
         self,
+        *,
         user_id: int,
+        plan_code: str,
         amount_cents: int,
-        frequency: str = "monthly",
+        initial_amount_cents: int | None = None,
+        period: str,
+        payer_name: str,
+        payer_email: str,
+        reference: str | None = None,
     ) -> dict[str, Any]:
-        """Create a recurring card mandate.
+        """Create a recurring subscription via POST /api/v1/subscriptions.
 
-        NOTE: Card Consent / recurring payments require the
-        client_recurringpaymentconsentrequest scope and are not available by
-        default on Stitch Express. Contact express-support@stitch.money to
-        enable this feature before implementing this path.
+        period must be "monthly" or "annual". Builds recurrence block per INV
+        report §4.3–4.4. Token scope: client_recurringpaymentconsentrequest.
 
-        Falls back to a one-off payment link in the interim.
+        Returns {subscription_id, checkout_url, status, reference}.
+        On 400: raises RuntimeError with fieldErrors from response body.
         """
-        log.warning(
-            "create_recurring_mandate called — Card Consent not enabled on Express by default. "
-            "Falling back to one-off payment link for user=%s amount=%d",
-            user_id,
-            amount_cents,
-        )
-        result = await self.create_payment(user_id, amount_cents)
-        return {
-            "mandate_url": result["payment_url"],
-            "mandate_id": result["payment_id"],
-            "reference": result["reference"],
+        if self._is_mock():
+            from services.stitch_mock import MockStitchService
+            return await MockStitchService().create_subscription(
+                user_id=user_id,
+                plan_code=plan_code,
+                amount_cents=amount_cents,
+                period=period,
+                payer_name=payer_name,
+                payer_email=payer_email,
+                reference=reference,
+            )
+
+        import uuid
+        from datetime import datetime, timezone
+
+        if not reference:
+            reference = f"mze-{user_id}-{plan_code.replace('_', '-')}-{uuid.uuid4().hex[:8]}"
+
+        now = datetime.now(timezone.utc)
+        billing_day = now.day
+        billing_month = now.month
+        start_date = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        if period == "monthly":
+            recurrence = {
+                "frequency": "MONTHLY",
+                "interval": 1,
+                "byMonthDay": billing_day,
+            }
+        else:
+            recurrence = {
+                "frequency": "YEARLY",
+                "interval": 1,
+                "byMonth": billing_month,
+                "byMonthDay": billing_day,
+            }
+
+        payload: dict[str, Any] = {
+            "amount": amount_cents,
+            "merchantReference": reference,
+            "payerId": str(user_id),
+            "payerName": payer_name,
+            "payerEmailAddress": payer_email,
+            "startDate": start_date,
+            "recurrence": recurrence,
         }
+        if initial_amount_cents is not None:
+            payload["initialAmount"] = initial_amount_cents
+
+        token = await self.get_client_token(scope="client_recurringpaymentconsentrequest")
+
+        async with _stitch_session() as session:
+            async with session.post(
+                self.SUBSCRIPTIONS_URL,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+            ) as resp:
+                body = await resp.json()
+
+                if resp.status == 400:
+                    field_errors = body.get("fieldErrors") or body.get("generalErrors") or body
+                    raise RuntimeError(f"Stitch subscription 400: {field_errors}")
+
+                if resp.status != 200 or not body.get("success"):
+                    log.error("Stitch subscription error %s: %s", resp.status, body)
+                    raise RuntimeError(f"Stitch subscription failed: {body}")
+
+                data = body["data"]["subscription"]
+                result = {
+                    "subscription_id": data["id"],
+                    "checkout_url": data["url"],
+                    "status": data["status"],
+                    "reference": data["merchantReference"],
+                }
+                log.info("Stitch subscription created: %s", result["subscription_id"])
+                return result
 
     async def build_mock_webhook_event(
         self,

@@ -228,6 +228,9 @@ async def _migrate_columns() -> None:
                 ("daily_push_count", "0"),
                 ("last_push_date", "NULL"),
                 ("consecutive_misses", "0"),
+                ("stitch_subscription_id", "NULL"),
+                ("subscription_billing_day", "NULL"),
+                ("subscription_next_charge_at", "NULL"),
             ]:
                 try:
                     await conn.execute(
@@ -754,6 +757,20 @@ async def update_user_email(user_id: int, email: str) -> None:
         if user:
             user.email = email
             await s.commit()
+
+
+async def update_user_stitch_subscription_id(user_id: int, subscription_id: str) -> None:
+    """Store Stitch subscription ID on successful recurring subscription creation."""
+    import aiosqlite
+    db_path = config.DATABASE_PATH
+    if db_path is None:
+        return
+    async with aiosqlite.connect(db_path.as_posix()) as conn:
+        await conn.execute(
+            "UPDATE users SET stitch_subscription_id = ? WHERE id = ?",
+            (subscription_id, user_id),
+        )
+        await conn.commit()
 
 
 async def get_payment_by_reference(provider: str, provider_reference: str) -> Payment | None:
