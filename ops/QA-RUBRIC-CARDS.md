@@ -446,6 +446,47 @@ band that applies:
 Any single hit = D7a capped at 4.0 and the card flagged SEV-2. Two or more
 = D7a capped at 2.0 and the card flagged SEV-1.
 
+### 6.7 Narrative pipeline compliance check (NARRATIVE-ACCURACY-01 — LOCKED 22 Apr 2026)
+
+For every C3 and C5 card, the QA agent MUST verify the narrative was produced
+by the accuracy-hardened pipeline before scoring D7a / D7b. These checks are
+**prerequisites** — if they fail, D7a and D7b are both capped at 5.0 and the
+card is flagged `QA-PIPELINE-MISS`.
+
+**Check 1 — Validator evidence present**
+
+Query `narrative_cache` for this `match_id`. Confirm the row contains non-null
+`setup_validated` and `verdict_validated` fields set to `true`. If either is
+`false` or `null`, the narrative was produced by the pre-v2 pipeline (no
+validator ran). Log as `PIPELINE-MISS` and deduct 2.0 on D7b.
+
+```sql
+SELECT setup_validated, verdict_validated, setup_attempts, verdict_attempts
+FROM narrative_cache WHERE match_id = ?;
+```
+
+**Check 2 — Sport-aware handler used**
+
+Confirm the narrative does not contain football terminology for rugby or cricket
+cards (e.g. "goals", "GPG", "home_record" for rugby; "shots", "clean sheet" for
+cricket). One hit = SEV-2 flag; two or more = D7a capped at 3.0.
+
+**Check 3 — CURRENT_STADIUMS compliance (EPL/PSL only)**
+
+For football cards, confirm no legacy stadium name appears. Currently watched:
+"Goodison" or "Goodison Park" for Everton = instant SEV-1 (Everton moved to
+Hill Dickinson Stadium in August 2025). Add entries here as clubs move grounds.
+
+**Check 4 — Validator false-positive awareness**
+
+If `verdict_validated = false` but the narrative reads as factually accurate,
+apply human override. The validator has a ~25% false-positive rate on arithmetic
+derivations ("twelve wins from sixteen games" for W12+D2+L2=16) and standard
+paraphrases ("winless in five"). A reviewer may override `verdict_validated`
+if the claim is traceable to DERIVED CLAIMS via arithmetic. Document the
+override with the specific claim and its arithmetic source.
+
+
 ---
 
 ## 7. Onboarding QA (C0-ONB)

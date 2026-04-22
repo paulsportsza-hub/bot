@@ -2988,3 +2988,63 @@ Two distinct `edge:detail` paths, both missing header data:
 - Do not re-enable `scrapers/transfermarkt_coaches.py` — WAF block persists (INV-COACHES-TRANSFERMARKT-RESCUE-01).
 - Do not add `coaches.json` as an edge signal. It is narrative-only by design.
 - Do not delete stale entries — `note` them; deletion breaks the fact-checker whitelist.
+
+## Narrative Generation Pipeline (NARRATIVE-ACCURACY-01 — LOCKED 22 Apr 2026)
+
+Five permanent rules for all narrative generation work. Read before touching
+`scripts/pregenerate_narratives.py`, `narrative_spec.py`, `evidence_pack.py`,
+or any narrative quality gate.
+
+### Rule 1 — Pre-computed derived claims (no LLM-derived counts)
+`build_derived_claims(h, a, sport)` is the required facts pre-processor for all
+narrative generation. Do NOT call the LLM to derive form counts, streak lengths,
+or home/away venue labels — compute them in Python first. The derived block is
+injected above the raw facts with the instruction: *"Do NOT compute your own
+counts. Every specific number, streak, or venue label MUST appear exactly as
+written below."* Root cause of the 12 v1 FAILs: LLM was doing extraction +
+prose in a single pass, introducing hallucinations at the extraction step.
+
+### Rule 2 — CURRENT_STADIUMS dict is a live data integrity component
+`CURRENT_STADIUMS` maps club → current 2025/26 ground name. Any club ground
+change MUST be reflected here before the next cron run, not after. Failing to
+update caused Everton "Goodison" errors (Everton moved to Hill Dickinson Stadium
+in August 2025). Clubs to watch for upcoming moves: none confirmed for 2025/26
+beyond Everton (already added). Add maintenance task to any wave brief that
+touches `CURRENT_STADIUMS`.
+
+### Rule 3 — Post-generation validator + one retry before publishing
+`generate_and_validate()` (wrapping `generate_section()`) is required before
+any narrative reaches `narrative_cache`. Validator runs a second LLM call at
+`temperature=0` checking every claim against DERIVED CLAIMS. On failure, one
+retry at `temperature=0.5` with violation list as banned phrases. If retry also
+fails, publishes best-effort with ⚠ flag and logs to `narrative_skip_log`.
+Do NOT publish first-draft narratives directly to cards. Store
+`setup_validated`, `verdict_validated`, `setup_attempts`, `verdict_attempts`
+on the narrative record for monitoring.
+
+**Validator calibration note:** false-positive rate on verdicts is ~25%.
+Arithmetic derivations ("twelve wins from sixteen games" for W12+D2+L2=16)
+and standard paraphrases ("winless in five") are sometimes rejected by the
+validator but are factually correct. These cause retries but do NOT represent
+published accuracy failures. Do not over-tighten the validator to chase this
+number — the calibration already whitelists arithmetic derivations and known
+stadium names.
+
+### Rule 4 — Sport-aware handlers (no football-only pipeline for rugby/cricket)
+Narrative generation is sport-aware. `build_derived_claims(h, a, sport)` dispatches:
+- Football (EPL/UCL/PSL/La Liga etc.) → `_derived_soccer()`
+- Rugby (URC/Super Rugby) → `_derived_rugby()` — uses tries/bonus points schema, prohibits football terminology
+- Cricket IPL/SA20 → `_derived_cricket_ipl()` — NRR as primary differentiator; runs/wickets vocabulary
+- Cricket Test → `_derived_cricket_test()` — conservative handler for sparse ESPN data; blocks invented stats explicitly
+
+Running the football-only pipeline on rugby or cricket produces "?" placeholders
+and incorrect venue labels. Never use `_derived_soccer()` for non-football sports.
+
+### Rule 5 — Verdict is story-close flavour, NOT a bet instruction
+Verdict copy = SA braai analyst voice: manager names, team nicknames, narrative
+punch line. Explicitly not a bet instruction. Price / EV / bookmaker are displayed
+elsewhere on the card. Selected voice direction: **V1 — Story close** (confirmed
+in NARRATIVE-ACCURACY-01 Part 2 voice testing). The wrong direction (V2) is
+bet-instruction style ("back at 1.45, measured single") — rejected. If a verdict
+reads like a sizing call, that is a voice regression. Refer to the `verdict-generator`
+skill and `narrative_spec.TONE_BANDS` for the allowed/banned phrase sets.
