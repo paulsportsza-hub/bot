@@ -4953,12 +4953,20 @@ function renderReelUploadPanel(p){
   if(tier==='diamond')tierBadge='<span class="so-rup-tier so-rup-tier-diamond">Diamond</span>';
   else if(tier==='gold')tierBadge='<span class="so-rup-tier so-rup-tier-gold">Gold</span>';
   else if(tier==='silver')tierBadge='<span class="so-rup-tier so-rup-tier-silver">Silver</span>';
-  var stateChip=hasFinal
-    ? '<span class="so-rup-chip so-rup-chip-ok">QUEUED</span>'
-    : '<span class="so-rup-chip">AWAITING UPLOAD</span>';
-  var pivotBanner=pivotedFrom
-    ? '<div class="so-rup-pivot">↪ '+eH(pivotedFrom)+' missed — showing next reel ('+eH(datePart)+')</div>'
-    : '';
+  var awaitingGen=(p.reel_state||'')==='awaiting_generator';
+  var stateChip=awaitingGen
+    ? '<span class="so-rup-chip">AWAITING GENERATOR</span>'
+    : (hasFinal
+        ? '<span class="so-rup-chip so-rup-chip-ok">QUEUED</span>'
+        : '<span class="so-rup-chip">AWAITING UPLOAD</span>');
+  var pivotBanner='';
+  if(pivotedFrom){
+    if(awaitingGen){
+      pivotBanner='<div class="so-rup-pivot">↪ '+eH(pivotedFrom)+' missed — next reel generates '+eH(datePart)+' at 08:00 SAST</div>';
+    } else {
+      pivotBanner='<div class="so-rup-pivot">↪ '+eH(pivotedFrom)+' missed — showing next reel ('+eH(datePart)+')</div>';
+    }
+  }
   // Card preview — mirrors Task Hub reel card (image + download)
   var cardBlock='';
   if(cardUrl){
@@ -4976,11 +4984,15 @@ function renderReelUploadPanel(p){
           '<button class="so-rup-act so-rup-act-copy" data-copy="'+eA(cardUrl)+'" aria-label="Copy card URL">'+_ICO_CLIP+' Copy URL</button>'+
         '</div>'+
       '</div>';
+  } else if(awaitingGen){
+    cardBlock='<div class="so-rup-card-missing"><b>No reel kit yet for '+eH(datePart)+'.</b><br>The reel generator runs daily at 08:00 SAST — the next kit will appear here automatically.</div>';
   } else {
     cardBlock='<div class="so-rup-card-missing">No reel card image found for '+eH(datePart)+' — run <code>reel_generator.py</code> to generate one.</div>';
   }
-  // Only show drop zone when no master has been uploaded yet.
-  var dropBlock=hasFinal?'':(''+
+  // Only show drop zone when no master has been uploaded yet AND we have a
+  // kit to upload against. When awaiting the next generator run there's no
+  // target row_id to attach the upload to.
+  var dropBlock=(hasFinal||awaitingGen)?'':(''+
     '<div class="so-rup-upload" id="so-rup-zone" data-row="'+eA(rowId)+'" data-date="'+eA(datePart)+'">'+
       '<div class="so-rup-drop" id="so-rup-drop">'+
         '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>'+
@@ -9923,12 +9935,17 @@ def api_so_post(post_id: str):
         _match, _kits = _best_kit_for(_effective_date)
 
         # If today is overdue, pivot forward to the next day that has a kit.
+        # If no future kit exists on disk (reel_generator runs daily at 06:00
+        # UTC / 08:00 SAST and only produces today's kit), blank out today's
+        # stale card and surface a "next generator run" banner — the operator
+        # can't act on today anyway and we shouldn't keep showing a ghost card.
         if reel_state_out == "overdue":
             from datetime import date as _date_cls, timedelta as _td
             try:
                 _base = _date_cls.fromisoformat(_effective_date)
             except ValueError:
                 _base = None
+            _pivot_found = False
             if _base is not None:
                 for _days_ahead in range(1, 15):  # look up to 2 weeks ahead
                     _candidate = (_base + _td(days=_days_ahead)).isoformat()
@@ -9946,7 +9963,19 @@ def api_so_post(post_id: str):
                         reel_state_out = "queued" if _pivot_final else "needs_upload"
                         reel_final_out = _pivot_final
                         reel_date_out = _candidate
+                        _pivot_found = True
                         break
+            if not _pivot_found:
+                # No future kit exists — show empty "awaiting next cron" state.
+                # Tomorrow's kit is produced at 06:00 UTC (08:00 SAST) by
+                # reel_generator.py. Surface the next ETA in the banner instead
+                # of the stale today-card the operator can't act on.
+                if _base is not None:
+                    _next_date = (_base + _td(days=1)).isoformat()
+                    reel_pivoted_from = _effective_date
+                    reel_date_out = _next_date
+                    reel_state_out = "awaiting_generator"
+                _match = None  # force the "No reel card image found" render
 
         if _match and _match.get("pick_id") and _match.get("card"):
             reel_pick_id = _match["pick_id"]
