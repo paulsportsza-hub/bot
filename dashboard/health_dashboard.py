@@ -1524,9 +1524,12 @@ def _fetch_quora_ledger() -> list[dict]:
                     m = re.match(r"^Q\d+[:.]?\s*", q)
                     if m:
                         q = q[m.end():]
-                    # id is the heading_2 block ID from the daily sheet, NOT a Notion page ID.
-                    # api_task_hub_quora_posted must PATCH /v1/blocks/{id}, not /v1/pages/{id}.
-                    current = {"id": b.get("id", ""), "question": q, "priority": "",
+                    # The heading_2 block ID is used as the row's `id` so the
+                    # frontend can group paragraphs/answers under this question.
+                    # `to_do_id` (set later) is what the Mark Posted handler must
+                    # PATCH — heading_2 blocks cannot receive a to_do.checked patch.
+                    current = {"id": b.get("id", ""), "to_do_id": "",
+                               "question": q, "priority": "",
                                "url": "", "answer": "", "status": "Ready", "posted": False,
                                "topic": "Quora", "notes": "", "last_edited": b.get("last_edited_time", "")}
                     answer_buf = []
@@ -1550,6 +1553,8 @@ def _fetch_quora_ledger() -> list[dict]:
                 elif t == "to_do" and txt.lower().startswith("posted"):
                     current["posted"] = bool((b.get("to_do") or {}).get("checked"))
                     current["status"] = "Posted" if current["posted"] else "Ready"
+                    # Capture the to_do block ID so Mark Posted can PATCH it.
+                    current["to_do_id"] = b.get("id", "")
             if current:
                 _full = "\n".join(answer_buf)
                 current["full_answer"] = _full
@@ -4041,6 +4046,22 @@ def render_automation_content() -> str:
 .so-rup-status.success{color:#22c55e;}
 .so-rup-status.error{color:#ef4444;}
 .so-rup-uploading{opacity:.55;pointer-events:none;}
+/* INV-DASH-FIXES-REGRESSION-01 hotfix: reel card preview + download inside the panel */
+.so-rup-chip-ok{background:rgba(34,197,94,0.15);color:#22c55e;border-color:rgba(34,197,94,0.35);}
+.so-rup-tier{display:inline-flex;align-items:center;border-radius:10px;padding:2px 10px;font-size:11px;font-weight:600;letter-spacing:.03em;margin-left:6px;}
+.so-rup-tier-diamond{background:rgba(139,92,246,0.15);color:#a78bfa;border:1px solid rgba(139,92,246,0.4);}
+.so-rup-tier-gold{background:rgba(248,200,48,0.15);color:var(--gold);border:1px solid rgba(248,200,48,0.4);}
+.so-rup-tier-silver{background:rgba(148,163,184,0.14);color:#cbd5e1;border:1px solid rgba(148,163,184,0.35);}
+.so-rup-card-wrap{display:flex;flex-direction:column;gap:8px;background:#0a0a0a;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.so-rup-card-img{display:block;width:100%;height:auto;max-height:min(55vh,520px);object-fit:contain;background:#0a0a0a;}
+.so-rup-master{display:block;width:100%;max-height:min(55vh,520px);background:#000;}
+.so-rup-card-actions{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;background:var(--surface-alt);border-top:1px solid var(--border);}
+.so-rup-act{flex:1 1 auto;min-width:110px;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-family:var(--font-m);font-size:11px;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:6px 10px;cursor:pointer;text-decoration:none;transition:border-color 150ms,color 150ms,background 150ms;}
+.so-rup-act:hover{color:var(--gold);border-color:var(--gold);background:rgba(248,200,48,0.06);}
+.so-rup-act-flash{color:#22c55e!important;border-color:#22c55e!important;background:rgba(34,197,94,0.1)!important;}
+.so-rup-card-missing{background:var(--surface-alt);border:1px dashed var(--border);border-radius:8px;padding:16px;font-size:12px;color:var(--muted);text-align:center;}
+.so-rup-card-missing code{color:var(--gold);background:rgba(248,200,48,0.08);padding:1px 5px;border-radius:3px;font-size:11px;}
+@media (max-width:600px){.so-rup-act{min-width:0;flex:1 1 calc(50% - 3px);}}
 /* ── Platform-native preview frames ─────────────────────────── */
 .pv-frame{max-width:420px;margin:0 auto;font-size:13px;line-height:1.5;color:var(--text);}
 .pv-frame-hdr{display:flex;align-items:center;gap:10px;padding:10px 12px;}
@@ -4492,7 +4513,10 @@ function renderRow(ch,ri){
     if(p.reel_state==='needs_upload')cls+=' so-tl-reel-flash';
     else if(p.reel_state==='overdue')cls+=' so-tl-reel-overdue';
     var reelTooltip=p.reel_state==='needs_upload'?'Reel kit needed — not uploaded yet':p.reel_state==='overdue'?'Reel past scheduled time — missed':'';
-    var reelLblText=p.reel_state==='needs_upload'?'NEEDS UPLOAD':p.reel_state==='overdue'?'MISSED':'';
+    // INV-DASH-FIXES-REGRESSION-01: 'NEEDS UPLOAD' label removed — red flashing
+    // pill (.so-tl-reel-flash) is sufficient signal. 'MISSED' retained for
+    // overdue state because the solid-red state doesn't animate.
+    var reelLblText=p.reel_state==='overdue'?'MISSED':'';
     var reelLblBadge=reelLblText?'<span class="so-tl-reel-state-lbl">'+reelLblText+'</span>':'';
     return '<button class="'+cls+'" style="left:'+pct+';'+off+';--status-color:'+stColor(p.status)+'" '+
       'data-post-id="'+eA(p.id)+'" data-row-idx="'+ri+'" data-col-idx="'+ci+'" '+
@@ -4615,7 +4639,7 @@ function showPreview(p){
   document.getElementById('so-pv-meta').innerHTML=chips;
   document.getElementById('so-pv-body').innerHTML=renderPvBody(p);
   initPvCarousels();
-  if(p.reel_state==='overdue'||p.reel_state==='needs_upload')soReelUploadInit();
+  if(p.reel_state||p.reel_card_url)soReelUploadInit();
   var acts=[];
   if((p.status||'').match(/fail|error|block/i))acts.push('<button onclick="alert(\\'Retry: use Notion to re-queue this post\\')">Retry</button>');
   if((p.status||'').match(/pending|queue|sched|ready|await/i))acts.push('<button onclick="alert(\\'Skip: use Notion to update status\\')">Skip</button>');
@@ -4785,8 +4809,10 @@ function _chanKey(p){
 }
 function renderPvBody(p){
   var chKey=_chanKey(p);
-  // Awaiting-upload reel: specialised upload panel instead of IG preview.
-  if((p.reel_state==='overdue'||p.reel_state==='needs_upload')&&chKey==='instagram'){return renderReelUploadPanel(p);}
+  // INV-DASH-FIXES-REGRESSION-01: IG reels always render the reel panel
+  // (card image + download + optional master mp4 + upload zone if no master).
+  // Non-reel IG posts still go through renderIgFrame.
+  if(chKey==='instagram'&&(p.reel_state||p.reel_card_url)){return renderReelUploadPanel(p);}
   var media=renderPvMedia(p,chKey);
   if(chKey==='instagram')return renderIgFrame(p,media);
   if(chKey==='tiktok')return renderTikTokFrame(p,media);
@@ -4891,16 +4917,44 @@ function initPvCarousels(){
 }
 // ── Reel upload panel ─────────────────────────────────────────────────────────
 function renderReelUploadPanel(p){
-  var rawSched=p.scheduled||'';
-  var datePart=rawSched.split(' ')[0]||'';
-  var slotPart=rawSched.split(' ')[1]||window.CADENCE_SLOTS.ig_reel;
+  var rawSched=p.scheduled||p.reel_date||'';
+  var datePart=(rawSched.split(' ')[0]||p.reel_date||'');
+  var slotPart=rawSched.split(' ')[1]||((window.CADENCE_SLOTS&&window.CADENCE_SLOTS.ig_reel)||'');
   var rowId=p.id||'';
-  return'<div class="so-reel-upload-panel">'+
-    '<div class="so-rup-header">🎥 IG Reel<span class="so-rup-chip">AWAITING UPLOAD</span></div>'+
-    '<div class="so-rup-meta">'+eH(datePart)+' &middot; '+eH(slotPart)+' SAST &middot; Upload your Premiere Pro export to queue this reel.</div>'+
-    '<div class="so-rup-kit-btn">'+
-      '<button onclick="soReelOpenKit('+JSON.stringify(datePart)+')">📦 Open Reel Kit in Task Hub →</button>'+
-    '</div>'+
+  var cardUrl=p.reel_card_url||'';
+  var pickId=p.reel_pick_id||'';
+  var tier=(p.reel_tier||'').toLowerCase();
+  var masterUrl=p.reel_master_url||'';
+  var hasFinal=!!p.reel_has_final;
+  var tierBadge='';
+  if(tier==='diamond')tierBadge='<span class="so-rup-tier so-rup-tier-diamond">Diamond</span>';
+  else if(tier==='gold')tierBadge='<span class="so-rup-tier so-rup-tier-gold">Gold</span>';
+  else if(tier==='silver')tierBadge='<span class="so-rup-tier so-rup-tier-silver">Silver</span>';
+  var stateChip=hasFinal
+    ? '<span class="so-rup-chip so-rup-chip-ok">QUEUED</span>'
+    : '<span class="so-rup-chip">AWAITING UPLOAD</span>';
+  // Card preview — mirrors Task Hub reel card (image + download)
+  var cardBlock='';
+  if(cardUrl){
+    cardBlock=''+
+      '<div class="so-rup-card-wrap">'+
+        '<img class="so-rup-card-img" loading="lazy" alt="Reel card preview" src="'+eA(cardUrl)+'">'+
+        (hasFinal&&masterUrl
+          ? '<video class="so-rup-master" controls preload="metadata" playsinline src="'+eA(masterUrl)+'"></video>'
+          : '')+
+        '<div class="so-rup-card-actions">'+
+          '<a class="so-rup-act" href="'+eA(cardUrl)+'" download="'+eA((pickId?('card_'+pickId+'.png'):'card.png'))+'" aria-label="Download card">'+_ICO_DOWNLOAD+' Download card</a>'+
+          (masterUrl
+            ? '<a class="so-rup-act" href="'+eA(masterUrl)+'" download aria-label="Download master mp4">'+_ICO_DOWNLOAD+' Master MP4</a>'
+            : '')+
+          '<button class="so-rup-act so-rup-act-copy" data-copy="'+eA(cardUrl)+'" aria-label="Copy card URL">'+_ICO_CLIP+' Copy URL</button>'+
+        '</div>'+
+      '</div>';
+  } else {
+    cardBlock='<div class="so-rup-card-missing">No reel card image found for '+eH(datePart)+' — run <code>reel_generator.py</code> to generate one.</div>';
+  }
+  // Only show drop zone when no master has been uploaded yet.
+  var dropBlock=hasFinal?'':(''+
     '<div class="so-rup-upload" id="so-rup-zone" data-row="'+eA(rowId)+'" data-date="'+eA(datePart)+'">'+
       '<div class="so-rup-drop" id="so-rup-drop">'+
         '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>'+
@@ -4908,7 +4962,15 @@ function renderReelUploadPanel(p){
         '<input type="file" id="so-rup-file" accept="video/mp4" style="display:none">'+
       '</div>'+
     '</div>'+
-    '<div id="so-rup-status" class="so-rup-status"></div>'+
+    '<div id="so-rup-status" class="so-rup-status"></div>');
+  return'<div class="so-reel-upload-panel">'+
+    '<div class="so-rup-header">🎥 IG Reel'+tierBadge+stateChip+'</div>'+
+    '<div class="so-rup-meta">'+eH(datePart)+(slotPart?(' &middot; '+eH(slotPart)+' SAST'):'')+(hasFinal?' &middot; Master uploaded, scheduled to publish.':' &middot; Upload your Premiere Pro export to queue this reel.')+'</div>'+
+    cardBlock+
+    '<div class="so-rup-kit-btn">'+
+      '<button onclick="soReelOpenKit('+JSON.stringify(datePart)+')">📦 Open Reel Kit in Task Hub →</button>'+
+    '</div>'+
+    dropBlock+
   '</div>';
 }
 function soReelOpenKit(date){
@@ -4958,6 +5020,20 @@ function soReelUploadFile(file,rowId,date){
     });
 }
 function soReelUploadInit(){
+  // Wire copy-URL buttons inside reel preview (always present when card exists).
+  document.querySelectorAll('.so-reel-upload-panel .so-rup-act-copy').forEach(function(btn){
+    if(btn.__wiredCopy)return;
+    btn.__wiredCopy=true;
+    btn.addEventListener('click',function(){
+      var url=btn.getAttribute('data-copy')||'';
+      if(!url)return;
+      try{navigator.clipboard.writeText(url);}catch(e){}
+      var orig=btn.innerHTML;
+      btn.classList.add('so-rup-act-flash');
+      btn.innerHTML=_ICO_CHECK+' Copied';
+      setTimeout(function(){btn.classList.remove('so-rup-act-flash');btn.innerHTML=orig;},2000);
+    });
+  });
   var zone=document.getElementById('so-rup-zone');
   if(!zone)return;
   var drop=document.getElementById('so-rup-drop');
@@ -5118,7 +5194,7 @@ var _SO_CH_CFG=[
   {key:'linkedin',svg:_SVG_LINKEDIN,label:'LinkedIn', actClass:'so-act-linkedin', actIcon:_ICO_PLANE, actLabel:'Mark Sent',    endpoint:function(t){return '/admin/api/task-hub/linkedin/'+encodeURIComponent(t.id||t.page_id||'')+'/sent';}},
   {key:'reels',   svg:_SVG_IG,      label:'Reel Kits',actClass:'so-act-instagram',actIcon:_ICO_UPLOAD,actLabel:'Mark Uploaded',endpoint:null},
   {key:'fb',      svg:_SVG_FB,      label:'FB Groups',actClass:'so-act-facebook', actIcon:_ICO_CHECK, actLabel:'Mark Posted',  endpoint:function(t){return '/admin/api/task-hub/fb/'+encodeURIComponent(t.id||t.page_id||'')+'/posted';}},
-  {key:'quora',   svg:_SVG_QUORA,   label:'Quora',    actClass:'so-act-quora',    actIcon:_ICO_CHECK, actLabel:'Mark Posted',  endpoint:function(t){return '/admin/api/task-hub/quora/'+encodeURIComponent(t.id||t.page_id||'')+'/posted';}}
+  {key:'quora',   svg:_SVG_QUORA,   label:'Quora',    actClass:'so-act-quora',    actIcon:_ICO_CHECK, actLabel:'Mark Posted',  endpoint:function(t){return '/admin/api/task-hub/quora/'+encodeURIComponent(t.to_do_id||t.id||'')+'/posted';}}
 ];
 function _soChItemLabel(key,t){
   if(key==='reels')return t.pick_team||t.pick_id||String(t.id||'')||'—';
@@ -6292,6 +6368,8 @@ def _th_render_fb_card(item: dict) -> str:
 
 def _th_render_quora_card(item: dict) -> str:
     pid = item.get("id") or ""
+    # Mark Posted must PATCH the to_do block ID, not the heading_2 question ID.
+    todo_id = item.get("to_do_id") or ""
     q = item.get("question") or "(untitled question)"
     topic = item.get("topic") or ""
     url = item.get("url") or ""
@@ -6305,6 +6383,10 @@ def _th_render_quora_card(item: dict) -> str:
         f'<a href="{_th_escape(url)}" target="_blank" rel="noopener" style="color:var(--cyan);font-size:11px">{_TH_SVG_EXTLINK} Open on Quora</a>'
         if url else ""
     )
+    btn_attrs = (
+        f'onclick="thQuoraPosted(\'{_th_escape(todo_id)}\',this)"'
+        if todo_id else 'disabled title="No Posted checkbox found in Notion daily sheet"'
+    )
     return f"""
     <div class="card" data-id="{_th_escape(pid)}">
       <div class="head">
@@ -6315,7 +6397,7 @@ def _th_render_quora_card(item: dict) -> str:
         {badge}
       </div>
       <div class="row-actions">
-        <button type="button" class="primary" onclick="thQuoraPosted('{_th_escape(pid)}',this)">{_TH_SVG_CHECK} Mark posted</button>
+        <button type="button" class="primary" {btn_attrs}>{_TH_SVG_CHECK} Mark posted</button>
       </div>
     </div>
     """
@@ -9715,6 +9797,40 @@ def api_so_post(post_id: str):
             reel_state_out = ""
     else:
         reel_state_out = ""
+
+    # INV-DASH-FIXES-REGRESSION-01 hotfix: enrich IG reel payload with the card
+    # image URL + pick_id + master mp4 URL so the preview pane can show the
+    # Task-Hub-parity reel card (not a bare upload drag-drop panel).
+    reel_card_url = ""
+    reel_master_url = ""
+    reel_pick_id = ""
+    reel_tier = ""
+    if _is_reel_post and channel_key == "instagram" and reel_date_out:
+        try:
+            _kits = _scan_reel_kits(reel_date_out)
+        except Exception:
+            _kits = []
+        # Best-effort match: prefer a kit whose pick_team/tier matches the MOQ title.
+        _title = (item.get("title") or "").lower()
+        _match = None
+        for _k in _kits:
+            _team = (_k.get("pick_team") or "").lower()
+            _tier_k = (_k.get("tier") or "").lower()
+            if _team and _team in _title:
+                _match = _k
+                break
+            if _tier_k and _tier_k.upper() in (item.get("title") or ""):
+                _match = _k
+                break
+        if _match is None and _kits:
+            _match = _kits[0]
+        if _match and _match.get("pick_id") and _match.get("card"):
+            reel_pick_id = _match["pick_id"]
+            reel_tier = (_match.get("tier") or "").lower()
+            reel_card_url = f"https://mzansiedge.co.za/assets/reel-cards/{reel_date_out}/{reel_pick_id}/{_match['card']}"
+            if reel_final_out:
+                reel_master_url = f"{_REEL_PUBLIC_BASE}/{reel_date_out}/{reel_pick_id}_master.mp4"
+
     payload = {
         "id":              post_id,
         "channel":         item.get("channel") or "",
@@ -9743,6 +9859,10 @@ def api_so_post(post_id: str):
         "reel_state":      reel_state_out,
         "reel_date":       reel_date_out,
         "reel_has_final":  reel_final_out,
+        "reel_card_url":   reel_card_url,
+        "reel_master_url": reel_master_url,
+        "reel_pick_id":    reel_pick_id,
+        "reel_tier":       reel_tier,
     }
     return Response(json.dumps(payload), mimetype="application/json")
 
