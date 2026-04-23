@@ -2930,7 +2930,6 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
     # Sonnet spend on every full sweep while still regenerating when
     # anything material has changed.
     if sweep == "full":
-        from datetime import datetime
         filtered_full = []
         skipped_full = 0
         for edge in edges:

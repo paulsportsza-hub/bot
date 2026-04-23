@@ -1524,6 +1524,8 @@ def _fetch_quora_ledger() -> list[dict]:
                     m = re.match(r"^Q\d+[:.]?\s*", q)
                     if m:
                         q = q[m.end():]
+                    # id is the heading_2 block ID from the daily sheet, NOT a Notion page ID.
+                    # api_task_hub_quora_posted must PATCH /v1/blocks/{id}, not /v1/pages/{id}.
                     current = {"id": b.get("id", ""), "question": q, "priority": "",
                                "url": "", "answer": "", "status": "Ready", "posted": False,
                                "topic": "Quora", "notes": "", "last_edited": b.get("last_edited_time", "")}
@@ -3780,7 +3782,28 @@ def render_automation_content() -> str:
             _adt   = parse_ts(_it.get("last_edited") or "")
             _ahhmm = (_adt.astimezone(_SAST).strftime("%H:%M") if _adt else "")
             _raw_st = (_it.get("status") or "").lower().strip()
+            if _raw_st == "archived":
+                continue
             _disp_st = "queued" if _raw_st == "approved" else _raw_st
+            _reel_state = ""
+            if _ck == "instagram":
+                _wt_lc = (_it.get("work_type") or "").lower()
+                _ttl_lc2 = (_it.get("title") or "").lower()
+                _is_reel2 = ("reel" in _wt_lc) or ("reel still" in _ttl_lc2) or ("reel" in _ttl_lc2)
+                if _is_reel2:
+                    _reel_date_str2 = _sdt.astimezone(_SAST).strftime("%Y-%m-%d")
+                    _moq_page_id2 = _it.get("id") or ""
+                    _final_uploaded2 = _reel_has_final(_moq_page_id2, _reel_date_str2)
+                    _reel_excl2 = _SO_POSTED_ST | {"archived"}
+                    if _raw_st in _SO_POSTED_ST:
+                        _reel_state = "published"
+                    elif _final_uploaded2:
+                        _reel_state = "queued"
+                    elif _raw_st not in _reel_excl2:
+                        if _sdt < now_sast:
+                            _reel_state = "overdue"
+                        else:
+                            _reel_state = "needs_upload"
             _posts.append({
                 "id":     _it.get("id", ""),
                 "title":  (_it.get("title") or _it.get("copy") or "")[:60],
@@ -3794,7 +3817,17 @@ def render_automation_content() -> str:
                 "error":    _it.get("error") or "",
                 "ch_lbl":   _clbl,
                 "asset_url": _resolve_media_url(_it.get("asset_link") or _it.get("asset_url") or _it.get("image_url") or ""),
+                "reel_state": _reel_state,
             })
+        if _ck == "instagram":
+            _reel_active_st2 = {"needs_upload", "queued", "overdue"}
+            _reel_any_st2    = {"needs_upload", "queued", "overdue", "published"}
+            _reel_posts2 = [p for p in _posts if (p.get("reel_state") or "") in _reel_any_st2]
+            _non_reel2   = [p for p in _posts if (p.get("reel_state") or "") not in _reel_any_st2]
+            if len(_reel_posts2) > 1:
+                _active2 = [p for p in _reel_posts2 if (p.get("reel_state") or "") in _reel_active_st2]
+                _best2   = _active2[0] if _active2 else _reel_posts2[0]
+                _posts   = _non_reel2 + [_best2]
         _tl_chans.append({"key": _ck, "label": _clbl, "icon": _so_platform_icon_svg(_ck), "color": _CHANNEL_MAP.get(_ck, {}).get("color", "#888888"), "posts": _posts})
 
     # AC-A: inject today's Alerts bot sends into the telegram_alerts timeline lane
@@ -4115,6 +4148,75 @@ def render_automation_content() -> str:
 
 /* Generic fallback */
 .pv-gen{background:var(--surface-alt);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
+
+/* ── Facebook Group preview frame + carousel (BUILD-DASH-FB-PREVIEW-CAROUSEL-01) ── */
+.pv-fb-frame{background:#1c1e21;border-radius:8px;overflow:hidden;border:1px solid #3a3b3c;color:#e4e6eb;}
+.pv-fb-hdr{display:flex;align-items:flex-start;gap:10px;padding:12px 14px 8px;}
+.pv-fb-avatar{background:#1877f2;color:#fff;border-radius:50%;}
+.pv-fb-head-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.pv-fb-group{font-family:var(--font-d);font-weight:600;font-size:14px;color:#e4e6eb;line-height:1.3;word-wrap:break-word;overflow-wrap:anywhere;}
+.pv-fb-group-link{color:#e4e6eb;text-decoration:none;}
+.pv-fb-group-link:hover{color:#70b5f9;text-decoration:underline;}
+.pv-fb-group-name{color:#e4e6eb;}
+.pv-fb-sub{font-family:var(--font-m);font-size:11px;color:#b0b3b8;line-height:1.4;}
+.pv-fb-media{position:relative;background:#0a0a0a;margin:6px 0;max-height:min(55vh,460px);overflow:hidden;}
+.pv-fb-media img{display:block;width:100%;max-height:inherit;object-fit:contain;background:#0a0a0a;}
+.pv-fb-media--none{min-height:64px;display:flex;align-items:center;justify-content:center;font-family:var(--font-m);font-size:12px;color:#6e7074;background:#23252a;border-top:1px dashed #3a3b3c;border-bottom:1px dashed #3a3b3c;}
+.pv-fb-dl{position:absolute;top:8px;right:8px;width:30px;height:30px;border-radius:50%;background:rgba(0,0,0,0.55);color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;text-decoration:none;transition:background .15s,transform .15s;backdrop-filter:blur(4px);}
+.pv-fb-dl:hover{background:rgba(0,0,0,0.8);transform:scale(1.08);}
+.pv-fb-text{padding:8px 14px 14px;font-size:13.5px;line-height:1.5;color:#e4e6eb;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;max-height:38vh;overflow-y:auto;}
+.pv-fb-text--empty{color:#6e7074;font-style:italic;}
+
+/* FB Groups pill-click carousel (wraps the frame with nav + toolbar) */
+.pv-fb-carousel{display:flex;flex-direction:column;gap:10px;max-width:520px;margin:0 auto;}
+.pv-fb-frame--carousel{border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.25);}
+.pv-fb-nav{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 4px;}
+.pv-fb-nav-btn{width:34px;height:34px;border-radius:50%;background:var(--surface-alt);border:1px solid var(--border);color:var(--text);font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color 150ms,background 150ms,color 150ms;}
+.pv-fb-nav-btn:hover:not(:disabled){border-color:var(--gold);color:var(--gold);background:var(--surface);}
+.pv-fb-nav-btn:disabled{opacity:.35;cursor:not-allowed;}
+.pv-fb-counter{font-family:var(--font-m);font-size:12px;color:var(--muted);letter-spacing:.02em;}
+.pv-fb-toolbar{display:flex;gap:8px;flex-wrap:wrap;padding:2px 4px;}
+.pv-fb-toolbar button{flex:1 1 auto;min-width:120px;font-family:var(--font-m);font-size:12px;background:var(--surface-alt);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:border-color 150ms,background 150ms,color 150ms;}
+.pv-fb-toolbar button:hover:not(:disabled){border-color:var(--gold);color:var(--gold);}
+.pv-fb-toolbar button:disabled{opacity:.5;cursor:not-allowed;}
+.pv-fb-copy-btn.pv-fb-copy-flash{background:rgba(34,197,94,0.18);border-color:#22c55e;color:#22c55e;}
+.pv-fb-posted-btn{background:linear-gradient(180deg,rgba(24,119,242,0.12),rgba(24,119,242,0.04));border-color:rgba(24,119,242,0.4);color:#70b5f9;}
+.pv-fb-posted-btn:hover:not(:disabled){background:rgba(24,119,242,0.18);border-color:#70b5f9;color:#fff;}
+.pv-fb-posted-err{background:rgba(239,68,68,0.18)!important;border-color:#ef4444!important;color:#fff!important;}
+.pv-fb-empty{padding:24px;text-align:center;color:#22c55e;font-size:14px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.25);border-radius:8px;margin:12px;}
+.so-pv-chip-count{background:rgba(248,200,48,0.1);border-color:rgba(248,200,48,0.35);color:var(--gold);}
+
+/* ── Adaptive preview pane (fit content to available space) ───────────────── */
+/* Let platform frames flex to container width up to their natural max. */
+.pv-frame,.pv-ig-frame,.pv-tg-frame,.pv-wa-frame,.pv-li-frame,.pv-fb-frame,.pv-tt-frame{max-width:min(480px,100%);width:100%;margin-left:auto;margin-right:auto;box-sizing:border-box;}
+/* Media heights scale with viewport but never larger than natural. */
+.pv-tg-bubble-media img,.pv-tg-bubble-media video{max-height:min(60vh,420px);}
+.pv-wa-bubble-media img,.pv-wa-bubble-media video{max-height:min(55vh,360px);}
+.pv-li-media img,.pv-li-media video{max-height:min(60vh,460px);}
+.pv-ig-media.aspect-9-16{max-height:min(70vh,640px);}
+.pv-ig-media.aspect-4-5{max-height:min(70vh,560px);}
+.pv-ig-media.aspect-1-1{max-height:min(55vh,480px);}
+.pv-tt-frame{max-height:min(72vh,620px);}
+/* Long captions scroll inside the bubble instead of stretching the frame. */
+.pv-ig-caption,.pv-tg-bubble-text,.pv-wa-bubble-text,.pv-li-text{max-height:min(38vh,320px);overflow-y:auto;}
+.pv-tt-cap{max-height:min(22vh,180px);}
+/* Preserve long unbroken strings (URLs, hashtags). */
+.pv-ig-caption,.pv-tg-bubble-text,.pv-wa-bubble-text,.pv-li-text,.pv-gen,.pv-fb-text{overflow-wrap:anywhere;}
+/* Tighter padding on narrow panes — preview sits in a right rail that can be ~360-520px wide. */
+@media (max-width: 600px){
+  .so-pv-body{padding:10px;}
+  .pv-frame,.pv-ig-frame,.pv-tg-frame,.pv-wa-frame,.pv-li-frame,.pv-fb-frame,.pv-tt-frame{max-width:100%;}
+  .pv-fb-toolbar button{min-width:0;flex:1 1 calc(50% - 4px);}
+  .pv-fb-counter{font-size:11px;}
+}
+@media (max-width: 420px){
+  .pv-fb-nav-btn{width:30px;height:30px;}
+  .pv-fb-media{max-height:min(45vh,320px);}
+}
+/* Very wide panes: don't let the frame get comically large. */
+@media (min-width: 900px){
+  .pv-frame,.pv-ig-frame,.pv-tg-frame,.pv-wa-frame,.pv-li-frame,.pv-fb-frame,.pv-tt-frame{max-width:480px;}
+}
 .so-tip{position:fixed;background:var(--surface-alt);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:var(--font-m);font-size:11px;color:var(--text);z-index:9999;pointer-events:none;max-width:240px;line-height:1.4;box-shadow:var(--glow);display:none;}
 .so-tip-thumb{display:block;width:96px;height:96px;object-fit:cover;border-radius:4px;margin-bottom:6px;background:var(--surface);}
 .so-chip-stack{display:flex;flex-direction:column;gap:6px;padding:4px 0;}
@@ -4319,31 +4421,11 @@ function updateNowLine(){
 }
 
 // ── Timeline rendering ────────────────────────────────────────────────
+var _soLastTimelineData=null;
 function renderTimeline(data){
   var cont=document.getElementById('so-tl-rows');
   if(!cont)return;
-  // FIX-DASH-IG-TIMELINE-PREVIEW-MISMATCH-01: capture the active IG reel ID
-  // so the bottom-bar IG icon can open the same MOQ preview row.
-  _soActiveIgReelId=null;
-  (data.channels||[]).forEach(function(ch){
-    var chKey=(ch.key||ch.label||'').toLowerCase();
-    if(chKey!=='instagram'&&!chKey.includes('instagram'))return;
-    var _active_states=['needs_upload','queued','overdue'];
-    (ch.posts||[]).forEach(function(p){
-      if(!_soActiveIgReelId&&p.id&&p.id!=='__ig_reel_empty__'&&
-         _active_states.indexOf(p.reel_state||'')!==-1){
-        _soActiveIgReelId=p.id;
-      }
-    });
-    if(!_soActiveIgReelId){
-      (ch.posts||[]).forEach(function(p){
-        if(!_soActiveIgReelId&&p.id&&p.id!=='__ig_reel_empty__'&&
-           p.reel_state==='published'){
-          _soActiveIgReelId=p.id;
-        }
-      });
-    }
-  });
+  _soLastTimelineData=data||null;
   cont.innerHTML=(data.channels||[]).map(renderRow).join('');
   cont.querySelectorAll('[data-post-id]').forEach(function(btn){
     btn.addEventListener('click',function(){loadPreview(btn.dataset.postId);setActive(btn);});
@@ -4542,18 +4624,19 @@ function showPreview(p){
   document.getElementById('so-pv-actions').innerHTML=acts.join('');
   var ld=document.getElementById('so-pv-loaded');ld.style.display='flex';ld.style.flexDirection='column';ld.style.flex='1';
 }
-function _pvBrand(ch){
-  if(ch.includes('instagram'))return{handle:'mzansiedge',display:'MzansiEdge',avatar:'M',sub:'Sponsored'};
-  if(ch.includes('tiktok'))return{handle:'@mzansiedge',display:'MzansiEdge',avatar:'M',sub:'original sound'};
-  if(ch.includes('telegram community')||ch.includes('telegram_community'))return{handle:'MzansiEdge Community',display:'MzansiEdge Community',avatar:'M',sub:'Group'};
-  if(ch.includes('telegram'))return{handle:'MzansiEdge Alerts',display:'MzansiEdge Alerts',avatar:'M',sub:'Channel'};
-  if(ch.includes('whatsapp'))return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:'Channel'};
-  if(ch.includes('linkedin'))return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:'Sports intelligence · Johannesburg · Sponsored'};
+// FIX-DASH-IG-PREVIEW-ROUTING-01: exact channel_key routing (no substring).
+function _pvBrand(chKey){
+  if(chKey==='instagram')return{handle:'mzansiedge',display:'MzansiEdge',avatar:'M',sub:'Sponsored'};
+  if(chKey==='tiktok')return{handle:'@mzansiedge',display:'MzansiEdge',avatar:'M',sub:'original sound'};
+  if(chKey==='telegram_community')return{handle:'MzansiEdge Community',display:'MzansiEdge Community',avatar:'M',sub:'Group'};
+  if(chKey==='telegram_alerts'||chKey==='telegram')return{handle:'MzansiEdge Alerts',display:'MzansiEdge Alerts',avatar:'M',sub:'Channel'};
+  if(chKey==='whatsapp')return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:'Channel'};
+  if(chKey==='linkedin')return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:'Sports intelligence · Johannesburg · Sponsored'};
   return{handle:'MzansiEdge',display:'MzansiEdge',avatar:'M',sub:''};
 }
-function _pvCaption(p,ch){
-  if(ch.includes('telegram'))return p.telegram_caption||p.caption_final||p.caption||p.body_markdown||'';
-  if(ch.includes('instagram'))return p.ig_caption||p.caption_final||p.caption||p.body_markdown||'';
+function _pvCaption(p,chKey){
+  if(chKey==='telegram_alerts'||chKey==='telegram_community'||chKey==='telegram')return p.telegram_caption||p.caption_final||p.caption||p.body_markdown||'';
+  if(chKey==='instagram')return p.ig_caption||p.caption_final||p.caption||p.body_markdown||'';
   return p.caption_final||p.caption||p.body_markdown||'';
 }
 function _pvEscHtml(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -4625,8 +4708,8 @@ function renderTikTokFrame(p,media){
   return'<div class="pv-tt-frame">'+media+top+side+bottom+'</div>';
 }
 function renderTelegramFrame(p,media){
-  var br=_pvBrand((p.channel||'').toLowerCase());
-  var cap=_pvCaption(p,'telegram');
+  var br=_pvBrand(_chanKey(p));
+  var cap=_pvCaption(p,_chanKey(p));
   var bodyHtml=cap.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>');
   var hdr='<div class="pv-tg-hdr"><div class="pv-avatar">'+eH(br.avatar)+'</div><div><div class="pv-tg-name">'+eH(br.display)+'</div><div class="pv-tg-sub">'+eH(br.sub)+'</div></div></div>';
   var bubbleMedia=media?'<div class="pv-tg-bubble-media">'+media+'</div>':'';
@@ -4665,27 +4748,64 @@ function renderLinkedInFrame(p,media){
     '</div>';
   return'<div class="pv-li-frame">'+hdr+text+mediaWrap+stats+actions+'</div>';
 }
+// BUILD-DASH-FB-PREVIEW-CAROUSEL-01: single-post FB Group preview frame.
+// Used by the timeline click path (loadPreview) when a FB Group card is tapped.
+// Group name is parsed from p.title or provided via p.group; link is optional.
+function _fbGroupName(p){
+  if(p.group)return p.group;
+  var t=p.title||'';
+  // Title format: "FB Group — {Group Name} — {Sport} — {Date}"
+  var parts=t.split(' — ').map(function(s){return (s||'').trim();}).filter(Boolean);
+  if(parts.length>=2)return parts[1];
+  return t||'Facebook Group';
+}
+function renderFbGroupFrame(p,media){
+  var name=_fbGroupName(p);
+  var url=p.group_url||'';
+  var cap=p.final_copy||p.caption_final||p.caption||p.body_markdown||p.post_text||'';
+  var bodyHtml=_pvLineBreaks(cap);
+  var nameHtml=url?'<a class="pv-fb-group-link" href="'+eA(url)+'" target="_blank" rel="noopener">'+eH(name)+' ↗</a>':'<span class="pv-fb-group-name">'+eH(name)+'</span>';
+  var hdr='<div class="pv-fb-hdr"><div class="pv-avatar pv-fb-avatar">'+eH((name||'F').charAt(0))+'</div><div class="pv-fb-head-meta"><div class="pv-fb-group">'+nameHtml+'</div><div class="pv-fb-sub">Group · '+_pvTimeLabel(p)+'</div></div></div>';
+  var imgUrl=p.image_url||'';
+  var mediaWrap='';
+  if(imgUrl){
+    mediaWrap='<div class="pv-fb-media"><img loading="lazy" alt="" src="'+eA(imgUrl)+'"><a class="pv-fb-dl" href="'+eA(imgUrl)+'" download aria-label="Download image" title="Download image">⤓</a></div>';
+  }else if(media){
+    mediaWrap='<div class="pv-fb-media">'+media+'</div>';
+  }
+  var text=bodyHtml?'<div class="pv-fb-text">'+bodyHtml+'</div>':'';
+  return'<div class="pv-fb-frame">'+hdr+mediaWrap+text+'</div>';
+}
+// FIX-DASH-IG-PREVIEW-ROUTING-01: switch preview dispatch from
+// substring match on p.channel (display name) to exact match on
+// p.channel_key (normalised server-side key). Prevents accidental
+// matches between similar channel names and aligns with the lane key.
+function _chanKey(p){
+  return ((p&&(p.channel_key||p.channel))||'').toLowerCase().trim();
+}
 function renderPvBody(p){
-  var ch=(p.channel||'').toLowerCase();
-  // Awaiting-upload reel: show specialized upload panel instead of IG preview
-  if((p.reel_state==='overdue'||p.reel_state==='needs_upload')&&ch.includes('instagram')){return renderReelUploadPanel(p);}
-  var media=renderPvMedia(p,ch);
-  if(ch.includes('instagram'))return renderIgFrame(p,media);
-  if(ch.includes('tiktok'))return renderTikTokFrame(p,media);
-  if(ch.includes('telegram'))return renderTelegramFrame(p,media);
-  if(ch.includes('whatsapp'))return renderWhatsAppFrame(p,media);
-  if(ch.includes('linkedin'))return renderLinkedInFrame(p,media);
-  var cap=_pvCaption(p,ch);
+  var chKey=_chanKey(p);
+  // Awaiting-upload reel: specialised upload panel instead of IG preview.
+  if((p.reel_state==='overdue'||p.reel_state==='needs_upload')&&chKey==='instagram'){return renderReelUploadPanel(p);}
+  var media=renderPvMedia(p,chKey);
+  if(chKey==='instagram')return renderIgFrame(p,media);
+  if(chKey==='tiktok')return renderTikTokFrame(p,media);
+  if(chKey==='telegram_alerts'||chKey==='telegram_community'||chKey==='telegram')return renderTelegramFrame(p,media);
+  if(chKey==='whatsapp')return renderWhatsAppFrame(p,media);
+  if(chKey==='linkedin')return renderLinkedInFrame(p,media);
+  if(chKey==='fb_groups'||chKey==='facebook_groups'||chKey==='facebook')return renderFbGroupFrame(p,media);
+  var cap=_pvCaption(p,chKey);
   var ttl=p.title?'<b>'+eH(p.title)+'</b><br><br>':'';
   var hashHtml=p.hashtags_str?'<div class="pv-hashtags">'+eH(p.hashtags_str)+'</div>':'';
   return media+'<div class="pv-gen">'+ttl+_pvLineBreaks(cap)+'</div>'+hashHtml;
 }
-function renderPvMedia(p,ch){
-  ch=ch||(p.channel||'').toLowerCase();
+function renderPvMedia(p,chKey){
+  chKey=(chKey||_chanKey(p));
+  var isIg=(chKey==='instagram');
   var hasCarousel=p.carousel_images && p.carousel_images.length>1;
   if(!p.image_url && !p.video_url && !hasCarousel)return'';
   var aspectCls='';
-  if(ch.includes('instagram')){
+  if(isIg){
     aspectCls='pv-ig-media '+(p.media_aspect==='9:16'?'aspect-9-16':(p.media_aspect==='4:5'?'aspect-4-5':'aspect-1-1'));
   }
   var inner='';
@@ -4697,7 +4817,7 @@ function renderPvMedia(p,ch){
     var hasSlideCaps=captions.length===total;
     var slides=p.carousel_images.map(function(u,i){
       var capOverlay='';
-      if(ch.includes('instagram') && hasSlideCaps){
+      if(isIg && hasSlideCaps){
         capOverlay='<div class="pv-ig-slide-cap">'+_pvLineBreaks(captions[i])+'</div>';
       }
       return '<div class="pv-carousel-slide">'+capOverlay+'<img loading="lazy" alt="Slide '+(i+1)+'" src="'+eA(u)+'"></div>';
@@ -4706,22 +4826,22 @@ function renderPvMedia(p,ch){
       return '<span class="pv-carousel-dot'+(i===0?' active':'')+'" data-idx="'+i+'"></span>';
     }).join('');
     var igDots='';
-    if(ch.includes('instagram')){
+    if(isIg){
       igDots='<div class="pv-ig-dots-top">'+p.carousel_images.map(function(_,i){return'<span class="d'+(i===0?' active':'')+'"></span>';}).join('')+'</div>'+
              '<span class="pv-ig-count" data-ig-count>1/'+total+'</span>';
     }
     inner=igDots+
           '<div class="pv-carousel" data-carousel>'+slides+'</div>'+
-          (ch.includes('instagram')?'':'<span class="pv-carousel-num" data-carousel-num>1/'+total+'</span>')+
+          (isIg?'':'<span class="pv-carousel-num" data-carousel-num>1/'+total+'</span>')+
           '<button class="pv-carousel-nav prev" data-carousel-prev aria-label="Previous slide" disabled>‹</button>'+
           '<button class="pv-carousel-nav next" data-carousel-next aria-label="Next slide">›</button>'+
           '<div class="pv-carousel-dots" data-carousel-dots>'+dots+'</div>';
   }else if(p.image_url){
     inner='<img loading="lazy" alt="" src="'+eA(p.image_url)+'">';
   }
-  var wrapCls=ch.includes('instagram')?aspectCls:'so-pv-media '+(hasCarousel?'pv-carousel-wrap aspect-1-1':'');
-  if(hasCarousel && !ch.includes('instagram'))wrapCls+=' pv-carousel-wrap';
-  else if(hasCarousel && ch.includes('instagram'))wrapCls+=' pv-carousel-wrap';
+  var wrapCls=isIg?aspectCls:'so-pv-media '+(hasCarousel?'pv-carousel-wrap aspect-1-1':'');
+  if(hasCarousel && !isIg)wrapCls+=' pv-carousel-wrap';
+  else if(hasCarousel && isIg)wrapCls+=' pv-carousel-wrap';
   return'<div class="'+wrapCls+'">'+inner+'</div>';
 }
 function initPvCarousels(){
@@ -4994,9 +5114,6 @@ var _SVG_QUORA='<svg width="22" height="22" viewBox="0 0 24 24"><path d="M11.3 2
 var _SVG_IG='<svg width="22" height="22" viewBox="0 0 24 24"><defs><linearGradient id="soch-ig" x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" stop-color="#F77737"/><stop offset="55%" stop-color="#FD1D1D"/><stop offset="100%" stop-color="#833AB4"/></linearGradient></defs><rect x="2" y="2" width="20" height="20" rx="5" fill="none" stroke="url(#soch-ig)" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="none" stroke="url(#soch-ig)" stroke-width="2"/><circle cx="17.5" cy="6.5" r="1.5" fill="url(#soch-ig)"/></svg>';
 var _soChData={};
 var _soChCounts={linkedin:0,reels:0,fb:0,quora:0};
-// FIX-DASH-IG-TIMELINE-PREVIEW-MISMATCH-01: active IG reel row ID captured at
-// timeline render time so the bottom-bar IG icon opens the same preview.
-var _soActiveIgReelId=null;
 var _SO_CH_CFG=[
   {key:'linkedin',svg:_SVG_LINKEDIN,label:'LinkedIn', actClass:'so-act-linkedin', actIcon:_ICO_PLANE, actLabel:'Mark Sent',    endpoint:function(t){return '/admin/api/task-hub/linkedin/'+encodeURIComponent(t.id||t.page_id||'')+'/sent';}},
   {key:'reels',   svg:_SVG_IG,      label:'Reel Kits',actClass:'so-act-instagram',actIcon:_ICO_UPLOAD,actLabel:'Mark Uploaded',endpoint:null},
@@ -5087,14 +5204,144 @@ function _renderSoTaskChannelBtns(sec,d){
 }
 document.addEventListener('so:task-channel-click',function(ev){
   var ch=ev.detail&&ev.detail.type;if(!ch)return;
-  // FIX-DASH-IG-TIMELINE-PREVIEW-MISMATCH-01: bottom-bar IG icon resolves to
-  // the same MOQ row that the timeline card click would open — ensures both
-  // click handlers show byte-identical reel preview content.
-  if(ch==='reels'&&_soActiveIgReelId){loadPreview(_soActiveIgReelId);return;}
+  // FIX-DASH-IG-PREVIEW-ROUTING-01: IG reel pill resolves to the current
+  // needs_upload/queued/overdue IG MOQ row from the live timeline data.
+  // Archive filter at the timeline API layer (render_automation_content /
+  // _build_so_timeline) guarantees archived rows never appear in posts.
+  if(ch==='reels'){
+    var tlData=(typeof _soLastTimelineData==='object'&&_soLastTimelineData)||null;
+    var activeId=_resolveActiveIgReelId(tlData);
+    if(activeId){loadPreview(activeId);return;}
+  }
   var cfg=null;for(var i=0;i<_SO_CH_CFG.length;i++){if(_SO_CH_CFG[i].key===ch){cfg=_SO_CH_CFG[i];break;}}
   if(!cfg)return;
   _soOpenChTaskList(ch,cfg,(_soChData[ch]||[]).slice());
 });
+// BUILD-DASH-FB-PREVIEW-CAROUSEL-01
+// Renders the FB Groups pill content as a one-at-a-time carousel inside the
+// preview pane. Per post: group name (+ link if registered), NB2 image with
+// download overlay, post copy with Copy button (2s green flash), Mark Posted
+// button that hits /admin/api/task-hub/fb-groups/{id}/posted.
+// Arrow nav + "Post X of N" counter. Empty state once all posted.
+function _soOpenFbGroupCarousel(cfg,items,meta,body,acts){
+  var posts=(items||[]).filter(function(t){return t && (t.id||t.page_id);});
+  var idx=0;
+  // Meta chips — show channel label + carousel counter.
+  function _renderMeta(){
+    var total=posts.length;
+    meta.innerHTML='<span class="so-pv-chip">'+eH(cfg.label)+'</span>'+
+      (total?'<span class="so-pv-chip so-pv-chip-count" data-fb-counter>Post '+(idx+1)+' of '+total+'</span>':'<span class="so-pv-chip">0 posts</span>');
+  }
+  function _renderEmpty(){
+    meta.innerHTML='<span class="so-pv-chip">'+eH(cfg.label)+'</span>';
+    body.innerHTML='<div class="so-ch-empty pv-fb-empty">✅ All FB Groups posted for today — great work.</div>';
+    if(acts)acts.innerHTML='';
+  }
+  function _renderSlide(){
+    if(!posts.length){_renderEmpty();return;}
+    if(idx<0)idx=0;
+    if(idx>=posts.length)idx=posts.length-1;
+    var t=posts[idx];
+    var tid=String(t.id||t.page_id||idx);
+    var name=_fbGroupName(t);
+    var url=t.group_url||'';
+    var copy=t.final_copy||t.post_text||t.copy||'';
+    var imgUrl=t.image_url||'';
+    var total=posts.length;
+    var canPrev=idx>0;
+    var canNext=idx<total-1;
+    var nameHtml=url
+      ? '<a class="pv-fb-group-link" href="'+eA(url)+'" target="_blank" rel="noopener">'+eH(name)+' ↗</a>'
+      : '<span class="pv-fb-group-name" title="No group URL configured">'+eH(name)+'</span>';
+    var avatar='<div class="pv-avatar pv-fb-avatar" aria-hidden="true">'+eH((name||'F').charAt(0).toUpperCase())+'</div>';
+    var hdr='<div class="pv-fb-hdr">'+avatar+'<div class="pv-fb-head-meta"><div class="pv-fb-group">'+nameHtml+'</div><div class="pv-fb-sub">Group · scheduled '+eH(t.scheduled_at||t.scheduled||'')+'</div></div></div>';
+    var mediaWrap=imgUrl
+      ? '<div class="pv-fb-media pv-fb-media--carousel"><img loading="lazy" alt="" src="'+eA(imgUrl)+'"><a class="pv-fb-dl" href="'+eA(imgUrl)+'" download aria-label="Download image" title="Download image">⤓</a></div>'
+      : '<div class="pv-fb-media pv-fb-media--none" aria-hidden="true">No image</div>';
+    var textHtml=copy?'<div class="pv-fb-text">'+_pvLineBreaks(copy)+'</div>':'<div class="pv-fb-text pv-fb-text--empty">(No post copy)</div>';
+    var toolbar='<div class="pv-fb-toolbar">'+
+      (copy?'<button type="button" class="pv-fb-copy-btn" data-fb-copy="'+eA(copy)+'" aria-label="Copy post copy">'+_ICO_CLIP+' Copy post</button>':'<button type="button" class="pv-fb-copy-btn" disabled aria-label="No copy">'+_ICO_CLIP+' Copy post</button>')+
+      '<button type="button" class="pv-fb-posted-btn" data-fb-tid="'+eA(tid)+'" aria-label="Mark posted">'+_ICO_CHECK+' Mark posted</button>'+
+    '</div>';
+    var nav='<div class="pv-fb-nav">'+
+      '<button type="button" class="pv-fb-nav-btn" data-fb-prev '+(canPrev?'':'disabled')+' aria-label="Previous post">‹</button>'+
+      '<span class="pv-fb-counter" data-fb-inline-counter>Post '+(idx+1)+' of '+total+'</span>'+
+      '<button type="button" class="pv-fb-nav-btn" data-fb-next '+(canNext?'':'disabled')+' aria-label="Next post">›</button>'+
+    '</div>';
+    body.innerHTML='<div class="pv-fb-carousel">'+nav+'<div class="pv-fb-frame pv-fb-frame--carousel">'+hdr+mediaWrap+textHtml+'</div>'+toolbar+'</div>';
+    _renderMeta();
+    if(acts)acts.innerHTML='';
+    _wire();
+  }
+  function _wire(){
+    var pb=body.querySelector('[data-fb-prev]');
+    var nb=body.querySelector('[data-fb-next]');
+    if(pb)pb.addEventListener('click',function(){if(idx>0){idx--;_renderSlide();}});
+    if(nb)nb.addEventListener('click',function(){if(idx<posts.length-1){idx++;_renderSlide();}});
+    var cb=body.querySelector('[data-fb-copy]');
+    if(cb)cb.addEventListener('click',function(){
+      var txt=cb.getAttribute('data-fb-copy')||'';
+      if(!txt)return;
+      try{navigator.clipboard.writeText(txt);}catch(e){}
+      var orig=cb.innerHTML;
+      cb.classList.add('pv-fb-copy-flash');
+      cb.innerHTML=_ICO_CHECK+' Copied';
+      setTimeout(function(){cb.classList.remove('pv-fb-copy-flash');cb.innerHTML=orig;},2000);
+    });
+    var pbtn=body.querySelector('[data-fb-tid]');
+    if(pbtn)pbtn.addEventListener('click',function(){
+      var tid=pbtn.getAttribute('data-fb-tid');
+      if(!tid||pbtn.disabled)return;
+      var orig=pbtn.innerHTML;
+      pbtn.disabled=true;pbtn.innerHTML=_ICO_SPIN+' …';
+      fetch('/admin/api/task-hub/fb-groups/'+encodeURIComponent(tid)+'/posted',{
+        method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},body:'{}'
+      }).then(function(r){return r.json().then(function(j){return{ok:r.ok,body:j};}).catch(function(){return{ok:r.ok,body:{}};});})
+        .then(function(res){
+          if(res.ok&&res.body&&res.body.ok){
+            // Remove from local list, advance
+            posts.splice(idx,1);
+            if(idx>=posts.length)idx=Math.max(0,posts.length-1);
+            if(typeof _soChDecrement==='function')_soChDecrement('fb');
+            _renderSlide();
+          } else {
+            pbtn.disabled=false;
+            pbtn.innerHTML=orig;
+            pbtn.classList.add('pv-fb-posted-err');
+            setTimeout(function(){pbtn.classList.remove('pv-fb-posted-err');},1500);
+          }
+        })
+        .catch(function(){
+          pbtn.disabled=false;pbtn.innerHTML=orig;
+          pbtn.classList.add('pv-fb-posted-err');
+          setTimeout(function(){pbtn.classList.remove('pv-fb-posted-err');},1500);
+        });
+    });
+  }
+  _renderSlide();
+}
+
+function _resolveActiveIgReelId(tlData){
+  if(!tlData||!tlData.channels)return'';
+  var active=['needs_upload','queued','overdue'];
+  for(var i=0;i<tlData.channels.length;i++){
+    var ch=tlData.channels[i];
+    var k=((ch&&(ch.key||ch.label))||'').toLowerCase();
+    if(k!=='instagram')continue;
+    var posts=(ch.posts||[]);
+    for(var j=0;j<posts.length;j++){
+      var p=posts[j];
+      if(p&&p.id&&p.id!=='__ig_reel_empty__'&&active.indexOf(p.reel_state||'')!==-1)return p.id;
+    }
+    for(var k2=0;k2<posts.length;k2++){
+      var p2=posts[k2];
+      if(p2&&p2.id&&p2.id!=='__ig_reel_empty__'&&(p2.reel_state||'')==='published')return p2.id;
+    }
+    break;
+  }
+  return'';
+}
 // Deterministic LinkedIn avatar gradient — stable per contact name
 function _soLiAvatarGradient(name){
   var h=0;for(var i=0;i<name.length;i++){h=(h*31+name.charCodeAt(i))>>>0;}
@@ -5124,6 +5371,9 @@ function _soOpenChTaskList(ch,cfg,items){
   if(empty)empty.style.display='none';
   if(skel)skel.style.display='none';
   ld.style.display='flex';ld.style.flexDirection='column';ld.style.flex='1';
+  // BUILD-DASH-FB-PREVIEW-CAROUSEL-01: FB Groups pill opens a one-at-a-time
+  // carousel (not a list). Arrow nav + Post X of N counter + per-post posted button.
+  if(ch==='fb'){return _soOpenFbGroupCarousel(cfg,items,meta,body,acts);}
   meta.innerHTML='<span class="so-pv-chip">'+eH(cfg.label)+'</span>'+
     '<span class="so-pv-chip">'+items.length+' item'+(items.length!==1?'s':'')+'</span>';
   if(acts)acts.innerHTML='';
@@ -9082,6 +9332,8 @@ def _build_so_timeline(day_str: str, items: list[dict], now_sast: datetime, aler
             adt   = parse_ts(it.get("last_edited") or "")
             ahhmm = adt.astimezone(_SAST).strftime("%H:%M") if adt else ""
             raw_st = (it.get("status") or "").lower().strip()
+            if raw_st == "archived":
+                continue
             disp_st = "queued" if raw_st == "approved" else raw_st
             # SOCIAL-OPS-TIMELINE-INTEGRITY-01: state-aware reel indicator on IG lane.
             # reel_state ∈ {published, overdue, needs_upload, queued}. Front-end reads this to
@@ -9824,23 +10076,65 @@ def api_task_hub_fb_posted(page_id: str):
     return Response(json.dumps({"ok": ok}), mimetype="application/json")
 
 
+@app.route("/admin/api/task-hub/fb-groups/<page_id>/posted", methods=["POST"])
+@require_auth
+def api_task_hub_fb_groups_posted(page_id: str):
+    """BUILD-DASH-FB-PREVIEW-CAROUSEL-01 — carousel Mark Posted endpoint.
+
+    page_id is a Notion page ID (MOQ row in the Marketing Queue DB). Flips
+    Status → Posted via the pages API and invalidates all FB/MOQ-related caches
+    so the carousel refreshes on next pill click.
+    """
+    if not page_id:
+        return Response(
+            json.dumps({"ok": False, "message": "missing page_id"}),
+            status=400,
+            mimetype="application/json",
+        )
+    ok = _mark_notion_status_posted(page_id)
+    if ok:
+        with _notion_cache_lock:
+            _notion_cache.pop("marketing_queue", None)
+            _notion_cache.pop("fb_moq", None)
+        with _page_cache_lock:
+            _page_cache.pop("task_hub_full", None)
+            _page_cache.pop("task_hub_content", None)
+            _page_cache.pop("social_ops_full", None)
+        return Response(json.dumps({"ok": True}), mimetype="application/json")
+    return Response(
+        json.dumps({"ok": False, "message": "Notion page update failed — check page ID and token permissions"}),
+        status=502,
+        mimetype="application/json",
+    )
+
+
 @app.route("/admin/api/task-hub/quora/<page_id>/posted", methods=["POST"])
 @require_auth
 def api_task_hub_quora_posted(page_id: str):
-    from datetime import datetime as _dt
-    now_iso = _dt.now(_SAST).isoformat()
-    extra = {"Answered At": {"date": {"start": now_iso}}}
-    # Quora ledger may use a different status column name — try generic Posted first.
-    ok = _mark_notion_status_posted(page_id, extra_props=extra)
+    # page_id is a Notion *block* ID (heading_2 block in the daily sheet),
+    # not a Notion page ID. Mark it checked via the blocks API.
+    patch_body = {"to_do": {"checked": True}}
+    try:
+        result = _notion_request(f"blocks/{page_id}", body=patch_body, method="PATCH")
+        ok = bool(result and result.get("object") == "block")
+    except Exception as exc:
+        log.warning(f"[task-hub] quora posted block patch failed: {exc}")
+        ok = False
     if ok:
         with _notion_cache_lock:
-            _notion_cache.pop("quora_ledger", None)
+            _notion_cache.pop("quora_daily", None)
             _notion_cache.pop("marketing_queue", None)
         with _page_cache_lock:
             _page_cache.pop("task_hub_full", None)
             _page_cache.pop("task_hub_content", None)
             _page_cache.pop("social_ops_full", None)
-    return Response(json.dumps({"ok": ok}), mimetype="application/json")
+        return Response(json.dumps({"ok": True}), mimetype="application/json")
+    else:
+        return Response(
+            json.dumps({"ok": False, "message": "Notion block update failed — check block ID and token permissions"}),
+            status=502,
+            mimetype="application/json",
+        )
 
 
 @app.route("/admin/api/task-hub/linkedin/<page_id>/sent", methods=["POST"])
