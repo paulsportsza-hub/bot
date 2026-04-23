@@ -4060,6 +4060,7 @@ def render_automation_content() -> str:
 .so-rup-act:hover{color:var(--gold);border-color:var(--gold);background:rgba(248,200,48,0.06);}
 .so-rup-act-flash{color:#22c55e!important;border-color:#22c55e!important;background:rgba(34,197,94,0.1)!important;}
 .so-rup-card-missing{background:var(--surface-alt);border:1px dashed var(--border);border-radius:8px;padding:16px;font-size:12px;color:var(--muted);text-align:center;}
+.so-rup-pivot{background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:6px 10px;font-family:var(--font-m);font-size:11px;color:var(--amber);letter-spacing:.02em;}
 .so-rup-card-missing code{color:var(--gold);background:rgba(248,200,48,0.08);padding:1px 5px;border-radius:3px;font-size:11px;}
 @media (max-width:600px){.so-rup-act{min-width:0;flex:1 1 calc(50% - 3px);}}
 /* ── Platform-native preview frames ─────────────────────────── */
@@ -4935,9 +4936,13 @@ function initPvCarousels(){
 }
 // ── Reel upload panel ─────────────────────────────────────────────────────────
 function renderReelUploadPanel(p){
+  // INV-DASH-FIXES-REGRESSION-01: when the server pivots an overdue reel
+  // forward, p.reel_date / p.scheduled reflect the NEXT day's slot.
+  // p.reel_pivoted_from carries today's missed date for a banner note.
   var rawSched=p.scheduled||p.reel_date||'';
   var datePart=(rawSched.split(' ')[0]||p.reel_date||'');
   var slotPart=rawSched.split(' ')[1]||((window.CADENCE_SLOTS&&window.CADENCE_SLOTS.ig_reel)||'');
+  var pivotedFrom=p.reel_pivoted_from||'';
   var rowId=p.id||'';
   var cardUrl=p.reel_card_url||'';
   var pickId=p.reel_pick_id||'';
@@ -4951,6 +4956,9 @@ function renderReelUploadPanel(p){
   var stateChip=hasFinal
     ? '<span class="so-rup-chip so-rup-chip-ok">QUEUED</span>'
     : '<span class="so-rup-chip">AWAITING UPLOAD</span>';
+  var pivotBanner=pivotedFrom
+    ? '<div class="so-rup-pivot">↪ '+eH(pivotedFrom)+' missed — showing next reel ('+eH(datePart)+')</div>'
+    : '';
   // Card preview — mirrors Task Hub reel card (image + download)
   var cardBlock='';
   if(cardUrl){
@@ -4983,6 +4991,7 @@ function renderReelUploadPanel(p){
     '<div id="so-rup-status" class="so-rup-status"></div>');
   return'<div class="so-reel-upload-panel">'+
     '<div class="so-rup-header">🎥 IG Reel'+tierBadge+stateChip+'</div>'+
+    pivotBanner+
     '<div class="so-rup-meta">'+eH(datePart)+(slotPart?(' &middot; '+eH(slotPart)+' SAST'):'')+(hasFinal?' &middot; Master uploaded, scheduled to publish.':' &middot; Upload your Premiere Pro export to queue this reel.')+'</div>'+
     cardBlock+
     '<div class="so-rup-kit-btn">'+
@@ -9874,35 +9883,77 @@ def api_so_post(post_id: str):
     # INV-DASH-FIXES-REGRESSION-01 hotfix: enrich IG reel payload with the card
     # image URL + pick_id + master mp4 URL so the preview pane can show the
     # Task-Hub-parity reel card (not a bare upload drag-drop panel).
+    #
+    # OVERDUE FORWARD-PIVOT (INV-DASH-FIXES-REGRESSION-01):
+    # When today's reel is overdue (past scheduled time, no master uploaded),
+    # scanning today's asset dir yields the stale card. The operator can't
+    # un-miss yesterday's slot — the useful next action is uploading
+    # tomorrow's (or whenever the next kit is ready). Pivot the preview to
+    # the next day that has a reel_cards asset dir so the operator lands
+    # directly on the next thing that needs doing.
     reel_card_url = ""
     reel_master_url = ""
     reel_pick_id = ""
     reel_tier = ""
-    if _is_reel_post and channel_key == "instagram" and reel_date_out:
+    reel_pivoted_from = ""  # set when overdue → next-day pivot fires
+
+    def _best_kit_for(date_str: str) -> tuple[dict | None, list[dict]]:
         try:
-            _kits = _scan_reel_kits(reel_date_out)
+            kits_ = _scan_reel_kits(date_str)
         except Exception:
-            _kits = []
-        # Best-effort match: prefer a kit whose pick_team/tier matches the MOQ title.
-        _title = (item.get("title") or "").lower()
-        _match = None
-        for _k in _kits:
+            kits_ = []
+        title_lo = (item.get("title") or "").lower()
+        title_raw = item.get("title") or ""
+        match_ = None
+        for _k in kits_:
             _team = (_k.get("pick_team") or "").lower()
             _tier_k = (_k.get("tier") or "").lower()
-            if _team and _team in _title:
-                _match = _k
+            if _team and _team in title_lo:
+                match_ = _k
                 break
-            if _tier_k and _tier_k.upper() in (item.get("title") or ""):
-                _match = _k
+            if _tier_k and _tier_k.upper() in title_raw:
+                match_ = _k
                 break
-        if _match is None and _kits:
-            _match = _kits[0]
+        if match_ is None and kits_:
+            match_ = kits_[0]
+        return match_, kits_
+
+    if _is_reel_post and channel_key == "instagram" and reel_date_out:
+        _effective_date = reel_date_out
+        _match, _kits = _best_kit_for(_effective_date)
+
+        # If today is overdue, pivot forward to the next day that has a kit.
+        if reel_state_out == "overdue":
+            from datetime import date as _date_cls, timedelta as _td
+            try:
+                _base = _date_cls.fromisoformat(_effective_date)
+            except ValueError:
+                _base = None
+            if _base is not None:
+                for _days_ahead in range(1, 15):  # look up to 2 weeks ahead
+                    _candidate = (_base + _td(days=_days_ahead)).isoformat()
+                    _cand_match, _cand_kits = _best_kit_for(_candidate)
+                    if _cand_match and _cand_match.get("pick_id") and _cand_match.get("card"):
+                        reel_pivoted_from = _effective_date
+                        _effective_date = _candidate
+                        _match = _cand_match
+                        # Recompute state for the new date — the new kit hasn't
+                        # been uploaded yet (no master on disk) so it's
+                        # needs_upload. If a master already exists, surface
+                        # that too so the operator can see it's queued.
+                        _pivot_pid = _cand_match.get("pick_id") or ""
+                        _pivot_final = _reel_has_final(_pivot_pid, _candidate) if _pivot_pid else False
+                        reel_state_out = "queued" if _pivot_final else "needs_upload"
+                        reel_final_out = _pivot_final
+                        reel_date_out = _candidate
+                        break
+
         if _match and _match.get("pick_id") and _match.get("card"):
             reel_pick_id = _match["pick_id"]
             reel_tier = (_match.get("tier") or "").lower()
-            reel_card_url = f"https://mzansiedge.co.za/assets/reel-cards/{reel_date_out}/{reel_pick_id}/{_match['card']}"
+            reel_card_url = f"https://mzansiedge.co.za/assets/reel-cards/{_effective_date}/{reel_pick_id}/{_match['card']}"
             if reel_final_out:
-                reel_master_url = f"{_REEL_PUBLIC_BASE}/{reel_date_out}/{reel_pick_id}_master.mp4"
+                reel_master_url = f"{_REEL_PUBLIC_BASE}/{_effective_date}/{reel_pick_id}_master.mp4"
 
     payload = {
         "id":              post_id,
@@ -9936,6 +9987,7 @@ def api_so_post(post_id: str):
         "reel_master_url": reel_master_url,
         "reel_pick_id":    reel_pick_id,
         "reel_tier":       reel_tier,
+        "reel_pivoted_from": reel_pivoted_from,
     }
     return Response(json.dumps(payload), mimetype="application/json")
 
