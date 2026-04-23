@@ -3740,7 +3740,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         days = int(action) if action.isdigit() else 7
         user_id = query.from_user.id
         text, markup = await _render_results_surface(user_id, days=days)
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        await _serve_response(query, text, markup)
     elif prefix == "profile":
         if action == "home":
             text, markup = await _render_profile_home_surface(query.from_user.id)
@@ -4009,12 +4009,7 @@ async def handle_guide(query, action: str) -> None:
         text, markup = _build_guide_menu_surface()
     else:
         text, markup = _build_guide_topic_surface(action)
-    await query.edit_message_text(
-        text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=markup,
-        disable_web_page_preview=True,
-    )
+    await _serve_response(query, text, markup)
 
 
 # ── Sport / odds handlers ────────────────────────────────
