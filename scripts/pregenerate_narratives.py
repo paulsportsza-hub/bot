@@ -178,6 +178,15 @@ _in_progress_matches: set[str] = set()
 _banned_shape_reject_count: dict[str, int] = {}
 _BANNED_SHAPE_SKIP_THRESHOLD = 1  # INV-SONNET-SPIKE-01: reduced 3→1; one retry is sufficient, 3 triples cost
 
+# BUILD-NARRATIVE-PREGEN-WINDOW-01: sweep universe bounds.
+# Hourly sweeps process only matches kicking off within the next 48h,
+# capped at 25 matches ordered by soonest kickoff.
+# Concurrency is bounded to 3 simultaneous LLM slots so pregen never
+# starves _edge_precompute_job.
+_PREGEN_HORIZON_HOURS: int = 48
+_PREGEN_MATCH_CAP: int = 25
+_PREGEN_CONCURRENCY: int = 3
+
 
 # W92-VERDICT-QUALITY P3: narrative_skip_log DDL + helpers. Persistent skip counts
 # survive process restarts and give EdgeOps a durable audit trail of which fixtures
@@ -2774,6 +2783,68 @@ def _quarantine_stale_cache_rows(db_path: str | None = None) -> int:
         return 0
 
 
+def _resolve_kickoff(edge: dict, db_path: str) -> "datetime":
+    """Resolve authoritative kickoff datetime for a pregen edge.
+
+    BUILD-NARRATIVE-PREGEN-WINDOW-01: Priority order (SO #40):
+    1. broadcast_schedule WHERE source='supersport_scraper' — exact kickoff time
+    2. commence_time field in the edge dict (from fixture tables)
+    3. Date suffix from match_key (day-level fallback, midnight SAST)
+
+    Returns a timezone-aware datetime. Returns datetime.max (SAST) when
+    unresolvable so the edge is excluded from any forward-horizon window.
+    """
+    mk = edge.get("match_key", "") or ""
+    home = (edge.get("home_team") or "")[:8]
+    away = (edge.get("away_team") or "")[:8]
+    date_10 = mk[-10:] if len(mk) >= 10 else ""
+
+    # 1. broadcast_schedule WHERE source='supersport_scraper' (SO #40)
+    if date_10:
+        try:
+            from scrapers.db_connect import connect_odds_db as _bsconn
+            _bsc = _bsconn(db_path, timeout=2)
+            try:
+                row = _bsc.execute(
+                    """
+                    SELECT start_time FROM broadcast_schedule
+                    WHERE source='supersport_scraper'
+                      AND broadcast_date = ?
+                      AND (home_team LIKE ? OR away_team LIKE ?)
+                    ORDER BY start_time ASC
+                    LIMIT 1
+                    """,
+                    (date_10, f"%{home}%", f"%{away}%"),
+                ).fetchone()
+                if row and row[0]:
+                    dt = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
+                    return dt if dt.tzinfo else dt.replace(tzinfo=SAST)
+            finally:
+                _bsc.close()
+        except Exception:
+            pass
+
+    # 2. commence_time from edge dict (fixture tables populate this)
+    ct = edge.get("commence_time") or ""
+    if ct:
+        try:
+            dt = datetime.fromisoformat(str(ct).replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+        except (ValueError, TypeError):
+            pass
+
+    # 3. Date suffix from match_key (day-level fallback)
+    if date_10:
+        try:
+            parts = [int(x) for x in date_10.split("-")]
+            return datetime(*parts, tzinfo=SAST)
+        except (ValueError, TypeError):
+            pass
+
+    # Unresolvable — place at far future so it is excluded from any horizon window
+    return datetime.max.replace(tzinfo=SAST)
+
+
 async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: bool = False) -> None:
     """Run the pre-generation sweep."""
     model_id = MODELS.get(sweep, MODELS["refresh"])
@@ -2912,6 +2983,41 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         log.info("All edges have fresh cache — nothing to do")
         return
 
+    # BUILD-NARRATIVE-PREGEN-WINDOW-01: 48h horizon filter + 25-match hard cap.
+    # Resolves authoritative kickoff via broadcast_schedule (source='supersport_scraper'),
+    # falling back to commence_time then match_key date. Sorts nearest-kickoff first
+    # so the most urgent narratives always get generated first when the cap fires.
+    _db_path = str(SCRAPERS_ROOT / "odds.db")
+    _horizon_cutoff = datetime.now(SAST) + timedelta(hours=_PREGEN_HORIZON_HOURS)
+    _pre_horizon_count = len(edges)
+
+    _edges_in_window = []
+    for _he in edges:
+        _ko = _resolve_kickoff(_he, _db_path)
+        _he["_resolved_kickoff"] = _ko
+        if _ko <= _horizon_cutoff:
+            _edges_in_window.append(_he)
+
+    _edges_in_window.sort(key=lambda e: e["_resolved_kickoff"])
+
+    if len(_edges_in_window) > _PREGEN_MATCH_CAP:
+        log.warning(
+            "pregen_cap_hit: %d matches within %dh window — capping to nearest-kickoff %d",
+            len(_edges_in_window), _PREGEN_HORIZON_HOURS, _PREGEN_MATCH_CAP,
+        )
+        _edges_in_window = _edges_in_window[:_PREGEN_MATCH_CAP]
+    elif _pre_horizon_count != len(_edges_in_window):
+        log.info(
+            "pregen_horizon_filter: %d → %d matches (horizon=%dh, cap=%d)",
+            _pre_horizon_count, len(_edges_in_window), _PREGEN_HORIZON_HOURS, _PREGEN_MATCH_CAP,
+        )
+
+    edges = _edges_in_window
+
+    if not edges:
+        log.info("No matches within %dh pregen window — nothing to do", _PREGEN_HORIZON_HOURS)
+        return
+
     # Initialize Claude client
     claude = anthropic.AsyncAnthropic(api_key=os.getenv("OPENROUTER_API_KEY"))
 
@@ -2928,7 +3034,18 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
     sweep_verdicts: list[str] = []
     pending_writes: list[dict] = []  # W79-P3D: collect cache writes, batch after generation
 
-    for i, edge in enumerate(edges, 1):
+    # BUILD-NARRATIVE-PREGEN-WINDOW-01: bounded concurrency via Semaphore.
+    # At most _PREGEN_CONCURRENCY (3) matches are generated simultaneously,
+    # so pregen never consumes all available LLM slots and _edge_precompute_job
+    # can schedule freely between awaits.
+    _sem = asyncio.Semaphore(_PREGEN_CONCURRENCY)
+    _sweep_wall_start = time.time()
+    log.info(
+        "pregen_sweep_start match_count=%d horizon_hours=%d concurrency_cap=%d",
+        len(edges), _PREGEN_HORIZON_HOURS, _PREGEN_CONCURRENCY,
+    )
+
+    async def _process_edge(edge: dict, idx: int, total: int) -> None:
         mk = edge.get("match_key", "")
 
         # W67-CALIBRATE Fix 5: Skip no-odds matches.
@@ -2937,24 +3054,26 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         if not edge.get("best_odds"):
             log.info("SKIP: %s — no active odds data", mk)
             results["skipped"] += 1
-            continue
+            return
 
         # BASELINE-FIX: match-level dedup — drop if already being generated
         if mk in _in_progress_matches:
             log.info("DROP: %s — already in progress (duplicate edge in sweep)", mk)
             results["dropped"] += 1
-            continue
+            return
         _in_progress_matches.add(mk)
 
         if dry_run:
-            log.info("[%d/%d] DRY RUN: would generate %s (%s / %s)", i, len(edges), mk, edge.get("sport", "?"), edge.get("league", "?"))
+            log.info("[%d/%d] DRY RUN: would generate %s (%s / %s)", idx, total, mk, edge.get("sport", "?"), edge.get("league", "?"))
             results["success"] += 1
-            continue
+            _in_progress_matches.discard(mk)
+            return
 
-        log.info("[%d/%d] Generating narrative for %s (%s)...", i, len(edges), mk, model_label)
+        log.info("[%d/%d] Generating narrative for %s (%s)...", idx, total, mk, model_label)
 
         try:
-            result = await _generate_one(edge, model_id, claude, sweep_type=sweep)
+            async with _sem:
+                result = await _generate_one(edge, model_id, claude, sweep_type=sweep)
             if result.get("success"):
                 results["success"] += 1
                 log.info("  -> OK in %.1fs", result["duration"])
@@ -2983,9 +3102,20 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
             # BASELINE-FIX: always release match slot, even on failure
             _in_progress_matches.discard(mk)
 
-        # Rate limit: 1s between calls
-        if i < len(edges):
-            await asyncio.sleep(1.0)
+    await asyncio.gather(
+        *[_process_edge(edge, i, len(edges)) for i, edge in enumerate(edges, 1)]
+    )
+
+    _sweep_wall_elapsed = time.time() - _sweep_wall_start
+    log.info(
+        "pregen_sweep_end match_count=%d success=%d failed=%d skipped=%d dropped=%d wall_secs=%.1f",
+        len(edges),
+        results["success"],
+        results["failed"],
+        results["skipped"],
+        results["dropped"],
+        _sweep_wall_elapsed,
+    )
 
     # W79-P3D: Batch-write all narratives to cache (separate from generation)
     # BUILD-PREGEN-FIX PRE-3: Never overwrite w84 with w82 on ANY sweep type.
