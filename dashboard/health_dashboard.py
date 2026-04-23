@@ -4100,8 +4100,8 @@ def render_automation_content() -> str:
 .pv-ig-count{position:absolute;top:10px;right:10px;padding:3px 9px;background:rgba(38,38,38,0.85);color:#fff;border-radius:12px;font-family:var(--font-m);font-size:11px;font-weight:600;z-index:3;}
 
 /* TikTok */
-.pv-tt-frame{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:9/16;max-height:70vh;color:#fff;}
-.pv-tt-frame video,.pv-tt-frame img{width:100%;height:100%;object-fit:cover;display:block;}
+.pv-tt-frame{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:9/16;color:#fff;}
+.pv-tt-frame video,.pv-tt-frame img{width:100%;height:100%;object-fit:contain;display:block;background:#000;}
 .pv-tt-top{position:absolute;top:0;left:0;right:0;padding:12px 14px;display:flex;justify-content:center;gap:18px;z-index:3;background:linear-gradient(to bottom,rgba(0,0,0,0.35),transparent);font-family:var(--font-d);font-weight:600;font-size:14px;color:#fff;}
 .pv-tt-top .tab{opacity:0.6;}
 .pv-tt-top .tab.active{opacity:1;border-bottom:2px solid #fff;padding-bottom:2px;}
@@ -4208,16 +4208,28 @@ def render_automation_content() -> str:
 .so-pv-chip-count{background:rgba(248,200,48,0.1);border-color:rgba(248,200,48,0.35);color:var(--gold);}
 
 /* ── Adaptive preview pane (fit content to available space) ───────────────── */
-/* Let platform frames flex to container width up to their natural max. */
-.pv-frame,.pv-ig-frame,.pv-tg-frame,.pv-wa-frame,.pv-li-frame,.pv-fb-frame,.pv-tt-frame{max-width:min(480px,100%);width:100%;margin-left:auto;margin-right:auto;box-sizing:border-box;}
-/* Media heights scale with viewport but never larger than natural. */
+/* Let landscape/square frames flex to container width up to their natural max. */
+.pv-frame,.pv-ig-frame,.pv-tg-frame,.pv-wa-frame,.pv-li-frame,.pv-fb-frame{max-width:min(480px,100%);width:100%;margin-left:auto;margin-right:auto;box-sizing:border-box;}
+
+/* 9:16 portrait content — natural phone-aspect, centered in the preview pane.
+   INV-DASH-FIXES-REGRESSION-01 / FIT-9-16: don't stretch portrait media to
+   the full 480px landscape rail. Cap the WIDTH (not height) to a phone-like
+   size so the frame keeps its natural 9:16 silhouette and simply centers. */
+.pv-tt-frame,.pv-ig-frame.aspect-9-16-wrap{max-width:min(360px,100%);width:min(360px,100%);margin-left:auto;margin-right:auto;box-sizing:border-box;}
+/* Height is derived from aspect-ratio — let it size naturally up to the pane. */
+.pv-tt-frame{max-height:none;}
+/* IG frame has chrome (header, actions, caption) — leave its frame width at
+   the default 480 cap, but constrain the MEDIA element to 9:16 natural ratio
+   via width so the video doesn't scale up when viewport is wide. */
+.pv-ig-media.aspect-9-16{max-width:min(360px,100%);margin-left:auto;margin-right:auto;max-height:none;aspect-ratio:9/16;}
+.pv-ig-media.aspect-9-16 video,.pv-ig-media.aspect-9-16 img{object-fit:contain;background:#000;}
+/* 4:5 and 1:1 — keep landscape rail width but cap height sensibly. */
+.pv-ig-media.aspect-4-5{max-width:min(420px,100%);margin-left:auto;margin-right:auto;max-height:min(65vh,520px);}
+.pv-ig-media.aspect-1-1{max-width:min(420px,100%);margin-left:auto;margin-right:auto;max-height:min(55vh,420px);}
+/* Other media heights scale with viewport but never larger than natural. */
 .pv-tg-bubble-media img,.pv-tg-bubble-media video{max-height:min(60vh,420px);}
 .pv-wa-bubble-media img,.pv-wa-bubble-media video{max-height:min(55vh,360px);}
 .pv-li-media img,.pv-li-media video{max-height:min(60vh,460px);}
-.pv-ig-media.aspect-9-16{max-height:min(70vh,640px);}
-.pv-ig-media.aspect-4-5{max-height:min(70vh,560px);}
-.pv-ig-media.aspect-1-1{max-height:min(55vh,480px);}
-.pv-tt-frame{max-height:min(72vh,620px);}
 /* Long captions scroll inside the bubble instead of stretching the frame. */
 .pv-ig-caption,.pv-tg-bubble-text,.pv-wa-bubble-text,.pv-li-text{max-height:min(38vh,320px);overflow-y:auto;}
 .pv-tt-cap{max-height:min(22vh,180px);}
@@ -4226,17 +4238,23 @@ def render_automation_content() -> str:
 /* Tighter padding on narrow panes — preview sits in a right rail that can be ~360-520px wide. */
 @media (max-width: 600px){
   .so-pv-body{padding:10px;}
-  .pv-frame,.pv-ig-frame,.pv-tg-frame,.pv-wa-frame,.pv-li-frame,.pv-fb-frame,.pv-tt-frame{max-width:100%;}
+  .pv-frame,.pv-ig-frame,.pv-tg-frame,.pv-wa-frame,.pv-li-frame,.pv-fb-frame{max-width:100%;}
+  .pv-tt-frame{max-width:min(300px,100%);width:min(300px,100%);}
+  .pv-ig-media.aspect-9-16{max-width:min(300px,100%);}
   .pv-fb-toolbar button{min-width:0;flex:1 1 calc(50% - 4px);}
   .pv-fb-counter{font-size:11px;}
 }
 @media (max-width: 420px){
   .pv-fb-nav-btn{width:30px;height:30px;}
   .pv-fb-media{max-height:min(45vh,320px);}
+  .pv-tt-frame{max-width:min(260px,90%);width:min(260px,90%);}
+  .pv-ig-media.aspect-9-16{max-width:min(260px,90%);}
 }
-/* Very wide panes: don't let the frame get comically large. */
+/* Very wide panes: don't let landscape frames get comically large. */
 @media (min-width: 900px){
-  .pv-frame,.pv-ig-frame,.pv-tg-frame,.pv-wa-frame,.pv-li-frame,.pv-fb-frame,.pv-tt-frame{max-width:480px;}
+  .pv-frame,.pv-ig-frame,.pv-tg-frame,.pv-wa-frame,.pv-li-frame,.pv-fb-frame{max-width:480px;}
+  .pv-tt-frame{max-width:360px;width:360px;}
+  .pv-ig-media.aspect-9-16{max-width:360px;}
 }
 .so-tip{position:fixed;background:var(--surface-alt);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:var(--font-m);font-size:11px;color:var(--text);z-index:9999;pointer-events:none;max-width:240px;line-height:1.4;box-shadow:var(--glow);display:none;}
 .so-tip-thumb{display:block;width:96px;height:96px;object-fit:cover;border-radius:4px;margin-bottom:6px;background:var(--surface);}
