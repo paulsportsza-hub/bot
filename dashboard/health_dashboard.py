@@ -4943,9 +4943,9 @@ function renderReelUploadPanel(p){
           ? '<video class="so-rup-master" controls preload="metadata" playsinline src="'+eA(masterUrl)+'"></video>'
           : '')+
         '<div class="so-rup-card-actions">'+
-          '<a class="so-rup-act" href="'+eA(cardUrl)+'" download="'+eA((pickId?('card_'+pickId+'.png'):'card.png'))+'" aria-label="Download card">'+_ICO_DOWNLOAD+' Download card</a>'+
+          '<a class="so-rup-act" href="'+eA(cardUrl)+'" download="'+eA((pickId?('card_'+pickId+'.png'):'card.png'))+'" aria-label="Download card">'+_ICO_DL+' Download card</a>'+
           (masterUrl
-            ? '<a class="so-rup-act" href="'+eA(masterUrl)+'" download aria-label="Download master mp4">'+_ICO_DOWNLOAD+' Master MP4</a>'
+            ? '<a class="so-rup-act" href="'+eA(masterUrl)+'" download aria-label="Download master mp4">'+_ICO_DL+' Master MP4</a>'
             : '')+
           '<button class="so-rup-act so-rup-act-copy" data-copy="'+eA(cardUrl)+'" aria-label="Copy card URL">'+_ICO_CLIP+' Copy URL</button>'+
         '</div>'+
