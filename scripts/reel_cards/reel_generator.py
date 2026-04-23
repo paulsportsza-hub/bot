@@ -51,6 +51,8 @@ EDGEOPS_CHAT_ID = os.environ.get("EDGEOPS_CHAT_ID", "")
 
 TIERS = ["diamond", "gold", "silver", "bronze"]
 MAX_REELS_PER_DAY = 1
+SPORT_DIVERSITY_DAYS = 3    # no same sport within this many days
+MATCH_UNIQUENESS_DAYS = 14  # no same match_key within this many days
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -224,9 +226,10 @@ def _alert_edge_ops(message: str) -> None:
 
 def _select_top_tier_pick(today: str) -> tuple[str, dict] | None:
     """Return (tier, row) for the highest-tier qualifying unsettled edge.
-    Tries tiers Diamond → Gold → Silver → Bronze and returns the first match.
-    Respects the Diamond rarity gate (max 1 per 10 days).
-    Returns None when no tier has a qualifying edge."""
+    Tries tiers Diamond → Gold → Silver → Bronze and returns the first match that
+    passes the sport-diversity (SPORT_DIVERSITY_DAYS) and match-uniqueness
+    (MATCH_UNIQUENESS_DAYS) guards. Diamond rarity gate runs first, independently.
+    Returns None when no qualifying edge survives all filters."""
     import sqlite3
 
     sql = """
@@ -240,7 +243,7 @@ def _select_top_tier_pick(today: str) -> tuple[str, dict] | None:
         WHERE e.result IS NULL
           AND e.edge_tier = ?
         ORDER BY e.composite_score DESC
-        LIMIT 1
+        LIMIT 10
     """
     diamond_blocked = _diamond_used_recently(today)
     if diamond_blocked:
@@ -248,21 +251,47 @@ def _select_top_tier_pick(today: str) -> tuple[str, dict] | None:
 
     tiers_to_check = [t for t in TIERS if not (t == "diamond" and diamond_blocked)]
 
+    blocked_sports = _recent_sports_used(today, SPORT_DIVERSITY_DAYS)
+    blocked_match_keys = _recent_match_keys_used(today, MATCH_UNIQUENESS_DAYS)
+    if blocked_sports:
+        log.info("[DIVERSITY] Sports blocked (last %d days): %s", SPORT_DIVERSITY_DAYS, blocked_sports)
+    if blocked_match_keys:
+        log.info("[DIVERSITY] Match keys blocked (last %d days): %d match(es)", MATCH_UNIQUENESS_DAYS, len(blocked_match_keys))
+
+    any_diversity_excluded = False
     try:
         conn = sqlite3.connect(SCRAPERS_DB, timeout=15)
         conn.row_factory = sqlite3.Row
         for tier in tiers_to_check:
-            row = conn.execute(sql, (tier,)).fetchone()
-            if row:
+            rows = conn.execute(sql, (tier,)).fetchall()
+            if not rows:
+                log.info("[SELECT] %s tier — no qualifying edge", tier.upper())
+                continue
+            for row in rows:
+                sport = (row["sport"] or "").lower()
+                mk = row["match_key"]
+                if sport and sport in blocked_sports:
+                    log.info("[DIVERSITY] excluded %s sport=%s reason=sport_repeat", mk, sport)
+                    any_diversity_excluded = True
+                    continue
+                if mk in blocked_match_keys:
+                    log.info("[DIVERSITY] excluded %s sport=%s reason=match_repeat", mk, sport)
+                    any_diversity_excluded = True
+                    continue
                 log.info("[SELECT] Top-tier pick: %s — %s (composite=%.1f)",
-                         tier.upper(), row["match_key"], row["composite_score"])
+                         tier.upper(), mk, row["composite_score"])
                 conn.close()
                 return tier, dict(row)
-            else:
-                log.info("[SELECT] %s tier — no qualifying edge", tier.upper())
+            log.info("[SELECT] %s tier — all %d candidate(s) excluded by diversity filters",
+                     tier.upper(), len(rows))
+            any_diversity_excluded = True
         conn.close()
     except Exception as exc:
         log.error("[SELECT] DB error: %s", exc)
+        return None
+
+    if any_diversity_excluded:
+        log.warning("[SELECT] no_reel_today — diversity filters exhaust pool")
     return None
 
 
@@ -314,12 +343,17 @@ def render_card(row: dict, tier: str, today: str) -> tuple[str, str, dict] | Non
     try:
         render_reel_card(pick, output_path)
         log.info("[RENDER] %s card → %s", tier.upper(), output_path)
-        # Save pick metadata so the Task Hub dashboard can display the header
-        # without a DB round-trip. Fields: pick_team (abbr, upper), bookmaker, tier.
+        # Save pick metadata for Task Hub display and diversity guards.
+        # sport + match_key are read by _recent_sports_used / _recent_match_keys_used.
         meta_path = str(out_dir / "meta.json")
         with open(meta_path, "w") as fh:
-            json.dump({"pick_team": pick["pick_team"], "bookmaker": row["bookmaker"],
-                       "tier": tier}, fh)
+            json.dump({
+                "pick_team": pick["pick_team"],
+                "bookmaker": row["bookmaker"],
+                "tier": tier,
+                "sport": row.get("sport", ""),
+                "match_key": row.get("match_key", ""),
+            }, fh)
         return pid, output_path, pick
     except Exception as exc:
         log.error("[RENDER] %s tier failed: %s", tier, exc)
@@ -416,6 +450,62 @@ def _diamond_used_recently(today: str, days: int = 10) -> bool:
                 log.info("[RARITY] Diamond issued on %s — gate active for %s", check_date, today)
                 return True
     return False
+
+
+def _recent_sports_used(today: str, days: int) -> set[str]:
+    """Return sports (lowercase) that had a reel pick in the last `days` days (excl. today)."""
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        today_dt = _dt.strptime(today, "%Y-%m-%d")
+    except ValueError:
+        return set()
+    used: set[str] = set()
+    for i in range(1, days + 1):
+        check_date = (today_dt - _td(days=i)).strftime("%Y-%m-%d")
+        date_dir = OUTPUT_ROOT / check_date
+        if not date_dir.exists():
+            continue
+        for pick_dir in date_dir.iterdir():
+            if not pick_dir.is_dir():
+                continue
+            meta = pick_dir / "meta.json"
+            if meta.exists():
+                try:
+                    data = json.loads(meta.read_text())
+                    sport = data.get("sport", "")
+                    if sport:
+                        used.add(sport.lower())
+                except Exception:
+                    pass
+    return used
+
+
+def _recent_match_keys_used(today: str, days: int) -> set[str]:
+    """Return match_keys that had a reel pick in the last `days` days (excl. today)."""
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        today_dt = _dt.strptime(today, "%Y-%m-%d")
+    except ValueError:
+        return set()
+    used: set[str] = set()
+    for i in range(1, days + 1):
+        check_date = (today_dt - _td(days=i)).strftime("%Y-%m-%d")
+        date_dir = OUTPUT_ROOT / check_date
+        if not date_dir.exists():
+            continue
+        for pick_dir in date_dir.iterdir():
+            if not pick_dir.is_dir():
+                continue
+            meta = pick_dir / "meta.json"
+            if meta.exists():
+                try:
+                    data = json.loads(meta.read_text())
+                    mk = data.get("match_key", "")
+                    if mk:
+                        used.add(mk)
+                except Exception:
+                    pass
+    return used
 
 
 def _vo_phonetics(text: str) -> str:
@@ -818,8 +908,18 @@ def main():
         if not home or not away:
             home, away = _parse_teams_from_match_key(row["match_key"])
         _, sched_source = _reel_sched_iso(today)
+        blocked_sports = _recent_sports_used(today, SPORT_DIVERSITY_DAYS)
+        blocked_match_keys = _recent_match_keys_used(today, MATCH_UNIQUENESS_DAYS)
+        sport = (row.get("sport") or "").lower()
         print(f"\n{'=' * 60}")
-        print("DRY RUN — FIX-REEL-GEN-TOP-TIER-ONLY-01")
+        print("DRY RUN — FIX-REEL-GEN-SPORT-DIVERSITY-01")
+        print(f"  Diversity filter (sport, last {SPORT_DIVERSITY_DAYS}d): {blocked_sports or '(none)'}")
+        print(f"  Diversity filter (match, last {MATCH_UNIQUENESS_DAYS}d): {len(blocked_match_keys)} blocked match(es)")
+        sport_flag = " ⚠ WOULD BE BLOCKED (sport_repeat)" if sport in blocked_sports else " ✓ passes sport filter"
+        match_flag = " ⚠ WOULD BE BLOCKED (match_repeat)" if row["match_key"] in blocked_match_keys else " ✓ passes match filter"
+        print(f"  Chosen sport  : {sport}{sport_flag}")
+        print(f"  Chosen match  : {row['match_key']}{match_flag}")
+        print()
         print(f"  Tier selected : {tier.upper()}")
         print(f"  Match         : {home} vs {away}")
         print(f"  Bet type      : {row['bet_type']}")
