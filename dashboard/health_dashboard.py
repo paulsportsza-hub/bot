@@ -9276,6 +9276,31 @@ _BRU_BANNED_TAGS = frozenset({
 })
 
 
+def _bru_video_idx_for_date(day_str: str) -> int | None:
+    """INV-DASH-FIXES-REGRESSION-01: resolve a BRU drip video index for a date.
+
+    Mirrors the epoch+offset math in _bru_drip_items_for_day so a TikTok MOQ
+    placeholder row can link back to the correct BRU video that's queued for
+    that day. Returns None when the date isn't a drip day (even day of month).
+    """
+    from datetime import date as _date, timedelta as _timedelta
+    _DRIP_EPOCH = _date(2026, 4, 19)
+    _DRIP_EPOCH_POS = 1
+    try:
+        day = _date.fromisoformat(day_str)
+    except ValueError:
+        return None
+    if day.day % 2 == 0:
+        return None
+    offset = 0
+    cur = _DRIP_EPOCH
+    while cur < day:
+        cur += _timedelta(days=1)
+        if cur.day % 2 == 1:
+            offset += 1
+    return _DRIP_EPOCH_POS + offset
+
+
 def _bru_drip_preview_payload(video_idx: int) -> dict | None:
     """Reconstruct BRU drip preview payload for the given queue position.
 
@@ -9658,6 +9683,36 @@ def api_so_post(post_id: str):
     if item is None:
         return Response(json.dumps({"error": "Post not found"}),
                         status=404, mimetype="application/json")
+
+    # INV-DASH-FIXES-REGRESSION-01: TikTok MOQ placeholders with type=bru_clip
+    # are stubs — the real video lives in the bru_drip queue. Resolve the
+    # drip video for the placeholder's scheduled date and return its payload
+    # so clicking the timeline card plays the correct video.
+    _bru_type_hits = "bru_clip" in (
+        (item.get("work_type") or "") + " " +
+        (item.get("title") or "") + " " +
+        (item.get("copy") or "")
+    ).lower()
+    _bru_ch = (item.get("channel") or "").strip().lower() == "tiktok"
+    if _bru_type_hits and _bru_ch:
+        _sched_ts = parse_ts(item.get("scheduled_time") or "")
+        _sched_day = _sched_ts.astimezone(_SAST).strftime("%Y-%m-%d") if _sched_ts else _today_sast_str()
+        _bru_idx = _bru_video_idx_for_date(_sched_day)
+        if _bru_idx is not None:
+            _bru_payload = _bru_drip_preview_payload(_bru_idx)
+            if _bru_payload is not None:
+                # Preserve the placeholder's original id + scheduled time so the
+                # frontend still navigates correctly; overlay video/caption/media
+                # fields from the resolved drip payload.
+                _bru_payload = dict(_bru_payload)
+                _bru_payload["id"] = post_id
+                if _sched_ts:
+                    _bru_payload["scheduled"] = _sched_ts.astimezone(_SAST).strftime("%Y-%m-%d %H:%M")
+                _bru_payload["status"] = (
+                    "queued" if (item.get("status") or "").lower().strip() == "approved"
+                    else (item.get("status") or "").lower().strip()
+                )
+                return Response(json.dumps(_bru_payload), mimetype="application/json")
 
     sdt = parse_ts(item.get("scheduled_time") or "")
     adt = parse_ts(item.get("last_edited") or "")
