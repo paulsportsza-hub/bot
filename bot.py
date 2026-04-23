@@ -14281,7 +14281,12 @@ def _has_any_cached_narrative(match_id: str) -> bool:
         try:
             row = conn.execute(
                 "SELECT expires_at FROM narrative_cache "
-                "WHERE match_id = ? AND COALESCE(quarantined, 0) = 0 LIMIT 1",
+                "WHERE match_id = ? "
+                "AND COALESCE(quarantined, 0) = 0 "
+                "AND (status IS NULL OR status != 'quarantined') "
+                "AND narrative_html IS NOT NULL "
+                "AND LENGTH(TRIM(COALESCE(narrative_html,''))) > 0 "
+                "LIMIT 1",
                 (match_id,),
             ).fetchone()
         finally:
@@ -14558,7 +14563,7 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
             # New W84 pipeline always produces bold HTML headers via _render_baseline().
             # Any w84 entry without these headers is an old-format narrative that may
             # contain hallucinated tactical content — force re-generation.
-            if narrative_source not in ("w82", "baseline_no_edge"):
+            if narrative_source not in ("w82", "baseline_no_edge", "verdict-cache"):
                 _has_html_headers = (
                     "<b>The Setup</b>" in cleaned
                     or "<b>The Edge</b>" in cleaned
@@ -14761,6 +14766,21 @@ async def _store_narrative_cache(
             now = datetime.now(timezone.utc)
             expires = now + timedelta(seconds=_NARRATIVE_CACHE_TTL)
             odds_hash = _compute_odds_hash(match_id)
+            # INV-CARD-NARRATIVE-SERVE-01: Preserve existing verdict_html when pregen
+            # doesn't generate one. INSERT OR REPLACE would otherwise wipe a verdict
+            # stored by _store_verdict_cache_sync on serve-time, causing the verdict to
+            # change on re-navigation (different Sonnet call generates different text).
+            nonlocal verdict_html
+            if verdict_html is None:
+                try:
+                    _ev = conn.execute(
+                        "SELECT verdict_html FROM narrative_cache WHERE match_id = ?",
+                        (match_id,),
+                    ).fetchone()
+                    if _ev and _ev[0]:
+                        verdict_html = _ev[0]
+                except Exception:
+                    pass
             conn.execute(
                 "INSERT OR REPLACE INTO narrative_cache "
                 "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
@@ -28142,6 +28162,7 @@ _QA_COMMANDS = {
     "validate": "Run full post-deploy validation suite",
     "list": "Show all available QA commands",
     "reset": "Restore tier and clear test state",
+    "force_onboard": "Reset onboarding state for calling user (onboarding_done=False, archetype cleared, sport prefs wiped — does NOT touch tier or payment)",
     "scaffold": "Print raw verified scaffold for a match key (e.g. /qa scaffold arsenal_vs_everton_2026-03-14)",
     "clear_mm_cache": "Clear My Matches schedule cache for a user ID (e.g. /qa clear_mm_cache 12345678), or self if no ID given",
     # BUILD-QA-HARNESS-01 commands
@@ -28187,6 +28208,22 @@ async def cmd_qa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 u.nudge_sent_at = None
                 await s.commit()
         await update.message.reply_text("✅ Reset: QA override cleared, misses=0, mute=off, push count=0\n(Subscription state preserved)")
+        return
+
+    if cmd == "force_onboard":
+        # BUILD-RUBRIC-RUNNER-HARDENING-01: reset onboarding state only.
+        # Never touches user_tier, subscription_status, or payment columns.
+        # Never calls db.set_user_tier() (W84-ACC1).
+        async with db.async_session() as s:
+            u = await s.get(db.User, uid)
+            if u:
+                u.onboarding_done = False
+                u.archetype = None
+                await s.commit()
+        await db.clear_user_sport_prefs(uid)
+        await update.message.reply_text(
+            f"Onboarding reset for user {uid}. Send /start to re-enter onboarding."
+        )
         return
 
     if cmd == "clear_mm_cache":

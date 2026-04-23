@@ -294,7 +294,9 @@ class TestHasAnyCachedNarrativeContract:
                 expires_at TEXT,
                 quarantined INTEGER DEFAULT 0,
                 verdict_html TEXT,
-                evidence_class TEXT
+                evidence_class TEXT,
+                status TEXT,
+                quarantine_reason TEXT
             )
         """)
         conn.commit()
@@ -342,6 +344,47 @@ class TestHasAnyCachedNarrativeContract:
         assert bot._has_any_cached_narrative(match_id) is False, (
             "Quarantined rows must NOT arm the AI Breakdown button — they won't "
             "render in build_ai_breakdown_data either."
+        )
+
+    def test_helper_rejects_status_quarantined_rows(self, synthetic_db):
+        """INV-CARD-NARRATIVE-SERVE-01 Fix 2: status='quarantined' must block button."""
+        match_id = "arsenal_vs_tottenham_2026-05-01_sq"
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
+        conn = sqlite3.connect(str(synthetic_db))
+        conn.execute(
+            "INSERT INTO narrative_cache "
+            "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
+            " narrative_source, expires_at, quarantined, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'quarantined')",
+            (match_id, "<b>Setup</b>...", "sonnet", "bronze", "[]", "abc",
+             "w84", expires_at),
+        )
+        conn.commit()
+        conn.close()
+
+        assert bot._has_any_cached_narrative(match_id) is False, (
+            "Rows with status='quarantined' must NOT arm the AI Breakdown button "
+            "even when the legacy quarantined column is 0."
+        )
+
+    def test_helper_rejects_empty_narrative_html_rows(self, synthetic_db):
+        """INV-CARD-NARRATIVE-SERVE-01 Fix 2: verdict-cache rows with empty narrative_html must not show button."""
+        match_id = "arsenal_vs_tottenham_2026-05-01_vc"
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
+        conn = sqlite3.connect(str(synthetic_db))
+        conn.execute(
+            "INSERT INTO narrative_cache "
+            "(match_id, narrative_html, model, edge_tier, tips_json, odds_hash, "
+            " narrative_source, expires_at, quarantined) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            (match_id, "", "sonnet", "", "[]", "abc", "verdict-cache", expires_at),
+        )
+        conn.commit()
+        conn.close()
+
+        assert bot._has_any_cached_narrative(match_id) is False, (
+            "verdict-cache rows with empty narrative_html must NOT arm the AI Breakdown "
+            "button — build_ai_breakdown_data would serve blank content."
         )
 
     def test_helper_rejects_expired_rows(self, synthetic_db):
