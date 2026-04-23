@@ -13894,7 +13894,8 @@ def _ensure_narrative_cache_table() -> None:
                 evidence_json TEXT,
                 narrative_source TEXT NOT NULL DEFAULT 'w82',
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP NOT NULL
+                expires_at TIMESTAMP NOT NULL,
+                verdict_html TEXT CHECK (verdict_html IS NULL OR (LENGTH(verdict_html) BETWEEN 1 AND 260))
             )
         """)
         cols = {
@@ -13964,6 +13965,34 @@ def _ensure_narrative_cache_table() -> None:
             conn.execute(
                 "ALTER TABLE narrative_cache ADD COLUMN verdict_attempts INTEGER DEFAULT 1"
             )
+        # FIX-NARRATIVE-CACHE-SCHEMA-200-260: widen verdict_html CHECK from 200 to 260
+        # on any DB where the column was added under the old 200-char schema.
+        try:
+            _nc_raw = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='narrative_cache'"
+            ).fetchone()
+            if _nc_raw and "BETWEEN 1 AND 200" in _nc_raw[0]:
+                log.info("FIX-NARRATIVE-CACHE-SCHEMA-200-260: widening verdict_html CHECK 200→260")
+                _old_ddl = _nc_raw[0]
+                _new_ddl = _old_ddl.replace("BETWEEN 1 AND 200", "BETWEEN 1 AND 260").replace(
+                    "narrative_cache", "narrative_cache_new200260", 1
+                )
+                _idx_sqls = [
+                    _r[0] for _r in conn.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='narrative_cache' AND sql IS NOT NULL"
+                    ).fetchall()
+                ]
+                conn.execute("BEGIN EXCLUSIVE TRANSACTION")
+                conn.execute(_new_ddl)
+                conn.execute("INSERT INTO narrative_cache_new200260 SELECT * FROM narrative_cache")
+                conn.execute("DROP TABLE narrative_cache")
+                conn.execute("ALTER TABLE narrative_cache_new200260 RENAME TO narrative_cache")
+                for _isql in _idx_sqls:
+                    conn.execute(_isql.replace("narrative_cache_new200260", "narrative_cache"))
+                conn.execute("COMMIT")
+                log.info("FIX-NARRATIVE-CACHE-SCHEMA-200-260: migration committed")
+        except Exception as _schema_exc:
+            log.warning("FIX-NARRATIVE-CACHE-SCHEMA-200-260: migration failed: %s", _schema_exc)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS gold_verdict_failed_edges (
                 match_key TEXT PRIMARY KEY,
@@ -14653,20 +14682,17 @@ async def _store_narrative_cache(
             match_id,
         )
         edge_tier = "bronze"
-    # FIX-NARRATIVE-CACHE-SILENT-DROP-01 B.1: schema CHECK constraint enforces
-    # `verdict_html IS NULL OR LENGTH BETWEEN 1 AND 200`. Observed silent drop:
-    # orlando_pirates_vs_kaizer_chiefs generated with verdict_html=211 chars triggered
-    # sqlite3.IntegrityError (CHECK constraint failed) which was caught by the existing
-    # handler with only a log.warning. The verdict text is also embedded in narrative_html,
-    # so the denormalised column is a sweetener, not source of truth — null it out when it
-    # exceeds the schema limit so the row lands instead of being swallowed.
-    if verdict_html is not None and len(verdict_html) > 200:
-        log.info(
-            "FIX-NARRATIVE-CACHE-SILENT-DROP-01 VerdictTrimmed match_id=%s "
-            "verdict_html_len=%d > 200 (schema CHECK) → setting to NULL, narrative_html preserved",
+    # FIX-NARRATIVE-CACHE-SCHEMA-200-260: schema CHECK constraint enforces
+    # verdict_html IS NULL OR LENGTH BETWEEN 1 AND 260 (HARD_MAX = 260 per policy).
+    # If a verdict exceeds 260 chars, truncate at the last sentence boundary rather
+    # than silently nulling — the column is source of truth for Narrative Integrity Monitor.
+    if verdict_html is not None and len(verdict_html) > 260:
+        log.warning(
+            "FIX-NARRATIVE-CACHE-SCHEMA-200-260 VerdictTruncated match_id=%s "
+            "verdict_html_len=%d > 260 (HARD_MAX) → truncating at last sentence boundary",
             match_id, len(verdict_html),
         )
-        verdict_html = None
+        verdict_html = _trim_to_last_sentence(verdict_html, max_chars=260) or None
     # FIX-NARRATIVE-CACHE-SILENT-DROP-01 A.1: log the happy path so silent drops are
     # diagnosable by absence. If we see "Stream4Accepted" for a match but no row
     # lands, the OperationalError path is the culprit (not Stream 4 F1-F2).
@@ -28831,6 +28857,7 @@ async def _background_pregen_fill() -> None:
     # meaning a new Gold/Diamond edge recommended mid-day would never get a narrative until the
     # next scheduled 06:00 SAST sweep. Per-fixture check asks: "does any current hot tip lack
     # fresh cache?" — if yes, run pregen refresh (which itself skips fresh entries, bounding cost).
+    _warm_count = 0  # default; overwritten only when the no-hot-tips path is taken
     try:
         _hot_keys: list[str] = []
         _hot = _hot_tips_cache.get("global") or {}
