@@ -31,7 +31,8 @@ def test_get_cached_narrative_invokes_min_verdict_quality(bot_module):
 
     # Gate must be wired into the cache-hit path — look for the three
     # load-bearing tokens: the gate function, the verdict extractor, and
-    # a DELETE on failure so pregen regenerates instead of serving stubs.
+    # a quarantine UPDATE on failure (FIX-NARRATIVE-CACHE-DEATH-01 replaces
+    # DELETE with quarantine so the loop cannot restart).
     assert "min_verdict_quality" in src, (
         "BUILD-NARRATIVE-WATERTIGHT-01 C.1: _get_cached_narrative must call "
         "min_verdict_quality on the cached verdict before returning."
@@ -44,9 +45,12 @@ def test_get_cached_narrative_invokes_min_verdict_quality(bot_module):
         "BUILD-NARRATIVE-WATERTIGHT-01 C.1: _get_cached_narrative must also "
         "evaluate the standalone verdict_html column."
     )
+    # FIX-NARRATIVE-CACHE-DEATH-01: quarantine-on-reject replaces DELETE.
+    # Quality-gate rejections now set status='quarantined' so the row is not
+    # re-generated in an infinite loop. Assert the quarantine UPDATE is present.
     assert re.search(
-        r"DELETE\s+FROM\s+narrative_cache", src, re.IGNORECASE
+        r"status\s*=\s*['\"]quarantined['\"]", src, re.IGNORECASE
     ), (
-        "BUILD-NARRATIVE-WATERTIGHT-01 C.1: gate must DELETE the cached row "
-        "on quality failure so pregen regenerates instead of leaving the stub."
+        "FIX-NARRATIVE-CACHE-DEATH-01: _get_cached_narrative must set "
+        "status='quarantined' (not DELETE) on quality-gate rejection."
     )

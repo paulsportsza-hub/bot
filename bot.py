@@ -13965,6 +13965,14 @@ def _ensure_narrative_cache_table() -> None:
             conn.execute(
                 "ALTER TABLE narrative_cache ADD COLUMN verdict_attempts INTEGER DEFAULT 1"
             )
+        # FIX-NARRATIVE-CACHE-DEATH-01: quarantine-on-reject columns
+        try:
+            if "status" not in cols:
+                conn.execute("ALTER TABLE narrative_cache ADD COLUMN status TEXT DEFAULT NULL")
+            if "quarantine_reason" not in cols:
+                conn.execute("ALTER TABLE narrative_cache ADD COLUMN quarantine_reason TEXT DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists — safe to ignore
         # FIX-NARRATIVE-CACHE-SCHEMA-200-260: widen verdict_html CHECK from 200 to 260
         # on any DB where the column was added under the old 200-char schema.
         try:
@@ -14298,17 +14306,18 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
     def _fetch():
         conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
         try:
-            # INV-VERDICT-COACH-FABRICATION-01: exclude quarantined rows
+            # INV-VERDICT-COACH-FABRICATION-01 + FIX-NARRATIVE-CACHE-DEATH-01: exclude quarantined rows
             try:
                 row = conn.execute(
                     "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
                     "evidence_json, narrative_source, coverage_json, created_at "
                     "FROM narrative_cache WHERE match_id = ? "
-                    "AND COALESCE(quarantined, 0) = 0",
+                    "AND COALESCE(quarantined, 0) = 0 "
+                    "AND (status IS NULL OR status != 'quarantined')",
                     (match_id,),
                 ).fetchone()
             except sqlite3.OperationalError:
-                # quarantined column may not exist in older DBs
+                # quarantined/status columns may not exist in older DBs
                 row = conn.execute(
                     "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
                     "evidence_json, narrative_source, coverage_json, created_at "
@@ -14341,10 +14350,14 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                         ", ".join(stale_setup_reasons),
                     )
                     try:
-                        conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                        conn.execute(
+                            "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                            "WHERE match_id = ?",
+                            (", ".join(stale_setup_reasons), match_id),
+                        )
                         conn.commit()
                     except sqlite3.OperationalError as exc:
-                        log.debug("Deferred stale Setup cache delete for %s: %s", match_id, exc)
+                        log.debug("Deferred stale Setup cache quarantine for %s: %s", match_id, exc)
                     return None
                 if _has_stale_setup_context_claims(cleaned, evidence_json):
                     log.warning(
@@ -14352,10 +14365,14 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                         match_id,
                     )
                     try:
-                        conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                        conn.execute(
+                            "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                            "WHERE match_id = ?",
+                            ("stale_setup_context_claims", match_id),
+                        )
                         conn.commit()
                     except sqlite3.OperationalError as exc:
-                        log.debug("Deferred stale context cache delete for %s: %s", match_id, exc)
+                        log.debug("Deferred stale context cache quarantine for %s: %s", match_id, exc)
                     return None
             # R12-OVERNIGHT: Reject cached narratives missing ESPN data for ESPN-covered leagues
             # when the match is within 7 days (ESPN has data for near-term matches).
@@ -14385,10 +14402,14 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                                 match_id, _ej_league,
                             )
                             try:
-                                conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                                conn.execute(
+                                    "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                                    "WHERE match_id = ?",
+                                    (f"espn_unavailable:{_ej_league}", match_id),
+                                )
                                 conn.commit()
                             except sqlite3.OperationalError as exc:
-                                log.debug("Deferred ESPN cache delete for %s: %s", match_id, exc)
+                                log.debug("Deferred ESPN cache quarantine for %s: %s", match_id, exc)
                             return None
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     pass
@@ -14403,10 +14424,14 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                     match_id, tier,
                 )
                 try:
-                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.execute(
+                        "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                        "WHERE match_id = ?",
+                        (f"w82_for_tier:{tier}", match_id),
+                    )
                     conn.commit()
                 except sqlite3.OperationalError as exc:
-                    log.debug("Deferred gold/diamond w82 cache delete for %s: %s", match_id, exc)
+                    log.debug("Deferred gold/diamond w82 cache quarantine for %s: %s", match_id, exc)
                 return None
 
             # MY-MATCHES-RELIABILITY-FIX: Reject w82 entries for ESPN-covered leagues
@@ -14448,20 +14473,28 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                             match_id, _w82_league,
                         )
                         try:
-                            conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                            conn.execute(
+                                "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                                "WHERE match_id = ?",
+                                (f"w82_espn_freshness:{_w82_league}", match_id),
+                            )
                             conn.commit()
                         except sqlite3.OperationalError as exc:
-                            log.debug("Deferred w82 freshness cache delete for %s: %s", match_id, exc)
+                            log.debug("Deferred w82 freshness cache quarantine for %s: %s", match_id, exc)
                         return None
 
             # W84-Q3: Reject cached narratives containing legacy banned phrases
             if _has_banned_patterns(cleaned):
                 log.warning("Rejecting cached narrative for %s — contains banned phrases", match_id)
                 try:
-                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.execute(
+                        "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                        "WHERE match_id = ?",
+                        ("banned_patterns", match_id),
+                    )
                     conn.commit()
                 except sqlite3.OperationalError as exc:
-                    log.debug("Deferred banned cache delete for %s: %s", match_id, exc)
+                    log.debug("Deferred banned cache quarantine for %s: %s", match_id, exc)
                 return None
 
             # BUILD-NARRATIVE-WATERTIGHT-01 C.1: serve-time min_verdict_quality gate.
@@ -14505,12 +14538,14 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                     )
                     try:
                         conn.execute(
-                            "DELETE FROM narrative_cache WHERE match_id = ?", (match_id,)
+                            "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                            "WHERE match_id = ?",
+                            (f"verdict_quality:embedded_ok={_embedded_ok},standalone_ok={_standalone_ok}", match_id),
                         )
                         conn.commit()
                     except sqlite3.OperationalError as _del_err:
                         log.debug(
-                            "Deferred serve-time verdict-gate delete for %s: %s",
+                            "Deferred serve-time verdict-gate quarantine for %s: %s",
                             match_id, _del_err,
                         )
                     return None
@@ -14535,18 +14570,26 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                         match_id, narrative_source,
                     )
                     try:
-                        conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                        conn.execute(
+                            "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                            "WHERE match_id = ?",
+                            (f"old_format_headers:{narrative_source}", match_id),
+                        )
                         conn.commit()
                     except sqlite3.OperationalError as exc:
-                        log.debug("Deferred old-format cache delete for %s: %s", match_id, exc)
+                        log.debug("Deferred old-format cache quarantine for %s: %s", match_id, exc)
                     return None
             if _has_empty_sections(cleaned):
                 log.warning("Rejecting cached narrative for %s — contains empty section", match_id)
                 try:
-                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.execute(
+                        "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                        "WHERE match_id = ?",
+                        ("empty_sections", match_id),
+                    )
                     conn.commit()
                 except sqlite3.OperationalError as exc:
-                    log.debug("Deferred empty-section cache delete for %s: %s", match_id, exc)
+                    log.debug("Deferred empty-section cache quarantine for %s: %s", match_id, exc)
                 return None
             # R11-BUILD-01 Fix A (Option B): Freshness guard — skip H2H validation
             # when evidence_json is present. The narrative already passed the TTL
@@ -14558,10 +14601,14 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
             if not _skip_h2h and _has_stale_h2h_summary(cleaned, parsed_tips, evidence_json):
                 log.warning("Rejecting cached narrative for %s — stale H2H summary mismatch", match_id)
                 try:
-                    conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                    conn.execute(
+                        "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                        "WHERE match_id = ?",
+                        ("stale_h2h_summary", match_id),
+                    )
                     conn.commit()
                 except sqlite3.OperationalError as exc:
-                    log.debug("Deferred stale H2H cache delete for %s: %s", match_id, exc)
+                    log.debug("Deferred stale H2H cache quarantine for %s: %s", match_id, exc)
                 return None
             # TIER-FIX C: Reject cache when tier drifts >1 level or EV is incoherent
             _current_er_tier = _quick_edge_tier_lookup(match_id)
@@ -14597,10 +14644,14 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                     # Without this delete, the rejected row persists in DB, the warm-cache guard
                     # sees N >= threshold, skips the pregen, and the loop repeats every 15 minutes.
                     try:
-                        conn.execute("DELETE FROM narrative_cache WHERE match_id = ?", (match_id,))
+                        conn.execute(
+                            "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                            "WHERE match_id = ?",
+                            (f"ev_incoherent:cached={_cached_ev},live={_current_er_ev}", match_id),
+                        )
                         conn.commit()
                     except sqlite3.OperationalError as _del_exc:
-                        log.debug("Deferred incoherent cache delete for %s: %s", match_id, _del_exc)
+                        log.debug("Deferred incoherent cache quarantine for %s: %s", match_id, _del_exc)
                     return None
 
             return {
@@ -20725,15 +20776,21 @@ async def _generate_haiku_match_summary(
                 ),
             )
             conn.commit()
-        except sqlite3.OperationalError:
-            pass
+        except Exception as e:
+            log.warning(
+                "_generate_haiku_match_summary: cache write failed for %s — %s: %s",
+                match_key, type(e).__name__, e,
+            )
         finally:
             conn.close()
 
     try:
         await asyncio.wait_for(asyncio.to_thread(_store), timeout=3.0)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(
+            "_generate_haiku_match_summary: cache write task failed for %s — %s: %s",
+            match_key, type(e).__name__, e,
+        )
 
     return summary
 
@@ -28751,6 +28808,11 @@ _pregen_active = False   # BASELINE-FIX: single-flight flag — set before lock 
 _PREGEN_WARM_THRESHOLD = 5
 _PREGEN_WARM_WINDOW_HOURS = 12
 
+# FIX-NARRATIVE-CACHE-DEATH-01 FIX-2: per-match cooldown for background fill.
+# Prevents the same match being attempted 96× per day when cache is always empty.
+_pregen_fill_last_attempt: dict[str, float] = {}  # match_key -> monotonic epoch seconds
+PREGEN_FILL_COOLDOWN_SECONDS = 7200  # 2 hours
+
 
 def _count_warm_narratives() -> int:
     """Count narrative_cache rows created within the last 12h (warm window).
@@ -28875,6 +28937,24 @@ async def _background_pregen_fill() -> None:
                 )
                 return
         else:
+            # FIX-NARRATIVE-CACHE-DEATH-01 FIX-2: per-match 2h cooldown — prevents 96× daily
+            # reattempts for matches that keep failing quality gates (would produce same output).
+            import time as _time_mod
+            _now_mono = _time_mod.monotonic()
+            _cooled_keys: list[str] = []
+            for _ck in _hot_keys:
+                if _ck in _pregen_fill_last_attempt:
+                    if _now_mono - _pregen_fill_last_attempt[_ck] < PREGEN_FILL_COOLDOWN_SECONDS:
+                        log.debug("background fill: skipping %s (cooldown active)", _ck)
+                        _cooled_keys.append(_ck)
+                        continue
+                _pregen_fill_last_attempt[_ck] = _now_mono
+            if len(_cooled_keys) == len(_hot_keys):
+                log.info(
+                    "Pregen [background]: SKIPPED — all %d hot tips on cooldown",
+                    len(_hot_keys),
+                )
+                return
             _uncached = await asyncio.to_thread(_count_uncached_hot_tips, _hot_keys)
             if _uncached == 0:
                 log.info(

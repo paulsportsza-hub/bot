@@ -478,7 +478,7 @@ def test_run_checks_returns_required_keys():
 
 
 def test_run_checks_summary_counts_match():
-    """summary pass+fail+skip must equal 6 (total checks)."""
+    """summary pass+fail+skip must equal 9 (6 scraper + 3 publisher checks)."""
     with patch("contracts.monitors.scraper_health.connect_odds_db") as mock_conn_fn:
         conn = _fresh_conn()
         shm._migrate(conn)
@@ -487,4 +487,4 @@ def test_run_checks_summary_counts_match():
         result = shm.run_checks(dry_run=True)
 
     s = result["summary"]
-    assert s["pass"] + s["fail"] + s["skip"] == 6
+    assert s["pass"] + s["fail"] + s["skip"] == 9
