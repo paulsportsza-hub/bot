@@ -2131,14 +2131,22 @@ async def _generate_one(
             verification_failure = f"w84_error: {exc}"
             log.warning("W84 ERROR for %s: %s — serving W82 fallback", match_key, exc)
 
-    # R11-BUILD-01 Fix A (Option A): Inject H2H into W82 fallback.
-    # _inject_h2h_sentence() was only applied inside the W84 path above. When W84
-    # fails verification, the W82 baseline lacks the last-score suffix, causing
-    # _has_stale_h2h_summary() to reject the cached entry on read (loop).
+    # R11-BUILD-01 FIX-H2H-DUP-01: Skip injection if _render_setup already included H2H
+    # via _h2h_bridge() (h2h_summary in NarrativeSpec → "Head to head: ..." line).
+    # The existing `sentence in text` guard in _inject_h2h_sentence() does NOT catch this
+    # because _h2h_bridge produces "Head to head: {h2h}." while _build_h2h_injection
+    # produces "Head to head: {summary_text}, and the last meeting finished {score}." —
+    # identical content, different text → the substring check misses it.
     if narrative and narrative_source == "w82" and evidence_pack is not None and spec is not None:
-        _w82_h2h = _build_h2h_injection(evidence_pack, spec)
-        if _w82_h2h:
-            narrative = _inject_h2h_sentence(narrative, _w82_h2h)
+        _spec_h2h = getattr(spec, "h2h_summary", "") or ""
+        _h2h_already_present = (
+            _spec_h2h
+            and _spec_h2h.split(",")[0].lower() in narrative.lower()
+        )
+        if not _h2h_already_present:
+            _w82_h2h = _build_h2h_injection(evidence_pack, spec)
+            if _w82_h2h:
+                narrative = _inject_h2h_sentence(narrative, _w82_h2h)
 
     if not narrative or narrative.strip() == "NO_DATA":
         return {"match_key": match_key, "success": False, "duration": time.time() - t0}

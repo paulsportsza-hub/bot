@@ -1,10 +1,12 @@
 """BUILD-NARRATIVE-WATERTIGHT-01 C.1 regression guard.
 
 Asserts that ``_get_cached_narrative`` invokes ``min_verdict_quality`` on
-both the embedded verdict section AND the standalone ``verdict_html`` column
-before returning a cached row. Fails loudly if a future wave removes the
-gate — thin 42–65 char verdicts would silently start flowing to Gold /
-Diamond subscribers again.
+the standalone ``verdict_html`` column before returning a cached row.
+
+BUILD-C1-OPTIONA-PHASE1-BREAKDOWN-01 AC-1: The embedded-verdict check
+(_embedded_ok) was removed. C.1 now gates ONLY on verdict_html
+(standalone_ok). The AI Breakdown 🏆 fallback in card_data.py handles
+thin embedded verdicts at serve time. See Narrative Wiring Bible v1 §2 Q1.
 """
 from __future__ import annotations
 
@@ -29,28 +31,29 @@ def test_get_cached_narrative_invokes_min_verdict_quality(bot_module):
     except (OSError, TypeError):
         pytest.skip("cannot inspect source of _get_cached_narrative")
 
-    # Gate must be wired into the cache-hit path — look for the three
-    # load-bearing tokens: the gate function, the verdict extractor, and
-    # a quarantine UPDATE on failure (FIX-NARRATIVE-CACHE-DEATH-01 replaces
-    # DELETE with quarantine so the loop cannot restart).
+    # Gate must be wired into the cache-hit path — look for the two
+    # load-bearing tokens: the gate function and the standalone verdict_html
+    # column. A quarantine UPDATE on failure must also be present.
     assert "min_verdict_quality" in src, (
         "BUILD-NARRATIVE-WATERTIGHT-01 C.1: _get_cached_narrative must call "
         "min_verdict_quality on the cached verdict before returning."
     )
-    assert "_extract_verdict_text" in src, (
-        "BUILD-NARRATIVE-WATERTIGHT-01 C.1: _get_cached_narrative must use "
-        "_extract_verdict_text so the embedded verdict section is evaluated."
-    )
     assert re.search(r"verdict_html", src), (
-        "BUILD-NARRATIVE-WATERTIGHT-01 C.1: _get_cached_narrative must also "
+        "BUILD-NARRATIVE-WATERTIGHT-01 C.1: _get_cached_narrative must "
         "evaluate the standalone verdict_html column."
     )
     # FIX-NARRATIVE-CACHE-DEATH-01: quarantine-on-reject replaces DELETE.
-    # Quality-gate rejections now set status='quarantined' so the row is not
-    # re-generated in an infinite loop. Assert the quarantine UPDATE is present.
     assert re.search(
         r"status\s*=\s*['\"]quarantined['\"]", src, re.IGNORECASE
     ), (
         "FIX-NARRATIVE-CACHE-DEATH-01: _get_cached_narrative must set "
         "status='quarantined' (not DELETE) on quality-gate rejection."
+    )
+    # AC-1 guard: _embedded_ok must NOT appear in the gate path.
+    # C.1 is standalone_ok only — the embedded check was the root cause of
+    # 67% unnecessary quarantines (16/24 rows, verdict_quality:embedded_ok=False).
+    assert "_embedded_ok" not in src, (
+        "BUILD-C1-OPTIONA-PHASE1-BREAKDOWN-01 AC-1 REGRESSION: _embedded_ok "
+        "was found in _get_cached_narrative — the dual gate must not be "
+        "re-introduced. Use the standalone_ok-only gate."
     )

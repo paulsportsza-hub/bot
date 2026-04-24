@@ -63,21 +63,25 @@ async def send_card_or_fallback(
         else:
             png = await asyncio.to_thread(render_card_sync, template, data, width)
         if message_to_edit and message_to_edit.photo:
-            await message_to_edit.edit_media(
-                media=InputMediaPhoto(media=png),
-                reply_markup=markup,
-            )
-        else:
-            if message_to_edit:
-                try:
-                    await message_to_edit.delete()
-                except Exception:
-                    pass
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=png,
-                reply_markup=markup,
-            )
+            try:
+                await message_to_edit.edit_media(
+                    media=InputMediaPhoto(media=png),
+                    reply_markup=markup,
+                )
+                return
+            except Exception as em_err:
+                log.warning("card_sender: edit_media failed (%s), falling back to send_photo", em_err)
+
+        if message_to_edit:
+            try:
+                await message_to_edit.delete()
+            except Exception:
+                pass
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=png,
+            reply_markup=markup,
+        )
     except Exception as exc:
         log.error("card_sender: render failed for %s: %s", template, exc, exc_info=True)
         if _sentry:

@@ -267,8 +267,8 @@ _VERDICT_MODEL = os.environ.get("VERDICT_MODEL", "claude-haiku-4-5-20251001")
 NOTIFICATIONS_ENABLED = False
 
 # ── Onboarding state machine ─────────────────────────────
-# Steps: experience → sports → favourites → edge_explainer → risk → bankroll → notify → summary → plan
-ONBOARD_STEPS = ("experience", "sports", "favourites", "edge_explainer", "risk", "bankroll", "notify", "summary", "plan")
+# Steps: experience → sports → favourites → edge_explainer → notify → summary → plan
+ONBOARD_STEPS = ("experience", "sports", "favourites", "edge_explainer", "notify", "summary", "plan")
 
 # BUILD-WAVE2-ONBOARDING-01: bot instance for handlers called without ctx
 _g_bot = None
@@ -290,7 +290,8 @@ _settings_sports_state: dict[int, dict] = {}
 # Always-visible bottom keyboard (separate from inline keyboards)
 
 _KEYBOARD_LABELS = [
-    "🏠 Menu", "⚽ My Matches", "💎 Edge Picks",
+    "💎 \U0001d5d8\U0001d5d7\U0001d5da\U0001d5d8 \U0001d5e3\U0001d5dc\U0001d5d6\U0001d5de\U0001d5e6 💎",
+    "🏠 Menu", "⚽ My Matches",
     "👤 Profile", "⚙️ Settings", "❓ Help",
 ]
 
@@ -304,18 +305,25 @@ _LEGACY_LABELS = {
     "🔥 Hot Tips": "hot_tips",               # old Hot Tips → Edge Picks
     "⚽ Your Games": "your_games",           # old Your Games → My Matches
     "💎 Top Edge Picks": "hot_tips",         # old label → Edge Picks
+    "💎 Edge Picks": "hot_tips",             # old label → Edge Picks
+    "💎 Edge Picks": "hot_tips",             # old flame label → Edge Picks
+    "🔥 \U0001d5d8\U0001d5d7\U0001d5da\U0001d5d8 \U0001d5e3\U0001d5dc\U0001d5d6\U0001d5de\U0001d5e6 🔥": "hot_tips",  # old flame hero → Edge Picks
     "📖 Guide": "guide",                     # removed from Row 1 → Guide action
 }
+# Add hero button text (bold Unicode) as a legacy label entry
+_LEGACY_LABELS[_KEYBOARD_LABELS[0]] = "hot_tips"
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Return the persistent 2×3 reply keyboard."""
+    """Return the persistent reply keyboard with Edge Picks hero button."""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("🏠 Menu"), KeyboardButton("⚽ My Matches"), KeyboardButton("💎 Edge Picks")],
+            [KeyboardButton(_KEYBOARD_LABELS[0])],
+            [KeyboardButton("🏠 Menu"), KeyboardButton("⚽ My Matches")],
             [KeyboardButton("👤 Profile"), KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")],
         ],
         resize_keyboard=True,
         is_persistent=True,
+        input_field_placeholder="💎 Edge Picks — today's top value",
     )
 
 
@@ -642,18 +650,30 @@ def _get_team_cheer(team: str, sport_key: str) -> str:
 
 # ── Keyboards ─────────────────────────────────────────────
 
+# Bold Unicode: "💎 DIAMOND EDGE PICKS" (Math Sans-Serif Bold)
+_DIAMOND_EDGE_PICKS = (
+    "💎 "
+    "\U0001d5d7\U0001d5dc\U0001d5d4\U0001d5e0\U0001d5e2\U0001d5e1\U0001d5d7"
+    " "
+    "\U0001d5d8\U0001d5d7\U0001d5da\U0001d5d8"
+    " "
+    "\U0001d5e3\U0001d5dc\U0001d5d6\U0001d5de\U0001d5e6"
+)
+
+
 def kb_main() -> InlineKeyboardMarkup:
     """Main persistent menu — every sub-screen navigates back here."""
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("━" * 16, callback_data="nop:spacer")],
+        [InlineKeyboardButton(_DIAMOND_EDGE_PICKS, callback_data="hot:go")],
         [
             InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0"),
-            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
         ],
         [
-            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
             InlineKeyboardButton("📖 Guide", callback_data="guide:menu"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings:home"),
         ],
-        [InlineKeyboardButton("⚙️ Settings", callback_data="settings:home")],
         [InlineKeyboardButton("🏠 Community", url="https://t.me/MzansiEdge")],
     ])
 
@@ -726,10 +746,7 @@ def kb_bookmakers() -> InlineKeyboardMarkup:
 
 def kb_settings() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎯 Risk Profile", callback_data="settings:risk")],
-        [InlineKeyboardButton("💰 Bankroll", callback_data="settings:bankroll")],
         [InlineKeyboardButton("⚽ My Sports", callback_data="settings:sports")],
-        [InlineKeyboardButton("📊 Alert Preferences", callback_data="settings:prefs")],
         [InlineKeyboardButton("🔄 Reset Profile", callback_data="settings:reset")],
         [
             InlineKeyboardButton("↩️ Back", callback_data="menu:home"),
@@ -1072,52 +1089,8 @@ def kb_onboarding_favourites(sport_key: str, selected: list[str] | None = None) 
     return InlineKeyboardMarkup(rows)
 
 
-def kb_onboarding_risk() -> InlineKeyboardMarkup:
-    rows = []
-    for key, prof in config.RISK_PROFILES.items():
-        rows.append([InlineKeyboardButton(prof["label"], callback_data=f"ob_risk:{key}")])
-    rows.append([
-        InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_risk"),
-        InlineKeyboardButton("🔄 Start Again", callback_data="ob_nav:restart"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
-# REMOVED: Daily Alerts step (FIX-ONBOARDING-OB-NAV-01)
-# def kb_onboarding_notify() -> InlineKeyboardMarkup:
-#     return InlineKeyboardMarkup([
-#         [
-#             InlineKeyboardButton("🌅 07:00", callback_data="ob_notify:7"),
-#             InlineKeyboardButton("☀️ 12:00", callback_data="ob_notify:12"),
-#         ],
-#         [
-#             InlineKeyboardButton("🌆 18:00", callback_data="ob_notify:18"),
-#             InlineKeyboardButton("🌙 21:00", callback_data="ob_notify:21"),
-#         ],
-#         [
-#             InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_notify"),
-#             InlineKeyboardButton("🔄 Start Again", callback_data="ob_nav:restart"),
-#         ],
-#     ])
-
-
-def kb_onboarding_bankroll() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("R50", callback_data="ob_bankroll:50"),
-            InlineKeyboardButton("R200", callback_data="ob_bankroll:200"),
-        ],
-        [
-            InlineKeyboardButton("R500", callback_data="ob_bankroll:500"),
-            InlineKeyboardButton("R1,000", callback_data="ob_bankroll:1000"),
-        ],
-        [InlineKeyboardButton("🤷 Not sure — skip", callback_data="ob_bankroll:skip")],
-        [InlineKeyboardButton("✏️ Custom amount", callback_data="ob_bankroll:custom")],
-        [
-            InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_bankroll"),
-            InlineKeyboardButton("🔄 Start Again", callback_data="ob_nav:restart"),
-        ],
-    ])
+# REMOVED: Risk Profile step (BUILD-SETTINGS-CLEANUP-01)
+# REMOVED: Bankroll step (BUILD-SETTINGS-CLEANUP-01)
 
 
 # ── /start deeplink resolver ─────────────────────────────
@@ -1132,7 +1105,7 @@ async def _dl_send_edge_no_longer_available(
         "This edge is no longer available — here's what's live now:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+            InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go"),
         ]]),
     )
 
@@ -1163,7 +1136,7 @@ async def _handle_card_deeplink(
             "⚠️ That edge link doesn't look right. Here's what's live now:",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+                InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go"),
             ]]),
         )
         return
@@ -1506,7 +1479,7 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
                 • On detail screens, the same tier tells you how premium that edge is.
                 • Higher tiers are usually rarer and deserve more attention, not blind staking.
             """),
-            [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]],
+            [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]],
         ),
         "signals": (
             textwrap.dedent("""\
@@ -1532,7 +1505,7 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
                 • In detail, you see <b>Signal Breakdown</b> or <b>Signal Snapshot</b>
                 • If a pick is marked <b>model-only</b>, the price is doing most of the work
             """),
-            [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]],
+            [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]],
         ),
         "track_record": (
             textwrap.dedent("""\
@@ -1580,7 +1553,7 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
 
                 Always re-check the live odds before betting. The edge is about price, not certainty.
             """),
-            [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]],
+            [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]],
         ),
         "value101": (
             textwrap.dedent("""\
@@ -1601,7 +1574,7 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
 
                 <b>Top Edge Picks</b> is built to find the better prices, not guaranteed winners.
             """),
-            [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]],
+            [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]],
         ),
         "bookmaker": (
             textwrap.dedent(f"""\
@@ -1760,6 +1733,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
 
     if prefix == "noop":
         return
+    elif prefix == "nop":
+        await query.answer()
+        return
     elif prefix == "nav":
         if action == "main":
             await handle_menu(query, "home")
@@ -1778,13 +1754,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         await handle_ob_sport(query, action)
     elif prefix == "ob_nav":
         await handle_ob_nav(query, action)
-    elif prefix == "ob_risk":
-        await handle_ob_risk(query, action)
-    elif prefix == "ob_bankroll":
-        await handle_ob_bankroll(query, action)
+    # REMOVED: Risk Profile step (BUILD-SETTINGS-CLEANUP-01)
+    # REMOVED: Bankroll step (BUILD-SETTINGS-CLEANUP-01)
     # REMOVED: Daily Alerts step (FIX-ONBOARDING-OB-NAV-01)
-    # elif prefix == "ob_notify":
-    #     await handle_ob_notify(query, action)
     elif prefix == "ob_fav":
         await handle_ob_fav(query, action)
     elif prefix == "ob_fav_manual":
@@ -1840,7 +1812,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 markup = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Retry", callback_data="yg:all:0")],
-                    [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                    [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                     [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                 ])
             # BUILD-W3 / W3-FIX: My Matches card pagination (photo→photo, no flicker)
@@ -3845,7 +3817,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     f"💎 <b>Keep Diamond: R199/mo or R1,599/yr (save 33%)</b>{founding_line}",
                     parse_mode=ParseMode.HTML,
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                        [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                         [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
                     ]),
                 )
@@ -3897,7 +3869,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _mu_id = query.from_user.id
             await db.set_muted_until(_mu_id, None)
             _mute_resume_mkp = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             ])
             await ctx.bot.send_message(
                 chat_id=query.message.chat_id,
@@ -4137,7 +4109,7 @@ async def handle_ob_experience(query, level: str) -> None:
         Tap to toggle. Hit <b>Done</b> when ready.
     """)
     await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
+        bot=_g_bot, chat_id=query.from_user.id,
         template="onboarding_sports.html",
         data=build_onboarding_sports_data(ob["selected_sports"]),
         text_fallback=text, markup=kb_onboarding_sports(),
@@ -4161,7 +4133,7 @@ async def handle_ob_sport(query, sport_key: str) -> None:
         Tap to toggle. Hit <b>Done</b> when ready.
     """)
     await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
+        bot=_g_bot, chat_id=query.from_user.id,
         template="onboarding_sports.html",
         data=build_onboarding_sports_data(ob["selected_sports"]),
         text_fallback=text, markup=kb_onboarding_sports(ob["selected_sports"]),
@@ -4192,7 +4164,7 @@ async def handle_ob_nav(query, action: str) -> None:
         ob["step"] = "experience"
         text = "<b>Step 1/5:</b> What's your betting experience?"
         await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
+            bot=_g_bot, chat_id=query.from_user.id,
             template="onboarding_experience.html",
             data=build_onboarding_experience_data(),
             text_fallback=text, markup=kb_onboarding_experience(),
@@ -4203,7 +4175,7 @@ async def handle_ob_nav(query, action: str) -> None:
         ob["step"] = "sports"
         text = "<b>Step 2/5: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
         await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
+            bot=_g_bot, chat_id=query.from_user.id,
             template="onboarding_sports.html",
             data=build_onboarding_sports_data(ob["selected_sports"]),
             text_fallback=text, markup=kb_onboarding_sports(ob["selected_sports"]),
@@ -4211,16 +4183,9 @@ async def handle_ob_nav(query, action: str) -> None:
         )
 
     elif action == "edge_done":
-        # Edge explainer acknowledged — move to preferences (risk)
-        ob["step"] = "risk"
-        text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
-        await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
-            template="onboarding_risk.html",
-            data=build_onboarding_risk_data(ob.get("risk")),
-            text_fallback=text, markup=kb_onboarding_risk(),
-            message_to_edit=query.message,
-        )
+        # Edge explainer acknowledged — go directly to summary (BUILD-SETTINGS-CLEANUP-01)
+        ob["step"] = "summary"
+        await _show_summary(query, ob)
 
     elif action == "back_edge":
         # Back from edge explainer → last sport's team prompt
@@ -4233,68 +4198,21 @@ async def handle_ob_nav(query, action: str) -> None:
             ob["step"] = "sports"
             text = "<b>Step 2/5: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
             await send_card_or_fallback(
-                bot=_g_bot, chat_id=query.message.chat_id,
+                bot=_g_bot, chat_id=query.from_user.id,
                 template="onboarding_sports.html",
                 data=build_onboarding_sports_data(ob["selected_sports"]),
                 text_fallback=text, markup=kb_onboarding_sports(ob["selected_sports"]),
                 message_to_edit=query.message,
             )
 
-    elif action == "back_risk":
-        # Back from risk → edge explainer (or last team prompt for experienced)
-        if ob.get("experience") == "experienced":
-            ob["step"] = "favourites"
-            sports = ob["selected_sports"]
-            if sports:
-                ob["_fav_idx"] = max(0, len(sports) - 1)
-                await _show_next_team_prompt(query, ob)
-            else:
-                ob["step"] = "sports"
-                text = "<b>Step 2/5: Select your sports</b>\n\nTap to toggle. Hit <b>Done</b> when ready."
-                await send_card_or_fallback(
-                    bot=_g_bot, chat_id=query.message.chat_id,
-                    template="onboarding_sports.html",
-                    data=build_onboarding_sports_data(ob["selected_sports"]),
-                    text_fallback=text, markup=kb_onboarding_sports(ob["selected_sports"]),
-                    message_to_edit=query.message,
-                )
-        else:
-            ob["step"] = "edge_explainer"
-            await _show_edge_explainer(query, ob)
-
-    elif action == "back_bankroll":
-        # Back from bankroll → risk (within Step 4)
-        ob["step"] = "risk"
-        text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
-        await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
-            template="onboarding_risk.html",
-            data=build_onboarding_risk_data(ob.get("risk")),
-            text_fallback=text, markup=kb_onboarding_risk(),
-            message_to_edit=query.message,
-        )
-
-    # REMOVED: Daily Alerts step — back_notify is unreachable (FIX-ONBOARDING-OB-NAV-01)
-    # elif action == "back_notify":
-    #     ob["step"] = "bankroll"
-    #     text = ("<b>Step 4/5: Your preferences — Weekly bankroll</b>\n\n"
-    #             "How much do you set aside for betting each week?")
-    #     await send_card_or_fallback(bot=_g_bot, chat_id=query.message.chat_id,
-    #         template="onboarding_bankroll.html", data=build_onboarding_bankroll_data(ob.get("bankroll")),
-    #         text_fallback=text, markup=kb_onboarding_bankroll(), message_to_edit=query.message)
+    # REMOVED: back_risk (BUILD-SETTINGS-CLEANUP-01)
+    # REMOVED: back_bankroll (BUILD-SETTINGS-CLEANUP-01)
 
     elif action == "favourites_done":
-        # Experienced users skip edge explainer
+        # Experienced users skip edge explainer — go straight to summary
         if ob.get("experience") == "experienced":
-            ob["step"] = "risk"
-            text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
-            await send_card_or_fallback(
-                bot=_g_bot, chat_id=query.message.chat_id,
-                template="onboarding_risk.html",
-                data=build_onboarding_risk_data(ob.get("risk")),
-                text_fallback=text, markup=kb_onboarding_risk(),
-                message_to_edit=query.message,
-            )
+            ob["step"] = "summary"
+            await _show_summary(query, ob)
         else:
             ob["step"] = "edge_explainer"
             await _show_edge_explainer(query, ob)
@@ -4318,7 +4236,7 @@ async def handle_ob_nav(query, action: str) -> None:
             "<b>Step 1/5:</b> What's your betting experience?"
         )
         await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
+            bot=_g_bot, chat_id=query.from_user.id,
             template="onboarding_experience.html",
             data=build_onboarding_experience_data(),
             text_fallback=text, markup=kb_onboarding_experience(),
@@ -4340,18 +4258,12 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
         ob["_fav_idx"] = idx
 
     if idx >= len(sports):
-        # All sports done — experienced users skip edge explainer
+        # All sports done — go to edge explainer or summary (BUILD-SETTINGS-CLEANUP-01)
         ob["_team_input_sport"] = None
         if ob.get("experience") == "experienced":
-            ob["step"] = "risk"
-            text = "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?"
-            await send_card_or_fallback(
-                bot=_g_bot, chat_id=query.message.chat_id,
-                template="onboarding_risk.html",
-                data=build_onboarding_risk_data(ob.get("risk")),
-                text_fallback=text, markup=kb_onboarding_risk(),
-                message_to_edit=query.message,
-            )
+            # Experienced users skip edge explainer — go straight to summary
+            ob["step"] = "summary"
+            await _show_summary(query, ob)
         else:
             ob["step"] = "edge_explainer"
             await _show_edge_explainer(query, ob)
@@ -4380,7 +4292,7 @@ async def _show_next_team_prompt(query, ob: dict) -> None:
         [InlineKeyboardButton("⏭ Skip", callback_data=f"ob_fav_done:{sport_key}")],
     ])
     await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
+        bot=_g_bot, chat_id=query.from_user.id,
         template="onboarding_favourites_manual.html",
         data=build_onboarding_favourites_manual_data(sport_key, sport_label, emoji, fav_type, example),
         text_fallback=text, markup=skip_markup,
@@ -4429,7 +4341,7 @@ async def handle_ob_fav(query, action: str) -> None:
     text = _fav_step_text(sport) if sport else "<b>Step 3/5</b>"
     teams_data = [{"name": t, "selected": t in favs} for t in _get_all_teams_for_sport(sport_key)]
     await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
+        bot=_g_bot, chat_id=query.from_user.id,
         template="onboarding_favourites.html",
         data=build_onboarding_favourites_data(sport_key, sport_label, sport_emoji, teams_data, len(favs)),
         text_fallback=text, markup=kb_onboarding_favourites(sport_key, favs),
@@ -4459,7 +4371,7 @@ async def handle_ob_fav_manual(query, sport_key: str) -> None:
         [InlineKeyboardButton("« Back to list", callback_data=f"ob_fav_back:{sport_key}")],
     ])
     await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
+        bot=_g_bot, chat_id=query.from_user.id,
         template="onboarding_favourites_manual.html",
         data=build_onboarding_favourites_manual_data(sport_key, sport_name, emoji, fav_type, example),
         text_fallback=text, markup=back_markup,
@@ -4522,7 +4434,7 @@ async def handle_ob_fav_suggest(query, action: str) -> None:
     sel = ob["favourites"][sport_key]
     teams_data = [{"name": t, "selected": t in sel} for t in _get_all_teams_for_sport(sport_key)]
     await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
+        bot=_g_bot, chat_id=query.from_user.id,
         template="onboarding_favourites.html",
         data=build_onboarding_favourites_data(sport_key, sport_label, sport_emoji, teams_data, len(sel)),
         text_fallback=text, markup=kb_onboarding_favourites(sport_key, sel),
@@ -4552,7 +4464,7 @@ async def _show_edge_explainer(query, ob: dict) -> None:
         [InlineKeyboardButton("↩️ Back", callback_data="ob_nav:back_edge")],
     ])
     await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
+        bot=_g_bot, chat_id=query.from_user.id,
         template="onboarding_edge_explainer.html",
         data=build_onboarding_edge_explainer_data(),
         text_fallback=text, markup=markup,
@@ -4560,100 +4472,8 @@ async def _show_edge_explainer(query, ob: dict) -> None:
     )
 
 
-async def handle_ob_risk(query, risk_key: str) -> None:
-    """Set risk profile during onboarding."""
-    user_id = query.from_user.id
-    ob = _get_ob(user_id)
-    ob["risk"] = risk_key
-
-    # REMOVED: Daily Alerts step — go to summary after risk edit (FIX-ONBOARDING-OB-NAV-01)
-    if ob.get("_editing") == "risk":
-        ob["_editing"] = None
-        ob["step"] = "summary"
-        await _show_summary(query, ob)
-        return
-
-    ob["step"] = "bankroll"
-    text = (
-        "<b>Step 4/5: Your preferences — Weekly bankroll</b>\n\n"
-        "How much do you set aside for betting each week?\n\n"
-        "This helps me size my stake suggestions.\n"
-        "<i>You can change this anytime in /settings.</i>"
-    )
-    await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
-        template="onboarding_bankroll.html",
-        data=build_onboarding_bankroll_data(ob.get("bankroll")),
-        text_fallback=text, markup=kb_onboarding_bankroll(),
-        message_to_edit=query.message,
-    )
-
-
-# REMOVED: Daily Alerts step (FIX-ONBOARDING-OB-NAV-01)
-# async def handle_ob_notify(query, hour_str: str) -> None:
-#     """Set notification hour during onboarding."""
-#     user_id = query.from_user.id
-#     ob = _get_ob(user_id)
-#     ob["notify_hour"] = int(hour_str)
-#     if ob.get("_editing") == "risk":
-#         ob["_editing"] = None
-#         ob["step"] = "summary"
-#         await _show_summary(query, ob)
-#         return
-#     ob["step"] = "summary"
-#     await _show_summary(query, ob)
-
-
-async def handle_ob_bankroll(query, value: str) -> None:
-    """Set bankroll during onboarding."""
-    user_id = query.from_user.id
-    ob = _get_ob(user_id)
-
-    if value == "skip":
-        ob["bankroll"] = None
-    elif value == "custom":
-        ob["step"] = "bankroll_custom"
-        ob["_bankroll_custom"] = True
-        custom_text = (
-            "<b>Step 4/5: Custom bankroll</b>\n\n"
-            "Type your weekly bankroll amount in Rands.\n"
-            "<i>e.g. 750 or 3000</i>"
-        )
-        back_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("↩️ Back to presets", callback_data="ob_bankroll:back")],
-        ])
-        await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
-            template="onboarding_bankroll_custom.html",
-            data=build_onboarding_bankroll_custom_data(),
-            text_fallback=custom_text, markup=back_markup,
-            message_to_edit=query.message,
-        )
-        return
-    elif value == "back":
-        ob["step"] = "bankroll"
-        ob.pop("_bankroll_custom", None)
-        text = (
-            "<b>Step 4/5: Your preferences — Weekly bankroll</b>\n\n"
-            "How much do you set aside for betting each week?"
-        )
-        await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
-            template="onboarding_bankroll.html",
-            data=build_onboarding_bankroll_data(ob.get("bankroll")),
-            text_fallback=text, markup=kb_onboarding_bankroll(),
-            message_to_edit=query.message,
-        )
-        return
-    else:
-        try:
-            ob["bankroll"] = float(value)
-        except ValueError:
-            ob["bankroll"] = None
-
-    # REMOVED: Daily Alerts step — go directly to summary (FIX-ONBOARDING-OB-NAV-01)
-    ob["step"] = "summary"
-    await _show_summary(query, ob)
+# REMOVED: handle_ob_risk (BUILD-SETTINGS-CLEANUP-01)
+# REMOVED: handle_ob_bankroll (BUILD-SETTINGS-CLEANUP-01)
 
 
 async def _show_summary(query, ob: dict) -> None:
@@ -4678,15 +4498,6 @@ async def _show_summary(query, ob: dict) -> None:
             sports_lines.append(f"  {', '.join(favs)}")
         sports_lines.append("")  # blank line between sports
 
-    # Strip emoji from risk label — e.g. "⚖️ Moderate" → "Moderate"
-    risk_raw = config.RISK_PROFILES.get(ob["risk"], {}).get("label", ob["risk"] or "Not set")
-    risk_label = risk_raw.split(" ", 1)[-1] if " " in risk_raw else risk_raw
-    hour = ob.get("notify_hour")
-    notify_map = {7: "Morning (07:00 SAST)", 12: "Midday (12:00 SAST)", 18: "Evening (18:00 SAST)", 21: "Night (21:00 SAST)"}
-    notify_str = notify_map.get(hour, f"{hour}:00") if hour is not None else "Not set"
-    bankroll = ob.get("bankroll")
-    bankroll_str = f"R{bankroll:,.0f}" if bankroll else "Not set"
-
     exp_labels = {
         "experienced": "I bet regularly",
         "casual": "I bet sometimes",
@@ -4695,21 +4506,18 @@ async def _show_summary(query, ob: dict) -> None:
     exp = ob.get("experience") or "casual"
 
     text = (
-        "<b>Step 5/5: Your profile summary</b>\n\n"
+        "<b>Step 4/5: Your profile summary</b>\n\n"
         f"🎯 <b>Experience:</b> {exp_labels.get(exp, exp)}\n\n"
         + "\n".join(sports_lines)
-        + f"\n⚖️ <b>Risk:</b> {risk_label}\n"
-        f"💰 <b>Bankroll:</b> {bankroll_str}\n\n"
-        "All good? Tap <b>Next</b> to choose your plan."
+        + "All good? Tap <b>Next</b> to choose your plan."
     )
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("➡️ Next — Choose Plan", callback_data="ob_nav:plan")],
         [InlineKeyboardButton("✏️ Edit Sports & Teams", callback_data="ob_edit:sports")],
-        [InlineKeyboardButton("⚙️ Edit Preferences", callback_data="ob_edit:risk")],
     ])
     await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
+        bot=_g_bot, chat_id=(getattr(query, "from_user", None) or getattr(query, "effective_user", None)).id,
         template="onboarding_summary.html",
         data=build_onboarding_summary_data(ob),
         text_fallback=text, markup=kb,
@@ -4758,7 +4566,7 @@ async def _show_plan_step(query, ob: dict) -> None:
     remaining_slots = await db.get_remaining_founding_slots()
     await send_card_or_fallback(
         bot=query.get_bot(),
-        chat_id=query.message.chat_id,
+        chat_id=query.from_user.id,
         template="sub_plans.html",
         data=build_sub_plans_data(user_tier, founding_left, remaining_slots),
         text_fallback=text,
@@ -5185,7 +4993,7 @@ async def _build_profile_buttons(user_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton("⚙️ Edit Profile", callback_data="settings:home"),
         ],
         [
-            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+            InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go"),
             InlineKeyboardButton("📋 My Plan" if is_paid else "✨ View Plans", callback_data="sub:billing" if is_paid else "sub:plans"),
         ],
         [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
@@ -5224,7 +5032,7 @@ async def _render_profile_plan_surface(user_id: int) -> tuple[str, InlineKeyboar
             "You're exploring full Diamond access right now."
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
             [InlineKeyboardButton("↩️ Back to Profile", callback_data="profile:home")],
         ])
@@ -5315,21 +5123,7 @@ async def handle_ob_edit(query, action: str) -> None:
             ]),
         )
 
-    elif action == "risk":
-        # Re-edit risk → bankroll → notify chain
-        # Summary is a photo card — must use send_card_or_fallback (not edit_message_text)
-        # Set _editing AFTER the send to avoid corrupted state if render fails
-        ob["step"] = "risk"
-        await send_card_or_fallback(
-            bot=_g_bot,
-            chat_id=query.message.chat_id,
-            template="onboarding_risk.html",
-            data=build_onboarding_risk_data(ob.get("risk")),
-            text_fallback="<b>🎯 Change Risk Profile</b>\n\nSelect your risk tolerance:",
-            markup=kb_onboarding_risk(),
-            message_to_edit=query.message,
-        )
-        ob["_editing"] = "risk"
+    # REMOVED: ob_edit:risk (BUILD-SETTINGS-CLEANUP-01)
 
 
 async def handle_ob_summary(query, action: str) -> None:
@@ -5405,14 +5199,14 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     done_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔔 Set Up Edge Alerts", callback_data="story:start")],
         [
-            InlineKeyboardButton("💎 Show Me Top Edge Picks", callback_data="hot:go"),
+            InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go"),
             InlineKeyboardButton("📖 How It Works", callback_data="guide:menu"),
         ],
         [InlineKeyboardButton("⏭️ Skip for Now", callback_data="nav:main")],
         [InlineKeyboardButton("👥 Join the MzansiEdge Community", url="https://t.me/MzansiEdge")],
     ])
     await send_card_or_fallback(
-        bot=_g_bot, chat_id=query.message.chat_id,
+        bot=_g_bot, chat_id=query.from_user.id,
         template="onboarding_done.html",
         data=build_onboarding_done_data(
             name, trial_started=trial_started, trial_days=7,
@@ -5424,7 +5218,7 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     # Activate the persistent reply keyboard
     await ctx.bot.send_message(
-        query.message.chat_id,
+        query.from_user.id,
         "⌨️ <i>Your quick-access keyboard is now active!</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_keyboard(),
@@ -5457,14 +5251,10 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
             ob["_fav_idx"] = idx
 
         if idx >= len(sports):
-            # All sports done — go to edge explainer or risk
+            # All sports done — go to edge explainer or summary
             if ob.get("experience") == "experienced":
-                ob["step"] = "risk"
-                await update.message.reply_text(
-                    "<b>Step 4/5: Your preferences — Risk profile</b>\n\nHow aggressive should your tips be?",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=kb_onboarding_risk(),
-                )
+                ob["step"] = "summary"
+                await _show_summary(update, ob)
             else:
                 ob["step"] = "edge_explainer"
                 # Send edge explainer as a new message (same gold standard as _show_edge_explainer)
@@ -5980,7 +5770,7 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
     )
     _FALLBACK_MARKUP = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Retry", callback_data="yg:all:0")],
-        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
         [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
     ])
 
@@ -6209,7 +5999,7 @@ def _build_mm_card_markup(
         rows.append(nav)
     if sport_keys and len(sport_keys) >= 2:
         rows.append(_build_sport_filter_row(sport_keys, sport_filter))
-    rows.append([InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")])
+    rows.append([InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")])
     rows.append([InlineKeyboardButton("↩️ Menu", callback_data="nav:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -6345,7 +6135,7 @@ async def _render_your_games_all(
         )
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
         ])
         return text, markup
@@ -6375,7 +6165,7 @@ async def _render_your_games_all(
 
         text = "\n".join(lines)
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
         ])
@@ -6426,7 +6216,7 @@ async def _render_your_games_all(
         if len(all_sport_keys) >= 2:
             buttons.append(_build_sport_filter_row(all_sport_keys, sport_filter))
         buttons.append([
-            InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+            InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go"),
             InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
         ])
         return text, InlineKeyboardMarkup(buttons)
@@ -6588,7 +6378,7 @@ async def _render_your_games_all(
 
     # Bottom nav
     buttons.append([
-        InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+        InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go"),
         InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
     ])
 
@@ -12924,11 +12714,10 @@ async def freetext_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
                 bot=_g_bot, chat_id=update.message.chat_id,
                 template="onboarding_summary.html",
                 data=build_onboarding_summary_data(ob),
-                text_fallback="<b>Step 5/5: Your profile summary</b>\n\nAll set! Tap Next to choose your plan.",
+                text_fallback="<b>Step 4/5: Your profile summary</b>\n\nAll set! Tap Next to choose your plan.",
                 markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("➡️ Next — Choose Plan", callback_data="ob_nav:plan")],
                     [InlineKeyboardButton("✏️ Edit Sports & Teams", callback_data="ob_edit:sports")],
-                    [InlineKeyboardButton("⚙️ Edit Preferences", callback_data="ob_edit:risk")],
                 ]),
             )
         except ValueError:
@@ -13566,7 +13355,7 @@ async def _build_schedule(user_id: int, page: int = 0) -> tuple[str, InlineKeybo
 
         text = "\n".join(lines)
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⚙️ Edit Teams", callback_data="settings:sports")],
             [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
         ])
@@ -22619,7 +22408,7 @@ def _build_game_buttons(
 
     # Top Edge Picks button when no tips available (skip if already showing Back to Edge Picks)
     if not tips and source != "edge_picks":
-        buttons.append([InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")])
+        buttons.append([InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")])
 
     # Navigation — contextual back button
     if source == "edge_picks":
@@ -23286,7 +23075,7 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
     if not tips:
         _oc_fallback_text = "⚠️ Tip data expired. Try Top Edge Picks again."
         _oc_fallback_mk = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
         ])
         # P1P3-WIRE-DETAIL: handle photo messages from card detail
         if query.message.photo:
@@ -23604,7 +23393,7 @@ async def _save_story_prefs(query, chat_id: int, user_id: int) -> None:
         "Ready to start? 🚀"
     )
     complete_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
         [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
         [InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")],
     ])
@@ -23747,119 +23536,6 @@ async def handle_affiliate(query, action: str) -> None:
     await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_bookmakers())
 
 
-_TIER_LABELS: dict[str, str] = {
-    "diamond": "💎 Diamond",
-    "gold": "🥇 Gold",
-    "silver": "🥈 Silver",
-    "bronze": "🥉 Bronze",
-}
-_SPORT_LABELS: dict[str, str] = {
-    "soccer": "⚽ Soccer",
-    "rugby": "🏉 Rugby",
-    "cricket": "🏏 Cricket",
-    "mma": "🥊 MMA",
-    "boxing": "🥊 Boxing",
-}
-_QUIET_PRESETS: list[tuple[int, int, str]] = [
-    (22, 7, "22:00–07:00"),
-    (23, 7, "23:00–07:00"),
-    (0, 6, "00:00–06:00"),
-]
-
-
-def _build_prefs_text(settings: dict) -> str:
-    """Build the Alert Preferences screen text."""
-    active_tiers = set(settings["tier_filter"].split(","))
-    active_sports = set(settings["sport_filter"].split(","))
-    qs = settings["quiet_start"]
-    qe = settings["quiet_end"]
-    quiet_label = f"{qs:02d}:00–{qe:02d}:00 ✅" if qs is not None else "Off"
-
-    tier_lines = "  ".join(
-        f"{'✅' if t in active_tiers else '❌'} {lbl}"
-        for t, lbl in _TIER_LABELS.items()
-    )
-    sport_lines = "  ".join(
-        f"{'✅' if s in active_sports else '❌'} {lbl}"
-        for s, lbl in _SPORT_LABELS.items()
-    )
-
-    return (
-        "<b>📊 Alert Preferences</b>\n\n"
-        "<b>🏆 Tiers</b> — which edge tiers to alert you for:\n"
-        f"{tier_lines}\n\n"
-        "<b>⚽ Sports</b> — which sports to alert you for:\n"
-        f"{sport_lines}\n\n"
-        f"<b>🔇 Quiet Hours</b>: <b>{quiet_label}</b>\n"
-        "<i>During quiet hours all notifications are silent.</i>"
-    )
-
-
-def _build_prefs_keyboard(settings: dict) -> InlineKeyboardMarkup:
-    """Build the Alert Preferences inline keyboard."""
-    import user_settings as _us  # noqa: PLC0415
-    active_tiers = set(settings["tier_filter"].split(","))
-    active_sports = set(settings["sport_filter"].split(","))
-
-    rows: list[list[InlineKeyboardButton]] = []
-
-    # Tier row (2 per row)
-    tier_items = list(_TIER_LABELS.items())
-    for i in range(0, len(tier_items), 2):
-        row = []
-        for t, lbl in tier_items[i:i + 2]:
-            icon = "✅" if t in active_tiers else "❌"
-            row.append(InlineKeyboardButton(
-                f"{icon} {lbl}", callback_data=f"settings:tier:{t}"
-            ))
-        rows.append(row)
-
-    # Sport row (2 per row)
-    sport_items = list(_SPORT_LABELS.items())
-    for i in range(0, len(sport_items), 2):
-        row = []
-        for s, lbl in sport_items[i:i + 2]:
-            icon = "✅" if s in active_sports else "❌"
-            row.append(InlineKeyboardButton(
-                f"{icon} {lbl}", callback_data=f"settings:sport:{s}"
-            ))
-        rows.append(row)
-
-    # Quiet hours
-    qs = settings["quiet_start"]
-    if qs is not None:
-        qe = settings["quiet_end"]
-        rows.append([
-            InlineKeyboardButton(
-                f"🔇 {qs:02d}:00–{qe:02d}:00 ✅", callback_data="settings:quiet_pick"
-            ),
-            InlineKeyboardButton("Turn Off", callback_data="settings:quiet_off"),
-        ])
-    else:
-        rows.append([
-            InlineKeyboardButton("🔇 Set Quiet Hours", callback_data="settings:quiet_pick")
-        ])
-
-    rows.append([InlineKeyboardButton("↩️ Back", callback_data="settings:home")])
-    return InlineKeyboardMarkup(rows)
-
-
-def _build_quiet_picker_keyboard() -> InlineKeyboardMarkup:
-    """Keyboard with preset quiet-hour windows."""
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                label,
-                callback_data=f"settings:quiet:{start}:{end}",
-            )
-        ]
-        for start, end, label in _QUIET_PRESETS
-    ]
-    rows.append([
-        InlineKeyboardButton("🔕 Turn Off", callback_data="settings:quiet_off"),
-        InlineKeyboardButton("↩️ Back", callback_data="settings:prefs"),
-    ])
-    return InlineKeyboardMarkup(rows)
 
 
 async def handle_settings(query, action: str) -> None:
@@ -23885,67 +23561,6 @@ async def handle_settings(query, action: str) -> None:
             await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
         except BadRequest:
             await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
-    elif action == "risk":
-        text = "<b>🎯 Change Risk Profile</b>\n\nSelect your risk tolerance:"
-        rows = []
-        for key, prof in config.RISK_PROFILES.items():
-            rows.append([InlineKeyboardButton(prof["label"], callback_data=f"settings:set_risk:{key}")])
-        rows.append([InlineKeyboardButton("↩️ Back", callback_data="settings:home")])
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(rows),
-        )
-    elif action.startswith("set_risk:"):
-        risk_key = action.split(":", 1)[1]
-        await db.update_user_risk(user_id, risk_key)
-        await query.edit_message_text(
-            f"✅ Risk profile updated to <b>{risk_key.title()}</b>.",
-            parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
-        )
-    elif action in {"notify", "story"}:
-        # FIX-NOTIFICATIONS-DISABLE-01: notifications feature disabled — redirect to settings home
-        await query.edit_message_text(
-            "⚙️ <b>Settings</b>\n\nChoose a setting to adjust:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_settings(),
-        )
-    elif action.startswith("set_notify:"):
-        hour = int(action.split(":", 1)[1])
-        await db.update_user_notification_hour(user_id, hour)
-        user = await db.get_user(user_id)
-        notify_prefs = db.get_notification_prefs(user)
-        await query.edit_message_text(
-            _build_settings_notifications_text(user, notify_prefs),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_settings_notifications_keyboard(user, notify_prefs),
-        )
-    elif action == "bankroll":
-        current = getattr(user, "bankroll", None)
-        current_str = f"R{current:,.0f}" if current else "Not set"
-        text = (
-            f"<b>💰 Bankroll</b>\n\n"
-            f"Current: <b>{current_str}</b>\n\n"
-            f"Select a new weekly bankroll:"
-        )
-        kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("R50", callback_data="settings:set_bankroll:50"),
-                InlineKeyboardButton("R200", callback_data="settings:set_bankroll:200"),
-            ],
-            [
-                InlineKeyboardButton("R500", callback_data="settings:set_bankroll:500"),
-                InlineKeyboardButton("R1,000", callback_data="settings:set_bankroll:1000"),
-            ],
-            [InlineKeyboardButton("↩️ Back", callback_data="settings:home")],
-        ])
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
-    elif action.startswith("set_bankroll:"):
-        amount = float(action.split(":", 1)[1])
-        await db.update_user_bankroll(user_id, amount)
-        await query.edit_message_text(
-            f"✅ Bankroll updated to <b>R{amount:,.0f}</b>/week.",
-            parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
-        )
     elif action == "sports":
         state = await _get_settings_sports_state(user_id)
         prefs = await db.get_user_sport_prefs(user_id)
@@ -24094,123 +23709,6 @@ async def handle_settings(query, action: str) -> None:
             [InlineKeyboardButton("🚀 Start onboarding", callback_data="ob_restart:go")],
         ])
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
-    elif action.startswith("toggle_notify:"):
-        key = action.split(":", 1)[1]
-        notify_prefs = db.get_notification_prefs(user)
-        notify_prefs[key] = not notify_prefs.get(key, False)
-        await db.update_notification_prefs(user_id, notify_prefs)
-        user = await db.get_user(user_id)
-        await query.edit_message_text(
-            _build_settings_notifications_text(user, notify_prefs),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_settings_notifications_keyboard(user, notify_prefs),
-        )
-    # ── P3-06: Alert Preferences ───────────────────────────
-    elif action == "prefs":
-        import user_settings as _us  # noqa: PLC0415
-        settings = await asyncio.to_thread(_us.get_settings, user_id)
-        await query.edit_message_text(
-            _build_prefs_text(settings),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_prefs_keyboard(settings),
-        )
-    elif action.startswith("tier:"):
-        import user_settings as _us  # noqa: PLC0415
-        tier = action.split(":", 1)[1]
-        if tier not in _us.ALL_TIERS:
-            return
-        settings = await asyncio.to_thread(_us.get_settings, user_id)
-        active = set(settings["tier_filter"].split(","))
-        if tier in active:
-            active.discard(tier)
-        else:
-            active.add(tier)
-        if not active:
-            await query.answer(
-                "⚠️ You've disabled all tiers. Enable at least one tier in /settings.",
-                show_alert=True,
-            )
-            return
-        await asyncio.to_thread(_us.set_tier_filter, user_id, list(active))
-        await query.answer("✅ Tier updated")
-        settings = await asyncio.to_thread(_us.get_settings, user_id)
-        await query.edit_message_text(
-            _build_prefs_text(settings),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_prefs_keyboard(settings),
-        )
-    elif action.startswith("sport:") and not action.startswith("sports"):
-        import user_settings as _us  # noqa: PLC0415
-        sport = action.split(":", 1)[1]
-        if sport not in _us.ALL_SPORTS:
-            return
-        settings = await asyncio.to_thread(_us.get_settings, user_id)
-        active = set(settings["sport_filter"].split(","))
-        if sport in active:
-            active.discard(sport)
-        else:
-            active.add(sport)
-        if not active:
-            await query.answer(
-                "⚠️ You've disabled all sports. Enable at least one sport in /settings.",
-                show_alert=True,
-            )
-            return
-        await asyncio.to_thread(_us.set_sport_filter, user_id, list(active))
-        await query.answer("✅ Sport updated")
-        settings = await asyncio.to_thread(_us.get_settings, user_id)
-        await query.edit_message_text(
-            _build_prefs_text(settings),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_prefs_keyboard(settings),
-        )
-    elif action == "quiet_pick":
-        import user_settings as _us  # noqa: PLC0415
-        settings = await asyncio.to_thread(_us.get_settings, user_id)
-        qs = settings["quiet_start"]
-        qe = settings["quiet_end"]
-        current_str = (
-            f"Current quiet window: <b>{qs:02d}:00–{qe:02d}:00</b>\n\n"
-            if qs is not None
-            else ""
-        )
-        await query.edit_message_text(
-            f"<b>🔇 Set Quiet Hours</b>\n\n"
-            f"{current_str}"
-            "During quiet hours all notifications will be silent.\n\n"
-            "Choose a window:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_quiet_picker_keyboard(),
-        )
-    elif action.startswith("quiet:") and action != "quiet_pick" and action != "quiet_off":
-        import user_settings as _us  # noqa: PLC0415
-        parts = action.split(":")
-        if len(parts) < 3:
-            return
-        try:
-            start, end = int(parts[1]), int(parts[2])
-        except ValueError:
-            return
-        if not (0 <= start <= 23 and 0 <= end <= 23):
-            return
-        await asyncio.to_thread(_us.set_quiet_hours, user_id, start, end)
-        await query.answer(f"✅ Quiet hours set: {start:02d}:00–{end:02d}:00")
-        settings = await asyncio.to_thread(_us.get_settings, user_id)
-        await query.edit_message_text(
-            _build_prefs_text(settings),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_prefs_keyboard(settings),
-        )
-    elif action == "quiet_off":
-        import user_settings as _us  # noqa: PLC0415
-        await asyncio.to_thread(_us.set_quiet_hours, user_id, None, None)
-        await query.answer("✅ Quiet hours disabled")
-        settings = await asyncio.to_thread(_us.get_settings, user_id)
-        await query.edit_message_text(
-            _build_prefs_text(settings),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_prefs_keyboard(settings),
-        )
     else:
         await query.edit_message_text("<b>⚙️ Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings())
 
@@ -24875,7 +24373,7 @@ def _build_results_buttons(days: int, user_tier: str) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton("💎 Upgrade to Diamond", callback_data="sub:plans")])
     # Nav
     rows.append([
-        InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go"),
+        InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go"),
         InlineKeyboardButton("↩️ Menu", callback_data="nav:main"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -25367,7 +24865,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     ),
                     text_fallback="",
                     markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
+                        [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                         [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                     ]),
                 )
@@ -25393,7 +24891,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     f"<i>Tap below to see all tips 👇</i>"
                 )
                 markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
+                    [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                     [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 ])
             elif user_tier == "gold":
@@ -25426,7 +24924,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 ])
                 teaser = "\n".join(_gold_lines)
                 markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
+                    [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                     [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 ])
             else:
@@ -25484,7 +24982,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
                 teaser = "\n".join(lines)
                 markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
+                    [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                     [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
                     [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
                 ])
@@ -25704,7 +25202,7 @@ async def _weekend_preview_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     continue
                 text = _format_weekend_fixture_preview(fixtures)
 
-            buttons = [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]]
+            buttons = [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]]
             if user_tier in ("bronze", "gold"):
                 buttons.append([InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")])
 
@@ -25965,7 +25463,7 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 continue
 
             buttons = [
-                [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                 [InlineKeyboardButton("📊 My Results", callback_data="results:7")],
             ]
             if user_tier in ("bronze", "gold"):
@@ -26109,7 +25607,7 @@ async def _monthly_report_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                         cta += f"\n🎁 Founding Member: R699/yr Diamond — {_fl} days left"
 
             buttons = [
-                [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                 [InlineKeyboardButton("📊 My Results", callback_data="results:30")],
             ]
             if user_tier in ("bronze", "gold"):
@@ -26201,7 +25699,7 @@ async def _check_trial_expiry_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     ),
                     parse_mode=ParseMode.HTML,
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                        [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                         [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
                     ]),
                 )
@@ -26233,7 +25731,7 @@ async def _check_trial_expiry_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     parse_mode=ParseMode.HTML,
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("✨ Keep Diamond", callback_data="sub:plans")],
-                        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                        [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                     ]),
                 )
                 await _after_send(user.id)
@@ -26263,7 +25761,7 @@ async def _check_trial_expiry_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 _pf_block = f"\n\n{_pf}" if _pf else ""
                 _mkp_trial = InlineKeyboardMarkup([
                     [InlineKeyboardButton("✨ Upgrade Now", callback_data="sub:plans")],
-                    [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                    [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                 ])
                 await send_card_or_fallback(
                     ctx.bot, user.id,
@@ -26331,7 +25829,7 @@ async def cmd_restart_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
             f"💎 <b>Keep Diamond: R199/mo or R1,599/yr (save 33%)</b>{founding_line}",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                 [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
             ]),
         )
@@ -26384,7 +25882,7 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
                     await _serve_response(
                         query, text,
                         InlineKeyboardMarkup([
-                            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                             [InlineKeyboardButton("📋 Status", callback_data="sub:billing")],
                         ]),
                     )
@@ -26583,7 +26081,7 @@ async def _notify_payment_outcome(bot, outcome: dict[str, object]) -> None:
         return
 
     _success_mkp = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
         [InlineKeyboardButton("📋 My Status", callback_data="sub:billing")],
     ])
 
@@ -26818,7 +26316,7 @@ async def _handle_sub_tier(query, plan_code: str) -> None:
             _founding_confirmation_text(int(slot_number or 0)),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+                [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
                 [InlineKeyboardButton("📋 Status", callback_data="sub:billing")],
             ]),
         )
@@ -27226,7 +26724,7 @@ async def cmd_founding(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if db_user and getattr(db_user, "is_founding_member", False):
         _slot_f = int(getattr(db_user, "founding_slot_number", 0) or 0)
         _mkp_confirmed = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
         ])
         await send_card_or_fallback(
@@ -27352,9 +26850,84 @@ async def _run_webhook_server(app_instance) -> None:
 
         return web.Response(status=200, text="OK")
 
+    # ── WA-CLOUD-API-01: WhatsApp webhook ─────────────────────────────────────
+    _WA_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
+    _WA_DB_PATH = _QA_BOT_DB_PATH  # same mzansiedge.db as the rest of the bot
+
+    def _now_sast_iso() -> str:
+        import datetime as _dt
+        from timezone_utils import SAST as _SAST
+        return _dt.datetime.now(_SAST).isoformat()
+
+    async def handle_wa_verify(request: web.Request) -> web.Response:
+        mode = request.rel_url.query.get("hub.mode", "")
+        token = request.rel_url.query.get("hub.verify_token", "")
+        challenge = request.rel_url.query.get("hub.challenge", "")
+        if mode == "subscribe" and token == _WA_VERIFY_TOKEN:
+            log.info("WhatsApp webhook verified")
+            return web.Response(status=200, text=challenge)
+        log.warning("WhatsApp webhook verify failed: token mismatch")
+        return web.Response(status=403, text="Forbidden")
+
+    async def handle_wa_webhook(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception as exc:
+            log.warning("WhatsApp webhook: invalid JSON: %s", exc)
+            return web.Response(status=400, text="Bad Request")
+        try:
+            for entry in body.get("entry", []):
+                for change in entry.get("changes", []):
+                    value = change.get("value", {})
+                    contacts = value.get("contacts", [])
+                    messages = value.get("messages", [])
+                    for msg in messages:
+                        wa_id = msg.get("from", "")
+                        phone_number = "+" + wa_id if wa_id and not wa_id.startswith("+") else wa_id
+                        display_name = ""
+                        for c in contacts:
+                            if c.get("wa_id") == wa_id:
+                                display_name = c.get("profile", {}).get("name", "")
+                                break
+                        referral = msg.get("referral", {})
+                        ctwa_clid = referral.get("ctwa_clid") or None
+                        source = "ctwa" if ctwa_clid else "organic"
+                        now = _now_sast_iso()
+
+                        from db_connection import get_connection as _wa_conn
+                        conn = _wa_conn(_WA_DB_PATH, timeout_ms=5000)
+                        try:
+                            conn.execute(
+                                """INSERT INTO wa_contacts
+                                   (wa_id, phone_number, display_name, ctwa_clid, source,
+                                    opted_in, opted_in_at, last_seen_at)
+                                   VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                                   ON CONFLICT(wa_id) DO UPDATE SET
+                                   last_seen_at = excluded.last_seen_at,
+                                   ctwa_clid = COALESCE(excluded.ctwa_clid, ctwa_clid),
+                                   phone_number = COALESCE(excluded.phone_number, phone_number)
+                                """,
+                                (wa_id, phone_number, display_name, ctwa_clid, source, now, now),
+                            )
+                            conn.commit()
+                            log.info(
+                                "wa_contacts upserted: wa_id=%s source=%s ctwa_clid=%s",
+                                wa_id, source, ctwa_clid,
+                            )
+                        finally:
+                            conn.close()
+        except Exception as exc:
+            log.error("WhatsApp webhook processing error: %s", exc, exc_info=True)
+            if sentry_sdk:
+                sentry_sdk.capture_exception(exc)
+            return web.Response(status=500, text="Internal Server Error")
+        return web.Response(status=200, text="OK")
+
     webhook_app = web.Application()
     webhook_app.router.add_post("/webhook/stitch", handle_stitch_webhook)
     webhook_app.router.add_get("/founding-success", handle_founding_success)
+    webhook_app.router.add_get("/webhook/whatsapp", handle_wa_verify)
+    webhook_app.router.add_post("/webhook/whatsapp", handle_wa_webhook)
 
     runner = web.AppRunner(webhook_app)
     await runner.setup()
@@ -27771,7 +27344,7 @@ async def _pre_match_gold_alert_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             _pma_hours_m = int((hours_until - _pma_hours_h) * 60)
             _pma_kickoff_in = f"{_pma_hours_h}h {_pma_hours_m:02d}m" if _pma_hours_h > 0 else f"{_pma_hours_m}m"
             markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
+                [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             ])
             await send_card_or_fallback(
                 bot=ctx.bot,
@@ -27837,7 +27410,7 @@ async def cmd_mute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if arg == "off" or (update.message and update.message.text and update.message.text.startswith("/unmute")):
         await db.set_muted_until(user_id, None)
         _mute_resume_mkp = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
         ])
         await update.message.reply_text(
             "🔔 <b>Notifications unmuted!</b>\nYou're back — we'll alert you as normal.",
@@ -27962,7 +27535,7 @@ async def _reengagement_nudge_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 lines.append("")
 
             # Tier-specific CTA
-            buttons = [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]]
+            buttons = [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]]
             if user_tier in ("bronze", "gold"):
                 if not lighter_tone:
                     lines.append("See what edges are live right now!")
@@ -29529,7 +29102,7 @@ async def _qa_trigger_teaser(ctx, uid: int, tier: str) -> None:
         lines.extend(["", f"🧪 <i>QA: {tier} tier teaser</i>"])
         teaser = "\n".join(lines)
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
         ])
 
@@ -29559,7 +29132,7 @@ async def _qa_trigger_teaser(ctx, uid: int, tier: str) -> None:
             f"🧪 <i>QA: {tier} tier teaser</i>"
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
         ])
 
@@ -29630,7 +29203,7 @@ async def _qa_trigger_teaser(ctx, uid: int, tier: str) -> None:
 
         teaser = "\n".join(lines)
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 See Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
             [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
             [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
         ])
@@ -29678,7 +29251,7 @@ async def _qa_trigger_weekend(ctx, uid: int, tier: str = "bronze") -> None:
     text = _format_weekend_preview(upcoming, user_tier)
     text += f"\n\n🧪 <i>QA: {tier} weekend preview</i>"
 
-    buttons = [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]]
+    buttons = [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]]
     if user_tier in ("bronze", "gold"):
         buttons.append([InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")])
 
@@ -29754,7 +29327,7 @@ async def _qa_trigger_recap(ctx, uid: int, tier: str) -> None:
     text += f"\n\n🧪 <i>QA: {tier} recap</i>"
 
     buttons = [
-        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
         [InlineKeyboardButton("📊 My Results", callback_data="results:7")],
     ]
     if tier in ("bronze", "gold"):
@@ -29844,7 +29417,7 @@ async def _qa_trigger_monthly(ctx, uid: int, tier: str = "bronze") -> None:
 
     # Buttons — View Plans only for bronze/gold
     buttons = [
-        [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+        [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
     ]
     if tier in ("bronze", "gold"):
         buttons.append([InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")])
@@ -29917,7 +29490,7 @@ async def _qa_trigger_nudge(ctx, uid: int, lighter: bool = False) -> None:
         lines.append("")
 
     # Tier-specific CTA line — matches real job
-    buttons = [[InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")]]
+    buttons = [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]]
     if user_tier in ("bronze", "gold"):
         if not lighter_tone:
             lines.append("See what edges are live right now!")
@@ -30057,7 +29630,7 @@ async def _qa_trigger_trial7(ctx, uid: int) -> None:
         chat_id=uid, text=text, parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✨ Upgrade Now", callback_data="sub:plans")],
-            [InlineKeyboardButton("💎 Top Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
         ]),
     )
 
@@ -30089,6 +29662,30 @@ async def _post_init(app_instance) -> None:
             log.info("Live edge hygiene check completed: no stale live rows")
     except Exception as exc:
         log.warning("Live edge hygiene failed at startup: %s", exc)
+
+    # WA-CLOUD-API-01: Idempotent wa_contacts migration
+    try:
+        from db_connection import get_connection as _wa_migrate_conn
+        _wa_conn = _wa_migrate_conn(_QA_BOT_DB_PATH, timeout_ms=5000)
+        _wa_conn.execute(
+            """CREATE TABLE IF NOT EXISTS wa_contacts (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               wa_id TEXT NOT NULL,
+               phone_number TEXT,
+               display_name TEXT,
+               ctwa_clid TEXT,
+               source TEXT NOT NULL DEFAULT 'organic',
+               opted_in INTEGER NOT NULL DEFAULT 1,
+               opted_in_at TEXT,
+               last_seen_at TEXT,
+               UNIQUE(wa_id)
+            )"""
+        )
+        _wa_conn.commit()
+        _wa_conn.close()
+        log.info("wa_contacts table ready")
+    except Exception as _wa_exc:
+        log.warning("wa_contacts migration failed: %s", _wa_exc)
 
     # W60-CACHE: Ensure narrative_cache table exists in odds.db
     # W84-LOCKFIX: retry up to 3 times with 2s sleep — startup often collides with cron writers
@@ -30538,7 +30135,11 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_button))
 
     # Persistent reply keyboard taps (must be BEFORE freetext_handler)
-    _kb_pattern = r"^(🏠 Menu|⚽ My Matches|💎 Edge Picks|⚽ Your Games|💎 Top Edge Picks|🔥 Hot Tips|📖 Guide|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule)$"
+    _kb_pattern = (
+        r"^(🏠 Menu|⚽ My Matches|💎 Edge Picks|⚽ Your Games|💎 Top Edge Picks|🔥 Hot Tips|📖 Guide"
+        r"|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule"
+        f"|{re.escape(_KEYBOARD_LABELS[0])})$"
+    )
     app.add_handler(MessageHandler(filters.Regex(_kb_pattern), handle_keyboard_tap))
 
     # Free-text chat (also handles favourite input during onboarding)

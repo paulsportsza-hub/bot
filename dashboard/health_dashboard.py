@@ -1328,7 +1328,17 @@ def _fetch_marketing_queue() -> tuple[list[dict], float]:
         items.append(item)
 
     with _notion_cache_lock:
-        _notion_cache[cache_key] = (items, now)
+        # FIX-DASH-CACHE-POISON-01: never overwrite a valid cache entry with an
+        # empty result -- Notion API timeouts / transient failures return [] which
+        # previously wiped good data and rendered the dashboard blank for up to 60s.
+        existing = _notion_cache.get(cache_key)
+        if items or not existing:
+            _notion_cache[cache_key] = (items, now)
+        else:
+            import logging as _lg
+            _lg.getLogger("dashboard").warning(
+                "[social-ops] _fetch_marketing_queue got 0 rows -- keeping stale cache to avoid blank dashboard"
+            )
 
     return items, now
 
@@ -3396,9 +3406,9 @@ document.addEventListener('healthViewLoaded', function() {{
 
 function copyPrompt(metricName, currentValue, expectedValue, lastTs, dbPath) {{
   var prompt = 'Investigate: ' + metricName + ' showing ' + currentValue + ' (expected: ' + expectedValue + ').\\n' +
-    'Last data: ' + lastTs + '. Server: 178.128.171.28\\n' +
+    'Last data: ' + lastTs + '. Server: 37.27.179.53\\n' +
     'Relevant path: ' + dbPath + '\\n' +
-    'Steps: Check cron schedule, review logs, verify DB connectivity, check Sentry for related errors.';
+    'Steps: Check cron schedule, review logs, verify DB connectivity, check EdgeOps alerts.';
   if (navigator.clipboard) {{
     navigator.clipboard.writeText(prompt).then(function() {{
       var toast = document.getElementById('copy-toast');
@@ -8668,9 +8678,9 @@ document.addEventListener('healthViewLoaded', function() {{
 
 function copyPrompt(metricName, currentValue, expectedValue, lastTs, dbPath) {{
   var prompt = 'Investigate: ' + metricName + ' showing ' + currentValue + ' (expected: ' + expectedValue + ').\\n' +
-    'Last data: ' + lastTs + '. Server: 178.128.171.28\\n' +
+    'Last data: ' + lastTs + '. Server: 37.27.179.53\\n' +
     'Relevant path: ' + dbPath + '\\n' +
-    'Steps: Check cron schedule, review logs, verify DB connectivity, check Sentry for related errors.';
+    'Steps: Check cron schedule, review logs, verify DB connectivity, check EdgeOps alerts.';
   if (navigator.clipboard) {{
     navigator.clipboard.writeText(prompt).then(function() {{
       var toast = document.getElementById('copy-toast');
