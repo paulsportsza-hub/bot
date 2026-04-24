@@ -1872,9 +1872,16 @@ def build_tier_lock_data(
     _logo_path = _Path(__file__).parent / "assets" / "LOGO" / "mzansiedge-wordmark-dark-transparent.png"
 
     ts = tracker_summary or {}
-    hit_rate = ts.get("hit_rate_7d") or ts.get("hit_rate") or 0
+    # hit_rate_pct is already 0-100; hit_rate is 0-1 decimal
+    hit_rate_pct = (
+        ts.get("hit_rate_pct")
+        or ts.get("hit_rate_7d")
+        or (ts.get("hit_rate", 0) * 100)
+        or 0
+    )
     roi = ts.get("roi_7d") or ts.get("roi") or 0
-    roi_str = f"+R{int(roi)}" if roi >= 0 else f"-R{abs(int(roi))}"
+    roi_str = ("+R" + str(int(roi))) if roi >= 0 else ("-R" + str(abs(int(roi))))
+    show_track_record = bool(hit_rate_pct > 0 or (roi and roi != 0))
 
     tier = edge_tier.lower() if edge_tier else "gold"
     return {
@@ -1889,7 +1896,8 @@ def build_tier_lock_data(
         "kickoff": kickoff_str,
         "broadcast": broadcast or "",
         "confirming_signals": confirming_signals or 0,
-        "hit_rate_7d": str(int(hit_rate)),
+        "show_track_record": show_track_record,
+        "hit_rate_7d": str(int(hit_rate_pct)),
         "roi_7d": roi_str,
         "price": _PRICE_BY_TIER.get(tier, "R199"),
     }
