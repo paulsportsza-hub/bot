@@ -101,6 +101,10 @@ POSTHOG_API_KEY: str = os.environ.get("POSTHOG_API_KEY", "")
 POSTHOG_HOST: str = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
 POSTHOG_PERSONAL_API_KEY: str = os.environ.get("POSTHOG_PERSONAL_API_KEY", "")
 
+# ── Meta Conversions API ──────────────────────────────────
+META_PIXEL_ID: str = os.environ.get("META_PIXEL_ID", "")
+META_CAPI_ACCESS_TOKEN: str = os.environ.get("META_CAPI_ACCESS_TOKEN", "")
+
 # ── Database ───────────────────────────────────────────────
 DATABASE_URL: str = _resolve_sqlite_url(os.environ.get("DATABASE_URL"))
 DATABASE_PATH: Path | None = _sqlite_path_from_url(DATABASE_URL)

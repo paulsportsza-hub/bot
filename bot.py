@@ -115,6 +115,7 @@ from services.stitch_service import stitch as stitch_service
 from services.edge_rating import EdgeRating, calculate_edge_rating, calculate_edge_score, apply_guardrails
 from services import odds_service as odds_svc
 from services.affiliate_service import get_affiliate_url, select_best_bookmaker, get_runner_up_odds, get_cta_label
+from services import meta_capi
 from renderers.edge_renderer import render_edge_badge, render_tip_with_odds, render_odds_comparison, EDGE_EMOJIS, EDGE_LABELS
 from tier_gate import gate_edges, gate_narrative, record_view, get_upgrade_message
 from message_types import DigestMessage, DetailMessage, AlertMessage, ResultMessage, is_stale_hash
@@ -1465,7 +1466,7 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(update.effective_user.id))
     else:
         await update.message.reply_text(
-            "<b>🇿🇦 MzansiEdge</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
+            "<b>🇿🇦 MzansiEdge</b>\n<b>🏠 Main Menu</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
         )
 
 
@@ -3927,6 +3928,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
     elif prefix == "settings":
         await handle_settings(query, action)
+    elif prefix == "ob_bankroll":
+        _ob_bl_uid = query.from_user.id
+        _ob_bl_state = _get_ob(_ob_bl_uid)
+        if action not in ("skip", "custom"):
+            try:
+                _ob_bl_state["bankroll"] = int(action)
+            except ValueError:
+                pass
+        await _show_summary(query, _ob_bl_state)
     elif prefix == "ob_done":
         await handle_ob_done(query, ctx)
     elif prefix == "ob_plan":
@@ -4034,7 +4044,7 @@ async def handle_menu(query, action: str) -> None:
             _wkb = await _welcome_kb(query.from_user.id)
             await _serve_response(query, "", _wkb, photo=_img_path.read_bytes())
         else:
-            await _serve_response(query, "<b>🇿🇦 MzansiEdge</b>", kb_main())
+            await _serve_response(query, "<b>🇿🇦 MzansiEdge</b>\n<b>🏠 Main Menu</b>", kb_main())
 
     elif action == "help":
         await _serve_response(query, HELP_TEXT, kb_help())
@@ -19469,8 +19479,16 @@ def _extract_edge_data(
         _contradicting = v2.get("contradicting_signals", 0)
         _comp_score = v2.get("composite_score", 0)
     else:
-        # Fix 6: When edge_v2 is absent, signal count is unknown — set 0, never guess.
-        _confirming = 0
+        # W84-P1D: When edge_v2 is absent, estimate confirming_signals from edge_score.
+        # Prevents incorrect "cautious" tone for Gold/Diamond tips from edge_results path.
+        if _cs >= 70:
+            _confirming = 3
+        elif _cs >= 55:
+            _confirming = 2
+        elif _cs >= 40:
+            _confirming = 1
+        else:
+            _confirming = 0
         _contradicting = 0
         _comp_score = _cs
     return {
@@ -26071,6 +26089,9 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
                     "method": "mock_webhook",
                     "outcome": outcome.get("outcome", "unknown"),
                 })
+                asyncio.create_task(
+                    meta_capi.fire_purchase_event(user_id, 69900, "founding_diamond")
+                )
                 if outcome.get("outcome") in {"confirmed", "already_founding_member"}:
                     slot_number = int(outcome.get("slot_number") or 0)
                     text = (
@@ -26411,6 +26432,8 @@ async def _process_stitch_event(event: dict) -> dict[str, object]:
             billing_status=billing_status,
             raw_event=json.dumps(event, sort_keys=True),
         )
+        outcome["plan_code"] = plan_code or "founding_diamond"
+        outcome["amount_cents"] = amount_cents
         return outcome
     except Exception as _exc:
         if sentry_sdk:
@@ -27037,6 +27060,13 @@ async def _run_webhook_server(app_instance) -> None:
                 "plan": "founding_diamond",
                 "outcome": outcome.get("outcome", "unknown"),
             })
+            asyncio.create_task(
+                meta_capi.fire_purchase_event(
+                    int(user_id),
+                    int(outcome.get("amount_cents", 0)),
+                    str(outcome.get("plan_code", "founding_diamond")),
+                )
+            )
         elif user_id and event_type in ("payment.cancelled", "subscription.cancelled"):
             analytics_track(int(user_id), "subscription_cancelled")
         elif user_id and event_type == "payment.failed":
