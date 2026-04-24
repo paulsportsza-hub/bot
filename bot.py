@@ -4052,7 +4052,7 @@ async def handle_menu(query, action: str) -> None:
         user_id = query.from_user.id
         _wp = await asyncio.to_thread(_load_welcome_pick)
         if not _wp:
-            await _do_hot_tips_flow(query.message.chat_id, query.message.bot, user_id=user_id)
+            await _do_hot_tips_flow(query.message.chat_id, _g_bot, user_id=user_id)
             return
         _wp_key = _wp.get("match_key", "")
         # Fast path: find the tip in the user's snapshot or global hot-tips cache
@@ -4070,7 +4070,7 @@ async def handle_menu(query, action: str) -> None:
             _all = await asyncio.to_thread(_load_tips_from_edge_results, 100, True)
             _wp_tip = next((t for t in _all if t.get("match_id") == _wp_key or t.get("event_id") == _wp_key), None)
         if not _wp_tip:
-            await _do_hot_tips_flow(query.message.chat_id, query.message.bot, user_id=user_id)
+            await _do_hot_tips_flow(query.message.chat_id, _g_bot, user_id=user_id)
             return
         _wp_enriched = await asyncio.to_thread(_enrich_tip_for_card, _wp_tip, _wp_key)
         _wp_data = build_edge_detail_data(_wp_enriched)
@@ -4086,7 +4086,7 @@ async def handle_menu(query, action: str) -> None:
             f"<b>{h(_wp_tip.get('home_team', ''))} vs {h(_wp_tip.get('away_team', ''))}</b>"
         )
         await send_card_or_fallback(
-            bot=query.message.bot, chat_id=query.message.chat_id,
+            bot=_g_bot, chat_id=query.message.chat_id,
             template="edge_detail.html", data=_wp_data,
             text_fallback=_wp_fallback, markup=InlineKeyboardMarkup(_wp_btn_rows),
             message_to_edit=query.message,
