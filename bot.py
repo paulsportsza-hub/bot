@@ -1386,7 +1386,7 @@ async def _welcome_kb(user_id: int) -> InlineKeyboardMarkup:
 
             if access in ("full", "partial"):
                 btn_text = f"{tier_emoji} View Edge of The Day ↗"
-                btn_cb = f"edge:detail:{match_key}"
+                btn_cb = "menu:pick"
             else:
                 btn_text = f"🔒 {tier_emoji} View Edge of The Day"
                 btn_cb = "sub:plans"
@@ -4045,6 +4045,52 @@ async def handle_menu(query, action: str) -> None:
             await _serve_response(query, "", _wkb, photo=_img_path.read_bytes())
         else:
             await _serve_response(query, "<b>🇿🇦 MzansiEdge</b>\n<b>🏠 Main Menu</b>", kb_main())
+
+    elif action == "pick":
+        # Welcome screen "View Edge of The Day" — serves the real edge_detail.html card
+        # via the same ep:pick path (enrich → build_edge_detail_data → template).
+        user_id = query.from_user.id
+        _wp = await asyncio.to_thread(_load_welcome_pick)
+        if not _wp:
+            await _do_hot_tips_flow(query.message.chat_id, query.message.bot, user_id=user_id)
+            return
+        _wp_key = _wp.get("match_key", "")
+        # Fast path: find the tip in the user's snapshot or global hot-tips cache
+        _wp_tip = next(
+            (t for t in (_ht_tips_snapshot.get(user_id) or []) if t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
+            None,
+        )
+        if _wp_tip is None:
+            _wp_tip = next(
+                (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
+                None,
+            )
+        # Slow path: load fresh from edge_results if not in any cache
+        if _wp_tip is None:
+            _all = await asyncio.to_thread(_load_tips_from_edge_results, 100, True)
+            _wp_tip = next((t for t in _all if t.get("match_id") == _wp_key or t.get("event_id") == _wp_key), None)
+        if not _wp_tip:
+            await _do_hot_tips_flow(query.message.chat_id, query.message.bot, user_id=user_id)
+            return
+        _wp_enriched = await asyncio.to_thread(_enrich_tip_for_card, _wp_tip, _wp_key)
+        _wp_data = build_edge_detail_data(_wp_enriched)
+        _wp_user_tier = await get_effective_tier(user_id)
+        _wp_edge_tier = (_wp_tip.get("display_tier") or _wp_tip.get("edge_rating") or _wp_tip.get("tier") or "gold").lower()
+        _wp_has_narrative = await asyncio.to_thread(_has_any_cached_narrative, _wp_key)
+        _wp_btn_rows = _build_game_buttons(
+            [_wp_tip], event_id=_wp_key, user_id=user_id,
+            source="edge_picks", user_tier=_wp_user_tier, edge_tier=_wp_edge_tier,
+            back_page=_ht_page_state.get(user_id, 0), has_narrative=_wp_has_narrative,
+        )
+        _wp_fallback = (
+            f"<b>{h(_wp_tip.get('home_team', ''))} vs {h(_wp_tip.get('away_team', ''))}</b>"
+        )
+        await send_card_or_fallback(
+            bot=query.message.bot, chat_id=query.message.chat_id,
+            template="edge_detail.html", data=_wp_data,
+            text_fallback=_wp_fallback, markup=InlineKeyboardMarkup(_wp_btn_rows),
+            message_to_edit=query.message,
+        )
 
     elif action == "help":
         await _serve_response(query, HELP_TEXT, kb_help())
