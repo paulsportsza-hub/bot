@@ -14502,11 +14502,13 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
             # the unified quality floor (≥ tier floor, ≤ 260 chars, terminal punctuation, no
             # banned phrases, no markdown, ≥3 analytical words). Cached rejections get DELETE'd
             # so pregen regenerates them instead of serving thin 42–65 char stubs.
+            # BUILD-C1-OPTIONA-PHASE1-BREAKDOWN-01 AC-1: C.1 gate now evaluates ONLY the
+            # standalone verdict_html column. The embedded verdict inside narrative_html is
+            # no longer part of the gate — the card image reads verdict_html exclusively
+            # (Narrative Wiring Bible v1 §2 Q1). The AI Breakdown fallback (AC-2 in
+            # card_data.py) handles thin embedded verdicts at serve time.
             try:
-                from narrative_spec import (
-                    min_verdict_quality as _mvq,
-                    _extract_verdict_text as _extract_vt,
-                )
+                from narrative_spec import min_verdict_quality as _mvq
                 _row_verdict_html: str | None = None
                 try:
                     _row_verdict_html = conn.execute(
@@ -14516,11 +14518,7 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                     _row_verdict_html = _row_verdict_html[0] if _row_verdict_html else None
                 except sqlite3.OperationalError:
                     _row_verdict_html = None
-                _embedded_verdict = _extract_vt(cleaned) or ""
                 _tier_for_gate = (tier or "bronze").lower()
-                _embedded_ok = True
-                if _embedded_verdict:
-                    _embedded_ok = _mvq(_embedded_verdict, tier=_tier_for_gate, evidence_pack=None)
                 _standalone_ok = True
                 if _row_verdict_html:
                     _standalone_plain = re.sub(r"<[^>]+>", "", _row_verdict_html).strip()
@@ -14528,19 +14526,17 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                         _standalone_ok = _mvq(
                             _standalone_plain, tier=_tier_for_gate, evidence_pack=None
                         )
-                if not (_embedded_ok and _standalone_ok):
+                if not _standalone_ok:
                     log.warning(
                         "BUILD-NARRATIVE-WATERTIGHT-01 C.1: rejecting cached narrative for %s "
-                        "— verdict quality gate failed (embedded_ok=%s, standalone_ok=%s, tier=%s, "
-                        "embedded_len=%d)",
-                        match_id, _embedded_ok, _standalone_ok, _tier_for_gate,
-                        len(_embedded_verdict),
+                        "— verdict_html quality gate failed (standalone_ok=%s, tier=%s)",
+                        match_id, _standalone_ok, _tier_for_gate,
                     )
                     try:
                         conn.execute(
                             "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
                             "WHERE match_id = ?",
-                            (f"verdict_quality:embedded_ok={_embedded_ok},standalone_ok={_standalone_ok}", match_id),
+                            (f"verdict_quality:standalone_ok={_standalone_ok}", match_id),
                         )
                         conn.commit()
                     except sqlite3.OperationalError as _del_err:

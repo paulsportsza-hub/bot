@@ -1129,11 +1129,25 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
 
     row = None
     try:
-        row = conn.execute(
-            """SELECT narrative_html, edge_tier, tips_json, verdict_html, evidence_class
-               FROM narrative_cache WHERE match_id = ?""",
-            (match_id,),
-        ).fetchone()
+        # AC-15: exclude quarantined rows; include created_at for AC-12 staleness check.
+        # Falls back to unfiltered query on older DBs that lack status/quarantined columns.
+        try:
+            row = conn.execute(
+                """SELECT narrative_html, edge_tier, tips_json, verdict_html, evidence_class,
+                          created_at
+                   FROM narrative_cache
+                   WHERE match_id = ?
+                     AND (status IS NULL OR status != 'quarantined')
+                     AND COALESCE(quarantined, 0) = 0""",
+                (match_id,),
+            ).fetchone()
+        except Exception:
+            row = conn.execute(
+                """SELECT narrative_html, edge_tier, tips_json, verdict_html, evidence_class,
+                          created_at
+                   FROM narrative_cache WHERE match_id = ?""",
+                (match_id,),
+            ).fetchone()
     except Exception as exc:
         log.warning("build_ai_breakdown_data: query failed: %s", exc)
     finally:
@@ -1150,6 +1164,7 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
     tips_json_raw = row[2] or "[]"
     verdict_html = row[3] or ""
     evidence_class = row[4] or ""
+    created_at_raw = row[5] if row[5] is not None else None
 
     # ── Parse teams from match_id ─────────────────────────────────────────────
     home, away = "", ""
@@ -1242,10 +1257,75 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
             section_html = ""
         return section_html.strip()
 
-    setup_html = _extract_section("setup")
-    edge_html = _extract_section("edge")
-    risk_html = _extract_section("risk")
+    def _trim_to_last_sentence(text: str, max_chars: int = 200) -> str:
+        """Truncate text at the nearest sentence boundary before max_chars."""
+        if len(text) <= max_chars:
+            return text
+        chunk = text[:max_chars]
+        last = max(chunk.rfind("."), chunk.rfind("!"), chunk.rfind("?"))
+        if last > 0:
+            return chunk[:last + 1]
+        return chunk
+
+    # AC-3: setup/edge/risk get 200-char sentence-boundary truncation only.
+    setup_html = _trim_to_last_sentence(_extract_section("setup"), 200)
+    edge_html = _trim_to_last_sentence(_extract_section("edge"), 200)
+    risk_html = _trim_to_last_sentence(_extract_section("risk"), 200)
+
+    # AC-13 ordering for verdict:
+    # (1) extract, (2) truncate, (3) strip for quality check,
+    # (4) quality gate, (5) fallback with AC-11/AC-12 guards.
     verdict_prose_html = _extract_section("verdict")
+    verdict_prose_html = _trim_to_last_sentence(verdict_prose_html, 200)
+
+    _stripped_verdict = _re.sub(r"<[^>]+>", "", verdict_prose_html).strip()
+    if _stripped_verdict:
+        try:
+            from narrative_spec import min_verdict_quality as _mvq
+            if not _mvq(_stripped_verdict, edge_tier, evidence_pack=None):
+                # AC-11: NULL guard — never substitute an empty string.
+                if not verdict_html:
+                    log.info(
+                        "AI_BREAKDOWN_VERDICT_FALLBACK_NULL match_id=%s tier=%s",
+                        match_id, edge_tier,
+                    )
+                    # Retain thin verdict_prose_html as-is (thin > blank).
+                else:
+                    # AC-12: Staleness guard — suppress if row is stale AND
+                    # verdict_html references a live bookmaker name.
+                    _suppress_fallback = False
+                    if created_at_raw:
+                        try:
+                            from datetime import timezone
+                            _created_dt = datetime.fromisoformat(
+                                str(created_at_raw).replace("Z", "+00:00")
+                            )
+                            if _created_dt.tzinfo is None:
+                                _created_dt = _created_dt.replace(tzinfo=timezone.utc)
+                            _age_h = (
+                                datetime.now(timezone.utc) - _created_dt
+                            ).total_seconds() / 3600.0
+                            if _age_h > 12:
+                                from config import SA_BOOKMAKERS as _SA_BKS
+                                _bk_names = {v["short_name"].lower() for v in _SA_BKS.values()}
+                                if any(n in verdict_html.lower() for n in _bk_names):
+                                    log.info(
+                                        "AI_BREAKDOWN_VERDICT_STALE match_id=%s age_hours=%.1f",
+                                        match_id, _age_h,
+                                    )
+                                    _suppress_fallback = True
+                        except Exception:
+                            pass
+                    # AC-13 step 5: substitute verdict_html without re-truncating.
+                    if not _suppress_fallback:
+                        log.info(
+                            "AI_BREAKDOWN_VERDICT_FALLBACK match_id=%s tier=%s "
+                            "reason=embedded_failed_quality",
+                            match_id, edge_tier,
+                        )
+                        verdict_prose_html = verdict_html
+        except Exception:
+            pass
 
     return {
         "home": home,

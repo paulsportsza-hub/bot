@@ -380,7 +380,7 @@ Every `SELECT ... FROM narrative_cache` site in `bot.py`:
 | 4 | Gold/Diamond forbidden w82/baseline_no_edge | `bot.py:14417-14435` | `narrative_source`, `edge_tier` | UPDATE SET status='quarantined' | `w82_for_tier:<tier>` |
 | 5 | w82 for ESPN-covered league ≤7d | `bot.py:14437-14484` | `narrative_source`, league from `evidence_json` or `edge_results` fallback, date | UPDATE SET status='quarantined' | `w82_espn_freshness:<league>` |
 | 6 | Banned phrases in cached body | `bot.py:14486-14498` | cleaned `narrative_html` | UPDATE SET status='quarantined' | `banned_patterns` |
-| 7 | **C.1 — `min_verdict_quality()` on both embedded AND standalone** | `bot.py:14500-14551` | Embedded verdict extracted from `narrative_html` + `verdict_html` column | UPDATE SET status='quarantined' | `verdict_quality:embedded_ok=<bool>,standalone_ok=<bool>` |
+| 7 | **C.1 — `min_verdict_quality()` on `verdict_html` (standalone only)** | `bot.py:14293-14342` | `verdict_html` column only — embedded verdict is no longer gated here (BUILD-C1-OPTIONA-PHASE1-BREAKDOWN-01) | UPDATE SET status='quarantined' | `verdict_quality:standalone_ok=<bool>` |
 | 8 | Old-format HTML headers missing (non-w82/baseline/verdict-cache) | `bot.py:14555-14581` | `narrative_html`, `narrative_source` | UPDATE SET status='quarantined' | `old_format_headers:<source>` |
 | 9 | Empty section(s) in body | `bot.py:14582-14593` | cleaned `narrative_html` | UPDATE SET status='quarantined' | `empty_sections` |
 | 10 | Stale H2H summary mismatch (bypassed when `evidence_json` present — gate 7 handles it) | `bot.py:14594-14612` | `narrative_html` + `tips` + `evidence_json` | UPDATE SET status='quarantined' | `stale_h2h_summary` |
@@ -617,16 +617,25 @@ if it is violated.
   to flash different verdict text between re-navigations. This is the
   INV-CARD-NARRATIVE-SERVE-01 pattern.
 
-### INV-3 — C.1 serve-time gate applies `min_verdict_quality()` to BOTH the embedded verdict in `narrative_html` AND the standalone `verdict_html` column
+### INV-3 — C.1 serve-time gate applies `min_verdict_quality()` to `verdict_html` (standalone) ONLY
 
-- **Evidence**: `bot.py:14500-14551`. Both must pass (`_embedded_ok AND
-  _standalone_ok`) for the row to serve.
+- **Evidence**: `bot.py:14293-14342` (BUILD-C1-OPTIONA-PHASE1-BREAKDOWN-01). Only
+  `_standalone_ok` on `verdict_html` must pass for the row to serve. The embedded
+  verdict inside `narrative_html` is no longer part of this gate.
 - **Enforcement**: Gate 7 in section 7a.
-- **If violated**: Stale/thin verdicts in `narrative_html` would serve to
-  the AI Breakdown screen even when the standalone verdict_html is healthy,
-  causing the breakdown's 🏆 section to show "Back Arsenal." or similar
-  trivial templates. This is the dominant failure mode in current DB
-  (67% of quarantines).
+- **Why changed**: Bible §2 Q1 confirms the card image reads `verdict_html` directly;
+  the embedded verdict is only consumed by the AI Breakdown 🏆 section. Applying
+  `min_verdict_quality()` to the embedded verdict was the dominant quarantine cause
+  (67% of quarantines — 16/24 rows had `embedded_ok=False, standalone_ok=True`).
+- **AI Breakdown 🏆 fallback** (BUILD-C1-OPTIONA-PHASE1-BREAKDOWN-01 AC-2):
+  `build_ai_breakdown_data()` in `card_data.py` runs its own quality check on the
+  parsed embedded verdict at serve time. If the embedded text fails
+  `min_verdict_quality()`, it substitutes `verdict_html` (with AC-11 NULL guard and
+  AC-12 staleness guard). This is the enduring mitigation — do NOT re-enable
+  `_embedded_ok` in C.1.
+- **If violated by re-enabling `_embedded_ok`**: The 67% unnecessary quarantine
+  pattern would recur immediately. Every row with thin embedded text but a
+  quality `verdict_html` would be re-quarantined — same P0 as before the fix.
 
 ### INV-4 — Any `SELECT` from narrative_cache that returns servable rows MUST filter on `status != 'quarantined'` AND `quarantined = 0`
 
