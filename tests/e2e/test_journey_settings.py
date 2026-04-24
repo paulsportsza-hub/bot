@@ -124,11 +124,11 @@ async def test_settings_sports_screen_shows_saved_sport(test_db) -> None:
     await db.save_sport_pref(41007, "soccer")
     query = _make_query(user_id=41007)
 
-    await bot.handle_settings(query, "sports")
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.handle_settings(query, "sports")
 
-    text = query.edit_message_text.call_args.args[0]
-    assert "My Sports" in text
-    assert "Soccer" in text or "football" in text.lower()
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "settings_sports.html"
 
 
 async def test_settings_sports_done_persists_selection(test_db) -> None:
@@ -184,10 +184,10 @@ async def test_handle_ob_restart_returns_to_experience_step() -> None:
 
 
 async def test_help_command_shows_help_text(mock_update, mock_context) -> None:
-    await bot.cmd_help(mock_update, mock_context)
-    text = mock_update.message.reply_text.call_args.args[0]
-    assert "/start" in text
-    assert "Top Edge Picks" in text
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.cmd_help(mock_update, mock_context)
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "help.html"
 
 
 async def test_settings_notifications_screen_has_back_button(test_db) -> None:

@@ -1278,3 +1278,130 @@ def build_profile_card_data(
         "sports": sport_rows,
         "header_logo_b64": _logo(),
     }
+
+
+def build_settings_sports_data(
+    selected_sports: list[str],
+    prefs: list,
+    user_name: str = "",
+) -> dict:
+    """Settings Sports toggle card — BUILD-SETTINGS-SPORTS-CARD-01."""
+    import config
+    sports = []
+    for sport in config.SPORTS:
+        enabled = sport.key in selected_sports
+        team_count = len({p.team_name for p in prefs if p.sport_key == sport.key and p.team_name})
+        league_count = len(sport.leagues)
+        sports.append({
+            "key": sport.key,
+            "emoji": sport.emoji,
+            "label": sport.label,
+            "enabled": enabled,
+            "league_count": league_count,
+            "team_count": team_count,
+        })
+    return {
+        "header_logo_b64": _logo(),
+        "sports": sports,
+        "user_name": user_name,
+    }
+
+
+def build_my_teams_data(teams_by_sport: list[dict], has_teams: bool) -> dict:
+    """My Teams card — BUILD-MY-TEAMS-CARD-01.
+
+    teams_by_sport: list of {sport_emoji, sport_label, teams: [{name, league}]}
+    has_teams: True when at least one team exists across all sports
+    """
+    return {
+        "teams_by_sport": teams_by_sport,
+        "has_teams": has_teams,
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_bookmaker_directory_data() -> dict:
+    """Bookmaker directory card — BUILD-BOOKMAKER-DIRECTORY-CARD-01."""
+    bookmakers = [
+        {
+            "badge": "🏦",
+            "name": "Betway",
+            "offer": "Fast payouts · Wide markets · Great live betting",
+            "domain": "betway.co.za",
+        },
+        {
+            "badge": "🎬",
+            "name": "Hollywoodbets",
+            "offer": "SA's favourite · USSD betting · Top Bet games",
+            "domain": "hollywoodbets.net",
+        },
+        {
+            "badge": "⚡",
+            "name": "Sportingbet",
+            "offer": "Competitive odds · Quick registration · Live streaming",
+            "domain": "sportingbet.co.za",
+        },
+        {
+            "badge": "🌟",
+            "name": "SupaBets",
+            "offer": "Easy sign-up · Popular in SA · Good promos",
+            "domain": "supabets.co.za",
+        },
+        {
+            "badge": "🎰",
+            "name": "GBets",
+            "offer": "Sharp odds · Goldrush Group · Growing fast",
+            "domain": "gbets.co.za",
+        },
+    ]
+    return {
+        "bookmakers": bookmakers,
+        "header_logo_b64": _logo(),
+    }
+
+
+# ── BUILD-HELP-CARD-01 ────────────────────────────────────────────────────────
+
+_HELP_COMMAND_GROUPS: list[dict] = [
+    {
+        "group_name": "Picks & Matches",
+        "commands": [
+            {"cmd": "/picks", "description": "Top Edge Picks — live value spots"},
+            {"cmd": "/schedule", "description": "My Matches — your fixture feed"},
+        ],
+    },
+    {
+        "group_name": "Account & Billing",
+        "commands": [
+            {"cmd": "/subscribe", "description": "Plans and upgrades"},
+        ],
+    },
+    {
+        "group_name": "Settings & Navigation",
+        "commands": [
+            {"cmd": "/settings", "description": "Risk, bankroll, alerts, and sports"},
+            {"cmd": "/start", "description": "Start onboarding or reopen main flow"},
+            {"cmd": "/menu", "description": "Main menu"},
+            {"cmd": "/help", "description": "This screen"},
+        ],
+    },
+    {
+        "group_name": "Quick Buttons",
+        "commands": [
+            {"cmd": "⚽ My Matches", "description": "Personalised fixture feed with Edge markers"},
+            {"cmd": "💎 Top Edge Picks", "description": "Strongest live value spots"},
+            {"cmd": "📖 Guide", "description": "Explanations for ratings, signals, and value"},
+            {"cmd": "👤 Profile", "description": "Your teams, sports, and preferences"},
+            {"cmd": "⚙️ Settings", "description": "Risk, bankroll, alerts, and sports"},
+            {"cmd": "❓ Help", "description": "This screen"},
+        ],
+    },
+]
+
+
+def build_help_data() -> dict:
+    """Help card data — BUILD-HELP-CARD-01."""
+    return {
+        "command_groups": _HELP_COMMAND_GROUPS,
+        "header_logo_b64": _logo(),
+    }

@@ -164,6 +164,9 @@ from card_data_adapters import (
     build_notify_mute_confirm_data, build_notify_mute_resume_data,
     build_notify_live_score_data, build_notify_live_score_ft_data,
     build_profile_card_data,
+    build_settings_sports_data,
+    build_bookmaker_directory_data,
+    build_help_data,
 )
 from narrative_spec import (
     _VERDICT_MAX_CHARS, _VERDICT_MIN_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
@@ -1683,10 +1686,13 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        HELP_TEXT,
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb_help(),
+    await send_card_or_fallback(
+        bot=ctx.bot,
+        chat_id=update.message.chat_id,
+        template="help.html",
+        data=build_help_data(),
+        text_fallback=HELP_TEXT,
+        markup=kb_help(),
     )
 
 
@@ -4210,7 +4216,12 @@ async def handle_menu(query, action: str) -> None:
         )
 
     elif action == "help":
-        await _serve_response(query, HELP_TEXT, kb_help())
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="help.html", data=build_help_data(),
+            text_fallback=HELP_TEXT, markup=kb_help(),
+            message_to_edit=query.message,
+        )
 
     elif action == "history":
         tips = await db.get_recent_tips(limit=5)
@@ -5962,10 +5973,13 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             "⚙️ <b>Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
         )
     elif text == "❓ Help":
-        await update.message.reply_text(
-            HELP_TEXT,
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_help(),
+        await send_card_or_fallback(
+            bot=update.get_bot(),
+            chat_id=update.message.chat_id,
+            template="help.html",
+            data=build_help_data(),
+            text_fallback=HELP_TEXT,
+            markup=kb_help(),
         )
 
 
@@ -24017,12 +24031,19 @@ async def handle_settings(query, action: str) -> None:
     elif action == "sports":
         state = await _get_settings_sports_state(user_id)
         prefs = await db.get_user_sport_prefs(user_id)
-        _sp_text = _build_settings_sports_text(state["selected_sports"], prefs)
+        _sp_user = await db.get_user(user_id)
+        _sp_name = (getattr(_sp_user, "first_name", None) or "").strip()
+        _sp_card = build_settings_sports_data(state["selected_sports"], prefs, user_name=_sp_name)
         _sp_markup = _build_settings_sports_keyboard(state["selected_sports"], prefs)
-        try:
-            await query.edit_message_text(_sp_text, parse_mode=ParseMode.HTML, reply_markup=_sp_markup)
-        except BadRequest:
-            await query.message.reply_text(_sp_text, parse_mode=ParseMode.HTML, reply_markup=_sp_markup)
+        await send_card_or_fallback(
+            bot=query.get_bot(),
+            chat_id=query.message.chat_id,
+            template="settings_sports.html",
+            data=_sp_card,
+            text_fallback=_build_settings_sports_text(state["selected_sports"], prefs),
+            markup=_sp_markup,
+            message_to_edit=query.message,
+        )
     elif action.startswith("toggle_sport:"):
         sport_key = action.split(":", 1)[1]
         state = await _get_settings_sports_state(user_id)
@@ -24034,12 +24055,19 @@ async def handle_settings(query, action: str) -> None:
             order = {sport.key: idx for idx, sport in enumerate(config.SPORTS)}
             selected_sports.sort(key=lambda key: order.get(key, len(order)))
         prefs = await db.get_user_sport_prefs(user_id)
-        _ts_text = _build_settings_sports_text(selected_sports, prefs)
+        _ts_user = await db.get_user(user_id)
+        _ts_name = (getattr(_ts_user, "first_name", None) or "").strip()
+        _ts_card = build_settings_sports_data(selected_sports, prefs, user_name=_ts_name)
         _ts_markup = _build_settings_sports_keyboard(selected_sports, prefs)
-        try:
-            await query.edit_message_text(_ts_text, parse_mode=ParseMode.HTML, reply_markup=_ts_markup)
-        except BadRequest:
-            await query.message.reply_text(_ts_text, parse_mode=ParseMode.HTML, reply_markup=_ts_markup)
+        await send_card_or_fallback(
+            bot=query.get_bot(),
+            chat_id=query.message.chat_id,
+            template="settings_sports.html",
+            data=_ts_card,
+            text_fallback=_build_settings_sports_text(selected_sports, prefs),
+            markup=_ts_markup,
+            message_to_edit=query.message,
+        )
     elif action == "sports_done":
         state = await _get_settings_sports_state(user_id)
         selected_sports = state["selected_sports"]

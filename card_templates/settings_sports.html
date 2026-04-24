@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+            padding: 2px;
+            box-sizing: content-box;
+        }
+        .card {
+            width: 480px;
+            height: 620px;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            text-align: center;
+            padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+            flex-shrink: 0;
+        }
+        .logo-img {
+            height: 32px;
+            width: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
+        }
+        .title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: 3px;
+        }
+        .sport-list {
+            padding: 6px 14px 14px;
+            flex: 1;
+        }
+        .sport-row {
+            display: flex;
+            align-items: center;
+            padding: 14px 16px;
+            background: #1A1A1A;
+            border-radius: 10px;
+            border: 1px solid #2A2A2A;
+            margin-top: 10px;
+        }
+        .sport-row.enabled {
+            border-left: 3px solid #F7931A;
+        }
+        .sport-row.disabled {
+            border-left: 3px solid #333333;
+            opacity: 0.6;
+        }
+        .sport-emoji {
+            font-size: 22px;
+            margin-right: 14px;
+            flex-shrink: 0;
+        }
+        .sport-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .sport-label {
+            font-size: 14px;
+            font-weight: 700;
+            color: #FFFFFF;
+        }
+        .sport-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 3px;
+        }
+        .sport-status {
+            font-size: 16px;
+            margin-left: 12px;
+            flex-shrink: 0;
+        }
+        .hint {
+            font-size: 10px;
+            color: #555555;
+            text-align: center;
+            padding: 12px 20px 14px;
+            border-top: 1px solid #1E1E1E;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div style="font-size:22px;font-weight:800;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">⚽ MY SPORTS</div>
+    </div>
+    <div class="sport-list">
+        {% for sport in sports %}
+        <div class="sport-row {{ 'enabled' if sport.enabled else 'disabled' }}">
+            <span class="sport-emoji">{{ sport.emoji }}</span>
+            <div class="sport-info">
+                <div class="sport-label">{{ sport.label }}</div>
+                <div class="sport-meta">
+                    {% if sport.team_count %}{{ sport.team_count }} team{{ 's' if sport.team_count != 1 else '' }} saved{% else %}No teams set{% endif %}
+                    · {{ sport.league_count }} league{{ 's' if sport.league_count != 1 else '' }}
+                </div>
+            </div>
+            <span class="sport-status">{{ '✅' if sport.enabled else '○' }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="hint">Tap a sport to toggle · Done to save</div>
+</div>
+</body>
+</html>

@@ -35,6 +35,8 @@ DETAIL_TEMPLATES = {
     "tier_lock_upsell.html",
     # BUILD-ONBOARDING-HYPE-PACK-01
     "onboarding_done.html",
+    # BUILD-SETTINGS-SPORTS-CARD-01
+    "settings_sports.html",
 }
 LIST_TEMPLATES = {
     "edge_picks.html",
@@ -80,6 +82,12 @@ LIST_TEMPLATES = {
     "onboarding_restart.html",
     # BUILD-PROFILE-CARD-01
     "profile_home.html",
+    # BUILD-MY-TEAMS-CARD-01
+    "my_teams.html",
+    # BUILD-HELP-CARD-01
+    "help.html",
+    # BUILD-BOOKMAKER-DIRECTORY-CARD-01
+    "bookmaker_directory.html",
 }
 ALL_DECLARED = DETAIL_TEMPLATES | LIST_TEMPLATES
 
