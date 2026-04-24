@@ -1838,6 +1838,12 @@ _TIER_COLOUR: dict[str, str] = {
     "silver": "#C0C0C0",
     "bronze": "#CD7F32",
 }
+_RETURN_HINT_BY_TIER: dict[str, str] = {
+    "diamond": "R100 stake · est. R240 return",
+    "gold":    "R100 stake · est. R185 return",
+    "silver":  "R100 stake · est. R140 return",
+    "bronze":  "",
+}
 _SPORT_EMOJI_MAP: dict[str, str] = {
     "soccer": "⚽", "football": "⚽",
     "rugby": "🏉",
@@ -1900,4 +1906,5 @@ def build_tier_lock_data(
         "hit_rate_7d": str(int(hit_rate_pct)),
         "roi_7d": roi_str,
         "price": _PRICE_BY_TIER.get(tier, "R199"),
+        "return_hint": _RETURN_HINT_BY_TIER.get(tier, ""),
     }

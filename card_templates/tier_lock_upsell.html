@@ -94,21 +94,44 @@
             margin: 12px 14px;
             border: 1px solid #2A2A2A;
             border-radius: 10px;
-            background: #111111;
+            background: #0D0D1A;
             overflow: hidden;
             position: relative;
-            flex-shrink: 0;
+            flex: 1;
         }
-        .locked-inner { padding: 14px 16px; }
+        .locked-content-area {
+            position: relative;
+            width: 100%; height: 100%;
+            background: radial-gradient(circle at 85% 15%,
+                rgba(247,147,26,0.25) 0%,
+                transparent 60%);
+            display: flex;
+            flex-direction: column;
+        }
+        /* Blurred rows — background texture */
+        .blurred-rows {
+            padding: 14px 16px;
+            flex: 1;
+        }
         .locked-row {
             display: flex; align-items: center; gap: 10px;
             margin-bottom: 10px;
         }
         .blurred-block {
             filter: blur(5px);
-            user-select: none;
-            pointer-events: none;
+            user-select: none; pointer-events: none;
             flex: 1;
+            background: #1A1A2A;
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+        .blurred-block-2 {
+            filter: blur(5px);
+            user-select: none; pointer-events: none;
+            flex: 1;
+            background: #16162A;
+            border-radius: 6px;
+            padding: 10px 12px;
         }
         .blur-odds {
             font-family: 'JetBrains Mono', monospace;
@@ -116,87 +139,55 @@
             color: #FFD700;
         }
         .blur-bookie {
-            font-size: 12px; color: var(--text-secondary);
-            margin-top: 2px;
+            font-size: 12px; color: var(--text-secondary); margin-top: 2px;
         }
         .blur-bar {
             height: 10px; border-radius: 5px;
             background: linear-gradient(90deg, #FFD700, #FF6B00);
             margin-top: 6px; opacity: 0.7;
         }
-        .lock-icon-overlay {
+        /* Centered overlay: 💎 → 🔒 → label → subtitle */
+        .lock-overlay {
             position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 28px;
-            pointer-events: none;
+            inset: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 1;
         }
-        .signal-row {
-            display: flex; align-items: center; gap: 8px;
-            padding-top: 8px;
-            border-top: 1px solid #2A2A2A;
-            margin-top: 4px;
+        .lock-diamond {
+            font-size: 80px;
+            filter: drop-shadow(0 0 24px rgba(185,242,255,0.8));
+            line-height: 1;
         }
-        .signal-dot {
-            width: 7px; height: 7px; border-radius: 50%;
-            background: #00E676; box-shadow: 0 0 4px #00E67680;
-            flex-shrink: 0;
-        }
-        .signal-text { font-size: 11px; color: #DDDDDD; }
-        .unlock-hint {
-            font-size: 10px; color: var(--text-secondary);
-            margin-top: 4px;
-        }
-
-        /* ── 5. Social proof ── */
-        .proof-section {
-            margin: 0 14px;
-            padding: 12px 14px;
-            border: 1px solid #2A2A2A;
-            border-radius: 10px;
-            background: #0F0F0F;
-            flex-shrink: 0;
-        }
-        .proof-header {
-            font-size: 9px; font-weight: 700; letter-spacing: 1.5px;
-            text-transform: uppercase; color: var(--text-secondary);
-            margin-bottom: 8px;
-        }
-        .proof-grid {
-            display: flex; gap: 0;
-        }
-        .proof-item {
-            flex: 1; text-align: center;
-            padding: 0 8px;
-        }
-        .proof-item + .proof-item { border-left: 1px solid #2A2A2A; }
-        .proof-value {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 20px; font-weight: 700;
-            color: #FFD700;
-        }
-        .proof-label {
-            font-size: 10px; color: var(--text-secondary);
-            margin-top: 2px;
-        }
-
-        /* ── 6. CTA footer ── */
-        .cta-footer {
-            flex: 1;
-            display: flex; align-items: center; justify-content: center;
-            padding: 10px 18px;
-            background: linear-gradient(135deg, #FF6B0012, #0A0A0A);
-            border-top: 1px solid #FF6B0020;
-        }
-        .cta-text {
-            font-size: 14px; font-weight: 700;
-            color: #FFFFFF;
+        .lock-padlock { font-size: 56px; margin-top: 12px; line-height: 1; }
+        .lock-label {
+            margin-top: 24px;
+            font-size: 18px; font-weight: 700;
+            color: #FFD700; letter-spacing: 2px;
             text-align: center;
         }
-        .cta-price {
-            color: #F7931A; font-weight: 800;
+        .lock-subtitle {
+            margin-top: 8px;
+            font-size: 13px; color: #999999;
+            text-align: center;
         }
-        .cta-arrow { color: #F7931A; margin-left: 4px; }
+        /* Lock footer */
+        .lock-footer {
+            padding: 10px 16px;
+            border-top: 1px solid #2A2A2A;
+            background: #0D0D1A;
+            display: flex; align-items: center;
+            justify-content: center; gap: 20px;
+            flex-shrink: 0;
+        }
+        .footer-signal {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px; color: #00E676;
+        }
+        .footer-return {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px; color: #F7931A;
+        }
     </style>
 </head>
 <body>
@@ -235,46 +226,41 @@
         {% if broadcast %}<span class="meta-item">📺 {{ broadcast }}</span>{% endif %}
     </div>
 
-    <!-- ── 4. Locked section ── -->
+    <!-- ── 4. Locked section: blurred texture + centered icon overlay ── -->
     <div class="locked-section">
-        <div class="locked-inner">
-            <div class="locked-row">
-                <div class="blurred-block">
-                    <div class="blur-odds">2.40 @ ██████</div>
-                    <div class="blur-bookie">🏦 ████████████ · EV +8.3%</div>
-                    <div class="blur-bar" style="width: 75%;"></div>
+        <div class="locked-content-area">
+
+            <!-- Blurred rows: background texture only -->
+            <div class="blurred-rows">
+                <div class="locked-row">
+                    <div class="blurred-block">
+                        <div class="blur-odds">2.40 @ ██████</div>
+                        <div class="blur-bookie">🏦 ████████████ · EV +8.3%</div>
+                        <div class="blur-bar" style="width: 75%;"></div>
+                    </div>
+                </div>
+                <div class="locked-row">
+                    <div class="blurred-block-2">
+                        <div class="blur-odds">████ ██████</div>
+                        <div class="blur-bookie">████ ██ ████ ███ ██</div>
+                    </div>
                 </div>
             </div>
-            <div class="signal-row">
-                <div class="signal-dot"></div>
-                <span class="signal-text"><b>{{ confirming_signals }}</b> signals confirm this edge</span>
-            </div>
-            <div class="unlock-hint">🔒 Unlock {{ edge_tier_display }} to see the full breakdown</div>
-        </div>
-        <div class="lock-icon-overlay">🔒</div>
-    </div>
 
-    <!-- ── 5. Social proof ── -->
-    {% if show_track_record %}
-    <div class="proof-section">
-        <div class="proof-header">7-DAY TRACK RECORD</div>
-        <div class="proof-grid">
-            <div class="proof-item">
-                <div class="proof-value">{{ hit_rate_7d }}%</div>
-                <div class="proof-label">Accuracy</div>
+            <!-- Centered overlay: 💎 → 🔒 → "SIGNAL LOCKED" → subtitle -->
+            <div class="lock-overlay">
+                <div class="lock-diamond">💎</div>
+                <div class="lock-padlock">🔒</div>
+                <div class="lock-label">{{ edge_tier_display | upper }} SIGNAL LOCKED</div>
+                <div class="lock-subtitle">{{ confirming_signals }} premium signals behind the blur</div>
             </div>
-            <div class="proof-item">
-                <div class="proof-value">{{ roi_7d }}</div>
-                <div class="proof-label">ROI on R100</div>
-            </div>
-        </div>
-    </div>
-    {% endif %}
 
-    <!-- ── 6. CTA footer ── -->
-    <div class="cta-footer">
-        <div class="cta-text">
-            Unlock {{ edge_tier_display }} from <span class="cta-price">{{ price }}/mo</span><span class="cta-arrow"> →</span>
+            <!-- Footer: signal count + return hint -->
+            <div class="lock-footer">
+                <span class="footer-signal">📊 {{ confirming_signals }} signals confirm this edge</span>
+                {% if return_hint %}<span class="footer-return">💰 {{ return_hint }}</span>{% endif %}
+            </div>
+
         </div>
     </div>
 
