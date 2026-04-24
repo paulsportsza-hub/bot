@@ -234,9 +234,10 @@ class TestPersistentMenu:
     def test_kb_main_matches_premium_working_layout(self):
         kb = bot.kb_main()
         rows = [[btn.text for btn in row] for row in kb.inline_keyboard]
+        # FIX-HIDE-EDGE-TRACKER-P0-01: 📊 Edge Tracker button removed pre-launch.
         assert rows == [
             ["💎 Edge Picks"],
-            ["⚽ My Matches", "📊 Edge Tracker"],
+            ["⚽ My Matches"],
             ["📖 Guide", "⚙️ Settings"],
             ["🏠 Community"],
         ]

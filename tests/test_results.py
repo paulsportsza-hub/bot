@@ -9,6 +9,13 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
+# FIX-HIDE-EDGE-TRACKER-P0-01 (2026-04-24): Edge Tracker UI is suppressed
+# pre-launch until the algorithm has enough settled data for meaningful stats.
+# Re-enable by flipping bot.EDGE_PERFORMANCE_HIDDEN = False.
+pytestmark = pytest.mark.skip(
+    reason="FIX-HIDE-EDGE-TRACKER-P0-01: Edge Tracker UI suppressed pre-launch"
+)
+
 
 # ── render_result_emoji tests ────────────────────────────
 

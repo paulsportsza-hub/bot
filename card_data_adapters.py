@@ -1235,6 +1235,9 @@ def build_profile_card_data(
         sport_rows.append({
             "emoji": s.get("emoji", "🏅"),
             "label": s.get("label", ""),
+            # FIX-HIDE-EDGE-TRACKER-P0-01: template uses `name` + `teams` list.
+            "name": s.get("label", ""),
+            "teams": deduped,
             "team_preview": preview,
         })
 

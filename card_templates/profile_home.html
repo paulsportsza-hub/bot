@@ -1,5 +1,6 @@
 <!-- VARIANT: LIST -->
-<!-- BRIEF: BUILD-PROFILE-CARD-01 -->
+<!-- BRIEF: BUILD-PROFILE-POLISH-01 -->
+<!-- Bronze = Free | Gold = R99/mo | Diamond = R199/mo -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -13,7 +14,7 @@
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
             width: 480px; padding: 2px; box-sizing: content-box;
         }
-        .card { width: 100%; background: #0A0A0A; overflow: hidden; }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
 
         /* ── Header ─────────────────────────────────────────────────────── */
         .header {
@@ -25,56 +26,36 @@
         .header-silver  { background: linear-gradient(180deg, #0A0A0F, #111118); }
         .header-bronze  { background: linear-gradient(180deg, #0A0806, #14100A); }
 
-        .logo-img { height: 28px; width: auto; display: block; margin: 0 auto 12px; }
-        .logo-fallback { font-size: 13px; font-weight: 700; color: #F7931A; margin-bottom: 12px; }
+        .logo-img { height: 28px; width: auto; display: block; margin: 0 auto 10px; }
+        .logo-fallback { font-size: 13px; font-weight: 700; color: #F7931A; margin-bottom: 10px; }
 
-        .tier-accent-bar { height: 3px; margin: 0 20px 12px; border-radius: 2px; }
+        .tier-accent-bar { height: 3px; margin: 0 20px 10px; border-radius: 2px; }
         .bar-diamond { background: linear-gradient(90deg, #93DBF8, #7B8CDE, #A8B4FF); }
         .bar-gold    { background: linear-gradient(90deg, #F7931A, #D4A843, #FBDC6E); }
         .bar-silver  { background: linear-gradient(90deg, #64748B, #94A3B8, #CBD5E1); }
         .bar-bronze  { background: linear-gradient(90deg, #92400E, #B46B30, #D97706); }
 
-        .header-label { font-size: 11px; font-weight: 700; letter-spacing: 3px; }
-        .label-diamond { color: #93DBF8; }
-        .label-gold    { color: #D4A843; }
-        .label-silver  { color: #94A3B8; }
-        .label-bronze  { color: #B46B30; }
+        .header-label { font-size: 11px; font-weight: 700; letter-spacing: 3px; color: var(--text-secondary); }
 
         /* ── Identity block ──────────────────────────────────────────────── */
         .identity-block {
-            padding: 18px 20px 14px;
+            padding: 18px 20px 16px;
             border-bottom: 1px solid #1A1A1A;
         }
-        .user-name {
-            font-size: 20px; font-weight: 800; color: #FFFFFF; margin-bottom: 8px;
-        }
         .tier-badge {
-            display: inline-flex; align-items: center; gap: 5px;
-            padding: 4px 10px; border-radius: 20px;
-            font-size: 11px; font-weight: 700; letter-spacing: 1px;
-            margin-bottom: 12px;
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 6px 14px; border-radius: 20px;
+            font-size: 12px; font-weight: 700; letter-spacing: 1.5px;
+            margin-bottom: 10px;
         }
         .badge-diamond { background: #93DBF820; border: 1px solid #93DBF840; color: #93DBF8; }
         .badge-gold    { background: #D4A84320; border: 1px solid #D4A84340; color: #D4A843; }
         .badge-silver  { background: #94A3B820; border: 1px solid #94A3B840; color: #94A3B8; }
         .badge-bronze  { background: #B46B3020; border: 1px solid #B46B3040; color: #B46B30; }
 
-        .identity-meta { display: flex; flex-direction: column; gap: 5px; }
-        .meta-line { font-size: 12px; color: var(--text-secondary); }
-        .meta-line strong { color: #FFFFFF; }
-
-        /* Trial progress bar */
-        .trial-bar-wrap { margin-top: 10px; }
-        .trial-bar-label {
-            display: flex; justify-content: space-between;
-            font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;
-        }
-        .trial-bar-track {
-            height: 6px; background: #1E1E1E; border-radius: 3px; overflow: hidden;
-        }
-        .trial-bar-fill {
-            height: 100%; border-radius: 3px;
-            background: linear-gradient(90deg, #93DBF8, #7B8CDE);
+        .exp-label {
+            font-size: 12px; color: var(--text-secondary);
+            margin-top: 2px;
         }
 
         /* ── Section ─────────────────────────────────────────────────────── */
@@ -86,83 +67,28 @@
         .section-title {
             font-size: 10px; font-weight: 700; letter-spacing: 2px;
             color: var(--text-secondary); text-transform: uppercase;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
         }
 
-        /* ── Performance 7D ──────────────────────────────────────────────── */
-        .perf-main {
-            display: flex; align-items: center; gap: 14px;
-            margin-bottom: 10px;
+        /* ── Sports list ─────────────────────────────────────────────────── */
+        .sports-list { display: flex; flex-direction: column; gap: 10px; }
+        .sport-row {}
+        .sport-name {
+            font-size: 13px; font-weight: 700; color: #FFFFFF;
+            margin-bottom: 3px;
         }
-        .perf-hitrate {
-            font-size: 28px; font-weight: 800; color: #FFFFFF;
-            font-family: 'JetBrains Mono', monospace;
-            line-height: 1;
+        .sport-teams {
+            font-size: 11px; color: var(--text-secondary);
+            padding-left: 4px;
         }
-        .perf-fraction {
-            font-size: 13px; font-weight: 700; color: var(--text-secondary);
-            font-family: 'JetBrains Mono', monospace;
-            margin-top: 4px;
+        .sport-teams-indent {
+            display: flex; align-items: flex-start; gap: 5px;
+            font-size: 11px; color: var(--text-secondary);
+            padding-left: 4px;
         }
-        .perf-bar-wrap { flex: 1; }
-        .perf-bar-track {
-            height: 8px; background: #1E1E1E; border-radius: 4px; overflow: hidden;
-            margin-bottom: 5px;
-        }
-        .perf-bar-fill {
-            height: 100%; border-radius: 4px;
-            background: linear-gradient(90deg, #22C55E, #4ADE80);
-        }
-        .perf-bar-miss { background: linear-gradient(90deg, #EF4444, #F87171); }
-
-        .perf-meta { display: flex; gap: 14px; flex-wrap: wrap; }
-        .perf-stat {
-            background: #111111; border: 1px solid #1E1E1E;
-            border-radius: 6px; padding: 7px 10px;
-            min-width: 80px;
-        }
-        .perf-stat-label { font-size: 10px; color: var(--text-secondary); margin-bottom: 2px; }
-        .perf-stat-value {
-            font-size: 14px; font-weight: 700;
-            font-family: 'JetBrains Mono', monospace;
-        }
-        .val-green { color: #4ADE80; }
-        .val-red   { color: #F87171; }
-        .val-white { color: #FFFFFF; }
-        .val-muted { color: var(--text-secondary); }
-
-        .perf-empty {
-            font-size: 12px; color: var(--text-secondary); font-style: italic;
-        }
-
-        /* ── Activity ────────────────────────────────────────────────────── */
-        .activity-row {
-            display: flex; gap: 8px; flex-wrap: wrap;
-        }
-        .activity-chip {
-            background: #111111; border: 1px solid #1E1E1E;
-            border-radius: 6px; padding: 8px 12px;
-            flex: 1; min-width: 100px;
-        }
-        .chip-label { font-size: 10px; color: var(--text-secondary); margin-bottom: 3px; }
-        .chip-value { font-size: 15px; font-weight: 700; color: #FFFFFF; }
-        .chip-sub   { font-size: 10px; color: var(--text-secondary); margin-top: 1px; }
-
-        /* ── Setup pills ─────────────────────────────────────────────────── */
-        .setup-row { display: flex; gap: 8px; flex-wrap: wrap; }
-        .setup-pill {
-            background: #111111; border: 1px solid #1E1E1E;
-            border-radius: 20px; padding: 5px 12px;
-            font-size: 11px; color: #FFFFFF; font-weight: 600;
-        }
-        .setup-pill span { color: var(--text-secondary); font-weight: 400; }
-
-        /* ── Following ───────────────────────────────────────────────────── */
-        .following-list { display: flex; flex-direction: column; gap: 6px; }
-        .following-sport { font-size: 12px; color: var(--text-secondary); }
-        .following-sport strong { color: #FFFFFF; }
-        .following-empty {
-            font-size: 12px; color: var(--text-secondary); font-style: italic;
+        .sport-teams-arrow { color: #444444; flex-shrink: 0; }
+        .sports-empty {
+            font-size: 12px; color: #555555; font-style: italic;
         }
 
         /* ── Footer ──────────────────────────────────────────────────────── */
@@ -185,146 +111,38 @@
         <div class="logo-fallback">MzansiEdge</div>
         {% endif %}
         <div class="tier-accent-bar bar-{{ tier }}"></div>
-        <div class="header-label label-{{ tier }}">YOUR PROFILE</div>
+        <div class="header-label">👤 PROFILE</div>
     </div>
 
-    <!-- Identity -->
+    <!-- Identity / Tier -->
     <div class="identity-block">
-        <div class="user-name">{% if first_name %}{{ first_name | e }}{% else %}Your Profile{% endif %}</div>
-        <div class="tier-badge badge-{{ tier }}">{{ tier_emoji }} {{ tier_name | upper }}</div>
-
-        <div class="identity-meta">
-            {% if trial_active %}
-            <div class="meta-line">💎 <strong>Diamond Trial</strong>
-                {% if trial_day and trial_total_days %}
-                — Day {{ trial_day }} of {{ trial_total_days }}
-                {% endif %}
-            </div>
-            {% if trial_days_remaining is not none %}
-            <div class="meta-line">⏳ <strong>{{ trial_days_remaining }} day{% if trial_days_remaining != 1 %}s{% endif %} remaining</strong></div>
-            {% endif %}
-            {% if trial_day and trial_total_days %}
-            <div class="trial-bar-wrap">
-                <div class="trial-bar-label">
-                    <span>Trial progress</span>
-                    <span>{{ trial_day }}/{{ trial_total_days }}</span>
-                </div>
-                <div class="trial-bar-track">
-                    <div class="trial-bar-fill" style="width: {{ ((trial_day / trial_total_days) * 100) | round | int }}%;"></div>
-                </div>
-            </div>
-            {% endif %}
-            {% else %}
-            {% if member_since %}
-            <div class="meta-line">📅 {{ member_label | e }}: <strong>{{ member_since | e }}</strong></div>
-            {% endif %}
-            {% if days_as_member %}
-            <div class="meta-line">🕒 <strong>{{ days_as_member }} day{% if days_as_member != 1 %}s{% endif %}</strong> with MzansiEdge</div>
-            {% endif %}
-            {% if is_founding_member %}
-            <div class="meta-line">🎁 <strong>Founding Member</strong></div>
-            {% endif %}
-            {% endif %}
-        </div>
-    </div>
-
-    <!-- 7D Performance -->
-    <div class="section">
-        <div class="section-title">Edge Performance — 7D</div>
-        {% if edge_7d_has_data %}
-        <div class="perf-main">
-            <div>
-                <div class="perf-hitrate">{{ edge_7d_hit_pct | int }}%</div>
-                <div class="perf-fraction">{{ edge_7d_hits }}/{{ edge_7d_total }}</div>
-            </div>
-            <div class="perf-bar-wrap">
-                <div class="perf-bar-track">
-                    <div class="perf-bar-fill {% if edge_7d_hit_pct < 50 %}perf-bar-miss{% endif %}"
-                         style="width: {{ [edge_7d_hit_pct | int, 100] | min }}%;"></div>
-                </div>
-                {% if edge_7d_streak %}
-                <div style="font-size: 11px; color: var(--text-secondary);">{{ edge_7d_streak | e }}</div>
-                {% endif %}
-            </div>
-        </div>
-        <div class="perf-meta">
-            <div class="perf-stat">
-                <div class="perf-stat-label">Hits</div>
-                <div class="perf-stat-value val-green">{{ edge_7d_hits }}</div>
-            </div>
-            <div class="perf-stat">
-                <div class="perf-stat-label">Tracked</div>
-                <div class="perf-stat-value val-white">{{ edge_7d_total }}</div>
-            </div>
-            {% if edge_7d_roi is not none %}
-            <div class="perf-stat">
-                <div class="perf-stat-label">7D ROI</div>
-                <div class="perf-stat-value {% if edge_7d_roi >= 0 %}val-green{% else %}val-red{% endif %}">
-                    {% if edge_7d_roi >= 0 %}+{% endif %}{{ "%.1f"|format(edge_7d_roi) }}%
-                </div>
-            </div>
-            {% endif %}
-        </div>
-        {% else %}
-        <div class="perf-empty">No settled results yet — check back after kickoff.</div>
+        <div class="tier-badge badge-{{ tier }}">{{ tier_emoji }} {{ tier_name | upper }} MEMBER</div>
+        {% if experience_label %}
+        <div class="exp-label">{{ experience_label | e }}</div>
         {% endif %}
     </div>
 
-    <!-- Activity -->
-    {% if total_views or recent_views or focus_sport %}
+    <!-- My Sports -->
     <div class="section">
-        <div class="section-title">Your Activity</div>
-        <div class="activity-row">
-            {% if total_views %}
-            <div class="activity-chip">
-                <div class="chip-label">Edges seen</div>
-                <div class="chip-value">{{ total_views }}</div>
-                <div class="chip-sub">all time</div>
-            </div>
-            {% endif %}
-            {% if recent_views %}
-            <div class="activity-chip">
-                <div class="chip-label">This week</div>
-                <div class="chip-value">{{ recent_views }}</div>
-                <div class="chip-sub">edge{% if recent_views != 1 %}s{% endif %}</div>
-            </div>
-            {% endif %}
-            {% if focus_sport %}
-            <div class="activity-chip">
-                <div class="chip-label">Main focus</div>
-                <div class="chip-value" style="font-size: 12px;">{{ focus_sport | e }}</div>
-            </div>
-            {% endif %}
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- Setup -->
-    <div class="section">
-        <div class="section-title">Setup</div>
-        <div class="setup-row">
-            <div class="setup-pill"><span>Exp </span>{{ experience_label | e }}</div>
-            <div class="setup-pill"><span>Risk </span>{{ risk_label | e }}</div>
-            {% if bankroll_str and bankroll_str != "Not set" %}
-            <div class="setup-pill"><span>Bank </span>{{ bankroll_str | e }}</div>
-            {% endif %}
-        </div>
-    </div>
-
-    <!-- Following -->
-    {% if sports %}
-    <div class="section">
-        <div class="section-title">Following</div>
-        <div class="following-list">
+        <div class="section-title">My Sports</div>
+        {% if sports %}
+        <div class="sports-list">
             {% for sport in sports %}
-            <div class="following-sport">
-                {{ sport.emoji }} <strong>{{ sport.label | e }}</strong>
-                {% if sport.team_preview %}— {{ sport.team_preview | e }}{% endif %}
+            <div class="sport-row">
+                <div class="sport-name">{{ sport.emoji }} {{ sport.name | e }}</div>
+                {% if sport.teams %}
+                <div class="sport-teams-indent">
+                    <span class="sport-teams-arrow">└─</span>
+                    <span>{{ sport.teams | join(", ") | e }}</span>
+                </div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
+        {% else %}
+        <div class="sports-empty">No sports set up yet — tap ⚙️ Settings to add them.</div>
+        {% endif %}
     </div>
-    {% endif %}
 
     <!-- Footer -->
     <div class="footer">

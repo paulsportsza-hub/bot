@@ -659,10 +659,7 @@ def kb_main() -> InlineKeyboardMarkup:
     """Main persistent menu — every sub-screen navigates back here."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(_DIAMOND_EDGE_PICKS, callback_data="hot:go")],
-        [
-            InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0"),
-            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
-        ],
+        [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
         [
             InlineKeyboardButton("📖 Guide", callback_data="guide:menu"),
             InlineKeyboardButton("⚙️ Settings", callback_data="settings:home"),
@@ -1354,10 +1351,7 @@ async def _welcome_kb(user_id: int) -> InlineKeyboardMarkup:
     """Build the welcome screen keyboard with a tier-gated edge pick button when available."""
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(_DIAMOND_EDGE_PICKS, callback_data="hot:go")],
-        [
-            InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0"),
-            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
-        ],
+        [InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0")],
         [
             InlineKeyboardButton("📖 Guide", callback_data="guide:menu"),
             InlineKeyboardButton("⚙️ Settings", callback_data="settings:home"),
@@ -1481,8 +1475,6 @@ HELP_TEXT = textwrap.dedent("""\
     /menu — Main menu
     /picks — <b>Top Edge Picks</b>
     /schedule — <b>My Matches</b>
-    /results — <b>Edge Tracker</b> (7D / 30D results)
-    /track — Same as /results
     /settings — Your preferences
     /subscribe — Plans and upgrades
     /help — This message
@@ -1491,14 +1483,13 @@ HELP_TEXT = textwrap.dedent("""\
     ⚽ <b>My Matches</b> — Your personalised fixture feed with Edge markers
     💎 <b>Top Edge Picks</b> — The strongest live value spots we have found
     📖 <b>Guide</b> — Detailed explanations for ratings, signals, value, and bookmaker setup
-    👤 <b>Profile</b> — Your teams, sports, and shortcuts into Edge Tracker
+    👤 <b>Profile</b> — Your teams, sports, and preferences
     ⚙️ <b>Settings</b> — Risk, bankroll, alerts, and sports
     ❓ <b>Help</b> — This screen
 
     <b>Quick orientation</b>
     • <b>Top Edge Picks</b> shows the live opportunities
     • <b>My Matches</b> helps you follow the games you care about
-    • <b>Edge Tracker</b> shows how posted edges have actually settled
 
     Tap <b>📖 Guide</b> for detailed explanations of what the product is showing you.
 """)
@@ -1507,7 +1498,6 @@ HELP_TEXT = textwrap.dedent("""\
 GUIDE_TOPICS: list[tuple[str, str]] = [
     ("edge_ratings", "💎 Edge Ratings — What do tiers mean?"),
     ("signals", "📶 Signals — What confirms a pick?"),
-    ("track_record", "📈 Track Record — How to read our results"),
     ("method", "🎯 How Edge-AI Works — Our method"),
     ("value101", "💰 Value Betting 101 — EV in simple terms"),
     ("bookmaker", "🏦 Bookmaker Quick Start — Place your first bet"),
@@ -1533,7 +1523,7 @@ def _build_guide_menu_surface() -> tuple[str, InlineKeyboardMarkup]:
         📖 <b>Guide</b>
 
         Your explanation hub for everything users see in <b>💎 Top Edge Picks</b>,
-        match detail, <b>⚽ My Matches</b>, and <b>📊 Edge Tracker</b>.
+        match detail, and <b>⚽ My Matches</b>.
 
         Pick a topic:
     """)
@@ -1603,27 +1593,6 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
             """),
             [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]],
         ),
-        "track_record": (
-            textwrap.dedent("""\
-                📈 <b>Track Record — How to read our results</b>
-
-                Open <b>/results</b> or tap <b>📊 Edge Tracker</b> to see how posted edges have actually settled.
-
-                <b>What the numbers mean</b>
-                • <b>Hit rate</b> = the share of settled picks that won
-                • <b>ROI</b> = profit or loss relative to stake, not just win count
-                • <b>Streak</b> = the current run of hits or misses
-                • <b>Recent results</b> = the latest settled edges so users can inspect the run
-
-                <b>How to use it well</b>
-                • Check both <b>7-day</b> and <b>30-day</b> views
-                • Do not judge only by one streak
-                • A good hit rate with poor ROI can still be mediocre
-
-                Edge Tracker is the trust surface: it is there so users can audit outcomes, not just read claims.
-            """),
-            [[InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7")]],
-        ),
         "method": (
             textwrap.dedent("""\
                 🎯 <b>How Edge-AI Works — Our method</b>
@@ -1688,14 +1657,13 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
                 <b>4. Keep the first stake small</b>
                 Use your bankroll plan, not emotion.
 
-                <b>5. Track what happened</b>
-                Use <b>/results</b> and <b>📊 Edge Tracker</b> to learn over time.
+                <b>5. Keep your stakes disciplined</b>
+                Bankroll first. Stick to your plan.
 
                 <i>Current setup: MzansiEdge surfaces the active {h(bookmaker_name)} guide and bookmaker links, but you should always verify the live slip before placing the bet.</i>
             """),
             [
                 [InlineKeyboardButton("🎰 Bookmakers", callback_data="affiliate:compare")],
-                [InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7")],
             ],
         ),
     }
@@ -5036,7 +5004,7 @@ def _build_profile_identity_block(user, user_tier: str, trial_active: bool) -> l
     else:
         return [
             "🥉 <b>Bronze (Free)</b>",
-            "Your free home base for followed teams, Edge Tracker, and daily edge access.",
+            "Your free home base for followed teams and daily edge access.",
         ]
 
     member_since = getattr(user, "subscription_started_at", None) or getattr(user, "joined_at", None)
@@ -5163,7 +5131,8 @@ def _build_settings_profile_summary(data: dict, edge_summary: dict) -> str:
     lines.append(f"⚖️ <b>Risk:</b> {data['risk_label']}")
     lines.append(f"💰 <b>Bankroll:</b> {data['bankroll_str']}")
 
-    if edge_summary.get("has_data"):
+    # FIX-HIDE-EDGE-TRACKER-P0-01: Edge Performance block suppressed pre-launch.
+    if not EDGE_PERFORMANCE_HIDDEN and edge_summary.get("has_data"):
         lines.append("")
         lines.append("📊 <b>Edge Performance (7D)</b>")
         lines.append(
@@ -5202,13 +5171,18 @@ async def _build_profile_home_summary(user_id: int, data: dict) -> str:
         if first_name else
         "👤 <b>Your MzansiEdge Profile</b>"
     )
-    return _join_profile_sections([
+    # FIX-HIDE-EDGE-TRACKER-P0-01: Edge Performance section suppressed pre-launch.
+    sections = [
         [title, *_build_profile_identity_block(user, user_tier, trial_active)],
         _build_profile_engagement_section(data, edge_views),
-        _build_profile_performance_section(edge_summary, edge_views),
+    ]
+    if not EDGE_PERFORMANCE_HIDDEN:
+        sections.append(_build_profile_performance_section(edge_summary, edge_views))
+    sections.extend([
         _build_profile_setup_section(data),
         _build_profile_following_section(data),
     ])
+    return _join_profile_sections(sections)
 
 
 async def format_profile_summary(user_id: int, *, surface: str = "settings") -> str:
@@ -5244,16 +5218,17 @@ async def _collect_profile_card_data(user_id: int) -> dict:
     member_since = _format_profile_date(member_since_raw)
     days_as_member = _profile_elapsed_days(member_since_raw, now=_profile_now_utc())
 
-    # 7D performance
-    edge_7d_has_data = bool(edge_summary.get("has_data"))
-    edge_7d_hits = int(edge_summary.get("hits", 0) or 0)
-    edge_7d_total = int(edge_summary.get("total", 0) or 0)
-    edge_7d_hit_pct = float(edge_summary.get("hit_rate_pct", 0.0) or 0.0)
-    edge_7d_roi = edge_summary.get("roi")
+    # FIX-HIDE-EDGE-TRACKER-P0-01: 7D Edge Performance hidden pre-launch.
+    # Template uses edge_7d_has_data to gate the section — force False to hide.
+    edge_7d_has_data = False if EDGE_PERFORMANCE_HIDDEN else bool(edge_summary.get("has_data"))
+    edge_7d_hits = 0 if EDGE_PERFORMANCE_HIDDEN else int(edge_summary.get("hits", 0) or 0)
+    edge_7d_total = 0 if EDGE_PERFORMANCE_HIDDEN else int(edge_summary.get("total", 0) or 0)
+    edge_7d_hit_pct = 0.0 if EDGE_PERFORMANCE_HIDDEN else float(edge_summary.get("hit_rate_pct", 0.0) or 0.0)
+    edge_7d_roi = None if EDGE_PERFORMANCE_HIDDEN else edge_summary.get("roi")
     if edge_7d_roi is not None:
         edge_7d_roi = float(edge_7d_roi)
     raw_streak = edge_summary.get("streak")
-    edge_7d_streak = _format_edge_tracker_streak_line(raw_streak) if raw_streak else ""
+    edge_7d_streak = "" if EDGE_PERFORMANCE_HIDDEN else (_format_edge_tracker_streak_line(raw_streak) if raw_streak else "")
 
     # Activity
     total_views = int(edge_views.get("total_edge_views", 0) or 0)
@@ -5294,10 +5269,7 @@ async def _build_profile_buttons(user_id: int) -> InlineKeyboardMarkup:
     is_paid = user_tier in {"gold", "diamond"} and not trial_active
 
     rows = [
-        [
-            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
-            InlineKeyboardButton("⚙️ Edit Profile", callback_data="settings:home"),
-        ],
+        [InlineKeyboardButton("⚙️ Edit Profile", callback_data="settings:home")],
         [
             InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go"),
             InlineKeyboardButton("📋 My Plan" if is_paid else "✨ View Plans", callback_data="sub:billing" if is_paid else "sub:plans"),
@@ -23981,11 +23953,12 @@ async def handle_settings(query, action: str) -> None:
     elif action == "sports":
         state = await _get_settings_sports_state(user_id)
         prefs = await db.get_user_sport_prefs(user_id)
-        await query.edit_message_text(
-            _build_settings_sports_text(state["selected_sports"], prefs),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_settings_sports_keyboard(state["selected_sports"], prefs),
-        )
+        _sp_text = _build_settings_sports_text(state["selected_sports"], prefs)
+        _sp_markup = _build_settings_sports_keyboard(state["selected_sports"], prefs)
+        try:
+            await query.edit_message_text(_sp_text, parse_mode=ParseMode.HTML, reply_markup=_sp_markup)
+        except BadRequest:
+            await query.message.reply_text(_sp_text, parse_mode=ParseMode.HTML, reply_markup=_sp_markup)
     elif action.startswith("toggle_sport:"):
         sport_key = action.split(":", 1)[1]
         state = await _get_settings_sports_state(user_id)
@@ -23997,21 +23970,23 @@ async def handle_settings(query, action: str) -> None:
             order = {sport.key: idx for idx, sport in enumerate(config.SPORTS)}
             selected_sports.sort(key=lambda key: order.get(key, len(order)))
         prefs = await db.get_user_sport_prefs(user_id)
-        await query.edit_message_text(
-            _build_settings_sports_text(selected_sports, prefs),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_settings_sports_keyboard(selected_sports, prefs),
-        )
+        _ts_text = _build_settings_sports_text(selected_sports, prefs)
+        _ts_markup = _build_settings_sports_keyboard(selected_sports, prefs)
+        try:
+            await query.edit_message_text(_ts_text, parse_mode=ParseMode.HTML, reply_markup=_ts_markup)
+        except BadRequest:
+            await query.message.reply_text(_ts_text, parse_mode=ParseMode.HTML, reply_markup=_ts_markup)
     elif action == "sports_done":
         state = await _get_settings_sports_state(user_id)
         selected_sports = state["selected_sports"]
         prefs = await db.get_user_sport_prefs(user_id)
         if not selected_sports:
-            await query.edit_message_text(
-                _build_settings_sports_text(selected_sports, prefs, error="Please select at least one sport."),
-                parse_mode=ParseMode.HTML,
-                reply_markup=_build_settings_sports_keyboard(selected_sports, prefs),
-            )
+            _sd_text = _build_settings_sports_text(selected_sports, prefs, error="Please select at least one sport.")
+            _sd_markup = _build_settings_sports_keyboard(selected_sports, prefs)
+            try:
+                await query.edit_message_text(_sd_text, parse_mode=ParseMode.HTML, reply_markup=_sd_markup)
+            except BadRequest:
+                await query.message.reply_text(_sd_text, parse_mode=ParseMode.HTML, reply_markup=_sd_markup)
             return
 
         await db.clear_user_sport_prefs(user_id)
@@ -24039,23 +24014,21 @@ async def handle_settings(query, action: str) -> None:
         state = await _get_settings_sports_state(user_id)
         if sport_key not in state["selected_sports"]:
             prefs = await db.get_user_sport_prefs(user_id)
-            await query.edit_message_text(
-                _build_settings_sports_text(
-                    state["selected_sports"],
-                    prefs,
-                    error="Select a sport before editing its teams.",
-                ),
-                parse_mode=ParseMode.HTML,
-                reply_markup=_build_settings_sports_keyboard(state["selected_sports"], prefs),
+            _et_err_text = _build_settings_sports_text(
+                state["selected_sports"], prefs, error="Select a sport before editing its teams.",
             )
+            _et_err_markup = _build_settings_sports_keyboard(state["selected_sports"], prefs)
+            try:
+                await query.edit_message_text(_et_err_text, parse_mode=ParseMode.HTML, reply_markup=_et_err_markup)
+            except BadRequest:
+                await query.message.reply_text(_et_err_text, parse_mode=ParseMode.HTML, reply_markup=_et_err_markup)
             return
 
         text, markup = await _render_settings_team_editor(user_id, sport_key)
-        await query.edit_message_text(
-            text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=markup,
-        )
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        except BadRequest:
+            await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
     elif action.startswith("edit_league:"):
         parts = action.split(":", 2)
         if len(parts) < 3:
@@ -24080,13 +24053,13 @@ async def handle_settings(query, action: str) -> None:
             f"This will replace your current selections.\n"
             f"Or type <b>cancel</b> to go back."
         )
-        await query.edit_message_text(
-            text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Cancel", callback_data=f"settings:edit_teams:{sport_key}")],
-            ]),
-        )
+        _el_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("↩️ Cancel", callback_data=f"settings:edit_teams:{sport_key}")],
+        ])
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=_el_markup)
+        except BadRequest:
+            await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=_el_markup)
     elif action == "reset":
         text = textwrap.dedent("""\
             <b>⚠️ Reset your profile?</b>
@@ -24281,6 +24254,12 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ── Edge Tracker / Results ────────────────────────────────
 
+# FIX-HIDE-EDGE-TRACKER-P0-01 (2026-04-24): pre-launch display-only suppression.
+# Data pipelines (settlement, match_results, cron scrapers) keep running; only
+# user-facing surfaces are suppressed. Flip to False to re-enable once the
+# algorithm has enough settled data to show meaningful performance stats.
+EDGE_PERFORMANCE_HIDDEN = True
+
 
 def _get_settlement_funcs():
     """Lazy import settlement pipeline functions (sync sqlite3 on odds.db)."""
@@ -24451,6 +24430,9 @@ async def _get_edge_tracker_summary(days: int = 7) -> dict:
     """Return a cached Edge Tracker trust summary with timeout protection."""
     import time as _time
 
+    if EDGE_PERFORMANCE_HIDDEN:
+        return _empty_edge_tracker_summary(days)
+
     cache_key = str(days)
     cache_entry = _edge_tracker_summary_cache.get(cache_key)
     if cache_entry and (_time.time() - cache_entry["ts"]) < EDGE_TRACKER_SUMMARY_CACHE_TTL:
@@ -24479,6 +24461,8 @@ def _format_edge_tracker_record_line(
     include_roi: bool = True,
 ) -> str:
     """Format a compact trust-proof line and omit cleanly when no settled data exists."""
+    if EDGE_PERFORMANCE_HIDDEN:
+        return ""
     summary = summary or {}
     total = int(summary.get("total", 0) or 0)
     hits = int(summary.get("hits", 0) or 0)
@@ -24495,6 +24479,8 @@ def _format_edge_tracker_record_line(
 
 def _format_edge_tracker_streak_line(streak: dict | None) -> str:
     """Format the current streak for compact profile display."""
+    if EDGE_PERFORMANCE_HIDDEN:
+        return ""
     streak = streak or {}
     count = int(streak.get("count", 0) or 0)
     if count <= 0:
@@ -24807,6 +24793,15 @@ def _build_results_buttons(days: int, user_tier: str) -> InlineKeyboardMarkup:
 
 async def _render_results_surface(user_id: int, days: int = 7) -> tuple[str, InlineKeyboardMarkup]:
     """Render Edge Tracker text + markup for commands, callbacks, and legacy redirects."""
+    if EDGE_PERFORMANCE_HIDDEN:
+        return (
+            "⚠️ Edge Tracker is coming soon.",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="nav:main")],
+            ]),
+        )
+
     user_tier = await get_effective_tier(user_id)
     summary = await _get_edge_tracker_summary(days)
     if not summary.get("loaded"):
@@ -25231,8 +25226,9 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             user_tier = await get_effective_tier(user.id)
 
             # Yesterday's results block (Wave 23 — Change 2)
+            # FIX-HIDE-EDGE-TRACKER-P0-01: suppress yesterday-hit-rate block pre-launch.
             results_block = ""
-            if yesterday_stats and yesterday_stats.get("total", 0) > 0:
+            if not EDGE_PERFORMANCE_HIDDEN and yesterday_stats and yesterday_stats.get("total", 0) > 0:
                 from renderers.edge_renderer import EDGE_EMOJIS as _RE, format_return as _fmt_ret
                 visible = _RESULTS_VISIBLE_TIERS.get(user_tier, {"bronze", "silver"})
                 by_tier = yesterday_stats.get("by_tier", {})
@@ -25841,6 +25837,11 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Monday 08:00 SAST: send weekend recap to Bronze and Gold users."""
     if not NOTIFICATIONS_ENABLED:
         return
+    # FIX-HIDE-EDGE-TRACKER-P0-01: Monday recap broadcasts hit rate / ROI / streak.
+    # Pre-launch the algorithm lacks enough settled data for meaningful stats.
+    if EDGE_PERFORMANCE_HIDDEN:
+        log.info("Monday Recap skipped — EDGE_PERFORMANCE_HIDDEN")
+        return
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
 
@@ -25923,6 +25924,10 @@ async def _monday_recap_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def _monthly_report_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Monthly cron: send 30-day edge performance report on 1st of each month at 09:00 SAST."""
     if not NOTIFICATIONS_ENABLED:
+        return
+    # FIX-HIDE-EDGE-TRACKER-P0-01: Entire report is edge performance stats.
+    if EDGE_PERFORMANCE_HIDDEN:
+        log.info("Monthly Report skipped — EDGE_PERFORMANCE_HIDDEN")
         return
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo
@@ -27389,6 +27394,11 @@ async def _result_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """
     if not NOTIFICATIONS_ENABLED:
         return
+    # FIX-HIDE-EDGE-TRACKER-P0-01: Result alerts broadcast hit/miss + season accuracy.
+    # Internal settlement pipeline still runs; user-facing alerts are suppressed.
+    if EDGE_PERFORMANCE_HIDDEN:
+        log.info("Result alerts skipped — EDGE_PERFORMANCE_HIDDEN")
+        return
     log.info("Result alerts job running")
     _ra_mon = _CronMonitor("settlement-pipeline")
     _ra_mon.begin()
@@ -27897,6 +27907,10 @@ async def _reengagement_nudge_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     - Shows real data, never generic messaging
     """
     if not NOTIFICATIONS_ENABLED:
+        return
+    # FIX-HIDE-EDGE-TRACKER-P0-01: Nudge body uses 7D hit rate + top hit returns.
+    if EDGE_PERFORMANCE_HIDDEN:
+        log.info("Re-engagement nudge skipped — EDGE_PERFORMANCE_HIDDEN")
         return
     from datetime import datetime as dt_cls
     from zoneinfo import ZoneInfo

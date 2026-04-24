@@ -110,7 +110,9 @@ async def test_cmd_help(mock_update, mock_context):
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
     assert "Help" in text
     assert "/start" in text
-    assert "/results" in text
+    # FIX-HIDE-EDGE-TRACKER-P0-01: /results is hidden pre-launch.
+    assert "/results" not in text
+    assert "Edge Tracker" not in text
     assert "Top Edge Picks" in text
     assert "My Matches" in text
     assert "Tap <b>📖 Guide</b>" in text
@@ -191,10 +193,10 @@ async def test_show_guide_hub_surface(mock_update):
 
     markup = call_args[1]["reply_markup"]
     button_data = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+    # FIX-HIDE-EDGE-TRACKER-P0-01: track_record topic removed pre-launch.
     assert button_data == [
         "guide:edge_ratings",
         "guide:signals",
-        "guide:track_record",
         "guide:method",
         "guide:value101",
         "guide:bookmaker",
