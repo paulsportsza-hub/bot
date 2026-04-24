@@ -32,6 +32,7 @@ DETAIL_TEMPLATES = {
     "sub_founding_live.html",
     # BUILD-HOME-WINNERS-CARD-01
     "home_winners.html",
+    "tier_lock_upsell.html",
 }
 LIST_TEMPLATES = {
     "edge_picks.html",
@@ -76,6 +77,8 @@ LIST_TEMPLATES = {
     "story_quiz_step.html",
     "story_quiz_complete.html",
     "onboarding_restart.html",
+    # BUILD-PROFILE-CARD-01
+    "profile_home.html",
 }
 ALL_DECLARED = DETAIL_TEMPLATES | LIST_TEMPLATES
 

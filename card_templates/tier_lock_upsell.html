@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body {
+            margin: 0; padding: 0;
+            background: #000000;
+            width: 480px; height: 620px;
+            overflow: hidden;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; height: 620px;
+            overflow: hidden;
+        }
+        .card {
+            width: 480px; height: 620px;
+            display: flex; flex-direction: column;
+            background: #0A0A0A;
+            overflow: hidden;
+        }
+
+        /* ── 1. Header ── */
+        .header {
+            padding: 8px 16px;
+            display: flex; align-items: center;
+            justify-content: space-between; gap: 10px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A);
+            border-bottom: 1px solid #FF6B0040;
+            flex-shrink: 0;
+        }
+        .logo-img { height: 24px; width: auto; flex-shrink: 0; }
+        .logo-fallback {
+            font-size: 16px; font-weight: 800; letter-spacing: 0.1em;
+            color: #FFFFFF; flex-shrink: 0;
+        }
+        .lock-badge {
+            display: flex; align-items: center; gap: 6px;
+            padding: 3px 12px; border-radius: 14px;
+            border: 1px solid;
+        }
+        .lock-badge-icon { font-size: 12px; }
+        .lock-badge-text {
+            font-size: 10px; font-weight: 800; letter-spacing: 2px;
+        }
+
+        /* ── 2. Match section ── */
+        .matchup {
+            padding: 14px 18px 6px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .sport-league-line {
+            font-size: 12px; font-weight: 700;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .teams-row {
+            display: flex; align-items: center; justify-content: center;
+        }
+        .team-block {
+            flex: 1; display: flex; flex-direction: column;
+            align-items: center; min-width: 0;
+        }
+        .team-name {
+            font-size: 19px; font-weight: 800; color: #FFFFFF;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            max-width: 100%;
+        }
+        .vs-badge {
+            font-size: 8px; font-weight: 700;
+            color: var(--text-secondary); background: #1A1A1A;
+            padding: 4px 8px; border-radius: 4px;
+            flex-shrink: 0; margin: 0 8px;
+        }
+
+        /* ── 3. Meta bar ── */
+        .meta-bar {
+            display: flex; align-items: center; justify-content: center;
+            gap: 12px; flex-wrap: wrap;
+            padding: 8px 18px;
+            border-top: 1px solid #2A2A2A;
+            border-bottom: 1px solid #2A2A2A;
+            flex-shrink: 0;
+        }
+        .meta-item { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+
+        /* ── 4. Locked section ── */
+        .locked-section {
+            margin: 12px 14px;
+            border: 1px solid #2A2A2A;
+            border-radius: 10px;
+            background: #111111;
+            overflow: hidden;
+            position: relative;
+            flex-shrink: 0;
+        }
+        .locked-inner { padding: 14px 16px; }
+        .locked-row {
+            display: flex; align-items: center; gap: 10px;
+            margin-bottom: 10px;
+        }
+        .blurred-block {
+            filter: blur(5px);
+            user-select: none;
+            pointer-events: none;
+            flex: 1;
+        }
+        .blur-odds {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 22px; font-weight: 700;
+            color: #FFD700;
+        }
+        .blur-bookie {
+            font-size: 12px; color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        .blur-bar {
+            height: 10px; border-radius: 5px;
+            background: linear-gradient(90deg, #FFD700, #FF6B00);
+            margin-top: 6px; opacity: 0.7;
+        }
+        .lock-icon-overlay {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 28px;
+            pointer-events: none;
+        }
+        .signal-row {
+            display: flex; align-items: center; gap: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #2A2A2A;
+            margin-top: 4px;
+        }
+        .signal-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: #00E676; box-shadow: 0 0 4px #00E67680;
+            flex-shrink: 0;
+        }
+        .signal-text { font-size: 11px; color: #DDDDDD; }
+        .unlock-hint {
+            font-size: 10px; color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* ── 5. Social proof ── */
+        .proof-section {
+            margin: 0 14px;
+            padding: 12px 14px;
+            border: 1px solid #2A2A2A;
+            border-radius: 10px;
+            background: #0F0F0F;
+            flex-shrink: 0;
+        }
+        .proof-header {
+            font-size: 9px; font-weight: 700; letter-spacing: 1.5px;
+            text-transform: uppercase; color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .proof-grid {
+            display: flex; gap: 0;
+        }
+        .proof-item {
+            flex: 1; text-align: center;
+            padding: 0 8px;
+        }
+        .proof-item + .proof-item { border-left: 1px solid #2A2A2A; }
+        .proof-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 20px; font-weight: 700;
+            color: #FFD700;
+        }
+        .proof-label {
+            font-size: 10px; color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        /* ── 6. CTA footer ── */
+        .cta-footer {
+            flex: 1;
+            display: flex; align-items: center; justify-content: center;
+            padding: 10px 18px;
+            background: linear-gradient(135deg, #FF6B0012, #0A0A0A);
+            border-top: 1px solid #FF6B0020;
+        }
+        .cta-text {
+            font-size: 14px; font-weight: 700;
+            color: #FFFFFF;
+            text-align: center;
+        }
+        .cta-price {
+            color: #F7931A; font-weight: 800;
+        }
+        .cta-arrow { color: #F7931A; margin-left: 4px; }
+    </style>
+</head>
+<body>
+<div class="card">
+
+    <!-- ── 1. Header ── -->
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="lock-badge" style="background: {{ tier_colour }}15; border-color: {{ tier_colour }}30;">
+            <span class="lock-badge-icon">🔒</span>
+            <span class="lock-badge-text" style="color: {{ tier_colour }};">{{ edge_tier_display | upper }} EDGE</span>
+        </div>
+    </div>
+
+    <!-- ── 2. Match section ── -->
+    <div class="matchup">
+        <div class="sport-league-line">{{ sport_emoji }}  {{ league }}</div>
+        <div class="teams-row">
+            <div class="team-block">
+                <div class="team-name">{{ home }}</div>
+            </div>
+            <div class="vs-badge">VS</div>
+            <div class="team-block">
+                <div class="team-name">{{ away }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 3. Meta bar ── -->
+    <div class="meta-bar">
+        {% if kickoff %}<span class="meta-item">⏰ {{ kickoff }}</span>{% endif %}
+        {% if broadcast %}<span class="meta-item">📺 {{ broadcast }}</span>{% endif %}
+    </div>
+
+    <!-- ── 4. Locked section ── -->
+    <div class="locked-section">
+        <div class="locked-inner">
+            <div class="locked-row">
+                <div class="blurred-block">
+                    <div class="blur-odds">2.40 @ ██████</div>
+                    <div class="blur-bookie">🏦 ████████████ · EV +8.3%</div>
+                    <div class="blur-bar" style="width: 75%;"></div>
+                </div>
+            </div>
+            <div class="signal-row">
+                <div class="signal-dot"></div>
+                <span class="signal-text"><b>{{ confirming_signals }}</b> signals confirm this edge</span>
+            </div>
+            <div class="unlock-hint">🔒 Unlock {{ edge_tier_display }} to see the full breakdown</div>
+        </div>
+        <div class="lock-icon-overlay">🔒</div>
+    </div>
+
+    <!-- ── 5. Social proof ── -->
+    <div class="proof-section">
+        <div class="proof-header">7-DAY TRACK RECORD</div>
+        <div class="proof-grid">
+            <div class="proof-item">
+                <div class="proof-value">{{ hit_rate_7d }}%</div>
+                <div class="proof-label">Accuracy</div>
+            </div>
+            <div class="proof-item">
+                <div class="proof-value">{{ roi_7d }}</div>
+                <div class="proof-label">ROI on R100</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 6. CTA footer ── -->
+    <div class="cta-footer">
+        <div class="cta-text">
+            Unlock {{ edge_tier_display }} from <span class="cta-price">{{ price }}/mo</span><span class="cta-arrow"> →</span>
+        </div>
+    </div>
+
+</div>
+</body>
+</html>

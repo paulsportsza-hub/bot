@@ -163,6 +163,7 @@ from card_data_adapters import (
     build_notify_reengagement_data, build_notify_reengagement_lighter_data,
     build_notify_mute_confirm_data, build_notify_mute_resume_data,
     build_notify_live_score_data, build_notify_live_score_ft_data,
+    build_profile_card_data,
 )
 from narrative_spec import (
     _VERDICT_MAX_CHARS, _VERDICT_MIN_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
@@ -2056,6 +2057,46 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
                 fallback_page=_upg_pg,
             ))
+            # BUILD-TIER-LOCK-UPSELL-01: render image upsell card for locked tips
+            if _upg_tip and _upg_key and _upg_header.get("home") and _upg_header.get("away"):
+                try:
+                    from card_pipeline import build_tier_lock_data as _build_lock_data
+                    _lock_data = _build_lock_data(
+                        edge_tier=_upg_edge_tier,
+                        home=_upg_header.get("home", ""),
+                        away=_upg_header.get("away", ""),
+                        sport_key=_upg_tip.get("sport_key", ""),
+                        league=_upg_header.get("league_display", ""),
+                        kickoff_str=_upg_header.get("kickoff", ""),
+                        broadcast=_upg_header.get("broadcast", ""),
+                        confirming_signals=(
+                            _upg_tip.get("confirming_signals")
+                            or ((_upg_tip.get("edge_v2") or {}).get("confirming_signals", 0))
+                        ),
+                        tracker_summary=_upg_summary,
+                    )
+                    _lock_markup = InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            f"✨ Unlock {_upg_edge_tier.title()} →",
+                            callback_data="sub:plans",
+                        ),
+                        InlineKeyboardButton(
+                            "↩️ Back",
+                            callback_data=f"hot:back:{_ht_page_state.get(user_id, 0)}",
+                        ),
+                    ]])
+                    await send_card_or_fallback(
+                        bot=ctx.bot,
+                        chat_id=query.from_user.id,
+                        template="tier_lock_upsell.html",
+                        data=_lock_data,
+                        text_fallback=f"🔒 {_upg_edge_tier.title()} Edge — upgrade to unlock.",
+                        markup=_lock_markup,
+                        message_to_edit=query.message,
+                    )
+                    return
+                except Exception as _lock_err:
+                    log.warning("tier_lock_upsell (hot) failed for %s: %s", _upg_key, _lock_err)
             await query.edit_message_text(_upg_text, parse_mode=ParseMode.HTML, reply_markup=_upg_markup)
         elif action.startswith("page:"):
             try:
@@ -2391,21 +2432,57 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     return
                 except Exception as _mme_err:
                     log.warning("mme edge_detail render failed for %s: %s", _mme_tip_key, _mme_err)
-        # blurred / locked / fallback → upgrade prompt
+        # blurred / locked / fallback → BUILD-TIER-LOCK-UPSELL-01 image card
         _mme_tier_pretty = _mme_edge_tier.title()
-        _mme_lines = [
-            f"🔒 <b>{_mme_tier_pretty} Edge — Locked</b>",
-            "",
-            "This edge is available on a higher plan.",
-            "Upgrade to view the full breakdown, odds, and bookmaker.",
-        ]
+        _mme_lock_home = (_mme_full_tip or {}).get("home") or _mme_match.get("home", "")
+        _mme_lock_away = (_mme_full_tip or {}).get("away") or _mme_match.get("away", "")
+        if _mme_lock_home and _mme_lock_away:
+            try:
+                from card_pipeline import build_tier_lock_data as _build_mme_lock_data
+                _mme_lock_summary = await _get_edge_tracker_summary(7)
+                _mme_kt = _mme_match.get("time", "")
+                _mme_kd = _mme_match.get("date", "")
+                _mme_kickoff_str = f"{_mme_kd} {_mme_kt}".strip() if _mme_kt else _mme_kd
+                _mme_lock_data = _build_mme_lock_data(
+                    edge_tier=_mme_edge_tier,
+                    home=_mme_lock_home,
+                    away=_mme_lock_away,
+                    sport_key=(_mme_full_tip or {}).get("sport_key", ""),
+                    league=(_mme_full_tip or {}).get("league_display") or _mme_match.get("league", ""),
+                    kickoff_str=_mme_kickoff_str,
+                    broadcast=(_mme_full_tip or {}).get("broadcast", ""),
+                    confirming_signals=(
+                        (_mme_full_tip or {}).get("confirming_signals")
+                        or (((_mme_full_tip or {}).get("edge_v2") or {}).get("confirming_signals", 0))
+                    ),
+                    tracker_summary=_mme_lock_summary,
+                )
+                _mme_lock_markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        f"✨ Unlock {_mme_tier_pretty} →",
+                        callback_data="sub:plans",
+                    ),
+                    InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb),
+                ]])
+                await send_card_or_fallback(
+                    bot=ctx.bot,
+                    chat_id=query.message.chat_id,
+                    template="tier_lock_upsell.html",
+                    data=_mme_lock_data,
+                    text_fallback=f"🔒 {_mme_tier_pretty} Edge — upgrade to unlock.",
+                    markup=_mme_lock_markup,
+                    message_to_edit=query.message,
+                )
+                return
+            except Exception as _mme_lock_err:
+                log.warning("tier_lock_upsell (mme) failed: %s", _mme_lock_err)
+        # fallback: text-based lock message
         _mme_markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
             [InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb)],
         ])
-        _mme_text = "\n".join(_mme_lines)
+        _mme_text = f"🔒 <b>{_mme_tier_pretty} Edge — Locked</b>\n\nUpgrade to view the full breakdown."
         _mme_chat_id = query.message.chat_id
-        # match_detail renders as a photo — delete and send a fresh text message
         try:
             await query.message.delete()
         except Exception:
@@ -3810,8 +3887,18 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         await _serve_response(query, text, markup)
     elif prefix == "profile":
         if action == "home":
-            text, markup = await _render_profile_home_surface(query.from_user.id)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            card_data = await _collect_profile_card_data(query.from_user.id)
+            markup = await _build_profile_buttons(query.from_user.id)
+            text, _ = await _render_profile_home_surface(query.from_user.id)
+            await send_card_or_fallback(
+                bot=query.get_bot(),
+                chat_id=query.message.chat_id,
+                template="profile_home.html",
+                data=card_data,
+                text_fallback=text,
+                markup=markup,
+                message_to_edit=query.message,
+            )
     elif prefix == "subscribe":
         await handle_subscribe(query, action)
     elif prefix == "unsubscribe":
@@ -5133,6 +5220,73 @@ async def format_profile_summary(user_id: int, *, surface: str = "settings") -> 
     return _build_settings_profile_summary(data, edge_summary)
 
 
+async def _collect_profile_card_data(user_id: int) -> dict:
+    """Assemble all state needed for the profile image card (BUILD-PROFILE-CARD-01)."""
+    user = await db.get_user(user_id)
+    user_tier = await get_effective_tier(user_id)
+    trial_active = await db.is_trial_active(user_id)
+    data = await get_profile_data(user_id)
+    edge_summary = await _get_edge_tracker_summary(7)
+    edge_views = await db.get_profile_engagement_stats(user_id)
+
+    first_name = (getattr(user, "first_name", None) or "").strip()
+
+    # Trial progress
+    trial_day = trial_total = trial_remaining = None
+    if trial_active:
+        progress = _profile_trial_progress(user, now=_profile_now_utc())
+        if progress:
+            trial_day, trial_total, trial_remaining = progress
+
+    # Member metadata
+    member_since_raw = getattr(user, "subscription_started_at", None) or getattr(user, "joined_at", None)
+    member_label = "Member since" if getattr(user, "subscription_started_at", None) else "Joined"
+    member_since = _format_profile_date(member_since_raw)
+    days_as_member = _profile_elapsed_days(member_since_raw, now=_profile_now_utc())
+
+    # 7D performance
+    edge_7d_has_data = bool(edge_summary.get("has_data"))
+    edge_7d_hits = int(edge_summary.get("hits", 0) or 0)
+    edge_7d_total = int(edge_summary.get("total", 0) or 0)
+    edge_7d_hit_pct = float(edge_summary.get("hit_rate_pct", 0.0) or 0.0)
+    edge_7d_roi = edge_summary.get("roi")
+    if edge_7d_roi is not None:
+        edge_7d_roi = float(edge_7d_roi)
+    raw_streak = edge_summary.get("streak")
+    edge_7d_streak = _format_edge_tracker_streak_line(raw_streak) if raw_streak else ""
+
+    # Activity
+    total_views = int(edge_views.get("total_edge_views", 0) or 0)
+    recent_views = int(edge_views.get("recent_edge_views", 0) or 0)
+    focus_sport = _get_profile_focus_sport(data.get("sports", []))
+
+    return build_profile_card_data(
+        first_name=first_name,
+        tier=user_tier,
+        trial_active=trial_active,
+        trial_day=trial_day,
+        trial_total_days=trial_total,
+        trial_days_remaining=trial_remaining,
+        is_founding_member=bool(getattr(user, "is_founding_member", False)),
+        member_since=member_since,
+        member_label=member_label,
+        days_as_member=days_as_member,
+        edge_7d_has_data=edge_7d_has_data,
+        edge_7d_hits=edge_7d_hits,
+        edge_7d_total=edge_7d_total,
+        edge_7d_hit_pct=edge_7d_hit_pct,
+        edge_7d_roi=edge_7d_roi,
+        edge_7d_streak=edge_7d_streak,
+        total_views=total_views,
+        recent_views=recent_views,
+        focus_sport=focus_sport,
+        experience_label=data.get("experience_label", ""),
+        risk_label=data.get("risk_label", ""),
+        bankroll_str=data.get("bankroll_str", ""),
+        sports=data.get("sports", []),
+    )
+
+
 async def _build_profile_buttons(user_id: int) -> InlineKeyboardMarkup:
     """Build tier-aware Profile buttons that keep the surface useful as a home base."""
     user_tier = await get_effective_tier(user_id)
@@ -5833,9 +5987,18 @@ async def _show_stats_overview(update: Update, user_id: int) -> None:
 
 
 async def _show_profile(update: Update, user_id: int) -> None:
-    """Show user profile summary from the sticky keyboard."""
-    summary, buttons = await _render_profile_home_surface(user_id)
-    await update.message.reply_text(summary, parse_mode=ParseMode.HTML, reply_markup=buttons)
+    """Show the profile image card from the sticky keyboard (BUILD-PROFILE-CARD-01)."""
+    card_data = await _collect_profile_card_data(user_id)
+    buttons = await _build_profile_buttons(user_id)
+    summary, _ = await _render_profile_home_surface(user_id)
+    await send_card_or_fallback(
+        bot=update.get_bot(),
+        chat_id=update.effective_chat.id,
+        template="profile_home.html",
+        data=card_data,
+        text_fallback=summary,
+        markup=buttons,
+    )
 
 
 async def _show_betway_guide(update: Update) -> None:

@@ -206,19 +206,30 @@ async def test_compare_odds_back_button_returns_to_edge_picks(test_edges) -> Non
 async def test_hot_upgrade_dispatch_returns_view_plans_and_back(
     monkeypatch, test_edges
 ) -> None:
+    # BUILD-TIER-LOCK-UPSELL-01: hot:upgrade now sends an image card via
+    # send_card_or_fallback (tier_lock_upsell.html) instead of edit_message_text.
     query = _make_query(user_id=77)
     ctx = _make_context()
     bot._ht_tips_snapshot[77] = list(test_edges)
     bot._remember_hot_tip_origin(77, test_edges[0]["match_id"], page=0)
     monkeypatch.setattr(bot, "get_effective_tier", AsyncMock(return_value="bronze"))
 
+    _card_calls: list[dict] = []
+
+    async def _capture_card(**kwargs):
+        _card_calls.append(kwargs)
+
+    monkeypatch.setattr(bot, "send_card_or_fallback", _capture_card)
+
     await bot._dispatch_button(
         query, ctx, "hot", f"upgrade:{test_edges[0]['match_id']}"
     )
 
-    text = query.edit_message_text.await_args.args[0]
-    markup = query.edit_message_text.await_args.kwargs["reply_markup"]
+    # Card path: send_card_or_fallback must have been called with upsell template
+    assert _card_calls, "send_card_or_fallback was not called"
+    call = _card_calls[0]
+    assert call["template"] == "tier_lock_upsell.html"
+    markup = call["markup"]
     callbacks = _callbacks(markup)
-    assert "Locked" in text
     assert "sub:plans" in callbacks
     assert "hot:back:0" in callbacks

@@ -1185,3 +1185,85 @@ def build_notify_live_score_ft_data(
         "settled_edge": settled_edge,
         "header_logo_b64": _logo(),
     }
+
+
+# ── BUILD-PROFILE-CARD-01 ─────────────────────────────────────────────────────
+
+def build_profile_card_data(
+    first_name: str = "",
+    tier: str = "bronze",
+    trial_active: bool = False,
+    trial_day: int | None = None,
+    trial_total_days: int | None = None,
+    trial_days_remaining: int | None = None,
+    is_founding_member: bool = False,
+    member_since: str = "",
+    member_label: str = "Joined",
+    days_as_member: int | None = None,
+    edge_7d_has_data: bool = False,
+    edge_7d_hits: int = 0,
+    edge_7d_total: int = 0,
+    edge_7d_hit_pct: float = 0.0,
+    edge_7d_roi: float | None = None,
+    edge_7d_streak: str = "",
+    total_views: int = 0,
+    recent_views: int = 0,
+    focus_sport: str = "",
+    experience_label: str = "",
+    risk_label: str = "",
+    bankroll_str: str = "",
+    sports: list[dict] | None = None,
+) -> dict:
+    """Profile home image card — BUILD-PROFILE-CARD-01."""
+    tier = (tier or "bronze").lower()
+    tier_emoji = _TIER_EMOJIS.get(tier, "🥉")
+    tier_name = _TIER_NAMES.get(tier, tier.title())
+
+    sport_rows: list[dict] = []
+    for s in (sports or []):
+        teams: list[str] = []
+        for lg in s.get("leagues", []):
+            teams.extend(lg.get("teams", []))
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for t in teams:
+            if t not in seen:
+                deduped.append(t)
+                seen.add(t)
+        preview = ", ".join(deduped[:4])
+        if len(deduped) > 4:
+            preview += f" +{len(deduped) - 4} more"
+        sport_rows.append({
+            "emoji": s.get("emoji", "🏅"),
+            "label": s.get("label", ""),
+            "team_preview": preview,
+        })
+
+    return {
+        "first_name": first_name,
+        "tier": tier,
+        "tier_emoji": tier_emoji,
+        "tier_name": tier_name,
+        "trial_active": trial_active,
+        "trial_day": trial_day,
+        "trial_total_days": trial_total_days,
+        "trial_days_remaining": trial_days_remaining,
+        "is_founding_member": is_founding_member,
+        "member_since": member_since,
+        "member_label": member_label,
+        "days_as_member": days_as_member,
+        "edge_7d_has_data": edge_7d_has_data,
+        "edge_7d_hits": edge_7d_hits,
+        "edge_7d_total": edge_7d_total,
+        "edge_7d_hit_pct": edge_7d_hit_pct,
+        "edge_7d_roi": edge_7d_roi,
+        "edge_7d_streak": edge_7d_streak,
+        "total_views": total_views,
+        "recent_views": recent_views,
+        "focus_sport": focus_sport,
+        "experience_label": experience_label,
+        "risk_label": risk_label,
+        "bankroll_str": bankroll_str,
+        "sports": sport_rows,
+        "header_logo_b64": _logo(),
+    }

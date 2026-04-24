@@ -39,6 +39,7 @@ Variant LIST — dynamic 480×N where N ∈ [100, 1200]
         tier_page.html
         ai_breakdown.html
         sub_payment_confirmed.html
+        profile_home.html
     Rationale: list-like content varies in item count — dynamic height eliminates
     blank-space padding. ai_breakdown sections vary greatly in prose length.
 

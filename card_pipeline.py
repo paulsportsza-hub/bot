@@ -1823,3 +1823,73 @@ def render_card_bytes(
     back_cb = back_cb_override or f"hot:back:{back_page}"
     markup = InlineKeyboardMarkup(buttons or [[InlineKeyboardButton("↩️ Back", callback_data=back_cb)]])
     return img, caption, markup
+
+
+# ── BUILD-TIER-LOCK-UPSELL-01 ─────────────────────────────────────────────────
+
+_PRICE_BY_TIER: dict[str, str] = {
+    "silver": "R149",
+    "gold": "R199",
+    "diamond": "R299",
+}
+_TIER_COLOUR: dict[str, str] = {
+    "diamond": "#B9F2FF",
+    "gold": "#FFD700",
+    "silver": "#C0C0C0",
+    "bronze": "#CD7F32",
+}
+_SPORT_EMOJI_MAP: dict[str, str] = {
+    "soccer": "⚽", "football": "⚽",
+    "rugby": "🏉",
+    "cricket": "🏏",
+    "mma": "🥊", "boxing": "🥊",
+    "tennis": "🎾",
+    "basketball": "🏀",
+}
+
+
+def _tier_sport_emoji(sport_key: str) -> str:
+    for k, v in _SPORT_EMOJI_MAP.items():
+        if k in sport_key.lower():
+            return v
+    return "🏅"
+
+
+def build_tier_lock_data(
+    edge_tier: str,
+    home: str,
+    away: str,
+    sport_key: str,
+    league: str,
+    kickoff_str: str,
+    broadcast: str,
+    confirming_signals: int,
+    tracker_summary: dict | None,
+) -> dict:
+    """Assemble template variables for tier_lock_upsell.html."""
+    from card_data import logo_b64 as _logo_b64
+    from pathlib import Path as _Path
+    _logo_path = _Path(__file__).parent / "assets" / "LOGO" / "mzansiedge-wordmark-dark-transparent.png"
+
+    ts = tracker_summary or {}
+    hit_rate = ts.get("hit_rate_7d") or ts.get("hit_rate") or 0
+    roi = ts.get("roi_7d") or ts.get("roi") or 0
+    roi_str = f"+R{int(roi)}" if roi >= 0 else f"-R{abs(int(roi))}"
+
+    tier = edge_tier.lower() if edge_tier else "gold"
+    return {
+        "header_logo_b64": _logo_b64(_logo_path, max_height=64),
+        "edge_tier": tier,
+        "edge_tier_display": tier.title(),
+        "tier_colour": _TIER_COLOUR.get(tier, "#FFD700"),
+        "sport_emoji": _tier_sport_emoji(sport_key),
+        "home": home,
+        "away": away,
+        "league": league,
+        "kickoff": kickoff_str,
+        "broadcast": broadcast or "",
+        "confirming_signals": confirming_signals or 0,
+        "hit_rate_7d": str(int(hit_rate)),
+        "roi_7d": roi_str,
+        "price": _PRICE_BY_TIER.get(tier, "R199"),
+    }
