@@ -7753,12 +7753,23 @@ _VERDICT_BLACKLIST = [
     "stake manageable",
     "size your stake",
     "limit your stake",
-    # BUILD-VERDICT-FLOOR-01: standalone "lean" in rendered verdict prose is banned —
-    # triggers LLM-voice leak (e.g. "I lean toward", "lean on home side").
-    " lean",
+    # BUILD-VERDICT-FLOOR-01 / P0-HOTFIX-LEAN-REGEX 2026-04-24: substring " lean" removed —
+    # replaced with _VERDICT_BLACKLIST_RE below. Catches LLM-voice forms ("I lean toward",
+    # "lean on home") while allowing SA sports noun usage ("the lean here", "is the lean").
     # FIX-D1-VERDICT-BLACKLIST-01: import LLM meta-markers from narrative_spec (single source of truth)
     *_LLM_META_MARKERS,
 ]
+
+# P0-HOTFIX-LEAN-REGEX 2026-04-24: regex companion to _VERDICT_BLACKLIST.
+# Targets LLM-voice "lean" forms (verb + first-person/model self-reference + directional
+# phrasing) while allowing SA sports noun usage ("the lean here", "is the lean",
+# "Arsenal is the lean at 1.45"). Pure style gate — factual accuracy is enforced by
+# _fact_check_verdict, validate_diamond_price_prefix, validate_manager_names, DERIVED CLAIMS
+# check, BANNED_TRIVIAL_VERDICT_TEMPLATES, and tier length floors, all independent of this.
+_VERDICT_BLACKLIST_RE = re.compile(
+    r"\b(?:I|we|my|our|the\s+model)\s+leans?\b|\bleans?\s+(?:toward|towards|on|into|against|heavily)\b",
+    re.IGNORECASE,
+)
 
 # BUILD-VERDICT-RENDER-FIXES-01: detect orphan "Back X." sentence at end of verdict
 _ORPHAN_BACK_RE = re.compile(
@@ -8081,7 +8092,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             log.warning("_generate_verdict: field-name leak detected, discarding: %s", text[:80])
             return ""
 
-        if any(p in text.lower() for p in _VERDICT_BLACKLIST):
+        if any(p in text.lower() for p in _VERDICT_BLACKLIST) or _VERDICT_BLACKLIST_RE.search(text):
             log.warning("verdict blacklisted: %s", text)
             return ""
 
@@ -8509,7 +8520,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             return ""
 
         # Blacklist check (matches _generate_verdict)
-        if any(p in text.lower() for p in _VERDICT_BLACKLIST):
+        if any(p in text.lower() for p in _VERDICT_BLACKLIST) or _VERDICT_BLACKLIST_RE.search(text):
             log.warning("_generate_verdict_constrained: blacklisted phrase, discarding: %s", text[:80])
             if isinstance(spec, NarrativeSpec):
                 return _cap_verdict(_render_verdict_deterministic(spec))
@@ -9036,7 +9047,7 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
         if _use_cached_verdict:
             _cv_text = _cached_verdict.get("verdict_html", "")
             # Serve-time content gate: apply blacklist to cached verdicts
-            if _VERDICT_BLACKLIST and any(p in _cv_text.lower() for p in _VERDICT_BLACKLIST):
+            if (_VERDICT_BLACKLIST and any(p in _cv_text.lower() for p in _VERDICT_BLACKLIST)) or _VERDICT_BLACKLIST_RE.search(_cv_text):
                 log.info("VERDICT_BLACKLISTED_CACHED: %s, will regenerate", match_key)
                 _use_cached_verdict = False
             elif _cv_text:
