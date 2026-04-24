@@ -8319,7 +8319,8 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             model=_VERDICT_MODEL,
             max_tokens=180,  # BUILD-NARRATIVE-VOICE-01: raised to 180 (≈260 chars × 0.7 headroom for VERDICT_HARD_MAX)
             temperature=0.5,
-            system=system_prompt,
+            # FIX-COST-WAVE-02 Phase 3: cache_control on the ~2.1K-token verdict system prompt.
+            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": "\n".join(lines)}],
         )
         text = ""
@@ -8355,7 +8356,8 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
                     model=_VERDICT_MODEL,
                     max_tokens=180,
                     temperature=0.85,
-                    system=system_prompt,
+                    # FIX-COST-WAVE-02 Phase 3: cache_control on the verdict system prompt.
+                    system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
                     messages=[
                         {"role": "user", "content": "\n".join(lines)},
                         {"role": "assistant", "content": text},
@@ -8806,7 +8808,8 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
             model=_VERDICT_MODEL,
             max_tokens=220,  # BUILD-VERDICT-ENRICHMENT-FIX-01: raised from 120; ceiling ≤300
             temperature=_temperature,
-            system=system_prompt,
+            # FIX-COST-WAVE-02 Phase 3: cache_control on the verdict system prompt.
+            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": "\n".join(lines)}],
         )
         text = ""

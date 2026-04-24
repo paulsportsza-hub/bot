@@ -210,7 +210,13 @@ def test_system_prompt_param_used():
 
     call_kwargs = mock_client.messages.create.call_args
     assert "system" in call_kwargs.kwargs, "Sonnet call must use 'system' parameter"
-    system_text = call_kwargs.kwargs["system"]
+    # FIX-COST-WAVE-02 Phase 3: system= is now a list of structured blocks with cache_control.
+    system_param = call_kwargs.kwargs["system"]
+    if isinstance(system_param, list):
+        assert system_param and "cache_control" in system_param[0], "verdict system block must carry cache_control"
+        system_text = system_param[0]["text"]
+    else:
+        system_text = system_param
     assert "SA sports pundit" in system_text, f"System prompt must use SA sports pundit voice, got: {system_text!r}"
 
 

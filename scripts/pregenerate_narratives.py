@@ -2058,10 +2058,20 @@ async def _generate_one(
                 # pregen_narratives(); fall back to the `claude` param so unit tests
                 # that pass a mocked client via _generate_one(..., claude=fake) still work.
                 _sonnet_client = _narrative_claude if _narrative_claude is not None else claude
+                # FIX-COST-WAVE-02 Phase 3: cache_control on the structured user block.
+                # Match-specific prompts limit hit rate at this breakpoint; retry path (2322)
+                # and any within-sweep prefix overlap still benefit.
                 resp = await _sonnet_client.messages.create(
                     model=SHADOW_MODEL,
                     max_tokens=1200,
-                    messages=[{"role": "user", "content": prompt_text}],
+                    messages=[{
+                        "role": "user",
+                        "content": [{
+                            "type": "text",
+                            "text": prompt_text,
+                            "cache_control": {"type": "ephemeral"},
+                        }],
+                    }],
                     timeout=45.0,
                 )
                 model_draft = _strip_preamble(_extract_text_from_response(resp)).strip()
@@ -2333,10 +2343,19 @@ async def _generate_one(
                         # FIX-COST-WAVE-02: Sonnet retry also routes direct Anthropic
                         # (NARRATIVE scope) when the module singleton is initialised.
                         _retry_sonnet_client = _narrative_claude if _narrative_claude is not None else claude
+                        # FIX-COST-WAVE-02 Phase 3: cache_control on the retry block — hits
+                        # the primary path's cache write when the prompt is identical.
                         _retry_resp = await _retry_sonnet_client.messages.create(
                             model=SHADOW_MODEL,
                             max_tokens=1200,
-                            messages=[{"role": "user", "content": _retry_prompt}],
+                            messages=[{
+                                "role": "user",
+                                "content": [{
+                                    "type": "text",
+                                    "text": _retry_prompt,
+                                    "cache_control": {"type": "ephemeral"},
+                                }],
+                            }],
                             timeout=45.0,
                         )
                         _retry_draft = _strip_preamble(
