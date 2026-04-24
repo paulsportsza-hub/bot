@@ -2045,7 +2045,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     )
                     _lock_markup = InlineKeyboardMarkup([[
                         InlineKeyboardButton(
-                            f"✨ Unlock {_upg_edge_tier.title()} →",
+                            f"💎 Unlock {_upg_edge_tier.title()}",
                             callback_data="sub:plans",
                         ),
                         InlineKeyboardButton(
@@ -2427,7 +2427,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 _mme_lock_markup = InlineKeyboardMarkup([[
                     InlineKeyboardButton(
-                        f"✨ Unlock {_mme_tier_pretty} →",
+                        f"💎 Unlock {_mme_tier_pretty}",
                         callback_data="sub:plans",
                     ),
                     InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb),
@@ -5084,14 +5084,10 @@ def _build_profile_performance_section(edge_summary: dict, edge_views: dict) -> 
 
 def _build_profile_setup_section(data: dict) -> list[str]:
     """Render the user's current setup as a compact identity summary."""
-    lines = [
+    return [
         "⚙️ <b>Your Setup</b>",
         f"🎯 <b>Experience:</b> {h(data['experience_label'])}",
-        f"⚖️ <b>Risk:</b> {h(data['risk_label'])}",
     ]
-    if data.get("bankroll_str") and data["bankroll_str"] != "Not set":
-        lines.append(f"💰 <b>Bankroll:</b> {h(data['bankroll_str'])}")
-    return lines
 
 
 def _build_profile_following_section(data: dict) -> list[str]:
@@ -5128,8 +5124,6 @@ def _build_settings_profile_summary(data: dict, edge_summary: dict) -> str:
                     lines.append(f"  {', '.join(lg['teams'])}")
         lines.append("")
 
-    lines.append(f"⚖️ <b>Risk:</b> {data['risk_label']}")
-    lines.append(f"💰 <b>Bankroll:</b> {data['bankroll_str']}")
 
     # FIX-HIDE-EDGE-TRACKER-P0-01: Edge Performance block suppressed pre-launch.
     if not EDGE_PERFORMANCE_HIDDEN and edge_summary.get("has_data"):
@@ -5474,20 +5468,21 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "market movers, live scores — choose what updates you want "
             "so I know exactly how to keep you in the game."
         )
-    done_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔔 Set Up Edge Alerts", callback_data="story:start")],
-        [
-            InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go"),
-            InlineKeyboardButton("📖 How It Works", callback_data="guide:menu"),
-        ],
-        [InlineKeyboardButton("⏭️ Skip for Now", callback_data="nav:main")],
+    _ob_tier = await get_effective_tier(user_id)
+    _ob_done_rows = [
+        [InlineKeyboardButton("📚 View Bookmaker Guide", callback_data="guide:bookmakers")],
         [InlineKeyboardButton("👥 Join the MzansiEdge Community", url="https://t.me/MzansiEdge")],
-    ])
+    ]
+    if _ob_tier != "diamond":
+        _ob_done_rows.append([InlineKeyboardButton("💎 Upgrade Now", callback_data="hot:upgrade")])
+    _ob_done_rows.append([InlineKeyboardButton("⏭️ Start Exploring", callback_data="nav:main")])
+    done_markup = InlineKeyboardMarkup(_ob_done_rows)
     await send_card_or_fallback(
         bot=_g_bot, chat_id=query.from_user.id,
         template="onboarding_done.html",
         data=build_onboarding_done_data(
-            name, trial_started=trial_started, trial_days=7,
+            name, user_tier=_ob_tier,
+            trial_started=trial_started, trial_days=7,
             founding_offer=False,
             founding_days_left=0,
         ),
@@ -13398,8 +13393,7 @@ async def _do_picks_flow(chat_id: int, bot, user_id: int) -> None:
         chat_id,
         f"💰 <b>Found {len(picks)} value bet{'s' if len(picks) != 1 else ''}!</b>\n\n"
         f"📊 Scanned {result['total_events']} events | "
-        f"{result['total_markets']} markets\n"
-        f"⚖️ Risk: {profile['label']}",
+        f"{result['total_markets']} markets",
         parse_mode=ParseMode.HTML,
     )
 
@@ -23945,11 +23939,16 @@ async def handle_settings(query, action: str) -> None:
 
     if action == "home":
         await _discard_settings_sports_state(user_id)
-        text = await format_profile_summary(user_id)
-        try:
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
-        except BadRequest:
-            await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_settings())
+        card_data = await _collect_profile_card_data(user_id)
+        await send_card_or_fallback(
+            bot=query.get_bot(),
+            chat_id=query.message.chat_id,
+            template="profile_home.html",
+            data=card_data,
+            text_fallback="",
+            markup=kb_settings(),
+            message_to_edit=query.message,
+        )
     elif action == "sports":
         state = await _get_settings_sports_state(user_id)
         prefs = await db.get_user_sport_prefs(user_id)

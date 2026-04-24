@@ -1,0 +1,80 @@
+{
+  "composite_score": 5.444,
+  "verdict": "FAIL (J5 < 5.0)",
+  "run_timestamp": "2026-04-23T18:09:01",
+  "stitch_mock_mode": true,
+  "payment_flow_executed": false,
+  "sev1_count": 0,
+  "persona_composites": {
+    "P4": 7.838
+  },
+  "l3_score": 0.999,
+  "l3_k3_fraction": 0.0,
+  "l3_k3_passes": false,
+  "per_persona": {
+    "P4": {
+      "composite": 7.838,
+      "l1": {
+        "score": 9.5,
+        "artefacts_scored": 4,
+        "dimensions": {
+          "C1": 10.0,
+          "C2": 10.0,
+          "C3": 10.0,
+          "C4": 10.0,
+          "C5": 10.0,
+          "C6": 0.0,
+          "C7": 10.0
+        },
+        "defects": [
+          {
+            "dimension": "C6",
+            "field": "empty_text",
+            "deduction": 5.0,
+            "sev": "SEV-2"
+          },
+          {
+            "dimension": "C6",
+            "field": "empty_text",
+            "deduction": 5.0,
+            "sev": "SEV-2"
+          }
+        ]
+      },
+      "l2": {
+        "score": 6.17,
+        "j5_score": 0.0,
+        "dimensions": {
+          "J1": 10.0,
+          "J2": 8.0,
+          "J3": 3.0,
+          "J4": 6.5,
+          "J5": 0.0
+        }
+      },
+      "steps_completed": 6,
+      "steps_total": 6,
+      "aborted": false
+    }
+  },
+  "defects": [
+    {
+      "persona": "P4",
+      "step": 3,
+      "sev": "2",
+      "description": "My Matches returned empty text \u2014 C6 empty state quality fail"
+    },
+    {
+      "persona": "P4",
+      "step": 4,
+      "sev": "2",
+      "description": "Top Edge Picks returned empty text \u2014 C6 quality fail"
+    },
+    {
+      "persona": "P4",
+      "step": 5,
+      "sev": "3",
+      "description": "Bot did not respond to freetext input"
+    }
+  ]
+}

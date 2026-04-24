@@ -111,10 +111,12 @@ async def test_settings_home_is_accessible(test_db) -> None:
     await db.upsert_user(41006, "settings", "Settings")
     query = _make_query(user_id=41006)
 
-    await bot.handle_settings(query, "home")
+    with patch("bot._collect_profile_card_data", new_callable=AsyncMock, return_value={}) as mock_data, \
+         patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.handle_settings(query, "home")
 
-    text = query.edit_message_text.call_args.args[0]
-    assert "Profile" in text or "Settings" in text
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "profile_home.html"
 
 
 async def test_settings_sports_screen_shows_saved_sport(test_db) -> None:
@@ -137,7 +139,9 @@ async def test_settings_sports_done_persists_selection(test_db) -> None:
     }
     query = _make_query(user_id=41008)
 
-    await bot.handle_settings(query, "sports_done")
+    with patch("bot._collect_profile_card_data", new_callable=AsyncMock, return_value={}), \
+         patch("bot.send_card_or_fallback", new_callable=AsyncMock):
+        await bot.handle_settings(query, "sports_done")
 
     prefs = await db.get_user_sport_prefs(41008)
     assert any(pref.sport_key == "soccer" for pref in prefs)

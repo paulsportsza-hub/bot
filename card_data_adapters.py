@@ -713,21 +713,30 @@ def build_onboarding_summary_data(ob: dict) -> dict:
     }
 
 
-def build_onboarding_done_data(first_name: str, trial_started: bool = False,
-                                trial_days: int = 7, founding_offer: bool = False,
+def build_onboarding_done_data(first_name: str, user_tier: str = "bronze",
+                                trial_started: bool = False, trial_days: int = 7,
+                                founding_offer: bool = False,
                                 founding_days_left: int = 0) -> dict:
-    features = [
-        {"emoji": "⚽", "title": "My Matches",     "desc": "Personalised 7-day schedule with Edge-AI on every game."},
-        {"emoji": "💎", "title": "Top Edge Picks", "desc": "I scan all SA bookmakers and find exactly where the Edge is."},
-    ]
+    _tier = (user_tier or "bronze").lower()
+    _tier_meta = {
+        "bronze":  {"display": "BRONZE MEMBER", "colour": "#CD7F32", "emoji": "🥉"},
+        "gold":    {"display": "GOLD MEMBER",   "colour": "#FFD700", "emoji": "🥇"},
+        "diamond": {"display": "DIAMOND MEMBER","colour": "#B9F2FF", "emoji": "💎"},
+    }.get(_tier, {"display": "BRONZE MEMBER", "colour": "#CD7F32", "emoji": "🥉"})
     return {
         "header_logo_b64": _logo(),
+        "user_name": first_name or "champ",
+        "user_tier": _tier,
+        "tier_display": _tier_meta["display"],
+        "tier_colour": _tier_meta["colour"],
+        "tier_emoji": _tier_meta["emoji"],
+        "show_upgrade": _tier != "diamond",
+        # Legacy keys kept for text fallback compatibility
         "first_name": first_name or "champ",
         "trial_started": trial_started,
         "trial_days": trial_days,
         "founding_offer": founding_offer,
         "founding_days_left": founding_days_left,
-        "features": features,
     }
 
 

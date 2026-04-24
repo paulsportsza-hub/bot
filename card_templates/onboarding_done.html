@@ -1,5 +1,5 @@
-<!-- VARIANT: LIST -->
-<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
+<!-- VARIANT: DETAIL -->
+<!-- BRIEF: BUILD-ONBOARDING-HYPE-PACK-01 -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -8,71 +8,167 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root { --text-secondary: #B3B3B3; }
-        html, body { margin: 0; padding: 0; background: #000000; }
-        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
-        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        html, body {
+            margin: 0; padding: 0;
+            background: #000000;
+            width: 480px; height: 620px;
+            overflow: hidden;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px; height: 620px; overflow: hidden;
+        }
+        .card {
+            width: 480px; height: 620px;
+            display: flex; flex-direction: column;
+            background: #0A0A0A;
+            overflow: hidden;
+        }
+
+        /* ── Header ─────────────────────────────────────── */
         .header {
-            text-align: center; padding: 22px 20px 18px;
+            text-align: center;
+            padding: 18px 20px 14px;
             background: linear-gradient(180deg, #0D0D0D, #141414);
             border-bottom: 1px solid #2A2A2A;
+            flex-shrink: 0;
         }
-        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
-        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
-        .title { font-size: 15px; font-weight: 700; color: #FFFFFF; letter-spacing: 3px; margin-bottom: 4px; }
-        .subtitle { font-size: 12px; color: var(--text-secondary); }
-        .body { padding: 20px 20px 8px; }
-        .greeting { font-size: 20px; font-weight: 800; color: #FFFFFF; margin-bottom: 6px; }
-        .tagline { font-size: 13px; color: var(--text-secondary); margin-bottom: 18px; line-height: 1.6; }
-        .badge-row { margin-bottom: 16px; }
-        .badge {
-            display: inline-flex; align-items: center; gap: 5px;
-            padding: 4px 10px; border-radius: 20px;
-            font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+        .logo-img { height: 28px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
         }
-        .badge-trial { background: #1A3A1A; color: #4CAF50; border: 1px solid #2D5A2D; }
-        .badge-founding { background: #2D1B00; color: #FFB300; border: 1px solid #5A3700; }
-        .features-title { font-size: 11px; color: var(--text-secondary); font-weight: 700; letter-spacing: 1px; margin-bottom: 12px; }
-        .features { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
-        .feature-row { display: flex; align-items: flex-start; gap: 10px; }
-        .feature-emoji { font-size: 18px; width: 26px; flex-shrink: 0; }
-        .feature-content {}
-        .feature-title { font-size: 13px; font-weight: 700; color: #FFFFFF; }
-        .feature-desc { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+        .header-title {
+            font-size: 13px; font-weight: 800;
+            color: #FFFFFF; letter-spacing: 3px;
+        }
+
+        /* ── Welcome block ───────────────────────────────── */
+        .welcome-block {
+            padding: 14px 20px 12px;
+            border-bottom: 1px solid #1E1E1E;
+            flex-shrink: 0;
+        }
+        .welcome-name {
+            font-size: 17px; font-weight: 800; color: #FFFFFF;
+            margin-bottom: 4px;
+        }
+        .welcome-sub {
+            font-size: 12px; color: var(--text-secondary); line-height: 1.5;
+        }
+
+        /* ── Steps ───────────────────────────────────────── */
+        .steps { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+        .step {
+            padding: 13px 20px;
+            border-bottom: 1px solid #1E1E1E;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        .step:last-child { border-bottom: none; }
+
+        .step-left {
+            display: flex; flex-direction: column;
+            align-items: center; gap: 2px;
+            flex-shrink: 0; width: 36px;
+        }
+        .step-num {
+            font-size: 9px; font-weight: 800;
+            color: var(--text-secondary);
+            letter-spacing: 1px;
+        }
+        .step-icon { font-size: 20px; line-height: 1; }
+
+        .step-content { flex: 1; min-width: 0; }
+        .step-headline {
+            font-size: 13px; font-weight: 700;
+            color: #FFFFFF; margin-bottom: 4px;
+        }
+        .step-body {
+            font-size: 11px; color: var(--text-secondary);
+            line-height: 1.55;
+        }
+
+        /* ── Tier badge (bottom right of welcome) ─────────── */
+        .tier-row {
+            display: flex; align-items: center; gap: 6px;
+            margin-top: 6px;
+        }
+        .tier-badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 9px; border-radius: 12px;
+            font-size: 9px; font-weight: 800; letter-spacing: 1.5px;
+            border: 1px solid;
+        }
     </style>
 </head>
 <body>
 <div class="card">
+    <!-- Header -->
     <div class="header">
         {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
         <div class="orange-bar"></div>
-        <div class="title">YOU'RE ALL SET</div>
-        <div class="subtitle">Your Edge-AI is live</div>
+        <div class="header-title">YOU'RE IN. LET'S GO.</div>
     </div>
-    <div class="body">
-        <div class="greeting">Let's go, {{ first_name }}! 🎉</div>
-        <div class="tagline">
-            Your personalised Edge-AI is configured. Here's what's available to you now.
+
+    <!-- Welcome block -->
+    <div class="welcome-block">
+        <div class="welcome-name">Welcome, {{ user_name }}! 🔥</div>
+        <div class="welcome-sub">Your Edge-AI is live. Here's how to get the most out of it.</div>
+        <div class="tier-row">
+            <span class="tier-badge" style="color: {{ tier_colour }}; border-color: {{ tier_colour }}40; background: {{ tier_colour }}10;">
+                {{ tier_emoji }} {{ tier_display }}
+            </span>
+        </div>
+    </div>
+
+    <!-- Steps -->
+    <div class="steps">
+        <!-- Step 1: Bookmakers -->
+        <div class="step">
+            <div class="step-left">
+                <span class="step-num">STEP 1</span>
+                <span class="step-icon">📚</span>
+            </div>
+            <div class="step-content">
+                <div class="step-headline">Get Your Bookmaker Accounts Ready</div>
+                <div class="step-body">We find the Edge. You need the account to take it. One guide — all major SA bookmakers covered.</div>
+            </div>
         </div>
 
-        {% if trial_started or founding_offer %}
-        <div class="badge-row">
-            {% if trial_started %}<span class="badge badge-trial">🎁 {{ trial_days }}-Day Free Trial — starts now</span>{% endif %}
-            {% if founding_offer %}<span class="badge badge-founding">⭐ Founding Member — {{ founding_days_left }} days left</span>{% endif %}
+        <!-- Step 2: Community -->
+        <div class="step">
+            <div class="step-left">
+                <span class="step-num">STEP 2</span>
+                <span class="step-icon">👥</span>
+            </div>
+            <div class="step-content">
+                <div class="step-headline">Feel the Mzansi Hype</div>
+                <div class="step-body">The community is live. Jump in for match banter, hot takes, and real-time Mzansi sports energy.</div>
+            </div>
+        </div>
+
+        <!-- Step 3: Upgrade (hidden for Diamond) -->
+        {% if show_upgrade %}
+        <div class="step">
+            <div class="step-left">
+                <span class="step-num">STEP 3</span>
+                <span class="step-icon">💎</span>
+            </div>
+            <div class="step-content">
+                {% if user_tier == 'gold' %}
+                <div class="step-headline">One Step to Diamond</div>
+                <div class="step-body">You're on Gold. Diamond unlocks AI Breakdown, exclusive picks, personalised alerts. The whole Edge system.</div>
+                {% else %}
+                <div class="step-headline">Your Edge, Fully Unlocked</div>
+                <div class="step-body">Bronze gives you a taste — Diamond is the full system. Upgrade to access every pick, nothing held back.</div>
+                {% endif %}
+            </div>
         </div>
         {% endif %}
-
-        <div class="features-title">YOUR TOOLKIT</div>
-        <div class="features">
-            {% for f in features %}
-            <div class="feature-row">
-                <div class="feature-emoji">{{ f.emoji }}</div>
-                <div class="feature-content">
-                    <div class="feature-title">{{ f.title }}</div>
-                    <div class="feature-desc">{{ f.desc }}</div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
     </div>
 </div>
 </body>
