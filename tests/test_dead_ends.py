@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -105,7 +106,8 @@ async def test_main_menu_is_reachable_from_start(
     mock_update.effective_user.username = "reachable"
     mock_update.effective_user.first_name = "Reachable"
 
-    await bot.cmd_start(mock_update, mock_context)
+    with patch("bot._welcome_img_path", return_value=None):
+        await bot.cmd_start(mock_update, mock_context)
 
     markup = mock_update.message.reply_text.call_args.kwargs["reply_markup"]
     labels = [button.text for row in markup.keyboard for button in row]

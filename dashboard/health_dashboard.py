@@ -1324,6 +1324,7 @@ def _fetch_marketing_queue() -> tuple[list[dict], float]:
             "platform_notes": _get_page_prop(page, "Platform Notes") or _get_page_prop(page, "Notes") or "",
             "created": page.get("created_time", ""),
             "last_edited": page.get("last_edited_time", ""),
+            "target_group_url": _get_page_prop(page, "Target Group URL") or "",
         }
         items.append(item)
 
@@ -1705,8 +1706,10 @@ def _fetch_fb_groups_moq() -> list[dict]:
             parts = [p.strip() for p in title.split(" — ")]
             group = parts[1] if len(parts) >= 3 else (parts[-1] if parts else title)
 
-            group_url = ""
-            if registry:
+            # FIX-FB-MOQ-GROUP-URL-01: use target_group_url from the Notion page
+            # first (set by the autogen cron), then fall back to ledger registry.
+            group_url = item.get("target_group_url") or ""
+            if not group_url and registry:
                 name_key = group.lower()
                 group_url = registry.get(name_key) or ""
                 if not group_url:
@@ -4801,6 +4804,28 @@ function renderLinkedInFrame(p,media){
     '</div>';
   return'<div class="pv-li-frame">'+hdr+text+mediaWrap+stats+actions+'</div>';
 }
+// FIX-DASH-FB-PREVIEW-GROUP-01: copy handler for the FB Groups preview frame.
+// Reads text from data-fb-copy attribute (HTML-escaped, auto-decoded by dataset API),
+// copies to clipboard, and flashes the button with visual confirmation.
+function pvFbCopy(btn){
+  var t=btn.getAttribute('data-fb-copy')||'';
+  if(!t)return;
+  var _finish=function(){
+    var orig=btn.innerHTML;
+    btn.classList.add('pv-fb-copy-flash');
+    btn.innerHTML=_ICO_CHECK+' Copied';
+    setTimeout(function(){btn.classList.remove('pv-fb-copy-flash');btn.innerHTML=orig;},2000);
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(_finish).catch(_finish);
+  }else{
+    var x=document.createElement('textarea');
+    x.value=t;document.body.appendChild(x);x.select();
+    try{document.execCommand('copy')}catch(e){}
+    document.body.removeChild(x);
+    _finish();
+  }
+}
 // BUILD-DASH-FB-PREVIEW-CAROUSEL-01: single-post FB Group preview frame.
 // Used by the timeline click path (loadPreview) when a FB Group card is tapped.
 // Group name is parsed from p.title or provided via p.group; link is optional.
@@ -4815,7 +4840,10 @@ function _fbGroupName(p){
 function renderFbGroupFrame(p,media){
   var name=_fbGroupName(p);
   var url=p.group_url||'';
-  var cap=p.final_copy||p.caption_final||p.caption||p.body_markdown||p.post_text||'';
+  // FIX-DASH-FB-PREVIEW-GROUP-01: use clean caption (hashtags stripped) as the
+  // paste-ready copy; prefer final_copy / caption over body_markdown which contains
+  // the full raw text including any hashtag lines. Trim to remove stray whitespace.
+  var cap=(p.final_copy||p.caption||p.caption_final||'').trim();
   var bodyHtml=_pvLineBreaks(cap);
   var nameHtml=url?'<a class="pv-fb-group-link" href="'+eA(url)+'" target="_blank" rel="noopener">'+eH(name)+' ↗</a>':'<span class="pv-fb-group-name">'+eH(name)+'</span>';
   var hdr='<div class="pv-fb-hdr"><div class="pv-avatar pv-fb-avatar">'+eH((name||'F').charAt(0))+'</div><div class="pv-fb-head-meta"><div class="pv-fb-group">'+nameHtml+'</div><div class="pv-fb-sub">Group · '+_pvTimeLabel(p)+'</div></div></div>';
@@ -4827,7 +4855,9 @@ function renderFbGroupFrame(p,media){
     mediaWrap='<div class="pv-fb-media">'+media+'</div>';
   }
   var text=bodyHtml?'<div class="pv-fb-text">'+bodyHtml+'</div>':'';
-  return'<div class="pv-fb-frame">'+hdr+mediaWrap+text+'</div>';
+  // Copy button — stores text in data-fb-copy (HTML-escaped), pvFbCopy reads it safely
+  var copyBar=cap?'<div class="pv-fb-toolbar" style="padding:8px 14px;border-top:1px solid rgba(255,255,255,.06)"><button type="button" class="pv-fb-copy-btn" data-fb-copy="'+eA(cap)+'" onclick="pvFbCopy(this)" aria-label="Copy post text">'+_ICO_CLIP+' Copy text</button></div>':'';
+  return'<div class="pv-fb-frame">'+hdr+mediaWrap+text+copyBar+'</div>';
 }
 // FIX-DASH-IG-PREVIEW-ROUTING-01: switch preview dispatch from
 // substring match on p.channel (display name) to exact match on
@@ -9799,6 +9829,27 @@ def api_so_post(post_id: str):
     channel_key = _so_norm_channel(item.get("channel") or "")
     is_vertical = channel_key in ("instagram", "tiktok")
 
+    # FIX-DASH-FB-PREVIEW-GROUP-01: enrich FB Groups posts with group name + URL.
+    # The marketing queue item does not include group_url by default; derive it
+    # from the title and look it up in the FB ledger registry.
+    _fb_group_name = ""
+    _fb_group_url = ""
+    if channel_key == "fb_groups":
+        _fb_title_parts = [_p.strip() for _p in (item.get("title") or "").split(" — ")]
+        _fb_group_name = _fb_title_parts[1] if len(_fb_title_parts) >= 3 else (_fb_title_parts[-1] if _fb_title_parts else "")
+        _fb_group_url = item.get("target_group_url") or ""
+        if not _fb_group_url:
+            try:
+                _fb_reg = _fetch_fb_ledger_registry()
+                _fb_group_url = _fb_reg.get(_fb_group_name.lower(), "")
+                if not _fb_group_url:
+                    for _rk, _rv in _fb_reg.items():
+                        if _rk in _fb_group_name.lower() or _fb_group_name.lower() in _rk:
+                            _fb_group_url = _rv
+                            break
+            except Exception:
+                pass
+
     image_url = ""
     video_url = ""
 
@@ -10027,6 +10078,10 @@ def api_so_post(post_id: str):
         "reel_pick_id":    reel_pick_id,
         "reel_tier":       reel_tier,
         "reel_pivoted_from": reel_pivoted_from,
+        # FB Groups preview fields (FIX-DASH-FB-PREVIEW-GROUP-01)
+        "group":      _fb_group_name,
+        "group_url":  _fb_group_url,
+        "final_copy": caption,  # clean paste-ready copy (hashtags stripped)
     }
     return Response(json.dumps(payload), mimetype="application/json")
 

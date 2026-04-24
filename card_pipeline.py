@@ -1828,9 +1828,9 @@ def render_card_bytes(
 # ── BUILD-TIER-LOCK-UPSELL-01 ─────────────────────────────────────────────────
 
 _PRICE_BY_TIER: dict[str, str] = {
-    "silver": "R149",
-    "gold": "R199",
-    "diamond": "R299",
+    "bronze": "Free",
+    "gold": "R99",
+    "diamond": "R199",
 }
 _TIER_COLOUR: dict[str, str] = {
     "diamond": "#B9F2FF",

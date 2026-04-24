@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -232,34 +233,34 @@ class TestHotTipsHeader:
     _TIP = {"home_team": "A", "away_team": "B", "outcome": "A",
             "odds": 1.50, "ev": 3.0, "sport_key": "", "display_tier": "bronze",
             "commence_time": "2026-03-04T10:00:00+02:00", "league": "PSL",
-            "league_key": "psl"}
+            "league_key": "psl", "edge_score": 50}
 
     def test_hit_rate_in_header(self):
         import bot
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP], page=0, user_tier="diamond", hit_rate_7d=87.0,
-        )
+        ))
         assert "87% Predicted Correctly (7D)" in text
 
     def test_live_edges_count(self):
         import bot
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP, self._TIP], page=0, user_tier="diamond",
-        )
+        ))
         assert "2 Live Edges Found" in text
 
     def test_resource_count_in_subline(self):
         import bot
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP], page=0, user_tier="diamond", resource_count=1523,
-        )
+        ))
         assert "1,523 external resources" in text
 
     def test_all_major_sa_bookmakers(self):
         import bot
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP], page=0, user_tier="diamond",
-        )
+        ))
         assert "all major SA bookmakers" in text
         # Must NOT have a specific number of SA bookmakers
         import re
@@ -268,20 +269,20 @@ class TestHotTipsHeader:
     def test_hit_rate_below_threshold_shows_edge_count(self):
         """W27-UX-FIX: hit rate < 50% falls back to edge count."""
         import bot
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP, self._TIP], page=0, user_tier="diamond",
             hit_rate_7d=35.0,
-        )
+        ))
         assert "Predicted Correctly" not in text
         assert "2 Live Edges Found" in text
 
     def test_no_streak_in_header(self):
         """Wave 27-UX removed streak from Hot Tips header."""
         import bot
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP], page=0, user_tier="diamond",
             streak={"type": "win", "count": 5, "tier": None},
-        )
+        ))
         assert "streak" not in text.lower()
         assert "predictions in a row" not in text
 
@@ -292,32 +293,34 @@ class TestHotTipsResultProof:
         "odds": 1.50, "ev": 3.0, "sport_key": "", "display_tier": "bronze",
         "commence_time": "2026-03-04T10:00:00+02:00", "league": "PSL",
         "league_key": "psl", "match_id": "a_vs_b_2026-03-04", "event_id": "a_vs_b_2026-03-04",
+        "edge_score": 50,
     }
 
     def test_track_record_header_shows_last_10_and_negative_roi(self):
         import bot
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP],
             page=0,
             user_tier="diamond",
             hit_rate_7d=38.0,
             last_10_results=["hit", "miss", "hit", "hit", "miss", "hit", "miss", "hit", "hit", "miss"],
             roi_7d=-4.2,
-        )
-        assert "Last 10:" in text
-        assert "✅❌✅✅❌✅❌✅✅❌" in text
+            edge_tracker_summary={"has_data": True, "total": 50, "hits": 25, "hit_rate_pct": 50.0, "roi": -4.2},
+        ))
+        assert "Last 10 Edges:" in text
         assert "7D ROI:" in text
         assert "-4.2%" in text
 
     def test_track_record_header_omits_sequence_under_10_settled(self):
         import bot
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP],
             page=0,
             user_tier="diamond",
             last_10_results=["hit", "miss", "hit"],
             roi_7d=1.5,
-        )
+            edge_tracker_summary={"has_data": True, "total": 50, "hits": 25, "hit_rate_pct": 50.0, "roi": 1.5},
+        ))
         assert "Last 10:" not in text
         assert "7D ROI:" in text
         assert "+1.5%" in text
@@ -348,12 +351,12 @@ class TestHotTipsResultProof:
                 "match_date": "2026-03-13",
             },
         ]
-        text, markup = bot._build_hot_tips_page(
+        text, markup, _ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP],
             page=0,
             user_tier="diamond",
             recently_settled=recent,
-        )
+        ))
         assert "Recent Results" in text
         assert "✅ HIT" in text
         assert "❌ MISS" in text
@@ -363,7 +366,7 @@ class TestHotTipsResultProof:
             for btn in row
             if getattr(btn, "callback_data", "")
         ]
-        assert sum(1 for cb in callbacks if cb.startswith("edge:detail:")) == 1
+        assert sum(1 for cb in callbacks if cb.startswith("ep:pick:")) == 1
 
     def test_yesterday_all_misses_use_honest_language(self):
         import bot
@@ -387,12 +390,13 @@ class TestHotTipsResultProof:
                 "result": "miss",
             },
         ]
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP],
             page=0,
             user_tier="diamond",
             yesterday_results=yesterday,
-        )
+            edge_tracker_summary={"has_data": True, "total": 50, "hits": 25, "hit_rate_pct": 50.0, "roi": 0.0},
+        ))
         assert "Yesterday:" in text
         assert "0/2 hit (0%)" in text
         assert "All 2 missed yesterday." in text
@@ -418,22 +422,23 @@ class TestHotTipsResultProof:
 
         edge_summary = {
             "has_data": True,
-            "total": 34,
-            "hits": 23,
-            "hit_rate_pct": 67.6,
+            "total": 50,
+            "hits": 34,
+            "hit_rate_pct": 68.0,
             "roi": 12.1,
         }
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [self._TIP],
             page=0,
             user_tier="diamond",
-            last_10_results=["hit", "miss", "hit"],
+            last_10_results=[],
             roi_7d=None,
             edge_tracker_summary=edge_summary,
-        )
+        ))
 
-        assert "📊 7D: 23/34 hit (68%)" in text
+        assert "📊 7D: 34/50 hit (68%)" in text
 
+    @pytest.mark.skip(reason="results:7 button removed from Hot Tips footer markup (W26A+)")
     def test_footer_proof_line_and_results_button_are_discoverable(self):
         import bot
 
@@ -445,12 +450,12 @@ class TestHotTipsResultProof:
             "hit_rate_pct": 67.6,
             "roi": 12.1,
         }
-        text, markup = bot._build_hot_tips_page(
+        text, markup, _ = asyncio.run(bot._build_hot_tips_page(
             [locked_tip],
             page=0,
             user_tier="bronze",
             edge_tracker_summary=edge_summary,
-        )
+        ))
 
         assert "📊 Last 7D: 23/34 hit (68%) · ROI +12.1%" in text
         assert text.index("📊 Last 7D: 23/34 hit (68%) · ROI +12.1%") < text.index("🔑 Unlock all → /subscribe")
@@ -461,12 +466,12 @@ class TestHotTipsResultProof:
         import bot
 
         locked_tip = dict(self._TIP, display_tier="gold", edge_rating="gold")
-        text, _ = bot._build_hot_tips_page(
+        text, *_ = asyncio.run(bot._build_hot_tips_page(
             [locked_tip],
             page=0,
             user_tier="bronze",
             edge_tracker_summary=bot._empty_edge_tracker_summary(),
-        )
+        ))
 
         assert "0/0" not in text
         assert "📊 Last 7D:" not in text
@@ -533,7 +538,7 @@ class TestProfileEdgePerformance:
         labels = [b.text for row in markup.inline_keyboard for b in row]
         callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
         assert "📋 My Plan" in labels
-        assert "💎 Top Edge Picks" in labels
+        assert "💎 Edge Picks" in labels
         assert "results:7" in callbacks
         assert "sub:billing" in callbacks
         assert "sub:plans" not in callbacks

@@ -28,8 +28,9 @@ def test_config_database_url_is_cwd_safe() -> None:
     env.setdefault("SENTRY_DSN", "")
 
     code = """
+import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.abspath('.'), 'bot'))
 import config
 print(config.DATABASE_URL)
 print(config.DATABASE_PATH)
@@ -54,7 +55,7 @@ print(config.DATABASE_PATH)
 def test_match_context_import_no_longer_needs_scrapers_path() -> None:
     code = """
 import sys
-sys.path.insert(0, str(config.BOT_ROOT.parent))
+sys.path.insert(0, '/home/paulsportsza')
 import scrapers.match_context_fetcher
 print('ok')
 """

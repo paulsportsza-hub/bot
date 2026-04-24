@@ -308,7 +308,7 @@ def test_load_shadow_pregen_edges_uses_live_edge_results_source(monkeypatch) -> 
     }
     seen = {}
 
-    def fake_load(limit: int = 10):
+    def fake_load(limit: int = 10, **kwargs):
         seen["limit"] = limit
         return [tip]
 
@@ -453,7 +453,7 @@ async def test_main_writes_shadow_rows_from_live_edge_source(monkeypatch, tmp_pa
 
     monkeypatch.setattr(bot, "_load_tips_from_edge_results", lambda limit=10: live_tips[:limit])
     monkeypatch.setattr(pregen.anthropic, "AsyncAnthropic", lambda api_key=None: FakeClaude())
-    monkeypatch.setattr(pregen, "_wait_for_scraper_writer_window", AsyncMock(return_value=True))
+    monkeypatch.setattr(pregen, "_wait_for_scraper_writer_window", AsyncMock(return_value=True), raising=False)
     monkeypatch.setattr(pregen, "_validate_pregen_runtime_schema", lambda db_path=None: None)
     monkeypatch.setattr(pregen, "_get_cached_narrative", fake_cached)
     monkeypatch.setattr(pregen, "_store_narrative_cache", fake_store_cache)

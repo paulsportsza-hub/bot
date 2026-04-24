@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import bot
 import narrative_spec
 from renderers import telegram_renderer, whatsapp_renderer
@@ -56,8 +57,9 @@ def test_gate_signal_display_shows_model_only_label():
     assert "signal" in lines[0].lower()
 
 
-def test_hot_tips_empty_state_uses_new_copy():
-    text, _ = bot._build_hot_tips_page([], page=0, user_tier="diamond")
+@pytest.mark.asyncio
+async def test_hot_tips_empty_state_uses_new_copy():
+    text, _, __ = await bot._build_hot_tips_page([], page=0, user_tier="diamond")
 
     assert "thin slate" in text.lower()
     assert "market is efficient" not in text

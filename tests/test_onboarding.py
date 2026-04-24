@@ -234,6 +234,7 @@ class TestFavSuggestHandler:
 
 
 class TestRiskSelection:
+    @pytest.mark.skip(reason="handle_ob_risk removed (BUILD-SETTINGS-CLEANUP-01)")
     async def test_risk_sets_profile(self):
         bot._onboarding_state.clear()
         ob = bot._get_ob(10008)
@@ -252,6 +253,7 @@ class TestNotifySelection:
 
 
 class TestPreferencesCombinedStep:
+    @pytest.mark.skip(reason="handle_ob_risk removed (BUILD-SETTINGS-CLEANUP-01)")
     async def test_risk_goes_to_bankroll(self):
         """Phase 0D: Risk should show Step 4/5 and go to bankroll."""
         bot._onboarding_state.clear()
@@ -296,12 +298,12 @@ class TestSummaryAndEdit:
 
         mock_card.assert_called_once()
         text_fb = mock_card.call_args.kwargs.get("text_fallback", "")
-        assert "Step 5/5" in text_fb
+        assert "Step 4/5" in text_fb
         assert "Arsenal" in text_fb
         kb = mock_card.call_args.kwargs.get("markup")
         btn_texts = [btn.text for row in kb.inline_keyboard for btn in row]
         assert any("Edit Sports & Teams" in t for t in btn_texts)
-        assert any("Edit Preferences" in t for t in btn_texts)
+        assert any("Choose Plan" in t or "Next" in t for t in btn_texts)
 
     async def test_edit_sports_shows_list(self):
         bot._onboarding_state.clear()
@@ -315,6 +317,7 @@ class TestSummaryAndEdit:
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
         assert "Edit which sport" in text
 
+    @pytest.mark.skip(reason="ob_edit:risk removed (BUILD-SETTINGS-CLEANUP-01)")
     async def test_edit_risk_shows_risk_kb(self):
         bot._onboarding_state.clear()
         ob = bot._get_ob(10025)
@@ -420,6 +423,7 @@ class TestKeyboards:
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
         assert any("Next" in t for t in texts)
 
+    @pytest.mark.skip(reason="kb_onboarding_risk removed (BUILD-SETTINGS-CLEANUP-01)")
     def test_kb_onboarding_risk(self):
         kb = bot.kb_onboarding_risk()
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
@@ -434,6 +438,7 @@ class TestKeyboards:
         callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
         assert "settings:reset" in callbacks
 
+    @pytest.mark.skip(reason="kb_onboarding_risk removed (BUILD-SETTINGS-CLEANUP-01)")
     def test_kb_onboarding_risk_has_start_again(self):
         """Risk keyboard has Start Again button."""
         kb = bot.kb_onboarding_risk()
@@ -445,12 +450,14 @@ class TestKeyboards:
     def test_kb_onboarding_notify_has_start_again(self):
         pytest.skip("kb_onboarding_notify removed in FIX-ONBOARDING-OB-NAV-01")
 
+    @pytest.mark.skip(reason="kb_onboarding_bankroll removed (BUILD-SETTINGS-CLEANUP-01)")
     def test_kb_onboarding_bankroll_has_start_again(self):
         """Bankroll keyboard has Start Again button."""
         kb = bot.kb_onboarding_bankroll()
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
         assert any("Start Again" in t for t in texts)
 
+    @pytest.mark.skip(reason="Alert Preferences button removed from kb_settings (BUILD-SETTINGS-CLEANUP-01)")
     def test_kb_settings_has_single_notifications_entry(self):
         """Settings keyboard exposes one consolidated alert preferences entry."""
         kb = bot.kb_settings()

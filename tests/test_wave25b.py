@@ -77,7 +77,8 @@ def _create_settlement_db(edges: list[dict]) -> str:
 # ── Spoiler Tag Tests ────────────────────────────────────
 
 
-def test_spoiler_tags_not_blocks():
+@pytest.mark.asyncio
+async def test_spoiler_tags_not_blocks():
     """Wave 26A: blurred cards show return only, no spoiler tags or per-card CTAs."""
     from bot import _build_hot_tips_page
 
@@ -86,10 +87,10 @@ def test_spoiler_tags_not_blocks():
         "sport_key": "soccer_south_africa_psl", "league": "PSL",
         "league_key": "psl", "display_tier": "gold", "edge_rating": "gold",
         "outcome": "Chiefs Win", "odds": 2.10, "bookmaker": "hollywoodbets",
-        "ev": 5.0, "match_id": "test_match_1", "event_id": "test_event_1",
+        "ev": 5.0, "edge_score": 60, "match_id": "test_match_1", "event_id": "test_event_1",
     }]
 
-    text, markup = _build_hot_tips_page(tips, page=0, user_tier="bronze")
+    text, markup, _ = await _build_hot_tips_page(tips, page=0, user_tier="bronze")
 
     # Should NOT contain block characters or spoiler tags (Wave 26A removed spoilers)
     assert "█" not in text
@@ -100,7 +101,8 @@ def test_spoiler_tags_not_blocks():
     assert "🔒" in text
 
 
-def test_spoiler_return_visible():
+@pytest.mark.asyncio
+async def test_spoiler_return_visible():
     """Return amount should NOT be inside spoiler tags."""
     from bot import _build_hot_tips_page
 
@@ -112,7 +114,7 @@ def test_spoiler_return_visible():
         "ev": 4.0, "match_id": "test_match_2", "event_id": "test_event_2",
     }]
 
-    text, markup = _build_hot_tips_page(tips, page=0, user_tier="bronze")
+    text, markup, _ = await _build_hot_tips_page(tips, page=0, user_tier="bronze")
 
     # Return line (💰 R540 return on R300) should be visible, not behind spoiler
     # Find return text
@@ -153,7 +155,8 @@ def test_portfolio_return_calculation():
 # ── Button Layout Test ───────────────────────────────────
 
 
-def test_button_layout_2_per_row():
+@pytest.mark.asyncio
+async def test_button_layout_2_per_row():
     """InlineKeyboard rows should have max 2 buttons."""
     from bot import _build_hot_tips_page
 
@@ -165,7 +168,7 @@ def test_button_layout_2_per_row():
         "bookmaker": "hwb", "ev": 3.0, "match_id": f"match_{i}", "event_id": f"event_{i}",
     } for i in range(3)]
 
-    text, markup = _build_hot_tips_page(tips, page=0, user_tier="diamond")
+    text, markup, _ = await _build_hot_tips_page(tips, page=0, user_tier="diamond")
 
     # Check all rows have <= 2 buttons
     for row in markup.inline_keyboard:

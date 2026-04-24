@@ -235,9 +235,9 @@ class TestPersistentMenu:
         kb = bot.kb_main()
         rows = [[btn.text for btn in row] for row in kb.inline_keyboard]
         assert rows == [
-            ["⚽ My Matches", "💎 Top Edge Picks"],
-            ["📊 Edge Tracker", "📖 Guide"],
-            ["⚙️ Settings"],
+            ["💎 Edge Picks"],
+            ["⚽ My Matches", "📊 Edge Tracker"],
+            ["📖 Guide", "⚙️ Settings"],
             ["🏠 Community"],
         ]
 
@@ -420,7 +420,7 @@ class TestMenuHandlers:
             for row in call_args[1]["reply_markup"].inline_keyboard
             for btn in row
         ]
-        assert "settings:risk" in callbacks
+        assert "settings:sports" in callbacks
 
     async def test_handle_settings_sports_renders_inline_editor(self, test_db):
         user_id = 40071
@@ -522,7 +522,10 @@ class TestMenuHandlers:
         await db.save_sport_pref(user_id, "soccer", league="epl")
 
         query = _make_query(user_id=user_id)
-        await bot.handle_settings(query, "reset:confirm")
+        mock_gbot = MagicMock()
+        mock_gbot.send_message = AsyncMock()
+        with patch("bot._g_bot", mock_gbot):
+            await bot.handle_settings(query, "reset:confirm")
 
         user = await db.get_user(user_id)
         assert user.onboarding_done is False

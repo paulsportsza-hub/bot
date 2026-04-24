@@ -76,7 +76,8 @@ async def test_cmd_start_returning_user(test_db, mock_update, mock_context):
     mock_user.first_name = "Veteran"
     mock_update.effective_user = mock_user
 
-    await bot.cmd_start(mock_update, mock_context)
+    with patch("bot._welcome_img_path", return_value=None):
+        await bot.cmd_start(mock_update, mock_context)
 
     # 1 call: single welcome message with sticky keyboard (consolidated UX)
     assert mock_update.message.reply_text.call_count == 1
@@ -91,7 +92,8 @@ async def test_cmd_menu(mock_update, mock_context):
     mock_user.first_name = "User"
     mock_update.effective_user = mock_user
 
-    await bot.cmd_menu(mock_update, mock_context)
+    with patch("bot._welcome_img_path", return_value=None):
+        await bot.cmd_menu(mock_update, mock_context)
 
     # 1 call: single menu message with sticky keyboard (consolidated UX)
     assert mock_update.message.reply_text.call_count == 1
@@ -159,8 +161,9 @@ async def test_handle_menu_home(test_db, mock_update, mock_context):
     query = mock_update.callback_query
     query.from_user.first_name = "User"
 
-    with patch("bot._get_recent_wins_from_edge_results", return_value=[]):
-        await bot.handle_menu(query, "home")
+    with patch("bot._welcome_img_path", return_value=None):
+        with patch("bot._get_recent_wins_from_edge_results", return_value=[]):
+            await bot.handle_menu(query, "home")
 
     call_args = query.edit_message_text.call_args
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
@@ -506,11 +509,12 @@ class TestHotTipsModelOnlyIntegrity:
 
 class TestStickyKeyboard:
     def test_get_main_keyboard_shape(self):
-        """Sticky keyboard should be 2 rows of 3."""
+        """Sticky keyboard should be 3 rows: 1 hero + 2 + 3."""
         kb = bot.get_main_keyboard()
-        assert len(kb.keyboard) == 2
-        assert len(kb.keyboard[0]) == 3
-        assert len(kb.keyboard[1]) == 3
+        assert len(kb.keyboard) == 3
+        assert len(kb.keyboard[0]) == 1
+        assert len(kb.keyboard[1]) == 2
+        assert len(kb.keyboard[2]) == 3
 
     def test_get_main_keyboard_labels(self):
         """Sticky keyboard has correct labels."""
@@ -1223,7 +1227,7 @@ class TestExperiencedSkipsEdgeExplainer:
     """Wave 14D: Experienced users skip the Edge explainer screen."""
 
     async def test_experienced_skips_to_risk(self):
-        """Experienced user after favourites should go to risk, not edge_explainer."""
+        """Experienced user after favourites should skip edge_explainer (goes to summary)."""
         bot._onboarding_state.clear()
         ob = bot._get_ob(30001)
         ob["experience"] = "experienced"
@@ -1236,7 +1240,7 @@ class TestExperiencedSkipsEdgeExplainer:
         query.from_user = MagicMock(id=30001)
         query.edit_message_text = AsyncMock()
         await bot._show_next_team_prompt(query, ob)
-        assert ob["step"] == "risk"
+        assert ob["step"] == "summary"
 
     async def test_casual_sees_edge_explainer(self):
         """Casual user after favourites should see edge_explainer."""

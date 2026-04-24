@@ -5516,8 +5516,8 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         template="onboarding_done.html",
         data=build_onboarding_done_data(
             name, trial_started=trial_started, trial_days=7,
-            founding_offer=(_founding_days_left() > 0),
-            founding_days_left=_founding_days_left(),
+            founding_offer=False,
+            founding_days_left=0,
         ),
         text_fallback=text, markup=done_markup,
         message_to_edit=query.message,

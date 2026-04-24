@@ -64,6 +64,11 @@ def mock_update():
     update.callback_query.message = MagicMock()
     update.callback_query.message.photo = None
     update.callback_query.message.delete = AsyncMock()
+    mock_bot = MagicMock()
+    mock_bot.send_photo = AsyncMock()
+    mock_bot.send_message = AsyncMock()
+    update.callback_query.get_bot = MagicMock(return_value=mock_bot)
+    update.callback_query.message.edit_media = AsyncMock()
     return update
 
 

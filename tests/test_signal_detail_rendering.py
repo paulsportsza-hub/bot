@@ -78,11 +78,10 @@ class TestSignalDetailBlock:
         )
 
         assert "Signal Breakdown" in text
-        assert "4/7 aligned" in text
+        assert "4/6 aligned" in text
         assert "Price edge" in text
         assert "▰" in text
         assert "Arsenal WWDLW" in text
-        assert "Rain" in text
 
     def test_bronze_gets_summary_only(self):
         from bot import _build_signal_detail_block

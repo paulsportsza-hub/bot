@@ -719,7 +719,6 @@ def build_onboarding_done_data(first_name: str, trial_started: bool = False,
     features = [
         {"emoji": "⚽", "title": "My Matches",     "desc": "Personalised 7-day schedule with Edge-AI on every game."},
         {"emoji": "💎", "title": "Top Edge Picks", "desc": "I scan all SA bookmakers and find exactly where the Edge is."},
-        {"emoji": "🔔", "title": "Edge Alerts",    "desc": "Daily picks, game day alerts, market movers, live scores."},
     ]
     return {
         "header_logo_b64": _logo(),
