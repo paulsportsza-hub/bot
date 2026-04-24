@@ -1325,7 +1325,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             with open(_img_path, "rb") as _fh:
                 await update.message.reply_photo(
                     photo=_fh,
-                    caption="🌍 Today's top edges are loaded. Tap 💎 Edge Picks to see your edge.",
                     reply_markup=kb_main(),
                 )
         else:

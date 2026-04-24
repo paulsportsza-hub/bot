@@ -63,8 +63,7 @@ async def test_start_returning_user_reopens_main_flow(
     # If the welcome image is available and fresh, reply_photo is called with kb_main().
     # If no image exists, reply_text falls back with "Welcome back".
     if mock_update.message.reply_photo.called:
-        caption = mock_update.message.reply_photo.call_args.kwargs.get("caption", "")
-        assert "edges" in caption.lower()
+        assert mock_update.message.reply_photo.called
     else:
         text = mock_update.message.reply_text.call_args.args[0]
         assert "Welcome back" in text
