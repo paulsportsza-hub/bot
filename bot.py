@@ -1895,12 +1895,28 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 message_to_edit=query.message,
             )
         elif action.startswith("sport:"):
-            # yg:sport:{key} → inline re-render with filter (Wave 15B)
+            # yg:sport:{key} → inline re-render with filter — serves image card (mirrors yg:all:N)
             parts = action.split(":")
             sk = parts[1] if len(parts) > 1 else ""
             _ut = await get_effective_tier(user_id)
-            text, markup = await _render_your_games_all(user_id, page=0, sport_filter=sk, user_tier=_ut)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            text, markup = await _render_your_games_all(user_id, page=0, sport_filter=sk, user_tier=_ut, skip_broadcast=True)
+            _raw_games_sf = _schedule_cache.get(user_id, [])
+            _raw_filtered_sf = [
+                g for g in _raw_games_sf
+                if config.LEAGUE_SPORT.get(g.get("league_key", "")) == sk
+            ] if sk else _raw_games_sf
+            _edge_info_sf = _get_edge_info_for_games(_raw_filtered_sf)
+            _mm_input_sf = await _build_mm_matches_for_card_with_odds(_raw_filtered_sf, _edge_info_sf)
+            _mm_sorted_sf = _sort_mm_snapshot(_mm_input_sf)
+            _mm_games_snapshot[user_id] = _mm_sorted_sf
+            _yg_card_data_sf = build_my_matches_data(_mm_input_sf, page=1)
+            _yg_sk_sf = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games_sf if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
+            await send_card_or_fallback(
+                bot=ctx.bot, chat_id=query.message.chat_id,
+                template="my_matches.html", data=_yg_card_data_sf,
+                text_fallback=text, markup=_build_mm_card_markup(_mm_sorted_sf, page=0, sport_keys=_yg_sk_sf, sport_filter=sk),
+                message_to_edit=query.message,
+            )
         elif action.startswith("game:"):
             # yg:game:{event_id} — show AI game breakdown
             event_id = action.split(":", 1)[1]
@@ -2043,16 +2059,16 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         ),
                         tracker_summary=_upg_summary,
                     )
-                    _lock_markup = InlineKeyboardMarkup([[
-                        InlineKeyboardButton(
+                    _lock_markup = InlineKeyboardMarkup([
+                        [InlineKeyboardButton(
                             f"💎 Unlock {_upg_edge_tier.title()}",
                             callback_data="sub:plans",
-                        ),
-                        InlineKeyboardButton(
+                        )],
+                        [InlineKeyboardButton(
                             "↩️ Back",
                             callback_data=f"hot:back:{_ht_page_state.get(user_id, 0)}",
-                        ),
-                    ]])
+                        )],
+                    ])
                     await send_card_or_fallback(
                         bot=ctx.bot,
                         chat_id=query.from_user.id,
@@ -2425,13 +2441,13 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     ),
                     tracker_summary=_mme_lock_summary,
                 )
-                _mme_lock_markup = InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
+                _mme_lock_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
                         f"💎 Unlock {_mme_tier_pretty}",
                         callback_data="sub:plans",
-                    ),
-                    InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb),
-                ]])
+                    )],
+                    [InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb)],
+                ])
                 await send_card_or_fallback(
                     bot=ctx.bot,
                     chat_id=query.message.chat_id,
@@ -3910,8 +3926,54 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 message_to_edit=query.message,
             )
         elif action == "billing":
-            text, markup = await _render_profile_plan_surface(query.from_user.id)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            _cb_user_id = query.from_user.id
+            _cb_db_user = await db.get_user(_cb_user_id)
+            _cb_tier = await get_effective_tier(_cb_user_id)
+            _cb_tier_emoji = config.TIER_EMOJIS.get(_cb_tier, "🥉")
+            _cb_tier_name = config.TIER_NAMES.get(_cb_tier, _cb_tier.title())
+            if _cb_tier in ("gold", "diamond"):
+                _cb_started = ""
+                if _cb_db_user and _cb_db_user.subscription_started_at:
+                    _cb_started = _cb_db_user.subscription_started_at.strftime("%d %b %Y")
+                _cb_expires = ""
+                if _cb_db_user and getattr(_cb_db_user, "tier_expires_at", None):
+                    _cb_expires = _cb_db_user.tier_expires_at.strftime("%d %b %Y")
+                _cb_founding = bool(_cb_db_user and getattr(_cb_db_user, "is_founding_member", False))
+                _cb_slot = int(getattr(_cb_db_user, "founding_slot_number", 0) or 0) if _cb_founding else 0
+                _cb_plan = getattr(_cb_db_user, "plan_code", "") or "" if _cb_db_user else ""
+                _cb_mkp = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬆️ Change Plan", callback_data="sub:plans")],
+                    [InlineKeyboardButton("❌ Cancel Subscription", callback_data="sub:cancel_confirm")],
+                    [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+                ])
+                await send_card_or_fallback(
+                    query.get_bot(), query.message.chat_id,
+                    "sub_billing_active.html",
+                    build_sub_billing_active_data(
+                        tier=_cb_tier,
+                        plan_code=_cb_plan,
+                        member_since=_cb_started,
+                        next_renewal=_cb_expires,
+                        is_founding=_cb_founding,
+                        founding_slot=_cb_slot if _cb_founding else None,
+                    ),
+                    f"{_cb_tier_emoji} {_cb_tier_name} — Billing",
+                    _cb_mkp,
+                    message_to_edit=query.message,
+                )
+            else:
+                _cb_mkp_inactive = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+                    [InlineKeyboardButton("↩️ Back", callback_data="nav:main")],
+                ])
+                await send_card_or_fallback(
+                    query.get_bot(), query.message.chat_id,
+                    "sub_billing_inactive.html",
+                    build_sub_billing_inactive_data(),
+                    "🥉 Bronze — No active subscription",
+                    _cb_mkp_inactive,
+                    message_to_edit=query.message,
+                )
         elif action.startswith("tier:"):
             plan_code = action.split(":", 1)[1]
             await _handle_sub_tier(query, plan_code)
