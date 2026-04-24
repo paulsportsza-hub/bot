@@ -1326,13 +1326,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await update.message.reply_photo(
                     photo=_fh,
                     caption="🌍 Today's top edges are loaded. Tap 💎 Edge Picks to see your edge.",
-                    reply_markup=get_main_keyboard(),
+                    reply_markup=kb_main(),
                 )
-            await update.message.reply_text(
-                f"<b>🇿🇦 Welcome back, {name}!</b>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb_main(),
-            )
         else:
             await update.message.reply_text(
                 f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",

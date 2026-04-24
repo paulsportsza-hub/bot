@@ -59,8 +59,15 @@ async def test_start_returning_user_reopens_main_flow(
 
     await bot.cmd_start(mock_update, mock_context)
 
-    text = mock_update.message.reply_text.call_args.args[0]
-    assert "Welcome back" in text
+    # New UX (BUILD-WELCOME-SCREEN-02): photo + inline buttons only, no separate text.
+    # If the welcome image is available and fresh, reply_photo is called with kb_main().
+    # If no image exists, reply_text falls back with "Welcome back".
+    if mock_update.message.reply_photo.called:
+        caption = mock_update.message.reply_photo.call_args.kwargs.get("caption", "")
+        assert "edges" in caption.lower()
+    else:
+        text = mock_update.message.reply_text.call_args.args[0]
+        assert "Welcome back" in text
 
 
 async def test_onboarding_sport_toggle_collects_preferences() -> None:
