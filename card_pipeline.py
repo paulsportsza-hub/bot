@@ -21,6 +21,7 @@ Constraints
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -30,6 +31,8 @@ import time
 from datetime import datetime, timezone
 from html import escape as h
 from pathlib import Path
+
+from cachetools import TTLCache
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +44,10 @@ _HAIKU_MAX_TOKENS = 120
 # ── Haiku circuit breaker (BUILD-SPEED) ───────────────────────────────────────
 _haiku_failures: int = 0
 _haiku_circuit_open_until: float = 0.0
+
+# ── Card-analysis success cache (FIX-CARD-ANALYSIS-CACHE-01) ─────────────────
+# In-memory only. Rebuilds on bot restart. Do NOT cache empty/None returns.
+_card_analysis_cache: TTLCache = TTLCache(maxsize=1000, ttl=3600)
 
 
 def _call_haiku_with_breaker(client, prompt: str) -> str | None:
@@ -1304,12 +1311,19 @@ def generate_card_analysis(match_key: str, verified_data: dict) -> str:
     data_block = "\n".join(lines)
     prompt = CARD_ANALYSIS_PROMPT.format(data_block=data_block)
 
+    cache_key = hashlib.sha256(prompt.encode()).hexdigest()
+    cached = _card_analysis_cache.get(cache_key)
+    if cached is not None:
+        log.debug("card_pipeline: card-analysis cache HIT for %s", match_key)
+        return cached
+
     text = _call_haiku_with_breaker(client, prompt)
     if not text:
-        return ""  # Circuit open or API failure — callers serve card without analysis
+        return ""  # Circuit open or API failure — do NOT cache degraded/empty returns
     # Hard cap at 180 chars
     if len(text) > 180:
         text = text[:177] + "..."
+    _card_analysis_cache[cache_key] = text
     return text
 
 

@@ -1306,14 +1306,39 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         # MM-01: Pre-warm My Matches cache in background so first tap hits warm path
         asyncio.create_task(_fetch_schedule_games(user.id))
         name = h(user.first_name or "")
-        picks = await asyncio.to_thread(_get_bru_daily_drop, 5)
-        drop_section = _format_bru_daily_drop(picks)
-        text = f"<b>🇿🇦 Welcome back, {name}!</b>\n\n{drop_section}"
-        # Send sticky keyboard + inline menu in one message
-        await update.message.reply_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=get_main_keyboard(),
-        )
+
+        # BUILD-WELCOME-SCREEN-02: image-first hero welcome
+        import datetime as _dt
+        _WELCOME_IMG = pathlib.Path("/home/paulsportsza/assets/welcome/welcome_today.png")
+        _FALLBACK_IMG = pathlib.Path("/home/paulsportsza/assets/welcome/fallback.png")
+        _img_path = None
+        if _WELCOME_IMG.exists():
+            _age_h = (_dt.datetime.now().timestamp() - _WELCOME_IMG.stat().st_mtime) / 3600
+            if _age_h <= 30:
+                _img_path = _WELCOME_IMG
+            else:
+                log.warning("welcome_today.png stale (%.1fh) — using fallback", _age_h)
+        if _img_path is None and _FALLBACK_IMG.exists():
+            _img_path = _FALLBACK_IMG
+
+        if _img_path is not None:
+            with open(_img_path, "rb") as _fh:
+                await update.message.reply_photo(
+                    photo=_fh,
+                    caption="🌍 Today's top edges are loaded. Tap 💎 Edge Picks to see your edge.",
+                    reply_markup=get_main_keyboard(),
+                )
+            await update.message.reply_text(
+                f"<b>🇿🇦 Welcome back, {name}!</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb_main(),
+            )
+        else:
+            await update.message.reply_text(
+                f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_main_keyboard(),
+            )
     else:
         # Start onboarding — hide sticky keyboard
         _onboarding_state.pop(user.id, None)  # reset

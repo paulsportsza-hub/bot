@@ -3,7 +3,7 @@ BUILD-NARRATIVE-PREGEN-WINDOW-01 — Regression guard.
 
 Static assertions on pregenerate_narratives.py:
   (a) broadcast_schedule query uses source='supersport_scraper'
-  (b) 48h horizon filter is present (_PREGEN_HORIZON_HOURS == 48)
+  (b) horizon filter is >= 48h (NARRATIVE-ACCURACY-01 R7: Diamond/Gold = 96h+; current = 240h)
   (c) Match cap is ≤ 25 (_PREGEN_MATCH_CAP)
 """
 import re
@@ -26,13 +26,17 @@ def test_supersport_scraper_source_present():
 
 
 def test_horizon_hours_constant_is_48():
-    """_PREGEN_HORIZON_HOURS must be exactly 48."""
+    """_PREGEN_HORIZON_HOURS must be >= 48h.
+
+    NARRATIVE-ACCURACY-01 R7 (locked 22 Apr 2026) raised the horizon to 96h+
+    for Diamond/Gold edges. Current value is 240h. Match cap (_PREGEN_MATCH_CAP)
+    bounds API usage, not the horizon window.
+    """
     src = _source()
-    # Extract the literal value assigned to _PREGEN_HORIZON_HOURS
     match = re.search(r"_PREGEN_HORIZON_HOURS\s*:\s*int\s*=\s*(\d+)", src)
     assert match, "_PREGEN_HORIZON_HOURS constant not found in pregenerate_narratives.py"
     value = int(match.group(1))
-    assert value == 48, f"_PREGEN_HORIZON_HOURS must be 48, got {value}"
+    assert value >= 48, f"_PREGEN_HORIZON_HOURS must be >= 48, got {value}"
 
 
 def test_match_cap_at_most_25():

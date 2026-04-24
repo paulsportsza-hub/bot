@@ -54,6 +54,7 @@ def mock_update():
     update.effective_user.first_name = "Test"
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
+    update.message.reply_photo = AsyncMock()
     update.callback_query = MagicMock()
     update.callback_query.answer = AsyncMock()
     update.callback_query.edit_message_text = AsyncMock()
