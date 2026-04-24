@@ -33,6 +33,8 @@ DETAIL_TEMPLATES = {
     # BUILD-HOME-WINNERS-CARD-01
     "home_winners.html",
     "tier_lock_upsell.html",
+    # BUILD-ONBOARDING-HYPE-PACK-01
+    "onboarding_done.html",
 }
 LIST_TEMPLATES = {
     "edge_picks.html",
@@ -73,7 +75,6 @@ LIST_TEMPLATES = {
     "onboarding_bankroll_custom.html",
     "onboarding_notify.html",
     "onboarding_summary.html",
-    "onboarding_done.html",
     "story_quiz_step.html",
     "story_quiz_complete.html",
     "onboarding_restart.html",

@@ -498,9 +498,13 @@ def test_summary_sports_list():
     assert len(d["sports"]) == 2
 
 
-def test_done_features_count():
+def test_done_hype_pack_keys():
     d = build_onboarding_done_data("Paul")
-    assert len(d["features"]) == 3
+    assert d["user_name"] == "Paul"
+    assert d["user_tier"] == "bronze"
+    assert d["show_upgrade"] is True
+    assert "tier_colour" in d
+    assert "tier_emoji" in d
 
 
 def test_done_default_name():

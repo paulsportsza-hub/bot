@@ -683,25 +683,27 @@ class TestCelebrationDataIntegrity:
 class TestWelcomeMessage:
     """Post-onboarding welcome message must be correct."""
 
-    def test_welcome_has_edge_alerts_cta(self):
-        """Welcome must offer 'Set Up Edge Alerts' button."""
+    def test_welcome_has_bookmaker_guide_cta(self):
+        """Welcome must offer bookmaker guide and community buttons (hype pack)."""
         source = (BOT_ROOT / "bot.py").read_text()
         ob_done_start = source.index("async def handle_ob_done")
         ob_done_end = source.index("\nasync def ", ob_done_start + 50)
         ob_done_region = source[ob_done_start:ob_done_end]
 
-        assert "Set Up Edge Alerts" in ob_done_region or "Edge Alerts" in ob_done_region, \
-            "Welcome must include Edge Alerts CTA"
+        assert "guide:bookmakers" in ob_done_region, \
+            "Welcome hype pack must include bookmaker guide CTA"
+        assert "MzansiEdge Community" in ob_done_region or "t.me/MzansiEdge" in ob_done_region, \
+            "Welcome hype pack must include community CTA"
 
     def test_welcome_has_skip_option(self):
-        """Welcome must allow skipping Edge Alerts setup."""
+        """Welcome must allow proceeding to explore (Start Exploring)."""
         source = (BOT_ROOT / "bot.py").read_text()
         ob_done_start = source.index("async def handle_ob_done")
         ob_done_end = source.index("\nasync def ", ob_done_start + 50)
         ob_done_region = source[ob_done_start:ob_done_end]
 
-        assert "Skip" in ob_done_region, \
-            "Welcome must include Skip option"
+        assert "Start Exploring" in ob_done_region or "nav:main" in ob_done_region, \
+            "Welcome must include Start Exploring option"
 
     def test_welcome_activates_persistent_keyboard(self):
         """Welcome must send the persistent reply keyboard."""

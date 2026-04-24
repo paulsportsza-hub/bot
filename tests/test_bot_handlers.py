@@ -249,8 +249,8 @@ async def test_dispatch_button_routes_stale_stats_to_edge_tracker(mock_update, m
     assert "Unknown action" in text
 
 
-async def test_handle_ob_done_includes_how_it_works_cta(test_db):
-    """Onboarding completion keeps primary CTAs and adds guide continuity."""
+async def test_handle_ob_done_hype_pack_ctas(test_db):
+    """Onboarding completion shows hype pack: bookmaker guide, community, upgrade, explore."""
     user_id = 98765
     bot._onboarding_state.clear()
     ob = bot._get_ob(user_id)
@@ -275,17 +275,20 @@ async def test_handle_ob_done_includes_how_it_works_cta(test_db):
              trial_status="active",
              subscription_status="inactive",
          ))), \
+         patch.object(bot, "get_effective_tier", new=AsyncMock(return_value="bronze")), \
          patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
         await bot.handle_ob_done(query, mock_ctx)
 
-    # handle_ob_done sends onboarding_done card; markup is passed as kwarg
+    # handle_ob_done sends onboarding_done hype pack card; markup is passed as kwarg
     assert mock_card.called
     markup = mock_card.call_args.kwargs.get("markup")
-    button_data = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
-    assert "story:start" in button_data
-    assert "hot:go" in button_data
-    assert "guide:menu" in button_data
+    all_buttons = [btn for row in markup.inline_keyboard for btn in row]
+    button_data = [btn.callback_data for btn in all_buttons if btn.callback_data]
+    button_urls = [btn.url for btn in all_buttons if btn.url]
+    assert "guide:bookmakers" in button_data
     assert "nav:main" in button_data
+    assert "hot:upgrade" in button_data  # upgrade row shown for bronze
+    assert any("MzansiEdge" in (u or "") for u in button_urls)  # community link
 
 
 async def test_handle_menu_history_empty(test_db, mock_update, mock_context):
