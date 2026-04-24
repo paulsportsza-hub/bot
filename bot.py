@@ -1385,10 +1385,10 @@ async def _welcome_kb(user_id: int) -> InlineKeyboardMarkup:
             tier_pretty = {"diamond": "Diamond", "gold": "Gold"}.get(edge_tier, "Gold")
 
             if access in ("full", "partial"):
-                btn_text = f"{tier_emoji} View {tier_pretty} Edge ↗"
+                btn_text = f"{tier_emoji} View Edge of The Day ↗"
                 btn_cb = f"edge:detail:{match_key}"
             else:
-                btn_text = f"🔒 View {tier_pretty} Edge"
+                btn_text = f"🔒 {tier_emoji} View Edge of The Day"
                 btn_cb = "sub:plans"
 
             rows.insert(0, [InlineKeyboardButton(btn_text, callback_data=btn_cb)])
