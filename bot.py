@@ -8106,6 +8106,8 @@ _VERDICT_BLACKLIST = [
     "form suggests", "expected to",
     "known for", "famous for",
     "ev edge", "ev%", "expected value",
+    # QF-3 (2026-04-24) W84-Q9 regression restore — audit found 2 live cards leaked this phrase
+    "structural gap",
     "the home side", "the away side",
     # BUILD-CARD-FIX-01: banned staking/hedge language
     "measured lean",
@@ -23982,20 +23984,17 @@ async def handle_teams(query, action: str) -> None:
 
 
 async def handle_affiliate(query, action: str) -> None:
-    """Handle affiliate:* callbacks — multi-bookmaker directory."""
-    lines = [
-        "📚 <b>SA Bookmakers</b>\n",
-        "All licensed. All verified. We compare odds across",
-        "all of them so you always get the best price.\n",
-        "━━━━━━━━━━━━━━━━━━━━",
-    ]
-    for info in SA_BOOKMAKERS_INFO.values():
-        lines.append(f"\n{info['emoji']} <b>{info['name']}</b>")
-        lines.append(info["tagline"])
-    lines.append("\n━━━━━━━━━━━━━━━━━━━━")
-    lines.append("\n<i>Always gamble responsibly. 18+ only.</i>")
-    text = "\n".join(lines)
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_bookmakers())
+    """Handle affiliate:* callbacks — bookmaker directory image card."""
+    card_data = build_bookmaker_directory_data()
+    await send_card_or_fallback(
+        bot=query.get_bot(),
+        chat_id=query.message.chat_id,
+        template="bookmaker_directory.html",
+        data=card_data,
+        text_fallback="",
+        markup=kb_bookmakers(),
+        message_to_edit=query.message,
+    )
 
 
 
