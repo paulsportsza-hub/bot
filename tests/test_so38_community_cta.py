@@ -17,6 +17,8 @@ import sys
 import time
 from datetime import datetime
 
+import pytest
+
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.types import (
@@ -124,6 +126,7 @@ def save_screenshot(name: str, content: str) -> str:
 
 
 # ── Test B: Main Menu ─────────────────────────────────────
+@pytest.mark.integration
 async def test_main_menu_community_button(client) -> dict:
     """Verify kb_main() (triggered by '🏠 Menu' sticky tap) has Community URL button."""
     print("\n[Test B] Main menu community button...")
@@ -160,6 +163,7 @@ async def test_main_menu_community_button(client) -> dict:
 
 
 # ── Test A: Onboarding completion ────────────────────────
+@pytest.mark.integration
 async def test_onboarding_community_button(client) -> dict:
     """Complete full onboarding flow and verify community button in completion message."""
     print("\n[Test A] Onboarding completion community button...")

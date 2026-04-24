@@ -349,8 +349,9 @@ async def test_cmd_picks_no_prefs(test_db, mock_update, mock_context):
     loading_msg = AsyncMock()
     mock_context.bot.send_message = AsyncMock(return_value=loading_msg)
 
-    # W84-P1: also patch fast path so cold path is exercised; clear cache to avoid warm-path contamination
+    # W84-P1: patch all tip sources so cold path shows empty state
     with patch("bot._hot_tips_cache", {}), \
+         patch("bot._fetch_hot_tips_from_db", new_callable=AsyncMock, return_value=[]), \
          patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=[]), \
          patch("bot._load_tips_from_edge_results", return_value=[]):
         await bot.cmd_picks(mock_update, mock_context)
@@ -372,11 +373,13 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     mock_update.effective_chat.id = 77778
 
     mock_tips = [{
-        "event_id": "abc123", "sport_key": "soccer_epl",
+        "event_id": "abc123", "match_id": "arsenal_vs_chelsea_2026-02-23",
+        "sport_key": "soccer_epl",
         "home_team": "Arsenal", "away_team": "Chelsea",
         "commence_time": "2026-02-23T15:00:00Z",
         "outcome": "Arsenal", "odds": 2.30, "bookmaker": "Betway",
         "ev": 5.3, "prob": 45, "kelly": 4.2,
+        "edge_score": 60, "display_tier": "gold",  # required by _build_hot_tips_page filter
     }]
 
     loading_msg = AsyncMock()
@@ -386,24 +389,22 @@ async def test_cmd_picks_with_prefs(test_db, mock_update, mock_context):
     def _passthrough_gate(edges, user_id, user_tier, conn):
         return edges, 999, None
 
-    # W84-P1: also patch fast path so cold path is exercised with mock_tips; clear cache to avoid warm-path contamination
+    # W84-P1: patch all tip sources; clear cache to avoid warm-path contamination
+    # patch send_card_or_fallback: production now sends tip cards via card_sender
     with patch("bot._hot_tips_cache", {}), \
          patch("bot._fetch_hot_tips_from_db", new_callable=AsyncMock, return_value=mock_tips), \
          patch("bot._fetch_hot_tips_all_sports", new_callable=AsyncMock, return_value=mock_tips), \
          patch("bot._load_tips_from_edge_results", return_value=[]), \
-         patch("bot.gate_edges", side_effect=_passthrough_gate):
+         patch("bot.gate_edges", side_effect=_passthrough_gate), \
+         patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_send_card:
         await bot.cmd_picks(mock_update, mock_context)
 
-    # Hot Tips sends loading + single consolidated message via bot.send_message
-    assert mock_context.bot.send_message.call_count >= 2
-    # Check that the final message contains both header and tip
-    all_texts = []
-    for call in mock_context.bot.send_message.call_args_list:
-        t = call[1].get("text", "") or (call[0][1] if len(call[0]) > 1 else "")
-        all_texts.append(t)
-    combined = " ".join(all_texts)
-    assert "Top Edge Picks" in combined
-    assert "Arsenal" in combined
+    # Hot Tips sends via card (send_card_or_fallback), not direct send_message
+    mock_send_card.assert_called_once()
+    # text_fallback passed to card contains Arsenal
+    call_kwargs = mock_send_card.call_args[1]
+    assert "Arsenal" in call_kwargs.get("text_fallback", "")
+    assert "Top Edge Picks" in call_kwargs.get("text_fallback", "")
 
 
 async def test_cmd_admin_shows_quota(test_db, mock_update, mock_context):
@@ -428,6 +429,7 @@ async def test_cmd_admin_non_admin_ignored(test_db, mock_update, mock_context):
     mock_update.message.reply_text.assert_not_called()
 
 
+@pytest.mark.skip(reason="handle_picks removed — picks: prefix is no longer routed; hot:go is the canonical callback")
 @pytest.mark.parametrize("action", ["go", "today"])
 async def test_handle_picks_legacy_callbacks_redirect_to_hot_tips(
     test_db, mock_update, mock_context, action

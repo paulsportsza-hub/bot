@@ -34,7 +34,7 @@ def _insert_cache_row(db_path: str, match_id: str, html: str) -> None:
             match_id,
             html,
             "sonnet",
-            "gold",
+            "bronze",  # gold+w82 hits WATERTIGHT-01 before banned-phrase check
             json.dumps([{"outcome": "home", "odds": 1.62, "ev": 5.0}]),
             "",
             now.isoformat(),
@@ -71,12 +71,14 @@ async def test_get_cached_narrative_rejects_shape_the_stake_filler(tmp_path) -> 
         assert cached is None
 
         conn = sqlite3.connect(db_path)
-        count = conn.execute(
-            "SELECT COUNT(*) FROM narrative_cache WHERE match_id = ?",
+        row = conn.execute(
+            "SELECT status FROM narrative_cache WHERE match_id = ?",
             ("golden_arrows_vs_stellenbosch_2026-03-21",),
-        ).fetchone()[0]
+        ).fetchone()
         conn.close()
-        assert count == 0
+        # Rejected rows are quarantined (UPDATE), not deleted
+        assert row is not None
+        assert row[0] == "quarantined"
     finally:
         bot._NARRATIVE_DB_PATH = original
 

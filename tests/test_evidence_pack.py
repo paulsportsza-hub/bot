@@ -152,7 +152,7 @@ async def test_store_narrative_cache_persists_evidence_json(tmp_path) -> None:
             "chiefs_vs_sundowns_2026-03-08",
             "<b>Test narrative</b>",
             [{"outcome": "home", "odds": 2.5, "ev": 5.0}],
-            "gold",
+            "bronze",  # gold+w82 blocked by BUILD-NARRATIVE-WATERTIGHT-01
             "opus",
             evidence_json='{"richness_score":"medium"}',
         )
@@ -475,7 +475,7 @@ def test_build_sharp_injection_uses_locked_snippet_for_recommended_outcome() -> 
     )
     spec = SimpleNamespace(outcome="home", evidence_class="lean", tone_band="moderate")
 
-    assert evidence_pack._build_sharp_injection(pack, spec) == "Sharp market pricing has home at 2.02."
+    assert evidence_pack._build_sharp_injection(pack, spec) == "Market pricing has home at 2.02."
 
 
 def test_build_sharp_injection_returns_empty_when_no_safe_snippet_exists() -> None:
@@ -641,6 +641,7 @@ async def test_generate_one_includes_evidence_json(monkeypatch) -> None:
     monkeypatch.setattr(pregen, "_get_match_context", fake_match_context)
     monkeypatch.setattr(pregen, "build_evidence_pack", fake_build_evidence_pack)
     monkeypatch.setattr(pregen, "serialise_evidence_pack", lambda pack: '{"pack_version":1}')
+    monkeypatch.setattr(pregen, "_is_past_kickoff", lambda *_: False)
 
     edge = {
         "match_key": "kaizer_chiefs_vs_magesi_2026-03-21",
@@ -720,10 +721,14 @@ async def test_edge_precompute_job_backfills_evidence(monkeypatch) -> None:
         return True
 
     monkeypatch.setattr(bot, "_fetch_hot_tips_from_db", fake_fetch_hot_tips)
+    # Stable path now used instead of _fetch_hot_tips_from_db; return [tip] directly.
+    monkeypatch.setattr(bot, "_load_tips_from_edge_results", lambda n: [tip])
     monkeypatch.setattr(bot, "_get_cached_narrative", fake_get_cached_narrative)
     monkeypatch.setattr(bot, "_store_narrative_evidence", fake_store_evidence)
     monkeypatch.setattr("evidence_pack.build_evidence_pack", fake_build_evidence_pack)
     monkeypatch.setattr("evidence_pack.serialise_evidence_pack", lambda pack: '{"match_key":"west_ham_vs_wolves_2026-04-10"}')
+    # Skip card prerender (slow, irrelevant to evidence backfill assertion).
+    monkeypatch.setattr(bot, "render_card_sync", lambda *a, **kw: b"")
 
     old_analysis = dict(bot._analysis_cache)
     old_game = dict(bot._game_tips_cache)

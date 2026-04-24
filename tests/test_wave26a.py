@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.asyncio
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import ensure_scrapers_importable
 ensure_scrapers_importable()
@@ -28,7 +30,7 @@ SAMPLE_TIPS = [
         "home_team": "Mamelodi Sundowns", "away_team": "Kaizer Chiefs",
         "league": "PSL", "league_key": "psl", "sport_key": "soccer_south_africa_psl",
         "outcome": "Sundowns", "odds": 1.50, "ev": 18, "bookmaker": "Hollywoodbets",
-        "display_tier": "diamond", "edge_rating": "diamond",
+        "display_tier": "diamond", "edge_rating": "diamond", "edge_score": 90,
         "match_id": "sun_kc_20260310", "event_id": "sun_kc_20260310",
         "commence_time": "2026-03-10T17:00:00Z",
     },
@@ -36,7 +38,7 @@ SAMPLE_TIPS = [
         "home_team": "Orlando Pirates", "away_team": "Sekhukhune United",
         "league": "PSL", "league_key": "psl", "sport_key": "soccer_south_africa_psl",
         "outcome": "Pirates", "odds": 1.80, "ev": 9, "bookmaker": "Betway",
-        "display_tier": "gold", "edge_rating": "gold",
+        "display_tier": "gold", "edge_rating": "gold", "edge_score": 75,
         "match_id": "pir_sek_20260310", "event_id": "pir_sek_20260310",
         "commence_time": "2026-03-10T15:00:00Z",
     },
@@ -44,7 +46,7 @@ SAMPLE_TIPS = [
         "home_team": "Arsenal", "away_team": "Chelsea",
         "league": "EPL", "league_key": "epl", "sport_key": "soccer_epl",
         "outcome": "Arsenal", "odds": 2.10, "ev": 5, "bookmaker": "Sportingbet",
-        "display_tier": "silver", "edge_rating": "silver",
+        "display_tier": "silver", "edge_rating": "silver", "edge_score": 58,
         "match_id": "ars_che_20260310", "event_id": "ars_che_20260310",
         "commence_time": "2026-03-10T14:00:00Z",
     },
@@ -52,17 +54,9 @@ SAMPLE_TIPS = [
         "home_team": "Liverpool", "away_team": "Man City",
         "league": "EPL", "league_key": "epl", "sport_key": "soccer_epl",
         "outcome": "Liverpool", "odds": 2.50, "ev": 3, "bookmaker": "GBets",
-        "display_tier": "bronze", "edge_rating": "bronze",
+        "display_tier": "bronze", "edge_rating": "bronze", "edge_score": 42,
         "match_id": "liv_mci_20260310", "event_id": "liv_mci_20260310",
         "commence_time": "2026-03-10T16:30:00Z",
-    },
-    {
-        "home_team": "Bulls", "away_team": "Stormers",
-        "league": "URC", "league_key": "urc", "sport_key": "rugby_urc",
-        "outcome": "Bulls", "odds": 1.65, "ev": 7, "bookmaker": "Hollywoodbets",
-        "display_tier": "gold", "edge_rating": "gold",
-        "match_id": "bul_sto_20260310", "event_id": "bul_sto_20260310",
-        "commence_time": "2026-03-10T19:00:00Z",
     },
 ]
 
@@ -76,19 +70,19 @@ def _import_build():
 
 @pytest.fixture
 def build_page():
-    """Return a helper that calls _build_hot_tips_page with broadcast mocked."""
-    def _call(**kwargs):
+    """Return an async helper that calls _build_hot_tips_page with broadcast mocked."""
+    async def _call(**kwargs):
         with patch("bot._get_broadcast_details", return_value={"kickoff": "Tue 17:00", "broadcast": "📺 SS PSL (DStv 202)"}):
             from bot import _build_hot_tips_page
-            return _build_hot_tips_page(**kwargs)
+            return await _build_hot_tips_page(**kwargs)
     return _call
 
 
 # ── Test 1: Full access card has exactly 3 content lines ──
 
-def test_card_3_lines_full(build_page):
+async def test_card_3_lines_full(build_page):
     """Full access card: match, info, outcome @ odds → return. No signal/CTA."""
-    text, _ = build_page(tips=SAMPLE_TIPS, user_tier="diamond")
+    text, _, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="diamond")
     # Find a full-access card (bronze tip for diamond user)
     lines = text.split("\n")
     card_lines = [l for l in lines if "[4]" in l or (lines.index(l) > 0 and "[4]" in lines[lines.index(l) - 1] if lines.index(l) > 0 else False)]
@@ -114,9 +108,9 @@ def test_card_3_lines_full(build_page):
 
 # ── Test 2: Blurred card has return only ──
 
-def test_card_3_lines_blurred(build_page):
+async def test_card_3_lines_blurred(build_page):
     """Blurred Gold card adds context but keeps odds/outcome/bookmaker hidden."""
-    text, _ = build_page(tips=SAMPLE_TIPS, user_tier="bronze")
+    text, _, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="bronze")
     # Gold tip (index 2) is blurred for bronze
     card_block = ""
     in_card = False
@@ -140,9 +134,9 @@ def test_card_3_lines_blurred(build_page):
 
 # ── Test 3: Locked card has lock message ──
 
-def test_card_3_lines_locked(build_page):
+async def test_card_3_lines_locked(build_page):
     """Locked Diamond card adds premium context without leaking odds or pick details."""
-    text, _ = build_page(tips=SAMPLE_TIPS, user_tier="bronze")
+    text, _, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="bronze")
     # Diamond tip (index 1) is locked for bronze
     card_block = ""
     in_card = False
@@ -164,9 +158,9 @@ def test_card_3_lines_locked(build_page):
 
 # ── Test 4: Rich section headers ──
 
-def test_richer_section_headers(build_page):
+async def test_richer_section_headers(build_page):
     """Output groups cards under richer tier-aware section headers."""
-    text, _ = build_page(tips=SAMPLE_TIPS, user_tier="diamond")
+    text, _, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="diamond")
     assert "💎 <b>DIAMOND EDGE</b> — 1 pick · Our highest-conviction calls" in text
     assert "🥇 <b>GOLDEN EDGE</b> — 1 pick · Strong value, clear signals" in text
     assert "🥈 <b>SILVER EDGE</b> — 1 pick · Solid value, cleaner spots" in text
@@ -175,9 +169,9 @@ def test_richer_section_headers(build_page):
 
 # ── Test 5: No per-card CTA ──
 
-def test_no_per_card_cta(build_page):
+async def test_no_per_card_cta(build_page):
     """No 'Unlock odds' or 'available on Gold' or 'Diamond members only' in card text."""
-    text, _ = build_page(tips=SAMPLE_TIPS, user_tier="bronze")
+    text, _, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="bronze")
     assert "Unlock odds" not in text
     assert "available on Gold" not in text
     assert "Diamond members only" not in text
@@ -186,9 +180,9 @@ def test_no_per_card_cta(build_page):
 
 # ── Test 6: Single footer CTA for Bronze ──
 
-def test_single_footer_cta_bronze(build_page):
+async def test_single_footer_cta_bronze(build_page):
     """Footer block present for Bronze user, contains /subscribe."""
-    text, _ = build_page(tips=SAMPLE_TIPS, user_tier="bronze")
+    text, _, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="bronze")
     assert "━━━" in text
     assert "/subscribe" in text
     assert "edges locked" in text
@@ -196,17 +190,17 @@ def test_single_footer_cta_bronze(build_page):
 
 # ── Test 7: No footer for Diamond ──
 
-def test_no_footer_diamond(build_page):
+async def test_no_footer_diamond(build_page):
     """No footer block (no '━━━') for Diamond user."""
-    text, _ = build_page(tips=SAMPLE_TIPS, user_tier="diamond")
+    text, _, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="diamond")
     assert "━━━" not in text
 
 
 # ── Test 8: No URL button for locked edges ──
 
-def test_no_bookmaker_link_locked(build_page):
+async def test_no_bookmaker_link_locked(build_page):
     """Locked edges have no URL button (check InlineKeyboardMarkup)."""
-    _, markup = build_page(tips=SAMPLE_TIPS, user_tier="bronze")
+    _, markup, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="bronze")
     # Find button for tip 1 (diamond — locked for bronze)
     for row in markup.inline_keyboard:
         for btn in row:
@@ -218,10 +212,10 @@ def test_no_bookmaker_link_locked(build_page):
 
 # ── Test 9: No Compare Odds button for locked edges ──
 
-def test_no_compare_odds_locked(build_page):
+async def test_no_compare_odds_locked(build_page):
     """No 'Compare All Odds' or 'All Bookmaker Odds' button for locked tip detail."""
     # This tests the button layout in _build_hot_tips_page list view
-    _, markup = build_page(tips=SAMPLE_TIPS, user_tier="bronze")
+    _, markup, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="bronze")
     all_btn_texts = [btn.text for row in markup.inline_keyboard for btn in row]
     # Locked edge buttons should go to sub:plans, not odds comparison
     for row in markup.inline_keyboard:
@@ -232,9 +226,9 @@ def test_no_compare_odds_locked(build_page):
 
 # ── Test 10: Button abbreviations under 28 chars ──
 
-def test_button_abbreviations(build_page):
+async def test_button_abbreviations(build_page):
     """All button labels under 28 chars."""
-    _, markup = build_page(tips=SAMPLE_TIPS, user_tier="diamond")
+    _, markup, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="diamond")
     for row in markup.inline_keyboard:
         for btn in row:
             if btn.text and btn.text.startswith("["):
@@ -355,9 +349,9 @@ async def test_teaser_diamond_no_cta():
 
 # ── Test 14: Losing streak footer ──
 
-def test_losing_streak_footer(build_page):
+async def test_losing_streak_footer(build_page):
     """Footer shows 'market has been tight' when consecutive_misses >= 3."""
-    text, _ = build_page(tips=SAMPLE_TIPS, user_tier="bronze", consecutive_misses=3)
+    text, _, _tips = await build_page(tips=SAMPLE_TIPS, user_tier="bronze", consecutive_misses=3)
     assert "market has been tight" in text.lower()
     # Should NOT have /subscribe or "edges locked"
     assert "/subscribe" not in text

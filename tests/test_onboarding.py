@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -56,11 +56,11 @@ class TestSportSelection:
     async def test_toggle_sport_on(self):
         bot._onboarding_state.clear()
         query = _make_query(user_id=10001)
-        await bot.handle_ob_sport(query, "soccer")
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock):
+            await bot.handle_ob_sport(query, "soccer")
 
         ob = bot._get_ob(10001)
         assert "soccer" in ob["selected_sports"]
-        query.edit_message_text.assert_called_once()
 
     async def test_toggle_sport_off(self):
         bot._onboarding_state.clear()
@@ -93,12 +93,13 @@ class TestSportsDone:
         ob["selected_sports"] = ["soccer"]
 
         query = _make_query(user_id=10004)
-        await bot.handle_ob_nav(query, "sports_done")
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+            await bot.handle_ob_nav(query, "sports_done")
 
         assert ob["step"] == "favourites"
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 3" in text
+        mock_card.assert_called_once()
+        text_fb = mock_card.call_args.kwargs.get("text_fallback", "")
+        assert "Step 3" in text_fb
 
     async def test_sports_done_combat_goes_to_teams(self):
         """Phase 0D: combat sports should go to team prompt, not league selection."""
@@ -247,33 +248,24 @@ class TestRiskSelection:
 
 class TestNotifySelection:
     async def test_notify_sets_hour(self):
-        bot._onboarding_state.clear()
-        ob = bot._get_ob(10009)
-        ob["step"] = "notify"
-        ob["selected_sports"] = ["soccer"]
-        ob["risk"] = "moderate"
-
-        query = _make_query(user_id=10009)
-        await bot.handle_ob_notify(query, "18")
-
-        assert ob["notify_hour"] == 18
-        assert ob["step"] == "summary"
+        pytest.skip("handle_ob_notify removed in FIX-ONBOARDING-OB-NAV-01")
 
 
 class TestPreferencesCombinedStep:
     async def test_risk_goes_to_bankroll(self):
-        """Phase 0D: Risk should show Step 4/6 and go to bankroll."""
+        """Phase 0D: Risk should show Step 4/5 and go to bankroll."""
         bot._onboarding_state.clear()
         ob = bot._get_ob(10050)
         ob["step"] = "risk"
 
         query = _make_query(user_id=10050)
-        await bot.handle_ob_risk(query, "moderate")
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+            await bot.handle_ob_risk(query, "moderate")
 
         assert ob["step"] == "bankroll"
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 4/6" in text
+        mock_card.assert_called_once()
+        text_fb = mock_card.call_args.kwargs.get("text_fallback", "")
+        assert "Step 4/5" in text_fb
 
     async def test_no_league_step(self):
         """Phase 0D: sports_done goes to favourites, not leagues."""
@@ -299,14 +291,14 @@ class TestSummaryAndEdit:
         ob["notify_hour"] = 18
 
         query = _make_query(user_id=10023)
-        await bot._show_summary(query, ob)
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+            await bot._show_summary(query, ob)
 
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 5/6" in text
-        assert "Arsenal" in text
-        # Edit buttons are in the keyboard markup
-        kb = call_args[1].get("reply_markup")
+        mock_card.assert_called_once()
+        text_fb = mock_card.call_args.kwargs.get("text_fallback", "")
+        assert "Step 5/5" in text_fb
+        assert "Arsenal" in text_fb
+        kb = mock_card.call_args.kwargs.get("markup")
         btn_texts = [btn.text for row in kb.inline_keyboard for btn in row]
         assert any("Edit Sports & Teams" in t for t in btn_texts)
         assert any("Edit Preferences" in t for t in btn_texts)
@@ -329,12 +321,13 @@ class TestSummaryAndEdit:
         ob["step"] = "summary"
 
         query = _make_query(user_id=10025)
-        await bot.handle_ob_edit(query, "risk")
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+            await bot.handle_ob_edit(query, "risk")
 
         assert ob["_editing"] == "risk"
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Risk" in text
+        mock_card.assert_called_once()
+        text_fb = mock_card.call_args.kwargs.get("text_fallback", "")
+        assert "Risk" in text_fb
 
     async def test_back_to_summary(self):
         bot._onboarding_state.clear()
@@ -434,10 +427,7 @@ class TestKeyboards:
         assert any("↩️" in t for t in texts)
 
     def test_kb_onboarding_notify(self):
-        kb = bot.kb_onboarding_notify()
-        texts = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert len(texts) == 6  # 4 time options + back + start again
-        assert any("↩️" in t for t in texts)
+        pytest.skip("kb_onboarding_notify removed in FIX-ONBOARDING-OB-NAV-01")
 
     def test_kb_settings_has_reset(self):
         kb = bot.kb_settings()
@@ -453,10 +443,7 @@ class TestKeyboards:
         assert "ob_nav:restart" in callbacks
 
     def test_kb_onboarding_notify_has_start_again(self):
-        """Notify keyboard has Start Again button."""
-        kb = bot.kb_onboarding_notify()
-        texts = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert any("Start Again" in t for t in texts)
+        pytest.skip("kb_onboarding_notify removed in FIX-ONBOARDING-OB-NAV-01")
 
     def test_kb_onboarding_bankroll_has_start_again(self):
         """Bankroll keyboard has Start Again button."""
@@ -465,9 +452,9 @@ class TestKeyboards:
         assert any("Start Again" in t for t in texts)
 
     def test_kb_settings_has_single_notifications_entry(self):
-        """Settings keyboard exposes one consolidated notifications entry."""
+        """Settings keyboard exposes one consolidated alert preferences entry."""
         kb = bot.kb_settings()
         texts = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert texts.count("🔔 Notifications") == 1
-        assert not any("Edge Alerts" in t for t in texts)
-        assert not any("⏰ Notifications" in t for t in texts)
+        assert texts.count("📊 Alert Preferences") == 1
+        assert not any("Notifications" in t for t in texts)
+        assert not any("🔔" in t for t in texts)

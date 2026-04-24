@@ -62,7 +62,7 @@ class TestMonthlyBody:
 
         captured = {}
 
-        async def _fake_post(url, json=None, headers=None):
+        def _fake_post(url, json=None, headers=None):
             captured["body"] = json
             return _make_200_resp({
                 "id": "sub_monthly_test",
@@ -102,7 +102,7 @@ class TestMonthlyBody:
         captured = {}
         utc_day = datetime.now(timezone.utc).day
 
-        async def _fake_post(url, json=None, headers=None):
+        def _fake_post(url, json=None, headers=None):
             captured["body"] = json
             return _make_200_resp({
                 "id": "sub_day_test",
@@ -141,7 +141,7 @@ class TestAnnualBody:
         captured = {}
         now = datetime.now(timezone.utc)
 
-        async def _fake_post(url, json=None, headers=None):
+        def _fake_post(url, json=None, headers=None):
             captured["body"] = json
             return _make_200_resp({
                 "id": "sub_annual_test",
@@ -233,7 +233,7 @@ class TestResponseParsing:
 
         captured = {}
 
-        async def _fake_post(url, json=None, headers=None):
+        def _fake_post(url, json=None, headers=None):
             captured["body"] = json
             return _make_200_resp({
                 "id": "sub_pid",
@@ -267,7 +267,7 @@ class TestResponseParsing:
 
         captured = {}
 
-        async def _fake_post(url, json=None, headers=None):
+        def _fake_post(url, json=None, headers=None):
             captured["body"] = json
             return _make_200_resp({
                 "id": "sub_dt",
@@ -313,7 +313,7 @@ class TestTokenScope:
 
         call_count = 0
 
-        async def _fake_post(url, json=None, headers=None):
+        def _fake_post(url, json=None, headers=None):
             nonlocal call_count
             call_count += 1
             resp = AsyncMock()
@@ -352,7 +352,7 @@ class TestTokenScope:
 
         call_count = 0
 
-        async def _fake_post(url, json=None, headers=None):
+        def _fake_post(url, json=None, headers=None):
             nonlocal call_count
             call_count += 1
             resp = AsyncMock()

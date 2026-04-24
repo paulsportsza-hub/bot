@@ -25,6 +25,8 @@ import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
+import pytest
+
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.types import (
@@ -283,6 +285,7 @@ async def _get_my_matches_msg(client: TelegramClient):
     return None
 
 
+@pytest.mark.integration
 async def test_game_breakdowns_quality(client: TelegramClient, max_games: int = 3,
                                         verbose: bool = False) -> TestResult:
     """Tap up to max_games from My Matches and validate breakdown quality."""
@@ -368,6 +371,7 @@ async def test_game_breakdowns_quality(client: TelegramClient, max_games: int = 
         return TestResult("game_breakdowns", False, str(e), time.time() - start, checks)
 
 
+@pytest.mark.integration
 async def test_no_terse_in_any_game(client: TelegramClient, verbose: bool = False) -> TestResult:
     """Specifically test that NO game breakdown has a terse Setup section."""
     start = time.time()
@@ -425,6 +429,7 @@ async def test_no_terse_in_any_game(client: TelegramClient, verbose: bool = Fals
         return TestResult("no_terse", False, str(e), time.time() - start, checks)
 
 
+@pytest.mark.integration
 async def test_all_sections_present(client: TelegramClient) -> TestResult:
     """Test that all 4 sections (Setup, Edge, Risk, Verdict) are present in breakdowns."""
     start = time.time()
@@ -485,6 +490,7 @@ async def test_all_sections_present(client: TelegramClient) -> TestResult:
         return TestResult("all_sections", False, str(e), time.time() - start, checks)
 
 
+@pytest.mark.integration
 async def test_edge_not_empty(client: TelegramClient) -> TestResult:
     """Test that Edge sections have actual content (not empty)."""
     start = time.time()
@@ -539,6 +545,7 @@ async def test_edge_not_empty(client: TelegramClient) -> TestResult:
         return TestResult("edge_content", False, str(e), time.time() - start, checks)
 
 
+@pytest.mark.integration
 async def test_setup_has_minimum_sentences(client: TelegramClient) -> TestResult:
     """Test that Setup sections have at least 3 sentences."""
     start = time.time()

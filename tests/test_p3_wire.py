@@ -228,16 +228,18 @@ async def test_morning_teaser_uses_send_photo(mock_context):
     user = MagicMock(id=77)
     mock_context.bot.send_photo = AsyncMock()
 
-    with patch.object(db, "get_users_for_notification", new_callable=AsyncMock, return_value=[user]), \
+    with patch("bot.NOTIFICATIONS_ENABLED", True), \
+         patch.object(db, "get_users_for_notification", new_callable=AsyncMock, return_value=[user]), \
          patch("bot._fetch_hot_tips_from_db", new_callable=AsyncMock, return_value=[_tip(0)]), \
          patch("bot._can_send_notification", new_callable=AsyncMock, return_value=True), \
          patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="gold"), \
          patch("bot._after_send", new_callable=AsyncMock), \
          patch("bot._get_settlement_funcs", return_value=(lambda d: {}, None, None, lambda: None)), \
-         patch("image_card.generate_digest_card", return_value=b"\x89PNG\r\n\x1a\n" + b"\x00" * 100):
+         patch("bot._blw_fire_tips"), \
+         patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_send_card:
         await bot._morning_teaser_job(mock_context)
 
-    mock_context.bot.send_photo.assert_called_once()
+    mock_send_card.assert_called_once()
     mock_context.bot.send_message.assert_not_called()
 
 
@@ -247,14 +249,17 @@ async def test_morning_teaser_falls_back_to_text_on_image_failure(mock_context):
     user = MagicMock(id=78)
     mock_context.bot.send_photo = AsyncMock()
 
-    with patch.object(db, "get_users_for_notification", new_callable=AsyncMock, return_value=[user]), \
+    with patch("bot.NOTIFICATIONS_ENABLED", True), \
+         patch.object(db, "get_users_for_notification", new_callable=AsyncMock, return_value=[user]), \
          patch("bot._fetch_hot_tips_from_db", new_callable=AsyncMock, return_value=[_tip(0)]), \
          patch("bot._can_send_notification", new_callable=AsyncMock, return_value=True), \
          patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="gold"), \
          patch("bot._after_send", new_callable=AsyncMock), \
          patch("bot._get_settlement_funcs", return_value=(lambda d: {}, None, None, lambda: None)), \
-         patch("image_card.generate_digest_card", side_effect=RuntimeError("Pillow fail")):
+         patch("bot._blw_fire_tips"), \
+         patch("bot.send_card_or_fallback", new_callable=AsyncMock, side_effect=Exception("render failed")):
         await bot._morning_teaser_job(mock_context)
 
-    mock_context.bot.send_message.assert_called_once()
+    # IMAGE ONLY rule: no text fallback when card fails
+    mock_context.bot.send_message.assert_not_called()
     mock_context.bot.send_photo.assert_not_called()

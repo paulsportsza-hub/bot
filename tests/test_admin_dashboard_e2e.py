@@ -239,6 +239,7 @@ def _db_coverage_matrix_labels(conn) -> list[str]:
 # AC-1: Test file exists and imports cleanly (self-proving)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac1_test_file_exists():
     """AC-1: Playwright test suite is located at tests/test_admin_dashboard_e2e.py."""
     import pathlib
@@ -251,6 +252,7 @@ def test_ac1_test_file_exists():
 # AC-2: System Health Score matches health_status table
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac2_system_health_score(health_page, db_conn):
     """AC-2: System Health Score KPI matches source_health_current computation."""
     kpi_text = _get_kpi(health_page, "System Health Score")
@@ -273,6 +275,7 @@ def test_ac2_system_health_score(health_page, db_conn):
 # AC-3: Active Scrapers count matches DB query
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac3_active_scrapers(health_page, db_conn):
     """AC-3: Active Scrapers KPI matches bookmakers with last scrape < 1h."""
     kpi_text = _get_kpi(health_page, "Active Scrapers")
@@ -293,6 +296,7 @@ def test_ac3_active_scrapers(health_page, db_conn):
 # AC-4: Narrative Coverage % matches w84 computation
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac4_narrative_coverage(health_page, db_conn):
     """AC-4: Narrative Coverage % matches w84/total from odds_snapshots + narrative_cache."""
     kpi_text = _get_kpi(health_page, "Narrative Coverage")
@@ -312,6 +316,7 @@ def test_ac4_narrative_coverage(health_page, db_conn):
 # AC-5: Active Alerts count matches unresolved alerts in DB
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac5_active_alerts(health_page, db_conn):
     """AC-5: Active Alerts (24h) KPI matches COUNT(*) from health_alerts last 24h."""
     kpi_text = _get_kpi(health_page, "Active Alerts")
@@ -331,6 +336,7 @@ def test_ac5_active_alerts(health_page, db_conn):
 # AC-6: Sport Coverage Matrix chart renders with correct labels
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac6_coverage_chart_renders(health_page, db_conn):
     """AC-6: Sport Coverage Matrix canvas renders and data labels match DB leagues."""
     # Verify canvas element exists
@@ -371,6 +377,7 @@ def test_ac6_coverage_chart_renders(health_page, db_conn):
 # AC-7: /admin/system redirects to /admin/health
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac7_system_redirects_to_health(playwright_ctx):
     """AC-7: GET /admin/system with auth redirects (302→) to /admin/health."""
     page = playwright_ctx.new_page()
@@ -397,6 +404,7 @@ def test_ac7_system_redirects_to_health(playwright_ctx):
 # AC-8: Page loads <3 seconds (warm cache)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac8_page_load_time(playwright_ctx):
     """AC-8: Dashboard page loads in <3s on warm cache."""
     page = playwright_ctx.new_page()
@@ -422,6 +430,7 @@ def test_ac8_page_load_time(playwright_ctx):
 # AC-9: 8+ KPI cards render
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac9_eight_plus_kpi_cards(health_page):
     """AC-9: Dashboard renders 8 or more KPI cards."""
     kpi_cards = health_page.locator(".kpi-strip .kpi")
@@ -443,6 +452,7 @@ def test_ac9_eight_plus_kpi_cards(health_page):
 # AC-10: All existing tests pass (gate check)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_ac10_existing_tests_not_broken():
     """AC-10: Imports from existing modules work (smoke test for regressions)."""
     # This test verifies we haven't broken existing modules by importing them
@@ -465,6 +475,7 @@ def test_ac10_existing_tests_not_broken():
 # Additional: Coverage matrix data sanity checks
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 def test_coverage_matrix_sport_column(health_page):
     """Coverage matrix table contains expected sport types."""
     table_text = (health_page.locator(".tbl").first.text_content() or "").lower()
@@ -473,6 +484,7 @@ def test_coverage_matrix_sport_column(health_page):
     assert has_content, "Coverage matrix table appears empty"
 
 
+@pytest.mark.integration
 def test_kpi_values_are_numeric(health_page):
     """All KPI value cards contain parseable numeric values (not error placeholders)."""
     kpi_cards = health_page.locator(".kpi-strip .kpi")
@@ -493,6 +505,7 @@ def test_kpi_values_are_numeric(health_page):
         )
 
 
+@pytest.mark.integration
 def test_dashboard_no_error_banners(health_page):
     """Dashboard should not display critical error banners."""
     page_text = (health_page.locator("body").text_content() or "").lower()
@@ -505,6 +518,7 @@ def test_dashboard_no_error_banners(health_page):
         assert err not in page_text, f"Error indicator found in dashboard: {err!r}"
 
 
+@pytest.mark.integration
 def test_dashboard_db_connected(health_page):
     """Dashboard banner should indicate DB is connected (not unreachable)."""
     banner = health_page.locator(".banner")

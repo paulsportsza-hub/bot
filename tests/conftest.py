@@ -59,6 +59,10 @@ def mock_update():
     update.callback_query.edit_message_text = AsyncMock()
     update.callback_query.from_user = update.effective_user
     update.callback_query.data = ""
+    # Ensure message is not treated as a photo message by _serve_response
+    update.callback_query.message = MagicMock()
+    update.callback_query.message.photo = None
+    update.callback_query.message.delete = AsyncMock()
     return update
 
 

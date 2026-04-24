@@ -33,6 +33,7 @@ async def file_test_db(tmp_path, monkeypatch):
     original_db_url = config.DATABASE_URL
 
     monkeypatch.setattr(config, "DATABASE_URL", db_url)
+    monkeypatch.setattr(config, "DATABASE_PATH", db_path)
     db.engine = test_engine
     db.async_session = test_session
 
@@ -187,6 +188,10 @@ async def test_mock_e2e_founding_flow(test_db, mock_context):
     user_id = 3030
     await db.upsert_user(user_id, "founder", "Founder")
 
+    # Ensure Stitch runs in mock mode (STITCH_MOCK_MODE may be False in test env)
+    monkeypatch_mock_mode = patch("config.STITCH_MOCK_MODE", True)
+    monkeypatch_mock_mode.start()
+
     query = MagicMock()
     query.from_user = SimpleNamespace(id=user_id)
     query.edit_message_text = AsyncMock()
@@ -206,23 +211,25 @@ async def test_mock_e2e_founding_flow(test_db, mock_context):
 
     loading_message = MagicMock()
     loading_message.delete = AsyncMock()
-    final_message = MagicMock()
     update = MagicMock()
     update.effective_user = SimpleNamespace(id=user_id)
     update.message = MagicMock()
     update.message.text = "founder@example.com"
-    update.message.reply_text = AsyncMock(side_effect=[loading_message, final_message])
+    update.message.reply_text = AsyncMock(return_value=loading_message)
 
-    handled = await bot._handle_sub_email(update, user_id)
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        handled = await bot._handle_sub_email(update, user_id)
     assert handled is True
     payment_id = bot._subscribe_state[user_id]["payment_id"]
 
-    ready_text = update.message.reply_text.call_args_list[-1].args[0]
+    ready_text = mock_card.call_args.args[4]
     assert "webhook confirms payment" in ready_text
 
     verify_query = MagicMock()
     verify_query.from_user = SimpleNamespace(id=user_id)
+    verify_query.answer = AsyncMock()
     verify_query.edit_message_text = AsyncMock()
+    verify_query.message.photo = None  # force text→text path in _serve_response
 
     with patch.object(bot, "analytics_track"):
         await bot._handle_sub_verify(verify_query, payment_id)
@@ -237,6 +244,8 @@ async def test_mock_e2e_founding_flow(test_db, mock_context):
     assert user.user_tier == "diamond"
     assert user.founding_slot_number == 1
 
+    monkeypatch_mock_mode.stop()
+
 
 async def test_checkout_url_appends_redirect_uri(monkeypatch):
     monkeypatch.setattr(config, "STITCH_REDIRECT_URI", "https://mzansiedge.co.za/founding-success")
@@ -245,7 +254,7 @@ async def test_checkout_url_appends_redirect_uri(monkeypatch):
 
     assert checkout_url == (
         "https://pay.stitch.money/checkout/pay-123"
-        "?redirect_uri=https%3A%2F%2Fmzansiedge.co.za%2Ffounding-success"
+        "?redirect_url=https%3A%2F%2Fmzansiedge.co.za%2Ffounding-success"
     )
 
 
@@ -258,7 +267,7 @@ async def test_checkout_url_preserves_existing_query_params(monkeypatch):
 
     assert checkout_url == (
         "https://pay.stitch.money/checkout/pay-123"
-        "?foo=bar&redirect_uri=https%3A%2F%2Fmzansiedge.co.za%2Ffounding-success"
+        "?foo=bar&redirect_url=https%3A%2F%2Fmzansiedge.co.za%2Ffounding-success"
     )
 
 
@@ -270,10 +279,11 @@ async def test_status_and_admin_show_founding_visibility(test_db, mock_update, m
 
     mock_update.effective_user.id = user_id
     mock_update.message.reply_text = AsyncMock()
-    await bot.cmd_status(mock_update, mock_context)
-    status_text = mock_update.message.reply_text.call_args.args[0]
-    assert "Founding Member" in status_text
-    assert "Slot: <b>#1</b>" in status_text
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.cmd_status(mock_update, mock_context)
+    card_data = mock_card.call_args.args[3]
+    assert card_data.get("founding_slot") is not None
+    assert card_data["founding_slot"] == 1
 
     mock_update.effective_user.id = config.ADMIN_IDS[0]
     mock_update.message.reply_text = AsyncMock()

@@ -42,7 +42,7 @@ def _insert_cache_row(
             match_id,
             html,
             "sonnet",
-            "gold",
+            "bronze",  # gold+w82 hits WATERTIGHT-01 before banned-phrase check
             json.dumps(tips or [{"outcome": "home", "odds": 2.2, "ev": 4.1}]),
             "",
             evidence_json,
@@ -84,12 +84,14 @@ async def test_get_cached_narrative_rejects_stale_risk_filler(tmp_path) -> None:
         assert cached is None
 
         conn = sqlite3.connect(db_path)
-        count = conn.execute(
-            "SELECT COUNT(*) FROM narrative_cache WHERE match_id = ?",
+        row = conn.execute(
+            "SELECT status FROM narrative_cache WHERE match_id = ?",
             ("arsenal_vs_bournemouth_2026-04-11",),
-        ).fetchone()[0]
+        ).fetchone()
         conn.close()
-        assert count == 0
+        # Rejected rows are quarantined (UPDATE), not deleted
+        assert row is not None
+        assert row[0] == "quarantined"
     finally:
         bot._NARRATIVE_DB_PATH = original
 
@@ -223,6 +225,9 @@ async def test_pregen_context_lift_retries_with_alternate_names(monkeypatch) -> 
         }
 
     monkeypatch.setattr(mcf, "get_match_context", _fake_get_match_context)
+    # Bypass primary sport-specific fetcher (has its own cache) so the ESPN fallback runs.
+    import fetchers as _fetchers_mod
+    monkeypatch.setattr(_fetchers_mod, "get_fetcher", lambda sport: (_ for _ in ()).throw(ImportError("test bypass")))
 
     ctx = await pregen._get_match_context(
         "Benetton Rugby",

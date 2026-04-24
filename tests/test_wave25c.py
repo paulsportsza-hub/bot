@@ -101,21 +101,21 @@ async def test_result_alert_hit(fresh_db):
     season_stats = {"hit_rate": 0.62, "total": 100, "hits": 62, "misses": 38}
 
     mock_ctx = MagicMock()
-    mock_ctx.bot.send_message = AsyncMock()
 
-    with patch("bot.asyncio.to_thread") as mock_thread:
-        # First call: get_recently_settled_since → edges
-        # Second call: get_edge_stats → stats
-        mock_thread.side_effect = [settled_edges, season_stats]
-        await _result_alerts_job(mock_ctx)
+    with patch("bot.NOTIFICATIONS_ENABLED", True):
+      with patch("bot.asyncio.to_thread") as mock_thread:
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+            # First call: get_recently_settled_since → edges
+            # Second call: get_edge_stats → stats
+            mock_thread.side_effect = [settled_edges, season_stats]
+            await _result_alerts_job(mock_ctx)
 
-    # Should have sent one message
-    assert mock_ctx.bot.send_message.call_count == 1
-    call_kwargs = mock_ctx.bot.send_message.call_args
-    text = call_kwargs.kwargs.get("text") or call_kwargs[1].get("text", "")
-    assert "Edge Hit" in text
-    assert "62%" in text  # Season accuracy
-    assert "chiefs" in text.lower() or "pirates" in text.lower()
+    # Should have sent one card
+    assert mock_card.call_count == 1
+    card_kwargs = mock_card.call_args.kwargs
+    assert card_kwargs["template"] == "notify_result_hit.html"  # Edge Hit
+    assert "62%" in card_kwargs["data"]["season_accuracy"]  # Season accuracy
+    assert "chiefs" in card_kwargs["data"]["match"].lower() or "pirates" in card_kwargs["data"]["match"].lower()
 
 
 # ── Result Alert MISS Test ───────────────────────────────
@@ -140,18 +140,18 @@ async def test_result_alert_miss(fresh_db):
     season_stats = {"hit_rate": 0.58, "total": 50, "hits": 29, "misses": 21}
 
     mock_ctx = MagicMock()
-    mock_ctx.bot.send_message = AsyncMock()
 
-    with patch("bot.asyncio.to_thread") as mock_thread:
-        mock_thread.side_effect = [settled_edges, season_stats]
-        await _result_alerts_job(mock_ctx)
+    with patch("bot.NOTIFICATIONS_ENABLED", True):
+      with patch("bot.asyncio.to_thread") as mock_thread:
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+            mock_thread.side_effect = [settled_edges, season_stats]
+            await _result_alerts_job(mock_ctx)
 
-    assert mock_ctx.bot.send_message.call_count == 1
-    call_kwargs = mock_ctx.bot.send_message.call_args
-    text = call_kwargs.kwargs.get("text") or call_kwargs[1].get("text", "")
-    assert "Edge Missed" in text
-    assert "58%" in text  # Season accuracy
-    assert "market was right" in text
+    assert mock_card.call_count == 1
+    card_kwargs = mock_card.call_args.kwargs
+    assert card_kwargs["template"] == "notify_result_miss.html"  # Edge Missed
+    assert "58%" in card_kwargs["data"]["season_accuracy"]  # Season accuracy
+    assert "market was right" in card_kwargs["data"]["transparency_note"].lower()
 
 
 # ── Daily Cap Test ───────────────────────────────────────
@@ -189,14 +189,15 @@ async def test_result_alert_daily_cap(fresh_db):
     season_stats = {"hit_rate": 0.60, "total": 80, "hits": 48, "misses": 32}
 
     mock_ctx = MagicMock()
-    mock_ctx.bot.send_message = AsyncMock()
 
-    with patch("bot.asyncio.to_thread") as mock_thread:
-        mock_thread.side_effect = [settled_edges, season_stats]
-        await _result_alerts_job(mock_ctx)
+    with patch("bot.NOTIFICATIONS_ENABLED", True):
+      with patch("bot.asyncio.to_thread") as mock_thread:
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+            mock_thread.side_effect = [settled_edges, season_stats]
+            await _result_alerts_job(mock_ctx)
 
     # Only 1 alert should be sent (push count was 2, cap is 3)
-    assert mock_ctx.bot.send_message.call_count == 1
+    assert mock_card.call_count == 1
 
 
 # ── Losing Streak Suppression Test ───────────────────────
@@ -224,15 +225,15 @@ async def test_losing_streak_suppression(fresh_db):
     season_stats = {"hit_rate": 0.55, "total": 60, "hits": 33, "misses": 27}
 
     mock_ctx = MagicMock()
-    mock_ctx.bot.send_message = AsyncMock()
+    with patch("bot.NOTIFICATIONS_ENABLED", True):
+      with patch("bot.asyncio.to_thread") as mock_thread:
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+            mock_thread.side_effect = [settled_edges, season_stats]
+            await _result_alerts_job(mock_ctx)
 
-    with patch("bot.asyncio.to_thread") as mock_thread:
-        mock_thread.side_effect = [settled_edges, season_stats]
-        await _result_alerts_job(mock_ctx)
-
-    assert mock_ctx.bot.send_message.call_count == 1
-    call_kwargs = mock_ctx.bot.send_message.call_args
-    markup = call_kwargs.kwargs.get("reply_markup") or call_kwargs[1].get("reply_markup")
+    assert mock_card.call_count == 1
+    card_kwargs = mock_card.call_args.kwargs
+    markup = card_kwargs.get("markup")
     # Should NOT have "View Plans" button (upgrade CTA suppressed)
     button_texts = [btn.text for row in markup.inline_keyboard for btn in row]
     assert "✨ View Plans" not in button_texts
@@ -265,16 +266,17 @@ async def test_result_alert_bundling(fresh_db):
     season_stats = {"hit_rate": 0.65, "total": 100, "hits": 65, "misses": 35}
 
     mock_ctx = MagicMock()
-    mock_ctx.bot.send_message = AsyncMock()
 
-    with patch("bot.asyncio.to_thread") as mock_thread:
-        mock_thread.side_effect = [settled_edges, season_stats]
-        await _result_alerts_job(mock_ctx)
+    with patch("bot.NOTIFICATIONS_ENABLED", True):
+      with patch("bot.asyncio.to_thread") as mock_thread:
+        with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+            mock_thread.side_effect = [settled_edges, season_stats]
+            await _result_alerts_job(mock_ctx)
 
-    # Bundled: single message for >3 results
-    assert mock_ctx.bot.send_message.call_count == 1
-    call_kwargs = mock_ctx.bot.send_message.call_args
-    text = call_kwargs.kwargs.get("text") or call_kwargs[1].get("text", "")
-    assert "5 edges settled" in text
-    assert "3 hit" in text
-    assert "2 missed" in text
+    # Bundled: single card for >3 results
+    assert mock_card.call_count == 1
+    card_kwargs = mock_card.call_args.kwargs
+    data = card_kwargs["data"]
+    assert data["total"] == 5   # 5 edges settled
+    assert data["hits"] == 3    # 3 hit
+    assert data["misses"] == 2  # 2 missed

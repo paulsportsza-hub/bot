@@ -85,12 +85,13 @@ class TestExperienceOnboarding:
         bot._get_ob(20002)
 
         query = _make_query(user_id=20002)
-        await bot.handle_ob_experience(query, "casual")
+        # send_card_or_fallback is now used (IMAGE ONLY rule — no text fallback)
+        with patch("bot.send_card_or_fallback", new=AsyncMock()):
+            await bot.handle_ob_experience(query, "casual")
 
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 2/6" in text
-        assert "sports" in text.lower()
+        ob = bot._get_ob(20002)
+        assert ob["step"] == "sports"
+        assert ob["experience"] == "casual"
 
     async def test_cmd_start_shows_experience_first(self, test_db):
         mock_update = MagicMock()
@@ -102,12 +103,13 @@ class TestExperienceOnboarding:
         mock_update.message = MagicMock()
         mock_update.message.reply_text = AsyncMock()
 
-        await bot.cmd_start(mock_update, MagicMock())
+        # cmd_start now uses send_card_or_fallback with onboarding_experience.html
+        # (IMAGE ONLY rule — no text fallback). Patch to avoid browser dependency.
+        with patch("bot.send_card_or_fallback", new=AsyncMock()):
+            await bot.cmd_start(mock_update, MagicMock())
 
-        call_args = mock_update.message.reply_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 1/6" in text
-        assert "experience" in text.lower()
+        ob = bot._get_ob(20003)
+        assert ob["step"] == "experience"
 
     async def test_onboarding_done_saves_experience(self, test_db):
         bot._onboarding_state.clear()
@@ -133,7 +135,7 @@ class TestExperienceOnboarding:
         assert user.onboarding_done is True
 
     async def test_onboarding_done_experienced_mentions_value(self, test_db):
-        """Experienced users should get a message mentioning value bets."""
+        """Experienced users get the done card whose text_fallback mentions value bets."""
         bot._onboarding_state.clear()
         user_id = 20005
         await db.upsert_user(user_id, "pro", "Pro")
@@ -150,15 +152,17 @@ class TestExperienceOnboarding:
         mock_ctx = MagicMock()
         mock_ctx.bot = MagicMock()
         mock_ctx.bot.send_message = AsyncMock()
-        with patch("bot._do_picks_flow", new_callable=AsyncMock):
+        mock_scf = AsyncMock()
+        # handle_ob_done now uses send_card_or_fallback — not edit_message_text
+        with patch("bot.send_card_or_fallback", new=mock_scf):
             await bot.handle_ob_done(query, mock_ctx)
 
-        call_args = query.edit_message_text.call_args_list[0]
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "value" in text.lower()
+        mock_scf.assert_called_once()
+        text_fb = mock_scf.call_args.kwargs.get("text_fallback", "")
+        assert "value" in text_fb.lower()
 
     async def test_onboarding_done_newbie_shows_lesson(self, test_db):
-        """Newbie users should get a mini-lesson about odds."""
+        """Newbie users complete onboarding and get the done card (lesson screen removed)."""
         bot._onboarding_state.clear()
         user_id = 20006
         await db.upsert_user(user_id, "noob", "Noob")
@@ -175,11 +179,12 @@ class TestExperienceOnboarding:
         mock_ctx = MagicMock()
         mock_ctx.bot = MagicMock()
         mock_ctx.bot.send_message = AsyncMock()
-        await bot.handle_ob_done(query, mock_ctx)
+        # The newbie lesson screen was removed; all users get the same done card.
+        with patch("bot.send_card_or_fallback", new=AsyncMock()):
+            await bot.handle_ob_done(query, mock_ctx)
 
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Lesson" in text or "odds" in text.lower()
+        user = await db.get_user(user_id)
+        assert user.onboarding_done is True
 
 
 class TestDBExperience:
@@ -233,6 +238,7 @@ class TestPersistentMenu:
             ["⚽ My Matches", "💎 Top Edge Picks"],
             ["📊 Edge Tracker", "📖 Guide"],
             ["⚙️ Settings"],
+            ["🏠 Community"],
         ]
 
     def test_kb_main_drops_retired_inline_surfaces(self):
@@ -284,24 +290,23 @@ class TestPersistentMenu:
 
 class TestMenuHandlers:
     async def test_dispatch_button_routes_stale_bets_to_main_menu(self, test_db):
+        # "bets" prefix was removed. Stale callbacks now show "Unknown action." with a Menu button.
         query = _make_query(user_id=40000)
         await bot._dispatch_button(query, MagicMock(), "bets", "history")
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Main Menu" in text
+        assert text == "Unknown action."
         markup = call_args[1]["reply_markup"]
         labels = [btn.text for row in markup.inline_keyboard for btn in row]
-        assert "📊 Edge Tracker" in labels
+        assert any("Menu" in l for l in labels)
 
     async def test_handle_bets_redirects_stale_callbacks_to_main_menu(self, test_db):
+        # handle_bets was removed; stale "bets:active" callback now shows "Unknown action."
         query = _make_query(user_id=40001)
-        await bot.handle_bets(query, "active")
+        await bot._dispatch_button(query, MagicMock(), "bets", "active")
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Main Menu" in text
-        markup = call_args[1]["reply_markup"]
-        labels = [btn.text for row in markup.inline_keyboard for btn in row]
-        assert "📊 Edge Tracker" in labels
+        assert text == "Unknown action."
 
     async def test_handle_teams_view_no_teams(self, test_db):
         await db.upsert_user(40002, "no_teams", "NoTeams")
@@ -321,24 +326,29 @@ class TestMenuHandlers:
         assert "Arsenal" in text
 
     async def test_handle_stats_overview_redirects_to_edge_tracker(self, test_db):
+        # handle_stats_menu removed; stats are now served via results:7 (Edge Tracker).
+        # Patch _serve_response to avoid photo/text message-type detection in test.
         query = _make_query(user_id=40004)
         markup = MagicMock()
-        with patch.object(bot, "_render_results_surface", new=AsyncMock(return_value=("EDGE TRACKER", markup))):
-            await bot.handle_stats_menu(query, "overview")
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert text == "EDGE TRACKER"
-        assert call_args[1]["reply_markup"] is markup
+        mock_serve = AsyncMock()
+        with patch.object(bot, "_render_results_surface", new=AsyncMock(return_value=("EDGE TRACKER", markup))), \
+             patch.object(bot, "_serve_response", new=mock_serve):
+            await bot._dispatch_button(query, MagicMock(), "results", "7")
+        mock_serve.assert_called_once()
+        assert mock_serve.call_args[0][1] == "EDGE TRACKER"
+        assert mock_serve.call_args[0][2] is markup
 
     async def test_dispatch_button_routes_stale_stats_to_edge_tracker(self, test_db):
+        # "stats" prefix removed; use "results" prefix for Edge Tracker.
         query = _make_query(user_id=40008)
         markup = MagicMock()
-        with patch.object(bot, "_render_results_surface", new=AsyncMock(return_value=("EDGE TRACKER", markup))):
-            await bot._dispatch_button(query, MagicMock(), "stats", "leaderboard")
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert text == "EDGE TRACKER"
-        assert call_args[1]["reply_markup"] is markup
+        mock_serve = AsyncMock()
+        with patch.object(bot, "_render_results_surface", new=AsyncMock(return_value=("EDGE TRACKER", markup))), \
+             patch.object(bot, "_serve_response", new=mock_serve):
+            await bot._dispatch_button(query, MagicMock(), "results", "30")
+        mock_serve.assert_called_once()
+        assert mock_serve.call_args[0][1] == "EDGE TRACKER"
+        assert mock_serve.call_args[0][2] is markup
 
     async def test_legacy_my_stats_keyboard_tap_redirects_to_edge_tracker(self, test_db):
         user_id = 40009
@@ -393,6 +403,7 @@ class TestMenuHandlers:
         assert "Risk" in text or "risk" in text
 
     async def test_handle_settings_notify_is_consolidated(self, test_db):
+        # FIX-NOTIFICATIONS-DISABLE-01: notifications page disabled — redirects to settings home.
         user_id = 40070
         await db.upsert_user(user_id, "notify_user", "NotifyUser")
         await db.update_user_notification_hour(user_id, 18)
@@ -402,17 +413,14 @@ class TestMenuHandlers:
 
         call_args = query.edit_message_text.call_args
         text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Notifications" in text
-        assert "Daily picks time" in text
-        assert "Alert types" in text
+        assert "Settings" in text
+        # Settings nav options from kb_settings() are preserved in the home redirect
         callbacks = [
             btn.callback_data
             for row in call_args[1]["reply_markup"].inline_keyboard
             for btn in row
         ]
-        assert "settings:set_notify:18" in callbacks
-        assert "settings:toggle_notify:daily_picks" in callbacks
-        assert "settings:home" in callbacks
+        assert "settings:risk" in callbacks
 
     async def test_handle_settings_sports_renders_inline_editor(self, test_db):
         user_id = 40071
@@ -498,10 +506,13 @@ class TestMenuHandlers:
     async def test_handle_settings_reset_shows_warning(self, test_db):
         await db.upsert_user(40008, "reset_user", "ResetUser")
         query = _make_query(user_id=40008)
-        await bot.handle_settings(query, "reset")
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Reset" in text
+        mock_scf = AsyncMock()
+        # handle_settings("reset") uses send_card_or_fallback with onboarding_restart.html
+        with patch("bot.send_card_or_fallback", new=mock_scf):
+            await bot.handle_settings(query, "reset")
+        mock_scf.assert_called_once()
+        text = mock_scf.call_args.kwargs.get("text_fallback", "")
+        assert "Reset" in text or "reset" in text.lower()
         assert "NOT" in text  # history not deleted
 
     async def test_handle_settings_reset_confirm(self, test_db):
@@ -522,13 +533,16 @@ class TestMenuHandlers:
     async def test_handle_ob_restart(self, test_db):
         bot._onboarding_state.clear()
         query = _make_query(user_id=40010)
-        await bot.handle_ob_restart(query)
+        mock_scf = AsyncMock()
+        # handle_ob_restart uses send_card_or_fallback; text_fallback says "Step 1/5"
+        with patch("bot.send_card_or_fallback", new=mock_scf):
+            await bot.handle_ob_restart(query)
 
         ob = bot._get_ob(40010)
         assert ob["step"] == "experience"
-        call_args = query.edit_message_text.call_args
-        text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-        assert "Step 1/6" in text
+        mock_scf.assert_called_once()
+        text = mock_scf.call_args.kwargs.get("text_fallback", "")
+        assert "Step 1" in text
 
 
 # ── Priority 3: Experience-Adapted Pick Cards ────────────────

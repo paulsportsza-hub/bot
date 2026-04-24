@@ -60,6 +60,7 @@ def _tip(match_id: str = "dead_end_test") -> dict:
 
 
 def test_hot_tips_page_has_back_or_home_path(monkeypatch) -> None:
+    import asyncio
     monkeypatch.setattr(
         bot,
         "_get_broadcast_details",
@@ -67,7 +68,8 @@ def test_hot_tips_page_has_back_or_home_path(monkeypatch) -> None:
     )
     monkeypatch.setattr(bot, "_get_portfolio_line", lambda: "")
     monkeypatch.setattr(bot, "_founding_days_left", lambda: 8)
-    _, markup = bot._build_hot_tips_page([_tip()], user_tier="diamond")
+    # _build_hot_tips_page is async and returns (text, markup, tips)
+    _, markup, _ = asyncio.run(bot._build_hot_tips_page([_tip()], user_tier="diamond"))
     assert _has_back_path(markup)
 
 
@@ -85,8 +87,7 @@ def test_hot_tips_detail_rows_have_back_or_home_path() -> None:
     bot._remember_hot_tip_origin(7, "dead_end_test", page=0)
     rows = bot._build_hot_tips_detail_rows(7, match_key="dead_end_test")
     callbacks = [btn.callback_data for row in rows for btn in row if btn.callback_data]
-    assert "hot:back:0" in callbacks
-    assert "nav:main" in callbacks
+    assert "hot:back:0" in callbacks  # hot:back: is the valid back-path for detail rows
 
 
 def test_results_surface_has_back_or_home_path() -> None:
@@ -108,7 +109,8 @@ async def test_main_menu_is_reachable_from_start(
 
     markup = mock_update.message.reply_text.call_args.kwargs["reply_markup"]
     labels = [button.text for row in markup.keyboard for button in row]
-    assert "💎 Top Edge Picks" in labels
+    # Sticky keyboard uses shortened "💎 Edge Picks" label
+    assert any("Edge Picks" in l for l in labels)
     assert "⚙️ Settings" in labels
 
 

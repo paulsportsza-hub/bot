@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
 import sqlite3
 import sys
@@ -14,6 +15,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bot
 from scripts import pregenerate_narratives as pregen
+
+# Future dates so the DB date-filter (substr(match_id,-10) >= today) always passes.
+_FUTURE_DATE_1 = (datetime.date.today() + datetime.timedelta(days=14)).isoformat()
+_FUTURE_DATE_2 = (datetime.date.today() + datetime.timedelta(days=12)).isoformat()
+_MATCH_KEY_1 = f"ts_galaxy_vs_polokwane_city_{_FUTURE_DATE_1}"
+_MATCH_KEY_2 = f"amazulu_vs_orlando_pirates_{_FUTURE_DATE_2}"
 
 
 def _create_snapshot_db(path: Path) -> None:
@@ -52,7 +59,7 @@ def _create_snapshot_db(path: Path) -> None:
         [
             (
                 "hollywoodbets",
-                "ts_galaxy_vs_polokwane_city_2026-04-08",
+                _MATCH_KEY_1,
                 "ts_galaxy",
                 "polokwane_city",
                 "psl",
@@ -65,7 +72,7 @@ def _create_snapshot_db(path: Path) -> None:
             ),
             (
                 "supabets",
-                "ts_galaxy_vs_polokwane_city_2026-04-08",
+                _MATCH_KEY_1,
                 "ts_galaxy",
                 "polokwane_city",
                 "psl",
@@ -78,7 +85,7 @@ def _create_snapshot_db(path: Path) -> None:
             ),
             (
                 "hollywoodbets",
-                "amazulu_vs_orlando_pirates_2026-04-06",
+                _MATCH_KEY_2,
                 "amazulu",
                 "orlando_pirates",
                 "psl",
@@ -93,7 +100,7 @@ def _create_snapshot_db(path: Path) -> None:
     )
     conn.execute(
         "INSERT INTO edge_results (match_key, result) VALUES (?, NULL)",
-        ("amazulu_vs_orlando_pirates_2026-04-06",),
+        (_MATCH_KEY_2,),
     )
     conn.commit()
     conn.close()
@@ -155,12 +162,12 @@ def test_load_snapshot_baseline_edges_discovers_no_edge_matches(
 
     assert len(edges) == 1
     edge = edges[0]
-    assert edge["match_key"] == "ts_galaxy_vs_polokwane_city_2026-04-08"
+    assert edge["match_key"] == _MATCH_KEY_1
     assert edge["narrative_source_hint"] == "baseline_no_edge"
     # BUILD-DUAL-MODEL-PREGEN: is_non_edge replaces skip_sonnet_polish
     assert edge["is_non_edge"] is True
     assert "skip_sonnet_polish" not in edge or edge.get("skip_sonnet_polish") is not True
-    assert edge["commence_time"] == "2026-04-08T00:00:00+00:00"
+    assert edge["commence_time"] == f"{_FUTURE_DATE_1}T00:00:00+00:00"
     assert edge["best_odds"] == 2.30
     assert edge["bookmaker_count"] == 2
     assert edge["edge_pct"] <= 0
@@ -261,7 +268,7 @@ async def test_generate_one_non_edge_calls_haiku_model(monkeypatch: pytest.Monke
     claude = SimpleNamespace(messages=SimpleNamespace(create=create_mock))
 
     edge = {
-        "match_key": "ts_galaxy_vs_polokwane_city_2026-04-08",
+        "match_key": f"ts_galaxy_vs_polokwane_city_{_FUTURE_DATE_1}",
         "home_team": "TS Galaxy",
         "away_team": "Polokwane City",
         "league": "psl",
@@ -278,7 +285,7 @@ async def test_generate_one_non_edge_calls_haiku_model(monkeypatch: pytest.Monke
         "tier": "bronze",
         "narrative_source_hint": "baseline_no_edge",
         "is_non_edge": True,
-        "commence_time": "2026-04-08T00:00:00+00:00",
+        "commence_time": f"{_FUTURE_DATE_1}T00:00:00+00:00",
     }
 
     result = await pregen._generate_one(edge, "claude-sonnet-4-20250514", claude, sweep_type="refresh")
@@ -334,7 +341,7 @@ async def test_generate_one_non_edge_uses_preview_prompt(monkeypatch: pytest.Mon
     claude = SimpleNamespace(messages=SimpleNamespace(create=create_mock))
 
     edge = {
-        "match_key": "ts_galaxy_vs_polokwane_city_2026-04-08",
+        "match_key": f"ts_galaxy_vs_polokwane_city_{_FUTURE_DATE_1}",
         "home_team": "TS Galaxy",
         "away_team": "Polokwane City",
         "league": "psl",
@@ -351,7 +358,7 @@ async def test_generate_one_non_edge_uses_preview_prompt(monkeypatch: pytest.Mon
         "tier": "bronze",
         "narrative_source_hint": "baseline_no_edge",
         "is_non_edge": True,
-        "commence_time": "2026-04-08T00:00:00+00:00",
+        "commence_time": f"{_FUTURE_DATE_1}T00:00:00+00:00",
     }
 
     await pregen._generate_one(edge, "claude-sonnet-4-20250514", claude, sweep_type="refresh")
@@ -396,7 +403,7 @@ async def test_generate_one_non_edge_haiku_success_sets_w84_source(
     claude = SimpleNamespace(messages=SimpleNamespace(create=create_mock))
 
     edge = {
-        "match_key": "ts_galaxy_vs_polokwane_city_2026-04-08",
+        "match_key": f"ts_galaxy_vs_polokwane_city_{_FUTURE_DATE_1}",
         "home_team": "TS Galaxy",
         "away_team": "Polokwane City",
         "league": "psl",
@@ -413,7 +420,7 @@ async def test_generate_one_non_edge_haiku_success_sets_w84_source(
         "tier": "bronze",
         "narrative_source_hint": "baseline_no_edge",
         "is_non_edge": True,
-        "commence_time": "2026-04-08T00:00:00+00:00",
+        "commence_time": f"{_FUTURE_DATE_1}T00:00:00+00:00",
     }
 
     result = await pregen._generate_one(edge, "claude-sonnet-4-20250514", claude, sweep_type="refresh")
@@ -458,7 +465,7 @@ async def test_generate_one_non_edge_haiku_success_sets_haiku_model(
     claude = SimpleNamespace(messages=SimpleNamespace(create=create_mock))
 
     edge = {
-        "match_key": "ts_galaxy_vs_polokwane_city_2026-04-08",
+        "match_key": f"ts_galaxy_vs_polokwane_city_{_FUTURE_DATE_1}",
         "home_team": "TS Galaxy",
         "away_team": "Polokwane City",
         "league": "psl",
@@ -475,7 +482,7 @@ async def test_generate_one_non_edge_haiku_success_sets_haiku_model(
         "tier": "bronze",
         "narrative_source_hint": "baseline_no_edge",
         "is_non_edge": True,
-        "commence_time": "2026-04-08T00:00:00+00:00",
+        "commence_time": f"{_FUTURE_DATE_1}T00:00:00+00:00",
     }
 
     result = await pregen._generate_one(edge, "claude-sonnet-4-20250514", claude, sweep_type="refresh")
@@ -521,7 +528,7 @@ async def test_generate_one_non_edge_haiku_fail_falls_back_to_w82(
     claude = SimpleNamespace(messages=SimpleNamespace(create=create_mock))
 
     edge = {
-        "match_key": "ts_galaxy_vs_polokwane_city_2026-04-08",
+        "match_key": f"ts_galaxy_vs_polokwane_city_{_FUTURE_DATE_1}",
         "home_team": "TS Galaxy",
         "away_team": "Polokwane City",
         "league": "psl",
@@ -538,7 +545,7 @@ async def test_generate_one_non_edge_haiku_fail_falls_back_to_w82(
         "tier": "bronze",
         "narrative_source_hint": "baseline_no_edge",
         "is_non_edge": True,
-        "commence_time": "2026-04-08T00:00:00+00:00",
+        "commence_time": f"{_FUTURE_DATE_1}T00:00:00+00:00",
     }
 
     result = await pregen._generate_one(edge, "claude-sonnet-4-20250514", claude, sweep_type="refresh")
@@ -593,7 +600,7 @@ async def test_generate_one_edge_match_calls_sonnet(monkeypatch: pytest.MonkeyPa
     claude = SimpleNamespace(messages=SimpleNamespace(create=create_mock))
 
     edge = {
-        "match_key": "ts_galaxy_vs_polokwane_city_2026-04-08",
+        "match_key": f"ts_galaxy_vs_polokwane_city_{_FUTURE_DATE_1}",
         "home_team": "TS Galaxy",
         "away_team": "Polokwane City",
         "league": "psl",
@@ -607,10 +614,10 @@ async def test_generate_one_edge_match_calls_sonnet(monkeypatch: pytest.MonkeyPa
         "fair_probability": 0.43,
         "composite_score": 60.0,
         "bookmaker_count": 2,
-        "tier": "silver",
+        "tier": "gold",  # gold passes W93-TIER-GATE so Sonnet polish is attempted
         "narrative_source_hint": "w82",
         # is_non_edge NOT set — this is an edge match
-        "commence_time": "2026-04-08T00:00:00+00:00",
+        "commence_time": f"{_FUTURE_DATE_1}T00:00:00+00:00",
     }
 
     await pregen._generate_one(edge, "claude-sonnet-4-20250514", claude, sweep_type="refresh")
@@ -698,11 +705,31 @@ async def test_fetch_hot_tips_v1_fallback_carries_snapshot_material(monkeypatch:
     monkeypatch.setattr(bot, "calculate_edge_rating", lambda *_args, **_kwargs: bot.EdgeRating.BRONZE)
     monkeypatch.setattr(bot, "calculate_edge_score", lambda *_args, **_kwargs: 57.0)
     monkeypatch.setattr(bot, "apply_guardrails", lambda edge_enum, ev, bk_count: (edge_enum, ev, None))
-    monkeypatch.setattr("scrapers.edge.edge_v2_helper.calculate_edge_v2", lambda *args, **kwargs: None)
+    # V2 is required (TIER-FIX-01). Return a minimal valid result so the match is not skipped.
+    monkeypatch.setattr(
+        "scrapers.edge.edge_v2_helper.calculate_edge_v2",
+        lambda *args, **kwargs: {
+            "tier": "gold",
+            "composite_score": 57.0,
+            "edge_pct": 3.5,
+            "outcome": "home",
+            "confidence": "high",
+            "sharp_source": "sa_consensus",
+            "best_bookmaker": "hollywoodbets",
+            "best_odds": 2.6,
+            "fair_probability": 0.45,
+            "confirming_signals": 2,
+        },
+    )
+    # Bypass CARD-BUILD-01 population gate — card rendering not under test here.
+    import card_pipeline
+    monkeypatch.setattr(card_pipeline, "verify_card_populates", lambda tip, mid: (True, {}))
+    # Bypass real odds.db fixture_mapping lookup — unit test should not depend on DB state.
+    monkeypatch.setattr(bot, "_load_fixture_kickoffs", lambda ids: {})
 
     async def _fake_matches(*_args, **_kwargs) -> list[dict]:
         return [{
-            "match_id": "ts_galaxy_vs_polokwane_city_2026-04-08",
+            "match_id": f"ts_galaxy_vs_polokwane_city_{_FUTURE_DATE_1}",
             "home_team": "ts_galaxy",
             "away_team": "polokwane_city",
             "bookmaker_count": 2,
@@ -752,7 +779,7 @@ def _make_edge(is_non_edge: bool, coverage_level: str = "empty") -> dict:
 
     return {
         "edge": {
-            "match_key": "ts_galaxy_vs_polokwane_city_2026-04-08",
+            "match_key": f"ts_galaxy_vs_polokwane_city_{_FUTURE_DATE_1}",
             "home_team": "TS Galaxy",
             "away_team": "Polokwane City",
             "league": "psl",
@@ -769,7 +796,7 @@ def _make_edge(is_non_edge: bool, coverage_level: str = "empty") -> dict:
             "tier": "bronze",
             "narrative_source_hint": "baseline_no_edge",
             "is_non_edge": is_non_edge,
-            "commence_time": "2026-04-08T00:00:00+00:00",
+            "commence_time": f"{_FUTURE_DATE_1}T00:00:00+00:00",
         },
         "pack": _Pack(),
     }
@@ -885,7 +912,9 @@ async def test_empty_evidence_non_edge_receives_minimal_context_prompt(
     )
 
     assert create_mock.called, "Haiku must be called"
-    assert len(captured_messages) == 1
+    # ACCURACY-01 adds setup + verdict validation passes after the narrative call,
+    # so total call count varies. Only the first call (narrative) must have the right content.
+    assert len(captured_messages) >= 1
     prompt_content = captured_messages[0][0]["content"]
     prompt_lower = prompt_content.lower()
 
@@ -967,6 +996,11 @@ async def test_mixed_batch_empty_evidence_edge_blocked_non_edge_allowed(
         "verify_shadow_narrative",
         lambda draft, pack, spec: (False, {"rejection_reasons": ["blocked"]}),
     )
+    # Bypass ACCURACY-01 validation — it adds 2 extra Haiku calls per w84 narrative
+    # and is not under test here (only the narrative-generation gate is tested).
+    async def _noop_validate(section_name, section_text, derived_claims, claude, model_id=""):
+        return (section_text, True, 1)
+    monkeypatch.setattr(pregen, "generate_and_validate", _noop_validate)
 
     haiku_call_count = 0
 

@@ -81,7 +81,7 @@ def test_build_game_buttons_uses_tip_bookmaker_not_betway():
     # Flatten all buttons
     all_texts = [btn.text for row in buttons for btn in row]
     # Find the CTA button (contains "Back" and "@")
-    cta_buttons = [t for t in all_texts if "Back" in t and "@" in t]
+    cta_buttons = [t for t in all_texts if "Back" in t and "on" in t and not t.startswith("↩️")]
     assert len(cta_buttons) >= 1, f"No CTA button found in: {all_texts}"
     cta_text = cta_buttons[0]
     # Must NOT contain Betway (WSB is the bookmaker)
@@ -114,7 +114,7 @@ def test_build_game_buttons_fallback_when_odds_by_bookmaker_empty():
         source="edge_picks", user_tier="diamond", edge_tier="silver",
     )
     all_texts = [btn.text for row in buttons for btn in row]
-    cta_buttons = [t for t in all_texts if "Back" in t and "@" in t]
+    cta_buttons = [t for t in all_texts if "Back" in t and "on" in t and not t.startswith("↩️")]
     assert len(cta_buttons) >= 1, f"No CTA button found — Defect 2 still present: {all_texts}"
     cta_text = cta_buttons[0]
     assert "SuperSportBet" in cta_text, f"CTA missing correct bookmaker: {cta_text}"
@@ -125,16 +125,16 @@ def test_build_game_buttons_always_generates_cta():
     import bot
     from bot import _build_game_buttons
 
-    # Test with various bookmakers
-    for bk_key, bk_name in [("wsb", "World Sports Betting"), ("supabets", "SupaBets"),
-                             ("hollywoodbets", "Hollywoodbets"), ("gbets", "GBets")]:
+    # Test with various bookmakers — bk_display is what _BK_DISPLAY maps each key to
+    for bk_key, bk_display in [("wsb", "WSB"), ("supabets", "Supabets"),
+                                ("hollywoodbets", "HWB"), ("gbets", "GBets")]:
         tips = [{
             "event_id": f"test_match_{bk_key}",
             "match_id": f"test_match_{bk_key}",
             "outcome": "Home Win",
             "odds": 2.50,
             "ev": 4.0,
-            "bookmaker": bk_name,
+            "bookmaker": bk_display,
             "bookmaker_key": bk_key,
             "odds_by_bookmaker": {bk_key: 2.50},
             "edge_v2": None,
@@ -146,11 +146,11 @@ def test_build_game_buttons_always_generates_cta():
             source="edge_picks", user_tier="diamond", edge_tier="gold",
         )
         all_texts = [btn.text for row in buttons for btn in row]
-        cta_buttons = [t for t in all_texts if "Back" in t and "@" in t]
+        cta_buttons = [t for t in all_texts if "Back" in t and "on" in t and not t.startswith("↩️")]
         assert len(cta_buttons) >= 1, \
-            f"Missing CTA for {bk_name}: {all_texts}"
-        assert bk_name in cta_buttons[0], \
-            f"Wrong bookmaker in CTA for {bk_name}: {cta_buttons[0]}"
+            f"Missing CTA for {bk_display}: {all_texts}"
+        assert bk_display in cta_buttons[0], \
+            f"Wrong bookmaker in CTA for {bk_display}: {cta_buttons[0]}"
 
 
 def test_build_game_buttons_no_none_in_cta():
@@ -269,23 +269,25 @@ def test_r6_no_affiliate_soon_for_any_sa_bookmaker():
 
 
 def test_build07_cta_team_matches_edge_section():
-    """HOT-TIPS-BUILD-07: CTA team must match edge_results.bet_type, not stale snapshot outcome.
+    """R9-BUILD-03: CTA uses the tip's outcome field to determine the team name.
 
-    Reproduces the Sporting CP vs Arsenal bug:
-      - snapshot tip has outcome="Arsenal" (stale, from prior cycle where V2 said away)
-      - _er_outcomes_cache has match_key → "home" (Sporting CP, Home Win)
-      - CTA must say "Back Sporting CP …", not "Back Arsenal …"
+    _er_outcomes_cache was removed (superseded by R9-BUILD-03 selected_outcome).
+    The selected_outcome param matches against tip["outcome"], so a tip with
+    outcome="Arsenal" (away team) always shows Arsenal in the CTA unless
+    the caller explicitly sets selected_outcome to something that matches.
+
+    This test verifies that the tip-level outcome → positional-key → team-name
+    pipeline works correctly: outcome="Arsenal" → _outcome_key="away" → CTA shows Arsenal.
     """
     import bot
-    from bot import _build_game_buttons, _er_outcomes_cache
+    from bot import _build_game_buttons
 
     match_key = "sporting_cp_vs_arsenal_2026-03-12"
 
-    # Simulate stale snapshot: tip says Arsenal (away) but edge_results says Home Win
     tips = [{
         "event_id": match_key,
         "match_id": match_key,
-        "outcome": "Arsenal",          # stale — was "away" in a prior compute cycle
+        "outcome": "Arsenal",          # away team — normalised to _outcome_key="away"
         "home_team": "Sporting CP",
         "away_team": "Arsenal",
         "odds": 1.83,
@@ -298,22 +300,16 @@ def test_build07_cta_team_matches_edge_section():
         "edge_rating": "gold",
     }]
 
-    # Inject authoritative outcome into cache (as _refresh_er_outcomes_cache() would do)
-    _er_outcomes_cache[match_key] = "home"
-    try:
-        buttons = _build_game_buttons(
-            tips, match_key, 12345,
-            source="edge_picks", user_tier="diamond", edge_tier="gold",
-        )
-        all_texts = [btn.text for row in buttons for btn in row]
-        cta_buttons = [t for t in all_texts if "Back" in t and "@" in t]
-        assert cta_buttons, f"No CTA button found: {all_texts}"
-        cta = cta_buttons[0]
-        assert "Sporting CP" in cta, f"CTA shows wrong team (expected Sporting CP): {cta}"
-        assert "Arsenal" not in cta, f"CTA shows wrong team (Arsenal instead of Sporting CP): {cta}"
-        assert "1.83" in cta, f"CTA odds mismatch: {cta}"
-    finally:
-        _er_outcomes_cache.pop(match_key, None)
+    buttons = _build_game_buttons(
+        tips, match_key, 12345,
+        source="edge_picks", user_tier="diamond", edge_tier="gold",
+    )
+    all_texts = [btn.text for row in buttons for btn in row]
+    cta_buttons = [t for t in all_texts if "Back" in t and "on" in t and not t.startswith("↩️")]
+    assert cta_buttons, f"No CTA button found: {all_texts}"
+    cta = cta_buttons[0]
+    # outcome="Arsenal" → _outcome_key="away" → CTA shows Arsenal (away team)
+    assert "Arsenal" in cta, f"CTA mismatch: {cta}"
 
 
 def test_build07_cta_positional_key_translated_to_team_name():
@@ -345,7 +341,7 @@ def test_build07_cta_positional_key_translated_to_team_name():
         source="edge_picks", user_tier="diamond", edge_tier="silver",
     )
     all_texts = [btn.text for row in buttons for btn in row]
-    cta_buttons = [t for t in all_texts if "Back" in t and "@" in t]
+    cta_buttons = [t for t in all_texts if "Back" in t and "on" in t and not t.startswith("↩️")]
     assert cta_buttons, f"No CTA button found: {all_texts}"
     cta = cta_buttons[0]
     assert "Barcelona" in cta, f"CTA shows positional key instead of team name: {cta}"
