@@ -1285,6 +1285,23 @@ async def _handle_card_deeplink(
     await _dl_send_edge_no_longer_available(update, ctx, match_key)
 
 
+_WELCOME_IMG_PATH = pathlib.Path("/home/paulsportsza/assets/welcome/welcome_today.png")
+_FALLBACK_IMG_PATH = pathlib.Path("/home/paulsportsza/assets/welcome/fallback.png")
+
+
+def _welcome_img_path() -> pathlib.Path | None:
+    """Return the freshest welcome image path, or None if unavailable."""
+    import datetime as _dt
+    if _WELCOME_IMG_PATH.exists():
+        age_h = (_dt.datetime.now().timestamp() - _WELCOME_IMG_PATH.stat().st_mtime) / 3600
+        if age_h <= 30:
+            return _WELCOME_IMG_PATH
+        log.warning("welcome_today.png stale (%.1fh) — using fallback", age_h)
+    if _FALLBACK_IMG_PATH.exists():
+        return _FALLBACK_IMG_PATH
+    return None
+
+
 # ── /start ────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1308,25 +1325,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         name = h(user.first_name or "")
 
         # BUILD-WELCOME-SCREEN-02: image-first hero welcome
-        import datetime as _dt
-        _WELCOME_IMG = pathlib.Path("/home/paulsportsza/assets/welcome/welcome_today.png")
-        _FALLBACK_IMG = pathlib.Path("/home/paulsportsza/assets/welcome/fallback.png")
-        _img_path = None
-        if _WELCOME_IMG.exists():
-            _age_h = (_dt.datetime.now().timestamp() - _WELCOME_IMG.stat().st_mtime) / 3600
-            if _age_h <= 30:
-                _img_path = _WELCOME_IMG
-            else:
-                log.warning("welcome_today.png stale (%.1fh) — using fallback", _age_h)
-        if _img_path is None and _FALLBACK_IMG.exists():
-            _img_path = _FALLBACK_IMG
-
+        _img_path = _welcome_img_path()
         if _img_path is not None:
             with open(_img_path, "rb") as _fh:
-                await update.message.reply_photo(
-                    photo=_fh,
-                    reply_markup=kb_main(),
-                )
+                await update.message.reply_photo(photo=_fh, reply_markup=kb_main())
         else:
             await update.message.reply_text(
                 f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",
@@ -1364,12 +1366,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # ── /menu ────────────────────────────────────────────────
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    picks = await asyncio.to_thread(_get_bru_daily_drop, 5)
-    name = h(user.first_name or "")
-    drop_section = _format_bru_daily_drop(picks)
-    text = f"<b>🇿🇦 MzansiEdge — Main Menu</b>\n\nHey {name}!\n\n{drop_section}"
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
+    _img_path = _welcome_img_path()
+    if _img_path is not None:
+        with open(_img_path, "rb") as _fh:
+            await update.message.reply_photo(photo=_fh, reply_markup=kb_main())
+    else:
+        await update.message.reply_text(
+            "<b>🇿🇦 MzansiEdge</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
+        )
 
 
 # ── /help ─────────────────────────────────────────────────
@@ -3932,15 +3936,11 @@ async def _serve_response(query, text: str, markup, photo=None) -> None:
 
 async def handle_menu(query, action: str) -> None:
     if action == "home":
-        user = query.from_user
-        picks = await asyncio.to_thread(_get_bru_daily_drop, 5)
-        drop_section = _format_bru_daily_drop(picks)
-        text = (
-            f"<b>🇿🇦 MzansiEdge — Main Menu</b>\n\n"
-            f"Hey {h(user.first_name or '')}!\n\n"
-            f"{drop_section}"
-        )
-        await _serve_response(query, text, kb_main())
+        _img_path = _welcome_img_path()
+        if _img_path is not None:
+            await _serve_response(query, "", kb_main(), photo=_img_path.read_bytes())
+        else:
+            await _serve_response(query, "<b>🇿🇦 MzansiEdge</b>", kb_main())
 
     elif action == "help":
         await _serve_response(query, HELP_TEXT, kb_help())
@@ -5577,14 +5577,14 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if text == "🏠 Menu":
-        picks = await asyncio.to_thread(_get_bru_daily_drop, 5)
-        name = h(update.effective_user.first_name or "")
-        drop_section = _format_bru_daily_drop(picks)
-        await update.message.reply_text(
-            f"<b>🇿🇦 MzansiEdge</b>\n\nHey {name}!\n\n{drop_section}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_main(),
-        )
+        _img_path = _welcome_img_path()
+        if _img_path is not None:
+            with open(_img_path, "rb") as _fh:
+                await update.message.reply_photo(photo=_fh, reply_markup=kb_main())
+        else:
+            await update.message.reply_text(
+                "<b>🇿🇦 MzansiEdge</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
+            )
     elif text == "⚽ My Matches":
         db_user = await db.get_user(user_id)
         if not db_user or not db_user.onboarding_done:
