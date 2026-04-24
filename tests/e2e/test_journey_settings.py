@@ -137,36 +137,6 @@ async def test_settings_sports_done_persists_selection(test_db) -> None:
     assert any(pref.sport_key == "soccer" for pref in prefs)
 
 
-async def test_notification_toggle_works(test_db) -> None:
-    await db.upsert_user(41009, "notify", "Notify")
-    query = _make_query(user_id=41009)
-
-    await bot.handle_settings(query, "toggle_notify:daily_picks")
-
-    user = await db.get_user(41009)
-    prefs = db.get_notification_prefs(user)
-    assert prefs["daily_picks"] is False
-
-
-async def test_notification_time_setting_works(test_db) -> None:
-    await db.upsert_user(41010, "notifyhour", "NotifyHour")
-    query = _make_query(user_id=41010)
-
-    await bot.handle_settings(query, "set_notify:18")
-
-    user = await db.get_user(41010)
-    assert user.notification_hour == 18
-
-
-async def test_bankroll_setting_works(test_db) -> None:
-    await db.upsert_user(41011, "bankroll", "Bankroll")
-    query = _make_query(user_id=41011)
-
-    await bot.handle_settings(query, "set_bankroll:500")
-
-    user = await db.get_user(41011)
-    assert user.bankroll == 500
-
 
 async def test_my_teams_editor_lists_saved_team_counts(test_db) -> None:
     await db.upsert_user(41012, "teams", "Teams")

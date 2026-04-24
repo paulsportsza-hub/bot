@@ -58,7 +58,7 @@ def _visible_card_lines(text: str) -> list[str]:
 
 async def test_main_menu_has_hot_tips_button() -> None:
     labels = _button_labels(bot.kb_main())
-    assert "💎 Top Edge Picks" in labels
+    assert "💎 Edge Picks" in labels
 
 
 async def test_hot_go_dispatch_sends_hot_tips_surface(monkeypatch, test_edges) -> None:

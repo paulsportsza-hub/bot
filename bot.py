@@ -290,7 +290,7 @@ _settings_sports_state: dict[int, dict] = {}
 # Always-visible bottom keyboard (separate from inline keyboards)
 
 _KEYBOARD_LABELS = [
-    "💎 \U0001d5d8\U0001d5d7\U0001d5da\U0001d5d8 \U0001d5e3\U0001d5dc\U0001d5d6\U0001d5de\U0001d5e6 💎",
+    "💎 Edge Picks",
     "🏠 Menu", "⚽ My Matches",
     "👤 Profile", "⚙️ Settings", "❓ Help",
 ]
@@ -306,8 +306,8 @@ _LEGACY_LABELS = {
     "⚽ Your Games": "your_games",           # old Your Games → My Matches
     "💎 Top Edge Picks": "hot_tips",         # old label → Edge Picks
     "💎 Edge Picks": "hot_tips",             # old label → Edge Picks
-    "💎 Edge Picks": "hot_tips",             # old flame label → Edge Picks
     "🔥 \U0001d5d8\U0001d5d7\U0001d5da\U0001d5d8 \U0001d5e3\U0001d5dc\U0001d5d6\U0001d5de\U0001d5e6 🔥": "hot_tips",  # old flame hero → Edge Picks
+    "💎 \U0001d5d8\U0001d5d7\U0001d5da\U0001d5d8 \U0001d5e3\U0001d5dc\U0001d5d6\U0001d5de\U0001d5e6 💎": "hot_tips",  # old diamond bold hero → Edge Picks
     "📖 Guide": "guide",                     # removed from Row 1 → Guide action
 }
 # Add hero button text (bold Unicode) as a legacy label entry
@@ -323,7 +323,7 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="💎 Edge Picks — today's top value",
+        input_field_placeholder="🇿🇦 Bet Better with Mzansi Edge....",
     )
 
 
@@ -650,21 +650,12 @@ def _get_team_cheer(team: str, sport_key: str) -> str:
 
 # ── Keyboards ─────────────────────────────────────────────
 
-# Bold Unicode: "💎 DIAMOND EDGE PICKS" (Math Sans-Serif Bold)
-_DIAMOND_EDGE_PICKS = (
-    "💎 "
-    "\U0001d5d7\U0001d5dc\U0001d5d4\U0001d5e0\U0001d5e2\U0001d5e1\U0001d5d7"
-    " "
-    "\U0001d5d8\U0001d5d7\U0001d5da\U0001d5d8"
-    " "
-    "\U0001d5e3\U0001d5dc\U0001d5d6\U0001d5de\U0001d5e6"
-)
+_DIAMOND_EDGE_PICKS = "💎 Edge Picks"
 
 
 def kb_main() -> InlineKeyboardMarkup:
     """Main persistent menu — every sub-screen navigates back here."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("━" * 16, callback_data="nop:spacer")],
         [InlineKeyboardButton(_DIAMOND_EDGE_PICKS, callback_data="hot:go")],
         [
             InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0"),
@@ -1315,12 +1306,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         # MM-01: Pre-warm My Matches cache in background so first tap hits warm path
         asyncio.create_task(_fetch_schedule_games(user.id))
         name = h(user.first_name or "")
-        text = textwrap.dedent(f"""\
-            <b>🇿🇦 Welcome back, {name}!</b>
-
-            Your AI-powered sports betting assistant.
-            Pick a sport or get an AI tip below.
-        """)
+        picks = await asyncio.to_thread(_get_bru_daily_drop, 5)
+        drop_section = _format_bru_daily_drop(picks)
+        text = f"<b>🇿🇦 Welcome back, {name}!</b>\n\n{drop_section}"
         # Send sticky keyboard + inline menu in one message
         await update.message.reply_text(
             text, parse_mode=ParseMode.HTML,
@@ -1358,20 +1346,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    wins = await asyncio.to_thread(_get_recent_wins_from_edge_results, 5)
-    if wins:
-        try:
-            data = build_home_winners_data(wins)
-            photo_bytes = await asyncio.to_thread(render_card_sync, "home_winners.html", data)
-            await update.message.reply_photo(
-                photo=photo_bytes,
-                reply_markup=kb_main(),
-            )
-            return
-        except Exception as exc:
-            log.warning("home_winners card render failed in cmd_menu: %s", exc)
+    picks = await asyncio.to_thread(_get_bru_daily_drop, 5)
     name = h(user.first_name or "")
-    text = f"<b>🇿🇦 MzansiEdge — Main Menu</b>\n\nHey {name}, what would you like to do?"
+    drop_section = _format_bru_daily_drop(picks)
+    text = f"<b>🇿🇦 MzansiEdge — Main Menu</b>\n\nHey {name}!\n\n{drop_section}"
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
 
 
@@ -3936,20 +3914,13 @@ async def _serve_response(query, text: str, markup, photo=None) -> None:
 async def handle_menu(query, action: str) -> None:
     if action == "home":
         user = query.from_user
-        wins = await asyncio.to_thread(_get_recent_wins_from_edge_results, 5)
-        if wins:
-            try:
-                data = build_home_winners_data(wins)
-                photo_bytes = await asyncio.to_thread(render_card_sync, "home_winners.html", data)
-                await _serve_response(query, "", kb_main(), photo=photo_bytes)
-                return
-            except Exception as exc:
-                log.warning("home_winners card render failed: %s", exc)
-        text = textwrap.dedent(f"""\
-            <b>🇿🇦 MzansiEdge — Main Menu</b>
-
-            Hey {h(user.first_name or '')}, what would you like to do?
-        """)
+        picks = await asyncio.to_thread(_get_bru_daily_drop, 5)
+        drop_section = _format_bru_daily_drop(picks)
+        text = (
+            f"<b>🇿🇦 MzansiEdge — Main Menu</b>\n\n"
+            f"Hey {h(user.first_name or '')}!\n\n"
+            f"{drop_section}"
+        )
         await _serve_response(query, text, kb_main())
 
     elif action == "help":
@@ -5587,21 +5558,11 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if text == "🏠 Menu":
-        wins = await asyncio.to_thread(_get_recent_wins_from_edge_results, 5)
-        if wins:
-            try:
-                data = build_home_winners_data(wins)
-                photo_bytes = await asyncio.to_thread(render_card_sync, "home_winners.html", data)
-                await update.message.reply_photo(
-                    photo=photo_bytes,
-                    reply_markup=kb_main(),
-                )
-                return
-            except Exception as exc:
-                log.warning("home_winners card render failed in keyboard tap: %s", exc)
+        picks = await asyncio.to_thread(_get_bru_daily_drop, 5)
         name = h(update.effective_user.first_name or "")
+        drop_section = _format_bru_daily_drop(picks)
         await update.message.reply_text(
-            f"<b>🇿🇦 MzansiEdge</b>\n\nHey {name}!",
+            f"<b>🇿🇦 MzansiEdge</b>\n\nHey {name}!\n\n{drop_section}",
             parse_mode=ParseMode.HTML,
             reply_markup=kb_main(),
         )
@@ -10240,6 +10201,95 @@ def _get_recent_wins_from_edge_results(limit: int = 5) -> list[dict]:
     except Exception as exc:
         log.warning("_get_recent_wins_from_edge_results failed: %s", exc)
         return []
+
+
+def _get_bru_daily_drop(limit: int = 5) -> list[dict]:
+    """Return today's Diamond/Gold picks for the BRU Daily Drop welcome screen section.
+
+    No result/outcome filter — shows all picks regardless of settlement status.
+    Enriches each pick with kickoff time from broadcast_schedule where available.
+    """
+    try:
+        import datetime
+        from zoneinfo import ZoneInfo as _ZI
+        from scrapers.db_connect import connect_odds_db as _conn_fn
+        from scrapers.edge.edge_config import DB_PATH as _DB_PATH
+
+        today = datetime.datetime.now(_ZI("Africa/Johannesburg")).date().isoformat()
+        _conn = _conn_fn(_DB_PATH)
+        _conn.row_factory = lambda cursor, row: dict(
+            zip([col[0] for col in cursor.description], row)
+        )
+        picks = _conn.execute(
+            "SELECT match_key, edge_tier, composite_score, bet_type, recommended_odds, "
+            "bookmaker, sport, league "
+            "FROM edge_results WHERE match_date = ? AND edge_tier IN ('diamond', 'gold') "
+            "ORDER BY CASE edge_tier WHEN 'diamond' THEN 1 ELSE 2 END, "
+            "composite_score DESC LIMIT ?",
+            (today, limit),
+        ).fetchall()
+        for pick in picks:
+            key = pick["match_key"]
+            vs_part = key.rsplit("_", 1)[0]
+            if "_vs_" in vs_part:
+                home_slug = vs_part.split("_vs_")[0].split("_")[0]
+                row = _conn.execute(
+                    "SELECT start_time FROM broadcast_schedule "
+                    "WHERE broadcast_date = ? AND source = 'supersport_scraper' "
+                    "AND LOWER(home_team) LIKE ? LIMIT 1",
+                    (today, f"%{home_slug}%"),
+                ).fetchone()
+                pick["kickoff"] = row["start_time"] if row else None
+            else:
+                pick["kickoff"] = None
+        _conn.close()
+        return picks
+    except Exception as exc:
+        log.warning("_get_bru_daily_drop failed: %s", exc)
+        return []
+
+
+def _format_bru_daily_drop(picks: list[dict]) -> str:
+    """Format today's Diamond/Gold picks as the BRU Daily Drop welcome screen block."""
+    _TIER_BADGES = {"diamond": "💎 DIAMOND EDGE", "gold": "🥇 GOLDEN EDGE"}
+    _SPORT_EMOJI = {"soccer": "⚽", "rugby": "🏉", "cricket": "🏏", "mma": "🥊", "boxing": "🥊"}
+
+    if not picks:
+        return (
+            "<b>📡 BRU Daily Drop</b>\n"
+            "<i>No edges today — check back soon 🔍</i>"
+        )
+
+    lines = ["<b>📡 BRU Daily Drop — Today's Edges</b>"]
+    for pick in picks:
+        tier = pick.get("edge_tier", "gold")
+        badge = _TIER_BADGES.get(tier, f"🥇 {tier.upper()} EDGE")
+        sport_emoji = _SPORT_EMOJI.get(pick.get("sport", ""), "🏅")
+
+        vs_part = pick["match_key"].rsplit("_", 1)[0]
+        if "_vs_" in vs_part:
+            home_raw, away_raw = vs_part.split("_vs_", 1)
+            match_name = (
+                f"{home_raw.replace('_', ' ').title()} vs "
+                f"{away_raw.replace('_', ' ').title()}"
+            )
+        else:
+            match_name = vs_part.replace("_", " ").title()
+
+        kickoff_str = ""
+        if pick.get("kickoff"):
+            try:
+                import datetime as _dt
+                ko = _dt.datetime.fromisoformat(str(pick["kickoff"]))
+                kickoff_str = f" · ⏰ {ko.strftime('%-H:%M')} SAST"
+            except Exception:
+                pass
+
+        lines.append(f"\n{sport_emoji} <b>{match_name}</b>")
+        lines.append(f"{badge}{kickoff_str}")
+        lines.append(f"💰 {pick['bet_type']} @ {pick['recommended_odds']:.2f}")
+
+    return "\n".join(lines)
 
 
 def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False, with_clv: bool = False) -> list[dict]:
@@ -23686,7 +23736,7 @@ async def handle_settings(query, action: str) -> None:
         ])
         first_name = (user.first_name or "") if user else ""
         await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
+            bot=_g_bot, chat_id=query.from_user.id,
             template="onboarding_restart.html",
             data=build_onboarding_restart_data(first_name),
             text_fallback=text, markup=reset_kb,
@@ -23708,7 +23758,16 @@ async def handle_settings(query, action: str) -> None:
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🚀 Start onboarding", callback_data="ob_restart:go")],
         ])
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await _g_bot.send_message(
+            chat_id=query.from_user.id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb,
+        )
     else:
         await query.edit_message_text("<b>⚙️ Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings())
 
