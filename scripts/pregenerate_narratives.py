@@ -183,7 +183,7 @@ _BANNED_SHAPE_SKIP_THRESHOLD = 1  # INV-SONNET-SPIKE-01: reduced 3→1; one retr
 # capped at 25 matches ordered by soonest kickoff.
 # Concurrency is bounded to 3 simultaneous LLM slots so pregen never
 # starves _edge_precompute_job.
-_PREGEN_HORIZON_HOURS: int = 48
+_PREGEN_HORIZON_HOURS: int = 240
 _PREGEN_MATCH_CAP: int = 25
 _PREGEN_CONCURRENCY: int = 3
 
