@@ -236,7 +236,7 @@ async def test_cache_write_failure_logged_not_swallowed(tmp_path, caplog) -> Non
         fake_client = MagicMock()
         fake_client.messages.create.return_value = fake_response
 
-        # Patch openrouter_client.Anthropic — the name bot.py imports as `anthropic`.
+        # FIX-COST-WAVE-02: _generate_verdict now imports anthropic_client (direct Anthropic).
         call_count = [0]
 
         def _patched_gc(path, **kwargs):
@@ -253,7 +253,7 @@ async def test_cache_write_failure_logged_not_swallowed(tmp_path, caplog) -> Non
             return conn
 
         with (
-            patch("openrouter_client.Anthropic", return_value=fake_client),
+            patch("anthropic_client.Anthropic", return_value=fake_client),
             patch("db_connection.get_connection", side_effect=_patched_gc),
             caplog.at_level(logging.WARNING, logger="bot"),
         ):

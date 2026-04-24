@@ -8148,7 +8148,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
     - Returns "" on any failure — never blocks rendering
     """
     try:
-        import openrouter_client as _anthropic
+        import anthropic_client as _anthropic  # FIX-COST-WAVE-02: direct Anthropic (VERDICT scope)
         from team_data import get_nickname, get_manager, form_to_plain
         odds = float(tip.get("odds") or tip.get("pick_odds") or 0)
         pick = tip.get("pick") or tip.get("outcome") or ""
@@ -8314,7 +8314,7 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
             "\"At 1.85, the Reds are the play.\" (Diamond banned opener — forbidden)"
         )
 
-        client = _anthropic.Anthropic()
+        client = _anthropic.Anthropic(scope_key_name="VERDICT_ANTHROPIC_API_KEY")
         resp = client.messages.create(
             model=_VERDICT_MODEL,
             max_tokens=180,  # BUILD-NARRATIVE-VOICE-01: raised to 180 (≈260 chars × 0.7 headroom for VERDICT_HARD_MAX)
@@ -8631,7 +8631,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
     - Falls back to _render_verdict(spec) from narrative_spec if fact-check strips >50%
     """
     try:
-        import openrouter_client as _anthropic
+        import anthropic_client as _anthropic  # FIX-COST-WAVE-02: direct Anthropic (VERDICT scope)
         from narrative_spec import _render_verdict as _render_verdict_deterministic, NarrativeSpec
         from team_data import get_nickname, get_manager, form_to_plain
 
@@ -8801,7 +8801,7 @@ def _generate_verdict_constrained(spec: dict, allowed_data: dict) -> str:
         # BUILD-VERDICT-ENRICHMENT-FIX-01: tier-split temperature + raised max_tokens/ceiling
         _tier_for_temp = getattr(spec, "edge_tier", "bronze").lower() if hasattr(spec, "edge_tier") else "bronze"
         _temperature = 0.7 if _tier_for_temp in ("gold", "diamond") else 0.5
-        client = _anthropic.Anthropic()
+        client = _anthropic.Anthropic(scope_key_name="VERDICT_ANTHROPIC_API_KEY")
         resp = client.messages.create(
             model=_VERDICT_MODEL,
             max_tokens=220,  # BUILD-VERDICT-ENRICHMENT-FIX-01: raised from 120; ceiling ≤300

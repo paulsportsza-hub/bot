@@ -64,7 +64,7 @@ class TestVerdictShapeGuard(unittest.TestCase):
         tip = self._minimal_tip()
         verified = self._minimal_verified()
 
-        with patch("openrouter_client.Anthropic") as MockClient:
+        with patch("anthropic_client.Anthropic") as MockClient:
             client_inst = MockClient.return_value
             client_inst.messages.create.side_effect = _fake_create
 
@@ -106,7 +106,7 @@ class TestVerdictShapeGuard(unittest.TestCase):
         )
         verified = self._minimal_verified()
 
-        with patch("openrouter_client.Anthropic") as MockClient:
+        with patch("anthropic_client.Anthropic") as MockClient:
             client_inst = MockClient.return_value
             client_inst.messages.create.return_value = _make_response(BANNED)
 
@@ -132,7 +132,7 @@ class TestVerdictShapeGuard(unittest.TestCase):
         tip = self._minimal_tip()
         verified = self._minimal_verified()
 
-        with patch("openrouter_client.Anthropic") as MockClient:
+        with patch("anthropic_client.Anthropic") as MockClient:
             client_inst = MockClient.return_value
             client_inst.messages.create.side_effect = _fake_create
 

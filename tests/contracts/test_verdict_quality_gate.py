@@ -379,7 +379,7 @@ class TestConstrainedVerdictTierFloor(unittest.TestCase):
         fake_client.messages.create.return_value = fake_resp
 
         import bot as _bot
-        with patch("openrouter_client.Anthropic", return_value=fake_client):
+        with patch("anthropic_client.Anthropic", return_value=fake_client):
             with patch.object(_bot, "_fact_check_verdict", side_effect=lambda t, _: t):
                 result = _bot._generate_verdict_constrained(spec, allowed)
 
@@ -436,7 +436,7 @@ class TestConstrainedVerdictTierFloor(unittest.TestCase):
         fake_client.messages.create.return_value = fake_resp
 
         import bot as _bot
-        with patch("openrouter_client.Anthropic", return_value=fake_client):
+        with patch("anthropic_client.Anthropic", return_value=fake_client):
             with patch.object(_bot, "_fact_check_verdict", side_effect=lambda t, _: t):
                 result = _bot._generate_verdict_constrained(spec, allowed)
 

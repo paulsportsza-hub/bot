@@ -37,6 +37,7 @@ _bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_bot_dir, ".env"))
 
 import openrouter_client as anthropic
+import anthropic_client as _anthropic_direct  # FIX-COST-WAVE-02: direct Anthropic for Sonnet narrative polish
 from validators.sport_context import validate_sport_text  # REGFIX-03 wiring
 from evidence_pack import (
     _build_h2h_injection,
@@ -75,6 +76,11 @@ SHADOW_MODEL = os.environ.get(
 )
 # BUILD-DUAL-MODEL-PREGEN: Haiku for non-edge match previews (~12x cheaper than Sonnet).
 HAIKU_MODEL = os.environ.get("NARRATIVE_HAIKU_MODEL", "claude-haiku-4-5-20251001")
+
+# FIX-COST-WAVE-02: initialised in pregen_narratives() — Sonnet polish routes
+# direct to Anthropic. `claude` (module singleton) stays on OpenRouter for
+# Haiku traffic (validator, non-edge preview, claims verifier) per AC-1.
+_narrative_claude: "_anthropic_direct.AsyncAnthropic | None" = None
 
 
 def _model_family_label(model_id: str) -> str:
@@ -2047,7 +2053,12 @@ async def _generate_one(
             else:
                 # Sonnet path for edge matches.
                 prompt_text = format_evidence_prompt(evidence_pack, spec)
-                resp = await claude.messages.create(
+                # FIX-COST-WAVE-02: route Sonnet narrative polish to direct Anthropic
+                # (NARRATIVE scope) when the module singleton is initialised by
+                # pregen_narratives(); fall back to the `claude` param so unit tests
+                # that pass a mocked client via _generate_one(..., claude=fake) still work.
+                _sonnet_client = _narrative_claude if _narrative_claude is not None else claude
+                resp = await _sonnet_client.messages.create(
                     model=SHADOW_MODEL,
                     max_tokens=1200,
                     messages=[{"role": "user", "content": prompt_text}],
@@ -2319,7 +2330,10 @@ async def _generate_one(
                 try:
                     if evidence_pack is not None and spec is not None:
                         _retry_prompt = format_evidence_prompt(evidence_pack, spec)
-                        _retry_resp = await claude.messages.create(
+                        # FIX-COST-WAVE-02: Sonnet retry also routes direct Anthropic
+                        # (NARRATIVE scope) when the module singleton is initialised.
+                        _retry_sonnet_client = _narrative_claude if _narrative_claude is not None else claude
+                        _retry_resp = await _retry_sonnet_client.messages.create(
                             model=SHADOW_MODEL,
                             max_tokens=1200,
                             messages=[{"role": "user", "content": _retry_prompt}],
@@ -3027,6 +3041,12 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
 
     # Initialize Claude client
     claude = anthropic.AsyncAnthropic(api_key=os.getenv("OPENROUTER_API_KEY"))
+    # FIX-COST-WAVE-02: Sonnet narrative polish routes direct to Anthropic (NARRATIVE scope).
+    # Haiku traffic on `claude` stays on OpenRouter — per Phase 2 AC-1 Haiku is out of scope.
+    global _narrative_claude
+    _narrative_claude = _anthropic_direct.AsyncAnthropic(
+        scope_key_name="NARRATIVE_ANTHROPIC_API_KEY"
+    )
 
     results = {
         "success": 0,
