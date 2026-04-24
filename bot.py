@@ -1302,6 +1302,99 @@ def _welcome_img_path() -> pathlib.Path | None:
     return None
 
 
+# Welcome pick — cached 1h, only Gold/Diamond
+_welcome_pick_cache: dict | None = None
+_welcome_pick_ts: float = 0.0
+_WELCOME_PICK_TTL = 3600
+
+
+def _load_welcome_pick() -> dict | None:
+    """Return today's top Gold/Diamond pick for the welcome button (sync, cached 1h)."""
+    global _welcome_pick_cache, _welcome_pick_ts
+    import time
+    now = time.time()
+    if _welcome_pick_ts > 0 and now - _welcome_pick_ts < _WELCOME_PICK_TTL:
+        return _welcome_pick_cache
+    try:
+        from scrapers.db_connect import connect_odds_db
+        from scrapers.edge.edge_config import DB_PATH
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        _sast = ZoneInfo("Africa/Johannesburg")
+        today = datetime.now(_sast).date().isoformat()
+        yesterday = (datetime.now(_sast).date() - timedelta(days=1)).isoformat()
+        conn = connect_odds_db(DB_PATH)
+        conn.row_factory = lambda cur, row: dict(zip([c[0] for c in cur.description], row))
+        _order = (
+            "CASE edge_tier WHEN 'diamond' THEN 1 WHEN 'gold' THEN 2 ELSE 3 END, "
+            "confirming_signals DESC, composite_score DESC"
+        )
+        pick = None
+        for _date in [today, yesterday]:
+            pick = conn.execute(
+                "SELECT match_key, edge_tier FROM edge_results "
+                f"WHERE match_date = ? AND edge_tier IN ('diamond', 'gold') "
+                f"ORDER BY {_order} LIMIT 1",
+                (_date,),
+            ).fetchone()
+            if pick:
+                break
+        conn.close()
+        _welcome_pick_cache = pick
+        _welcome_pick_ts = now
+        return pick
+    except Exception as exc:
+        log.debug("_load_welcome_pick failed: %s", exc)
+        return _welcome_pick_cache
+
+
+async def _welcome_kb(user_id: int) -> InlineKeyboardMarkup:
+    """Build the welcome screen keyboard with a tier-gated edge pick button when available."""
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(_DIAMOND_EDGE_PICKS, callback_data="hot:go")],
+        [
+            InlineKeyboardButton("⚽ My Matches", callback_data="yg:all:0"),
+            InlineKeyboardButton("📊 Edge Tracker", callback_data="results:7"),
+        ],
+        [
+            InlineKeyboardButton("📖 Guide", callback_data="guide:menu"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings:home"),
+        ],
+        [InlineKeyboardButton("🏠 Community", url="https://t.me/MzansiEdge")],
+    ]
+
+    # Only add pick button when the daily image (not fallback) is showing
+    if _welcome_img_path() == _WELCOME_IMG_PATH:
+        pick = await asyncio.to_thread(_load_welcome_pick)
+        if pick:
+            edge_tier = (pick.get("edge_tier") or "gold").lower()
+            match_key = pick.get("match_key", "")
+            vs_part = match_key.rsplit("_", 1)[0]
+            if "_vs_" in vs_part:
+                home_slug, away_slug = vs_part.split("_vs_", 1)
+                home = home_slug.replace("_", " ").title()
+                away = away_slug.replace("_", " ").title()
+            else:
+                home, away = vs_part.replace("_", " ").title(), ""
+
+            user_tier = await get_effective_tier(user_id)
+            from tier_gate import get_edge_access_level
+            access = get_edge_access_level(user_tier, edge_tier)
+            tier_emoji = {"diamond": "💎", "gold": "🥇"}.get(edge_tier, "🥇")
+            tier_pretty = {"diamond": "Diamond", "gold": "Gold"}.get(edge_tier, "Gold")
+
+            if access in ("full", "partial"):
+                btn_text = f"{tier_emoji} View {tier_pretty} Edge ↗"
+                btn_cb = f"edge:detail:{match_key}"
+            else:
+                btn_text = f"🔒 View {tier_pretty} Edge"
+                btn_cb = "sub:plans"
+
+            rows.insert(0, [InlineKeyboardButton(btn_text, callback_data=btn_cb)])
+
+    return InlineKeyboardMarkup(rows)
+
+
 # ── /start ────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1328,7 +1421,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _img_path = _welcome_img_path()
         if _img_path is not None:
             with open(_img_path, "rb") as _fh:
-                await update.message.reply_photo(photo=_fh, reply_markup=kb_main())
+                await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(user.id))
         else:
             await update.message.reply_text(
                 f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",
@@ -1369,7 +1462,7 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     _img_path = _welcome_img_path()
     if _img_path is not None:
         with open(_img_path, "rb") as _fh:
-            await update.message.reply_photo(photo=_fh, reply_markup=kb_main())
+            await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(update.effective_user.id))
     else:
         await update.message.reply_text(
             "<b>🇿🇦 MzansiEdge</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
@@ -3938,7 +4031,8 @@ async def handle_menu(query, action: str) -> None:
     if action == "home":
         _img_path = _welcome_img_path()
         if _img_path is not None:
-            await _serve_response(query, "", kb_main(), photo=_img_path.read_bytes())
+            _wkb = await _welcome_kb(query.from_user.id)
+            await _serve_response(query, "", _wkb, photo=_img_path.read_bytes())
         else:
             await _serve_response(query, "<b>🇿🇦 MzansiEdge</b>", kb_main())
 
@@ -4464,6 +4558,18 @@ async def _show_edge_explainer(query, ob: dict) -> None:
 
 # REMOVED: handle_ob_risk (BUILD-SETTINGS-CLEANUP-01)
 # REMOVED: handle_ob_bankroll (BUILD-SETTINGS-CLEANUP-01)
+
+
+def kb_onboarding_bankroll() -> InlineKeyboardMarkup:
+    """Step 5/5: Bankroll preferences — SA-appropriate amounts (R50–R1,000)."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("R50", callback_data="ob_bankroll:50"),
+         InlineKeyboardButton("R200", callback_data="ob_bankroll:200")],
+        [InlineKeyboardButton("R500", callback_data="ob_bankroll:500"),
+         InlineKeyboardButton("R1,000", callback_data="ob_bankroll:1000")],
+        [InlineKeyboardButton("Custom amount", callback_data="ob_bankroll:custom"),
+         InlineKeyboardButton("Skip", callback_data="ob_bankroll:skip")],
+    ])
 
 
 async def _show_summary(query, ob: dict) -> None:
@@ -5580,7 +5686,7 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         _img_path = _welcome_img_path()
         if _img_path is not None:
             with open(_img_path, "rb") as _fh:
-                await update.message.reply_photo(photo=_fh, reply_markup=kb_main())
+                await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(user_id))
         else:
             await update.message.reply_text(
                 "<b>🇿🇦 MzansiEdge</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
@@ -13605,8 +13711,8 @@ def _build_edge_only_section(tips: list[dict]) -> str:
             except ValueError:
                 pass
     _d06_ctx = " · ".join(p for p in [_d06_league_name, _d06_date] if p)
-    _d06_odds_ctx = f"{h(outcome)} priced at {odds:.2f} with {h(bk)}." if odds > 1 else ""
-    _d06_prefix = (_d06_ctx + " — " if _d06_ctx else "") + (_d06_odds_ctx + " " if _d06_odds_ctx else "")
+    _d06_odds_ctx = ""
+    _d06_prefix = (_d06_ctx + " — " if _d06_ctx else "")
 
     # Edge-score-aware setup text
     if edge_score >= 55:
@@ -14181,7 +14287,6 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                     "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
                     "evidence_json, narrative_source, coverage_json, created_at "
                     "FROM narrative_cache WHERE match_id = ? "
-                    "AND COALESCE(quarantined, 0) = 0 "
                     "AND (status IS NULL OR status != 'quarantined')",
                     (match_id,),
                 ).fetchone()
@@ -14220,13 +14325,12 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                     )
                     try:
                         conn.execute(
-                            "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
-                            "WHERE match_id = ?",
-                            (", ".join(stale_setup_reasons), match_id),
+                            "DELETE FROM narrative_cache WHERE match_id = ?",
+                            (match_id,),
                         )
                         conn.commit()
                     except sqlite3.OperationalError as exc:
-                        log.debug("Deferred stale Setup cache quarantine for %s: %s", match_id, exc)
+                        log.debug("Deferred stale Setup cache delete for %s: %s", match_id, exc)
                     return None
                 if _has_stale_setup_context_claims(cleaned, evidence_json):
                     log.warning(
@@ -18005,7 +18109,13 @@ def _build_setup_section_v2(ctx_data: dict, tips: list[dict] | None = None,
     paragraphs.append(_build_home_para(d))
     paragraphs.append(_build_away_para(d))
 
-    # H2H rendered solely by NarrativeSpec._render_setup() — do not add here (RENDER-FIX4)
+    if h2h_latest and h2h_count:
+        h2h_intro = "meeting" if h2h_count == 1 else f"{h2h_count} meetings"
+        latest_score = (h2h[0].get("score", "") if h2h else "")
+        if latest_score:
+            paragraphs.append(f"Their {h2h_intro} most recently ended {latest_score}.")
+        else:
+            paragraphs.append(f"These sides have met {h2h_intro} recently.")
 
     return "\n\n".join(p for p in paragraphs if p)
 
