@@ -2727,7 +2727,7 @@ async def _verify_and_fill_cache(
                         narrative_source=pw.get("narrative_source", "w82"),
                         coverage_json=pw.get("coverage_json"),
                         structured_card_json=pw.get("structured_card_json"),
-                        verdict_html=pw.get("verdict_html"),
+                        verdict_html=None,  # P0-HOTFIX-VERDICT-HAIKU-REGRESSION: pregen Haiku verdicts polluted cards; force preservation-guard path in bot.py:14624
                         evidence_class=pw.get("evidence_class"),
                         tone_band=pw.get("tone_band"),
                         spec_json=pw.get("spec_json"),
@@ -3163,7 +3163,7 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                     narrative_source=new_source,
                     coverage_json=pw.get("coverage_json"),
                     structured_card_json=pw.get("structured_card_json"),
-                    verdict_html=pw.get("verdict_html"),
+                    verdict_html=None,  # P0-HOTFIX-VERDICT-HAIKU-REGRESSION: pregen Haiku verdicts polluted cards; force preservation-guard path in bot.py:14624
                     evidence_class=pw.get("evidence_class"),
                     tone_band=pw.get("tone_band"),
                     spec_json=pw.get("spec_json"),
