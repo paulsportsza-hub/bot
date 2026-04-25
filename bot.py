@@ -1450,7 +1450,7 @@ async def _welcome_kb(user_id: int) -> InlineKeyboardMarkup:
             user_tier = await get_effective_tier(user_id)
             from tier_gate import get_edge_access_level
             access = get_edge_access_level(user_tier, edge_tier)
-            tier_emoji = {"diamond": "💎", "gold": "🥇", "silver": "⚡", "bronze": "🥉"}.get(edge_tier, "🥇")
+            tier_emoji = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}.get(edge_tier, "🥇")
             tier_pretty = {"diamond": "Diamond", "gold": "Gold", "silver": "Silver", "bronze": "Bronze"}.get(edge_tier, "Gold")
 
             if access in ("full", "partial"):
@@ -1458,7 +1458,7 @@ async def _welcome_kb(user_id: int) -> InlineKeyboardMarkup:
                 btn_cb = "menu:pick"
             else:
                 btn_text = f"🔒 {tier_emoji} View Edge of The Day"
-                btn_cb = "sub:plans"
+                btn_cb = "menu:pick_lock"
 
             rows.insert(0, [InlineKeyboardButton(btn_text, callback_data=btn_cb)])
 
@@ -4288,6 +4288,67 @@ async def handle_menu(query, action: str) -> None:
             text_fallback=_wp_fallback, markup=InlineKeyboardMarkup(_wp_btn_rows),
             message_to_edit=query.message,
         )
+
+    elif action == "pick_lock":
+        # Locked "Edge of The Day" button — non-paying user taps.
+        # Serve the tier_lock_upsell card for the welcome pick's tier.
+        user_id = query.from_user.id
+        _wpl = await asyncio.to_thread(_load_welcome_pick)
+        if not _wpl:
+            await _serve_response(
+                query, "🔒 Upgrade to unlock this Edge.",
+                InlineKeyboardMarkup([[InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")]]),
+            )
+            return
+        _wpl_key = _wpl.get("match_key", "")
+        _wpl_tier = (_wpl.get("edge_tier") or "gold").lower()
+        _wpl_tip = await asyncio.to_thread(_load_edge_tip_by_key, _wpl_key)
+        # Extract home/away from match_key
+        import re as _re_wpl
+        _wpl_mk_nd = _re_wpl.sub(r"_\d{4}-\d{2}-\d{2}$", "", _wpl_key)
+        if "_vs_" in _wpl_mk_nd:
+            _wpl_h_slug, _wpl_a_slug = _wpl_mk_nd.split("_vs_", 1)
+        else:
+            _wpl_h_slug = _wpl_a_slug = _wpl_mk_nd
+        _wpl_home = _display_team_name(_wpl_h_slug)
+        _wpl_away = _display_team_name(_wpl_a_slug)
+        _wpl_signals = int(_wpl.get("confirming_signals") or (_wpl_tip or {}).get("confirming_signals") or 0)
+        _lock_tier_emoji = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}.get(_wpl_tier, "🔒")
+        try:
+            from card_pipeline import build_tier_lock_data as _build_wpl_lock
+            _wpl_lock_data = _build_wpl_lock(
+                edge_tier=_wpl_tier,
+                home=_wpl_home,
+                away=_wpl_away,
+                sport_key=(_wpl_tip or {}).get("sport", ""),
+                league=(_wpl_tip or {}).get("league", ""),
+                kickoff_str="",
+                broadcast="",
+                confirming_signals=_wpl_signals,
+                tracker_summary=None,
+            )
+            _lock_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    f"{_lock_tier_emoji} Unlock {_wpl_tier.title()} — from R199/mo",
+                    callback_data="sub:plans",
+                )],
+                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+            ])
+            await send_card_or_fallback(
+                bot=_g_bot,
+                chat_id=query.message.chat_id,
+                template="tier_lock_upsell.html",
+                data=_wpl_lock_data,
+                text_fallback=f"🔒 {_wpl_tier.title()} Edge — upgrade to unlock.",
+                markup=_lock_markup,
+                message_to_edit=query.message,
+            )
+        except Exception as _wpl_lock_err:
+            log.warning("pick_lock upsell failed: %s", _wpl_lock_err)
+            await _serve_response(
+                query, "🔒 Upgrade to unlock this Edge.",
+                InlineKeyboardMarkup([[InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")]]),
+            )
 
     elif action == "help":
         await send_card_or_fallback(
