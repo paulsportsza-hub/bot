@@ -4309,7 +4309,7 @@ async def handle_menu(query, action: str) -> None:
         user_id = query.from_user.id
         await query.answer()
         try:
-            await query.message.edit_caption("⏳ Loading your Edge of The Day…")
+            await query.message.edit_caption("⚡ Loading your Edge of The Day…")
         except Exception:
             pass
         _wp = await asyncio.to_thread(_load_welcome_pick)
