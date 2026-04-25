@@ -29728,6 +29728,44 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 except Exception as _pr_err:
                     log.debug("BUILD-SPEED: card prerender skipped: %s", _pr_err)
 
+            # BUILD-EDGE-DETAIL-PRERENDER-01: Prerender edge_detail.html for top 20 tips.
+            # One render per match covers all users — build_edge_detail_data contains no
+            # user_tier, so the cache key is match-specific and shared across all tiers.
+            _detail_tips = _prerender_tips[:20] if _prerender_tips else []
+            if _detail_tips:
+                _det_start = _t.time()
+                _det_count = 0
+
+                async def _prerender_detail_card(_tip: dict) -> bool:
+                    _mk = _tip.get("match_id", "")
+                    if not _mk:
+                        return False
+                    async with _evidence_sem:
+                        try:
+                            _enr = await asyncio.to_thread(_enrich_tip_for_card, _tip, _mk)
+                            _dd = build_edge_detail_data(_enr)
+                            await asyncio.to_thread(
+                                render_card_sync, "edge_detail.html", _dd,
+                                cache_ttl=900,
+                            )
+                            return True
+                        except Exception as _det_err:
+                            log.warning(
+                                "BUILD-SPEED: edge_detail prerender failed for %s: %s",
+                                _mk, _det_err,
+                            )
+                            return False
+
+                _det_results = await asyncio.gather(
+                    *[_prerender_detail_card(_tip) for _tip in _detail_tips],
+                    return_exceptions=False,
+                )
+                _det_count = sum(1 for r in _det_results if r)
+                log.info(
+                    "BUILD-SPEED: prerendered %d edge_detail cards into PNG cache (%.1fs elapsed)",
+                    _det_count, _t.time() - _det_start,
+                )
+
             _ep_mon.done()
     except Exception as exc:
         log.warning("Edge pre-compute failed (%.1fs): %s", _t.time() - _start, exc)
