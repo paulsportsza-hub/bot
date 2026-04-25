@@ -1957,7 +1957,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                 ])
             # BUILD-W3 / W3-FIX: My Matches card pagination (photo→photo, no flicker)
-            _raw_games = _schedule_cache.get(user_id, [])
+            _raw_games = _schedule_cache.get(user_id) or await _fetch_schedule_games(user_id)
             _edge_info = _get_edge_info_for_games(_raw_games)
             _mm_input = await _build_mm_matches_for_card_with_odds(_raw_games, _edge_info)
             # W3-FIX: sort matches to align with build_my_matches_data() card [N] order
@@ -2612,7 +2612,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         user_id = query.from_user.id
         if action == "back":
             _mdback_ut = await get_effective_tier(user_id)
-            _raw_games_md = _schedule_cache.get(user_id, [])
+            _raw_games_md = _schedule_cache.get(user_id) or await _fetch_schedule_games(user_id)
             _edge_info_md = _get_edge_info_for_games(_raw_games_md)
             _mm_input_md = await _build_mm_matches_for_card_with_odds(_raw_games_md, _edge_info_md)
             # W3-FIX: sort to align with card [N] order
