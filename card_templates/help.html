@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+            padding: 2px;
+            box-sizing: content-box;
+        }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+        }
+        .header {
+            text-align: center;
+            padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img {
+            height: 32px;
+            width: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
+        }
+        .title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: 3px;
+        }
+        .groups {
+            padding: 8px 14px 14px;
+        }
+        .group {
+            margin-top: 10px;
+        }
+        .group-name {
+            font-size: 10px;
+            font-weight: 700;
+            color: #F7931A;
+            letter-spacing: 1.2px;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+            padding-left: 4px;
+        }
+        .cmd-row {
+            display: flex;
+            align-items: baseline;
+            padding: 8px 12px;
+            background: #1A1A1A;
+            border-radius: 8px;
+            border-left: 2px solid #2A2A2A;
+            margin-bottom: 4px;
+        }
+        .cmd-name {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            color: #FFFFFF;
+            min-width: 120px;
+            flex-shrink: 0;
+        }
+        .cmd-desc {
+            font-size: 11px;
+            color: var(--text-secondary);
+            flex: 1;
+        }
+        .footer {
+            text-align: center;
+            padding: 10px 20px 14px;
+            font-size: 9px;
+            color: #555555;
+            border-top: 1px solid #1E1E1E;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div style="font-size:22px;font-weight:800;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">❓ HELP</div>
+    </div>
+    <div class="groups">
+        {% for group in command_groups %}
+        <div class="group">
+            <div class="group-name">{{ group.group_name }}</div>
+            {% for cmd in group.commands %}
+            <div class="cmd-row">
+                <span class="cmd-name">{{ cmd.cmd }}</span>
+                <span class="cmd-desc">{{ cmd.description }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </div>
+    <div class="footer">Tap 📖 Guide for detailed explanations</div>
+</div>
+</body>
+</html>

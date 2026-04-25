@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MzansiEdge Card QA — 2026-04-24</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#0A0A0A;color:#E0E0E0;font-family:'Inter',-apple-system,system-ui,sans-serif;padding-bottom:80px}
+  header{background:#111;border-bottom:1px solid #222;padding:20px 24px;position:sticky;top:0;z-index:10}
+  header h1{font-size:20px;font-weight:700;color:#FF6B00}
+  header p{font-size:13px;color:#888;margin-top:4px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(500px,1fr));gap:24px;padding:24px}
+  .card-block{background:#141414;border:1px solid #222;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px}
+  .card-label{font-size:13px;font-weight:600;color:#aaa;font-family:monospace}
+  .feedback-label{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:1px}
+  .feedback-box{background:#0A0A0A;border:1px solid #333;border-radius:6px;color:#ccc;font-size:13px;padding:10px;resize:vertical;min-height:72px;width:100%;outline:none}
+  .feedback-box:focus{border-color:#FF6B00}
+  footer{position:fixed;bottom:0;left:0;right:0;background:#111;border-top:1px solid #222;padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
+  footer span{font-size:12px;color:#555}
+  #export-btn{background:#FF6B00;color:#fff;border:none;padding:10px 20px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer}
+  #export-btn:hover{background:#e85c00}
+</style>
+</head>
+<body>
+<header>
+  <h1>MzansiEdge Card QA — 2026-04-24</h1>
+  <p>51 rendered · 0 errors · 51 templates total · <a href="../canonical/" style="color:#F7931A">canonical design gallery →</a></p>
+</header>
+<div class="grid">
+        <div class="card-block">
+          <div class="card-label">✅ ai_breakdown.html</div>
+          <img src="ai_breakdown.png" alt="ai_breakdown.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="ai_breakdown.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ bookmaker_directory.html</div>
+          <img src="bookmaker_directory.png" alt="bookmaker_directory.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="bookmaker_directory.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ edge_detail.html</div>
+          <img src="edge_detail.png" alt="edge_detail.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="edge_detail.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ edge_picks.html</div>
+          <img src="edge_picks.png" alt="edge_picks.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="edge_picks.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ edge_summary.html</div>
+          <img src="edge_summary.png" alt="edge_summary.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="edge_summary.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ help.html</div>
+          <img src="help.png" alt="help.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="help.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ home_winners.html</div>
+          <img src="home_winners.png" alt="home_winners.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="home_winners.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ match_detail.html</div>
+          <img src="match_detail.png" alt="match_detail.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="match_detail.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ my_matches.html</div>
+          <img src="my_matches.png" alt="my_matches.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="my_matches.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ my_teams.html</div>
+          <img src="my_teams.png" alt="my_teams.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="my_teams.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_bankroll.html</div>
+          <img src="onboarding_bankroll.png" alt="onboarding_bankroll.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_bankroll.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_bankroll_custom.html</div>
+          <img src="onboarding_bankroll_custom.png" alt="onboarding_bankroll_custom.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_bankroll_custom.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_done.html</div>
+          <img src="onboarding_done.png" alt="onboarding_done.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_done.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_edge_explainer.html</div>
+          <img src="onboarding_edge_explainer.png" alt="onboarding_edge_explainer.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_edge_explainer.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_experience.html</div>
+          <img src="onboarding_experience.png" alt="onboarding_experience.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_experience.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_favourites.html</div>
+          <img src="onboarding_favourites.png" alt="onboarding_favourites.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_favourites.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_favourites_manual.html</div>
+          <img src="onboarding_favourites_manual.png" alt="onboarding_favourites_manual.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_favourites_manual.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_fuzzy_suggest.html</div>
+          <img src="onboarding_fuzzy_suggest.png" alt="onboarding_fuzzy_suggest.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_fuzzy_suggest.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_notify.html</div>
+          <img src="onboarding_notify.png" alt="onboarding_notify.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_notify.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_restart.html</div>
+          <img src="onboarding_restart.png" alt="onboarding_restart.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_restart.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_risk.html</div>
+          <img src="onboarding_risk.png" alt="onboarding_risk.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_risk.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_sports.html</div>
+          <img src="onboarding_sports.png" alt="onboarding_sports.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_sports.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_summary.html</div>
+          <img src="onboarding_summary.png" alt="onboarding_summary.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_summary.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_team_celebration.html</div>
+          <img src="onboarding_team_celebration.png" alt="onboarding_team_celebration.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_team_celebration.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ onboarding_welcome.html</div>
+          <img src="onboarding_welcome.png" alt="onboarding_welcome.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="onboarding_welcome.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ profile_home.html</div>
+          <img src="profile_home.png" alt="profile_home.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="profile_home.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ settings_sports.html</div>
+          <img src="settings_sports.png" alt="settings_sports.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="settings_sports.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ story_quiz_complete.html</div>
+          <img src="story_quiz_complete.png" alt="story_quiz_complete.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="story_quiz_complete.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ story_quiz_step.html</div>
+          <img src="story_quiz_step.png" alt="story_quiz_step.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="story_quiz_step.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_billing_active.html</div>
+          <img src="sub_billing_active.png" alt="sub_billing_active.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_billing_active.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_billing_inactive.html</div>
+          <img src="sub_billing_inactive.png" alt="sub_billing_inactive.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_billing_inactive.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_cancel_confirm.html</div>
+          <img src="sub_cancel_confirm.png" alt="sub_cancel_confirm.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_cancel_confirm.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_cancel_done.html</div>
+          <img src="sub_cancel_done.png" alt="sub_cancel_done.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_cancel_done.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_email_redirect.html</div>
+          <img src="sub_email_redirect.png" alt="sub_email_redirect.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_email_redirect.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_expiry_notice.html</div>
+          <img src="sub_expiry_notice.png" alt="sub_expiry_notice.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_expiry_notice.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_founding_confirmed.html</div>
+          <img src="sub_founding_confirmed.png" alt="sub_founding_confirmed.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_founding_confirmed.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_founding_ended.html</div>
+          <img src="sub_founding_ended.png" alt="sub_founding_ended.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_founding_ended.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_founding_live.html</div>
+          <img src="sub_founding_live.png" alt="sub_founding_live.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_founding_live.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_founding_soldout.html</div>
+          <img src="sub_founding_soldout.png" alt="sub_founding_soldout.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_founding_soldout.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_payment_confirmed.html</div>
+          <img src="sub_payment_confirmed.png" alt="sub_payment_confirmed.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_payment_confirmed.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_payment_error.html</div>
+          <img src="sub_payment_error.png" alt="sub_payment_error.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_payment_error.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_payment_ready.html</div>
+          <img src="sub_payment_ready.png" alt="sub_payment_ready.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_payment_ready.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_plans.html</div>
+          <img src="sub_plans.png" alt="sub_plans.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_plans.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_status_active.html</div>
+          <img src="sub_status_active.png" alt="sub_status_active.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_status_active.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_status_bronze.html</div>
+          <img src="sub_status_bronze.png" alt="sub_status_bronze.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_status_bronze.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_trial_expiry.html</div>
+          <img src="sub_trial_expiry.png" alt="sub_trial_expiry.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_trial_expiry.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_upgrade_bronze.html</div>
+          <img src="sub_upgrade_bronze.png" alt="sub_upgrade_bronze.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_upgrade_bronze.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_upgrade_diamond_max.html</div>
+          <img src="sub_upgrade_diamond_max.png" alt="sub_upgrade_diamond_max.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_upgrade_diamond_max.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ sub_upgrade_gold.html</div>
+          <img src="sub_upgrade_gold.png" alt="sub_upgrade_gold.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="sub_upgrade_gold.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ tier_lock_upsell.html</div>
+          <img src="tier_lock_upsell.png" alt="tier_lock_upsell.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="tier_lock_upsell.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div>
+        <div class="card-block">
+          <div class="card-label">✅ tier_page.html</div>
+          <img src="tier_page.png" alt="tier_page.html" style="max-width:480px;width:100%;display:block;border-radius:8px;">
+          <div class="feedback-label">Feedback</div>
+          <textarea class="feedback-box" data-template="tier_page.html" placeholder="Notes, bugs, visual issues..."></textarea>
+        </div></div>
+<footer>
+  <span>Feedback is client-side only — click Export to download JSON</span>
+  <button id="export-btn">Export Feedback JSON</button>
+</footer>
+<script>
+document.getElementById('export-btn').addEventListener('click',()=>{
+  const out={};
+  document.querySelectorAll('.feedback-box').forEach(t=>{if(t.value.trim())out[t.dataset.template]=t.value.trim()});
+  const blob=new Blob([JSON.stringify(out,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='qa-feedback-2026-04-24.json';a.click();
+});
+</script>
+</body>
+</html>

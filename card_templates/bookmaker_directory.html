@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+            padding: 2px;
+            box-sizing: content-box;
+        }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+        }
+        .header {
+            text-align: center;
+            padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .logo-img {
+            height: 32px;
+            width: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
+        }
+        .title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: 3px;
+        }
+        .bk-list {
+            padding: 6px 14px 14px;
+        }
+        .bk-row {
+            display: flex;
+            align-items: center;
+            padding: 14px 16px;
+            background: #1A1A1A;
+            border-radius: 10px;
+            border: 1px solid #2A2A2A;
+            border-left: 3px solid #F7931A;
+            margin-top: 8px;
+        }
+        .bk-badge {
+            font-size: 22px;
+            margin-right: 14px;
+            flex-shrink: 0;
+        }
+        .bk-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .bk-name {
+            font-size: 14px;
+            font-weight: 700;
+            color: #FFFFFF;
+        }
+        .bk-offer {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 3px;
+        }
+        .bk-domain {
+            font-size: 10px;
+            color: #F7931A;
+            margin-left: 12px;
+            flex-shrink: 0;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .footer {
+            text-align: center;
+            padding: 10px 20px 14px;
+            font-size: 9px;
+            color: #555555;
+            border-top: 1px solid #1E1E1E;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">BOOKMAKERS</div>
+    </div>
+    <div class="bk-list">
+        {% for bk in bookmakers %}
+        <div class="bk-row">
+            <span class="bk-badge">{{ bk.badge }}</span>
+            <div class="bk-info">
+                <div class="bk-name">{{ bk.name }}</div>
+                <div class="bk-offer">{{ bk.offer }}</div>
+            </div>
+            <span class="bk-domain">{{ bk.domain }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="footer">MzansiEdge earns a referral fee. Always bet responsibly.</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<!-- VARIANT: LIST -->
+<!-- BRIEF: BUILD-MY-TEAMS-CARD-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+        }
+        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+
+        .header {
+            text-align: center;
+            padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0A0806, #14100A);
+            border-bottom: 1px solid #1E1E1E;
+        }
+        .logo-img { height: 28px; width: auto; display: block; margin: 0 auto 10px; }
+        .logo-fallback { font-size: 13px; font-weight: 700; color: #F7931A; margin-bottom: 10px; }
+        .accent-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 0 20px 10px;
+            border-radius: 2px;
+        }
+        .header-label {
+            font-size: 11px; font-weight: 700; letter-spacing: 3px;
+            color: var(--text-secondary);
+        }
+
+        .body { padding: 16px 18px 8px; }
+
+        .sport-section { margin-bottom: 14px; }
+        .sport-section:last-child { margin-bottom: 6px; }
+
+        .sport-header {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin-bottom: 8px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #222222;
+        }
+        .sport-emoji { font-size: 14px; line-height: 1; }
+        .sport-name {
+            font-size: 11px; font-weight: 700; letter-spacing: 2px;
+            text-transform: uppercase; color: #FFFFFF;
+        }
+
+        .team-rows { display: flex; flex-direction: column; gap: 5px; }
+
+        .team-row {
+            background: #151515;
+            border: 1px solid #252525;
+            border-left: 3px solid #F7931A;
+            border-radius: 8px;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .team-name {
+            font-size: 13px; font-weight: 700; color: #FFFFFF;
+        }
+        .team-league {
+            font-size: 11px; color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        .empty-row {
+            background: #111111;
+            border: 1px dashed #2A2A2A;
+            border-radius: 8px;
+            padding: 10px 12px;
+            text-align: center;
+        }
+        .empty-text {
+            font-size: 12px; color: #555555; font-weight: 400;
+        }
+
+        .footer {
+            border-top: 1px solid #1A1A1A;
+            padding: 12px 18px 14px;
+            text-align: center;
+        }
+        .footer-text {
+            font-size: 11px; color: #555555; font-weight: 400;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge">
+        {% else %}
+        <div class="logo-fallback">MzansiEdge</div>
+        {% endif %}
+        <div class="accent-bar"></div>
+        <div class="header-label">🏆 MY TEAMS</div>
+    </div>
+
+    <div class="body">
+        {% if has_teams %}
+            {% for sport in teams_by_sport %}
+            <div class="sport-section">
+                <div class="sport-header">
+                    <span class="sport-emoji">{{ sport.sport_emoji }}</span>
+                    <span class="sport-name">{{ sport.sport_label }}</span>
+                </div>
+                <div class="team-rows">
+                    {% if sport.teams %}
+                        {% for team in sport.teams %}
+                        <div class="team-row">
+                            <span class="team-name">{{ team.name }}</span>
+                            {% if team.league %}
+                            <span class="team-league">{{ team.league }}</span>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                    <div class="empty-row">
+                        <span class="empty-text">No teams added</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            {% for sport in teams_by_sport %}
+            <div class="sport-section">
+                <div class="sport-header">
+                    <span class="sport-emoji">{{ sport.sport_emoji }}</span>
+                    <span class="sport-name">{{ sport.sport_label }}</span>
+                </div>
+                <div class="team-rows">
+                    <div class="empty-row">
+                        <span class="empty-text">No teams added</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+            {% if not teams_by_sport %}
+            <div class="empty-row" style="margin-bottom: 10px;">
+                <span class="empty-text">No favourite teams set yet.</span>
+            </div>
+            {% endif %}
+        {% endif %}
+    </div>
+
+    <div class="footer">
+        <div class="footer-text">Tap Edit below to update your teams</div>
+    </div>
+
+</div>
+</body>
+</html>

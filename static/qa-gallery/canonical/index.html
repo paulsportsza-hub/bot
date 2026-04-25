@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MzansiEdge — Canonical Design Gallery</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#0A0A0A;color:#E0E0E0;font-family:'Inter',-apple-system,system-ui,sans-serif;padding-bottom:60px;line-height:1.45}
+  header{background:#111;border-bottom:2px solid #FF6B00;padding:24px 28px;position:sticky;top:0;z-index:10}
+  header .badge{display:inline-block;background:linear-gradient(90deg,#FF6B00,#F7931A,#FFBE45);color:#0A0A0A;font-size:10px;font-weight:800;letter-spacing:1.5px;padding:3px 10px;border-radius:4px;margin-bottom:8px}
+  header h1{font-size:22px;font-weight:800;color:#FFF}
+  header h1 .accent{color:#F7931A}
+  header p{font-size:13px;color:#999;margin-top:6px;max-width:780px}
+  header p code{background:#1a1a1a;color:#F7931A;padding:1px 6px;border-radius:3px;font-size:12px;font-family:'JetBrains Mono',monospace}
+  header .links{margin-top:10px;font-size:12px;color:#666}
+  header .links a{color:#F7931A;text-decoration:none;margin-right:14px}
+  header .links a:hover{text-decoration:underline}
+
+  .workflow{background:#0F0F0F;border-bottom:1px solid #222;padding:16px 28px;font-size:12px;color:#888}
+  .workflow strong{color:#E0E0E0}
+  .workflow ol{margin:6px 0 0 22px;line-height:1.6}
+  .workflow code{background:#1a1a1a;color:#F7931A;padding:1px 5px;border-radius:3px;font-size:11px;font-family:'JetBrains Mono',monospace}
+
+  .legend{padding:12px 28px;font-size:11px;color:#777;border-bottom:1px solid #222;display:flex;gap:18px;flex-wrap:wrap}
+  .legend span{white-space:nowrap}
+
+  .status-section{padding:32px 28px 8px}
+  .status-section + .status-section{border-top:1px solid #1a1a1a}
+  .status-heading{font-size:13px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:18px}
+  .status-heading.canonical{color:#5DD68F}
+  .status-heading.in-review{color:#FFBE45}
+  .status-heading .count{color:#666;font-weight:600;letter-spacing:1px;margin-left:8px}
+
+  section.template-block{padding:0 0 32px;margin-bottom:32px;border-bottom:1px solid #1a1a1a}
+  section.template-block:last-of-type{border-bottom:none;margin-bottom:0}
+  .tpl-header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  .tpl-name{font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;color:#FFF}
+  .tpl-status{font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;letter-spacing:0.5px}
+  .tpl-status.canonical{background:#0E2A1A;color:#5DD68F;border:1px solid #1F4F33}
+  .tpl-status.in-review{background:#2A1F0E;color:#FFBE45;border:1px solid #5A4218}
+  .tpl-status.draft{background:#1A1A2A;color:#A0AEC0;border:1px solid #303045}
+  .tpl-status.rework{background:#2A0E0E;color:#EF4444;border:1px solid #5A1F1F}
+  .tpl-meta{font-size:11px;color:#666;font-family:'JetBrains Mono',monospace}
+  .tpl-summary{font-size:13px;color:#bbb;margin:6px 0 18px;max-width:880px}
+
+  .design-notes{background:#0F0F0F;border:1px solid #222;border-left:3px solid #F7931A;border-radius:6px;padding:12px 14px;margin-bottom:22px;font-size:12px;color:#bbb}
+  .design-notes h4{font-size:11px;color:#F7931A;letter-spacing:1px;text-transform:uppercase;font-weight:700;margin-bottom:6px}
+  .design-notes ul{margin-left:18px;line-height:1.6}
+  .design-notes li{margin-bottom:3px}
+  .design-notes code{background:#1a1a1a;color:#FFBE45;padding:1px 5px;border-radius:3px;font-size:11px;font-family:'JetBrains Mono',monospace}
+
+  .impl-targets{background:#0F0F0F;border:1px solid #222;border-left:3px solid #5DD68F;border-radius:6px;padding:12px 14px;margin-bottom:22px;font-size:12px;color:#bbb}
+  .impl-targets h4{font-size:11px;color:#5DD68F;letter-spacing:1px;text-transform:uppercase;font-weight:700;margin-bottom:6px}
+  .impl-targets ul{margin-left:18px;line-height:1.7}
+  .impl-targets li code{background:#1a1a1a;color:#F4F4F5;padding:1px 5px;border-radius:3px;font-size:11px;font-family:'JetBrains Mono',monospace}
+
+  .variants{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:20px}
+  .variant{background:#141414;border:1px solid #222;border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+  .variant-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#0F0F0F;border-bottom:1px solid #222}
+  .variant-name{font-size:12px;font-weight:700;color:#E0E0E0;font-family:'JetBrains Mono',monospace}
+  .variant-tag{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.6px}
+  .variant img{display:block;width:100%;height:auto}
+
+  /* Compact in-review grid: full template list at-a-glance */
+  .review-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:18px}
+  .review-card{background:#141414;border:1px solid #222;border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+  .review-card-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#0F0F0F;border-bottom:1px solid #222;gap:8px}
+  .review-card-name{font-size:12px;font-weight:700;color:#E0E0E0;font-family:'JetBrains Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .review-card-tag{font-size:9px;color:#FFBE45;text-transform:uppercase;letter-spacing:0.6px;border:1px solid #5A4218;border-radius:3px;padding:2px 6px;flex-shrink:0}
+  .review-card img{display:block;width:100%;height:auto}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="badge">Design Source of Truth</div>
+  <h1>MzansiEdge — <span class="accent">Canonical</span> Design Gallery</h1>
+  <p>
+    Paul + Claude iterate here until each card image is design-locked.
+    Downstream implementer agents are then tasked to make the live bot's
+    <code>card_templates/*.html</code> reproduce these PNGs cell-for-cell.
+    This page is hand-curated and survives every <code>generate_qa_gallery.py</code> regen.
+  </p>
+  <div class="links">
+    <a href="../latest/">Live gallery (auto-regenerated) →</a>
+    <a href="README.md">Workflow README →</a>
+  </div>
+</header>
+
+<div class="workflow">
+  <strong>Workflow:</strong>
+  <ol>
+    <li>Iterate on a draft template + sample data in <code>/tmp/</code> (zero touches to <code>card_templates/</code>).</li>
+    <li>Render via the live <code>card_renderer.render_card_sync</code> pipeline (in-memory loader patch).</li>
+    <li>Once Paul approves, drop the PNG into <code>canonical/&lt;template&gt;_&lt;variant&gt;.png</code> and promote the entry from 🔄 In review to ✅ Canonical.</li>
+    <li>Capture design notes + implementer targets inline in this <code>index.html</code>.</li>
+    <li>Dispatch a FIX brief: implementer makes <code>latest/&lt;template&gt;.png</code> match this canonical PNG.</li>
+  </ol>
+</div>
+
+<div class="legend">
+  <span><strong style="color:#5DD68F">✅ Canonical</strong> — design-locked, ready for implementation</span>
+  <span><strong style="color:#FFBE45">🔄 In review</strong> — current live behaviour, awaiting design lock</span>
+  <span><strong style="color:#A0AEC0">📝 Draft</strong> — Claude exploring options</span>
+  <span><strong style="color:#EF4444">⚠ Needs rework</strong> — constraint changed; re-iterate</span>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────────────── -->
+<!-- ✅ Canonical section                                                    -->
+<!-- ─────────────────────────────────────────────────────────────────────── -->
+
+<div class="status-section">
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(1 design-locked)</span></h2>
+
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">edge_picks_index_v1.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-25 · 5 iterations · INV-HOT-TIPS-A2-IMPL-DESIGN-01</span>
+    </div>
+    <p class="tpl-summary">
+      Edge Picks tier index card. Image-first surface sent on the <code>hot:go</code> callback.
+      Shows all four tiers (Diamond → Gold → Silver → Bronze) with live counts. Locked tiers
+      show 🔒 + "Upgrade to unlock"; unlocked tiers show a tier-coloured tick to the right of
+      the count. The user's highest-unlocked tier is highlighted as "★ Your default".
+      Five rendered states below — one PNG per (user_tier × locks) combination.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes (locked constraints)</h4>
+      <ul>
+        <li><strong>Header</strong> matches canonical <code>edge_picks.html</code> header:
+          <code>mzansiedge-wordmark-dark-transparent.png</code> at height 32px,
+          orange brand bar (3px gradient <code>#FF6B00→#F7931A→#FFBE45</code>),
+          "EDGE PICKS" title (white, letter-spacing 3px),
+          per-tier count strip <code>💎N · 🥇N · 🥈N · 🥉N — N edges today</code>
+          with each tier emoji+count colored by canonical <code>tier_color</code>.</li>
+        <li><strong>Tier rows</strong> in rank order: Diamond → Gold → Silver → Bronze.
+          Border-left 3px in <code>tier_color</code> for unlocked, neutral grey <code>#2A2A2A</code> for locked.</li>
+        <li><strong>Default highlight</strong> on user's highest unlocked tier:
+          gradient bg <code>linear-gradient(90deg, {tier_color}15 0%, #1A1A1A 60%)</code>
+          + orange <code>★ Your default</code> badge (<code>#F7931A</code>).</li>
+        <li><strong>Locked rows</strong>: medal emoji desaturated to <code>filter: grayscale(0.6); opacity: 0.55</code>,
+          background <code>#131313</code>, secondary text colour <code>#B3B3B3</code>, lock icon 🔒 on the right.</li>
+        <li><strong>Unlocked tick</strong>: SVG path <code>M4 12.5 L10 18.5 L20 6</code> at <code>stroke-width: 3.5</code>,
+          rounded caps + joins, <code>stroke="{tier.color}"</code>. 22×22 px box, sits to the right of the count block.</li>
+        <li><strong>Live count</strong> always vertically aligned: big number (<code>JetBrains Mono</code>, 22px, 700)
+          over small "LIVE" label (uppercase, 9px, letter-spaced). No emoji prefix on the count.</li>
+        <li><strong>Empty state</strong>: header strip shows zeros, body shows centred 🌙 +
+          "No live edges right now / Check back soon · we scan every 15 minutes". Tier rows dimmed to <code>opacity: 0.5</code>;
+          unlocked Bronze keeps its tier-colour tick (access semantics independent of count).</li>
+        <li><strong>Footer</strong>: <code>mzansiedge-micro-mark-e-transparent.png</code> at height 16px (right),
+          <code>mzansiedge.co.za · Bet responsibly · 18+</code> on the left.</li>
+        <li><strong>Banned</strong>: emoji prefix on the count, orange-gradient tick (only the brand bar uses gradient),
+          wordmark text fallback when the logo image is available.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>New template: <code>bot/card_templates/edge_picks_index.html</code> (lift from <code>/tmp/edge_picks_index_v1.html</code>; ≈ 260 LOC HTML + CSS)</li>
+        <li>New data builder: <code>bot/card_data.py</code> → <code>build_edge_picks_index_data(user_tier, tier_counts) -> dict</code> (≈ +95 LOC)</li>
+        <li>Handler swap: <code>bot/bot.py:_do_hot_tips_flow</code> at L12889 (warm) / L12944 (cold) / L13088 (stale-revalidate) — mark with <code># A2-INDEX-SWAP</code></li>
+        <li>New callbacks: <code>hot:tier:{bronze|silver|gold|diamond}</code> at <code>bot.py</code> ~L1935 (≈ +60 LOC)</li>
+        <li>Gating: call <code>tier_gate.get_edge_access_level(user_tier, edge_tier)</code> per tier — do not duplicate gate logic</li>
+        <li>Kill switch: <code>HOT_TIPS_INDEX_ENABLED</code> env flag → falls back to <code>_do_hot_tips_flow_legacy</code></li>
+        <li>Contract tests: <code>tests/contracts/test_edge_picks_index_render.py</code>, <code>test_hot_tier_callback_routing.py</code>, <code>test_locked_tier_button_routes_to_upgrade.py</code> (5 + 5 + 12 cases)</li>
+        <li>Acceptance: <code>latest/edge_picks_index.png</code> (variant matrix) byte-equivalent to the canonical PNGs below within OCR tolerance</li>
+        <li>Ship order: <strong>after</strong> FIX-HOT-TIPS-TIER-COVERAGE-01 has soaked 24–48h</li>
+        <li>Reference: <code>~/reports/INV-HOT-TIPS-A2-IMPL-DESIGN-01-orchestrator.md</code> + Notion brief <code>34dd9048d73c81f1a72af81ef4cf48f2</code></li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant">
+        <div class="variant-header"><span class="variant-name">edge_picks_index_bronze.png</span><span class="variant-tag">Bronze user</span></div>
+        <img src="edge_picks_index_bronze.png" alt="Edge Picks tier index — Bronze user">
+      </div>
+      <div class="variant">
+        <div class="variant-header"><span class="variant-name">edge_picks_index_silver.png</span><span class="variant-tag">Silver user</span></div>
+        <img src="edge_picks_index_silver.png" alt="Edge Picks tier index — Silver user">
+      </div>
+      <div class="variant">
+        <div class="variant-header"><span class="variant-name">edge_picks_index_gold.png</span><span class="variant-tag">Gold user</span></div>
+        <img src="edge_picks_index_gold.png" alt="Edge Picks tier index — Gold user">
+      </div>
+      <div class="variant">
+        <div class="variant-header"><span class="variant-name">edge_picks_index_diamond.png</span><span class="variant-tag">Diamond user</span></div>
+        <img src="edge_picks_index_diamond.png" alt="Edge Picks tier index — Diamond user">
+      </div>
+      <div class="variant">
+        <div class="variant-header"><span class="variant-name">edge_picks_index_empty.png</span><span class="variant-tag">Empty state</span></div>
+        <img src="edge_picks_index_empty.png" alt="Edge Picks tier index — Empty state">
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────────────── -->
+<!-- 🔄 In review section — every live bot image (51 templates)              -->
+<!-- ─────────────────────────────────────────────────────────────────────── -->
+
+<div class="status-section">
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(51 live bot renders — awaiting design lock)</span></h2>
+
+  <div class="review-grid">
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">ai_breakdown.html</span><span class="review-card-tag">In review</span></div><img src="ai_breakdown.png" alt="ai_breakdown.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">bookmaker_directory.html</span><span class="review-card-tag">In review</span></div><img src="bookmaker_directory.png" alt="bookmaker_directory.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">edge_detail.html</span><span class="review-card-tag">In review</span></div><img src="edge_detail.png" alt="edge_detail.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">edge_picks.html</span><span class="review-card-tag">In review</span></div><img src="edge_picks.png" alt="edge_picks.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">edge_summary.html</span><span class="review-card-tag">In review</span></div><img src="edge_summary.png" alt="edge_summary.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">help.html</span><span class="review-card-tag">In review</span></div><img src="help.png" alt="help.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">home_winners.html</span><span class="review-card-tag">In review</span></div><img src="home_winners.png" alt="home_winners.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">match_detail.html</span><span class="review-card-tag">In review</span></div><img src="match_detail.png" alt="match_detail.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">my_matches.html</span><span class="review-card-tag">In review</span></div><img src="my_matches.png" alt="my_matches.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">my_teams.html</span><span class="review-card-tag">In review</span></div><img src="my_teams.png" alt="my_teams.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_bankroll.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_bankroll.png" alt="onboarding_bankroll.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_bankroll_custom.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_bankroll_custom.png" alt="onboarding_bankroll_custom.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_done.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_done.png" alt="onboarding_done.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_edge_explainer.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_edge_explainer.png" alt="onboarding_edge_explainer.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_experience.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_experience.png" alt="onboarding_experience.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_favourites.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_favourites.png" alt="onboarding_favourites.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_favourites_manual.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_favourites_manual.png" alt="onboarding_favourites_manual.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_fuzzy_suggest.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_fuzzy_suggest.png" alt="onboarding_fuzzy_suggest.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_notify.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_notify.png" alt="onboarding_notify.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_restart.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_restart.png" alt="onboarding_restart.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_risk.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_risk.png" alt="onboarding_risk.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_sports.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_sports.png" alt="onboarding_sports.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_summary.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_summary.png" alt="onboarding_summary.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_team_celebration.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_team_celebration.png" alt="onboarding_team_celebration.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_welcome.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_welcome.png" alt="onboarding_welcome.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">profile_home.html</span><span class="review-card-tag">In review</span></div><img src="profile_home.png" alt="profile_home.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">settings_sports.html</span><span class="review-card-tag">In review</span></div><img src="settings_sports.png" alt="settings_sports.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_complete.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_complete.png" alt="story_quiz_complete.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_step.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_step.png" alt="story_quiz_step.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_billing_active.html</span><span class="review-card-tag">In review</span></div><img src="sub_billing_active.png" alt="sub_billing_active.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_billing_inactive.html</span><span class="review-card-tag">In review</span></div><img src="sub_billing_inactive.png" alt="sub_billing_inactive.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_confirm.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_confirm.png" alt="sub_cancel_confirm.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_done.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_done.png" alt="sub_cancel_done.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_email_redirect.html</span><span class="review-card-tag">In review</span></div><img src="sub_email_redirect.png" alt="sub_email_redirect.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_expiry_notice.html</span><span class="review-card-tag">In review</span></div><img src="sub_expiry_notice.png" alt="sub_expiry_notice.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_confirmed.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_confirmed.png" alt="sub_founding_confirmed.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_ended.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_ended.png" alt="sub_founding_ended.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_live.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_live.png" alt="sub_founding_live.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_soldout.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_soldout.png" alt="sub_founding_soldout.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_payment_confirmed.html</span><span class="review-card-tag">In review</span></div><img src="sub_payment_confirmed.png" alt="sub_payment_confirmed.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_payment_error.html</span><span class="review-card-tag">In review</span></div><img src="sub_payment_error.png" alt="sub_payment_error.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_payment_ready.html</span><span class="review-card-tag">In review</span></div><img src="sub_payment_ready.png" alt="sub_payment_ready.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_plans.html</span><span class="review-card-tag">In review</span></div><img src="sub_plans.png" alt="sub_plans.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_active.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_active.png" alt="sub_status_active.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_bronze.png" alt="sub_status_bronze.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_trial_expiry.html</span><span class="review-card-tag">In review</span></div><img src="sub_trial_expiry.png" alt="sub_trial_expiry.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_bronze.png" alt="sub_upgrade_bronze.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_diamond_max.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_diamond_max.png" alt="sub_upgrade_diamond_max.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_gold.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_gold.png" alt="sub_upgrade_gold.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">tier_lock_upsell.html</span><span class="review-card-tag">In review</span></div><img src="tier_lock_upsell.png" alt="tier_lock_upsell.html"></div>
+    <div class="review-card"><div class="review-card-header"><span class="review-card-name">tier_page.html</span><span class="review-card-tag">In review</span></div><img src="tier_page.png" alt="tier_page.html"></div>
+  </div>
+</div>
+
+</body>
+</html>
