@@ -2719,6 +2719,10 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             match_key = _resolve_cb_key(_raw_cb_key)
             _sentry_user(user_id)
             _sentry_tags(flow="edge_detail", route="edge:detail", match_id=match_key)
+            try:
+                await query.answer("⏳ Loading…", show_alert=False)
+            except Exception:
+                pass
 
             from edge_detail_renderer import render_edge_detail
 
@@ -4303,6 +4307,11 @@ async def handle_menu(query, action: str) -> None:
         # Welcome screen "View Edge of The Day" — serves the real edge_detail.html card
         # via the same ep:pick path (enrich → build_edge_detail_data → template).
         user_id = query.from_user.id
+        await query.answer()
+        try:
+            await query.message.edit_caption("⏳ Loading your Edge of The Day…")
+        except Exception:
+            pass
         _wp = await asyncio.to_thread(_load_welcome_pick)
         if not _wp:
             await _do_hot_tips_flow(query.message.chat_id, _g_bot, user_id=user_id)
