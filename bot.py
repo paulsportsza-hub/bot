@@ -3888,12 +3888,71 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             match_key = _resolve_cb_key(action[len("breakdown:"):])
             await _handle_ai_breakdown(query, ctx, match_key)
         elif action.startswith("breakdown_gate:"):
-            # query.answer() already consumed by on_button — use reply_text (same pattern as _handle_ai_breakdown)
-            await query.message.reply_text(
-                "💎 <b>Full AI Breakdown</b> is exclusive to Diamond members.\n\n"
-                "Upgrade to unlock: /subscribe",
-                parse_mode="HTML",
-            )
+            # FIX-TIER-TEXT-SWEEP-01: serve tier_lock_upsell card instead of plain text.
+            # Mirrors pick_lock canonical handler (~L4292) and _handle_ai_breakdown back-cache pattern.
+            _bg_match_key = _resolve_cb_key(action[len("breakdown_gate:"):])
+            # Capture the current detail card so ↩️ Back can restore it without re-render.
+            _bg_detail_file_id = ""
+            _bg_detail_markup = None
+            try:
+                if query.message and query.message.photo:
+                    _bg_detail_file_id = query.message.photo[-1].file_id
+                    _bg_detail_markup = query.message.reply_markup
+            except Exception:
+                pass
+
+            _bg_tip = await asyncio.to_thread(_load_edge_tip_by_key, _bg_match_key)
+            import re as _re_bg
+            _bg_mk_nd = _re_bg.sub(r"_\d{4}-\d{2}-\d{2}$", "", _bg_match_key)
+            if "_vs_" in _bg_mk_nd:
+                _bg_h_slug, _bg_a_slug = _bg_mk_nd.split("_vs_", 1)
+            else:
+                _bg_h_slug = _bg_a_slug = _bg_mk_nd
+            _bg_home = _display_team_name(_bg_h_slug)
+            _bg_away = _display_team_name(_bg_a_slug)
+            _bg_signals = int((_bg_tip or {}).get("confirming_signals") or 0)
+            _bg_back_cb = f"edge:breakdown_back:{_shorten_cb_key(_bg_match_key, max_len=64 - len('edge:breakdown_back:'))}"
+            try:
+                from card_pipeline import build_tier_lock_data as _build_bg_lock
+                _bg_lock_data = _build_bg_lock(
+                    edge_tier="diamond",
+                    home=_bg_home,
+                    away=_bg_away,
+                    sport_key=(_bg_tip or {}).get("sport", ""),
+                    league=(_bg_tip or {}).get("league", ""),
+                    kickoff_str="",
+                    broadcast="",
+                    confirming_signals=_bg_signals,
+                    tracker_summary=None,
+                )
+                _bg_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        "💎 Unlock Diamond — from R199/mo",
+                        callback_data="sub:plans",
+                    )],
+                    [InlineKeyboardButton("↩️ Back", callback_data=_bg_back_cb)],
+                ])
+                # Persist detail card state so breakdown_back can restore it verbatim.
+                if _bg_detail_file_id and _bg_detail_markup:
+                    _breakdown_back_cache[(user_id, _bg_match_key)] = (_bg_detail_file_id, _bg_detail_markup)
+                await send_card_or_fallback(
+                    bot=_g_bot,
+                    chat_id=query.message.chat_id,
+                    template="tier_lock_upsell.html",
+                    data=_bg_lock_data,
+                    text_fallback="🔒 Diamond Edge — upgrade to unlock.",
+                    markup=_bg_markup,
+                    message_to_edit=query.message,
+                )
+            except Exception as _bg_lock_err:
+                log.warning("breakdown_gate upsell failed for %s: %s", _bg_match_key, _bg_lock_err)
+                await _serve_response(
+                    query, "🔒 Diamond Edge — upgrade to unlock.",
+                    InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+                        [InlineKeyboardButton("↩️ Back", callback_data=_bg_back_cb)],
+                    ]),
+                )
         elif action.startswith("breakdown_back:"):
             # Restore the exact detail card captured when breakdown was opened.
             # Uses Telegram file_id to re-deliver the same PNG without re-rendering.
@@ -23093,12 +23152,67 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
     user_id = query.from_user.id
 
     # Server-side tier gate (double-check — button only shown to diamond users)
+    # FIX-TIER-TEXT-SWEEP-01: deliver tier_lock_upsell card, never plain text.
     tier = await get_effective_tier(user_id)
     if tier != "diamond":
-        await query.message.reply_text(
-            "💎 Full AI Breakdown is available to Diamond members only. "
-            "Tap /subscribe to upgrade."
-        )
+        _abg_tip = await asyncio.to_thread(_load_edge_tip_by_key, match_key)
+        import re as _re_abg
+        _abg_mk_nd = _re_abg.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_key)
+        if "_vs_" in _abg_mk_nd:
+            _abg_h_slug, _abg_a_slug = _abg_mk_nd.split("_vs_", 1)
+        else:
+            _abg_h_slug = _abg_a_slug = _abg_mk_nd
+        _abg_home = _display_team_name(_abg_h_slug)
+        _abg_away = _display_team_name(_abg_a_slug)
+        _abg_signals = int((_abg_tip or {}).get("confirming_signals") or 0)
+        _abg_back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
+        try:
+            from card_pipeline import build_tier_lock_data as _build_abg_lock
+            _abg_lock_data = _build_abg_lock(
+                edge_tier="diamond",
+                home=_abg_home,
+                away=_abg_away,
+                sport_key=(_abg_tip or {}).get("sport", ""),
+                league=(_abg_tip or {}).get("league", ""),
+                kickoff_str="",
+                broadcast="",
+                confirming_signals=_abg_signals,
+                tracker_summary=None,
+            )
+            _abg_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "💎 Unlock Diamond — from R199/mo",
+                    callback_data="sub:plans",
+                )],
+                [InlineKeyboardButton("↩️ Back", callback_data=_abg_back_cb)],
+            ])
+            # Capture detail card so breakdown_back restores it verbatim.
+            try:
+                if query.message and query.message.photo:
+                    _breakdown_back_cache[(user_id, match_key)] = (
+                        query.message.photo[-1].file_id,
+                        query.message.reply_markup,
+                    )
+            except Exception:
+                pass
+            await send_card_or_fallback(
+                bot=query.get_bot(),
+                chat_id=query.message.chat_id,
+                template="tier_lock_upsell.html",
+                data=_abg_lock_data,
+                text_fallback="🔒 Diamond Edge — upgrade to unlock.",
+                markup=_abg_markup,
+                message_to_edit=query.message,
+            )
+        except Exception as _abg_lock_err:
+            log.warning("_handle_ai_breakdown lock card failed for %s: %s", match_key, _abg_lock_err)
+            await _serve_response(
+                query, "🔒 Diamond Edge — upgrade to unlock.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+                    [InlineKeyboardButton("↩️ Back", callback_data=_abg_back_cb)],
+                ]),
+            )
         return
 
     # Capture the current detail card (photo file_id + markup) BEFORE replacing the
@@ -23647,27 +23761,47 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
         from tier_gate import get_edge_access_level as _oc_access_fn
         _oc_access = _oc_access_fn(_oc_user_tier, _oc_edge_tier)
         if _oc_access != "full":
-            _oc_gate_text = "🔒 <b>Odds comparison requires a higher tier.</b>\n\n/subscribe — View plans"
-            if query.message.photo:
-                _oc_gate_cid = query.message.chat_id
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                await query.get_bot().send_message(
-                    chat_id=_oc_gate_cid, text=_oc_gate_text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
-                        [InlineKeyboardButton("↩️ Back", callback_data=f"yg:game:{event_id}")],
-                    ]),
+            # FIX-TIER-TEXT-SWEEP-01: deliver tier_lock_upsell card, never plain text.
+            _oc_tip = tips[0]
+            _oc_signals = int(_oc_tip.get("confirming_signals") or 0)
+            _oc_tier_emoji = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}.get(_oc_edge_tier, "🔒")
+            _oc_back_cb = f"yg:game:{event_id}"
+            try:
+                from card_pipeline import build_tier_lock_data as _build_oc_lock
+                _oc_lock_data = _build_oc_lock(
+                    edge_tier=_oc_edge_tier,
+                    home=_oc_tip.get("home_team", "") or "",
+                    away=_oc_tip.get("away_team", "") or "",
+                    sport_key=_oc_tip.get("sport", "") or "",
+                    league=_oc_tip.get("league", "") or "",
+                    kickoff_str="",
+                    broadcast="",
+                    confirming_signals=_oc_signals,
+                    tracker_summary=None,
                 )
-            else:
-                await query.edit_message_text(
-                    _oc_gate_text, parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
-                        [InlineKeyboardButton("↩️ Back", callback_data=f"yg:game:{event_id}")],
+                _oc_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        f"{_oc_tier_emoji} Unlock {_oc_edge_tier.title()} — from R199/mo",
+                        callback_data="sub:plans",
+                    )],
+                    [InlineKeyboardButton("↩️ Back", callback_data=_oc_back_cb)],
+                ])
+                await send_card_or_fallback(
+                    bot=query.get_bot(),
+                    chat_id=query.message.chat_id,
+                    template="tier_lock_upsell.html",
+                    data=_oc_lock_data,
+                    text_fallback=f"🔒 {_oc_edge_tier.title()} Edge — upgrade to unlock.",
+                    markup=_oc_markup,
+                    message_to_edit=query.message,
+                )
+            except Exception as _oc_lock_err:
+                log.warning("odds_comparison lock card failed for %s: %s", event_id, _oc_lock_err)
+                await _serve_response(
+                    query, f"🔒 {_oc_edge_tier.title()} Edge — upgrade to unlock.",
+                    InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+                        [InlineKeyboardButton("↩️ Back", callback_data=_oc_back_cb)],
                     ]),
                 )
             return
