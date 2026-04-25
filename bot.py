@@ -29731,16 +29731,67 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             # BUILD-EDGE-DETAIL-PRERENDER-01: Prerender edge_detail.html for top 20 tips.
             # One render per match covers all users — build_edge_detail_data contains no
             # user_tier, so the cache key is match-specific and shared across all tiers.
+            # Mirrors _build_hot_tips_page (line 12656-12692) _bc_kickoff / pick mutations
+            # so the rendered data hash equals the user-tap data hash → cache HIT on first tap.
             _detail_tips = _prerender_tips[:20] if _prerender_tips else []
             if _detail_tips:
                 _det_start = _t.time()
                 _det_count = 0
+                _det_bc_raw = await asyncio.gather(*[
+                    asyncio.wait_for(
+                        asyncio.to_thread(
+                            _get_broadcast_details,
+                            home_team=_display_team_name(_dtip.get("home_team") or ""),
+                            away_team=_display_team_name(_dtip.get("away_team") or ""),
+                            league_key=_dtip.get("league_key", ""),
+                        ),
+                        timeout=2.0,
+                    )
+                    for _dtip in _detail_tips
+                ], return_exceptions=True)
+                _det_bc_infos = [
+                    bc if isinstance(bc, dict) else {"broadcast": "", "kickoff": ""}
+                    for bc in _det_bc_raw
+                ]
+                import re as _re_dpr
+                from datetime import datetime as _dt_dpr, timedelta as _td_dpr
+                from zoneinfo import ZoneInfo as _ZI_dpr
+                _today_dpr = _dt_dpr.now(_ZI_dpr(config.TZ)).date()
+                for _idx, _dtip in enumerate(_detail_tips):
+                    if not _dtip.get("_bc_kickoff"):
+                        _ko = ""
+                        if _dtip.get("commence_time"):
+                            _ko = _format_kickoff_display(_dtip["commence_time"])
+                        if not _ko:
+                            _ko = _det_bc_infos[_idx].get("kickoff", "")
+                        if not _ko:
+                            _date_m = _re_dpr.search(
+                                r"(\d{4}-\d{2}-\d{2})$",
+                                _dtip.get("match_id") or _dtip.get("event_id") or "",
+                            )
+                            if _date_m:
+                                try:
+                                    _md = _dt_dpr.strptime(_date_m.group(1), "%Y-%m-%d").date()
+                                    if _md == _today_dpr:
+                                        _ko = "Today"
+                                    elif _md == _today_dpr + _td_dpr(days=1):
+                                        _ko = "Tomorrow"
+                                    else:
+                                        _ko = _md.strftime("%a %d %b")
+                                except Exception:
+                                    pass
+                        _dtip["_bc_kickoff"] = _ko
+                        _dtip["_bc_broadcast"] = ""
+                    if not _dtip.get("pick"):
+                        _dtip["pick"] = _dtip.get("outcome") or _dtip.get("home_team") or ""
+
+                _detail_sem = asyncio.Semaphore(3)
 
                 async def _prerender_detail_card(_tip: dict) -> bool:
                     _mk = _tip.get("match_id", "")
                     if not _mk:
                         return False
-                    async with _evidence_sem:
+                    async with _detail_sem:
                         try:
                             _enr = await asyncio.to_thread(_enrich_tip_for_card, _tip, _mk)
                             _dd = build_edge_detail_data(_enr)
