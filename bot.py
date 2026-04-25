@@ -16347,6 +16347,85 @@ def _find_stale_setup_patterns(narrative: str) -> list[str]:
     return list(dict.fromkeys(reasons))
 
 
+# FIX-PREGEN-SETUP-PRICING-LEAK-02: polish-time STRICT BAN enforcer.
+# Catches violations the cache-read detector _find_stale_setup_patterns misses:
+# integer-percentage probabilities, isolated banned tokens (e.g. "implied" without
+# a proximate decimal), and Elo-implied phrasing. Used by _validate_polish gate 8a.
+# Locked at this site — see CLAUDE.md Narrative Generation Pipeline Rule 8.
+_SETUP_STRICT_BAN_TOKENS = (
+    "bookmaker",
+    "odds",
+    "price",
+    "priced",
+    "implied",
+    "implied probability",
+    "implied chance",
+    "fair probability",
+    "fair value",
+    "expected value",
+    "model reads",
+)
+_SETUP_STRICT_BAN_TOKEN_RES = tuple(
+    re.compile(rf"\b{re.escape(_token)}\b", re.IGNORECASE)
+    for _token in _SETUP_STRICT_BAN_TOKENS
+)
+_SETUP_STRICT_BAN_DECIMAL_RE = re.compile(r"\b\d+\.\d{1,2}%?")
+_SETUP_STRICT_BAN_METRIC_TAIL_RE = re.compile(
+    r"\s+(?:goals?|points?|runs?)\s+per\s+game\b", re.IGNORECASE
+)
+_SETUP_STRICT_BAN_INTEGER_PROB_RES = (
+    re.compile(r"\b\d{1,2}%\s*(?:home|away|draw)?\s*(?:win\s+)?probability\b", re.IGNORECASE),
+    re.compile(r"\bprobability\s+(?:of|at)\s+(?:just\s+)?\d{1,2}%", re.IGNORECASE),
+    re.compile(r"\belo[-\s]implied\b", re.IGNORECASE),
+    re.compile(r"\b\d{1,2}%[-\s]implied\b", re.IGNORECASE),
+)
+
+
+def _find_setup_strict_ban_violations(narrative: str) -> list[str]:
+    """Polish-time STRICT BAN enforcer for The Setup section.
+
+    Returns a list of `'reason:value'` strings (e.g. `'banned_token:implied'`,
+    `'integer_probability:30% probability'`) or `[]` when Setup is clean.
+
+    NOT used at cache-read — do not change `_find_stale_setup_patterns`
+    invocations. This helper is wired into `_validate_polish` gate 8a only.
+    """
+    setup = _extract_setup_section(narrative)
+    if not setup:
+        return []
+
+    setup_plain = re.sub(r"<[^>]+>", " ", setup)
+    setup_plain = re.sub(r"\s+", " ", setup_plain).strip()
+    reasons: list[str] = []
+
+    # (a) Banned-token check — word-boundary regex over the 11 locked tokens.
+    seen_tokens: set[str] = set()
+    for token, token_re in zip(_SETUP_STRICT_BAN_TOKENS, _SETUP_STRICT_BAN_TOKEN_RES):
+        if token in seen_tokens:
+            continue
+        if token_re.search(setup_plain):
+            reasons.append(f"banned_token:{token}")
+            seen_tokens.add(token)
+
+    # (b) Decimal-probability check — exclude matches inside metric-phrase windows
+    #     ("X.X goals per game", "X.X points per game", "X.X runs per game").
+    for match in _SETUP_STRICT_BAN_DECIMAL_RE.finditer(setup_plain):
+        tail = setup_plain[match.end() : match.end() + 30]
+        if _SETUP_STRICT_BAN_METRIC_TAIL_RE.match(tail):
+            continue
+        reasons.append(f"decimal_probability:{match.group(0)}")
+
+    # (c) Integer-probability check — catches "X% probability", "probability of X%",
+    #     "Elo-implied", "X%-implied". These are pricing claims that don't carry
+    #     decimal points so the cache-read detector can't see them.
+    for prob_re in _SETUP_STRICT_BAN_INTEGER_PROB_RES:
+        for match in prob_re.finditer(setup_plain):
+            reasons.append(f"integer_probability:{match.group(0)}")
+
+    # Preserve reason order while collapsing exact-string duplicates.
+    return list(dict.fromkeys(reasons))
+
+
 def _extract_rendered_h2h_summary(narrative: str) -> str:
     """Return the rendered H2H summary body without its leading label."""
     if not narrative:
@@ -20120,15 +20199,24 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
         log.warning("POLISH REJECT: quality violations %s", violations)
         return False
 
-    # 8a. FIX-PREGEN-SETUP-PRICING-LEAK-01: defensive Setup-pricing gate.
-    # Mirror the cache-read absolute-ban detector (_find_stale_setup_patterns) at polish
-    # time so leaks are caught before persistence rather than after a DELETE round-trip.
-    # The Setup section must not contain odds/bookmaker/decimal-probability vocabulary —
-    # see CLAUDE.md Narrative Generation Pipeline Rule 8.
+    # 8a. FIX-PREGEN-SETUP-PRICING-LEAK-01 / -02: defensive Setup-pricing gate.
+    # Two helpers run side-by-side:
+    #   - _find_stale_setup_patterns mirrors the cache-read absolute-ban detector
+    #     (decimal + price-context). Catches "implied probability of 0.85"-style leaks.
+    #   - _find_setup_strict_ban_violations (FIX-02) catches integer-percentage
+    #     probabilities, isolated banned tokens, and Elo-implied phrasing — the
+    #     gap surfaced post-FIX-01 on everton_vs_manchester_city_2026-05-04.
+    # See CLAUDE.md Narrative Generation Pipeline Rule 8.
     _setup_leak_reasons = _find_stale_setup_patterns(polished)
     if _setup_leak_reasons:
         log.warning(
             "POLISH REJECT: Setup-pricing leak (%s)", ", ".join(_setup_leak_reasons)
+        )
+        return False
+    _setup_strict_reasons = _find_setup_strict_ban_violations(polished)
+    if _setup_strict_reasons:
+        log.warning(
+            "POLISH REJECT: Setup-strict-ban (%s)", ", ".join(_setup_strict_reasons)
         )
         return False
 
