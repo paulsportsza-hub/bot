@@ -29,11 +29,9 @@
             padding: 8px 16px;
             display: flex; align-items: center;
             justify-content: space-between; gap: 10px;
-            background: linear-gradient(90deg, #FF6B00, #F7931A);
-            border-bottom: 1px solid #FF6B0040;
             flex-shrink: 0;
         }
-        .logo-img { height: 24px; width: auto; flex-shrink: 0; }
+        .logo-img { height: 26px; width: auto; flex-shrink: 0; }
         .logo-fallback {
             font-size: 16px; font-weight: 800; letter-spacing: 0.1em;
             color: #FFFFFF; flex-shrink: 0;
@@ -194,7 +192,7 @@
 <div class="card">
 
     <!-- ── 1. Header ── -->
-    <div class="header">
+    <div class="header" style="background: linear-gradient(90deg, {{ tier_colour }}08, #0A0A0A); border-bottom: 1px solid {{ tier_colour }}20;">
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
