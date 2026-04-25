@@ -16502,6 +16502,85 @@ def _find_risk_resolution_violations(narrative: str) -> list[str]:
     return reasons
 
 
+_RATING_NUMBER_RE = re.compile(r"\b([12]\d{3})(?:\.\d{1,2})?\b")  # 4-digit rating space
+_RATING_TOLERANCE = 2.0  # ±2 points absolute
+
+
+def _find_rating_anchor_violations(
+    narrative: str,
+    team_ratings: "dict | None",
+) -> list[str]:
+    """Polish-time rating-anchor enforcer (FIX-NARRATIVE-RATING-ANCHOR-01).
+
+    Extracts every 4-digit rating mention (1000–2999) from the narrative and
+    cross-references against team_ratings.{home,away}.{glicko2,elo}. Returns:
+      - 'no_team_ratings_anchor' if ratings cited but no anchor provided.
+      - 'fabricated_rating:<n>' if a cited number is >2 pts off all anchors.
+      - 'fabricated_gap:<n>' if a cited rating gap exceeds actual by >2 pts.
+    """
+    if not narrative:
+        return []
+    plain = re.sub(r"<[^>]+>", " ", narrative)
+    plain = re.sub(r"\s+", " ", plain).strip()
+
+    mentioned: list[float] = []
+    for m in _RATING_NUMBER_RE.finditer(plain):
+        try:
+            n = float(m.group(0))
+            if 1000.0 <= n <= 2999.0:
+                mentioned.append(n)
+        except ValueError:
+            continue
+
+    if not mentioned:
+        return []
+
+    if not team_ratings:
+        return ["no_team_ratings_anchor"]
+
+    anchors: list[float] = []
+    for side in ("home", "away"):
+        side_ratings = team_ratings.get(side, {}) or {}
+        for key in ("glicko2", "elo"):
+            v = side_ratings.get(key)
+            if isinstance(v, (int, float)):
+                anchors.append(float(v))
+
+    if not anchors:
+        return ["no_team_ratings_anchor"]
+
+    reasons: list[str] = []
+    for n in mentioned:
+        if all(abs(n - a) > _RATING_TOLERANCE for a in anchors):
+            reasons.append(f"fabricated_rating:{n:g}")
+
+    _gap_re = re.compile(
+        r"\b(\d{2,4})[-\s]*(?:point|rating)?[-\s]*(?:chasm|gap|gulf|differential)\b",
+        re.IGNORECASE,
+    )
+    for m in _gap_re.finditer(plain):
+        try:
+            cited_gap = abs(float(m.group(1)))
+        except ValueError:
+            continue
+        if cited_gap < 50 or cited_gap > 1000:
+            continue
+        home_anchor = max(
+            (team_ratings.get("home", {}) or {}).get("glicko2", 0),
+            (team_ratings.get("home", {}) or {}).get("elo", 0),
+        )
+        away_anchor = max(
+            (team_ratings.get("away", {}) or {}).get("glicko2", 0),
+            (team_ratings.get("away", {}) or {}).get("elo", 0),
+        )
+        if home_anchor > 0 and away_anchor > 0:
+            actual_gap = abs(home_anchor - away_anchor)
+            if abs(cited_gap - actual_gap) > _RATING_TOLERANCE:
+                reasons.append(f"fabricated_gap:{cited_gap:.0f}")
+
+    return list(dict.fromkeys(reasons))
+
+
 def _extract_rendered_h2h_summary(narrative: str) -> str:
     """Return the rendered H2H summary body without its leading label."""
     if not narrative:
@@ -20201,10 +20280,11 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
     )
 
 
-def _validate_polish(polished: str, baseline: str, spec) -> bool:
+def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | None" = None) -> bool:
     """Validate polished output against NarrativeSpec constraints.
 
     W82-POLISH: returns True if polish is safe to serve; False = serve baseline.
+    evidence_pack: serialised evidence dict — provides team_ratings for gate 8d.
     """
     from narrative_spec import TONE_BANDS
     band = TONE_BANDS[spec.tone_band]
@@ -20302,6 +20382,14 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
         log.warning(
             "POLISH REJECT: risk-resolution (%s)", ", ".join(_risk_resolution_reasons)
         )
+        return False
+
+    # 8d. FIX-NARRATIVE-RATING-ANCHOR-01: Rating numbers must match evidence pack.
+    _rating_reasons = _find_rating_anchor_violations(
+        polished, evidence_pack.get("team_ratings") if evidence_pack else None
+    )
+    if _rating_reasons:
+        log.warning("POLISH REJECT: rating-anchor (%s)", ", ".join(_rating_reasons))
         return False
 
     # 8b. BUILD-VERDICT-FLOOR-01: verdict section length gate [140, 200]

@@ -1698,6 +1698,75 @@ def _format_elo_section(pack: EvidencePack) -> tuple[str | None, str | None]:
         return None, "ELO RATINGS: Elo lookup failed."
 
 
+def _build_team_ratings_anchor(home_key: str, away_key: str, sport: str) -> dict:
+    """Read team_ratings (Glicko-2) + elo_ratings for both teams.
+
+    Returns {home: {glicko2, elo, as_of}, away: {...}}.
+    Missing teams return {} for that side — prompt tells Sonnet to omit ratings then.
+    """
+    result: dict = {"home": {}, "away": {}}
+    if not home_key or not away_key:
+        return result
+    try:
+        from scrapers.db_connect import connect_odds_db_readonly
+        conn = connect_odds_db_readonly(ODDS_DB, timeout=1.0)
+        try:
+            for side, key in (("home", home_key), ("away", away_key)):
+                g2_row = conn.execute(
+                    "SELECT mu, last_updated FROM team_ratings WHERE team_name = ? AND sport = ?",
+                    (key, sport),
+                ).fetchone()
+                elo_row = conn.execute(
+                    "SELECT rating FROM elo_ratings WHERE team = ? AND sport = ?",
+                    (key, sport),
+                ).fetchone()
+                entry: dict = {}
+                if g2_row:
+                    entry["glicko2"] = round(float(g2_row[0]), 1)
+                    entry["as_of"] = str(g2_row[1] or "")
+                if elo_row:
+                    entry["elo"] = round(float(elo_row[0]), 0)
+                result[side] = entry
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return result
+
+
+def _format_team_ratings_section(pack: EvidencePack) -> tuple[str | None, str | None]:
+    """FIX-NARRATIVE-RATING-ANCHOR-01: provide exact match-specific rating anchor."""
+    try:
+        home_key = pack.match_key.split("_vs_")[0] if "_vs_" in pack.match_key else ""
+        away_key = pack.match_key.split("_vs_")[1].rsplit("_", 1)[0] if "_vs_" in pack.match_key else ""
+        anchor = _build_team_ratings_anchor(home_key, away_key, pack.sport)
+        lines = []
+        for side in ("home", "away"):
+            entry = anchor.get(side, {})
+            if not entry:
+                continue
+            label = side.capitalize()
+            parts = []
+            if "glicko2" in entry:
+                parts.append(f"Glicko-2: {entry['glicko2']}")
+            if "elo" in entry:
+                parts.append(f"Elo: {entry['elo']:.0f}")
+            if parts:
+                lines.append(f"{label} ({(home_key if side == 'home' else away_key).replace('_', ' ').title()}): {', '.join(parts)}")
+        if not lines:
+            return None, "TEAM RATINGS ANCHOR: No rating data for either team."
+        if len(lines) == 2:
+            home_entry = anchor.get("home", {})
+            away_entry = anchor.get("away", {})
+            h_r = home_entry.get("glicko2") or home_entry.get("elo") or 0
+            a_r = away_entry.get("glicko2") or away_entry.get("elo") or 0
+            if h_r and a_r:
+                lines.append(f"Gap: {abs(h_r - a_r):.0f} pts ({'home stronger' if h_r > a_r else 'away stronger'})")
+        return "\n".join(lines), None
+    except Exception:
+        return None, "TEAM RATINGS ANCHOR: Lookup failed."
+
+
 def _format_tipster_section(pack: EvidencePack) -> tuple[str | None, str | None]:
     """R12-OVERNIGHT: Surface tipster consensus data."""
     try:
@@ -2215,6 +2284,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
         ("EDGE ANALYSIS", _format_edge_section),
         ("ESPN STANDINGS & FORM", lambda p: _format_espn_section(p, spec)),
         ("ELO RATINGS", _format_elo_section),
+        ("TEAM RATINGS ANCHOR", _format_team_ratings_section),
         ("TIPSTER CONSENSUS", _format_tipster_section),
         ("HEAD TO HEAD", lambda p: _format_h2h_placeholder(p, spec)),
         ("SHARP BENCHMARK LINES", _format_sharp_placeholder),
@@ -2364,8 +2434,9 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "",
             "📋 <b>The Setup</b>",
             "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",
-            "If ESPN data is unavailable, pivot to: Elo ratings (integer rating points or rank/point gap only — e.g. 'rated 150 points higher', '1853 vs 1551'), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. Do NOT pivot to odds structure or line movements in The Setup.",
-            "STRICT BAN — The Setup section MUST NOT contain any of: 'bookmaker', 'odds', 'price', 'priced', 'implied', 'implied probability', 'implied chance', 'fair probability', 'fair value', 'expected value', 'model reads'. Decimal numbers in The Setup are allowed ONLY in metric phrases like 'X.X goals per game', 'X.X points per game', 'X.X runs per game'. Bookmaker names, odds quotes, and EV percentages belong in The Edge section, not The Setup. Express probabilities ONLY as qualitative descriptors — no integer percentages, no decimal probabilities. The Setup is for context (form, standings, injuries, Elo), not pricing.",
+            "If ESPN data is unavailable, pivot to: team strength ratings (use values VERBATIM from [TEAM RATINGS ANCHOR] — e.g. 'rated 150 points higher', then cite the exact numbers; NEVER invent or round any rating number), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. If TEAM RATINGS ANCHOR is not in the evidence pack, omit rating numbers entirely. Do NOT pivot to odds structure or line movements in The Setup.",
+            "STRICT BAN — The Setup section MUST NOT contain any of: 'bookmaker', 'odds', 'price', 'priced', 'implied', 'implied probability', 'implied chance', 'fair probability', 'fair value', 'expected value', 'model reads'. Decimal numbers in The Setup are allowed ONLY in metric phrases like 'X.X goals per game', 'X.X points per game', 'X.X runs per game'. Bookmaker names, odds quotes, and EV percentages belong in The Edge section, not The Setup. Express probabilities ONLY as qualitative descriptors — no integer percentages, no decimal probabilities. The Setup is for context (form, standings, injuries, ratings), not pricing.",
+            "RATING ANCHOR LAW (AUTOMATIC REJECTION IF VIOLATED): Any 4-digit Elo or Glicko-2 rating number cited in Setup MUST appear VERBATIM in [TEAM RATINGS ANCHOR]. Do NOT invent, estimate, or round rating values.",
             "",
             "🎯 <b>The Edge</b>",
             "2-3 sentences. Analyse the matchup: which team holds the advantage and why.",
@@ -2419,8 +2490,9 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "",
             "📋 <b>The Setup</b>",
             "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",
-            "If ESPN data is unavailable, pivot to: Elo ratings (integer rating points or rank/point gap only — e.g. 'rated 150 points higher', '1853 vs 1551'), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. Do NOT pivot to odds structure or line movements in The Setup.",
-            "STRICT BAN — The Setup section MUST NOT contain any of: 'bookmaker', 'odds', 'price', 'priced', 'implied', 'implied probability', 'implied chance', 'fair probability', 'fair value', 'expected value', 'model reads'. Decimal numbers in The Setup are allowed ONLY in metric phrases like 'X.X goals per game', 'X.X points per game', 'X.X runs per game'. Bookmaker names, odds quotes, and EV percentages belong in The Edge section, not The Setup. Express probabilities ONLY as qualitative descriptors — no integer percentages, no decimal probabilities. The Setup is for context (form, standings, injuries, Elo), not pricing.",
+            "If ESPN data is unavailable, pivot to: team strength ratings (use values VERBATIM from [TEAM RATINGS ANCHOR] — e.g. 'rated 150 points higher', then cite the exact numbers; NEVER invent or round any rating number), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. If TEAM RATINGS ANCHOR is not in the evidence pack, omit rating numbers entirely. Do NOT pivot to odds structure or line movements in The Setup.",
+            "STRICT BAN — The Setup section MUST NOT contain any of: 'bookmaker', 'odds', 'price', 'priced', 'implied', 'implied probability', 'implied chance', 'fair probability', 'fair value', 'expected value', 'model reads'. Decimal numbers in The Setup are allowed ONLY in metric phrases like 'X.X goals per game', 'X.X points per game', 'X.X runs per game'. Bookmaker names, odds quotes, and EV percentages belong in The Edge section, not The Setup. Express probabilities ONLY as qualitative descriptors — no integer percentages, no decimal probabilities. The Setup is for context (form, standings, injuries, ratings), not pricing.",
+            "RATING ANCHOR LAW (AUTOMATIC REJECTION IF VIOLATED): Any 4-digit Elo or Glicko-2 rating number cited in Setup MUST appear VERBATIM in [TEAM RATINGS ANCHOR]. Do NOT invent, estimate, or round rating values.",
             "",
             "🎯 <b>The Edge</b>",
             "2-3 sentences. Explain the pricing gap using edge analysis and SA bookmaker pricing only.",
