@@ -1289,6 +1289,7 @@ async def _handle_card_deeplink(
 
 _WELCOME_IMG_PATH = pathlib.Path("/home/paulsportsza/assets/welcome/welcome_today.png")
 _FALLBACK_IMG_PATH = pathlib.Path("/home/paulsportsza/assets/welcome/fallback.png")
+_WELCOME_PICK_JSON = pathlib.Path("/home/paulsportsza/assets/welcome/welcome_pick.json")
 
 
 def _welcome_img_path() -> pathlib.Path | None:
@@ -1311,12 +1312,32 @@ _WELCOME_PICK_TTL = 3600
 
 
 def _load_welcome_pick() -> dict | None:
-    """Return today's top Gold/Diamond pick for the welcome button (sync, cached 1h)."""
+    """Return the pick used to generate today's welcome image (sync, cached 1h).
+
+    Primary path: reads welcome_pick.json sidecar written by generate_welcome_image.py.
+    This guarantees the button always refers to the exact same match as the hero image.
+    Fallback: DB query (Diamond/Gold) for backward compat when sidecar is absent/stale.
+    """
     global _welcome_pick_cache, _welcome_pick_ts
     import time
     now = time.time()
     if _welcome_pick_ts > 0 and now - _welcome_pick_ts < _WELCOME_PICK_TTL:
         return _welcome_pick_cache
+    # Primary: sidecar written by publisher/generate_welcome_image.py
+    if _WELCOME_PICK_JSON.exists():
+        import json as _json
+        try:
+            _age_h = (now - _WELCOME_PICK_JSON.stat().st_mtime) / 3600
+            if _age_h <= 30:
+                pick = _json.loads(_WELCOME_PICK_JSON.read_text())
+                if pick.get("match_key"):
+                    log.debug("_load_welcome_pick: sidecar hit (%s)", pick.get("match_key"))
+                    _welcome_pick_cache = pick
+                    _welcome_pick_ts = now
+                    return pick
+        except Exception as exc:
+            log.debug("_load_welcome_pick sidecar failed: %s", exc)
+    # Fallback: DB query (pre-sidecar compat / sidecar absent)
     try:
         from scrapers.db_connect import connect_odds_db
         from scrapers.edge.edge_config import DB_PATH
@@ -1342,12 +1363,62 @@ def _load_welcome_pick() -> dict | None:
             if pick:
                 break
         conn.close()
+        log.debug("_load_welcome_pick: DB fallback (%s)", pick and pick.get("match_key"))
         _welcome_pick_cache = pick
         _welcome_pick_ts = now
         return pick
     except Exception as exc:
         log.debug("_load_welcome_pick failed: %s", exc)
         return _welcome_pick_cache
+
+
+def _load_edge_tip_by_key(match_key: str) -> dict | None:
+    """Slow-path: load a single edge tip from edge_results by match_key.
+
+    Used when menu:pick handler cannot find the pick in any hot-tips cache
+    (e.g. pick is settled, or is a silver-tier pick not in the D/G hot list).
+    Unlike _load_tips_from_edge_results() this does NOT filter by result IS NULL,
+    so it works for yesterday's settled picks too.
+    """
+    if not match_key:
+        return None
+    try:
+        import re as _re_etk
+        from scrapers.db_connect import connect_odds_db as _etk_conn
+        from scrapers.edge.edge_config import DB_PATH as _etk_db
+        conn = _etk_conn(_etk_db)
+        conn.row_factory = lambda cur, row: dict(zip([c[0] for c in cur.description], row))
+        row = conn.execute(
+            "SELECT match_key, edge_id, edge_tier, composite_score, bet_type, "
+            "recommended_odds, bookmaker, predicted_ev, league, match_date, "
+            "confirming_signals "
+            "FROM edge_results WHERE match_key = ? "
+            "ORDER BY CASE WHEN result IS NULL THEN 0 ELSE 1 END, id DESC LIMIT 1",
+            (match_key,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        mk = row["match_key"] or ""
+        mk_no_date = _re_etk.sub(r"_\d{4}-\d{2}-\d{2}$", "", mk)
+        if "_vs_" in mk_no_date:
+            _h, _a = mk_no_date.split("_vs_", 1)
+        else:
+            _h = _a = mk_no_date
+        return {
+            **row,
+            "match_id": mk,
+            "event_id": mk,
+            "home_team": _display_team_name(_h),
+            "away_team": _display_team_name(_a),
+            "edge_rating": row.get("edge_tier", "silver"),
+            "display_tier": row.get("edge_tier", "silver"),
+            "ev": float(row.get("predicted_ev") or 0),
+            "tier": row.get("edge_tier", "silver"),
+        }
+    except Exception as exc:
+        log.debug("_load_edge_tip_by_key failed for %s: %s", match_key, exc)
+        return None
 
 
 async def _welcome_kb(user_id: int) -> InlineKeyboardMarkup:
@@ -1379,8 +1450,8 @@ async def _welcome_kb(user_id: int) -> InlineKeyboardMarkup:
             user_tier = await get_effective_tier(user_id)
             from tier_gate import get_edge_access_level
             access = get_edge_access_level(user_tier, edge_tier)
-            tier_emoji = {"diamond": "💎", "gold": "🥇"}.get(edge_tier, "🥇")
-            tier_pretty = {"diamond": "Diamond", "gold": "Gold"}.get(edge_tier, "Gold")
+            tier_emoji = {"diamond": "💎", "gold": "🥇", "silver": "⚡", "bronze": "🥉"}.get(edge_tier, "🥇")
+            tier_pretty = {"diamond": "Diamond", "gold": "Gold", "silver": "Silver", "bronze": "Bronze"}.get(edge_tier, "Gold")
 
             if access in ("full", "partial"):
                 btn_text = f"{tier_emoji} View Edge of The Day ↗"
@@ -4180,18 +4251,21 @@ async def handle_menu(query, action: str) -> None:
         _wp_key = _wp.get("match_key", "")
         # Fast path: find the tip in the user's snapshot or global hot-tips cache
         _wp_tip = next(
-            (t for t in (_ht_tips_snapshot.get(user_id) or []) if t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
+            (t for t in (_ht_tips_snapshot.get(user_id) or []) if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
             None,
         )
         if _wp_tip is None:
             _wp_tip = next(
-                (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
+                (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
                 None,
             )
         # Slow path: load fresh from edge_results if not in any cache
         if _wp_tip is None:
             _all = await asyncio.to_thread(_load_tips_from_edge_results, 100, True)
-            _wp_tip = next((t for t in _all if t.get("match_id") == _wp_key or t.get("event_id") == _wp_key), None)
+            _wp_tip = next((t for t in _all if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key), None)
+        # Final fallback: direct DB fetch by match_key (works even for settled picks)
+        if _wp_tip is None:
+            _wp_tip = await asyncio.to_thread(_load_edge_tip_by_key, _wp_key)
         if not _wp_tip:
             await _do_hot_tips_flow(query.message.chat_id, _g_bot, user_id=user_id)
             return
