@@ -39,13 +39,21 @@ def test_horizon_hours_constant_is_48():
     assert value >= 48, f"_PREGEN_HORIZON_HOURS must be >= 48, got {value}"
 
 
-def test_match_cap_at_most_25():
-    """_PREGEN_MATCH_CAP must be ≤ 25."""
+def test_match_cap_at_most_60():
+    """_PREGEN_MATCH_CAP must be ≤ 60.
+
+    FIX-PREGEN-TIER-DRIFT-01 (2026-04-25): cap raised 25 → 60 to accommodate the
+    240h premium horizon (FIX-AI-BREAKDOWN-COVERAGE-01). The previous 25-cap was
+    truncating Gold/Diamond fixtures 7-9 days out via the nearest-kickoff sort.
+    60 covers the full 240h universe (~53 matches at peak) while bounding LLM
+    spend (concurrency stays at 3, so additional matches just lengthen the sweep
+    rather than burst-spend).
+    """
     src = _source()
     match = re.search(r"_PREGEN_MATCH_CAP\s*:\s*int\s*=\s*(\d+)", src)
     assert match, "_PREGEN_MATCH_CAP constant not found in pregenerate_narratives.py"
     value = int(match.group(1))
-    assert value <= 25, f"_PREGEN_MATCH_CAP must be ≤ 25, got {value}"
+    assert value <= 60, f"_PREGEN_MATCH_CAP must be ≤ 60, got {value}"
 
 
 def test_semaphore_concurrency_bound_present():

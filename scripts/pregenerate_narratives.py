@@ -186,11 +186,16 @@ _BANNED_SHAPE_SKIP_THRESHOLD = 1  # INV-SONNET-SPIKE-01: reduced 3→1; one retr
 
 # BUILD-NARRATIVE-PREGEN-WINDOW-01: sweep universe bounds.
 # Hourly sweeps process only matches kicking off within the next 48h,
-# capped at 25 matches ordered by soonest kickoff.
+# capped at 60 matches ordered by soonest kickoff.
 # Concurrency is bounded to 3 simultaneous LLM slots so pregen never
 # starves _edge_precompute_job.
+# FIX-PREGEN-TIER-DRIFT-01 (2026-04-25): cap raised 25 → 60 to accommodate the
+# 240h premium horizon expansion (FIX-AI-BREAKDOWN-COVERAGE-01). At 25, the
+# nearest-kickoff sort cut Gold/Diamond fixtures 7-9 days out (53+ matches now
+# fit the window). 60 covers the full premium universe while keeping daily LLM
+# spend bounded (~$9/mo delta at full saturation).
 _PREGEN_HORIZON_HOURS: int = 240
-_PREGEN_MATCH_CAP: int = 25
+_PREGEN_MATCH_CAP: int = 60
 _PREGEN_CONCURRENCY: int = 3
 
 

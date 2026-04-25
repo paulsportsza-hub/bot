@@ -15043,9 +15043,24 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
             _current_er_tier = _quick_edge_tier_lookup(match_id)
             if _current_er_tier and _tier_drift_exceeds_threshold(tier, _current_er_tier):
                 log.warning(
-                    "Cache rejected for %s — tier drift: cache=%s current=%s",
+                    "Cache rejected for %s — tier drift: cache=%s current=%s — quarantining stale row",
                     match_id, tier, _current_er_tier,
                 )
+                # FIX-PREGEN-TIER-DRIFT-01 (2026-04-25): quarantine the stale row so
+                # _count_warm_narratives() does not count it as warm and the next
+                # pregen sweep can regenerate it. Without quarantine, the row sat in
+                # cache permanently — every sweep saw it as fresh and skipped re-pregen,
+                # leaving Gold/Diamond cards button-less indefinitely after tier promotion.
+                # Mirrors the EV-incoherent quarantine path immediately below.
+                try:
+                    conn.execute(
+                        "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                        "WHERE match_id = ?",
+                        (f"tier_drift:cache={tier},live={_current_er_tier}", match_id),
+                    )
+                    conn.commit()
+                except sqlite3.OperationalError as exc:
+                    log.debug("Deferred tier-drift cache quarantine for %s: %s", match_id, exc)
                 return None
 
             # Extract cached EV from tips_json (first tip's predicted_ev or ev)
