@@ -374,11 +374,14 @@ class TestTierAwarePregenHorizon:
         sig = inspect.signature(discover_pregen_targets)
         assert "hours_ahead_premium" in sig.parameters
 
-    def test_premium_default_is_96(self):
+    def test_premium_default_is_240(self):
+        # FIX-AI-BREAKDOWN-COVERAGE-01 (2026-04-25): premium horizon raised
+        # 96h → 240h to align with Edge Picks lookahead. Closes Bible G14.
+        # CLAUDE.md Rule 7 (BUILD-NARRATIVE-VOICE-01 amended 2026-04-25).
         from scripts.pregenerate_narratives import discover_pregen_targets
         import inspect
         sig = inspect.signature(discover_pregen_targets)
-        assert sig.parameters["hours_ahead_premium"].default == 96
+        assert sig.parameters["hours_ahead_premium"].default == 240
 
     def test_standard_default_is_48(self):
         from scripts.pregenerate_narratives import discover_pregen_targets

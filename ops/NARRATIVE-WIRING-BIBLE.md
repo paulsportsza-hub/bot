@@ -420,6 +420,23 @@ Every `SELECT ... FROM narrative_cache` site in `bot.py`:
 must use the per-tier dict. TODO `INV-VERDICT-GOLD-TRACE-01` is open against the
 Gold calibration.
 
+### 7d-bis. `_VERDICT_BLACKLIST` + `_VERDICT_BLACKLIST_RE` (added P0-HOTFIX-LEAN-REGEX 2026-04-24)
+
+Applied at `_generate_verdict` (`bot.py:8084`), `_generate_verdict_constrained` (`bot.py:8512`), and the serve-time cached-verdict gate (`bot.py:9039`). Fail on any → fallback to `_render_verdict_deterministic(spec)`.
+
+- **Substring list (`_VERDICT_BLACKLIST` at `bot.py:7732`)**: 25 entries covering "home advantage", "historically", "title race", "ev edge", "ev%", "expected value", "factor this in", "keep stakes", and the BUILD-CARD-FIX-01 staking/hedge bans. The substring " lean" (leading space) was **removed 2026-04-24 in commit `d2f072d`** — it over-caught valid SA sports noun usage ("the lean here", "is the lean", "Arsenal is the lean at 1.45").
+
+- **Regex companion (`_VERDICT_BLACKLIST_RE` at `bot.py:~7762`, commit `d2f072d`)**:
+```python
+re.compile(
+    r"\\b(?:I|we|my|our|the\\s+model)\\s+leans?\\b|\\bleans?\\s+(?:toward|towards|on|into|against|heavily)\\b",
+    re.IGNORECASE,
+)
+```
+Catches LLM-voice forms ("I lean toward", "leans heavily on home") while allowing noun usage. 11/11 unit tests pass.
+
+**Accuracy note**: blacklist is a pure style gate. Factual accuracy is enforced by `_fact_check_verdict`, `validate_diamond_price_prefix`, `validate_manager_names`, `validate_no_markdown_leak`, DERIVED CLAIMS check in `generate_and_validate`, `BANNED_TRIVIAL_VERDICT_TEMPLATES`, tier length floors, and analytical vocab count — all independent of the blacklist and unchanged by `d2f072d`.
+
 ### 7e. Current quarantine distribution (DB query 2026-04-23)
 
 ```
@@ -978,6 +995,22 @@ mirroring. If Cowork reads directly from the server path, no sync
 needed.
 
 ---
+
+### G13 — `VERDICT_MODEL` / `NARRATIVE_MODEL` / `NARRATIVE_SHADOW_MODEL` `.env` overrides can defeat designed Sonnet defaults (added 2026-04-24)
+
+- **Context**: Module defaults in `scripts/pregenerate_narratives.py:68-71` and `bot.py:264` all default to `claude-sonnet-4-6`, but read from `os.environ.get(...)` first.
+- **Observed failure** (P0-WAVE-VERDICT-SONNET-RESTORE 2026-04-24): `.env` had `VERDICT_MODEL=claude-haiku-4-5-20251001` and `NARRATIVE_MODEL=claude-haiku-4-5-20251001` as an `INV-SONNET-BURN-05` cost-burn-down artefact. Every verdict regeneration on every surface ran on Haiku despite the designed Sonnet path. Diagnosis was chased through the code for hours before the env layer was checked.
+- **Rule**: check `/home/paulsportsza/bot/.env` for `VERDICT_MODEL` / `NARRATIVE_MODEL` / `NARRATIVE_SHADOW_MODEL` overrides FIRST on any "verdict regressed" complaint, before touching code. Env overrides persist across deploys, are gitignored, and cannot be detected by `git log` or `git blame`.
+- **2026-04-24 PM update**: `VERDICT_MODEL=claude-sonnet-4-5` is intentional (FIX-COST-WAVE-02 Phase 0 discovered Sonnet 4.6 has an undocumented ~2048-token empirical cache floor; verdict prompt at 2027 tokens caches on 4.5 but not 4.6). Sonnet 4.5 is within policy for verdicts — the lock is "any Sonnet, not Haiku." Narrative stays on `claude-sonnet-4-6` (its ~2500-token prompt caches fine on 4.6).
+
+### G14 — Tier-aware premium pregen horizon (96h) is narrower than Edge Picks surface lookahead (up to 10d) (added 2026-04-24)
+
+- **Context**: `discover_pregen_targets(hours_ahead_premium=96)` at `scripts/pregenerate_narratives.py:1469` hardcodes 96h for Diamond/Gold pregen. Module-level `_PREGEN_HORIZON_HOURS=240` (raised per NARRATIVE-ACCURACY-01 R7) is a separate, higher constant that does NOT flow through `discover_pregen_targets`.
+- **User-visible effect**: Premium-tier matches beyond 96h (e.g. `everton_vs_manchester_city_2026-05-04` at 230h out) are excluded from pregen. No `narrative_html` generated. `_has_rich_narrative` fails (`narrative_source != "w84"`). Card renders via serve-time `_generate_verdict`, but the AI Breakdown button is hidden on ep:pick paths.
+- **Paul 2026-04-24 observation**: "AI breakdown button missing on Arsenal / Everton" — Arsenal (7.6d = 182h) + Everton (9.6d = 230h) were both outside the 96h premium window. Arsenal was rescued by a manual cap=100 wide sweep; Everton remained excluded.
+- **Rule**: either (a) align `hours_ahead_premium` in `discover_pregen_targets` call sites to `_PREGEN_HORIZON_HOURS` (240h), or (b) reduce Edge Picks lookahead to match 96h. Current state is inconsistent. Follow-up INV not yet filed.
+
+**RESOLVED 2026-04-25** — Closed by FIX-AI-BREAKDOWN-COVERAGE-01 (recommendation source: INV-AI-BREAKDOWN-COVERAGE-01). Adopted option (a): aligned `hours_ahead_premium` to 240h at the single call site (`scripts/pregenerate_narratives.py:1475`) and the function default (`scripts/pregenerate_narratives.py:1192`). New policy: Premium-tier (Diamond + Gold) = 240h pregen horizon (full Edge Picks lookahead); Standard-tier (Silver + Bronze) = 48h. The verdict-cache shell pattern (`narrative_source='verdict-cache'`, `narrative_html=''` for premium fixtures in the 96–240h band) is closed as a side effect of the discovery scope alignment — every premium match in 0–240h now flows through the full `_generate_one()` pipeline (verdict + narrative + `_validate_polish` + DERIVED CLAIMS gates). Cost validation: $3.93/mo measured baseline + $7.30/mo projected delta = $11.23/mo total, within $60/mo target. CLAUDE.md Rule 7 amended in same wave to match the new 240/48 policy. Bot.py `_background_pregen_fill()` and the pregen job both call `pregen_main(sweep)` which delegates to the cron script — the single-site change in `pregenerate_narratives.py` covers both bot-internal invocations automatically (zero `hours_ahead_premium` references in `bot.py` confirmed by grep).
 
 ## 14. Version history
 

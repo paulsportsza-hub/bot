@@ -1189,7 +1189,7 @@ def _fixture_home_prefix(key: str) -> str:
 def discover_pregen_targets(
     db_path: str | None = None,
     hours_ahead: int = 48,
-    hours_ahead_premium: int = 96,
+    hours_ahead_premium: int = 240,
 ) -> list[dict]:
     """Discover upcoming matches from ALL fixture sources for pregen.
 
@@ -1197,10 +1197,11 @@ def discover_pregen_targets(
     rugby_fixtures (rugby), and odds_snapshots (soccer/existing) for matches
     with commence_time in the next *hours_ahead* hours.
 
-    BUILD-NARRATIVE-VOICE-01 Fix C: Diamond/Gold edges get a wider horizon
-    (hours_ahead_premium, default 96h) so they are pre-generated further in
-    advance. Silver/Bronze edges use the standard hours_ahead window (48h).
-    Fixtures with no edge_results row use the standard window.
+    FIX-AI-BREAKDOWN-COVERAGE-01 (2026-04-25): Diamond/Gold edges get the full
+    Edge Picks lookahead horizon (hours_ahead_premium, default 240h = 10 days)
+    so AI Breakdowns are pre-baked for every premium-tier match a user can see.
+    Silver/Bronze edges use the standard hours_ahead window (48h). Fixtures
+    with no edge_results row use the standard window. Closes Bible G14.
 
     Returns a unified list of dicts:
         {match_key, sport, home_team, away_team, league, commence_time, source_table}
@@ -1471,8 +1472,10 @@ def _load_pregen_edges(limit: int = 100, sport: str | None = None) -> list[dict]
     # BUILD-ENRICH-09: Add fixture-table targets not covered by odds_snapshots.
     # discover_pregen_targets() includes odds_snapshots matches first (already in seen)
     # then fixture-table matches — so only the new ones pass the seen check.
+    # FIX-AI-BREAKDOWN-COVERAGE-01 (2026-04-25): premium horizon raised 96h → 240h
+    # to align with Edge Picks lookahead and close AI Breakdown coverage gap (Bible G14).
     try:
-        fixture_targets = discover_pregen_targets(hours_ahead_premium=96)
+        fixture_targets = discover_pregen_targets(hours_ahead_premium=240)
         fixture_added = 0
         for target in fixture_targets:
             mkey = target.get("match_key", "")

@@ -3063,11 +3063,6 @@ All LLM-generated narrative sections MUST use SA voice (enforced in prompt by
 - `VERDICT_HARD_MAX = 260` chars (soft target band: 140–200 chars)
 - `max_tokens` for verdict-only Sonnet calls: ≥ 180 (`_generate_verdict()` in bot.py)
 
-### Rule 7 — Tier-Aware Pregen Horizon (BUILD-NARRATIVE-VOICE-01 — LOCKED 22 Apr 2026)
-- Diamond/Gold edges: pregen horizon = 96h ahead
-- Silver/Bronze edges: pregen horizon = 48h ahead
-- Implementation: `discover_pregen_targets(hours_ahead_premium=96)` in
-  `scripts/pregenerate_narratives.py`; queries 96h window, filters out
-  Silver/Bronze fixtures in the 48–96h band
-- DO NOT revert `hours_ahead_premium` default to 48 — Diamond edges need the wider window
-  to avoid the "outside 48h window → legacy path" defect
+### Rule 7 — Tier-Aware Pregen Horizon (BUILD-NARRATIVE-VOICE-01 amended 2026-04-25)
+
+Premium-tier (Diamond + Gold) edges: pregen horizon = 240h ahead (full Edge Picks lookahead). Standard-tier (Silver + Bronze) edges: pregen horizon = 48h ahead. Implementation: `discover_pregen_targets(hours_ahead_premium=240, hours_ahead=48)`. Rationale: AI Breakdown coverage gap closure (INV-AI-BREAKDOWN-COVERAGE-01 → FIX-AI-BREAKDOWN-COVERAGE-01). Cost validation: post-WAVE-02 baseline $3.93/mo + this fix +$7.30/mo = $11.23/mo total, within $60/mo budget. The lock prevents downward revert (240h → 96h or below); upward extensions are explicit policy decisions.
