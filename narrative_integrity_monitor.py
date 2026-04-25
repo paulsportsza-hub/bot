@@ -17,7 +17,10 @@ log = logging.getLogger(__name__)
 
 # --- Configuration -----------------------------------------------------------
 
-MAX_AGE_DAYS = 7  # P1 alert if any entry older than this
+MAX_AGE_DAYS = 30  # P1 alert if any coach entry exceeds audit threshold
+# Coach data is manually curated (~14d audit cadence per CLAUDE.md). Weekly
+# threshold was too tight — every cron run flagged the backlog.
+# FIX-SOCIAL-OPS-AUDIT-01 (2026-04-24): raised 7 → 30.
 BOT_COACHES_PATH = Path(__file__).resolve().parent / "data" / "coaches.json"
 
 
@@ -87,9 +90,9 @@ def freshness_check(
 
     if not ok:
         log.warning(
-            "FRESHNESS_CHECK FAILED: %d stale, %d missing out of %d entries "
-            "(threshold=%d days)",
-            len(stale), len(missing), checked, max_age_days,
+            "COACH_FRESHNESS: %d/%d coaches.json entries exceed %d-day audit "
+            "threshold (missing=%d)",
+            len(stale), checked, max_age_days, len(missing),
         )
         for entry in stale:
             log.warning(
@@ -99,8 +102,8 @@ def freshness_check(
             )
     else:
         log.info(
-            "FRESHNESS_CHECK OK: %d entries, all within %d-day threshold",
-            checked, max_age_days,
+            "COACH_FRESHNESS OK: %d/%d entries within %d-day audit threshold",
+            checked, checked, max_age_days,
         )
 
     return {

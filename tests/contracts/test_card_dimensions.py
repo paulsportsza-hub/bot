@@ -88,6 +88,8 @@ LIST_TEMPLATES = {
     "help.html",
     # BUILD-BOOKMAKER-DIRECTORY-CARD-01
     "bookmaker_directory.html",
+    # BUILD-HELP-CARD-01
+    "help.html",
 }
 ALL_DECLARED = DETAIL_TEMPLATES | LIST_TEMPLATES
 

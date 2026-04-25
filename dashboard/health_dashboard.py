@@ -249,7 +249,9 @@ _CHANNELS = [
     {"key": "instagram", "label": "Instagram", "color": "#E4405F", "emoji": "\U0001f4f8"},
     {"key": "tiktok", "label": "TikTok", "color": "#ff0050", "emoji": "\U0001f3b5"},
 ]
-_MANUAL_CHANNELS = []
+_MANUAL_CHANNELS = [
+    {"key": "fb_groups", "label": "Facebook Groups", "color": "#1877F2", "emoji": "\U0001f4d8"},
+]
 _CHANNEL_MAP = {c["key"]: c for c in _CHANNELS + _MANUAL_CHANNELS}
 _CHANNEL_SVG = {
     "telegram_alerts":    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.2 3.1L1.9 10.5c-1.3.5-1.3 1.3-.2 1.6l4.9 1.5 1.9 5.9c.2.7.4.8.9.3l2.8-2.7 5.5 4c1 .6 1.7.3 2-.9l3.5-16.5c.4-1.4-.5-2-.9-.4z" fill="#26A5E4"/></svg>',
@@ -2249,7 +2251,6 @@ def _sidebar_html(active_view: str) -> str:
         ("health", "System Health", _ICON_SERVER, "/admin/health"),
         ("performance", "Edge Performance", _ICON_CHART, "/admin/performance"),
         ("social_ops", "Social Ops", _ICON_PLAY, "/admin/social-ops"),
-        ("task_hub", "Task Hub", _ICON_TASKHUB, "/admin/task-hub"),
     ]
     # Badge counts only genuinely failed/blocked items — awaiting approvals do not
     # surface here, since those live in-screen on the Social Ops view itself.
@@ -3667,6 +3668,7 @@ def render_automation_content() -> str:
         ("whatsapp_channel",   "WA Channel"),
         ("instagram",          "Instagram"),
         ("tiktok",             "TikTok"),
+        ("fb_groups",          "Facebook Groups"),
     ]
 
     def _icon_for(wt: str, ck: str) -> str:
@@ -4048,8 +4050,6 @@ def render_automation_content() -> str:
 .so-rup-header{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--text);}
 .so-rup-chip{background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.35);border-radius:10px;padding:2px 10px;font-size:11px;font-weight:600;letter-spacing:.03em;}
 .so-rup-meta{font-size:12px;color:var(--muted);}
-.so-rup-kit-btn button{width:100%;background:var(--surface-alt);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:9px 14px;font-size:12px;font-family:var(--font-m);cursor:pointer;text-align:left;transition:border-color 150ms,background 150ms;}
-.so-rup-kit-btn button:hover{border-color:var(--gold);background:rgba(248,200,48,0.06);}
 .so-rup-drop{border:2px dashed rgba(248,200,48,0.4);border-radius:8px;padding:28px 16px;text-align:center;cursor:pointer;transition:all .18s ease;color:var(--gold);}
 .so-rup-drop:hover,.so-rup-drop.dragover{background:rgba(248,200,48,0.06);border-color:var(--gold);}
 .so-rup-drop svg{display:block;margin:0 auto 10px;opacity:.7;}
@@ -5013,9 +5013,6 @@ function renderReelUploadPanel(p){
     cardBlock=''+
       '<div class="so-rup-card-wrap">'+
         '<img class="so-rup-card-img" loading="lazy" alt="Reel card preview" src="'+eA(cardUrl)+'">'+
-        (hasFinal&&masterUrl
-          ? '<video class="so-rup-master" controls preload="metadata" playsinline src="'+eA(masterUrl)+'"></video>'
-          : '')+
         '<div class="so-rup-card-actions">'+
           '<a class="so-rup-act" href="'+eA(cardUrl)+'" download="'+eA((pickId?('card_'+pickId+'.png'):'card.png'))+'" aria-label="Download card">'+_ICO_DL+' Download card</a>'+
           (masterUrl
@@ -5046,9 +5043,6 @@ function renderReelUploadPanel(p){
     pivotBanner+
     '<div class="so-rup-meta">'+eH(datePart)+(slotPart?(' &middot; '+eH(slotPart)+' SAST'):'')+(hasFinal?' &middot; Master uploaded, scheduled to publish.':' &middot; Upload your Premiere Pro export to queue this reel.')+'</div>'+
     cardBlock+
-    '<div class="so-rup-kit-btn">'+
-      '<button onclick="soReelOpenKit('+JSON.stringify(datePart)+')">📦 Open Reel Kit in Task Hub →</button>'+
-    '</div>'+
     dropBlock+
   '</div>';
 }
@@ -8953,6 +8947,7 @@ _SO_TL_CH = [
     ("whatsapp_channel",   "WA Channel"),
     ("instagram",          "Instagram"),
     ("tiktok",             "TikTok"),
+    ("fb_groups",          "Facebook Groups"),
 ]
 _SO_POSTED_ST = {"published", "done", "complete", "posted"}
 _SO_PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
@@ -9599,17 +9594,22 @@ def _build_so_timeline(day_str: str, items: list[dict], now_sast: datetime, aler
                          "color": _CHANNEL_MAP.get(ck, {}).get("color", "#888888"), "posts": posts}
         if ck == "tiktok":
             bru_items = _bru_drip_items_for_day(day_str)
+            if not bru_items:
+                # BRU-EMPTY-HIDE-01 (2026-04-24): non-BRU day — hide TikTok row entirely.
+                # bru_drip fires on odd days of month only; on even days there is nothing
+                # to act on and the empty row adds noise. Placeholder MOQ stubs are also
+                # suppressed — they exist only to reserve the slot for the cron.
+                continue
             moq_mins = {p["mins"] for p in posts}
             for bru in bru_items:
                 conflict = any(abs(bru["mins"] - m) < 30 for m in moq_mins)
                 if conflict:
-                    # MOQ wins — badge the conflicting MOQ post to flag the mismatch
                     for p in posts:
                         if abs(p["mins"] - bru["mins"]) < 30:
                             p["bru_mismatch"] = True
                 else:
                     posts.append(bru)
-            ch_dict["bru_empty"] = not posts and not bru_items
+            ch_dict["bru_empty"] = False
         channels.append(ch_dict)
 
     # AC-B: inject today's Alerts bot sends into the telegram_alerts timeline lane

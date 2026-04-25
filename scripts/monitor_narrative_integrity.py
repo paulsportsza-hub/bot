@@ -20,7 +20,7 @@ Signals produced (12 distinct values):
     7. validator_reject_rate             — % of validator calls rejected
     8. banned_template_hit_rate          — % of validator calls hitting a banned template
     9. manager_name_fabrication_attempts — count of fabricated manager name attempts
-   10. coach_freshness_pct               — % of coaches.json entries stale >7 days
+   10. coach_freshness_pct               — % of coaches.json entries stale >30 days
    11. bot_coaches_sync                  — mismatches between bot/data/coaches.json and scrapers version
 """
 from __future__ import annotations
@@ -289,13 +289,16 @@ def _send_edgeops_alert(signal: str, value: int, detail: str) -> None:
 
 
 def signal_coach_freshness_pct() -> dict:
-    """Pct of coaches.json entries stale beyond 7 days.
+    """Pct of coaches.json entries stale beyond the audit threshold.
+
+    FIX-SOCIAL-OPS-AUDIT-01 (2026-04-24): threshold raised 7 → 30 days.
+    Coach data is manually curated (~14d audit cadence per CLAUDE.md).
 
     Bands: GREEN ≤10%, WARN ≤25%, ALERT >25%.
     """
     try:
         from narrative_integrity_monitor import freshness_check
-        result = freshness_check(max_age_days=7)
+        result = freshness_check(max_age_days=30)
     except Exception as exc:
         log.warning("MONITOR: signal_coach_freshness_pct import error: %s", exc)
         return {
