@@ -20111,6 +20111,18 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
         log.warning("POLISH REJECT: quality violations %s", violations)
         return False
 
+    # 8a. FIX-PREGEN-SETUP-PRICING-LEAK-01: defensive Setup-pricing gate.
+    # Mirror the cache-read absolute-ban detector (_find_stale_setup_patterns) at polish
+    # time so leaks are caught before persistence rather than after a DELETE round-trip.
+    # The Setup section must not contain odds/bookmaker/decimal-probability vocabulary —
+    # see CLAUDE.md Narrative Generation Pipeline Rule 8.
+    _setup_leak_reasons = _find_stale_setup_patterns(polished)
+    if _setup_leak_reasons:
+        log.warning(
+            "POLISH REJECT: Setup-pricing leak (%s)", ", ".join(_setup_leak_reasons)
+        )
+        return False
+
     # 8b. BUILD-VERDICT-FLOOR-01: verdict section length gate [140, 200]
     _verdict_idx = polished.find("🏆")
     if _verdict_idx != -1:

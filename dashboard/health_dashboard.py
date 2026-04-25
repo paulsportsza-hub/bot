@@ -249,9 +249,10 @@ _CHANNELS = [
     {"key": "instagram", "label": "Instagram", "color": "#E4405F", "emoji": "\U0001f4f8"},
     {"key": "tiktok", "label": "TikTok", "color": "#ff0050", "emoji": "\U0001f3b5"},
 ]
-_MANUAL_CHANNELS = [
-    {"key": "fb_groups", "label": "Facebook Groups", "color": "#1877F2", "emoji": "\U0001f4d8"},
-]
+# FB Groups removed from automated timeline 2026-04-25 — now a manual workflow only.
+# The FB Groups task pane (driven by _fetch_fb_groups_moq) remains, but the channel
+# is no longer tracked as an automation lane on the social ops timeline.
+_MANUAL_CHANNELS: list[dict] = []
 _CHANNEL_MAP = {c["key"]: c for c in _CHANNELS + _MANUAL_CHANNELS}
 _CHANNEL_SVG = {
     "telegram_alerts":    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.2 3.1L1.9 10.5c-1.3.5-1.3 1.3-.2 1.6l4.9 1.5 1.9 5.9c.2.7.4.8.9.3l2.8-2.7 5.5 4c1 .6 1.7.3 2-.9l3.5-16.5c.4-1.4-.5-2-.9-.4z" fill="#26A5E4"/></svg>',
@@ -3662,13 +3663,14 @@ def render_automation_content() -> str:
     _today_str  = _today_sast.strftime("%Y-%m-%d")
     _now_mins   = _today_sast.hour * 60 + _today_sast.minute
 
+    # FB Groups removed 2026-04-25 — manual workflow, not an automation lane.
+    # See _MANUAL_CHANNELS comment and the FB Groups task hub pane for the manual queue.
     _TL_CH = [
         ("telegram_alerts",    "TG Alerts"),
         ("telegram_community", "TG Community"),
         ("whatsapp_channel",   "WA Channel"),
         ("instagram",          "Instagram"),
         ("tiktok",             "TikTok"),
-        ("fb_groups",          "Facebook Groups"),
     ]
 
     def _icon_for(wt: str, ck: str) -> str:
@@ -8941,13 +8943,14 @@ def api_social_ops():
     return _no_store(Response(content, mimetype="text/html"))
 
 
+# FB Groups removed 2026-04-25 — manual workflow, not an automation lane.
+# The FB Groups task hub pane remains the source of manual posting actions.
 _SO_TL_CH = [
     ("telegram_alerts",    "TG Alerts"),
     ("telegram_community", "TG Community"),
     ("whatsapp_channel",   "WA Channel"),
     ("instagram",          "Instagram"),
     ("tiktok",             "TikTok"),
-    ("fb_groups",          "Facebook Groups"),
 ]
 _SO_POSTED_ST = {"published", "done", "complete", "posted"}
 _SO_PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
