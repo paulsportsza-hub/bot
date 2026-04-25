@@ -2378,6 +2378,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "🏆 <b>Verdict</b>",
             "1-2 sentences. Give a match outlook — who you lean toward and how the match might play out.",
             "Do NOT recommend a bet or mention bet sizing.",
+            "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — acknowledging it ('factor in the defensive uncertainty'), resolving it ('discount the rotation concern'), or addressing it ('despite the form gap, the home advantage holds'). Generic closers like 'all things considered' or 'on balance' are banned.",
             "",
             "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
             "- Verdict MUST use at least 3 distinct analytical vocabulary terms from this list:",
@@ -2433,6 +2434,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "🏆 <b>Verdict</b>",
             "1-2 sentences. State the action and sizing guidance without upgrading it.",
             f"YOUR VERDICT MUST recommend {getattr(spec, 'bookmaker', '')} at {getattr(spec, 'odds', '')}. This is NON-NEGOTIABLE. Do not substitute any other bookmaker or price.",
+            "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — resolving it ('discount the injury concern'), hedging on it ('live with the squad-rotation risk'), or pricing it ('the form gap is already in the number'). Generic closers like 'all things considered' or 'on balance' are banned. The card must read as one analytical voice, not two disconnected sections.",
             *_verdict_quality_lines,
         ])
     return "\n".join(prompt_parts).strip()

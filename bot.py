@@ -4309,7 +4309,7 @@ async def handle_menu(query, action: str) -> None:
         user_id = query.from_user.id
         await query.answer()
         try:
-            await query.message.edit_caption("⚡ Loading your Edge of The Day…")
+            await query.message.edit_caption("Loading...")
         except Exception:
             pass
         _wp = await asyncio.to_thread(_load_welcome_pick)
@@ -16426,6 +16426,82 @@ def _find_setup_strict_ban_violations(narrative: str) -> list[str]:
     return list(dict.fromkeys(reasons))
 
 
+# ── Risk-Resolution Validator (FIX-NARRATIVE-RISK-RESOLUTION-01 — LOCKED 2026-04-25) ──
+
+_RISK_RESOLUTION_MIN_JACCARD: float = 0.10
+
+_RISK_BOILERPLATE_PHRASES: tuple[str, ...] = (
+    "all things considered",
+    "on balance",
+    "taking everything into account",
+    "weighing it all up",
+    "net of the risks",
+)
+
+_RISK_SECTION_RE = re.compile(
+    r"⚠️\s*(?:<b>)?The Risk(?:</b>)?\s*(.*?)(?=\n\s*[📋🎯🏆]|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_VERDICT_SECTION_RE = re.compile(
+    r"🏆\s*(?:<b>)?Verdict(?:</b>)?\s*(.*?)(?=\n\s*[📋🎯⚠️]|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_JACCARD_STOP_WORDS: frozenset[str] = frozenset({
+    "the", "and", "for", "are", "but", "not", "with", "from", "this", "that",
+    "have", "its", "was", "been", "will", "they", "them", "then", "has", "had",
+    "his", "her", "who", "our", "all", "can", "may", "one", "any", "how",
+    "also", "just", "over", "out", "into", "more", "most", "some", "when",
+    "than", "what", "well", "here", "only", "both", "very", "even", "such",
+    "each", "much", "where", "risk", "side", "back", "edge", "play",
+})
+
+
+def _tokenise_meaningful(text: str) -> set[str]:
+    """Lowercase alpha tokens ≥4 chars, drop stop words. For Jaccard overlap."""
+    plain = re.sub(r"<[^>]+>", " ", text)
+    tokens = re.findall(r"[a-z]{4,}", plain.lower())
+    return {t for t in tokens if t not in _JACCARD_STOP_WORDS}
+
+
+def _find_risk_resolution_violations(narrative: str) -> list[str]:
+    """Polish-time risk-resolution enforcer (FIX-NARRATIVE-RISK-RESOLUTION-01).
+
+    Returns reasons list:
+      - 'risk_boilerplate' when Risk section uses generic boilerplate with < 6 tokens.
+      - 'verdict_ignores_risk:overlap=N.NN' when Jaccard(Risk, Verdict) < threshold.
+    Returns [] when Risk or Verdict section is absent — not this gate's responsibility.
+    """
+    risk_match = _RISK_SECTION_RE.search(narrative)
+    verdict_match = _VERDICT_SECTION_RE.search(narrative)
+    if not risk_match or not verdict_match:
+        return []
+
+    risk_body = risk_match.group(1).strip()
+    verdict_body = verdict_match.group(1).strip()
+    if not risk_body or not verdict_body:
+        return []
+
+    reasons: list[str] = []
+
+    risk_lower = risk_body.lower()
+    if any(phrase in risk_lower for phrase in _RISK_BOILERPLATE_PHRASES):
+        risk_tokens = _tokenise_meaningful(risk_body)
+        if len(risk_tokens) < 6:
+            reasons.append("risk_boilerplate")
+
+    risk_tokens = _tokenise_meaningful(risk_body)
+    verdict_tokens = _tokenise_meaningful(verdict_body)
+    if not risk_tokens or not verdict_tokens:
+        return reasons
+
+    overlap = len(risk_tokens & verdict_tokens) / max(len(risk_tokens), 1)
+    if overlap < _RISK_RESOLUTION_MIN_JACCARD:
+        reasons.append(f"verdict_ignores_risk:overlap={overlap:.2f}")
+
+    return reasons
+
+
 def _extract_rendered_h2h_summary(narrative: str) -> str:
     """Return the rendered H2H summary body without its leading label."""
     if not narrative:
@@ -20217,6 +20293,14 @@ def _validate_polish(polished: str, baseline: str, spec) -> bool:
     if _setup_strict_reasons:
         log.warning(
             "POLISH REJECT: Setup-strict-ban (%s)", ", ".join(_setup_strict_reasons)
+        )
+        return False
+
+    # 8c. FIX-NARRATIVE-RISK-RESOLUTION-01: Verdict prose must reference Risk.
+    _risk_resolution_reasons = _find_risk_resolution_violations(polished)
+    if _risk_resolution_reasons:
+        log.warning(
+            "POLISH REJECT: risk-resolution (%s)", ", ".join(_risk_resolution_reasons)
         )
         return False
 

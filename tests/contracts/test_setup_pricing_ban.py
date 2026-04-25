@@ -186,11 +186,12 @@ def test_validate_polish_accepts_clean_setup():
         "🎯 <b>The Edge</b>\n"
         "Hollywoodbets are at 1.85, fair probability 58%, EV 4.5%.\n\n"
         "⚠️ <b>The Risk</b>\n"
-        "Limited evidence depth on the away side, so size accordingly.\n\n"
+        "Limited evidence depth on the away side — Fulham's away record is thin "
+        "and there's no strong tipster consensus to anchor the reading.\n\n"
         "🏆 <b>Verdict</b>\n"
-        "Lean Arsenal at 1.85 on Hollywoodbets — small stake play with the "
-        "model and tipster backing aligned, sensible exposure for a gold-tier "
-        "edge with tipster consensus pulling the same way."
+        "Lean Arsenal at 1.85 on Hollywoodbets — the limited evidence depth on "
+        "the away side is already priced in; model and tipster backing aligned "
+        "for sensible exposure at this gold-tier number."
     )
     baseline = polished
 
