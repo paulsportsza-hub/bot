@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(20 design-locked · 46 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(28 design-locked · 59 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -1207,6 +1207,352 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">sub_upgrade_bronze_canonical_with_founding.png</span><span class="variant-tag">With founding offer · 3 days left</span></div><img src="sub_upgrade_bronze_canonical_with_founding.png" alt="sub_upgrade_bronze with founding"></div>
     </div>
   </section>
+
+  <!-- ── sub_upgrade_gold.html (Wave T — Batch 5 · Subscription upgrade 2/3) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_upgrade_gold.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · diamond-target glow</span>
+    </div>
+    <p class="tpl-summary">
+      Gold→Diamond upgrade card. Sent when a Gold user taps a Diamond-locked edge or a top-tier upgrade CTA.
+      Single-target surface — every signal points at Diamond. <strong>Diamond-color logo glow</strong> (cyan)
+      establishes the tier the user is being asked to step up to. Current-tier chip (Gold) sits inline above
+      the pitch. Lock note ("Diamond edges remain locked") in cyan with internal glow. Feature rows use cyan
+      left-border accent + cyan ▸ bullet for a uniform "everything points at Diamond" read. Price block matches
+      the canonical price-block recipe (cyan left-border + glow). Optional founding banner with internal orange
+      glow. No prod-emoji-icons-per-feature row — those felt arbitrary. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: diamond-target cyan <code>#B9F2FF</code> (canonical). The header glow is cyan because the user IS Gold — this card sells them the next step. CSS variable <code>--target-color</code> drives all cyan-toned elements.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. Title is canonical 14px tracked cyan with inline 💎. Subline added: "One step from our best plan".</li>
+        <li><strong>Current chip inline</strong>: gold chip (3px gold left-border) sits on the same line as "You are on …". Replaces prod's bordered <code>.current-tier</code> with bottom-divider — that read as a footer.</li>
+        <li><strong>Lock note as a contained block</strong>: cyan left-border + soft cyan wash + internal glow. Replaces the prod's flat <code>.lock-note</code> tinted box. The 🔒 icon is canonical (already used on tier_lock_upsell).</li>
+        <li><strong>Feature rows uniform</strong>: every feature row gets cyan left-border + cyan ▸ bullet. Prod cycled through 4 emojis (📈 💰 📊 🎯) which felt arbitrary and distracted from the message. Uniform cyan accents read more decisively.</li>
+        <li><strong>Price block</strong>: cyan left-border + soft cyan wash + glow. 24px JetBrains Mono price with letter-spacing tightened. Matches the canonical price-block recipe used elsewhere in Batch 3.</li>
+        <li><strong>Founding banner</strong>: same internal orange-glow recipe. Conditional on <code>founding_offer</code>.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_upgrade_gold.html</code> with the canonical (lift from <code>/tmp/sub_upgrade_gold_canonical.html</code>). Remove gradient header background + border-bottom; insert cyan <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; replace bordered current-tier with inline gold chip; replace flat lock-note with cyan-glow variant; remove the per-feature emoji-icon cycle and replace with uniform cyan ▸ bullets; restyle price-block to canonical (cyan left-border + glow); rebuild founding banner.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_upgrade_gold_data</code> already emits the right shape (<code>current_tier</code>, <code>diamond_pitch</code>, <code>lock_note</code>, <code>features[]</code>, <code>founding_offer</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_upgrade_gold.png</code> matches <code>canonical/sub_upgrade_gold_canonical_standard.png</code> when no founding offer, <code>_with_founding.png</code> when set. Cyan logo glow visible. Gold chip inline. Cyan-bordered feature rows with ▸ bullets. No per-row emoji icons. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_upgrade_gold_canonical_standard.png</span><span class="variant-tag">Standard upgrade view</span></div><img src="sub_upgrade_gold_canonical_standard.png" alt="sub_upgrade_gold standard"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_upgrade_gold_canonical_with_founding.png</span><span class="variant-tag">With founding offer · 3 days left</span></div><img src="sub_upgrade_gold_canonical_with_founding.png" alt="sub_upgrade_gold with founding"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_upgrade_diamond_max.html (Wave U — Batch 5 · Subscription upgrade 3/3) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_upgrade_diamond_max.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · diamond glow (max-tier)</span>
+    </div>
+    <p class="tpl-summary">
+      "You're already on Diamond" max-tier card. Sent when a Diamond user taps any upgrade-flow CTA.
+      Closes Batch 5 — Subscription upgrade. No upsell — this card affirms the user has the top tier
+      and shows their stats if available. Diamond logo glow (cyan), hero block with cyan left-border +
+      cyan wash + 38px diamond emoji + bold "You have our best plan" headline. Three benefits with
+      cyan tick-circles. Optional 3-stat strip (hit rate · edges · ROI) with tier-color left borders.
+      No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: tier-color cyan (canonical). Solo-tier surface — only Diamond users land here.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. Title canonical 15px tracked cyan with inline 💎. Subline added: "Max tier — every edge unlocked".</li>
+        <li><strong>Hero block — contained, not bare</strong>: cyan left-border + soft cyan wash + 38px 💎 + 18px bold "You have our best plan" + 12px sub. Replaces prod's bare centred icon-above-text — now framed and consistent with the active-state set's hero pattern.</li>
+        <li><strong>Hero copy tightened</strong>: prod paragraph was 3 sentences smashed into <code>.sub-text</code>. Split into 1-line hero-sub ("Nothing is held back — you see <strong>every edge</strong> we publish") + 3 separate benefit rows below.</li>
+        <li><strong>Benefit rows with cyan tick circles</strong>: 16px cyan-circle ✓ glyphs + cyan left-border. Replaces the verbose paragraph layout. Glanceable.</li>
+        <li><strong>Stats strip canonical</strong>: 3-stat row matches the active-state stat pattern (cyan left-border + JetBrains Mono value). Conditional on <code>stats_summary</code>.</li>
+        <li><strong>Stat label change</strong>: "Edges Analysed" → "Edges" (uppercase 9.5px label in 100px-wide tile gets crowded with the longer label). "Avg ROI" kept as-is.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_upgrade_diamond_max.html</code> with the canonical (lift from <code>/tmp/sub_upgrade_diamond_max_canonical.html</code>). Remove gradient header background + border-bottom; insert cyan <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; replace centred-bare hero with the contained <code>.hero-block</code> (cyan left-border + glow); split the 3-line <code>.sub-text</code> into separate <code>.benefit</code> rows with cyan tick circles; restyle stats grid with canonical pattern; shorten "Edges Analysed" label to "Edges".</li>
+        <li><code>bot/card_data_adapters.py:build_sub_upgrade_diamond_max_data</code> already emits the right shape (<code>stats_summary</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_upgrade_diamond_max.png</code> matches <code>canonical/sub_upgrade_diamond_max_canonical_no_stats.png</code> without stats, <code>_with_stats.png</code> with all 3 stats. Cyan logo glow visible. Hero block with cyan left-border. 3 benefit rows with cyan tick circles. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_upgrade_diamond_max_canonical_no_stats.png</span><span class="variant-tag">Affirmation only</span></div><img src="sub_upgrade_diamond_max_canonical_no_stats.png" alt="sub_upgrade_diamond_max no stats"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_upgrade_diamond_max_canonical_with_stats.png</span><span class="variant-tag">With stats · 64% hit · 142 edges · +8% ROI</span></div><img src="sub_upgrade_diamond_max_canonical_with_stats.png" alt="sub_upgrade_diamond_max with stats"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_founding_live.html (Wave V — Batch 6 · Subscription founding 1/4) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_founding_live.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · DETAIL 480×620 · brand-orange (founding)</span>
+    </div>
+    <p class="tpl-summary">
+      Founding-member offer card. Opens Batch 6 — Subscription founding. The hero conversion surface for
+      founding-member sales: hero price (R699/yr in JetBrains Mono yellow), strikethrough on normal price,
+      "Save 71%" pill, monthly equivalent. Two big counters (days left · slots left) with orange-glow
+      highlighting urgency. Five benefit rows. Brand-orange logo glow at full strength (this is THE
+      founding-member surface — the orange runs hot here). No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (founding-strong variant — wider radial spread + higher alpha than the standard orange glow). This is the only surface in the system where the orange runs at full intensity, signalling premium-offer urgency.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient(180deg, #150E00, #1A1200)</code> background and <code>border-bottom: 1px solid #F7931A60</code>. The full-card gold-tinted background <code>linear-gradient(180deg, #0D0A00, #0A0A0A)</code> is also dropped — too heavy. Keeps the canonical near-black <code>#0A0A0A</code> + orange glow.</li>
+        <li><strong>Logo size 30px</strong>: slightly smaller than canonical 32px — DETAIL variant 480×620 has tight vertical budget; saves 2px to fit all benefit rows without scroll.</li>
+        <li><strong>Price hero block</strong>: dual-side orange left+right borders (3px each) + soft internal orange glow. Frames the price as the focal point. Replaces prod's flat <code>.price-hero</code> centring.</li>
+        <li><strong>Price 46px gold + 18px year</strong>: prod was 48px + 16px year — slightly tightened for letterspacing balance. Letter-spacing -1px for the 46px display number to prevent the wide R699 from looking gappy.</li>
+        <li><strong>Save pill</strong>: gold-tinted with stronger 800-weight font. Replaces prod's 700-weight pill.</li>
+        <li><strong>Counters with internal orange glow</strong>: each counter has its own orange left-border + soft orange wash from the left edge. Prod had flat amber-tinted background — canonical adds depth.</li>
+        <li><strong>Benefit rows with orange-circle tick glyphs</strong>: 14px orange-circle ✓ glyphs + orange left-border. Replaces prod's flat amber bullet (<code>::before</code> ✓). Matches the canonical tick-circle pattern used on <code>sub_payment_confirmed</code> and <code>sub_billing_active</code>.</li>
+        <li><strong>Card terminates within 620px</strong>: tight padding/gaps tuned to fit price hero + counters + 5 benefits within the fixed canvas.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates with the last benefit row.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_founding_live.html</code> with the canonical (lift from <code>/tmp/sub_founding_live_canonical.html</code>). Drop the full-card gold-tinted gradient background; remove header gradient + border-bottom; insert orange <code>.logo-glow</code> + <code>.logo-glow-screen</code> at founding-strong intensity; rebuild <code>.price-hero</code> with dual-side orange borders + internal glow; restyle counters with orange-glow recipe; replace flat <code>::before</code> ✓ bullets with 14px orange-circle tick glyphs; tune body padding/gaps to fit 620px.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_founding_live_data</code> already emits the right shape (<code>days_left</code>, <code>slots_remaining</code>, <code>annual_price</code>, <code>monthly_equiv</code>, <code>normal_monthly</code>, <code>savings_pct</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_founding_live.png</code> matches <code>canonical/sub_founding_live_canonical_active.png</code>. Brand-orange logo glow at founding-strong intensity. Price hero with dual orange borders + internal glow. Counters with orange-glow recipe. Benefit rows with orange-circle tick glyphs. No footer. Fits within 480×620.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_founding_live_canonical_active.png</span><span class="variant-tag">3 days · 23 slots · R699/yr · Save 71%</span></div><img src="sub_founding_live_canonical_active.png" alt="sub_founding_live active"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_founding_confirmed.html (Wave W — Batch 6 · Subscription founding 2/4) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_founding_confirmed.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · founding-strong orange + green tick</span>
+    </div>
+    <p class="tpl-summary">
+      Founding-member purchase confirmation. Sent immediately after Stitch confirms a founding-member
+      payment. Hero element is the user's slot number (#NN in 56px gold mono) — a unique founding-member
+      identity moment. Inline green-circle tick beside the title (matches sub_payment_confirmed pattern).
+      5 benefit rows with orange-circle tick glyphs. Joined date in orange JetBrains Mono. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange founding-strong intensity (matches <code>sub_founding_live</code>) — keeps the founding-member visual identity continuous from offer → confirmation.</li>
+        <li><strong>Slot hero — number is the trophy</strong>: 56px gold JetBrains Mono with -2px letter-spacing, inline 26px orange "#" prefix. Replaces prod's bordered slot card with dual-side orange borders + internal glow + blacker hero background. Slot number is the value.</li>
+        <li><strong>Title with inline green-circle tick</strong>: matches the success-affirmation pattern across <code>sub_payment_confirmed</code> + <code>sub_billing_active</code> + <code>sub_status_active</code>. Subline reads "You're locked in — welcome to the founders".</li>
+        <li><strong>Benefits with orange-circle tick glyphs</strong>: 16px orange circles + orange left-border on each row. Matches <code>sub_founding_live</code> for visual continuity.</li>
+        <li><strong>Joined row</strong>: centred, no border-top divider (prod had one — read as a footer). Date in orange JetBrains Mono.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_founding_confirmed.html</code> with the canonical (lift from <code>/tmp/sub_founding_confirmed_canonical.html</code>). Insert founding-strong <code>.logo-glow</code> + <code>.logo-glow-screen</code>; replace bordered slot card with dual-side orange borders + internal glow + 56px gold mono number; add inline green-circle tick to title; add subline; replace flat <code>::before</code> ✓ bullets on benefits with 16px orange-circle tick glyphs; remove <code>.joined</code> border-top divider.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_founding_confirmed_data</code> already emits the right shape (<code>slot_number</code>, <code>founding_price</code>, <code>benefits[]</code>, <code>joined_label</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_founding_confirmed.png</code> matches <code>canonical/sub_founding_confirmed_canonical_slot_7.png</code> (or <code>_slot_42.png</code>) by slot number. Slot number in 56px gold mono. Inline green-circle tick beside title. 5 benefits with orange tick circles. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_founding_confirmed_canonical_slot_7.png</span><span class="variant-tag">Lucky #7 · joined today</span></div><img src="sub_founding_confirmed_canonical_slot_7.png" alt="sub_founding_confirmed slot 7"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_founding_confirmed_canonical_slot_42.png</span><span class="variant-tag">Slot #42 · joined today</span></div><img src="sub_founding_confirmed_canonical_slot_42.png" alt="sub_founding_confirmed slot 42"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_founding_ended.html (Wave X — Batch 6 · Subscription founding 3/4) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_founding_ended.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · diamond pivot glow</span>
+    </div>
+    <p class="tpl-summary">
+      Founding-offer-ended pivot card. Sent when a user attempts to access the founding offer after the
+      campaign window has closed (time-based, not slot-based). The card pivots them toward Diamond at
+      regular pricing. <strong>Diamond cyan glow</strong> establishes the new target. Hero block uses
+      neutral-grey accent (the offer is gone — no orange urgency). Pricing card with cyan accent shows
+      Diamond monthly + annual. No alarm-clock emoji. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: diamond cyan (the new target). Pivots the user from "the deal you wanted" toward "still the best plan available".</li>
+        <li><strong>Removed prod ⏰ alarm-clock emoji</strong>: same reasoning as <code>sub_expiry_notice</code> — the alarm-clock semantics felt punitive and off-brand. Replaced with a 🎁 gift emoji on a neutral-grey hero block.</li>
+        <li><strong>Hero block — grey accent (calm, not urgent)</strong>: the offer is closed; there's no urgency to manufacture. Grey left-border + soft grey wash communicates "the moment has passed" without panic.</li>
+        <li><strong>Pricing card with cyan accent</strong>: Diamond left-border + soft cyan wash. 14px header "Diamond — Current Pricing". Two rows: monthly + annual with "save 33%" pill on annual.</li>
+        <li><strong>Subline carries the pivot</strong>: "Diamond access still available at the regular price" — manages expectations on the title alone.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_founding_ended.html</code> with the canonical (lift from <code>/tmp/sub_founding_ended_canonical.html</code>). Insert cyan <code>.logo-glow</code> + <code>.logo-glow-screen</code>; remove the standalone 36px ⏰ icon and replace with 🎁 in a contained <code>.hero-block</code> (grey left-border + soft wash); add subline; replace prod's bordered <code>.pricing-card</code> with cyan-left-border + soft wash recipe + row-based pricing layout.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_founding_ended_data</code> already emits the right shape (<code>diamond_monthly</code>, <code>diamond_annual</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_founding_ended.png</code> matches <code>canonical/sub_founding_ended_canonical.png</code>. Cyan logo glow visible. Hero block with grey accent + 🎁 (no ⏰). Pricing card with cyan left-border. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_founding_ended_canonical.png</span><span class="variant-tag">Offer closed · pivot to Diamond regular</span></div><img src="sub_founding_ended_canonical.png" alt="sub_founding_ended"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_founding_soldout.html (Wave Y — Batch 6 · Subscription founding 4/4) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_founding_soldout.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · diamond pivot + slot-meter</span>
+    </div>
+    <p class="tpl-summary">
+      Founding-offer-soldout pivot card. Distinct from <code>sub_founding_ended</code> by trigger:
+      sold-out fires when 100/100 slots are claimed (<strong>scarcity</strong>); ended fires when the
+      time window closes (<strong>deadline</strong>). Same pivot destination — Diamond at regular pricing.
+      Closes Batch 6. The slot meter visualises the "100/100 claimed" scarcity in a contained card. Same
+      diamond-cyan glow as <code>sub_founding_ended</code>. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: diamond cyan (the new target). Same recipe as <code>sub_founding_ended</code>.</li>
+        <li><strong>Slot meter — visualises the scarcity</strong>: contained card with "Founding slots claimed" label + 100/100 count + 100% red→orange progress fill. Replaces just-text "100 slots taken" copy with a visual proof.</li>
+        <li><strong>100/100 count in red mono</strong>: <code>#FF7777</code> JetBrains Mono — reads as "everyone got there before you".</li>
+        <li><strong>Removed prod ⏰ alarm-clock emoji</strong>: same as Wave X. 🎁 in a grey-accent hero block instead.</li>
+        <li><strong>Pricing card "Still Available"</strong>: subtitle reads "Diamond — Still Available" (vs "Current Pricing" on Wave X). Reinforces that something IS still on offer, just not the founding deal.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_founding_soldout.html</code> with the canonical (lift from <code>/tmp/sub_founding_soldout_canonical.html</code>). Insert cyan <code>.logo-glow</code> + <code>.logo-glow-screen</code>; remove the standalone 36px ⏰ icon and replace with 🎁 hero-block; add subline; insert a new <code>.slot-meter</code> contained card with red-orange 100% progress fill + 100/100 count in red mono; pricing card with cyan accent + "Still Available" subtitle.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_founding_soldout_data</code> already emits the right shape (just <code>header_logo_b64</code>; pricing is hardcoded at the canonical level). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_founding_soldout.png</code> matches <code>canonical/sub_founding_soldout_canonical.png</code>. Cyan logo glow visible. Hero block with grey accent + 🎁 (no ⏰). Slot meter at 100% red-orange fill. Pricing card "Still Available". No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_founding_soldout_canonical.png</span><span class="variant-tag">100/100 claimed · pivot to Diamond regular</span></div><img src="sub_founding_soldout_canonical.png" alt="sub_founding_soldout"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_cancel_confirm.html (Wave Z — Batch 7 · Subscription cancel/exit 1/3) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_cancel_confirm.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange + amber alert + red lose-list</span>
+    </div>
+    <p class="tpl-summary">
+      Cancellation pre-confirmation card. Opens Batch 7 — Subscription cancel/exit. Last-chance moment
+      before the user confirms cancellation. Brand-orange logo glow with an inline amber "!" glyph in the
+      title. Confirm block uses amber accent (warning, not failure — they haven't cancelled yet).
+      Lose list uses red-circle ✕ markers (genuine loss, not soft caution). Access-until row reassures
+      the user their paid period continues. Calibrated to make cancellation a deliberate action, not
+      a tap-and-regret. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (non-tier surface — applies to anyone). Amber + red are reserved as semantic accents.</li>
+        <li><strong>Inline amber "!" glyph</strong>: <code>#FFBE45</code> circle with white "!". Amber is the "are you sure?" semantic — not red (which says "this failed") and not green (which says "this succeeded"). Matches the inline-glyph pattern across the success/error pair.</li>
+        <li><strong>Confirm block — amber accent</strong>: amber left-border + amber-tinted background + 28px amber circle "!" + bold title + dim sub. Replaces prod's flat ⚠️ emoji with an SVG-style glyph that renders consistently.</li>
+        <li><strong>Lose list — red ✕ markers</strong>: 16px red circles + red left-border on each row. Same pattern as <code>sub_trial_expiry</code>'s "What you've lost" — but using the marker AS the bullet for stronger visual loss-aversion (cancel surface needs more friction than trial-expired).</li>
+        <li><strong>Access-until row</strong>: contained card with JetBrains Mono date. Reassures continued paid access — softens the cancel decision so it feels less binary.</li>
+        <li><strong>Removed prod ⚠️ standalone emoji</strong>: replaced by the amber-circle "!" glyph in the confirm block. Consistent with the glyph treatment across the subscription set.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_cancel_confirm.html</code> with the canonical (lift from <code>/tmp/sub_cancel_confirm_canonical.html</code>). Insert brand-orange <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add inline amber "!" glyph to title; add subline; replace prod's flat ⚠️ emoji block with the contained <code>.confirm-block</code> (amber circle glyph + amber left-border + glow); restyle <code>.lose-list</code> with red-circle ✕ markers + red left-border + dark-red background tint; add the access-until row.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_cancel_confirm_data</code> already emits the right shape (<code>plan_name</code>, <code>access_until</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_cancel_confirm.png</code> matches <code>canonical/sub_cancel_confirm_canonical_gold_monthly.png</code> (or <code>_diamond_annual.png</code> by plan). Brand-orange logo glow + inline amber "!" glyph in title. Amber confirm block with circle "!" glyph (no ⚠️ emoji). Red ✕ markers on lose-list. Access-until row. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_cancel_confirm_canonical_gold_monthly.png</span><span class="variant-tag">Gold Monthly · access to 27 May</span></div><img src="sub_cancel_confirm_canonical_gold_monthly.png" alt="sub_cancel_confirm gold monthly"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_cancel_confirm_canonical_diamond_annual.png</span><span class="variant-tag">Diamond Annual · access to 27 Apr 2027</span></div><img src="sub_cancel_confirm_canonical_diamond_annual.png" alt="sub_cancel_confirm diamond annual"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_cancel_done.html (Wave AA — Batch 7 · Subscription cancel/exit 2/3) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_cancel_done.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange + bronze accent + green tick</span>
+    </div>
+    <p class="tpl-summary">
+      Cancellation success card. Sent immediately after the user confirms cancellation. Bittersweet
+      surface — the action succeeded (green tick) but the user reverted to Bronze (bronze tier accent).
+      Hero block with bronze left-border + 36px green tick circle + "Subscription cancelled" headline.
+      "Now on" Bronze block shows what they have. Optional access-until row when paid access continues.
+      Friendly tone, no anti-churn messaging, no re-subscribe shaming. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (non-tier surface). Bronze accent on the hero + now-on blocks carries the new tier identity.</li>
+        <li><strong>Title with green tick</strong>: 18px green circle ✓. Confirms the action succeeded (this is a state change, not a failure).</li>
+        <li><strong>Hero — green tick + bronze left-border</strong>: 36px green tick circle (success) + bronze left-border + soft bronze wash. The hybrid colour signals "the cancel succeeded AND you're now on Bronze".</li>
+        <li><strong>Re-subscribe in soft text</strong>: <code>/subscribe</code> as orange code-pill inside the hero-sub. No pushy "RE-SUBSCRIBE NOW" CTA — that would feel like the bot didn't accept the user's decision.</li>
+        <li><strong>"Now on" Bronze block</strong>: bronze left-border + bronze wash + 🥉 emoji + "Bronze — Free" header + plan-detail line ("3 tips per day · 24h delayed edges · basic match analysis"). Helps the user understand exactly what they still have.</li>
+        <li><strong>Access-until row (conditional)</strong>: only shows when <code>access_until</code> is set. JetBrains Mono date. Explicit reassurance that paid access doesn't end immediately.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_cancel_done.html</code> with the canonical (lift from <code>/tmp/sub_cancel_done_canonical.html</code>). Insert brand-orange <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add inline green-circle tick to title; add subline; build the hero-block with 36px green tick + bronze left-border + soft bronze wash; build the now-on block with bronze accent + plan detail; add conditional access-until row.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_cancel_done_data</code> already emits the right shape (<code>access_until</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_cancel_done.png</code> matches <code>canonical/sub_cancel_done_canonical_with_access.png</code> when <code>access_until</code> is set, <code>_no_access.png</code> when empty. Brand-orange logo glow + inline green tick. Hero with 36px green tick + bronze accent. Bronze "Now on" block. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_cancel_done_canonical_with_access.png</span><span class="variant-tag">Paid access continues until 27 May</span></div><img src="sub_cancel_done_canonical_with_access.png" alt="sub_cancel_done with access"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_cancel_done_canonical_no_access.png</span><span class="variant-tag">Cancelled · no remaining paid access</span></div><img src="sub_cancel_done_canonical_no_access.png" alt="sub_cancel_done no access"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -1214,7 +1560,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(32 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(24 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -1257,15 +1603,7 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">settings_sports.html</span><span class="review-card-tag">In review</span></div><img src="settings_sports.png" alt="settings_sports.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_complete.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_complete.png" alt="story_quiz_complete.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_step.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_step.png" alt="story_quiz_step.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_confirm.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_confirm.png" alt="sub_cancel_confirm.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_done.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_done.png" alt="sub_cancel_done.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_email_redirect.html</span><span class="review-card-tag">In review</span></div><img src="sub_email_redirect.png" alt="sub_email_redirect.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_confirmed.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_confirmed.png" alt="sub_founding_confirmed.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_ended.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_ended.png" alt="sub_founding_ended.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_live.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_live.png" alt="sub_founding_live.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_soldout.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_soldout.png" alt="sub_founding_soldout.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_diamond_max.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_diamond_max.png" alt="sub_upgrade_diamond_max.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_gold.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_gold.png" alt="sub_upgrade_gold.html"></div>
   </div>
 </div>
 
