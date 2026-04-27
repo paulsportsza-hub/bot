@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(33 design-locked · 66 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(34 design-locked · 68 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -1654,10 +1654,10 @@ if user_tier == "gold":
     <div class="design-notes">
       <h4>Design notes</h4>
       <ul>
-        <li><strong>Step-progress dots pattern</strong>: 5 × 16×4px pills, active = orange, done = orange, upcoming = grey. Reusable across <code>onboarding_experience</code> + <code>onboarding_sports</code> + <code>onboarding_favourites</code> + future <code>onboarding_risk</code> + <code>onboarding_notify</code>. <strong>Replaces prod's "STEP 1 OF 5" plain-text indicator</strong> with a visual progress affordance.</li>
+        <li><strong>Step-progress dots pattern</strong>: 5 × 16×4px pills, active = orange, done = orange, upcoming = grey. Reusable across <code>onboarding_experience</code> + <code>onboarding_sports</code> + <code>onboarding_favourites_manual</code> + future <code>onboarding_risk</code> + <code>onboarding_notify</code>. <strong>Replaces prod's "STEP 1 OF 5" plain-text indicator</strong> with a visual progress affordance.</li>
         <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. <code>.step-badge</code> plain-text replaced by progress-dots row.</li>
         <li><strong>Question + hint</strong>: 17px bold question (was 16px) — slightly larger for stronger anchoring. 12px hint underneath in secondary text.</li>
-        <li><strong>Option rows</strong>: 22px emoji + bold label + 11px description. Grey left-border (3px) on the unselected state — sets up the <code>.selected</code> class to swap to orange-3px-left-border + soft wash. Same row pattern as <code>onboarding_sports</code> + <code>onboarding_favourites</code>.</li>
+        <li><strong>Option rows</strong>: 22px emoji + bold label + 11px description. Grey left-border (3px) on the unselected state — sets up the <code>.selected</code> class to swap to orange-3px-left-border + soft wash. Same row pattern as <code>onboarding_sports</code>.</li>
         <li><strong>No footer</strong> per universal §7.</li>
       </ul>
     </div>
@@ -1716,27 +1716,37 @@ if user_tier == "gold":
     </div>
   </section>
 
-  <!-- ── onboarding_favourites.html (Wave AF — Batch 8 · Onboarding core 4/8) ── -->
+  <!-- ── onboarding_favourites_manual.html (Wave AF — Batch 8 · Onboarding core 4/8) ── -->
+  <!-- CORRECTION 2026-04-27: original Wave AF rendered onboarding_favourites.html
+       (list-with-buttons UI). Telethon capture confirmed the actual prod flow at
+       Step 3/5 is text-input via onboarding_favourites_manual.html → fuzzy match →
+       onboarding_team_celebration.html. The list-with-buttons template is dead code
+       in onboarding (only reachable via deprecated "back to list" path). Replaced
+       Wave AF with the correct primary-flow templates. -->
   <section class="template-block">
     <div class="tpl-header">
-      <span class="tpl-name">onboarding_favourites.html</span>
+      <span class="tpl-name">onboarding_favourites_manual.html</span>
       <span class="tpl-status canonical">✅ Canonical</span>
-      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + sport-context header</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + green type-here CTA</span>
     </div>
     <p class="tpl-summary">
-      Step 3 of 5 — favourite teams selection within a sport context. Card iterates per sport selected
-      in Step 2 — header shows the current sport's emoji + name as the title (replacing the generic step
-      title). Multi-select team rows with the same orange-tick selection pattern as <code>onboarding_sports</code>.
-      "{N} selected" chip + 5-team cap signalled in the hint. No footer.
+      Step 3 of 5 — favourite teams via text input. <strong>This is the actual primary flow at Step 3/5</strong>
+      — the user does NOT pick teams from a list; they TYPE comma-separated team names and the bot fuzzy-matches
+      them. Confirmed via Telethon capture against <code>@mzansiedge_bot</code> on 2026-04-27. Header iterates
+      per sport (sport-context emoji + name). Body has the typing instruction + green "type your answer in the
+      chat below" CTA + an example box showing valid input format. After typing, the user sees
+      <code>onboarding_team_celebration.html</code> with their matched teams and per-team cheers (next section).
+      No footer.
     </p>
 
     <div class="design-notes">
       <h4>Design notes</h4>
       <ul>
         <li><strong>Glow type</strong>: brand-orange.</li>
-        <li><strong>Header swap — sport-context title</strong>: instead of a generic "FAVOURITES" title, the header shows the current sport (emoji + name) since this card iterates per sport. Replaces prod's same approach but in canonical typography (14px tracked + 18px emoji).</li>
-        <li><strong>Selection states reuse onboarding_sports recipe</strong>: grey-default + orange-selected (left-border, wash, orange-circle ✓ glyph). Smaller team rows than sport rows (11×14px padding vs 12×14px) since teams lists can be longer.</li>
-        <li><strong>Empty-hint state</strong>: italic "Loading teams…" centred in a 16px-padding placeholder. Same as prod copy, restyled for italic emphasis.</li>
+        <li><strong>Header — sport-context</strong>: same step-progress dots pattern (3 done/active, 2 grey) + sport emoji + name. Same architecture as Wave AE (sports) but the title slot is replaced by the current sport's identity.</li>
+        <li><strong>Type-here CTA — GREEN accent</strong>: <code>#5DD68F</code> left-border + soft green wash + green "Type your answer in the chat below ↓" + ⌨️ keyboard glyph. Green is the canonical "do this now" affordance — same hue as the green tick on success affirmations (<code>sub_payment_confirmed</code>, <code>sub_billing_active</code>) but used here for an actionable instruction.</li>
+        <li><strong>Example box — neutral grey accent</strong>: secondary helper info, not the action. <code>EXAMPLE</code> label in 9.5px secondary-grey + 12px white sample text. Replaces prod's flat tinted box.</li>
+        <li><strong>Why the list-with-buttons depiction was wrong</strong>: prod's <code>onboarding_favourites.html</code> template (list-with-buttons) is reachable only via a deprecated <code>ob_fav_back</code> callback path. The PRIMARY entry to Step 3/5 is <code>_show_next_team_prompt</code> which renders <code>onboarding_favourites_manual.html</code>. User types, fuzzy-match runs, matched teams display in the celebration card. There is no real "list-with-buttons" UX in modern onboarding.</li>
         <li><strong>No footer</strong> per universal §7.</li>
       </ul>
     </div>
@@ -1744,14 +1754,59 @@ if user_tier == "gold":
     <div class="impl-targets">
       <h4>Implementer agent — targets</h4>
       <ul>
-        <li>Replace <code>bot/card_templates/onboarding_favourites.html</code> with the canonical (lift from <code>/tmp/onboarding_favourites_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; replace plain <code>.step-badge</code> with <code>.step-progress</code> dots + "Step 3 of 5" label; build <code>.sport-header</code> in the header zone for emoji+name display; restyle <code>.team-row</code> selection states with orange-circle ✓ glyph; italicise empty-hint copy.</li>
-        <li><code>bot/card_data_adapters.py:build_onboarding_favourites_data</code> already emits the right shape (<code>sport</code>, <code>teams[]</code>, <code>selected_count</code>). No data-side changes needed.</li>
-        <li>Acceptance: <code>latest/onboarding_favourites.png</code> matches <code>canonical/onboarding_favourites_canonical_soccer.png</code> for soccer with 3 selected. Step-progress dots (3 active+done, 2 grey). Sport-context header. Orange-circle ✓ glyphs on selected rows. No footer.</li>
+        <li>Replace <code>bot/card_templates/onboarding_favourites_manual.html</code> with the canonical (lift from <code>/tmp/onboarding_favourites_manual_canonical.html</code>). Remove gradient header background + border-bottom; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; replace plain <code>.step-badge</code> with <code>.step-progress</code> dots + "Step 3 of 5" label; restyle <code>.chat-directive</code> as the green-accent <code>.type-cta</code> (left-border + soft glow + ⌨️ glyph); restyle <code>.example-box</code> with neutral grey left-border.</li>
+        <li><strong>Optional follow-up</strong>: deprecate <code>bot/card_templates/onboarding_favourites.html</code> (the list-with-buttons template). It's only reachable via the <code>ob_fav_back</code> deprecated callback path. If kept, it should also follow the canonical patterns — but better practice is to remove the template + the <code>handle_ob_fav_back</code> handler entirely.</li>
+        <li><code>bot/card_data_adapters.py:build_onboarding_favourites_manual_data</code> already emits the right shape (<code>sport</code>, <code>fav_label</code>, <code>example</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/onboarding_favourites_manual.png</code> matches <code>canonical/onboarding_favourites_manual_canonical_soccer.png</code>. Brand-orange logo glow + step-progress dots (3 done/active, 2 grey) + sport-context header. Green type-here CTA with ⌨️. Grey example box. No footer.</li>
       </ul>
     </div>
 
     <div class="variants">
-      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_favourites_canonical_soccer.png</span><span class="variant-tag">Soccer · 3 of 6 teams selected</span></div><img src="onboarding_favourites_canonical_soccer.png" alt="onboarding_favourites soccer"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_favourites_manual_canonical_soccer.png</span><span class="variant-tag">Soccer · type your answer prompt</span></div><img src="onboarding_favourites_manual_canonical_soccer.png" alt="onboarding_favourites_manual soccer"></div>
+    </div>
+  </section>
+
+  <!-- ── onboarding_team_celebration.html (Wave AF-2 — Batch 8 · Onboarding core 5/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">onboarding_team_celebration.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + green tick rows + amber unmatched</span>
+    </div>
+    <p class="tpl-summary">
+      <strong>The dynamic team list Paul referenced</strong> — sent immediately after the user types their team
+      names at Step 3/5. The bot fuzzy-matches each name and displays them as bordered rows with green tick +
+      team name + per-team cheer (Amakhosi! Come on you Gunners! YNWA!). Unrecognised names render in an
+      amber-accented "Not recognised" section. Summary line at the bottom shows "{N} teams added". <code>Continue</code>
+      and <code>Try Again</code> buttons follow (handled by Telegram's inline keyboard, not visible here).
+      No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange.</li>
+        <li><strong>Header — sport emoji big + "NICE PICKS!"</strong>: 26px sport emoji block-displayed above 15px tracked white "NICE PICKS!" headline. Combat sport gets "WAR ROOM LOADED!" instead per <code>build_onboarding_team_celebration_data</code>.</li>
+        <li><strong>Matched rows — green left-border + green-circle tick</strong>: 18px green-circle ✓ glyph (same recipe as success-affirmation across the canonical set) + 14px team name + 12px cheer line. Every matched team gets a per-team cheer from <code>_get_team_cheer</code> (TEAM_CELEBRATIONS dict, with sport-context overrides).</li>
+        <li><strong>Unmatched section — amber accent</strong>: amber left-border + amber-tinted bg + 18px amber-circle "!" glyph. Distinct semantic from red ✕ (cancel-confirm lose-list): unmatched isn't a failure, it's "couldn't find this — try again or skip". Calmer tone.</li>
+        <li><strong>Summary line</strong>: centred bold "{N} teams added" with N highlighted in orange. No border-top divider (prod had one — read as a footer).</li>
+        <li><strong>This IS the dynamic list update</strong>: the user types names, the bot matches them, and this card shows the running list. For a 2nd batch of teams (user types more), the bot re-renders this card with the combined list.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/onboarding_team_celebration.html</code> with the canonical (lift from <code>/tmp/onboarding_team_celebration_canonical.html</code>). Remove gradient header background + border-bottom; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; rebuild <code>.matched-row</code> with green left-border + 18px green-circle ✓ glyph (replaces flat ✅ emoji); rebuild <code>.unmatched-row</code> with amber left-border + 18px amber-circle "!" glyph (replaces flat ⚠️ emoji); remove <code>.divider</code> bottom-border above <code>.summary</code>; restyle summary line with orange-highlighted count.</li>
+        <li><code>bot/card_data_adapters.py:build_onboarding_team_celebration_data</code> already emits the right shape (<code>matched[]</code>, <code>unmatched[]</code>, <code>sport_emoji</code>, <code>header_text</code>, <code>summary_line</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/onboarding_team_celebration.png</code> matches <code>canonical/onboarding_team_celebration_canonical_soccer.png</code> when only matched teams, <code>_with_unmatched.png</code> when there are unrecognised entries. Brand-orange logo glow. Green-tick matched rows with cheers. Amber unmatched rows. No border-top above summary. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_team_celebration_canonical_soccer.png</span><span class="variant-tag">3 matched · Chiefs / Arsenal / Liverpool</span></div><img src="onboarding_team_celebration_canonical_soccer.png" alt="onboarding_team_celebration soccer"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_team_celebration_canonical_with_unmatched.png</span><span class="variant-tag">2 matched + 2 unrecognised</span></div><img src="onboarding_team_celebration_canonical_with_unmatched.png" alt="onboarding_team_celebration with unmatched"></div>
     </div>
   </section>
 </div>
@@ -1761,7 +1816,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(19 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(17 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -1773,7 +1828,7 @@ if user_tier == "gold":
       <li><strong>Batch 5 — Subscription upgrade (3 cards):</strong> <code>sub_upgrade_bronze.html</code>, <code>sub_upgrade_gold.html</code>, <code>sub_upgrade_diamond_max.html</code>. Tier-color glow (target tier).</li>
       <li><strong>Batch 6 — Subscription founding (4 cards):</strong> <code>sub_founding_live.html</code>, <code>sub_founding_confirmed.html</code>, <code>sub_founding_ended.html</code>, <code>sub_founding_soldout.html</code>. Brand-orange glow + 🎁 founding badge.</li>
       <li><strong>Batch 7 — Subscription cancel/exit (3 cards):</strong> <code>sub_cancel_confirm.html</code>, <code>sub_cancel_done.html</code>, <code>sub_email_redirect.html</code>. Brand-orange glow.</li>
-      <li><strong>Batch 8 — Onboarding core (8 cards):</strong> <code>onboarding_welcome.html</code>, <code>onboarding_experience.html</code>, <code>onboarding_sports.html</code>, <code>onboarding_favourites.html</code>, <code>onboarding_favourites_manual.html</code>, <code>onboarding_fuzzy_suggest.html</code>, <code>onboarding_team_celebration.html</code>, <code>onboarding_edge_explainer.html</code>. Brand-orange glow.</li>
+      <li><strong>Batch 8 — Onboarding core (7 cards):</strong> <code>onboarding_welcome.html</code>, <code>onboarding_experience.html</code>, <code>onboarding_sports.html</code>, <code>onboarding_favourites_manual.html</code>, <code>onboarding_team_celebration.html</code>, <code>onboarding_fuzzy_suggest.html</code>, <code>onboarding_edge_explainer.html</code>. Brand-orange glow. <em>Note: <code>onboarding_favourites.html</code> (list-with-buttons) was removed from this batch — Telethon capture confirmed Step 3/5 is text-input only via <code>onboarding_favourites_manual.html</code>; the list-with-buttons template is dead code in onboarding flow.</em></li>
       <li><strong>Batch 9 — Onboarding finalise (7 cards):</strong> <code>onboarding_risk.html</code>, <code>onboarding_bankroll.html</code>, <code>onboarding_bankroll_custom.html</code>, <code>onboarding_notify.html</code>, <code>onboarding_summary.html</code>, <code>onboarding_done.html</code>, <code>onboarding_restart.html</code>. Brand-orange glow.</li>
       <li><strong>Batch 10 — Story quiz + utility (8 cards):</strong> <code>story_quiz_step.html</code>, <code>story_quiz_complete.html</code>, <code>profile_home.html</code>, <code>my_teams.html</code>, <code>settings_sports.html</code>, <code>help.html</code>, <code>bookmaker_directory.html</code>, <code>home_winners.html</code>. Brand-orange glow.</li>
     </ul>
@@ -1789,13 +1844,11 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_bankroll_custom.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_bankroll_custom.png" alt="onboarding_bankroll_custom.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_done.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_done.png" alt="onboarding_done.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_edge_explainer.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_edge_explainer.png" alt="onboarding_edge_explainer.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_favourites_manual.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_favourites_manual.png" alt="onboarding_favourites_manual.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_fuzzy_suggest.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_fuzzy_suggest.png" alt="onboarding_fuzzy_suggest.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_notify.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_notify.png" alt="onboarding_notify.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_restart.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_restart.png" alt="onboarding_restart.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_risk.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_risk.png" alt="onboarding_risk.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_summary.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_summary.png" alt="onboarding_summary.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_team_celebration.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_team_celebration.png" alt="onboarding_team_celebration.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">profile_home.html</span><span class="review-card-tag">In review</span></div><img src="profile_home.png" alt="profile_home.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">settings_sports.html</span><span class="review-card-tag">In review</span></div><img src="settings_sports.png" alt="settings_sports.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_complete.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_complete.png" alt="story_quiz_complete.html"></div>
