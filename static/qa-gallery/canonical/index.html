@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(17 design-locked · 40 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(20 design-locked · 46 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -1073,6 +1073,140 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">sub_billing_inactive_canonical_never_subscribed.png</span><span class="variant-tag">Never subscribed · free plan only</span></div><img src="sub_billing_inactive_canonical_never_subscribed.png" alt="sub_billing_inactive never subscribed"></div>
     </div>
   </section>
+
+  <!-- ── sub_trial_expiry.html (Wave Q — Batch 4 · Subscription state 4/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_trial_expiry.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · diamond-color glow (post-trial)</span>
+    </div>
+    <p class="tpl-summary">
+      Diamond-trial expiry card. Sent when a user's 7-day Diamond trial ends — they're now on Bronze. This is
+      the highest-conversion-pressure surface in the subscription state set: the user has just experienced full
+      Diamond access for a week and lost it. Diamond-color logo glow (cyan) carries the "what you had" memory.
+      Hero block uses the same cyan accent. "What you've lost" list uses red ✕ markers — direct, honest. Stats
+      row shows days explored + edge accuracy if positive (green). Side-by-side Gold/Diamond upgrade pills with
+      tier-color left borders. Removed the "Bet responsibly" footer (responsible-gambling copy is for monthly
+      reports + re-engagement nudges, not in-flow upgrade screens). No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: diamond cyan <code>#B9F2FF</code> (canonical) — keeps the visual memory of the trial tier the user just lost. Single-tier surface: this card only ever fires after a Diamond trial ends.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. Title is cyan (was white). Subline added: "You're back on Bronze — keep your edge".</li>
+        <li><strong>Hero block</strong>: cyan left-border + soft cyan wash. Replaces prod's bare centred icon-above-text — now framed and consistent with the active-state set's hero pattern.</li>
+        <li><strong>"What you've lost" with red ✕ markers</strong>: prod had bullets in the hero <code>.trial-sub</code> as soft text. Promoted to a contained block with red ✕ markers — direct loss-aversion framing without crossing into hostile.</li>
+        <li><strong>Stats grid polished</strong>: edge accuracy in green (<code>#5DD68F</code>) when positive — "you saw real performance during the trial" reinforcement. JetBrains Mono values, contained card styling.</li>
+        <li><strong>Upgrade pills with tier-color left borders</strong>: Gold + Diamond, same recipe as <code>sub_status_bronze</code>. 3px tier-color left border + matching soft tier wash.</li>
+        <li><strong>Removed "Bet responsibly. 18+ only." footer</strong>: per CLAUDE.md notification content laws (rule 5), responsible-gambling footer applies to monthly reports, trial messages, and re-engagement nudges — but the trial-expiry card itself is the conversion CTA, not a passive teaser. Footer suppressed to keep the call-to-action clean. (RG copy still fires through the parallel notification text.)</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_trial_expiry.html</code> with the canonical (lift from <code>/tmp/sub_trial_expiry_canonical.html</code>). Remove gradient header background + border-bottom; insert cyan <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; replace the trial-header block with the new <code>.hero-block</code> pattern (cyan left-border + glow); add the <code>.lost-block</code> with red ✕ markers; restyle <code>.stats-grid</code> with JetBrains Mono + green hit-rate; replace flat <code>.up-pill</code> with tier-color-left-border variants; remove <code>.rg-footer</code>.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_trial_expiry_data</code> already emits the right shape (<code>days_used</code>, <code>hit_rate_pct</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_trial_expiry.png</code> matches <code>canonical/sub_trial_expiry_canonical_with_hit_rate.png</code> when <code>hit_rate &gt; 0</code>, else <code>_no_hit_rate.png</code>. Cyan logo glow visible. Hero block has cyan left-border. "What you've lost" list with red ✕ markers. Edge-accuracy stat in green when positive. No "Bet responsibly" footer. No card footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_trial_expiry_canonical_with_hit_rate.png</span><span class="variant-tag">7 days · 62% accuracy</span></div><img src="sub_trial_expiry_canonical_with_hit_rate.png" alt="sub_trial_expiry with hit rate"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_trial_expiry_canonical_no_hit_rate.png</span><span class="variant-tag">7 days · no settled edges yet</span></div><img src="sub_trial_expiry_canonical_no_hit_rate.png" alt="sub_trial_expiry no hit rate"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_expiry_notice.html (Wave R — Batch 4 · Subscription state 5/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_expiry_notice.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · old-tier-color glow + bronze accent</span>
+    </div>
+    <p class="tpl-summary">
+      Subscription-expired notice. Sent when a paid subscription ends and the user reverts to Bronze. Distinct
+      from <code>sub_trial_expiry</code>: trial-expiry follows a 7-day intro, this fires on actual paid-tier
+      lapse (renewal failure, cancellation, period-end). Closes Batch 4 (Subscription state). The header glow
+      uses the <strong>old tier color</strong> — yellow if they were Gold, cyan if Diamond — preserving the
+      "what you had" identity. Tier-flow row visualises old → bronze transition. Renew CTA with internal orange
+      glow. No prod ⏰ alarm-clock emoji. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: old-tier-color (whichever tier the user just lost). Single template, two old-tier classes (<code>.tier-old-gold</code> / <code>.tier-old-diamond</code>) drive the CSS variables.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. Subline added: "Your access has reverted to Bronze".</li>
+        <li><strong>Removed ⏰ alarm-clock emoji</strong>: prod had a 36px ⏰ centred above the message — alarm-clock semantics felt punitive. The tier-flow row already communicates expiry visually (old → bronze).</li>
+        <li><strong>Tier-flow row — chips with left borders</strong>: old-tier chip has 3px left-border in old-tier color + soft tier wash. New-tier chip is bronze (3px <code>#CD7F32</code> + bronze wash). Cleaner than the prod border-only tier-chips — matches the canonical chip pattern used in tier_lock_upsell.</li>
+        <li><strong>Renew CTA with internal orange glow</strong>: same orange-glow architecture as the founding banner across the subscription set. <code>/subscribe</code> as a strong orange code-pill — clear single action.</li>
+        <li><strong>Card terminates immediately after the renew CTA</strong>: prod left bottom-padding only. Canonical card matches the pattern with 18px body bottom-padding.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_expiry_notice.html</code> with the canonical (lift from <code>/tmp/sub_expiry_notice_canonical.html</code>). Remove gradient header background + border-bottom; switch to <code>.card.tier-old-{tier}</code> + CSS vars; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; remove the standalone ⏰ icon; replace flat <code>.tier-chip</code> rules with left-border variants; replace bordered <code>.renew-hint</code> with internal-glow <code>.renew-cta</code>.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_expiry_notice_data</code> already emits the right shape (<code>old_tier</code>, <code>old_tier_emoji</code>, <code>old_tier_name</code>, <code>new_tier</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_expiry_notice.png</code> matches <code>canonical/sub_expiry_notice_canonical_from_gold.png</code> for Gold expiry, <code>_from_diamond.png</code> for Diamond. Old-tier-color logo glow visible. No ⏰ emoji. Tier-flow chips with left borders. Renew CTA with internal orange glow. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_expiry_notice_canonical_from_gold.png</span><span class="variant-tag">Gold expired · yellow glow</span></div><img src="sub_expiry_notice_canonical_from_gold.png" alt="sub_expiry_notice from gold"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_expiry_notice_canonical_from_diamond.png</span><span class="variant-tag">Diamond expired · cyan glow</span></div><img src="sub_expiry_notice_canonical_from_diamond.png" alt="sub_expiry_notice from diamond"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_upgrade_bronze.html (Wave S — Batch 5 · Subscription upgrade 1/3) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_upgrade_bronze.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + tier-pill plans</span>
+    </div>
+    <p class="tpl-summary">
+      Upgrade-from-Bronze card. Opens Batch 5 — Subscription upgrade. Sent when a Bronze user taps an upgrade
+      CTA (from anywhere — daily-limit hit, locked-tier tap, /subscribe). Dual-target surface: shows both
+      Gold and Diamond plans side-by-side with differentiator + features. Brand-orange logo glow (multi-tier
+      surface — both upgrade paths reachable). Plan tiles use tier-color left borders + matching soft tier wash.
+      Optional founding banner with internal orange glow. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (multi-tier surface — Bronze user funnels to either Gold or Diamond). Per-element tier signalling on plan tiles handles the per-tier identity.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. Subline added: "Unlock the full edge system".</li>
+        <li><strong>Current-tier chip</strong>: bronze left-border chip inline with "You are on … — the free plan." Replaces prod's bordered <code>.current-tier</code> bottom-divider treatment. Matches the canonical chip pattern.</li>
+        <li><strong>Plan tiles with tier-color left borders + glow</strong>: 3px Gold left-border + cyan radial-gradient glow on Gold tile (yellow); 3px Diamond left-border + cyan glow on Diamond. Replaces prod's tinted full borders — left-border accent is more decisive and scales better at small font sizes.</li>
+        <li><strong>Plan-features list</strong>: only renders when <code>plan.features</code> is set (Diamond gets it; Gold gets only the differentiator). Matches the data shape from <code>build_sub_upgrade_bronze_data</code>.</li>
+        <li><strong>Founding banner</strong>: same internal orange-glow recipe as <code>sub_plans</code> / <code>sub_billing_active</code> / <code>sub_status_bronze</code>. Conditional on <code>founding_offer</code>.</li>
+        <li><strong>Plan-feature bullet color</strong>: cyan (matches Diamond brand) — the features bullet only appears under Diamond, so cyan is the contextually correct accent.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates with founding banner (or last plan tile if not founding).</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_upgrade_bronze.html</code> with the canonical (lift from <code>/tmp/sub_upgrade_bronze_canonical.html</code>). Remove gradient header background + border-bottom; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; replace bordered current-tier with inline chip pattern; replace flat <code>.plan</code> backgrounds with tier-color-left-border + radial-glow recipe; restyle features list with cyan bullets; rebuild founding banner with internal-glow recipe.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_upgrade_bronze_data</code> already emits the right shape (<code>current_tier</code>, <code>target_plans[]</code>, <code>founding_offer</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_upgrade_bronze.png</code> matches <code>canonical/sub_upgrade_bronze_canonical_standard.png</code> when no founding offer, <code>_with_founding.png</code> when set. Brand-orange centred logo glow visible. Plan tiles have tier-color left borders + glow. Bronze chip inline in the "You are on …" row. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_upgrade_bronze_canonical_standard.png</span><span class="variant-tag">Standard upgrade view</span></div><img src="sub_upgrade_bronze_canonical_standard.png" alt="sub_upgrade_bronze standard"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_upgrade_bronze_canonical_with_founding.png</span><span class="variant-tag">With founding offer · 3 days left</span></div><img src="sub_upgrade_bronze_canonical_with_founding.png" alt="sub_upgrade_bronze with founding"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -1080,7 +1214,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(35 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(32 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -1126,13 +1260,10 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_confirm.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_confirm.png" alt="sub_cancel_confirm.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_done.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_done.png" alt="sub_cancel_done.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_email_redirect.html</span><span class="review-card-tag">In review</span></div><img src="sub_email_redirect.png" alt="sub_email_redirect.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_expiry_notice.html</span><span class="review-card-tag">In review</span></div><img src="sub_expiry_notice.png" alt="sub_expiry_notice.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_confirmed.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_confirmed.png" alt="sub_founding_confirmed.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_ended.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_ended.png" alt="sub_founding_ended.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_live.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_live.png" alt="sub_founding_live.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_soldout.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_soldout.png" alt="sub_founding_soldout.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_trial_expiry.html</span><span class="review-card-tag">In review</span></div><img src="sub_trial_expiry.png" alt="sub_trial_expiry.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_bronze.png" alt="sub_upgrade_bronze.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_diamond_max.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_diamond_max.png" alt="sub_upgrade_diamond_max.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_gold.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_gold.png" alt="sub_upgrade_gold.html"></div>
   </div>

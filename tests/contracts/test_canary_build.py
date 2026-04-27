@@ -193,7 +193,7 @@ async def test_cache_round_trips_narrative_source(tmp_path) -> None:
 async def test_generate_one_serves_w84_when_verify_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_generate_dependencies(monkeypatch)
 
-    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec: "prompt")
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec, match_preview=False, return_split=False: ("static", "dynamic") if return_split else "prompt")
     monkeypatch.setattr(
         pregen,
         "verify_shadow_narrative",
@@ -220,7 +220,7 @@ async def test_generate_one_silver_bronze_skips_w84_polish(
     """
     _patch_generate_dependencies(monkeypatch)
 
-    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec: "prompt")
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec, match_preview=False, return_split=False: ("static", "dynamic") if return_split else "prompt")
     # If the gate leaks, verify_shadow_narrative would be invoked — set a sentinel
     # that would incorrectly flip the source to w84 if it were ever called.
     monkeypatch.setattr(
@@ -242,7 +242,7 @@ async def test_generate_one_silver_bronze_skips_w84_polish(
 async def test_generate_one_falls_back_to_w82_when_verify_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_generate_dependencies(monkeypatch)
 
-    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec: "prompt")
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec, match_preview=False, return_split=False: ("static", "dynamic") if return_split else "prompt")
     monkeypatch.setattr(
         pregen,
         "verify_shadow_narrative",
@@ -260,7 +260,7 @@ async def test_generate_one_falls_back_to_w82_when_verify_fails(monkeypatch: pyt
 async def test_generate_one_falls_back_to_w82_on_w84_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_generate_dependencies(monkeypatch)
 
-    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec: "prompt")
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec, match_preview=False, return_split=False: ("static", "dynamic") if return_split else "prompt")
 
     async def _boom(**kwargs):
         raise RuntimeError("anthropic down")

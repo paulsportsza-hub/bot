@@ -2227,7 +2227,7 @@ def _format_settlement_section(pack: EvidencePack) -> tuple[str | None, str | No
     return "\n".join(lines), None
 
 
-def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False) -> str:
+def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False, return_split: bool = False) -> "str | tuple[str, str]":
     """Format the approved Phase B shadow reasoning prompt from evidence only.
 
     match_preview=True: match preview mode for non-edge matches — no betting
@@ -2534,6 +2534,10 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — resolving it ('discount the injury concern'), hedging on it ('live with the squad-rotation risk'), or pricing it ('the form gap is already in the number'). Generic closers like 'all things considered' or 'on balance' are banned. The card must read as one analytical voice, not two disconnected sections.",
             *_verdict_quality_lines,
         ])
+    if return_split:
+        _sep = "───────────── EVIDENCE PACK ─────────────"
+        _split_idx = next(i for i, line in enumerate(prompt_parts) if line == _sep)
+        return "\n".join(prompt_parts[:_split_idx]).rstrip(), "\n".join(prompt_parts[_split_idx:]).strip()
     return "\n".join(prompt_parts).strip()
 
 

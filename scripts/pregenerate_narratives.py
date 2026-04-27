@@ -2039,7 +2039,11 @@ async def _generate_one(
                         "[HAIKU-MINIMAL-CTX] Using minimal context prompt for %s", match_key
                     )
                 else:
-                    prompt_text = format_evidence_prompt(evidence_pack, spec, match_preview=True)
+                    _static, _dynamic = format_evidence_prompt(evidence_pack, spec, match_preview=True, return_split=True)
+                    prompt_text = [
+                        {"type": "text", "text": _static, "cache_control": {"type": "ephemeral"}},
+                        {"type": "text", "text": _dynamic},
+                    ]
                 resp = await claude.messages.create(
                     model=HAIKU_MODEL,
                     max_tokens=800,
@@ -2060,25 +2064,24 @@ async def _generate_one(
                     log.warning("W84-HAIKU REJECT for %s — serving W82 fallback", match_key)
             else:
                 # Sonnet path for edge matches.
-                prompt_text = format_evidence_prompt(evidence_pack, spec)
+                _static, _dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
                 # FIX-COST-WAVE-02: route Sonnet narrative polish to direct Anthropic
                 # (NARRATIVE scope) when the module singleton is initialised by
                 # pregen_narratives(); fall back to the `claude` param so unit tests
                 # that pass a mocked client via _generate_one(..., claude=fake) still work.
                 _sonnet_client = _narrative_claude if _narrative_claude is not None else claude
-                # FIX-COST-WAVE-02 Phase 3: cache_control on the structured user block.
-                # Match-specific prompts limit hit rate at this breakpoint; retry path (2322)
-                # and any within-sweep prefix overlap still benefit.
+                # FIX-COST-WAVE-03: static/dynamic split — cache_control on static instructions
+                # only, not on match-specific evidence. Same static block across all matches →
+                # cache hits instead of write storm.
                 resp = await _sonnet_client.messages.create(
                     model=SHADOW_MODEL,
                     max_tokens=1200,
                     messages=[{
                         "role": "user",
-                        "content": [{
-                            "type": "text",
-                            "text": prompt_text,
-                            "cache_control": {"type": "ephemeral"},
-                        }],
+                        "content": [
+                            {"type": "text", "text": _static, "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": _dynamic},
+                        ],
                     }],
                     timeout=45.0,
                 )
@@ -2347,22 +2350,21 @@ async def _generate_one(
                 _retry_narrative = ""
                 try:
                     if evidence_pack is not None and spec is not None:
-                        _retry_prompt = format_evidence_prompt(evidence_pack, spec)
+                        _retry_static, _retry_dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
                         # FIX-COST-WAVE-02: Sonnet retry also routes direct Anthropic
                         # (NARRATIVE scope) when the module singleton is initialised.
                         _retry_sonnet_client = _narrative_claude if _narrative_claude is not None else claude
-                        # FIX-COST-WAVE-02 Phase 3: cache_control on the retry block — hits
-                        # the primary path's cache write when the prompt is identical.
+                        # FIX-COST-WAVE-03: same static/dynamic split as primary path —
+                        # retry hits the primary path's static cache write.
                         _retry_resp = await _retry_sonnet_client.messages.create(
                             model=SHADOW_MODEL,
                             max_tokens=1200,
                             messages=[{
                                 "role": "user",
-                                "content": [{
-                                    "type": "text",
-                                    "text": _retry_prompt,
-                                    "cache_control": {"type": "ephemeral"},
-                                }],
+                                "content": [
+                                    {"type": "text", "text": _retry_static, "cache_control": {"type": "ephemeral"}},
+                                    {"type": "text", "text": _retry_dynamic},
+                                ],
                             }],
                             timeout=45.0,
                         )

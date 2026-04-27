@@ -266,7 +266,7 @@ class TestGoldEdgeModelGate(unittest.TestCase):
                 patch.object(pregen, "serialise_evidence_pack", return_value="{}"),
                 patch.object(pregen, "_refresh_edge_from_odds_db", new=AsyncMock(return_value=edge)),
                 patch.object(pregen, "verify_shadow_narrative", return_value=(True, {"sanitized_draft": _BAD_NARRATIVE})),
-                patch.object(pregen, "format_evidence_prompt", return_value="prompt"),
+                patch.object(pregen, "format_evidence_prompt", side_effect=lambda *a, return_split=False, **kw: ("static", "dynamic") if return_split else "prompt"),
                 patch.object(pregen, "_validate_preview_polish", return_value=True),
                 patch.object(pregen, "_suppress_shadow_banned_phrases", side_effect=lambda x: x),
                 patch.object(pregen, "_recover_missing_emoji_headers", side_effect=lambda x: x),
