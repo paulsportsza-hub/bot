@@ -2314,6 +2314,45 @@ def _render_edge(spec: NarrativeSpec) -> str:
     elif spec.tipster_available and spec.tipster_agrees is False:
         tipster_line = " Tipster consensus is not on the same side."
 
+    # FIX-NARRATIVE-NO-EDGE-FAIR-VALUE-FALLBACK-01: When verdict_action is monitor/pass
+    # (zero/negative EV), fair_prob_pct is often missing — render thesis variants that
+    # never reference fair_value / EV %, so we never emit a literal "?" fallback.
+    if spec.verdict_action in ("pass", "monitor"):
+        _v = _pick(_seed, 3)
+        if odds_str != "?" and bk != "the market":
+            _no_edge_variants = [
+                (
+                    f"No actionable edge on {outcome} at {odds_str} with {bk} — "
+                    f"the model and the market are aligned at this number. "
+                    f"Watch the line for any shift before kickoff."
+                ),
+                (
+                    f"{outcome} at {odds_str} ({bk}) doesn't show a meaningful pricing gap right now. "
+                    f"The market has this priced where the model expects."
+                ),
+                (
+                    f"At {odds_str} ({bk}), {outcome} has no edge in our read — "
+                    f"the bookmaker number sits where our probability lands. "
+                    f"Monitor the line until value emerges."
+                ),
+            ]
+        else:
+            _no_edge_variants = [
+                (
+                    f"No edge on {outcome} at the current market price — "
+                    f"model probability and bookmaker pricing align."
+                ),
+                (
+                    f"{outcome} doesn't show a price gap worth chasing right now. "
+                    f"Monitor the line for value."
+                ),
+                (
+                    f"Nothing actionable on {outcome} — "
+                    f"the market read sits where our model lands."
+                ),
+            ]
+        return _no_edge_variants[_v]
+
     if spec.evidence_class == "speculative":
         _v = _pick(_seed, 6)
         _spec_variants = [
