@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(49 design-locked · 96 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(51 design-locked · 100 PNGs) — DESIGN SYSTEM COMPLETE</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -2422,6 +2422,89 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">help_canonical.png</span><span class="variant-tag">4 command groups · 11 commands</span></div><img src="help_canonical.png" alt="help"></div>
     </div>
   </section>
+
+  <!-- ── bookmaker_directory.html (Wave AV — Batch 10 · Story quiz + utility 7/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">bookmaker_directory.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + bookmaker-row list</span>
+    </div>
+    <p class="tpl-summary">
+      SA bookmaker directory. Brand-orange logo glow + "BOOKMAKERS" title + 5 bookmaker rows
+      (Betway / Hollywoodbets / Sportingbet / SupaBets / GBets) with badge emoji + name + offer
+      + domain shown as JetBrains Mono code-pill. Trailing referral-fee + RG hint. No footer divider.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. Subtitle "SA bookmakers we track for live odds" added.</li>
+        <li><strong>Bookmaker rows</strong>: orange 3px left-border (preserved from prod) + #111 bg + 1px border. 22px badge emoji + bold name + secondary offer text.</li>
+        <li><strong>Domain as code-pill</strong>: JetBrains Mono with orange-tinted background + 3px border-radius. Matches the canonical orange code-pill pattern (used on <code>/subscribe</code>, <code>/status</code>, plan codes, etc.).</li>
+        <li><strong>Referral disclosure inline</strong>: "MzansiEdge earns a referral fee · Always bet responsibly" — small dim grey text at the bottom. Consolidated from prod's bordered-footer treatment to a single line. Required disclosure stays visible without dominating the card.</li>
+        <li><strong>No footer divider</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/bookmaker_directory.html</code> with the canonical (lift from <code>/tmp/bookmaker_directory_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subtitle; restyle <code>.bk-domain</code> as orange code-pill (background tint + padding + border-radius); replace bordered <code>.footer</code> with single centred hint-line below the bk-list.</li>
+        <li><code>bot/card_data_adapters.py:build_bookmaker_directory_data</code> already emits the right shape (<code>bookmakers[]</code> with <code>badge</code>, <code>name</code>, <code>offer</code>, <code>domain</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/bookmaker_directory.png</code> matches <code>canonical/bookmaker_directory_canonical.png</code>. Brand-orange logo glow visible. 5 bookmaker rows with orange left-border. Domain as code-pill. Referral disclosure at bottom (no border-top). No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">bookmaker_directory_canonical.png</span><span class="variant-tag">5 SA bookmakers · 1 variant</span></div><img src="bookmaker_directory_canonical.png" alt="bookmaker_directory"></div>
+    </div>
+  </section>
+
+  <!-- ── home_winners.html (Wave AW — Batch 10 · Story quiz + utility 8/8 — CLOSE ALL) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">home_winners.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · DETAIL 480×620 · brand-orange glow + tier-coloured row borders</span>
+    </div>
+    <p class="tpl-summary">
+      Last-5-winners performance card. Sent for proof-of-track-record / social proof. Brand-orange logo glow
+      + "RECENT PERFORMANCE" label + "Last 5 Winning Edges" headline + "R100 stake · actual returns" sub.
+      5 win rows with sport emoji + match + bet line + R100→{return} display. Each row's left-border AND
+      return value colour driven by the edge tier (Diamond cyan / Gold orange / Silver+Bronze green for
+      successful smaller-tier hits). RG copy at bottom (locked per CLAUDE.md notification law 5).
+      DETAIL 480×620 fixed canvas. <strong>Closes the entire 51-card design system.</strong>
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (multi-tier surface — shows wins from all 4 tiers).</li>
+        <li><strong>Header changes from prod</strong>: removed prod's hero-glow div + thin gradient divider. Replaced with the canonical brand-orange logo glow. "RECENT PERFORMANCE" label is now the orange uppercase tracked label; "Last 5 Winning Edges" is 20px bold (was 22px — slightly tighter to fit).</li>
+        <li><strong>Tier-coloured row borders</strong>: each win row gets a 3px tier-color left-border via <code>--row-tier-color</code> CSS var on <code>.tier-{tier}</code> classes. Matches the per-tier identity convention across the canonical set.</li>
+        <li><strong>Tier-coloured return values</strong>: Diamond cyan, Gold brand-orange, Silver+Bronze green. Green for the smaller tiers signals "wins are wins" without the higher-tier prestige colour. JetBrains Mono 17px bold.</li>
+        <li><strong>R100→ arrow</strong>: small monospace label above the value to make the stake → return clear at a glance.</li>
+        <li><strong>RG copy preserved</strong>: "Past performance is not a guarantee of future results" stays — required by CLAUDE.md notification content laws (rule 5 — RG footer on monthly reports / re-engagement / proof-of-record). Removed the <code>border-top</code> divider above it; now sits as plain centred dim text.</li>
+        <li><strong>DETAIL 480×620 fixed</strong>: card always uses the fixed canvas. With 5 wins, body fills naturally; empty state has a centred italic placeholder.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/home_winners.html</code> with the canonical (lift from <code>/tmp/home_winners_canonical.html</code>). Drop the absolute-positioned <code>.hero-glow</code> div + the <code>.divider</code> linear-gradient line; insert canonical <code>.logo-glow</code> + <code>.logo-glow-screen</code>; restyle <code>.row</code> with tier-coloured 3px left-border driven by <code>.tier-{tier}</code> classes; restyle <code>.return-value</code> with tier-coloured class variants; remove <code>border-top</code> from the RG <code>.footer</code> + restyle as plain centred line.</li>
+        <li><code>bot/card_data_adapters.py:build_home_winners_data</code> already emits the right shape (<code>wins[]</code> with <code>match</code>, <code>bet_line</code>, <code>return_zar</code>, <code>sport_emoji</code>, <code>tier</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/home_winners.png</code> matches <code>canonical/home_winners_canonical_full.png</code> when wins exist, <code>_empty.png</code> when none. Brand-orange logo glow. Tier-coloured row borders + return values. RG copy at bottom (no border-top divider). Fits 480×620.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">home_winners_canonical_full.png</span><span class="variant-tag">5 wins · Gold/Diamond/Silver/Bronze mix</span></div><img src="home_winners_canonical_full.png" alt="home_winners full"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">home_winners_canonical_empty.png</span><span class="variant-tag">No resolved picks yet</span></div><img src="home_winners_canonical_empty.png" alt="home_winners empty"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -2429,7 +2512,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(2 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(0 live bot renders — all 51 templates design-locked!)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -2449,8 +2532,6 @@ if user_tier == "gold":
   </div>
 
   <div class="review-grid">
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">bookmaker_directory.html</span><span class="review-card-tag">In review</span></div><img src="bookmaker_directory.png" alt="bookmaker_directory.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">home_winners.html</span><span class="review-card-tag">In review</span></div><img src="home_winners.png" alt="home_winners.html"></div>
   </div>
 </div>
 
