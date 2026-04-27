@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(13 design-locked · 29 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(14 design-locked · 32 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -888,6 +888,52 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">sub_payment_error_canonical_generic.png</span><span class="variant-tag">Generic fallback copy</span></div><img src="sub_payment_error_canonical_generic.png" alt="sub_payment_error generic"></div>
     </div>
   </section>
+
+  <!-- ── sub_billing_active.html (Wave M — Batch 3 · Subscription core 5/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_billing_active.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · tier-color glow (Gold / Diamond)</span>
+    </div>
+    <p class="tpl-summary">
+      Active-subscription summary card. Sent on <code>/billing</code> and <code>/status</code> — shows the user
+      their current plan, member-since date, next renewal, and plan code. Tier-locked surface (only Gold
+      or Diamond can be active), so this surface gets a <strong>tier-color logo glow</strong> matching
+      <code>sub_payment_confirmed</code> — same dual-layer centred recipe. Tier-block uses tier-color
+      left-border + soft tier wash + green-circle tick beside "Active". Founding members see an extra
+      banner with their slot number (#42) — orange internal-glow pattern reused from <code>sub_plans</code>.
+      No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: tier-color (this is a tier-locked surface — only Gold or Diamond ever lands here). Single template, two tier classes (<code>.tier-gold</code> / <code>.tier-diamond</code>) drive the CSS variables. Same recipe as <code>sub_payment_confirmed</code> for visual consistency across the success/active state pair.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient(180deg, #0D0D0D, #141414)</code> background and <code>border-bottom: 1px solid #2A2A2A</code>. Title is tier-coloured (was white) — strengthens the tier identity. Subline added: "Your subscription details".</li>
+        <li><strong>Tier block</strong>: tier-color left-border + soft tier wash (mirrors <code>sub_payment_confirmed</code> plan block). Replaces prod's flat <code>border-bottom</code> divider — that divider felt like a footer.</li>
+        <li><strong>Active status with green-tick glyph</strong>: 14px green circle + "Active" label. Replaces the prod ✅ emoji. Consistent with <code>sub_payment_confirmed</code>'s success-affirmation pattern — same green <code>#5DD68F</code>, same glyph treatment, smaller size for inline status context.</li>
+        <li><strong>Meta rows polished</strong>: dates rendered in JetBrains Mono white-bold (was sans). Plan code as orange code-pill (matches <code>/subscribe</code> + support-handle pills on other Batch 3 surfaces). Background <code>#111111</code> + 1px border <code>#1E1E1E</code> for crisp edges.</li>
+        <li><strong>Founding banner — internal glow + slot badge</strong>: same orange-glow architecture as <code>sub_plans</code> + <code>sub_payment_ready</code> founding banners. Slot number (#NN) in orange JetBrains Mono on the right. Banner only renders when <code>founding_slot</code> is set.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates with the founding banner (or last meta row if not founding).</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_billing_active.html</code> with the canonical (lift from <code>/tmp/sub_billing_active_canonical.html</code>). Remove gradient header background + border-bottom; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; switch to single <code>.card.tier-{tier}</code> + CSS vars (drop <code>.tier-gold .tier-name</code> / <code>.tier-diamond .tier-name</code> overrides); replace <code>.tier-header</code> bottom-border with new <code>.tier-block</code> left-border + glow; replace <code>✅</code> emoji with inline green-circle tick; restyle <code>.meta-row</code> with <code>#111111</code> bg + JetBrains Mono values; update founding section to internal-glow + slot-badge layout.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_billing_active_data</code> already emits the right shape (<code>tier</code>, <code>tier_emoji</code>, <code>tier_name</code>, <code>plan_code</code>, <code>member_since</code>, <code>next_renewal</code>, <code>is_founding</code>, <code>founding_slot</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_billing_active.png</code> matches <code>canonical/sub_billing_active_canonical_gold.png</code> / <code>_diamond.png</code> by tier (with founding variant rendering when <code>founding_slot</code> is set). Tier-color logo glow visible. Tier block has tier-color left-border + soft wash. Inline green-circle tick replaces ✅ emoji. Meta values in JetBrains Mono. Plan code as orange code-pill. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_billing_active_canonical_gold.png</span><span class="variant-tag">Gold Monthly · standard</span></div><img src="sub_billing_active_canonical_gold.png" alt="sub_billing_active gold"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_billing_active_canonical_diamond.png</span><span class="variant-tag">Diamond Monthly · standard</span></div><img src="sub_billing_active_canonical_diamond.png" alt="sub_billing_active diamond"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_billing_active_canonical_diamond_founding.png</span><span class="variant-tag">Diamond Founding · slot #42</span></div><img src="sub_billing_active_canonical_diamond_founding.png" alt="sub_billing_active diamond founding"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -895,7 +941,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(39 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(38 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -938,7 +984,6 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">settings_sports.html</span><span class="review-card-tag">In review</span></div><img src="settings_sports.png" alt="settings_sports.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_complete.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_complete.png" alt="story_quiz_complete.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_step.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_step.png" alt="story_quiz_step.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_billing_active.html</span><span class="review-card-tag">In review</span></div><img src="sub_billing_active.png" alt="sub_billing_active.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_billing_inactive.html</span><span class="review-card-tag">In review</span></div><img src="sub_billing_inactive.png" alt="sub_billing_inactive.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_confirm.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_confirm.png" alt="sub_cancel_confirm.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_done.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_done.png" alt="sub_cancel_done.html"></div>
