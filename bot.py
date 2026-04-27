@@ -11617,31 +11617,46 @@ def _expire_stale_edges() -> None:
         _now_utc = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
         _conn = _conn_fn(_DB_PATH)
         # Path 1: Has fixture_mapping + kickoff is past
+        # FIX-CORE7-CRICKET-01: exclude cricket — kickoff-based expiry fires during the
+        # match before results are in match_results, causing a settlement race. Cricket
+        # uses the 7-day date-stale path below instead.
         _expired_ko = _conn.execute("""
             UPDATE edge_results
             SET result = 'expired'
             WHERE result IS NULL
+              AND sport NOT IN ('cricket', 'mma', 'boxing')
               AND match_key IN (
                   SELECT e.match_key
                   FROM edge_results e
                   JOIN fixture_mapping fm ON fm.match_key = e.match_key
                   WHERE e.result IS NULL
+                    AND e.sport NOT IN ('cricket', 'mma', 'boxing')
                     AND fm.kickoff < ?
               )
         """, (_now_utc,)).rowcount
-        # Path 2: No fixture_mapping + match_date > 2 days ago (settlement lag guard)
+        # Path 2a: No fixture_mapping + match_date > 2 days ago (non-cricket/combat)
         _expired_date = _conn.execute("""
             UPDATE edge_results
             SET result = 'expired'
             WHERE result IS NULL
+              AND sport NOT IN ('cricket', 'mma', 'boxing')
               AND match_date < date('now', '-2 days')
+        """).rowcount
+        # Path 2b: Cricket/combat — 7-day grace period gives settler time to run
+        # FIX-CORE7-CRICKET-01: extended from 2d → 7d to eliminate settlement race
+        _expired_cricket = _conn.execute("""
+            UPDATE edge_results
+            SET result = 'expired'
+            WHERE result IS NULL
+              AND sport IN ('cricket', 'mma', 'boxing')
+              AND match_date < date('now', '-7 days')
         """).rowcount
         _conn.commit()
         _conn.close()
-        if _expired_ko or _expired_date:
+        if _expired_ko or _expired_date or _expired_cricket:
             log.info(
-                "Stale edge cleanup: expired %d kickoff-past + %d date-stale edges",
-                _expired_ko, _expired_date,
+                "Stale edge cleanup: expired %d kickoff-past + %d date-stale + %d cricket/combat-7d edges",
+                _expired_ko, _expired_date, _expired_cricket,
             )
     except Exception as _e:
         log.debug("_expire_stale_edges failed: %s", _e)

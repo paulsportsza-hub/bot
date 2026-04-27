@@ -8160,6 +8160,23 @@ def render_unified_health_content(conn, db_status: str) -> str:
     cpg      = build_card_population_gate(conn)
     updated  = datetime.now(_SAST).strftime("%Y-%m-%d %H:%M:%S")
 
+    # ── BRL orphan rate (24h) — FIX-CORE7-CROSS-SPORT-01 ─────────────────────
+    _brl_served = 0
+    _brl_logged = 0
+    _brl_orphan_rate = 0.0
+    try:
+        if conn and table_exists(conn, "edge_results") and table_exists(conn, "bet_recommendations_log"):
+            _r_served = q_one(conn, "SELECT COUNT(*) AS cnt FROM edge_results WHERE recommended_at > datetime('now','-1 day')")
+            _r_logged = q_one(conn, "SELECT COUNT(*) AS cnt FROM bet_recommendations_log WHERE logged_at > datetime('now','-1 day')")
+            _brl_served = (_r_served["cnt"] if _r_served else 0) or 0
+            _brl_logged = (_r_logged["cnt"] if _r_logged else 0) or 0
+            if _brl_served > 0:
+                _orphans = max(0, _brl_served - _brl_logged)
+                _brl_orphan_rate = round(_orphans / _brl_served * 100, 1)
+    except Exception:
+        pass
+    _brl_cls = "c-green" if _brl_orphan_rate == 0 else ("c-amber" if _brl_orphan_rate < 10 else "c-red")
+
     # ── Derived KPI values ────────────────────────────────────────────────────
     active_scrapers  = sum(1 for s in scrapers if s.get("has_data_24h", False))
     matches_24h      = sum(s["matches_24h"] for s in scrapers)
@@ -8237,6 +8254,7 @@ def render_unified_health_content(conn, db_status: str) -> str:
   <div class="kpi"><div class="kpi-lbl">Sentry Issues</div><div class="kpi-val {sentry_cls}">{sentry_count}</div><div class="kpi-sub">unresolved · mzansi-edge</div></div>
   <div class="kpi"><div class="kpi-lbl">CPU Load (1m)</div><div class="kpi-val {cpu_cls}">{cpu_disp}</div><div class="kpi-sub">{_na(res.get("cpu_5"), "{:.2f}")} / {_na(res.get("cpu_15"), "{:.2f}")} (5m/15m)</div></div>
   <div class="kpi"><div class="kpi-lbl">RAM Usage</div><div class="kpi-val {mem_cls}">{mem_pct}<span style="font-size:14px;color:var(--muted);font-weight:400">%</span></div><div class="kpi-sub">{res.get("mem_used_mb") or 0:,} / {res.get("mem_total_mb") or 0:,} MB</div></div>
+  <div class="kpi"><div class="kpi-lbl">BRL Orphan Rate (24h)</div><div class="kpi-val {_brl_cls}">{_brl_orphan_rate}<span style="font-size:14px;color:var(--muted);font-weight:400">%</span></div><div class="kpi-sub">{_brl_logged}/{_brl_served} edges logged &middot; CLV calibration</div></div>
 </div>"""
 
     # ── Coverage data for summary ─────────────────────────────────────────────

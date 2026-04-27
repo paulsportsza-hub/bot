@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(11 design-locked · 25 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(12 design-locked · 27 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -797,6 +797,51 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">sub_payment_ready_canonical_founding.png</span><span class="variant-tag">Diamond Founding · rate locked-in</span></div><img src="sub_payment_ready_canonical_founding.png" alt="sub_payment_ready founding"></div>
     </div>
   </section>
+
+  <!-- ── sub_payment_confirmed.html (Wave K — Batch 3 · Subscription core 3/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_payment_confirmed.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · tier-color glow (Gold / Diamond)</span>
+    </div>
+    <p class="tpl-summary">
+      Post-checkout success card. Sent immediately after Stitch webhook confirms payment — the user just paid for
+      either Gold or Diamond and this is their entry-point celebration. Tier-specific (only ever Gold or Diamond),
+      so this surface gets a <strong>tier-color logo glow</strong> (yellow for Gold, cyan for Diamond) — same dual-layer
+      centred recipe as <code>tier_lock_upsell</code> and <code>tier_page</code>. Plan block has matching tier-color
+      left border + soft tier wash. A green-circle tick sits inline with the title for clear success affirmation.
+      Trailing instruction "Use /status any time to view your plan" carries the orange brand-token (one of two surfaces
+      where brand-orange touches a tier-color card — kept compact, single line, no border-top divider). No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: tier-color (this is a tier-locked surface — the user JUST paid for that tier). Gold uses <code>#FFD700</code>; Diamond uses canonical <code>#B9F2FF</code> (cyan, not the prod purple-blue <code>#7B8CDE</code>).</li>
+        <li><strong>Single template, two tier classes</strong>: <code>.card.tier-gold</code> / <code>.card.tier-diamond</code> set CSS variables (<code>--tier-color</code>, <code>--tier-color-soft</code>, <code>--tier-color-glow</code>). Halves the template surface vs the prod two-block approach.</li>
+        <li><strong>Title with inline tick</strong>: 15px tracked tier-color "PAYMENT CONFIRMED" + 18px green circle <code>#5DD68F</code> with white tick. Replaces the prod ✅ emoji which read as awkwardly pasted.</li>
+        <li><strong>Plan block</strong>: tier-color left-border + soft tier wash (radial gradient blurred from left edge). Tier emoji at 28px (was 36px in prod — too big), 14px tracked tier-coloured plan-label, 32px JetBrains Mono price.</li>
+        <li><strong>Access row</strong>: expiry date in tier-color JetBrains Mono. Subtle but emphasises the "until" nature.</li>
+        <li><strong>Trailing instruction</strong>: 11.5px text, no border-top divider (prod had one — that read as a footer). <code>/status</code> in orange-pill code styling. Centred, low-padding.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates with the instruction line.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_payment_confirmed.html</code> with the canonical (lift from <code>/tmp/sub_payment_confirmed_canonical.html</code>). Collapses the two header/body blocks into one tier-classed structure. Removes <code>linear-gradient(180deg)</code> backgrounds, <code>border-bottom</code> rules, and the <code>border-top</code> on the footer-note.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_payment_confirmed_data</code> already emits the right shape (<code>first_name</code>, <code>plan_label</code>, <code>tier</code>, <code>tier_badge</code>, <code>amount_zar</code>, <code>expires_at_human</code>, <code>renewal_cadence</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_payment_confirmed.png</code> matches <code>canonical/sub_payment_confirmed_canonical_gold.png</code> or <code>_diamond.png</code> by tier. Tier-color logo glow visible. Plan block has tier-color left-border + soft tier wash. Inline green-circle tick replaces ✅ emoji. No border-top above the <code>/status</code> instruction. No footer. Trailing blank ≤14px.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_payment_confirmed_canonical_gold.png</span><span class="variant-tag">Gold Monthly · R99 · yellow glow</span></div><img src="sub_payment_confirmed_canonical_gold.png" alt="sub_payment_confirmed gold"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_payment_confirmed_canonical_diamond.png</span><span class="variant-tag">Diamond Monthly · R199 · cyan glow</span></div><img src="sub_payment_confirmed_canonical_diamond.png" alt="sub_payment_confirmed diamond"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -804,7 +849,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(41 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(40 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -857,7 +902,6 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_ended.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_ended.png" alt="sub_founding_ended.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_live.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_live.png" alt="sub_founding_live.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_soldout.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_soldout.png" alt="sub_founding_soldout.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_payment_confirmed.html</span><span class="review-card-tag">In review</span></div><img src="sub_payment_confirmed.png" alt="sub_payment_confirmed.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_payment_error.html</span><span class="review-card-tag">In review</span></div><img src="sub_payment_error.png" alt="sub_payment_error.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_active.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_active.png" alt="sub_status_active.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_bronze.png" alt="sub_status_bronze.html"></div>
