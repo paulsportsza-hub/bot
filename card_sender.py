@@ -4,10 +4,19 @@ WIRE STANDARD (BUILD-W3):
     photo→photo:  edit_media(InputMediaPhoto) — no flicker
     text→photo:   delete old message + send_photo
     fallback:     log + Sentry capture only (IMAGE ONLY rule — no user-visible message)
+
+BUILD-FILE-ID-REUSE-01:
+    Persistent file_id cache checked before Playwright render.  On hit,
+    send_photo(photo=file_id) / edit_media(InputMediaPhoto(media=file_id)) —
+    no render, no upload.  On miss, render normally, send, then store the
+    returned file_id.  Stale or Telegram-rejected file_ids are invalidated
+    and fall through to a full byte render automatically.
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 
 from telegram import InputMediaPhoto
@@ -20,6 +29,17 @@ except ImportError:
     _sentry = None
 
 log = logging.getLogger(__name__)
+
+_DSF = 2  # device_scale_factor — must match render_card_sync's default
+
+
+def _build_cache_key(template: str, data: dict, width: int | None) -> str:
+    """Mirror render_card_sync's cache key so the file_id key matches the PNG key."""
+    _w = width if width is not None else 480
+    _data_hash = hashlib.md5(
+        json.dumps(data, sort_keys=True, default=str).encode()
+    ).hexdigest()[:12]
+    return f"{template}:{_w}x{_DSF}:{_data_hash}"
 
 
 async def send_card_or_fallback(
@@ -58,30 +78,81 @@ async def send_card_or_fallback(
         match_detail.html to produce 1080px output; other templates keep 480.
     """
     try:
+        from file_id_cache import file_id_cache as _fid  # type: ignore[import]
+
+        _cache_key = _build_cache_key(template, data, width)
+        _stored_fid = _fid.get(_cache_key)
+
+        # ── file_id fast path ─────────────────────────────────────────────────
+        if _stored_fid:
+            try:
+                if message_to_edit and message_to_edit.photo:
+                    await message_to_edit.edit_media(
+                        media=InputMediaPhoto(media=_stored_fid),
+                        reply_markup=markup,
+                    )
+                    return
+                if message_to_edit:
+                    try:
+                        await message_to_edit.delete()
+                    except Exception:
+                        pass
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=_stored_fid,
+                    reply_markup=markup,
+                )
+                return
+            except Exception as _fid_err:
+                log.warning(
+                    "card_sender: file_id reuse rejected for %s (%s), re-rendering",
+                    template,
+                    _fid_err,
+                )
+                _fid.invalidate(_cache_key)
+            # fall through to full render
+
+        # ── Full render path ──────────────────────────────────────────────────
         if width is None:
             png = await asyncio.to_thread(render_card_sync, template, data)
         else:
             png = await asyncio.to_thread(render_card_sync, template, data, width)
+
         if message_to_edit and message_to_edit.photo:
             try:
-                await message_to_edit.edit_media(
+                result = await message_to_edit.edit_media(
                     media=InputMediaPhoto(media=png),
                     reply_markup=markup,
                 )
+                try:
+                    if result and hasattr(result, "photo") and result.photo:
+                        _fid.put(_cache_key, result.photo[-1].file_id)
+                except Exception:
+                    pass
                 return
             except Exception as em_err:
-                log.warning("card_sender: edit_media failed (%s), falling back to send_photo", em_err)
+                log.warning(
+                    "card_sender: edit_media failed (%s), falling back to send_photo",
+                    em_err,
+                )
 
         if message_to_edit:
             try:
                 await message_to_edit.delete()
             except Exception:
                 pass
-        await bot.send_photo(
+
+        msg = await bot.send_photo(
             chat_id=chat_id,
             photo=png,
             reply_markup=markup,
         )
+        try:
+            if msg and msg.photo:
+                _fid.put(_cache_key, msg.photo[-1].file_id)
+        except Exception:
+            pass
+
     except Exception as exc:
         log.error("card_sender: render failed for %s: %s", template, exc, exc_info=True)
         if _sentry:
