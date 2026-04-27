@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(14 design-locked · 32 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(15 design-locked · 35 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -934,6 +934,53 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">sub_billing_active_canonical_diamond_founding.png</span><span class="variant-tag">Diamond Founding · slot #42</span></div><img src="sub_billing_active_canonical_diamond_founding.png" alt="sub_billing_active diamond founding"></div>
     </div>
   </section>
+
+  <!-- ── sub_status_active.html (Wave N — Batch 4 · Subscription state 1/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_status_active.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · tier-color glow (Gold / Diamond)</span>
+    </div>
+    <p class="tpl-summary">
+      Subscription status card. Sent on <code>/status</code> for paid users — shows current tier, member-since,
+      next renewal, plan code, plus a renewal-warning row when renewal is ≤14 days away. Tier-locked surface
+      (only Gold or Diamond can be active), uses the same tier-color logo glow as <code>sub_payment_confirmed</code>
+      and <code>sub_billing_active</code> for visual consistency across the active-state set. Pulsing green dot
+      on the ACTIVE label reads as a "live" status indicator. Renewal warning row uses the same orange-glow
+      architecture as the founding banner — same accent, different semantic. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: tier-color (tier-locked surface). Single template, two tier classes (<code>.tier-gold</code> / <code>.tier-diamond</code>) drive CSS variables. Same recipe as <code>sub_payment_confirmed</code> + <code>sub_billing_active</code>.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient(180deg)</code> background and <code>border-bottom</code>. Title is tier-coloured with inline 18px green-circle tick (was bare white "STATUS ✅"). Subline added: "Subscription active".</li>
+        <li><strong>Status indicator — pulse dot</strong>: 7px green dot with soft glow halo on the ACTIVE label. Replaces flat green text. Reads as a "live" status pulse (subtle, not animated since this is a static PNG render).</li>
+        <li><strong>Tier block</strong>: tier-color left-border + soft tier wash. Same architecture as the active-state set.</li>
+        <li><strong>Meta rows polished</strong>: dates in JetBrains Mono white-bold; plan code as orange code-pill (matches Batch 3 surfaces).</li>
+        <li><strong>Renewal warning row</strong> (≤14 days): orange-accent left-border + soft orange glow + bold day count. Same architecture as the founding banner — different semantic (urgent reminder, not premium accent).</li>
+        <li><strong>Founding section</strong> (when set): identical recipe to <code>sub_billing_active</code>. Internal orange glow + slot badge.</li>
+        <li><strong>Bronze styling removed</strong>: prod CSS had <code>.tier-bronze</code> rules but Bronze is the free tier — never lands on the active-status surface (<code>sub_status_bronze.html</code> is its own template). Dead code dropped.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates with whichever conditional row is last (renewal warning, founding, or last meta row).</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_status_active.html</code> with the canonical (lift from <code>/tmp/sub_status_active_canonical.html</code>). Remove gradient header background + border-bottom; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; switch to single <code>.card.tier-{tier}</code> + CSS vars; replace <code>.tier-badge</code> bordered-box with new <code>.tier-block</code> (left-border + glow); replace bare green "ACTIVE" text with pulse-dot + label; replace <code>.days-left</code> flat box with the orange-glow renewal-warning row; restyle <code>.meta-row</code> to JetBrains Mono values + orange code-pill plan; drop <code>.tier-bronze</code> rules (dead code).</li>
+        <li><code>bot/card_data_adapters.py:build_sub_status_active_data</code> already emits the right shape (<code>tier</code>, <code>tier_emoji</code>, <code>tier_name</code>, <code>plan_code</code>, <code>expires_label</code>, <code>days_left</code>, <code>member_since</code>, <code>founding_slot</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_status_active.png</code> matches <code>canonical/sub_status_active_canonical_gold.png</code> / <code>_diamond.png</code> by tier (renewal warning visible only when <code>days_left ≤ 14</code>). Tier-color logo glow visible. Pulse dot beside ACTIVE. Renewal warning row uses orange-glow architecture. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_status_active_canonical_gold.png</span><span class="variant-tag">Gold · 30 days to renewal</span></div><img src="sub_status_active_canonical_gold.png" alt="sub_status_active gold"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_status_active_canonical_diamond.png</span><span class="variant-tag">Diamond · 30 days to renewal</span></div><img src="sub_status_active_canonical_diamond.png" alt="sub_status_active diamond"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_status_active_canonical_gold_renewal_soon.png</span><span class="variant-tag">Gold · 5 days · renewal warning</span></div><img src="sub_status_active_canonical_gold_renewal_soon.png" alt="sub_status_active gold renewal soon"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -941,7 +988,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(38 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(37 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -993,7 +1040,6 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_ended.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_ended.png" alt="sub_founding_ended.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_live.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_live.png" alt="sub_founding_live.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_soldout.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_soldout.png" alt="sub_founding_soldout.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_active.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_active.png" alt="sub_status_active.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_bronze.png" alt="sub_status_bronze.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_trial_expiry.html</span><span class="review-card-tag">In review</span></div><img src="sub_trial_expiry.png" alt="sub_trial_expiry.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_bronze.png" alt="sub_upgrade_bronze.html"></div>
