@@ -31066,6 +31066,17 @@ async def _post_init(app_instance) -> None:
             else:
                 log.warning("Could not create narrative_cache table after 3 attempts: %s", exc)
 
+    # FIX-FILE-ID-REUSE-AC5-AC6-01 (AC5): Token-rotation probe.
+    # Calls bot.get_file() against one cached file_id; if Telegram returns
+    # Forbidden / "Wrong file identifier", every cached file_id is dead
+    # (token has rotated) and the entire card_file_ids table is wiped.
+    # Best-effort — a probe failure for one expired file_id mid-life is normal.
+    try:
+        from file_id_cache import file_id_cache as _fid_cache
+        await _fid_cache.startup_token_rotation_probe(app_instance.bot)
+    except Exception as exc:
+        log.debug("startup_token_rotation_probe wrapper failed: %s", exc)
+
     # Pre-publish Betway Telegra.ph guide and wire URL into config
     try:
         from scripts.telegraph_guides import ensure_active_guide

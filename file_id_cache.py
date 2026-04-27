@@ -157,6 +157,84 @@ class FileIdCache:
             log.debug("file_id_cache.stats() failed: %s", exc)
             return {"entries": 0, "expired": 0}
 
+    def clear_all(self) -> int:
+        """Delete every row from card_file_ids. Returns rows removed."""
+        try:
+            conn = self._conn()
+            try:
+                _ensure_table(conn)
+                cur = conn.execute("DELETE FROM card_file_ids")
+                conn.commit()
+                return cur.rowcount or 0
+            finally:
+                conn.close()
+        except Exception as exc:
+            log.warning("file_id_cache.clear_all() failed: %s", exc)
+            return 0
+
+    async def startup_token_rotation_probe(self, bot) -> bool:
+        """FIX-FILE-ID-REUSE-AC5-AC6-01 (AC5): detect bot-token rotation at startup.
+
+        Picks any one cached row, calls ``bot.get_file(file_id)``. If Telegram
+        returns ``Forbidden`` (bot kicked) or ``BadRequest: Wrong file
+        identifier`` (file_id is dead — strongest signal that the bot token
+        rotated and every cached file_id is now invalid), wipes the entire
+        ``card_file_ids`` table so subsequent sends re-render and re-cache
+        cleanly. Any other exception is treated as a transient single-file_id
+        failure (e.g. natural TTL miss mid-life) and does NOT clear the table.
+
+        Returns True if the table was cleared, False otherwise.
+        """
+        try:
+            conn = self._conn()
+            try:
+                _ensure_table(conn)
+                row = conn.execute(
+                    "SELECT cache_key, file_id FROM card_file_ids LIMIT 1"
+                ).fetchone()
+            finally:
+                conn.close()
+        except Exception as exc:
+            log.debug("startup_token_rotation_probe: DB read failed: %s", exc)
+            return False
+
+        if row is None:
+            return False
+
+        try:
+            from telegram.error import BadRequest, Forbidden
+        except Exception:
+            BadRequest = Exception  # type: ignore[assignment]
+            Forbidden = Exception  # type: ignore[assignment]
+
+        file_id = row["file_id"]
+        try:
+            await bot.get_file(file_id)
+            return False
+        except Forbidden as exc:
+            log.warning(
+                "file_id_cache: token rotation probe got Forbidden (%s) — clearing card_file_ids",
+                exc,
+            )
+            removed = self.clear_all()
+            log.warning("file_id_cache: cleared %d rows after token-rotation signal", removed)
+            return True
+        except BadRequest as exc:
+            if "wrong file identifier" in str(exc).lower():
+                log.warning(
+                    "file_id_cache: probe got 'Wrong file identifier' — clearing card_file_ids",
+                )
+                removed = self.clear_all()
+                log.warning(
+                    "file_id_cache: cleared %d rows after token-rotation signal", removed
+                )
+                return True
+            log.debug("startup_token_rotation_probe: BadRequest (not rotation): %s", exc)
+            return False
+        except Exception as exc:
+            log.debug("startup_token_rotation_probe: transient error (no clear): %s", exc)
+            return False
+
 
 # Singleton — imported by card_sender
 file_id_cache = FileIdCache()
