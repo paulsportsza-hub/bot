@@ -1780,11 +1780,53 @@ def _fetch_fb_ledger_registry() -> dict[str, str]:
     return registry
 
 
+# FIX-DASH-CHANNEL-NORMALISE-FAIL-LOUD-01: debounce state for unrecognised channel alerts.
+# Keyed by normalised raw value; value is the epoch second the alert was last fired.
+_channel_normalise_alert_sent: dict[str, float] = {}
+_channel_normalise_alert_lock = threading.Lock()
+_CHANNEL_NORMALISE_DEBOUNCE_S = 3600  # 1 h between repeated alerts for the same raw value
+_EDGEOPS_CHAT_ID_CHANNEL = -1003877525865  # SO #20: EdgeOps only
+
+
+def _fire_channel_normalise_alert(raw: str) -> None:
+    """Log warning + send EdgeOps alert for an unrecognised channel name (debounced 1 h)."""
+    key = raw.lower().strip()
+    now = time.time()
+    with _channel_normalise_alert_lock:
+        last = _channel_normalise_alert_sent.get(key, 0.0)
+        if now - last < _CHANNEL_NORMALISE_DEBOUNCE_S:
+            return
+        _channel_normalise_alert_sent[key] = now
+
+    log.warning("[channel-normalise] unrecognised channel value: %r — update _normalise_channel_key", raw)
+
+    token = os.environ.get("BOT_TOKEN", "")
+    if not token:
+        return
+    text = (
+        "⚠️ <b>Dashboard: unrecognised channel value</b>\n"
+        f"Raw value: <code>{html.escape(raw)}</code>\n"
+        "Action: add a mapping in <code>_normalise_channel_key</code> in health_dashboard.py."
+    )
+    try:
+        payload = json.dumps(
+            {"chat_id": _EDGEOPS_CHAT_ID_CHANNEL, "text": text, "parse_mode": "HTML"}
+        ).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=8)
+    except Exception as _te:
+        log.warning("[channel-normalise] EdgeOps alert failed: %s", _te)
+
+
 def _normalise_channel_key(raw: str) -> str:
     """Normalise channel name to a key in _CHANNEL_MAP."""
-    if not raw:
+    low = (raw or "").lower().strip()
+    if not low:
         return ""
-    low = raw.lower().strip()
     for key in _CHANNEL_MAP:
         if key.replace("_", " ") in low or key.replace("_", "") in low.replace(" ", ""):
             return key
@@ -1809,6 +1851,7 @@ def _normalise_channel_key(raw: str) -> str:
         return "whatsapp_channel"
     if "quora" in low:
         return "quora"
+    _fire_channel_normalise_alert(raw)
     return ""
 
 
