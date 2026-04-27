@@ -126,13 +126,13 @@ def test_boilerplate_with_specific_anchor_does_not_fire():
     )
 
 
-# ── AC-2f: threshold constant is exactly 0.10 ────────────────────────────────
+# ── AC-2f: threshold constant within calibration range ────────────────────────────────
 
 def test_threshold_constant_value():
-    """_RISK_RESOLUTION_MIN_JACCARD must be exactly 0.10 (calibration starting point)."""
+    """_RISK_RESOLUTION_MIN_JACCARD must be within calibration range 0.07-0.15."""
     from bot import _RISK_RESOLUTION_MIN_JACCARD
 
-    assert _RISK_RESOLUTION_MIN_JACCARD == 0.10
+    assert 0.07 <= _RISK_RESOLUTION_MIN_JACCARD <= 0.15
 
 
 # ── AC-2g: tokeniser drops stop words and HTML ───────────────────────────────

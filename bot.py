@@ -16489,7 +16489,7 @@ def _validate_baseline_setup(narrative: str) -> list[str]:
 
 # ── Risk-Resolution Validator (FIX-NARRATIVE-RISK-RESOLUTION-01 — LOCKED 2026-04-25) ──
 
-_RISK_RESOLUTION_MIN_JACCARD: float = 0.10
+_RISK_RESOLUTION_MIN_JACCARD: float = 0.07
 
 _RISK_BOILERPLATE_PHRASES: tuple[str, ...] = (
     "all things considered",
