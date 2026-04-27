@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(15 design-locked · 35 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(16 design-locked · 38 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -981,6 +981,54 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">sub_status_active_canonical_gold_renewal_soon.png</span><span class="variant-tag">Gold · 5 days · renewal warning</span></div><img src="sub_status_active_canonical_gold_renewal_soon.png" alt="sub_status_active gold renewal soon"></div>
     </div>
   </section>
+
+  <!-- ── sub_status_bronze.html (Wave O — Batch 4 · Subscription state 2/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_status_bronze.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + bronze tier accent</span>
+    </div>
+    <p class="tpl-summary">
+      Free-plan status card. Sent on <code>/status</code> for Bronze (free) users. The <strong>conversion-funnel
+      counterpart</strong> to <code>sub_status_active</code> — same "STATUS" title and shape, different goal:
+      this card sells the upgrade. Brand-orange logo glow (non-tier surface — Bronze reads as the floor
+      that everyone shares, not a tier identity). Bronze tier block uses bronze-color left-border accent.
+      Daily-views progress bar transitions from brand-orange to red gradient when the cap is hit.
+      Side-by-side Gold/Diamond CTA pills with tier-color left borders. Optional founding banner with
+      orange internal-glow accent. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (non-tier surface). Bronze isn't a paid tier — it's the floor every user starts on. The bronze accent on the tier-block carries the bronze identity locally without claiming a tier-color glow.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient(180deg)</code> background and <code>border-bottom</code>. Subline added: "Free plan — see every edge, unlock with upgrade".</li>
+        <li><strong>Bronze tier block</strong>: bronze left-border <code>#CD7F32</code> + soft bronze wash. Replaces the prod pill-shaped <code>.badge</code> (which was outside the canonical tier-block pattern). Now matches the tier-block pattern used on <code>sub_billing_active</code> / <code>sub_status_active</code>.</li>
+        <li><strong>Limit section as a contained block</strong>: progress bar wrapped in a bordered card with <code>#111111</code> bg + <code>#1E1E1E</code> border. Consistent with meta-row styling on the active-state set.</li>
+        <li><strong>Progress bar — graceful → urgent</strong>: brand-orange→amber gradient at &lt; 100%. Switches to red→orange gradient at 100% via <code>.progress-full</code> class. "Daily limit reached" copy in red-tinted strong text.</li>
+        <li><strong>CTA pills with tier-color left borders</strong>: 3px Gold left-border / 3px Diamond left-border + matching soft tier wash. Prod had subtle full borders — left-border accent is more decisive and matches the active-state plan-block pattern.</li>
+        <li><strong>Removed cta-section border-top divider</strong>: prod had <code>border-top: 1px solid #1E1E1E</code> on the cta-section (read as a footer). Now spaces with margin only.</li>
+        <li><strong>Founding banner</strong>: same internal orange-glow recipe as <code>sub_plans</code> / <code>sub_billing_active</code>. Days-left and slot count baked into the title/body.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates with the founding banner (or CTA pills if no founding offer is active).</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_status_bronze.html</code> with the canonical (lift from <code>/tmp/sub_status_bronze_canonical.html</code>). Remove gradient header background + border-bottom; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; replace pill-shaped <code>.badge</code> with the new <code>.tier-block</code> (bronze left-border + glow); wrap limit-section in a contained card; replace flat full-border CTA pills with left-border accent variants; drop <code>border-top</code> on <code>.cta-section</code>; rebuild founding banner with internal-glow recipe.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_status_bronze_data</code> already emits the right shape (<code>daily_views_used</code>, <code>daily_cap</code>, <code>daily_pct</code>, <code>founding_offer</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_status_bronze.png</code> matches <code>canonical/sub_status_bronze_canonical_partial.png</code> at &lt;100%, switches to <code>_limit_reached.png</code> visual when <code>daily_pct == 100</code>, and shows the founding banner from <code>_with_founding.png</code> when <code>founding_offer</code> is set. Brand-orange centred logo glow visible. Bronze tier block has bronze left-border. Progress bar gradient swaps red on cap. CTA pills have tier-color left borders. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_status_bronze_canonical_partial.png</span><span class="variant-tag">2/3 used · 1 view remaining</span></div><img src="sub_status_bronze_canonical_partial.png" alt="sub_status_bronze partial"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_status_bronze_canonical_limit_reached.png</span><span class="variant-tag">3/3 used · red bar · resets at midnight</span></div><img src="sub_status_bronze_canonical_limit_reached.png" alt="sub_status_bronze limit reached"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_status_bronze_canonical_with_founding.png</span><span class="variant-tag">1/3 used · founding offer active</span></div><img src="sub_status_bronze_canonical_with_founding.png" alt="sub_status_bronze with founding"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -988,7 +1036,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(37 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(36 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -1040,7 +1088,6 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_ended.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_ended.png" alt="sub_founding_ended.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_live.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_live.png" alt="sub_founding_live.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_soldout.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_soldout.png" alt="sub_founding_soldout.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_bronze.png" alt="sub_status_bronze.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_trial_expiry.html</span><span class="review-card-tag">In review</span></div><img src="sub_trial_expiry.png" alt="sub_trial_expiry.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_bronze.png" alt="sub_upgrade_bronze.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_diamond_max.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_diamond_max.png" alt="sub_upgrade_diamond_max.html"></div>
