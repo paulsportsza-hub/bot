@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(44 design-locked · 87 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(49 design-locked · 96 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -2222,6 +2222,206 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">story_quiz_step_canonical_step_3.png</span><span class="variant-tag">Step 3 of 8 · Weekly recap</span></div><img src="story_quiz_step_canonical_step_3.png" alt="story_quiz_step step 3"></div>
     </div>
   </section>
+
+  <!-- ── story_quiz_complete.html (Wave AQ — Batch 10 · Story quiz + utility 2/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">story_quiz_complete.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + green tick + green-pill on rows</span>
+    </div>
+    <p class="tpl-summary">
+      Story-quiz completion summary. Sent after the user finishes the Edge Alerts notification preferences quiz.
+      Brand-orange logo glow + inline green-circle tick in title + count-badge ("N alert types enabled" in
+      green) + 7 preference rows showing ON (with green left-border + tick pill) or OFF (grey muted). No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange.</li>
+        <li><strong>Title with green-circle tick</strong>: "EDGE ALERTS — ALL SET" + 18px green tick. Same success-affirmation pattern as <code>sub_payment_confirmed</code>.</li>
+        <li><strong>Count badge — green accent</strong>: green left-border + soft green wash + 🔔 + bold count. Replaces prod's flat pill with the canonical accent treatment.</li>
+        <li><strong>Pref rows — semantic states</strong>: ON state gets green 3px left-border + ON pill with mini green-circle tick. OFF state stays grey + uppercase letter-spaced "OFF" label. Replaces prod's bare ✓/text status with the canonical pill treatment.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/story_quiz_complete.html</code> with the canonical (lift from <code>/tmp/story_quiz_complete_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add inline green-circle tick to title; restyle <code>.count-badge</code> with green left-border + soft glow; add <code>.enabled</code> class on pref-rows for green left-border; replace <code>.pref-on</code> text-only with mini-circle-tick pill pattern.</li>
+        <li><code>bot/card_data_adapters.py:build_story_quiz_complete_data</code> already emits the right shape (<code>prefs[]</code>, <code>enabled_count</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/story_quiz_complete.png</code> matches <code>canonical/story_quiz_complete_canonical_mixed.png</code> for partial selection, <code>_all_on.png</code> when all 7 enabled. Brand-orange logo glow + inline green tick. Green count badge. Green-bordered ON rows. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">story_quiz_complete_canonical_mixed.png</span><span class="variant-tag">2 alert types enabled (mixed)</span></div><img src="story_quiz_complete_canonical_mixed.png" alt="story_quiz_complete mixed"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">story_quiz_complete_canonical_all_on.png</span><span class="variant-tag">All 7 alert types enabled</span></div><img src="story_quiz_complete_canonical_all_on.png" alt="story_quiz_complete all on"></div>
+    </div>
+  </section>
+
+  <!-- ── profile_home.html (Wave AR — Batch 10 · Story quiz + utility 3/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">profile_home.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · tier-color glow (Bronze / Silver / Gold / Diamond)</span>
+    </div>
+    <p class="tpl-summary">
+      User profile card. Tier-locked surface — every user has a tier. Tier-color logo glow (matches the user's
+      current tier) + tier-coloured "PROFILE" title + identity block with tier-color left-border + soft tier
+      wash + "MY SPORTS" section with sport name + indented team list. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: tier-color (every user has a tier — same recipe as <code>sub_billing_active</code>, <code>sub_status_active</code>, <code>sub_payment_confirmed</code>).</li>
+        <li><strong>Header changes from prod</strong>: removed prod's per-tier <code>linear-gradient</code> backgrounds (header-bronze/-silver/-gold/-diamond) and <code>border-bottom</code>. Replaced with the canonical tier-color logo glow. Title is tier-coloured. Subtitle "Your tier and preferences" added.</li>
+        <li><strong>Identity block</strong>: tier-color 3px left-border + soft tier wash + "{TIER} MEMBER" label + experience label below. Replaces prod's tier-pill chip with the canonical contained-card pattern.</li>
+        <li><strong>My Sports section</strong>: contained card with grey 3px left-border + sport rows with emoji + name + indented "└─ teams" list. Same └─ tree-line indent character as prod for the team list.</li>
+        <li><strong>Footer removed</strong>: prod had a `mzansiedge.co.za` footer-text + `border-top: 1px solid #1A1A1A` divider. Removed per universal §7.</li>
+        <li><strong>Bronze/Silver/Gold/Diamond CSS variables</strong>: drives all tier-coloured elements. Same architecture as the active-state set.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/profile_home.html</code> with the canonical (lift from <code>/tmp/profile_home_canonical.html</code>). Drop the four header-tier gradient classes; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; switch to <code>.card.tier-{tier}</code> + CSS vars for tier colouring; replace tier-pill <code>.tier-badge</code> with <code>.identity-block</code> (tier left-border + glow); restyle <code>.section</code> with grey left-border accent; remove <code>.footer</code> + <code>border-top</code>.</li>
+        <li><code>bot/card_data_adapters.py:build_profile_card_data</code> already emits the right shape (<code>tier</code>, <code>tier_emoji</code>, <code>tier_name</code>, <code>experience_label</code>, <code>sports[]</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/profile_home.png</code> matches <code>canonical/profile_home_canonical_{bronze,gold,diamond}.png</code> by tier. Tier-color logo glow visible. Identity block with tier-coloured "MEMBER" label. Sports list with └─ team indent. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">profile_home_canonical_bronze.png</span><span class="variant-tag">Bronze · Casual bettor · 1 sport</span></div><img src="profile_home_canonical_bronze.png" alt="profile_home bronze"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">profile_home_canonical_gold.png</span><span class="variant-tag">Gold · Experienced · 2 sports</span></div><img src="profile_home_canonical_gold.png" alt="profile_home gold"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">profile_home_canonical_diamond.png</span><span class="variant-tag">Diamond · Experienced · 2 sports / 5 teams</span></div><img src="profile_home_canonical_diamond.png" alt="profile_home diamond"></div>
+    </div>
+  </section>
+
+  <!-- ── my_teams.html (Wave AS — Batch 10 · Story quiz + utility 4/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">my_teams.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + sport-grouped team rows</span>
+    </div>
+    <p class="tpl-summary">
+      Your favourite teams across all sports. Brand-orange logo glow + 🏆 trophy emoji + "MY TEAMS" title +
+      grouped team rows by sport (sport-emoji + uppercase sport-label header above each group). Each team row
+      shows team name + league. Empty state per sport ("No teams added") in dashed-border placeholder.
+      Trailing "Tap Edit below to update your teams" hint. No footer divider.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (multi-sport surface).</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient(180deg, #0A0806, #14100A)</code> background and <code>border-bottom</code>. Title gains a 🏆 emoji + "MY TEAMS" + subtitle "The teams shaping your tips".</li>
+        <li><strong>Sport group header</strong>: 11px tracked uppercase with sport emoji + sport name in white. Replaces prod's bordered-bottom sport-header treatment.</li>
+        <li><strong>Team rows</strong>: 3px orange left-border (was already in prod, retained). Team name 13px bold + league label 11px secondary text. Same as prod, slightly tightened typography.</li>
+        <li><strong>Empty rows</strong>: dashed-border (1px <code>#2A2A2A</code> dashed) in italic dim grey text. Replaces prod's same approach but emphasises italics.</li>
+        <li><strong>Footer removed</strong>: prod had bordered footer with "Tap Edit below…" copy. Replaced with a centred hint-line below the body (no divider). Less visually heavy.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/my_teams.html</code> with the canonical (lift from <code>/tmp/my_teams_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subtitle below title; replace bordered-bottom <code>.sport-header</code> with the simpler emoji + uppercase label pattern; italicise <code>.empty-text</code>; remove <code>.footer</code> + <code>border-top</code> divider; replace with centred <code>.hint-line</code>.</li>
+        <li><code>bot/card_data_adapters.py:build_my_teams_data</code> already emits the right shape (<code>teams_by_sport[]</code>, <code>has_teams</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/my_teams.png</code> matches <code>canonical/my_teams_canonical_full.png</code> when teams exist, <code>_empty.png</code> when none. Brand-orange logo glow + 🏆 + "MY TEAMS" title. Sport groups with uppercase header. Orange-bordered team rows. No footer divider.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">my_teams_canonical_full.png</span><span class="variant-tag">Soccer + Rugby · 3 teams</span></div><img src="my_teams_canonical_full.png" alt="my_teams full"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">my_teams_canonical_empty.png</span><span class="variant-tag">No teams set yet</span></div><img src="my_teams_canonical_empty.png" alt="my_teams empty"></div>
+    </div>
+  </section>
+
+  <!-- ── settings_sports.html (Wave AT — Batch 10 · Story quiz + utility 5/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">settings_sports.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + orange-tick toggle</span>
+    </div>
+    <p class="tpl-summary">
+      Sport toggle settings card. Brand-orange logo glow + ⚽ + "MY SPORTS" title + 4 sport rows with toggle
+      states. Enabled rows: orange 3px left-border + soft orange wash + orange-circle ✓ glyph. Disabled rows:
+      grey 3px left-border + dimmer + empty-circle outline. Each row shows team count + league count. Trailing
+      hint line. No footer divider.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (multi-sport surface).</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. Subtitle "Toggle which sports you follow" added.</li>
+        <li><strong>Toggle glyph — orange-circle ✓ vs empty ring</strong>: matches the canonical selection pattern across <code>onboarding_sports</code> + <code>onboarding_favourites_manual</code>. Replaces prod's ✅ emoji + ○ char with consistent canonical glyphs.</li>
+        <li><strong>Sport meta with middle dot separator</strong>: "{N} teams saved · {M} leagues" — matches prod's typography.</li>
+        <li><strong>Disabled state</strong>: 60% opacity (preserved from prod) + grey 3px left-border (replaces prod's <code>#333333</code> left-border). Same dim-on-inactive treatment.</li>
+        <li><strong>Footer removed</strong>: prod had <code>border-top: 1px solid #1E1E1E</code> + bordered hint. Replaced with centred trailing hint line, no divider.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/settings_sports.html</code> with the canonical (lift from <code>/tmp/settings_sports_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subtitle; replace <code>.sport-status</code> ✅/○ char with <code>.sport-status.on</code> orange-filled circle + tick / <code>.sport-status.off</code> empty-ring circle; remove <code>.hint</code> bordered footer + replace with centred hint line.</li>
+        <li><code>bot/card_data_adapters.py:build_settings_sports_data</code> already emits the right shape (<code>sports[]</code> with <code>enabled</code>, <code>league_count</code>, <code>team_count</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/settings_sports.png</code> matches <code>canonical/settings_sports_canonical.png</code>. Brand-orange logo glow + ⚽ "MY SPORTS" title. Enabled rows: orange-bordered + orange ✓ circle. Disabled rows: empty-ring circle + 60% opacity. No footer divider.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">settings_sports_canonical.png</span><span class="variant-tag">Soccer + Rugby ON · Cricket + Combat OFF</span></div><img src="settings_sports_canonical.png" alt="settings_sports"></div>
+    </div>
+  </section>
+
+  <!-- ── help.html (Wave AU — Batch 10 · Story quiz + utility 6/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">help.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + grouped command list</span>
+    </div>
+    <p class="tpl-summary">
+      Bot help reference. Brand-orange logo glow + "HELP" title (no ❓ emoji per banned-emoji list) +
+      command groups (Picks &amp; Matches / Account &amp; Billing / Settings &amp; Navigation / Quick Buttons)
+      with each command in a JetBrains Mono code-row + plain-English description. Trailing "Tap 📖 Guide
+      for detailed explanations" hint. No footer divider.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. <strong>Removed ❓ emoji from title</strong> — not in the canonical emoji set per §5. Title is just "HELP". Subtitle "Commands and quick navigation" added.</li>
+        <li><strong>Command rows — JetBrains Mono command name + secondary description</strong>: 12px mono command (with /<em>name</em> intact) + 11.5px description in secondary grey. Same content as prod, tightened spacing.</li>
+        <li><strong>Group labels — orange uppercase</strong>: 9.5px tracked orange labels. Replaces prod's 10px label with slightly tighter typography.</li>
+        <li><strong>Footer removed</strong>: prod had bordered footer with "Tap 📖 Guide for detailed explanations" copy. Replaced with centred trailing hint line, no divider. <strong>📖 emoji preserved</strong> — it's in the canonical set as a guide-reference.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/help.html</code> with the canonical (lift from <code>/tmp/help_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; remove ❓ from title; add subtitle "Commands and quick navigation"; restyle <code>.cmd-row</code> with grey 3px left-border + #111 bg; remove <code>.footer</code> + <code>border-top</code>; replace with centred <code>.hint-line</code>.</li>
+        <li><code>bot/card_data_adapters.py:build_help_data</code> already emits the right shape (<code>command_groups[]</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/help.png</code> matches <code>canonical/help_canonical.png</code>. Brand-orange logo glow + "HELP" title (no ❓). Command groups with orange uppercase labels. JetBrains Mono command names. No footer divider.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">help_canonical.png</span><span class="variant-tag">4 command groups · 11 commands</span></div><img src="help_canonical.png" alt="help"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -2229,7 +2429,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(7 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(2 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -2250,12 +2450,7 @@ if user_tier == "gold":
 
   <div class="review-grid">
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">bookmaker_directory.html</span><span class="review-card-tag">In review</span></div><img src="bookmaker_directory.png" alt="bookmaker_directory.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">help.html</span><span class="review-card-tag">In review</span></div><img src="help.png" alt="help.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">home_winners.html</span><span class="review-card-tag">In review</span></div><img src="home_winners.png" alt="home_winners.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">my_teams.html</span><span class="review-card-tag">In review</span></div><img src="my_teams.png" alt="my_teams.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">profile_home.html</span><span class="review-card-tag">In review</span></div><img src="profile_home.png" alt="profile_home.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">settings_sports.html</span><span class="review-card-tag">In review</span></div><img src="settings_sports.png" alt="settings_sports.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_complete.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_complete.png" alt="story_quiz_complete.html"></div>
   </div>
 </div>
 
