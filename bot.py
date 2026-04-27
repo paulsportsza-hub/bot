@@ -16564,7 +16564,7 @@ def _find_risk_resolution_violations(narrative: str) -> list[str]:
 
 
 _RATING_NUMBER_RE = re.compile(r"\b([12]\d{3})(?:\.\d{1,2})?\b")  # 4-digit rating space
-_RATING_TOLERANCE = 2.0  # ±2 points absolute
+_RATING_TOLERANCE = 5.0  # ±5 points absolute — FIX-NARRATIVE-RATING-TOLERANCE-WIDEN-01 (2026-04-27): widened 2.0→5.0. ±5.0 absorbs ~one cron cycle of Glicko-2 drift on stable teams. ±2 (FIX-RATING-01 baseline) was over-aggressive on cached rows where rating shifts post-write. Widen further if reject rate stays > 5% post-deploy; tighten if false-positives surface.
 
 
 def _find_rating_anchor_violations(

@@ -59,17 +59,22 @@ def test_rating_within_tolerance_passes():
 # ── AC-2c: off by 5 (outside tolerance) → fabricated ─────────────────────────
 
 def test_rating_outside_tolerance_flagged():
-    """Citing a rating off by 5 points (outside ±2 tolerance) fires fabricated_rating."""
+    """Citing a rating clearly outside ±5 tolerance fires fabricated_rating.
+
+    Fixture data updated under FIX-NARRATIVE-RATING-TOLERANCE-WIDEN-01 (2026-04-27)
+    when _RATING_TOLERANCE widened 2.0→5.0: 1858 (diff=4.9) is now within tolerance,
+    so this test uses 1860 (diff=6.9) to retain its out-of-tolerance assertion.
+    """
     from bot import _find_rating_anchor_violations
 
-    # 1858 vs nearest anchor 1853.1 — diff = 4.9, outside tolerance
-    narrative = "Arsenal's strength rating stands at 1858 heading into this clash."
+    # 1860 vs nearest anchor 1853.1 — diff = 6.9, outside ±5 tolerance
+    narrative = "Arsenal's strength rating stands at 1860 heading into this clash."
     result = _find_rating_anchor_violations(narrative, _ARSENAL_ANCHORS)
     assert any("fabricated_rating" in r for r in result), (
         f"Expected fabricated_rating for out-of-tolerance rating; got {result}"
     )
-    assert any("1858" in r for r in result), (
-        f"Expected fabricated value '1858' in reason; got {result}"
+    assert any("1860" in r for r in result), (
+        f"Expected fabricated value '1860' in reason; got {result}"
     )
 
 
@@ -170,14 +175,21 @@ def test_zebre_dragons_fabricated_values_caught():
     )
 
 
-# ── AC-2 bonus: _RATING_TOLERANCE constant is exactly 2.0 ────────────────────
+# ── _RATING_TOLERANCE constant pinned to 5.0 (FIX-NARRATIVE-RATING-TOLERANCE-WIDEN-01)
 
 def test_rating_tolerance_constant_value():
-    """_RATING_TOLERANCE must be exactly 2.0 (calibration starting point)."""
+    """_RATING_TOLERANCE must be exactly 5.0 (regression guard against accidental tightening).
+
+    Locked under FIX-NARRATIVE-RATING-TOLERANCE-WIDEN-01 (2026-04-27): widened from
+    the original 2.0 (FIX-RATING-01 baseline) to absorb daily Glicko-2 cron drift on
+    stable team ratings. CLAUDE.md Rule 10 forbids tightening below 5.0 without
+    monitoring evidence of false-fabrication rate < 1% across a 7-day window.
+    """
     from bot import _RATING_TOLERANCE
 
-    assert _RATING_TOLERANCE == 2.0, (
-        f"_RATING_TOLERANCE should be 2.0; got {_RATING_TOLERANCE}"
+    assert _RATING_TOLERANCE == 5.0, (
+        f"_RATING_TOLERANCE should be 5.0 (FIX-NARRATIVE-RATING-TOLERANCE-WIDEN-01); "
+        f"got {_RATING_TOLERANCE}"
     )
 
 
@@ -321,3 +333,145 @@ def test_validate_polish_passes_when_ratings_match_anchors():
         "_validate_polish must pass when cited Elo values (1853, 1551) match "
         "evidence pack Elo anchors (1853.1, 1551.2) within ±2 tolerance"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-NARRATIVE-RATING-TOLERANCE-WIDEN-01 (2026-04-27): widened tolerance ±2→±5
+# to absorb daily Glicko-2 cron drift on stable team ratings.
+# Brief: https://www.notion.so/34fd9048d73c81078fc8d0a303d3952a
+# Predecessor: FIX-NARRATIVE-RATING-PROMPT-PLACEHOLDER-01 (Finding B).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_rating_within_5pt_drift_passes():
+    """A cited rating 5 points off the anchor must pass at the new ±5 tolerance.
+
+    Calibration anchor: ±5.0 absorbs ~one Glicko-2 daily cron cycle on stable teams
+    (5–15pt average shift per parent INV-NARRATIVE-AUDIT-LAUNCH-DAY-01). 1858 cited
+    against 1853 anchor → diff = 5.0 → helper uses `> _RATING_TOLERANCE` so 5.0pt
+    is precisely on the no-flag side of the boundary.
+    """
+    from bot import _find_rating_anchor_violations
+
+    anchors = {"home": {"glicko2": 1853.0}, "away": {"glicko2": 1500.0}}
+    narrative = "Arsenal carry a Glicko-2 mark of 1858 into this fixture."
+    result = _find_rating_anchor_violations(narrative, anchors)
+    assert result == [], (
+        f"5pt drift (cited 1858 vs anchor 1853) must pass under widened ±5 tolerance; "
+        f"got {result}"
+    )
+
+
+def test_rating_off_by_10pt_fires():
+    """A cited rating 10 points off all anchors must still fire fabricated_rating.
+
+    Confirms the widening preserves catch-rate on genuine fabrications. INV cases
+    were 50+ pt deltas — 10pt is comfortably above the ±5 threshold.
+    """
+    from bot import _find_rating_anchor_violations
+
+    anchors = {"home": {"glicko2": 1858.0}, "away": {"glicko2": 1500.0}}
+    narrative = "Arsenal head into this with a Glicko-2 rating of 1868 — a clear edge."
+    result = _find_rating_anchor_violations(narrative, anchors)
+    assert any("fabricated_rating" in r for r in result), (
+        f"10pt drift (cited 1868 vs anchor 1858) must still fire fabricated_rating; "
+        f"got {result}"
+    )
+    assert any("1868" in r for r in result), (
+        f"Expected fabricated value '1868' in reason list; got {result}"
+    )
+
+
+def test_rating_widening_calibration_boundary():
+    """Boundary smoke test: 4pt drift passes, 6pt drift fires.
+
+    Validates the ±5 boundary holds in both directions:
+      - 4.0pt diff → no flag (within tolerance)
+      - 6.0pt diff → fabricated_rating (outside tolerance)
+    Catches accidental off-by-one regressions in the comparison operator.
+    """
+    from bot import _find_rating_anchor_violations
+
+    anchors = {"home": {"glicko2": 1850.0}, "away": {"glicko2": 1500.0}}
+
+    # 4pt drift — must pass
+    within = _find_rating_anchor_violations(
+        "Arsenal sit on a Glicko-2 reading of 1854 entering this fixture.", anchors
+    )
+    assert within == [], f"4pt drift must pass at ±5 tolerance; got {within}"
+
+    # 6pt drift — must fire
+    outside = _find_rating_anchor_violations(
+        "Arsenal sit on a Glicko-2 reading of 1856 entering this fixture.", anchors
+    )
+    assert any("fabricated_rating" in r for r in outside), (
+        f"6pt drift must fire fabricated_rating at ±5 tolerance; got {outside}"
+    )
+
+
+def test_no_literal_arsenal_elo_in_prompt():
+    """Permanent regression guard against literal Arsenal Elo values in prompts.
+
+    Per VERIFY's caveat #1 from the predecessor brief
+    (FIX-NARRATIVE-RATING-PROMPT-PLACEHOLDER-01): renders format_evidence_prompt()
+    for both branches (edge + match_preview) across 5 non-Arsenal fixtures spanning
+    soccer (EPL/PSL/La Liga/UCL) and rugby (URC), and asserts the rendered string
+    contains zero '1853' / '1551' substrings. The historical bug: the prompt
+    example phrase '1853 vs 1551' was Arsenal's literal Elo values; Sonnet copied
+    these to other matches. Anchor block is now built per-fixture from team_ratings
+    DB, but a future cargo-cult re-introduction would resurface the leak. This
+    test is the canary.
+    """
+    import datetime as dt
+    from types import SimpleNamespace
+
+    from evidence_pack import EvidencePack, format_evidence_prompt
+
+    fixtures = [
+        ("liverpool_vs_manchester_city_2026-05-02", "soccer", "EPL"),
+        ("orlando_pirates_vs_kaizer_chiefs_2026-05-03", "soccer", "PSL"),
+        ("real_madrid_vs_barcelona_2026-05-04", "soccer", "La Liga"),
+        ("paris_saint_germain_vs_bayern_munich_2026-05-05", "soccer", "Champions League"),
+        ("bulls_vs_stormers_2026-05-06", "rugby", "URC"),
+    ]
+    banned = ("1853", "1551")
+
+    for match_key, sport, league in fixtures:
+        home_key, rest = match_key.split("_vs_", 1)
+        away_key = rest.rsplit("_", 1)[0]
+        spec = SimpleNamespace(
+            home_name=home_key.replace("_", " ").title(),
+            away_name=away_key.replace("_", " ").title(),
+            sport=sport,
+            competition=league,
+            bookmaker="Betway",
+            odds=1.85,
+            verdict_action="lean back",
+            verdict_sizing="moderate",
+            evidence_class="supported",
+            tone_band="moderate",
+            edge_tier="gold",
+            sa_tag="lean",
+            h2h_history="No prior meetings",
+        )
+        pack = EvidencePack(
+            match_key=match_key,
+            sport=sport,
+            league=league,
+            built_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            richness_score="medium",
+            sources_available=4,
+            sources_total=8,
+        )
+
+        for preview in (False, True):
+            prompt = format_evidence_prompt(pack, spec, match_preview=preview)
+            assert isinstance(prompt, str), (
+                f"format_evidence_prompt must return str for {match_key} preview={preview}"
+            )
+            for literal in banned:
+                assert literal not in prompt, (
+                    f"Banned literal {literal!r} must not appear in {match_key} "
+                    f"(preview={preview}). This regression is the cargo-cult Arsenal "
+                    f"Elo leak from FIX-NARRATIVE-RATING-PROMPT-PLACEHOLDER-01."
+                )
