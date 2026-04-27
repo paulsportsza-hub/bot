@@ -51,7 +51,7 @@ EDGEOPS_CHAT_ID = os.environ.get("EDGEOPS_CHAT_ID", "")
 
 TIERS = ["diamond", "gold", "silver", "bronze"]
 MAX_REELS_PER_DAY = 1
-SPORT_DIVERSITY_DAYS = 3    # no same sport within this many days
+SPORT_DIVERSITY_DAYS = 1    # no same sport within this many days
 MATCH_UNIQUENESS_DAYS = 14  # no same match_key within this many days
 
 # ── Logging ────────────────────────────────────────────────────────────────────
