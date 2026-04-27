@@ -16581,6 +16581,97 @@ def _find_rating_anchor_violations(
     return list(dict.fromkeys(reasons))
 
 
+# ── Combat-Sport Lore Validator (FIX-NARRATIVE-MMA-LORE-01 — LOCKED 2026-04-25) ──
+#
+# Why this gate exists: combat-sport evidence packs are structurally sparse
+# (no team-level form strings — just fighter records and odds), so Sonnet drifts
+# into training-data lore to fill space. INV-NARRATIVE-AUDIT-PRE-LAUNCH-01
+# (Opus AUDITOR, 2026-04-24) flagged generic_lore at 12.7% of corpus on the
+# w84 polish path, all combat fixtures.
+#
+# Phrase list calibrated empirically: classic fight-game tropes from the brief
+# (forward guards) plus phrases observed in the W84 INV-flagged failed-card
+# corpus (currently leaking). Brief-listed "has been a", "this division has",
+# "new wave" dropped — false-positive risk too high (overlap with neutral
+# language). Mirror constant `_COMBAT_SPORT_KEYS_SET` lives in evidence_pack.py;
+# see CLAUDE.md Narrative Generation Pipeline Rule 11.
+_COMBAT_SPORT_KEYS: frozenset[str] = frozenset({
+    "mma", "boxing", "ufc", "bellator", "one_fc", "one",
+    "pfl", "professional_fighters_league", "glory", "k1", "kickboxing",
+    "combat",
+})
+
+_COMBAT_LORE_BANNED_PHRASES: tuple[str, ...] = (
+    # Classic fight-game lore tropes — forward guards (not currently leaking).
+    "the fight game",
+    "in the fight business",
+    "warrior spirit",
+    "warrior's heart",
+    "the heart of a champion",
+    "bread and butter",
+    "check the ledger",
+    "the division reads",
+    "in his prime",
+    "in their prime",
+    "prime years",
+    "old guard",
+    "changing of the guard",
+    # Catch-all fabricated history pivot — observed 3× in active W84 cache.
+    "historically",
+    # Empirically observed in INV-flagged failed-card corpus.
+    "in combat sports",
+    "psychological and logistical advantages",
+    "championship-level mma",
+    "inherent unpredictability of mma",
+    "challenger's mentality",
+    "the promotion's ruleset",
+    "submission vulnerability",
+    "fight-night adjustments",
+    "double-edged sword",
+)
+
+_COMBAT_LORE_BANNED_RES = tuple(
+    re.compile(rf"\b{re.escape(phrase)}\b", re.IGNORECASE)
+    for phrase in _COMBAT_LORE_BANNED_PHRASES
+)
+
+
+def _find_combat_lore_violations(
+    narrative: str,
+    sport: str | None,
+) -> list[str]:
+    """Polish-time combat-sport lore enforcer (FIX-NARRATIVE-MMA-LORE-01).
+
+    No-op for non-combat sports. For combat fixtures, scans the full narrative
+    body (all 4 sections) for training-data lore phrases and generic combat-
+    sport filler that have no anchor in the evidence pack.
+
+    Returns reasons list:
+      - 'combat_lore:<phrase>' for each unique banned phrase hit (deduped).
+    """
+    if not narrative:
+        return []
+    if not sport:
+        return []
+    sport_norm = sport.lower().strip()
+    if sport_norm not in _COMBAT_SPORT_KEYS:
+        return []
+
+    plain = re.sub(r"<[^>]+>", " ", narrative)
+    plain = re.sub(r"\s+", " ", plain).strip()
+
+    reasons: list[str] = []
+    seen_phrases: set[str] = set()
+    for phrase, phrase_re in zip(_COMBAT_LORE_BANNED_PHRASES, _COMBAT_LORE_BANNED_RES):
+        if phrase in seen_phrases:
+            continue
+        if phrase_re.search(plain):
+            reasons.append(f"combat_lore:{phrase}")
+            seen_phrases.add(phrase)
+
+    return reasons
+
+
 def _extract_rendered_h2h_summary(narrative: str) -> str:
     """Return the rendered H2H summary body without its leading label."""
     if not narrative:
@@ -20390,6 +20481,14 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
     )
     if _rating_reasons:
         log.warning("POLISH REJECT: rating-anchor (%s)", ", ".join(_rating_reasons))
+        return False
+
+    # 8e. FIX-NARRATIVE-MMA-LORE-01: combat-sport lore-trope ban.
+    _combat_lore_reasons = _find_combat_lore_violations(
+        polished, getattr(spec, "sport", None) if spec else None
+    )
+    if _combat_lore_reasons:
+        log.warning("POLISH REJECT: combat-lore (%s)", ", ".join(_combat_lore_reasons))
         return False
 
     # 8b. BUILD-VERDICT-FLOOR-01: verdict section length gate [140, 200]

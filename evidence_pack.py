@@ -14,6 +14,15 @@ from config import ODDS_DB_PATH, ENRICHMENT_DB_PATH, TIPSTER_DB_PATH
 ODDS_DB = str(ODDS_DB_PATH)
 ENRICHMENT_DB = str(ENRICHMENT_DB_PATH)
 
+# FIX-NARRATIVE-MMA-LORE-01 (locked 2026-04-25): combat-sport vocabulary key set.
+# Mirror of bot._COMBAT_SPORT_KEYS — keep both in sync. CLAUDE.md Rule 11
+# documents the canonical list; any addition here MUST also land in bot.py.
+_COMBAT_SPORT_KEYS_SET: frozenset[str] = frozenset({
+    "mma", "boxing", "ufc", "bellator", "one_fc", "one",
+    "pfl", "professional_fighters_league", "glory", "k1", "kickboxing",
+    "combat",
+})
+
 
 @dataclass
 class EvidenceSource:
@@ -2277,6 +2286,21 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "or any price-prefix construction. Lead with analytical posture, not the price."
         )
 
+    # FIX-NARRATIVE-MMA-LORE-01 (locked 2026-04-25): combat-sport evidence law.
+    # For MMA/boxing fixtures, evidence is structurally sparse (no team-level form,
+    # only fighter records and odds), so Sonnet drifts into training-data lore.
+    # Forbid the most common drift shapes — both classic fight-game tropes and
+    # generic-filler observed in the W84 INV-flagged corpus. Polish-time gate 8e
+    # in bot._validate_polish enforces the same list against output.
+    _is_combat = (getattr(pack, "sport", "") or "").lower().strip() in _COMBAT_SPORT_KEYS_SET
+    _combat_law_lines: list[str] = []
+    if _is_combat:
+        _combat_law_lines = [
+            "",
+            "COMBAT-SPORT EVIDENCE LAW (LOCKED 2026-04-25, FIX-NARRATIVE-MMA-LORE-01 — automatic rejection if violated):",
+            "12. For boxing, MMA, UFC, Bellator, ONE FC and other combat fixtures, ALL prose across the 4 sections MUST anchor exclusively to data in this evidence pack — fighter_records (W-L-D, KO%, recent form), sharp_lines / SA bookmaker odds, and espn_context. Do NOT reach for combat-sport history, traditions, or fighter-lore phrases ('historically', 'the fight game', 'in the fight business', 'in his prime', 'warrior spirit', 'warrior’s heart', 'the heart of a champion', 'bread and butter', 'check the ledger', 'old guard', 'changing of the guard', 'the division reads'). Do NOT use generic combat-sport divisional filler ('in combat sports', 'psychological and logistical advantages', 'championship-level MMA combat', 'inherent unpredictability of MMA', 'challenger’s mentality', 'the promotion’s ruleset', 'submission vulnerability', 'fight-night adjustments', 'double-edged sword'). Do NOT invent stylistic profiles, technical descriptions, or fight-camp narratives ('aggressive striking combinations', 'wrestling credentials', 'methodical approach') without verbatim source in fighter_records. If the evidence pack is thin, prefer brevity over fabrication.",
+        ]
+
     sections: list[tuple[str, str]] = []
     unavailable: list[str] = []
     for title, formatter in (
@@ -2348,6 +2372,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
         "9. Do NOT mention Pinnacle, Betfair, Matchbook, Smarkets, or any sharp bookmaker prices. Sharp context is injected separately.",
         "10. Never use banned filler such as 'thin support', 'pure pricing call', or 'supporting evidence is thin'. Prefer 'limited support', 'price-led angle', or evidence-specific wording. Do NOT use the phrases 'sharp market pricing' or 'worth backing'.",
         "11. Do NOT use the phrases 'knockout football', 'knockout stakes', 'knockout stage', 'knockout tie', 'knockout clash'. UCL league-phase matches are NOT knockouts. Describe match dynamics, not format labels.",
+        *_combat_law_lines,
         "",
         "───────────── EVIDENCE PACK ─────────────",
         "",
