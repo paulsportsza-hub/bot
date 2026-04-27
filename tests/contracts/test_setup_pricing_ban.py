@@ -228,6 +228,12 @@ _BASELINE_FIXTURES = [
     ("mma", "UFC", "Alex Pereira", "Magomed Ankalaev"),
     ("mma", "UFC", "Tom Aspinall", "Curtis Blaydes"),
     ("mma", "UFC", "Ilia Topuria", "Max Holloway"),
+    # 5 boxing (FIX-W82-BASELINE-PRICE-TALKING-01: extended sport coverage)
+    ("boxing", "Major Bouts", "Tyson Fury", "Oleksandr Usyk"),
+    ("boxing", "Major Bouts", "Canelo Alvarez", "Jermall Charlo"),
+    ("boxing", "Major Bouts", "Terence Crawford", "Errol Spence"),
+    ("boxing", "Major Bouts", "Naoya Inoue", "Stephen Fulton"),
+    ("boxing", "Major Bouts", "Devin Haney", "Vasyl Lomachenko"),
 ]
 
 
@@ -237,6 +243,13 @@ def test_baseline_setup_never_contains_pricing(sport, league, home, away):
 
     Regression guard: if `_render_baseline()` is changed to inject odds/bookmaker
     vocabulary into Setup, this test catches it before users do.
+
+    FIX-W82-BASELINE-PRICE-TALKING-01 (2026-04-27): now also asserts the
+    polish-time strict-ban detector returns [] for W82 baseline. Pre-fix the
+    `_render_setup_no_context` low-context variants leaked banned vocab into Setup
+    (e.g. "let the price do the talking"); post-fix, all 4 sections are clean
+    by construction. The brief moved this from "out of scope" (FIX-02) to active
+    coverage (FIX-W82-BASELINE-PRICE-TALKING-01).
     """
     import bot
     from narrative_spec import build_narrative_spec, _render_baseline
@@ -279,14 +292,162 @@ def test_baseline_setup_never_contains_pricing(sport, league, home, away):
         f"--- baseline ---\n{baseline}"
     )
 
-    # NOTE (FIX-02): _find_setup_strict_ban_violations is intentionally NOT
-    # asserted against the W82 deterministic baseline. The strict-ban helper
-    # is a POLISH-TIME enforcer (gate 8a) and is stricter than the cache-read
-    # detector — it would fire on legacy W82 templates such as "let the price
-    # do the talking" in the Setup body of certain low-context fixtures.
-    # Cleaning those templates is out of scope per FIX-02 ("W82 baseline rebuild
-    # … already free of pricing vocabulary by construction" — see brief).
-    # The cache-read detector remains the authoritative guard for W82 output.
+    # FIX-W82-BASELINE-PRICE-TALKING-01: the strict-ban detector now asserted too.
+    # Pre-fix the `_render_setup_no_context` low-context variants emitted banned
+    # vocab into Setup (e.g. "let the price do the talking", "lean on the price",
+    # "what the odds say matters more"); post-fix, those variants are rewritten
+    # in non-pricing language and this assertion guards against regression.
+    strict_reasons = bot._find_setup_strict_ban_violations(baseline)
+    assert strict_reasons == [], (
+        f"FIX-W82-BASELINE-PRICE-TALKING-01 regression in {sport} {home} vs {away}: "
+        f"{strict_reasons}\n--- baseline ---\n{baseline}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-W82-BASELINE-PRICE-TALKING-01 — Exhaustive fuzzing matrix (≥100 fixtures).
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# AC-3 expands the regression coverage from 25 base fixtures to ≥100 by sweeping
+# each fixture across multiple `(composite_score, support_level, ev_pct, odds)`
+# combinations. Each combination drives a different posture_band × signal_band ×
+# ev_band × score_band path through `_render_setup_no_context`, exercising the
+# full variant matrix. The previous 25-fixture coverage only hit a single posture
+# point per fixture and missed the variant 4 ("market architecture / let the price
+# do the talking") leak that lived in the `premium`/`thin` close_map branches.
+
+# 5 coverage profiles drive different (posture × signal × ev × score) paths.
+# Together these exercise every cell in the posture_map × close_map matrix.
+_COVERAGE_PROFILES = [
+    # (label, composite_score, confirming_signals, ev_pct, odds, stale_minutes)
+    ("premium_confident_multi", 78.0, 3, 9.5, 1.55, 0),       # premium / confident / multi_signal
+    ("solid_balanced_single",   55.0, 1, 4.0, 1.85, 0),       # solid / balanced / single_signal
+    ("thin_cautious_no_signal", 42.0, 0, 1.2, 2.10, 0),       # thin / cautious / no_signal — variant 4 path
+    ("premium_cautious_no",     65.0, 0, 1.5, 3.40, 0),       # premium / cautious / no_signal — live underdog
+    ("solid_confident_no_sig",  56.0, 0, 8.5, 1.60, 5),       # solid / confident / no_signal — short fav
+]
+
+
+@pytest.mark.parametrize("sport,league,home,away", _BASELINE_FIXTURES)
+@pytest.mark.parametrize("profile_label,composite,signals,ev,odds,stale",
+                         _COVERAGE_PROFILES,
+                         ids=[p[0] for p in _COVERAGE_PROFILES])
+def test_baseline_setup_fuzzing_strict_ban_zero(
+    sport, league, home, away,
+    profile_label, composite, signals, ev, odds, stale,
+):
+    """FIX-W82-BASELINE-PRICE-TALKING-01 AC-3: exhaustive fuzzing — every
+    sport × fixture × coverage-profile combination must produce zero strict-ban
+    violations across the FULL baseline narrative (Setup, Edge, Risk, Verdict).
+
+    Sweep size: 25 fixtures × 5 coverage profiles = 125 combinations (≥100).
+    Each profile drives a different `(posture_band × signal_band × ev_band ×
+    score_band)` cell in the variant matrix — together these exhaustively
+    exercise every path through `_render_setup_no_context`.
+    """
+    import bot
+    from narrative_spec import build_narrative_spec, _render_baseline
+
+    edge_data = {
+        "home_team": home,
+        "away_team": away,
+        "league": league,
+        "best_bookmaker": "Hollywoodbets",
+        "best_odds": odds,
+        "edge_pct": ev,
+        "outcome": "home",
+        "outcome_team": home,
+        "confirming_signals": signals,
+        "composite_score": composite,
+        "bookmaker_count": 5,
+        "stale_minutes": stale,
+        "movement_direction": "neutral",
+        "tipster_against": 0,
+    }
+    tips = [
+        {
+            "outcome": "home",
+            "odds": odds,
+            "bookie": "Hollywoodbets",
+            "bookmaker": "Hollywoodbets",
+            "ev": ev,
+            "prob": (1 + ev / 100.0) / odds * 100.0,
+            "home_team": home,
+            "away_team": away,
+        }
+    ]
+
+    # Empty ctx_data → drives _render_setup_no_context (the path with the leak).
+    spec = build_narrative_spec({}, edge_data, tips, sport)
+    baseline = _render_baseline(spec)
+
+    strict_reasons = bot._find_setup_strict_ban_violations(baseline)
+    assert strict_reasons == [], (
+        f"FIX-W82-BASELINE-PRICE-TALKING-01 regression: profile={profile_label} "
+        f"{sport} {home} vs {away}: {strict_reasons}\n--- baseline ---\n{baseline}"
+    )
+
+    # Also confirm "market architecture" doesn't appear (not in the strict-ban
+    # token list, so explicitly checked here per brief banned-tokens spec).
+    assert "market architecture" not in baseline.lower(), (
+        f"FIX-W82-BASELINE-PRICE-TALKING-01 'market architecture' leaked: "
+        f"profile={profile_label} {sport} {home} vs {away}\n--- baseline ---\n{baseline}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-W82-BASELINE-PRICE-TALKING-01 — _validate_baseline_setup helper unit tests.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_validate_baseline_setup_is_callable():
+    """AC-2: _validate_baseline_setup must exist on the bot module."""
+    import bot
+
+    assert callable(bot._validate_baseline_setup), (
+        "_validate_baseline_setup must be exported as a module-level callable"
+    )
+
+
+def test_validate_baseline_setup_clean_returns_empty():
+    """Clean Setup body returns []."""
+    import bot
+
+    text = _wrap_setup(
+        "Arsenal sit second on 75 points after a four-match winning run. "
+        "Fulham have lost three in a row and slip toward mid-table."
+    )
+    assert bot._validate_baseline_setup(text) == []
+
+
+def test_validate_baseline_setup_flags_pricing_token():
+    """Setup body containing a banned token returns non-empty reasons."""
+    import bot
+
+    text = _wrap_setup("The bookmaker has Arsenal at 1.45 here.")
+    reasons = bot._validate_baseline_setup(text)
+    assert reasons, "_validate_baseline_setup must flag bookmaker token"
+    assert "banned_token:bookmaker" in reasons
+
+
+def test_validate_baseline_setup_delegates_to_strict_ban():
+    """_validate_baseline_setup returns the same result as _find_setup_strict_ban_violations."""
+    import bot
+
+    test_inputs = [
+        _wrap_setup("Clean form-based context with no pricing vocabulary."),
+        _wrap_setup("The implied chance favours the home side here."),
+        _wrap_setup("The model reads 30% probability for an away win."),
+        _wrap_setup("City have won four on the bounce coming in."),
+    ]
+    for text in test_inputs:
+        baseline_result = bot._validate_baseline_setup(text)
+        strict_result = bot._find_setup_strict_ban_violations(text)
+        assert baseline_result == strict_result, (
+            f"_validate_baseline_setup must delegate to _find_setup_strict_ban_violations "
+            f"identically for: {text[:60]!r}\n"
+            f"baseline_result={baseline_result}\nstrict_result={strict_result}"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -15221,6 +15221,24 @@ async def _store_narrative_cache(
         match_id, _wg_src, edge_tier, len(verdict_html or ""),
     )
 
+    # FIX-W82-BASELINE-PRICE-TALKING-01 (locked 2026-04-27): scan W82 baseline
+    # Setup for banned pricing vocabulary before persistence. The W82 deterministic
+    # baseline path bypasses _validate_polish gate 8a, so without this scan a future
+    # template change could leak banned vocab (price/bookmaker/odds/implied/etc.)
+    # into Setup with no gate to catch it. On hit, log + return early (don't persist) —
+    # the in-memory _analysis_cache already holds the narrative for immediate serving,
+    # and the next pregen cycle will rebuild from cleaned templates. See CLAUDE.md
+    # Narrative Generation Pipeline Rule 12.
+    if _wg_src == "w82":
+        _baseline_setup_reasons = _validate_baseline_setup(html)
+        if _baseline_setup_reasons:
+            log.warning(
+                "BASELINE REJECT: setup-pricing-leak match_id=%s reasons=%s — "
+                "skipping W82 persistence (in-memory cache still serves)",
+                match_id, ", ".join(_baseline_setup_reasons),
+            )
+            return
+
     def _store():
         # W84-RT3: 3s timeout — WAL mode handles transient scraper locks up to 3s.
         # If lock lasts longer (scraper bulk write), we skip this persist gracefully.
@@ -16439,6 +16457,34 @@ def _find_setup_strict_ban_violations(narrative: str) -> list[str]:
 
     # Preserve reason order while collapsing exact-string duplicates.
     return list(dict.fromkeys(reasons))
+
+
+# ── W82 Baseline-Time Setup Validator (FIX-W82-BASELINE-PRICE-TALKING-01 — LOCKED 2026-04-27) ──
+#
+# Why this helper exists: gate 8a in _validate_polish only runs on the w84 LLM-polish
+# path. The W82 deterministic baseline templates in narrative_spec.py bypass every
+# polish-time check we have. FIX-PREGEN-SETUP-PRICING-LEAK-02's report flagged that
+# narrative_spec._render_setup_no_context variant 4 emitted "the market architecture
+# here is clean enough to let the price do the talking" into Setup body for low-context
+# fixtures — banned vocab, no gate to catch it.
+#
+# This helper is a thin wrapper around the existing strict-ban enforcer. The single-
+# purpose name distinguishes baseline-time invocation (called from _store_narrative_cache
+# before persistence) from polish-time invocation (gate 8a inside _validate_polish).
+# Both call the same underlying detector, so any future addition to the banned-token
+# list automatically flows through to both callsites. CLAUDE.md Narrative Generation
+# Pipeline Rule 12 documents the architecture.
+def _validate_baseline_setup(narrative: str) -> list[str]:
+    """Baseline-time variant of polish gate 8a's strict-ban enforcer.
+
+    Used by _store_narrative_cache to scan W82 baseline output before persistence.
+    Returns the same reasons list as _find_setup_strict_ban_violations — empty list
+    means clean Setup, non-empty means at least one banned token was found.
+
+    Single-purpose name distinguishes this baseline-time callsite from the polish-
+    time gate 8a inside _validate_polish. Both ultimately call the same detector.
+    """
+    return _find_setup_strict_ban_violations(narrative)
 
 
 # ── Risk-Resolution Validator (FIX-NARRATIVE-RISK-RESOLUTION-01 — LOCKED 2026-04-25) ──

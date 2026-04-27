@@ -2089,11 +2089,15 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
     odds = float(spec.odds or 0.0)
     composite = float(spec.composite_score or 0.0)
 
-    price_band = (
+    # FIX-W82-BASELINE-PRICE-TALKING-01: posture_band describes the side's market
+    # position in non-pricing language. "competitive price point" was the prior
+    # else-branch — replaced with "balanced contest" to keep Setup free of
+    # pricing vocabulary. See CLAUDE.md Narrative Generation Pipeline Rule 12.
+    posture_band = (
         "short favourite" if odds and odds < 1.8 else
         "clear favourite" if odds and odds < 2.15 else
         "live underdog" if odds and odds >= 3.2 else
-        "competitive price point"
+        "balanced contest"
     )
     ev_band = (
         "confident" if ev >= 7.0 else
@@ -2101,7 +2105,7 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
         "balanced"
     )
     signal_band = (
-        "price_only" if support == 0 else
+        "no_signal" if support == 0 else
         "multi_signal" if support >= 2 else
         "single_signal"
     )
@@ -2153,74 +2157,83 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
             f"This league {fixture_type} between {h} and {a}{comp_note} should be judged through pattern and control before any bigger story gets attached to it.",
         ],
     }
-    price_map = {
+    # FIX-W82-BASELINE-PRICE-TALKING-01: posture_map replaces the prior price_map.
+    # All variants describe the analytical posture (signal mix × confidence band)
+    # in non-pricing language. Banned vocabulary (price, priced, bookmaker, odds,
+    # implied, fair value, expected value, model reads, market architecture) is
+    # excluded by construction. See CLAUDE.md Narrative Generation Pipeline Rule 12.
+    posture_map = {
         "confident": {
-            "price_only": [
-                f"The market still leans hard enough toward the number to make the {price_band} central to the read, even without broader support.",
-                f"This is still a price-led angle: the number is doing the work, not a stack of external signals.",
+            "no_signal": [
+                f"The headline read still leans hard enough toward the {posture_band} to lead with, even without broader supporting context.",
+                f"This is still a sharper analytical posture: the indicator profile looks firm enough to lead with confidence, even if external corroboration is thin.",
             ],
             "single_signal": [
-                f"There is some support around the price, but the main point is that the number still looks firmer than the surrounding noise.",
-                f"One confirming signal helps, yet the price remains the real engine of the case.",
+                f"There is one confirming indicator on top of the headline read, which keeps the case tighter than most low-context setups allow.",
+                f"One supporting signal helps, but the indicator profile still does the heavy lifting on this {posture_band}.",
             ],
             "multi_signal": [
-                f"With multiple signals behind it and a stronger-than-usual edge, this is the sort of {price_band} market position that can be stated more cleanly.",
-                f"The signal count gives this {price_band} more authority, so the setup does not need to lean on theatre.",
+                f"With multiple indicators stacked behind it and a stronger-than-usual analytical lead, this is the sort of {posture_band} that can be stated more cleanly than usual.",
+                f"The signal count gives this {posture_band} more authority, so the framing does not need to lean on theatre.",
             ],
         },
         "balanced": {
-            "price_only": [
-                f"It still reads as a {price_band} call first, which keeps the discipline on the number rather than on any invented story.",
-                f"The angle is mainly in the price architecture, so the right tone is measured rather than promotional.",
+            "no_signal": [
+                f"It still reads as a measured {posture_band} call first, which keeps discipline on the analytical signal rather than on any invented story.",
+                f"The angle is mainly in the indicator profile here, so the right tone is measured rather than promotional.",
             ],
             "single_signal": [
-                f"The case is respectable rather than emphatic: one signal, a workable number, and no need to oversell it.",
+                f"The case is respectable rather than emphatic: one supporting signal, a workable read on the {posture_band}, and no need to oversell it.",
                 f"There is enough there to keep it live, but not enough to pretend this is a runaway read.",
             ],
             "multi_signal": [
-                f"The support is real, but the edge still belongs in the disciplined bucket rather than the loud one.",
-                f"More than one signal sharpens the view, although this still looks like a controlled market read rather than a statement play.",
+                f"The support stack is real, but the read still belongs in the disciplined bucket rather than the loud one.",
+                f"More than one indicator sharpens the view, although this still looks like a controlled read rather than a statement play.",
             ],
         },
         "cautious": {
-            "price_only": [
-                f"With no support stack and only a narrow edge, this is the kind of {price_band} that asks for restraint.",
-                f"The number keeps it on the board, but only just; no support stack means this stays in caution territory rather than conviction territory.",
+            "no_signal": [
+                f"With no supporting stack and only a narrow analytical lead, this is the kind of {posture_band} that asks for restraint.",
+                f"The headline read keeps it on the board, but only just; without supporting indicators, this stays in caution territory rather than conviction territory.",
             ],
             "single_signal": [
-                f"There is a hint of support, but the edge is slim enough that the market should still be treated carefully.",
-                f"One signal stops it from being purely numbers-led, though not by enough to remove the caution.",
+                f"There is a hint of support, but the analytical lead is slim enough that this should still be treated carefully.",
+                f"One indicator stops it from being purely thin, though not by enough to remove the caution.",
             ],
             "multi_signal": [
-                f"Multiple signals are doing more work than the edge size, which makes this more about respecting the line than pressing it.",
+                f"Multiple indicators are doing more work than the analytical gap itself, which makes this more about respecting the read than pressing it.",
                 f"Multiple signals keep it credible, but the margin is still narrow and should be handled that way.",
             ],
         },
     }
+    # FIX-W82-BASELINE-PRICE-TALKING-01: close_map replaces the prior close_map.
+    # All variants reframe the closing posture in analytical-signal language.
+    # The "premium / solid / thin" axis still describes composite-score band, but
+    # without leaking pricing vocabulary into the Setup body.
     close_map = {
         "premium": [
-            f"That leaves a premium-grade market read on a fixture where the structure matters as much as the names.",
-            f"The cleaner angle here is to trust the market shape and keep the language as composed as the setup.",
-            f"The market architecture here is clean enough to let the price do the talking without embellishment.",
-            f"A premium read on a fixture where the pricing signal is the headline, not the supporting cast.",
+            f"That leaves a premium-grade analytical read on a fixture where the structure matters as much as the names.",
+            f"The cleaner angle here is to trust the signal shape and keep the language as composed as the setup.",
+            f"The indicator profile here is clean enough to lead with conviction, without embellishment.",
+            f"A premium read on a fixture where the analytical signal is the headline, not the supporting cast.",
         ],
         "solid": [
-            f"That keeps the focus on execution and price discipline rather than on borrowed narrative.",
-            f"It is a solid setup for a measured read, with the market doing enough of the explanatory work.",
-            f"A workable, proportionate read — the market has done its job and the price reflects it.",
-            f"Solid pricing context, no need to overreach — trust the signal and stay market-led.",
+            f"That keeps the focus on execution and analytical discipline rather than on borrowed narrative.",
+            f"It is a solid setup for a measured read, with the indicator profile doing enough of the explanatory work.",
+            f"A workable, proportionate read — the indicators have done their job and the analytical profile reflects it.",
+            f"Solid signal context, no need to overreach — trust the read and stay disciplined.",
         ],
         "thin": [
             f"That is why the setup needs restraint: the frame is usable, but not rich enough for swagger.",
-            f"The right read is compact and market-literate — trust the pricing structure and let it carry the weight.",
-            f"Thin context calls for a proportionate play — a market-led position without an oversold case behind it.",
-            f"The analytical posture here is disciplined: lean on the price, size conservatively, and stay proportionate.",
-            f"A market-led read is the sharpest call here — what the odds say matters more than what the surrounding data confirms.",
+            f"The right read is compact and signal-literate — trust the analytical structure and let it carry the weight.",
+            f"Thin context calls for a proportionate play — a measured analytical position without an oversold case behind it.",
+            f"The analytical posture here is disciplined: lean on the indicator profile, size conservatively, and stay proportionate.",
+            f"A signal-led read is the sharpest call here — what the indicators say matters more than what the surrounding data confirms.",
         ],
     }
 
     scene_variants = scene_map[cat]
-    price_variants = price_map[ev_band][signal_band]
+    posture_variants = posture_map[ev_band][signal_band]
     close_variants = close_map[score_band]
 
     # R7-BUILD-03: Use raw float precision and competition key in seeds to reduce
@@ -2229,9 +2242,9 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
     _odds_str = f"{odds:.4f}"
     _ev_str = f"{ev:.4f}"
     scene = scene_variants[_pick(f"{h}|{a}|{comp}|{_odds_str}|{_ev_str}|scene", len(scene_variants))]
-    price = price_variants[_pick(f"{h}|{a}|{cat}|{ev_band}|{signal_band}|price", len(price_variants))]
+    posture = posture_variants[_pick(f"{h}|{a}|{cat}|{ev_band}|{signal_band}|posture", len(posture_variants))]
     close = close_variants[_pick(f"{h}|{a}|{comp}|{_odds_str}|{_ev_str}|{score_band}|close", len(close_variants))]
-    return f"{scene} {price} {close}"
+    return f"{scene} {posture} {close}"
 
 
 def _render_setup_bridge(spec: NarrativeSpec) -> str:
@@ -2250,7 +2263,7 @@ def _render_setup(spec: NarrativeSpec) -> str:
     W84-P1E: When no standings/form data available (both neutral, no form),
     produce a compact scene-setting note rather than two thin boilerplate paragraphs.
     """
-    # No context — produce compact fixture framing instead of price-analysis boilerplate.
+    # No context — produce compact fixture framing via _render_setup_no_context.
     _no_context = (
         spec.home_story_type == "neutral"
         and spec.away_story_type == "neutral"
