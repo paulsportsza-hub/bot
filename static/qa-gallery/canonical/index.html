@@ -107,12 +107,527 @@
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
+<!-- 🎨 Design System (universal tokens — every canonical card must honour) -->
+<!-- ─────────────────────────────────────────────────────────────────────── -->
+
+<div class="status-section" style="background:linear-gradient(180deg,#0F0F0F,#0A0A0A)">
+  <h2 class="status-heading" style="color:#F7931A">🎨 Design System <span class="count">(universal tokens)</span></h2>
+  <p style="font-size:13px;color:#bbb;margin-bottom:18px;max-width:880px;line-height:1.5">
+    Every canonical card MUST honour these tokens. The unified header pattern (logo + tier-glow halo + brand bar + sparkle layer) is mandatory on edge-tier surfaces. Locked rules carry precedence; deviations require Paul's explicit approval per card.
+  </p>
+
+  <div class="design-notes">
+    <h4>1 · Header (every edge-tier surface)</h4>
+    <ul>
+      <li><strong>Logo</strong>: <code>mzansiedge-wordmark-dark-transparent.png</code> at <code>height: 28px</code> (detail/breakdown) or <code>32px</code> (list/index). Loaded via <code>card_data.logo_b64()</code> as base64 data URI. Text fallback only if image absent.</li>
+      <li><strong>Glow zone — covers header + matchup + meta-bar as one unified block</strong> (templates: <code>edge_detail</code>, <code>ai_breakdown</code>, <code>tier_lock_upsell</code>):
+        <ul>
+          <li>Wrap <code>.header</code> + <code>.matchup</code> (or <code>.match-meta</code> kicker+title for ai_breakdown) + <code>.meta-bar</code> in <code>&lt;div class="upper-glow-zone"&gt;</code>. Wrapper has <code>position: relative; isolation: isolate; overflow: hidden</code>.</li>
+          <li>Two glow layers inside the wrapper at <code>z-index: 0</code>:
+            <ul>
+              <li>Layer A (<code>.upper-glow</code>, blurred 2px): <code>radial-gradient(ellipse 35% 130% at 92% 50%, {tc}10 0%, {tc}07 50%, transparent 90%)</code></li>
+              <li>Layer B (<code>.upper-glow-screen</code>, <code>mix-blend-mode: screen</code>): <code>radial-gradient(ellipse 22% 100% at 92% 50%, {tc}1A 0%, {tc}0D 40%, transparent 80%)</code></li>
+            </ul>
+          </li>
+          <li>All inner content (header / matchup / meta-bar) lifted to <code>z-index: 2</code>.</li>
+          <li><strong>Drop the hard dividing line above the meta-bar.</strong> Remove <code>border-top: 1px solid #2A2A2A</code> from <code>.meta-bar</code>. Keep <code>border-bottom</code> (separates the unified upper block from the analysis section below — THE PICK / prose / locked-preview).</li>
+          <li>For ai_breakdown specifically: the prod template originally nested <code>.meta-bar</code> inside <code>.match-meta</code>. Canonical pulls <code>.meta-bar</code> out as a sibling of <code>.match-meta</code> (with explicit <code>padding: 8px 18px</code> to replace the lost <code>margin: 0 -18px</code>) so the glow can flow seamlessly to its bottom.</li>
+          <li>Header padding stays at prod values (<code>8px 16px</code>) — do NOT enlarge (eats verdict space on edge_detail).</li>
+          <li><strong>Banned</strong>: <code>border-top</code> on <code>.meta-bar</code> (creates the hard dividing line); glow radials extending past the meta-bar's bottom border; header background gradients.</li>
+        </ul>
+      </li>
+      <li><strong>Logo-centered glow</strong> (for tall-header LIST cards where the wordmark logo is the centerpiece — <code>edge_picks</code>, <code>edge_picks_index_v1</code>, <code>edge_summary</code>): glow radiates from BEHIND the logo (centered top), fading down through the orange-bar.
+        <ul>
+          <li>Layer A (<code>.header-glow</code> / <code>.logo-glow</code>, blurred 3px): <code>radial-gradient(ellipse 50% 90% at 50% 25%, #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%)</code></li>
+          <li>Layer B (<code>.header-glow-screen</code> / <code>.logo-glow-screen</code>, screen-blend): <code>radial-gradient(ellipse 32% 60% at 50% 28%, #F7931A66 0%, #F7931A22 50%, transparent 80%)</code></li>
+          <li>Container <code>inset: -10px 0 0 0</code> on Layer A so the glow bleeds slightly above the logo into the card edge.</li>
+          <li>Always brand orange <code>#F7931A</code> (these are multi-tier or non-tier surfaces — orange is the brand stamp).</li>
+        </ul>
+      </li>
+      <li><strong>No card border.</strong> The card frame is borderless; the glow alone signals the tier in the header row.</li>
+      <li><strong>Brand bar</strong>: 2px tall, <code>linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45)</code>, margin <code>0 16px 8px</code>, opacity 0.9. Mandatory below header on every card.</li>
+      <li><strong>Tier badge</strong>: pill on header right with tier emoji + label. Background <code>{tier_color}18</code>, border <code>{tier_color}55</code>, box-shadow <code>0 0 12px {tier_color}30</code>, label colour <code>{tier_color}</code>.</li>
+    </ul>
+  </div>
+
+  <div class="design-notes">
+    <h4>2 · Tier tokens (canonical _TIER_META)</h4>
+    <ul>
+      <li>💎 <strong>Diamond</strong> — <code>#B9F2FF</code> (cool cyan), rank 0</li>
+      <li>🥇 <strong>Gold</strong> — <code>#FFD700</code> (warm yellow), rank 1</li>
+      <li>🥈 <strong>Silver</strong> — <code>#A0AEC0</code> (cool grey-blue), rank 2</li>
+      <li>🥉 <strong>Bronze</strong> — <code>#CD7F32</code> (warm bronze), rank 3</li>
+      <li>Source: <code>bot/card_data.py:100-104</code>. <strong>Banned</strong>: any deviation from these hex values for tier accents anywhere in the bot.</li>
+    </ul>
+  </div>
+
+  <div class="design-notes">
+    <h4>3 · Bookmaker logos (use real PNGs, never plain text)</h4>
+    <ul>
+      <li>Source: <code>/home/paulsportsza/assets/bookmakers/logo-{name}.png</code> — 7 logos: Betway, Hollywoodbets, Supabets, Sportingbet, GBets, Playabets, WSB.</li>
+      <li>Render at <code>height: 24px</code> inside <code>.odds-pill</code> chips (alongside the odds number). Chip <code>font-size: 13px / padding: 7px 11px / gap: 9px</code>. Source PNGs pre-resized to 56px height for retina-sharp downscaling at dsf=2.</li>
+      <li><strong>Where logos go vs don't</strong>:
+        <ul>
+          <li><strong>Use logos</strong> on detail/hero surfaces with breathing room: <code>edge_detail</code> (24px chip logos), <code>edge_summary</code> (14px in TOP PICK), <code>edge_picks</code> (14px in pick chips), <code>tier_lock_upsell</code> plan cards.</li>
+          <li><strong>Use text</strong> on compact list rows where logos would crowd: <code>my_matches</code> (`@ Bookmaker`), and any other multi-row list where a bookmaker reference shares a single line with team name + pick.</li>
+          <li>Rule of thumb: if the bookmaker reference shares its row with team name + pick text, keep it text; if the chip is a standalone visual element, use the logo.</li>
+        </ul>
+      </li>
+      <li>Pick (highlighted) chip: <code>{tier_color}20</code> bg + <code>1.5px solid {tier_color}</code> border. Other chips dim down to <code>{tier_color}12</code> bg + <code>{tier_color}30</code> border.</li>
+      <li><strong>Banned</strong>: text-only bookie names ("Betway" / "Hollywoodbets" without logo) anywhere a bookmaker is referenced.</li>
+    </ul>
+  </div>
+
+  <div class="design-notes">
+    <h4>4 · SuperSport DStv badge</h4>
+    <ul>
+      <li>Source channel string MUST contain <code>"DStv N"</code> (e.g. <code>"SS PSL (DStv 211)"</code>) so <code>_extract_dstv_num</code> picks up the channel number.</li>
+      <li>Badge structure: <code>&lt;span class="ss-badge"&gt;&lt;img class="ss-icon" src="{ss_icon_b64}"&gt;&lt;span class="ss-num"&gt;211&lt;/span&gt;&lt;/span&gt;</code></li>
+      <li>SS icon source: <code>bot/assets/icons/ss_40.png</code> at 18×18 px. Loaded as base64 via <code>_load_ss_icon_b64()</code>.</li>
+      <li>Fallback (non-SS broadcast): plain text <code>📺 {channel}</code>.</li>
+    </ul>
+  </div>
+
+  <div class="design-notes">
+    <h4>5 · Canonical emoji set (LOCKED — banned emojis listed below)</h4>
+    <ul>
+      <li><strong>Sports</strong>: ⚽ soccer · 🏉 rugby · 🏏 cricket · 🥊 combat. <strong>Banned</strong>: any other sport emoji until the bot covers it.</li>
+      <li><strong>Tier markers</strong>: 💎 Diamond · 🥇 Gold · 🥈 Silver · 🥉 Bronze · 🔒 Locked. The medal emojis ALWAYS map to the canonical <code>tier_color</code>.</li>
+      <li><strong>Section markers</strong> (deep-dive cards only — Setup/Edge/Risk/Verdict): 📋 Setup · 🎯 Edge · ⚠️ Risk · 🏆 Verdict. <strong>Banned</strong>: 🔍 (use 🎯) and 💡 (use 🎯).</li>
+      <li><strong>Meta-bar items</strong>: 📅 Date · ⏰ Kickoff · 🏙️ Venue (rare). SuperSport broadcast uses the <strong>SS badge</strong> (<code>ss_icon_b64</code> + DStv #), <strong>not</strong> 📺. Non-SS broadcasts fall back to <code>📺 {channel}</code>.</li>
+      <li><strong>States</strong>: ✅ confirmed/active · ⚠️ caution/error · 🌙 quiet/empty · ⚡ live/electric · ★ default/featured · 🎁 founding/gift. <strong>Banned</strong>: 🔥 (replaced by tier-glow visual), 🇿🇦 on bookmaker names.</li>
+      <li><strong>Actions</strong>: ↩️ back · 📲 bet on (deep link) · 🔄 retry/refresh. <strong>Banned</strong>: 🔙 (use ↩️).</li>
+      <li><strong>Cardinal rule</strong>: max <strong>one section emoji per row</strong> (incl. meta-bar separators). Multiple emojis on a single line dilute meaning and are banned.</li>
+    </ul>
+  </div>
+
+  <div class="design-notes">
+    <h4>6 · Two glow types — one per surface family</h4>
+    <ul>
+      <li><strong>Tier-color glow</strong> (cyan/yellow/silver/bronze): for surfaces tied to a specific edge tier. Used by <code>edge_detail.html</code>, <code>ai_breakdown.html</code>, <code>edge_picks.html</code>, <code>edge_picks_index_v1.html</code>, <code>tier_page.html</code>, <code>tier_lock_upsell.html</code>.</li>
+      <li><strong>Brand-orange glow</strong> (gradient <code>#FF6B00 → #F7931A → #FFBE45</code>): for surfaces NOT tied to a tier. Used by all <code>sub_*</code>, <code>onboarding_*</code>, <code>profile_home</code>, <code>my_matches</code>, <code>match_detail</code>, <code>my_teams</code>, <code>settings_sports</code>, <code>help</code>, <code>bookmaker_directory</code>, <code>home_winners</code>, <code>story_quiz_*</code>. Reference: existing prod <code>sub_payment_error.html</code> + <code>home_winners.html</code>.</li>
+      <li><strong>Glow placement</strong>: right side of header only (same dual-layer recipe as edge_detail), alphas adjusted to whatever reads best per surface but never extends below the header.</li>
+      <li><strong>Banned</strong>: mixed tier+orange on same card; full-card border glows; glow on cards explicitly representing "calm" UX (e.g. settings).</li>
+    </ul>
+  </div>
+
+  <div class="design-notes">
+    <h4>7 · Universal laws (apply to every card)</h4>
+    <ul>
+      <li><strong>No footers.</strong> Card terminates with a small black breathing strip below the last content block. No <code>mzansiedge.co.za · Bet responsibly · 18+</code> footer on any surface.</li>
+      <li><strong>No negative space.</strong> Card edge sits 8-12px below last content block. Verify with pixel measurement (<code>trailing_blank ≤ 14px logical</code>).</li>
+      <li><strong>Real bookmaker logos</strong> (from <code>/home/paulsportsza/assets/bookmakers/logo-*.png</code>) wherever a bookmaker is mentioned. Logo height 18-24px. <strong>Banned</strong>: text-only bookie names.</li>
+      <li><strong>Unified header pattern</strong>: <code>mzansiedge-wordmark-dark-transparent.png</code> at 28px on every card. Header glow per the glow-type rule above. No header background, no border-bottom. Header padding stays at <code>8px 16px</code>.</li>
+      <li><strong>Adaptive height (LIST variant)</strong> is the default for everything except <code>edge_detail.html</code> + <code>match_detail.html</code> (DETAIL 480×620). LIST cards auto-fit content height via JS measurement.</li>
+    </ul>
+  </div>
+
+  <div class="design-notes">
+    <h4>8 · Typography + colour scaffold</h4>
+    <ul>
+      <li>Sans: <strong>Inter</strong> 400/600/700/800; mono: <strong>JetBrains Mono</strong> 700 (numbers, odds, EV).</li>
+      <li>Body bg <code>#000000</code>; card surface <code>#0A0A0A</code>; section surface <code>#141414</code>; secondary text <code>#B3B3B3</code> (WCAG AA on dark).</li>
+      <li>Form box colours: W <code>#00E676</code>, D <code>#555555</code>, L <code>#FF5252</code>.</li>
+      <li>Confidence/H2H bars use <code>{tier_color}</code> for fill on accent rows; muted <code>#444</code> for neutral.</li>
+    </ul>
+  </div>
+
+  <div class="design-notes">
+    <h4>9 · Verdict section — LOCKED to prod (size + position must not change)</h4>
+    <ul>
+      <li><strong>This is a hard lock.</strong> Text limits + verdict-prose generation are calibrated to this exact box. Any size / padding / font / line-height change will break downstream prose-fit assumptions.</li>
+      <li><code>.verdict-section</code> — <code>flex-grow: 1; min-height: 90px; padding: 10px 14px 12px; background: #141414; border-top: 1px solid #2A2A2A</code>. Identical to <code>bot/card_templates/edge_detail.html:417-424</code>.</li>
+      <li><code>.verdict-text</code> — <code>font-size: 15px; color: #DDDDDD; line-height: 1.6; margin-top: 5px; white-space: pre-line</code>. Identical to prod.</li>
+      <li><code>.verdict-section .section-hdr</code> — <code>font-size: 11px</code>.</li>
+      <li><strong>Banned</strong>: changing <code>min-height</code>, adding <code>max-height</code>, line-clamp, or tier-coloured background/border on the verdict — those alter the size/position of the box that prose generators are calibrated to.</li>
+      <li>Verification: <code>diff &lt;canonical-verdict-css&gt; &lt;prod-verdict-css&gt;</code> must produce zero output. Tested + locked 2026-04-25 ✓ (Paul approved Diamond 90 / Gold 84 / Silver 108 / Bronze 109 vs prod baseline 88 — within ±10px tolerance).</li>
+      <li><strong>CRITICAL:</strong> verdict-section uses <code>flex-grow: 1</code> — it fills remaining space inside the 620px frame. Therefore <strong>any padding or sizing change in the sections above</strong> (header, matchup, pick, chips, signals, H2H) will shrink the verdict's effective rendered height, even though its CSS is unchanged. Pixel measurement check (Diamond/Gold should both land near 88px logical):
+        <code>python3 -c "from PIL import Image; import numpy as np; img=np.array(Image.open('canonical/edge_detail_gold.png').convert('RGB')); h,w,_=img.shape; col=img[:,w//2]; m=np.all(np.abs(col.astype(int)-np.array([20,20,20]))&lt;=5,axis=1); y=h-1; \nwhile y&gt;=0 and m[y]: y-=1\nprint('verdict_height_logical=', (h-(y+1))//2)"</code>
+        Tolerance: ±10px logical vs prod's 88px. <strong>Banned</strong>: increasing header padding, adding brand-bar between header and matchup, increasing chip/signals padding — all eat verdict space.</li>
+    </ul>
+  </div>
+
+  <div class="design-notes">
+    <h4>10 · Footer — REMOVED (universal law §7)</h4>
+    <ul>
+      <li><strong>No footer on any card.</strong> The previous <code>mzansiedge.co.za · Bet responsibly · 18+</code> footer is dropped from every surface. Card terminates with the black breathing strip rule (§7).</li>
+      <li>Responsible-gambling messaging surfaces only on monthly reports + trial messages + re-engagement nudges (per CLAUDE.md §Notification Content Laws), <strong>not</strong> on UI cards.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────────────── -->
 <!-- ✅ Canonical section                                                    -->
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(1 design-locked)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(11 design-locked · 25 PNGs)</span></h2>
 
+  <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">match_detail.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-25 · LIST variant 480×N (was DETAIL fixed) · conditional glow</span>
+    </div>
+    <p class="tpl-summary">
+      Single-match deep view. Sent on <code>yg:game:{event_id}</code> from My Matches. Same upper-glow-zone pattern
+      as edge_detail (header + matchup + meta-bar unified). Glow color is conditional: tier-color when match has edge,
+      brand-orange when NO EDGE. Sections below: MARKET OVERVIEW (3-up odds), KEY STATS (2-up cards),
+      ⚠️ INJURY WATCH (when present), MATCH PREVIEW (Haiku analysis), H2H bar. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Variant moved from DETAIL → LIST</strong>. Prod was fixed 480×620 which left dead space below H2H when content was sparse. Now adaptive — auto-fits content height. <strong>Verdict-section locked rule does NOT apply</strong> here (this is not edge_detail; no verdict prose calibration).</li>
+        <li><strong>Conditional glow</strong>: <code>edge_badge_color</code> drives the upper-glow-zone tint when match has an edge (Diamond cyan / Gold yellow / etc.); falls back to brand-orange <code>#F7931A</code> when NO EDGE.</li>
+        <li><strong>Banned emojis removed</strong> from section headers: ⭐ (was on MARKET OVERVIEW) → dropped; 📊 (was on KEY STATS) → dropped; 🏥 (was on INJURY WATCH) → ⚠️ (in canonical set §5); 📝 (was on MATCH PREVIEW) → dropped. Section labels now read as uppercase letter-spaced text.</li>
+        <li><strong>Bookmaker text under odds boxes</strong> stays text — these are compact 3-up cells, no room for logos (matches my_matches rule on compact lists).</li>
+        <li><strong>Header pattern</strong>: logo left + "MY MATCH" pill + tier-edge badge OR "NO EDGE" pill on right. Glow lives in the upper-glow-zone wrapper.</li>
+        <li><strong>Meta bar</strong>: lost <code>border-top</code> per the unified-block rule (Wave E2). Border-bottom kept as the boundary marker.</li>
+        <li>No footer per universal §7. Trailing blank 10px on both variants.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Edit <code>bot/card_templates/match_detail.html</code>: remove fixed <code>height: 620px</code> from <code>html / body / .card</code>; wrap header + matchup + meta-bar in <code>.upper-glow-zone</code>; add conditional glow gradients (tier-color or orange); strip banned section emojis (⭐📊🏥📝); drop <code>border-top</code> from <code>.meta-bar</code>.</li>
+        <li>Update <code>bot/card_data.py:build_match_detail_data</code> to emit <code>edge_badge_color</code> when an edge exists (map from <code>edge_badge_tier</code> via <code>_TIER_META</code>).</li>
+        <li>Acceptance: <code>latest/match_detail.png</code> matches <code>canonical/match_detail_canonical_*.png</code> for the corresponding edge state. No footer. Trailing blank ≤14px.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">match_detail_canonical_with_edge.png</span><span class="variant-tag">Diamond edge · cyan glow</span></div><img src="match_detail_canonical_with_edge.png" alt="match_detail with edge"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">match_detail_canonical_no_edge.png</span><span class="variant-tag">No edge · orange glow</span></div><img src="match_detail_canonical_no_edge.png" alt="match_detail no edge"></div>
+    </div>
+  </section>
+
+  <!-- ── my_matches.html ─────────────────────────────────────── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">my_matches.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-25 · LIST variant 480×N · brand-orange logo glow</span>
+    </div>
+    <p class="tpl-summary">
+      User's followed games. Logo + orange-bar + MY MATCHES title + summary header. Two sections: 🎯 EDGE AVAILABLE
+      (matches with picks — tier-coloured left border + tier badge + team-name pick + bookmaker logo) and
+      📋 UPCOMING (raw H/D/A odds boxes for plain matches). No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange logo glow (centered behind the wordmark) — same recipe as <code>edge_picks</code> / <code>edge_summary</code>.</li>
+        <li><strong>Header</strong>: no background, no border-bottom. Inherits card <code>#0A0A0A</code>.</li>
+        <li><strong>Edge match rows</strong>: tier-coloured left-border + tier badge ("💎 EDGE" / "🥇 EDGE" etc.) on the right + team-name pick + <strong>bookmaker as text</strong>. <strong>Banned</strong>: bookmaker logos in this surface — the compact list row doesn't have room; logos get cramped and degrade legibility. Logos belong on detail surfaces (edge_detail, edge_summary's TOP PICK, edge_picks's pick chips) where there's vertical breathing room.</li>
+        <li><strong>Upcoming match rows</strong>: neutral grey left-border + 2-3 odds boxes (H / D / A) on the right.</li>
+        <li><strong>Section labels</strong>: 🎯 EDGE AVAILABLE (orange) and 📋 UPCOMING (grey). Both emojis are in the canonical set §5.</li>
+        <li><strong>Pick string = team name only</strong>. Match samples use "Manchester City" and "Kaizer Chiefs" — no markets, no spreads.</li>
+        <li>No footer per universal §7. Trailing blank 13px.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Edit <code>bot/card_templates/my_matches.html</code>: replace header pattern with canonical orange logo glow (lift from <code>/tmp/my_matches_canonical.html</code>). <strong>Do NOT</strong> add <code>.bk-logo</code> here — bookmaker stays text-only on this compact list.</li>
+        <li>Acceptance: <code>latest/my_matches.png</code> matches <code>canonical/my_matches_canonical.png</code>. No footer. Trailing blank ≤14px.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">my_matches_canonical.png</span><span class="variant-tag">2 edges + 2 upcoming</span></div><img src="my_matches_canonical.png" alt="my_matches canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── tier_lock_upsell.html (3 variants by user_tier × edge_tier) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">tier_lock_upsell.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-25 · LIST variant 480×N · edge-tier glow · 3 user-state variants</span>
+    </div>
+    <p class="tpl-summary">
+      Locked-edge upsell. Sent when a user taps a tier they don't have access to. The card detects the user's tier and
+      shows only the upgrade plans that would actually unlock the requested edge. Header gets the locked edge's tier glow
+      (gold for Gold edges, cyan for Diamond), so users see immediately which tier they're being teased toward.
+      No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes — tier-aware upgrade options</h4>
+      <ul>
+        <li><strong>Variant A — Bronze user → Gold edge</strong>: <code>upgrade_plans = [Gold (R99), Diamond (R199)]</code>. 2-column grid. Both plans unlock Gold edges, so both are shown.</li>
+        <li><strong>Variant B — Bronze user → Diamond edge</strong>: <code>upgrade_plans = [Diamond (R199)]</code>. Single plan. Only Diamond unlocks Diamond edges.</li>
+        <li><strong>Variant C — Gold user → Diamond edge</strong>: <code>upgrade_plans = [Diamond (R199)]</code>. Visually identical to Variant B. Implementer differentiates via user state, not template.</li>
+        <li><strong>Glow color = edge tier color</strong>, not user tier. The card teases the tier the user wants, so its glow comes from that target tier.</li>
+        <li><strong>Locked preview = frosted glass over glowing tier emoji</strong>:
+          <ul>
+            <li>Behind layer (<code>.locked-bg</code>): giant 200px tier emoji centered, with <code>filter: blur(14px)</code> + <code>drop-shadow(0 0 60px {tier_color}AA)</code> so it reads as a tier-coloured aurora bleeding through frost.</li>
+            <li>Frost scrim (<code>.locked-frost</code>): <code>linear-gradient(180deg, rgba(10,10,10,0.45), rgba(10,10,10,0.62))</code> — semi-transparent matte that lets the emoji's glow show through but darkens enough for foreground text to read.</li>
+            <li>Foreground (<code>.locked-foreground</code>, sharp): centered <strong>56px 🔒 padlock</strong> + "{TIER} SIGNAL LOCKED" label (16px) + "{N} confirming signals behind the blur" subtitle. All vertically centered.</li>
+            <li>Container <code>height: 230px</code>, <code>border-radius: 12px</code>, <code>overflow: hidden</code> to clip the blurred emoji at the corners.</li>
+          </ul>
+        Removed the prod template's banned emojis (📊 signals, 💰 return) — they violated the "max one emoji per row" rule and aren't in the canonical set.</li>
+        <li><strong>Plan card pattern</strong>: tier-coloured left border + tier emoji/name (in tier color) + price (R99 / R199) + period (/ month) + perk line. Compact 2-row layout per plan card.</li>
+        <li>No footer. Card terminates after the upgrade-options grid with 15px black breathing strip.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/tier_lock_upsell.html</code> with the canonical (lift from <code>/tmp/tier_lock_upsell_canonical.html</code>). Remove the existing complex blurred-preview area + banned emojis.</li>
+        <li>Update <code>card_data.build_tier_lock_upsell_data</code> (or its current equivalent) to compute <code>upgrade_plans</code> based on <code>(user_tier, edge_tier)</code>:
+          <pre style="margin-top:6px;color:#ccc">if edge_tier == "gold":
+    plan_keys = ["gold", "diamond"]
+elif edge_tier == "diamond":
+    plan_keys = ["diamond"]
+# Filter plans the user already has:
+if user_tier == "gold":
+    plan_keys = [k for k in plan_keys if k != "gold"]</pre>
+        </li>
+        <li>Each plan dict must include: <code>emoji</code>, <code>label</code> (name), <code>color</code>, <code>price</code> (R99/R199), <code>period</code> ("month"), <code>perk</code> (1-line description).</li>
+        <li>Acceptance: 3 distinct route paths (Bronze→Gold, Bronze→Diamond, Gold→Diamond) all render the same template; only the <code>upgrade_plans</code> list differs.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">tier_lock_upsell_bronze_to_gold.png</span><span class="variant-tag">Bronze → Gold edge · 2 plans</span></div><img src="tier_lock_upsell_bronze_to_gold.png" alt="Bronze user → Gold edge upsell"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">tier_lock_upsell_bronze_to_diamond.png</span><span class="variant-tag">Bronze → Diamond edge · 1 plan</span></div><img src="tier_lock_upsell_bronze_to_diamond.png" alt="Bronze user → Diamond edge upsell"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">tier_lock_upsell_gold_to_diamond.png</span><span class="variant-tag">Gold → Diamond edge · 1 plan</span></div><img src="tier_lock_upsell_gold_to_diamond.png" alt="Gold user → Diamond edge upsell"></div>
+    </div>
+  </section>
+
+  <!-- ── tier_page.html ──────────────────────────────────────── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">tier_page.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-25 · LIST variant 480×N · tier-color glow</span>
+    </div>
+    <p class="tpl-summary">
+      Single-tier filtered list. Sent on tier-drill from the index. Header layout is unique to this surface:
+      tier emoji + tier label + pick count on the left, MzansiEdge wordmark on the right, tier-color right-side glow
+      behind the wordmark. Pick rows are tier-coloured (left-border + accents) with team-name picks and bookmaker logos.
+      No footer. Card was previously framed (border + shadow + border-radius) — flattened to the canonical card style.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: tier-color (this is a single-tier surface — Diamond / Gold / Silver / Bronze each get their own glow). Same dual-layer right-side recipe.</li>
+        <li><strong>Card flattened</strong>: removed <code>border: 1px solid #2A2A2A</code>, <code>border-radius: 14px</code>, and <code>box-shadow</code> from <code>.card</code>. Matches the canonical card style (no frame).</li>
+        <li><strong>Wordmark logo</strong>: 28px (was 22px in prod, opacity 0.9 — both replaced with prod-canonical 28px full-opacity).</li>
+        <li><strong>Unique header layout</strong>: tier-label-left + wordmark-right. The tier label IS the title for this surface — wordmark serves as brand stamp (not the centerpiece). Acceptable departure from the standard logo-top pattern.</li>
+        <li><strong>Pick string = team name only</strong> (e.g. "Kaizer Chiefs", "Liverpool", "Real Madrid", "Stormers"). Sample data follows the new rule.</li>
+        <li><strong>Bookmaker logos</strong> at 14px in pick rows.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates after the last pick row with 11px black breathing strip.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Edit <code>bot/card_templates/tier_page.html</code>: flatten <code>.card</code> styling (no border/border-radius/shadow); replace tier-header gradient bg + border-bottom with tier-color glow pattern (lift from <code>/tmp/tier_page_canonical.html</code>); add <code>.bk-logo</code> img inside <code>.pick-bookie</code>; remove footer block + footer CSS.</li>
+        <li>Update <code>bot/card_data.py:build_tier_page_data</code> to inject <code>bookmaker_logo_b64</code> on each pick.</li>
+        <li>Acceptance: <code>latest/tier_page.png</code> matches <code>canonical/tier_page_canonical.png</code>. No footer. Trailing blank ≤14px logical.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">tier_page_canonical.png</span><span class="variant-tag">Gold tier · 4 picks</span></div><img src="tier_page_canonical.png" alt="tier_page canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── edge_summary.html ───────────────────────────────────── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">edge_summary.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-25 · LIST variant 480×N · brand-orange glow</span>
+    </div>
+    <p class="tpl-summary">
+      Morning digest summary card. Sent in the daily teaser flow. Header logo + brand-orange right-side glow,
+      "MORNING DIGEST" + "TODAY'S EDGE PICKS" titles, 4 tier-pill counts (Diamond/Gold/Silver/Bronze),
+      and a TOP PICK block highlighting the highest-EV pick (tier-coloured left-border + odds + bookmaker logo).
+      No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (multi-tier surface — same recipe as edge_picks).</li>
+        <li><strong>Banned emoji removed</strong>: 🌅 was on "MORNING DIGEST" — outside the canonical emoji set (§5). Header label now reads plain "MORNING DIGEST".</li>
+        <li><strong>Top pick</strong> retains tier-coloured accents (left-border + odds colour) for the picked tier — that's per-element tier signalling, allowed alongside the multi-tier brand-orange header glow.</li>
+        <li><strong>Bookmaker logo</strong> at 14px in the "@ {logo}" line below the odds. Source same as edge_picks/edge_detail.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates after the top_pick block (~19px bottom-padding breathing room from <code>top-pick-wrapper { padding: 18px 16px }</code>).</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Edit <code>bot/card_templates/edge_summary.html</code>: replace header block with canonical glow pattern (lift from <code>/tmp/edge_summary_canonical.html</code>); remove 🌅 from MORNING DIGEST label; add <code>.bk-logo</code> img inside <code>.pick-bookmaker</code>; remove footer block + footer CSS.</li>
+        <li>Update <code>bot/card_data.py:build_edge_summary_data</code> to inject <code>top_pick.bookmaker_logo_b64</code> (load from <code>assets/bookmakers/logo-*.png</code>).</li>
+        <li>Acceptance: <code>latest/edge_summary.png</code> matches <code>canonical/edge_summary_canonical.png</code>. No 🌅 emoji. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">edge_summary_canonical.png</span><span class="variant-tag">Top pick: Diamond</span></div><img src="edge_summary_canonical.png" alt="edge_summary canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── edge_picks.html ─────────────────────────────────────── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">edge_picks.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-25 · LIST variant 480×N · brand-orange glow</span>
+    </div>
+    <p class="tpl-summary">
+      Pick list shown after tapping Hot Tips. Pre-existing tier-summary header preserved
+      (💎N · 🥇N · 🥈N · 🥉N — N edges today). Brand-orange right-side header glow
+      (multi-tier surface — not tier-coloured). Pick rows show team-name picks (no markets/spreads),
+      real bookmaker logos, SVG-arrow prize lines. No footer. Locked Diamond rows preserve
+      "💎 Diamond Edge / 🔒 Upgrade to unlock" pattern.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (this is a multi-tier surface, not bound to one tier). Right-side only, single-radial-per-layer recipe with <code>#F7931A</code> alphas <code>4D / 22</code> (Layer A) and <code>1A / 0D</code> (Layer B screen).</li>
+        <li><strong>Pick string = team name only</strong>. Sample data uses "Manchester City" / "Kaizer Chiefs" / "Stormers" / "South Africa" — never markets ("BTTS"), spreads ("-4.5"), or nicknames ("Proteas").</li>
+        <li><strong>Bookmaker logos</strong> at 14px height in the per-pick "@ {logo}" position. Source: <code>/home/paulsportsza/assets/bookmakers/logo-*.png</code>, pre-resized to 36px for retina.</li>
+        <li><strong>Prize-line arrow</strong>: SVG (path <code>M1 6 H10 M7 3 L10 6 L7 9</code>) at 10×10 box, vertically centered between R200 and R{return}. Banned: Unicode <code>→</code> (off-baseline).</li>
+        <li>Header — no background, no border-bottom. Glow is the only signal. Orange-bar gradient is preserved as the signature accent for list-view surfaces (kept from <code>edge_picks_index_v1</code> for visual continuity).</li>
+        <li>No footer. Card terminates after last pick group with ≤14px black breathing strip.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Edit <code>bot/card_templates/edge_picks.html</code>: replace header block with canonical glow pattern (lift from <code>/tmp/edge_picks_canonical.html</code>); add <code>.bk-logo</code> img inside <code>.pick-bookie</code>; replace Unicode <code>→</code> in <code>.pick-prize-line</code> with the canonical 12×12 SVG arrow.</li>
+        <li>Update <code>bot/card_data.py:build_edge_picks_data</code> to inject <code>bookmaker_logo_b64</code> per pick (load from <code>assets/bookmakers/logo-*.png</code>). Pick string normalized to team-name only.</li>
+        <li>Acceptance: <code>latest/edge_picks.png</code> matches <code>canonical/edge_picks_canonical.png</code>. No footer present. Trailing blank ≤14px logical.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">edge_picks_canonical.png</span><span class="variant-tag">Diamond user · 4 tiers</span></div><img src="edge_picks_canonical.png" alt="edge_picks canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── edge_detail.html ────────────────────────────────────── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">edge_detail.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-25 · DETAIL variant 480×620 · 4 tier renders</span>
+    </div>
+    <p class="tpl-summary">
+      Full single-pick detail card. Sent on <code>edge:detail:{match_key}</code>. Hero surface for any tier.
+      Header-only tier-glow (logo + tier badge + EV row), brand bar, matchup with form rows, SS DStv badge,
+      THE PICK section (team-name pick, 18px bookmaker logos), bookmaker chip row, larger edge signals grid (13px),
+      H2H bar, capped verdict. <strong>No confidence bar</strong>; <strong>pick is the team name only</strong>; <strong>no card border</strong>.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes (locked constraints)</h4>
+      <ul>
+        <li><strong>Pick string = team name only</strong>. We only cover wins for now. <strong>Banned</strong>: "X to Win" / "Both Teams to Score" / "X -4.5" / nicknames ("Proteas" → "South Africa"). The pick row reads exactly the canonical team name.</li>
+        <li>Header MUST follow the universal pattern (§ Design System 1) — logo + header-only tier-glow + tier badge + EV display. Tier color drives glow, badge, EV.</li>
+        <li><strong>Glow stays in the header.</strong> Three stacked radials inside <code>.header-glow { inset: 0 }</code>. Brand-bar, matchup, and meta-bar stay clean.</li>
+        <li><strong>No card border / no outer ambient glow.</strong> The card frame is borderless; tier signal lives in the header row.</li>
+        <li>Bookmaker chips render real logo PNGs at <strong>18px</strong> height; pick chip highlighted with <code>{tier_color}</code> border + <code>{tier_color}20</code> bg. Chip <code>font-size: 12px / padding: 5px 9px / gap: 7px</code>.</li>
+        <li>Channel string MUST be <code>"SS &lt;league&gt; (DStv N)"</code> so the SS badge fires (not text fallback).</li>
+        <li>Verdict section capped at 130px with 4-line clamp. <strong>Banned</strong>: <code>flex-grow: 1</code> without max-height — caused the bleed-past-620px bug.</li>
+        <li><strong>No confidence bar.</strong> The visual bar is removed; <code>confidence_tier</code> data field is preserved (used by verdict-prose generation in <code>card_data.py:550</code> + <code>test_verdict_adversarial_*.py</code>).</li>
+        <li><strong>Edge signals grid — compact</strong>: section header 9px, signal labels 11px, dot 7px with 4px halo when active. Section padding-top 16px so the dividing line above sits lower (gives the bookmaker chip row breathing room).</li>
+        <li>H2H bar segments: home #00E676, draw #444, away #FF5252.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Edit <code>bot/card_templates/edge_detail.html</code>: replace header block with canonical pattern (lift from <code>/tmp/edge_detail_canonical.html</code>); cap <code>.verdict-section</code> with <code>max-height: 130px</code> + line-clamp; bump <code>.bk-logo { height: 18px }</code> + chip <code>font-size: 12px / padding: 5px 9px</code>; <strong>delete the confidence-bar block</strong> (~10 LOC removed). <strong>Risk: none</strong> — Jinja silently skips fields that aren't rendered; <code>confidence_tier</code> data flow stays intact for verdict prose.</li>
+        <li>Update <code>bot/card_data.py:build_edge_detail_data</code>: inject <code>logo_b64</code> per bookmaker into <code>all_odds</code> (load from <code>assets/bookmakers/logo-*.png</code> at <code>max_height=40</code>); ensure channel passed downstream as <code>"SS X (DStv N)"</code> shape. <strong>Risk: none</strong> — pure additive field on existing dict.</li>
+        <li>Acceptance: <code>latest/edge_detail.png</code> must match <code>canonical/edge_detail_{tier}.png</code> for the corresponding tier-coloured render.</li>
+        <li><strong>Effort: ~30 LOC Python + ~50 LOC HTML/CSS, ~1 hour. No callback / DB / schema changes.</strong></li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">edge_detail_diamond.png</span><span class="variant-tag">Diamond · #B9F2FF</span></div><img src="edge_detail_diamond.png" alt="edge_detail — Diamond"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">edge_detail_gold.png</span><span class="variant-tag">Gold · #FFD700</span></div><img src="edge_detail_gold.png" alt="edge_detail — Gold"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">edge_detail_silver.png</span><span class="variant-tag">Silver · #A0AEC0</span></div><img src="edge_detail_silver.png" alt="edge_detail — Silver"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">edge_detail_bronze.png</span><span class="variant-tag">Bronze · #CD7F32</span></div><img src="edge_detail_bronze.png" alt="edge_detail — Bronze"></div>
+    </div>
+  </section>
+
+  <!-- ── ai_breakdown.html ───────────────────────────────────── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">ai_breakdown.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-25 · LIST variant 480×N · 4 tier renders</span>
+    </div>
+    <p class="tpl-summary">
+      Full AI breakdown card. Sent on the AI deep-dive flow. 4 prose sections (Setup / Edge / Risk / Verdict)
+      wrapped in the unified header system: logo + right-side tier-glow + match meta with SS badge.
+      <strong>No footer</strong> — card terminates immediately below the Verdict block.
+      Section left-borders + tag colors are <strong>fixed</strong> (gold/green/red), matching live prod —
+      tier-coloured signals live only in the header glow + tier badge + EV display.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes (locked constraints)</h4>
+      <ul>
+        <li>Header pattern matches <code>edge_detail.html</code> (§ Design System 1) — same logo + right-side-only tier-glow + tier badge.</li>
+        <li>EV % shown in tier color in the header right.</li>
+        <li>Match title: <strong>full team names always</strong> (max 2 lines) — never truncate "Mamelodi Sun..." or similar.</li>
+        <li>Meta bar: league emoji, date, time, SS DStv badge — separated by 14px gap, centred, on top + bottom borders.</li>
+        <li><strong>Section left-borders are FIXED</strong> (matches live <code>bot/card_templates/ai_breakdown.html</code>): Setup = <code>#F5B800</code> (gold), Edge = green, Risk = red, Verdict = <code>#F5B800</code> with subtle <code>rgba(245,184,0,0.05)</code> bg gradient. <strong>Banned</strong>: tier-colouring section borders.</li>
+        <li><strong>Section tags are FIXED colors</strong> (matches live): Setup <code>tag-gold "CONTEXT"</code>, Edge <code>tag-green "+X.X% EV"</code>, Risk <code>tag-red "CAUTION"</code>, Verdict <code>tag-gold "{verdict_tag}"</code>.</li>
+        <li><strong>verdict_tag legitimate values</strong> (from <code>bot/card_data.py:1199-1213</code>): <code>STRONG BACK / BACK / MILD LEAN / SPECULATIVE / MONITOR / VERDICT</code>. <strong>Banned</strong>: <code>"LEAN"</code> alone (must be <code>"MILD LEAN"</code>), <code>"PASS"</code>, or any value outside the legitimate set.</li>
+        <li><strong>No footer.</strong> Card closes off immediately after the Verdict block. The standard <code>mzansiedge.co.za · Bet responsibly · 18+</code> footer is omitted on this surface.</li>
+        <li><strong>Adaptive height (LIST variant)</strong> — <code>card_renderer.py:40</code> JS-measures content and clips the card to actual height. Total heights vary per render: Diamond 618 / Gold 578 / Silver 538 / Bronze 538 logical px.</li>
+        <li><strong>Card terminates with a small black breathing strip</strong> below the Verdict section:
+          <ul>
+            <li><code>.section { padding: 10px 13px 8px }</code> — verdict text breathes 8px inside the grey section bg (#141416)</li>
+            <li><code>.sections { padding: 10px 16px 10px }</code> — card extends 10px past the section, showing the card bg (#0a0a0b ≈ pure black) as a clean black breathing strip before the card edge</li>
+          </ul>
+          <strong>Banned</strong>: zero <code>.sections</code> bottom padding (verdict touches card edge — too tight) AND large <code>.sections</code> bottom padding (negative space).
+        </li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/ai_breakdown.html</code> with canonical version (lift from <code>/tmp/ai_breakdown_canonical.html</code>) — keeps the 4-section structure, adds unified header + meta bar, <strong>removes the footer entirely</strong>, fixes section borders/tags to prod-spec colors.</li>
+        <li>Update <code>bot/card_data.py:build_ai_breakdown_data</code> to provide: <code>tier</code>, <code>tier_emoji</code>, <code>tier_label</code>, <code>tier_color</code>, <code>header_logo_b64</code>, <code>ss_icon_b64</code>, <code>channel_dstv_num</code>, <code>league</code>, <code>sport_emoji</code>, <code>date</code>, <code>time</code>, <code>verdict_tag</code>. (No <code>footer_logo_b64</code> needed — footer dropped.)</li>
+        <li><code>verdict_tag</code> derivation already exists at <code>card_data.py:1199-1213</code> — produces <code>STRONG BACK / BACK / MILD LEAN / SPECULATIVE / MONITOR / VERDICT</code>. No change needed.</li>
+        <li>Acceptance: <code>latest/ai_breakdown.png</code> must match <code>canonical/ai_breakdown_{tier}.png</code> for the corresponding tier render. No team-name truncation, no footer, fixed badge colors.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">ai_breakdown_diamond.png</span><span class="variant-tag">Diamond · #B9F2FF</span></div><img src="ai_breakdown_diamond.png" alt="ai_breakdown — Diamond"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">ai_breakdown_gold.png</span><span class="variant-tag">Gold · #FFD700</span></div><img src="ai_breakdown_gold.png" alt="ai_breakdown — Gold"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">ai_breakdown_silver.png</span><span class="variant-tag">Silver · #A0AEC0</span></div><img src="ai_breakdown_silver.png" alt="ai_breakdown — Silver"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">ai_breakdown_bronze.png</span><span class="variant-tag">Bronze · #CD7F32</span></div><img src="ai_breakdown_bronze.png" alt="ai_breakdown — Bronze"></div>
+    </div>
+  </section>
+
+  <!-- ── edge_picks_index_v1.html (existing canonical) ───────── -->
   <section class="template-block">
     <div class="tpl-header">
       <span class="tpl-name">edge_picks_index_v1.html</span>
@@ -150,8 +665,7 @@
         <li><strong>Empty state</strong>: header strip shows zeros, body shows centred 🌙 +
           "No live edges right now / Check back soon · we scan every 15 minutes". Tier rows dimmed to <code>opacity: 0.5</code>;
           unlocked Bronze keeps its tier-colour tick (access semantics independent of count).</li>
-        <li><strong>Footer</strong>: <code>mzansiedge-micro-mark-e-transparent.png</code> at height 16px (right),
-          <code>mzansiedge.co.za · Bet responsibly · 18+</code> on the left.</li>
+        <li><strong>Footer REMOVED</strong> per universal law §7. Card terminates after the tier list with a 10px black breathing strip below the last row. <code>.tier-list { padding: 14px 14px 10px }</code>.</li>
         <li><strong>Banned</strong>: emoji prefix on the count, orange-gradient tick (only the brand bar uses gradient),
           wordmark text fallback when the logo image is available.</li>
       </ul>
@@ -196,6 +710,93 @@
       </div>
     </div>
   </section>
+
+  <!-- ── sub_plans.html (Wave I — Batch 3 · Subscription core 1/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_plans.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · DETAIL 480×620 · brand-orange glow</span>
+    </div>
+    <p class="tpl-summary">
+      Plan picker — three tiers (Bronze / Gold / Diamond) plus optional founding-member banner.
+      Conversion-critical surface: shown on <code>/subscribe</code>, upgrade flows, and tier-locked CTAs.
+      Header gets the canonical brand-orange centred logo glow (this is a non-tier surface — every tier user can land here).
+      Plan tiles use tier-coloured left borders + bullet markers; Diamond grows to fill remaining space so the card always
+      lands tight on 620px regardless of feature-list length. Founding banner has its own internal orange glow accent.
+      No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (non-tier surface — same dual-layer centred recipe as <code>edge_picks_index</code>, <code>my_matches</code>, <code>edge_summary</code>).</li>
+        <li><strong>Header pattern</strong>: 32px logo, 3px orange-bar, 15px tracked "PLANS" title, 11px subline ("Choose your edge — every tier finds value"). Matches canonical header standard exactly.</li>
+        <li><strong>Plan tile borders</strong>: each tier gets its own left-border colour (<code>#CD7F32</code> Bronze, <code>#FFD700</code> Gold, <code>#B9F2FF</code> Diamond) + matching bullet markers. Per-element tier signalling, allowed alongside the brand-orange header glow.</li>
+        <li><strong>Diamond fills</strong>: Diamond plan uses <code>flex: 1</code> so it absorbs any remaining vertical space — keeps the founding banner anchored to the bottom and the card tight on 620px.</li>
+        <li><strong>Founding banner glow</strong>: internal blurred radial-gradient (orange) on the right edge of the banner. Subtle premium accent — does not double up with the header glow.</li>
+        <li><strong>Bronze price</strong>: rendered smaller/dimmer ("Free" at 12px <code>#888</code>) so it doesn't compete with paid-tier prices.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates with founding banner (or last plan tile if banner absent).</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_plans.html</code> with the canonical (lift from <code>/tmp/sub_plans_canonical.html</code>). Replace existing header block with the canonical brand-orange glow pattern; replace plain coloured borders with left-border accent pattern; add internal glow div to <code>.founding-banner</code>; remove old gradient-background <code>.header</code> styling.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_plans_data</code> already emits the right shape (<code>plans[].tier</code>, <code>tier_emoji</code>, <code>monthly_price</code>, <code>annual_price</code>, <code>annual_savings</code>, <code>features</code> + <code>founding_offer</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_plans.png</code> matches <code>canonical/sub_plans_canonical.png</code>. Brand-orange centred logo glow visible. Tier-colour left borders on each tile. Diamond tile fills remaining space. No footer. Trailing blank ≤14px.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_plans_canonical.png</span><span class="variant-tag">Bronze user · founding active (3 days · 23 slots)</span></div><img src="sub_plans_canonical.png" alt="sub_plans canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_payment_ready.html (Wave J — Batch 3 · Subscription core 2/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_payment_ready.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow</span>
+    </div>
+    <p class="tpl-summary">
+      Pre-checkout confirmation card. Sent immediately before the user taps "Pay Now" — shows the chosen plan,
+      price, payment reference, and trust signals. Conversion-critical: this is the last screen between intent
+      and payment. Header gets the canonical brand-orange centred logo glow. Reference block has a brand-orange
+      left-border accent so the reference reads as the "thing to verify". A green-padlock + "Powered by Stitch ·
+      256-bit TLS" trust line sits below the instruction. Founding variant adds an internal-glow banner that
+      anchors the rate-locked-in promise. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (non-tier surface — every plan funnels through this card). Same dual-layer centred recipe.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient(180deg, #0D0D0D, #141414)</code> background and <code>border-bottom: 1px solid #2A2A2A</code> — both replaced by the canonical glow pattern. 32px logo (was 30px). 15px tracked title (was 14px). Added 11px subline ("Secure checkout — tap Pay Now to complete").</li>
+        <li><strong>Price</strong>: 38px JetBrains Mono, brand-orange (<code>#F7931A</code>). Letter-spacing tightened (<code>-0.5px</code>) so long values like "R1,599/year" don't break the line.</li>
+        <li><strong>Reference block</strong>: 3px brand-orange left-border + 10px corner radius. Visually marked as the "important" element — replaces the flat full-border treatment in prod.</li>
+        <li><strong>Trust line</strong>: green padlock 🔒 + "Powered by Stitch · 256-bit TLS". Stitch wordmark white-bold; TLS detail dim. Builds payment trust without being noisy. (🔒 emoji is canonical — already used on tier_lock_upsell.)</li>
+        <li><strong>Founding variant</strong>: same internal-orange-glow treatment as <code>sub_plans</code> founding banner. Bold "Founding Member" hook + plain renewal-rate explanation.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates after the trust line (or founding banner if applicable).</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_payment_ready.html</code> with the canonical (lift from <code>/tmp/sub_payment_ready_canonical.html</code>). Remove the <code>linear-gradient</code> header background and <code>border-bottom</code>; insert the <code>.logo-glow</code> + <code>.logo-glow-screen</code> divs; add subline div; add trust line below instruction; replace founding-note with the internal-glow variant.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_payment_ready_data</code> already emits the right shape (<code>plan_name</code>, <code>price_display</code>, <code>reference</code>, <code>is_founding</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_payment_ready.png</code> matches <code>canonical/sub_payment_ready_canonical_standard.png</code> (or <code>_founding</code> if founding flow). Brand-orange centred glow visible. Reference block has orange left-border. Trust line "Powered by Stitch · 256-bit TLS" present below instruction. No footer. Trailing blank ≤14px.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_payment_ready_canonical_standard.png</span><span class="variant-tag">Gold Monthly · standard checkout</span></div><img src="sub_payment_ready_canonical_standard.png" alt="sub_payment_ready standard"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_payment_ready_canonical_founding.png</span><span class="variant-tag">Diamond Founding · rate locked-in</span></div><img src="sub_payment_ready_canonical_founding.png" alt="sub_payment_ready founding"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -203,18 +804,29 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(51 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(41 live bot renders — awaiting design lock)</span></h2>
+
+  <div class="design-notes" style="margin-bottom:24px">
+    <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
+    <ul>
+      <li><strong>Batch 1 — Edge surfaces (4 cards):</strong> <code>edge_picks.html</code>, <code>edge_summary.html</code>, <code>tier_page.html</code>, <code>tier_lock_upsell.html</code>. Tier-color glow. Highest-traffic. <em>Start here.</em></li>
+      <li><strong>Batch 2 — Match surfaces (2 cards):</strong> <code>my_matches.html</code>, <code>match_detail.html</code>. Brand-orange glow. Reuses ai_breakdown header pattern.</li>
+      <li><strong>Batch 3 — Subscription core (5 cards):</strong> <code>sub_plans.html</code>, <code>sub_payment_ready.html</code>, <code>sub_payment_confirmed.html</code>, <code>sub_payment_error.html</code>, <code>sub_billing_active.html</code>. Brand-orange glow. Conversion-critical surfaces.</li>
+      <li><strong>Batch 4 — Subscription state (5 cards):</strong> <code>sub_status_active.html</code>, <code>sub_status_bronze.html</code>, <code>sub_billing_inactive.html</code>, <code>sub_trial_expiry.html</code>, <code>sub_expiry_notice.html</code>. Brand-orange glow.</li>
+      <li><strong>Batch 5 — Subscription upgrade (3 cards):</strong> <code>sub_upgrade_bronze.html</code>, <code>sub_upgrade_gold.html</code>, <code>sub_upgrade_diamond_max.html</code>. Tier-color glow (target tier).</li>
+      <li><strong>Batch 6 — Subscription founding (4 cards):</strong> <code>sub_founding_live.html</code>, <code>sub_founding_confirmed.html</code>, <code>sub_founding_ended.html</code>, <code>sub_founding_soldout.html</code>. Brand-orange glow + 🎁 founding badge.</li>
+      <li><strong>Batch 7 — Subscription cancel/exit (3 cards):</strong> <code>sub_cancel_confirm.html</code>, <code>sub_cancel_done.html</code>, <code>sub_email_redirect.html</code>. Brand-orange glow.</li>
+      <li><strong>Batch 8 — Onboarding core (8 cards):</strong> <code>onboarding_welcome.html</code>, <code>onboarding_experience.html</code>, <code>onboarding_sports.html</code>, <code>onboarding_favourites.html</code>, <code>onboarding_favourites_manual.html</code>, <code>onboarding_fuzzy_suggest.html</code>, <code>onboarding_team_celebration.html</code>, <code>onboarding_edge_explainer.html</code>. Brand-orange glow.</li>
+      <li><strong>Batch 9 — Onboarding finalise (7 cards):</strong> <code>onboarding_risk.html</code>, <code>onboarding_bankroll.html</code>, <code>onboarding_bankroll_custom.html</code>, <code>onboarding_notify.html</code>, <code>onboarding_summary.html</code>, <code>onboarding_done.html</code>, <code>onboarding_restart.html</code>. Brand-orange glow.</li>
+      <li><strong>Batch 10 — Story quiz + utility (8 cards):</strong> <code>story_quiz_step.html</code>, <code>story_quiz_complete.html</code>, <code>profile_home.html</code>, <code>my_teams.html</code>, <code>settings_sports.html</code>, <code>help.html</code>, <code>bookmaker_directory.html</code>, <code>home_winners.html</code>. Brand-orange glow.</li>
+    </ul>
+    <p style="margin-top:8px;color:#999"><strong>Process per batch:</strong> read prod template → apply universal laws (§7) + glow type from §6 → use canonical emoji set (§5) → render PNGs → Paul reviews → promote to ✅ Canonical.</p>
+  </div>
 
   <div class="review-grid">
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">ai_breakdown.html</span><span class="review-card-tag">In review</span></div><img src="ai_breakdown.png" alt="ai_breakdown.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">bookmaker_directory.html</span><span class="review-card-tag">In review</span></div><img src="bookmaker_directory.png" alt="bookmaker_directory.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">edge_detail.html</span><span class="review-card-tag">In review</span></div><img src="edge_detail.png" alt="edge_detail.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">edge_picks.html</span><span class="review-card-tag">In review</span></div><img src="edge_picks.png" alt="edge_picks.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">edge_summary.html</span><span class="review-card-tag">In review</span></div><img src="edge_summary.png" alt="edge_summary.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">help.html</span><span class="review-card-tag">In review</span></div><img src="help.png" alt="help.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">home_winners.html</span><span class="review-card-tag">In review</span></div><img src="home_winners.png" alt="home_winners.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">match_detail.html</span><span class="review-card-tag">In review</span></div><img src="match_detail.png" alt="match_detail.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">my_matches.html</span><span class="review-card-tag">In review</span></div><img src="my_matches.png" alt="my_matches.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">my_teams.html</span><span class="review-card-tag">In review</span></div><img src="my_teams.png" alt="my_teams.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_bankroll.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_bankroll.png" alt="onboarding_bankroll.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_bankroll_custom.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_bankroll_custom.png" alt="onboarding_bankroll_custom.html"></div>
@@ -247,16 +859,12 @@
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_soldout.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_soldout.png" alt="sub_founding_soldout.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_payment_confirmed.html</span><span class="review-card-tag">In review</span></div><img src="sub_payment_confirmed.png" alt="sub_payment_confirmed.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_payment_error.html</span><span class="review-card-tag">In review</span></div><img src="sub_payment_error.png" alt="sub_payment_error.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_payment_ready.html</span><span class="review-card-tag">In review</span></div><img src="sub_payment_ready.png" alt="sub_payment_ready.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_plans.html</span><span class="review-card-tag">In review</span></div><img src="sub_plans.png" alt="sub_plans.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_active.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_active.png" alt="sub_status_active.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_bronze.png" alt="sub_status_bronze.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_trial_expiry.html</span><span class="review-card-tag">In review</span></div><img src="sub_trial_expiry.png" alt="sub_trial_expiry.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_bronze.png" alt="sub_upgrade_bronze.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_diamond_max.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_diamond_max.png" alt="sub_upgrade_diamond_max.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_upgrade_gold.html</span><span class="review-card-tag">In review</span></div><img src="sub_upgrade_gold.png" alt="sub_upgrade_gold.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">tier_lock_upsell.html</span><span class="review-card-tag">In review</span></div><img src="tier_lock_upsell.png" alt="tier_lock_upsell.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">tier_page.html</span><span class="review-card-tag">In review</span></div><img src="tier_page.png" alt="tier_page.html"></div>
   </div>
 </div>
 
