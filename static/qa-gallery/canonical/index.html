@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(12 design-locked · 27 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(13 design-locked · 29 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -842,6 +842,52 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">sub_payment_confirmed_canonical_diamond.png</span><span class="variant-tag">Diamond Monthly · R199 · cyan glow</span></div><img src="sub_payment_confirmed_canonical_diamond.png" alt="sub_payment_confirmed diamond"></div>
     </div>
   </section>
+
+  <!-- ── sub_payment_error.html (Wave L — Batch 3 · Subscription core 4/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_payment_error.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + red error accent</span>
+    </div>
+    <p class="tpl-summary">
+      Payment failure card. Sent when Stitch returns an error or webhook reports a decline.
+      Emotionally-loaded surface: the user just attempted to pay and it didn't work. The card
+      acknowledges clearly without panicking — brand-orange logo glow (canonical non-tier),
+      with a discrete red accent reserved for the error elements only (red-circle alert glyph
+      next to the title, red-bordered error box). Subline "We couldn't complete your payment"
+      replaces the prod's bare title-only header. Support handle rendered as a code-pill so
+      it visually matches the <code>/subscribe</code> command pill in the trailing CTA. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (non-tier surface — error happens to anyone). Red is reserved for the error semantic only — keeps the card from feeling alarmist.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient(180deg, #1A0A00, #1F1000)</code> background and <code>border-bottom: 1px solid #F7931A40</code>. Restored white title (<code>#FFFFFF</code>, was <code>#FF6B00</code> orange) — strong but neutral. Bar is canonical orange gradient (was red→orange).</li>
+        <li><strong>Inline alert glyph</strong>: 18px red circle <code>#FF5252</code> with white "!" — matches the green-tick pattern on <code>sub_payment_confirmed</code>. Consistent semantic-affirmation language across the success/error pair.</li>
+        <li><strong>Error box</strong>: red left-border <code>#FF5252</code> + soft red wash (radial gradient blurred from left edge). Same architecture as the orange-accent reference block on <code>sub_payment_ready</code>.</li>
+        <li><strong>Support handle as code-pill</strong>: orange code-pill styling matches the <code>/subscribe</code> command in the trailing instruction. Visual consistency for "things you can tap/copy".</li>
+        <li><strong>Removed icon-above-box layout</strong>: prod had a 40px ⚠️ emoji centered above the error box — clunky and oversized. Replaced with the inline 18px red-circle glyph in the title.</li>
+        <li><strong>No border-top divider</strong>: prod had <code>border-top: 1px solid #1E1E1E</code> on the cta-hint (read as a footer). Removed — instruction sits with margin only.</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates with the trailing instruction.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_payment_error.html</code> with the canonical (lift from <code>/tmp/sub_payment_error_canonical.html</code>). Remove gradient header background + border-bottom; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; replace standalone 40px emoji with inline 18px red-circle glyph in the title; replace <code>.error-box</code> styling (red left-border + glow); remove <code>border-top</code> from <code>.cta-hint</code>.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_payment_error_data</code> already emits the right shape (<code>error_message</code>, <code>support_handle</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_payment_error.png</code> matches <code>canonical/sub_payment_error_canonical_declined.png</code> (or <code>_generic.png</code> for default copy). Brand-orange centred glow visible. Inline red-circle "!" glyph next to title (no standalone ⚠️ emoji). Error box has red left-border accent. No border-top above the trailing instruction. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_payment_error_canonical_declined.png</span><span class="variant-tag">Card declined · specific copy</span></div><img src="sub_payment_error_canonical_declined.png" alt="sub_payment_error declined"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_payment_error_canonical_generic.png</span><span class="variant-tag">Generic fallback copy</span></div><img src="sub_payment_error_canonical_generic.png" alt="sub_payment_error generic"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -849,7 +895,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(40 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(39 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -902,7 +948,6 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_ended.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_ended.png" alt="sub_founding_ended.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_live.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_live.png" alt="sub_founding_live.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_founding_soldout.html</span><span class="review-card-tag">In review</span></div><img src="sub_founding_soldout.png" alt="sub_founding_soldout.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_payment_error.html</span><span class="review-card-tag">In review</span></div><img src="sub_payment_error.png" alt="sub_payment_error.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_active.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_active.png" alt="sub_status_active.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_status_bronze.html</span><span class="review-card-tag">In review</span></div><img src="sub_status_bronze.png" alt="sub_status_bronze.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_trial_expiry.html</span><span class="review-card-tag">In review</span></div><img src="sub_trial_expiry.png" alt="sub_trial_expiry.html"></div>
