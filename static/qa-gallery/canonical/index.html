@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(16 design-locked · 38 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(17 design-locked · 40 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -1029,6 +1029,50 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">sub_status_bronze_canonical_with_founding.png</span><span class="variant-tag">1/3 used · founding offer active</span></div><img src="sub_status_bronze_canonical_with_founding.png" alt="sub_status_bronze with founding"></div>
     </div>
   </section>
+
+  <!-- ── sub_billing_inactive.html (Wave P — Batch 4 · Subscription state 3/5) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_billing_inactive.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + neutral grey accent</span>
+    </div>
+    <p class="tpl-summary">
+      No-subscription billing state. Sent on <code>/billing</code> for users without an active paid plan —
+      either lapsed (last_plan + ended_at populated) or never-subscribed (both empty). Brand-orange logo
+      glow (non-tier surface), neutral-grey left-border on the status block. Keeps the card calm — this is
+      a state surface, not a sales pitch (<code>sub_status_bronze</code> handles the upsell). Replaces prod's
+      ⭕ emoji with a clean 22px hollow-circle SVG-style indicator. Variants differ by whether the
+      last-plan/ended-at info rows render. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (non-tier surface — applies to anyone). Status block uses neutral grey <code>#555555</code> left-border so it doesn't shout colour at a non-event surface.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient(180deg)</code> background and <code>border-bottom</code>. Subline added: "No active subscription".</li>
+        <li><strong>Status block — clean hollow circle</strong>: 22px ring with 2px <code>#777777</code> border. Replaces the prod ⭕ emoji at 28px (which renders inconsistently across platforms — sometimes filled red, sometimes outlined). Single bordered circle is platform-stable.</li>
+        <li><strong>Status detail line</strong>: dynamic copy based on data — "Subscription ended" when <code>last_plan</code> or <code>ended_at</code> is set, "Free plan only" when neither (never-subscribed user).</li>
+        <li><strong>Info rows</strong>: same JetBrains Mono + #111111 + #1E1E1E recipe as the active-state set. Conditional — only render when data is present.</li>
+        <li><strong>Trailing instruction</strong>: <code>/subscribe</code> as orange code-pill (matches Batch 3 surfaces). No border-top divider (prod had one — read as a footer).</li>
+        <li><strong>No footer</strong> per universal §7. Card terminates with the trailing instruction.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_billing_inactive.html</code> with the canonical (lift from <code>/tmp/sub_billing_inactive_canonical.html</code>). Remove gradient header background + border-bottom; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; replace <code>.status-row</code> bottom-border layout with new <code>.status-block</code> (grey left-border + hollow-circle indicator); restyle <code>.info-row</code> with JetBrains Mono values; replace flat <code>.cta-hint</code> with code-pill <code>/subscribe</code> instruction; drop <code>border-top</code>.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_billing_inactive_data</code> already emits the right shape (<code>last_plan</code>, <code>ended_at</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_billing_inactive.png</code> matches <code>canonical/sub_billing_inactive_canonical_lapsed.png</code> when last_plan/ended_at set, <code>_never_subscribed.png</code> when both empty. Brand-orange centred logo glow visible. Hollow-circle status indicator (no ⭕ emoji). No footer. Trailing blank ≤14px.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_billing_inactive_canonical_lapsed.png</span><span class="variant-tag">Lapsed · Gold Monthly · ended 1 Apr</span></div><img src="sub_billing_inactive_canonical_lapsed.png" alt="sub_billing_inactive lapsed"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_billing_inactive_canonical_never_subscribed.png</span><span class="variant-tag">Never subscribed · free plan only</span></div><img src="sub_billing_inactive_canonical_never_subscribed.png" alt="sub_billing_inactive never subscribed"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -1036,7 +1080,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(36 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(35 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -1079,7 +1123,6 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">settings_sports.html</span><span class="review-card-tag">In review</span></div><img src="settings_sports.png" alt="settings_sports.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_complete.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_complete.png" alt="story_quiz_complete.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_step.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_step.png" alt="story_quiz_step.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_billing_inactive.html</span><span class="review-card-tag">In review</span></div><img src="sub_billing_inactive.png" alt="sub_billing_inactive.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_confirm.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_confirm.png" alt="sub_cancel_confirm.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_cancel_done.html</span><span class="review-card-tag">In review</span></div><img src="sub_cancel_done.png" alt="sub_cancel_done.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_email_redirect.html</span><span class="review-card-tag">In review</span></div><img src="sub_email_redirect.png" alt="sub_email_redirect.html"></div>
