@@ -261,7 +261,7 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading canonical">✅ Canonical <span class="count">(28 design-locked · 59 PNGs)</span></h2>
+  <h2 class="status-heading canonical">✅ Canonical <span class="count">(33 design-locked · 66 PNGs)</span></h2>
 
   <!-- ── match_detail.html (2 variants — with-edge / no-edge) ── -->
   <section class="template-block">
@@ -1553,6 +1553,207 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">sub_cancel_done_canonical_no_access.png</span><span class="variant-tag">Cancelled · no remaining paid access</span></div><img src="sub_cancel_done_canonical_no_access.png" alt="sub_cancel_done no access"></div>
     </div>
   </section>
+
+  <!-- ── sub_email_redirect.html (Wave AB — Batch 7 · Subscription cancel/exit 3/3) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_email_redirect.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow</span>
+    </div>
+    <p class="tpl-summary">
+      Email-capture redirect card. Sent at the start of the subscribe flow when the user needs to provide
+      their email for Stitch payment setup. Closes Batch 7 — Subscription cancel/exit (Batch 7 contained
+      the cancel pair and this email-capture pivot, all "exit-or-into-checkout" flows). Brand-orange logo
+      glow + envelope hero in a circle chip + reply-instruction CTA with internal orange glow. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (non-tier surface — applies to anyone in the subscribe flow).</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. Subline added: "One step from setting up your subscription".</li>
+        <li><strong>Hero block — circle envelope chip</strong>: 44px orange-tinted circle with 22px ✉️ inside, replacing prod's 40px standalone emoji. Cleaner, more "icon" than "emoji-art".</li>
+        <li><strong>Reply hint with internal glow</strong>: orange left-border + soft orange glow + bold "Reply" + amber surround copy. Prod had a flat tinted box — canonical adds depth.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/sub_email_redirect.html</code> with the canonical (lift from <code>/tmp/sub_email_redirect_canonical.html</code>). Insert brand-orange <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; replace standalone 40px ✉️ emoji with circle-chip pattern in a contained <code>.hero-block</code>; restyle <code>.reply-hint</code> with internal-glow recipe.</li>
+        <li><code>bot/card_data_adapters.py:build_sub_email_redirect_data</code> needs no fields beyond <code>header_logo_b64</code>. No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/sub_email_redirect.png</code> matches <code>canonical/sub_email_redirect_canonical.png</code>. Brand-orange logo glow visible. Envelope in circle chip (no standalone emoji). Reply hint with orange-glow recipe. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_email_redirect_canonical.png</span><span class="variant-tag">Subscribe flow · email entry</span></div><img src="sub_email_redirect_canonical.png" alt="sub_email_redirect"></div>
+    </div>
+  </section>
+
+  <!-- ── onboarding_welcome.html (Wave AC — Batch 8 · Onboarding core 1/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">onboarding_welcome.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow</span>
+    </div>
+    <p class="tpl-summary">
+      Welcome card — first surface a user sees in onboarding. Opens Batch 8 — Onboarding core (8 cards).
+      Brand-orange logo glow header + "Hey {name} 👋" greeting + tagline + 3 feature rows with orange
+      left-border accent + closing "Takes about 2 minutes to set up" CTA line. Trial + founding-member
+      badges (when active) sit in a row above features. Returning-user variant swaps greeting and title.
+      No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange (welcome is the universal first impression — every tier funnels through this card).</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. Subline reads "AI-powered sports betting edge".</li>
+        <li><strong>Greeting at 22px</strong>: bold white with letter-spacing -0.5px. Replaces prod's same-size approach but tightens letterspacing for the larger display weight.</li>
+        <li><strong>Trial / founding badges</strong>: green-tinted badge for trial, orange-tinted badge for founding. Replaces prod's same-style badge with semantic colour separation — trial is "free thing" (green positive), founding is "premium offer" (orange premium).</li>
+        <li><strong>Feature rows with orange left-border</strong>: 3 feature rows in contained cards with orange 3px left-border + emoji + bold title + 11px description. Replaces prod's flat row layout — adds the canonical accent treatment.</li>
+        <li><strong>CTA line with orange highlight</strong>: "Takes about <strong>2 minutes</strong>…" with the duration in orange. No border-top divider (prod had one — read as a footer).</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/onboarding_welcome.html</code> with the canonical (lift from <code>/tmp/onboarding_welcome_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; add subline; tighten greeting letterspacing; restyle <code>.badge-trial</code> green and <code>.badge-founding</code> orange; rebuild <code>.feature-row</code> with orange left-border + 1px border + #111 bg; remove <code>.divider</code> bottom-border above CTA line.</li>
+        <li><code>bot/card_data_adapters.py:build_onboarding_welcome_data</code> already emits the right shape (<code>first_name</code>, <code>is_returning</code>, <code>trial_started</code>, <code>trial_days</code>, <code>founding_offer</code>, <code>founding_days_left</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/onboarding_welcome.png</code> matches <code>canonical/onboarding_welcome_canonical_fresh.png</code> for fresh users, <code>_trial.png</code> when trial+founding active. Brand-orange logo glow + 3 feature rows with orange left-border. No border-top above CTA. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_welcome_canonical_fresh.png</span><span class="variant-tag">Fresh user · no trial/founding</span></div><img src="onboarding_welcome_canonical_fresh.png" alt="onboarding_welcome fresh"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_welcome_canonical_trial.png</span><span class="variant-tag">7-day trial + founding · 3 days left</span></div><img src="onboarding_welcome_canonical_trial.png" alt="onboarding_welcome trial"></div>
+    </div>
+  </section>
+
+  <!-- ── onboarding_experience.html (Wave AD — Batch 8 · Onboarding core 2/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">onboarding_experience.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + step-progress dots</span>
+    </div>
+    <p class="tpl-summary">
+      Step 1 of 5 — experience-level selection. First step in onboarding question flow. Establishes the
+      <strong>step-progress dots pattern</strong> reused across the 5-step onboarding sequence: 5 small
+      pills (16×4px) where the active step is orange, prior steps are also orange (done), upcoming steps
+      are grey. "STEP 1 OF 5" label sits to the right. 3 option rows (experienced / casual / newbie) with
+      emoji + label + descriptive caption. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Step-progress dots pattern</strong>: 5 × 16×4px pills, active = orange, done = orange, upcoming = grey. Reusable across <code>onboarding_experience</code> + <code>onboarding_sports</code> + <code>onboarding_favourites</code> + future <code>onboarding_risk</code> + <code>onboarding_notify</code>. <strong>Replaces prod's "STEP 1 OF 5" plain-text indicator</strong> with a visual progress affordance.</li>
+        <li><strong>Header changes from prod</strong>: removed <code>linear-gradient</code> background and <code>border-bottom</code>. <code>.step-badge</code> plain-text replaced by progress-dots row.</li>
+        <li><strong>Question + hint</strong>: 17px bold question (was 16px) — slightly larger for stronger anchoring. 12px hint underneath in secondary text.</li>
+        <li><strong>Option rows</strong>: 22px emoji + bold label + 11px description. Grey left-border (3px) on the unselected state — sets up the <code>.selected</code> class to swap to orange-3px-left-border + soft wash. Same row pattern as <code>onboarding_sports</code> + <code>onboarding_favourites</code>.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/onboarding_experience.html</code> with the canonical (lift from <code>/tmp/onboarding_experience_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; replace plain <code>.step-badge</code> div with the <code>.step-progress</code> dots row + label; restyle <code>.option</code> with grey 3px left-border + #111 bg; tighten question to 17px bold.</li>
+        <li><code>bot/card_data_adapters.py:build_onboarding_experience_data</code> already emits the right shape (<code>options[]</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/onboarding_experience.png</code> matches <code>canonical/onboarding_experience_canonical.png</code>. Brand-orange logo glow + step-progress dots (1st orange, 4 grey) + "STEP 1 OF 5" label. 3 options with grey left-border. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_experience_canonical.png</span><span class="variant-tag">Step 1 of 5 — experience level</span></div><img src="onboarding_experience_canonical.png" alt="onboarding_experience"></div>
+    </div>
+  </section>
+
+  <!-- ── onboarding_sports.html (Wave AE — Batch 8 · Onboarding core 3/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">onboarding_sports.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + selected-count chip</span>
+    </div>
+    <p class="tpl-summary">
+      Step 2 of 5 — sport selection. Multi-select grid for the 4 sport categories (soccer, rugby, cricket,
+      combat). Step-progress dots show steps 1+2 as done/active. <strong>Selected-count chip</strong> with
+      orange left-border + bold count. Sport rows toggle between unselected (grey left-border + empty
+      circle) and selected (orange left-border + orange wash + orange-circle ✓ glyph). No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange. Step-progress dots pattern from Wave AD continues.</li>
+        <li><strong>Selected-count chip</strong>: orange left-border + 1px border + 3px padding-y + 10px padding-x + bold "{N} selected". Replaces prod's bare orange text — now framed and consistent with the chip pattern across the canonical set.</li>
+        <li><strong>Sport rows — selection states</strong>: unselected = grey 3px left-border + grey empty circle (22px ring); selected = orange 3px left-border + soft orange wash + orange-circle ✓ glyph (22px circle filled with orange). Replaces prod's hollow square checkbox with a circular tick — matches the success-glyph pattern across the canonical set.</li>
+        <li><strong>Tap target unchanged</strong>: 12px×14px padding keeps row hit-area generous on mobile.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/onboarding_sports.html</code> with the canonical (lift from <code>/tmp/onboarding_sports_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; replace plain <code>.step-badge</code> with <code>.step-progress</code> dots + "Step 2 of 5" label; restyle <code>.selected-count</code> as orange-left-border chip; restyle <code>.sport-row</code> with grey 3px left-border default + orange selected state; replace square <code>.sport-check-empty</code> with 22px circular ring + orange-circle ✓ glyph for selected.</li>
+        <li><code>bot/card_data_adapters.py:build_onboarding_sports_data</code> already emits the right shape (<code>sports[]</code>, <code>selected_count</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/onboarding_sports.png</code> matches <code>canonical/onboarding_sports_canonical_one_selected.png</code> with 1 selected, <code>_three_selected.png</code> with 3. Step-progress dots (2 active+done, 3 grey). Selected-count chip with orange accent. Orange-circle ✓ glyphs on selected rows. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_sports_canonical_one_selected.png</span><span class="variant-tag">Soccer only · 1 selected</span></div><img src="onboarding_sports_canonical_one_selected.png" alt="onboarding_sports one selected"></div>
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_sports_canonical_three_selected.png</span><span class="variant-tag">Soccer + rugby + cricket · 3 selected</span></div><img src="onboarding_sports_canonical_three_selected.png" alt="onboarding_sports three selected"></div>
+    </div>
+  </section>
+
+  <!-- ── onboarding_favourites.html (Wave AF — Batch 8 · Onboarding core 4/8) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">onboarding_favourites.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-04-27 · LIST adaptive · brand-orange glow + sport-context header</span>
+    </div>
+    <p class="tpl-summary">
+      Step 3 of 5 — favourite teams selection within a sport context. Card iterates per sport selected
+      in Step 2 — header shows the current sport's emoji + name as the title (replacing the generic step
+      title). Multi-select team rows with the same orange-tick selection pattern as <code>onboarding_sports</code>.
+      "{N} selected" chip + 5-team cap signalled in the hint. No footer.
+    </p>
+
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange.</li>
+        <li><strong>Header swap — sport-context title</strong>: instead of a generic "FAVOURITES" title, the header shows the current sport (emoji + name) since this card iterates per sport. Replaces prod's same approach but in canonical typography (14px tracked + 18px emoji).</li>
+        <li><strong>Selection states reuse onboarding_sports recipe</strong>: grey-default + orange-selected (left-border, wash, orange-circle ✓ glyph). Smaller team rows than sport rows (11×14px padding vs 12×14px) since teams lists can be longer.</li>
+        <li><strong>Empty-hint state</strong>: italic "Loading teams…" centred in a 16px-padding placeholder. Same as prod copy, restyled for italic emphasis.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Replace <code>bot/card_templates/onboarding_favourites.html</code> with the canonical (lift from <code>/tmp/onboarding_favourites_canonical.html</code>). Insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; replace plain <code>.step-badge</code> with <code>.step-progress</code> dots + "Step 3 of 5" label; build <code>.sport-header</code> in the header zone for emoji+name display; restyle <code>.team-row</code> selection states with orange-circle ✓ glyph; italicise empty-hint copy.</li>
+        <li><code>bot/card_data_adapters.py:build_onboarding_favourites_data</code> already emits the right shape (<code>sport</code>, <code>teams[]</code>, <code>selected_count</code>). No data-side changes needed.</li>
+        <li>Acceptance: <code>latest/onboarding_favourites.png</code> matches <code>canonical/onboarding_favourites_canonical_soccer.png</code> for soccer with 3 selected. Step-progress dots (3 active+done, 2 grey). Sport-context header. Orange-circle ✓ glyphs on selected rows. No footer.</li>
+      </ul>
+    </div>
+
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_favourites_canonical_soccer.png</span><span class="variant-tag">Soccer · 3 of 6 teams selected</span></div><img src="onboarding_favourites_canonical_soccer.png" alt="onboarding_favourites soccer"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
@@ -1560,7 +1761,7 @@ if user_tier == "gold":
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(24 live bot renders — awaiting design lock)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(19 live bot renders — awaiting design lock)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
@@ -1588,22 +1789,17 @@ if user_tier == "gold":
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_bankroll_custom.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_bankroll_custom.png" alt="onboarding_bankroll_custom.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_done.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_done.png" alt="onboarding_done.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_edge_explainer.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_edge_explainer.png" alt="onboarding_edge_explainer.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_experience.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_experience.png" alt="onboarding_experience.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_favourites.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_favourites.png" alt="onboarding_favourites.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_favourites_manual.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_favourites_manual.png" alt="onboarding_favourites_manual.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_fuzzy_suggest.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_fuzzy_suggest.png" alt="onboarding_fuzzy_suggest.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_notify.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_notify.png" alt="onboarding_notify.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_restart.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_restart.png" alt="onboarding_restart.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_risk.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_risk.png" alt="onboarding_risk.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_sports.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_sports.png" alt="onboarding_sports.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_summary.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_summary.png" alt="onboarding_summary.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_team_celebration.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_team_celebration.png" alt="onboarding_team_celebration.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">onboarding_welcome.html</span><span class="review-card-tag">In review</span></div><img src="onboarding_welcome.png" alt="onboarding_welcome.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">profile_home.html</span><span class="review-card-tag">In review</span></div><img src="profile_home.png" alt="profile_home.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">settings_sports.html</span><span class="review-card-tag">In review</span></div><img src="settings_sports.png" alt="settings_sports.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_complete.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_complete.png" alt="story_quiz_complete.html"></div>
     <div class="review-card"><div class="review-card-header"><span class="review-card-name">story_quiz_step.html</span><span class="review-card-tag">In review</span></div><img src="story_quiz_step.png" alt="story_quiz_step.html"></div>
-    <div class="review-card"><div class="review-card-header"><span class="review-card-name">sub_email_redirect.html</span><span class="review-card-tag">In review</span></div><img src="sub_email_redirect.png" alt="sub_email_redirect.html"></div>
   </div>
 </div>
 
