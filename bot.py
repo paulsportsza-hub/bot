@@ -86,11 +86,13 @@ from config import ODDS_DB_PATH, ensure_scrapers_importable
 # One-time path setup: replaces all scattered sys.path.insert blocks
 ensure_scrapers_importable()
 
-# FIX-TIMEZONE-CANON-01B: canonical timezone utilities from publisher
+# FIX-TIMEZONE-CANON-01B: canonical timezone utilities from publisher.
+# Append (not insert(0)) — publisher/ contains a top-level `scripts/` package
+# that would otherwise shadow bot/scripts/odds_client and friends.
 import sys as _sys_tz
 _pub_tz_path = str(pathlib.Path(__file__).resolve().parent.parent / "publisher")
 if _pub_tz_path not in _sys_tz.path:
-    _sys_tz.path.insert(0, _pub_tz_path)
+    _sys_tz.path.append(_pub_tz_path)
 from timezone_utils import assume_utc, assume_sast, to_sast
 
 import db
