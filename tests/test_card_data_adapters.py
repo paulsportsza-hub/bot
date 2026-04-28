@@ -518,6 +518,42 @@ def test_done_founding_flags():
     assert d["founding_days_left"] == 3
 
 
+def test_done_bronze_member_with_trial_active_renders_bronze_badge():
+    """Regression for FIX-ONBOARDING-DONE-TIER-LEAK-01.
+
+    db.start_trial() writes user_tier="diamond"; handle_ob_done() now
+    overrides _ob_tier back to "bronze" before passing it here. This pins
+    the post-fix data shape: BRONZE MEMBER badge, trial_started flag
+    preserved for the trial copy, upgrade CTA visible.
+    """
+    d = build_onboarding_done_data(
+        "Paul", user_tier="bronze", trial_started=True, trial_days=7,
+    )
+    assert d["user_tier"] == "bronze"
+    assert d["tier_display"] == "BRONZE MEMBER"
+    assert d["tier_emoji"] == "🥉"
+    assert d["show_upgrade"] is True
+    assert d["trial_started"] is True
+    assert d["trial_days"] == 7
+
+
+def test_done_diamond_passthrough_proves_caller_owns_override():
+    """Regression for FIX-ONBOARDING-DONE-TIER-LEAK-01.
+
+    build_onboarding_done_data() is a pure projection of (user_tier,
+    trial_started); it does NOT itself enforce the bronze override. That
+    responsibility lives in handle_ob_done(). If the override is ever
+    moved down into this function, this test fails deliberately — and
+    that change must reopen the brief.
+    """
+    d = build_onboarding_done_data(
+        "Paul", user_tier="diamond", trial_started=True, trial_days=7,
+    )
+    assert d["user_tier"] == "diamond"
+    assert d["tier_display"] == "DIAMOND MEMBER"
+    assert d["show_upgrade"] is False
+
+
 def test_restart_first_name():
     d = build_onboarding_restart_data(first_name="Sipho")
     assert d["first_name"] == "Sipho"

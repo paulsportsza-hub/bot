@@ -5747,6 +5747,10 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "so I know exactly how to keep you in the game."
         )
     _ob_tier = await get_effective_tier(user_id)
+    # FIX-ONBOARDING-DONE-TIER-LEAK-01: db.start_trial() above writes user_tier="diamond";
+    # the badge must show the user's real plan (bronze) with the trial communicated separately.
+    if trial_started:
+        _ob_tier = "bronze"
     _ob_done_rows = [
         [InlineKeyboardButton("📚 View Bookmaker Guide", callback_data="guide:bookmakers")],
         [InlineKeyboardButton("👥 Join the MzansiEdge Community", url="https://t.me/MzansiEdge")],
