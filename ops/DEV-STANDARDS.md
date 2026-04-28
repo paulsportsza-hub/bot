@@ -98,11 +98,13 @@ Report evidence required: OCR raw text output + assertion results table (asserti
 
 ---
 
-### Dispatch Format v4.1 (LOCKED — 18 April 2026, supersedes v4)
+### Dispatch Format v4.2 (LOCKED — 28 April 2026, supersedes v4.1 — Pure Claude reconciliation)
 
 **This is the ONLY acceptable format for dispatching ANY brief (INV, BUILD, QA, FIX, investigation, marketing, SEO — all types, all agents: LEAD, COO, anyone else). Zero deviations. Any dispatch not matching this exact format will be rejected by Paul.**
 
-**What changed in v4.1 (18 Apr 2026):** added mandatory `(cli)` parenthetical on the Model token so the dispatcher and the report agree on which CLI ran the brief. Also locks the Agent-field taxonomy for reports. Solves the "Dataminer/Codex/Claude" report-label confusion raised by Paul on 17 Apr PM.
+**What changed in v4.2 (28 Apr 2026 — Pure Claude Ecosystem lock):** v4.1's multi-CLI taxonomy `(claude)` / `(codex)` / `(cowork)` / `(cursor)` directly contradicted `feedback_pure_claude_ecosystem.md` — both LOCKED on 18 April 2026. The contradiction was the root cause of the FIX-CLAUDEMD-D2-SUPERVISOR-01 "Codex attribution leak" surfaced by AUDITOR Lane B on 28 Apr 2026. v4.2 collapses the `(cli)` taxonomy to **two options only: `(claude)` and `(cowork)`.** `(codex)` and `(cursor)` are explicitly BANNED. Historical `codex-*.md` reports filed 17-28 Apr 2026 under `/home/paulsportsza/reports/` are tagged retroactive-noncompliant — not recovered, not deleted, just flagged. `.codex/` server-side auth is archived as part of `OPS-CHAOS-CLEANUP-01`.
+
+**What changed in v4.1 (18 Apr 2026, NOW SUPERSEDED BY v4.2):** added mandatory `(cli)` parenthetical on the Model token so the dispatcher and the report agree on which CLI ran the brief. Also locked the Agent-field taxonomy for reports. Solved the "Dataminer/Codex/Claude" report-label confusion raised by Paul on 17 Apr PM. **Retired by v4.2's Pure Claude reconciliation.**
 
 **Every dispatch has exactly two parts. Em dashes (`—`), not hyphens (`-`).**
 
@@ -115,11 +117,31 @@ Report evidence required: OCR raw text output + assertion results table (asserti
 Field spec:
 - `[N]` — sequential number in square brackets across this dispatch (`[1]`, `[2]`, `[3]` …).
 - `Model` — exactly one of: `Opus`, `Sonnet`, `Haiku`, `GPT-5`, `GPT-5-Codex`. Never "agent type," never "opus-4-7" or any model string. Capitalised.
-- `(cli)` — **MANDATORY, lowercase, in parentheses, immediately after Model.** Exactly one of: `(claude)`, `(codex)`, `(cowork)`, `(cursor)`. Identifies which CLI will execute the brief. Reports must echo this exact string in the `Agent:` field.
+- `(cli)` — **MANDATORY, lowercase, in parentheses, immediately after Model.** Exactly one of: `(claude)`, `(cowork)`. `(codex)` and `(cursor)` are BANNED per Pure Claude Ecosystem lock (v4.2, 28 Apr 2026). Identifies which Claude executor runs the brief. Reports must echo this exact string in the `Agent:` field.
 - `[flags]` — optional. If using Opus with max reasoning, append ` --effort max` AFTER the `(cli)` token (e.g. `Opus (claude) --effort max`). No other flags.
-- `Mode` — exactly one of: `Parallel` (runs concurrently with its sibling dispatches), `Sequential` (must wait on prior brief in this dispatch), `Standalone` (single brief, no siblings). Capitalised.
+- `Mode` — exactly one of: `Parallel` (runs concurrently with its sibling dispatches), `Sequential` (must wait on prior brief in this dispatch), `Standalone` (single brief, no siblings). Capitalised. **See Mode Selection Rule below — same-repo briefs MUST be Sequential.**
 - `TYPE` — the brief family, UPPERCASE: `INV`, `BUILD`, `QA`, `FIX`, `INVESTIGATE-REGRESS`, `MARKETING`, `SEO`, etc. Matches the first token of the BRIEF-ID inside the block.
 - `Priority` — exactly one of: `P0`, `P1`, `P2`. P0 = launch-blocking, P1 = this-week, P2 = post-launch.
+
+**Mode Selection Rule (LOCKED — 27 April 2026 — same-repo serialization):**
+
+The `Mode` flag is **load-bearing** — it determines whether briefs run concurrently or block on each other. Wrong choice causes pre-merge gate collisions, where one agent's uncommitted dirty state fails the full test suite that the other agent's commit gate runs.
+
+- **`Parallel` is permitted ONLY when every sibling brief in the wave touches a DIFFERENT git repo** (e.g. one in `publisher`, one in `bot`, one in `scrapers`, one in `mzansiedge-wp`). Pre-merge gates run isolated per repo — cross-repo parallelism is collision-free.
+- **`Sequential` is MANDATORY when two or more sibling briefs touch the SAME repo**, regardless of which files they edit. The pre-merge gate runs the full test suite in that repo on every commit — a sibling agent's uncommitted dirty state can fail unrelated tests and block the gate.
+- **Default to `Sequential` when in doubt.** False-positive serialization costs ~10 minutes of wall time. False-positive parallelism costs a wave-blocking pre-merge collision (incident: 27 April 2026 — FIX-CONTENT-LAWS-CANON-01 + FIX-DASH-CHANNEL-NORMALISE-FAIL-LOUD-01 both targeted the bot repo as `Parallel`; CONTENT-LAWS-CANON pre-merge gate failed on a test owned by the still-uncommitted DASH-NORMALISE work).
+- **Repo identification is part of dispatch authoring.** Every brief lives in exactly one primary repo per its file:line targets. If a brief touches multiple repos, it's `Sequential` against any sibling that touches any of those repos.
+- **Pre-send check (mandatory):** for every brief marked `Parallel` in your dispatch, identify its primary repo (read the file:line in the Notion brief — look for `/home/paulsportsza/<repo>/...`). If any two `Parallel` siblings share a repo, downgrade the later one(s) to `Sequential` before sending.
+
+**Repo classification cheat-sheet:**
+
+| Repo | Path | Common brief types |
+|---|---|---|
+| `publisher` | `/home/paulsportsza/publisher` | autogen, channel modules, prequeue, dispatch loop, compliance |
+| `bot` | `/home/paulsportsza/bot` | dashboard, bot.py, cards, reels, narrative, arbiter, QA gallery |
+| `scrapers` | `/home/paulsportsza/scrapers` | sharp data, edge ingestion, settlement |
+| `mzansiedge-wp` | `/var/www/mzansiedge-wp` | LP, blog, WP theme, hero pages |
+| `Cowork` (no git) | n/a | `daily-*` scheduled task prompts (use `update_scheduled_task` directly, not via brief) |
 
 **Part 2 — Code block** (fenced, copy-paste ready — Paul pastes the entire block unchanged into the coding agent's terminal). Exactly four lines, in this exact order:
 
@@ -167,7 +189,7 @@ NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
 Execute this brief.
 ```
 
-**[2] — Sonnet (codex) — Sequential — BUILD — P1**
+**[2] — Sonnet (claude) — Sequential — BUILD — P1**
 
 ```
 IMG-PW3 — My Matches Card Template 2026-04-17
@@ -180,11 +202,12 @@ Execute this brief.
 1. Is the header line bold markdown and OUTSIDE the code block? ✅/❌
 2. Does the header use em dashes (`—`), not hyphens? ✅/❌
 3. Is the number in brackets (`[3]`, not `3`)? ✅/❌
-4. **Does the Model token carry a lowercase `(cli)` parenthetical** — one of `(claude)` / `(codex)` / `(cowork)` / `(cursor)`? ✅/❌
+4. **Does the Model token carry a lowercase `(cli)` parenthetical** — one of `(claude)` / `(cowork)` only? `(codex)` and `(cursor)` are BANNED per Pure Claude Ecosystem lock. ✅/❌
 5. Does the header end with a Priority (`P0`/`P1`/`P2`)? ✅/❌
 6. Inside the block: BRIEF-ID line → URL → `NOTION_TOKEN:` → `Execute this brief.` — in that order? ✅/❌
 7. Is the token label exactly `NOTION_TOKEN:` (not `Use notion API token:`)? ✅/❌
 8. Are there any lines outside the 4 canonical ones? ❌ (should be no)
+9. **Mode selection check:** for every brief marked `Parallel`, did you confirm it targets a DIFFERENT repo from every other `Parallel` sibling in this wave? Same-repo `Parallel` is a violation — downgrade the later one(s) to `Sequential`. ✅/❌
 
 Any ❌ → dispatch is wrong. Fix before sending. No exceptions.
 
@@ -196,11 +219,15 @@ Any ❌ → dispatch is wrong. Fix before sending. No exceptions.
 
 **Why:** Reports were being filed as `Agent: Dataminer`, `Agent: Codex`, etc., with no canonical taxonomy. Paul flagged 17 Apr PM. This section is the taxonomy. Every dispatcher embeds it in the brief. Every executing agent echoes it in the report.
 
-**Agent taxonomy (lowercase, exactly one of):**
+**Agent taxonomy (lowercase, exactly one of) — Pure Claude Ecosystem LOCKED 28 April 2026:**
 - `claude` — Claude Code CLI (server or local)
-- `codex` — OpenAI Codex CLI
 - `cowork` — Cowork desktop session (AUDITOR / LEAD / COO)
-- `cursor` — Cursor IDE agent
+
+**BANNED (per Pure Claude Ecosystem lock, 28 Apr 2026):**
+- `codex` — OpenAI Codex CLI. Was permitted 17-28 Apr 2026; reports filed under this label are retroactive-noncompliant.
+- `cursor` — Cursor IDE agent. Was permitted 17-28 Apr 2026; same retroactive-noncompliant status.
+
+Any report filed with `Agent: codex` or `Agent: cursor` after 28 Apr 2026 is invalid and the brief reopens.
 
 **Not allowed in the `Agent:` field:** any persona (`Dataminer`, `AUDITOR`, `LEAD`, `COO`), any model name (`opus`, `sonnet`), any nickname. Personas go in `Dispatcher:` if needed. Models go in `Model:`.
 
@@ -216,7 +243,7 @@ Example: `claude-INV-PRECOMPUTE-DEAD-WATCH-01-20260418-0830.md` ✅
 ```
 # <BRIEF-ID> — <outcome>
 **Wave:** <BRIEF-ID>
-**Agent:** claude | codex | cowork | cursor
+**Agent:** claude | cowork
 **Model:** Opus | Sonnet | Haiku | GPT-5 | GPT-5-Codex
 **Date:** YYYY-MM-DD
 **Status:** Complete | Blocked | Escalated
@@ -226,10 +253,10 @@ Example: `claude-INV-PRECOMPUTE-DEAD-WATCH-01-20260418-0830.md` ✅
 
 > **Report filing — mandatory**
 > After completion, file your report at:
-> - Filename: `<agent>-<BRIEF-ID>-<YYYYMMDD-HHMM>.md` (agent lowercase: `claude`/`codex`/`cowork`/`cursor`)
+> - Filename: `<agent>-<BRIEF-ID>-<YYYYMMDD-HHMM>.md` (agent lowercase: `claude` or `cowork` only)
 > - First 6 lines of body must be the canonical header (`# …`, `**Wave:**`, `**Agent:**`, `**Model:**`, `**Date:**`, `**Status:**`).
 > - Push to Agent Reports Pipeline via `push-report` (see SO #35).
-> - Use the CLI name from the dispatch header's `(cli)` parenthetical — do NOT invent a persona name.
+> - Use the CLI name from the dispatch header's `(cli)` parenthetical — do NOT invent a persona name. Only `claude` or `cowork` are permitted (per v4.2 Pure Claude Ecosystem lock).
 
 ---
 
@@ -255,6 +282,40 @@ crontab -l | wc -l   # Must still be ≥ 20. If count dropped, ROLLBACK.
 2. If a brief adds or removes cron entries, the report MUST include before/after `crontab -l | wc -l` counts.
 3. Canonical crontab backup: `/home/paulsportsza/crontab_restored_20260406.txt`. If the crontab is damaged, restore from this file.
 4. After any intentional crontab change, run `/home/paulsportsza/scripts/update_cron_baseline.sh` to update the checksum baseline so the hourly watchdog doesn't false-alarm.
+
+---
+
+### Parallel Lane Safety: Pathspec-Restricted Commits (LOCKED — 27 April 2026)
+
+**Context:** On 2026-04-27 during OPS-STASH-AUDIT-01, a multi-commit walk on the bot repo was contaminated by a parallel curatorial-lane subagent that staged unrelated files between Opus-LEAD's pre-flight `git status` and its `git commit`. A naked `git commit` swept the canonical-lane's PNGs and `index.html` mod into a wave-named test commit. Recovery cost a `git reset --mixed HEAD~1` mid-execution. Race-safe pattern below prevents recurrence.
+
+**Rule:** When the repo has any other concurrent session that may stage / modify files (Cowork curatorial lanes, scheduled scrapers, parallel agents), every commit MUST use the pathspec-restricted form:
+
+```bash
+git add <file1> [file2] [...]
+git commit -m "<message>" -- <file1> [file2] [...]
+```
+
+The `-- <pathspec>` after the commit message restricts the commit to ONLY those paths regardless of what else is staged in the index. Naked `git commit` (no pathspec) commits everything in the index — including anything a parallel lane added between your `git add` and your `git commit`.
+
+**When this matters:**
+- Any wave that loops over multiple files committing one at a time.
+- Any wave running on a repo that has an active curatorial / canonical lane (currently: bot repo + `static/qa-gallery/canonical/*` Paul-owned curatorial lane).
+- Any OPS-STASH-AUDIT-style sweep across multiple owning waves.
+
+**When it doesn't matter:**
+- Single-file single-commit waves (the one file IS the path).
+- Repos with zero concurrent agents (rare).
+
+**Forward fix when contamination is detected mid-execution:**
+1. `git reset --mixed HEAD~1` — restores files to working tree, keeps history clean.
+2. Re-stage only your target paths.
+3. Re-commit with the pathspec form.
+4. Continue the wave. Document the recovery in the report.
+
+**No `--force` push** to recover from contamination. The pathspec form is the prevention; the reset is the recovery; force-push is never the answer.
+
+**Contract:** Every report from a multi-commit OPS / FIX brief running on bot or any active-curatorial repo MUST cite which form was used. Naked `git commit` form on these repos = brief incomplete.
 
 ---
 
