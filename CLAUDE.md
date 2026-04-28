@@ -7,6 +7,301 @@ band-aids, or surface-level fixes. If you're not sure what the root cause is,
 investigate until you find it. Every fix must address WHY the problem happened,
 not just WHAT went wrong.
 
+## ⚙️ Operations & Deployment
+
+> Consolidated under OPS-CLAUDEMD-CONSOLIDATION-01 (Option B, 2026-04-29). This
+> block was the standalone Operating Constitution at `/home/paulsportsza/CLAUDE.md`
+> until that orphan was retired so SO #41 (commit-binding verification) could run
+> against a git-managed file. Constitutional authority for the rules below now
+> lives here. Cowork canonical at `/Users/paul/Documents/MzansiEdge/CLAUDE.md`
+> remains the routing core (untouched).
+
+### Single Source of Truth: Notion
+https://www.notion.so/313d9048d73c818f94aadea85b5158d0
+
+Ops Hub (Cowork) is the only writer. All agents read for context.
+The Notion workspace holds architecture, callbacks, DB models, sport
+categories, service layer, edge rating, brand guidance, credentials, and the
+wave log.
+
+### Quick Reference
+- Bot: `@mzansiedge_bot`
+- Server: `178.128.171.28`
+- Domain: `mzansiedge.co.za`
+- Bot code (working tree): `/home/paulsportsza/bot/`
+- **Live runtime**: `/home/paulsportsza/bot/bot.py` (canonical — see Deployment Rules)
+- Scrapers: `/home/paulsportsza/scrapers/`
+- Reports: `/home/paulsportsza/reports/`
+- Logs: `/home/paulsportsza/logs/`
+- Runtime: Python 3.12.3 on Ubuntu
+- Packaging note: `pip3` needs `--break-system-packages`
+- Bot stack: PTB v20+ async bot, aiohttp-based scrapers
+- Verify live runtime: `ps aux | grep bot.py` — must show `/home/paulsportsza/bot/bot.py`
+
+### Reporting Pipeline
+Every wave report must include a `## CLAUDE.md Updates` section listing
+required constitutional or repo-reference updates, or `None` if no update is
+needed.
+
+#### Notion Push — REST API Only (NOTION-API-1 — Permanent)
+- **NEVER** use the Notion MCP tools (`mcp__claude_ai_Notion__*`). The MCP
+  integration connects to the wrong Notion workspace and creates pages in an
+  inaccessible database.
+- **ALWAYS** push reports via the REST API using the helper script:
+  ```bash
+  python3 ~/scripts/push_report.py \
+      --agent {QA,LeadDev,Dataminer,UX,Codex,UXDesigner,Sonnet,Opus} \
+      --wave WAVE_ID \
+      /path/to/report.md
+  ```
+- The script reads `NOTION_TOKEN` and `NOTION_REPORTS_DB` from `~/.env`.
+  If the token is invalid or expired, stop and ask the user — do not push
+  blind.
+- Title is auto-extracted from the first `# H1` line in the report.
+- The script prints the Notion page URL to stdout on success.
+
+After every push, send the Notion URL(s) back to the user. Do not
+wait to be asked. Codex/executor reports must end with Notion URLs for all
+pushed parts.
+
+### Deployment Rules (DEPLOY-DISCIPLINE-1 — Permanent)
+
+#### D1 — Canonical Runtime Path
+- The bot process MUST run from `/home/paulsportsza/bot/bot.py` (the git
+  working tree on `main`).
+- The process MUST be started with CWD = `/home/paulsportsza/bot/`.
+- Do not create or use `.deploy/` worktrees for production runtime.
+- Git worktrees may be used for isolated testing but never as the live runtime.
+
+#### D2 — Deploy = Restart from Working Tree
+- A "deploy" means:
+  1. Commit changes to `main` in `/home/paulsportsza/bot/`.
+  2. Restart: `sudo systemctl restart mzansi-bot.service`.
+- No intermediate copy, worktree checkout, or rsync step.
+- **Do NOT use `tmux new-session` to start the bot.** `mzansi-bot.service` is the
+  canonical supervisor (`Restart=always`). A tmux-launched bot acquires the
+  `fcntl.flock` on `/tmp/mzansiedge.pid` (RUNTIME-R1) and forces systemd into a
+  continuous restart loop (NRestarts 75+ in ~6 min — incident 2026-04-25).
+- If a leftover tmux `bot` session exists, kill it first:
+  `tmux kill-session -t bot` — systemd reacquires the lock within ~7s.
+- After restart, verify: `systemctl is-active mzansi-bot.service` (must return
+  `active`) and `ps aux | grep bot.py` (must show `/home/paulsportsza/bot/bot.py`).
+
+#### D3 — QA Must Validate the Active Runtime
+- Before any QA pass, run `ps aux | grep bot.py` to confirm which `bot.py`
+  is running.
+- If the running process does not match `/home/paulsportsza/bot/bot.py`,
+  QA must BLOCK and report `ENVIRONMENT NOT CLEAN`.
+- QA validation targets the working tree at `/home/paulsportsza/bot/`.
+- Tests run from `/home/paulsportsza/bot/` using `.venv`.
+
+#### D4 — Cron Alignment
+- All cron jobs that invoke bot code must use `cd /home/paulsportsza/bot`
+  as CWD.
+- Any new cron that touches bot code must follow this pattern.
+
+#### D5 — Asset Integrity on Deploy
+- Before restarting the bot, verify that `data/prose_exemplars.json` exists.
+- Required assets: `data/prose_exemplars.json`, `data/mzansiedge.db`, `.env`.
+- If any required asset is missing, the deploy must stop — not proceed with
+  a broken runtime.
+
+### Locked Rules — Do Not Bypass
+
+#### Canonical QA Gallery — Hand-Curated, Do Not Touch (LOCKED 27 Apr 2026)
+- `bot/static/qa-gallery/canonical/**` is the design source of truth — hand-curated
+  by Paul + Claude. The `index.html` and every `*_canonical*.png` / approved variant
+  PNG in this directory MUST survive every regen, deploy, stash, reset, and cleanup.
+- Before any agent runs `git stash`, `git stash --include-untracked`, `git clean`,
+  `git checkout -- .`, `git reset --hard`, or any "wipe untracked" operation in the
+  bot working tree, it MUST exclude `static/qa-gallery/canonical/**` (use pathspecs:
+  `git stash push -u -- ':!static/qa-gallery/canonical'`).
+- Auto-regen pipelines (live-bot QA runners, batch render scripts) write to
+  `static/qa-gallery/latest/` and `static/qa-gallery/YYYY-MM-DD/` ONLY. Never to
+  `canonical/`.
+- Incident on 2026-04-27: an agent on `FIX-NARRATIVE-MMA-LORE-01` stashed all
+  untracked files (incl. canonical PNGs and the modified `index.html`) and did not
+  pop. Recovered via `git stash apply stash@{0}`. Do not repeat.
+- If you find canonical work missing, check `git stash list` BEFORE re-rendering —
+  stash apply restores hours of work in seconds.
+
+#### End-to-End Rubric Hard Overrides (LOCKED 23 Apr 2026)
+- Any SEV-1 = FAIL
+- J5 below 5.0 on any persona = FAIL (tier-gating is non-negotiable)
+- K3 below 80% testable cells = FAIL (coverage is non-negotiable)
+- Payment flow not executed end-to-end when `STITCH_MOCK_MODE=true` = FAIL
+- Webhook sig verify fail = SEV-1 FAIL
+- `db.set_user_tier()` used anywhere in rubric runner = QA-INVALID
+- SuperSport logo missing or non-red on broadcast card = C3 deduction (-1.0) + SEV-3
+- Kickoff time mismatch vs `supersport_scraper` source = C1 deduction (-2.0) + SEV-2
+
+#### TG Community Image Law (BUILD-NEWS-IMAGE-TG-COMMUNITY-01 — LOCKED 21 Apr 2026)
+- All TG Community posts of type `news`, `build_up`, `market`, `recap` MUST include an NB2
+  image (`asset_link` set) before the MOQ row is created or approved.
+- WA Channel is TEXT-ONLY. Never set `asset_link` on WA Channel rows.
+- Image generator: `publisher/autogen/_tg_community_image.py`
+  - Square canvas 1024×1024 (1:1). No compositor, no borders.
+  - Gemini Flash primary (`GEMINI_API_KEY`), Pillow fallback.
+  - Hard gate: if generation fails, do NOT queue the TG Community row. Alert EdgeOps.
+- Asset dir: `/var/www/mzansiedge-wp/assets/tg-community/`
+- Asset URL base: `https://mzansiedge.co.za/assets/tg-community/`
+- `notion_client.create_recap_draft()` accepts `asset_url` kwarg — pass it for TG Community only.
+
+#### Card SQL Market Filter (BUILD-MY-MATCHES-01 — Permanent)
+- Any `SELECT` from `odds_latest` or `odds_snapshots` that consumes
+  `home_odds`, `draw_odds`, or `away_odds` for display **MUST** include
+  `AND market_type = '1x2'` in the `WHERE` clause.
+- Without this filter the first row per bookmaker can be `over_under_2.5`
+  or `btts`, which sets draw_odds to 0 and populates home/away with
+  BTTS values instead of win odds — corrupting all three market values.
+
+#### GATE_MATRIX Renderer Rules (TIER-GATE-IMPL-01 — Permanent)
+- **PARTIAL** access (`Bronze→Silver`): show return amount ONLY (`R{return} on R300`).
+  Never call `_section_edge()` from `_render_partial()`. It exposes odds, EV%, bookmaker.
+- **BLURRED** access (`Bronze→Gold`): match header + badge + return hint only.
+- **LOCKED** access (`Bronze→Diamond`, `Gold→Diamond`): match header + badge + 🔒 only.
+- `check_gate_matrix()` in `scrapers/health_monitor.py` validates all 12 GATE_MATRIX
+  combinations at runtime — keep it registered in `ALL_CHECKS`.
+- Regression guard: `tests/contracts/test_gate_contracts.py` — 155 tests cover the full matrix.
+
+#### SQLite Connection Rules (W81-DBLOCK — Permanent)
+- Never call `sqlite3.connect()` directly.
+- Bot code uses the approved connection factory for bot-side SQLite access.
+- Scraper code uses `scrapers.db_connect.connect_odds_db(...)`.
+- Approved factories enforce WAL mode, `busy_timeout=30000`, and
+  `check_same_thread=False`.
+- Regression guard: `tests/contracts/test_db_connection.py`.
+
+#### Singleton Enforcement (RUNTIME-R1 — Permanent)
+- `_acquire_pid_lock()` must use `fcntl.flock(LOCK_EX | LOCK_NB)` on
+  `/tmp/mzansiedge.pid`.
+- `_PID_LOCK_FD` stays open for the full process lifetime so the kernel-held
+  lock cannot be dropped early.
+- Do not replace the flock-based lock with a soft PID-file-only check.
+- `_log_startup_truth()` must emit PID, git SHA, `bot.py` mtime, and lock
+  status to logs and Sentry.
+
+#### Async / Blocking Patterns (RUNTIME-R2 — Permanent)
+- `check_same_thread=False` on approved SQLite connections is locked.
+- Any synchronous SQLite work inside an async handler must run inside
+  `asyncio.wait_for(asyncio.to_thread(...), timeout=3.0)` with graceful
+  fallback.
+- Do not add direct blocking DB calls inside async handlers.
+
+#### Settlement Normalization (RUNTIME-R3 — Permanent)
+- `_normalise_team_key()` in `results_collector.py` uses NFKD decomposition.
+- Do not revert settlement normalization to bare `re.sub(...)`.
+- `_TEAM_ALIASES` in `settlement.py` is the bridge for cross-system team-name
+  divergence. When adding leagues, verify both pipelines normalize to the same
+  keys.
+
+#### Sentry Instrumentation (SENTRY-F2 — Permanent)
+- Cron monitors belong after early-return time guards and must call
+  `_mon.done()` on success and `_mon.done(exc)` on exception exits.
+- `edge:detail` and `handle_tip_detail` entry instrumentation stays in place.
+- Do not remove or bypass Sentry instrumentation without Controller approval.
+
+#### Payment Integration — Stitch Express (INV-STITCH-RECURRING-01 — 22 Apr 2026)
+- **Recurring subscriptions use `POST https://express.stitch.money/api/v1/subscriptions`**,
+  NOT the GraphQL Card Consent flow in Stitch's public docs. Stitch manages the
+  recurring charge schedule server-side — do not build a renewal cron.
+- Auth scope: `client_recurringpaymentconsentrequest` (single scope —
+  `transaction_initiate` is NOT needed on Express).
+- `recurrence` enum is case-sensitive and RRULE-style:
+  - `MONTHLY` requires `interval` + `byMonthDay` (1–31); `byMonthDay` is mandatory.
+  - `YEARLY` requires `interval` + `byMonth` (1–12) + `byMonthDay`.
+  - `DAILY` requires `interval` only.
+  - `WEEKLY` is NOT supported on Express.
+- `payerId` is a merchant-chosen opaque string — use `str(telegram_user_id)`.
+- `endDate` is optional — omit for open-ended subscriptions.
+- Full schema, request bodies, probe history: INV-STITCH-RECURRING-01 Notion report.
+- Failed charges: Stitch retries daily for 3 days then marks `FAILED`. No API
+  revival — bot must detect via webhook and prompt re-subscribe.
+- One-off payments (founding tier) continue to use `POST /api/v1/payment-links`
+  with scope `client_paymentrequest` — unchanged.
+
+#### API-Docs Access Pattern (Permanent)
+- **`express.stitch.money/api-docs` is a JavaScript SPA.** WebFetch returns only the
+  HTML shell, not the rendered spec. Same applies to any Swagger UI / Redoc docs site.
+- When investigating a payment-provider (or any SaaS) API whose docs render
+  client-side, use this order:
+  1. Probe raw OpenAPI JSON: `/swagger.json`, `/openapi.json`, `/v3/api-docs`,
+     `/api-docs.json`. Beware of UA-based redirects — try both a plain UA and a
+     browser UA.
+  2. Ask the user to paste the relevant schema section from their dashboard.
+  3. Render the SPA via `mcp__playwright__browser_navigate` + `browser_snapshot`.
+  4. Live-probe the endpoint with progressive POSTs (only if the 400 responses
+     return helpful field errors).
+- Never assume WebFetch output reflects the full spec when the page is a SPA.
+
+#### Social Ops Task Pane — Notion Block Update (TASK-PANE-01 — Permanent)
+- LinkedIn daily sheet items are Notion **block** IDs (to_do type), NOT page IDs.
+- `api_task_hub_linkedin_sent` MUST use `PATCH /v1/blocks/{id}` with `{"to_do": {"checked": True}}`.
+- Never use `PATCH /v1/pages/{id}` for LinkedIn task completion — Notion returns 404.
+- Cache key for LinkedIn ledger invalidation: `linkedin_daily` (not `linkedin_ledger`).
+
+### Notification Content Laws (Constitutional)
+1. No win guarantees. Never say "guaranteed winner" or "sure bet."
+2. Show losses with the same prominence as wins.
+3. No aggressive CTAs after losing streaks. Three or more misses suppress
+   upgrade CTAs for 48 hours.
+4. Quiet confidence tone. Let numbers speak. One emoji per section maximum.
+5. Responsible gambling footer is required on monthly reports, trial messages,
+   and re-engagement nudges.
+6. Never hide or soften a miss.
+
+(See also the operational expansion under `## NOTIFICATION CONTENT LAWS (LOCKED — 4 March 2026)` further down.)
+
+### Conventions (Constitutional)
+- HTML `parse_mode` across Telegram messaging.
+- Max two buttons per row for mobile.
+- Callback routing uses `prefix:action` patterns.
+- Use `↩️` rather than `🔙`.
+- Show `.co.za` bookmaker names for South African display.
+- Sharp books are for internal probability only and must never appear in
+  user-facing copy.
+
+(See also the implementation conventions under `## Conventions` further down.)
+
+### Evidence and Verification Rules
+- Read the relevant system state before acting. Do not guess.
+- Never claim a fix works without running the checks that prove it.
+- Use the repo test gates that match the wave scope.
+- For production-impacting waves, validate against Sentry before and after.
+- A fix is not done until verification evidence exists and recurring signals
+  stay clean.
+- Missing instrumentation is itself a defect.
+
+Verification commands (MUST use safe wrapper — see QA-SAFE-1):
+```bash
+bash scripts/qa_safe.sh              # full suite (bounded, serialised)
+bash scripts/qa_safe.sh gate         # wave completion gate (L1-L4)
+bash scripts/qa_safe.sh contracts    # contract tests only
+```
+
+QA rubric (pre-launch gate): `ops/QA-RUBRIC-E2E.md` — v4.0 (INV-QA-RUBRIC-01, 2026-04-23).
+Inherits `ops/QA-RUBRIC-CARDS-v3.md` section 1 anti-fluff rules and section 8 vision model.
+Launch requires three consecutive PASS verdicts on three separate days.
+Runner: `python -m tests.qa.rubric_runner --personas P1,P2,P3,P4 --output reports/rubric-YYYYMMDD-HHMM.md`
+
+### Escalation Rules
+- Escalate reopened Sentry regressions to Controller.
+- Escalate any new P0 or P1 issue not caused by the current wave.
+- Muting or downgrading Sentry alerts requires Controller approval.
+- Never skip hooks with `--no-verify` without explicit Controller approval.
+- If a brief conflicts with a locked rule, stop and escalate rather than
+  improvising.
+
+### Agent Governance
+- Authority order is: this file (`bot/CLAUDE.md` — both constitutional and
+  repo-reference after OPS-CLAUDEMD-CONSOLIDATION-01), executor playbooks,
+  wave reports, then memory artifacts.
+- The `## ⚙️ Operations & Deployment` section above is the constitutional
+  source of truth. The remainder of this file is repo reference: architecture,
+  features, callbacks, DB models, testing, and wave history.
+- `CODEX.md` is executor behavior only and is subordinate to this file.
+- Wave history belongs in git and reports, not at the top of this file.
+
 ## Overview
 AI-powered sports betting Telegram bot for South Africa. Uses python-telegram-bot v20+ (PTB), Claude API for AI tips, The Odds API for live odds, and async SQLAlchemy for persistence.
 
@@ -3091,7 +3386,7 @@ All `_render_setup_*` and `_render_baseline_*` helpers in `narrative_spec.py` MU
 
 ### Rule 13 — Canonical QA Gallery commit discipline (locked 2026-04-28, OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01)
 
-`static/qa-gallery/canonical/**` is the design source of truth — hand-curated by Paul + Claude. Two consecutive audits (INV-NARRATIVE-AUDIT-LAUNCH-DAY-VALIDATION-01 HG-2 and OPS-COMMIT-RECOVER-FIX-NARRATIVE-NO-EDGE-FAIR-VALUE-FALLBACK-01 pre-flight) flagged canonical/ files leaking into the wrong commit across parallel agent sessions. **Canonical writes are atomic-commit-only. The curatorial agent MUST run `git add static/qa-gallery/canonical/...` and `git commit -m "canonical(qa-gallery): ..."` in a single transaction.** Leaving canonical/ files staged across other lanes' edits is forbidden — enforced by the pre-commit hook `.githooks/pre-commit` (active when `core.hooksPath = .githooks`; install on a fresh clone via `bash scripts/install_git_hooks.sh`) which calls `scripts/canonical_lane_check.sh` and aborts on any commit that co-stages files under `static/qa-gallery/canonical/` with files outside that prefix. Auto-regen pipelines write to `static/qa-gallery/latest/` and `static/qa-gallery/YYYY-MM-DD/` ONLY. Never to `canonical/`. Emergency override (audited): `ALLOW_CANONICAL_MIX=1 git commit ...` — document the reason in the commit message. Regression guard: `tests/contracts/test_canonical_lane_discipline.py` (15 tests). The hook closes commit-time race surfaces 1 (`git add .` co-staging) and 4 (cross-session staging confusion); race surfaces 2 (stash sweep — pathspec must exclude `':!static/qa-gallery/canonical'`) and 3 (`git clean -fd`) remain governed by the constitutional `/home/paulsportsza/CLAUDE.md` "Canonical QA Gallery — Hand-Curated, Do Not Touch" rule.
+`static/qa-gallery/canonical/**` is the design source of truth — hand-curated by Paul + Claude. Two consecutive audits (INV-NARRATIVE-AUDIT-LAUNCH-DAY-VALIDATION-01 HG-2 and OPS-COMMIT-RECOVER-FIX-NARRATIVE-NO-EDGE-FAIR-VALUE-FALLBACK-01 pre-flight) flagged canonical/ files leaking into the wrong commit across parallel agent sessions. **Canonical writes are atomic-commit-only. The curatorial agent MUST run `git add static/qa-gallery/canonical/...` and `git commit -m "canonical(qa-gallery): ..."` in a single transaction.** Leaving canonical/ files staged across other lanes' edits is forbidden — enforced by the pre-commit hook `.githooks/pre-commit` (active when `core.hooksPath = .githooks`; install on a fresh clone via `bash scripts/install_git_hooks.sh`) which calls `scripts/canonical_lane_check.sh` and aborts on any commit that co-stages files under `static/qa-gallery/canonical/` with files outside that prefix. Auto-regen pipelines write to `static/qa-gallery/latest/` and `static/qa-gallery/YYYY-MM-DD/` ONLY. Never to `canonical/`. Emergency override (audited): `ALLOW_CANONICAL_MIX=1 git commit ...` — document the reason in the commit message. Regression guard: `tests/contracts/test_canonical_lane_discipline.py` (15 tests). The hook closes commit-time race surfaces 1 (`git add .` co-staging) and 4 (cross-session staging confusion); race surfaces 2 (stash sweep — pathspec must exclude `':!static/qa-gallery/canonical'`) and 3 (`git clean -fd`) remain governed by the constitutional "Canonical QA Gallery — Hand-Curated, Do Not Touch" rule under `## ⚙️ Operations & Deployment` → `### Locked Rules — Do Not Bypass` in this file (consolidated from `/home/paulsportsza/CLAUDE.md` under OPS-CLAUDEMD-CONSOLIDATION-01, 2026-04-29).
 
 ### Rule 14 — Verdict templates are tier-aware (locked 2026-04-28, FIX-NARRATIVE-BOILERPLATE-VERDICT-TEMPLATE-01)
 
