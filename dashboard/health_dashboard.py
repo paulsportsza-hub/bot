@@ -4057,6 +4057,7 @@ def render_automation_content() -> str:
 .so-tl-icon-btn.so-tl-icon-empty{--status-color:#ef4444;}
 .so-tl-icon-btn.so-tl-icon-empty svg{animation:so-tl-reel-pulse 900ms ease-in-out infinite;color:#ef4444;stroke-dasharray:3 3;}
 .so-tl-icon-btn.so-tl-reel-overdue svg{color:#c91e1e;}
+.so-tl-icon-btn.so-tl-reel-queued svg{color:#22c55e;}
 .so-tl-reel-state-lbl{position:absolute;bottom:-13px;left:50%;transform:translateX(-50%);background:#ef4444;color:#fff;font-family:var(--font-m);font-size:7px;font-weight:700;letter-spacing:0.04em;padding:1px 4px;border-radius:2px;white-space:nowrap;pointer-events:none;line-height:1.3;}
 .so-tl-icon-btn.so-tl-reel-overdue .so-tl-reel-state-lbl{background:#c91e1e;}
 @keyframes so-tl-reel-lbl-pulse{0%,100%{opacity:1;}50%{opacity:0.65;}}
@@ -4121,6 +4122,7 @@ def render_automation_content() -> str:
 .so-rup-tier-silver{background:rgba(148,163,184,0.14);color:#cbd5e1;border:1px solid rgba(148,163,184,0.35);}
 .so-rup-card-wrap{display:flex;flex-direction:column;gap:8px;background:#0a0a0a;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
 .so-rup-card-img{display:block;width:100%;height:auto;max-height:min(55vh,520px);object-fit:contain;background:#0a0a0a;}
+.so-rup-card-video{display:block;width:100%;height:auto;max-height:min(55vh,520px);background:#0a0a0a;}
 .so-rup-master{display:block;width:100%;max-height:min(55vh,520px);background:#000;}
 .so-rup-card-actions{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;background:var(--surface-alt);border-top:1px solid var(--border);}
 .so-rup-act{flex:1 1 auto;min-width:110px;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-family:var(--font-m);font-size:11px;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:6px 10px;cursor:pointer;text-decoration:none;transition:border-color 150ms,color 150ms,background 150ms;}
@@ -4607,6 +4609,10 @@ function renderRow(ch,ri){
     var cls='so-tl-icon-btn';
     if(p.reel_state==='needs_upload')cls+=' so-tl-reel-flash';
     else if(p.reel_state==='overdue')cls+=' so-tl-reel-overdue';
+    // FIX-IG-REEL-WIDGET-POST-UPLOAD-01 (AC-4): once the kit is queued/published
+    // (master.mp4 uploaded), flip the lane glyph to the fulfilled colour so it
+    // visually separates from sibling slots still awaiting their asset.
+    else if(p.reel_state==='queued'||p.reel_state==='published')cls+=' so-tl-reel-queued';
     var reelTooltip=p.reel_state==='needs_upload'?'Reel kit needed — not uploaded yet':p.reel_state==='overdue'?'Reel past scheduled time — missed':'';
     // INV-DASH-FIXES-REGRESSION-01: 'NEEDS UPLOAD' label removed — red flashing
     // pill (.so-tl-reel-flash) is sufficient signal. 'MISSED' retained for
@@ -5070,12 +5076,28 @@ function renderReelUploadPanel(p){
       pivotBanner='<div class="so-rup-pivot">↪ '+eH(pivotedFrom)+' missed — showing next reel ('+eH(datePart)+')</div>';
     }
   }
-  // Card preview — mirrors Task Hub reel card (image + download)
+  // Card preview — mirrors Task Hub reel card (image + download).
+  // FIX-IG-REEL-WIDGET-POST-UPLOAD-01 (AC-1): once master.mp4 is bound to the
+  // row, render an HTML5 <video> preview (poster=card image, controls) so the
+  // widget shows the actual uploaded asset instead of the static card image.
+  // Cache-bust via mtime when the server provides one, else current timestamp.
   var cardBlock='';
   if(cardUrl){
+    var mediaInner;
+    if(masterUrl){
+      var _vBust=p.reel_master_mtime||Date.now();
+      var _vSrc=masterUrl+(masterUrl.indexOf('?')>=0?'&':'?')+'v='+encodeURIComponent(_vBust);
+      mediaInner='<video class="so-rup-card-video" preload="metadata" controls playsinline'+
+        ' poster="'+eA(cardUrl)+'"'+
+        ' src="'+eA(_vSrc)+'">'+
+        'Your browser does not support HTML5 video.'+
+      '</video>';
+    } else {
+      mediaInner='<img class="so-rup-card-img" loading="lazy" alt="Reel card preview" src="'+eA(cardUrl)+'">';
+    }
     cardBlock=''+
       '<div class="so-rup-card-wrap">'+
-        '<img class="so-rup-card-img" loading="lazy" alt="Reel card preview" src="'+eA(cardUrl)+'">'+
+        mediaInner+
         '<div class="so-rup-card-actions">'+
           '<a class="so-rup-act" href="'+eA(cardUrl)+'" download="'+eA((pickId?('card_'+pickId+'.png'):'card.png'))+'" aria-label="Download card">'+_ICO_DL+' Download card</a>'+
           (masterUrl
@@ -5159,11 +5181,33 @@ function soReelUploadFile(file,rowId,date){
         // Show success
         if(drop)drop.innerHTML='<div style="color:var(--green);text-align:center">✅ Uploaded — queued for 19:00 SAST</div>';
         if(status){status.textContent='Master MP4 uploaded. Refreshing timeline…';status.className='so-rup-status success';}
-        // Instant local glyph repaint: strip flash class
+        // FIX-IG-REEL-WIDGET-POST-UPLOAD-01 (AC-4): instant timeline glyph
+        // repaint — strip the pulsing flash class so the lane icon flips to
+        // its queued/completed colour without waiting on refreshTimeline().
         var glyphBtn=document.querySelector('[data-post-id="'+rowId+'"]');
-        if(glyphBtn){glyphBtn.classList.remove('so-tl-reel-flash');}
+        if(glyphBtn){
+          glyphBtn.classList.remove('so-tl-reel-flash');
+          glyphBtn.classList.remove('so-tl-reel-overdue');
+          glyphBtn.classList.add('so-tl-reel-queued');
+          glyphBtn.setAttribute('data-reel-state','queued');
+        }
+        // FIX-IG-REEL-WIDGET-POST-UPLOAD-01 (AC-2/AC-3): instant footer
+        // decrement so the IG pulse + badge react in the same frame as the
+        // upload — _soChDecrement is the same single source of truth used by
+        // the Task Hub Mark Uploaded flow. _loadSoTaskPills then re-syncs
+        // from /admin/api/task-hub/data which now excludes uploaded kits via
+        // _ig_uploaded_pick_ids() (server-side authoritative).
+        if(typeof _soChDecrement==='function')_soChDecrement('reels');
+        if(typeof _loadSoTaskPills==='function')_loadSoTaskPills();
         // Force timeline refresh (will confirm queued state from server)
         if(typeof refreshTimeline==='function')refreshTimeline();
+        // FIX-IG-REEL-WIDGET-POST-UPLOAD-01 (AC-1): re-render the widget so
+        // the user sees the <video> preview with the freshly uploaded master
+        // (instead of the static card image they had before the upload).
+        // Small delay lets the success indicator land before the panel swaps.
+        setTimeout(function(){
+          if(typeof loadPreview==='function')loadPreview(rowId);
+        },600);
       } else {
         if(status){status.textContent='Upload failed: '+(d.error||'unknown error');status.className='so-rup-status error';}
       }
@@ -6305,10 +6349,24 @@ def _fetch_task_hub_data() -> dict:
 
     def _do_reels():
         try:
-            return _scan_reel_kits(today)
+            kits = _scan_reel_kits(today)
         except Exception as e:
             log.warning(f"[task-hub] reel scan failed: {e}")
             return []
+        # FIX-IG-REEL-WIDGET-POST-UPLOAD-01 (AC-2/AC-3): _scan_reel_kits checks
+        # _REEL_MASTERS_ROOT for has_master, but the dashboard widget upload
+        # flow writes to _REEL_FINALS_ROOT/<date>/final/<row_id>.mp4. Without
+        # this cross-check, kits remain in the actionable list after upload —
+        # the IG footer pulse stays on and the badge never decrements.
+        # Single source of truth: an IG MOQ row scheduled today whose
+        # _reel_has_final() is True is queued/published — strip its kit.
+        try:
+            uploaded_pick_ids = _ig_uploaded_pick_ids(today, kits)
+            if uploaded_pick_ids:
+                kits = [k for k in kits if (k.get("pick_id") or "") not in uploaded_pick_ids]
+        except Exception as e:
+            log.warning(f"[task-hub] IG MOQ cross-check failed: {e}")
+        return kits
 
     def _do_fb():
         try:
@@ -9333,6 +9391,63 @@ def _reel_has_final(page_id: str, date_str: str) -> bool:
     return os.path.isfile(os.path.join(_REEL_FINALS_ROOT, date_str, "final", f"{page_id}.mp4"))
 
 
+def _ig_uploaded_pick_ids(date_str: str, kits: list[dict]) -> set[str]:
+    """Return the set of pick_ids whose IG MOQ row already has a master mp4 on disk.
+
+    FIX-IG-REEL-WIDGET-POST-UPLOAD-01 (AC-2/AC-3) — single source of truth for the
+    IG footer pulse + badge. _scan_reel_kits only checks _REEL_MASTERS_ROOT
+    (public path), but the dashboard widget upload flow writes to
+    _REEL_FINALS_ROOT/<date>/final/<row_id>.mp4. This helper bridges the gap by
+    cross-referencing IG MOQ rows scheduled today against _reel_has_final()
+    (which checks the finals dir) and matching them back to on-disk kits via
+    pick_team in the MOQ title (mirrors _build_so_timeline._best_kit_for).
+    Falls back to a 1:1 single-kit/single-final mapping when no team match
+    is available, then returns an empty set on any error so the caller never
+    fails closed (kits stay actionable on lookup failure).
+    """
+    if not date_str or not kits:
+        return set()
+    try:
+        items, _ = _fetch_marketing_queue()
+    except Exception:
+        return set()
+    if not items:
+        return set()
+    uploaded_ids: set[str] = set()
+    matched_rows = 0
+    for item in items:
+        if (item.get("channel") or "").strip().lower() != "instagram":
+            continue
+        sched = item.get("scheduled_time") or ""
+        if not sched.startswith(date_str) and not _is_today_sast(sched):
+            continue
+        row_id = item.get("id") or ""
+        if not row_id or not _reel_has_final(row_id, date_str):
+            continue
+        matched_rows += 1
+        title_lo = (item.get("title") or "").lower()
+        title_raw = item.get("title") or ""
+        matched = False
+        for k in kits:
+            team_lo = (k.get("pick_team") or "").lower()
+            tier_k = (k.get("tier") or "").upper()
+            if team_lo and team_lo in title_lo:
+                uploaded_ids.add(k.get("pick_id") or "")
+                matched = True
+                break
+            if tier_k and tier_k in title_raw:
+                uploaded_ids.add(k.get("pick_id") or "")
+                matched = True
+                break
+        # 1:1 fallback — exactly one kit and exactly one finalised IG MOQ
+        # row for the date is the typical case, so map them directly when
+        # title matching produced nothing.
+        if not matched and len(kits) == 1 and matched_rows == 1:
+            uploaded_ids.add(kits[0].get("pick_id") or "")
+    uploaded_ids.discard("")
+    return uploaded_ids
+
+
 def _so_platform_icon_svg(ck: str) -> str:
     """Inline SVG platform icon for the 7 publisher channels. 20×20, currentColor stroke."""
     _ICONS = {
@@ -10117,6 +10232,7 @@ def api_so_post(post_id: str):
     # directly on the next thing that needs doing.
     reel_card_url = ""
     reel_master_url = ""
+    reel_master_mtime = 0  # epoch seconds of master.mp4 mtime when file exists
     reel_pick_id = ""
     reel_tier = ""
     reel_pivoted_from = ""  # set when overdue → next-day pivot fires
@@ -10198,6 +10314,18 @@ def api_so_post(post_id: str):
             reel_card_url = _reel_asset_url(_effective_date, reel_pick_id, _match["card"])
             if reel_final_out:
                 reel_master_url = f"{_REEL_PUBLIC_BASE}/{_effective_date}/{reel_pick_id}_master.mp4"
+                # FIX-IG-REEL-WIDGET-POST-UPLOAD-01 (AC-1): expose mtime so the
+                # widget's <video> tag can cache-bust on the actual file rather
+                # than per-render — keeps the browser cache warm between
+                # re-renders but invalidates after every fresh upload.
+                _master_fs_path = os.path.join(
+                    _REEL_FINALS_ROOT, _effective_date, "final", f"{post_id}.mp4"
+                )
+                try:
+                    if os.path.isfile(_master_fs_path):
+                        reel_master_mtime = int(os.path.getmtime(_master_fs_path))
+                except OSError:
+                    pass
             # FIX-DASH-REEL-WIDGET-01: include VOs in widget payload
             for _vo_name in (_match.get("vos") or []):
                 _vo_url = _reel_asset_url(_effective_date, reel_pick_id, _vo_name)
@@ -10239,6 +10367,7 @@ def api_so_post(post_id: str):
         "reel_has_final":  reel_final_out,
         "reel_card_url":   reel_card_url,
         "reel_master_url": reel_master_url,
+        "reel_master_mtime": reel_master_mtime,
         "reel_pick_id":    reel_pick_id,
         "reel_tier":       reel_tier,
         "reel_pivoted_from": reel_pivoted_from,
