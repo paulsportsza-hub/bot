@@ -1180,6 +1180,40 @@ _FIXTURE_DISCOVERY_SOURCES = [
 _FIXTURE_TERMINAL_STATUSES = {"Finished", "Cancelled"}
 
 
+# FIX-PREGEN-EDGE-RESULTS-COUPLING-01 (locked 2026-04-28).
+# Pregen writes only for matches that already have an unsettled edge_results row
+# (the deeplink resolver requires presence in edge_results to serve a card).
+# The allowlist is an explicit escape valve for warm-coverage cases where we
+# want pregen to seed narrative_cache for an entire league regardless of edge
+# presence (e.g. league-wide preview content). Default empty: zero ghost-cache
+# writes, full intersection coupling.
+_PREGEN_WARM_COVERAGE_ALLOWLIST: frozenset[str] = frozenset()
+
+
+def _load_unsettled_edge_match_keys(db_path: str) -> set[str]:
+    """Return distinct match_keys with an unsettled edge_results row.
+
+    Mirrors the deeplink resolver's preference (`ORDER BY result IS NULL DESC`)
+    by selecting only rows where result IS NULL. Returns an empty set on any
+    DB error so the caller can fall through to the allowlist branch and never
+    crash the pregen sweep.
+    """
+    try:
+        from scrapers.db_connect import connect_odds_db as _connect_odds_db
+        conn = _connect_odds_db(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT match_key FROM edge_results "
+                "WHERE result IS NULL AND match_key IS NOT NULL"
+            ).fetchall()
+        finally:
+            conn.close()
+        return {r[0] for r in rows if r and r[0]}
+    except Exception as exc:
+        log.warning("_load_unsettled_edge_match_keys: query failed: %s", exc)
+        return set()
+
+
 def _fixture_home_prefix(key: str) -> str:
     """First two underscore-separated words of a normalised team key.
 
@@ -1415,6 +1449,28 @@ def discover_pregen_targets(
             sum(1 for t in targets if t["match_key"][-10:] > _standard_cutoff),
             hours_ahead,
         )
+
+    # FIX-PREGEN-EDGE-RESULTS-COUPLING-01: intersect candidate set with edge_results.match_key
+    # (unsettled) to prevent ghost-cache writes that fail mechanically at the deeplink resolver.
+    # The allowlist (default empty) is an explicit escape valve for warm-coverage cases.
+    edge_match_keys = _load_unsettled_edge_match_keys(path)
+    _raw_count = len(targets)
+    _intersect_kept = sum(1 for t in targets if t["match_key"] in edge_match_keys)
+    _allowlist_kept = sum(
+        1 for t in targets
+        if t["match_key"] not in edge_match_keys
+        and (t.get("league") or "") in _PREGEN_WARM_COVERAGE_ALLOWLIST
+    )
+    targets = [
+        t for t in targets
+        if t["match_key"] in edge_match_keys
+        or (t.get("league") or "") in _PREGEN_WARM_COVERAGE_ALLOWLIST
+    ]
+    log.info(
+        "discover_pregen_targets: edge_results coupling: raw=%d, edge_intersection=%d, "
+        "allowlist_kept=%d, final=%d",
+        _raw_count, _intersect_kept, _allowlist_kept, len(targets),
+    )
 
     log.info(
         "discover_pregen_targets: %d targets (%d from odds_snapshots, %d from fixture tables)",

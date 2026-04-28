@@ -93,8 +93,49 @@ def _make_odds_db(path: str) -> sqlite3.Connection:
         )
     """)
 
+    # edge_results (FIX-PREGEN-EDGE-RESULTS-COUPLING-01: discover_pregen_targets()
+    # now intersects candidates with edge_results.match_key. Tests that expect a
+    # fixture/snapshot to surface MUST also seed edge_results via _seed_edge().)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS edge_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            edge_id TEXT,
+            match_key TEXT,
+            sport TEXT,
+            league TEXT,
+            edge_tier TEXT,
+            composite_score REAL,
+            bet_type TEXT,
+            recommended_odds REAL,
+            bookmaker TEXT,
+            predicted_ev REAL,
+            recommended_at TEXT,
+            match_date TEXT,
+            result TEXT,
+            actual_return REAL,
+            settled_at TEXT,
+            confirming_signals INTEGER,
+            movement TEXT,
+            match_score TEXT
+        )
+    """)
+
     conn.commit()
     return conn
+
+
+def _seed_edge(conn: sqlite3.Connection, match_key: str) -> None:
+    """Seed an unsettled edge_results row so the coupling filter accepts the candidate.
+
+    FIX-PREGEN-EDGE-RESULTS-COUPLING-01: discover_pregen_targets() filters candidates
+    against unsettled edge_results.match_key. Without a matching row the candidate
+    is dropped (treated as ghost-cache risk).
+    """
+    conn.execute(
+        "INSERT INTO edge_results (match_key, result, recommended_at, edge_tier) "
+        "VALUES (?, NULL, ?, 'gold')",
+        (match_key, datetime.now(timezone.utc).isoformat()),
+    )
 
 
 def _tomorrow_date() -> str:
@@ -126,6 +167,7 @@ class TestDiscoveryFindsAllSources:
             "VALUES (?, ?, 'NS', ?, ?)",
             ("IPL", f"{tomorrow} 14:00:00", "Gujarat Titans", "Rajasthan Royals"),
         )
+        _seed_edge(conn, f"gujarat_titans_vs_rajasthan_royals_{tomorrow}")
         conn.commit()
         conn.close()
 
@@ -152,6 +194,7 @@ class TestDiscoveryFindsAllSources:
             "VALUES (?, ?, ?, 'NS', ?, ?)",
             ("UFC Fight Night", tomorrow, "Middleweight", "Dricus Du Plessis", "Israel Adesanya"),
         )
+        _seed_edge(conn, f"dricus_du_plessis_vs_israel_adesanya_{tomorrow}")
         conn.commit()
         conn.close()
 
@@ -176,6 +219,7 @@ class TestDiscoveryFindsAllSources:
             "VALUES (?, ?, 'NS', ?, ?)",
             ("Super Rugby", tomorrow, "Chiefs", "Waratahs"),
         )
+        _seed_edge(conn, f"chiefs_vs_waratahs_{tomorrow}")
         conn.commit()
         conn.close()
 
@@ -200,6 +244,7 @@ class TestDiscoveryFindsAllSources:
             "VALUES (?, 'kaizer_chiefs', 'orlando_pirates', 'psl', 'football', 'betway', '1x2', ?)",
             (f"kaizer_chiefs_vs_orlando_pirates_{tomorrow}", "2026-04-04 06:00:00"),
         )
+        _seed_edge(conn, f"kaizer_chiefs_vs_orlando_pirates_{tomorrow}")
         conn.commit()
         conn.close()
 
@@ -234,6 +279,7 @@ class TestDeduplication:
             "VALUES (?, ?, 'NS', ?, ?)",
             ("IPL", f"{tomorrow} 14:00:00", "Gujarat Titans", "Rajasthan Royals"),
         )
+        _seed_edge(conn, f"gujarat_titans_vs_rajasthan_royals_{tomorrow}")
         conn.commit()
         conn.close()
 
@@ -267,6 +313,7 @@ class TestDeduplication:
             "VALUES (?, ?, 'NS', ?, ?)",
             ("IPL", f"{tomorrow} 14:00:00", "Royal Challengers Bengaluru", "Chennai Super Kings"),
         )
+        _seed_edge(conn, f"royal_challengers_bangalore_vs_chennai_super_kings_{tomorrow}")
         conn.commit()
         conn.close()
 
@@ -301,6 +348,8 @@ class TestDeduplication:
             "VALUES (?, ?, 'NS', ?, ?)",
             ("Super Rugby", tomorrow, "Chiefs", "Waratahs"),
         )
+        _seed_edge(conn, f"gujarat_titans_vs_delhi_capitals_{tomorrow}")
+        _seed_edge(conn, f"chiefs_vs_waratahs_{tomorrow}")
         conn.commit()
         conn.close()
 
@@ -366,6 +415,7 @@ class TestWindowFilter:
             "VALUES (?, ?, 'NS', ?, ?)",
             ("URC", tomorrow, "Leinster", "Munster"),
         )
+        _seed_edge(conn, f"leinster_vs_munster_{tomorrow}")
         conn.commit()
         conn.close()
 
@@ -413,6 +463,7 @@ class TestOddsSnapshotsFallback:
             "VALUES (?, 'wolves', 'aston_villa', 'epl', 'football', 'betway', '1x2', ?)",
             (f"wolves_vs_aston_villa_{tomorrow}", "2026-04-04 06:00:00"),
         )
+        _seed_edge(conn, f"wolves_vs_aston_villa_{tomorrow}")
         conn.commit()
         conn.close()
 
@@ -453,11 +504,21 @@ class TestMissingTables:
                 bookmaker TEXT, market_type TEXT, scraped_at TEXT
             )
         """)
+        # FIX-PREGEN-EDGE-RESULTS-COUPLING-01 requires edge_results presence
+        # for any candidate to surface; missing fixture tables remain a separate
+        # graceful-degradation concern.
+        conn.execute("""
+            CREATE TABLE edge_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_key TEXT, result TEXT, recommended_at TEXT, edge_tier TEXT
+            )
+        """)
         tomorrow = _tomorrow_date()
         conn.execute(
             "INSERT INTO odds_snapshots VALUES (1, ?, 'team_a', 'team_b', 'psl', 'football', 'betway', '1x2', '2026-04-04')",
             (f"team_a_vs_team_b_{tomorrow}",),
         )
+        _seed_edge(conn, f"team_a_vs_team_b_{tomorrow}")
         conn.commit()
         conn.close()
 
