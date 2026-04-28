@@ -254,6 +254,19 @@ _CHANNELS = [
 # is no longer tracked as an automation lane on the social ops timeline.
 _MANUAL_CHANNELS: list[dict] = []
 _CHANNEL_MAP = {c["key"]: c for c in _CHANNELS + _MANUAL_CHANNELS}
+# FIX-DASH-TIKTOK-LANE-REGISTRY-01: single source of truth for the timeline
+# lane order/labels. Both the Task Hub timeline render (was `_TL_CH`) and the
+# Social Ops timeline render (was `_SO_TL_CH`) reference this list, so a future
+# channel add/remove only needs one edit and drift-guard tests catch any
+# regression that re-introduces a duplicate. Order here is the visual order in
+# the timeline widget; labels are the short forms used on lane headers.
+_TIMELINE_CHANNELS: list[tuple[str, str]] = [
+    ("telegram_alerts",    "TG Alerts"),
+    ("telegram_community", "TG Community"),
+    ("whatsapp_channel",   "WA Channel"),
+    ("instagram",          "Instagram"),
+    ("tiktok",             "TikTok"),
+]
 _CHANNEL_SVG = {
     "telegram_alerts":    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.2 3.1L1.9 10.5c-1.3.5-1.3 1.3-.2 1.6l4.9 1.5 1.9 5.9c.2.7.4.8.9.3l2.8-2.7 5.5 4c1 .6 1.7.3 2-.9l3.5-16.5c.4-1.4-.5-2-.9-.4z" fill="#26A5E4"/></svg>',
     "telegram_community": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.2 3.1L1.9 10.5c-1.3.5-1.3 1.3-.2 1.6l4.9 1.5 1.9 5.9c.2.7.4.8.9.3l2.8-2.7 5.5 4c1 .6 1.7.3 2-.9l3.5-16.5c.4-1.4-.5-2-.9-.4z" fill="#179CDE"/></svg>',
@@ -3708,13 +3721,9 @@ def render_automation_content() -> str:
 
     # FB Groups removed 2026-04-25 — manual workflow, not an automation lane.
     # See _MANUAL_CHANNELS comment and the FB Groups task hub pane for the manual queue.
-    _TL_CH = [
-        ("telegram_alerts",    "TG Alerts"),
-        ("telegram_community", "TG Community"),
-        ("whatsapp_channel",   "WA Channel"),
-        ("instagram",          "Instagram"),
-        ("tiktok",             "TikTok"),
-    ]
+    # FIX-DASH-TIKTOK-LANE-REGISTRY-01: alias the canonical _TIMELINE_CHANNELS so
+    # this render path can never drift away from the Social Ops timeline render.
+    _TL_CH = _TIMELINE_CHANNELS
 
     def _icon_for(wt: str, ck: str) -> str:
         w = (wt or "").lower()
@@ -9075,13 +9084,9 @@ def api_social_ops():
 
 # FB Groups removed 2026-04-25 — manual workflow, not an automation lane.
 # The FB Groups task hub pane remains the source of manual posting actions.
-_SO_TL_CH = [
-    ("telegram_alerts",    "TG Alerts"),
-    ("telegram_community", "TG Community"),
-    ("whatsapp_channel",   "WA Channel"),
-    ("instagram",          "Instagram"),
-    ("tiktok",             "TikTok"),
-]
+# FIX-DASH-TIKTOK-LANE-REGISTRY-01: alias the canonical _TIMELINE_CHANNELS so
+# this render path can never drift away from the Task Hub timeline render.
+_SO_TL_CH = _TIMELINE_CHANNELS
 _SO_POSTED_ST = {"published", "done", "complete", "posted"}
 _SO_PENDING_ST = {"pending", "queued", "scheduled", "ready", "approved"}
 _SO_FAILED_ST  = {"failed", "error", "blocked"}
@@ -9728,21 +9733,34 @@ def _build_so_timeline(day_str: str, items: list[dict], now_sast: datetime, aler
         if ck == "tiktok":
             bru_items = _bru_drip_items_for_day(day_str)
             if not bru_items:
-                # BRU-EMPTY-HIDE-01 (2026-04-24): non-BRU day — hide TikTok row entirely.
-                # bru_drip fires on odd days of month only; on even days there is nothing
-                # to act on and the empty row adds noise. Placeholder MOQ stubs are also
-                # suppressed — they exist only to reserve the slot for the cron.
-                continue
-            moq_mins = {p["mins"] for p in posts}
-            for bru in bru_items:
-                conflict = any(abs(bru["mins"] - m) < 30 for m in moq_mins)
-                if conflict:
-                    for p in posts:
-                        if abs(p["mins"] - bru["mins"]) < 30:
-                            p["bru_mismatch"] = True
-                else:
-                    posts.append(bru)
-            ch_dict["bru_empty"] = False
+                # FIX-DASH-TIKTOK-LANE-REGISTRY-01 (2026-04-28) supersedes
+                # BRU-EMPTY-HIDE-01 (2026-04-24): always render the TikTok lane
+                # so the operator can see the channel is configured. On non-BRU
+                # days (bru_drip fires on odd days of month) the lane stays
+                # empty and bru_empty=True signals "drip idle" to the front-end.
+                # Hiding the lane caused a registry-vs-render drift bug (audit
+                # FIX-DASH-TIKTOK-LANE-REGISTRY-01 §5 #10) where _SO_TL_CH
+                # declared TikTok but the timeline never showed it.
+                #
+                # Drop placeholder MOQ stubs (status="scheduled-placeholder")
+                # when there's no real BRU work — they exist only to reserve
+                # the slot for the cron and add visual noise without action.
+                ch_dict["posts"] = [
+                    _p for _p in posts
+                    if (_p.get("status") or "") != "scheduled-placeholder"
+                ]
+                ch_dict["bru_empty"] = True
+            else:
+                moq_mins = {p["mins"] for p in posts}
+                for bru in bru_items:
+                    conflict = any(abs(bru["mins"] - m) < 30 for m in moq_mins)
+                    if conflict:
+                        for p in posts:
+                            if abs(p["mins"] - bru["mins"]) < 30:
+                                p["bru_mismatch"] = True
+                    else:
+                        posts.append(bru)
+                ch_dict["bru_empty"] = False
         channels.append(ch_dict)
 
     # AC-B: inject today's Alerts bot sends into the telegram_alerts timeline lane
