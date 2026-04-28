@@ -432,6 +432,18 @@
             margin-top: 5px;
             white-space: pre-line;
         }
+        /* FIX-CARD-SURFACE-TIER-CAP-REASON-01: structural cap reason beneath verdict.
+           Quieter than the verdict prose — italic, dimmer, smaller. Reads as context,
+           not as a competing call. */
+        .cap-reason-text {
+            font-size: 11px;
+            color: #888888;
+            font-style: italic;
+            line-height: 1.4;
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px dashed #2A2A2A;
+        }
     </style>
 </head>
 <body>
@@ -593,6 +605,11 @@
     <div class="verdict-section">
         <div class="section-hdr" style="color: #FFB300;">🏆 VERDICT</div>
         <div class="verdict-text">{{ verdict }}</div>
+        {# FIX-CARD-SURFACE-TIER-CAP-REASON-01: structural cap explanation beneath verdict.
+           Hidden on uncapped edges so Diamond/Gold cards stay clean. #}
+        {% if cap_reason %}
+        <div class="cap-reason-text">🔒 {{ cap_reason }}</div>
+        {% endif %}
     </div>
     {% endif %}
 

@@ -231,6 +231,36 @@ def _empty_data() -> dict:
     }
 
 
+def _resolve_cap_reason(tip: dict, tier_key: str | None) -> str:
+    """FIX-CARD-SURFACE-TIER-CAP-REASON-01: derive cap reason from (league, tier).
+
+    Returns the plain-English cap reason when the tip's league has a structural
+    LEAGUE_TIER_CAP and the resolved tier matches that cap. Empty string for
+    uncapped edges (AC-6 regression guard — irrelevant cap text MUST NOT appear
+    on cards where no cap fired).
+
+    Reads from scrapers.edge.tier_engine to keep the helper as the single source
+    of truth (AC-2: sibling helper to assign_tier()).
+    """
+    if not tier_key:
+        return ""
+    league = (
+        tip.get("league_key")
+        or tip.get("league")
+        or tip.get("league_display")
+        or ""
+    )
+    if not league:
+        return ""
+    league_lower = str(league).lower().strip().replace(" ", "_")
+    try:
+        from scrapers.edge.tier_engine import get_league_cap_reason
+    except Exception:
+        return ""
+    reason = get_league_cap_reason(league_lower, tier_key)
+    return reason or ""
+
+
 def _resolve_tier(tip: dict) -> str | None:
     # Resolution chain for tier badges.
     # `edge_tier` (from edge_results) is the CANONICAL source of truth.
@@ -787,6 +817,11 @@ def build_edge_detail_data(tip: dict, card_width: int = 480) -> dict:
         # Verdict — raw, no injury appending (BUILD-VERDICT-INJURY-SPLIT-01)
         "verdict": tip.get("verdict") or "",
 
+        # FIX-CARD-SURFACE-TIER-CAP-REASON-01: structural cap explanation surfaces
+        # beneath the verdict when LEAGUE_TIER_CAP fires (Super Rugby / Currie Cup
+        # capped at Silver). Empty string for uncapped edges.
+        "cap_reason": _resolve_cap_reason(tip, tier_key),
+
         # Tipsters — FIX 4 (CARD-REBUILD-03A); resolve "Home"/"Away" to team names (D-18)
         "top_tipsters": [
             {**t, "pick": home if t.get("pick") == "Home" else (away if t.get("pick") == "Away" else t.get("pick", ""))}
@@ -1327,6 +1362,30 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
         except Exception:
             pass
 
+    # FIX-CARD-SURFACE-TIER-CAP-REASON-01: surface league cap reason on AI Breakdown.
+    # League is read from edge_results so the helper can detect a structural cap
+    # (Super Rugby / Currie Cup → Silver). Empty string for uncapped edges.
+    cap_reason = ""
+    try:
+        from scrapers.db_connect import connect_odds_db as _ck_connect
+        _ck_conn = _ck_connect(_ODDS_DB)
+        try:
+            _ck_row = _ck_conn.execute(
+                "SELECT league FROM edge_results WHERE match_key = ? LIMIT 1",
+                (match_id,),
+            ).fetchone()
+        finally:
+            try:
+                _ck_conn.close()
+            except Exception:
+                pass
+        if _ck_row and _ck_row[0]:
+            cap_reason = _resolve_cap_reason(
+                {"league_key": str(_ck_row[0])}, edge_tier
+            )
+    except Exception as _ck_exc:
+        log.debug("build_ai_breakdown_data: cap_reason resolve failed: %s", _ck_exc)
+
     return {
         "home": home,
         "away": away,
@@ -1338,4 +1397,5 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
         "risk_html": risk_html,
         "verdict_prose_html": verdict_prose_html,
         "best_bookmaker_key": best_bookmaker_key,
+        "cap_reason": cap_reason,
     }

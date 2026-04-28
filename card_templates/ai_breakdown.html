@@ -157,6 +157,17 @@
             background: rgba(239, 68, 68, 0.12);
             border: 1px solid rgba(239, 68, 68, 0.25);
         }
+        /* FIX-CARD-SURFACE-TIER-CAP-REASON-01: structural cap reason below verdict.
+           Subtle italic line so it reads as context not as a competing call. */
+        .cap-reason-text {
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.55);
+            font-style: italic;
+            line-height: 1.45;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed rgba(255, 255, 255, 0.10);
+        }
 
         /* ── Prose ───────────────────────────────────────────────── */
         .prose {
@@ -230,6 +241,11 @@
                 <span class="sec-tag tag-gold">{{ verdict_tag }}</span>
             </div>
             <div class="prose">{{ verdict_prose_html | safe }}</div>
+            {# FIX-CARD-SURFACE-TIER-CAP-REASON-01: structural cap explanation below verdict.
+               Hidden when no cap fired so Diamond/Gold cards stay clean. #}
+            {% if cap_reason %}
+            <div class="cap-reason-text">🔒 {{ cap_reason }}</div>
+            {% endif %}
         </div>
 
     </div>
