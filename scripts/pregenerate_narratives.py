@@ -198,6 +198,43 @@ _PREGEN_HORIZON_HOURS: int = 240
 _PREGEN_MATCH_CAP: int = 60
 _PREGEN_CONCURRENCY: int = 3
 
+# FIX-PREGEN-DIAMOND-PRIORITY-01 (locked 2026-04-28).
+# Tier priority order — Diamond first, Bronze last. Premium tiers MUST refresh
+# before Bronze when the cap budget is constrained. INV-CORPUS-LIVE-COVERAGE-01
+# measured a 4h11m Diamond blackout pre-fix when Bronze candidates with sooner
+# kickoffs displaced Diamond on cap truncation. Order matches the canonical
+# tier ordering used across GATE_MATRIX (Diamond > Gold > Silver > Bronze).
+_TIER_PRIORITY: dict[str, int] = {
+    "diamond": 0,
+    "gold": 1,
+    "silver": 2,
+    "bronze": 3,
+}
+
+
+def _kickoff_unix(target: dict) -> float:
+    """Extract kickoff timestamp from a pregen candidate; large default for missing.
+
+    Best-effort: any parse failure returns +inf so the candidate sorts last
+    within its tier band. Never raises.
+    """
+    raw = (
+        target.get("_resolved_kickoff")
+        or target.get("kickoff")
+        or target.get("commence_time")
+        or target.get("match_date")
+    )
+    if not raw:
+        return float("inf")
+    try:
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        if isinstance(raw, datetime):
+            return raw.timestamp()
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return float("inf")
+
 
 # W92-VERDICT-QUALITY P3: narrative_skip_log DDL + helpers. Persistent skip counts
 # survive process restarts and give EdgeOps a durable audit trail of which fixtures
@@ -3123,7 +3160,25 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         if _ko <= _horizon_cutoff:
             _edges_in_window.append(_he)
 
-    _edges_in_window.sort(key=lambda e: e["_resolved_kickoff"])
+    # FIX-PREGEN-DIAMOND-PRIORITY-01: tier-priority sort BEFORE _PREGEN_MATCH_CAP
+    # truncation. Premium tiers (Diamond > Gold > Silver) refresh first; Bronze
+    # fills the remainder. Within a tier, nearest kickoff still wins. Replaces
+    # the prior kickoff-only sort that allowed Bronze to displace premium when
+    # the cap fired. The candidate dict carries `tier` from its source builder
+    # (`_edge_from_serving_tip`, `_build_baseline_edge_from_snapshot_row`,
+    # `_build_fixture_only_edge`) — all use lowercase tier strings.
+    _edges_in_window.sort(key=lambda e: (
+        _TIER_PRIORITY.get((e.get("tier") or e.get("edge_tier") or "bronze").lower(), 99),
+        _kickoff_unix(e),
+    ))
+    log.info(
+        "pregen_tier_priority_sort: diamond=%d, gold=%d, silver=%d, bronze=%d, other=%d",
+        sum(1 for e in _edges_in_window if (e.get("tier") or e.get("edge_tier") or "").lower() == "diamond"),
+        sum(1 for e in _edges_in_window if (e.get("tier") or e.get("edge_tier") or "").lower() == "gold"),
+        sum(1 for e in _edges_in_window if (e.get("tier") or e.get("edge_tier") or "").lower() == "silver"),
+        sum(1 for e in _edges_in_window if (e.get("tier") or e.get("edge_tier") or "").lower() == "bronze"),
+        sum(1 for e in _edges_in_window if (e.get("tier") or e.get("edge_tier") or "").lower() not in _TIER_PRIORITY),
+    )
 
     if len(_edges_in_window) > _PREGEN_MATCH_CAP:
         log.warning(
