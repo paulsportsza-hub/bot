@@ -301,6 +301,7 @@ def render_card(row: dict, tier: str, today: str) -> tuple[str, str, dict] | Non
     """Render the reel card PNG. Returns (pick_id, output_path) or None on error."""
     sys.path.insert(0, str(SCRIPT_DIR))
     from render_reel_card import render_reel_card
+    from team_display_names import display_team_name
 
     edge_id  = row["edge_id"]
     pid      = _pick_id(edge_id)
@@ -316,16 +317,18 @@ def render_card(row: dict, tier: str, today: str) -> tuple[str, str, dict] | Non
     stake  = 100
     profit = round(stake * (odds - 1))
 
-    # CARD-CASE-LOCK-01 — template geometry (render_reel_card.py) is tuned for UPPERCASE
-    # caps-height glyphs only. Lowercase descenders (g/j/p/q/y) break gradient mask alignment
-    # in _draw_gradient_text and clip team names. Force .upper() at render boundary.
-    # Do NOT remove even if upstream DB is clean — historical regressions have let mixed-case
-    # reach this function (see .auto-memory/project_card_regression_17apr.md).
+    sport = (row.get("sport") or "").strip().lower()
+
+    # FIX-REEL-KIT-RENDERING-01 — display_team_name() is the canonical short-form
+    # source. It handles raw match-key (punjab_kings), uppercased (PUNJAB_KINGS),
+    # and spaced ("Punjab Kings") forms uniformly and is sport-aware. The card
+    # template geometry is still tuned for UPPERCASE only — display_team_name
+    # always returns uppercase, satisfying CARD-CASE-LOCK-01.
     pick = {
         "tier":          tier,
-        "home_team":     abbr(home.upper()),
-        "away_team":     abbr(away.upper()),
-        "pick_team":     abbr(pick_team.upper()),
+        "home_team":     display_team_name(home, sport),
+        "away_team":     display_team_name(away, sport),
+        "pick_team":     display_team_name(pick_team, sport) if pick_team.lower() != "draw" else "DRAW",
         "league":        row["league"].replace("_", " ").upper(),
         "bet_type":      row["bet_type"],
         "recommended_odds": odds,

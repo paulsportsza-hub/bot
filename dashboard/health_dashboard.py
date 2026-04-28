@@ -4400,6 +4400,9 @@ def render_automation_content() -> str:
 .th-root .row-actions{display:flex;gap:6px;flex-wrap:wrap}
 .th-root .row-actions button,.th-root button{background:var(--surface-alt);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:var(--r);font-size:11px;cursor:pointer;font-family:var(--font-b);display:inline-flex;align-items:center;gap:5px;transition:border-color .18s}
 .th-root .row-actions button:hover,.th-root button:hover{border-color:var(--gold);background:var(--surface)}
+.th-root .th-vo-row{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.th-root .th-vo-link{flex:1 1 30%;padding:5px 4px;background:rgba(248,200,48,.08);color:var(--gold);border:1px solid rgba(248,200,48,.30);border-radius:var(--r);font-size:10.5px;font-weight:700;text-align:center;text-decoration:none;letter-spacing:.4px}
+.th-root .th-vo-link:hover{background:rgba(248,200,48,.18);border-color:var(--gold)}
 .th-root .upload-zone{border:1px dashed rgba(248,200,48,.5);border-radius:var(--r);padding:10px;text-align:center;color:var(--gold);font-size:11px;cursor:pointer;position:relative;transition:all .18s}
 .th-root .upload-zone:hover{background:rgba(248,200,48,.05);border-color:var(--gold)}
 .th-root .upload-zone.done{border-color:var(--green);color:var(--green);border-style:solid;background:rgba(34,197,94,.06)}
@@ -5923,12 +5926,30 @@ def render_reel_kit_page() -> str:
             thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/{thumb_file}"
             card_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/card_{pick_id}.png"
             display_name = pick_id[:12].upper()
+            # FIX-REEL-KIT-RENDERING-01 (AC-4): expose individual VO download links so
+            # Paul can pull MP3s directly into Premiere Pro without round-tripping
+            # the kit zip.
+            vo_links_html = ""
+            for vo_name in (kit.get("vos") or []):
+                vo_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/{vo_name}"
+                # Extract "v1"/"v2"/"v3" from name e.g. vo_<pick>_v1.mp3 \u2192 "VO 1"
+                _vlabel = "VO"
+                if "_v" in vo_name:
+                    try:
+                        _vlabel = "VO " + vo_name.split("_v", 1)[1].split(".", 1)[0]
+                    except Exception:
+                        pass
+                vo_links_html += (
+                    f'<a class="rk-vo-link" href="{_html_mod.escape(vo_url)}" '
+                    f'download target="_blank">\U0001f3a7 {_html_mod.escape(_vlabel)}</a>'
+                )
             cards += f"""<div class="rk-card" style="border-top:3px solid {tier_color}">
   <img class="rk-thumb" src="{_html_mod.escape(thumb_url)}" alt="{_html_mod.escape(display_name)}" loading="lazy">
   <div class="rk-tier" style="color:{tier_color}">{_html_mod.escape(tier_label)}</div>
   <div class="rk-name">{_html_mod.escape(display_name)}</div>
   <div class="rk-status">{status_html}</div>
-  <a class="rk-download" href="{_html_mod.escape(card_url)}" download target="_blank">\u2b07 Download</a>
+  <a class="rk-download" href="{_html_mod.escape(card_url)}" download target="_blank">\u2b07 Card PNG</a>
+  <div class="rk-vos">{vo_links_html}</div>
 </div>"""
         body = f'<div class="rk-grid">{cards}</div>'
     else:
@@ -5948,6 +5969,11 @@ def render_reel_kit_page() -> str:
   border:1px solid rgba(88,166,255,.30);border-radius:5px;font-weight:700;font-size:11px;
   text-decoration:none;}}
 .rk-download:hover{{background:rgba(88,166,255,.22);}}
+.rk-vos{{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;justify-content:center;}}
+.rk-vo-link{{flex:1 1 30%;padding:5px 0;background:rgba(255,210,0,.08);color:var(--amber);
+  border:1px solid rgba(255,210,0,.25);border-radius:4px;font-family:var(--font-m);
+  font-size:10px;font-weight:700;text-align:center;text-decoration:none;letter-spacing:.4px;}}
+.rk-vo-link:hover{{background:rgba(255,210,0,.18);}}
 .rk-empty{{text-align:center;padding:60px 0;color:var(--muted);}}
 </style>
 <div class="rk-page">
@@ -6395,6 +6421,24 @@ def _th_render_reel_card(kit: dict, date: str) -> str:
     dl_btn = (
         f'<button type="button" onclick="thReelDownload(\'{_th_escape(date)}\',\'{_th_escape(pick)}\')">{_TH_SVG_DOWNLOAD} Download kit</button>'
     )
+    # FIX-REEL-KIT-RENDERING-01 (AC-4): expose individual VO download links inline
+    # on the Task Hub card so Paul can pull each MP3 directly into Premiere Pro.
+    vo_links_html = ""
+    if vos:
+        _items = []
+        for vo_name in vos:
+            vo_url = f"https://mzansiedge.co.za/assets/reel-cards/{date}/{pick}/{vo_name}"
+            _vlabel = "VO"
+            if "_v" in vo_name:
+                try:
+                    _vlabel = "VO " + vo_name.split("_v", 1)[1].split(".", 1)[0]
+                except Exception:
+                    pass
+            _items.append(
+                f'<a class="th-vo-link" href="{_th_escape(vo_url)}" '
+                f'download target="_blank">\U0001f3a7 {_th_escape(_vlabel)}</a>'
+            )
+        vo_links_html = '<div class="th-vo-row">' + "".join(_items) + '</div>'
     if has_master:
         upload_zone = (
             f'<div class="upload-zone done">{_TH_SVG_CHECK} Uploaded · queued to MOQ</div>'
@@ -6433,6 +6477,7 @@ def _th_render_reel_card(kit: dict, date: str) -> str:
         {dl_btn}
         {vo_btn}
       </div>
+      {vo_links_html}
       {upload_zone}
     </div>
     """

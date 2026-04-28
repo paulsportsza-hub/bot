@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-render_reel_card.py — MzansiEdge Reel Card Compositing Script v6
-LINE_Y_FIXED = 682 — divider anchor shifted +92px from v5 (590→682).
-Global downward shift: two steps of 46px each (20% of 232px available space).
-Pill shape and text travel together as one unit.
+render_reel_card.py — MzansiEdge Reel Card Compositing Script v6.5
+v6.5 (28 Apr 2026, FIX-REEL-KIT-RENDERING-01): tier rosette overlap fix.
+  - LINE_Y_FIXED: 632 → 700 (cascade shifts down 68px so the medal emoji
+    and the league/team-name block sit clear of the frame-baked rosette).
+  - TIER_EMOJI_Y_NUDGE silver/gold/bronze: -0.20 → -0.50 (lift medal glyph
+    higher within its block so the gap to the league text is ≥40px on every
+    tier). Diamond keeps -0.70.
+  - Behaviour is tier-agnostic — applies to all four tier badges.
 
-v6 changes vs v5:
-  1. LINE_Y_FIXED: 590 → 682  (cascade shifts all elements down 92px)
-  All other fonts, gaps, and draw offsets are IDENTICAL to v5.
+v6 (legacy): LINE_Y_FIXED 590→632, two 46px steps within the available 232px.
 """
 from __future__ import annotations
 import json, sys
@@ -26,7 +28,7 @@ OVAL_H      = OVAL_BOTTOM - OVAL_TOP
 CX          = (OVAL_LEFT + OVAL_RIGHT) // 2
 SCALE       = OVAL_W / 1240
 
-LINE_Y_FIXED = 632  # v6: 590 + 42 (two 46px steps = 20% of 232px space)
+LINE_Y_FIXED = 700  # v6.5: 632 + 68 (clears medal emoji from team-name overlap)
 
 # ── Font paths ─────────────────────────────────────────────────────────────────
 POPPINS_BOLD   = '/usr/share/fonts/truetype/poppins/Poppins-Bold.ttf'
@@ -37,13 +39,13 @@ NOTO_EMOJI     = '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf'
 FRAMES_DIR = Path(__file__).resolve().parent / 'assets'
 TIER_EMOJI = {'diamond': '💎', 'gold': '🥇', 'silver': '🥈', 'bronze': '🥉'}
 
-# v6.1 (17 Apr 2026) — diamond-only visual calibration.
-# Diamond gem renders visually larger than medal glyphs at equal em_h;
-# these dicts shrink + lift the diamond without touching gold/silver/bronze.
+# Tier visual calibration. Diamond gem renders visually larger than medal glyphs
+# at equal em_h, so it carries its own scale. v6.5 lifts silver/gold/bronze
+# medals within their block to clear the team-name headline below.
 TIER_EMOJI_SCALE    = {'diamond': 0.70, 'gold': 1.0, 'silver': 1.0, 'bronze': 1.0}
-TIER_EMOJI_Y_NUDGE  = {'diamond': -0.70, 'gold': -0.20, 'silver': -0.20, 'bronze': -0.20}  # * em_h
+TIER_EMOJI_Y_NUDGE  = {'diamond': -0.70, 'gold': -0.50, 'silver': -0.50, 'bronze': -0.50}  # * em_h
 TIER_LEAGUE_Y_NUDGE = {'diamond': -0.70, 'gold': -0.70, 'silver': -0.70, 'bronze': -0.70}  # * lh
-TIER_TOP_BLOCK_Y_NUDGE = {'diamond': -15, 'gold': 0, 'silver': 0, 'bronze': 0}  # pixels, -ve = up (v6.3)
+TIER_TOP_BLOCK_Y_NUDGE = {'diamond': -15, 'gold': 0, 'silver': 0, 'bronze': 0}  # pixels, -ve = up
 PICK_TEAM_Y_NUDGE = 5  # pixels, +ve = down. Baseline fix for orange pick_team glyph (v6.2)
 
 # ── Colours ────────────────────────────────────────────────────────────────────
