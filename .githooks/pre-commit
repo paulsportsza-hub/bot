@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Tracked pre-commit hook. Enable on a fresh clone with:
+#   bash scripts/install_git_hooks.sh
+# (sets git config core.hooksPath .githooks)
+#
+# Order of checks:
+#   1. Canonical lane discipline (OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01) — fail-fast
+#   2. Secret scan
+#   3. Pre-merge gate (full local test suite)
+echo "Running pre-merge gate (local)..."
+
+# === CANONICAL LANE DISCIPLINE (OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01) ===
+# Reject mixed-staging of canonical/ + non-canonical/ files.
+# Closes commit-time race surface where another lane's `git add .` or
+# stale-index commit accidentally bundles canonical/ work into a wave commit.
+if ! ./scripts/canonical_lane_check.sh; then
+    exit 1
+fi
+
+# === SECRET SCAN: check staged files for hardcoded secrets ===
+STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep -E '\.(py|sh|cfg|ini|yaml|yml|toml|txt|md)$' || true)
+if [ -n "$STAGED" ]; then
+    # Patterns: Telegram bot token, Bright Data passwords, known token fragments
+    SECRET_HITS=$(git diff --cached -- $STAGED 2>/dev/null \
+        | grep '^+' | grep -v '^+++' \
+        | grep -E '[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}|g6aqv3ydjg50|hbse7mjqk2b3|4148a9c8-d613' \
+        || true)
+    if [ -n "$SECRET_HITS" ]; then
+        echo ""
+        echo "ERROR: Hardcoded secret detected in staged files — aborting commit."
+        echo "Move the value to .env and reference it via an environment variable."
+        echo ""
+        exit 1
+    fi
+fi
+
+# Load .env for local runs (CI gets secrets from Actions)
+if [ -f .env ]; then
+  set -a
+  source .env
+  set +a
+fi
+./scripts/pre_merge_gate.sh
