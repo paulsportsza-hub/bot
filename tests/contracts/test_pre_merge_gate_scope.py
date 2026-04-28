@@ -40,20 +40,24 @@ printf '%s' "$SCOPED"
 """
 
 
+def _clean_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+    env["HOME"] = os.environ.get("HOME", "/tmp")
+    env["GIT_AUTHOR_NAME"] = "Test"
+    env["GIT_AUTHOR_EMAIL"] = "test@example.com"
+    env["GIT_COMMITTER_NAME"] = "Test"
+    env["GIT_COMMITTER_EMAIL"] = "test@example.com"
+    if extra:
+        env.update(extra)
+    return env
+
+
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    env = os.environ.copy()
-    env.update(
-        {
-            "GIT_AUTHOR_NAME": "Test",
-            "GIT_AUTHOR_EMAIL": "test@example.com",
-            "GIT_COMMITTER_NAME": "Test",
-            "GIT_COMMITTER_EMAIL": "test@example.com",
-        }
-    )
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
-        env=env,
+        env=_clean_env(),
         capture_output=True,
         text=True,
         check=True,
@@ -64,6 +68,7 @@ def _scope(repo: Path) -> list[str]:
     result = subprocess.run(
         ["bash", "-c", SCOPING_SNIPPET],
         cwd=str(repo),
+        env=_clean_env(),
         capture_output=True,
         text=True,
         check=True,
@@ -117,6 +122,7 @@ class TestStep2Scoping:
         tracked_only = subprocess.run(
             ["git", "ls-files", "tests/contracts/", "--", "tests/contracts/test_*.py"],
             cwd=str(tmp_repo),
+            env=_clean_env(),
             capture_output=True,
             text=True,
             check=True,
