@@ -18,7 +18,18 @@ echo "=== STEP 1: ENV GUARD (full) ==="
 
 echo ""
 echo "=== STEP 2: CONTRACT TESTS ==="
-pytest tests/contracts/ -q --tb=short
+# Collect tracked + staged test files only — keeps untracked WIP from parallel
+# agent sessions out of the gate. INV-PRE-MERGE-GATE-INTEGRITY-01 (G2).
+TRACKED_CONTRACTS=$(git ls-files tests/contracts/ -- 'tests/contracts/test_*.py' 2>/dev/null)
+STAGED_CONTRACTS=$(git diff --cached --name-only --diff-filter=A 2>/dev/null \
+                   | grep -E '^tests/contracts/test_.*\.py$' || true)
+SCOPED=$(printf '%s\n%s\n' "$TRACKED_CONTRACTS" "$STAGED_CONTRACTS" | sort -u | grep -v '^$' || true)
+
+if [ -z "$SCOPED" ]; then
+  echo "No tracked or staged contract tests — skipping Step 2."
+else
+  pytest $SCOPED -q --tb=short -rs
+fi
 
 echo ""
 echo "=== STEP 3: EDGE ACCURACY TESTS ==="
