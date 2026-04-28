@@ -12,6 +12,7 @@ ship without verification.
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import pytest
 
 
 _BOT_PY = Path("/home/paulsportsza/bot/bot.py")
+_CANONICAL_HOSTS = {"mzansiedge-hel1"}
 
 
 def _running_bot_pid_and_start_time():
@@ -64,7 +66,19 @@ def test_bot_py_mtime_before_process_start():
         pytest.skip("bot.py not found at canonical path — skipping deploy-discipline check")
     pid, start_epoch = _running_bot_pid_and_start_time()
     if pid is None or start_epoch is None:
-        pytest.skip("No live bot.py process detected — deploy-discipline check N/A in this env")
+        host = socket.gethostname()
+        if host in _CANONICAL_HOSTS:
+            pytest.fail(
+                f"DEPLOY-DISCIPLINE-1 PROBE FAIL on canonical host {host}: "
+                "ps could not detect a running bot.py process. Either the bot "
+                "is genuinely down (investigate before merging) or "
+                "_running_bot_pid_and_start_time() raced. Re-run; if "
+                "persistent, escalate."
+            )
+        pytest.skip(
+            "No live bot.py process detected — deploy-discipline check N/A "
+            "in this env (non-canonical host)."
+        )
     mtime = os.path.getmtime(_BOT_PY)
     assert mtime <= start_epoch, (
         f"DEPLOY-DISCIPLINE-1 violation (BUILD-NARRATIVE-WATERTIGHT-01 D.4): "
