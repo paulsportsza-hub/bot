@@ -125,10 +125,22 @@ class TestSupportLineVariants:
         assert "one" in line, f"support=1 line missing 'one' word: {line!r}"
         assert "indicator sit" not in line
 
-    def test_support_multi_no_opposing_includes_count(self):
+    def test_support_multi_no_opposing_excludes_count(self):
+        """FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): brief Forbidden
+        list bans count cites in Verdict body ('N indicators line up' / 'N
+        supporting indicator'). Counts belong in The Edge section, not the
+        Verdict. _verdict_support_line now emits qualitative phrases only."""
         spec = _make_spec(support_level=3, contradicting_signals=0)
         line = _verdict_support_line(spec)
-        assert "3" in line, f"support=3 line missing count: {line!r}"
+        # No count cite: assert no digit token appears.
+        import re as _re
+        assert not _re.search(r"\b\d+\b", line), (
+            f"support=3 line cites count digit (banned per Rule 17): {line!r}"
+        )
+        # Qualitative phrasing must reference signals/indicators.
+        assert ("signal" in line.lower()) or ("indicator" in line.lower()), (
+            f"support=3 line missing signal/indicator reference: {line!r}"
+        )
 
     def test_md5_determinism_same_fixture_same_variant(self):
         """Same home/away pair must always render the same support line variant."""
@@ -162,6 +174,10 @@ class TestTierAwareVariantsCiteFixtureData:
     """Each tier verdict MUST cite team / EV% (integer) / odds / bookmaker."""
 
     def _check_cites_fixture_data(self, spec, expected_team, expected_odds, expected_bk, expected_ev):
+        """FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): EV cite removed
+        from Verdict per brief Forbidden list ('+X% EV' / '% EV' belong in The
+        Edge, not the Verdict). The expected_ev parameter is preserved for
+        signature stability but no longer asserted on verdict text."""
         verdict = _render_verdict(spec)
         # Team name reference (full or partial — outcome_label carries it)
         assert expected_team.lower() in verdict.lower(), (
@@ -175,11 +191,15 @@ class TestTierAwareVariantsCiteFixtureData:
         assert expected_bk in verdict, (
             f"Verdict missing bookmaker {expected_bk!r}: {verdict!r}"
         )
-        # EV percentage as integer (allow either +N% EV variant or EV% variants from floor)
-        ev_int = int(round(expected_ev))
-        assert (f"+{ev_int}%" in verdict) or (f"{expected_ev:.1f}%" in verdict), (
-            f"Verdict missing EV percentage near {expected_ev}: {verdict!r}"
+        # Verdict MUST NOT cite EV percentage (Rule 17 — telemetry lives in The Edge).
+        assert "% EV" not in verdict, (
+            f"Verdict cites '% EV' (Rule 17 forbidden — belongs in The Edge): {verdict!r}"
         )
+        assert "% ev" not in verdict.lower(), (
+            f"Verdict cites '% ev' (Rule 17 forbidden — belongs in The Edge): {verdict!r}"
+        )
+        # Suppress unused-arg warning while preserving signature.
+        _ = expected_ev
 
     def test_bronze_speculative_cites_all(self):
         spec = _make_spec(

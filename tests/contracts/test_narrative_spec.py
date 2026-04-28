@@ -1082,7 +1082,20 @@ class TestRenderVerdict:
             )
 
     def test_all_verdict_actions_in_length_window(self):
-        """BUILD-VERDICT-FLOOR-01: Every verdict action × sizing renders in [140, 200] chars."""
+        """Every verdict action × sizing renders within the locked char range.
+
+        BUILD-VERDICT-FLOOR-01 originally enforced [140, 200].
+        FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) widens the ceiling to
+        VERDICT_HARD_MAX (260) per `feedback_verdict_char_range_unified.md`
+        (tier-uniform 100/140-200/260: hard floor 100, soft target 140-200,
+        hard ceiling 260). The brief Required item: "100–260 chars
+        (tier-uniform per feedback_verdict_char_range_unified.md)". 200 is
+        the SOFT target ceiling (logged as `verdict_suboptimal_length` if
+        exceeded); 260 is the HARD reject ceiling. Holistic Path A variants
+        with long team names + long bookmaker + risk_clause cohesion will
+        legitimately overshoot 200 — staying under 260 is the contract.
+        """
+        from narrative_spec import VERDICT_HARD_MAX
         cases = [
             ("pass", "monitor", "cautious"),
             ("monitor", "monitor", "cautious"),
@@ -1109,8 +1122,9 @@ class TestRenderVerdict:
             assert len(verdict) >= 140, (
                 f"Verdict for action={action!r} below floor ({len(verdict)} < 140): {verdict!r}"
             )
-            assert len(verdict) <= 200, (
-                f"Verdict for action={action!r} exceeds ceiling ({len(verdict)} > 200): {verdict!r}"
+            assert len(verdict) <= VERDICT_HARD_MAX, (
+                f"Verdict for action={action!r} exceeds hard max ({len(verdict)} > "
+                f"{VERDICT_HARD_MAX}): {verdict!r}"
             )
 
 
@@ -1526,9 +1540,14 @@ class TestTierConvictionLanguage:
         """AC-3: TONE_BANDS['confident'/'moderate'] must allow Gold conviction phrases.
         BUILD-VERDICT-FLOOR-01: 'lean' removed from TONE_BANDS allowed lists in
         narrative_spec.py to prevent LLM-voice leakage in Sonnet-polished verdicts.
+        FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): "supported by data"
+        moved from confident.allowed to confident.banned per brief Forbidden list
+        (flat / generic / not SA Braai Voice).
         """
         assert "standard stake" in TONE_BANDS["confident"]["allowed"]
-        assert "supported by data" in TONE_BANDS["confident"]["allowed"]
+        # NOTE: "supported by data" is now BANNED (brief Forbidden list).
+        assert "supported by data" not in TONE_BANDS["confident"]["allowed"]
+        assert "supported by data" in TONE_BANDS["confident"]["banned"]
         assert "small-to-standard stake" in TONE_BANDS["moderate"]["allowed"]
         # "lean" intentionally removed from TONE_BANDS allowed lists in narrative_spec.py
         assert "lean" not in TONE_BANDS["confident"]["allowed"]

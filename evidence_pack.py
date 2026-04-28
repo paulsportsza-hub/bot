@@ -2487,6 +2487,19 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "- 'one to watch, not back', 'this one to watch', 'won't last forever'",
             "- 'knockout football', 'knockout stakes', 'knockout stage'",
             "- 'pure pricing call', 'thin support', 'numbers-only play'",
+            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
+            # Verdict body excludes betting telemetry. The Verdict closes with a
+            # friend's read on the match — manager + price + bookmaker + Risk-
+            # factor resolution. EV percentages, indicator counts, and line-
+            # movement language belong in The Edge or The Risk, not the Verdict.
+            "VERDICT BODY EXCLUSION (Rule 17 — automatic rejection if any of these appear in the Verdict):",
+            "- '+X% EV' / '% EV' (EV percentages live in The Edge, not the Verdict)",
+            "- 'indicators line up' / 'supporting indicator' (indicator counts live in The Edge)",
+            "- 'line movement' / 'adverse movement' (line-movement language lives in The Edge)",
+            "- 'price is stable' / 'price angle' / 'priced in' (meta-betting lives in The Edge)",
+            "- 'the lean is' (analytical jargon)",
+            "- 'supported by data' (flat, generic — use SA Braai Voice phrasing)",
+            "Verdict cites: outcome + price + bookmaker by name, Risk-factor resolution, tier-banded confidence vocabulary. SA Braai Voice anchored to verdict-generator/SKILL.md + brand-voice canon (BRAND-BIBLE-v3 §08–09 + COPYWRITING-DNA §6/§8).",
         ])
     else:
         prompt_parts.extend([
@@ -2532,6 +2545,17 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "1-2 sentences. State the action and sizing guidance without upgrading it.",
             f"YOUR VERDICT MUST recommend {getattr(spec, 'bookmaker', '')} at {getattr(spec, 'odds', '')}. This is NON-NEGOTIABLE. Do not substitute any other bookmaker or price.",
             "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — resolving it ('discount the injury concern'), hedging on it ('live with the squad-rotation risk'), or pricing it ('the form gap is already in the number'). Generic closers like 'all things considered' or 'on balance' are banned. The card must read as one analytical voice, not two disconnected sections.",
+            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
+            # Verdict body excludes betting telemetry. EV/indicator-count/line-
+            # movement language belongs in The Edge, not the Verdict.
+            "VERDICT BODY EXCLUSION (Rule 17 — automatic rejection if any of these appear in the Verdict):",
+            "- '+X% EV' / '% EV' (EV percentages live in The Edge, not the Verdict)",
+            "- 'indicators line up' / 'supporting indicator' (indicator counts live in The Edge)",
+            "- 'line movement' / 'adverse movement' (line-movement language lives in The Edge)",
+            "- 'price is stable' / 'price angle' / 'priced in' (meta-betting lives in The Edge)",
+            "- 'the lean is' (analytical jargon)",
+            "- 'supported by data' (flat, generic — use SA Braai Voice phrasing)",
+            "Verdict cites: outcome + price + bookmaker by name, Risk-factor resolution, tier-banded confidence vocabulary. SA Braai Voice anchored to verdict-generator/SKILL.md + brand-voice canon (BRAND-BIBLE-v3 §08–09 + COPYWRITING-DNA §6/§8).",
             *_verdict_quality_lines,
         ])
     if return_split:

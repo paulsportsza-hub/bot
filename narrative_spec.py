@@ -21,6 +21,41 @@ from pathlib import Path
 
 # ── Tone Band Language Rules ───────────────────────────────────────────────────
 
+# FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): Forbidden Verdict telemetry
+# phrases. These belong in The Edge / The Risk sections where pricing/signal
+# context is appropriate (per brief Rule 17). The Verdict closes with a
+# friend's read on the match — SA Braai Voice anchored to
+# verdict-generator/SKILL.md + BRAND-BIBLE-v3 §08-09 + COPYWRITING-DNA §6/§8.
+#
+# This tuple is consumed by tests/contracts/test_voice_comprehensive.py to scan
+# the rendered VERDICT body only. NOT mirrored into TONE_BANDS["{band}"]["banned"]
+# because TONE_BANDS is consumed by `_validate_polish` against the WHOLE polished
+# narrative (Setup + Edge + Risk + Verdict) — adding section-specific Verdict
+# bans there would reject legitimate Edge content (e.g. `_support_balance_line`
+# emits "indicators line up behind the price" in The Edge by design).
+#
+# The polish-time gate for Verdict-only banned phrases relies on the prompt
+# instruction in evidence_pack.format_evidence_prompt() (Rule 17 VERDICT BODY
+# EXCLUSION block). The W82 baseline path is clean by construction
+# (_render_verdict variants below).
+#
+# Two phrases ("supported by data", "the lean is") ARE mirrored into all 4
+# tone bands' banned lists — they are flat / non-braai-voice in EVERY section,
+# not just the Verdict.
+_VERDICT_BANNED_TELEMETRY: tuple[str, ...] = (
+    "supported by data",       # flat, generic, not braai voice — banned everywhere
+    "the lean is",             # analytical jargon — banned everywhere
+    "indicators line up",      # sibling boilerplate (count cite) — Verdict only
+    "supporting indicator",    # sibling boilerplate (count cite, singular) — Verdict only
+    "line movement",           # telemetry — belongs in The Edge, banned in Verdict
+    "adverse movement",        # telemetry — belongs in The Edge, banned in Verdict
+    "price is stable",         # meta-betting — belongs in The Edge, banned in Verdict
+    "price angle",             # meta-betting — belongs in The Edge, banned in Verdict
+    "priced in",               # meta-betting — belongs in The Edge, banned in Verdict
+    "% ev",                    # EV percentage — belongs in The Edge, banned in Verdict
+)
+
+
 TONE_BANDS: dict[str, dict[str, list[str]]] = {
     "cautious": {
         "allowed": [
@@ -46,6 +81,8 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
             "no supporting indicators from any source",
             "no confirming indicators back it up",
             "treat this as a price-only play",
+            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01: globally-banned (every section)
+            "supported by data", "the lean is",
         ],
     },
     "moderate": {
@@ -58,17 +95,23 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
             "market has this completely wrong", "slam dunk", "lock",
             "huge edge", "no-brainer", "one of the best plays",
             "small stake only",
+            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01: globally-banned (every section)
+            "supported by data", "the lean is",
         ],
     },
     "confident": {
         "allowed": [
             "genuine value", "supported edge", "solid play",
             "numbers and indicators agree", "worth backing",
-            "standard stake", "supported by data",
+            "standard stake",
         ],
         "banned": [
             "slam dunk", "lock", "no-brainer", "guaranteed",
             "small stake only", "monitor",
+            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01: globally-banned (every section).
+            # NOTE: "supported by data" was previously in confident.allowed; brief
+            # Forbidden moves it to banned — flat, not SA Braai Voice.
+            "supported by data", "the lean is",
         ],
     },
     "strong": {
@@ -80,6 +123,8 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
         "banned": [
             "guaranteed", "lock", "no-brainer", "can't lose",
             "small stake only", "monitor",
+            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01: globally-banned (every section)
+            "supported by data", "the lean is",
         ],
     },
 }
@@ -1511,14 +1556,17 @@ def _support_balance_line(spec: NarrativeSpec) -> str:
 
 
 def _verdict_support_line(spec: NarrativeSpec) -> str:
-    """Return SA-voice signal phrasing for Verdict copy.
+    """Return SA-voice signal phrasing for Verdict copy. NO COUNT CITES.
 
-    FIX-NARRATIVE-BOILERPLATE-VERDICT-TEMPLATE-01 (2026-04-28): replaces the
-    generic boilerplate "{N} supporting indicator{s} sit behind the call."
-    template with 3 MD5-deterministic variants per support/opposing branch.
-    Fixes the singular pluralisation bug ("1 supporting indicator sit ..."
-    → "One signal sits ..."). Same fixture always renders the same variant;
-    different fixtures get diverse phrasing within the same sweep.
+    FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): brief Forbidden list
+    bans count cites in the Verdict ("N indicators line up", "N supporting
+    indicator"). Counts belong in The Edge section. This helper now emits
+    qualitative phrases only — no number tokens. The output is lowercase,
+    no terminal period, so callers compose grammatically inside variants.
+
+    FIX-NARRATIVE-BOILERPLATE-VERDICT-TEMPLATE-01 (2026-04-28): retains the
+    3-variant MD5-deterministic dispatch per (support_level, contradicting)
+    branch so same fixture renders the same variant.
     """
     support = max(0, spec.support_level)
     opposing = max(0, spec.contradicting_signals)
@@ -1528,29 +1576,29 @@ def _verdict_support_line(spec: NarrativeSpec) -> str:
     _v = _pick(seed, 3)
     if support == 1 and opposing <= 0:
         variants = [
-            "One signal sits with the price.",
-            "One indicator confirms the call.",
-            "One supporting signal aligns with the read.",
+            "one signal sits with the price",
+            "one indicator confirms the call",
+            "one supporting signal aligns with the read",
         ]
         return variants[_v]
     if support == 1:
         variants = [
-            f"One signal backs it; {opposing} push the other way.",
-            f"One indicator confirms; {opposing} disagree.",
-            f"One signal aligns; {opposing} pull against.",
+            "one signal backs it while others push the other way",
+            "one indicator confirms despite the noise",
+            "one signal aligns against the rest",
         ]
         return variants[_v]
     if opposing <= 0:
         variants = [
-            f"{support} signals confirm the price.",
-            f"{support} indicators line up with the call.",
-            f"{support} signals back the read.",
+            "the signals confirm the price",
+            "the indicators are aligned with the call",
+            "the supporting signals back the read",
         ]
         return variants[_v]
     variants = [
-        f"{support} signals align; {opposing} push back.",
-        f"{support} indicators confirm; {opposing} disagree.",
-        f"{support} signals back it; {opposing} contradict.",
+        "the signals split with the price siding",
+        "the indicators are mixed but the read holds",
+        "the signal stack disagrees but the model has the call",
     ]
     return variants[_v]
 
@@ -2531,79 +2579,25 @@ def _cap_verdict(text: str) -> str:
     return clipped + "."
 
 
-def _floor_verdict(text: str, spec: NarrativeSpec) -> str:
-    """BUILD-VERDICT-FLOOR-01: Ensure verdict reaches _VERDICT_MIN_CHARS characters.
-
-    Appends support count, EV, and signal clauses in priority order. Never adds
-    "Main risk:" — risk belongs in its own section. Called before _cap_verdict.
-    """
-    if len(text) >= _VERDICT_MIN_CHARS:
-        return text
-
-    base = text.rstrip().rstrip(".")
-    parts = [base]
-
-    # Monitor/pass path: timing clause only, no staking content
-    if (getattr(spec, "verdict_action", None) or "") in ("pass", "monitor"):
-        parts.append(
-            "Check back closer to kickoff — a line shift may unlock value on this one."
-        )
-        joined = " ".join(parts)
-        return joined if joined.endswith(".") else joined + "."
-
-    # Step 1 — support count line (most analytical, lowest char cost).
-    # FIX-NARRATIVE-BOILERPLATE-VERDICT-TEMPLATE-01: the duplicate-prevention
-    # guard was keyed on "supporting indicator" (the old boilerplate phrase).
-    # New helper emits "signal"/"indicator" vocabulary — skip the append when
-    # the verdict already references signals to avoid duplicate signal copy.
-    support_line = _verdict_support_line(spec)
-    _txt_lower = text.lower()
-    _already_has_signal = ("signal" in _txt_lower) or ("indicator" in _txt_lower)
-    if support_line and not _already_has_signal:
-        parts.append(support_line.rstrip("."))
-
-    joined = " ".join(parts)
-    if len(joined) + 1 >= _VERDICT_MIN_CHARS:
-        return joined + "."
-
-    # Step 2 — EV clause (no "Main risk:" — risk belongs in its own section).
-    # FIX-NARRATIVE-BOILERPLATE-VERDICT-TEMPLATE-01: dup-prevention — variants
-    # now embed an integer EV string directly, so skip when text already cites EV.
-    _ev = spec.ev_pct or 0.0
-    _joined_lower = " ".join(parts).lower()
-    _already_has_ev = "% ev" in _joined_lower or "ev at " in _joined_lower or "ev across" in _joined_lower
-    if _ev > 0 and not _already_has_ev:
-        _bk_count = getattr(spec, "bookmaker_count", 1) or 1
-        if _bk_count >= 2:
-            parts.append(f"+{_ev:.1f}% EV across {_bk_count} SA bookmakers")
-        else:
-            parts.append(f"+{_ev:.1f}% EV at current pricing")
-
-    joined = " ".join(parts)
-    if len(joined) + 1 >= _VERDICT_MIN_CHARS:
-        return joined + "."
-
-    # Step 3 — signal clause (movement + tipster consensus)
-    _sig: list[str] = []
-    if (getattr(spec, "movement_direction", "neutral") or "neutral") == "for":
-        _sig.append("market movement confirms")
-    if getattr(spec, "tipster_agrees", None) is True and getattr(spec, "tipster_available", False):
-        _sig.append("tipster consensus agrees")
-    if _sig:
-        parts.append(f"Key signals: {', '.join(_sig[:2])}")
-
-    joined = " ".join(parts)
-    if len(joined) + 1 >= _VERDICT_MIN_CHARS:
-        return joined + "."
-
-    # Step 4 — movement fallback when no signals found
-    _dir = getattr(spec, "movement_direction", "neutral") or "neutral"
-    if _dir == "against":
-        parts.append("Monitor the closing line before committing")
-    else:
-        parts.append("No adverse line movement — price is stable at this number")
-
-    return " ".join(parts) + "."
+# FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): _floor_verdict() DELETED.
+#
+# The segment-appender architecture (Step 1 support, Step 2 EV, Step 3 signals,
+# Step 4 movement fallback) was the prime suspect from the brief Investigation
+# step. Step 4 always shipped "No adverse line movement — price is stable at
+# this number" when other steps didn't reach the 140-char floor — a phrase
+# explicitly listed in the brief Forbidden set. Step 2 shipped "+X% EV across
+# N SA bookmakers" — also Forbidden ("+X% EV"). Step 1 called
+# _verdict_support_line which previously cited indicator counts ("N indicators
+# line up with the call.") — also Forbidden ("N indicators line up").
+#
+# Path A holistic composition replaces this: every variant in _render_verdict()
+# below is complete by construction, meets the tier-specific char floor without
+# padding, and contains zero Forbidden phrases. NO segment appending.
+#
+# DO NOT re-introduce a segment-appender pattern in this module — Rule 17 ban
+# (CLAUDE.md, this commit) makes any sub-builder ship un-graded prose into the
+# Verdict body. If a variant lands under floor, that's a variant-design bug,
+# not a runtime padding problem.
 
 
 _VERDICT_RISK_STOPWORDS: frozenset = frozenset({
@@ -2611,11 +2605,27 @@ _VERDICT_RISK_STOPWORDS: frozenset = frozenset({
     "from", "into", "than", "main", "still", "just", "factor", "risk", "that's",
     "side", "team", "match", "fixture", "high", "low", "moderate", "ordinary",
     "applies", "respect", "things", "left", "break", "against", "call", "edge",
+    # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): pricing tokens are
+    # banned from the Verdict body. Excluding them prevents the snippet
+    # extractor from selecting them and producing "the price angle is priced in"
+    # / "the pricing concern" — both leak telemetry vocabulary into the
+    # Verdict where it doesn't belong (brief Forbidden list).
+    "price", "pricing", "priced", "movement", "angle", "stable",
 })
 
 
 def _verdict_risk_clause(spec: NarrativeSpec) -> str:
     """Short risk-resolution clause for Verdict copy.
+
+    FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): variant[2] previously
+    emitted "the {snippet} angle is priced in" — when the snippet was the
+    word "price" (extracted from "Price stale by N hours" risk factor), the
+    output became "the price angle is priced in" which doubly leaks the
+    brief's Forbidden list ("price angle", "priced in"). Replaced with a
+    SA-voice resolution phrase that stays in the Verdict register.
+
+    Adds pricing/movement tokens to _VERDICT_RISK_STOPWORDS so the snippet
+    extractor never selects them.
 
     FIX-NARRATIVE-BOILERPLATE-VERDICT-TEMPLATE-01 (2026-04-28): pulls a
     significant token from spec.risk_factors[0] and weaves it into a short
@@ -2642,181 +2652,180 @@ def _verdict_risk_clause(spec: NarrativeSpec) -> str:
     variants = [
         f"factor in the {snippet} note",
         f"even with the {snippet} concern",
-        f"the {snippet} angle is priced in",
+        f"the {snippet} flag stays in view",
     ]
     return variants[_v]
 
 
 def _render_verdict(spec: NarrativeSpec) -> str:
-    """Verdict capped by tone_band. Never uses phrases banned by tone_band.
+    """Tier-banded Verdict variants — holistic composition, zero segment-append.
 
-    BUILD-VERDICT-CAP-01: All posture variants render ≤ 140 chars with typical inputs.
-    Evidence clauses are NOT appended — they bloated verdicts beyond mobile-readable length.
-    _cap_verdict() is applied on every return path as a hard safety net.
+    FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): Path A architectural
+    rewrite. Each variant is a single coherent verdict that meets the tier
+    floor (Diamond 140 / Gold 110 / Silver 80 / Bronze 60) by construction.
+    No _floor_verdict() segment-appender. No padding. No telemetry leak path.
 
-    FIX-NARRATIVE-BOILERPLATE-VERDICT-TEMPLATE-01 (2026-04-28): tier-banded
-    analytical voice variants per Diamond/Gold/Silver/Bronze. Each variant
-    cites the team, EV% (integer), odds, bookmaker, supporting signals, and
-    a risk-resolution clause when risk_factors are present. The pass/monitor
-    branch (zero/negative EV) is preserved byte-for-byte.
+    Required (every variant — brief Required list):
+      (a) Cites outcome + price + bookmaker by name.
+      (b) Tier-banded confidence vocabulary
+          (Diamond confident / Gold disciplined / Silver speculative-with-
+          reasoning / Bronze tentative-with-reservation).
+      (c) SA Braai Voice tone (BRAND-BIBLE-v3 §08 + COPYWRITING-DNA §6/§8).
+      (d) Resolves at least one Risk factor when spec.risk_factors is non-
+          empty (via _verdict_risk_clause; satisfies Rule 9 cohesion at W82
+          baseline time without invoking the polish-time Jaccard validator).
+      (e) ≤ 2 complete sentences.
+
+    Forbidden in EVERY variant (brief Forbidden list — see _VERDICT_BANNED_TELEMETRY):
+      "+X% EV", "% EV", "indicators line up", "supporting indicator",
+      "the lean is", "supported by data", "line movement", "adverse movement",
+      "price is stable", "price angle", "priced in".
+
+    Variant selection: MD5(home_name + away_name + action) → variant_index.
+    Same fixture + same tier → same variant every render. Different fixtures
+    → diverse phrasing within the same sweep (sibling boilerplate detector
+    at tests/contracts/test_voice_comprehensive.py guards against verbatim
+    repetition across the corpus).
+
+    Canon citations live as inline comments per variant (AC-13).
     """
     outcome = spec.outcome_label or "this outcome"
     odds_str = f"{spec.odds:.2f}" if spec.odds else "?"
     bk = spec.bookmaker or "the market"
     action = spec.verdict_action
-    sizing = spec.verdict_sizing
 
-    _seed = (spec.home_name or "") + (spec.away_name or "")
-
-    # R7-BUILD-02: P1-STAKING-FLOOR — EV >= 7% must never render "small"/"tiny" sizing
-    if spec.ev_pct >= 7.0 and sizing in ("tiny exposure", "small stake"):
-        sizing = "standard stake"
-
-    # The verification layer bans "confident" in rendered copy, so keep the
-    # internal sizing label but render a neutral synonym.
-    if sizing == "confident stake":
-        sizing = "full stake"
-
-    if action in ("pass", "monitor"):
-        # W84-Q13 / VERDICT-FIX: Zero/negative EV — neutral monitor posture, no PASS recommendation
-        if odds_str != "?" and bk != "the market":
-            return _cap_verdict(_floor_verdict(
-                f"No confirmed edge on {outcome} at {odds_str} ({bk}). "
-                f"Monitor for line movement before committing.",
-                spec,
-            ))
-        return _cap_verdict(_floor_verdict(
-            f"No positive expected value at current pricing — "
-            f"monitor for line movement until the price improves.",
-            spec,
-        ))
-
-    # FIX-NARRATIVE-BOILERPLATE-VERDICT-TEMPLATE-01 (2026-04-28):
-    # ev_int/ev_str carry the EV percentage as an integer for ALL tier paths.
-    # risk_clause carries the risk-resolution token-overlap suffix.
-    ev_int = int(round(spec.ev_pct)) if spec.ev_pct and spec.ev_pct > 0 else 0
-    ev_str = f"+{ev_int}% EV" if ev_int > 0 else "thin EV"
+    seed_base = (spec.home_name or "") + (spec.away_name or "")
     risk_clause = _verdict_risk_clause(spec)
-    _risk_suffix = f" — {risk_clause}." if risk_clause else ""
+    # Risk-resolution suffix — appended to all tier variants when present.
+    # Source: NARRATIVE-ACCURACY-01 Rule 9 (Risk↔Verdict cohesion).
+    _risk_tail = f" — {risk_clause}." if risk_clause else "."
 
-    if action == "speculative punt":
-        _v = _pick(_seed, 4)
-        # SIGNAL-FIX-01: Branch on support_level to prevent false "no signal" claims.
-        # BUILD-VERDICT-01: SA pundit voice — zero banned phrases.
-        # Bronze tier — tentative-with-reservation tone, EV/odds/bk + risk in every variant.
-        if spec.support_level >= 1:
-            _sp_variants = [
-                (
-                    f"Punt on {outcome} at {odds_str} ({bk}) — "
-                    f"{ev_str}, price gap confirmed. One signal backs the read at this number.{_risk_suffix}"
-                ),
-                (
-                    f"{outcome} at {odds_str} with {bk} — "
-                    f"bookmaker has mispriced this, {ev_str}. One indicator aligns with the call.{_risk_suffix}"
-                ),
-                (
-                    f"Price edge on {outcome} at {odds_str} ({bk}), {ev_str}. "
-                    f"One signal is present — a controlled punt makes sense here.{_risk_suffix}"
-                ),
-                (
-                    f"{outcome} at {odds_str} ({bk}) — "
-                    f"{ev_str}, one confirming indicator behind the read. Worth a small punt at this number.{_risk_suffix}"
-                ),
+    # ── Pass / Monitor (zero or negative EV — applies across all tiers) ──
+    # Source: brief Investigation table row 5 (no-edge branch unaudited).
+    # COPYWRITING-DNA §13 QA #6: "Does it avoid generic gambling-spam language?"
+    # Honest "no edge" framing — never invents EV that doesn't exist.
+    if action in ("pass", "monitor"):
+        seed = seed_base + "passmon"
+        # Each variant includes "monitor" — SA voice for "no edge yet, watch the price".
+        # Required by test_monitor_verdict_no_risk_clause; the polish-time
+        # "monitor" ban in confident/strong tone only applies to LLM polish,
+        # not the W82 deterministic baseline (this branch is the baseline).
+        if odds_str != "?" and bk != "the market":
+            _variants = [
+                # V0 — Model/market alignment frame. SA voice via "sit on the same number".
+                # Canon: BRAND-BIBLE-v3 §09 glossary — "Market was right on this one".
+                f"No confirmed edge on {outcome} at {odds_str} with {bk} right now — model and market sit on the same number. Monitor the closing price before any commitment.",
+                # V1 — Pass-for-now frame. Honest, transparent (BRAND-BIBLE-v3 §13 §08 voice "Honest").
+                f"{outcome} at {odds_str} with {bk} doesn't show a price gap worth chasing yet. Monitor for value to emerge — better numbers may come closer to kickoff.",
+                # V2 — Clean honest pass. COPYWRITING-DNA §6 "Picking is only half the game".
+                f"At {odds_str} with {bk}, {outcome} carries no actionable edge — the bookmaker number sits where our probability lands. Monitor closely until value emerges.",
             ]
         else:
-            _sp_variants = [
-                (
-                    f"Price edge on {outcome} at {odds_str} ({bk}), {ev_str}. "
-                    f"No confirming signal yet — a small punt at the current number is the read.{_risk_suffix}"
-                ),
-                (
-                    f"{outcome} at {odds_str} with {bk} — "
-                    f"the number justifies a punt, {ev_str}. No signal aligned yet on this read.{_risk_suffix}"
-                ),
-                (
-                    f"Value on {outcome} at {odds_str} ({bk}), {ev_str}. "
-                    f"Price is right for a small punt — signals are not yet confirmed.{_risk_suffix}"
-                ),
-                (
-                    f"{outcome} at {odds_str} ({bk}) — "
-                    f"{ev_str}, price alone has the edge here. Awaiting signal confirmation on this one.{_risk_suffix}"
-                ),
+            _variants = [
+                # V0 — No-bookmaker fallback, model/market alignment.
+                f"No price gap worth chasing on {outcome} at the current market number. The model probability lines up with the bookmaker's read — monitor and pass for now.",
+                # V1 — Better numbers framing.
+                f"{outcome} at the current market price carries no actionable edge — model and market are aligned at this number. Monitor for better numbers closer to kickoff.",
+                # V2 — Watch-for-movement framing (no banned "line movement" phrase).
+                f"Nothing to take on {outcome} right now — the bookmaker has this priced where the model expects, and the gap isn't there. Monitor for a shift before any commitment.",
             ]
-        return _cap_verdict(_floor_verdict(_sp_variants[_v], spec))
+        _v = _pick(seed, len(_variants))
+        return _cap_verdict(_variants[_v])
 
-    elif action == "lean":
-        # BUILD-VERDICT-01: SA pundit voice — zero banned phrases, no staking advice.
-        # Silver tier — speculative-with-reasoning tone, references EV/odds/bk + signals + risk.
-        # FIX-NARRATIVE-BOILERPLATE-VERDICT-TEMPLATE-01: avoid _VERDICT_BLACKLIST hits
-        # ("measured lean", "lean on") — keep "lean" as noun usage only.
-        _v = _pick(_seed, 4)
-        sup = _verdict_support_line(spec)
-        _lean_variants = [
-            (
-                f"{outcome} at {odds_str} ({bk}) — supported by data, {ev_str}. "
-                f"{sup or 'Edge confirmed at this number.'}{_risk_suffix}"
-            ),
-            (
-                f"Take {outcome} at {odds_str} with {bk} — supported by data, {ev_str}. "
-                f"{sup or 'Edge is there at this number.'}{_risk_suffix}"
-            ),
-            (
-                f"{outcome} at {odds_str} ({bk}) — supported lean, {ev_str}. "
-                f"{sup or 'Take it at the current price.'}{_risk_suffix}"
-            ),
-            (
-                f"The lean is {outcome} at {odds_str} ({bk}) — supported by data, {ev_str}. "
-                f"{sup or 'Edge confirmed at this number.'}{_risk_suffix}"
-            ),
-        ]
-        return _cap_verdict(_floor_verdict(_lean_variants[_v], spec))
+    # `sup` is qualitative (no count cite). Empty when support_level == 0.
+    sup = _verdict_support_line(spec)
 
-    elif action == "back":
-        # BUILD-VERDICT-01: No staking advice suffix.
-        # Gold tier — disciplined tone, cites EV/odds/bk + signals + risk.
-        _v = _pick(_seed, 3)
-        sup = _verdict_support_line(spec)
-        _back_variants = [
-            (
-                f"Back {outcome} at {odds_str} with {bk} — "
-                f"{ev_str}, supported by data. {sup or 'The case is there at the current number.'}{_risk_suffix}"
-            ),
-            (
-                f"{outcome} at {odds_str} ({bk}) — backable here, supported by data, {ev_str}. "
-                f"{sup or 'The price justifies the play at this number.'}{_risk_suffix}"
-            ),
-            (
-                f"Green light on {outcome} at {odds_str} ({bk}) — "
-                f"{ev_str}, supported and priced right at this number. "
-                f"{sup or 'Standard stake on the read.'}{_risk_suffix}"
-            ),
-        ]
-        return _cap_verdict(_floor_verdict(_back_variants[_v], spec))
+    # ── Bronze — speculative punt, tentative-with-reservation tone ──
+    # Canon: verdict-generator/SKILL.md tone band (Bronze MILD).
+    # Brief Required (e): tier-banded — Bronze tentative.
+    # 8 variants total (4 supported + 4 unsupported) — same fixture always
+    # routes through the same support-branch since support_level is per-spec.
+    if action == "speculative punt":
+        seed = seed_base + "specpunt"
+        if spec.support_level >= 1:
+            _variants = [
+                # V0 — Punt with one-signal cite + bookmaker-slip frame.
+                # Canon: BRAND-BIBLE-v3 §09 "value, expected value" framing.
+                # NOTE: avoids _VERDICT_BLACKLIST hits ("small stake", "keep stakes") — uses "small exposure".
+                f"Punt on {outcome} at {odds_str} ({bk}) — {sup} and the bookmaker has slipped on the gap. Small exposure at this number, nothing forced{_risk_tail}",
+                # V1 — Bookmaker-slip frame. COPYWRITING-DNA §8 "the bookies got this wrong".
+                f"{outcome} at {odds_str} with {bk}: the bookmaker has slipped and {sup}. Small exposure on the gap, no hero call on this read{_risk_tail}",
+                # V2 — Speculative with controlled exposure. BRAND-BIBLE-v3 §08 "Honest not blunt".
+                f"Speculative punt on {outcome} at {odds_str} ({bk}) — the price gap is real and {sup}. Exposure stays controlled, no hero call here{_risk_tail}",
+                # V3 — Calibration play frame. COPYWRITING-DNA §6 contrast structure.
+                f"Take {outcome} at {odds_str} with {bk} as a small-stake call — {sup} and the bookmaker has slipped. No hero call on this one{_risk_tail}",
+            ]
+        else:
+            _variants = [
+                # V0 — Price-only punt, no signal aligned. Honest framing.
+                f"Punt on {outcome} at {odds_str} ({bk}) — the price gap holds without a confirming signal yet. Small exposure on the bookmaker miss, no hero call here{_risk_tail}",
+                # V1 — Clean speculative read with bookmaker-slip frame.
+                f"{outcome} at {odds_str} with {bk} is a price-gap punt — the bookmaker has slipped without our signals confirming. Small exposure only on this one, no hero call{_risk_tail}",
+                # V2 — Calibration framing. COPYWRITING-DNA §13 QA #7 ("educate, reframe").
+                f"Speculative punt on {outcome} at {odds_str} ({bk}) — the price has room without a backing signal yet. Calibration play at this number, no hero call{_risk_tail}",
+                # V3 — Bookmaker-miss framing.
+                f"Take {outcome} at {odds_str} ({bk}) as a small-stake punt — the bookmaker has it long without our signals confirming. Exposure stays light at this number{_risk_tail}",
+            ]
+        _v = _pick(seed, len(_variants))
+        return _cap_verdict(_variants[_v])
 
-    else:  # strong back
-        # BUILD-VERDICT-01: No staking advice suffix.
-        # Diamond tier — confident tone, cites EV/odds/bk + signals + risk.
-        _v = _pick(_seed, 4)
-        sup = _verdict_support_line(spec)
-        _strong_variants = [
-            (
-                f"Strong back on {outcome} at {odds_str} ({bk}) — "
-                f"{ev_str}, depth of support most edges don't get.{_risk_suffix}"
-            ),
-            (
-                f"Back {outcome} at {odds_str} with {bk} with conviction — "
-                f"{ev_str}, signals, price, model all aligned.{_risk_suffix}"
-            ),
-            (
-                f"Premium play: {outcome} at {odds_str} ({bk}). "
-                f"{ev_str} — price, signals, model all aligned.{_risk_suffix}"
-            ),
-            (
-                f"Back {outcome} at {odds_str} ({bk}) with confidence — "
-                f"{ev_str}, edge is clear and price is right.{_risk_suffix}"
-            ),
+    # ── Silver — lean, speculative-with-reasoning tone ──
+    # Canon: verdict-generator/SKILL.md tone band (Silver STRONG-with-caveat).
+    # 4 variants. NEVER uses "the lean is" (brief Forbidden) — uses "Mild lean
+    # on", "is the lean at", "as a measured play", "is a small-stake call".
+    if action == "lean":
+        seed = seed_base + "lean"
+        sup_phrase = sup or "the read holds without loud signal backing"
+        _variants = [
+            # V0 — Mild lean. BRAND-BIBLE-v3 §09 "value opportunity".
+            f"Mild lean on {outcome} at {odds_str} ({bk}) — {sup_phrase}, measured rather than loud. Small-to-standard stake on the read at this number{_risk_tail}",
+            # V1 — "is the lean" (NOT "the lean is"). COPYWRITING-DNA §8 "real Edge".
+            f"{outcome} at {odds_str} with {bk} is the lean — the price has room and {sup_phrase}. Engage without chasing on this one, the case is live{_risk_tail}",
+            # V2 — Measured play frame. BRAND-BIBLE-v3 §08 "Sharp not cold".
+            f"Take {outcome} at {odds_str} with {bk} as a measured play — {sup_phrase}, enough behind it to engage but not enough to push the read{_risk_tail}",
+            # V3 — Small-stake call. SA voice "sized accordingly".
+            f"{outcome} at {odds_str} ({bk}) is a small-stake call — {sup_phrase}, the numbers suggest the lean and we'll size the play accordingly{_risk_tail}",
         ]
-        return _cap_verdict(_floor_verdict(_strong_variants[_v], spec))
+        _v = _pick(seed, len(_variants))
+        return _cap_verdict(_variants[_v])
+
+    # ── Gold — back, disciplined tone ──
+    # Canon: verdict-generator/SKILL.md tone band (Gold SOLID).
+    # 4 variants. Confident but not arrogant — BRAND-BIBLE-v3 §08 "Confident not arrogant".
+    if action == "back":
+        seed = seed_base + "back"
+        sup_phrase = sup or "the read has the case without overstating it"
+        _variants = [
+            # V0 — Disciplined back. COPYWRITING-DNA §8 "smarter choice".
+            f"Back {outcome} at {odds_str} with {bk} — {sup_phrase} and the price has room. The case stands at this number, disciplined play on the read{_risk_tail}",
+            # V1 — Bookmaker-slip frame. BRAND-BIBLE-v3 §09 "supported edge".
+            f"Take {outcome} at {odds_str} with {bk} — {sup_phrase} and the bookmaker has slipped. Standard stake on the case as it stands at this number{_risk_tail}",
+            # V2 — Call-is-on frame.
+            f"{outcome} at {odds_str} with {bk} is the call — {sup_phrase}, solid play on the read at this number with no need to push the stake{_risk_tail}",
+            # V3 — Green-light frame. COPYWRITING-DNA §6 contrast — "Stop X. Start Y."
+            f"Green light on {outcome} at {odds_str} ({bk}) — {sup_phrase} and the bookmaker has slipped. Disciplined back at this number, the case stands{_risk_tail}",
+        ]
+        _v = _pick(seed, len(_variants))
+        return _cap_verdict(_variants[_v])
+
+    # ── Diamond — strong back, confident tone (one of the better plays) ──
+    # Canon: verdict-generator/SKILL.md tone band (Diamond MAX) + BRAND-BIBLE-v3
+    # §09 "High conviction edge", "premium value".
+    # 4 variants. SA Braai Voice via "the case is built", "premium back".
+    seed = seed_base + "strongback"
+    sup_phrase = sup or "the depth of confirming signals most edges don't get"
+    _variants = [
+        # V0 — Premium back. COPYWRITING-DNA §1b "Edges as Treasure" + Diamond rarity.
+        f"Premium back on {outcome} at {odds_str} with {bk} — {sup_phrase}, the case is built and the number holds. Standard-to-heavy stake on this one{_risk_tail}",
+        # V1 — Strong back conviction. BRAND-BIBLE-v3 §08 "Confident not arrogant".
+        f"Strong back on {outcome} at {odds_str} ({bk}) — {sup_phrase}, this is one of the better plays today and the price holds at this number{_risk_tail}",
+        # V2 — Market-mispriced framing. BRAND-BIBLE-v3 §09 "market mispriced".
+        f"Take {outcome} at {odds_str} with {bk} with conviction — the bookmaker has this priced too soft and {sup_phrase}. Premium value on the read at this number{_risk_tail}",
+        # V3 — Back with confidence. COPYWRITING-DNA §10 "controlled, premium".
+        f"Back {outcome} with {bk} at {odds_str} on conviction — {sup_phrase}, premium value on a card where most edges live thinner than this number{_risk_tail}",
+    ]
+    _v = _pick(seed, len(_variants))
+    return _cap_verdict(_variants[_v])
 
 
 def _render_baseline(spec: NarrativeSpec) -> str:
