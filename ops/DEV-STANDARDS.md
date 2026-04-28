@@ -215,6 +215,75 @@ Any ❌ → dispatch is wrong. Fix before sending. No exceptions.
 
 ---
 
+### Dispatch via dispatch_runner.sh (LOCKED — 30 April 2026, BUILD-WORKTREE-DISPATCH-RUNNER-01)
+
+**Supersedes the manual paste workflow on the server side.** The Cowork dispatch
+block (Format v4.2 above) stays unchanged; what changes is what the SERVER does
+with it: instead of a human pasting the four lines into a tmux window, the
+single entrypoint `/home/paulsportsza/scripts/dispatch_runner.sh` runs the wave
+end-to-end.
+
+**Invocation (single line):**
+
+```bash
+/home/paulsportsza/scripts/dispatch_runner.sh <BRIEF-ID> [<NOTION_PAGE_ID>]
+```
+
+**Pipeline executed by the runner:**
+1. Validate `BRIEF-ID` against `^[A-Z][A-Z0-9-]+-[0-9]+$`.
+2. Load `NOTION_TOKEN` from `/home/paulsportsza/.env`.
+3. Resolve the Notion page (search-by-title if `NOTION_PAGE_ID` not provided).
+4. Confirm Notion `Status` is `📥 Pending` (override: `DISPATCH_RUNNER_FORCE=1`).
+5. Fetch brief body and reject if it carries a banned `(codex)` or `(cursor)`
+   CLI tag — Pure Claude Ecosystem lock (v4.2).
+6. Create wave worktree at `/home/paulsportsza/worktrees/<BRIEF-ID>/` on a
+   `wave/<BRIEF-ID>` branch off `origin/main` (via `wave_worktree_create.sh`).
+7. Invoke `claude --print --add-dir <worktree> --dangerously-skip-permissions`
+   inside the worktree with the brief body as prompt.
+8. Run SO #41 verification (`scripts/lib/so41_verify.sh`) against every repo in
+   `$WAVE_REPO` (default `bot`) and `$WAVE_REPOS_EXTRA` (default `scrapers`).
+9. Update Notion: `✅ Done` on PASS, `❌ Blocked` on FAIL, with diagnostic note.
+10. Prune the worktree on PASS only; FAIL retains it for debugging.
+
+**Wave worktree contract (locked):**
+- One brief = one worktree at `/home/paulsportsza/worktrees/<BRIEF-ID>/`.
+- Wave-class file edits in the main bot tree (`/home/paulsportsza/bot/`) are
+  refused at commit time by `.githooks/pre-commit`. Carve-outs: `ops/`,
+  `reference/`, `COO/`, `HANDOFFS/`, `CLAUDE.md`, `static/qa-gallery/canonical/`.
+- Audit-trailed bypass: `WAVE_GUARD_BYPASS=1 git commit ...` (controller-approved
+  only — note the reason in the commit message).
+
+**Why this exists:** the SO #41 violation pattern (6 violations in 5 days
+ending 28 Apr 2026 — commit skipped, commit unpushed, silent verification-block
+substitution, executor self-attribution leak) shared one structural root: every
+parallel agent was reading and writing the same bot working tree, and the
+dispatch chain had zero enforcement at the boundary between brief and commit.
+The worktree-per-wave pattern makes cross-wave bundling mechanically impossible;
+the runner removes the executor's discretion to silently substitute the SO #41
+verification block.
+
+**Pure Claude Ecosystem (v4.2) — runner enforcement:** the runner accepts ONLY
+the `claude` CLI. `codex` and `cursor` invocations are blocked at brief-parse
+time. There is no escape hatch — a brief that requires a non-Claude CLI is
+malformed under v4.2.
+
+**Out of scope (deliberate, follow-up briefs):**
+- Migrating EVERY past brief to use the runner. Going forward only.
+- Multi-CLI support beyond `claude` — Pure Claude lock.
+- Worktree GUI / dashboard — shell scripts only.
+- Cross-machine dispatch — Cowork still pastes the dispatch block; the runner
+  replaces the SERVER-side execution path.
+- Auto-sweep of stale worktrees > 24h old — flagged as follow-up.
+
+**Regression guards:**
+- `tests/contracts/test_dispatch_runner_so41.py` — covers all 5 P2-ACs of the
+  brief that introduced the runner (subprocess + temp git repo, no live Notion
+  or claude calls).
+- The runner self-validates its own delivery wave via the same SO #41 helper
+  it ships.
+
+---
+
 ### Agent Report — Filename & Header Schema (LOCKED 18 April 2026)
 
 **Why:** Reports were being filed as `Agent: Dataminer`, `Agent: Codex`, etc., with no canonical taxonomy. Paul flagged 17 Apr PM. This section is the taxonomy. Every dispatcher embeds it in the brief. Every executing agent echoes it in the report.
