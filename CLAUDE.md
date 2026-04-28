@@ -3412,3 +3412,20 @@ Enforcement (defence-in-depth):
 - **Helpers cleaned**: `_verdict_support_line()` now emits qualitative phrases only (no "{N} indicators line up" count cite). `_verdict_risk_clause()` excludes pricing/movement tokens from the snippet extractor (no more "the price angle is priced in" emerging from a "Price stale" risk factor).
 - **Prompt instruction**: `format_evidence_prompt()` in `evidence_pack.py` carries the VERDICT BODY EXCLUSION block on BOTH branches (match-preview and edge-mode).
 - **Regression guard**: `tests/contracts/test_voice_comprehensive.py` — 16+ tier×sport voice-rubric tests + sibling boilerplate detector (AC-14) that scans rendered output for any phrase appearing verbatim in ≥3 different fixtures.
+
+### Rule 18 — Stadium / venue names are forbidden in all narrative output (locked 2026-04-28, FIX-NARRATIVE-VENUE-LEAK-01)
+
+Venue / stadium names are NOT in the evidence pack. Every mention is a hallucination — the verdict-generator system prompt already says so ("Stadium or venue names ... — venue data is NOT in our database. If you mention a stadium name, you are inventing it. Never do this."), but Sonnet/Haiku ignore the prompt 10–20% of the time per the FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 dry-run (Stamford Bridge × Chelsea, Villa Park × Aston Villa, Goodison Park × Everton — the last is ALSO stale per Rule 2 since Everton moved to Hill Dickinson Stadium in August 2025).
+
+This rule complements (does not replace) Rule 2 (`CURRENT_STADIUMS` freshness) — Rule 2 governs WHICH stadium name is current; Rule 18 forbids ANY stadium name from appearing in narrative output regardless of freshness. Even Hill Dickinson Stadium (the correct current Everton ground) would be banned by this rule because the LLM has no source for it in the evidence pack.
+
+Enforcement (defence-in-depth):
+- **Curated banned-substring list**: `bot/data/stadiums.json` — ~140 venues across EPL (full 20 + relegated), PSL (top 10), UCL frequent sites (Camp Nou, Bernabéu, San Siro, Allianz Arena, Stade de France, etc.), URC / Super Rugby grounds (Aviva, Twickenham, Murrayfield, Sky Stadium, Loftus, Cape Town), IPL/SA20 grounds (Wankhede, Eden Gardens, Chinnaswamy, Wanderers, Newlands, Centurion), and major MMA/boxing venues (T-Mobile Arena, MGM Grand, MSG, UFC Apex). Reviewed quarterly + immediately on any club ground change.
+- **Loader**: `narrative_spec._load_banned_venues()` — module-level, cached on first call, builds a single case-insensitive regex with longest-first ordering (so "Etihad Stadium" matches before bare "Etihad").
+- **Helpers**: `narrative_spec.find_venue_leaks(text)` returns deduped list of unique hits; `narrative_spec.validate_no_venue_leak(text)` returns False on any hit.
+- **Verdict path (Gate 9)**: `min_verdict_quality()` in `narrative_spec.py` — added gate after the markdown-leak gate. Logs `verdict_rejected_venue_leak: tier=X len=N venues=[...] text=...` and returns False, forcing the LLM verdict-cache path to retry or fall back to the W82 baseline.
+- **Narrative polish (Gate 8f)**: `_validate_polish()` in `bot.py` — added scan after the combat-lore gate. Logs `POLISH REJECT: venue-leak (...)` and rejects the polish, falling back to the W82 baseline.
+- **W82 baseline path**: deterministic templates do NOT name venues by construction (no template references stadium names), so no separate gate is needed at `_store_narrative_cache`.
+- **Regression guard**: `tests/contracts/test_venue_leak.py` — 322 tests (loader integrity + per-venue parametric scan covering all curated entries + dry-run leak repro for Stamford Bridge / Villa Park / Goodison Park + Gate 9 wiring + case-insensitive matching + multi-venue dedup + clean-text false-positive guards).
+
+DO NOT add bare single-word entries like "Stadium", "Park", "Arena", "Ground", or "Field" to `stadiums.json` — they would fire on legitimate prose ("park the bus", "the home stadium gives them an edge", "ground them out"). The list curates UNIQUE compound venue names only. False positive risk audit per addition: search the corpus for the proposed term in non-venue contexts before adding.

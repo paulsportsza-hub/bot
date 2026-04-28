@@ -449,6 +449,80 @@ def validate_no_markdown_leak(verdict: str) -> bool:
     return not bool(_MARKDOWN_LEAK_RE.search(verdict))
 
 
+# FIX-NARRATIVE-VENUE-LEAK-01 (2026-04-28): curated banned-substring list.
+# Venue/stadium names are NOT in the evidence pack — every mention is a
+# hallucination per the verdict-generator system prompt
+# ("Stadium or venue names ... — venue data is NOT in our database. If you
+#  mention a stadium name, you are inventing it. Never do this.").
+# Source: bot/data/stadiums.json (curated EPL + PSL + UCL + IPL/SA20 + URC + MMA).
+# Loader is module-level (cached on first call) for zero per-call I/O cost.
+_VENUE_LEAK_CACHE: tuple[str, ...] | None = None
+_VENUE_LEAK_REGEX: re.Pattern | None = None
+
+
+def _load_banned_venues() -> tuple[str, ...]:
+    """Load curated venue list from data/stadiums.json. Cached on first call."""
+    global _VENUE_LEAK_CACHE, _VENUE_LEAK_REGEX
+    if _VENUE_LEAK_CACHE is not None:
+        return _VENUE_LEAK_CACHE
+    venues_path = Path(__file__).resolve().parent / "data" / "stadiums.json"
+    try:
+        payload = json.loads(venues_path.read_text())
+        raw = payload.get("venues", []) if isinstance(payload, dict) else []
+        _VENUE_LEAK_CACHE = tuple(v for v in raw if isinstance(v, str) and v.strip())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        _VENUE_LEAK_CACHE = tuple()
+    # Build a single case-insensitive regex with word boundaries on
+    # alphabetic characters only (so multi-word venues with apostrophes /
+    # hyphens / accent marks match correctly without spurious sub-matches).
+    if _VENUE_LEAK_CACHE:
+        # Sort longest-first so "Etihad Stadium" matches before "Etihad" alone
+        # (when both are in the list — defensive against future list growth).
+        sorted_venues = sorted(_VENUE_LEAK_CACHE, key=len, reverse=True)
+        pattern = "|".join(re.escape(v) for v in sorted_venues)
+        _VENUE_LEAK_REGEX = re.compile(pattern, re.IGNORECASE)
+    return _VENUE_LEAK_CACHE
+
+
+def find_venue_leaks(text: str) -> list[str]:
+    """Return list of unique venue-name leaks found in `text`. Empty list on clean.
+
+    Case-insensitive substring scan against the curated stadiums.json list.
+    Used by `validate_no_venue_leak` (Gate 9) and at the
+    `_validate_polish` gate in bot.py for narrative polish output.
+
+    Returns the FIRST occurrence's exact-case match per unique venue (not all
+    duplicates) so callers can log each violation once.
+    """
+    _load_banned_venues()
+    if not text or _VENUE_LEAK_REGEX is None:
+        return []
+    seen: set[str] = set()
+    hits: list[str] = []
+    for m in _VENUE_LEAK_REGEX.finditer(text):
+        key = m.group(0).lower()
+        if key not in seen:
+            seen.add(key)
+            hits.append(m.group(0))
+    return hits
+
+
+def validate_no_venue_leak(text: str) -> bool:
+    """FIX-NARRATIVE-VENUE-LEAK-01: Return True if text contains no curated venue name.
+
+    Hard fail if ANY venue from data/stadiums.json appears in `text`.
+    Used as Gate 9 in `min_verdict_quality()` for the LLM verdict-cache path
+    AND as a polish-time scan for narrative_html.
+
+    The system prompt already instructs the LLM not to mention stadiums, but
+    Sonnet/Haiku ignore the instruction ~10–20% of the time per the
+    FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 dry-run (Stamford Bridge, Villa Park,
+    Goodison Park leaks observed across 10 fixtures). This gate forces
+    rejection-and-retry instead of relying on prompt-following.
+    """
+    return not find_venue_leaks(text)
+
+
 def min_verdict_quality(verdict: str, tier: str = "bronze",
                         evidence_pack: dict | None = None) -> bool:
     """Return True if verdict passes the minimum quality floor.
@@ -466,6 +540,7 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
     6. Name a manager/coach not present in evidence_pack (hard fail).
     7. Begin with "At <price>" for Diamond tier.
     8. Contain residual markdown formatting (**/__/`/#/>) (hard fail).
+    9. Contain any curated venue/stadium name (FIX-NARRATIVE-VENUE-LEAK-01).
 
     AC-1 contract: min_verdict_quality("Arteta's Gunners at 4.") is False.
     """
@@ -499,6 +574,15 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
         return False
     # Gate 8 — BUILD-SANITIZER-MARKDOWN-STRIP-01: markdown leak hard gate
     if not validate_no_markdown_leak(text):
+        return False
+    # Gate 9 — FIX-NARRATIVE-VENUE-LEAK-01: stadium/venue name leak (hallucination).
+    # Venue data is NOT in the evidence pack — every mention is fabricated.
+    _venue_hits = find_venue_leaks(text)
+    if _venue_hits:
+        _log.warning(
+            "verdict_rejected_venue_leak: tier=%s len=%d venues=%r text=%r",
+            _tier_key, len(text), _venue_hits, text[:200],
+        )
         return False
     # Soft monitoring: verdict passes all gates but is below TARGET band
     if len(text) < VERDICT_TARGET_LOW:

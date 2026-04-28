@@ -20554,6 +20554,18 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
         log.warning("POLISH REJECT: combat-lore (%s)", ", ".join(_combat_lore_reasons))
         return False
 
+    # 8f. FIX-NARRATIVE-VENUE-LEAK-01: stadium/venue name hallucination ban.
+    # Venue data is NOT in the evidence pack — every mention is fabricated.
+    # Applies to ALL 4 sections (Setup/Edge/Risk/Verdict) of the polished output.
+    try:
+        from narrative_spec import find_venue_leaks as _find_venue_leaks
+        _venue_leaks = _find_venue_leaks(polished)
+        if _venue_leaks:
+            log.warning("POLISH REJECT: venue-leak (%s)", ", ".join(_venue_leaks))
+            return False
+    except Exception as _vl_exc:
+        log.debug("Venue-leak check skipped: %s", _vl_exc)
+
     # 8b. BUILD-VERDICT-FLOOR-01: verdict section length gate [140, 200]
     _verdict_idx = polished.find("🏆")
     if _verdict_idx != -1:
