@@ -2153,7 +2153,7 @@ async def _generate_one(
                 else:
                     _static, _dynamic = format_evidence_prompt(evidence_pack, spec, match_preview=True, return_split=True)
                     prompt_text = [
-                        {"type": "text", "text": _static, "cache_control": {"type": "ephemeral"}},
+                        {"type": "text", "text": _static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
                         {"type": "text", "text": _dynamic},
                     ]
                 resp = await claude.messages.create(
@@ -2191,7 +2191,7 @@ async def _generate_one(
                     messages=[{
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": _static, "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": _static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
                             {"type": "text", "text": _dynamic},
                         ],
                     }],
@@ -2474,7 +2474,7 @@ async def _generate_one(
                             messages=[{
                                 "role": "user",
                                 "content": [
-                                    {"type": "text", "text": _retry_static, "cache_control": {"type": "ephemeral"}},
+                                    {"type": "text", "text": _retry_static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
                                     {"type": "text", "text": _retry_dynamic},
                                 ],
                             }],
