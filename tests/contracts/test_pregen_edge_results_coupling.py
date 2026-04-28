@@ -324,3 +324,56 @@ class TestSignatureStability:
         assert coupling_lines, "Expected 'edge_results coupling' log line for observability"
         msg = coupling_lines[0]
         assert "raw=" in msg and "edge_intersection=" in msg and "final=" in msg
+
+
+# ---------------------------------------------------------------------------
+# AC-2 extension: snapshot baseline path also coupled to edge_results
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotBaselineCouplingAtLoadPregenEdges:
+    """_load_snapshot_baseline_edges by SQL design returns matches WITHOUT
+    edge_results — i.e. exactly the ghost-cache pattern this fix prevents.
+    The coupling check at _load_pregen_edges drops them unless allowlisted."""
+
+    def test_snapshot_baseline_dropped_by_default(self):
+        import pregenerate_narratives as pn
+
+        ghost_edge = {
+            "match_key": "ghost_a_vs_ghost_b_2026-05-01",
+            "best_odds": 2.10,
+            "edge_pct": -0.5,
+            "league": "epl",
+            "narrative_source_hint": "baseline_no_edge",
+        }
+        # Real-world: shadow path returns nothing here, snapshot path returns the ghost
+        with patch.object(pn, "_load_shadow_pregen_edges", return_value=[]), \
+             patch.object(pn, "_load_snapshot_baseline_edges", return_value=[ghost_edge]), \
+             patch.object(pn, "discover_pregen_targets", return_value=[]):
+            edges = pn._load_pregen_edges(limit=10)
+
+        keys = [e.get("match_key") for e in edges]
+        assert "ghost_a_vs_ghost_b_2026-05-01" not in keys, (
+            "Snapshot baseline ghosts must be filtered when allowlist is empty"
+        )
+
+    def test_snapshot_baseline_kept_when_allowlisted(self):
+        import pregenerate_narratives as pn
+
+        warm_edge = {
+            "match_key": "warm_a_vs_warm_b_2026-05-01",
+            "best_odds": 2.10,
+            "edge_pct": -0.5,
+            "league": "epl",
+            "narrative_source_hint": "baseline_no_edge",
+        }
+        with patch.object(pn, "_load_shadow_pregen_edges", return_value=[]), \
+             patch.object(pn, "_load_snapshot_baseline_edges", return_value=[warm_edge]), \
+             patch.object(pn, "discover_pregen_targets", return_value=[]), \
+             patch.object(pn, "_PREGEN_WARM_COVERAGE_ALLOWLIST", frozenset({"epl"})):
+            edges = pn._load_pregen_edges(limit=10)
+
+        keys = [e.get("match_key") for e in edges]
+        assert "warm_a_vs_warm_b_2026-05-01" in keys, (
+            "Allowlist must keep snapshot baseline edges in the candidate set"
+        )

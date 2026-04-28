@@ -1523,7 +1523,26 @@ def _load_pregen_edges(limit: int = 100, sport: str | None = None) -> list[dict]
     """
     live_edges = _load_shadow_pregen_edges(limit=limit)
     seen = {edge.get("match_key", "") for edge in live_edges if edge.get("match_key")}
+
+    # FIX-PREGEN-EDGE-RESULTS-COUPLING-01: _load_snapshot_baseline_edges()
+    # explicitly returns matches in odds_snapshots that have NO unsettled
+    # edge_results row (its SQL filters `WHERE er.match_key IS NULL`). Those
+    # are exactly the ghost-cache writes the deeplink resolver cannot serve.
+    # Drop them here unless their league is in the warm-coverage allowlist;
+    # baseline_no_edge cards are still served via the live-tap path
+    # (`_generate_narrative_v2(live_tap=True, ctx_data=None, tips=[])`).
     snapshot_edges = _load_snapshot_baseline_edges(limit=limit)
+    _snap_raw = len(snapshot_edges)
+    snapshot_edges = [
+        e for e in snapshot_edges
+        if (e.get("league") or "") in _PREGEN_WARM_COVERAGE_ALLOWLIST
+    ]
+    if _snap_raw and _snap_raw != len(snapshot_edges):
+        log.info(
+            "_load_pregen_edges: edge_results coupling on snapshot baseline: "
+            "%d → %d (allowlist_kept=%d)",
+            _snap_raw, len(snapshot_edges), len(snapshot_edges),
+        )
     for edge in snapshot_edges:
         match_key = edge.get("match_key", "")
         if match_key and match_key not in seen:
