@@ -4,10 +4,44 @@
 # (sets git config core.hooksPath .githooks)
 #
 # Order of checks:
-#   1. Canonical lane discipline (OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01) — fail-fast
-#   2. Secret scan
-#   3. Pre-merge gate (full local test suite)
+#   1. Wave worktree guard (BUILD-WORKTREE-DISPATCH-RUNNER-01) — fail-fast
+#   2. Canonical lane discipline (OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01) — fail-fast
+#   3. Secret scan
+#   4. Pre-merge gate (full local test suite)
 echo "Running pre-merge gate (local)..."
+
+# === WAVE WORKTREE GUARD (BUILD-WORKTREE-DISPATCH-RUNNER-01) ===
+# Wave-class file edits must happen inside a wave worktree (created by
+# /home/paulsportsza/scripts/wave_worktree_create.sh), never directly in the
+# main bot tree. This closes the SO #41 violation pattern where parallel agents
+# commit-bundle each other's wave files.
+#
+# Carve-outs (allowed in main tree): ops/, reference/, COO/, HANDOFFS/, CLAUDE.md,
+# static/qa-gallery/canonical/.
+#
+# Bypass (audit-trailed, controller-approved only):
+#   WAVE_GUARD_BYPASS=1 git commit ...
+GIT_TOPLEVEL_RESOLVED="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+if [ "${WAVE_GUARD_BYPASS:-0}" != "1" ] \
+   && [[ "$GIT_TOPLEVEL_RESOLVED" != /home/paulsportsza/worktrees/* ]]; then
+    OFFENDERS=$(git diff --cached --name-only --diff-filter=ACMRT 2>/dev/null \
+        | grep -vE '^(ops/|reference/|COO/|HANDOFFS/|CLAUDE\.md$|static/qa-gallery/canonical/)' || true)
+    if [ -n "$OFFENDERS" ]; then
+        echo "" >&2
+        echo "ERROR: Wave-class file edits forbidden in main bot tree." >&2
+        echo "       Use wave_worktree_create.sh <BRIEF-ID> and edit there." >&2
+        echo "" >&2
+        echo "Offending staged files:" >&2
+        echo "$OFFENDERS" | sed 's/^/  - /' >&2
+        echo "" >&2
+        echo "Carve-outs (allowed in main tree):" >&2
+        echo "  ops/  reference/  COO/  HANDOFFS/  CLAUDE.md  static/qa-gallery/canonical/" >&2
+        echo "" >&2
+        echo "Bypass (audit-trailed): WAVE_GUARD_BYPASS=1 git commit ..." >&2
+        echo "" >&2
+        exit 1
+    fi
+fi
 
 # === CANONICAL LANE DISCIPLINE (OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01) ===
 # Reject mixed-staging of canonical/ + non-canonical/ files.
@@ -34,10 +68,26 @@ if [ -n "$STAGED" ]; then
     fi
 fi
 
-# Load .env for local runs (CI gets secrets from Actions)
-if [ -f .env ]; then
-  set -a
-  source .env
-  set +a
+# Load .env for local runs (CI gets secrets from Actions).
+# Try cwd first; fall back to canonical bot tree so wave worktrees inherit secrets
+# without copying .env. Order matches BUILD-WORKTREE-DISPATCH-RUNNER-01.
+for env_candidate in .env /home/paulsportsza/bot/.env; do
+  if [ -f "$env_candidate" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_candidate"
+    set +a
+    break
+  fi
+done
+
+# Wave worktrees: route sibling-repo lookups back to the canonical paths so
+# config.SCRAPERS_ROOT does not pick up a worktree-sibling symlink, and prepend
+# /home/paulsportsza so the canonical mzansiedge-contracts package wins over the
+# scrapers/contracts shadow.
+if [[ "$GIT_TOPLEVEL_RESOLVED" == /home/paulsportsza/worktrees/* ]]; then
+  export SCRAPERS_ROOT="${SCRAPERS_ROOT:-/home/paulsportsza/scrapers}"
+  export PYTHONPATH="/home/paulsportsza:/home/paulsportsza/bot:/home/paulsportsza/scripts${PYTHONPATH:+:$PYTHONPATH}"
 fi
+
 ./scripts/pre_merge_gate.sh
