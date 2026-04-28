@@ -4120,7 +4120,13 @@ def render_automation_content() -> str:
 .so-rup-card-missing{background:var(--surface-alt);border:1px dashed var(--border);border-radius:8px;padding:16px;font-size:12px;color:var(--muted);text-align:center;}
 .so-rup-pivot{background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:6px 10px;font-family:var(--font-m);font-size:11px;color:var(--amber);letter-spacing:.02em;}
 .so-rup-card-missing code{color:var(--gold);background:rgba(248,200,48,0.08);padding:1px 5px;border-radius:3px;font-size:11px;}
-@media (max-width:600px){.so-rup-act{min-width:0;flex:1 1 calc(50% - 3px);}}
+/* FIX-DASH-REEL-WIDGET-01 — voice-over download links */
+.so-rup-vos{display:flex;flex-direction:column;gap:6px;background:var(--surface-alt);border:1px solid var(--border);border-radius:8px;padding:10px 12px;}
+.so-rup-vos-label{font-family:var(--font-m);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);}
+.so-rup-vos-links{display:flex;gap:6px;flex-wrap:wrap;}
+.so-rup-vo{flex:1 1 calc(33% - 4px);min-width:90px;display:inline-flex;align-items:center;justify-content:center;gap:5px;font-family:var(--font-m);font-size:11px;font-weight:600;color:var(--amber,#f8c830);background:rgba(248,200,48,0.08);border:1px solid rgba(248,200,48,0.30);border-radius:6px;padding:6px 8px;text-decoration:none;letter-spacing:.04em;}
+.so-rup-vo:hover{background:rgba(248,200,48,0.18);border-color:var(--gold);color:var(--gold);}
+@media (max-width:600px){.so-rup-act{min-width:0;flex:1 1 calc(50% - 3px);}.so-rup-vo{flex:1 1 calc(50% - 3px);}}
 /* ── Platform-native preview frames ─────────────────────────── */
 .pv-frame{max-width:420px;margin:0 auto;font-size:13px;line-height:1.5;color:var(--text);}
 .pv-frame-hdr{display:flex;align-items:center;gap:10px;padding:10px 12px;}
@@ -5074,6 +5080,23 @@ function renderReelUploadPanel(p){
   } else {
     cardBlock='<div class="so-rup-card-missing">No reel card image found for '+eH(datePart)+' — run <code>reel_generator.py</code> to generate one.</div>';
   }
+  // FIX-DASH-REEL-WIDGET-01: surface VOs (voice-overs) so Paul can pull
+  // individual MP3s straight into Premiere Pro. Server passes p.reel_vos
+  // as [{name,url,label}, ...]. Hidden when empty.
+  var vosBlock='';
+  var vos=Array.isArray(p.reel_vos)?p.reel_vos:[];
+  if(vos.length){
+    var vosLinks='';
+    for(var _vi=0;_vi<vos.length;_vi++){
+      var _v=vos[_vi]||{};
+      var _vu=_v.url||'';
+      var _vn=_v.name||'';
+      var _vl=_v.label||'VO';
+      if(!_vu)continue;
+      vosLinks+='<a class="so-rup-vo" href="'+eA(_vu)+'" download="'+eA(_vn)+'" target="_blank" rel="noopener" aria-label="Download '+eA(_vl)+'">🎧 '+eH(_vl)+'</a>';
+    }
+    vosBlock='<div class="so-rup-vos"><div class="so-rup-vos-label">Voice-overs</div><div class="so-rup-vos-links">'+vosLinks+'</div></div>';
+  }
   // Only show drop zone when no master has been uploaded yet AND we have a
   // kit to upload against. When awaiting the next generator run there's no
   // target row_id to attach the upload to.
@@ -5091,6 +5114,7 @@ function renderReelUploadPanel(p){
     pivotBanner+
     '<div class="so-rup-meta">'+eH(datePart)+(slotPart?(' &middot; '+eH(slotPart)+' SAST'):'')+(hasFinal?' &middot; Master uploaded, scheduled to publish.':' &middot; Upload your Premiere Pro export to queue this reel.')+'</div>'+
     cardBlock+
+    vosBlock+
     dropBlock+
   '</div>';
 }
@@ -5923,15 +5947,15 @@ def render_reel_kit_page() -> str:
             else:
                 status_html = '<span style="color:var(--muted)">Card only</span>'
             thumb_file = kit.get("thumb") or kit.get("card") or f"card_{pick_id}.png"
-            thumb_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/{thumb_file}"
-            card_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/card_{pick_id}.png"
+            thumb_url = _reel_asset_url(today_str, pick_id, thumb_file)
+            card_url = _reel_asset_url(today_str, pick_id, f"card_{pick_id}.png")
             display_name = pick_id[:12].upper()
             # FIX-REEL-KIT-RENDERING-01 (AC-4): expose individual VO download links so
             # Paul can pull MP3s directly into Premiere Pro without round-tripping
             # the kit zip.
             vo_links_html = ""
             for vo_name in (kit.get("vos") or []):
-                vo_url = f"https://mzansiedge.co.za/assets/reel-cards/{today_str}/{pick_id}/{vo_name}"
+                vo_url = _reel_asset_url(today_str, pick_id, vo_name)
                 # Extract "v1"/"v2"/"v3" from name e.g. vo_<pick>_v1.mp3 \u2192 "VO 1"
                 _vlabel = "VO"
                 if "_v" in vo_name:
@@ -10078,6 +10102,9 @@ def api_so_post(post_id: str):
     reel_pick_id = ""
     reel_tier = ""
     reel_pivoted_from = ""  # set when overdue → next-day pivot fires
+    # FIX-DASH-REEL-WIDGET-01: surface VOs to the upload widget so Paul can
+    # pull individual MP3s into Premiere Pro without opening the gallery.
+    reel_vos: list[dict] = []
 
     def _best_kit_for(date_str: str) -> tuple[dict | None, list[dict]]:
         try:
@@ -10150,9 +10177,19 @@ def api_so_post(post_id: str):
         if _match and _match.get("pick_id") and _match.get("card"):
             reel_pick_id = _match["pick_id"]
             reel_tier = (_match.get("tier") or "").lower()
-            reel_card_url = f"https://mzansiedge.co.za/assets/reel-cards/{_effective_date}/{reel_pick_id}/{_match['card']}"
+            reel_card_url = _reel_asset_url(_effective_date, reel_pick_id, _match["card"])
             if reel_final_out:
                 reel_master_url = f"{_REEL_PUBLIC_BASE}/{_effective_date}/{reel_pick_id}_master.mp4"
+            # FIX-DASH-REEL-WIDGET-01: include VOs in widget payload
+            for _vo_name in (_match.get("vos") or []):
+                _vo_url = _reel_asset_url(_effective_date, reel_pick_id, _vo_name)
+                _vlabel = "VO"
+                if "_v" in _vo_name:
+                    try:
+                        _vlabel = "VO " + _vo_name.split("_v", 1)[1].split(".", 1)[0]
+                    except Exception:
+                        pass
+                reel_vos.append({"name": _vo_name, "url": _vo_url, "label": _vlabel})
 
     payload = {
         "id":              post_id,
@@ -10187,6 +10224,7 @@ def api_so_post(post_id: str):
         "reel_pick_id":    reel_pick_id,
         "reel_tier":       reel_tier,
         "reel_pivoted_from": reel_pivoted_from,
+        "reel_vos":        reel_vos,
         # FB Groups preview fields (FIX-DASH-FB-PREVIEW-GROUP-01)
         "group":      _fb_group_name,
         "group_url":  _fb_group_url,
@@ -10894,6 +10932,24 @@ def _find_reel_vos(date_str: str, pick_id: str) -> list[str]:
         if fname.startswith(f"vo_{pick_id}_v") and fname.endswith(".mp3"):
             vos.append(os.path.join(date_dir, fname))
     return vos
+
+
+def _reel_asset_url(date_str: str, pick_id: str, fname: str) -> str:
+    """Build a public reel-asset URL with a `?v=<mtime>` cache buster.
+
+    FIX-DASH-REEL-WIDGET-01: nginx now serves /assets/reel-cards/ with
+    `Cache-Control: public, max-age=300, must-revalidate`, so changing the
+    query string is sufficient to defeat any intermediate caches when a
+    kit is regenerated. Falls back to the unversioned URL if the file is
+    missing — never blocks rendering on a stat() failure.
+    """
+    base = f"https://mzansiedge.co.za/assets/reel-cards/{date_str}/{pick_id}/{fname}"
+    try:
+        path = os.path.join(_REEL_CARDS_ROOT, date_str, pick_id, fname)
+        mtime = int(os.path.getmtime(path))
+        return f"{base}?v={mtime}"
+    except OSError:
+        return base
 
 
 # -- Reel Kit API routes -----------------------------------------------------
