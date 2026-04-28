@@ -10313,11 +10313,12 @@ def api_so_post(post_id: str):
             reel_tier = (_match.get("tier") or "").lower()
             reel_card_url = _reel_asset_url(_effective_date, reel_pick_id, _match["card"])
             if reel_final_out:
-                reel_master_url = f"{_REEL_PUBLIC_BASE}/{_effective_date}/{reel_pick_id}_master.mp4"
-                # FIX-IG-REEL-WIDGET-POST-UPLOAD-01 (AC-1): expose mtime so the
-                # widget's <video> tag can cache-bust on the actual file rather
-                # than per-render — keeps the browser cache warm between
-                # re-renders but invalidates after every fresh upload.
+                # FIX-REEL-MASTER-URL-CONTRACT-01: master files are written by
+                # api_reel_final_upload() to <_REEL_FINALS_ROOT>/<date>/final/<row_id>.mp4
+                # where row_id is the MOQ Notion page id (== post_id here).
+                # The widget URL must mirror that layout — never <pick_id>_master.mp4.
+                # See ops/REEL-MASTER-CONTRACT.md.
+                reel_master_url = f"{_REEL_PUBLIC_BASE}/{_effective_date}/final/{post_id}.mp4"
                 _master_fs_path = os.path.join(
                     _REEL_FINALS_ROOT, _effective_date, "final", f"{post_id}.mp4"
                 )
