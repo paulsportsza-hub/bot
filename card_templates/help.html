@@ -7,114 +7,117 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root { --text-secondary: #B3B3B3; }
         html, body { margin: 0; padding: 0; background: #000000; }
-        body {
-            font-family: 'Inter', -apple-system, system-ui, sans-serif;
-            width: 480px;
-            padding: 2px;
-            box-sizing: content-box;
-        }
-        .card {
-            width: 100%;
-            background: #0A0A0A;
-            border-radius: 0;
-            overflow: hidden;
-        }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; }
+
         .header {
-            text-align: center;
-            padding: 22px 20px 16px;
-            background: linear-gradient(180deg, #0D0D0D, #141414);
-            border-bottom: 1px solid #2A2A2A;
+            position: relative; text-align: center; padding: 20px 20px 14px;
+            isolation: isolate; overflow: hidden;
         }
-        .logo-img {
-            height: 32px;
-            width: auto;
-            display: block;
-            margin: 0 auto;
+        .logo-glow {
+            position: absolute; inset: -10px 0 0 0; pointer-events: none; z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
         }
+        .logo-glow-screen {
+            position: absolute; inset: 0; pointer-events: none; z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+        }
+        .header > .logo-img, .header > .logo-fallback,
+        .header > .orange-bar, .header > .title, .header > .subtitle { position: relative; z-index: 1; }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
         .orange-bar {
             height: 3px;
             background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
-            margin: 10px 20px;
-            border-radius: 2px;
+            margin: 10px 20px; border-radius: 2px;
         }
         .title {
-            font-size: 15px;
-            font-weight: 700;
-            color: #FFFFFF;
-            letter-spacing: 3px;
+            font-size: 15px; font-weight: 700; color: #FFFFFF;
+            letter-spacing: 3px; margin-bottom: 5px;
         }
-        .groups {
-            padding: 8px 14px 14px;
+        .subtitle {
+            font-size: 11px; color: var(--text-secondary); font-weight: 400;
         }
+
+        .body { padding: 14px 18px 18px; }
+
         .group {
-            margin-top: 10px;
+            margin-bottom: 12px;
         }
+        .group:last-child { margin-bottom: 0; }
         .group-name {
-            font-size: 10px;
-            font-weight: 700;
+            font-size: 9.5px; font-weight: 800;
             color: #F7931A;
-            letter-spacing: 1.2px;
+            letter-spacing: 1.5px;
             text-transform: uppercase;
             margin-bottom: 6px;
             padding-left: 4px;
         }
+        .cmd-rows {
+            display: flex; flex-direction: column; gap: 4px;
+        }
         .cmd-row {
-            display: flex;
-            align-items: baseline;
-            padding: 8px 12px;
-            background: #1A1A1A;
+            display: flex; align-items: baseline;
+            padding: 9px 13px;
+            background: #111111;
+            border: 1px solid #1E1E1E;
+            border-left: 3px solid #2A2A2A;
             border-radius: 8px;
-            border-left: 2px solid #2A2A2A;
-            margin-bottom: 4px;
         }
         .cmd-name {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-            font-weight: 700;
-            color: #FFFFFF;
-            min-width: 120px;
+            font-size: 12px; font-weight: 800; color: #FFFFFF;
+            min-width: 130px;
             flex-shrink: 0;
         }
         .cmd-desc {
-            font-size: 11px;
-            color: var(--text-secondary);
-            flex: 1;
+            font-size: 11.5px; color: var(--text-secondary);
+            flex: 1; line-height: 1.4;
         }
-        .footer {
+
+        .hint-line {
             text-align: center;
-            padding: 10px 20px 14px;
-            font-size: 9px;
-            color: #555555;
-            border-top: 1px solid #1E1E1E;
-            margin-top: 4px;
+            font-size: 11px; color: var(--text-secondary);
+            padding-top: 8px;
+            font-weight: 500;
         }
     </style>
 </head>
 <body>
 <div class="card">
     <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
-        <div style="font-size:22px;font-weight:800;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
         {% endif %}
         <div class="orange-bar"></div>
-        <div class="title">❓ HELP</div>
+        <div class="title">HELP</div>
+        <div class="subtitle">Commands and quick navigation</div>
     </div>
-    <div class="groups">
+
+    <div class="body">
         {% for group in command_groups %}
         <div class="group">
-            <div class="group-name">{{ group.group_name }}</div>
-            {% for cmd in group.commands %}
-            <div class="cmd-row">
-                <span class="cmd-name">{{ cmd.cmd }}</span>
-                <span class="cmd-desc">{{ cmd.description }}</span>
+            <div class="group-name">{{ group.group_name | e }}</div>
+            <div class="cmd-rows">
+                {% for cmd in group.commands %}
+                <div class="cmd-row">
+                    <span class="cmd-name">{{ cmd.cmd | e }}</span>
+                    <span class="cmd-desc">{{ cmd.description | e }}</span>
+                </div>
+                {% endfor %}
             </div>
-            {% endfor %}
         </div>
         {% endfor %}
+
+        <div class="hint-line">Tap 📖 Guide for detailed explanations</div>
     </div>
-    <div class="footer">Tap 📖 Guide for detailed explanations</div>
 </div>
 </body>
 </html>
