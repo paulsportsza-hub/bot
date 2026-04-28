@@ -687,29 +687,16 @@ def build_onboarding_summary_data(ob: dict) -> dict:
                 "label": sport.label if sport else sk,
                 "teams": favs,
             })
-        risk_raw = config.RISK_PROFILES.get(ob.get("risk") or "moderate", {}).get("label", "Moderate")
-        risk_label = risk_raw.split(" ", 1)[-1] if " " in risk_raw else risk_raw
-        hour = ob.get("notify_hour")
-        notify_map = {7: "07:00 SAST", 12: "12:00 SAST", 18: "18:00 SAST", 21: "21:00 SAST"}
-        notify_str = notify_map.get(hour, f"{hour}:00") if hour is not None else "Not set"
-        bankroll = ob.get("bankroll")
-        bankroll_str = f"R{bankroll:,.0f}" if bankroll else "Not set"
     except Exception:
         exp = ob.get("experience", "casual")
         exp_labels = {"experienced": "Regular bettor", "casual": "Casual", "newbie": "Newbie"}
         sports = []
-        risk_label = ob.get("risk", "Moderate")
-        notify_str = "Not set"
-        bankroll_str = "Not set"
     return {
         "header_logo_b64": _logo(),
         "step": 5,
         "total_steps": 5,
         "experience_label": exp_labels.get(exp, exp),
         "sports": sports,
-        "risk": risk_label,
-        "bankroll_str": bankroll_str,
-        "notify_str": notify_str,
     }
 
 

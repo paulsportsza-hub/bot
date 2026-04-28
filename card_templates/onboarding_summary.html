@@ -128,28 +128,6 @@
             font-style: italic;
         }
 
-        /* Prefs row — 2 columns */
-        .prefs-row {
-            display: grid; grid-template-columns: 1fr 1fr;
-            gap: 6px;
-        }
-        .pref-item {
-            background: #111111;
-            border: 1px solid #1E1E1E;
-            border-left: 3px solid #2A2A2A;
-            border-radius: 10px;
-            padding: 11px 14px;
-        }
-        .pref-label {
-            font-size: 9.5px; color: var(--text-secondary);
-            font-weight: 800; letter-spacing: 1.5px;
-            text-transform: uppercase;
-            margin-bottom: 4px;
-        }
-        .pref-value {
-            font-size: 13px; font-weight: 700; color: #FFFFFF;
-            text-transform: capitalize;
-        }
     </style>
 </head>
 <body>
@@ -204,16 +182,6 @@
         </div>
         {% endif %}
 
-        <div class="prefs-row">
-            <div class="pref-item">
-                <div class="pref-label">Risk</div>
-                <div class="pref-value">{{ risk | e }}</div>
-            </div>
-            <div class="pref-item">
-                <div class="pref-label">Bankroll</div>
-                <div class="pref-value">{{ bankroll_str | e }}</div>
-            </div>
-        </div>
     </div>
 </div>
 </body>
