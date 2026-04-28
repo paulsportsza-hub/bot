@@ -1,5 +1,3 @@
-<!-- VARIANT: LIST -->
-<!-- BRIEF: BUILD-WAVE2-ONBOARDING-01 -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -10,64 +8,193 @@
         :root { --text-secondary: #B3B3B3; }
         html, body { margin: 0; padding: 0; background: #000000; }
         body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
-        .card { width: 100%; background: #0A0A0A; overflow: hidden; border: none; box-shadow: none; }
+        .card { width: 100%; background: #0A0A0A; }
+
         .header {
-            text-align: center; padding: 22px 20px 16px;
-            background: linear-gradient(180deg, #0D0D0D, #141414);
-            border-bottom: 1px solid #2A2A2A;
+            position: relative; text-align: center; padding: 18px 20px 12px;
+            isolation: isolate; overflow: hidden;
         }
+        .logo-glow {
+            position: absolute; inset: -10px 0 0 0; pointer-events: none; z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
+        }
+        .logo-glow-screen {
+            position: absolute; inset: 0; pointer-events: none; z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+        }
+        .header > .logo-img, .header > .logo-fallback,
+        .header > .orange-bar, .header > .step-progress, .header > .title { position: relative; z-index: 1; }
         .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
-        .orange-bar { height: 3px; background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45); margin: 10px 20px; border-radius: 2px; }
-        .step-badge { display: inline-block; font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; margin-bottom: 6px; }
-        .title { font-size: 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 2px; }
-        .body { padding: 18px 20px 20px; }
-        .confirm-line { font-size: 14px; font-weight: 700; color: #FFFFFF; margin-bottom: 16px; }
-        .section { margin-bottom: 14px; }
-        .section-label {
-            font-size: 10px; color: var(--text-secondary); font-weight: 700;
-            letter-spacing: 1px; margin-bottom: 6px; text-transform: uppercase;
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
         }
-        .section-value { font-size: 14px; font-weight: 600; color: #FFFFFF; }
-        .section-hint { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
-        .divider { height: 1px; background: #1E1E1E; margin: 10px 0; }
-        .sports-block { display: flex; flex-direction: column; gap: 8px; }
+        .step-progress {
+            display: inline-flex; align-items: center; gap: 5px;
+            margin-bottom: 6px;
+        }
+        .step-dot { width: 16px; height: 4px; border-radius: 2px; background: #2A2A2A; }
+        .step-dot.done { background: #F7931A; }
+        .step-dot.active { background: #5DD68F; box-shadow: 0 0 6px #5DD68F88; }
+        .step-label {
+            font-size: 9.5px; color: var(--text-secondary);
+            letter-spacing: 1.5px; font-weight: 700; text-transform: uppercase;
+            margin-left: 6px;
+        }
+        .title {
+            font-size: 14px; font-weight: 700; color: #FFFFFF;
+            letter-spacing: 2.5px;
+        }
+
+        .body { padding: 16px 20px 18px; }
+
+        /* Confirm hero */
+        .confirm-block {
+            position: relative;
+            background: #0F0F0F;
+            border: 1px solid #2A2A2A;
+            border-left: 3px solid #5DD68F;
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            display: flex; align-items: center; gap: 10px;
+            overflow: hidden; isolation: isolate;
+        }
+        .confirm-glow {
+            position: absolute; inset: -30px -10px; pointer-events: none; z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 50% 90% at 0% 50%,
+                #5DD68F22 0%, transparent 70%);
+        }
+        .confirm-block > .confirm-tick,
+        .confirm-block > .confirm-text { position: relative; z-index: 1; }
+        .confirm-tick {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 22px; height: 22px;
+            background: #5DD68F; color: #000;
+            border-radius: 50%;
+            font-size: 12px; font-weight: 800; line-height: 1;
+            flex-shrink: 0;
+        }
+        .confirm-text {
+            font-size: 13.5px; font-weight: 700; color: #FFFFFF;
+            line-height: 1.3;
+        }
+
+        /* Section block */
+        .section {
+            background: #111111;
+            border: 1px solid #1E1E1E;
+            border-left: 3px solid #2A2A2A;
+            border-radius: 10px;
+            padding: 11px 14px;
+            margin-bottom: 8px;
+        }
+        .section-label {
+            font-size: 9.5px; color: var(--text-secondary);
+            font-weight: 800; letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        .section-value {
+            font-size: 14px; font-weight: 700; color: #FFFFFF;
+            line-height: 1.35;
+        }
+
+        /* Sports section — multi-row variant */
+        .section-sports {
+            border-left-color: #F7931A;
+        }
+        .sports-block {
+            display: flex; flex-direction: column; gap: 10px;
+            margin-top: 4px;
+        }
         .sport-item {}
-        .sport-name { font-size: 13px; font-weight: 700; color: #FFFFFF; margin-bottom: 3px; }
-        .teams-list { font-size: 12px; color: var(--text-secondary); }
-        .no-teams { font-size: 12px; color: #555555; font-style: italic; }
-        .prefs-row { display: flex; gap: 16px; }
-        .pref-item {}
-        .pref-label { font-size: 10px; color: var(--text-secondary); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 3px; }
-        .pref-value { font-size: 13px; font-weight: 600; color: #FFFFFF; }
+        .sport-name {
+            font-size: 13px; font-weight: 800; color: #FFFFFF;
+            margin-bottom: 2px;
+        }
+        .teams-list {
+            font-size: 12px; color: var(--text-secondary);
+            line-height: 1.4;
+        }
+        .no-teams {
+            font-size: 12px; color: #555555;
+            font-style: italic;
+        }
+
+        /* Prefs row — 2 columns */
+        .prefs-row {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+        .pref-item {
+            background: #111111;
+            border: 1px solid #1E1E1E;
+            border-left: 3px solid #2A2A2A;
+            border-radius: 10px;
+            padding: 11px 14px;
+        }
+        .pref-label {
+            font-size: 9.5px; color: var(--text-secondary);
+            font-weight: 800; letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        .pref-value {
+            font-size: 13px; font-weight: 700; color: #FFFFFF;
+            text-transform: capitalize;
+        }
     </style>
 </head>
 <body>
 <div class="card">
     <div class="header">
-        {% if header_logo_b64 %}<img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />{% endif %}
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
         <div class="orange-bar"></div>
-        <div class="step-badge">STEP 5 OF 5</div>
+        <div class="step-progress">
+            <span class="step-dot done"></span>
+            <span class="step-dot done"></span>
+            <span class="step-dot done"></span>
+            <span class="step-dot done"></span>
+            <span class="step-dot active"></span>
+            <span class="step-label">Step 5 of 5</span>
+        </div>
         <div class="title">YOUR PROFILE</div>
     </div>
+
     <div class="body">
-        <div class="confirm-line">Looking good — confirm your setup.</div>
+        <div class="confirm-block">
+            <div class="confirm-glow"></div>
+            <span class="confirm-tick">✓</span>
+            <span class="confirm-text">Looking good — confirm your setup</span>
+        </div>
 
         <div class="section">
             <div class="section-label">Experience</div>
-            <div class="section-value">{{ experience_label }}</div>
+            <div class="section-value">{{ experience_label | e }}</div>
         </div>
 
-        <div class="divider"></div>
-
         {% if sports %}
-        <div class="section">
+        <div class="section section-sports">
             <div class="section-label">Sports &amp; Teams</div>
             <div class="sports-block">
                 {% for sp in sports %}
                 <div class="sport-item">
-                    <div class="sport-name">{{ sp.emoji }} {{ sp.label }}</div>
+                    <div class="sport-name">{{ sp.emoji }} {{ sp.label | e }}</div>
                     {% if sp.teams %}
-                    <div class="teams-list">{{ sp.teams | join(', ') }}</div>
+                    <div class="teams-list">{{ sp.teams | join(', ') | e }}</div>
                     {% else %}
                     <div class="no-teams">No teams selected</div>
                     {% endif %}
@@ -75,17 +202,16 @@
                 {% endfor %}
             </div>
         </div>
-        <div class="divider"></div>
         {% endif %}
 
         <div class="prefs-row">
             <div class="pref-item">
                 <div class="pref-label">Risk</div>
-                <div class="pref-value">{{ risk }}</div>
+                <div class="pref-value">{{ risk | e }}</div>
             </div>
             <div class="pref-item">
                 <div class="pref-label">Bankroll</div>
-                <div class="pref-value">{{ bankroll_str }}</div>
+                <div class="pref-value">{{ bankroll_str | e }}</div>
             </div>
         </div>
     </div>
