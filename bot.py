@@ -14771,13 +14771,19 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
     def _fetch():
         conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
         try:
-            # INV-VERDICT-COACH-FABRICATION-01 + FIX-NARRATIVE-CACHE-DEATH-01: exclude quarantined rows
+            # INV-VERDICT-COACH-FABRICATION-01 + FIX-NARRATIVE-CACHE-DEATH-01: exclude quarantined rows.
+            # FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01: also exclude rows with empty
+            # narrative_html so the breakdown surface treats verdict-cache rows
+            # (narrative_html='' by design) as cache-miss and falls through to live
+            # generation rather than serving four blank prose sections.
             try:
                 row = conn.execute(
                     "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
                     "evidence_json, narrative_source, coverage_json, created_at "
                     "FROM narrative_cache WHERE match_id = ? "
-                    "AND (status IS NULL OR status != 'quarantined')",
+                    "AND (status IS NULL OR status != 'quarantined') "
+                    "AND narrative_html IS NOT NULL "
+                    "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0",
                     (match_id,),
                 ).fetchone()
             except sqlite3.OperationalError:
@@ -14785,7 +14791,9 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 row = conn.execute(
                     "SELECT narrative_html, model, edge_tier, tips_json, odds_hash, expires_at, "
                     "evidence_json, narrative_source, coverage_json, created_at "
-                    "FROM narrative_cache WHERE match_id = ?",
+                    "FROM narrative_cache WHERE match_id = ? "
+                    "AND narrative_html IS NOT NULL "
+                    "AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0",
                     (match_id,),
                 ).fetchone()
             if not row:

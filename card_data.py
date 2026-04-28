@@ -1133,6 +1133,147 @@ def _format_commence_time_sast(iso_str: str) -> str:
 
 # ── AI Breakdown card data ─────────────────────────────────────────────────────
 
+
+def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
+    """FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01: instant-baseline fallback.
+
+    When no eligible narrative_cache row exists for ``match_id`` (because the
+    match was never pregenerated, or the only row is a verdict-cache row with
+    empty ``narrative_html``), synthesize a row tuple in the exact shape
+    ``build_ai_breakdown_data`` expects from the DB SELECT, using:
+
+      1. edge_results lookup for sport / league / tier / odds / bookmaker / EV
+      2. ``narrative_spec.build_narrative_spec(...)`` to construct a NarrativeSpec
+      3. ``narrative_spec._render_baseline(spec)`` to produce the 4-section HTML
+
+    Zero LLM calls, zero ESPN context fetch — same instant-baseline path used by
+    ``_generate_narrative_v2(live_tap=True)`` and the Hot Tips warm path.
+    Latency target: < 100ms (deterministic templates only).
+
+    Returns ``(narrative_html, edge_tier, tips_json, verdict_html='',
+              evidence_class='', created_at_iso)`` matching the DB row order,
+    or ``None`` when there is no edge data for this match either (truly
+    unreachable). The caller then returns ``None`` to its own caller.
+    """
+    import json as _json
+    import os
+    import re as _re
+    from datetime import datetime, timezone
+    from pathlib import Path as _Path
+
+    _BOT_DIR = _Path(__file__).parent
+    _SCRAPERS_DIR = _Path(os.environ.get("SCRAPERS_ROOT", str(_BOT_DIR.parent / "scrapers")))
+    _ODDS_DB = str(_SCRAPERS_DIR / "odds.db")
+
+    try:
+        from scrapers.db_connect import connect_odds_db
+        _conn = connect_odds_db(_ODDS_DB)
+    except Exception as exc:
+        log.debug("baseline-fallback: cannot connect to odds.db: %s", exc)
+        return None
+
+    edge_row = None
+    try:
+        try:
+            edge_row = _conn.execute(
+                """SELECT sport, league, edge_tier, composite_score, bet_type,
+                          recommended_odds, bookmaker, predicted_ev,
+                          confirming_signals, movement
+                   FROM edge_results
+                   WHERE match_key = ?
+                   ORDER BY (result IS NULL) DESC, recommended_at DESC
+                   LIMIT 1""",
+                (match_id,),
+            ).fetchone()
+        except Exception as exc:
+            log.debug("baseline-fallback: edge_results lookup failed for %s: %s", match_id, exc)
+    finally:
+        try:
+            _conn.close()
+        except Exception:
+            pass
+
+    if not edge_row:
+        return None
+
+    sport, league, edge_tier, composite_score, bet_type, odds, bookmaker, ev, confirming, movement = edge_row
+    sport = (sport or "soccer").lower()
+    edge_tier = (edge_tier or "bronze").lower()
+
+    # bet_type is shaped like "1X2:home" / "1X2:away" / "1X2:draw"; outcome is the suffix.
+    outcome = "home"
+    if bet_type and ":" in bet_type:
+        outcome = bet_type.split(":", 1)[1].lower()
+    if outcome not in ("home", "away", "draw"):
+        outcome = "home"
+
+    # Extract teams from match_id ("home_vs_away_YYYY-MM-DD")
+    home, away = "", ""
+    _mid_nodate = _re.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_id)
+    if "_vs_" in _mid_nodate:
+        _h_raw, _a_raw = _mid_nodate.split("_vs_", 1)
+        home = " ".join(w.capitalize() for w in _h_raw.split("_"))
+        away = " ".join(w.capitalize() for w in _a_raw.split("_"))
+
+    outcome_label = home if outcome == "home" else (away if outcome == "away" else "Draw")
+
+    tip_dict = {
+        "match_id": match_id,
+        "sport": sport,
+        "league": league or "",
+        "edge_tier": edge_tier,
+        "outcome": outcome,
+        "outcome_label": outcome_label,
+        "odds": float(odds or 0),
+        "bookmaker": bookmaker or "",
+        "ev": float(ev or 0),
+        "predicted_ev": float(ev or 0),
+        "composite_score": float(composite_score or 0),
+        "confirming_signals": int(confirming or 0),
+        "movement": movement or "",
+        "home_team": home,
+        "away_team": away,
+    }
+    edge_data = {
+        "outcome": outcome,
+        "outcome_label": outcome_label,
+        "home_team": home,
+        "away_team": away,
+        "best_odds": float(odds or 0),
+        "best_bookmaker": bookmaker or "",
+        "edge_pct": float(ev or 0),
+        "composite_score": float(composite_score or 0),
+        "confirming_signals": int(confirming or 0),
+        "movement": movement or "",
+        "league": league or "",
+    }
+
+    try:
+        from narrative_spec import build_narrative_spec, _render_baseline
+        spec = build_narrative_spec({}, edge_data, [tip_dict], sport)
+        baseline_html = _render_baseline(spec)
+    except Exception as exc:
+        log.warning("baseline-fallback: spec/render failed for %s: %s", match_id, exc)
+        return None
+
+    if not baseline_html or not baseline_html.strip():
+        return None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    log.info(
+        "AI_BREAKDOWN_BASELINE_FALLBACK match_id=%s tier=%s sport=%s len=%d",
+        match_id, edge_tier, sport, len(baseline_html),
+    )
+    return (
+        baseline_html,           # narrative_html
+        edge_tier,               # edge_tier
+        _json.dumps([tip_dict], default=str),  # tips_json
+        "",                      # verdict_html (empty — verdict_tag derived below)
+        "",                      # evidence_class
+        now_iso,                 # created_at
+    )
+
+
 def build_ai_breakdown_data(match_id: str) -> dict | None:
     """Build template data for the Full AI Breakdown card.
 
@@ -1165,6 +1306,12 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
     row = None
     try:
         # AC-15: exclude quarantined rows; include created_at for AC-12 staleness check.
+        # FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01: also exclude rows with empty
+        # narrative_html — `verdict-cache` rows write narrative_html='' by construction
+        # (bot.py::_store_verdict_cache_sync INSERT path) and would render four blank
+        # prose sections through the existing _SECTION_MARKERS regex. The breakdown
+        # surface treats these as "no narrative cached" and falls through to the
+        # baseline-render path below.
         # Falls back to unfiltered query on older DBs that lack status/quarantined columns.
         try:
             row = conn.execute(
@@ -1173,14 +1320,19 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
                    FROM narrative_cache
                    WHERE match_id = ?
                      AND (status IS NULL OR status != 'quarantined')
-                     AND COALESCE(quarantined, 0) = 0""",
+                     AND COALESCE(quarantined, 0) = 0
+                     AND narrative_html IS NOT NULL
+                     AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0""",
                 (match_id,),
             ).fetchone()
         except Exception:
             row = conn.execute(
                 """SELECT narrative_html, edge_tier, tips_json, verdict_html, evidence_class,
                           created_at
-                   FROM narrative_cache WHERE match_id = ?""",
+                   FROM narrative_cache
+                   WHERE match_id = ?
+                     AND narrative_html IS NOT NULL
+                     AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0""",
                 (match_id,),
             ).fetchone()
     except Exception as exc:
@@ -1192,7 +1344,13 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
             pass
 
     if not row:
-        return None
+        # FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01: instant-baseline fallback.
+        # No eligible cache row → synthesize a row from edge_results + _render_baseline(spec).
+        # Zero LLM, zero ESPN — same path used by _generate_narrative_v2(live_tap=True).
+        # Returns None only when there is no edge data either (truly unreachable match).
+        row = _synthesize_breakdown_row_from_baseline(match_id)
+        if not row:
+            return None
 
     narrative_html = row[0] or ""
     edge_tier = (row[1] or "bronze").lower()
