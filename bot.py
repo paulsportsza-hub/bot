@@ -14724,12 +14724,22 @@ def _has_w84_narrative(match_id: str) -> bool:
 
 
 def _has_any_cached_narrative(match_id: str) -> bool:
-    """Return True when ANY non-expired, non-quarantined narrative row exists.
+    """Return True when an AI Breakdown can be rendered for this match.
 
-    FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: Gates the AI Breakdown button in
-    edge:detail cache-hit / CLEAN-RENDER / instant-baseline / tip:detail paths.
-    Accepts any narrative_source (w84, w82, baseline_no_edge, verdict-cache) —
-    build_ai_breakdown_data() reads by match_id only, with no source filter.
+    FIX-NARRATIVE-AIBREAKDOWN-REGRESSION-01: Gates the AI Breakdown button.
+
+    FIX-AI-BREAKDOWN-BUTTON-GATE-COVERAGE-01 (locked 2026-04-28): the gate now
+    returns True when EITHER (a) a non-expired, non-quarantined narrative_cache
+    row with non-empty narrative_html exists OR (b) edge_results has any row
+    for this match (so the breakdown handler's baseline-synthesis fallback at
+    card_data.py::_synthesize_breakdown_row_from_baseline can produce content).
+
+    This is the bulletproof contract: edge_results row exists ⇔ button shows ⇔
+    content renders. The button-gate predicate is mechanically consistent with
+    the synthesis predicate — no scenario where the gate says yes but the
+    handler returns blank, and no scenario where the gate hides the button on
+    a match that has a live edge.
+
     Independent DB check — must not rely on render-path state.
     """
     if not match_id:
@@ -14739,6 +14749,7 @@ def _has_any_cached_narrative(match_id: str) -> bool:
         from db_connection import get_connection as _gc
         conn = _gc(_NARRATIVE_DB_PATH, timeout_ms=1500)
         try:
+            # Path A — existing pregen / cached narrative with non-empty HTML.
             row = conn.execute(
                 "SELECT expires_at FROM narrative_cache "
                 "WHERE match_id = ? "
@@ -14749,14 +14760,30 @@ def _has_any_cached_narrative(match_id: str) -> bool:
                 "LIMIT 1",
                 (match_id,),
             ).fetchone()
+            if row:
+                exp_dt = _dt.fromisoformat(row[0])
+                if exp_dt.tzinfo is None:
+                    exp_dt = assume_utc(exp_dt)
+                if _dt.now(_tz.utc) < exp_dt:
+                    return True
+            # Path B — synthesis fallback can produce content from edge_results.
+            # FIX-AI-BREAKDOWN-BUTTON-GATE-COVERAGE-01: predicate must match
+            # _synthesize_breakdown_row_from_baseline()'s own SELECT predicate
+            # (any edge_results row, prefer-unsettled order) so gate-and-synthesis
+            # are mechanically guaranteed to agree.
+            try:
+                er_row = conn.execute(
+                    "SELECT 1 FROM edge_results WHERE match_key = ? LIMIT 1",
+                    (match_id,),
+                ).fetchone()
+                if er_row:
+                    return True
+            except Exception:
+                # edge_results table missing or transient lock — fall through.
+                pass
+            return False
         finally:
             conn.close()
-        if not row:
-            return False
-        exp_dt = _dt.fromisoformat(row[0])
-        if exp_dt.tzinfo is None:
-            exp_dt = assume_utc(exp_dt)
-        return _dt.now(_tz.utc) < exp_dt
     except Exception:
         return False
 
@@ -14885,25 +14912,26 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     pass
 
-            # BUILD-NARRATIVE-VOICE-01: Gold/Diamond must never serve thin w82/baseline
-            # narratives. Reject unconditionally so pregen re-generates with Sonnet polish.
-            # Root cause of "rich then gone": pregen writes w82 between taps because the
-            # empty-evidence gate blocked Sonnet. Now we reject those at serve time.
+            # FIX-PREGEN-COVERAGE-DIAMOND-01 (locked 2026-04-28): w82_for_tier
+            # serve-time gate LIFTED for Gold/Diamond. Previously rejected w82 /
+            # baseline_no_edge for premium tiers on the rationale that "Gold/Diamond
+            # must never serve thin w82/baseline narratives". Locked Rules 12, 14,
+            # 17, 18 now ensure w82 is editorial-quality. The previous behaviour
+            # combined with Stream4 refusal at the writer side produced ~17/21
+            # unsettled Gold/Diamond edges with NO eligible cache row — the
+            # missing-breakdown symptom Paul reported on launch day +1. Now we
+            # serve w82 baselines for premium tiers when w84 polish was unavailable;
+            # subsequent pregen cycles upgrade the row to w84 via INSERT OR REPLACE.
+            # Surface the premium-tier baseline serve as INFO so polish-failure
+            # rates remain monitorable in journalctl.
             if narrative_source in ("w82", "baseline_no_edge") and tier in ("gold", "diamond"):
-                log.warning(
-                    "Rejecting w82/baseline narrative for %s — %s tier requires Sonnet polish",
-                    match_id, tier,
+                log.info(
+                    "FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Serve match_id=%s "
+                    "tier=%s narrative_source=%s — serving w82 baseline as safety-net "
+                    "(Rules 12/14/17/18 ensure editorial quality)",
+                    match_id, tier, narrative_source,
                 )
-                try:
-                    conn.execute(
-                        "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
-                        "WHERE match_id = ?",
-                        (f"w82_for_tier:{tier}", match_id),
-                    )
-                    conn.commit()
-                except sqlite3.OperationalError as exc:
-                    log.debug("Deferred gold/diamond w82 cache quarantine for %s: %s", match_id, exc)
-                return None
+                # Continue serving — do not return None, do not quarantine.
 
             # MY-MATCHES-RELIABILITY-FIX: Reject w82 entries for ESPN-covered leagues
             # within 7 days. w82 is the deterministic baseline — if ESPN data is available
@@ -15187,23 +15215,32 @@ async def _store_narrative_cache(
     from datetime import datetime, timedelta, timezone
     from db_connection import get_connection
 
-    # BUILD-NARRATIVE-WATERTIGHT-01 Stream 4 F1-F2 (Part D.3 regression guard):
-    # refuse narrative_cache writes where narrative_source is a thin baseline
-    # (w82 / baseline_no_edge) AND edge_tier is premium (gold / diamond).
-    # These combinations produced the "rich then gone" defect observed pre-launch —
-    # Silver / Bronze deliberately keep the baseline path as a cost-save (W93-COST),
-    # but premium tiers must get polished narratives or no row at all.
+    # FIX-PREGEN-COVERAGE-DIAMOND-01 (locked 2026-04-28): Stream4 refusal LIFTED.
+    # Previously refused narrative_cache writes where narrative_source was a thin
+    # baseline (w82 / baseline_no_edge) AND edge_tier was premium (gold / diamond),
+    # on the rationale that "premium tiers must get polished narratives or no row
+    # at all". That was correct in pre-launch architecture when w82 was lower
+    # quality. Locked Rules 12 (no pricing vocab in Setup), 14 (tier-aware verdict
+    # variants), 17 (no betting telemetry in verdict), 18 (no venue leaks) now
+    # ensure w82 is editorial-quality content suitable for any tier. Refusing the
+    # write left ~17/21 unsettled Gold/Diamond edges with NO cache row at all
+    # whenever Sonnet polish failed — which presented as a missing AI Breakdown
+    # button, the symptom Paul reported on launch day +1. With the refusal lifted,
+    # pregen warms the cache with synthesis-equivalent content; the user always
+    # gets a 4-section breakdown. Pregen still attempts w84 polish first; w82 is
+    # the safety-net write when polish fails. Subsequent pregen cycles retry
+    # polish and INSERT OR REPLACE the row with w84 when it succeeds.
     _wg_tier = (edge_tier or "").lower()
     _wg_src = (narrative_source or "").lower()
     if _wg_src in ("w82", "baseline_no_edge") and _wg_tier in ("gold", "diamond"):
-        # FIX-NARRATIVE-CACHE-SILENT-DROP-01 A.1: elevate to warning + named tag so
-        # pregen supervisor + log scrape can distinguish silent drops from success.
+        # Surface the safety-net write so polish-failure rates remain monitorable.
         log.warning(
-            "FIX-NARRATIVE-CACHE-SILENT-DROP-01 Stream4Refused match_id=%s "
-            "narrative_source=%s edge_tier=%s verdict_len=%d — premium-only polish required",
+            "FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Write match_id=%s "
+            "narrative_source=%s edge_tier=%s verdict_len=%d — Sonnet polish "
+            "unavailable; persisting w82 baseline as safety-net (Rules 12/14/17/18 "
+            "ensure editorial quality)",
             match_id, _wg_src, _wg_tier, len(verdict_html or ""),
         )
-        return
     # FIX-NARRATIVE-CACHE-SILENT-DROP-01 B.1: Default edge_tier to 'bronze' when pregen
     # produces an empty/None tier. Observed silent drop: arsenal_vs_fulham generated with
     # tier='' triggered sqlite3.IntegrityError (NOT NULL constraint failed) which was
