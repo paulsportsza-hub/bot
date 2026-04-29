@@ -219,7 +219,18 @@
             </div>
             <div class="prose">
                 Our analyst polish for this premium card is regenerating right now.
+                {# FIX-VERDICT-CLOSURE-AND-BREAKDOWN-VISIBILITY-01 (2026-04-29) — AC-4:
+                   tier-aware placeholder copy. Diamond / Gold get tier-specific
+                   text; Silver / Bronze fall back to generic "full breakdown" —
+                   per AC-3 the visibility gate hides this surface for non-premium
+                   tiers anyway, so the generic copy is defence-in-depth. #}
+                {% if edge_tier and edge_tier|lower == "diamond" %}
                 Refresh in a few minutes — the full Diamond breakdown will be ready.
+                {% elif edge_tier and edge_tier|lower == "gold" %}
+                Refresh in a few minutes — the full Gold breakdown will be ready.
+                {% else %}
+                Refresh in a few minutes — the full breakdown will be ready.
+                {% endif %}
             </div>
         </div>
         {% else %}
