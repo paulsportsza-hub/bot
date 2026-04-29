@@ -236,6 +236,43 @@ def _kickoff_unix(target: dict) -> float:
         return float("inf")
 
 
+def _apply_premium_horizon_filter(
+    edges: list[dict], horizon_cutoff: datetime
+) -> tuple[list[dict], int]:
+    """FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 (locked 2026-04-29).
+
+    Filter pregen candidates by ``_PREGEN_HORIZON_HOURS`` while exempting
+    premium tiers. Diamond + Gold edges always pass through regardless of
+    kickoff distance — the 240h horizon was clipping legitimate Gold/Diamond
+    fixtures (e.g. EPL May 9 ~10 days out) and pushing premium consumers onto
+    synthesis-on-tap baselines. Silver + Bronze still respect the horizon.
+
+    Each candidate must have ``_resolved_kickoff`` populated (a ``datetime``)
+    by the caller before invocation.
+
+    Returns
+    -------
+    tuple[list[dict], int]
+        ``(filtered_edges, premium_bypass_count)`` — the second element counts
+        premium edges that survived solely because of the bypass (kickoff was
+        beyond ``horizon_cutoff``).
+    """
+    out: list[dict] = []
+    bypass_count = 0
+    for he in edges:
+        ko = he.get("_resolved_kickoff")
+        tier = (he.get("tier") or he.get("edge_tier") or "").lower()
+        is_premium = tier in ("gold", "diamond")
+        if is_premium:
+            out.append(he)
+            if ko is not None and ko > horizon_cutoff:
+                bypass_count += 1
+        else:
+            if ko is not None and ko <= horizon_cutoff:
+                out.append(he)
+    return out, bypass_count
+
+
 # W92-VERDICT-QUALITY P3: narrative_skip_log DDL + helpers. Persistent skip counts
 # survive process restarts and give EdgeOps a durable audit trail of which fixtures
 # hit the banned-shape guard and when.
@@ -1901,6 +1938,20 @@ _PREMIUM_DEFER_ALERT_CHAT_ID = -1003877525865
 _PREMIUM_DEFER_ALERT_THRESHOLD = 3
 
 
+_THIN_EVIDENCE_DIRECTIVE = (
+    "\n\nTHIN-EVIDENCE MODE (FIX-W84-PREMIUM-MANDATORY-COVERAGE-01):\n"
+    "- ESPN context is empty or partial for this fixture. DO NOT manufacture concrete\n"
+    "  recent events (specific match scores, injury reports, transfer news, weather,\n"
+    "  managerial quotes). If you cite a fact, it MUST be visible in the EVIDENCE PACK\n"
+    "  above (form table, H2H ledger, ratings, sharp price, market-derived signals).\n"
+    "- Lead the analytical thrust with: (a) the verdict's analytical statement,\n"
+    "  (b) head-to-head + form table data even when shallow, (c) market-derived\n"
+    "  narrative such as price level, line shape, sharp/SA price gap.\n"
+    "- Aim for 800–1500 characters of polished prose. Clean and confident; never\n"
+    "  apologetic about thin evidence — the analytical frame replaces the missing facts.\n"
+)
+
+
 async def _attempt_haiku_polish_fallback(
     claude: "anthropic.AsyncAnthropic",
     evidence_pack,
@@ -1908,9 +1959,13 @@ async def _attempt_haiku_polish_fallback(
     tips: list,
     match_key: str,
     log,
+    thin_evidence: bool = False,
 ) -> str | None:
-    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): Haiku polish fallback for
-    premium-tier (Diamond+Gold) cards when Sonnet polish has exhausted retries.
+    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23) + FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-2.
+
+    Haiku polish fallback for premium-tier (Diamond+Gold) cards when Sonnet polish
+    has exhausted retries OR failed quality validation (banned phrase, length,
+    structure, GOLD-QUALITY-GATE rejection).
 
     Returns the polished narrative on success, or None on failure (caller defers
     the row write — never silently downgrades to W82 for premium tiers).
@@ -1920,6 +1975,11 @@ async def _attempt_haiku_polish_fallback(
     intact (Rule 22). Skips coverage-gate checks because the caller has already
     decided premium intercept is appropriate.
 
+    When ``thin_evidence=True`` (caller indicates COVERAGE-GATE empty / THIN_ESPN
+    landed Sonnet on this match), a thin-evidence directive is appended to the
+    dynamic prompt segment instructing Haiku to ground claims in the evidence
+    pack only — preventing hallucinated concrete recent events.
+
     Cost: Haiku is ~5× cheaper than Sonnet — escapes credit-balance dead state
     when Sonnet keys are throttled.
     """
@@ -1927,6 +1987,8 @@ async def _attempt_haiku_polish_fallback(
         return None
     try:
         _h_static, _h_dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
+        if thin_evidence:
+            _h_dynamic = _h_dynamic + _THIN_EVIDENCE_DIRECTIVE
         _h_resp = await claude.messages.create(
             model=HAIKU_MODEL,
             max_tokens=1200,
@@ -2815,48 +2877,68 @@ async def _generate_one(
                     )
 
     if _gold_verdict_failed:
-        # Alert EdgeOps: write to gold_verdict_failed_edges table
-        try:
-            from db_connection import get_connection as _gvf_conn
-            _db_p = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "data", "mzansiedge.db",
+        # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-2: before deferring on a
+        # GOLD-QUALITY-GATE failure, attempt Haiku polish fallback. The Sonnet
+        # quality-gate path was previously bypassing the Wave 2 intercept entirely
+        # (it returns early with `_gold_verdict_failed=True` BEFORE the intercept
+        # block runs). That gap meant any GOLD-QUALITY-GATE rejection silently
+        # produced no narrative_cache row → view-time fell through to synthesis
+        # baseline. Now: try Haiku with thin-evidence directive when coverage was
+        # empty; on success, write w84-haiku-fallback; on failure, defer cleanly
+        # via the same `_record_premium_defer` machinery the Wave 2 chain uses.
+        _qg_haiku_narrative = await _attempt_haiku_polish_fallback(
+            claude,
+            evidence_pack,
+            spec,
+            tips,
+            match_key,
+            log,
+            thin_evidence=(_coverage_level == "empty"),
+        )
+        if _qg_haiku_narrative:
+            log.info(
+                "GOLD-QUALITY-GATE: Haiku polish SERVED for %s (tier=%s reason=%s) — "
+                "FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 escalation",
+                match_key, _pregen_edge_tier, _failure_reason,
             )
-            _gvf_c = _gvf_conn(_db_p, timeout_ms=3000)
-            try:
-                _gvf_c.execute(
-                    "CREATE TABLE IF NOT EXISTS gold_verdict_failed_edges ("
-                    "match_key TEXT PRIMARY KEY, edge_tier TEXT NOT NULL, "
-                    "fixture TEXT NOT NULL, pick TEXT NOT NULL, "
-                    "failure_reason TEXT NOT NULL, "
-                    "failed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+            narrative = _qg_haiku_narrative
+            narrative_source = "w84-haiku-fallback"
+            served_model = "haiku"
+            verification_failure = ""
+            _gold_verdict_failed = False
+            _clear_premium_defer(match_key, log)
+        else:
+            # Both Sonnet (twice) and Haiku failed — defer via Wave 2 chain.
+            _qg_pick = (tips[0].get("outcome", "?") if tips else "?")
+            _qg_count = _record_premium_defer(
+                match_key,
+                _pregen_edge_tier,
+                f"{home} vs {away}",
+                _qg_pick,
+                _failure_reason or "verdict_quality_gate_haiku_also_failed",
+                log,
+            )
+            if _qg_count >= _PREMIUM_DEFER_ALERT_THRESHOLD:
+                log.error(
+                    "PremiumDeferAlert: %s has %d consecutive defers (tier=%s) — "
+                    "ALERT_REQUIRED chat_id=%d "
+                    "(FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 quality-gate path)",
+                    match_key, _qg_count, _pregen_edge_tier,
+                    _PREMIUM_DEFER_ALERT_CHAT_ID,
                 )
-                _gvf_pick = (
-                    tips[0].get("outcome", "?") if tips else "?"
-                )
-                _gvf_c.execute(
-                    "INSERT OR REPLACE INTO gold_verdict_failed_edges "
-                    "(match_key, edge_tier, fixture, pick, failure_reason) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (
-                        match_key,
-                        _pregen_edge_tier,
-                        f"{home} vs {away}",
-                        _gvf_pick,
-                        _failure_reason,
-                    ),
-                )
-                _gvf_c.commit()
-            finally:
-                _gvf_c.close()
-        except Exception as _gvf_err:
-            log.warning("GOLD-QUALITY-GATE: failed to write alert row: %s", _gvf_err)
-        return {
-            "match_key": match_key,
-            "success": False,
-            "gold_verdict_failed": True,
-            "duration": time.time() - t0,
-        }
+            log.warning(
+                "GOLD-QUALITY-GATE: Sonnet retry + Haiku both failed for %s "
+                "(tier=%s consecutive=%d) — no narrative_cache row written this sweep",
+                match_key, _pregen_edge_tier, _qg_count,
+            )
+            return {
+                "match_key": match_key,
+                "success": False,
+                "gold_verdict_failed": True,
+                "premium_deferred": True,
+                "premium_defer_count": _qg_count,
+                "duration": time.time() - t0,
+            }
 
     # 8. Build the full HTML message (simplified — no user-specific gating)
     from html import escape as h
@@ -3446,16 +3528,27 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
     # Resolves authoritative kickoff via broadcast_schedule (source='supersport_scraper'),
     # falling back to commence_time then match_key date. Sorts nearest-kickoff first
     # so the most urgent narratives always get generated first when the cap fires.
+    #
+    # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 (locked 2026-04-29):
+    # Premium tiers (gold/diamond) bypass _PREGEN_HORIZON_HOURS entirely. Only
+    # Silver/Bronze still respect the 240h window. Match-cap stays in place but
+    # premium edges fill the cap first via the existing tier-priority sort, and
+    # any premium edge that DOES overflow the cap is logged at WARNING with the
+    # PremiumOverflowCap signature — never dropped silently.
     _db_path = str(SCRAPERS_ROOT / "odds.db")
     _horizon_cutoff = datetime.now(SAST) + timedelta(hours=_PREGEN_HORIZON_HOURS)
     _pre_horizon_count = len(edges)
 
-    _edges_in_window = []
     for _he in edges:
-        _ko = _resolve_kickoff(_he, _db_path)
-        _he["_resolved_kickoff"] = _ko
-        if _ko <= _horizon_cutoff:
-            _edges_in_window.append(_he)
+        _he["_resolved_kickoff"] = _resolve_kickoff(_he, _db_path)
+    _edges_in_window, _premium_bypass_count = _apply_premium_horizon_filter(
+        edges, _horizon_cutoff
+    )
+    if _premium_bypass_count:
+        log.info(
+            "FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 PremiumHorizonBypass count=%d horizon_hours=%d",
+            _premium_bypass_count, _PREGEN_HORIZON_HOURS,
+        )
 
     # FIX-PREGEN-DIAMOND-PRIORITY-01: tier-priority sort BEFORE _PREGEN_MATCH_CAP
     # truncation. Premium tiers (Diamond > Gold > Silver) refresh first; Bronze
@@ -3478,11 +3571,53 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
     )
 
     if len(_edges_in_window) > _PREGEN_MATCH_CAP:
-        log.warning(
-            "pregen_cap_hit: %d matches within %dh window — capping to nearest-kickoff %d",
-            len(_edges_in_window), _PREGEN_HORIZON_HOURS, _PREGEN_MATCH_CAP,
+        # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01: tier-priority sort guarantees
+        # premium edges fill the cap first. Any premium that DOES get truncated
+        # is logged at WARNING with the PremiumOverflowCap signature so EdgeOps
+        # can size up the cap rather than swallow the drop silently.
+        _capped_window = _edges_in_window[:_PREGEN_MATCH_CAP]
+        _dropped_window = _edges_in_window[_PREGEN_MATCH_CAP:]
+        _total_premium = sum(
+            1 for _e in _edges_in_window
+            if (_e.get("tier") or _e.get("edge_tier") or "").lower() in ("gold", "diamond")
         )
-        _edges_in_window = _edges_in_window[:_PREGEN_MATCH_CAP]
+        _premium_dropped = [
+            _e for _e in _dropped_window
+            if (_e.get("tier") or _e.get("edge_tier") or "").lower() in ("gold", "diamond")
+        ]
+        if _premium_dropped:
+            try:
+                import sentry_sdk as _pregen_sentry_local
+            except Exception:
+                _pregen_sentry_local = None
+            for _pe in _premium_dropped:
+                _pe_mid = _pe.get("match_key") or _pe.get("match_id") or "<unknown>"
+                _pe_tier = (_pe.get("tier") or _pe.get("edge_tier") or "").lower()
+                log.warning(
+                    "FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 PremiumOverflowCap "
+                    "match_id=%s tier=%s total_premium=%d cap=%d",
+                    _pe_mid, _pe_tier, _total_premium, _PREGEN_MATCH_CAP,
+                )
+                if _pregen_sentry_local is not None:
+                    try:
+                        _pregen_sentry_local.add_breadcrumb(
+                            category="pregen.premium_overflow",
+                            level="warning",
+                            message="FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 PremiumOverflowCap",
+                            data={
+                                "match_id": _pe_mid,
+                                "tier": _pe_tier,
+                                "total_premium": _total_premium,
+                                "cap": _PREGEN_MATCH_CAP,
+                            },
+                        )
+                    except Exception:
+                        pass
+        log.warning(
+            "pregen_cap_hit: %d matches within %dh window — capping to nearest-kickoff %d (premium_overflow=%d)",
+            len(_edges_in_window), _PREGEN_HORIZON_HOURS, _PREGEN_MATCH_CAP, len(_premium_dropped),
+        )
+        _edges_in_window = _capped_window
     elif _pre_horizon_count != len(_edges_in_window):
         log.info(
             "pregen_horizon_filter: %d → %d matches (horizon=%dh, cap=%d)",

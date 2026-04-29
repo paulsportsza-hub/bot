@@ -1134,6 +1134,96 @@ def _format_commence_time_sast(iso_str: str) -> str:
 # ── AI Breakdown card data ─────────────────────────────────────────────────────
 
 
+def _check_premium_defer(match_id: str) -> dict | None:
+    """FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-3.
+
+    Read ``gold_verdict_failed_edges`` (in ``bot/data/mzansiedge.db``) for a
+    deferred-state row keyed by ``match_id``. The pregen Wave 2 chain UPSERTs
+    here whenever Sonnet polish + Haiku polish both fail for a premium card.
+
+    Returns a dict ``{match_key, edge_tier, consecutive_count, fixture}`` when
+    a defer row exists, else ``None``. Best-effort — any DB error returns None
+    (caller treats missing defer as "not deferred"). Never raises.
+    """
+    import os as _os
+    from pathlib import Path as _PathDefer
+
+    _bot_dir = _PathDefer(__file__).parent
+    _bot_db = str(_bot_dir / "data" / "mzansiedge.db")
+    if not _os.path.exists(_bot_db):
+        return None
+    try:
+        from db_connection import get_connection as _defer_conn
+        _c = _defer_conn(_bot_db, timeout_ms=2000)
+    except Exception:
+        return None
+    try:
+        try:
+            row = _c.execute(
+                "SELECT match_key, edge_tier, fixture, consecutive_count "
+                "FROM gold_verdict_failed_edges WHERE match_key = ?",
+                (match_id,),
+            ).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        return {
+            "match_key": row[0],
+            "edge_tier": (row[1] or "").lower(),
+            "fixture": row[2] or "",
+            "consecutive_count": int(row[3] or 1),
+        }
+    finally:
+        try:
+            _c.close()
+        except Exception:
+            pass
+
+
+def _check_premium_edge(match_id: str) -> str | None:
+    """Look up ``edge_results`` for ``match_id``; return tier ("gold"/"diamond")
+    when an unsettled premium edge exists, else ``None``. Best-effort.
+
+    Used by the AI Breakdown view-time path to decide whether the
+    PremiumOrphan ERROR log + Sentry breadcrumb should fire when no
+    narrative_cache row is found and synthesis also fails.
+    """
+    import os as _os
+    from pathlib import Path as _PathOrph
+
+    _bot_dir = _PathOrph(__file__).parent
+    _SCRAPERS_DIR = _PathOrph(_os.environ.get("SCRAPERS_ROOT", str(_bot_dir.parent / "scrapers")))
+    _ODDS_DB = str(_SCRAPERS_DIR / "odds.db")
+    if not _os.path.exists(_ODDS_DB):
+        return None
+    try:
+        from scrapers.db_connect import connect_odds_db as _orph_conn
+        _c = _orph_conn(_ODDS_DB)
+    except Exception:
+        return None
+    try:
+        row = _c.execute(
+            "SELECT edge_tier FROM edge_results "
+            "WHERE match_key = ? AND result IS NULL "
+            "ORDER BY recommended_at DESC LIMIT 1",
+            (match_id,),
+        ).fetchone()
+        if not row:
+            return None
+        tier = (row[0] or "").lower()
+        if tier in ("gold", "diamond"):
+            return tier
+        return None
+    except Exception:
+        return None
+    finally:
+        try:
+            _c.close()
+        except Exception:
+            pass
+
+
 def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
     """FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01: instant-baseline fallback.
 
@@ -1344,12 +1434,58 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
             pass
 
     if not row:
+        # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-3: premium defer check.
+        # Before falling through to the W82 synthesis-on-tap fallback, check
+        # whether a premium-tier defer row exists. If yes, return a deferred
+        # sentinel — caller (bot.py::_handle_ai_breakdown) renders the
+        # "AI Breakdown updating — refresh in a few minutes" placeholder
+        # instead of W82 boilerplate. Premium subscribers must NEVER see
+        # synthesis-on-tap content during a live polish-failure window.
+        _premium_tier = _check_premium_edge(match_id)
+        if _premium_tier:
+            _defer = _check_premium_defer(match_id)
+            if _defer:
+                log.info(
+                    "FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 PremiumDeferred "
+                    "match_id=%s tier=%s consecutive=%d — serving placeholder "
+                    "(no narrative_cache row, defer in flight)",
+                    match_id, _premium_tier, _defer.get("consecutive_count", 1),
+                )
+                return {
+                    "deferred": True,
+                    "match_id": match_id,
+                    "edge_tier": _premium_tier,
+                    "defer_count": _defer.get("consecutive_count", 1),
+                    "fixture": _defer.get("fixture", ""),
+                }
         # FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01: instant-baseline fallback.
-        # No eligible cache row → synthesize a row from edge_results + _render_baseline(spec).
-        # Zero LLM, zero ESPN — same path used by _generate_narrative_v2(live_tap=True).
-        # Returns None only when there is no edge data either (truly unreachable match).
+        # No eligible cache row + no premium defer → synthesize a row from
+        # edge_results + _render_baseline(spec). Zero LLM, zero ESPN — same
+        # path used by _generate_narrative_v2(live_tap=True). Returns None
+        # only when there is no edge data either (truly unreachable match).
         row = _synthesize_breakdown_row_from_baseline(match_id)
         if not row:
+            # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-3: orphan path.
+            # Premium edge exists but neither narrative_cache nor defer row
+            # nor synthesizable baseline — pregen gap. Should never fire in
+            # steady state. Log ERROR + Sentry breadcrumb so EdgeOps notices.
+            if _premium_tier:
+                log.error(
+                    "FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 PremiumOrphan "
+                    "match_id=%s tier=%s — premium edge has neither cache "
+                    "nor defer nor synthesizable baseline (pregen gap)",
+                    match_id, _premium_tier,
+                )
+                try:
+                    import sentry_sdk as _orphan_sentry
+                    _orphan_sentry.add_breadcrumb(
+                        category="ai_breakdown.premium_orphan",
+                        level="error",
+                        message="FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 PremiumOrphan",
+                        data={"match_id": match_id, "tier": _premium_tier},
+                    )
+                except Exception:
+                    pass
             return None
 
     narrative_html = row[0] or ""

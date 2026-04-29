@@ -6,8 +6,10 @@ AC-2: At least 10 test cases covering:
   - analytical-word-count rejections
   - 5 known-good Sonnet-style verdicts that MUST pass
 
-AC-3: Gold Edge generation with mocked double-Sonnet-failure produces
-  gold_verdict_failed status and does NOT call Haiku/baseline fallback.
+AC-3: Gold Edge generation with mocked double-Sonnet-failure escalates to
+  Haiku polish fallback before deferring. Updated 2026-04-29 per
+  FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 — the legacy behaviour ("does NOT
+  call Haiku/baseline fallback") was the very gap the new brief fixes.
 """
 from __future__ import annotations
 
@@ -200,13 +202,16 @@ class TestExtractVerdictText(unittest.TestCase):
 # ── AC-3: Gold Edge double-Sonnet-failure ─────────────────────────────────────
 
 class TestGoldEdgeModelGate(unittest.TestCase):
-    """AC-3: Gold Edge with mocked double-Sonnet-failure produces
-    gold_verdict_failed and does NOT call Haiku/baseline fallback.
+    """AC-3 (updated 2026-04-29 per FIX-W84-PREMIUM-MANDATORY-COVERAGE-01):
+    Gold Edge with mocked double-Sonnet-failure now ESCALATES to Haiku polish
+    before deferring. The previous "does NOT call Haiku" policy was the
+    silent-downgrade gap the new brief fixes — Premium subscribers must never
+    see synthesis-on-tap when polish-failure can be retried via Haiku.
     """
 
-    def test_gold_verdict_failed_flag(self):
-        """_generate_one returns gold_verdict_failed=True when both Sonnet
-        attempts fail quality gate for a Gold edge."""
+    def test_gold_verdict_failed_when_sonnet_and_haiku_both_fail(self):
+        """_generate_one returns premium_deferred=True only when BOTH Sonnet
+        retries AND Haiku polish fail quality gate for a Gold edge."""
         import asyncio
 
         # Build a minimal edge dict for a Gold edge.
@@ -277,6 +282,21 @@ class TestGoldEdgeModelGate(unittest.TestCase):
                 patch.object(pregen, "_realign_verdict_bookmaker", side_effect=lambda n, b, o: n),
                 patch.object(pregen, "_verdict_bookmaker_aligned", return_value=True),
                 patch.object(pregen, "validate_sport_text", return_value=(True, [])),
+                # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-2: GOLD-QUALITY-GATE
+                # double-fail now escalates to Haiku before deferring. To exercise
+                # the defer path, mock Haiku to also fail (returns None). When
+                # Haiku succeeds, the row is served as w84-haiku-fallback —
+                # validated by the new test_premium_polish_fallback_chain.py.
+                patch.object(
+                    pregen,
+                    "_attempt_haiku_polish_fallback",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(
+                    pregen,
+                    "_record_premium_defer",
+                    return_value=1,
+                ),
                 # Make the Sonnet call always return the bad narrative
                 patch("openrouter_client.AsyncAnthropic") as mock_anthropic,
                 # Patch the DB write so no file access needed
@@ -305,9 +325,16 @@ class TestGoldEdgeModelGate(unittest.TestCase):
 
         result = asyncio.run(_run())
 
-        # AC-3 assertions
+        # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-2 assertions:
+        # When Sonnet retry + Haiku polish BOTH fail, the function defers
+        # (no narrative_cache row) and the result dict carries
+        # premium_deferred=True alongside the legacy gold_verdict_failed flag.
         assert result.get("gold_verdict_failed") is True, (
             f"Expected gold_verdict_failed=True but got: {result}"
+        )
+        assert result.get("premium_deferred") is True, (
+            "Quality-gate Haiku-also-failed path must surface premium_deferred=True "
+            "(FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-2)"
         )
         assert result.get("success") is not True, (
             "Gold failure should not be marked as success"

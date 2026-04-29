@@ -23762,6 +23762,27 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
         await query.message.reply_text("❌ Could not render breakdown. Please try again.")
         return
 
+    # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-3: deferred placeholder.
+    # When card_data signals premium-tier defer in flight (Sonnet + Haiku both
+    # failed this sweep, defer row written), show the "updating" banner
+    # rather than a W82 synthesis-on-tap card. Premium consumers MUST NOT
+    # see baseline boilerplate during a live polish-failure window.
+    if isinstance(_bd, dict) and _bd.get("deferred"):
+        _bd_back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
+        _placeholder_msg = (
+            "🔄 <b>AI Breakdown updating</b>\n\n"
+            "Our analyst polish for this premium card is regenerating right now. "
+            "Refresh in a few minutes — the full Diamond breakdown will be ready."
+        )
+        await _serve_response(
+            query,
+            _placeholder_msg,
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("↩️ Back", callback_data=_bd_back_cb)],
+            ]),
+        )
+        return
+
     if not png_bytes:
         await query.message.reply_text("❌ Breakdown not available for this match yet.")
         return
