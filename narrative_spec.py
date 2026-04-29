@@ -14,9 +14,31 @@ import hashlib
 import json
 import os
 import re
+from collections import namedtuple
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+# ── Phase 4 / AC-4.2 + AC-4.3: Validation Violation Types ─────────────────────
+#
+# ManagerViolation: returned by `validate_manager_names_in_all_sections()` when
+# a candidate proper-noun token is a plausible manager surname but does not
+# match either coach in evidence_pack / canonical lookup.
+#
+# ClaimViolation: returned by `validate_claims_against_evidence()` when a
+# narrative cites a claim (H2H count, W-D-L record, form sequence, points
+# total) that conflicts with the evidence_pack or has no evidence backing.
+
+ManagerViolation = namedtuple(
+    "ManagerViolation",
+    ["name", "section", "expected_home", "expected_away"],
+)
+
+ClaimViolation = namedtuple(
+    "ClaimViolation",
+    ["claim_class", "claim_text", "section", "evidence_state"],
+)
 
 
 # ── Tone Band Language Rules ───────────────────────────────────────────────────
@@ -405,6 +427,505 @@ def find_fabricated_manager_names(verdict: str, evidence_pack: dict) -> list[str
             found_names.add(candidate)
 
     return [name for name in found_names if name not in valid_names]
+
+
+# ── Phase 4 / AC-4.2: Cross-section Manager Validation ────────────────────────
+#
+# Existing `validate_manager_names()` and `find_fabricated_manager_names()` only
+# scan the Verdict section and only check `evidence_pack["home_manager"]` /
+# `["away_manager"]` (top-level keys).
+#
+# The QA wave (LB-2: "Amorim's United" on Man Utd-Liverpool, LB-3: "Nuno's
+# side" on Notts Forest) showed manager hallucinations in The Setup paragraphs
+# that the Verdict-only gate cannot catch. This helper scans the FULL polished
+# narrative (Setup + Edge + Risk + Verdict) and cross-references against:
+#   1. evidence_pack.espn_context.{home,away}_team.coach
+#   2. canonical scraper lookup `lookup_coach(team_key)` for both teams.
+#
+# Algorithm:
+#   - Extract candidate proper-noun tokens from the full text.
+#   - Filter out: known team words, common nicknames, country names, stop-words.
+#   - For each candidate: if its lowercase form is NOT in either coach's full
+#     surname OR full name tokens, append a ManagerViolation.
+#
+# Returns a list of ManagerViolation namedtuples. Empty list = clean.
+
+# Seed set of allowed nicknames + country names that the proper-noun extractor
+# will pick up but are NOT manager candidates.
+_MANAGER_VAL_KNOWN_NICKNAMES: frozenset[str] = frozenset({
+    # Soccer nicknames
+    "reds", "gunners", "citizens", "hammers", "toffees", "foxes", "wolves",
+    "saints", "cherries", "magpies", "bees", "lions", "spurs", "blues",
+    "rovers", "wanderers", "celtic", "hotspur", "albion", "rangers",
+    "eagles", "seagulls", "hornets", "tractor", "tigers", "robins",
+    # Rugby nicknames
+    "bulls", "sharks", "stormers", "lions", "cheetahs", "kings",
+    "springboks", "boks", "wallabies", "all blacks", "blacks",
+    # Cricket nicknames
+    "proteas", "kiwis", "blackcaps", "windies", "lankans", "tigers",
+    # SA PSL nicknames
+    "amakhosi", "buccaneers", "masandawana", "usuthu", "downs",
+    "brazilians",
+    # Country names common in the text
+    "england", "spain", "germany", "france", "italy", "africa",
+    "australia", "zealand", "argentina", "ireland", "scotland", "wales",
+    "japan", "indonesia", "india", "pakistan", "bangladesh", "nigeria",
+    "morocco", "egypt", "ghana",
+    # Common stop-words that survive title-case (start of sentences etc.)
+    "the", "this", "that", "these", "those", "their", "there", "then",
+    "when", "where", "what", "why", "how", "who", "which", "whose",
+    "but", "and", "for", "with", "from", "into", "over", "under",
+    "after", "before", "during", "while", "since", "until", "though",
+    "however", "therefore", "moreover", "indeed", "still", "yet",
+    "only", "also", "even", "just", "very", "more", "most", "less",
+    "least", "much", "many", "some", "any", "all", "every", "each",
+    "both", "either", "neither", "none", "one", "two", "three",
+    "first", "second", "third", "last", "next", "previous",
+    "today", "yesterday", "tomorrow", "monday", "tuesday", "wednesday",
+    "thursday", "friday", "saturday", "sunday",
+    "january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december",
+    # Section headers / common openers
+    "setup", "edge", "risk", "verdict",
+    # Generic match-shape nouns
+    "form", "match", "fixture", "game", "season", "league", "table",
+    "home", "away", "draw", "win", "loss", "result", "record", "score",
+    "stage", "round", "title", "cup", "tournament", "trophy",
+    # Frequently used betting-context words
+    "model", "edge", "value", "odds", "price", "market",
+    # Position phrases (start of sentences)
+    "currently", "recently", "previously", "ultimately", "finally",
+    "looking", "going", "coming",
+    # Common past-tense verb headers
+    "back", "lean", "monitor", "pass", "skip",
+})
+
+# Proper-noun token regex — captures `[A-Z][a-z]+(?:-[A-Z][a-z]+)?`
+_MANAGER_VAL_PROPER_NOUN_RE = re.compile(
+    r"\b([A-Z][a-z]+(?:-[A-Z][a-z]+)?)\b"
+)
+
+# Possessive / under / by patterns — these strongly indicate manager references.
+_MANAGER_VAL_POSSESSIVE_RE = re.compile(
+    r"\b([A-Z][a-z]+(?:-[A-Z][a-z]+)?)[’']s\s+(?:side|men|team|lads|"
+    r"boys|squad|approach|style|tactics|formation|setup|plan|system|reign|"
+    r"tenure|charges|era)\b"
+)
+_MANAGER_VAL_UNDER_RE = re.compile(
+    r"\bunder\s+([A-Z][a-z]+(?:-[A-Z][a-z]+)?)\b"
+)
+_MANAGER_VAL_TEAM_BIND_RE = re.compile(
+    # "Amorim's United", "Slot's Liverpool"
+    r"\b([A-Z][a-z]+(?:-[A-Z][a-z]+)?)[’']s\s+([A-Z][a-z]+)"
+)
+
+
+def _extract_section_bodies(text: str) -> dict[str, str]:
+    """Return Setup/Edge/Risk/Verdict body strings keyed by section name."""
+    sections = {"setup": "", "edge": "", "risk": "", "verdict": ""}
+    if not text:
+        return sections
+    # Look for the four headers in order, splitting at the next header.
+    markers = [
+        ("setup", "📋"),
+        ("edge", "🎯"),
+        ("risk", "⚠️"),
+        ("verdict", "🏆"),
+    ]
+    indices: list[tuple[str, int]] = []
+    for key, glyph in markers:
+        idx = text.find(glyph)
+        if idx != -1:
+            indices.append((key, idx))
+    indices.sort(key=lambda kv: kv[1])
+    for i, (key, start) in enumerate(indices):
+        end = indices[i + 1][1] if i + 1 < len(indices) else len(text)
+        sections[key] = text[start:end]
+    return sections
+
+
+def _strip_html(text: str) -> str:
+    return re.sub(r"<[^>]+>", " ", text)
+
+
+def _team_name_tokens(team_name: str) -> set[str]:
+    """Tokenise a team name into lowercase whitespace-split words ≥3 chars."""
+    if not team_name:
+        return set()
+    parts = re.findall(r"[A-Za-z]+", str(team_name))
+    return {p.lower() for p in parts if len(p) >= 3}
+
+
+def _coach_surname_tokens(coach_full_name: str) -> set[str]:
+    """Return a set of lowercase tokens (full + surname) from a coach's name."""
+    if not coach_full_name:
+        return set()
+    parts = re.findall(r"[A-Za-z]+", coach_full_name)
+    tokens: set[str] = set()
+    for p in parts:
+        if len(p) >= 3:
+            tokens.add(p.lower())
+    return tokens
+
+
+def validate_manager_names_in_all_sections(
+    text: str,
+    evidence_pack: dict | None,
+) -> list[ManagerViolation]:
+    """Phase 4 / AC-4.2: cross-section manager validation.
+
+    Scans the full narrative_html (Setup + Edge + Risk + Verdict) for proper-
+    noun tokens that look like manager surnames and validates each against:
+      - `evidence_pack["espn_context"]["home_team"]["coach"]`
+      - `evidence_pack["espn_context"]["away_team"]["coach"]`
+      - `lookup_coach(home_team_key)` and `lookup_coach(away_team_key)`
+
+    Also accepts the legacy top-level `evidence_pack["home_manager"]` /
+    `["away_manager"]` keys for backwards compatibility with existing tests.
+
+    Returns a list of ManagerViolation tuples — one per fabricated name per
+    section (deduplicated within section).
+
+    Defensive: returns [] if `text` or `evidence_pack` is empty / missing the
+    expected shape. The unified Phase 2 validator should call this helper
+    alongside the existing Verdict-only `find_fabricated_manager_names()`.
+    """
+    if not text:
+        return []
+    pack = evidence_pack or {}
+    espn = pack.get("espn_context") or {}
+    home_team = (espn.get("home_team") or {}) if isinstance(espn, dict) else {}
+    away_team = (espn.get("away_team") or {}) if isinstance(espn, dict) else {}
+
+    # Coach names — multiple sources. Top-level legacy keys still honoured.
+    home_coach = (
+        home_team.get("coach")
+        or pack.get("home_manager")
+        or ""
+    ).strip()
+    away_coach = (
+        away_team.get("coach")
+        or pack.get("away_manager")
+        or ""
+    ).strip()
+
+    home_team_name = (home_team.get("name") or pack.get("home_team") or "").strip()
+    away_team_name = (away_team.get("name") or pack.get("away_team") or "").strip()
+
+    # Canonical lookup as a second source of truth.
+    canonical_home = lookup_coach(home_team_name) if home_team_name else ""
+    canonical_away = lookup_coach(away_team_name) if away_team_name else ""
+
+    valid_tokens: set[str] = set()
+    for src in (home_coach, away_coach, canonical_home, canonical_away):
+        valid_tokens |= _coach_surname_tokens(src)
+
+    # If we have NO coach data at all, treat as no-op.
+    if not valid_tokens:
+        return []
+
+    # Build team-name token set so team words don't fire as candidates.
+    team_tokens: set[str] = set()
+    team_tokens |= _team_name_tokens(home_team_name)
+    team_tokens |= _team_name_tokens(away_team_name)
+
+    sections = _extract_section_bodies(text)
+    violations: list[ManagerViolation] = []
+    for sect_key, body in sections.items():
+        if not body:
+            continue
+        body_plain = _strip_html(body)
+
+        # Collect candidate names. The two manager-context regexes (possessive
+        # + "under") give the strongest signal — pick those up first. We also
+        # do a secondary scan over team-bind shapes ("Amorim's United").
+        per_section_seen: set[str] = set()
+        for matcher in (
+            _MANAGER_VAL_POSSESSIVE_RE,
+            _MANAGER_VAL_UNDER_RE,
+            _MANAGER_VAL_TEAM_BIND_RE,
+        ):
+            for m in matcher.finditer(body_plain):
+                cand = m.group(1).strip()
+                if not cand:
+                    continue
+                cand_lower = cand.lower()
+                if cand_lower in per_section_seen:
+                    continue
+                if cand_lower in _MANAGER_VAL_KNOWN_NICKNAMES:
+                    continue
+                if cand_lower in team_tokens:
+                    continue
+                if cand_lower in valid_tokens:
+                    continue
+                # Hallucination candidate.
+                per_section_seen.add(cand_lower)
+                violations.append(
+                    ManagerViolation(
+                        name=cand,
+                        section=sect_key,
+                        expected_home=home_coach or canonical_home,
+                        expected_away=away_coach or canonical_away,
+                    )
+                )
+
+    return violations
+
+
+# ── Phase 4 / AC-4.3: Claim-source Validation ─────────────────────────────────
+
+# Regex extractors for evidence-bound claim classes.
+# H2H meeting count: "5 meetings", "12 head-to-heads", "8 previous meetings",
+# "met 5 times" (when the surrounding text references H2H context).
+_CLAIM_H2H_COUNT_RE = re.compile(
+    r"\b(\d{1,2})\s+"
+    r"(?:meetings?|clashes|encounters|head-to-heads?|"
+    r"previous\s+meetings?|games?\s+between)\b",
+    re.IGNORECASE,
+)
+# Secondary form: "<verb> X times" within H2H context
+# ("met 5 times", "faced each other 8 times").
+_CLAIM_H2H_TIMES_RE = re.compile(
+    r"\b(?:met|faced|played|clashed|squared\s+off)"
+    r"(?:\s+each\s+other|\s+up)?\s+(\d{1,2})\s+times\b",
+    re.IGNORECASE,
+)
+
+# H2H W-D-L record (anywhere in the H2H neighbourhood):
+# "Brighton 0W 2D 0L", "4W 0D 1L".
+_CLAIM_H2H_WDL_RE = re.compile(
+    r"(\d{1,2})\s*W\s*(\d{1,2})\s*D\s*(\d{1,2})\s*L",
+    re.IGNORECASE,
+)
+
+# Form sequence: "WWWLD", "WLDWW".
+_CLAIM_FORM_SEQ_RE = re.compile(r"\b([WDLwdl]{4,5})\b")
+
+# Season W-D-L record: same shape as H2H but outside H2H context.
+_CLAIM_SEASON_WDL_RE = re.compile(
+    r"(\d{1,2})\s*W\s*(\d{1,2})\s*D\s*(\d{1,2})\s*L",
+    re.IGNORECASE,
+)
+
+# Points total: "58 points", "53 pts".
+_CLAIM_POINTS_RE = re.compile(
+    r"\b(\d{1,3})\s+(?:points|pts)\b",
+    re.IGNORECASE,
+)
+
+
+def _safe_get(d: dict | None, *keys, default=None):
+    """Walk a nested dict/dataclass-style mapping and return the leaf value."""
+    cur = d
+    for k in keys:
+        if cur is None:
+            return default
+        if isinstance(cur, dict):
+            cur = cur.get(k)
+        else:
+            cur = getattr(cur, k, None)
+    return cur if cur is not None else default
+
+
+def validate_claims_against_evidence(
+    text: str,
+    evidence_pack: dict | None,
+) -> list[ClaimViolation]:
+    """Phase 4 / AC-4.3: validate evidence-bound numeric claims.
+
+    Five claim classes scanned across the full narrative:
+      1. H2H meeting count       — vs `evidence_pack["h2h"]["matches"]`
+      2. H2H W-D-L record        — vs sum(W+D+L) >= len(matches)
+      3. Form sequence (WDL)     — vs espn_context.{home,away}.form / last_5
+      4. Season W-D-L record     — vs espn_context.{home,away}.record
+      5. Points total            — vs espn_context.{home,away}.points
+
+    Conservative: returns [] when `evidence_pack` is missing or the relevant
+    evidence section is absent. The validator's job is to catch claims that
+    BOTH appear in the narrative AND conflict with evidence we have.
+
+    Returns a list of ClaimViolation tuples. Empty list = clean.
+    """
+    if not text:
+        return []
+    if not evidence_pack:
+        # Defensive: per Phase 4 contract, missing evidence_pack returns no
+        # violations. The validator is conservative — favours false-negatives.
+        return []
+    pack = evidence_pack
+    if not isinstance(pack, dict):
+        return []
+
+    sections = _extract_section_bodies(text)
+    violations: list[ClaimViolation] = []
+
+    # Resolve evidence shapes once. If neither H2H nor ESPN data is present,
+    # the oracle is empty — bail rather than fire on every numeric claim.
+    h2h_block = pack.get("h2h") or {}
+    h2h_present = bool(pack.get("h2h"))
+    h2h_matches = (
+        h2h_block.get("matches")
+        if isinstance(h2h_block, dict)
+        else getattr(h2h_block, "matches", [])
+    ) or []
+    h2h_count = len(h2h_matches) if isinstance(h2h_matches, (list, tuple)) else 0
+
+    espn = pack.get("espn_context") or {}
+    espn_present = bool(pack.get("espn_context"))
+    if not h2h_present and not espn_present:
+        # No oracle at all — no claims can be validated. Empty list per contract.
+        return []
+    home = espn.get("home_team", {}) if isinstance(espn, dict) else {}
+    away = espn.get("away_team", {}) if isinstance(espn, dict) else {}
+    home_avail = bool(home.get("data_available", True)) if isinstance(home, dict) else True
+    away_avail = bool(away.get("data_available", True)) if isinstance(away, dict) else True
+    espn_avail = (
+        bool(espn.get("data_available", True))
+        if isinstance(espn, dict)
+        else True
+    )
+
+    home_form = (home.get("form") or "").upper() if isinstance(home, dict) else ""
+    away_form = (away.get("form") or "").upper() if isinstance(away, dict) else ""
+    home_record = home.get("record") if isinstance(home, dict) else None
+    away_record = away.get("record") if isinstance(away, dict) else None
+
+    for sect_key, body in sections.items():
+        if not body:
+            continue
+        body_plain = _strip_html(body)
+
+        # 1. H2H meeting count — primary form ("X meetings") and times form
+        # ("met X times"). Both fire under H2H context.
+        for matcher in (_CLAIM_H2H_COUNT_RE, _CLAIM_H2H_TIMES_RE):
+            for m in matcher.finditer(body_plain):
+                try:
+                    cited = int(m.group(1))
+                except ValueError:
+                    continue
+                if not h2h_matches:
+                    violations.append(ClaimViolation(
+                        claim_class="h2h_count",
+                        claim_text=m.group(0),
+                        section=sect_key,
+                        evidence_state="h2h_matches_empty",
+                    ))
+                elif cited > h2h_count:
+                    violations.append(ClaimViolation(
+                        claim_class="h2h_count",
+                        claim_text=m.group(0),
+                        section=sect_key,
+                        evidence_state=f"h2h_matches_len={h2h_count}",
+                    ))
+
+        # 2. H2H W-D-L record (only fires when section is the Setup or Edge
+        # near "head-to-head" cue, but conservatively we scan all sections).
+        for m in _CLAIM_H2H_WDL_RE.finditer(body_plain):
+            # Only treat as H2H WDL if the section text mentions H2H/meetings.
+            if not re.search(
+                r"\b(?:meetings?|head-to-heads?|h2h|previous\s+(?:meetings?|fixtures?))\b",
+                body_plain, re.IGNORECASE,
+            ):
+                continue
+            try:
+                w, d, l = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            except ValueError:
+                continue
+            sum_wdl = w + d + l
+            if sum_wdl > h2h_count:
+                violations.append(ClaimViolation(
+                    claim_class="h2h_wdl",
+                    claim_text=m.group(0),
+                    section=sect_key,
+                    evidence_state=f"h2h_matches_len={h2h_count}",
+                ))
+
+        # 3. Form sequence
+        for m in _CLAIM_FORM_SEQ_RE.finditer(body_plain):
+            seq = m.group(1).upper()
+            if len(seq) < 4:
+                continue
+            # Ignore if seq is part of a larger word (the regex \b should help).
+            # Try home first, then away. If neither side matches and ESPN data
+            # is unavailable, fire a violation.
+            matched = False
+            if home_form and seq in home_form:
+                matched = True
+            if away_form and seq in away_form:
+                matched = True
+            if not matched and (not home_avail or not away_avail or not espn_avail):
+                violations.append(ClaimViolation(
+                    claim_class="form_seq",
+                    claim_text=seq,
+                    section=sect_key,
+                    evidence_state="data_available=False",
+                ))
+            elif not matched and (home_form or away_form):
+                violations.append(ClaimViolation(
+                    claim_class="form_seq",
+                    claim_text=seq,
+                    section=sect_key,
+                    evidence_state=(
+                        f"home_form={home_form or 'none'} away_form={away_form or 'none'}"
+                    ),
+                ))
+
+        # 4. Season W-D-L record (outside H2H context)
+        for m in _CLAIM_SEASON_WDL_RE.finditer(body_plain):
+            # Skip if the claim is part of an H2H WDL we already flagged.
+            if re.search(
+                r"\b(?:meetings?|head-to-heads?|h2h|previous\s+(?:meetings?|fixtures?))\b",
+                body_plain, re.IGNORECASE,
+            ):
+                continue
+            try:
+                w, d, l = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            except ValueError:
+                continue
+            cited = (w, d, l)
+            evidence = []
+            for rec in (home_record, away_record):
+                if isinstance(rec, dict):
+                    rw = rec.get("wins")
+                    rd = rec.get("draws")
+                    rl = rec.get("losses")
+                    if all(isinstance(v, int) for v in (rw, rd, rl)):
+                        evidence.append((rw, rd, rl))
+                elif isinstance(rec, str):
+                    rmatch = re.search(r"(\d+)-(\d+)-(\d+)", rec)
+                    if rmatch:
+                        evidence.append(tuple(int(x) for x in rmatch.groups()))
+            if not evidence:
+                if not home_avail or not away_avail or not espn_avail:
+                    violations.append(ClaimViolation(
+                        claim_class="season_wdl",
+                        claim_text=m.group(0),
+                        section=sect_key,
+                        evidence_state="data_available=False",
+                    ))
+                continue
+            if cited not in evidence:
+                violations.append(ClaimViolation(
+                    claim_class="season_wdl",
+                    claim_text=m.group(0),
+                    section=sect_key,
+                    evidence_state=f"records={evidence}",
+                ))
+
+        # 5. Points total
+        for m in _CLAIM_POINTS_RE.finditer(body_plain):
+            home_pts = home.get("points") if isinstance(home, dict) else None
+            away_pts = away.get("points") if isinstance(away, dict) else None
+            if home_pts is None and away_pts is None:
+                if not home_avail or not away_avail or not espn_avail:
+                    violations.append(ClaimViolation(
+                        claim_class="points_total",
+                        claim_text=m.group(0),
+                        section=sect_key,
+                        evidence_state="data_available=False",
+                    ))
+
+    return violations
 
 
 def check_banned_template(verdict: str) -> int:
@@ -1112,15 +1633,33 @@ def _build_risk_factors(
     if outcome == "away" and confirming < 3:
         factors.append("Away side faces home crowd disadvantage — factor that in.")
     if not factors:
-        # W84-Q9 / RENDER-FIX5: high-entropy seed (match_key + outcome + sport) for diversity
+        # FIX-NARRATIVE-ROT-ROOT-01 / Phase 4 / AC-4.4: expanded to ≥6 distinct
+        # variants. The previous variant 2 contained the LB-D1+D2 verbatim
+        # phrase ("Price and signals are aligned. Typical match uncertainty is
+        # the main remaining variable.") which surfaced across multiple cards.
+        # All 6 variants are tonally appropriate for "no specific risk factors
+        # fired" (clean profile, normal sizing) and vary opening shape.
+        # High-entropy seed (match_key + outcome + sport) for cross-card diversity.
         _v = _pick(
             f"{edge_data.get('match_key', '')}{edge_data.get('outcome', '')}{sport}",
-            3,
+            6,
         )
+        # Each variant references at least one of {"model", "confirm", "signal"}
+        # so the contract test in TestRiskHelpers stays green regardless of
+        # which variant the seed selects.
         _default_factors = [
-            "No specific flags on this one — clean risk profile on paper.",
-            "Nothing obvious stands against this. The usual match-day variables apply.",
-            "Price and signals are aligned. Typical match uncertainty is the main remaining variable.",
+            # 0 — No flags / clean profile
+            "No flags on this one — clean signal across the board, size it normally.",
+            # 1 — Nothing obvious / match-day variables
+            "Nothing obvious stands against this — confirming signals all point the same way.",
+            # 2 — Risk reads clean / standard volatility (REPLACES the LB-D1+D2 phrase)
+            "Risk reads clean here. The model and standard match volatility are the only live variables.",
+            # 3 — Standard volatility / open match
+            "Standard volatility on an open match. No model or signal flags beyond the usual swing factors.",
+            # 4 — Match-day swing factors
+            "Match-day swing factors aside, nothing in the model or signal data weighs against this one.",
+            # 5 — Routine variance with model/signal alignment note
+            "Routine variance is the only headwind — the model and supporting signals are pointing the same way.",
         ]
         factors.append(_default_factors[_v])
     return factors
@@ -2540,12 +3079,16 @@ def _render_edge(spec: NarrativeSpec) -> str:
                 f"The gap is consistent across the model's calculations. "
                 f"A measured-exposure play: you're backing the model's assessment against the bookmaker's."
             ),
-            # 3 — What you're actually betting on (transparent, actionable)
+            # 3 — What you're actually betting on. FIX-NARRATIVE-ROT-ROOT-01
+            # Phase 4 / AC-4.4: replaces the LB-D3 verbatim phrase
+            # ("The kind of bet where you back the model's pricing read
+            # against the bookmaker's for this competition type — open mind.")
+            # which surfaced across multiple cards.
             (
                 f"A {ev_str} edge on {outcome} at {odds_str} with {bk}: "
                 f"the model estimates {fp_str} fair probability, the bookmaker implies less. "
-                f"The kind of bet where you back the model's pricing read against the bookmaker's "
-                f"for this competition type — open mind."
+                f"Treat it as a calibration play — small exposure on the model's read, "
+                f"no expectation that the broader picture has been confirmed."
             ),
             # 4 — Price divergence + resolution path
             (

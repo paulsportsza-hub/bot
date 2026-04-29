@@ -1989,6 +1989,15 @@ async def _attempt_haiku_polish_fallback(
         _h_static, _h_dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
         if thin_evidence:
             _h_dynamic = _h_dynamic + _THIN_EVIDENCE_DIRECTIVE
+        # FIX-NARRATIVE-ROT-ROOT-01 HG-P3: in-flight pregen sweep verification log.
+        log.info(
+            "FIX-NARRATIVE-ROT-ROOT-01 polish_prompt_built path=haiku_fallback "
+            "match=%s tier=%s coaches_injected=%s data_availability_injected=%s",
+            match_key,
+            (getattr(spec, "edge_tier", "") or "unknown").lower(),
+            "CANONICAL MANAGERS" in _h_dynamic,
+            "DATA AVAILABILITY" in _h_dynamic,
+        )
         _h_resp = await claude.messages.create(
             model=HAIKU_MODEL,
             max_tokens=1200,
@@ -2432,6 +2441,15 @@ async def _generate_one(
             else:
                 # Sonnet path for edge matches.
                 _static, _dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
+                # FIX-NARRATIVE-ROT-ROOT-01 HG-P3: in-flight pregen sweep verification log.
+                log.info(
+                    "FIX-NARRATIVE-ROT-ROOT-01 polish_prompt_built path=sonnet_primary "
+                    "match=%s tier=%s coaches_injected=%s data_availability_injected=%s",
+                    match_key,
+                    (getattr(spec, "edge_tier", "") or "unknown").lower(),
+                    "CANONICAL MANAGERS" in _dynamic,
+                    "DATA AVAILABILITY" in _dynamic,
+                )
                 # FIX-COST-WAVE-02: route Sonnet narrative polish to direct Anthropic
                 # (NARRATIVE scope) when the module singleton is initialised by
                 # pregen_narratives(); fall back to the `claude` param so unit tests
@@ -2816,6 +2834,15 @@ async def _generate_one(
                 try:
                     if evidence_pack is not None and spec is not None:
                         _retry_static, _retry_dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
+                        # FIX-NARRATIVE-ROT-ROOT-01 HG-P3: in-flight pregen sweep verification log.
+                        log.info(
+                            "FIX-NARRATIVE-ROT-ROOT-01 polish_prompt_built path=sonnet_retry "
+                            "match=%s tier=%s coaches_injected=%s data_availability_injected=%s",
+                            match_key,
+                            (getattr(spec, "edge_tier", "") or "unknown").lower(),
+                            "CANONICAL MANAGERS" in _retry_dynamic,
+                            "DATA AVAILABILITY" in _retry_dynamic,
+                        )
                         # FIX-COST-WAVE-02: Sonnet retry also routes direct Anthropic
                         # (NARRATIVE scope) when the module singleton is initialised.
                         _retry_sonnet_client = _narrative_claude if _narrative_claude is not None else claude

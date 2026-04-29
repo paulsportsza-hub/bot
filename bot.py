@@ -8427,7 +8427,137 @@ def _generate_verdict(tip: dict, verified: dict) -> str:
         _sigs = tip.get("signals") or {}
         signals_active = [k for k, v in _sigs.items() if v and isinstance(v, (int, float)) and float(v) > 0]
 
+        # FIX-NARRATIVE-ROT-ROOT-01 (Phase 3, AC-3.1 verdict-cache rewire):
+        # Replace inline hardcoded constraints with the unified builder. Build
+        # a thin evidence_pack + spec from (tip, verified_ctx → coach lookup)
+        # so CANONICAL MANAGERS, DATA AVAILABILITY, Setup price-free zone, and
+        # Setup opening shape variation all land in the user message exactly
+        # the same way they do in the Sonnet primary polish path. Closes the
+        # LB-2 (Amorim) and LB-3 (Nuno) hallucination root paths.
+        _coach_constraint_block = ""
+        try:
+            from evidence_pack import EvidencePack, ESPNContextBlock
+            from evidence_pack import EvidenceSource as _EvSrc
+            from narrative_spec import lookup_coach as _lookup_coach
+            from types import SimpleNamespace as _NS
+            from datetime import datetime, timezone as _tz
+
+            _vc_home_coach = (
+                manager_home
+                or (verified.get("home_coach") if isinstance(verified, dict) else "")
+                or _lookup_coach(home)
+                or ""
+            )
+            _vc_away_coach = (
+                manager_away
+                or (verified.get("away_coach") if isinstance(verified, dict) else "")
+                or _lookup_coach(away)
+                or ""
+            )
+
+            _vc_pack = EvidencePack(
+                match_key=str(tip.get("match_key") or f"{home}_vs_{away}".lower().replace(" ", "_")),
+                sport=str(tip.get("sport") or "soccer"),
+                league=str(league or ""),
+                built_at=datetime.now(_tz.utc).isoformat(),
+                pack_version=1,
+                espn_context=ESPNContextBlock(
+                    provenance=_EvSrc(
+                        available=True,
+                        fetched_at=datetime.now(_tz.utc).isoformat(),
+                        source_name="verdict_cache_thin_pack",
+                        stale_minutes=0.0,
+                    ),
+                    data_available=False,
+                    home_team={"name": home, "coach": _vc_home_coach},
+                    away_team={"name": away, "coach": _vc_away_coach},
+                    h2h=[],
+                    competition=str(league or ""),
+                    season="",
+                ),
+            )
+            _vc_spec = _NS(
+                competition=str(league or ""),
+                tone_band="moderate",
+                evidence_class="supported",
+                verdict_action="back",
+                verdict_sizing="0.5u",
+                bookmaker=str(bookmaker or ""),
+                odds=float(odds or 0.0),
+                edge_tier=str(tip.get("edge_tier") or tip.get("display_tier") or "bronze"),
+                home_name=home,
+                away_name=away,
+                home_coach=_vc_home_coach,
+                away_coach=_vc_away_coach,
+            )
+            _vc_static, _vc_dynamic = _build_unified_polish_prompt(
+                _vc_pack,
+                _vc_spec,
+                edge_tier=_vc_spec.edge_tier,
+                model_class="sonnet",
+                log_path="verdict_cache",
+                match_key=_vc_pack.match_key,
+            )
+            # Extract just the CANONICAL MANAGERS + DATA AVAILABILITY +
+            # SETUP OPENING SHAPE blocks from the unified dynamic prompt —
+            # the verdict-cache system_prompt already carries verdict-specific
+            # tone constraints (different contract from full-narrative polish),
+            # so we only inject the hard-constraint blocks Phase 3 mandates.
+            # Splitter: each block is delimited by a blank line (the unified
+            # builder consistently emits an empty string before each block
+            # heading inside the dynamic suffix).
+            _block_lines: list[str] = []
+            _stop_headers = (
+                "TONE BAND",
+                "VERDICT CONSTRAINT",
+                "EVIDENCE CLASS",
+                "H2H GUARDRAIL",
+                "MATCH PREVIEW MODE",
+                "Allowed phrases",
+                "Banned phrases",
+                "Action:",
+                "Sizing:",
+                "You MUST NOT",
+                "Do NOT",
+                "Name the bookmaker",
+                "YOUR VERDICT",
+                "Verdict MUST",
+                "DIAMOND TIER",
+                "───",
+            )
+            for _marker in (
+                "CANONICAL MANAGERS",
+                "DATA AVAILABILITY",
+                "SETUP OPENING SHAPE",
+            ):
+                _idx = _vc_dynamic.find(_marker)
+                if _idx < 0:
+                    continue
+                _tail_lines = _vc_dynamic[_idx:].splitlines()
+                _captured: list[str] = []
+                for _ln in _tail_lines:
+                    if _captured and not _ln.strip():
+                        # Blank line ends the current block.
+                        break
+                    if _captured and any(
+                        _ln.lstrip().startswith(_stop) for _stop in _stop_headers
+                    ):
+                        break
+                    _captured.append(_ln)
+                if _captured:
+                    _block_lines.append("\n".join(_captured).rstrip())
+            if _block_lines:
+                _coach_constraint_block = "\n\n".join(_block_lines).strip()
+        except Exception as _ucb_err:
+            log.debug(
+                "FIX-NARRATIVE-ROT-ROOT-01 verdict_cache: unified-builder block build failed: %s",
+                _ucb_err,
+            )
+
         lines: list[str] = []
+        if _coach_constraint_block:
+            lines.append(_coach_constraint_block)
+            lines.append("")
         if matchup:
             lines.append(f"Match: {matchup}")
         if league:
@@ -15309,6 +15439,67 @@ async def _store_narrative_cache(
             )
             return
 
+    # FIX-NARRATIVE-ROT-ROOT-01 Phase 2: unified pre-persist validator.
+    # Runs the full gate stack (venue / setup-pricing strict + semantic /
+    # manager hallucination / claim verification / verdict quality / banned
+    # phrases) and applies tier-aware enforcement policy:
+    #   - Premium (Diamond/Gold) + CRITICAL or MAJOR → refuse write
+    #   - Non-premium (Silver/Bronze) + CRITICAL → refuse write
+    #   - Non-premium + MAJOR → write with quality_status='quarantined'
+    # Sits AFTER the Rule 23 / Rule 24 (premium W82 refusal) and AFTER the
+    # legacy _validate_baseline_setup gate (kept for log-marker compatibility).
+    from narrative_validator import _validate_narrative_for_persistence
+
+    _evidence_pack_dict: dict | None = None
+    if evidence_json:
+        try:
+            import json as _json_mod
+            _evidence_pack_dict = _json_mod.loads(evidence_json)
+            if not isinstance(_evidence_pack_dict, dict):
+                _evidence_pack_dict = None
+        except Exception:
+            _evidence_pack_dict = None
+
+    _validation = _validate_narrative_for_persistence(
+        content={
+            "narrative_html": html,
+            "verdict_html": verdict_html,
+            "match_id": match_id,
+            "narrative_source": narrative_source,
+        },
+        evidence_pack=_evidence_pack_dict,
+        edge_tier=edge_tier,
+        source_label=narrative_source,
+    )
+
+    _quality_status_override: str | None = None
+    if not _validation.passed:
+        _premium = (edge_tier or "").lower() in ("gold", "diamond")
+        _crit = _validation.critical_count > 0
+        _major = _validation.major_count > 0
+        _gates_failed = ",".join(f.gate for f in _validation.failures)
+        if _premium and (_crit or _major):
+            log.warning(
+                "FIX-NARRATIVE-ROT-ROOT-01 PremiumValidatorRefused "
+                "match_id=%s tier=%s source=%s gates_failed=%s",
+                match_id, edge_tier, narrative_source, _gates_failed,
+            )
+            return
+        if not _premium and _crit:
+            log.warning(
+                "FIX-NARRATIVE-ROT-ROOT-01 BaselineValidatorRefused "
+                "match_id=%s tier=%s source=%s gates_failed=%s",
+                match_id, edge_tier, narrative_source, _gates_failed,
+            )
+            return
+        if not _premium and _major:
+            _quality_status_override = "quarantined"
+            log.warning(
+                "FIX-NARRATIVE-ROT-ROOT-01 BaselineQuarantined "
+                "match_id=%s tier=%s source=%s gates_failed=%s",
+                match_id, edge_tier, narrative_source, _gates_failed,
+            )
+
     def _store():
         # W84-RT3: 3s timeout — WAL mode handles transient scraper locks up to 3s.
         # If lock lasts longer (scraper bulk write), we skip this persist gracefully.
@@ -15338,8 +15529,9 @@ async def _store_narrative_cache(
                 "evidence_json, narrative_source, coverage_json, created_at, expires_at, "
                 "structured_card_json, verdict_html, evidence_class, tone_band, "
                 "spec_json, context_json, generation_ms, "
-                "setup_validated, verdict_validated, setup_attempts, verdict_attempts) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "setup_validated, verdict_validated, setup_attempts, verdict_attempts, "
+                "quality_status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     match_id, html, model, edge_tier,
                     json.dumps(tips, default=str),
@@ -15360,6 +15552,7 @@ async def _store_narrative_cache(
                     verdict_validated,
                     setup_attempts,
                     verdict_attempts,
+                    _quality_status_override,
                 ),
             )
             conn.commit()
@@ -15368,8 +15561,8 @@ async def _store_narrative_cache(
             # the row was silently dropped by an exception swallowed below.
             log.info(
                 "FIX-NARRATIVE-CACHE-SILENT-DROP-01 CommitOK match_id=%s "
-                "narrative_source=%s edge_tier=%s",
-                match_id, narrative_source, edge_tier,
+                "narrative_source=%s edge_tier=%s quality_status=%s",
+                match_id, narrative_source, edge_tier, _quality_status_override,
             )
         except sqlite3.IntegrityError as e:
             if sentry_sdk:
@@ -15390,8 +15583,9 @@ async def _store_narrative_cache(
                         "evidence_json, narrative_source, coverage_json, created_at, expires_at, "
                         "structured_card_json, verdict_html, evidence_class, tone_band, "
                         "spec_json, context_json, generation_ms, "
-                        "setup_validated, verdict_validated, setup_attempts, verdict_attempts) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "setup_validated, verdict_validated, setup_attempts, verdict_attempts, "
+                        "quality_status) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             match_id, html, model, edge_tier,
                             json.dumps(tips, default=str),
@@ -15412,6 +15606,7 @@ async def _store_narrative_cache(
                             verdict_validated,
                             setup_attempts,
                             verdict_attempts,
+                            _quality_status_override,
                         ),
                     )
                     conn.commit()
@@ -15661,6 +15856,49 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
         except Exception:
             pass
         return
+
+    # FIX-NARRATIVE-ROT-ROOT-01 Phase 2: route verdict-cache through unified validator.
+    # Verdict-cache writes only carry verdict_html (no narrative_html) — only the
+    # verdict-level gates fire. evidence_pack is None here (tip_data carries a
+    # tip dict, not the full pack), so manager + claim gates skip silently.
+    try:
+        from narrative_validator import _validate_narrative_for_persistence as _vncfp
+        _vc_validation = _vncfp(
+            content={
+                "narrative_html": "",
+                "verdict_html": verdict_html,
+                "match_id": match_key,
+                "narrative_source": "verdict-cache",
+            },
+            evidence_pack=_evidence_pack if isinstance(_evidence_pack, dict) else None,
+            edge_tier=_tier,
+            source_label="verdict-cache",
+        )
+        if not _vc_validation.passed:
+            _vc_crit = _vc_validation.critical_count > 0
+            _vc_gates = ",".join(f.gate for f in _vc_validation.failures)
+            if _vc_crit:
+                log.warning(
+                    "FIX-NARRATIVE-ROT-ROOT-01 VerdictCacheRefused "
+                    "match_key=%s tier=%s gates=%s",
+                    match_key, _tier, _vc_gates,
+                )
+                return
+            # MAJOR-only: log and continue — verdict-cache is best-effort and the
+            # serve-time min_verdict_quality gate already gives belt-and-suspenders.
+            log.warning(
+                "FIX-NARRATIVE-ROT-ROOT-01 VerdictCacheMajor "
+                "match_key=%s tier=%s gates=%s",
+                match_key, _tier, _vc_gates,
+            )
+    except Exception as _vc_exc:
+        # Validator failures must never block verdict-cache writes — log and proceed.
+        log.warning(
+            "FIX-NARRATIVE-ROT-ROOT-01 VerdictCacheValidatorErr "
+            "match_key=%s err=%s",
+            match_key, _vc_exc,
+        )
+
     try:
         conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
         try:
@@ -15711,9 +15949,36 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
 
 
 async def _store_narrative_evidence(match_id: str, evidence_json: str) -> bool:
-    """Best-effort update of evidence_json for an existing narrative cache row."""
+    """Best-effort update of evidence_json for an existing narrative cache row.
+
+    FIX-NARRATIVE-ROT-ROOT-01 Phase 2: this UPDATE only touches `evidence_json`
+    (no narrative/verdict text) so the unified validator is not invoked. We DO
+    sanity-check that the new payload parses as a JSON object — a corrupted
+    evidence_json column poisons every downstream gate (manager validator,
+    rating anchor, claim validator) and is silent until those gates fire.
+    On parse failure we log + return False (best-effort, no exception).
+    """
+    import json as _json_mod
     import sqlite3
     from db_connection import get_connection
+
+    if evidence_json:
+        try:
+            _parsed = _json_mod.loads(evidence_json)
+            if not isinstance(_parsed, dict):
+                log.warning(
+                    "FIX-NARRATIVE-ROT-ROOT-01 EvidenceUpdateInvalidShape "
+                    "match_id=%s type=%s — refusing UPDATE",
+                    match_id, type(_parsed).__name__,
+                )
+                return False
+        except Exception as _ej_exc:
+            log.warning(
+                "FIX-NARRATIVE-ROT-ROOT-01 EvidenceUpdateInvalidJson "
+                "match_id=%s err=%s — refusing UPDATE",
+                match_id, _ej_exc,
+            )
+            return False
 
     def _store() -> bool:
         conn = get_connection(_NARRATIVE_DB_PATH, timeout_ms=3000)
@@ -16529,6 +16794,152 @@ def _find_setup_strict_ban_violations(narrative: str) -> list[str]:
     return list(dict.fromkeys(reasons))
 
 
+# ── Phase 4 / AC-4.1: Setup-Pricing Semantic Detector ──────────────────────────
+#
+# FIX-NARRATIVE-ROT-ROOT-01 (Phase 4): The keyword-substring detector
+# `_find_setup_strict_ban_violations` above missed semantic shapes the QA wave
+# flagged (e.g. "84% Elo-implied home win probability", "Elo-implied home win
+# probability north of 70%", "implied probability of Everton winning at 47%",
+# "Glicko-implied chance of 65%", "model-implied 72% to win").
+#
+# This sibling helper detects those semantic patterns via regex without
+# touching the existing strict-ban enforcer. Both run side-by-side at every
+# Setup gate site (polish gate 8a + baseline-time validator).
+#
+# Locked rules preserved: existing token list + decimal-probability + Elo-
+# implied phrasing checks in `_find_setup_strict_ban_violations` are unchanged.
+# This helper is additive — it adds NEW shapes without relaxing OLD ones.
+
+# Pattern 1 — Integer-or-decimal percentage tied to outcome verbs.
+# Matches: "47% to win", "65 % chance", "72% probability", "84.5% likely".
+_SETUP_PCT_OUTCOME_VERB_RE = re.compile(
+    r"\b\d{1,3}(?:\.\d+)?\s?%\s+"
+    r"(?:implied|likely|chance|probability|to\s+win|to\s+score|"
+    r"to\s+draw|favoured|rated|expected)\b",
+    re.IGNORECASE,
+)
+
+# Pattern 2 — Outcome verb followed by percentage (with optional preposition).
+# Matches: "probability of 47%", "chance at 65%", "implied around 72%".
+_SETUP_OUTCOME_VERB_PCT_RE = re.compile(
+    r"\b(?:implied|likely|chance|probability|to\s+win|to\s+score|"
+    r"to\s+draw|favoured|rated|expected)\s+"
+    r"(?:at|of|around|near)?\s*\d{1,3}(?:\.\d+)?\s?%",
+    re.IGNORECASE,
+)
+
+# Pattern 2b — Outcome-verb gap form. Catches the QA-flagged shape
+# "implied probability of Everton winning at 47%" where the verb and the
+# percentage are separated by team-specific text. Allows up to ~80 chars
+# between the leading pricing/probability verb and the follow-up outcome
+# word ending in `at|of|around X%`.
+_SETUP_OUTCOME_VERB_GAP_PCT_RE = re.compile(
+    r"\b(?:implied|chance|probability|likelihood|odds)\b"
+    r"[^.]{0,80}?"
+    r"\b(?:winning|losing|drawing|to\s+win|to\s+score|to\s+draw|"
+    r"to\s+lose|favourite|favorite|favoured)\b"
+    r"\s*(?:at|of|around|near|near\s+to)?\s*\d{1,3}(?:\.\d+)?\s?%",
+    re.IGNORECASE,
+)
+
+# Pattern 3 — Model-implied / Elo-implied / Glicko-implied (anywhere).
+# Matches: "Elo-implied", "Glicko implied", "model-implied", "model implied".
+_SETUP_MODEL_IMPLIED_RE = re.compile(
+    r"\b(?:elo|glicko|model)[-\s]?implied\b",
+    re.IGNORECASE,
+)
+
+# Pattern 4 — Bookmaker name detection. Built lazily from SA_BOOKMAKERS_INFO
+# (defined earlier in bot.py). We compile a single combined word-boundary
+# regex over each bookmaker key + display name pair. Compilation is cached.
+_SA_BOOKMAKERS_FOR_SETUP_RE: re.Pattern | None = None
+
+
+def _build_sa_bookmakers_setup_regex() -> re.Pattern | None:
+    """Compile SA bookmaker-name regex on first use; cache across calls."""
+    global _SA_BOOKMAKERS_FOR_SETUP_RE
+    if _SA_BOOKMAKERS_FOR_SETUP_RE is not None:
+        return _SA_BOOKMAKERS_FOR_SETUP_RE
+    try:
+        _info_dict = SA_BOOKMAKERS_INFO  # type: ignore[name-defined]
+    except NameError:
+        # Module hasn't fully imported yet during early sweeps. Fail-open.
+        return None
+    tokens: set[str] = set()
+    for bk_key, info in (_info_dict or {}).items():
+        if isinstance(bk_key, str) and bk_key.strip():
+            tokens.add(bk_key.strip().lower())
+        if isinstance(info, dict):
+            display = info.get("name") or ""
+            if isinstance(display, str) and display.strip():
+                tokens.add(display.strip().lower())
+    # Drop overly-short tokens that would collide with team words.
+    tokens = {t for t in tokens if len(t) >= 5}
+    if not tokens:
+        return None
+    # Sort longest-first so multi-word bookmaker names match before substrings.
+    sorted_tokens = sorted(tokens, key=len, reverse=True)
+    pattern = r"\b(?:" + r"|".join(re.escape(t) for t in sorted_tokens) + r")\b"
+    _SA_BOOKMAKERS_FOR_SETUP_RE = re.compile(pattern, re.IGNORECASE)
+    return _SA_BOOKMAKERS_FOR_SETUP_RE
+
+
+def _find_setup_pricing_semantic_violations(narrative: str) -> list[str]:
+    """Phase 4 / AC-4.1 semantic-class Setup pricing detector.
+
+    Returns a list of unique pattern names hit. Empty list = clean.
+
+    Patterns scanned (all case-insensitive, restricted to the Setup section):
+      - pct_with_outcome_verb     : "47% probability", "65% to win"
+      - outcome_verb_with_pct     : "probability of 47%", "implied 72%"
+      - model_implied             : "Elo-implied", "Glicko-implied", "model-implied"
+      - bookmaker_in_setup        : Hollywoodbets / Betway / GBets / etc. by name
+
+    Sibling of `_find_setup_strict_ban_violations` — both run side-by-side at
+    every Setup gate site (polish gate 8a + baseline-time validator). The
+    existing keyword-substring detector is unchanged; this helper is additive.
+    """
+    setup = _extract_setup_section(narrative)
+    if not setup:
+        return []
+
+    setup_plain = re.sub(r"<[^>]+>", " ", setup)
+    setup_plain = re.sub(r"\s+", " ", setup_plain).strip()
+    if not setup_plain:
+        return []
+
+    hits: list[str] = []
+
+    if _SETUP_PCT_OUTCOME_VERB_RE.search(setup_plain):
+        hits.append("pct_with_outcome_verb")
+
+    if _SETUP_OUTCOME_VERB_PCT_RE.search(setup_plain):
+        hits.append("outcome_verb_with_pct")
+
+    # 2b — outcome-verb gap form ("implied probability of X winning at Y%").
+    if _SETUP_OUTCOME_VERB_GAP_PCT_RE.search(setup_plain):
+        hits.append("outcome_verb_with_pct")
+
+    if _SETUP_MODEL_IMPLIED_RE.search(setup_plain):
+        hits.append("model_implied")
+
+    bk_re = _build_sa_bookmakers_setup_regex()
+    if bk_re is not None and bk_re.search(setup_plain):
+        hits.append("bookmaker_in_setup")
+
+    if hits:
+        log.warning(
+            "FIX-NARRATIVE-ROT-ROOT-01 SetupPricingSemantic: %s",
+            ", ".join(hits),
+        )
+
+    # Phase 2 hook (left for the unified validator):
+    #   The unified `_validate_narrative_for_persistence()` (planned for Phase 2)
+    #   should call this helper alongside `_find_setup_strict_ban_violations`
+    #   and merge results into a single failure-reason list.
+    return list(dict.fromkeys(hits))
+
+
 # ── W82 Baseline-Time Setup Validator (FIX-W82-BASELINE-PRICE-TALKING-01 — LOCKED 2026-04-27) ──
 #
 # Why this helper exists: gate 8a in _validate_polish only runs on the w84 LLM-polish
@@ -16548,13 +16959,19 @@ def _validate_baseline_setup(narrative: str) -> list[str]:
     """Baseline-time variant of polish gate 8a's strict-ban enforcer.
 
     Used by _store_narrative_cache to scan W82 baseline output before persistence.
-    Returns the same reasons list as _find_setup_strict_ban_violations — empty list
-    means clean Setup, non-empty means at least one banned token was found.
+    Returns the merged reasons list of both:
+      - `_find_setup_strict_ban_violations` (keyword-substring strict-ban detector)
+      - `_find_setup_pricing_semantic_violations` (Phase 4 / AC-4.1 semantic-class)
+
+    Empty list = clean Setup. Non-empty = at least one detector fired.
 
     Single-purpose name distinguishes this baseline-time callsite from the polish-
-    time gate 8a inside _validate_polish. Both ultimately call the same detector.
+    time gate 8a inside _validate_polish. Both ultimately call the same detectors.
     """
-    return _find_setup_strict_ban_violations(narrative)
+    reasons = list(_find_setup_strict_ban_violations(narrative))
+    reasons.extend(_find_setup_pricing_semantic_violations(narrative))
+    # Preserve order, drop exact-string duplicates.
+    return list(dict.fromkeys(reasons))
 
 
 # ── Risk-Resolution Validator (FIX-NARRATIVE-RISK-RESOLUTION-01 — LOCKED 2026-04-25) ──
@@ -20453,6 +20870,89 @@ def _extract_edge_data(
     }
 
 
+def _build_unified_polish_prompt(
+    evidence_pack,
+    spec,
+    edge_tier: str,
+    model_class: str = "sonnet",
+    *,
+    log_path: str = "verdict_cache",
+    match_key: str = "",
+) -> "tuple[str, str]":
+    """FIX-NARRATIVE-ROT-ROOT-01 (Phase 3, AC-3.1): unified polish prompt builder.
+
+    Returns (system_prompt, user_message) for both the Sonnet primary polish
+    path AND the verdict-cache path (was an inline hardcoded prompt at
+    `_generate_verdict()` lines ~8430-8470 with zero coaches injection, zero
+    TONE_BANDS, zero data_available, zero Setup pricing ban).
+
+    Architecture decision (locked 2026-04-29 per phase-3 brief):
+    NEW function added rather than refactoring `_build_polish_prompt`. The
+    existing function consumes (baseline, spec, exemplars) and produces a
+    "polish-of-baseline" prompt — that signature is wrong for verdict-cache
+    which has NO baseline to polish (the verdict is the FIRST writer). The
+    unified builder consumes (evidence_pack, spec, edge_tier, model_class)
+    and delegates to `evidence_pack.format_evidence_prompt(return_split=True)`
+    which already enforces:
+        - CANONICAL MANAGERS (Phase 3 deliverable 1, in dynamic block)
+        - DATA AVAILABILITY (Phase 3 deliverable 1)
+        - Setup price-free zone (Rule 8)
+        - TONE_BANDS allowed/banned (Rule 14)
+        - VERDICT-CITES-RISK (Rule 9)
+        - RATING ANCHOR LAW (Rule 10)
+        - COMBAT-SPORT EVIDENCE LAW (Rule 11)
+        - VERDICT BODY EXCLUSION (Rule 17)
+        - venue ban (Rule 18)
+    The Setup opening shape variation (LB-7 fix) is appended to the dynamic
+    block as a per-match instruction.
+
+    model_class controls downstream max_tokens only:
+        - "sonnet" → caller uses max_tokens=1024
+        - "haiku"  → caller uses max_tokens=512
+    Per-model variation is documented in the prompt itself; the prompt text
+    is identical to keep cache hit-rate high.
+    """
+    from evidence_pack import format_evidence_prompt
+
+    _static, _dynamic = format_evidence_prompt(
+        evidence_pack, spec, return_split=True
+    )
+
+    # LB-7 fix: Setup opening shape variation. Inject in the dynamic block so
+    # it lands BELOW the EVIDENCE PACK separator (Rule 22 invariant — never
+    # add per-match interpolation above the cache_control split).
+    _setup_shape_lines = [
+        "",
+        "SETUP OPENING SHAPE — VARY ACROSS THESE 6 PATTERNS (random selection by model):",
+        "1. Manager-led: \"<Manager>'s <Team> sit on X points...\"",
+        "2. Form-led: \"On a 3-game unbeaten run, <Team> arrive...\"",
+        "3. Position-led: \"Currently 4th, <Team> back themselves at home...\"",
+        "4. Stat-led: \"1.7 goals per game and a tight defensive shape — <Team>...\"",
+        "5. Question-led: \"Can <Team> hold their ground at this price?...\"",
+        "6. Comparison-led: \"<Team> vs <Team>: 12 points separate them...\"",
+        "",
+        "DO NOT default to the manager-led mould. Vary.",
+    ]
+    _dynamic_with_shape = _dynamic + "\n" + "\n".join(_setup_shape_lines)
+
+    # FIX-NARRATIVE-ROT-ROOT-01 HG-P3: in-flight pregen sweep verification log.
+    # Marker `polish_prompt_built` is grep-target for HG-P3 sweep validation.
+    _coaches_injected = "CANONICAL MANAGERS" in _dynamic_with_shape
+    _data_avail_injected = "DATA AVAILABILITY" in _dynamic_with_shape
+    log.info(
+        "FIX-NARRATIVE-ROT-ROOT-01 polish_prompt_built path=%s match=%s "
+        "tier=%s model_class=%s coaches_injected=%s data_availability_injected=%s",
+        log_path,
+        match_key or getattr(evidence_pack, "match_key", "") or "unknown",
+        (edge_tier or "").lower() or "unknown",
+        model_class,
+        _coaches_injected,
+        _data_avail_injected,
+    )
+
+    return _static, _dynamic_with_shape
+
+
 def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
     """Build constrained polish prompt. LLM may only improve flow.
 
@@ -20498,6 +20998,18 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         f"BANNED PHRASES — using ANY of these will cause automated rejection:\n"
         + "\n".join(f"- \"{p}\"" for p in BANNED_NARRATIVE_PHRASES)
         + "\n\nUse alternative language that conveys the same meaning without these phrases.\n\n"
+        # FIX-NARRATIVE-ROT-ROOT-01 / Phase 4 / AC-4.4 (LB-7 fix):
+        # W82-RENDER-OPENING-VARIATION — vary Setup opening shape across cards
+        # so the manager-led template doesn't dominate. Diversity monitor
+        # (scripts/monitor_narrative_diversity.py) catches drift.
+        + "SETUP OPENING SHAPE — VARY ACROSS THESE 6 PATTERNS:\n"
+        + "1. Manager-led: \"<Manager>'s <Team> sit on X points...\"\n"
+        + "2. Form-led: \"On a 3-game unbeaten run, <Team> arrive...\"\n"
+        + "3. Position-led: \"Currently 4th, <Team> back themselves at home...\"\n"
+        + "4. Stat-led: \"1.7 goals per game and a tight defensive shape — <Team>...\"\n"
+        + "5. Question-led: \"Can <Team> hold their ground at this price?...\"\n"
+        + "6. Comparison-led: \"<Team> vs <Team>: 12 points separate them...\"\n\n"
+        + "Pick ONE pattern per polish — VARY across cards. Do NOT default to the manager-led mould.\n\n"
         f"If you cannot improve the baseline without violating these constraints, return it UNCHANGED."
     )
 
@@ -20597,6 +21109,19 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
             "POLISH REJECT: Setup-strict-ban (%s)", ", ".join(_setup_strict_reasons)
         )
         return False
+    # Phase 4 / AC-4.1 semantic-class detector — sibling of the strict-ban
+    # enforcer above. Catches "X% probability"-style outcome-verb patterns,
+    # model/Elo/Glicko-implied phrasing, and bookmaker-name leaks the
+    # keyword-substring detector misses.
+    # Phase 2 hook: when the unified `_validate_narrative_for_persistence` lands,
+    # it should call this helper alongside `_find_setup_strict_ban_violations`.
+    _setup_semantic_reasons = _find_setup_pricing_semantic_violations(polished)
+    if _setup_semantic_reasons:
+        log.warning(
+            "POLISH REJECT: Setup-pricing-semantic (%s)",
+            ", ".join(_setup_semantic_reasons),
+        )
+        return False
 
     # 8c. FIX-NARRATIVE-RISK-RESOLUTION-01: Verdict prose must reference Risk.
     _risk_resolution_reasons = _find_risk_resolution_violations(polished)
@@ -20633,6 +21158,52 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
             return False
     except Exception as _vl_exc:
         log.debug("Venue-leak check skipped: %s", _vl_exc)
+
+    # 8g. FIX-NARRATIVE-ROT-ROOT-01 / Phase 4 / AC-4.2: cross-section manager
+    # validation. Catches "Amorim's United" on Man Utd-Liverpool, "Nuno's side"
+    # on Notts Forest — manager hallucinations in Setup/Edge/Risk that the
+    # existing Verdict-only `find_fabricated_manager_names()` cannot catch.
+    # Phase 2 hook: the unified persistence validator should call this helper
+    # alongside `find_fabricated_manager_names()`.
+    try:
+        from narrative_spec import (
+            validate_manager_names_in_all_sections as _vmn_all,
+        )
+        _mgr_violations = _vmn_all(polished, evidence_pack)
+        if _mgr_violations:
+            _bad = ", ".join(
+                f"{v.name} in {v.section}" for v in _mgr_violations[:5]
+            )
+            log.warning(
+                "FIX-NARRATIVE-ROT-ROOT-01 ManagerNameLeak: %s", _bad,
+            )
+            log.warning("POLISH REJECT: manager-leak-all-sections (%s)", _bad)
+            return False
+    except Exception as _mn_exc:
+        log.debug("Manager-leak (all sections) check skipped: %s", _mn_exc)
+
+    # 8h. FIX-NARRATIVE-ROT-ROOT-01 / Phase 4 / AC-4.3: claim-source validation.
+    # Conservative: fires only on numeric claims (H2H counts, W-D-L records,
+    # form sequences, points totals) that conflict with the evidence pack OR
+    # appear when ESPN context flags `data_available=False`.
+    # Phase 2 hook: the unified persistence validator should call this helper.
+    try:
+        from narrative_spec import (
+            validate_claims_against_evidence as _vca,
+        )
+        _claim_violations = _vca(polished, evidence_pack)
+        if _claim_violations:
+            _bad = ", ".join(
+                f"{v.claim_class}={v.claim_text!r}@{v.section}({v.evidence_state})"
+                for v in _claim_violations[:5]
+            )
+            log.warning(
+                "FIX-NARRATIVE-ROT-ROOT-01 ClaimSourceLeak: %s", _bad,
+            )
+            log.warning("POLISH REJECT: claim-source (%s)", _bad)
+            return False
+    except Exception as _cs_exc:
+        log.debug("Claim-source check skipped: %s", _cs_exc)
 
     # 8b. BUILD-VERDICT-FLOOR-01: verdict section length gate [140, 200]
     _verdict_idx = polished.find("🏆")

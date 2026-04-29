@@ -431,7 +431,16 @@ def test_validate_baseline_setup_flags_pricing_token():
 
 
 def test_validate_baseline_setup_delegates_to_strict_ban():
-    """_validate_baseline_setup returns the same result as _find_setup_strict_ban_violations."""
+    """_validate_baseline_setup runs BOTH the strict-ban enforcer AND the
+    Phase 4 semantic detector. Result is the merged superset of both.
+
+    FIX-NARRATIVE-ROT-ROOT-01 / Phase 4 / AC-4.1: the baseline-time validator
+    no longer just delegates — it merges results from the keyword strict-ban
+    detector and the new semantic-class detector. For inputs the semantic
+    detector doesn't fire on, the result is identical to the strict-ban
+    output (the original delegation contract is preserved for clean cases).
+    For inputs both detectors fire on, the merged superset is returned.
+    """
     import bot
 
     test_inputs = [
@@ -443,11 +452,19 @@ def test_validate_baseline_setup_delegates_to_strict_ban():
     for text in test_inputs:
         baseline_result = bot._validate_baseline_setup(text)
         strict_result = bot._find_setup_strict_ban_violations(text)
-        assert baseline_result == strict_result, (
-            f"_validate_baseline_setup must delegate to _find_setup_strict_ban_violations "
-            f"identically for: {text[:60]!r}\n"
-            f"baseline_result={baseline_result}\nstrict_result={strict_result}"
+        semantic_result = bot._find_setup_pricing_semantic_violations(text)
+        # Order-preserving merge with duplicates collapsed.
+        expected = list(dict.fromkeys(list(strict_result) + list(semantic_result)))
+        assert baseline_result == expected, (
+            f"_validate_baseline_setup must merge strict + semantic results "
+            f"for: {text[:60]!r}\n"
+            f"baseline_result={baseline_result}\nstrict_result={strict_result}\n"
+            f"semantic_result={semantic_result}\nexpected={expected}"
         )
+        # The strict result must remain a subset of the merged result (the
+        # original delegation contract is preserved — semantic just adds).
+        for r in strict_result:
+            assert r in baseline_result
 
 
 # ─────────────────────────────────────────────────────────────────────────────

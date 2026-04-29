@@ -2575,6 +2575,109 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
         else "No verified H2H exists. Do NOT mention head-to-head, last meeting, meeting counts, or historical scores at all."
     )
 
+    # FIX-NARRATIVE-ROT-ROOT-01 (Phase 3, Rule 25 candidate):
+    # CANONICAL MANAGERS hard-constraint block — closes LB-2 (Amorim) and LB-3
+    # (Nuno) hallucination paths. coaches.json is the single source of truth;
+    # ESPN-context coach is the live fallback. When both are absent, the rule
+    # SWITCHES from "use this surname" to "do not name the manager".
+    # Lands in the DYNAMIC (post-EVIDENCE PACK separator) block per Rule 22 —
+    # never per-match interpolation above the cache_control split.
+    from narrative_spec import lookup_coach as _lookup_coach
+    _ep_home_coach = ""
+    _ep_away_coach = ""
+    if pack.espn_context is not None:
+        _ep_home_coach = str((pack.espn_context.home_team or {}).get("coach") or "")
+        _ep_away_coach = str((pack.espn_context.away_team or {}).get("coach") or "")
+    _home_coach = _lookup_coach(home_name) or _ep_home_coach
+    _away_coach = _lookup_coach(away_name) or _ep_away_coach
+
+    def _coach_surname(full_name: str) -> str:
+        parts = (full_name or "").strip().split()
+        return parts[-1] if parts else ""
+
+    _canonical_manager_lines: list[str] = [
+        "",
+        "CANONICAL MANAGERS (you MUST use these surnames; NO substitutions):",
+    ]
+    if _home_coach:
+        _canonical_manager_lines.append(
+            f"  Home: {home_name} — {_home_coach} (refer as {_coach_surname(_home_coach)})"
+        )
+    else:
+        _canonical_manager_lines.append(
+            f"  Home: {home_name} — manager unknown — do not name the manager."
+        )
+    if _away_coach:
+        _canonical_manager_lines.append(
+            f"  Away: {away_name} — {_away_coach} (refer as {_coach_surname(_away_coach)})"
+        )
+    else:
+        _canonical_manager_lines.append(
+            f"  Away: {away_name} — manager unknown — do not name the manager."
+        )
+
+    # FIX-NARRATIVE-ROT-ROOT-01 (Phase 3, AC-3.1 §2): DATA AVAILABILITY hard
+    # constraint block. Reflects the actual data_available flags present on
+    # each block — Sonnet must NOT cite specific facts for data_available=False
+    # sources. Closes the "vague-when-thin / specific-when-rich" semantic rot.
+    def _da(flag: bool) -> str:
+        return "True" if flag else "False"
+
+    _h2h_avail = bool(
+        pack.h2h
+        and getattr(pack.h2h, "provenance", None)
+        and pack.h2h.provenance.available
+        and getattr(pack.h2h, "matches", None)
+    )
+    _form_avail = bool(
+        pack.espn_context
+        and getattr(pack.espn_context, "provenance", None)
+        and pack.espn_context.provenance.available
+        and getattr(pack.espn_context, "data_available", False)
+    )
+    _ratings_avail = bool(
+        getattr(pack, "team_ratings", None)
+        and getattr(pack.team_ratings, "provenance", None)
+        and pack.team_ratings.provenance.available
+    ) if hasattr(pack, "team_ratings") else False
+    _injuries_avail = bool(
+        pack.injuries
+        and getattr(pack.injuries, "provenance", None)
+        and pack.injuries.provenance.available
+        and getattr(pack.injuries, "total_injury_count", 0) > 0
+    )
+    _market_avail = bool(
+        pack.movements
+        and getattr(pack.movements, "provenance", None)
+        and pack.movements.provenance.available
+        and getattr(pack.movements, "movement_count", 0) > 0
+    )
+
+    _data_availability_lines: list[str] = [
+        "",
+        "DATA AVAILABILITY (HARD CONSTRAINT — automatic rejection if violated):",
+        f"  H2H: data_available={_da(_h2h_avail)} → "
+        + ("you MAY cite the H2H sentence injected after generation."
+           if _h2h_avail
+           else "you MUST NOT cite specific match counts/dates/scores. Use vague language only."),
+        f"  Form: data_available={_da(_form_avail)} → "
+        + ("you MAY cite the recent form sequence as provided."
+           if _form_avail
+           else "you MUST NOT cite specific results, points tallies, or form streaks."),
+        f"  Ratings: data_available={_da(_ratings_avail)} → "
+        + ("you MAY cite the rating numbers VERBATIM from [TEAM RATINGS ANCHOR]."
+           if _ratings_avail
+           else "you MUST NOT cite Elo or Glicko-2 numbers."),
+        f"  Injuries: data_available={_da(_injuries_avail)} → "
+        + ("you MAY name injured players as listed in [INJURY REPORT]."
+           if _injuries_avail
+           else "you MUST NOT name specific players as injured."),
+        f"  Market: data_available={_da(_market_avail)} → "
+        + ("you MAY cite odds movement direction and magnitude."
+           if _market_avail
+           else "you MUST NOT claim line movement, sharp action, or steam."),
+    ]
+
     # FIX-PREGEN-STATIC-PREFIX-PURE-01 (locked 2026-04-28, Rule 19):
     # Per-match interpolation block — moved BELOW the EVIDENCE PACK split so
     # the static OUTPUT FORMAT / BANNED PHRASES / VERDICT BODY EXCLUSION
@@ -2599,6 +2702,8 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "",
             "H2H GUARDRAIL:",
             h2h_guardrail,
+            *_canonical_manager_lines,
+            *_data_availability_lines,
         ])
     else:
         prompt_parts.extend([
@@ -2620,6 +2725,8 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "",
             "H2H GUARDRAIL:",
             h2h_guardrail,
+            *_canonical_manager_lines,
+            *_data_availability_lines,
             "",
             f"Name the bookmaker, odds, and the capped verdict posture for {spec.verdict_action}.",
             f"YOUR VERDICT MUST recommend {getattr(spec, 'bookmaker', '')} at {getattr(spec, 'odds', '')}. This is NON-NEGOTIABLE. Do not substitute any other bookmaker or price.",
