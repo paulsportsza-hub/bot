@@ -23766,22 +23766,38 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
         pass
 
     from card_data import build_ai_breakdown_data as _build_bd_data
+
+    # FIX-AI-BREAKDOWN-DEFERRED-PLACEHOLDER-RENDER-01 AC-2 — deferred check
+    # MUST happen BEFORE render_ai_breakdown_card. Pre-fix, this handler ran
+    # `asyncio.gather(render_ai_breakdown_card, _build_bd_data)` in parallel,
+    # so the template render crashed with `'ev_pct' is undefined` whenever the
+    # underlying build returned a deferred sentinel ({"deferred": True, ...}).
+    # The crash was caught by the broad `except Exception` and the user saw
+    # "❌ Could not render breakdown" — masking the AC-2 placeholder branch
+    # below. By calling `_build_bd_data` first, we short-circuit to the
+    # placeholder path before the template ever runs.
     try:
-        png_bytes, _bd = await asyncio.gather(
-            asyncio.to_thread(render_ai_breakdown_card, match_key),
-            asyncio.to_thread(_build_bd_data, match_key),
-        )
+        _bd = await asyncio.to_thread(_build_bd_data, match_key)
     except Exception as exc:
-        log.error("AI breakdown render failed for %s: %s", match_key, exc)
+        log.error("AI breakdown data build failed for %s: %s", match_key, exc)
         await query.message.reply_text("❌ Could not render breakdown. Please try again.")
         return
 
-    # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-3: deferred placeholder.
-    # When card_data signals premium-tier defer in flight (Sonnet + Haiku both
-    # failed this sweep, defer row written), show the "updating" banner
-    # rather than a W82 synthesis-on-tap card. Premium consumers MUST NOT
-    # see baseline boilerplate during a live polish-failure window.
+    # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-3 + FIX-PREMIUM-POSTWRITE-PROTECTION-01 AC-2:
+    # deferred placeholder fires when card_data signals premium-tier defer-in-flight
+    # (Sonnet + Haiku polish both failed this sweep, defer row written) OR a
+    # status='quarantined' Gold/Diamond row exists. Premium consumers MUST NOT
+    # see baseline boilerplate or `'ev_pct' is undefined` errors during a live
+    # polish-failure window — show the "updating" banner instead.
     if isinstance(_bd, dict) and _bd.get("deferred"):
+        _bd_reason = "quarantine" if _bd.get("quarantine_reason") else "defer"
+        log.info(
+            "FIX-AI-BREAKDOWN-DEFERRED-PLACEHOLDER-RENDER-01 PlaceholderServed "
+            "match_id=%s reason=%s tier=%s",
+            match_key,
+            _bd_reason,
+            _bd.get("edge_tier", ""),
+        )
         _bd_back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
         _placeholder_msg = (
             "🔄 <b>AI Breakdown updating</b>\n\n"
@@ -23795,6 +23811,15 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
                 [InlineKeyboardButton("↩️ Back", callback_data=_bd_back_cb)],
             ]),
         )
+        return
+
+    # Non-deferred path — render the breakdown card. Render is heavy (Playwright);
+    # only fire it when we know the data is full-shape.
+    try:
+        png_bytes = await asyncio.to_thread(render_ai_breakdown_card, match_key)
+    except Exception as exc:
+        log.error("AI breakdown render failed for %s: %s", match_key, exc)
+        await query.message.reply_text("❌ Could not render breakdown. Please try again.")
         return
 
     if not png_bytes:

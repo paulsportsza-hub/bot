@@ -199,6 +199,31 @@
     <!-- ── Sections ──────────────────────────────────────────────── -->
     <div class="sections">
 
+        {# FIX-AI-BREAKDOWN-DEFERRED-PLACEHOLDER-RENDER-01 AC-1:
+           Premium-tier deferred sentinel (build_ai_breakdown_data returns
+           {"deferred": True, ...} when the only narrative_cache row is
+           quarantined or a polish-failure defer entry exists). Render the
+           "updating" placeholder block instead of the standard 4-section
+           layout — the deferred dict carries no setup_html/edge_html/
+           verdict_html/ev_pct, so referencing them unconditionally
+           crashes Jinja with `'ev_pct' is undefined`. The deferred path
+           is a defence-in-depth backstop; the live serve path also
+           short-circuits in bot.py::_handle_ai_breakdown before this
+           template ever renders. #}
+        {% if deferred is defined and deferred %}
+        <div class="section setup">
+            <div class="sec-head">
+                <span class="sec-emoji">🔄</span>
+                <span class="sec-title">AI Breakdown updating</span>
+                <span class="sec-tag tag-gold">PLEASE WAIT</span>
+            </div>
+            <div class="prose">
+                Our analyst polish for this premium card is regenerating right now.
+                Refresh in a few minutes — the full Diamond breakdown will be ready.
+            </div>
+        </div>
+        {% else %}
+
         <!-- Setup -->
         <div class="section setup">
             <div class="sec-head">
@@ -214,7 +239,7 @@
             <div class="sec-head">
                 <span class="sec-emoji">🎯</span>
                 <span class="sec-title">The Edge</span>
-                {% if ev_pct > 0 %}
+                {% if ev_pct is defined and ev_pct and ev_pct > 0 %}
                 <span class="sec-tag tag-green">+{{ "%.1f"|format(ev_pct) }}% EV</span>
                 {% else %}
                 <span class="sec-tag tag-green">EV</span>
@@ -247,6 +272,8 @@
             <div class="cap-reason-text">🔒 {{ cap_reason }}</div>
             {% endif %}
         </div>
+
+        {% endif %}{# end deferred branch (FIX-AI-BREAKDOWN-DEFERRED-PLACEHOLDER-RENDER-01 AC-1) #}
 
     </div>
 
