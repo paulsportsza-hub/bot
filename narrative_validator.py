@@ -34,12 +34,119 @@ circular import. Helpers are imported lazily inside `_validate_narrative_for_per
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 log = logging.getLogger(__name__)
 
 Severity = Literal["CRITICAL", "MAJOR", "MINOR"]
+
+
+# FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) — AC-1.
+# Rule 17 telemetry vocabulary recurrence catalogue, sourced verbatim from
+# QA-01 §6.3 (banned-phrase recurrence — `the bookmaker has slipped` in 8/19
+# cards) and QA-01 §6.4 (verdict telemetry leak in 58% of cards). These
+# phrases read like a quant analyst's note, not a SA mate at a braai.
+#
+# Word-boundary, case-insensitive. Where a pattern has known false-positive
+# risk in legitimate non-betting prose ("in view of the squad rotation"),
+# the regex narrows to the surrounding quant-speak context.
+TELEMETRY_VOCABULARY_PATTERNS: tuple[tuple[str, str], ...] = (
+    # "the supporting signals back the read" / "the signals confirm" — Rule 17
+    # leak across 58% of cards. Broad match: any "the [supporting] signal(s)"
+    # phrase falls into the braai-voice forbidden zone (signals are quant-talk).
+    (r"\bthe\s+(?:supporting\s+)?signals?\b", "the signals"),
+    # "the reads" — quant analyst metonym for "the analysis". The braai-voice
+    # equivalent is the team-level read ("Slot's lot are flying"), not "the reads".
+    (r"\bthe\s+reads?\b", "the reads"),
+    # "reads flag" / "reads flag stays in view" — the entire reads-flag idiom is
+    # unintelligible to a normal user.
+    (r"\breads?\s+flag\b", "reads flag"),
+    # "the bookmaker has slipped" / "bookmaker slipped" — QA-01 §6.3 flagged
+    # this exact phrase in 8/19 cards. The braai-voice version is concrete:
+    # "Supabets hasn't moved yet — get on it before they catch up."
+    (r"\bbookmaker\s+(?:has\s+)?slipp(?:ed|ing|s)\b", "bookmaker slipped"),
+    # "stays in view" / "kept in view" / "remains in view" — narrow context
+    # because the bare "\bin view\b" hits legitimate prose ("in view of the
+    # squad rotation, ..."). The actual quant-speak usage anchors on a verb of
+    # persistence (stays/keeps/remains/kept).
+    (r"\b(?:stays?|kept|keeps?|remains?|stay)\s+in\s+view\b", "stays in view"),
+    # "the case as it stands" / "the case here" — wooden mid-paragraph filler.
+    (r"\bthe\s+case\s+(?:as\s+it\s+stands|here)\b", "the case as it stands"),
+    # "the model estimates" / "model implies" / "model prices" — the model is
+    # not a character in our story. SA Braai Voice talks about teams/managers,
+    # not the model. Use "we make it" or omit entirely.
+    (r"\b(?:the\s+)?model\s+(?:estimates|implies|prices?)\b", "the model estimates"),
+    # "indicators line up" / "indicators align" — already in
+    # _VERDICT_BANNED_TELEMETRY but mirrored here for cross-section enforcement
+    # (ban applies to AI Breakdown sections too, not only the Verdict).
+    (r"\bindicators?\s+(?:line\s+up|align)\b", "indicators line up"),
+    # "structural signal" / "structural lean" / "structural read" — analyst-deck
+    # vocabulary; never appears in pundit speech.
+    (r"\bstructural\s+(?:signal|lean|read)\b", "structural signal"),
+    # "price edge" — quant-speak. The braai-voice version names the price:
+    # "Liverpool at 1.97 is too good" — not "the price edge here is +5.2%".
+    (r"\bprice\s+edge\b", "price edge"),
+    # "signal-aware" / "signal aware" — analyst slack-speak.
+    (r"\bsignal[-\s]aware\b", "signal-aware"),
+    # "edge confirms" / "edge confirm" — the edge isn't a witness.
+    (r"\bedge\s+confirms?\b", "edge confirms"),
+    # "speculative punt" — tone-band mismatch on Gold/Diamond Strong-band cards.
+    # Allowed on Bronze (genuinely speculative tier) but never on premium.
+    # The validator caller scopes this hit by tier.
+    (r"\bspeculative\s+punt\b", "speculative punt"),
+)
+
+# Compiled regex cache — module-level so we compile once.
+_TELEMETRY_VOCABULARY_RE: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pat, re.IGNORECASE), label)
+    for pat, label in TELEMETRY_VOCABULARY_PATTERNS
+)
+
+# Patterns that ONLY fire on premium-tier (Strong-band) cards. Allowed on
+# Bronze (genuinely speculative tier) per brief AC-2 tier-band tone rule.
+_PREMIUM_ONLY_TELEMETRY_LABELS: frozenset[str] = frozenset({"speculative punt"})
+
+
+def _check_telemetry_vocabulary(
+    text: str, edge_tier: str, section: str
+) -> list[str]:
+    """Scan `text` for Rule 17 telemetry-vocabulary leaks.
+
+    Parameters
+    ----------
+    text
+        Raw HTML or plaintext to scan. Empty string returns no hits.
+    edge_tier
+        Lowercase tier label ("diamond" | "gold" | "silver" | "bronze"). Used
+        to scope tier-conditional patterns (e.g. `speculative punt` is allowed
+        on Bronze cards because they are genuinely speculative).
+    section
+        Identifier for the surface being scanned ("verdict_html" |
+        "narrative_html" | "verdict" | "edge" | "risk" | "setup"). Currently
+        informational — the regex catalogue is identical across sections; the
+        caller decides which sections to scan.
+
+    Returns
+    -------
+    list[str]
+        Deduped list of hit labels (e.g. ["bookmaker slipped", "the reads"]).
+        Empty list when text is clean.
+    """
+    if not text:
+        return []
+    tier = (edge_tier or "").lower()
+    is_premium = tier in ("diamond", "gold")
+    hits: list[str] = []
+    seen: set[str] = set()
+    for compiled, label in _TELEMETRY_VOCABULARY_RE:
+        if label in _PREMIUM_ONLY_TELEMETRY_LABELS and not is_premium:
+            continue
+        if compiled.search(text) and label not in seen:
+            hits.append(label)
+            seen.add(label)
+    return hits
 
 
 @dataclass
@@ -456,6 +563,50 @@ def _validate_narrative_for_persistence(
                 "FIX-NARRATIVE-ROT-ROOT-01 ValidatorBannedPhrase "
                 "match_id=%s source=%s hits=%r",
                 match_id, source_label, hits[:5],
+            )
+
+    # ── Gate 8: Rule 17 telemetry vocabulary scan ───────────────────────────
+    # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-1.
+    # Scan BOTH verdict_html and narrative_html for telemetry vocabulary leaks.
+    # Premium tier (Diamond/Gold) hit → CRITICAL (refuse write).
+    # Non-premium tier hit → MAJOR (quarantine).
+    tier_lower = (edge_tier or "").lower()
+    tele_severity: Severity = "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
+    if narrative_html:
+        narr_tele_hits = _check_telemetry_vocabulary(
+            narrative_html, edge_tier, "narrative_html"
+        )
+        if narr_tele_hits:
+            failures.append(
+                ValidationFailure(
+                    gate="telemetry_vocabulary",
+                    severity=tele_severity,
+                    detail=f"hits={narr_tele_hits!r}",
+                    section="narrative_html",
+                )
+            )
+            log.warning(
+                "FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 ValidatorTelemetryVocab "
+                "match_id=%s source=%s tier=%s section=narrative hits=%r",
+                match_id, source_label, edge_tier, narr_tele_hits,
+            )
+    if verdict_html:
+        v_tele_hits = _check_telemetry_vocabulary(
+            verdict_html, edge_tier, "verdict_html"
+        )
+        if v_tele_hits:
+            failures.append(
+                ValidationFailure(
+                    gate="telemetry_vocabulary",
+                    severity=tele_severity,
+                    detail=f"verdict hits={v_tele_hits!r}",
+                    section=_SECTION_VERDICT_HTML,
+                )
+            )
+            log.warning(
+                "FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 ValidatorTelemetryVocab "
+                "match_id=%s source=%s tier=%s section=verdict_html hits=%r",
+                match_id, source_label, edge_tier, v_tele_hits,
             )
 
     # ── Outcome ──────────────────────────────────────────────────────────────

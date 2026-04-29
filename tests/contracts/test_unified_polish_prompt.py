@@ -399,16 +399,29 @@ def test_setup_opening_shape_in_unified_builder():
     )
 
     assert _SETUP_SHAPE_MARKER in dynamic
-    # All 6 variation patterns must be listed.
-    for pattern in (
-        "Manager-led",
-        "Form-led",
-        "Position-led",
-        "Stat-led",
-        "Question-led",
-        "Comparison-led",
-    ):
-        assert pattern in dynamic, f"Missing '{pattern}' shape pattern"
+    # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-5: the prompt now
+    # injects ONE pattern (MD5-deterministic on match_key), not all 6. The
+    # selected pattern label MUST be one of the 6 catalogue entries — the
+    # underlying ``_OPENING_PATTERNS`` tuple is the source of truth.
+    selected_label, selected_example = bot._select_opening_pattern(
+        getattr(pack, "match_key", "") or ""
+    )
+    assert selected_label in dynamic, (
+        f"Selected pattern label {selected_label!r} not injected into dynamic block"
+    )
+    assert selected_example in dynamic, (
+        f"Selected pattern example {selected_example!r} not injected into dynamic block"
+    )
+    # Reverse contract: the OTHER 5 pattern labels MUST NOT all appear (single-
+    # pattern injection means only the selected label appears in the SETUP
+    # OPENING SHAPE block).
+    other_labels = [
+        label for label, _ in bot._OPENING_PATTERNS if label != selected_label
+    ]
+    other_count = sum(1 for label in other_labels if label in dynamic)
+    assert other_count == 0, (
+        f"Multi-pattern leak: {other_count}/5 non-selected labels appeared in dynamic block"
+    )
     assert "DO NOT default to the manager-led mould" in dynamic
 
 

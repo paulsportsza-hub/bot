@@ -884,16 +884,37 @@ class TestRenderEdge:
             assert phrase not in edge.lower(), f"Legacy phrase '{phrase}' in speculative edge"
 
     def test_lean_mentions_value_or_signal(self):
-        """W84-Q3: Lean edge references value or confirming signal."""
+        """W84-Q3 + FIX-NARRATIVE-VOICE-COMPREHENSIVE-01: Lean edge references
+        value, confirming evidence, or a fair-line frame.
+
+        The braai-voice rewrite (2026-04-29 AC-3) replaced "signal" / "indicator"
+        with "evidence" + "fair line" — Rule 17 telemetry vocabulary purge.
+        """
         spec = self._spec("lean", "moderate", "lean", "small stake", support_level=1)
         edge = _render_edge(spec)
-        assert "value" in edge.lower() or "confirm" in edge.lower() or "signal" in edge.lower()
+        assert (
+            "value" in edge.lower()
+            or "confirm" in edge.lower()
+            or "evidence" in edge.lower()
+            or "fair" in edge.lower()
+            or "back" in edge.lower()
+        )
 
     def test_supported_mentions_indicators(self):
-        """W84-Q3: Supported edge references indicators or support."""
+        """W84-Q3 + FIX-NARRATIVE-VOICE-COMPREHENSIVE-01: Supported edge
+        references confirming evidence or support.
+
+        Renamed semantic check: "indicator" / "signal" purged per Rule 17.
+        New vocabulary uses "evidence", "support", "back", "fair" tokens.
+        """
         spec = self._spec("supported", "confident", "back", "standard stake", support_level=3)
         edge = _render_edge(spec)
-        assert "indicator" in edge.lower() or "support" in edge.lower() or "confirm" in edge.lower()
+        assert (
+            "evidence" in edge.lower()
+            or "support" in edge.lower()
+            or "confirm" in edge.lower()
+            or "back" in edge.lower()
+        )
 
     def test_conviction_strong_language(self):
         """W84-Q3: Conviction edge uses strong language."""

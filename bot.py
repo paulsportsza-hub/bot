@@ -20870,6 +20870,59 @@ def _extract_edge_data(
     }
 
 
+# FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-5: LB-7 code-level
+# opening-shape selection. Six analytical opening shapes for The Setup
+# section. Selection is MD5-deterministic on match_key — same fixture
+# always renders the same shape across reruns; different fixtures spread
+# uniformly across the 6 shapes.
+#
+# Why six shapes: brief AC-5 reproduces the pre-existing 6-pattern list
+# from the "vary across 6 patterns" prompt instruction. The structural
+# change is moving selection from LLM (which ignored it) to code
+# (deterministic + auditable).
+_OPENING_PATTERNS: tuple[tuple[str, str], ...] = (
+    (
+        "action-led",
+        "Liverpool come into this on the back of three straight wins, with Salah back from injury and Chelsea visiting after a brutal week.",
+    ),
+    (
+        "stake-led",
+        "What stands out: Brighton's home record against bottom-half sides — five wins in seven, conceding less than once a game.",
+    ),
+    (
+        "risk-frame",
+        "The data has a cleaner read on Forest's recent form than on Newcastle's away travel — that's where the analysis starts.",
+    ),
+    (
+        "question-frame",
+        "Can Arsenal turn early-spring form into a result against a Liverpool side that's been the league's most consistent traveller?",
+    ),
+    (
+        "stat-anchor",
+        "Eight wins in twelve since the manager change — that's the engine behind the price the bookmakers can't quite catch.",
+    ),
+    (
+        "comparison",
+        "Two sides going in opposite directions: one chasing top four, the other already looking at next season's planning.",
+    ),
+)
+
+
+def _select_opening_pattern(match_key: str) -> "tuple[str, str]":
+    """Return ``(pattern_label, example_sentence)`` for the given match.
+
+    MD5-deterministic on ``match_key`` — same fixture always selects the
+    same opening pattern across reruns. The selection is uniform across
+    the 6-pattern catalogue when ``match_key`` is drawn from a high-entropy
+    distribution (verified by ``tests/contracts/test_opening_shape_distribution.py``
+    against 100 synthetic match keys).
+    """
+    if not match_key:
+        match_key = "unknown"
+    h = _md5(match_key.encode("utf-8")).digest()
+    return _OPENING_PATTERNS[h[0] % len(_OPENING_PATTERNS)]
+
+
 def _build_unified_polish_prompt(
     evidence_pack,
     spec,
@@ -20918,20 +20971,24 @@ def _build_unified_polish_prompt(
         evidence_pack, spec, return_split=True
     )
 
-    # LB-7 fix: Setup opening shape variation. Inject in the dynamic block so
-    # it lands BELOW the EVIDENCE PACK separator (Rule 22 invariant — never
-    # add per-match interpolation above the cache_control split).
+    # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-5: LB-7 code-level
+    # opening shape selection. The previous "vary across 6 patterns" prompt
+    # was IGNORED by Sonnet/Haiku — all 4 sampled W84 cards still opened with
+    # the manager-led mould. The structural fix is to pick a single pattern
+    # at code level (MD5-deterministic on match_key) and inject it as a
+    # SINGLE-PATTERN instruction. Sonnet receiving "use pattern X" follows
+    # it; Sonnet receiving "vary across 6 patterns" defaults to the proven
+    # mould.
+    _selected_shape_label, _selected_shape_example = _select_opening_pattern(
+        match_key or getattr(evidence_pack, "match_key", "") or "unknown"
+    )
     _setup_shape_lines = [
         "",
-        "SETUP OPENING SHAPE — VARY ACROSS THESE 6 PATTERNS (random selection by model):",
-        "1. Manager-led: \"<Manager>'s <Team> sit on X points...\"",
-        "2. Form-led: \"On a 3-game unbeaten run, <Team> arrive...\"",
-        "3. Position-led: \"Currently 4th, <Team> back themselves at home...\"",
-        "4. Stat-led: \"1.7 goals per game and a tight defensive shape — <Team>...\"",
-        "5. Question-led: \"Can <Team> hold their ground at this price?...\"",
-        "6. Comparison-led: \"<Team> vs <Team>: 12 points separate them...\"",
+        f"SETUP OPENING SHAPE: {_selected_shape_label}",
+        "Use this pattern, NOT any other. The Setup section MUST open in this shape.",
+        f"Example: \"{_selected_shape_example}\"",
         "",
-        "DO NOT default to the manager-led mould. Vary.",
+        "DO NOT default to the manager-led mould unless the assigned pattern IS manager-led.",
     ]
     _dynamic_with_shape = _dynamic + "\n" + "\n".join(_setup_shape_lines)
 
@@ -20957,6 +21014,12 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
     """Build constrained polish prompt. LLM may only improve flow.
 
     W82-POLISH: the LLM cannot change analytical posture — only the words.
+
+    FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-5: replaces the
+    "vary across 6 patterns" tail with a single MD5-deterministic shape
+    selection (`_select_opening_pattern`). Pattern is keyed on
+    ``home_name + away_name`` so the legacy path stays MD5-equivalent to
+    the unified path's match_key keying when the spec carries those fields.
     """
     from narrative_spec import TONE_BANDS
     band = TONE_BANDS[spec.tone_band]
@@ -20970,6 +21033,12 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         if not getattr(spec, "context_is_fresh", True)
         else ""
     )
+    # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-5: single-pattern
+    # injection. The legacy path doesn't carry an explicit match_key on the
+    # spec object, so we seed on home+away names — same fixture renders the
+    # same shape across reruns.
+    _seed_key = f"{getattr(spec, 'home_name', '')}_{getattr(spec, 'away_name', '')}"
+    _shape_label, _shape_example = _select_opening_pattern(_seed_key)
     return (
         f"You are polishing a sports betting preview for MzansiEdge, a South African platform.\n\n"
         f"THE BASELINE TEXT BELOW IS ALREADY ACCURATE AND COMPLETE. Your job is ONLY to improve "
@@ -20998,18 +21067,14 @@ def _build_polish_prompt(baseline: str, spec, exemplars: dict) -> str:
         f"BANNED PHRASES — using ANY of these will cause automated rejection:\n"
         + "\n".join(f"- \"{p}\"" for p in BANNED_NARRATIVE_PHRASES)
         + "\n\nUse alternative language that conveys the same meaning without these phrases.\n\n"
-        # FIX-NARRATIVE-ROT-ROOT-01 / Phase 4 / AC-4.4 (LB-7 fix):
-        # W82-RENDER-OPENING-VARIATION — vary Setup opening shape across cards
-        # so the manager-led template doesn't dominate. Diversity monitor
-        # (scripts/monitor_narrative_diversity.py) catches drift.
-        + "SETUP OPENING SHAPE — VARY ACROSS THESE 6 PATTERNS:\n"
-        + "1. Manager-led: \"<Manager>'s <Team> sit on X points...\"\n"
-        + "2. Form-led: \"On a 3-game unbeaten run, <Team> arrive...\"\n"
-        + "3. Position-led: \"Currently 4th, <Team> back themselves at home...\"\n"
-        + "4. Stat-led: \"1.7 goals per game and a tight defensive shape — <Team>...\"\n"
-        + "5. Question-led: \"Can <Team> hold their ground at this price?...\"\n"
-        + "6. Comparison-led: \"<Team> vs <Team>: 12 points separate them...\"\n\n"
-        + "Pick ONE pattern per polish — VARY across cards. Do NOT default to the manager-led mould.\n\n"
+        # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-5: code-level
+        # opening-shape selection (replaces the "vary across 6 patterns"
+        # instruction Sonnet/Haiku ignored). Single-pattern injection per
+        # match. Diversity monitor (scripts/monitor_narrative_diversity.py)
+        # catches drift across the corpus.
+        + f"SETUP OPENING SHAPE: {_shape_label}\n"
+        + f"Use this pattern, NOT any other. Example: \"{_shape_example}\"\n"
+        + "DO NOT default to the manager-led mould unless the assigned pattern IS manager-led.\n\n"
         f"If you cannot improve the baseline without violating these constraints, return it UNCHANGED."
     )
 

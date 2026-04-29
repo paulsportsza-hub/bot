@@ -119,17 +119,28 @@ class TestSupportLineVariants:
         assert _verdict_support_line(spec) == ""
 
     def test_support_one_no_opposing_emits_singular_phrasing(self):
-        """At least one variant for support=1 must use 'one' — not '1 ... indicator sit'."""
+        """FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29): support=1 must
+        convey singular evidence in SA voice. The earlier "one signal sits"
+        phrasing was retired (Rule 17 telemetry vocabulary purge); the rewrite
+        speaks of form / recent run / backer and may not include the literal
+        word "one"."""
         spec = _make_spec(support_level=1, contradicting_signals=0)
         line = _verdict_support_line(spec).lower()
-        assert "one" in line, f"support=1 line missing 'one' word: {line!r}"
+        # Anti-pattern: literal "indicator sit" / "indicator(s) line up" must not return.
         assert "indicator sit" not in line
+        assert "indicators line up" not in line
+        # New SA-voice contract: line must reference form / run / evidence /
+        # backer to convey supporting weight.
+        assert any(token in line for token in ("form", "run", "evidence", "back")), (
+            f"support=1 line missing SA-voice support token: {line!r}"
+        )
 
     def test_support_multi_no_opposing_excludes_count(self):
-        """FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28): brief Forbidden
-        list bans count cites in Verdict body ('N indicators line up' / 'N
-        supporting indicator'). Counts belong in The Edge section, not the
-        Verdict. _verdict_support_line now emits qualitative phrases only."""
+        """FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28 + 2026-04-29):
+        brief Forbidden list bans count cites in the Verdict body. Counts
+        belong in The Edge section, not the Verdict. _verdict_support_line
+        now emits qualitative phrases only — and must avoid the Rule 17
+        telemetry vocabulary entirely (no "signals" / "indicators" tokens)."""
         spec = _make_spec(support_level=3, contradicting_signals=0)
         line = _verdict_support_line(spec)
         # No count cite: assert no digit token appears.
@@ -137,9 +148,11 @@ class TestSupportLineVariants:
         assert not _re.search(r"\b\d+\b", line), (
             f"support=3 line cites count digit (banned per Rule 17): {line!r}"
         )
-        # Qualitative phrasing must reference signals/indicators.
-        assert ("signal" in line.lower()) or ("indicator" in line.lower()), (
-            f"support=3 line missing signal/indicator reference: {line!r}"
+        # Qualitative phrasing must reference SA-voice support tokens (form,
+        # evidence, picture). The legacy "signal" / "indicator" tokens are
+        # banned by Rule 17 (FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-2).
+        assert any(token in line.lower() for token in ("form", "evidence", "picture")), (
+            f"support=3 line missing SA-voice support token: {line!r}"
         )
 
     def test_md5_determinism_same_fixture_same_variant(self):
