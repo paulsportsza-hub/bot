@@ -239,7 +239,10 @@ async def test_generate_one_silver_bronze_skips_w84_polish(
 
 
 @pytest.mark.asyncio
-async def test_generate_one_falls_back_to_w82_when_verify_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_generate_one_premium_defers_when_verify_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): premium-tier (default Gold) verify-fail
+    no longer silently serves W82. The premium intercept attempts Haiku fallback;
+    when Haiku also fails (here forced via empty-draft response), the row defers."""
     _patch_generate_dependencies(monkeypatch)
 
     monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec, match_preview=False, return_split=False: ("static", "dynamic") if return_split else "prompt")
@@ -248,16 +251,26 @@ async def test_generate_one_falls_back_to_w82_when_verify_fails(monkeypatch: pyt
         "verify_shadow_narrative",
         lambda draft, pack, spec: (False, {"rejection_reasons": ["bad h2h"]}),
     )
+    # Force Haiku fallback to fail too, so the premium intercept ends in defer.
+    async def _haiku_fail(*args, **kwargs):
+        return None
+    monkeypatch.setattr(pregen, "_attempt_haiku_polish_fallback", _haiku_fail)
+    # Stub the persistence helpers (test harness, no real DB).
+    monkeypatch.setattr(pregen, "_record_premium_defer", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(pregen, "_clear_premium_defer", lambda *args, **kwargs: None)
 
     result = await pregen._generate_one(_edge(), "claude-sonnet", _FakeClaude())
 
-    assert result["success"] is True
-    assert result["_cache"]["narrative_source"] == "w82"
-    assert "Lean Arsenal at Betway 2.10" in result["narrative"]
+    assert result["success"] is False
+    assert result.get("premium_deferred") is True
+    assert "_cache" not in result, "deferred premium card MUST NOT write a narrative_cache row"
 
 
 @pytest.mark.asyncio
-async def test_generate_one_falls_back_to_w82_on_w84_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_generate_one_premium_defers_on_w84_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): premium-tier (default Gold) Sonnet
+    API error no longer silently serves W82. With Sonnet retry exhausted (3 attempts
+    on Gold) and Haiku fallback forced to fail, the row defers."""
     _patch_generate_dependencies(monkeypatch)
 
     monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec, match_preview=False, return_split=False: ("static", "dynamic") if return_split else "prompt")
@@ -267,12 +280,80 @@ async def test_generate_one_falls_back_to_w82_on_w84_error(monkeypatch: pytest.M
 
     claude = _FakeClaude()
     monkeypatch.setattr(claude.messages, "create", _boom)
+    # Patch asyncio.sleep so the retry-backoff doesn't slow the test (3 attempts → 3s sleep).
+    import asyncio as _aio
+    monkeypatch.setattr(_aio, "sleep", AsyncMock(return_value=None))
+    # Force Haiku fallback to also fail.
+    async def _haiku_fail(*args, **kwargs):
+        return None
+    monkeypatch.setattr(pregen, "_attempt_haiku_polish_fallback", _haiku_fail)
+    monkeypatch.setattr(pregen, "_record_premium_defer", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(pregen, "_clear_premium_defer", lambda *args, **kwargs: None)
 
     result = await pregen._generate_one(_edge(), "claude-sonnet", claude)
 
+    assert result["success"] is False
+    assert result.get("premium_deferred") is True
+    assert "_cache" not in result
+
+
+@pytest.mark.asyncio
+async def test_generate_one_premium_serves_haiku_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): when Sonnet exhausted but Haiku
+    fallback succeeds, the row writes with `narrative_source = "w84-haiku-fallback"`."""
+    _patch_generate_dependencies(monkeypatch)
+
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec, match_preview=False, return_split=False: ("static", "dynamic") if return_split else "prompt")
+    monkeypatch.setattr(
+        pregen,
+        "verify_shadow_narrative",
+        lambda draft, pack, spec: (False, {"rejection_reasons": ["bad h2h"]}),
+    )
+    # Haiku fallback returns a polished narrative.
+    async def _haiku_ok(*args, **kwargs):
+        return _w84_text()
+    monkeypatch.setattr(pregen, "_attempt_haiku_polish_fallback", _haiku_ok)
+    monkeypatch.setattr(pregen, "_clear_premium_defer", lambda *args, **kwargs: None)
+
+    result = await pregen._generate_one(_edge(), "claude-sonnet", _FakeClaude())
+
+    assert result["success"] is True
+    assert result["_cache"]["narrative_source"] == "w84-haiku-fallback"
+    assert result["_cache"]["model"] == "haiku"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", ["silver", "bronze"])
+async def test_generate_one_silver_bronze_still_serves_w82_on_verify_fail(
+    monkeypatch: pytest.MonkeyPatch, tier: str
+) -> None:
+    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): Silver+Bronze unchanged — they
+    keep the existing W82 fallback path per W93-TIER-GATE cost policy. The premium
+    intercept does NOT fire for these tiers."""
+    _patch_generate_dependencies(monkeypatch)
+
+    monkeypatch.setattr(pregen, "format_evidence_prompt", lambda pack, spec, match_preview=False, return_split=False: ("static", "dynamic") if return_split else "prompt")
+    monkeypatch.setattr(
+        pregen,
+        "verify_shadow_narrative",
+        lambda draft, pack, spec: (False, {"rejection_reasons": ["bad h2h"]}),
+    )
+    # Sentinel: Haiku fallback should NEVER be invoked for Silver/Bronze.
+    _haiku_called = []
+    async def _haiku_sentinel(*args, **kwargs):
+        _haiku_called.append(True)
+        return None
+    monkeypatch.setattr(pregen, "_attempt_haiku_polish_fallback", _haiku_sentinel)
+
+    edge = _edge()
+    edge["tier"] = tier
+    result = await pregen._generate_one(edge, "claude-sonnet", _FakeClaude())
+
+    # Silver/Bronze: tier-gate skips W84 polish entirely → narrative_source stays "w82",
+    # and the premium intercept's tier check skips them too.
     assert result["success"] is True
     assert result["_cache"]["narrative_source"] == "w82"
-    assert "Lean Arsenal at Betway 2.10" in result["narrative"]
+    assert _haiku_called == [], f"Haiku fallback must NOT fire for {tier} tier"
 
 
 @pytest.mark.asyncio

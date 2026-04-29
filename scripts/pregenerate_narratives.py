@@ -1894,6 +1894,199 @@ def _is_past_kickoff(match_key: str, cutoff_hours: int = 24) -> bool:
         return False
 
 
+# FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): Premium-tier defer alert chat (EdgeOps).
+# When a Diamond/Gold card defers 3+ consecutive sweeps, alert is queued to this chat.
+# Test paths inspect the constant; production reads it directly.
+_PREMIUM_DEFER_ALERT_CHAT_ID = -1003877525865
+_PREMIUM_DEFER_ALERT_THRESHOLD = 3
+
+
+async def _attempt_haiku_polish_fallback(
+    claude: "anthropic.AsyncAnthropic",
+    evidence_pack,
+    spec,
+    tips: list,
+    match_key: str,
+    log,
+) -> str | None:
+    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): Haiku polish fallback for
+    premium-tier (Diamond+Gold) cards when Sonnet polish has exhausted retries.
+
+    Returns the polished narrative on success, or None on failure (caller defers
+    the row write — never silently downgrades to W82 for premium tiers).
+
+    Uses Haiku 4.5 against the same `format_evidence_prompt(return_split=True)`
+    static/dynamic content as the Sonnet path so the cache prefix benefits remain
+    intact (Rule 22). Skips coverage-gate checks because the caller has already
+    decided premium intercept is appropriate.
+
+    Cost: Haiku is ~5× cheaper than Sonnet — escapes credit-balance dead state
+    when Sonnet keys are throttled.
+    """
+    if evidence_pack is None or spec is None:
+        return None
+    try:
+        _h_static, _h_dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
+        _h_resp = await claude.messages.create(
+            model=HAIKU_MODEL,
+            max_tokens=1200,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _h_static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                    {"type": "text", "text": _h_dynamic},
+                ],
+            }],
+            timeout=30.0,
+        )
+        _h_draft = _strip_preamble(_extract_text_from_response(_h_resp)).strip()
+        if not _h_draft:
+            log.warning(
+                "PremiumPolishFallback: Haiku returned empty draft for %s", match_key,
+            )
+            return None
+        _h_sanitized = sanitize_ai_response(_h_draft)
+        _h_sanitized = _strip_model_generated_h2h_references(_h_sanitized)
+        _h_sanitized = _strip_model_generated_sharp_references(_h_sanitized)
+        # Inject H2H + sharp sentences (same pipeline as Sonnet path).
+        _h_h2h = _build_h2h_injection(evidence_pack, spec)
+        if _h_h2h:
+            _h_sanitized = _inject_h2h_sentence(_h_sanitized, _h_h2h)
+        _h_sharp = _build_sharp_injection(evidence_pack, spec)
+        if _h_sharp:
+            _h_sanitized = _inject_sharp_sentence(_h_sanitized, _h_sharp)
+        _h_sanitized = _suppress_shadow_banned_phrases(_h_sanitized)
+        # Verify against verify_shadow_narrative — same gate as Sonnet path.
+        _h_passed, _h_report = verify_shadow_narrative(_h_sanitized, evidence_pack, spec)
+        if not _h_passed:
+            _h_reasons = "; ".join(_h_report.get("rejection_reasons", [])[:3]) or "verification failed"
+            log.warning(
+                "PremiumPolishFallback: Haiku draft REJECTED by verify_shadow_narrative for %s: %s",
+                match_key, _h_reasons,
+            )
+            return None
+        _h_candidate = _h_report.get("sanitized_draft") or _h_sanitized
+        # Bookmaker realignment — same as Sonnet path.
+        _h_bk = tips[0]["bookie"] if tips else ""
+        _h_odds = tips[0]["odds"] if tips else 0
+        if _h_bk and _h_odds:
+            _h_candidate = _realign_verdict_bookmaker(_h_candidate, _h_bk, float(_h_odds))
+            if not _verdict_bookmaker_aligned(_h_candidate, _h_bk, float(_h_odds)):
+                log.warning(
+                    "PremiumPolishFallback: Haiku verdict realignment failed for %s "
+                    "(expected %s@%.2f) — deferring",
+                    match_key, _h_bk, _h_odds,
+                )
+                return None
+        # Sport validator — same gate as Sonnet path.
+        _h_sv_valid, _h_sv_banned = validate_sport_text(_h_candidate, spec.sport)
+        if not _h_sv_valid:
+            log.warning(
+                "PremiumPolishFallback: Haiku draft blocked by sport validator for %s: %s",
+                match_key, _h_sv_banned,
+            )
+            return None
+        log.info(
+            "PremiumPolishFallback: Haiku polish PASSED all gates for %s — serving as w84-haiku-fallback",
+            match_key,
+        )
+        return _h_candidate
+    except Exception as _h_err:
+        log.warning(
+            "PremiumPolishFallback: Haiku polish raised for %s: %s — deferring",
+            match_key, _h_err,
+        )
+        return None
+
+
+def _record_premium_defer(match_key: str, edge_tier: str, fixture: str, pick: str,
+                          reason: str, log) -> int:
+    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): persist a premium defer event in
+    `gold_verdict_failed_edges` (existing table) and return the cumulative consecutive
+    defer count for this match_key so the caller can decide whether to alert EdgeOps.
+
+    The existing table is reused intentionally — schema already carries match_key,
+    edge_tier, failure_reason, failed_at. The "consecutive" semantics are derived by
+    counting prior rows for the same match_key with no intervening success.
+    """
+    try:
+        from db_connection import get_connection as _gvf_conn
+        _db_p = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "mzansiedge.db",
+        )
+        _gvf_c = _gvf_conn(_db_p, timeout_ms=3000)
+        try:
+            # Ensure table exists (mirror schema from existing _gold_verdict_failed handler).
+            _gvf_c.execute(
+                "CREATE TABLE IF NOT EXISTS gold_verdict_failed_edges ("
+                "match_key TEXT PRIMARY KEY, edge_tier TEXT NOT NULL, "
+                "fixture TEXT NOT NULL, pick TEXT NOT NULL, "
+                "failure_reason TEXT NOT NULL, "
+                "failed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                "consecutive_count INTEGER NOT NULL DEFAULT 1)"
+            )
+            # FIX-W84-PREMIUM-NO-FALLBACK-01: add column if missing on legacy DBs.
+            try:
+                _gvf_c.execute("ALTER TABLE gold_verdict_failed_edges ADD COLUMN consecutive_count INTEGER NOT NULL DEFAULT 1")
+            except sqlite3.OperationalError:
+                pass  # already present
+            # UPSERT: increment consecutive_count if row already exists for this match_key.
+            _gvf_c.execute(
+                "INSERT INTO gold_verdict_failed_edges "
+                "(match_key, edge_tier, fixture, pick, failure_reason, consecutive_count) "
+                "VALUES (?, ?, ?, ?, ?, 1) "
+                "ON CONFLICT(match_key) DO UPDATE SET "
+                "edge_tier=excluded.edge_tier, fixture=excluded.fixture, "
+                "pick=excluded.pick, failure_reason=excluded.failure_reason, "
+                "failed_at=CURRENT_TIMESTAMP, "
+                "consecutive_count=consecutive_count + 1",
+                (match_key, edge_tier, fixture, pick, reason),
+            )
+            _gvf_c.commit()
+            _row = _gvf_c.execute(
+                "SELECT consecutive_count FROM gold_verdict_failed_edges WHERE match_key = ?",
+                (match_key,),
+            ).fetchone()
+            return int(_row[0]) if _row else 1
+        finally:
+            _gvf_c.close()
+    except Exception as _err:
+        log.warning(
+            "PremiumDefer: failed to persist defer counter for %s: %s",
+            match_key, _err,
+        )
+        return 1  # safe default — never trigger alert on persistence failure
+
+
+def _clear_premium_defer(match_key: str, log) -> None:
+    """Clear the consecutive-defer counter for a match_key on successful polish.
+
+    Called when a previously-deferred premium card finally serves successfully —
+    resets the alert threshold so transient failures don't trigger unnecessary alerts.
+    """
+    try:
+        from db_connection import get_connection as _clr_conn
+        _db_p = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "mzansiedge.db",
+        )
+        _clr_c = _clr_conn(_db_p, timeout_ms=3000)
+        try:
+            _clr_c.execute(
+                "DELETE FROM gold_verdict_failed_edges WHERE match_key = ?",
+                (match_key,),
+            )
+            _clr_c.commit()
+        finally:
+            _clr_c.close()
+    except Exception as _err:
+        log.debug(
+            "PremiumDefer: clear counter failed for %s: %s (non-blocking)",
+            match_key, _err,
+        )
+
+
 async def _generate_one(
     edge: dict,
     model_id: str,
@@ -2185,18 +2378,51 @@ async def _generate_one(
                 # FIX-COST-WAVE-03: static/dynamic split — cache_control on static instructions
                 # only, not on match-specific evidence. Same static block across all matches →
                 # cache hits instead of write storm.
-                resp = await _sonnet_client.messages.create(
-                    model=SHADOW_MODEL,
-                    max_tokens=1200,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": _static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-                            {"type": "text", "text": _dynamic},
-                        ],
-                    }],
-                    timeout=45.0,
-                )
+                #
+                # FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): Premium tiers (Diamond+Gold) get
+                # exponential-backoff retry on transient Sonnet failures (rate limit, network,
+                # credit-balance burst). Silver/Bronze keep single-attempt behaviour so the
+                # existing W82 fallback fires fast. Retries stay scoped to the API call —
+                # downstream processing (verify/realign/validator) is unchanged.
+                # Read tier from edge dict (the canonical _pregen_edge_tier is
+                # computed later at line ~2397; replicate the same key access here).
+                _polish_tier = str(edge.get("tier", "bronze") or "bronze").lower()
+                _sonnet_attempts = 0
+                _max_sonnet_attempts = 3 if _polish_tier in ("gold", "diamond") else 1
+                _sonnet_resp = None
+                _last_sonnet_err: Exception | None = None
+                while _sonnet_attempts < _max_sonnet_attempts:
+                    _sonnet_attempts += 1
+                    try:
+                        _sonnet_resp = await _sonnet_client.messages.create(
+                            model=SHADOW_MODEL,
+                            max_tokens=1200,
+                            messages=[{
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": _static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                                    {"type": "text", "text": _dynamic},
+                                ],
+                            }],
+                            timeout=45.0,
+                        )
+                        break
+                    except Exception as _se:
+                        _last_sonnet_err = _se
+                        if _sonnet_attempts < _max_sonnet_attempts:
+                            _backoff = 1.0 * (2 ** (_sonnet_attempts - 1))  # 1.0s → 2.0s
+                            log.warning(
+                                "PremiumPolishRetry: Sonnet attempt %d/%d failed for %s (tier=%s): %s — retrying in %.1fs",
+                                _sonnet_attempts, _max_sonnet_attempts, match_key,
+                                _polish_tier, _se, _backoff,
+                            )
+                            await asyncio.sleep(_backoff)
+                if _sonnet_resp is None:
+                    # All retries exhausted — surface to outer except handler.
+                    raise _last_sonnet_err if _last_sonnet_err else RuntimeError(
+                        "Sonnet polish attempts exhausted with no exception"
+                    )
+                resp = _sonnet_resp
                 model_draft = _strip_preamble(_extract_text_from_response(resp)).strip()
                 sanitized_draft = sanitize_ai_response(model_draft)
                 sanitized_draft = _strip_model_generated_h2h_references(sanitized_draft)
@@ -2357,6 +2583,71 @@ async def _generate_one(
             if w82_baseline:
                 narrative = w82_baseline
                 narrative_source = "w82"
+
+    # FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): premium-tier intercept.
+    # If we reached this point with narrative_source == "w82" for a Diamond/Gold
+    # edge, ALL upstream Sonnet retry/verify/realign/validator paths failed.
+    # Per Paul's strategic call, premium subscribers MUST NOT silently see W82
+    # boilerplate. Try Haiku-narrative polish as last resort. If that also fails,
+    # defer (no row write) and increment consecutive-defer counter — alert
+    # EdgeOps when threshold reached.
+    _premium_polish_failed = False
+    _premium_intercept_tier = str(edge.get("tier", "bronze") or "bronze").lower()
+    if (
+        narrative_source in ("w82", "baseline_no_edge")
+        and _premium_intercept_tier in ("gold", "diamond")
+        and not _is_non_edge
+        and not _skip_w84
+    ):
+        log.info(
+            "PremiumPolishFallback: Sonnet exhausted for %s (tier=%s reason=%s) — attempting Haiku fallback",
+            match_key, _premium_intercept_tier, verification_failure or "unknown",
+        )
+        _haiku_narrative = await _attempt_haiku_polish_fallback(
+            claude, evidence_pack, spec, tips, match_key, log,
+        )
+        if _haiku_narrative:
+            narrative = _haiku_narrative
+            narrative_source = "w84-haiku-fallback"
+            served_model = "haiku"
+            verification_failure = ""
+            log.info(
+                "PremiumPolishFallback: Haiku polish SERVED for %s (tier=%s)",
+                match_key, _premium_intercept_tier,
+            )
+            # Successful fallback resets the consecutive-defer counter.
+            _clear_premium_defer(match_key, log)
+        else:
+            _premium_polish_failed = True
+
+    if _premium_polish_failed:
+        _pi_pick = (tips[0].get("outcome", "?") if tips else "?")
+        _pi_count = _record_premium_defer(
+            match_key,
+            _premium_intercept_tier,
+            f"{home} vs {away}",
+            _pi_pick,
+            verification_failure or "polish_chain_exhausted",
+            log,
+        )
+        if _pi_count >= _PREMIUM_DEFER_ALERT_THRESHOLD:
+            log.error(
+                "PremiumDeferAlert: %s has %d consecutive defers (tier=%s) — "
+                "ALERT_REQUIRED chat_id=%d",
+                match_key, _pi_count, _premium_intercept_tier,
+                _PREMIUM_DEFER_ALERT_CHAT_ID,
+            )
+        log.warning(
+            "PremiumDefer: %s deferred (tier=%s consecutive=%d) — no narrative_cache row written this sweep",
+            match_key, _premium_intercept_tier, _pi_count,
+        )
+        return {
+            "match_key": match_key,
+            "success": False,
+            "premium_deferred": True,
+            "premium_defer_count": _pi_count,
+            "duration": time.time() - t0,
+        }
 
     # W91-P3 VERDICT-CAP-ALL-TIERS: apply `_cap_verdict` safety net for ALL
     # tiers (not just gold/diamond).  Sonnet-polished narratives for silver
@@ -2797,6 +3088,12 @@ async def _generate_one(
             )
         except Exception as _av_err:
             log.debug("ACCURACY-01: generate_and_validate failed for %s: %s", match_key, _av_err)
+
+    # FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): clear consecutive-defer counter
+    # on successful premium-tier serve. Recovers gracefully when transient failure
+    # window closes — next defer (if any) starts the count fresh.
+    if _premium_intercept_tier in ("gold", "diamond") and narrative_source != "w82":
+        _clear_premium_defer(match_key, log)
 
     return {
         "match_key": match_key, "success": True, "model": _final_model,

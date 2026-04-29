@@ -3481,3 +3481,44 @@ Regression guard: `tests/contracts/test_polish_prefix_threshold.py` — 5 tests:
 - `test_dynamic_block_carries_per_match_interpolation` — structural test, asserts `tone_band`, `verdict_action`, `bookmaker @ odds`, and `DIAMOND TIER ONLY` `_tier_key` conditional all stay in dynamic.
 
 DO NOT move per-match interpolation above the EVIDENCE PACK split — it defeats the cache and Anthropic gives no warning. DO NOT change the split sentinel from `───────────── EVIDENCE PACK ─────────────` without updating the split helper at the tail of `format_evidence_prompt` AND every caller that consumes `_static` / `_retry_static`. DO NOT remove the `STYLE & OUTPUT GUIDE` block — its presence is what brings the prefix from sub-threshold to 1500-1700 tokens. Verify cache hit rate post-deploy via `cache_creation_input_tokens` + `cache_read_input_tokens` in Anthropic response metadata (Rule 22 24-h soak target: ≥ 90 % cache_read on the Sonnet polish surface).
+
+### Rule 23 — Diamond + Gold MUST NOT silently fall back to W82 (locked 2026-04-29, FIX-W84-PREMIUM-NO-FALLBACK-01)
+
+When Sonnet polish fails on a Diamond or Gold tier card, the fallback chain MUST be: **(1) Sonnet retry 2× with exponential backoff** → **(2) Haiku-narrative polish** (still polish quality, mark `narrative_source = "w84-haiku-fallback"`) → **(3) defer to next pregen sweep** with EdgeOps alert on 3 consecutive failures. NEVER write a `narrative_source = "w82"` row for a Diamond or Gold tier card. Silver + Bronze tier W82 fallback path remains unchanged per W93-TIER-GATE cost policy (existing Silver/Bronze polish failures still serve W82 baseline immediately — no retry, no Haiku, no defer). Premium subscribers MUST see W84-quality voice OR a regenerating state — never D-grade W82 baseline boilerplate.
+
+This rule narrowly amends Rule 21 for the **failure-mode case** only. Rule 21 keeps governing the **legitimate** w82 path (skipped polish, non-edge previews, coverage-gate denials) where w82 is the intentional output. Rule 23 fires only when polish was attempted and the chain exhausted — `_skip_w84 == False AND _is_non_edge == False AND narrative_source in ("w82", "baseline_no_edge") AND tier in ("gold", "diamond")`.
+
+**Failure-mode taxonomy (7-day production scan, INV input):**
+- 1 119 rate-limit / 429 events
+- 306 credit-balance errors
+- 188 W84 VERIFY FAIL events
+- 372 GOLD-QUALITY-GATE rejections (already partially handled by existing Sonnet-1× retry)
+- 46 W84 ERROR (network / timeout)
+- 14 PremiumW82Write events — direct symptom of Diamond/Gold cards that this rule prevents
+
+**Implementation in `scripts/pregenerate_narratives.py`:**
+- **Sonnet retry loop** wraps the in-line `_sonnet_client.messages.create(...)` call. `_max_sonnet_attempts = 3 if tier in ("gold", "diamond") else 1`; backoff `1.0s → 2.0s` (exp). All retries exhausted → re-raises last `Exception` into the existing outer `except Exception` handler.
+- **Haiku polish fallback** — `_attempt_haiku_polish_fallback(claude, evidence_pack, spec, tips, match_key, log) -> str | None`. Uses the same `format_evidence_prompt(return_split=True)` static/dynamic content (cache prefix benefits from Rule 22 remain intact). Runs the same downstream gates as Sonnet path: `sanitize_ai_response` → H2H/sharp injection → `_suppress_shadow_banned_phrases` → `verify_shadow_narrative` → bookmaker realignment → `validate_sport_text`. Returns `None` on any rejection.
+- **Premium intercept** sits between the sport-validator block and the verdict-cap block (after all 5 W82 fallback paths have fired). When triggered: invoke Haiku fallback. Success → `narrative_source = "w84-haiku-fallback"`, `served_model = "haiku"`, clear consecutive-defer counter. Failure → `_premium_polish_failed = True`, return `{success: False, premium_deferred: True, premium_defer_count: N}` with NO `narrative_cache` row write.
+- **Defer counter** persisted in existing `gold_verdict_failed_edges` table with new `consecutive_count INTEGER NOT NULL DEFAULT 1` column (added via idempotent ALTER TABLE). UPSERT semantics: `ON CONFLICT(match_key) DO UPDATE SET consecutive_count = consecutive_count + 1`. `_clear_premium_defer(match_key)` removes the row on successful polish (Sonnet, Sonnet retry, OR Haiku fallback) so transient failure windows don't trigger spurious alerts.
+- **EdgeOps alert** fires when `consecutive_count >= _PREMIUM_DEFER_ALERT_THRESHOLD` (= 3). Logged as `PremiumDeferAlert: <match_key> has N consecutive defers ... ALERT_REQUIRED chat_id=-1003877525865`. The chat-id constant `_PREMIUM_DEFER_ALERT_CHAT_ID = -1003877525865` is the EdgeOps Telegram group from the brief — do NOT change without ops sign-off.
+
+**Regression guards:** `tests/contracts/test_w84_premium_no_fallback.py` — 12 tests:
+- `test_premium_defer_alert_chat_id_locked` — chat-id sentinel matches brief
+- `test_premium_defer_alert_threshold_is_3` — alert threshold is 3
+- `test_haiku_fallback_helper_is_async_callable` — helper exists and is async
+- `test_record_and_clear_defer_helpers_exist` — persistence helpers exist
+- `test_record_defer_creates_row_and_returns_count_one` — DB-level
+- `test_record_defer_increments_on_repeated_call` — DB-level (counts to 3)
+- `test_clear_defer_removes_row` — DB-level
+- `test_premium_tier_intercept_silver_bronze_skip` — tier policy
+- `test_premium_tier_intercept_diamond_gold_fires` — tier policy (case-insensitive)
+- `test_premium_tier_intercept_skipped_when_polish_was_skipped` — `_skip_w84` carve-out
+- `test_premium_tier_intercept_skipped_for_non_edge_preview` — `_is_non_edge` carve-out
+- `test_premium_tier_intercept_w84_success_does_not_trigger` — happy path
+
+**DO NOT** narrow the carve-outs without a brief amendment — the `_skip_w84` and `_is_non_edge` exceptions exist because both legitimately produce W82-class baselines (coverage-gate / non-edge preview), not failure-mode silent downgrades. **DO NOT** raise `_PREMIUM_DEFER_ALERT_THRESHOLD` above 3 without ops sign-off — fewer than 3 alerts/day is the calibration target, but ≤ 3 transient failures should NEVER suppress the alert (the brief's "≥ 10 alerts/day" is the rollback trigger, not the comfort zone). **DO NOT** mutate `gold_verdict_failed_edges` schema in another wave without preserving the `consecutive_count` column (the existing `_gold_verdict_failed` handler at line 2536 uses `INSERT OR REPLACE` which silently drops the column — use `INSERT … ON CONFLICT … DO UPDATE` for any new write path that touches this table). **DO NOT** reuse `narrative_source = "w84-haiku-fallback"` for any other code path — it is the canonical sentinel for premium Haiku-fallback rows and surfaces in monitoring dashboards.
+
+**Cost note:** Haiku polish is ~5× cheaper than Sonnet. Even if the failure rate stayed at the 7-day baseline (~14 PremiumW82 events / week), the additional Haiku spend is negligible. The dominant cost driver is the 3-attempt Sonnet retry on rate-limit days — bounded by `_max_sonnet_attempts = 3` and the 45 s per-attempt timeout, so the worst-case duration per match is ~135 s + 3 s backoff sleep. Pregen sweep cap (`_PREGEN_MATCH_CAP = 60`) bounds the worst-case wall-clock impact.
+
+**Soft-disable rollback** (per the brief): `git revert <fix-commit-sha>` reverts the entire chain. Soft-disable alternative: keep the Haiku helper for future use but remove only the post-polish intercept block (the ~30 lines starting `if narrative_source in ("w82", "baseline_no_edge")…`). The Sonnet retry loop is generic and can stay — it's a free win for Silver/Bronze too if `_max_sonnet_attempts` defaults to 1 there.
