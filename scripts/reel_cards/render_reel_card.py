@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-render_reel_card.py — MzansiEdge Reel Card Compositing Script v6.5
+render_reel_card.py — MzansiEdge Reel Card Compositing Script v6.6
+v6.6 (29 Apr 2026, FIX-CARD-GOLD-PROFIT-BADGE-CLIP-01): Gold content up-shift.
+  - TIER_LINE_Y_OFFSET gold: -60 — moves the entire content block (top block +
+    divider + boxes + pick line + profit badge) 60px higher for Gold tier,
+    lifting the badge clear of the frame's bottom ornament band (dense gold
+    pixels at y≥1010). Badge bottom moves from y≈1041 to y≈988, giving ≥20px
+    clearance from the ornament. R1,250 PROFIT (widest) tested at 22px.
+  - Diamond/Silver/Bronze: offset=0 — completely unaffected.
+
 v6.5 (28 Apr 2026, FIX-REEL-KIT-RENDERING-01): tier rosette overlap fix.
   - LINE_Y_FIXED: 632 → 700 (cascade shifts down 68px so the medal emoji
     and the league/team-name block sit clear of the frame-baked rosette).
@@ -46,6 +54,10 @@ TIER_EMOJI_SCALE    = {'diamond': 0.70, 'gold': 1.0, 'silver': 1.0, 'bronze': 1.
 TIER_EMOJI_Y_NUDGE  = {'diamond': -0.70, 'gold': -0.50, 'silver': -0.50, 'bronze': -0.50}  # * em_h
 TIER_LEAGUE_Y_NUDGE = {'diamond': -0.70, 'gold': -0.70, 'silver': -0.70, 'bronze': -0.70}  # * lh
 TIER_TOP_BLOCK_Y_NUDGE = {'diamond': -15, 'gold': 0, 'silver': 0, 'bronze': 0}  # pixels, -ve = up
+# v6.6: per-tier divider offset shifts entire content block (top block + divider +
+# boxes + pick line + profit badge) without touching other tier layouts.
+# Gold −60 px lifts the badge clear of the frame's bottom ornament band (y≥1010).
+TIER_LINE_Y_OFFSET = {'diamond': 0, 'gold': -60, 'silver': 0, 'bronze': 0}  # pixels, -ve = up
 PICK_TEAM_Y_NUDGE = 5  # pixels, +ve = down. Baseline fix for orange pick_team glyph (v6.2)
 
 # ── Colours ────────────────────────────────────────────────────────────────────
@@ -203,9 +215,10 @@ def render_reel_card(pick: dict, output_path: str) -> str:
     GB  = round(50 * SCALE)
     GP  = round(28 * SCALE) + max(2, round(pill_h * 0.05))
 
-    # cascade above determines start_y (line_y = start_y + cascade_above = LINE_Y_FIXED)
+    # cascade above determines start_y (line_y = start_y + cascade_above = tier_line_y)
+    tier_line_y = LINE_Y_FIXED + TIER_LINE_Y_OFFSET[tier]
     cascade_above = em_h + GE + lh + GL + hh + GH + vsh + GV + awh + GA
-    start_y = LINE_Y_FIXED - cascade_above
+    start_y = tier_line_y - cascade_above
     y = start_y
 
     # ── Draw offsets (IDENTICAL to v5 — applied at draw time only) ────────────
@@ -236,8 +249,8 @@ def render_reel_card(pick: dict, output_path: str) -> str:
     draw_grad_text(ov, pick['away_team'], FT, CX, y + away_dy)
     y += awh + GA
 
-    # ── 6+7. Divider + diamond at LINE_Y_FIXED ────────────────────────────────
-    line_y = y  # == LINE_Y_FIXED (658) by construction
+    # ── 6+7. Divider + diamond at tier_line_y ────────────────────────────────
+    line_y = y  # == tier_line_y by construction
     lx1 = CX - round(200 * SCALE)
     lx2 = CX + round(200 * SCALE)
     lt  = 4
