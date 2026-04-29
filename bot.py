@@ -15215,32 +15215,37 @@ async def _store_narrative_cache(
     from datetime import datetime, timedelta, timezone
     from db_connection import get_connection
 
-    # FIX-PREGEN-COVERAGE-DIAMOND-01 (locked 2026-04-28): Stream4 refusal LIFTED.
-    # Previously refused narrative_cache writes where narrative_source was a thin
-    # baseline (w82 / baseline_no_edge) AND edge_tier was premium (gold / diamond),
-    # on the rationale that "premium tiers must get polished narratives or no row
-    # at all". That was correct in pre-launch architecture when w82 was lower
-    # quality. Locked Rules 12 (no pricing vocab in Setup), 14 (tier-aware verdict
-    # variants), 17 (no betting telemetry in verdict), 18 (no venue leaks) now
-    # ensure w82 is editorial-quality content suitable for any tier. Refusing the
-    # write left ~17/21 unsettled Gold/Diamond edges with NO cache row at all
-    # whenever Sonnet polish failed — which presented as a missing AI Breakdown
-    # button, the symptom Paul reported on launch day +1. With the refusal lifted,
-    # pregen warms the cache with synthesis-equivalent content; the user always
-    # gets a 4-section breakdown. Pregen still attempts w84 polish first; w82 is
-    # the safety-net write when polish fails. Subsequent pregen cycles retry
-    # polish and INSERT OR REPLACE the row with w84 when it succeeds.
+    # FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 (locked 2026-04-29):
+    # Refuse premium-tier W82 / baseline_no_edge writes at the writer level.
+    # Wave 2 (Rule 23) is the canonical no-fallback chain for Diamond + Gold —
+    # Sonnet retry → Haiku-narrative fallback → defer with EdgeOps alert. The
+    # refusal here is second-layer enforcement covering paths that bypass the
+    # pregen-side intercept: (a) `_skip_w84` / `_is_non_edge` carve-outs in
+    # `pregenerate_narratives._generate_one`, (b) the bot serve-time persist at
+    # `_generate_game_tips` whose `live_tap=True` baseline is labelled
+    # narrative_source='w82' by the default kwarg. Synthesis-on-tap (Rule 20)
+    # covers the resulting cache miss — `_has_any_cached_narrative` returns True
+    # whenever `edge_results` has the match, and `card_data._synthesize_breakdown_row_from_baseline`
+    # produces a fresh baseline at view time. Silver and Bronze tiers continue
+    # to write W82 baselines per W93-TIER-GATE cost policy (test (c) below).
+    # Rule 21 (FIX-PREGEN-COVERAGE-DIAMOND-01 lift) keeps governing the read
+    # surface — _get_cached_narrative still serves any premium W82 row that
+    # exists pre-flush — but post-deploy + cache invalidation there will be
+    # zero premium W82 rows in narrative_cache to read.
     _wg_tier = (edge_tier or "").lower()
     _wg_src = (narrative_source or "").lower()
     if _wg_src in ("w82", "baseline_no_edge") and _wg_tier in ("gold", "diamond"):
-        # Surface the safety-net write so polish-failure rates remain monitorable.
+        # Surface the refusal so polish-failure rates remain monitorable in
+        # journalctl. Match the brief log marker exactly — `qa_safe.sh contracts`
+        # and AC-9 corpus-delta verification both grep for this string.
         log.warning(
-            "FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Write match_id=%s "
-            "narrative_source=%s edge_tier=%s verdict_len=%d — Sonnet polish "
-            "unavailable; persisting w82 baseline as safety-net (Rules 12/14/17/18 "
-            "ensure editorial quality)",
+            "FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 PremiumW82WriteRefused "
+            "match_id=%s narrative_source=%s edge_tier=%s verdict_len=%d — "
+            "refusing W82 baseline persistence for premium tier (Wave 2 chain "
+            "owns the fallback policy; synthesis-on-tap covers any cache miss)",
             match_id, _wg_src, _wg_tier, len(verdict_html or ""),
         )
+        return
     # FIX-NARRATIVE-CACHE-SILENT-DROP-01 B.1: Default edge_tier to 'bronze' when pregen
     # produces an empty/None tier. Observed silent drop: arsenal_vs_fulham generated with
     # tier='' triggered sqlite3.IntegrityError (NOT NULL constraint failed) which was

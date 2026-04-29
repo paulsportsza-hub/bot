@@ -1,29 +1,28 @@
-"""FIX-PREGEN-COVERAGE-DIAMOND-01 — regression guard.
+"""FIX-PREGEN-COVERAGE-DIAMOND-01 — partial regression guard.
 
-Two pre-launch gates that policed "Gold/Diamond cards must be Sonnet-polished
-or no row at all" are LIFTED:
+History:
+- 2026-04-28 (FIX-PREGEN-COVERAGE-DIAMOND-01): Two pre-launch gates lifted —
+  Stream4 refusal at `_store_narrative_cache` and serve-time `w82_for_tier`
+  quarantine at `_get_cached_narrative` — to fix the "missing AI Breakdown
+  button" symptom on premium-tier edges with failed Sonnet polish.
+- 2026-04-29 (FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01, this brief):
+  The Stream4 refusal was REINSTATED at the writer level for premium tiers
+  ONLY (Diamond + Gold). Rationale: Wave 2 (Rule 23) is the canonical
+  no-fallback chain (Sonnet retry → Haiku → defer); the writer-level refusal
+  is the second-layer enforcement covering bypass paths (`_skip_w84` /
+  `_is_non_edge` carve-outs at pregen, plus the bot serve-time persist whose
+  `live_tap=True` baseline gets labelled w82). Synthesis-on-tap (Rule 20)
+  covers the resulting cache miss. Silver + Bronze writer path is unchanged.
 
-1. Stream4 refusal at bot.py::_store_narrative_cache (formerly returned early
-   on `narrative_source in ("w82", "baseline_no_edge") AND edge_tier in ("gold",
-   "diamond")`).
-2. Serve-time `w82_for_tier:gold|diamond` quarantine at
-   bot.py::_get_cached_narrative (formerly returned None + UPDATE SET status =
-   'quarantined' on premium-tier baseline reads).
+Tests below cover the 2026-04-28 lifts that REMAIN intact:
+- Serve-time gate removed (reader returns w82 row for Gold/Diamond when one
+  exists — though after FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 the
+  cache will not contain any premium W82 rows in steady state).
+- Quarantine reason `w82_for_tier:` is no longer set anywhere.
+- CLAUDE.md Rule 21 carries the lift documentation.
 
-Justification: locked Rules 12, 14, 17, 18 ensure w82 templates produce
-editorial-quality content suitable for any tier. The original gates were
-correct in pre-launch architecture when w82 was lower quality. Together with
-FIX-AI-BREAKDOWN-BUTTON-GATE-COVERAGE-01 (Rule 20), the bulletproof
-contract is: edge exists → button shows → content renders, regardless of
-tier or polish state.
-
-Tests:
-- Stream4 refusal removed (writer accepts w82 + Gold/Diamond)
-- Premium-tier baseline writes are LOGGED (monitorable polish-failure rate)
-- Serve-time gate removed (reader returns w82 row for Gold/Diamond)
-- Premium-tier baseline serves are LOGGED
-- Quarantine reason `w82_for_tier:` is no longer set anywhere
-- CLAUDE.md Rule 21 carries the lift documentation
+The writer-level behaviour is now covered by
+`tests/contracts/test_premium_no_w82_invariant.py` (the brief's AC-5).
 """
 from __future__ import annotations
 
@@ -36,78 +35,13 @@ _BOT_PY = Path(__file__).resolve().parents[2] / "bot.py"
 _CLAUDE_MD = Path(__file__).resolve().parents[2] / "CLAUDE.md"
 
 
-# ── Source-level: writer no longer refuses ────────────────────────────────────
-
-
-def test_stream4_refusal_removed_from_writer():
-    """The pregen writer must NOT early-return on (w82|baseline_no_edge) + (gold|diamond).
-
-    Previously: lines 15198-15206 had a `return` statement after a Stream4Refused
-    log warning. Now: the warning is replaced with a PremiumW82Write log + no
-    early return — pregen persists the safety-net baseline.
-    """
-    src = _BOT_PY.read_text()
-    # The full _store_narrative_cache function body
-    fn_start = src.index("async def _store_narrative_cache(")
-    fn_end = src.index("\nasync def _store_narrative_evidence", fn_start)
-    fn_body = src[fn_start:fn_end]
-
-    # Smoke check: function body still references w82 + gold/diamond
-    assert '"w82"' in fn_body or "'w82'" in fn_body
-    assert '"gold"' in fn_body or "'gold'" in fn_body
-
-    # The old refusal log message must be gone
-    assert "Stream4Refused" not in fn_body, (
-        "Stream4Refused log line still present — Stream4 refusal not fully lifted. "
-        "Re-introducing the refusal will reopen the FIX-PREGEN-COVERAGE-DIAMOND-01 "
-        "coverage gap."
-    )
-
-    # The lift-marker log message must be present
-    assert "PremiumW82Write" in fn_body, (
-        "Premium-tier baseline writes must be logged so polish-failure rates "
-        "remain monitorable in journalctl."
-    )
-
-    # Verify no early-return branches into the (w82, gold|diamond) condition.
-    # Use indent-based block scoping (sibling-aware) to avoid picking up `return`
-    # statements from later sibling blocks at the same indent.
-    cond_idx = fn_body.index("if _wg_src in (\"w82\", \"baseline_no_edge\")")
-    line_start = fn_body.rfind("\n", 0, cond_idx) + 1
-    if_line = fn_body[line_start: fn_body.index("\n", cond_idx)]
-    if_indent = len(if_line) - len(if_line.lstrip())
-
-    block_lines: list[str] = []
-    cursor = fn_body.index("\n", cond_idx) + 1
-    while cursor < len(fn_body):
-        next_nl = fn_body.find("\n", cursor)
-        if next_nl == -1:
-            line = fn_body[cursor:]
-            cursor = len(fn_body)
-        else:
-            line = fn_body[cursor:next_nl]
-            cursor = next_nl + 1
-        if not line.strip():
-            block_lines.append(line)
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent <= if_indent:
-            break
-        block_lines.append(line)
-
-    block_body = "\n".join(block_lines)
-    if "return" in block_body:
-        # Allow `return` in nested function definitions if any (defensive),
-        # but reject any top-level-of-block `return` statement.
-        for line in block_lines:
-            stripped = line.strip()
-            if stripped.startswith("return"):
-                pytest.fail(
-                    "Stream4 (w82/baseline_no_edge × gold/diamond) conditional "
-                    "still contains a `return` — refusal not fully lifted. "
-                    f"Pregen will continue silent-dropping premium-tier baseline "
-                    f"rows. Block was:\n---\n{block_body}\n---"
-                )
+# ── Source-level: writer-level reinstatement of premium-tier refusal ──────────
+#
+# The 2026-04-28 lift left the writer accepting premium-tier W82 rows on bypass
+# paths (`_skip_w84` / `_is_non_edge` carve-outs at pregen, plus the bot
+# serve-time persist whose `live_tap=True` baseline gets labelled w82). The
+# writer-level refusal is reinstated by FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01.
+# Detailed coverage of the refusal lives in `test_premium_no_w82_invariant.py`.
 
 
 # ── Source-level: reader no longer quarantines ────────────────────────────────
@@ -193,10 +127,24 @@ def test_w82_for_tier_quarantine_lifted():
 
 
 def test_gate_lift_log_messages_use_brief_id():
-    """Both lift-marker logs reference the brief ID for traceability."""
+    """Lift-marker logs reference the relevant brief ID for traceability.
+
+    The 2026-04-28 read-side lift kept its `PremiumW82Serve` marker.
+    The writer-side `PremiumW82Write` marker was retired by
+    FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 (replaced with
+    `PremiumW82WriteRefused`). Test enforces both states.
+    """
     src = _BOT_PY.read_text()
-    assert "FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Write" in src
     assert "FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Serve" in src
+    assert (
+        "FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 PremiumW82WriteRefused"
+        in src
+    )
+    assert "FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Write " not in src, (
+        "Old PremiumW82Write marker still present — writer-level refusal not "
+        "fully migrated to the FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 "
+        "log signature."
+    )
 
 
 # ── Source-level: card-image surface still independent ────────────────────────
