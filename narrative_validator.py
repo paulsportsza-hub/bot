@@ -238,14 +238,30 @@ _VERDICT_ACTION_VERBS: tuple[str, ...] = (
     r"bet\s+on",
     r"get\s+on",
     r"put\s+(?:your\s+)?money\s+on",
-    r"hammer\s+it\s+on",
+    r"hammer\s+it(?:\s+on)?",
     r"get\s+behind",
     r"lean\s+on",
     r"ride",
     r"smash",
 )
+# FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 (2026-04-29) — AC-3.
+# Declarative recommendation phrases. The brief broadens the action-verb cluster
+# so the closing sentence can carry either an imperative ("Back Liverpool at
+# 1.97 with Supabets") or a declarative recommendation ("Liverpool at 1.97
+# is the pick — Supabets, measured stake"). Both shapes carry the same SA
+# Braai voice intent — recommending a bet — without forcing the imperative-
+# only frame on the W82 baseline templates.
+_VERDICT_DECLARATIVE_PHRASES: tuple[str, ...] = (
+    r"is\s+the\s+pick",
+    r"is\s+the\s+play",
+    r"is\s+the\s+call",
+    r"is\s+the\s+lean",
+    r"is\s+the\s+bet",
+    r"is\s+the\s+value",
+)
 _VERDICT_ACTION_RE: re.Pattern[str] = re.compile(
-    r"\b(?:" + "|".join(_VERDICT_ACTION_VERBS) + r")\b",
+    r"\b(?:" + "|".join(_VERDICT_ACTION_VERBS) + r")\b"
+    r"|\b(?:" + "|".join(_VERDICT_DECLARATIVE_PHRASES) + r")\b",
     re.IGNORECASE,
 )
 
@@ -1323,6 +1339,412 @@ def _validate_narrative_for_persistence(
                 "section=verdict_html hits=%r",
                 match_id, source_label, edge_tier, v_vague_hits,
             )
+
+    # ── Outcome ──────────────────────────────────────────────────────────────
+    crit = [f for f in failures if f.severity == "CRITICAL"]
+    major = [f for f in failures if f.severity == "MAJOR"]
+    if crit:
+        sev: Severity | None = "CRITICAL"
+    elif major:
+        sev = "MAJOR"
+    elif failures:
+        sev = "MINOR"
+    else:
+        sev = None
+    return ValidationResult(
+        passed=(len(crit) == 0 and len(major) == 0),
+        failures=failures,
+        severity=sev,
+    )
+
+
+# ── FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 — AC-1 ──────────
+#
+# Verdict-only validator for the verdict-cache write path. Subset of the unified
+# validator that runs gates relevant to a verdict surface that has no Setup /
+# Edge / Risk sections — verdict-cache rows write `narrative_html=''` by design
+# (per Rule 19), so the unified validator's narrative-section gates are no-ops
+# on this path. This function inlines the verdict-relevant gates and additionally:
+#   - scans setup-pricing patterns against verdict_html (premium leak vector)
+#   - scans manager validation against verdict_html
+#   - enforces verdict char range [100, 260]
+#
+# Tier-aware enforcement matrix (caller policy at _store_verdict_cache_sync):
+#   - Diamond + Gold → CRITICAL on banned-phrase / venue / manager / strong-band-
+#     tone / closure rule → refuse write, log PremiumVerdictRefused.
+#   - Silver → MAJOR on closure rule → quarantine row.
+#   - Bronze → MINOR on closure rule → write with warning log.
+#
+# Severity assignment for each gate is computed inside this function. Caller
+# inspects ValidationResult.failures and applies the matrix above.
+
+# Verdict char range — Rule unified-char-range / Rule 6 (140-200 soft, 100 floor,
+# 260 hard max). The brief AC-1 enforces a minimum of 100 (verdicts under 100
+# chars are content-empty by structure, e.g. truncated single-clause "Take it.")
+# and the hard max of VERDICT_HARD_MAX=260 is already enforced by _cap_verdict
+# in narrative_spec, so this gate primarily guards the lower bound.
+_VERDICT_CHAR_MIN: int = 100
+_VERDICT_CHAR_MAX: int = 260
+
+
+def _validate_verdict_for_persistence(
+    verdict_html: str,
+    edge_tier: str,
+    evidence_pack: dict | None,
+    source_label: str,
+    match_id: str = "",
+) -> ValidationResult:
+    """Run the verdict-cache pre-persist gate stack.
+
+    Subset of `_validate_narrative_for_persistence` scoped to a verdict surface
+    only (no Setup/Edge/Risk sections). Gates run:
+
+      1. Banned phrases (Rule 14/17/W84-Q9) — `BANNED_NARRATIVE_PHRASES`.
+      2. Venue leak (Rule 18) — `find_venue_leaks`.
+      3. Setup-pricing leak — `_find_setup_strict_ban_violations` against
+         verdict_html (catches odds/probability vocabulary that occasionally
+         leaks from verdict prose). Premium-tier hits CRITICAL.
+      4. Manager validation against coaches.json — `validate_manager_names`
+         (verdict-only via `min_verdict_quality`).
+      5. Verdict quality floor — `min_verdict_quality` (markdown leak, length
+         tier-floor, Diamond price-prefix, manager fabrication, venue, banned
+         shapes, analytical vocab count). Returns single bool — surfaced as
+         MAJOR severity.
+      6. Telemetry vocabulary (Gate 8) — `_check_telemetry_vocabulary`.
+         Premium = CRITICAL; non-premium = MAJOR.
+      7. Strong-band tone lock (Gate 9) — `_check_tier_band_tone`. Diamond/Gold
+         = CRITICAL; Silver = MAJOR; Bronze skipped.
+      8. Verdict closure rule (Gate 10) — `_check_verdict_closure_rule`. Tier
+         enforcement: Diamond/Gold all-3 components, Silver action+team-or-odds,
+         Bronze action only.
+      9. Vague-content patterns (Gate 11) — `_check_vague_content_patterns`.
+         Premium = CRITICAL; non-premium = MAJOR.
+     10. Verdict char range — must be in [_VERDICT_CHAR_MIN, _VERDICT_CHAR_MAX].
+         Premium = CRITICAL on under-min; non-premium = MAJOR.
+
+    Skipped (no narrative sections to scan):
+      - Setup-pricing semantic detector (operates on the Setup section only)
+      - Manager hallucination across Setup/Edge/Risk sections
+      - Claim verification against evidence (operates on full narrative_html)
+      - Section-level quality checks (length, entity counts)
+
+    Parameters
+    ----------
+    verdict_html
+        Verdict prose to validate. Empty/whitespace returns
+        `ValidationResult(passed=True)` without any failures.
+    edge_tier
+        Lowercase tier label ("diamond" | "gold" | "silver" | "bronze").
+        Tier-conditional gates use this to select severity.
+    evidence_pack
+        Optional dict carrying ``home_team``, ``away_team`` (used by closure
+        rule team-name match) and ``managers`` / ``home_manager`` /
+        ``away_manager`` (used by `validate_manager_names`).
+    source_label
+        Source identifier ("verdict-cache" | "view-time" | etc.). Used in log
+        markers only.
+    match_id
+        Match key for logging. Empty by default — pass when available.
+
+    Returns
+    -------
+    ValidationResult
+        ``passed`` is True iff there are zero CRITICAL and zero MAJOR failures.
+        Caller applies tier-aware enforcement (refuse / quarantine / warn).
+    """
+    failures: list[ValidationFailure] = []
+    if not verdict_html or not verdict_html.strip():
+        return ValidationResult(passed=True)
+
+    tier_lower = (edge_tier or "").lower()
+    is_premium = tier_lower in ("diamond", "gold")
+
+    # Lazy imports — see _validate_narrative_for_persistence for rationale.
+    try:
+        from narrative_spec import (
+            find_venue_leaks,
+            min_verdict_quality,
+        )
+    except ImportError as exc:
+        log.warning(
+            "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+            "VerdictValidatorImportFailed match_id=%s err=%s — gate is no-op",
+            match_id, exc,
+        )
+        return ValidationResult(passed=True)
+
+    try:
+        from bot import _find_setup_strict_ban_violations as _find_setup_strict_ban  # type: ignore[attr-defined]
+    except ImportError:
+        _find_setup_strict_ban = None  # type: ignore[assignment]
+
+    try:
+        from bot import BANNED_NARRATIVE_PHRASES  # type: ignore[attr-defined]
+    except ImportError:
+        BANNED_NARRATIVE_PHRASES = []  # type: ignore[assignment]
+
+    # ── Gate A: Venue leaks (Rule 18) ─────────────────────────────────────────
+    venues = find_venue_leaks(verdict_html)
+    if venues:
+        failures.append(
+            ValidationFailure(
+                gate="venue_leak",
+                severity="CRITICAL",
+                detail=f"verdict venues={venues!r}",
+                section=_SECTION_VERDICT_HTML,
+            )
+        )
+        log.warning(
+            "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+            "VerdictValidatorVenueLeak match_id=%s source=%s venues=%r",
+            match_id, source_label, venues,
+        )
+
+    # ── Gate B: BANNED_NARRATIVE_PHRASES (Rule 14/17/W84-Q9 catalogue) ────────
+    if BANNED_NARRATIVE_PHRASES:
+        v_lower = verdict_html.lower()
+        hits = [p for p in BANNED_NARRATIVE_PHRASES if p.lower() in v_lower]
+        if hits:
+            sev_banned: Severity = "CRITICAL" if is_premium else "MAJOR"
+            failures.append(
+                ValidationFailure(
+                    gate="banned_phrase",
+                    severity=sev_banned,
+                    detail=f"hits={hits[:5]!r}",
+                    section=_SECTION_VERDICT_HTML,
+                )
+            )
+            log.warning(
+                "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+                "VerdictValidatorBannedPhrase match_id=%s source=%s tier=%s "
+                "hits=%r",
+                match_id, source_label, edge_tier, hits[:5],
+            )
+
+    # ── Gate C: Setup-pricing leak (premium-tier protection) ──────────────────
+    # Verdict prose occasionally leaks pricing vocabulary that should live in
+    # The Edge. The strict-ban detector covers `price`, `priced`, `bookmaker`,
+    # `odds`, `implied`, `fair value`, `expected value`, `model reads`,
+    # `market architecture`. Note: legitimate verdict closure cites odds shape
+    # (e.g. "Back Liverpool at 1.97 with Supabets") — that's a numeric token
+    # match, not a pricing-vocabulary hit, and is allowed.
+    if _find_setup_strict_ban is not None:
+        try:
+            strict_reasons = _find_setup_strict_ban(verdict_html)
+        except Exception as exc:
+            strict_reasons = []
+            log.warning(
+                "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+                "VerdictValidatorStrictBanFailed match_id=%s err=%s",
+                match_id, exc,
+            )
+        if strict_reasons:
+            sev_pricing: Severity = "CRITICAL" if is_premium else "MAJOR"
+            failures.append(
+                ValidationFailure(
+                    gate="setup_pricing",
+                    severity=sev_pricing,
+                    detail=f"verdict reasons={strict_reasons!r}",
+                    section=_SECTION_VERDICT_HTML,
+                )
+            )
+            log.warning(
+                "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+                "VerdictValidatorSetupPricing match_id=%s source=%s tier=%s "
+                "reasons=%r",
+                match_id, source_label, edge_tier, strict_reasons,
+            )
+
+    # ── Gate D: Verdict quality floor (markdown / manager / Diamond price-prefix) ─
+    # `min_verdict_quality` is the existing serve-time floor; surfaced here as
+    # a single MAJOR failure on rejection. It internally calls
+    # `validate_manager_names` (manager hallucination), `validate_diamond_
+    # price_prefix`, `validate_no_markdown_leak`, length floor, and venue check.
+    try:
+        verdict_ok = min_verdict_quality(
+            verdict_html, tier=edge_tier, evidence_pack=evidence_pack
+        )
+    except Exception as exc:
+        verdict_ok = True
+        log.warning(
+            "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+            "VerdictValidatorQualityFailed match_id=%s err=%s",
+            match_id, exc,
+        )
+    if not verdict_ok:
+        # Verdict quality floor (length, manager fabrication, Diamond
+        # price-prefix, markdown leak, venue, banned shapes, analytical
+        # vocab count) is CRITICAL across ALL tiers — a verdict that fails
+        # `min_verdict_quality` is structurally broken (e.g. 30-char "At
+        # 1.85 on Betway for Arsenal." fails the Bronze 60-char floor) and
+        # must not be persisted. Preserves the W92-VERDICT-QUALITY P2
+        # regression-guard contract that any verdict failing the quality
+        # floor is silently SKIPPED with a Sentry breadcrumb.
+        failures.append(
+            ValidationFailure(
+                gate="verdict_quality",
+                severity="CRITICAL",
+                detail=f"len={len(verdict_html)} sample={verdict_html[:80]!r}",
+                section=_SECTION_VERDICT_HTML,
+            )
+        )
+        log.warning(
+            "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+            "VerdictValidatorQualityFail match_id=%s source=%s tier=%s len=%d "
+            "sample=%r",
+            match_id, source_label, edge_tier, len(verdict_html),
+            verdict_html[:80],
+        )
+
+    # ── Gate E: Telemetry vocabulary (Rule 17 / Gate 8) ───────────────────────
+    tele_hits = _check_telemetry_vocabulary(
+        verdict_html, edge_tier, "verdict_html"
+    )
+    if tele_hits:
+        sev_tele: Severity = "CRITICAL" if is_premium else "MAJOR"
+        failures.append(
+            ValidationFailure(
+                gate="telemetry_vocabulary",
+                severity=sev_tele,
+                detail=f"verdict hits={tele_hits!r}",
+                section=_SECTION_VERDICT_HTML,
+            )
+        )
+        log.warning(
+            "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+            "VerdictValidatorTelemetryVocab match_id=%s source=%s tier=%s "
+            "hits=%r",
+            match_id, source_label, edge_tier, tele_hits,
+        )
+
+    # ── Gate F: Strong-band tone lock (Gate 9) ────────────────────────────────
+    # Bronze short-circuits inside `_check_tier_band_tone` (cautious-band IS
+    # Bronze's correct register).
+    if tier_lower in ("diamond", "gold", "silver"):
+        sev_sb: Severity = "CRITICAL" if is_premium else "MAJOR"
+        sb_hits, sb_hedging = _check_tier_band_tone(
+            verdict_html, edge_tier, "verdict_html"
+        )
+        if sb_hits:
+            failures.append(
+                ValidationFailure(
+                    gate="strong_band_tone",
+                    severity=sev_sb,
+                    detail=f"verdict hits={sb_hits!r}",
+                    section=_SECTION_VERDICT_HTML,
+                )
+            )
+            log.warning(
+                "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+                "VerdictValidatorStrongBandTone match_id=%s source=%s tier=%s "
+                "hits=%r",
+                match_id, source_label, edge_tier, sb_hits,
+            )
+        # Hedging-conditional opener fires on Diamond/Gold only.
+        if sb_hedging and is_premium:
+            failures.append(
+                ValidationFailure(
+                    gate="strong_band_hedging_opener",
+                    severity="CRITICAL",
+                    detail=f"hedging conditional opener; sample={verdict_html[:100]!r}",
+                    section=_SECTION_VERDICT_HTML,
+                )
+            )
+            log.warning(
+                "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+                "VerdictValidatorStrongBandHedgingOpener match_id=%s source=%s "
+                "tier=%s sample=%r",
+                match_id, source_label, edge_tier, verdict_html[:100],
+            )
+
+    # ── Gate G: Verdict closure rule (Gate 10) ────────────────────────────────
+    sev_close, reason_close = _check_verdict_closure_rule(
+        verdict_html, edge_tier, evidence_pack,
+    )
+    if sev_close:
+        # `_check_verdict_closure_rule` returns CRITICAL for all tier
+        # mismatches; the brief's tier-aware enforcement matrix downgrades
+        # closure to MAJOR on Silver and MINOR on Bronze. We override the
+        # severity here to match the matrix while preserving the diagnostic.
+        if tier_lower == "silver":
+            close_severity: Severity = "MAJOR"
+        elif tier_lower == "bronze":
+            close_severity = "MINOR"
+        else:
+            close_severity = sev_close
+        failures.append(
+            ValidationFailure(
+                gate="verdict_closure_rule",
+                severity=close_severity,
+                detail=reason_close,
+                section=_SECTION_VERDICT_HTML,
+            )
+        )
+        log.warning(
+            "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+            "VerdictValidatorClosureRule match_id=%s source=%s tier=%s "
+            "severity=%s reason=%s",
+            match_id, source_label, edge_tier, close_severity, reason_close,
+        )
+
+    # ── Gate H: Vague-content patterns (Gate 11) ──────────────────────────────
+    vague_hits = _check_vague_content_patterns(verdict_html)
+    if vague_hits:
+        sev_vague: Severity = "CRITICAL" if is_premium else "MAJOR"
+        failures.append(
+            ValidationFailure(
+                gate="vague_content",
+                severity=sev_vague,
+                detail=f"verdict hits={vague_hits!r}",
+                section=_SECTION_VERDICT_HTML,
+            )
+        )
+        log.warning(
+            "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+            "VerdictValidatorVagueContent match_id=%s source=%s tier=%s "
+            "hits=%r",
+            match_id, source_label, edge_tier, vague_hits,
+        )
+
+    # ── Gate I: Verdict char range [_VERDICT_CHAR_MIN, _VERDICT_CHAR_MAX] ────
+    # Strip HTML tags before measuring — the cap function works on plain text.
+    plain = _HTML_TAG_RE.sub("", verdict_html).strip()
+    plain_len = len(plain)
+    if plain_len < _VERDICT_CHAR_MIN:
+        sev_short: Severity = "CRITICAL" if is_premium else "MAJOR"
+        failures.append(
+            ValidationFailure(
+                gate="verdict_char_range",
+                severity=sev_short,
+                detail=f"len={plain_len} < min={_VERDICT_CHAR_MIN}; "
+                       f"sample={plain[:80]!r}",
+                section=_SECTION_VERDICT_HTML,
+            )
+        )
+        log.warning(
+            "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+            "VerdictValidatorCharRangeUnder match_id=%s source=%s tier=%s "
+            "len=%d sample=%r",
+            match_id, source_label, edge_tier, plain_len, plain[:80],
+        )
+    elif plain_len > _VERDICT_CHAR_MAX:
+        # Over the hard cap — _cap_verdict should have prevented this; if it
+        # leaks through, MAJOR-flag for monitoring. Caller doesn't refuse on
+        # this alone (the cap is a safety net, not a content-quality gate).
+        failures.append(
+            ValidationFailure(
+                gate="verdict_char_range",
+                severity="MAJOR",
+                detail=f"len={plain_len} > max={_VERDICT_CHAR_MAX}",
+                section=_SECTION_VERDICT_HTML,
+            )
+        )
+        log.warning(
+            "FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 "
+            "VerdictValidatorCharRangeOver match_id=%s source=%s tier=%s "
+            "len=%d",
+            match_id, source_label, edge_tier, plain_len,
+        )
 
     # ── Outcome ──────────────────────────────────────────────────────────────
     crit = [f for f in failures if f.severity == "CRITICAL"]

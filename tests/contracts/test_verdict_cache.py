@@ -33,11 +33,21 @@ def _rejected_verdict() -> str:
 
 
 def _gold_pass_verdict() -> str:
-    """A 180-char verdict with analytical vocabulary, passes gold floor."""
+    """A Gold-tier verdict that passes the unified validator stack.
+
+    Updated under FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 — the
+    new validator enforces verdict closure rule (action verb + team + odds in
+    closing sentence), telemetry vocabulary ban, vague-content ban, char range
+    [100, 260], and tier-band tone in addition to the legacy
+    ``min_verdict_quality`` floor. The old fixture closed with "moving in the
+    opposite direction" (no action verb + team + odds in last sentence) and
+    leaked telemetry ("the model gives", "a clear signal", "supported by",
+    "line is moving") — all blocked under the new contract.
+    """
     return (
-        "Arsenal at 1.85 on Betway remains the call. The model gives fair probability "
-        "around 58% — a clear signal, supported by recent form, against a line that is "
-        "moving in the opposite direction."
+        "Arsenal's form is solid and the line is too long for what we see. "
+        "Back Arsenal at 1.85 with Betway, even with the rotation concern — "
+        "standard stake on this one."
     )
 
 
@@ -85,7 +95,15 @@ class TestVerdictCachePreWriteGate(unittest.TestCase):
         )
 
     def test_passing_verdict_proceeds_to_db_write(self):
-        """A 180-char verdict passes the gate and reaches the DB layer."""
+        """A 180-char verdict passes the gate and reaches the DB layer.
+
+        Updated under FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01:
+        the new validator's closure-rule gate (Gate 10) requires the closing
+        sentence to contain action verb + team or selection + odds. The
+        team-name match runs against ``evidence_pack['home_team']`` and
+        ``evidence_pack['away_team']``, so tip_data must carry an
+        ``evidence_pack`` dict for the gate to recognise the team.
+        """
         fake_conn = MagicMock()
         # Simulate "row does not exist yet" so INSERT path runs.
         fake_conn.execute.return_value.fetchone.return_value = None
@@ -94,7 +112,13 @@ class TestVerdictCachePreWriteGate(unittest.TestCase):
             _bot._store_verdict_cache_sync(
                 _MATCH_KEY,
                 _gold_pass_verdict(),
-                {"edge_tier": "gold"},
+                {
+                    "edge_tier": "gold",
+                    "evidence_pack": {
+                        "home_team": "Arsenal",
+                        "away_team": "Chelsea",
+                    },
+                },
             )
         # Connection factory was invoked — gate did NOT reject.
         assert mock_conn.call_count == 1

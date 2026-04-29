@@ -137,6 +137,105 @@ def test_components_action_verbs_all_clusters():
         assert has_action, f"Action verb missed in: {verb_text!r}"
 
 
+# ── 2b. AC-3 — Declarative recommendation phrases ────────────────────────────
+# FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 broadens the action-
+# verb cluster to also accept declarative phrases ("is the pick", "is the
+# play", etc.) so polish output and W82 templates can express the closing
+# recommendation in either imperative or declarative voice.
+
+
+def test_components_declarative_is_the_pick():
+    """Declarative 'is the pick' counts as an action verb."""
+    has_action, _, _ = _verdict_closure_components(
+        "Liverpool at 1.97 is the pick.", "Liverpool", "Chelsea",
+    )
+    assert has_action
+
+
+def test_components_declarative_is_the_play():
+    """Declarative 'is the play' counts as an action verb."""
+    has_action, _, _ = _verdict_closure_components(
+        "Liverpool at 1.97 is the play.", "Liverpool", "Chelsea",
+    )
+    assert has_action
+
+
+def test_components_declarative_is_the_call():
+    """Declarative 'is the call' counts as an action verb."""
+    has_action, _, _ = _verdict_closure_components(
+        "Liverpool at 1.97 is the call.", "Liverpool", "Chelsea",
+    )
+    assert has_action
+
+
+def test_components_declarative_is_the_lean():
+    """Declarative 'is the lean' counts as an action verb."""
+    has_action, _, _ = _verdict_closure_components(
+        "Liverpool at 1.97 is the lean.", "Liverpool", "Chelsea",
+    )
+    assert has_action
+
+
+def test_components_declarative_is_the_bet():
+    """Declarative 'is the bet' counts as an action verb."""
+    has_action, _, _ = _verdict_closure_components(
+        "Liverpool at 1.97 is the bet.", "Liverpool", "Chelsea",
+    )
+    assert has_action
+
+
+def test_components_declarative_is_the_value():
+    """Declarative 'is the value' counts as an action verb."""
+    has_action, _, _ = _verdict_closure_components(
+        "Liverpool at 1.97 is the value.", "Liverpool", "Chelsea",
+    )
+    assert has_action
+
+
+def test_diamond_declarative_closure_passes():
+    """Diamond verdict with declarative closure shape → no failure."""
+    text = (
+        "Form is solid and the line looks soft. "
+        "Liverpool at 1.97 with Supabets is the pick, measured stake."
+    )
+    sev, _ = _check_verdict_closure_rule(
+        text, "diamond", {"home_team": "Liverpool", "away_team": "Chelsea"},
+    )
+    assert sev is None
+
+
+def test_gold_declarative_closure_passes():
+    """Gold verdict with declarative 'is the call' closure → no failure."""
+    text = (
+        "The line is soft and the form holds. "
+        "Manchester City at 1.36 with Supabets is the call, standard stake."
+    )
+    sev, _ = _check_verdict_closure_rule(
+        text, "gold", {"home_team": "Manchester City", "away_team": "Brentford"},
+    )
+    assert sev is None
+
+
+def test_silver_declarative_closure_passes():
+    """Silver verdict with declarative 'is the lean' closure → no failure."""
+    text = (
+        "The price has room and the form holds. "
+        "Liverpool at 1.97 with Supabets is the lean, small-stake call."
+    )
+    sev, _ = _check_verdict_closure_rule(
+        text, "silver", {"home_team": "Liverpool", "away_team": "Chelsea"},
+    )
+    assert sev is None
+
+
+def test_components_declarative_no_match_when_unrelated_phrase():
+    """'the pick' alone (without 'is the') does not match the declarative cluster."""
+    has_action, _, _ = _verdict_closure_components(
+        "Form is solid and the pick is interesting.", "Liverpool", "Chelsea",
+    )
+    assert not has_action
+
+
 def test_components_no_action_verb():
     """Closing sentence with no action verb → has_action False."""
     text = (
