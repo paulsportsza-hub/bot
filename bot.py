@@ -14461,16 +14461,30 @@ def _ensure_narrative_cache_table() -> None:
                 log.info("FIX-NARRATIVE-CACHE-SCHEMA-200-260: migration committed")
         except Exception as _schema_exc:
             log.warning("FIX-NARRATIVE-CACHE-SCHEMA-200-260: migration failed: %s", _schema_exc)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS gold_verdict_failed_edges (
-                match_key TEXT PRIMARY KEY,
-                edge_tier TEXT NOT NULL,
-                fixture TEXT NOT NULL,
-                pick TEXT NOT NULL,
-                failure_reason TEXT NOT NULL,
-                failed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # FIX-PREMIUM-POSTWRITE-PROTECTION-01 AC-3 — drop shadow table.
+        # `gold_verdict_failed_edges` was historically created here in odds.db
+        # (= _NARRATIVE_DB_PATH) but the canonical table lives in
+        # `bot/data/mzansiedge.db` — every production reader and writer points
+        # there: card_data._check_premium_defer (line 1140), pregenerate_narratives
+        # ._record_premium_defer / _clear_premium_defer (lines 2078 / 2135), and
+        # monitor_narrative_integrity (line 720). The odds.db shadow is unused —
+        # it was missing the consecutive_count column and silently caused the
+        # AC-3 corpus invariant test to read an empty table on the wrong DB.
+        # Drop the shadow only when empty (defensive — never destroy real data).
+        try:
+            _shadow_count = conn.execute(
+                "SELECT COUNT(*) FROM gold_verdict_failed_edges"
+            ).fetchone()
+            if _shadow_count and _shadow_count[0] == 0:
+                conn.execute("DROP TABLE IF EXISTS gold_verdict_failed_edges")
+                log.info(
+                    "FIX-PREMIUM-POSTWRITE-PROTECTION-01: dropped empty "
+                    "gold_verdict_failed_edges shadow from %s — canonical "
+                    "table lives in bot/data/mzansiedge.db",
+                    _NARRATIVE_DB_PATH,
+                )
+        except sqlite3.OperationalError:
+            pass  # Table doesn't exist (already dropped or fresh DB) — fine.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS regen_queue (
                 match_key TEXT PRIMARY KEY,

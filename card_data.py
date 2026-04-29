@@ -1181,6 +1181,69 @@ def _check_premium_defer(match_id: str) -> dict | None:
             pass
 
 
+def _check_premium_quarantined(match_id: str) -> dict | None:
+    """FIX-PREMIUM-POSTWRITE-PROTECTION-01 AC-2.
+
+    Detect a premium-tier ``narrative_cache`` row marked ``status='quarantined'``.
+    The view-time SELECT in ``build_ai_breakdown_data`` already filters these out
+    (so a tainted row never renders), but a quarantined w84 row paired with NO
+    ``gold_verdict_failed_edges`` defer entry would otherwise fall through to the
+    W82 synthesis-on-tap baseline — the exact W82-boilerplate regression the
+    predecessor brief documented (Brentford–West Ham, Brighton–Wolves, 29 Apr).
+
+    This helper closes that gap: if any ``status='quarantined'`` row exists for
+    a Gold/Diamond edge tier, the caller should serve the deferred placeholder
+    instead of synthesising a W82 baseline. The pregen sweep (or polish retry)
+    will replace the row with a clean w84 narrative on the next cycle.
+
+    Reads from ``scrapers/odds.db`` (the canonical narrative_cache DB,
+    ``_NARRATIVE_DB_PATH`` in bot.py — same DB the AC-3 corpus invariant test
+    queries for w84/w84-haiku-fallback rows).
+
+    Returns ``{match_key, edge_tier, quarantine_reason}`` when at least one
+    quarantined premium row exists, else ``None``. Best-effort — any DB error
+    returns None. Never raises.
+    """
+    import os as _os
+    from pathlib import Path as _PathQuar
+
+    _bot_dir = _PathQuar(__file__).parent
+    _SCRAPERS_DIR = _PathQuar(_os.environ.get("SCRAPERS_ROOT", str(_bot_dir.parent / "scrapers")))
+    _ODDS_DB = str(_SCRAPERS_DIR / "odds.db")
+    if not _os.path.exists(_ODDS_DB):
+        return None
+    try:
+        from scrapers.db_connect import connect_odds_db as _quar_conn
+        _c = _quar_conn(_ODDS_DB)
+    except Exception:
+        return None
+    try:
+        try:
+            row = _c.execute(
+                "SELECT match_id, edge_tier, COALESCE(quarantine_reason, '') "
+                "FROM narrative_cache "
+                "WHERE match_id = ? "
+                "AND status = 'quarantined' "
+                "AND LOWER(COALESCE(edge_tier, '')) IN ('gold', 'diamond') "
+                "LIMIT 1",
+                (match_id,),
+            ).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        return {
+            "match_key": row[0],
+            "edge_tier": (row[1] or "").lower(),
+            "quarantine_reason": row[2] or "",
+        }
+    finally:
+        try:
+            _c.close()
+        except Exception:
+            pass
+
+
 def _check_premium_edge(match_id: str) -> str | None:
     """Look up ``edge_results`` for ``match_id``; return tier ("gold"/"diamond")
     when an unsettled premium edge exists, else ``None``. Best-effort.
@@ -1457,6 +1520,34 @@ def build_ai_breakdown_data(match_id: str) -> dict | None:
                     "edge_tier": _premium_tier,
                     "defer_count": _defer.get("consecutive_count", 1),
                     "fixture": _defer.get("fixture", ""),
+                }
+            # FIX-PREMIUM-POSTWRITE-PROTECTION-01 AC-2: post-write quarantine check.
+            # The cache SELECT above already excludes status='quarantined' rows,
+            # but the predecessor brief documented (Brentford–West Ham,
+            # Brighton–Wolves on 29 Apr) that w84-served premium rows can be
+            # quarantined post-commit by serve-time gates without a paired
+            # `gold_verdict_failed_edges` defer entry — so the cache-miss path
+            # would otherwise fall through to W82 synthesis. That is the W82-
+            # boilerplate regression Paul observed on premium cards. Treat any
+            # quarantined Gold/Diamond row as an in-flight defer so the user
+            # sees the "updating" placeholder rather than tainted W82 content.
+            _quarantined = _check_premium_quarantined(match_id)
+            if _quarantined:
+                log.warning(
+                    "FIX-PREMIUM-POSTWRITE-PROTECTION-01 PremiumQuarantined "
+                    "match_id=%s tier=%s reason=%s — serving placeholder "
+                    "(no narrative_cache row eligible, w84 row quarantined post-write)",
+                    match_id,
+                    _premium_tier,
+                    _quarantined.get("quarantine_reason", ""),
+                )
+                return {
+                    "deferred": True,
+                    "match_id": match_id,
+                    "edge_tier": _premium_tier,
+                    "defer_count": 0,
+                    "fixture": "",
+                    "quarantine_reason": _quarantined.get("quarantine_reason", ""),
                 }
         # FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01: instant-baseline fallback.
         # No eligible cache row + no premium defer → synthesize a row from
