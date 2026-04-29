@@ -2405,6 +2405,49 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "STRUCTURE: action-led or stat-led opening. Concrete evidence in the middle. One clear close.",
             "ACTION VERB CLUSTER (use at least one in the Verdict on Bronze/Silver/Gold/Diamond cards): get on, back, take, worth, ride, leave.",
             "",
+            # FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 (2026-04-29) AC-2 — Strong-band
+            # tone lock. Live failure case: Manchester City vs Brentford GOLD
+            # verdict at Supabets 1.36 read "the form picture is unclear and
+            # there's limited edge to work with here ... cautious lean rather
+            # than a confident call". Sonnet adapted tone to evidence (MILD
+            # signal) rather than tier (Strong-band Gold). This block tells
+            # Sonnet to REFRAME MILD as MEASURED on Strong-band cards.
+            #
+            # Sits in the static cache prefix (above EVIDENCE PACK split per
+            # Rule 22) so the instruction reuses the cached prompt prefix
+            # without re-billing.
+            "⚠️ STRONG-BAND TIER (Diamond / Gold) — TONE LOCK:",
+            "",
+            "This card is rated Strong-band. The verdict MUST speak with Strong-band confidence.",
+            "IF the underlying signal is MILD, reframe it as MEASURED confidence — NOT cautious withdrawal.",
+            "",
+            "ALLOWED reframes for MILD-confidence Strong-band:",
+            "  - \"Measured back at this number\"",
+            "  - \"Worth a measured stake\"",
+            "  - \"Solid lean\" (NOT \"cautious lean\")",
+            "  - \"Disciplined back\"",
+            "  - \"Worth getting in early\"",
+            "",
+            "BANNED on Strong-band (these are Bronze-tier vocabulary):",
+            "  - \"cautious\" / \"cautious lean\" / \"cautious play\"",
+            "  - \"limited edge\" / \"thin edge\" / \"no edge to work with\"",
+            "  - \"form picture is unclear\" / \"data is thin\" / \"without recent form\"",
+            "  - \"rather than a confident call\"",
+            "  - \"speculative punt\" (Bronze-only)",
+            "  - hedging openers: don't open the verdict body with \"but\", \"however\", \"though\"",
+            "",
+            "IF the evidence genuinely cannot support Strong-band confidence,",
+            "the verdict should still close with an action verb (\"back\", \"take\", \"get on\")",
+            "+ measured stake instruction — NEVER \"cautious lean\" or \"speculative\".",
+            "",
+            "GOOD Strong-band MILD-confidence example:",
+            "  \"Back City at 1.36 with Supabets — form solid, line slightly soft.",
+            "   Measured stake at this number, no need to push.\"",
+            "",
+            "BAD Strong-band example (cautious-band collapse):",
+            "  \"City are the pick at 1.36, but the form picture is unclear...",
+            "   cautious lean rather than a confident call.\"",
+            "",
             "📋 <b>The Setup</b>",
             "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",
             # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-3 — SETUP voice examples.
@@ -2505,6 +2548,49 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "STRUCTURE: action-led or stat-led opening. Concrete evidence in the middle. One clear action close.",
             "ACTION VERB CLUSTER (use at least one in the Verdict on Bronze/Silver/Gold/Diamond cards): get on, back, take, worth, ride, leave.",
             "LENGTH: Verdict 100-260 chars (per Rule 22).",
+            "",
+            # FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 (2026-04-29) AC-2 — Strong-band
+            # tone lock. Live failure case: Manchester City vs Brentford GOLD
+            # verdict at Supabets 1.36 read "the form picture is unclear and
+            # there's limited edge to work with here ... cautious lean rather
+            # than a confident call". Sonnet adapted tone to evidence (MILD
+            # signal) rather than tier (Strong-band Gold). This block tells
+            # Sonnet to REFRAME MILD as MEASURED on Strong-band cards.
+            #
+            # Sits in the static cache prefix (above EVIDENCE PACK split per
+            # Rule 22) so the instruction reuses the cached prompt prefix
+            # without re-billing.
+            "⚠️ STRONG-BAND TIER (Diamond / Gold) — TONE LOCK:",
+            "",
+            "This card is rated Strong-band. The verdict MUST speak with Strong-band confidence.",
+            "IF the underlying signal is MILD, reframe it as MEASURED confidence — NOT cautious withdrawal.",
+            "",
+            "ALLOWED reframes for MILD-confidence Strong-band:",
+            "  - \"Measured back at this number\"",
+            "  - \"Worth a measured stake\"",
+            "  - \"Solid lean\" (NOT \"cautious lean\")",
+            "  - \"Disciplined back\"",
+            "  - \"Worth getting in early\"",
+            "",
+            "BANNED on Strong-band (these are Bronze-tier vocabulary):",
+            "  - \"cautious\" / \"cautious lean\" / \"cautious play\"",
+            "  - \"limited edge\" / \"thin edge\" / \"no edge to work with\"",
+            "  - \"form picture is unclear\" / \"data is thin\" / \"without recent form\"",
+            "  - \"rather than a confident call\"",
+            "  - \"speculative punt\" (Bronze-only)",
+            "  - hedging openers: don't open the verdict body with \"but\", \"however\", \"though\"",
+            "",
+            "IF the evidence genuinely cannot support Strong-band confidence,",
+            "the verdict should still close with an action verb (\"back\", \"take\", \"get on\")",
+            "+ measured stake instruction — NEVER \"cautious lean\" or \"speculative\".",
+            "",
+            "GOOD Strong-band MILD-confidence example:",
+            "  \"Back City at 1.36 with Supabets — form solid, line slightly soft.",
+            "   Measured stake at this number, no need to push.\"",
+            "",
+            "BAD Strong-band example (cautious-band collapse):",
+            "  \"City are the pick at 1.36, but the form picture is unclear...",
+            "   cautious lean rather than a confident call.\"",
             "",
             "📋 <b>The Setup</b>",
             "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",

@@ -109,6 +109,223 @@ _TELEMETRY_VOCABULARY_RE: tuple[tuple[re.Pattern[str], str], ...] = tuple(
 _PREMIUM_ONLY_TELEMETRY_LABELS: frozenset[str] = frozenset({"speculative punt"})
 
 
+# FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 (2026-04-29) — AC-1.
+#
+# Strong-band tier (Diamond + Gold) MUST speak Strong-band confidence.
+# Cautious-band vocabulary collapses the verdict tone on a Strong-band card
+# (live failure case 29 Apr 19:24 SAST: Manchester City vs Brentford GOLD
+# verdict at Supabets 1.36 read "the form picture is unclear and there's
+# limited edge to work with here ... this is a cautious lean rather than a
+# confident call"). The verdict-generator skill rubric says Strong-band
+# Gold should sound like "Back Guardiola's City at 1.36 with Supabets —
+# form solid, attack on song, Brentford bring nothing on the road."
+#
+# Three failure shapes the catalogue covers:
+#   1. Cautious framing  — "cautious lean", "limited edge", "speculative punt"
+#   2. Evidence-poor hedging — "form picture is unclear", "without recent form"
+#   3. Hedging closers — "rather than a confident call", "monitor only"
+#
+# Tier-aware caller policy (in `_validate_narrative_for_persistence`):
+#   - Diamond + Gold hit → CRITICAL (refuse write — synthesis-on-tap covers
+#     the cache miss; pregen retries via Wave 2 chain).
+#   - Silver hit → MAJOR (quarantine; some hedging is acceptable on Silver
+#     but Strong-band cautious vocabulary is not).
+#   - Bronze → ALLOWED (cautious-band IS Bronze's correct register —
+#     the verdict-generator skill maps Bronze to MILD confidence).
+STRONG_BAND_INCOMPATIBLE_PATTERNS: tuple[tuple[str, str], ...] = (
+    # ── Cautious framing ────────────────────────────────────────────────────
+    # "cautious lean", "cautious play", "cautious call", "cautious bet",
+    # "cautious stake", "cautious approach", "cautious read", "cautiously lean".
+    # Word-boundary so legitimate prose ("cautious about the line") doesn't fire.
+    (r"\bcautious(?:ly)?\s+(?:lean|call|play|bet|stake|approach|read)\b",
+     "cautious lean"),
+    # "limited edge", "thin edge", "sparse edge", "weak edge", "minimal edge"
+    # — all describe an absent edge, banned on Strong-band where the card
+    # ALGORITHMICALLY HAS an edge (that's why it's Gold/Diamond).
+    (r"\b(?:limited|thin|sparse|weak|minimal)\s+edge\b", "limited edge"),
+    # "no edge to work with" — Bronze framing on a card the algorithm tagged
+    # as Strong-band edge. If the model says Gold and the verdict says
+    # "no edge", the card is internally contradictory.
+    (r"\bno\s+edge\s+to\s+work\s+with\b", "no edge to work with"),
+    # "form picture is unclear / murky / split / mixed" / "picture is unclear"
+    # — Bronze-tier hedging on a Strong-band card. The form was the SIGNAL
+    # used to rate this Gold; saying it's unclear is a tone collapse.
+    (r"\b(?:form\s+)?picture\s+is\s+(?:unclear|murky|split|mixed)\b",
+     "form picture is unclear"),
+    # "rather than a confident call" / "rather than a strong call" — explicit
+    # tier-band downgrade vocabulary. Verbatim from Paul's live failure case.
+    (r"\brather\s+than\s+a\s+(?:confident|strong)\s+(?:call|play|bet)\b",
+     "rather than a confident call"),
+    # "speculative punt" — Bronze-only register; mirrors telemetry catalogue
+    # but listed here so the AC-1 gate fires it on Strong-band tiers even when
+    # Gate 8 misses (e.g. when the phrase is in narrative_html but Gate 8
+    # already flagged a different telemetry hit and dedup short-circuits).
+    (r"\bspeculative\s+(?:punt|stake|play|bet)\b", "speculative punt"),
+    # "tiny exposure" / "small exposure only" — cautious-band sizing language
+    # that signals tier mismatch. Strong-band uses "standard stake" or
+    # "standard-to-heavy" sizing. The qualifier "only" or "just" is required
+    # to avoid false positives in legitimate prose ("a small stake on this
+    # one" can read fine on Silver — but "small exposure only" reads Bronze).
+    (r"\btiny\s+exposure\b", "tiny exposure"),
+    (r"\bsmall\s+(?:exposure|stake)\s+only\b", "small exposure only"),
+
+    # ── Evidence-poor hedging ───────────────────────────────────────────────
+    # "without recent form / context / h2h / head-to-head / data" — Bronze
+    # framing that admits the analysis is data-poor. Strong-band cards have
+    # data by construction (the algorithm needed it to rate the card Gold).
+    (r"\bwithout\s+(?:recent\s+form|context|h2h|head[- ]to[- ]head|data)\b",
+     "without recent form"),
+    # "no recent form" / "little recent context" / "no recent h2h" — same
+    # shape as above, different opener.
+    (r"\b(?:no|little)\s+recent\s+(?:form|context|h2h)\b",
+     "no recent form"),
+    # "data is thin / sparse / limited / weak" — analysis-poor hedging.
+    (r"\bdata\s+is\s+(?:thin|sparse|limited|weak)\b", "data is thin"),
+    # "not enough to back" / "not enough to trust" / "not enough to recommend"
+    # — explicit refusal-of-confidence language. Banned on Strong-band where
+    # the verdict MUST recommend with action-verb conviction.
+    (r"\bnot\s+enough\s+to\s+(?:back|trust|recommend)\b",
+     "not enough to back"),
+
+    # ── Hedging closers ─────────────────────────────────────────────────────
+    # "lean rather than a confident call" / "read rather than a strong call"
+    # — composite hedging closer. Already partially caught by "rather than a
+    # confident call" above; this pattern catches the lean/read/call opener
+    # variants for monitoring completeness.
+    (r"\b(?:lean|read|call)\s+rather\s+than\s+a\s+(?:confident|strong)\s+(?:call|play|bet)\b",
+     "lean rather than a confident call"),
+    # "one to watch rather than back" — Bronze closer; banned on Strong-band
+    # where the verdict MUST close with action ("get on", "back", "take").
+    (r"\bone\s+to\s+watch\s+rather\s+than\s+back\b",
+     "one to watch rather than back"),
+    # "monitor only" — Bronze closer (correct register); on Strong-band reads
+    # as a refusal to commit and is a tier-band collapse.
+    (r"\bmonitor\s+only\b", "monitor only"),
+)
+
+_STRONG_BAND_INCOMPATIBLE_RE: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pat, re.IGNORECASE), label)
+    for pat, label in STRONG_BAND_INCOMPATIBLE_PATTERNS
+)
+
+
+# Hedging-conditional-opener detection (separate gate per brief AC-1).
+#
+# Rule: Strong-band verdicts MUST NOT have their first clause end with a
+# comma followed by a hedging conjunction (but, however, though, although,
+# yet). Catches the "City are the pick at 1.36, but the form picture is
+# unclear..." shape verbatim from Paul's live failure case.
+#
+# Detection algorithm:
+#   1. Strip HTML tags + leading whitespace.
+#   2. Find the first comma in the text.
+#   3. Check next 1-2 tokens (skip whitespace) against
+#      {but, however, though, although, yet}.
+#   4. If match → hedging-conditional opener detected.
+#
+# Strong-band cards open with confidence:
+#   GOOD: "Back Guardiola's City at 1.36 with Supabets — form solid..."
+#   BAD:  "City are the pick at 1.36, but the form picture is unclear..."
+#
+# The em-dash separator is allowed (it sets up evidence, not contradiction).
+# A semicolon is also allowed (it joins independent clauses, not hedging).
+_HEDGING_CONJUNCTIONS: frozenset[str] = frozenset({
+    "but", "however", "though", "although", "yet",
+})
+
+# Strip HTML tags for plain-text comma scanning (the validator runs against
+# narrative_html which carries <b>...</b> Setup/Edge/Risk/Verdict headers).
+_HTML_TAG_RE: re.Pattern[str] = re.compile(r"<[^>]+>")
+
+
+def _check_hedging_conditional_opener(text: str) -> bool:
+    """Return True iff the verdict opens with a hedging conditional clause.
+
+    Detects the "X is the pick, but ..." shape that is verbatim from Paul's
+    live Manchester City vs Brentford failure case (Apr 29 19:24 SAST).
+    Strong-band tone collapses when the first clause concedes uncertainty
+    via {but, however, though, although, yet} — the verdict-generator skill
+    rubric requires confidence-led openings on Gold/Diamond.
+
+    Parameters
+    ----------
+    text
+        Raw verdict text (HTML-stripped internally). Empty string returns False.
+
+    Returns
+    -------
+    bool
+        True if the first comma is immediately followed by a hedging
+        conjunction (skipping whitespace). False otherwise.
+    """
+    if not text:
+        return False
+    # Strip HTML tags so we don't count "<b>" as text.
+    plain = _HTML_TAG_RE.sub("", text).strip()
+    if not plain:
+        return False
+    # Scan for the first comma — anything before is the first clause.
+    comma_idx = plain.find(",")
+    if comma_idx == -1:
+        return False
+    # Take the chunk after the comma. Skip whitespace.
+    tail = plain[comma_idx + 1:].lstrip()
+    if not tail:
+        return False
+    # First token after the comma. Strip trailing punctuation.
+    first_token = tail.split(maxsplit=1)[0].strip(",.;:!?\"'").lower()
+    return first_token in _HEDGING_CONJUNCTIONS
+
+
+def _check_tier_band_tone(
+    text: str, edge_tier: str, section: str
+) -> tuple[list[str], bool]:
+    """Scan `text` for AC-1 Strong-band tone-lock violations.
+
+    Two-component scan:
+      - banned vocabulary (STRONG_BAND_INCOMPATIBLE_PATTERNS)
+      - hedging-conditional opener (verdict-only)
+
+    Parameters
+    ----------
+    text
+        Raw HTML or plaintext to scan. Empty string returns ([], False).
+    edge_tier
+        Lowercase tier label ("diamond" | "gold" | "silver" | "bronze").
+        Bronze hits are NOT returned (cautious-band IS Bronze's correct
+        register per verdict-generator skill rubric).
+    section
+        Identifier for the surface being scanned. Hedging-conditional
+        opener detection runs on the verdict surfaces only ("verdict" /
+        "verdict_html"); banned-vocab scan runs on every section.
+
+    Returns
+    -------
+    tuple[list[str], bool]
+        (banned_vocab_hits, hedging_opener_detected). Empty list +
+        False when text is clean OR tier is Bronze.
+    """
+    if not text:
+        return [], False
+    tier = (edge_tier or "").lower()
+    # Bronze: cautious is the correct register — skip the entire scan.
+    if tier == "bronze":
+        return [], False
+    hits: list[str] = []
+    seen: set[str] = set()
+    for compiled, label in _STRONG_BAND_INCOMPATIBLE_RE:
+        if compiled.search(text) and label not in seen:
+            hits.append(label)
+            seen.add(label)
+    # Hedging opener detection runs on verdict surfaces only — narrative_html
+    # contains 4 sections and the comma-rule applies to the verdict's first
+    # clause, not (e.g.) the second sentence of The Setup.
+    hedging = False
+    if section in ("verdict", "verdict_html"):
+        hedging = _check_hedging_conditional_opener(text)
+    return hits, hedging
+
+
 def _check_telemetry_vocabulary(
     text: str, edge_tier: str, section: str
 ) -> list[str]:
@@ -608,6 +825,84 @@ def _validate_narrative_for_persistence(
                 "match_id=%s source=%s tier=%s section=verdict_html hits=%r",
                 match_id, source_label, edge_tier, v_tele_hits,
             )
+
+    # ── Gate 9: Strong-band tone lock (FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01) ─
+    # Brief AC-1: Strong-band tier (Diamond + Gold) MUST speak Strong-band
+    # confidence. Cautious-band vocabulary collapses the verdict tone on a
+    # Strong-band card (live failure case 29 Apr 19:24 SAST).
+    #
+    # Tier-aware enforcement matrix (per brief AC-1):
+    #   - Diamond + Gold → CRITICAL (refuse write — synthesis-on-tap covers
+    #     the cache miss; Wave 2 Sonnet retry → Haiku → defer chain still
+    #     applies via the existing pregen flow).
+    #   - Silver → MAJOR (quarantine; some hedging is acceptable on Silver
+    #     but Strong-band cautious vocabulary is not — quarantined rows can
+    #     still be served via the read surface but are flagged for repolish).
+    #   - Bronze → ALLOWED (cautious-band IS Bronze's correct register;
+    #     `_check_tier_band_tone` skips the scan entirely when tier=bronze).
+    if tier_lower in ("diamond", "gold", "silver"):
+        # Strong-band severity: Diamond/Gold = CRITICAL; Silver = MAJOR.
+        # Bronze short-circuits inside `_check_tier_band_tone` (returns
+        # empty hits + False hedging).
+        sb_severity: Severity = "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
+        # Verdict scan runs against verdict_html (when present) AND the
+        # narrative-embedded verdict section. The narrative_html scan also
+        # picks up violations in The Setup / The Edge / The Risk where
+        # cautious-band vocabulary leaks (e.g. "the form picture is unclear"
+        # in The Setup of a Gold card).
+        if narrative_html:
+            narr_sb_hits, _narr_hedging = _check_tier_band_tone(
+                narrative_html, edge_tier, "narrative_html"
+            )
+            if narr_sb_hits:
+                failures.append(
+                    ValidationFailure(
+                        gate="strong_band_tone",
+                        severity=sb_severity,
+                        detail=f"hits={narr_sb_hits!r}",
+                        section="narrative_html",
+                    )
+                )
+                log.warning(
+                    "FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 ValidatorStrongBandTone "
+                    "match_id=%s source=%s tier=%s section=narrative hits=%r",
+                    match_id, source_label, edge_tier, narr_sb_hits,
+                )
+        if verdict_html:
+            v_sb_hits, v_hedging = _check_tier_band_tone(
+                verdict_html, edge_tier, "verdict_html"
+            )
+            if v_sb_hits:
+                failures.append(
+                    ValidationFailure(
+                        gate="strong_band_tone",
+                        severity=sb_severity,
+                        detail=f"verdict hits={v_sb_hits!r}",
+                        section=_SECTION_VERDICT_HTML,
+                    )
+                )
+                log.warning(
+                    "FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 ValidatorStrongBandTone "
+                    "match_id=%s source=%s tier=%s section=verdict_html hits=%r",
+                    match_id, source_label, edge_tier, v_sb_hits,
+                )
+            # Hedging-conditional opener fires on Strong-band verdict only.
+            # Silver allows mild hedging (lean tone band) so we scope the
+            # opener gate to Diamond + Gold per brief AC-1.
+            if v_hedging and tier_lower in ("diamond", "gold"):
+                failures.append(
+                    ValidationFailure(
+                        gate="strong_band_hedging_opener",
+                        severity="CRITICAL",
+                        detail=f"first_clause hedging conditional opener; sample={verdict_html[:100]!r}",
+                        section=_SECTION_VERDICT_HTML,
+                    )
+                )
+                log.warning(
+                    "FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 ValidatorStrongBandHedgingOpener "
+                    "match_id=%s source=%s tier=%s sample=%r",
+                    match_id, source_label, edge_tier, verdict_html[:100],
+                )
 
     # ── Outcome ──────────────────────────────────────────────────────────────
     crit = [f for f in failures if f.severity == "CRITICAL"]

@@ -355,3 +355,193 @@ def test_w82_verdicts_unique_per_fixture():
         f"Too many duplicate verdicts ({dup_count}/30) — variant pool may have "
         f"collapsed."
     )
+
+
+# ── FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 AC-3 — tier-band tone audit ─────────
+#
+# Brief AC-3: Gold/Diamond W82 verdicts → 0 cautious-band vocabulary hits;
+# Bronze W82 verdicts → cautious-band ALLOWED. Confirms the W82 baseline
+# templates emit voice consistent with the tier badge.
+
+# Mirror of `narrative_validator.STRONG_BAND_INCOMPATIBLE_PATTERNS` — kept here
+# as a regex-only catalogue so the test is independent of the validator's
+# tier-aware short-circuit (the helper skips Bronze; we want to scan ALL tiers
+# and assert tier-conditional absence).
+_STRONG_BAND_BANNED_RE: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        # Cautious framing
+        r"\bcautious(?:ly)?\s+(?:lean|call|play|bet|stake|approach|read)\b",
+        r"\b(?:limited|thin|sparse|weak|minimal)\s+edge\b",
+        r"\bno\s+edge\s+to\s+work\s+with\b",
+        r"\b(?:form\s+)?picture\s+is\s+(?:unclear|murky|split|mixed)\b",
+        r"\brather\s+than\s+a\s+(?:confident|strong)\s+(?:call|play|bet)\b",
+        r"\bspeculative\s+(?:punt|stake|play|bet)\b",
+        r"\btiny\s+exposure\b",
+        r"\bsmall\s+(?:exposure|stake)\s+only\b",
+        # Evidence-poor hedging
+        r"\bwithout\s+(?:recent\s+form|context|h2h|head[- ]to[- ]head|data)\b",
+        r"\b(?:no|little)\s+recent\s+(?:form|context|h2h)\b",
+        r"\bdata\s+is\s+(?:thin|sparse|limited|weak)\b",
+        r"\bnot\s+enough\s+to\s+(?:back|trust|recommend)\b",
+        # Hedging closers
+        r"\b(?:lean|read|call)\s+rather\s+than\s+a\s+(?:confident|strong)\s+(?:call|play|bet)\b",
+        r"\bone\s+to\s+watch\s+rather\s+than\s+back\b",
+        r"\bmonitor\s+only\b",
+    )
+)
+
+
+def _has_strong_band_banned_vocab(text: str) -> list[str]:
+    """Return labels of every Strong-band banned phrase that fires on `text`."""
+    hits: list[str] = []
+    for compiled in _STRONG_BAND_BANNED_RE:
+        m = compiled.search(text)
+        if m:
+            hits.append(m.group(0).lower())
+    return hits
+
+
+def test_strong_band_w82_verdicts_zero_cautious_band_vocab():
+    """30 Gold/Diamond W82 verdicts contain ZERO cautious-band vocabulary.
+
+    Brief AC-3: Strong-band verdict templates use ONLY Strong-band vocabulary.
+    Bronze register words (cautious lean, limited edge, form picture unclear,
+    rather than a confident call, speculative punt, tiny exposure, small
+    exposure only, without recent form, data is thin, monitor only, etc.)
+    NEVER appear on a Gold or Diamond card by construction.
+
+    Generates 30 fixtures: 4 Diamond + 8 Gold (= 12 Strong-band) replicated
+    plus the existing fixture set, scanned with the AC-1 catalogue.
+    """
+    verdicts = _generate_30_verdicts()
+    # Index 0-3 = Diamond, 4-11 = Gold (per _generate_30_verdicts ordering).
+    strong_band_verdicts = verdicts[:12]
+    leaks = []
+    for i, v in enumerate(strong_band_verdicts):
+        hits = _has_strong_band_banned_vocab(v)
+        if hits:
+            leaks.append((i, hits, v[:120]))
+    assert leaks == [], (
+        f"Strong-band W82 verdicts MUST NOT contain cautious-band vocabulary. "
+        f"Leaks in {len(leaks)}/12 verdicts: {leaks!r}"
+    )
+
+
+def test_silver_w82_verdicts_zero_cautious_band_vocab():
+    """Silver W82 verdicts ALSO contain zero Strong-band-incompatible vocab.
+
+    Per validator caller policy, Silver hits raise MAJOR (quarantine). The W82
+    templates should preempt this by producing clean Silver text — Silver is
+    `lean` action which uses `_lean_variants`. None of those variants reference
+    cautious-band language by construction.
+    """
+    verdicts = _generate_30_verdicts()
+    # Index 12-20 = Silver (per _generate_30_verdicts ordering).
+    silver_verdicts = verdicts[12:21]
+    leaks = []
+    for i, v in enumerate(silver_verdicts):
+        hits = _has_strong_band_banned_vocab(v)
+        if hits:
+            leaks.append((i, hits, v[:120]))
+    assert leaks == [], (
+        f"Silver W82 verdicts MUST NOT contain Strong-band-incompatible vocab "
+        f"(quarantine trigger at writer level). Leaks: {leaks!r}"
+    )
+
+
+def test_bronze_w82_speculative_punt_uses_cautious_register():
+    """Bronze speculative_punt W82 verdicts use cautious-band vocabulary.
+
+    Brief AC-3 says Bronze cautious-band IS ALLOWED. The W82 Bronze
+    speculative_punt templates exist for genuinely cautious cards and use
+    register-appropriate language ("speculative punt", "small exposure",
+    "no hero call") — banned on Strong-band tiers but correct on Bronze.
+
+    Generates 4 Bronze fixtures forced into the `speculative punt` branch
+    (verdict_action="speculative punt") to exercise the cautious vocab
+    templates. Confirms the templates do contain Bronze register words.
+    """
+    bronze_specpunt_fixtures = [
+        ("burnley", "luton", "EPL", "soccer", 3.50, 1.5, 1),
+        ("leicester", "leeds", "EPL", "soccer", 2.95, 1.2, 0),
+        ("rangers_fc", "celtic", "Scottish Premiership", "soccer", 4.50, 1.0, 0),
+        ("cape_town_city", "stellenbosch", "PSL", "soccer", 3.10, 1.1, 1),
+    ]
+    bronze_verdicts: list[str] = []
+    for home, away, comp, sport, odds, ev, confirming in bronze_specpunt_fixtures:
+        spec = NarrativeSpec(
+            sport=sport,
+            competition=comp,
+            home_name=home.replace("_", " ").title(),
+            away_name=away.replace("_", " ").title(),
+            home_story_type="momentum",
+            away_story_type="setback",
+            home_form="WLLLW",
+            away_form="LWLLW",
+            outcome="home",
+            outcome_label=home.replace("_", " ").title(),
+            odds=odds,
+            bookmaker="Hollywoodbets",
+            ev_pct=ev,
+            fair_prob_pct=35.0,
+            support_level=confirming,
+            contradicting_signals=0,
+            evidence_class="speculative",
+            tone_band="cautious",
+            verdict_action="speculative punt",  # Force the cautious branch.
+            verdict_sizing="tiny exposure",
+            edge_tier="bronze",
+        )
+        bronze_verdicts.append(_render_verdict(spec))
+
+    # Sanity: verdicts generated.
+    assert len(bronze_verdicts) == 4
+    # The Bronze speculative_punt branch uses words like "punt", "small
+    # exposure" / "no hero call" — let's confirm at least 2/4 fire on
+    # Strong-band catalogue (since Bronze allows them, this proves the
+    # cautious register is in use).
+    bronze_with_register = [
+        v for v in bronze_verdicts if _has_strong_band_banned_vocab(v)
+    ]
+    assert len(bronze_with_register) >= 2, (
+        f"Bronze speculative_punt expected ≥2/4 verdicts using cautious-band "
+        f"register; got {len(bronze_with_register)}/4: "
+        f"{[v[:120] for v in bronze_verdicts]!r}"
+    )
+
+    # And confirm the validator helper accepts these Bronze cards (key AC-1
+    # tier-aware enforcement: Bronze tier short-circuits, returning empty hits).
+    from narrative_validator import _check_tier_band_tone
+
+    for v in bronze_verdicts:
+        hits, _hedging = _check_tier_band_tone(v, "bronze", "verdict_html")
+        assert hits == [], (
+            f"Bronze tier MUST be ALLOWED to use cautious-band vocabulary. "
+            f"Validator flagged hits {hits!r} on text {v[:100]!r}"
+        )
+
+
+def test_strong_band_w82_verdicts_no_hedging_conditional_openers():
+    """Diamond/Gold W82 verdicts MUST NOT open with hedging conditional clauses.
+
+    Brief AC-1: "Strong-band verdicts MUST NOT have their first clause end
+    with a comma followed by a hedging conjunction (but, however, though,
+    although, yet)."
+
+    The W82 holistic verdict templates compose the verdict in a single coherent
+    voice — no "X is the pick, but Y is uncertain" shape. This test asserts
+    that the templates themselves never produce that shape.
+    """
+    from narrative_validator import _check_hedging_conditional_opener
+
+    verdicts = _generate_30_verdicts()
+    strong_band_verdicts = verdicts[:12]  # Diamond + Gold
+    hedging_hits = [
+        (i, v[:120]) for i, v in enumerate(strong_band_verdicts)
+        if _check_hedging_conditional_opener(v)
+    ]
+    assert hedging_hits == [], (
+        f"Strong-band W82 verdicts MUST NOT open with hedging conditional "
+        f"clauses (comma + but/however/though/although/yet). Hits: {hedging_hits!r}"
+    )
