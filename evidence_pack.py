@@ -2255,10 +2255,15 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
     )
     # Sort vocabulary for deterministic prompt text (frozenset has no ordering).
     _analytical_vocab_list = ", ".join(sorted(ANALYTICAL_VOCABULARY))
-    _verdict_quality_lines = [
+    # FIX-PREGEN-STATIC-PREFIX-PURE-01 (locked 2026-04-28, Rule 22):
+    # Split _verdict_quality_lines into static (no per-match interpolation) and
+    # dynamic (per-match _verdict_char_floor + _tier_key diamond conditional).
+    # The static portion — including the SA VOICE rules block — moves above the
+    # cache_control split via output_guide_static_lines below; the dynamic
+    # portion stays below the split inside the PER-MATCH CONSTRAINTS block.
+    _verdict_quality_static_lines = [
         "",
         "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
-        f"- Verdict MUST be at least {_verdict_char_floor} characters long ({_tier_key} tier floor).",
         f"- TARGET band: {VERDICT_TARGET_LOW}–{VERDICT_TARGET_HIGH} characters. Hard max: {VERDICT_HARD_MAX} characters.",
         "- Verdict MUST use at least 3 distinct analytical vocabulary terms from this list:",
         f"  {_analytical_vocab_list}",
@@ -2280,8 +2285,12 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
         "- FORBIDDEN: 'proceed with caution', 'worth backing', 'value play', 'value here',",
         "  'can't lose', 'guaranteed', 'one to watch', 'smart money'.",
     ]
+    _verdict_quality_dynamic_lines = [
+        "",
+        f"- Verdict MUST be at least {_verdict_char_floor} characters long ({_tier_key} tier floor).",
+    ]
     if _tier_key == "diamond":
-        _verdict_quality_lines.append(
+        _verdict_quality_dynamic_lines.append(
             "- DIAMOND TIER ONLY: Do NOT begin the verdict with 'At <price>' "
             "or any price-prefix construction. Lead with analytical posture, not the price."
         )
@@ -2359,6 +2368,110 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "",
         ]
 
+    # FIX-PREGEN-STATIC-PREFIX-PURE-01 (locked 2026-04-28, Rule 19):
+    # Polish-path cache_control prefix MUST exceed model minimum (Sonnet 1024,
+    # Haiku 2048 tokens). Move all literal-content blocks (OUTPUT FORMAT,
+    # BANNED PHRASES, VERDICT BODY EXCLUSION, VERDICT QUALITY base) above the
+    # EVIDENCE PACK split sentinel so the cache_control directive in callers
+    # (pregenerate_narratives 2156/2194/2477) actually fires. Per-match
+    # interpolations (tone_band, verdict_action, bookmaker @ odds, _tier_key)
+    # stay in the dynamic block below the split. Net zero content change —
+    # only position. Pre-fix non-combat Sonnet prefix: 823 tokens (sub-min);
+    # post-fix target: 1500–1700 tokens.
+    if match_preview:
+        output_guide_static_lines = [
+            "",
+            "───────────── STYLE & OUTPUT GUIDE ─────────────",
+            "",
+            "Write exactly 4 sections in this order. Start directly with no preamble.",
+            "",
+            "📋 <b>The Setup</b>",
+            "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",
+            "If ESPN data is unavailable, pivot to: team strength ratings (use values VERBATIM from [TEAM RATINGS ANCHOR] — e.g. 'rated 150 points higher', then cite the exact numbers; NEVER invent or round any rating number), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. If TEAM RATINGS ANCHOR is not in the evidence pack, omit rating numbers entirely. Do NOT pivot to odds structure or line movements in The Setup.",
+            "STRICT BAN — The Setup section MUST NOT contain any of: 'bookmaker', 'odds', 'price', 'priced', 'implied', 'implied probability', 'implied chance', 'fair probability', 'fair value', 'expected value', 'model reads'. Decimal numbers in The Setup are allowed ONLY in metric phrases like 'X.X goals per game', 'X.X points per game', 'X.X runs per game'. Bookmaker names, odds quotes, and EV percentages belong in The Edge section, not The Setup. Express probabilities ONLY as qualitative descriptors — no integer percentages, no decimal probabilities. The Setup is for context (form, standings, injuries, ratings), not pricing.",
+            "RATING ANCHOR LAW (AUTOMATIC REJECTION IF VIOLATED): Any 4-digit Elo or Glicko-2 rating number cited in Setup MUST appear VERBATIM in [TEAM RATINGS ANCHOR]. Do NOT invent, estimate, or round rating values.",
+            "",
+            "🎯 <b>The Edge</b>",
+            "2-3 sentences. Analyse the matchup: which team holds the advantage and why.",
+            "Reference odds structure and SA bookmaker pricing to illustrate market expectation.",
+            "Do NOT make a betting recommendation. Do NOT mention sharp bookmakers.",
+            "",
+            "⚠️ <b>The Risk</b>",
+            "1-3 sentences. State what could swing the match the other way.",
+            "",
+            "🏆 <b>Verdict</b>",
+            "1-2 sentences. Give a match outlook — who you lean toward and how the match might play out.",
+            "Do NOT recommend a bet or mention bet sizing.",
+            "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — acknowledging it ('factor in the defensive uncertainty'), resolving it ('discount the rotation concern'), or addressing it ('despite the form gap, the home advantage holds'). Generic closers like 'all things considered' or 'on balance' are banned.",
+            "",
+            "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
+            "- Verdict MUST use at least 3 distinct analytical vocabulary terms from this list:",
+            f"  {_analytical_vocab_list}",
+            "- Verdict MUST NOT be a trivial shape (price-only openers, bare name-only shapes,",
+            "  or one-line verdicts that only restate the market price without positional language).",
+            "",
+            "BANNED PHRASES (automated rejection if used):",
+            "- 'proceed with caution', 'value play', 'grab it before', 'move fast'",
+            "- 'one to watch, not back', 'this one to watch', 'won't last forever'",
+            "- 'knockout football', 'knockout stakes', 'knockout stage'",
+            "- 'pure pricing call', 'thin support', 'numbers-only play'",
+            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
+            # Verdict body excludes betting telemetry. The Verdict closes with a
+            # friend's read on the match — manager + price + bookmaker + Risk-
+            # factor resolution. EV percentages, indicator counts, and line-
+            # movement language belong in The Edge or The Risk, not the Verdict.
+            "VERDICT BODY EXCLUSION (Rule 17 — automatic rejection if any of these appear in the Verdict):",
+            "- '+X% EV' / '% EV' (EV percentages live in The Edge, not the Verdict)",
+            "- 'indicators line up' / 'supporting indicator' (indicator counts live in The Edge)",
+            "- 'line movement' / 'adverse movement' (line-movement language lives in The Edge)",
+            "- 'price is stable' / 'price angle' / 'priced in' (meta-betting lives in The Edge)",
+            "- 'the lean is' (analytical jargon)",
+            "- 'supported by data' (flat, generic — use SA Braai Voice phrasing)",
+            "Verdict cites: outcome + price + bookmaker by name, Risk-factor resolution, tier-banded confidence vocabulary. SA Braai Voice anchored to verdict-generator/SKILL.md + brand-voice canon (BRAND-BIBLE-v3 §08–09 + COPYWRITING-DNA §6/§8).",
+        ]
+    else:
+        output_guide_static_lines = [
+            "",
+            "───────────── STYLE & OUTPUT GUIDE ─────────────",
+            "",
+            "Write exactly 4 sections in this order. Start directly with no preamble.",
+            "",
+            "📋 <b>The Setup</b>",
+            "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",
+            "If ESPN data is unavailable, pivot to: team strength ratings (use values VERBATIM from [TEAM RATINGS ANCHOR] — e.g. 'rated 150 points higher', then cite the exact numbers; NEVER invent or round any rating number), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. If TEAM RATINGS ANCHOR is not in the evidence pack, omit rating numbers entirely. Do NOT pivot to odds structure or line movements in The Setup.",
+            "STRICT BAN — The Setup section MUST NOT contain any of: 'bookmaker', 'odds', 'price', 'priced', 'implied', 'implied probability', 'implied chance', 'fair probability', 'fair value', 'expected value', 'model reads'. Decimal numbers in The Setup are allowed ONLY in metric phrases like 'X.X goals per game', 'X.X points per game', 'X.X runs per game'. Bookmaker names, odds quotes, and EV percentages belong in The Edge section, not The Setup. Express probabilities ONLY as qualitative descriptors — no integer percentages, no decimal probabilities. The Setup is for context (form, standings, injuries, ratings), not pricing.",
+            "RATING ANCHOR LAW (AUTOMATIC REJECTION IF VIOLATED): Any 4-digit Elo or Glicko-2 rating number cited in Setup MUST appear VERBATIM in [TEAM RATINGS ANCHOR]. Do NOT invent, estimate, or round rating values.",
+            "",
+            "🎯 <b>The Edge</b>",
+            "2-3 sentences. Explain the pricing gap using edge analysis and SA bookmaker pricing only.",
+            "Do NOT mention sharp bookmakers or sharp prices. Any sharp context is injected separately.",
+            "",
+            "⚠️ <b>The Risk</b>",
+            "1-3 sentences. State what could make this angle wrong.",
+            "If evidence is thin, say that limited evidence depth is part of the risk.",
+            "",
+            "🏆 <b>Verdict</b>",
+            "1-2 sentences. State the action and sizing guidance without upgrading it.",
+            "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — resolving it ('discount the injury concern'), hedging on it ('live with the squad-rotation risk'), or pricing it ('the form gap is already in the number'). Generic closers like 'all things considered' or 'on balance' are banned. The card must read as one analytical voice, not two disconnected sections.",
+            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
+            # Verdict body excludes betting telemetry. EV/indicator-count/line-
+            # movement language belongs in The Edge, not the Verdict.
+            "VERDICT BODY EXCLUSION (Rule 17 — automatic rejection if any of these appear in the Verdict):",
+            "- '+X% EV' / '% EV' (EV percentages live in The Edge, not the Verdict)",
+            "- 'indicators line up' / 'supporting indicator' (indicator counts live in The Edge)",
+            "- 'line movement' / 'adverse movement' (line-movement language lives in The Edge)",
+            "- 'price is stable' / 'price angle' / 'priced in' (meta-betting lives in The Edge)",
+            "- 'the lean is' (analytical jargon)",
+            "- 'supported by data' (flat, generic — use SA Braai Voice phrasing)",
+            "Verdict cites: outcome + price + bookmaker by name, Risk-factor resolution, tier-banded confidence vocabulary. SA Braai Voice anchored to verdict-generator/SKILL.md + brand-voice canon (BRAND-BIBLE-v3 §08–09 + COPYWRITING-DNA §6/§8).",
+            # FIX-PREGEN-STATIC-PREFIX-PURE-01 — verdict-quality static base
+            # (SA VOICE rules block + literal verdict-shape constraints)
+            # moved from below the EVIDENCE PACK split per INV G4. The
+            # dynamic per-tier lines (_verdict_char_floor + diamond
+            # conditional) stay below the split inside PER-MATCH CONSTRAINTS.
+            *_verdict_quality_static_lines,
+        ]
+
     prompt_parts = role_lines + [
         "RULES (violation = AUTOMATIC REJECTION — no exceptions):",
         "1. Every factual claim must trace to a specific field in the EVIDENCE PACK below.",
@@ -2373,6 +2486,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
         "10. Never use banned filler such as 'thin support', 'pure pricing call', or 'supporting evidence is thin'. Prefer 'limited support', 'price-led angle', or evidence-specific wording. Do NOT use the phrases 'sharp market pricing' or 'worth backing'.",
         "11. Do NOT use the phrases 'knockout football', 'knockout stakes', 'knockout stage', 'knockout tie', 'knockout clash'. UCL league-phase matches are NOT knockouts. Describe match dynamics, not format labels.",
         *_combat_law_lines,
+    ] + output_guide_static_lines + [
         "",
         "───────────── EVIDENCE PACK ─────────────",
         "",
@@ -2433,11 +2547,16 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
         else "No verified H2H exists. Do NOT mention head-to-head, last meeting, meeting counts, or historical scores at all."
     )
 
+    # FIX-PREGEN-STATIC-PREFIX-PURE-01 (locked 2026-04-28, Rule 19):
+    # Per-match interpolation block — moved BELOW the EVIDENCE PACK split so
+    # the static OUTPUT FORMAT / BANNED PHRASES / VERDICT BODY EXCLUSION
+    # blocks above the split clear the cache_control minimum-token threshold.
+    # See output_guide_static_lines construction earlier in this function.
     if match_preview:
         # Non-edge match preview: no betting recommendation, no verdict constraint.
         prompt_parts.extend([
             "",
-            "───────────── CONSTRAINTS ─────────────",
+            "───────────── PER-MATCH CONSTRAINTS ─────────────",
             "",
             f"TONE BAND: {spec.tone_band}",
             f"Allowed phrases: {', '.join(tone_band['allowed']) or 'None'}",
@@ -2452,59 +2571,11 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "",
             "H2H GUARDRAIL:",
             h2h_guardrail,
-            "",
-            "───────────── OUTPUT FORMAT ─────────────",
-            "",
-            "Write exactly 4 sections in this order. Start directly with no preamble.",
-            "",
-            "📋 <b>The Setup</b>",
-            "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",
-            "If ESPN data is unavailable, pivot to: team strength ratings (use values VERBATIM from [TEAM RATINGS ANCHOR] — e.g. 'rated 150 points higher', then cite the exact numbers; NEVER invent or round any rating number), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. If TEAM RATINGS ANCHOR is not in the evidence pack, omit rating numbers entirely. Do NOT pivot to odds structure or line movements in The Setup.",
-            "STRICT BAN — The Setup section MUST NOT contain any of: 'bookmaker', 'odds', 'price', 'priced', 'implied', 'implied probability', 'implied chance', 'fair probability', 'fair value', 'expected value', 'model reads'. Decimal numbers in The Setup are allowed ONLY in metric phrases like 'X.X goals per game', 'X.X points per game', 'X.X runs per game'. Bookmaker names, odds quotes, and EV percentages belong in The Edge section, not The Setup. Express probabilities ONLY as qualitative descriptors — no integer percentages, no decimal probabilities. The Setup is for context (form, standings, injuries, ratings), not pricing.",
-            "RATING ANCHOR LAW (AUTOMATIC REJECTION IF VIOLATED): Any 4-digit Elo or Glicko-2 rating number cited in Setup MUST appear VERBATIM in [TEAM RATINGS ANCHOR]. Do NOT invent, estimate, or round rating values.",
-            "",
-            "🎯 <b>The Edge</b>",
-            "2-3 sentences. Analyse the matchup: which team holds the advantage and why.",
-            "Reference odds structure and SA bookmaker pricing to illustrate market expectation.",
-            "Do NOT make a betting recommendation. Do NOT mention sharp bookmakers.",
-            "",
-            "⚠️ <b>The Risk</b>",
-            "1-3 sentences. State what could swing the match the other way.",
-            "",
-            "🏆 <b>Verdict</b>",
-            "1-2 sentences. Give a match outlook — who you lean toward and how the match might play out.",
-            "Do NOT recommend a bet or mention bet sizing.",
-            "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — acknowledging it ('factor in the defensive uncertainty'), resolving it ('discount the rotation concern'), or addressing it ('despite the form gap, the home advantage holds'). Generic closers like 'all things considered' or 'on balance' are banned.",
-            "",
-            "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
-            "- Verdict MUST use at least 3 distinct analytical vocabulary terms from this list:",
-            f"  {_analytical_vocab_list}",
-            "- Verdict MUST NOT be a trivial shape (price-only openers, bare name-only shapes,",
-            "  or one-line verdicts that only restate the market price without positional language).",
-            "",
-            "BANNED PHRASES (automated rejection if used):",
-            "- 'proceed with caution', 'value play', 'grab it before', 'move fast'",
-            "- 'one to watch, not back', 'this one to watch', 'won't last forever'",
-            "- 'knockout football', 'knockout stakes', 'knockout stage'",
-            "- 'pure pricing call', 'thin support', 'numbers-only play'",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
-            # Verdict body excludes betting telemetry. The Verdict closes with a
-            # friend's read on the match — manager + price + bookmaker + Risk-
-            # factor resolution. EV percentages, indicator counts, and line-
-            # movement language belong in The Edge or The Risk, not the Verdict.
-            "VERDICT BODY EXCLUSION (Rule 17 — automatic rejection if any of these appear in the Verdict):",
-            "- '+X% EV' / '% EV' (EV percentages live in The Edge, not the Verdict)",
-            "- 'indicators line up' / 'supporting indicator' (indicator counts live in The Edge)",
-            "- 'line movement' / 'adverse movement' (line-movement language lives in The Edge)",
-            "- 'price is stable' / 'price angle' / 'priced in' (meta-betting lives in The Edge)",
-            "- 'the lean is' (analytical jargon)",
-            "- 'supported by data' (flat, generic — use SA Braai Voice phrasing)",
-            "Verdict cites: outcome + price + bookmaker by name, Risk-factor resolution, tier-banded confidence vocabulary. SA Braai Voice anchored to verdict-generator/SKILL.md + brand-voice canon (BRAND-BIBLE-v3 §08–09 + COPYWRITING-DNA §6/§8).",
         ])
     else:
         prompt_parts.extend([
             "",
-            "───────────── CONSTRAINTS ─────────────",
+            "───────────── PER-MATCH CONSTRAINTS ─────────────",
             "",
             f"TONE BAND: {spec.tone_band}",
             f"Allowed phrases: {', '.join(tone_band['allowed']) or 'None'}",
@@ -2522,41 +2593,9 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "H2H GUARDRAIL:",
             h2h_guardrail,
             "",
-            "───────────── OUTPUT FORMAT ─────────────",
-            "",
-            "Write exactly 4 sections in this order. Start directly with no preamble.",
-            "",
-            "📋 <b>The Setup</b>",
-            "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",
-            "If ESPN data is unavailable, pivot to: team strength ratings (use values VERBATIM from [TEAM RATINGS ANCHOR] — e.g. 'rated 150 points higher', then cite the exact numbers; NEVER invent or round any rating number), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. If TEAM RATINGS ANCHOR is not in the evidence pack, omit rating numbers entirely. Do NOT pivot to odds structure or line movements in The Setup.",
-            "STRICT BAN — The Setup section MUST NOT contain any of: 'bookmaker', 'odds', 'price', 'priced', 'implied', 'implied probability', 'implied chance', 'fair probability', 'fair value', 'expected value', 'model reads'. Decimal numbers in The Setup are allowed ONLY in metric phrases like 'X.X goals per game', 'X.X points per game', 'X.X runs per game'. Bookmaker names, odds quotes, and EV percentages belong in The Edge section, not The Setup. Express probabilities ONLY as qualitative descriptors — no integer percentages, no decimal probabilities. The Setup is for context (form, standings, injuries, ratings), not pricing.",
-            "RATING ANCHOR LAW (AUTOMATIC REJECTION IF VIOLATED): Any 4-digit Elo or Glicko-2 rating number cited in Setup MUST appear VERBATIM in [TEAM RATINGS ANCHOR]. Do NOT invent, estimate, or round rating values.",
-            "",
-            "🎯 <b>The Edge</b>",
-            "2-3 sentences. Explain the pricing gap using edge analysis and SA bookmaker pricing only.",
-            "Do NOT mention sharp bookmakers or sharp prices. Any sharp context is injected separately.",
             f"Name the bookmaker, odds, and the capped verdict posture for {spec.verdict_action}.",
-            "",
-            "⚠️ <b>The Risk</b>",
-            "1-3 sentences. State what could make this angle wrong.",
-            "If evidence is thin, say that limited evidence depth is part of the risk.",
-            "",
-            "🏆 <b>Verdict</b>",
-            "1-2 sentences. State the action and sizing guidance without upgrading it.",
             f"YOUR VERDICT MUST recommend {getattr(spec, 'bookmaker', '')} at {getattr(spec, 'odds', '')}. This is NON-NEGOTIABLE. Do not substitute any other bookmaker or price.",
-            "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — resolving it ('discount the injury concern'), hedging on it ('live with the squad-rotation risk'), or pricing it ('the form gap is already in the number'). Generic closers like 'all things considered' or 'on balance' are banned. The card must read as one analytical voice, not two disconnected sections.",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
-            # Verdict body excludes betting telemetry. EV/indicator-count/line-
-            # movement language belongs in The Edge, not the Verdict.
-            "VERDICT BODY EXCLUSION (Rule 17 — automatic rejection if any of these appear in the Verdict):",
-            "- '+X% EV' / '% EV' (EV percentages live in The Edge, not the Verdict)",
-            "- 'indicators line up' / 'supporting indicator' (indicator counts live in The Edge)",
-            "- 'line movement' / 'adverse movement' (line-movement language lives in The Edge)",
-            "- 'price is stable' / 'price angle' / 'priced in' (meta-betting lives in The Edge)",
-            "- 'the lean is' (analytical jargon)",
-            "- 'supported by data' (flat, generic — use SA Braai Voice phrasing)",
-            "Verdict cites: outcome + price + bookmaker by name, Risk-factor resolution, tier-banded confidence vocabulary. SA Braai Voice anchored to verdict-generator/SKILL.md + brand-voice canon (BRAND-BIBLE-v3 §08–09 + COPYWRITING-DNA §6/§8).",
-            *_verdict_quality_lines,
+            *_verdict_quality_dynamic_lines,
         ])
     if return_split:
         _sep = "───────────── EVIDENCE PACK ─────────────"
