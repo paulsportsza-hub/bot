@@ -21212,12 +21212,14 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
         log.warning("POLISH REJECT: combat-lore (%s)", ", ".join(_combat_lore_reasons))
         return False
 
-    # 8f. FIX-NARRATIVE-VENUE-LEAK-01: stadium/venue name hallucination ban.
-    # Venue data is NOT in the evidence pack — every mention is fabricated.
-    # Applies to ALL 4 sections (Setup/Edge/Risk/Verdict) of the polished output.
+    # 8f. BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01: verified-list
+    # venue scanner. Stadium/venue mentions allowed only when matching pack.venue
+    # (case-insensitive) or appearing in the canonical stadiums.json fallback
+    # set when pack.venue is empty. Cross-fixture inventions are LEAK.
+    # Applies to ALL 4 sections (Setup/Edge/Risk/Verdict) of polished output.
     try:
         from narrative_spec import find_venue_leaks as _find_venue_leaks
-        _venue_leaks = _find_venue_leaks(polished)
+        _venue_leaks = _find_venue_leaks(polished, evidence_pack)
         if _venue_leaks:
             log.warning("POLISH REJECT: venue-leak (%s)", ", ".join(_venue_leaks))
             return False

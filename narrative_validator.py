@@ -546,10 +546,12 @@ def _validate_narrative_for_persistence(
         BANNED_NARRATIVE_PHRASES = []  # type: ignore[assignment]
 
     # ── Gate 1: Venue leaks in narrative_html (LB-1 closure) ─────────────────
-    # Scan the FULL narrative — find_venue_leaks does not differentiate sections,
-    # which is desirable here (Anfield in Verdict is just as wrong as Anfield in Setup).
+    # BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01: verified-list mode.
+    # find_venue_leaks(text, pack) allows pack.venue (case-insensitive) and the
+    # canonical stadiums.json fallback when pack.venue is empty. Cross-fixture
+    # inventions of curated venues remain a leak.
     if narrative_html:
-        venues = find_venue_leaks(narrative_html)
+        venues = find_venue_leaks(narrative_html, evidence_pack)
         if venues:
             failures.append(
                 ValidationFailure(
@@ -739,8 +741,9 @@ def _validate_narrative_for_persistence(
     # ── Gate 6: Venue leaks in verdict_html (explicit) ──────────────────────
     # min_verdict_quality already scans for venues but only reports a bool.
     # Surface the explicit leak so the caller log carries the venue names.
+    # BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01: verified-list mode.
     if verdict_html:
-        verdict_venues = find_venue_leaks(verdict_html)
+        verdict_venues = find_venue_leaks(verdict_html, evidence_pack)
         if verdict_venues:
             # Don't double-fail if Gate 1 already caught it via narrative_html.
             already_failed = any(

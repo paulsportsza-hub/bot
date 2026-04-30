@@ -265,6 +265,7 @@ class EvidencePack:
     sources_available: int = 0
     sources_total: int = 8
     coverage_metrics: CoverageMetrics | None = field(default=None)
+    venue: str = ""
 
 
 def _utc_now_iso() -> str:
@@ -1367,6 +1368,7 @@ async def build_evidence_pack(
         built_at=built_at,
         edge_state=_build_edge_state(edge_result),
         espn_context=_wrap_espn_context(ctx),
+        venue=str(ctx.get("venue", "") or "").strip(),
     )
 
     sa_task = _run_with_timeout(
@@ -2680,6 +2682,13 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
         f"SPORT: {pack.sport}",
         f"EVIDENCE RICHNESS: {pack.richness_score} ({pack.sources_available}/{pack.sources_total} sources)",
     ]
+
+    # BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01 (AC-3): emit
+    # VENUE only when populated by _fetch_espn_context. Lives in the
+    # dynamic per-match block (below the EVIDENCE PACK split sentinel)
+    # alongside MATCH / COMPETITION / SPORT / EVIDENCE RICHNESS.
+    if pack.venue:
+        prompt_parts.append(f"VENUE: {pack.venue}")
 
     for title, body in sections:
         prompt_parts.extend(["", f"[{title}]", body])

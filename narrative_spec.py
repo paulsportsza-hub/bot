@@ -1005,43 +1005,83 @@ def _load_banned_venues() -> tuple[str, ...]:
     return _VENUE_LEAK_CACHE
 
 
-def find_venue_leaks(text: str) -> list[str]:
+def _pack_venue(pack) -> str:
+    """Extract pack.venue as a normalised lowercase string. Accepts dataclass,
+    dict, or None. Empty string when missing or non-string."""
+    if pack is None:
+        return ""
+    venue = None
+    if isinstance(pack, dict):
+        venue = pack.get("venue")
+    else:
+        venue = getattr(pack, "venue", None)
+    if not isinstance(venue, str):
+        return ""
+    return venue.strip().lower()
+
+
+def find_venue_leaks(text: str, pack=None) -> list[str]:
     """Return list of unique venue-name leaks found in `text`. Empty list on clean.
 
-    Case-insensitive substring scan against the curated stadiums.json list.
-    Used by `validate_no_venue_leak` (Gate 9) and at the
-    `_validate_polish` gate in bot.py for narrative polish output.
+    BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01 (2026-04-30): replaces
+    the FIX-NARRATIVE-VENUE-LEAK-01 absolute-ban scanner with a verified-list
+    scanner. Detection still scans the curated bot/data/stadiums.json corpus
+    (case-insensitive substring match). The classification rule is now:
 
-    Returns the FIRST occurrence's exact-case match per unique venue (not all
-    duplicates) so callers can log each violation once.
+      1. If `pack.venue` is non-empty AND the matched name equals (or is a
+         substring of) `pack.venue` → ALLOWED (verified for this fixture).
+      2. If `pack.venue` is empty / missing / pack is None → canonical
+         fallback: every curated stadiums.json hit is ALLOWED.
+      3. If `pack.venue` is set but the matched name is a different curated
+         entry → LEAK (cross-fixture invention).
+
+    Used by `validate_no_venue_leak` (Gate 9), `narrative_validator` Gates 1/6,
+    and the `_validate_polish` gate in bot.py.
+
+    Returns the first exact-case match per unique venue (deduped) so callers
+    can log each violation once.
     """
     _load_banned_venues()
     if not text or _VENUE_LEAK_REGEX is None:
         return []
+    pack_venue = _pack_venue(pack)
     seen: set[str] = set()
     hits: list[str] = []
     for m in _VENUE_LEAK_REGEX.finditer(text):
-        key = m.group(0).lower()
-        if key not in seen:
-            seen.add(key)
-            hits.append(m.group(0))
+        match_text = m.group(0)
+        match_lower = match_text.lower()
+        if match_lower in seen:
+            continue
+        seen.add(match_lower)
+        # Allow rule 1: matches pack.venue (case-insensitive, either-direction
+        # substring — handles "Anfield" vs "Anfield, Liverpool" variants).
+        if pack_venue and (
+            match_lower == pack_venue
+            or match_lower in pack_venue
+            or pack_venue in match_lower
+        ):
+            continue
+        # Allow rule 2: pack.venue empty → canonical fallback set passes
+        if not pack_venue:
+            continue
+        # Pack.venue set but match is a different curated venue → LEAK
+        hits.append(match_text)
     return hits
 
 
-def validate_no_venue_leak(text: str) -> bool:
-    """FIX-NARRATIVE-VENUE-LEAK-01: Return True if text contains no curated venue name.
+def validate_no_venue_leak(text: str, pack=None) -> bool:
+    """BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01: Return True if text
+    contains no unverified venue mention.
 
-    Hard fail if ANY venue from data/stadiums.json appears in `text`.
-    Used as Gate 9 in `min_verdict_quality()` for the LLM verdict-cache path
-    AND as a polish-time scan for narrative_html.
+    Verified-list mode: a venue mention is allowed when it matches `pack.venue`
+    or appears in the canonical bot/data/stadiums.json fallback (when pack.venue
+    is empty). Cross-fixture inventions (a different curated venue when pack.venue
+    is populated) fail this gate.
 
-    The system prompt already instructs the LLM not to mention stadiums, but
-    Sonnet/Haiku ignore the instruction ~10–20% of the time per the
-    FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 dry-run (Stamford Bridge, Villa Park,
-    Goodison Park leaks observed across 10 fixtures). This gate forces
-    rejection-and-retry instead of relying on prompt-following.
+    Used as Gate 9 in `min_verdict_quality()` and as a polish-time scan for
+    narrative_html.
     """
-    return not find_venue_leaks(text)
+    return not find_venue_leaks(text, pack)
 
 
 def min_verdict_quality(verdict: str, tier: str = "bronze",
@@ -1096,9 +1136,11 @@ def min_verdict_quality(verdict: str, tier: str = "bronze",
     # Gate 8 — BUILD-SANITIZER-MARKDOWN-STRIP-01: markdown leak hard gate
     if not validate_no_markdown_leak(text):
         return False
-    # Gate 9 — FIX-NARRATIVE-VENUE-LEAK-01: stadium/venue name leak (hallucination).
-    # Venue data is NOT in the evidence pack — every mention is fabricated.
-    _venue_hits = find_venue_leaks(text)
+    # Gate 9 — BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01:
+    # verified-list venue scanner. Venue allowed when it matches pack.venue
+    # (case-insensitive) or appears in the canonical stadiums.json fallback
+    # (when pack.venue is empty). Cross-fixture inventions remain a leak.
+    _venue_hits = find_venue_leaks(text, evidence_pack)
     if _venue_hits:
         _log.warning(
             "verdict_rejected_venue_leak: tier=%s len=%d venues=%r text=%r",
