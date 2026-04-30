@@ -285,17 +285,10 @@ def test_e2e_diamond_critical_refuse_on_cautious_punt():
 
 
 def test_e2e_silver_major_quarantine_on_limited_edge():
-    """Silver verdict with `limited edge` returns MAJOR quarantine.
-
-    FIX-VERDICT-CLOSURE-AND-BREAKDOWN-VISIBILITY-01 amendment: the original
-    fixture closed on "Small-to-standard stake." which fails the new AC-1
-    closure rule (no action verb). Reordered so the action sentence is the
-    closing sentence — the strong_band_tone gate still fires on the
-    mid-sentence "limited edge" hit, preserving the original test intent.
-    """
+    """Silver verdict with `limited edge` returns MAJOR quarantine."""
     verdict_html = (
-        "Limited edge on this one, but the price has room. "
-        "Take Brighton at 1.78 with Betway — small-to-standard stake."
+        "Take Brighton at 1.78 with Betway — limited edge on this one, "
+        "but the price has room. Small-to-standard stake."
     )
     content = {
         "narrative_html": "",
@@ -304,9 +297,7 @@ def test_e2e_silver_major_quarantine_on_limited_edge():
         "narrative_source": "w82",
     }
     result = _validate_narrative_for_persistence(
-        content,
-        evidence_pack={"home_team": "Brighton", "away_team": "Wolves"},
-        edge_tier="silver",
+        content, evidence_pack=None, edge_tier="silver",
         source_label="w82",
     )
     # Silver hit = MAJOR (not CRITICAL). Result still fails (passed=False)
@@ -314,9 +305,6 @@ def test_e2e_silver_major_quarantine_on_limited_edge():
     assert result.passed is False
     assert result.severity == "MAJOR"
     assert "strong_band_tone" in {f.gate for f in result.failures}
-    # AC-1 closure rule should NOT fire on this fixture — closing sentence
-    # carries action verb + team + odds.
-    assert "verdict_closure_rule" not in {f.gate for f in result.failures}
 
 
 def test_e2e_bronze_passes_with_cautious_vocabulary():

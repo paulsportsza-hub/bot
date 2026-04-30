@@ -14407,22 +14407,9 @@ def _build_hot_tips_detail_rows(
     rows: list[list[InlineKeyboardButton]] = []
     if primary_button is not None:
         rows.append([primary_button])
-    # Full AI Breakdown button — only when has_narrative AND visibility gate
-    # passes (FIX-VERDICT-CLOSURE-AND-BREAKDOWN-VISIBILITY-01 AC-3).
-    # The visibility gate enforces narrative_source ∈ {w84, w84-haiku-fallback}
-    # plus per-section quality thresholds (≥200 chars + 3 entities for Setup,
-    # ≥100 chars + bookmaker + odds for Edge, ≥100 chars + risk noun for Risk).
-    # Hides the button on W82 baselines, quarantined / deferred rows, and any
-    # row whose sections fail quality. user_tier presence is still required
-    # so the gate doesn't fire on contexts that don't pass it (e.g. early
-    # bootstrap callsites).
-    _show_breakdown_btn = (
-        has_narrative
-        and user_tier is not None
-        and bool(match_key)
-        and _breakdown_button_visible(match_key)
-    )
-    if _show_breakdown_btn:
+    # Full AI Breakdown button — only when has_narrative (W82-quality Sonnet narrative exists)
+    # and user_tier is explicitly passed (main analysis view)
+    if has_narrative and user_tier is not None and match_key:
         _bk = _shorten_cb_key(match_key, max_len=64 - len("edge:breakdown:"))
         if user_tier == "diamond":
             rows.append([InlineKeyboardButton(
@@ -14941,99 +14928,6 @@ def _has_any_cached_narrative(match_id: str) -> bool:
             return False
         finally:
             conn.close()
-    except Exception:
-        return False
-
-
-def _breakdown_button_visible(match_id: str) -> bool:
-    """FIX-VERDICT-CLOSURE-AND-BREAKDOWN-VISIBILITY-01 (2026-04-29) — AC-3.
-
-    Return True iff the "🤖 Full AI Breakdown" button should be visible for
-    this match. Stricter than ``_has_any_cached_narrative`` — that function
-    gates content reachability (Rule 20 mechanical-consistency); this one
-    gates BUTTON visibility per Paul's directive: "rather don't show AI
-    breakdown unless there's something worth a monthly subscription behind
-    it because breaking our image-only rule and showing this vague, generic
-    crap is honestly worse than the alternative."
-
-    Five conditions (all must hold):
-      1. narrative_source IN ('w84','w84-haiku-fallback') — polish landed.
-      2. status IS NULL OR status NOT IN ('quarantined','deferred').
-      3. Setup section ≥ 200 chars + ≥ 3 named entities.
-      4. Edge section ≥ 100 chars + ≥ 1 bookmaker name + ≥ 1 odds shape.
-      5. Risk section ≥ 100 chars + ≥ 1 specific risk noun.
-
-    Implementation
-    --------------
-    Single indexed PK SELECT against ``narrative_cache``. Best-effort —
-    any DB error returns False (button hidden, baseline content remains
-    reachable via synthesis-on-tap for users who reach the breakdown
-    surface through other paths).
-
-    Latency: typically 5-30ms (single PK lookup + narrative_html parse).
-    Acceptable as inline sync call inside keyboard builders.
-    """
-    if not match_id:
-        return False
-    try:
-        from card_data import compute_breakdown_visibility as _cbv
-        from db_connection import get_connection as _gc
-        conn = _gc(_NARRATIVE_DB_PATH, timeout_ms=1500)
-        try:
-            try:
-                row = conn.execute(
-                    "SELECT narrative_html, narrative_source, "
-                    "       COALESCE(status, '') AS status "
-                    "FROM narrative_cache "
-                    "WHERE match_id = ? "
-                    "  AND COALESCE(quarantined, 0) = 0 "
-                    "  AND narrative_html IS NOT NULL "
-                    "  AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0 "
-                    "LIMIT 1",
-                    (match_id,),
-                ).fetchone()
-            except Exception:
-                # Older DBs may lack the status column — fall back without it.
-                row = conn.execute(
-                    "SELECT narrative_html, narrative_source, '' AS status "
-                    "FROM narrative_cache "
-                    "WHERE match_id = ? "
-                    "  AND narrative_html IS NOT NULL "
-                    "  AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0 "
-                    "LIMIT 1",
-                    (match_id,),
-                ).fetchone()
-            if not row:
-                return False
-            narrative_html, narrative_source, status = row
-            # Try to extract home/away from match_id for evidence_pack so the
-            # named-entity counter has team names to match against. Mirrors the
-            # extraction used in card_data.build_ai_breakdown_data.
-            import re as _re_v
-            home_team = ""
-            away_team = ""
-            mid_nodate = _re_v.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_id)
-            if "_vs_" in mid_nodate:
-                _h_raw, _a_raw = mid_nodate.split("_vs_", 1)
-                home_team = " ".join(w.capitalize() for w in _h_raw.split("_"))
-                away_team = " ".join(w.capitalize() for w in _a_raw.split("_"))
-            visible = _cbv(
-                {
-                    "narrative_html": narrative_html,
-                    "narrative_source": narrative_source,
-                    "status": status,
-                },
-                {
-                    "home_team": home_team,
-                    "away_team": away_team,
-                },
-            )
-            return bool(visible)
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
     except Exception:
         return False
 
@@ -24363,20 +24257,11 @@ def _build_game_buttons(
     if primary_button is not None:
         buttons.append([primary_button])
 
-    # Full AI Breakdown button — gated by has_narrative (Rule 20 read-side
-    # consistency) AND visibility (FIX-VERDICT-CLOSURE-AND-BREAKDOWN-VISIBILITY-01
-    # AC-3). The visibility gate enforces narrative_source ∈ {w84,
-    # w84-haiku-fallback} plus per-section quality thresholds (≥200 chars + 3
-    # entities for Setup, ≥100 chars + bookmaker + odds for Edge, ≥100 chars
-    # + risk noun for Risk). Hides the button on W82 baselines, quarantined /
-    # deferred rows, and any row whose sections fail quality.
+    # Full AI Breakdown button — only when a W82-quality Sonnet narrative exists.
+    # has_narrative must be explicitly True; source=="edge_picks" no longer overrides.
     # "edge:breakdown:" is 15 chars → Telegram 64-byte limit leaves max 49 chars for the key.
     _BREAKDOWN_KEY_MAX = 64 - len("edge:breakdown:")  # 49
-    _show_breakdown = (
-        has_narrative
-        and bool(match_key)
-        and _breakdown_button_visible(match_key)
-    )
+    _show_breakdown = has_narrative
     _breakdown_key = _shorten_cb_key(match_key, max_len=_BREAKDOWN_KEY_MAX) if (match_key and _show_breakdown) else ""
     if _breakdown_key:
         if user_tier == "diamond":
@@ -24542,7 +24427,6 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
     # polish-failure window — show the "updating" banner instead.
     if isinstance(_bd, dict) and _bd.get("deferred"):
         _bd_reason = "quarantine" if _bd.get("quarantine_reason") else "defer"
-        _bd_tier_lower = (_bd.get("edge_tier") or "").lower()
         log.info(
             "FIX-AI-BREAKDOWN-DEFERRED-PLACEHOLDER-RENDER-01 PlaceholderServed "
             "match_id=%s reason=%s tier=%s",
@@ -24551,21 +24435,10 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
             _bd.get("edge_tier", ""),
         )
         _bd_back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
-        # FIX-VERDICT-CLOSURE-AND-BREAKDOWN-VISIBILITY-01 (2026-04-29) — AC-4:
-        # tier-aware placeholder copy. Diamond / Gold get tier-specific text;
-        # Silver / Bronze fall back to generic "full breakdown" (per AC-3 the
-        # visibility gate should hide the button on non-premium tiers anyway,
-        # so the generic copy is a defence-in-depth fallback).
-        if _bd_tier_lower == "diamond":
-            _bd_tier_label = "Diamond breakdown"
-        elif _bd_tier_lower == "gold":
-            _bd_tier_label = "Gold breakdown"
-        else:
-            _bd_tier_label = "breakdown"
         _placeholder_msg = (
             "🔄 <b>AI Breakdown updating</b>\n\n"
             "Our analyst polish for this premium card is regenerating right now. "
-            f"Refresh in a few minutes — the full {_bd_tier_label} will be ready."
+            "Refresh in a few minutes — the full Diamond breakdown will be ready."
         )
         await _serve_response(
             query,
