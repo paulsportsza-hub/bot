@@ -1,5 +1,3 @@
-<!-- VARIANT: LIST -->
-<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -9,85 +7,162 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root { --text-secondary: #B3B3B3; }
         html, body { margin: 0; padding: 0; background: #000000; }
-        body {
-            font-family: 'Inter', -apple-system, system-ui, sans-serif;
-            width: 480px; padding: 2px; box-sizing: content-box;
-        }
-        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; }
+
+        /* Header — founding-strong orange glow */
         .header {
-            text-align: center; padding: 22px 20px 14px;
-            background: linear-gradient(180deg, #0A0800, #141000);
-            border-bottom: 1px solid #F7931A60;
+            position: relative; text-align: center;
+            padding: 20px 20px 14px;
+            isolation: isolate; overflow: hidden;
         }
-        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
-        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .logo-glow {
+            position: absolute; inset: -10px 0 0 0; pointer-events: none; z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 60% 100% at 50% 30%,
+                #F7931A55 0%, #F7931A22 45%, #F7931A08 70%, transparent 100%);
+        }
+        .logo-glow-screen {
+            position: absolute; inset: 0; pointer-events: none; z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 36% 65% at 50% 30%,
+                #F7931A88 0%, #F7931A33 50%, transparent 80%);
+        }
+        .header > .logo-img, .header > .logo-fallback,
+        .header > .orange-bar, .header > .title, .header > .subline { position: relative; z-index: 1; }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
         .orange-bar {
             height: 3px;
-            background: linear-gradient(90deg, #F7931A, #FFBE45, #FFD700);
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
             margin: 10px 20px; border-radius: 2px;
         }
-        .title { font-size: 14px; font-weight: 700; color: #FFBE45; letter-spacing: 3px; }
-        .body { padding: 20px; }
-        .slot-block {
-            text-align: center; margin-bottom: 20px;
-            background: linear-gradient(135deg, #1A1200, #2A1E00);
-            border: 1px solid #FFD70050; border-radius: 12px;
-            padding: 20px;
+        .title {
+            font-size: 14px; font-weight: 800; color: #F7931A; letter-spacing: 3px;
+            display: inline-flex; align-items: center; gap: 8px; justify-content: center;
+            margin-bottom: 5px;
         }
-        .slot-label { font-size: 11px; color: #F7931A; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; }
+        .title .gift { font-size: 16px; line-height: 1; }
+        .title .check {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 18px; height: 18px;
+            background: #5DD68F; color: #000; border-radius: 50%;
+            font-size: 11px; font-weight: 800; line-height: 1;
+        }
+        .subline { font-size: 11px; color: var(--text-secondary); font-weight: 400; }
+
+        /* Body */
+        .body { padding: 16px 20px 18px; }
+
+        /* Slot hero block — orange left/right + internal glow */
+        .slot-hero {
+            position: relative;
+            text-align: center;
+            background: linear-gradient(135deg, #1A1200, #211800);
+            border: 1px solid #F7931A55;
+            border-left: 3px solid #F7931A; border-right: 3px solid #F7931A;
+            border-radius: 12px;
+            padding: 14px 16px 13px;
+            margin-bottom: 12px;
+            overflow: hidden; isolation: isolate;
+        }
+        .slot-hero-glow {
+            position: absolute; inset: -30px -10px; pointer-events: none; z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 70% 100% at 50% 50%,
+                #F7931A30 0%, #F7931A10 50%, transparent 80%);
+        }
+        .slot-hero > * { position: relative; z-index: 1; }
+
+        .slot-label {
+            font-size: 10.5px; color: #F7931A; font-weight: 700;
+            letter-spacing: 2px; text-transform: uppercase;
+            margin-bottom: 4px;
+        }
         .slot-number {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 48px; font-weight: 700; color: #FFD700;
-            line-height: 1;
+            font-size: 56px; font-weight: 700; color: #FFD700;
+            line-height: 1; letter-spacing: -2px;
+            display: inline-flex; align-items: baseline; gap: 4px;
         }
-        .slot-hash { font-size: 16px; color: #FFBE45; }
-        .price-locked {
-            font-size: 13px; color: #F7931A; margin-top: 8px;
+        .slot-number .hash {
+            font-size: 26px; color: #F7931A; font-weight: 700;
         }
-        .price-locked strong {
+        .slot-price {
+            font-size: 13px; color: #FFBE45; font-weight: 600;
+            margin-top: 6px;
+        }
+        .slot-price strong {
+            color: #FFD700; font-weight: 800;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 18px; color: #FFD700;
         }
-        .benefits-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px; }
+
+        /* Benefits */
+        .benefits-list {
+            display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px;
+        }
         .benefit {
-            display: flex; align-items: center; gap: 8px;
-            padding: 9px 14px; background: #111111;
-            border: 1px solid #FFD70020; border-radius: 6px;
-            font-size: 12px; color: #FFFFFF;
+            display: flex; align-items: center; gap: 9px;
+            padding: 9px 13px;
+            background: #111111; border: 1px solid #1E1E1E;
+            border-left: 3px solid #F7931A; border-radius: 8px;
+            font-size: 12px; color: #FFFFFF; line-height: 1.4;
         }
-        .benefit::before { content: "✓"; color: #FFD700; font-weight: 700; }
-        .joined-note {
-            text-align: center; font-size: 11px; color: var(--text-secondary);
-            padding-top: 12px; border-top: 1px solid #1E1E1E;
+        .benefit-tick {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 16px; height: 16px; background: #F7931A; color: #000;
+            border-radius: 50%; font-size: 10px; font-weight: 800; line-height: 1;
+            flex-shrink: 0;
         }
-        .joined-note strong { color: #FFBE45; }
+
+        /* Joined row */
+        .joined {
+            text-align: center;
+            font-size: 11.5px; color: var(--text-secondary);
+            padding-top: 6px;
+        }
+        .joined strong {
+            color: #F7931A; font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
     </style>
 </head>
 <body>
 <div class="card">
     <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
-        <div class="logo-fallback">MzansiEdge</div>
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
         {% endif %}
         <div class="orange-bar"></div>
-        <div class="title">FOUNDING MEMBER ✅</div>
+        <div class="title">
+            <span class="gift">🎁</span>
+            <span>FOUNDING MEMBER</span>
+            <span class="check">✓</span>
+        </div>
+        <div class="subline">You're locked in — welcome to the founders</div>
     </div>
+
     <div class="body">
-        <div class="slot-block">
+        <div class="slot-hero">
+            <div class="slot-hero-glow"></div>
             <div class="slot-label">Your Slot</div>
-            <div class="slot-number"><span class="slot-hash">#</span>{{ slot_number }}</div>
-            <div class="price-locked">Price locked at <strong>{{ founding_price | e }}</strong>/year</div>
+            <div class="slot-number"><span class="hash">#</span>{{ slot_number }}</div>
+            <div class="slot-price">Price locked at <strong>{{ founding_price }}/year</strong></div>
         </div>
 
         <div class="benefits-list">
-            {% for benefit in benefits %}
-            <div class="benefit">{{ benefit | e }}</div>
+            {% for b in benefits %}
+            <div class="benefit">
+                <span class="benefit-tick">✓</span>
+                <span>{{ b | e }}</span>
+            </div>
             {% endfor %}
         </div>
 
-        <div class="joined-note">Joined <strong>{{ joined_label | e }}</strong></div>
+        <div class="joined">Joined <strong>{{ joined_label | e }}</strong></div>
     </div>
 </div>
 </body>
