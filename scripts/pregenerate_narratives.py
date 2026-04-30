@@ -613,6 +613,7 @@ async def _get_match_context(
     *,
     home_key: str = "",
     away_key: str = "",
+    match_date: str = "",
 ) -> dict:
     """Fetch match context: API-Football primary (soccer), ESPN fallback.
 
@@ -675,6 +676,7 @@ async def _get_match_context(
                 away_team=away_candidate,
                 league=league,
                 sport=sport,
+                match_date=match_date,
                 live_safe=live_safe,
             )
             last_ctx = ctx
@@ -2204,6 +2206,8 @@ async def _generate_one(
     edge = await _refresh_edge_from_odds_db(edge)
 
     # 1. Match context
+    _mk_date_m = re.search(r"(\d{4}-\d{2}-\d{2})$", match_key)
+    _mk_date = _mk_date_m.group(1) if _mk_date_m else ""
     ctx = await _get_match_context(
         home,
         away,
@@ -2211,6 +2215,7 @@ async def _generate_one(
         sport,
         home_key=home_key,
         away_key=away_key,
+        match_date=_mk_date,
     )
     evidence_pack = await build_evidence_pack(
         match_key,

@@ -23127,13 +23127,21 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
 
             # ── Fallback: ESPN (all sports) ─────────────────────────────────
             from scrapers.match_context_fetcher import get_match_context
-            log.info("Fetching match context via ESPN: %s vs %s, league=%s, sport=%s",
-                     home_raw, away_raw, target_league, _fs or "(auto)")
+            import re as _re_ctx
+            # Extract date from commence_time or event_id so ESPN returns future fixtures
+            _ct_raw = (target_event or {}).get("commence_time", "") or ""
+            _ctx_date_m = re.search(r"(\d{4}-\d{2}-\d{2})", _ct_raw) if _ct_raw else None
+            if not _ctx_date_m:
+                _ctx_date_m = _re_ctx.search(r"(\d{4}-\d{2}-\d{2})", event_id or "")
+            _ctx_date = _ctx_date_m.group(1) if _ctx_date_m else ""
+            log.info("Fetching match context via ESPN: %s vs %s, league=%s, sport=%s, date=%s",
+                     home_raw, away_raw, target_league, _fs or "(auto)", _ctx_date or "(none)")
             return await get_match_context(
                 home_team=_h_key,
                 away_team=_a_key,
                 league=target_league or "",
                 sport=_fs,
+                match_date=_ctx_date,
             )
         except Exception as exc:
             log.warning("Match context fetch failed: %s", exc, exc_info=True)
