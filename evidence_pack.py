@@ -1470,15 +1470,19 @@ async def build_evidence_pack(
     # unsupported league, or API outage — fetch_fixture_meta() returns {} on
     # any non-success path (no network call for unsupported leagues). Rugby +
     # cricket get separate enrichers (INV-EVIDENCE-PACK-ENRICHMENT-01 waves 4 + 5).
+    # Note: fetch_fixture_meta is async — direct asyncio.wait_for, NOT
+    # _run_with_timeout (the latter wraps sync funcs in to_thread).
     if sport == "soccer":
+        _fdorg_meta: dict[str, Any] = {}
         try:
             from scrapers.football_data_org import fetch_fixture_meta as _fdorg_fetch
-            _fdorg_meta = await _run_with_timeout(
-                _fdorg_fetch, match_key, league, timeout=4.0, fallback={}
+            _fdorg_meta = await asyncio.wait_for(
+                _fdorg_fetch(match_key, league), timeout=8.0
             )
+        except asyncio.TimeoutError:
+            logger.warning("football-data.org timeout for %s/%s", match_key, league)
         except Exception as _fdorg_exc:  # noqa: BLE001 — best-effort enrichment
             logger.warning("football-data.org enrichment skipped (%s)", _fdorg_exc)
-            _fdorg_meta = {}
         if isinstance(_fdorg_meta, dict) and _fdorg_meta:
             pack.competition_stage = str(_fdorg_meta.get("competition_stage") or "")
             _md = _fdorg_meta.get("matchday")

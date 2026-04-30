@@ -330,6 +330,20 @@ def test_fetch_returns_empty_when_no_fixture_match():
 # Test 19: EvidencePack dataclass extension is backward-compatible
 # ---------------------------------------------------------------------------
 
+def test_fetch_fixture_meta_is_async_coroutine():
+    """Regression guard: fetch_fixture_meta MUST be async — pipeline awaits it
+    directly via asyncio.wait_for, not via _run_with_timeout (which would wrap
+    a sync func in to_thread and silently return an unawaited coroutine).
+    """
+    import inspect
+    from scrapers.football_data_org import fetch_fixture_meta
+    assert inspect.iscoroutinefunction(fetch_fixture_meta), (
+        "fetch_fixture_meta must remain async; build_evidence_pack relies on "
+        "asyncio.wait_for to drive it. Wrapping it via to_thread silently "
+        "returns the coroutine object."
+    )
+
+
 def test_evidence_pack_new_fields_default_empty():
     """Pre-fix narrative_cache rows must deserialise unchanged.
 
