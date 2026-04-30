@@ -25,7 +25,7 @@ ODDS_DB = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scrapers", "odds.db"),
 )
 
-_BUSY_MS = 30_000          # 30 seconds
+_BUSY_MS = 60_000          # 60 seconds — FIX-DB-LOCK-CONTENTION-01: raised from 30s
 _RETRY_ATTEMPTS = 5        # W81-DBLOCK: was 3 — extra headroom for long scraper runs
 _RETRY_BACKOFF = 0.25      # W81-DBLOCK: was 1.0 — faster first retry
 
@@ -42,7 +42,7 @@ def get_connection(
     Args:
         db_path: Path to SQLite database (default: scrapers/odds.db via MZANSI_DB_PATH)
         readonly: If True, opens in read-only URI mode (no writes possible)
-        timeout_ms: SQLite busy_timeout in milliseconds (default: _BUSY_MS = 30000).
+        timeout_ms: SQLite busy_timeout in milliseconds (default: _BUSY_MS = 60000).
             Pass a shorter value (e.g. 3000) for best-effort background operations that
             should give up quickly rather than block. The WAL guarantee still applies.
 
