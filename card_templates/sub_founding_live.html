@@ -1,5 +1,3 @@
-<!-- VARIANT: DETAIL -->
-<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -14,93 +12,259 @@
         }
         body {
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
-            width: 480px; height: 620px; overflow: hidden;
+            width: 480px; height: 620px;
         }
         .card {
             width: 480px; height: 620px;
             display: flex; flex-direction: column;
-            background: linear-gradient(180deg, #0D0A00, #0A0A0A);
+            background: #0A0A0A;
         }
+
+        /* ── Header (canonical — orange logo glow, founding-strong) ── */
         .header {
-            text-align: center; padding: 16px 20px 10px;
-            background: linear-gradient(180deg, #150E00, #1A1200);
-            border-bottom: 1px solid #F7931A60; flex-shrink: 0;
+            position: relative;
+            text-align: center;
+            padding: 18px 20px 12px;
+            isolation: isolate;
+            overflow: hidden;
+            flex-shrink: 0;
         }
-        .logo-img { height: 26px; width: auto; display: block; margin: 0 auto; }
-        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .logo-glow {
+            position: absolute;
+            inset: -10px 0 0 0;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 60% 100% at 50% 30%,
+                #F7931A55 0%, #F7931A22 45%, #F7931A08 70%, transparent 100%);
+        }
+        .logo-glow-screen {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 36% 65% at 50% 30%,
+                #F7931A88 0%, #F7931A33 50%, transparent 80%);
+        }
+        .header > .logo-img,
+        .header > .logo-fallback,
+        .header > .orange-bar,
+        .header > .title { position: relative; z-index: 1; }
+        .logo-img {
+            height: 30px; width: auto;
+            display: block; margin: 0 auto;
+        }
         .orange-bar {
             height: 3px;
-            background: linear-gradient(90deg, #F7931A, #FFBE45, #FFD700);
-            margin: 8px 20px; border-radius: 2px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 8px 20px;
+            border-radius: 2px;
         }
-        .title { font-size: 13px; font-weight: 700; color: #FFBE45; letter-spacing: 3px; }
+        .title {
+            font-size: 14px;
+            font-weight: 800;
+            color: #F7931A;
+            letter-spacing: 3px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            justify-content: center;
+        }
+        .title .gift { font-size: 16px; line-height: 1; }
+
+        /* ── Body ──────────────────────────────────────────────── */
         .body {
-            flex: 1; display: flex; flex-direction: column;
-            padding: 12px 20px; overflow: hidden;
+            flex: 1;
+            padding: 12px 18px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            overflow: hidden;
         }
+
+        /* Price hero */
         .price-hero {
-            text-align: center; margin-bottom: 10px;
+            position: relative;
+            text-align: center;
+            background: linear-gradient(135deg, #1A1200, #211800);
+            border: 1px solid #F7931A55;
+            border-left: 3px solid #F7931A;
+            border-right: 3px solid #F7931A;
+            border-radius: 12px;
+            padding: 14px 16px 12px;
+            overflow: hidden;
+            isolation: isolate;
         }
-        .price-label { font-size: 11px; color: #F7931A; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px; }
+        .price-hero-glow {
+            position: absolute;
+            inset: -30px -10px;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 70% 100% at 50% 50%,
+                #F7931A30 0%, #F7931A10 50%, transparent 80%);
+        }
+        .price-hero > * { position: relative; z-index: 1; }
+
+        .price-label {
+            font-size: 10.5px;
+            color: #F7931A;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 4px;
+            font-weight: 700;
+        }
         .price-main {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 48px; font-weight: 700; color: #FFD700;
+            font-size: 46px;
+            font-weight: 700;
+            color: #FFD700;
             line-height: 1;
+            letter-spacing: -1px;
         }
-        .price-year { font-size: 16px; color: #FFBE45; }
+        .price-year {
+            font-size: 18px;
+            color: #FFBE45;
+            font-weight: 700;
+        }
         .price-compare {
-            font-size: 12px; color: var(--text-secondary); margin-top: 4px;
-            text-decoration: line-through; opacity: 0.7;
+            font-size: 11.5px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+            text-decoration: line-through;
+            opacity: 0.7;
         }
         .savings-pill {
-            display: inline-flex; align-items: center;
-            background: #FFD70020; border: 1px solid #FFD70050;
-            border-radius: 20px; padding: 4px 12px;
-            font-size: 12px; font-weight: 700; color: #FFD700;
-            margin-top: 6px;
+            display: inline-flex;
+            align-items: center;
+            background: #FFD70020;
+            border: 1px solid #FFD70060;
+            border-radius: 20px;
+            padding: 4px 14px;
+            font-size: 12px;
+            font-weight: 800;
+            color: #FFD700;
+            margin-top: 7px;
+            letter-spacing: 0.3px;
         }
         .monthly-equiv {
-            font-size: 11px; color: var(--text-secondary);
-            margin-top: 4px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 5px;
+            font-weight: 500;
         }
-        .monthly-equiv strong { color: #F7931A; }
+        .monthly-equiv strong {
+            color: #F7931A;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Counters */
         .counters {
-            display: flex; gap: 10px; margin-bottom: 10px;
+            display: flex;
+            gap: 8px;
         }
         .counter {
-            flex: 1; background: #1A1200; border: 1px solid #F7931A40;
-            border-radius: 8px; padding: 10px; text-align: center;
+            position: relative;
+            flex: 1;
+            background: linear-gradient(135deg, #1A1200, #211800);
+            border: 1px solid #F7931A55;
+            border-left: 3px solid #F7931A;
+            border-radius: 10px;
+            padding: 9px 8px 8px;
+            text-align: center;
+            overflow: hidden;
+            isolation: isolate;
         }
+        .counter-glow {
+            position: absolute;
+            inset: -20px -10px;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(12px);
+            background: radial-gradient(ellipse 50% 100% at 0% 50%,
+                #F7931A30 0%, transparent 70%);
+        }
+        .counter > .counter-value,
+        .counter > .counter-label { position: relative; z-index: 1; }
         .counter-value {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 22px; font-weight: 700; color: #F7931A;
+            font-size: 22px;
+            font-weight: 800;
+            color: #F7931A;
+            line-height: 1;
         }
-        .counter-label { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+        .counter-label {
+            font-size: 9.5px;
+            color: var(--text-secondary);
+            font-weight: 700;
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+
+        /* Benefits */
         .benefits-list {
-            display: flex; flex-direction: column; gap: 5px; flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex: 1;
+            min-height: 0;
         }
         .benefit {
-            display: flex; align-items: center; gap: 8px;
-            padding: 7px 12px; background: #111111;
-            border: 1px solid #F7931A20; border-radius: 6px;
-            font-size: 11px; color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 7px 12px;
+            background: #111111;
+            border: 1px solid #1E1E1E;
+            border-left: 3px solid #F7931A;
+            border-radius: 8px;
+            font-size: 11.5px;
+            color: #E5E5E5;
+            line-height: 1.35;
         }
-        .benefit::before { content: "✓"; color: #FFD700; font-weight: 700; }
+        .benefit-tick {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 14px; height: 14px;
+            background: #F7931A;
+            color: #000;
+            border-radius: 50%;
+            font-size: 9px;
+            font-weight: 800;
+            line-height: 1;
+            flex-shrink: 0;
+        }
     </style>
 </head>
 <body>
 <div class="card">
+
+    <!-- Header -->
     <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
-        <div class="logo-fallback">MzansiEdge</div>
+        <div class="logo-fallback" style="font-size:20px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
         {% endif %}
         <div class="orange-bar"></div>
-        <div class="title">🎁 FOUNDING MEMBER</div>
+        <div class="title">
+            <span class="gift">🎁</span>
+            <span>FOUNDING MEMBER</span>
+        </div>
     </div>
+
+    <!-- Body -->
     <div class="body">
+
+        <!-- Price hero -->
         <div class="price-hero">
+            <div class="price-hero-glow"></div>
             <div class="price-label">Diamond access — locked in at</div>
             <div class="price-main">R{{ annual_price }}<span class="price-year">/yr</span></div>
             <div class="price-compare">normally R{{ normal_monthly }}/mo = R{{ normal_monthly * 12 }}/yr</div>
@@ -108,25 +272,46 @@
             <div class="monthly-equiv">Just <strong>R{{ monthly_equiv }}/mo</strong> equivalent</div>
         </div>
 
+        <!-- Counters -->
         <div class="counters">
             <div class="counter">
+                <div class="counter-glow"></div>
                 <div class="counter-value">{{ days_left }}</div>
-                <div class="counter-label">days left</div>
+                <div class="counter-label">Days Left</div>
             </div>
             <div class="counter">
+                <div class="counter-glow"></div>
                 <div class="counter-value">{{ slots_remaining }}</div>
-                <div class="counter-label">slots left</div>
+                <div class="counter-label">Slots Left</div>
             </div>
         </div>
 
+        <!-- Benefits -->
         <div class="benefits-list">
-            <div class="benefit">Full Diamond access for 1 year</div>
-            <div class="benefit">Price locked forever — R{{ annual_price }}/yr every renewal</div>
-            <div class="benefit">Real-time edges + full AI breakdowns</div>
-            <div class="benefit">Line movement + sharp money alerts</div>
-            <div class="benefit">Founding member badge and community access</div>
+            <div class="benefit">
+                <span class="benefit-tick">✓</span>
+                <span>Full Diamond access for 1 year</span>
+            </div>
+            <div class="benefit">
+                <span class="benefit-tick">✓</span>
+                <span>Price locked forever — R{{ annual_price }}/yr every renewal</span>
+            </div>
+            <div class="benefit">
+                <span class="benefit-tick">✓</span>
+                <span>Real-time edges + full AI breakdowns</span>
+            </div>
+            <div class="benefit">
+                <span class="benefit-tick">✓</span>
+                <span>Line movement + sharp money alerts</span>
+            </div>
+            <div class="benefit">
+                <span class="benefit-tick">✓</span>
+                <span>Founding member badge and community access</span>
+            </div>
         </div>
+
     </div>
+
 </div>
 </body>
 </html>
