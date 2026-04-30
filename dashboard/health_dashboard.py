@@ -1723,7 +1723,8 @@ def _fetch_fb_groups_moq() -> list[dict]:
             group = parts[1] if len(parts) >= 3 else (parts[-1] if parts else title)
 
             # FIX-FB-MOQ-GROUP-URL-01: use target_group_url from the Notion page
-            # first (set by the autogen cron), then fall back to ledger registry.
+            # first (set by the autogen cron), then fall back to ledger registry,
+            # then to _GROUP_CONTEXT["url"] (canonical autogen config).
             group_url = item.get("target_group_url") or ""
             if not group_url and registry:
                 name_key = group.lower()
@@ -1733,6 +1734,13 @@ def _fetch_fb_groups_moq() -> list[dict]:
                         if reg_name in name_key or name_key in reg_name:
                             group_url = reg_url
                             break
+            if not group_url:
+                try:
+                    from publisher.autogen.fb_groups_daily import _GROUP_CONTEXT as _fbgc
+                    ctx_entry = _fbgc.get(group) or {}
+                    group_url = ctx_entry.get("url") or ""
+                except Exception:
+                    pass
 
             rows.append({
                 "id": item.get("id") or "",
@@ -10676,23 +10684,21 @@ def api_task_hub_content():
 
 
 def _mark_notion_status_posted(page_id: str, extra_props: dict | None = None) -> bool:
-    """PATCH a Notion page Status → Posted. Returns True on success."""
-    from datetime import datetime as _dt
+    """PATCH a Notion page Status → Posted. Returns True on success.
+    Tries 'status' type format first (MOQ schema), falls back to 'select'."""
     if not page_id:
         return False
-    now_iso = _dt.now(_SAST).isoformat()
-    props = {
-        "Status": {"select": {"name": "Posted"}},
-        "Posted At": {"date": {"start": now_iso}},
-    }
-    if extra_props:
-        props.update(extra_props)
-    body = {"properties": props}
-    try:
-        result = _notion_request(f"pages/{page_id}", body=body, method="PATCH")
-        return bool(result and result.get("object") == "page")
-    except Exception:
-        return False
+    for fmt_key in ("status", "select"):
+        props: dict = {"Status": {fmt_key: {"name": "Posted"}}}
+        if extra_props:
+            props.update(extra_props)
+        try:
+            result = _notion_request(f"pages/{page_id}", body={"properties": props}, method="PATCH")
+            if result and result.get("object") == "page":
+                return True
+        except Exception:
+            pass
+    return False
 
 
 @app.route("/admin/api/task-hub/fb/<page_id>/posted", methods=["POST"])
