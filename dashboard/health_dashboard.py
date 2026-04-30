@@ -136,7 +136,7 @@ DASHBOARD_PASS = os.getenv("DASHBOARD_PASS", "mzansiedge")
 PORT = int(os.getenv("DASHBOARD_PORT", "8501"))
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
-NOTION_MARKETING_DB = "58123052-0e48-466a-be63-5308e793e672"
+NOTION_MARKETING_DB = os.getenv("NOTION_MARKETING_DB", "9061c15b-e8de-416d-8d61-e6b1d4d37f9f")
 NOTION_TASK_HUB_PAGE = "31ed9048-d73c-814e-a179-ccd2cf35df1d"
 # BUILD-REEL-KIT-DATE-RULE-01 (Piece B): set True when BUILD-SOCIAL-OPS-URGENT-PILLS-01 lands
 SHOW_REEL_KIT_ON_TIMELINE = True
@@ -149,7 +149,7 @@ NOTION_QUORA_DB = os.getenv(
     "NOTION_QUORA_DB", "dcb0e810-c714-4b92-b3b5-fad18c4a2452"
 )  # 🌐 GEO Quora Pipeline
 NOTION_FB_GROUPS_LEDGER = os.getenv(
-    "NOTION_FB_GROUPS_LEDGER", "693414a9-5154-45d6-a548-70e84409d439"
+    "NOTION_FB_GROUPS_LEDGER", "a71d20318b0f45f6bbba2c4d640b7754"
 )  # 📋 FB Groups Posting Ledger (group registry)
 _NOTION_LEDGER_CACHE_TTL = 300  # seconds (LinkedIn / Quora ledgers)
 
@@ -10468,8 +10468,9 @@ def api_reel_final_upload():
         f.save(dest_path)
     except OSError as exc:
         return Response(json.dumps({"ok": False, "error": f"save failed: {exc}"}), status=500, mimetype="application/json")
-    # Served URL via so_serve_asset (auth-gated admin route)
-    video_url = f"/admin/social-ops/asset/reels/{date_str}/final/{row_id}.mp4"
+    # INV-IG-REEL-SILVER-PUBLISH-FAIL-01: write canonical public HTTPS URL, not admin path.
+    # FIX-REEL-MASTER-URL-CONTRACT-01 fixed the widget URL builder; this fixes the upload API.
+    video_url = f"{_REEL_PUBLIC_BASE}/{date_str}/final/{row_id}.mp4"
     # Update the MOQ row's Asset Link in Notion
     patch_body = {"properties": {"Asset Link": {"url": video_url}}}
     _notion_request(f"pages/{row_id}", body=patch_body, method="PATCH")
@@ -10676,14 +10677,19 @@ def api_task_hub_content():
 
 
 def _mark_notion_status_posted(page_id: str, extra_props: dict | None = None) -> bool:
-    """PATCH a Notion page Status → Posted. Returns True on success."""
+    """PATCH a Notion MOQ page Status → Published. Returns True on success.
+
+    FIX-DASH-FB-GROUPS-LINK-AND-MARK-POSTED-01: the Marketing Queue DB uses
+    Status option "Published" (not "Posted") and timestamp property "Shipped At"
+    (not "Posted At").
+    """
     from datetime import datetime as _dt
     if not page_id:
         return False
     now_iso = _dt.now(_SAST).isoformat()
     props = {
-        "Status": {"select": {"name": "Posted"}},
-        "Posted At": {"date": {"start": now_iso}},
+        "Status": {"select": {"name": "Published"}},
+        "Shipped At": {"date": {"start": now_iso}},
     }
     if extra_props:
         props.update(extra_props)
