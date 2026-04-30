@@ -2494,12 +2494,6 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "🏆 <b>Verdict</b>",
             "1-2 sentences. Give a match outlook — who you lean toward and how the match might play out.",
             "Do NOT recommend a bet or mention bet sizing.",
-            # FIX-VERDICT-CLOSURE-AND-BREAKDOWN-VISIBILITY-01 (2026-04-29) — AC-1:
-            # Match-preview branch closure rule. Even on previews (no betting
-            # action), the closing sentence must NOT be a Setup-style
-            # observation that fails the validator's closure rule. Use a
-            # closing sentence that names the leaning side + an action verb.
-            "VERDICT-CLOSURE (PREVIEW MODE): The LAST sentence of the Verdict MUST close with an action verb (Lean on / Back / Take / Get on) plus the leaning team or selection name. Setup-style observations ('What stands out: form picture is X') in the closing sentence are AUTO-REJECTED.",
             "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — acknowledging it ('factor in the defensive uncertainty'), resolving it ('discount the rotation concern'), or addressing it ('despite the form gap, the home advantage holds'). Generic closers like 'all things considered' or 'on balance' are banned.",
             "",
             "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
@@ -2643,15 +2637,6 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "",
             "🏆 <b>Verdict</b>",
             "1-2 sentences. State the action and sizing guidance without upgrading it.",
-            # FIX-VERDICT-CLOSURE-AND-BREAKDOWN-VISIBILITY-01 (2026-04-29) — AC-1:
-            # Closing-sentence requirement. Polish-time enforcement via
-            # `narrative_validator._check_verdict_closure_rule` will reject
-            # any Strong-band (Diamond/Gold) verdict whose LAST sentence
-            # lacks action verb + team/selection + odds shape. Examples:
-            # GOOD: "Slot's lot are flying. Get on Liverpool at 1.97 with Supabets."
-            # GOOD: "Form solid, line slightly soft. Take Man City at 1.36 (Supabets), measured stake."
-            # BAD: "...Chelsea are in terrible form with five losses from their last five." — no action verb in CLOSING sentence.
-            "VERDICT-CLOSURE (REQUIRED — automatic rejection if absent on Diamond/Gold): The LAST sentence of the Verdict MUST close with an actual recommendation — an action verb (Back / Take / Bet on / Get on / Put your money on / Hammer it on / Get behind / Lean on / Ride / Smash) PLUS the team or selection name PLUS the odds shape (e.g. 1.97 or 11/10). Setup-style observations ('What stands out: form picture is X') in the closing sentence are AUTO-REJECTED on Strong-band tiers. Silver: action verb + team OR odds. Bronze: action verb required.",
             "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — resolving it ('discount the injury concern'), hedging on it ('live with the squad-rotation risk'), or pricing it ('the form gap is already in the number'). Generic closers like 'all things considered' or 'on balance' are banned. The card must read as one analytical voice, not two disconnected sections.",
             # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
             # Verdict body excludes betting telemetry. EV/indicator-count/line-
