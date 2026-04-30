@@ -2499,13 +2499,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             # action), the closing sentence must NOT be a Setup-style
             # observation that fails the validator's closure rule. Use a
             # closing sentence that names the leaning side + an action verb.
-            # FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01
-            # (2026-04-29) — AC-3: preview-mode closure rule. Match-preview
-            # branch makes no betting recommendation, but the closing
-            # sentence must NOT be a Setup-style observation. Use either an
-            # imperative "Lean on / Back / Take / Get on" or a declarative
-            # "is the pick / is the play / is the call / is the lean".
-            "VERDICT-CLOSURE (PREVIEW MODE): The LAST sentence of the Verdict MUST close with an action verb (Lean on / Back / Take / Get on) OR a declarative recommendation phrase (is the pick / is the play / is the call / is the lean) plus the leaning team or selection name. Setup-style observations ('What stands out: form picture is X') in the closing sentence are AUTO-REJECTED.",
+            "VERDICT-CLOSURE (PREVIEW MODE): The LAST sentence of the Verdict MUST close with an action verb (Lean on / Back / Take / Get on) plus the leaning team or selection name. Setup-style observations ('What stands out: form picture is X') in the closing sentence are AUTO-REJECTED.",
             "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — acknowledging it ('factor in the defensive uncertainty'), resolving it ('discount the rotation concern'), or addressing it ('despite the form gap, the home advantage holds'). Generic closers like 'all things considered' or 'on balance' are banned.",
             "",
             "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
@@ -2657,14 +2651,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             # GOOD: "Slot's lot are flying. Get on Liverpool at 1.97 with Supabets."
             # GOOD: "Form solid, line slightly soft. Take Man City at 1.36 (Supabets), measured stake."
             # BAD: "...Chelsea are in terrible form with five losses from their last five." — no action verb in CLOSING sentence.
-            # FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01
-            # (2026-04-29) — AC-3: closure rule broadened to accept BOTH
-            # imperative ("Back Liverpool at 1.97 with Supabets") AND
-            # declarative ("Liverpool at 1.97 is the pick — Supabets,
-            # measured stake") shapes. The validator's _VERDICT_ACTION_RE
-            # now matches either form so polish output has more flexibility
-            # to express the closing recommendation.
-            "VERDICT-CLOSURE (REQUIRED — automatic rejection if absent on Diamond/Gold): The LAST sentence of the Verdict MUST close with an actual recommendation. Two acceptable shapes — IMPERATIVE: 'Back Liverpool at 1.97 with Supabets, measured stake.' DECLARATIVE: 'Liverpool at 1.97 is the pick — Supabets, measured stake.' Either shape MUST contain (a) an action verb (Back / Take / Bet on / Get on / Put your money on / Hammer it on / Get behind / Lean on / Ride / Smash) OR a declarative recommendation phrase (is the pick / is the play / is the call / is the lean / is the bet / is the value), (b) the team or betting selection name, AND (c) the odds shape (decimal 1.97 / fraction 11/10 / American -110). Setup-style observations ('What stands out: form picture is X') in the closing sentence are AUTO-REJECTED on Strong-band tiers. Silver: action verb + (team OR odds). Bronze: action verb required.",
+            "VERDICT-CLOSURE (REQUIRED — automatic rejection if absent on Diamond/Gold): The LAST sentence of the Verdict MUST close with an actual recommendation — an action verb (Back / Take / Bet on / Get on / Put your money on / Hammer it on / Get behind / Lean on / Ride / Smash) PLUS the team or selection name PLUS the odds shape (e.g. 1.97 or 11/10). Setup-style observations ('What stands out: form picture is X') in the closing sentence are AUTO-REJECTED on Strong-band tiers. Silver: action verb + team OR odds. Bronze: action verb required.",
             "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — resolving it ('discount the injury concern'), hedging on it ('live with the squad-rotation risk'), or pricing it ('the form gap is already in the number'). Generic closers like 'all things considered' or 'on balance' are banned. The card must read as one analytical voice, not two disconnected sections.",
             # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
             # Verdict body excludes betting telemetry. EV/indicator-count/line-

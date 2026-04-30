@@ -15916,29 +15916,20 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
     Updates verdict_html column on existing row (from pregenerate or narrative cache).
     If no row exists, creates a minimal one.
 
-    FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 (2026-04-29) — AC-1:
-    routes the verdict-cache write path through `_validate_verdict_for_persistence`
-    and applies the brief tier-aware enforcement matrix:
-      - Diamond/Gold + CRITICAL gate hit (banned-phrase / venue / manager /
-        strong-band-tone / closure rule / setup-pricing / vague-content
-        premium / char range under) → refuse write (log
-        `FIX-VERDICT-CACHE-PATH-LOCK-01 PremiumVerdictRefused`).
-      - MAJOR severity → write with quality_status='quarantined' (visible to
-        the read surface for fallback but flagged for repolish).
-      - MINOR severity → write with quality_status NULL + warning log.
-
-    Replaces the W92-VERDICT-QUALITY P2 single-bool `min_verdict_quality()` gate
-    plus the FIX-NARRATIVE-ROT-ROOT-01 Phase 2 unified validator call. The new
-    validator inlines `min_verdict_quality` as a single MAJOR-or-CRITICAL gate
-    so its diagnostics flow through the same matrix.
+    W92-VERDICT-QUALITY P2: enforces min_verdict_quality() gate BEFORE writing. Rejects
+    verdicts that fail the tier-aware quality floor (length, analytical vocabulary,
+    banned shapes, Diamond price-prefix, markdown leak, manager fabrication). A failing
+    verdict is silently SKIPPED (no INSERT) with a Sentry breadcrumb for observability.
     """
     import json
     import sqlite3
     from datetime import datetime, timedelta, timezone
     from db_connection import get_connection
+    from narrative_spec import min_verdict_quality
     if not match_key or not verdict_html:
         return
 
+    # W92-VERDICT-QUALITY P2: pre-write quality gate.
     # Tier is carried in tip_data under several possible keys — normalise to lowercase.
     _tier_raw = (
         tip_data.get("edge_tier")
@@ -15948,71 +15939,68 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
     )
     _tier = str(_tier_raw).lower().strip() or "bronze"
     _evidence_pack = tip_data.get("evidence_pack") if isinstance(tip_data, dict) else None
+    if not min_verdict_quality(verdict_html, tier=_tier, evidence_pack=_evidence_pack):
+        log.warning(
+            "_store_verdict_cache_sync: verdict rejected by quality gate "
+            "(match_key=%s tier=%s len=%d sample=%r)",
+            match_key, _tier, len(verdict_html), verdict_html[:60],
+        )
+        try:
+            import sentry_sdk as _sentry_mod
+            if _sentry_mod:
+                _sentry_mod.add_breadcrumb(
+                    category="verdict",
+                    message="verdict_cache_rejected",
+                    level="warning",
+                    data={
+                        "match_id": match_key,
+                        "tier": _tier,
+                        "verdict_len": len(verdict_html),
+                        "sample": verdict_html[:80],
+                    },
+                )
+        except Exception:
+            pass
+        return
 
-    # FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 — AC-1:
-    # Run the verdict-only validator subset and apply the tier-aware enforcement matrix.
-    _quality_status: str | None = None  # None = clean; 'quarantined' on MAJOR.
+    # FIX-NARRATIVE-ROT-ROOT-01 Phase 2: route verdict-cache through unified validator.
+    # Verdict-cache writes only carry verdict_html (no narrative_html) — only the
+    # verdict-level gates fire. evidence_pack is None here (tip_data carries a
+    # tip dict, not the full pack), so manager + claim gates skip silently.
     try:
-        from narrative_validator import _validate_verdict_for_persistence as _vvfp
-        _vc_validation = _vvfp(
-            verdict_html=verdict_html,
-            edge_tier=_tier,
+        from narrative_validator import _validate_narrative_for_persistence as _vncfp
+        _vc_validation = _vncfp(
+            content={
+                "narrative_html": "",
+                "verdict_html": verdict_html,
+                "match_id": match_key,
+                "narrative_source": "verdict-cache",
+            },
             evidence_pack=_evidence_pack if isinstance(_evidence_pack, dict) else None,
+            edge_tier=_tier,
             source_label="verdict-cache",
-            match_id=match_key,
         )
         if not _vc_validation.passed:
+            _vc_crit = _vc_validation.critical_count > 0
             _vc_gates = ",".join(f.gate for f in _vc_validation.failures)
-            if _vc_validation.critical_count > 0:
-                # CRITICAL → refuse write. Synthesis-on-tap (Rule 20) covers
-                # the cache miss; pregen retries via Wave 2 chain when applicable.
+            if _vc_crit:
                 log.warning(
-                    "FIX-VERDICT-CACHE-PATH-LOCK-01 PremiumVerdictRefused "
-                    "match_id=%s tier=%s gates_failed=%s",
+                    "FIX-NARRATIVE-ROT-ROOT-01 VerdictCacheRefused "
+                    "match_key=%s tier=%s gates=%s",
                     match_key, _tier, _vc_gates,
                 )
-                try:
-                    import sentry_sdk as _sentry_mod
-                    if _sentry_mod:
-                        # Breadcrumb message preserved as `verdict_cache_rejected`
-                        # for the W92-VERDICT-QUALITY P2 regression-guard
-                        # contract (test_verdict_cache.py).
-                        _sentry_mod.add_breadcrumb(
-                            category="verdict",
-                            message="verdict_cache_rejected",
-                            level="warning",
-                            data={
-                                "match_id": match_key,
-                                "tier": _tier,
-                                "gates_failed": _vc_gates,
-                                "verdict_len": len(verdict_html),
-                                "sample": verdict_html[:80],
-                            },
-                        )
-                except Exception:
-                    pass
                 return
-            # MAJOR → quarantine the row (write but flag for repolish).
-            _quality_status = "quarantined"
+            # MAJOR-only: log and continue — verdict-cache is best-effort and the
+            # serve-time min_verdict_quality gate already gives belt-and-suspenders.
             log.warning(
-                "FIX-VERDICT-CACHE-PATH-LOCK-01 VerdictCacheQuarantined "
-                "match_id=%s tier=%s gates_failed=%s",
+                "FIX-NARRATIVE-ROT-ROOT-01 VerdictCacheMajor "
+                "match_key=%s tier=%s gates=%s",
                 match_key, _tier, _vc_gates,
             )
-        else:
-            # Validator passed; check for MINOR failures (e.g. Bronze closure
-            # rule mismatch downgraded by the validator's tier-aware matrix).
-            if _vc_validation.failures:
-                _vc_gates = ",".join(f.gate for f in _vc_validation.failures)
-                log.warning(
-                    "FIX-VERDICT-CACHE-PATH-LOCK-01 VerdictCacheMinorWarning "
-                    "match_id=%s tier=%s gates=%s",
-                    match_key, _tier, _vc_gates,
-                )
     except Exception as _vc_exc:
         # Validator failures must never block verdict-cache writes — log and proceed.
         log.warning(
-            "FIX-VERDICT-CACHE-PATH-LOCK-01 VerdictCacheValidatorErr "
+            "FIX-NARRATIVE-ROT-ROOT-01 VerdictCacheValidatorErr "
             "match_key=%s err=%s",
             match_key, _vc_exc,
         )
@@ -16028,23 +16016,13 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
             if existing:
                 # Update verdict on existing row; clear skipped_banned_shape so
                 # _get_cached_verdict() serves this fresh verdict next time.
-                # Set quality_status='quarantined' on MAJOR; preserve existing
-                # quality_status otherwise (clearing skipped_banned_shape only).
-                if _quality_status == "quarantined":
-                    conn.execute(
-                        "UPDATE narrative_cache SET verdict_html = ?, "
-                        "quality_status = 'quarantined' "
-                        "WHERE match_id = ?",
-                        (verdict_html, match_key),
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE narrative_cache SET verdict_html = ?, "
-                        "quality_status = CASE WHEN quality_status = 'skipped_banned_shape' "
-                        "THEN NULL ELSE quality_status END "
-                        "WHERE match_id = ?",
-                        (verdict_html, match_key),
-                    )
+                conn.execute(
+                    "UPDATE narrative_cache SET verdict_html = ?, "
+                    "quality_status = CASE WHEN quality_status = 'skipped_banned_shape' "
+                    "THEN NULL ELSE quality_status END "
+                    "WHERE match_id = ?",
+                    (verdict_html, match_key),
+                )
             else:
                 # Create minimal row for verdict
                 now = datetime.now(timezone.utc)
@@ -16052,9 +16030,8 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
                 conn.execute(
                     "INSERT OR REPLACE INTO narrative_cache "
                     "(match_id, narrative_html, verdict_html, model, edge_tier, "
-                    "tips_json, odds_hash, narrative_source, created_at, expires_at, "
-                    "quality_status) "
-                    "VALUES (?, '', ?, 'view-time', ?, ?, ?, 'verdict-cache', ?, ?, ?)",
+                    "tips_json, odds_hash, narrative_source, created_at, expires_at) "
+                    "VALUES (?, '', ?, 'view-time', ?, ?, ?, 'verdict-cache', ?, ?)",
                     (
                         match_key,
                         verdict_html,
@@ -16063,7 +16040,6 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
                         _compute_odds_hash(match_key),
                         now.isoformat(),
                         expires.isoformat(),
-                        _quality_status,
                     ),
                 )
             conn.commit()

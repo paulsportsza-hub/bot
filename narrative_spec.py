@@ -2222,17 +2222,10 @@ def _verdict_support_line(spec: NarrativeSpec) -> str:
         ]
         return variants[_v]
     if opposing <= 0:
-        # FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 (2026-04-29):
-        # Replaced "everything we have points the same way" — fired Gate 11
-        # vague_content (it's in VAGUE_CONTENT_PATTERNS as the broader
-        # `\beverything\s+we\s+have\s+points\s+the\s+same\s+way\b` ban). The
-        # predecessor wave added that pattern but didn't update this support
-        # line; current wave closes the loop. New phrase keeps the
-        # confirming-signal SA-voice intent without triggering the gate.
         variants = [
             "the form and the numbers all line up",
             "the evidence is firmly on our side",
-            "the form runs deep and the case lands clean",
+            "everything we have points the same way",
         ]
         return variants[_v]
     variants = [
@@ -3349,42 +3342,43 @@ def _render_verdict(spec: NarrativeSpec) -> str:
 
     seed_base = (spec.home_name or "") + (spec.away_name or "")
     risk_clause = _verdict_risk_clause(spec)
-    # Risk-resolution suffix — woven into the closing sentence so closure-rule
-    # detection sees both the action+team+odds payload AND the risk citation.
+    # Risk-resolution suffix — appended to all tier variants when present.
     # Source: NARRATIVE-ACCURACY-01 Rule 9 (Risk↔Verdict cohesion).
-    _risk_tail = f", {risk_clause}" if risk_clause else ""
+    _risk_tail = f" — {risk_clause}." if risk_clause else "."
 
     # ── Pass / Monitor (zero or negative EV — applies across all tiers) ──
-    # FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 (2026-04-29) AC-2:
-    # Restructured so the LAST sentence carries action+team+odds+bookmaker
-    # (was first sentence). Sentence 1 is now the gap-honest setup framing;
-    # sentence 2 closes with "Take a pass on {outcome} at {odds_str} with {bk}".
-    # "Take" matches the action-verb cluster — closure rule Gate 10 satisfied.
+    # Source: brief Investigation table row 5 (no-edge branch unaudited).
+    # COPYWRITING-DNA §13 QA #6: "Does it avoid generic gambling-spam language?"
+    # Honest "no edge" framing — never invents EV that doesn't exist.
     if action in ("pass", "monitor"):
         seed = seed_base + "passmon"
+        # Each variant includes "monitor" — SA voice for "no edge yet, watch the price".
+        # Required by test_monitor_verdict_no_risk_clause; the polish-time
+        # "monitor" ban in confident/strong tone only applies to LLM polish,
+        # not the W82 deterministic baseline (this branch is the baseline).
+        # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2:
+        # Pass/monitor variants now include action-verb cluster words
+        # (leave / take / worth) at the opening so the verdict never reads
+        # like a robotic abstention. SA voice: "Leave it alone for now"
+        # is what a mate at a braai would say.
         if odds_str != "?" and bk != "the market":
             _variants = [
-                # V0 — Sit-on-same-number setup → take-a-pass close.
+                # V0 — Leave-it-alone frame. SA voice via "sit on the same number".
                 # Canon: BRAND-BIBLE-v3 §09 glossary — "Market was right on this one".
-                f"The bookmaker's read and ours sit on the same number, no actionable gap right now. Take a pass on {outcome} at {odds_str} with {bk}{_risk_tail} — monitor the closing price.",
-                # V1 — Worth-waiting setup → take-a-pass close.
-                # Canon: BRAND-BIBLE-v3 §13 §08 voice "Honest".
-                f"The price gap isn't there yet and better numbers may emerge closer to kickoff. Take a pass on {outcome} at {odds_str} with {bk}{_risk_tail} — monitor for value.",
-                # V2 — No-edge setup → take-a-pass close.
-                # Canon: COPYWRITING-DNA §6 "Picking is only half the game".
-                f"The line sits where our probability lands, no edge to engage with. Take a pass on {outcome} at {odds_str} with {bk}{_risk_tail} — monitor closely until value emerges.",
+                f"Leave {outcome} alone at {odds_str} with {bk} for now — the bookmaker's read and ours sit on the same number. Monitor the closing price before any commitment.",
+                # V1 — Worth-waiting frame. Honest, transparent (BRAND-BIBLE-v3 §13 §08 voice "Honest").
+                f"Worth waiting on {outcome} at {odds_str} with {bk} — the price gap isn't there yet. Monitor for value to emerge — better numbers may come closer to kickoff.",
+                # V2 — Take-a-pass frame. COPYWRITING-DNA §6 "Picking is only half the game".
+                f"Take a pass on {outcome} at {odds_str} with {bk} — the line sits where our probability lands and the gap isn't there. Monitor closely until value emerges.",
             ]
         else:
-            # No bookmaker / no odds — fixture-only or pre-pricing context.
-            # Closure rule Strong-band requires odds; this branch fires on
-            # cautious/Bronze where action verb alone is enough.
             _variants = [
-                # V0 — Lines-up setup → take-a-pass close.
-                f"The bookmaker's view and ours line up too closely to chase. Take a pass on {outcome} at the current market number{_risk_tail} — monitor and wait.",
-                # V1 — Worth-waiting setup.
-                f"There's no actionable edge with the line sitting where we'd price it. Take a pass on {outcome} at the current market price{_risk_tail} — monitor for better numbers closer to kickoff.",
-                # V2 — Priced-too-tight setup.
-                f"The bookmaker has it priced where we'd land, so the gap isn't there. Take a pass on {outcome} for now{_risk_tail} — monitor for a shift before any commitment.",
+                # V0 — No-bookmaker leave-it frame.
+                f"Leave {outcome} alone at the current market number — the bookmaker's view and ours line up too closely to chase. Monitor and pass for now.",
+                # V1 — Worth-waiting framing.
+                f"Worth waiting on {outcome} at the current market price — there's no actionable edge with the line sitting where we'd price it. Monitor for better numbers closer to kickoff.",
+                # V2 — Take-a-pass watch framing (no banned "line movement" phrase).
+                f"Take a pass on {outcome} right now — the bookmaker has it priced where we'd land too, so the gap isn't there. Monitor for a shift before any commitment.",
             ]
         _v = _pick(seed, len(_variants))
         return _cap_verdict(_variants[_v])
@@ -3393,139 +3387,124 @@ def _render_verdict(spec: NarrativeSpec) -> str:
     sup = _verdict_support_line(spec)
 
     # ── Bronze — speculative punt, tentative-with-reservation tone ──
-    # FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 (2026-04-29) AC-2:
-    # Restructured so action+team+odds+bookmaker close the verdict. Sentence 1
-    # carries setup + sizing posture; sentence 2 closes with "Take a punt on
-    # {outcome} at {odds_str} with {bk}" or declarative "{outcome} at {odds_str}
-    # with {bk} is the play". V1 declarative form exercises the broadened
-    # closure-rule action cluster surface.
-    # Canon: verdict-generator/SKILL.md tone band (Bronze MILD). Length
-    # targeting [140, 200] with full sup_phrase + risk_tail expansion.
+    # Canon: verdict-generator/SKILL.md tone band (Bronze MILD).
+    # Brief Required (e): tier-banded — Bronze tentative.
+    # 8 variants total (4 supported + 4 unsupported) — same fixture always
+    # routes through the same support-branch since support_level is per-spec.
     if action == "speculative punt":
         seed = seed_base + "specpunt"
-        # Bronze register: every variant carries the brief AC-2 cautious-band
-        # cluster ("speculative punt", "speculative play") so the
-        # test_bronze_w82_speculative_punt_uses_cautious_register validator
-        # confirms cautious-tone vocabulary is in use. These phrases are
-        # flagged on Strong-band tiers but ALLOWED on Bronze per the
-        # FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 tier-aware enforcement.
+        # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2:
+        # Replaced "the bookmaker has slipped" / "without our signals confirming"
+        # — both Rule 17 hits — with concrete SA-voice framing: "the line is
+        # generous", "the price is too long for what we see", "our case for it
+        # is still light". Action verb cluster (Take/Worth) leads V0/V1/V3
+        # since "Punt on" / "Speculative punt on" don't match the cluster.
         if spec.support_level >= 1:
             _variants = [
-                # V0 — Generous-line setup → take-a-punt close.
-                # Canon: BRAND-BIBLE-v3 §09 "value, expected value".
-                f"{(sup + ' and ').capitalize()}the line is generous. Take a punt on {outcome} at {odds_str} with {bk}{_risk_tail} — speculative play.",
-                # V1 — Controlled-exposure setup → declarative close.
-                # Canon: COPYWRITING-DNA §8 "the bookies got this wrong".
-                f"{(sup + ', ').capitalize()}exposure stays controlled. {outcome} at {odds_str} with {bk} is the play{_risk_tail} — speculative punt only.",
-                # V2 — Real-gap setup → take-a-shot close. Carries the
-                # Bronze tier-vocab anchor "no hero call" so
-                # test_r4_tier_banded_vocabulary passes regardless of MD5
-                # variant selection.
-                # Canon: BRAND-BIBLE-v3 §08 "Honest not blunt".
-                f"Gap to fair value is real and {sup}, no hero call. Take a shot on {outcome} at {odds_str} with {bk}{_risk_tail} — speculative play.",
-                # V3 — Soft-line + signal setup → take-as-punt close. Carries
-                # tier-vocab anchor "punt" via "speculative punt".
-                # Canon: COPYWRITING-DNA §6 contrast structure.
-                f"{(sup + ', ').capitalize()}line looks soft. Take {outcome} at {odds_str} with {bk} as a speculative punt{_risk_tail} — no hero call.",
+                # V0 — Take-a-punt frame. SA voice "the line is generous".
+                # Canon: BRAND-BIBLE-v3 §09 "value, expected value" framing.
+                # NOTE: avoids _VERDICT_BLACKLIST hits ("small stake", "keep stakes") — uses "small exposure".
+                # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2: trimmed
+                # to fit [140, 200] soft band when {sup} + {_risk_tail} fully expand.
+                f"Take a punt on {outcome} at {odds_str} ({bk}) — {sup} and the line is generous. Small exposure here, nothing forced{_risk_tail}",
+                # V1 — Worth-a-punt frame. COPYWRITING-DNA §8 "the bookies got this wrong".
+                f"Worth a punt on {outcome} at {odds_str} with {bk}: the line is generous and {sup}. Small exposure on the gap, no hero call here{_risk_tail}",
+                # V2 — Take-a-shot frame. BRAND-BIBLE-v3 §08 "Honest not blunt".
+                f"Take a shot on {outcome} at {odds_str} ({bk}) — the gap to fair value is real and {sup}. Exposure stays controlled, no hero call here{_risk_tail}",
+                # V3 — Calibration play frame. COPYWRITING-DNA §6 contrast structure.
+                f"Take {outcome} at {odds_str} with {bk} as a small-stake call — {sup} and the line looks soft. No hero call on this one{_risk_tail}",
             ]
         else:
             _variants = [
-                # V0 — Soft-line + thin-form setup → take-a-punt close.
-                f"Gap holds without a backer in the recent form. Take a punt on {outcome} at {odds_str} with {bk}{_risk_tail} — speculative punt, small exposure.",
-                # V1 — Light-case setup → declarative close.
-                f"Line is generous and our case is still light. {outcome} at {odds_str} with {bk} is the play{_risk_tail} — speculative play, small exposure.",
-                # V2 — Calibration framing → take-a-shot close.
-                # Canon: COPYWRITING-DNA §13 QA #7 ("educate, reframe").
-                f"Price has room without a clear backer yet. Take a shot on {outcome} at {odds_str} with {bk}{_risk_tail} — speculative play, no hero call.",
-                # V3 — Long-line setup → take-as-punt close.
-                f"Line is long and our case is still building. Take {outcome} at {odds_str} with {bk} as a speculative punt{_risk_tail} — exposure stays light.",
+                # V0 — Take-a-punt, price-only frame. Honest framing.
+                f"Take a punt on {outcome} at {odds_str} ({bk}) — the gap holds without a backer in the recent form yet. Small exposure on the soft line, no hero call here{_risk_tail}",
+                # V1 — Worth-a-punt clean speculative read.
+                f"Worth a punt on {outcome} at {odds_str} with {bk} — the line is generous, but our case for it is still light. Small exposure only on this one, no hero call{_risk_tail}",
+                # V2 — Take-a-shot calibration framing. COPYWRITING-DNA §13 QA #7 ("educate, reframe").
+                f"Take a shot on {outcome} at {odds_str} ({bk}) as a speculative play — the price has room without a clear backer yet. Calibration play at this number, no hero call{_risk_tail}",
+                # V3 — Take-as-a-punt soft-line framing.
+                f"Take {outcome} at {odds_str} ({bk}) as a small-stake punt — the line is long, our case for it is still building. Exposure stays light at this number{_risk_tail}",
             ]
         _v = _pick(seed, len(_variants))
         return _cap_verdict(_variants[_v])
 
     # ── Silver — lean, speculative-with-reasoning tone ──
-    # FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 (2026-04-29) AC-2:
-    # Restructured so action+team+odds+bookmaker close the verdict. Sentence 1
-    # carries setup + measured framing; sentence 2 closes with action verb +
-    # team + odds + bookmaker + sizing tail. V1 uses declarative ("is the
-    # lean") to exercise the broadened closure-rule action cluster surface.
     # Canon: verdict-generator/SKILL.md tone band (Silver STRONG-with-caveat).
+    # 4 variants. NEVER uses "the lean is" (brief Forbidden) — uses "Mild lean
+    # on", "is the lean at", "as a measured play", "is a small-stake call".
     if action == "lean":
         seed = seed_base + "lean"
+        # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2:
+        # Replaced "loud signal backing" / "push the read" / "the read holds"
+        # — all Rule 17 hits via "the read" or signal vocabulary — with SA-voice
+        # phrasing. V0/V1/V2/V3 all carry an action verb (Back/Take/Worth)
+        # since the brief AC-2 test requires ≥25/30 verdicts contain one.
         sup_phrase = sup or "the form holds without a loud backer"
         _variants = [
-            # V0 — Measured setup → back-as-mild-lean close.
-            # Canon: BRAND-BIBLE-v3 §09 "value opportunity".
-            f"{(sup_phrase + ', ').capitalize()}measured rather than loud. Back {outcome} at {odds_str} with {bk} as a mild lean{_risk_tail} — small-to-standard stake.",
-            # V1 — Live-case setup → declarative close.
-            # Canon: COPYWRITING-DNA §8 "real Edge".
-            f"Price has room and {sup_phrase}, the case is live. {outcome} at {odds_str} with {bk} is the lean{_risk_tail} — engage without chasing.",
-            # V2 — Engagement setup → take-as-measured-play close.
-            # Canon: BRAND-BIBLE-v3 §08 "Sharp not cold".
-            f"{(sup_phrase + ', ').capitalize()}enough behind to engage. Take {outcome} at {odds_str} with {bk} as a measured play{_risk_tail}.",
-            # V3 — Numbers-suggest setup → get-on-as-small-stake close.
-            # Canon: SA voice "sized accordingly". Uses "Get on" (in the action-
-            # verb cluster) — "Worth taking" doesn't match `\btake\b` because
-            # of the `-ing` suffix.
-            f"{(sup_phrase + ', ').capitalize()}the numbers suggest the lean. Get on {outcome} at {odds_str} with {bk} as a small-stake call{_risk_tail}.",
+            # V0 — Back-as-mild-lean. BRAND-BIBLE-v3 §09 "value opportunity".
+            f"Back {outcome} at {odds_str} ({bk}) as a mild lean — {sup_phrase}, measured rather than loud. Small-to-standard stake on this one at the current number{_risk_tail}",
+            # V1 — Take-as-the-lean. COPYWRITING-DNA §8 "real Edge".
+            f"Take {outcome} at {odds_str} with {bk} as the lean — the price has room and {sup_phrase}. Engage without chasing on this one, the case is live{_risk_tail}",
+            # V2 — Take-as-a-measured-play. BRAND-BIBLE-v3 §08 "Sharp not cold".
+            f"Take {outcome} at {odds_str} with {bk} as a measured play — {sup_phrase}, enough behind it to engage but not enough to push the stake{_risk_tail}",
+            # V3 — Worth-taking. SA voice "sized accordingly".
+            f"Worth taking {outcome} at {odds_str} ({bk}) as a small-stake call — {sup_phrase}, the numbers suggest the lean and we'll size the play accordingly{_risk_tail}",
         ]
         _v = _pick(seed, len(_variants))
         return _cap_verdict(_variants[_v])
 
     # ── Gold — back, disciplined tone ──
-    # FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 (2026-04-29) AC-2:
-    # Restructured so action+team+odds+bookmaker close the verdict. Sentence 1
-    # carries setup + sizing posture; sentence 2 closes with the bet
-    # recommendation. V2 uses declarative ("is the call") for variant diversity
-    # and to exercise the broadened closure-rule action cluster.
     # Canon: verdict-generator/SKILL.md tone band (Gold SOLID).
+    # 4 variants. Confident but not arrogant — BRAND-BIBLE-v3 §08 "Confident not arrogant".
     if action == "back":
         seed = seed_base + "back"
+        # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2:
+        # Purged "the bookmaker has slipped" (V1+V3 leak), "the case as it
+        # stands" (V1 leak), "play on the read" (V0+V2 — `the read` regex),
+        # "the read has the case" (default sup_phrase). Replaced with "the
+        # line is too long for what we see", "the price has room", "solid
+        # play on the form". Every variant carries an action verb (Back/Take/
+        # Worth/Get on).
         sup_phrase = sup or "the form has the case without overstating it"
         _variants = [
-            # V0 — Setup + room → disciplined-back close.
-            # Canon: COPYWRITING-DNA §8 "smarter choice".
-            f"{(sup_phrase + ' and ').capitalize()}the price has room. Back {outcome} at {odds_str} with {bk}{_risk_tail} — standard stake, disciplined play.",
-            # V1 — Setup + soft-line → take-as-call close.
-            # Canon: BRAND-BIBLE-v3 §09 "supported edge".
-            f"{(sup_phrase + ' and ').capitalize()}the line is too long. Take {outcome} at {odds_str} with {bk}{_risk_tail} — standard stake on this one.",
-            # V2 — Setup + solid-form → declarative close.
-            f"{(sup_phrase + ', ').capitalize()}solid play on the form. {outcome} at {odds_str} with {bk} is the call{_risk_tail} — standard stake.",
-            # V3 — Setup + soft-line → get-on close.
-            # Canon: COPYWRITING-DNA §6 contrast — "Stop X. Start Y."
-            f"{(sup_phrase + ' and ').capitalize()}the line looks soft. Get on {outcome} at {odds_str} with {bk}{_risk_tail} — disciplined back.",
+            # V0 — Disciplined back. COPYWRITING-DNA §8 "smarter choice".
+            f"Back {outcome} at {odds_str} with {bk} — {sup_phrase} and the price has room. The case stands at this number, disciplined play on the form{_risk_tail}",
+            # V1 — Standard-stake frame. BRAND-BIBLE-v3 §09 "supported edge".
+            f"Take {outcome} at {odds_str} with {bk} — {sup_phrase} and the line is too long for what we see. Standard stake on this one at the current number{_risk_tail}",
+            # V2 — Call-is-on frame.
+            f"Take {outcome} at {odds_str} with {bk} as the call — {sup_phrase}, solid play on the form at this number with no need to push the stake{_risk_tail}",
+            # V3 — Get-on frame. COPYWRITING-DNA §6 contrast — "Stop X. Start Y."
+            f"Get on {outcome} at {odds_str} ({bk}) — {sup_phrase} and the line looks soft. Disciplined back at this number, the case stands{_risk_tail}",
         ]
         _v = _pick(seed, len(_variants))
         return _cap_verdict(_variants[_v])
 
     # ── Diamond — strong back, confident tone (one of the better plays) ──
-    # FIX-VERDICT-CACHE-PATH-LOCK-AND-W82-TEMPLATE-CLOSURE-01 (2026-04-29) AC-2:
-    # Restructured so action+team+odds+bookmaker close the verdict. Sentence 1
-    # carries premium-value framing; sentence 2 closes with strong/premium back
-    # of {outcome} at {odds_str} with {bk}. V2 uses declarative ("is the
-    # value") for variant diversity. Diamond MUST hit the 140-char floor and
-    # stay below 200-char ceiling — variants tuned for [150, 195].
     # Canon: verdict-generator/SKILL.md tone band (Diamond MAX) + BRAND-BIBLE-v3
     # §09 "High conviction edge", "premium value".
+    # 4 variants. SA Braai Voice via "the case is built", "premium back".
     seed = seed_base + "strongback"
+    # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2:
+    # Replaced "the depth of confirming signals most edges don't get" with
+    # SA-voice "the depth of evidence most edges don't carry". V2 previously
+    # said "Premium value on the read" — `the read` regex hit; replaced with
+    # "Premium value on the form".
     sup_phrase = sup or "the depth of evidence most edges don't carry"
     _variants = [
-        # V0 — Case-built setup → premium-back close.
-        # Canon: COPYWRITING-DNA §1b "Edges as Treasure" + Diamond rarity.
-        f"{(sup_phrase + ', ').capitalize()}the case is built. Premium back on {outcome} at {odds_str} with {bk}{_risk_tail} — standard-to-heavy stake.",
-        # V1 — Better-plays setup → strong-back close.
-        # Canon: BRAND-BIBLE-v3 §08 "Confident not arrogant" (no "confident"
-        # in rendered output — boundary phrase per
-        # test_rendered_verdict_never_emits_confident).
-        f"{(sup_phrase + ', ').capitalize()}one of the better plays today. Strong back on {outcome} at {odds_str} with {bk}{_risk_tail} — full stake at this number.",
-        # V2 — Mispriced-line setup → declarative close.
-        # Canon: BRAND-BIBLE-v3 §09 "market mispriced".
-        f"Line is priced too soft and {sup_phrase}, premium value. {outcome} at {odds_str} with {bk} is the value{_risk_tail} — back with conviction.",
-        # V3 — Premium-thick setup → back-with-conviction close.
-        # Canon: COPYWRITING-DNA §10 "controlled, premium". Carries the
-        # tier-vocab anchor "premium value" so test_r4_tier_banded_vocabulary
-        # passes regardless of MD5 variant selection.
-        f"{(sup_phrase + ', ').capitalize()}premium value here. Back {outcome} at {odds_str} with {bk} on conviction{_risk_tail} — size up at this number.",
+        # V0 — Premium back. COPYWRITING-DNA §1b "Edges as Treasure" + Diamond rarity.
+        f"Premium back on {outcome} at {odds_str} with {bk} — {sup_phrase}, the case is built and the number holds. Standard-to-heavy stake on this one{_risk_tail}",
+        # V1 — Strong back conviction. BRAND-BIBLE-v3 §08 "Confident not arrogant".
+        f"Strong back on {outcome} at {odds_str} ({bk}) — {sup_phrase}, this is one of the better plays today and the price holds at this number{_risk_tail}",
+        # V2 — Market-mispriced framing. BRAND-BIBLE-v3 §09 "market mispriced".
+        f"Take {outcome} at {odds_str} with {bk} with conviction — the line is priced too soft and {sup_phrase}. Premium value on the form at this number{_risk_tail}",
+        # V3 — Back with confidence. COPYWRITING-DNA §10 "controlled, premium".
+        # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2: tail rewritten
+        # to clear the [140, 200] window in BOTH no-risk-factor (139 chars
+        # was the regression) and full-risk-factor (210 chars was the cap-fail)
+        # cases. "edges rarely live this thick" is +5 chars over the previous
+        # "edges live thinner" tail and still under the 200-char ceiling when
+        # the risk_tail fully expands.
+        f"Back {outcome} with {bk} at {odds_str} on conviction — {sup_phrase}, premium value on a card where edges rarely live this thick{_risk_tail}",
     ]
     _v = _pick(seed, len(_variants))
     return _cap_verdict(_variants[_v])
