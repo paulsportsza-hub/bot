@@ -1,5 +1,3 @@
-<!-- VARIANT: LIST -->
-<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -8,117 +6,341 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root { --text-secondary: #B3B3B3; }
-        html, body { margin: 0; padding: 0; background: #000000; }
+        html, body {
+            margin: 0; padding: 0; background: #000000;
+        }
         body {
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
-            width: 480px; padding: 2px; box-sizing: content-box;
+            width: 480px;
         }
-        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+            --target-color: #B9F2FF;
+            --target-color-2: #8EE6F8;
+            --target-color-soft: #B9F2FF22;
+            --target-color-glow: #B9F2FF60;
+        }
+
+        /* ── Header (canonical — diamond-target glow) ── */
         .header {
-            text-align: center; padding: 22px 20px 14px;
-            background: linear-gradient(180deg, #0D0D0D, #141414);
-            border-bottom: 1px solid #2A2A2A;
+            position: relative;
+            text-align: center;
+            padding: 20px 20px 14px;
+            isolation: isolate;
+            overflow: hidden;
         }
-        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
-        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
-        .orange-bar {
+        .logo-glow {
+            position: absolute;
+            inset: -10px 0 0 0;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                var(--target-color-glow) 0%, var(--target-color-soft) 45%, transparent 75%);
+        }
+        .logo-glow-screen {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                var(--target-color-glow) 0%, var(--target-color-soft) 50%, transparent 80%);
+        }
+        .header > .logo-img,
+        .header > .logo-fallback,
+        .header > .target-bar,
+        .header > .title,
+        .header > .subline { position: relative; z-index: 1; }
+        .logo-img {
+            height: 32px; width: auto;
+            display: block; margin: 0 auto;
+        }
+        .target-bar {
             height: 3px;
-            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
-            margin: 10px 20px; border-radius: 2px;
+            background: linear-gradient(90deg, var(--target-color-2), var(--target-color), var(--target-color-2));
+            margin: 10px 20px;
+            border-radius: 2px;
         }
-        .title { font-size: 14px; font-weight: 700; color: #B9F2FF; letter-spacing: 3px; }
-        .body { padding: 16px 20px; }
-        .current-tier {
-            font-size: 13px; color: var(--text-secondary);
-            margin-bottom: 14px; padding-bottom: 12px;
-            border-bottom: 1px solid #1E1E1E;
+        .title {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--target-color);
+            letter-spacing: 3px;
+            margin-bottom: 5px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            justify-content: center;
         }
-        .current-tier strong { color: #FFD700; }
+        .title .gem { font-size: 16px; line-height: 1; }
+        .subline {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        /* ── Body ──────────────────────────────────────────────── */
+        .body {
+            padding: 14px 20px 16px;
+        }
+
+        /* Current → target row */
+        .current-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+        }
+        .current-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: #FFD7000A;
+            border: 1px solid #FFD70040;
+            border-left: 3px solid #FFD700;
+            border-radius: 8px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 800;
+            color: #FFD700;
+            letter-spacing: 0.3px;
+        }
+        .current-chip-emoji { font-size: 14px; }
+
+        /* Pitch */
         .pitch {
-            font-size: 14px; color: #FFFFFF; font-weight: 600;
-            margin-bottom: 14px;
+            font-size: 14.5px;
+            color: #FFFFFF;
+            font-weight: 700;
+            margin-bottom: 10px;
+            line-height: 1.35;
+            letter-spacing: -0.2px;
         }
-        .feature-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+
+        /* Lock note */
+        .lock-note {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #B9F2FF0A;
+            border: 1px solid #B9F2FF30;
+            border-left: 3px solid #B9F2FF;
+            border-radius: 10px;
+            padding: 9px 13px;
+            margin-bottom: 12px;
+            font-size: 11.5px;
+            color: var(--target-color);
+            font-weight: 600;
+            line-height: 1.35;
+            overflow: hidden;
+            isolation: isolate;
+        }
+        .lock-glow {
+            position: absolute;
+            inset: -30px -10px;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 50% 90% at 0% 50%,
+                var(--target-color-soft) 0%, transparent 70%);
+        }
+        .lock-note > .lock-icon,
+        .lock-note > .lock-text { position: relative; z-index: 1; }
+        .lock-icon { font-size: 13px; flex-shrink: 0; }
+        .lock-text strong { color: #FFFFFF; font-weight: 700; }
+
+        /* Feature list */
+        .feature-list {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            margin-bottom: 12px;
+        }
         .feature {
-            display: flex; align-items: flex-start; gap: 10px;
-            padding: 10px 14px; background: #0F0F0F;
-            border-radius: 6px; border-left: 3px solid #B9F2FF;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 9px 13px;
+            background: #111111;
+            border: 1px solid #1E1E1E;
+            border-left: 3px solid var(--target-color);
+            border-radius: 8px;
+            font-size: 12px;
+            color: #FFFFFF;
+            line-height: 1.4;
         }
-        .feature-icon { font-size: 16px; flex-shrink: 0; }
-        .feature-text { font-size: 12px; color: #FFFFFF; }
-        .feature-text span { color: var(--text-secondary); font-size: 11px; }
+        .feature-bullet {
+            color: var(--target-color);
+            font-weight: 800;
+            font-size: 14px;
+            line-height: 1.2;
+            flex-shrink: 0;
+        }
+
+        /* Price block */
         .price-block {
-            background: #B9F2FF10; border: 1px solid #B9F2FF30;
-            border-radius: 8px; padding: 14px 16px; margin-bottom: 10px;
+            position: relative;
+            background: #0F0F0F;
+            border: 1px solid #2A2A2A;
+            border-left: 3px solid var(--target-color);
+            border-radius: 10px;
+            padding: 11px 14px;
+            margin-bottom: 8px;
+            overflow: hidden;
+            isolation: isolate;
         }
+        .price-glow {
+            position: absolute;
+            inset: -30px -10px;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 50% 90% at 0% 50%,
+                var(--target-color-soft) 0%, transparent 70%);
+        }
+        .price-block > .price-main,
+        .price-block > .price-sub { position: relative; z-index: 1; }
         .price-main {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 22px; font-weight: 700; color: #B9F2FF;
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--target-color);
+            letter-spacing: -0.5px;
+            line-height: 1.1;
         }
-        .price-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
-        .price-sub span { color: #F7931A; }
+        .price-sub {
+            font-size: 11.5px;
+            color: var(--text-secondary);
+            margin-top: 3px;
+        }
+        .price-sub .save {
+            color: #F7931A;
+            font-weight: 700;
+        }
+
+        /* Founding banner */
         .founding-banner {
+            position: relative;
+            margin-top: 8px;
             background: linear-gradient(135deg, #1A1200, #2A1E00);
-            border: 1px solid #F7931A50; border-radius: 8px;
-            padding: 12px 16px; margin-top: 6px;
+            border: 1px solid #F7931A55;
+            border-radius: 10px;
+            padding: 9px 13px;
+            overflow: hidden;
+            isolation: isolate;
         }
-        .founding-title { font-size: 12px; font-weight: 700; color: #F7931A; margin-bottom: 4px; }
-        .founding-body  { font-size: 11px; color: #FFBE45; }
+        .founding-glow {
+            position: absolute;
+            inset: -20px -10px;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(8px);
+            background: radial-gradient(ellipse 60% 120% at 100% 50%,
+                #F7931A40 0%, #F7931A14 45%, transparent 80%);
+        }
+        .founding-banner > .founding-title,
+        .founding-banner > .founding-body { position: relative; z-index: 1; }
+        .founding-title {
+            font-size: 11.5px;
+            font-weight: 800;
+            color: #F7931A;
+            letter-spacing: 0.5px;
+            margin-bottom: 3px;
+        }
+        .founding-body {
+            font-size: 11px;
+            color: #FFBE45;
+            line-height: 1.4;
+        }
         .founding-price {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 15px; font-weight: 700; color: #F7931A;
-        }
-        .lock-note {
-            font-size: 11px; color: #B9F2FF80;
-            background: #B9F2FF08; border: 1px solid #B9F2FF20;
-            border-radius: 6px; padding: 8px 12px; margin-bottom: 12px;
+            font-size: 13px;
+            font-weight: 700;
+            color: #F7931A;
         }
     </style>
 </head>
 <body>
 <div class="card">
+
+    <!-- Header -->
     <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
-        <div class="logo-fallback">MzansiEdge</div>
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
         {% endif %}
-        <div class="orange-bar"></div>
-        <div class="title">UPGRADE TO 💎 DIAMOND</div>
+        <div class="target-bar"></div>
+        <div class="title">
+            <span>UPGRADE TO</span>
+            <span class="gem">💎</span>
+            <span>DIAMOND</span>
+        </div>
+        <div class="subline">One step from our best plan</div>
     </div>
+
+    <!-- Body -->
     <div class="body">
-        <div class="current-tier">You are on <strong>🥇 Gold</strong>.</div>
+
+        <!-- Current row -->
+        <div class="current-row">
+            <span>You are on</span>
+            <span class="current-chip">
+                <span class="current-chip-emoji">🥇</span>
+                <span>GOLD</span>
+            </span>
+        </div>
+
+        <!-- Pitch -->
         <div class="pitch">{{ diamond_pitch | e }}</div>
 
+        <!-- Lock note -->
         {% if lock_note is defined and lock_note %}
-        <div class="lock-note">🔒 {{ lock_note | e }}</div>
+        <div class="lock-note">
+            <div class="lock-glow"></div>
+            <span class="lock-icon">🔒</span>
+            <span class="lock-text">{{ lock_note | e }}</span>
+        </div>
         {% endif %}
 
+        <!-- Feature list -->
         <div class="feature-list">
-            {% set icons = ["📈", "💰", "📊", "🎯"] %}
             {% for feat in features %}
             <div class="feature">
-                <div class="feature-icon">{{ icons[loop.index0 % 4] }}</div>
-                <div class="feature-text">{{ feat | e }}</div>
+                <span class="feature-bullet">▸</span>
+                <span>{{ feat | e }}</span>
             </div>
             {% endfor %}
         </div>
 
+        <!-- Price block -->
         <div class="price-block">
+            <div class="price-glow"></div>
             <div class="price-main">R199/mo</div>
-            <div class="price-sub">Annual: R1,599/yr <span>(save 33%)</span></div>
+            <div class="price-sub">Annual: R1,599/yr <span class="save">(save 33%)</span></div>
         </div>
 
+        <!-- Founding banner (conditional) -->
         {% if founding_offer %}
         <div class="founding-banner">
+            <div class="founding-glow"></div>
             <div class="founding-title">🎁 FOUNDING MEMBER DEAL</div>
             <div class="founding-body">
                 <span class="founding-price">R{{ founding_offer.annual_price }}/yr</span>
-                — {{ founding_offer.days_left }} days left to lock it in.
+                — {{ founding_offer.days_left }} days left to lock it in
             </div>
         </div>
         {% endif %}
+
     </div>
+
 </div>
 </body>
 </html>
