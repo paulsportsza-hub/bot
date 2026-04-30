@@ -1,5 +1,3 @@
-<!-- VARIANT: LIST -->
-<!-- BRIEF: BUILD-WAVE1-SUB-01 -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -8,64 +6,190 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root { --text-secondary: #B3B3B3; }
-        html, body { margin: 0; padding: 0; background: #000000; }
+        html, body {
+            margin: 0; padding: 0; background: #000000;
+        }
         body {
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
-            width: 480px; padding: 2px; box-sizing: content-box;
+            width: 480px;
         }
-        .card { width: 100%; background: #0A0A0A; border-radius: 0; overflow: hidden; }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+        }
+
+        /* ── Header (canonical — brand-orange logo glow) ── */
         .header {
-            text-align: center; padding: 22px 20px 14px;
-            background: linear-gradient(180deg, #1A0A00, #1F1000);
-            border-bottom: 1px solid #F7931A40;
+            position: relative;
+            text-align: center;
+            padding: 20px 20px 14px;
+            isolation: isolate;
+            overflow: hidden;
         }
-        .logo-img { height: 30px; width: auto; display: block; margin: 0 auto; }
-        .logo-fallback { font-size: 14px; font-weight: 700; color: #F7931A; }
+        .logo-glow {
+            position: absolute;
+            inset: -10px 0 0 0;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
+        }
+        .logo-glow-screen {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+        }
+        .header > .logo-img,
+        .header > .logo-fallback,
+        .header > .orange-bar,
+        .header > .title,
+        .header > .subline { position: relative; z-index: 1; }
+        .logo-img {
+            height: 32px; width: auto;
+            display: block; margin: 0 auto;
+        }
         .orange-bar {
             height: 3px;
-            background: linear-gradient(90deg, #FF4444, #FF6B00, #F7931A);
-            margin: 10px 20px; border-radius: 2px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
         }
-        .title { font-size: 14px; font-weight: 700; color: #FF6B00; letter-spacing: 3px; }
-        .body { padding: 24px 20px; }
-        .error-icon { font-size: 40px; text-align: center; display: block; margin-bottom: 16px; }
+        .title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: 3px;
+            margin-bottom: 5px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .title .alert {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px; height: 18px;
+            background: #FF5252;
+            color: #FFFFFF;
+            border-radius: 50%;
+            font-size: 12px;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: 0;
+        }
+        .subline {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        /* ── Body ──────────────────────────────────────────────── */
+        .body {
+            padding: 18px 20px 20px;
+        }
+
+        /* Error box with red left-border accent */
         .error-box {
-            background: #FF6B0010; border: 1px solid #FF6B0040;
-            border-radius: 8px; padding: 14px 16px;
-            margin-bottom: 16px;
+            position: relative;
+            background: #1A0F0F;
+            border: 1px solid #FF525240;
+            border-left: 3px solid #FF5252;
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            overflow: hidden;
+            isolation: isolate;
         }
+        .error-glow {
+            position: absolute;
+            inset: -30px -10px;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 50% 90% at 0% 50%,
+                #FF525222 0%, transparent 70%);
+        }
+        .error-box > .error-label,
+        .error-box > .error-message { position: relative; z-index: 1; }
         .error-label {
-            font-size: 10px; color: #FF6B00;
-            text-transform: uppercase; letter-spacing: 1.5px;
-            margin-bottom: 6px; font-weight: 600;
+            font-size: 10px;
+            color: #FF7777;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            margin-bottom: 5px;
+            font-weight: 700;
         }
-        .error-message { font-size: 13px; color: #FFFFFF; line-height: 1.5; }
+        .error-message {
+            font-size: 13px;
+            color: #FFFFFF;
+            line-height: 1.5;
+            font-weight: 500;
+        }
+
+        /* Support line */
         .support-line {
-            font-size: 12px; color: var(--text-secondary);
-            margin-bottom: 12px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+            line-height: 1.4;
         }
-        .support-line a, .support-line span { color: #F7931A; font-weight: 600; }
-        .cta-hint {
-            font-size: 12px; color: var(--text-secondary);
-            padding-top: 12px; border-top: 1px solid #1E1E1E;
+        .support-line .handle {
+            color: #F7931A;
+            font-weight: 700;
+            background: #F7931A14;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+        }
+
+        /* Trailing instruction (no border) */
+        .instruction {
+            font-size: 11.5px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            padding-top: 4px;
+        }
+        .instruction strong { color: #FFFFFF; font-weight: 700; }
+        .instruction code {
+            font-family: 'JetBrains Mono', monospace;
+            color: #F7931A;
+            font-weight: 700;
+            background: #F7931A14;
+            padding: 1px 5px;
+            border-radius: 3px;
         }
     </style>
 </head>
 <body>
 <div class="card">
+
+    <!-- Header -->
     <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
-        <div class="logo-fallback">MzansiEdge</div>
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
         {% endif %}
         <div class="orange-bar"></div>
-        <div class="title">PAYMENT ERROR</div>
+        <div class="title">
+            <span>PAYMENT ERROR</span>
+            <span class="alert">!</span>
+        </div>
+        <div class="subline">We couldn't complete your payment</div>
     </div>
-    <div class="body">
-        <span class="error-icon">⚠️</span>
 
+    <!-- Body -->
+    <div class="body">
         <div class="error-box">
+            <div class="error-glow"></div>
             <div class="error-label">What went wrong</div>
             <div class="error-message">
                 {% if error_message %}{{ error_message | e }}{% else %}Something went wrong setting up your payment. Please try again.{% endif %}
@@ -74,12 +198,15 @@
 
         {% if support_handle %}
         <div class="support-line">
-            Need help? Contact <span>{{ support_handle | e }}</span>
+            Need help? Contact <span class="handle">{{ support_handle | e }}</span>
         </div>
         {% endif %}
 
-        <div class="cta-hint">Tap <strong style="color:#FFFFFF">Try Again</strong> below or use /subscribe to restart.</div>
+        <div class="instruction">
+            Tap <strong>Try Again</strong> below or use <code>/subscribe</code> to restart.
+        </div>
     </div>
+
 </div>
 </body>
 </html>
