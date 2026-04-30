@@ -285,10 +285,15 @@ def test_e2e_diamond_critical_refuse_on_cautious_punt():
 
 
 def test_e2e_silver_major_quarantine_on_limited_edge():
-    """Silver verdict with `limited edge` returns MAJOR quarantine."""
+    """Silver verdict with `limited edge` returns MAJOR quarantine.
+
+    FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30): closing sentence has
+    been updated to retain an action verb so Gate 10 (closure rule) does not
+    fire CRITICAL — the test still asserts the strong_band_tone MAJOR.
+    """
     verdict_html = (
         "Take Brighton at 1.78 with Betway — limited edge on this one, "
-        "but the price has room. Small-to-standard stake."
+        "but the price has room. Take Brighton at 1.78 with Betway."
     )
     content = {
         "narrative_html": "",
@@ -297,7 +302,9 @@ def test_e2e_silver_major_quarantine_on_limited_edge():
         "narrative_source": "w82",
     }
     result = _validate_narrative_for_persistence(
-        content, evidence_pack=None, edge_tier="silver",
+        content,
+        evidence_pack={"home_team": "Brighton", "away_team": "Wolves"},
+        edge_tier="silver",
         source_label="w82",
     )
     # Silver hit = MAJOR (not CRITICAL). Result still fails (passed=False)

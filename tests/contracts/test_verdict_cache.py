@@ -33,11 +33,15 @@ def _rejected_verdict() -> str:
 
 
 def _gold_pass_verdict() -> str:
-    """A 180-char verdict with analytical vocabulary, passes gold floor."""
+    """A 180-char verdict with analytical vocabulary, passes gold floor.
+
+    FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30): closing sentence
+    must close with action verb + team + odds (Gold tier closure rule).
+    """
     return (
         "Arsenal at 1.85 on Betway remains the call. The model gives fair probability "
-        "around 58% — a clear signal, supported by recent form, against a line that is "
-        "moving in the opposite direction."
+        "around 58% — a clear signal, supported by recent form, against a line moving "
+        "in the opposite direction. Back Arsenal at 1.85 with Betway."
     )
 
 
@@ -85,7 +89,12 @@ class TestVerdictCachePreWriteGate(unittest.TestCase):
         )
 
     def test_passing_verdict_proceeds_to_db_write(self):
-        """A 180-char verdict passes the gate and reaches the DB layer."""
+        """A 180-char verdict passes the gate and reaches the DB layer.
+
+        FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30): tip_data must
+        include evidence_pack with home/away team names so the new Gate 10
+        closure rule can match the closing sentence team check.
+        """
         fake_conn = MagicMock()
         # Simulate "row does not exist yet" so INSERT path runs.
         fake_conn.execute.return_value.fetchone.return_value = None
@@ -94,7 +103,13 @@ class TestVerdictCachePreWriteGate(unittest.TestCase):
             _bot._store_verdict_cache_sync(
                 _MATCH_KEY,
                 _gold_pass_verdict(),
-                {"edge_tier": "gold"},
+                {
+                    "edge_tier": "gold",
+                    "evidence_pack": {
+                        "home_team": "Arsenal",
+                        "away_team": "Chelsea",
+                    },
+                },
             )
         # Connection factory was invoked — gate did NOT reject.
         assert mock_conn.call_count == 1

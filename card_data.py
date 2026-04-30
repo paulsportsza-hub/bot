@@ -1427,6 +1427,383 @@ def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
     )
 
 
+# FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-4 (restored from
+# reverted b585c69).
+#
+# Breakdown visibility gate. Paul's directive (verbatim): "rather don't show AI
+# breakdown unless there's something worth a monthly subscription behind it
+# because breaking our image-only rule and showing this vague, generic crap is
+# honestly worse than the alternative."
+#
+# Show the "🤖 Full AI Breakdown" button ONLY WHEN ALL 5 conditions hold:
+#   1. narrative_source IN ('w84','w84-haiku-fallback') — Sonnet / Haiku polish
+#      landed, not a W82 baseline.
+#   2. status IS NULL OR status NOT IN ('quarantined','deferred') — gate is a
+#      strict superset of the existing reader filter (Rule 19 + 20).
+#   3. Setup section ≥ 200 chars AND ≥ 3 named entities (team / manager /
+#      specific number ending in goals/points/wins/losses/meetings).
+#   4. Edge section ≥ 100 chars AND ≥ 1 bookmaker name AND ≥ 1 odds-shape match.
+#   5. Risk section ≥ 100 chars AND ≥ 1 specific risk noun from the curated list.
+#
+# When the gate returns False the bot.py keyboard builder skips the breakdown
+# button entirely; the card surface still includes the verdict (which has
+# already passed AC-1 closure rule + AC-2 vague-content ban). Card image +
+# CTA + "↩️ Back" remain.
+
+# Section quality thresholds — locked from brief AC-4.
+_BREAKDOWN_SETUP_MIN_CHARS = 200
+_BREAKDOWN_SETUP_MIN_ENTITIES = 3
+_BREAKDOWN_EDGE_MIN_CHARS = 100
+_BREAKDOWN_RISK_MIN_CHARS = 100
+
+# Polish-quality narrative sources. W82 baseline is intentionally excluded —
+# even though synthesis-on-tap can still serve it on read, we don't surface
+# the button for it (visibility gate is stricter than read availability).
+_BREAKDOWN_POLISH_SOURCES: frozenset[str] = frozenset({
+    "w84",
+    "w84-haiku-fallback",
+})
+
+# Statuses that disqualify a row even when narrative_source is polish-quality.
+# Quarantined = post-write integrity check fired; deferred = pregen retry chain
+# still in flight (Rule 23 Wave 2 chain).
+_BREAKDOWN_DISQUALIFYING_STATUSES: frozenset[str] = frozenset({
+    "quarantined",
+    "deferred",
+})
+
+# SA bookmaker names — case-insensitive substring match against the Edge
+# section. Mirrors `config.SA_BOOKMAKERS` short_name keys plus historical
+# spellings observed in pregen output.
+_BREAKDOWN_BOOKMAKER_NAMES: frozenset[str] = frozenset({
+    "betway",
+    "hollywoodbets",
+    "supabets",
+    "sportingbet",
+    "gbets",
+    "playabets",
+    "wsb",
+    "10bet",
+    "betxchange",
+    "world sports betting",
+})
+
+# Odds shape — same regex semantics as the validator AC-1 closure rule.
+_BREAKDOWN_ODDS_RE = _re.compile(
+    r"(?:\b[1-9]\d?\.\d{2}\b|\b\d+/\d+\b|(?:^|\s)[+-]\d{2,4}\b)"
+)
+
+# Curated risk-noun list. 30 tokens covering soccer/rugby/cricket/combat/generic.
+_BREAKDOWN_RISK_NOUNS: tuple[str, ...] = (
+    # Player / squad availability
+    "injury", "injuries",
+    "rotation", "rotations",
+    "fatigue",
+    "suspension", "suspensions",
+    "rest", "rested", "resting",
+    "lineup", "lineups",
+    "starting eleven", "starting xi",
+    "absence", "absences",
+    "travel",
+    # Form / fixture
+    "away record",
+    "derby",
+    "cup distraction",
+    "fixture congestion",
+    "schedule",
+    "tournament",
+    # Conditions
+    "weather", "wind", "rain", "heat",
+    "pitch", "surface",
+    "altitude",
+    "kickoff time", "kick-off time",
+    # In-match
+    "referee", "ref",
+    "var",
+    "late goals",
+    "set piece", "set-piece",
+    "discipline", "red card", "yellow card",
+    # Combat / cricket-specific
+    "weight cut",
+    "toss",
+    "conditions",
+    # Market / structural
+    "line movement", "movement",
+    "stale price",
+)
+_BREAKDOWN_RISK_NOUNS_RE = _re.compile(
+    r"\b(?:" + "|".join(
+        _re.escape(n) for n in sorted(_BREAKDOWN_RISK_NOUNS, key=len, reverse=True)
+    ) + r")\b",
+    _re.IGNORECASE,
+)
+
+# Named-entity heuristic patterns. Specific numbers ending in points / goals /
+# wins / losses / meetings / matches / runs / wickets / KOs / etc.
+_BREAKDOWN_NUMERIC_ENTITY_RE = _re.compile(
+    r"\b\d+(?:\.\d+)?\s*"
+    r"(?:points?|pts|goals?|wins?|losses?|defeats?|draws?|meetings?|"
+    r"matches?|games?|tries|tries?|runs?|wickets?|kos?|knockouts?|"
+    r"submissions?|finishes?|fights?|bonus\s+points?)"
+    r"\b",
+    _re.IGNORECASE,
+)
+
+
+def _section_extract_for_quality(narrative_html: str, section_key: str) -> str:
+    """Extract a section's prose body (header line stripped) for quality scan.
+
+    Mirrors the section-extraction logic in ``build_ai_breakdown_data`` but
+    is exposed for external use. Returns empty string when the section
+    marker is absent.
+    """
+    if not narrative_html:
+        return ""
+    section_markers = [
+        ("setup",   r"📋\s*<b>The Setup</b>"),
+        ("edge",    r"🎯\s*<b>The Edge</b>"),
+        ("risk",    r"⚠️\s*<b>The Risk</b>"),
+        ("verdict", r"🏆\s*<b>Verdict</b>"),
+        ("odds",    r"<b>SA Bookmaker Odds:</b>"),
+    ]
+    positions: list[tuple[str, int]] = []
+    for name, pat in section_markers:
+        m = _re.search(pat, narrative_html)
+        if m:
+            positions.append((name, m.start()))
+    positions.sort(key=lambda x: x[1])
+    start_idx = next((p for n, p in positions if n == section_key), None)
+    if start_idx is None:
+        return ""
+    next_pos = None
+    for _name, _pos in positions:
+        if _pos > start_idx:
+            next_pos = _pos
+            break
+    section_html = (
+        narrative_html[start_idx:next_pos].strip()
+        if next_pos else
+        narrative_html[start_idx:].strip()
+    )
+    first_newline = section_html.find("\n")
+    if first_newline != -1:
+        section_html = section_html[first_newline:].strip()
+    else:
+        section_html = ""
+    return section_html.strip()
+
+
+def _section_plain_text(html: str) -> str:
+    """Strip HTML tags and collapse whitespace for length / scan checks."""
+    if not html:
+        return ""
+    plain = _re.sub(r"<[^>]+>", "", html)
+    return _re.sub(r"\s+", " ", plain).strip()
+
+
+def _count_setup_named_entities(
+    setup_text: str,
+    home_team: str,
+    away_team: str,
+    manager_names: tuple[str, ...] = (),
+) -> int:
+    """Count distinct named entities in the Setup section.
+
+    Counts unique entities (saying a name 3 times still = 1 entity).
+    Brief AC-4 threshold is 3.
+    """
+    if not setup_text:
+        return 0
+    text_lower = setup_text.lower()
+    seen: set[str] = set()
+
+    for raw in (home_team, away_team):
+        name = (raw or "").strip().lower()
+        if not name:
+            continue
+        if " " in name:
+            if name in text_lower:
+                seen.add(f"team:{name}")
+        else:
+            if _re.search(r"\b" + _re.escape(name) + r"\b", text_lower):
+                seen.add(f"team:{name}")
+
+    for mgr in manager_names:
+        mgr_clean = (mgr or "").strip().lower()
+        if not mgr_clean:
+            continue
+        if _re.search(r"\b" + _re.escape(mgr_clean) + r"\b", text_lower):
+            seen.add(f"mgr:{mgr_clean}")
+
+    for m in _BREAKDOWN_NUMERIC_ENTITY_RE.finditer(setup_text):
+        seen.add(f"num:{m.group(0).lower().strip()}")
+
+    return len(seen)
+
+
+def _check_setup_quality(
+    setup_html: str,
+    home_team: str,
+    away_team: str,
+    manager_names: tuple[str, ...] = (),
+) -> tuple[bool, str]:
+    """Return (passed, reason). Reason is empty when passed."""
+    plain = _section_plain_text(setup_html)
+    if len(plain) < _BREAKDOWN_SETUP_MIN_CHARS:
+        return (False, f"setup_len={len(plain)}<{_BREAKDOWN_SETUP_MIN_CHARS}")
+    entities = _count_setup_named_entities(
+        plain, home_team, away_team, manager_names,
+    )
+    if entities < _BREAKDOWN_SETUP_MIN_ENTITIES:
+        return (
+            False,
+            f"setup_entities={entities}<{_BREAKDOWN_SETUP_MIN_ENTITIES}",
+        )
+    return (True, "")
+
+
+def _check_edge_quality(edge_html: str) -> tuple[bool, str]:
+    """Return (passed, reason). Edge ≥ 100 chars + bookmaker + odds shape."""
+    plain = _section_plain_text(edge_html)
+    if len(plain) < _BREAKDOWN_EDGE_MIN_CHARS:
+        return (False, f"edge_len={len(plain)}<{_BREAKDOWN_EDGE_MIN_CHARS}")
+    plain_lower = plain.lower()
+    has_bookmaker = any(bk in plain_lower for bk in _BREAKDOWN_BOOKMAKER_NAMES)
+    if not has_bookmaker:
+        return (False, "edge_missing_bookmaker_name")
+    if not _BREAKDOWN_ODDS_RE.search(plain):
+        return (False, "edge_missing_odds_shape")
+    return (True, "")
+
+
+def _check_risk_quality(risk_html: str) -> tuple[bool, str]:
+    """Return (passed, reason). Risk ≥ 100 chars + ≥ 1 specific risk noun."""
+    plain = _section_plain_text(risk_html)
+    if len(plain) < _BREAKDOWN_RISK_MIN_CHARS:
+        return (False, f"risk_len={len(plain)}<{_BREAKDOWN_RISK_MIN_CHARS}")
+    if not _BREAKDOWN_RISK_NOUNS_RE.search(plain):
+        return (False, "risk_missing_specific_risk_noun")
+    return (True, "")
+
+
+def compute_breakdown_visibility(
+    narrative_cache_row: dict | None,
+    evidence_pack: dict | None = None,
+) -> bool:
+    """Return True iff the AI Breakdown button should be visible for this row.
+
+    Parameters
+    ----------
+    narrative_cache_row
+        Dict (or dict-like) with at minimum: ``narrative_html``,
+        ``narrative_source``, optional ``status``. Missing any required key
+        returns False (defensive).
+    evidence_pack
+        Optional dict with ``home_team``, ``away_team``, and optional
+        ``coaches`` (list/tuple of manager surnames).
+
+    Returns
+    -------
+    bool
+        True when ALL 5 visibility conditions hold; False otherwise.
+    """
+    if not isinstance(narrative_cache_row, dict):
+        return False
+
+    narrative_source = (narrative_cache_row.get("narrative_source") or "").lower()
+    if narrative_source not in _BREAKDOWN_POLISH_SOURCES:
+        return False
+
+    status = (narrative_cache_row.get("status") or "").lower()
+    if status in _BREAKDOWN_DISQUALIFYING_STATUSES:
+        return False
+
+    narrative_html = narrative_cache_row.get("narrative_html") or ""
+    if not narrative_html.strip():
+        return False
+
+    setup_html = _section_extract_for_quality(narrative_html, "setup")
+    edge_html = _section_extract_for_quality(narrative_html, "edge")
+    risk_html = _section_extract_for_quality(narrative_html, "risk")
+
+    home_team = ""
+    away_team = ""
+    manager_names: tuple[str, ...] = ()
+    if isinstance(evidence_pack, dict):
+        home_team = str(evidence_pack.get("home_team") or "").strip()
+        away_team = str(evidence_pack.get("away_team") or "").strip()
+        coaches = evidence_pack.get("coaches") or ()
+        if isinstance(coaches, (list, tuple)):
+            manager_names = tuple(str(c).strip() for c in coaches if c)
+
+    setup_ok, _setup_reason = _check_setup_quality(
+        setup_html, home_team, away_team, manager_names,
+    )
+    if not setup_ok:
+        return False
+
+    edge_ok, _edge_reason = _check_edge_quality(edge_html)
+    if not edge_ok:
+        return False
+
+    risk_ok, _risk_reason = _check_risk_quality(risk_html)
+    if not risk_ok:
+        return False
+
+    return True
+
+
+def compute_breakdown_visibility_reasons(
+    narrative_cache_row: dict | None,
+    evidence_pack: dict | None = None,
+) -> list[str]:
+    """Diagnostic variant — returns an ordered list of failed conditions.
+
+    Empty list ⇔ ``compute_breakdown_visibility`` returns True.
+    """
+    failures: list[str] = []
+    if not isinstance(narrative_cache_row, dict):
+        return ["row_not_dict"]
+
+    narrative_source = (narrative_cache_row.get("narrative_source") or "").lower()
+    if narrative_source not in _BREAKDOWN_POLISH_SOURCES:
+        failures.append(f"narrative_source={narrative_source!r}_not_polish")
+    status = (narrative_cache_row.get("status") or "").lower()
+    if status in _BREAKDOWN_DISQUALIFYING_STATUSES:
+        failures.append(f"status={status!r}_disqualifying")
+    narrative_html = narrative_cache_row.get("narrative_html") or ""
+    if not narrative_html.strip():
+        failures.append("narrative_html_empty")
+
+    if narrative_html.strip():
+        setup_html = _section_extract_for_quality(narrative_html, "setup")
+        edge_html = _section_extract_for_quality(narrative_html, "edge")
+        risk_html = _section_extract_for_quality(narrative_html, "risk")
+
+        home_team = ""
+        away_team = ""
+        manager_names: tuple[str, ...] = ()
+        if isinstance(evidence_pack, dict):
+            home_team = str(evidence_pack.get("home_team") or "").strip()
+            away_team = str(evidence_pack.get("away_team") or "").strip()
+            coaches = evidence_pack.get("coaches") or ()
+            if isinstance(coaches, (list, tuple)):
+                manager_names = tuple(str(c).strip() for c in coaches if c)
+
+        s_ok, s_reason = _check_setup_quality(
+            setup_html, home_team, away_team, manager_names,
+        )
+        if not s_ok:
+            failures.append(s_reason)
+        e_ok, e_reason = _check_edge_quality(edge_html)
+        if not e_ok:
+            failures.append(e_reason)
+        r_ok, r_reason = _check_risk_quality(risk_html)
+        if not r_ok:
+            failures.append(r_reason)
+    return failures
+
+
 def build_ai_breakdown_data(match_id: str) -> dict | None:
     """Build template data for the Full AI Breakdown card.
 

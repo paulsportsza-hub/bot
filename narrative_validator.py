@@ -209,6 +209,284 @@ _STRONG_BAND_INCOMPATIBLE_RE: tuple[tuple[re.Pattern[str], str], ...] = tuple(
 )
 
 
+# FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-1 (restored from
+# reverted b585c69; AC-1 broadened per current brief).
+#
+# Verdict closure rule: the LAST sentence of verdict_html MUST close with an
+# ACTUAL verdict. Live failure case 1 (Liverpool vs Chelsea, Gold, 1.97
+# Supabets, 29 Apr 2026 ~20:25 SAST):
+#   "What stands out: Slot's Reds have picked up two wins in their last three,
+#    while Chelsea are in terrible form with five losses from their last five."
+# Reads like a Setup observation. Validator passed it because tier-band tone is
+# fine, no telemetry vocab, no banned phrases — but it never tells the user to
+# back anyone. Closure-rule gate catches this structurally.
+#
+# Live failure case (this brief, 30 Apr 2026 ~15:55 SAST, Gujarat Titans vs
+# RCB Gold 1.72 WSB):
+#   "The data has a cleaner read on Royal Challengers Bengaluru's recent form
+#    than on Gujarat Titans' — that's where the analysis starts."
+# Same architectural failure mode — Setup-style opener as the entire verdict.
+#
+# Three components in the closing sentence:
+#   1. Action verb cluster (case-insensitive, word-boundary).
+#   2. Team / selection name (matches evidence_pack home/away OR betting selection).
+#   3. Odds shape (decimal OR fraction OR American).
+#
+# Tier-aware enforcement (caller policy):
+#   - Diamond + Gold (Strong-band): all 3 → PASS. Missing ANY → CRITICAL.
+#   - Silver: action verb required; team OR odds optional but at least one.
+#     Missing both → CRITICAL.
+#   - Bronze: action verb required; team / odds optional.
+#     Missing action verb → CRITICAL.
+_VERDICT_ACTION_VERBS: tuple[str, ...] = (
+    # Imperative cluster (locked from b585c69 + verdict-generator skill rubric).
+    r"back",
+    r"take",
+    r"bet\s+on",
+    r"get\s+on",
+    r"put\s+(?:your\s+)?money\s+on",
+    r"hammer\s+it\s+on",
+    r"get\s+behind",
+    r"lean\s+on",
+    r"ride",
+    r"smash",
+)
+
+# AC-1 broadening (this brief): the action verb cluster regex must accept BOTH
+# imperative and declarative shapes. Manchester City example "Guardiola's City
+# are the pick at Supabets 1.36." passes via the declarative branch; the
+# Liverpool-Chelsea Setup-style closer (no verb at all) still fails.
+_VERDICT_ACTION_RE: re.Pattern[str] = re.compile(
+    r"\b(?:back|take|bet\s+on|get\s+on|put\s+your\s+money|hammer\s+it|"
+    r"get\s+behind|lean\s+on|ride|smash)\b"
+    r"|\bis\s+the\s+(?:pick|play|call|lean|bet|value)\b",
+    re.IGNORECASE,
+)
+
+# Odds shape: decimal (1.36-99.99), fraction (1/2, 11/10, 100/1), American (+150/-200).
+# Decimal range narrows to plausible betting odds; rejects "5.0" alone and "12.5 goals".
+_VERDICT_ODDS_RE: re.Pattern[str] = re.compile(
+    r"(?:"
+    r"\b[1-9]\d?\.\d{2}\b"  # decimal: 1.36, 1.97, 12.50
+    r"|"
+    r"\b\d+/\d+\b"  # fraction: 11/10, 100/1
+    r"|"
+    r"(?:^|\s)[+-]\d{2,4}\b"  # American: +150, -200, +1000
+    r")"
+)
+
+# Selection-name vocabulary: betting-market keywords that count as a "selection"
+# even when the team name is absent.
+_VERDICT_SELECTION_KEYWORDS: tuple[str, ...] = (
+    r"home\s+win",
+    r"away\s+win",
+    r"draw",
+    r"over\s+\d+(?:\.\d+)?",
+    r"under\s+\d+(?:\.\d+)?",
+    r"btts",
+    r"both\s+teams\s+to\s+score",
+    r"clean\s+sheet",
+    r"asian\s+handicap",
+    r"handicap",
+    r"to\s+win",
+    r"to\s+score",
+    r"first\s+goalscorer",
+    r"correct\s+score",
+    r"double\s+chance",
+    r"draw\s+no\s+bet",
+)
+_VERDICT_SELECTION_RE: re.Pattern[str] = re.compile(
+    r"\b(?:" + "|".join(_VERDICT_SELECTION_KEYWORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _last_sentence(text: str) -> str:
+    """Return the last non-empty sentence from ``text`` after HTML strip.
+
+    Tokenisation: split on ``[.!?]\\s+`` (sentence terminators followed by
+    whitespace), take the last non-empty segment. Trailing punctuation is
+    stripped. Empty input returns empty string.
+    """
+    if not text:
+        return ""
+    plain = _HTML_TAG_RE.sub("", text).strip()
+    if not plain:
+        return ""
+    parts = re.split(r"[.!?]\s+", plain)
+    nonempty = [p.strip() for p in parts if p and p.strip()]
+    if not nonempty:
+        return ""
+    last = nonempty[-1]
+    return last.rstrip(" \t.!?;,…—–-").strip()
+
+
+def _verdict_closure_components(
+    verdict_text: str,
+    home_team: str = "",
+    away_team: str = "",
+) -> tuple[bool, bool, bool]:
+    """Return (has_action, has_team_or_selection, has_odds) for closing sentence."""
+    last = _last_sentence(verdict_text)
+    if not last:
+        return (False, False, False)
+    has_action = bool(_VERDICT_ACTION_RE.search(last))
+    has_odds = bool(_VERDICT_ODDS_RE.search(last))
+
+    last_lower = last.lower()
+    team_hit = False
+    for raw in (home_team, away_team):
+        name = (raw or "").strip().lower()
+        if not name:
+            continue
+        if " " in name:
+            if name in last_lower:
+                team_hit = True
+                break
+        else:
+            if re.search(r"\b" + re.escape(name) + r"\b", last_lower):
+                team_hit = True
+                break
+
+    selection_hit = bool(_VERDICT_SELECTION_RE.search(last))
+    has_team_or_selection = team_hit or selection_hit
+    return (has_action, has_team_or_selection, has_odds)
+
+
+def _check_verdict_closure_rule(
+    verdict_html: str,
+    edge_tier: str,
+    evidence_pack: dict | None,
+) -> tuple[Severity | None, str]:
+    """Apply tier-aware closure-rule enforcement to verdict_html.
+
+    Returns ``(None, "")`` when the verdict closes correctly for its tier.
+    Returns ``("CRITICAL", reason)`` when the closing sentence fails the rule.
+    """
+    if not verdict_html:
+        return (None, "")
+    tier = (edge_tier or "").lower()
+    home_team = ""
+    away_team = ""
+    if isinstance(evidence_pack, dict):
+        home_team = str(evidence_pack.get("home_team") or "").strip()
+        away_team = str(evidence_pack.get("away_team") or "").strip()
+    has_action, has_team, has_odds = _verdict_closure_components(
+        verdict_html, home_team, away_team,
+    )
+    last = _last_sentence(verdict_html)
+    sample = last[:120] if last else ""
+
+    if tier in ("diamond", "gold"):
+        missing: list[str] = []
+        if not has_action:
+            missing.append("action_verb")
+        if not has_team:
+            missing.append("team_or_selection")
+        if not has_odds:
+            missing.append("odds_shape")
+        if missing:
+            return (
+                "CRITICAL",
+                f"Strong-band ({tier}) closing sentence missing "
+                f"{','.join(missing)}; sample={sample!r}",
+            )
+        return (None, "")
+
+    if tier == "silver":
+        if not has_action:
+            return (
+                "CRITICAL",
+                f"Silver closing sentence missing action_verb; "
+                f"sample={sample!r}",
+            )
+        if not (has_team or has_odds):
+            return (
+                "CRITICAL",
+                f"Silver closing sentence missing both team_or_selection "
+                f"and odds_shape; sample={sample!r}",
+            )
+        return (None, "")
+
+    if tier == "bronze":
+        if not has_action:
+            return (
+                "CRITICAL",
+                f"Bronze closing sentence missing action_verb; "
+                f"sample={sample!r}",
+            )
+        return (None, "")
+
+    return (None, "")
+
+
+# FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-2 (restored from
+# reverted b585c69 + 1 new whole-verdict-is-opener pattern).
+#
+# Vague-content pattern ban. Live failure case 2 (Manchester United vs
+# Liverpool, Gold, 2.38 Supabets, 29 Apr 2026 ~20:25 SAST): the AI Breakdown
+# read like an empty-calorie market summary — "looks like the sort of league
+# fixture that takes shape once one side settles into its preferred tempo",
+# "the play is live without being loud", "Risk reads clean here. The model and
+# standard match volatility are the only live variables."
+#
+# Tier policy (caller):
+#   - Diamond + Gold hit → CRITICAL (refuse write).
+#   - Silver / Bronze hit → MAJOR (quarantine).
+VAGUE_CONTENT_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"\blooks?\s+like\s+the\s+sort\s+of\b", "looks like the sort of"),
+    (r"\btakes?\s+shape\b", "takes shape"),
+    (r"\bsettles?\s+into\s+its?\s+(?:preferred\s+)?tempo\b",
+     "settles into its preferred tempo"),
+    (r"\breads?\s+clean\s+here\b", "reads clean here"),
+    (r"\b(?:the\s+)?only\s+live\s+variables?\b", "only live variables"),
+    (r"\bplay\s+is\s+live\s+without\s+being\s+loud\b",
+     "play is live without being loud"),
+    (r"\bmeasured\s+rather\s+than\s+loud\b", "measured rather than loud"),
+    (r"\bstandard\s+match\s+volatility\b", "standard match volatility"),
+    (r"\bthe\s+model\s+and\b", "the model and"),
+    (r"\beverything\s+we\s+have\s+points\s+the\s+same\s+way\b",
+     "everything we have points the same way"),
+    (r"\bthe\s+sort\s+of\s+(?:fixture|match|game|league)\b",
+     "the sort of fixture"),
+    (r"\bonce\s+one\s+side\s+settles\b", "once one side settles"),
+    (r"\bnot\s+a\s+huge\s+edge\b", "not a huge edge"),
+    (
+        r"\bbut\s+(?:supabets|betway|hollywoodbets|gbets|wsb|sportingbet)"
+        r"(?:\'?s)?\s+\d+\.\d{2}\s+is\s+still\b",
+        "but bookmaker odds is still better",
+    ),
+    # FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (this brief, AC-2 addition):
+    # "The data has a cleaner read on X — that's where the analysis starts."
+    # Anchored: matches a verdict whose ENTIRE content is a Setup-style opener
+    # with no closing recommendation. Card 1 verbatim text from 30 Apr 15:55 SAST.
+    (
+        r"^\s*the\s+data\s+has\s+a\s+cleaner\s+read\s+on\s+.*?\s+—\s+that.s\s+where\s+the\s+analysis\s+starts\.?\s*$",
+        "data has a cleaner read on (whole-verdict opener)",
+    ),
+)
+
+_VAGUE_CONTENT_RE: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pat, re.IGNORECASE), label)
+    for pat, label in VAGUE_CONTENT_PATTERNS
+)
+
+
+def _check_vague_content_patterns(text: str) -> list[str]:
+    """Return deduped list of vague-content pattern hits found in ``text``."""
+    if not text:
+        return []
+    hits: list[str] = []
+    seen: set[str] = set()
+    for compiled, label in _VAGUE_CONTENT_RE:
+        if label in seen:
+            continue
+        if compiled.search(text):
+            hits.append(label)
+            seen.add(label)
+    return hits
+
+
 # Hedging-conditional-opener detection (separate gate per brief AC-1).
 #
 # Rule: Strong-band verdicts MUST NOT have their first clause end with a
@@ -907,6 +1185,73 @@ def _validate_narrative_for_persistence(
                     match_id, source_label, edge_tier, verdict_html[:100],
                 )
 
+    # ── Gate 10: Verdict closure rule (FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01) ─
+    # AC-1: the LAST sentence of verdict_html MUST close with an action verb
+    # (imperative OR declarative) plus tier-aware (team, odds) requirements.
+    # Live failure case 1 (Liverpool vs Chelsea Gold 1.97 Supabets, 29 Apr 2026)
+    # and Card 1 (Gujarat Titans vs RCB Gold 1.72 WSB, 30 Apr 2026): verdict
+    # closed on Setup-style opener without ever telling the user to back anyone.
+    if verdict_html:
+        sev_close, reason_close = _check_verdict_closure_rule(
+            verdict_html, edge_tier, evidence_pack,
+        )
+        if sev_close:
+            failures.append(
+                ValidationFailure(
+                    gate="verdict_closure_rule",
+                    severity=sev_close,
+                    detail=reason_close,
+                    section=_SECTION_VERDICT_HTML,
+                )
+            )
+            log.warning(
+                "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 "
+                "ValidatorVerdictClosureRule match_id=%s source=%s tier=%s reason=%s",
+                match_id, source_label, edge_tier, reason_close,
+            )
+
+    # ── Gate 11: Vague-content pattern ban (FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01) ─
+    # AC-2: scan narrative_html (Setup, Edge, Risk, Verdict surfaces) and
+    # verdict_html for empty-calorie / generic-prose patterns. Premium tier
+    # hit → CRITICAL; non-premium → MAJOR.
+    vague_severity: Severity = (
+        "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
+    )
+    if narrative_html:
+        narr_vague_hits = _check_vague_content_patterns(narrative_html)
+        if narr_vague_hits:
+            failures.append(
+                ValidationFailure(
+                    gate="vague_content",
+                    severity=vague_severity,
+                    detail=f"hits={narr_vague_hits!r}",
+                    section="narrative_html",
+                )
+            )
+            log.warning(
+                "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 "
+                "ValidatorVagueContent match_id=%s source=%s tier=%s "
+                "section=narrative hits=%r",
+                match_id, source_label, edge_tier, narr_vague_hits,
+            )
+    if verdict_html:
+        v_vague_hits = _check_vague_content_patterns(verdict_html)
+        if v_vague_hits:
+            failures.append(
+                ValidationFailure(
+                    gate="vague_content",
+                    severity=vague_severity,
+                    detail=f"verdict hits={v_vague_hits!r}",
+                    section=_SECTION_VERDICT_HTML,
+                )
+            )
+            log.warning(
+                "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 "
+                "ValidatorVagueContent match_id=%s source=%s tier=%s "
+                "section=verdict_html hits=%r",
+                match_id, source_label, edge_tier, v_vague_hits,
+            )
+
     # ── Outcome ──────────────────────────────────────────────────────────────
     crit = [f for f in failures if f.severity == "CRITICAL"]
     major = [f for f in failures if f.severity == "MAJOR"]
@@ -922,4 +1267,65 @@ def _validate_narrative_for_persistence(
         passed=(len(crit) == 0 and len(major) == 0),
         failures=failures,
         severity=sev,
+    )
+
+
+# FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-3.
+#
+# Verdict-only validator subset. Wired into every verdict-cache write site
+# (currently `_store_verdict_cache_sync` in bot.py). Runs the verdict-relevant
+# gates from `_validate_narrative_for_persistence`:
+#   - Venue leaks in verdict_html (Gate 6 mirror)
+#   - BANNED_NARRATIVE_PHRASES on verdict_html (Gate 7 mirror)
+#   - Telemetry vocabulary on verdict_html (Gate 8 mirror)
+#   - Strong-band tone on verdict_html (Gate 9 mirror)
+#   - Closure rule on verdict_html (Gate 10)
+#   - Vague-content patterns on verdict_html (Gate 11)
+#   - min_verdict_quality (single MAJOR-or-CRITICAL gate)
+#
+# This is a thin wrapper around `_validate_narrative_for_persistence` that
+# passes an empty narrative_html so only verdict-relevant gates fire. Tier
+# enforcement is the caller's responsibility (writer applies the matrix).
+def _validate_verdict_for_persistence(
+    verdict_html: str,
+    edge_tier: str,
+    evidence_pack: dict | None,
+    source_label: str,
+) -> ValidationResult:
+    """Verdict-only validator for verdict-cache write paths.
+
+    Parameters
+    ----------
+    verdict_html
+        The verdict surface to validate. Empty string → empty result (passed).
+    edge_tier
+        Tier label ("diamond" | "gold" | "silver" | "bronze"). Used for
+        tier-aware Gate 9/11 severity (caller policy applies tier-aware
+        write decisions on the result).
+    evidence_pack
+        Optional evidence dict — needed for the closure-rule team check.
+        ``None`` skips team match (selection keywords still count).
+    source_label
+        Source label for log markers (e.g. ``"verdict-cache"``).
+
+    Returns
+    -------
+    ValidationResult
+        Reports findings; never makes write decisions.
+    """
+    if not verdict_html:
+        return ValidationResult(passed=True)
+    return _validate_narrative_for_persistence(
+        content={
+            "narrative_html": "",
+            "verdict_html": verdict_html,
+            "match_id": (
+                evidence_pack.get("match_id", "")
+                if isinstance(evidence_pack, dict) else ""
+            ),
+            "narrative_source": source_label,
+        },
+        evidence_pack=evidence_pack if isinstance(evidence_pack, dict) else None,
+        edge_tier=edge_tier,
+        source_label=source_label,
     )

@@ -14407,9 +14407,21 @@ def _build_hot_tips_detail_rows(
     rows: list[list[InlineKeyboardButton]] = []
     if primary_button is not None:
         rows.append([primary_button])
-    # Full AI Breakdown button — only when has_narrative (W82-quality Sonnet narrative exists)
-    # and user_tier is explicitly passed (main analysis view)
-    if has_narrative and user_tier is not None and match_key:
+    # Full AI Breakdown button — gated by has_narrative AND visibility
+    # (FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 AC-4). The visibility gate enforces
+    # narrative_source ∈ {w84, w84-haiku-fallback} plus per-section quality
+    # thresholds (≥200 chars + 3 entities for Setup, ≥100 chars + bookmaker +
+    # odds for Edge, ≥100 chars + risk noun for Risk). Hides the button on W82
+    # baselines, quarantined / deferred rows, and any row whose sections fail
+    # quality. user_tier presence is still required so the gate doesn't fire on
+    # contexts that don't pass it (e.g. early bootstrap callsites).
+    _show_breakdown_btn = (
+        has_narrative
+        and user_tier is not None
+        and bool(match_key)
+        and _breakdown_button_visible(match_key)
+    )
+    if _show_breakdown_btn:
         _bk = _shorten_cb_key(match_key, max_len=64 - len("edge:breakdown:"))
         if user_tier == "diamond":
             rows.append([InlineKeyboardButton(
@@ -14928,6 +14940,91 @@ def _has_any_cached_narrative(match_id: str) -> bool:
             return False
         finally:
             conn.close()
+    except Exception:
+        return False
+
+
+def _breakdown_button_visible(match_id: str) -> bool:
+    """FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-4.
+
+    Return True iff the "🤖 Full AI Breakdown" button should be visible for
+    this match. Stricter than ``_has_any_cached_narrative`` — that function
+    gates content reachability (Rule 20 mechanical-consistency); this one
+    gates BUTTON visibility per Paul's directive: "rather don't show AI
+    breakdown unless there's something worth a monthly subscription behind
+    it because breaking our image-only rule and showing this vague, generic
+    crap is honestly worse than the alternative."
+
+    Five conditions (all must hold):
+      1. narrative_source IN ('w84','w84-haiku-fallback') — polish landed.
+      2. status IS NULL OR status NOT IN ('quarantined','deferred').
+      3. Setup section ≥ 200 chars + ≥ 3 named entities.
+      4. Edge section ≥ 100 chars + ≥ 1 bookmaker name + ≥ 1 odds shape.
+      5. Risk section ≥ 100 chars + ≥ 1 specific risk noun.
+
+    Best-effort: any DB error returns False (button hidden).
+    """
+    if not match_id:
+        return False
+    try:
+        from card_data import compute_breakdown_visibility as _cbv
+        from db_connection import get_connection as _gc
+        conn = _gc(_NARRATIVE_DB_PATH, timeout_ms=1500)
+        try:
+            try:
+                row = conn.execute(
+                    "SELECT narrative_html, narrative_source, "
+                    "       COALESCE(status, '') AS status "
+                    "FROM narrative_cache "
+                    "WHERE match_id = ? "
+                    "  AND COALESCE(quarantined, 0) = 0 "
+                    "  AND narrative_html IS NOT NULL "
+                    "  AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0 "
+                    "LIMIT 1",
+                    (match_id,),
+                ).fetchone()
+            except Exception:
+                # Older DBs may lack the status column — fall back without it.
+                row = conn.execute(
+                    "SELECT narrative_html, narrative_source, '' AS status "
+                    "FROM narrative_cache "
+                    "WHERE match_id = ? "
+                    "  AND narrative_html IS NOT NULL "
+                    "  AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0 "
+                    "LIMIT 1",
+                    (match_id,),
+                ).fetchone()
+            if not row:
+                return False
+            narrative_html, narrative_source, status = row
+            # Try to extract home/away from match_id for evidence_pack so the
+            # named-entity counter has team names to match against. Mirrors the
+            # extraction used in card_data.build_ai_breakdown_data.
+            import re as _re_v
+            home_team = ""
+            away_team = ""
+            mid_nodate = _re_v.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_id)
+            if "_vs_" in mid_nodate:
+                _h_raw, _a_raw = mid_nodate.split("_vs_", 1)
+                home_team = " ".join(w.capitalize() for w in _h_raw.split("_"))
+                away_team = " ".join(w.capitalize() for w in _a_raw.split("_"))
+            visible = _cbv(
+                {
+                    "narrative_html": narrative_html,
+                    "narrative_source": narrative_source,
+                    "status": status,
+                },
+                {
+                    "home_team": home_team,
+                    "away_team": away_team,
+                },
+            )
+            return bool(visible)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
     except Exception:
         return False
 
@@ -15857,44 +15954,72 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
             pass
         return
 
-    # FIX-NARRATIVE-ROT-ROOT-01 Phase 2: route verdict-cache through unified validator.
-    # Verdict-cache writes only carry verdict_html (no narrative_html) — only the
-    # verdict-level gates fire. evidence_pack is None here (tip_data carries a
-    # tip dict, not the full pack), so manager + claim gates skip silently.
+    # FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-3.
+    # Route verdict-cache through the dedicated `_validate_verdict_for_persistence`
+    # helper (verdict-only subset of the unified validator). Tier-aware
+    # enforcement matrix matching AC-1:
+    #   - Diamond + Gold: CRITICAL → refuse write (log PremiumVerdictRefused).
+    #   - Silver: CRITICAL → refuse; MAJOR → write with quality_status='quarantined'.
+    #   - Bronze: CRITICAL → refuse; MAJOR → log + write.
+    # MINOR severity is informational; never blocks.
+    _vc_quality_status: str | None = None
     try:
-        from narrative_validator import _validate_narrative_for_persistence as _vncfp
-        _vc_validation = _vncfp(
-            content={
-                "narrative_html": "",
-                "verdict_html": verdict_html,
-                "match_id": match_key,
-                "narrative_source": "verdict-cache",
-            },
-            evidence_pack=_evidence_pack if isinstance(_evidence_pack, dict) else None,
+        from narrative_validator import _validate_verdict_for_persistence as _vvfp
+        # The verdict-only validator wraps `_validate_narrative_for_persistence`;
+        # gates 6 (verdict venue), 7 (banned phrases), 8 (telemetry), 9
+        # (strong-band tone), 10 (closure rule), 11 (vague content) all fire
+        # against verdict_html when narrative_html is empty.
+        _vc_pack = _evidence_pack if isinstance(_evidence_pack, dict) else None
+        # Inject match_id into the pack so the validator log markers carry it.
+        if _vc_pack is not None and "match_id" not in _vc_pack:
+            _vc_pack = dict(_vc_pack)
+            _vc_pack["match_id"] = match_key
+        elif _vc_pack is None:
+            _vc_pack = {"match_id": match_key}
+        _vc_validation = _vvfp(
+            verdict_html=verdict_html,
             edge_tier=_tier,
+            evidence_pack=_vc_pack,
             source_label="verdict-cache",
         )
         if not _vc_validation.passed:
             _vc_crit = _vc_validation.critical_count > 0
             _vc_gates = ",".join(f.gate for f in _vc_validation.failures)
+            _vc_premium = _tier in ("diamond", "gold")
             if _vc_crit:
+                if _vc_premium:
+                    log.warning(
+                        "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 PremiumVerdictRefused "
+                        "match_key=%s tier=%s gates=%s",
+                        match_key, _tier, _vc_gates,
+                    )
+                else:
+                    log.warning(
+                        "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 VerdictCacheCriticalRefused "
+                        "match_key=%s tier=%s gates=%s",
+                        match_key, _tier, _vc_gates,
+                    )
+                return
+            # MAJOR severity — Silver/Bronze write with quarantined status flag,
+            # Premium tiers shouldn't reach here (CRITICAL already short-circuited),
+            # but defence-in-depth: refuse premium MAJOR too.
+            if _vc_premium:
                 log.warning(
-                    "FIX-NARRATIVE-ROT-ROOT-01 VerdictCacheRefused "
-                    "match_key=%s tier=%s gates=%s",
+                    "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 PremiumVerdictRefused "
+                    "match_key=%s tier=%s gates=%s severity=MAJOR",
                     match_key, _tier, _vc_gates,
                 )
                 return
-            # MAJOR-only: log and continue — verdict-cache is best-effort and the
-            # serve-time min_verdict_quality gate already gives belt-and-suspenders.
             log.warning(
-                "FIX-NARRATIVE-ROT-ROOT-01 VerdictCacheMajor "
+                "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 VerdictCacheQuarantined "
                 "match_key=%s tier=%s gates=%s",
                 match_key, _tier, _vc_gates,
             )
+            _vc_quality_status = "quarantined"
     except Exception as _vc_exc:
         # Validator failures must never block verdict-cache writes — log and proceed.
         log.warning(
-            "FIX-NARRATIVE-ROT-ROOT-01 VerdictCacheValidatorErr "
+            "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 VerdictCacheValidatorErr "
             "match_key=%s err=%s",
             match_key, _vc_exc,
         )
@@ -15936,6 +16061,20 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
                         expires.isoformat(),
                     ),
                 )
+            # FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-3.
+            # Apply quarantine flag post-write when validator returned MAJOR on
+            # non-premium tiers. Best-effort: a row that landed without a
+            # quality_status column survives; the AI Breakdown visibility gate
+            # already filters on quarantined rows via its DISQUALIFYING_STATUSES.
+            if _vc_quality_status == "quarantined":
+                try:
+                    conn.execute(
+                        "UPDATE narrative_cache SET quality_status = ? "
+                        "WHERE match_id = ?",
+                        (_vc_quality_status, match_key),
+                    )
+                except Exception:
+                    pass
             conn.commit()
         finally:
             conn.close()
@@ -24259,11 +24398,20 @@ def _build_game_buttons(
     if primary_button is not None:
         buttons.append([primary_button])
 
-    # Full AI Breakdown button — only when a W82-quality Sonnet narrative exists.
-    # has_narrative must be explicitly True; source=="edge_picks" no longer overrides.
+    # Full AI Breakdown button — gated by has_narrative (Rule 20 read-side
+    # consistency) AND visibility (FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 AC-4).
+    # The visibility gate enforces narrative_source ∈ {w84, w84-haiku-fallback}
+    # plus per-section quality thresholds (≥200 chars + 3 entities for Setup,
+    # ≥100 chars + bookmaker + odds for Edge, ≥100 chars + risk noun for Risk).
+    # Hides the button on W82 baselines, quarantined / deferred rows, and any
+    # row whose sections fail quality.
     # "edge:breakdown:" is 15 chars → Telegram 64-byte limit leaves max 49 chars for the key.
     _BREAKDOWN_KEY_MAX = 64 - len("edge:breakdown:")  # 49
-    _show_breakdown = has_narrative
+    _show_breakdown = (
+        has_narrative
+        and bool(match_key)
+        and _breakdown_button_visible(match_key)
+    )
     _breakdown_key = _shorten_cb_key(match_key, max_len=_BREAKDOWN_KEY_MAX) if (match_key and _show_breakdown) else ""
     if _breakdown_key:
         if user_tier == "diamond":
@@ -24429,6 +24577,7 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
     # polish-failure window — show the "updating" banner instead.
     if isinstance(_bd, dict) and _bd.get("deferred"):
         _bd_reason = "quarantine" if _bd.get("quarantine_reason") else "defer"
+        _bd_tier_lower = (_bd.get("edge_tier") or "").lower()
         log.info(
             "FIX-AI-BREAKDOWN-DEFERRED-PLACEHOLDER-RENDER-01 PlaceholderServed "
             "match_id=%s reason=%s tier=%s",
@@ -24437,10 +24586,21 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
             _bd.get("edge_tier", ""),
         )
         _bd_back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
+        # FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-4:
+        # tier-aware placeholder copy. Diamond / Gold get tier-specific text;
+        # Silver / Bronze fall back to generic "full breakdown" (per AC-4 the
+        # visibility gate hides the button on lower tiers anyway, so the
+        # generic copy is a defence-in-depth fallback).
+        if _bd_tier_lower == "diamond":
+            _bd_tier_label = "Diamond breakdown"
+        elif _bd_tier_lower == "gold":
+            _bd_tier_label = "Gold breakdown"
+        else:
+            _bd_tier_label = "breakdown"
         _placeholder_msg = (
             "🔄 <b>AI Breakdown updating</b>\n\n"
             "Our analyst polish for this premium card is regenerating right now. "
-            "Refresh in a few minutes — the full Diamond breakdown will be ready."
+            f"Refresh in a few minutes — the full {_bd_tier_label} will be ready."
         )
         await _serve_response(
             query,
