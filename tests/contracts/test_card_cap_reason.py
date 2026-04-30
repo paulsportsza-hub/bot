@@ -31,6 +31,25 @@ class TestResolveCapReason:
         assert reason
         assert "SA-domestic" in reason
 
+    def test_urc_silver_returns_reason(self):
+        tip = {"league_key": "urc"}
+        reason = _resolve_cap_reason(tip, "silver")
+        assert reason
+        assert "Capped at Silver" in reason
+        assert "URC" in reason
+
+    def test_urc_silver_via_league_field(self):
+        tip = {"league": "urc"}
+        reason = _resolve_cap_reason(tip, "silver")
+        assert reason
+        assert "URC" in reason
+
+    def test_urc_bronze_returns_empty(self):
+        assert _resolve_cap_reason({"league_key": "urc"}, "bronze") == ""
+
+    def test_urc_gold_returns_empty(self):
+        assert _resolve_cap_reason({"league_key": "urc"}, "gold") == ""
+
     def test_super_rugby_bronze_returns_empty(self):
         # bronze BELOW the cap — no cap text on a card that wasn't capped.
         assert _resolve_cap_reason({"league_key": "super_rugby"}, "bronze") == ""
@@ -104,6 +123,20 @@ class TestBuildEdgeDetailData:
         ))
         assert data["cap_reason"]
         assert "SA-domestic" in data["cap_reason"]
+
+    def test_urc_silver_carries_cap_reason(self):
+        data = build_edge_detail_data(self._base_tip(
+            league_key="urc", league_display="URC", edge_tier="silver"
+        ))
+        assert data["cap_reason"]
+        assert "URC" in data["cap_reason"]
+        assert "Capped at Silver" in data["cap_reason"]
+
+    def test_urc_bronze_card_no_cap_reason(self):
+        data = build_edge_detail_data(self._base_tip(
+            league_key="urc", league_display="URC", edge_tier="bronze"
+        ))
+        assert data["cap_reason"] == ""
 
     def test_no_tier_card_has_empty_cap_reason(self):
         # No-edge cards (display_tier=None path): cap_reason key still present, empty
