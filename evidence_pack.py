@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from config import ODDS_DB_PATH, ENRICHMENT_DB_PATH, TIPSTER_DB_PATH
+
+logger = logging.getLogger(__name__)
 
 ODDS_DB = str(ODDS_DB_PATH)
 ENRICHMENT_DB = str(ENRICHMENT_DB_PATH)
@@ -265,7 +268,15 @@ class EvidencePack:
     sources_available: int = 0
     sources_total: int = 8
     coverage_metrics: CoverageMetrics | None = field(default=None)
+    # BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01: ESPN scoreboard venue
+    # promotion. Single field, empty default preserves cache backward-compat.
     venue: str = ""
+    # BUILD-EVIDENCE-ENRICH-FOOTBALL-DATA-ORG-01: free-tier football-data.org enrichment.
+    # Soccer (UCL/EPL) only initially. Empty defaults preserve cache backward-compat:
+    # pre-fix narrative_cache rows deserialise unchanged, prompt block skips when empty.
+    competition_stage: str = ""
+    matchday: int | None = None
+    referee: str = ""
 
 
 def _utc_now_iso() -> str:
@@ -1453,6 +1464,29 @@ async def build_evidence_pack(
         pack.h2h = _build_h2h_from_espn(ctx, home_name, away_name)
     if pack.h2h is None:
         pack.h2h = H2HBlock(provenance=_empty_source("h2h", error="No verified H2H rows."))
+
+    # BUILD-EVIDENCE-ENRICH-FOOTBALL-DATA-ORG-01: soccer-only stage/matchday/referee
+    # backstop via football-data.org free tier. Soft-fails on missing key,
+    # unsupported league, or API outage — fetch_fixture_meta() returns {} on
+    # any non-success path (no network call for unsupported leagues). Rugby +
+    # cricket get separate enrichers (INV-EVIDENCE-PACK-ENRICHMENT-01 waves 4 + 5).
+    if sport == "soccer":
+        try:
+            from scrapers.football_data_org import fetch_fixture_meta as _fdorg_fetch
+            _fdorg_meta = await _run_with_timeout(
+                _fdorg_fetch, match_key, league, timeout=4.0, fallback={}
+            )
+        except Exception as _fdorg_exc:  # noqa: BLE001 — best-effort enrichment
+            logger.warning("football-data.org enrichment skipped (%s)", _fdorg_exc)
+            _fdorg_meta = {}
+        if isinstance(_fdorg_meta, dict) and _fdorg_meta:
+            pack.competition_stage = str(_fdorg_meta.get("competition_stage") or "")
+            _md = _fdorg_meta.get("matchday")
+            try:
+                pack.matchday = int(_md) if _md is not None else None
+            except (TypeError, ValueError):
+                pack.matchday = None
+            pack.referee = str(_fdorg_meta.get("referee") or "")
 
     pack.richness_score, pack.sources_available = _score_richness(pack)
 
@@ -2689,6 +2723,18 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
     # alongside MATCH / COMPETITION / SPORT / EVIDENCE RICHNESS.
     if pack.venue:
         prompt_parts.append(f"VENUE: {pack.venue}")
+    # BUILD-EVIDENCE-ENRICH-FOOTBALL-DATA-ORG-01: per-match enrichment from
+    # football-data.org (UCL stage / EPL referee / matchday). Lives in the
+    # dynamic post-split block alongside other per-match metadata. Rule 22
+    # cache invariant preserved (static prefix unchanged). Conditional
+    # emission keeps prompt unchanged for fixtures without enrichment.
+    if getattr(pack, "competition_stage", ""):
+        prompt_parts.append(f"COMPETITION STAGE: {pack.competition_stage}")
+    _md_val = getattr(pack, "matchday", None)
+    if _md_val is not None:
+        prompt_parts.append(f"MATCHDAY: {_md_val}")
+    if getattr(pack, "referee", ""):
+        prompt_parts.append(f"REFEREE: {pack.referee}")
 
     for title, body in sections:
         prompt_parts.extend(["", f"[{title}]", body])
