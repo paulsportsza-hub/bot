@@ -28,14 +28,41 @@
 - **LEAD → AUDITOR:** after any BUILD lands that touches algo / data / dashboard / system health, say "re-audit this fix" and pass the report URL. Do not close the loop yourself.
 - **LEAD ↔ COO:** COO surfaces publishing / channel defects → LEAD dispatches fix → COO verifies ops restored.
 
-## Dispatch discipline — LOCKED v4 (17 April 2026 PM)
+## Dispatch discipline — LOCKED v4.2 + SSH-Enqueue (30 April 2026)
 
-- **Dispatch Format v4** per `ops/DEV-STANDARDS.md §Dispatch Format v4`. v3_exact is DEAD — do not use the old `**N - TYPE - MODEL - MODE**` hyphenated header or `Use notion API token:` wording.
-- Header v4 = `**[N] — Model [flags] — Mode — TYPE — Priority**` (em dashes, bracketed number, `P0/P1/P2`, `Parallel/Sequential/Standalone`).
-- Code block v4 = exactly 4 lines: `BRIEF-ID — Title YYYY-MM-DD [metric]` → URL → `NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN` → `Execute this brief.`
-- Run the 7-point pre-send self-check in DEV-STANDARDS.md before every dispatch.
-- SO #35 Report Filing block verbatim in every brief (Pipeline DS `7da2d5d2-0e74-429e-9190-6a54d7bbcd23`, pre-file verification step mandatory).
-- Every brief ships with acceptance criteria leading the spec, not buried.
+**Dispatch = SSH-enqueue. LEAD never pastes dispatch blocks into CMUX manually.**
+
+### SSH-enqueue command (LEAD role)
+
+```bash
+KEY=$(find /sessions -name "id_ed25519" -path "*.cowork-ssh*" -print -quit)
+ssh -i "$KEY" -o StrictHostKeyChecking=no -o BatchMode=yes paulsportsza@37.27.179.53 \
+  -- '--notion-url <NOTION-URL> --role edge_lead --mode <sequential|parallel>'
+```
+
+After `ssh` exits, the pipeline is: `pending/` → `dispatch-promoter` → `ready/`
+→ `cmux-bridge` → CMUX workspace. LEAD's responsibility ends when `ssh` exits.
+Bridge spawns the workspace, pastes the dispatch block, and runs `claude`.
+LEAD does not wait for the Claude session to start — enqueue exits ≠ brief
+complete. Paul relays the report URL back when the session files its report.
+
+### Mode selection
+- `sequential` — mandatory when this brief and any other in-flight brief target
+  the **same git repo**. Default when in doubt.
+- `parallel` — permitted only when every sibling brief targets a **different
+  git repo**.
+
+### Dispatch Format v4.2
+- Header: `**[N] — Model (cli) [flags] — Mode — TYPE — Priority**` (em dashes,
+  brackets, `P0/P1/P2`, `Parallel/Sequential/Standalone`).
+- Code block (4 lines, bridge-pasted): `BRIEF-ID — Title YYYY-MM-DD` → URL →
+  `NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN` → `Execute this brief.`
+- Run the 9-point pre-send self-check in `ops/DEV-STANDARDS.md` before every
+  enqueue.
+- SO #35 Report Filing block verbatim in every brief.
+- Every brief ships with acceptance criteria leading the spec.
+
+Full architecture: `ops/DISPATCH-V2.md`.
 
 ## Load sequence (every session start)
 

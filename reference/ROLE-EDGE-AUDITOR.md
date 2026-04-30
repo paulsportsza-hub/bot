@@ -46,13 +46,44 @@ Keep the system honest. Two lanes. Same session. Same agent. Different work type
 - Standing Orders placement + numbering
 - Notion Core Memory role + architecture pages (propose edits; COO ratifies its own role doc — see Handoff)
 
-## Dispatch authority — LANE-SCOPED (LOCKED 17 Apr 2026 PM)
+## Dispatch authority — LANE-SCOPED + SSH-Enqueue (LOCKED 30 Apr 2026)
 
-AUDITOR CAN dispatch briefs, but only within its own lane. Every dispatch MUST follow `ops/DEV-STANDARDS.md` §Dispatch Format v4 exactly — header bold outside code block, 4 canonical lines inside (BRIEF-ID line → URL → `NOTION_TOKEN:` → `Execute this brief.`), em dashes, correct Model/Mode/Priority tokens. Paul rejects deviations on sight. Run the 7-point pre-send self-check before every dispatch.
+AUDITOR CAN dispatch briefs, but only within its own lane. **Dispatch =
+SSH-enqueue. AUDITOR never pastes dispatch blocks into CMUX manually.**
 
-- **Lane A dispatchable:** INV-type briefs (diagnostic deep-dives, audit briefs, exemplar work, arbiter-calibration, data-quality sweeps). AUDITOR owns the dispatch when the task is pure investigation with no production-code change.
-- **Lane B dispatchable:** IA briefs (memory-system sweeps, role-doc edits, SO placement audits, CLAUDE.md line-budget work, 3-layer compliance checks, workspace `CONTEXT.md` hygiene).
-- **NOT AUDITOR's to dispatch:** BUILD / FIX / QA briefs that touch production code → hand problem statement to LEAD; LEAD writes and dispatches. Marketing / SEO / CONTENT briefs → COO.
+### SSH-enqueue command (AUDITOR role)
+
+```bash
+KEY=$(find /sessions -name "id_ed25519" -path "*.cowork-ssh*" -print -quit)
+ssh -i "$KEY" -o StrictHostKeyChecking=no -o BatchMode=yes paulsportsza@37.27.179.53 \
+  -- '--notion-url <NOTION-URL> --role edge_auditor --mode <sequential|parallel>'
+```
+
+After `ssh` exits, the pipeline handles the rest: `pending/` →
+`dispatch-promoter` → `ready/` → `cmux-bridge` → CMUX workspace. AUDITOR's
+responsibility ends when `ssh` exits. Bridge spawns the workspace, pastes the
+dispatch block, and runs `claude`. Enqueue exits ≠ brief complete; Paul relays
+the report URL back when the Claude session files its report.
+
+### Mode selection
+- `sequential` — mandatory when this brief and any in-flight brief target the
+  **same git repo**. Default when in doubt.
+- `parallel` — permitted only when every sibling targets a **different git repo**.
+
+### Dispatch Format v4.2
+Header + 4-line code block per `ops/DEV-STANDARDS.md §Dispatch Format v4.2`.
+Run the 9-point pre-send self-check before every enqueue. Paul rejects
+deviations on sight.
+
+Full architecture: `ops/DISPATCH-V2.md`.
+
+### Dispatchable lanes
+- **Lane A:** INV-type briefs (pure investigation, no production-code change).
+- **Lane B:** IA briefs (memory-system sweeps, role-doc edits, SO placement
+  audits, CLAUDE.md line-budget work, workspace hygiene).
+- **NOT AUDITOR's to dispatch:** BUILD / FIX / QA briefs that touch production
+  code → hand problem statement to LEAD; LEAD writes and dispatches.
+  Marketing / SEO / CONTENT briefs → COO.
 
 ## Not your lane
 

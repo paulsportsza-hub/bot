@@ -143,7 +143,7 @@ The `Mode` flag is **load-bearing** — it determines whether briefs run concurr
 | `mzansiedge-wp` | `/var/www/mzansiedge-wp` | LP, blog, WP theme, hero pages |
 | `Cowork` (no git) | n/a | `daily-*` scheduled task prompts (use `update_scheduled_task` directly, not via brief) |
 
-**Part 2 — Code block** (fenced, copy-paste ready — Paul pastes the entire block unchanged into the coding agent's terminal). Exactly four lines, in this exact order:
+**Part 2 — Code block** (fenced — **this is what the bridge pastes into the spawned Claude Code session. Cowork agents NEVER paste this manually.** See `ops/DISPATCH-V2.md §The Dispatch Block`). Exactly four lines, in this exact order:
 
 ```
 BRIEF-ID — Descriptive Title YYYY-MM-DD [optional score/metric]
@@ -215,72 +215,56 @@ Any ❌ → dispatch is wrong. Fix before sending. No exceptions.
 
 ---
 
-### Dispatch via dispatch_runner.sh (LOCKED — 30 April 2026, BUILD-WORKTREE-DISPATCH-RUNNER-01)
+### SSH-Enqueue (canonical) — LOCKED 30 April 2026
 
-**Supersedes the manual paste workflow on the server side.** The Cowork dispatch
-block (Format v4.2 above) stays unchanged; what changes is what the SERVER does
-with it: instead of a human pasting the four lines into a tmux window, the
-single entrypoint `/home/paulsportsza/scripts/dispatch_runner.sh` runs the wave
-end-to-end.
+**Supersedes** the `dispatch_runner.sh` manual-paste model
+(BUILD-WORKTREE-DISPATCH-RUNNER-01). Cowork agents NEVER paste the dispatch
+block manually. Bridge handles everything after `ssh` exits.
 
-**Invocation (single line):**
+Full architecture at `ops/DISPATCH-V2.md`.
+
+**Command (Cowork-side):**
 
 ```bash
-/home/paulsportsza/scripts/dispatch_runner.sh <BRIEF-ID> [<NOTION_PAGE_ID>]
+KEY=$(find /sessions -name "id_ed25519" -path "*.cowork-ssh*" -print -quit)
+ssh -i "$KEY" -o StrictHostKeyChecking=no -o BatchMode=yes paulsportsza@37.27.179.53 \
+  -- '--notion-url <NOTION-URL> --role edge_<lead|auditor|coo> --mode <sequential|parallel>'
 ```
 
-**Pipeline executed by the runner:**
-1. Validate `BRIEF-ID` against `^[A-Z][A-Z0-9-]+-[0-9]+$`.
-2. Load `NOTION_TOKEN` from `/home/paulsportsza/.env`.
-3. Resolve the Notion page (search-by-title if `NOTION_PAGE_ID` not provided).
-4. Confirm Notion `Status` is `📥 Pending` (override: `DISPATCH_RUNNER_FORCE=1`).
-5. Fetch brief body and reject if it carries a banned `(codex)` or `(cursor)`
-   CLI tag — Pure Claude Ecosystem lock (v4.2).
-6. Create wave worktree at `/home/paulsportsza/worktrees/<BRIEF-ID>/` on a
-   `wave/<BRIEF-ID>` branch off `origin/main` (via `wave_worktree_create.sh`).
-7. Invoke `claude --print --add-dir <worktree> --dangerously-skip-permissions`
-   inside the worktree with the brief body as prompt.
-8. Run SO #41 verification (`scripts/lib/so41_verify.sh`) against every repo in
-   `$WAVE_REPO` (default `bot`) and `$WAVE_REPOS_EXTRA` (default `scrapers`).
-9. Update Notion: `✅ Done` on PASS, `❌ Blocked` on FAIL, with diagnostic note.
-10. Prune the worktree on PASS only; FAIL retains it for debugging.
+**enqueue.py flags:**
 
-**Wave worktree contract (locked):**
-- One brief = one worktree at `/home/paulsportsza/worktrees/<BRIEF-ID>/`.
-- Wave-class file edits in the main bot tree (`/home/paulsportsza/bot/`) are
-  refused at commit time by `.githooks/pre-commit`. Carve-outs: `ops/`,
-  `reference/`, `COO/`, `HANDOFFS/`, `CLAUDE.md`, `static/qa-gallery/canonical/`.
-- Audit-trailed bypass: `WAVE_GUARD_BYPASS=1 git commit ...` (controller-approved
-  only — note the reason in the commit message).
+| Flag | Values | Default |
+|------|--------|---------|
+| `--notion-url` | full Notion URL | *(required)* |
+| `--role` | `edge_lead`, `edge_auditor`, `edge_coo` | `edge_lead` |
+| `--target-repo` | repo name | `bot` |
+| `--mode` | `sequential`, `parallel` | `sequential` |
+| `--depends-on` | `<id1,id2>` | *(none)* |
+| `--no-cmux-validation` | flag | off |
 
-**Why this exists:** the SO #41 violation pattern (6 violations in 5 days
-ending 28 Apr 2026 — commit skipped, commit unpushed, silent verification-block
-substitution, executor self-attribution leak) shared one structural root: every
-parallel agent was reading and writing the same bot working tree, and the
-dispatch chain had zero enforcement at the boundary between brief and commit.
-The worktree-per-wave pattern makes cross-wave bundling mechanically impossible;
-the runner removes the executor's discretion to silently substitute the SO #41
-verification block.
+**What happens after `ssh` exits:**
+1. `pending/<BRIEF-ID>.yaml` written on server.
+2. `dispatch-promoter.service` polls every 5s → promotes to `ready/` when deps
+   clear and mode allows.
+3. Mac `cmux-bridge` polls `ready/` → creates CMUX workspace, spawns
+   `mosh + claude`, pastes the 4-line dispatch block automatically.
+4. Claude Code session executes brief autonomously. Cowork agent's
+   responsibility ends at step 1.
 
-**Pure Claude Ecosystem (v4.2) — runner enforcement:** the runner accepts ONLY
-the `claude` CLI. `codex` and `cursor` invocations are blocked at brief-parse
-time. There is no escape hatch — a brief that requires a non-Claude CLI is
-malformed under v4.2.
+**Wave worktree contract (unchanged from BUILD-WORKTREE-DISPATCH-RUNNER-01):**
+- Wave-class file edits in `/home/paulsportsza/bot/` main tree are refused at
+  commit time. Carve-outs: `ops/`, `reference/`, `COO/`, `HANDOFFS/`,
+  `CLAUDE.md`, `static/qa-gallery/canonical/`.
+- Audit-trailed bypass: `WAVE_GUARD_BYPASS=1 git commit ...`
+  (controller-approved only).
 
-**Out of scope (deliberate, follow-up briefs):**
-- Migrating EVERY past brief to use the runner. Going forward only.
-- Multi-CLI support beyond `claude` — Pure Claude lock.
-- Worktree GUI / dashboard — shell scripts only.
-- Cross-machine dispatch — Cowork still pastes the dispatch block; the runner
-  replaces the SERVER-side execution path.
-- Auto-sweep of stale worktrees > 24h old — flagged as follow-up.
+**Pure Claude Ecosystem (v4.2) — still enforced:** only `claude` CLI. `codex`
+and `cursor` are banned. `dispatch-promoter` rejects briefs carrying banned CLI
+tags.
 
 **Regression guards:**
-- `tests/contracts/test_dispatch_runner_so41.py` — covers all 5 P2-ACs of the
-  brief that introduced the runner (subprocess + temp git repo, no live Notion
-  or claude calls).
-- The runner self-validates its own delivery wave via the same SO #41 helper
-  it ships.
+- `tests/contracts/test_dispatch_runner_so41.py` — covers the SO #41 contract
+  (subprocess + temp git repo, no live Notion or claude calls).
 
 ---
 

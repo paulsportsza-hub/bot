@@ -37,6 +37,7 @@ wave log.
 - Packaging note: `pip3` needs `--break-system-packages`
 - Bot stack: PTB v20+ async bot, aiohttp-based scrapers
 - Verify live runtime: `ps aux | grep bot.py` — must show `/home/paulsportsza/bot/bot.py`
+- **Dispatch system**: SSH-enqueue → `pending/` → promoter → `ready/` → bridge → CMUX. Queue root: `/home/paulsportsza/dispatch/queue/`. Promoter log: `/home/paulsportsza/dispatch/dispatch_promoter.log`. Bridge log: `~/Library/Logs/cmux-bridge.log`. See `ops/DISPATCH-V2.md`.
 
 ### Reporting Pipeline
 Every wave report must include a `## CLAUDE.md Updates` section listing
@@ -1067,12 +1068,14 @@ See `.env.example` for required variables:
 CLI agents push markdown reports to Notion via push-report script. Reports land in the Agent Reports Pipeline database, tagged and searchable.
 
 ### Flow
-1. Team Lead writes brief → Director pastes into agent's tmux window
-2. Agent works → writes .md report to /home/paulsportsza/reports/
-3. Agent runs: push-report --agent X --wave Y report.md
-4. Report appears in Notion with status "New"
-5. Team Lead reads/reviews in Notion → marks "Reviewed"
-6. Team Lead writes next briefs → cycle repeats
+1. Cowork agent drafts brief in Notion → SSH-enqueues via `.cowork-ssh` key (SSH-enqueue → server `pending/` → promoter → `ready/` → bridge → CMUX)
+2. Bridge spawns CMUX workspace, pastes dispatch block — Cowork agent's job ends at enqueue; bridge handles the rest
+3. Claude Code session executes brief → writes `.md` report to `/home/paulsportsza/reports/`
+4. Claude session runs: `push-report --agent X --wave Y report.md`
+5. Report appears in Notion; Paul relays URL to Cowork lead → lead marks Wave Done
+6. Bridge renames CMUX workspace `[✅ <report-page-tail>]`; `done/` marker written on server
+
+See `ops/DISPATCH-V2.md` for full architecture, troubleshooting playbook, and SSH-enqueue command.
 
 ### push-report Script
 - Location: /usr/local/bin/push-report
