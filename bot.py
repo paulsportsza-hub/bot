@@ -6358,14 +6358,18 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 timeout=12.0,
             )
         except Exception as _de:
-            log.warning("MM warm card failed for user %s: %s", user_id, _de)
+            log.error("MM warm card failed for user %s: %s", user_id, _de, exc_info=True)
+            if sentry_sdk:
+                sentry_sdk.capture_exception(_de)
             try:
                 await asyncio.wait_for(
                     update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup),
                     timeout=8.0,
                 )
-            except Exception:
-                pass
+            except Exception as _wf:
+                log.error("MM warm fallback send failed for user %s: %s", user_id, _wf, exc_info=True)
+                if sentry_sdk:
+                    sentry_sdk.capture_exception(_wf)
         return
 
     # W84-MM1/RT5: Cold path — strict 5s deadline, never leave user on spinner.
@@ -6432,8 +6436,10 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 pass
         try:
             await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-        except Exception:
-            pass
+        except Exception as _tf:
+            log.error("MM timed-out fallback send failed for user %s: %s", user_id, _tf, exc_info=True)
+            if sentry_sdk:
+                sentry_sdk.capture_exception(_tf)
         if loading is not None:
             try:
                 await loading.delete()
@@ -6463,7 +6469,9 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                     timeout=12.0,
                 )
             except Exception as _ar_e:
-                log.debug("MM auto-retry failed for user %s: %s", user_id, _ar_e)
+                log.error("MM auto-retry failed for user %s: %s", user_id, _ar_e, exc_info=True)
+                if sentry_sdk:
+                    sentry_sdk.capture_exception(_ar_e)
         asyncio.create_task(_auto_retry_deliver())
     else:
         # Success path: stop spinner, build card, deliver
@@ -6497,7 +6505,9 @@ async def _show_your_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_
                 timeout=12.0,
             )
         except Exception as _fe:
-            log.error("MM: final delivery failed for user %s: %s", user_id, _fe)
+            log.error("MM: final delivery failed for user %s: %s", user_id, _fe, exc_info=True)
+            if sentry_sdk:
+                sentry_sdk.capture_exception(_fe)
 
 
 # W3-FIX: My Matches card helpers — order must match build_my_matches_data() sort
