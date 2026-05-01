@@ -2340,6 +2340,13 @@ def _strip_possessive_suffix(value: str) -> str:
     return re.sub(r"(?:'s|’s)\b", "", str(value or ""), flags=re.IGNORECASE)
 
 
+_SURNAME_PARTICLE_TOKENS: frozenset[str] = frozenset({
+    "al", "bin", "da", "das", "de", "del", "della", "den", "der", "di",
+    "dos", "du", "el", "la", "le", "los", "mac", "mc", "o", "saint",
+    "san", "st", "ten", "ter", "van", "vande", "vanden", "vander", "von",
+})
+
+
 def _name_word_tokens(value: Any) -> list[str]:
     # BASELINE-FIX-R3: NFKD normalise accented chars (é→e, ü→u) before tokenising.
     # Without this, "Konaté" produces ["konat"] instead of ["konate"].
@@ -2453,6 +2460,12 @@ def _normalise_name_phrase(value: Any) -> str:
 
 def _normalise_name_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+_TEAM_SUFFIX_TOKENS: frozenset[str] = frozenset({
+    "afc", "athletic", "cf", "city", "club", "fc", "hotspur", "rover", "rovers",
+    "sc", "town", "united", "wanderers",
+})
 
 
 def _team_base_tokens(name: str) -> list[str]:
