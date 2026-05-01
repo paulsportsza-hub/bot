@@ -26776,6 +26776,97 @@ async def _notify_payment_outcome(bot, outcome: dict[str, object]) -> None:
         return
 
 
+_EDGEOPS_CHAT_ID = -1003877525865  # Standing Order #20: EdgeOps only. Never public channels.
+
+# ── BUILD-STITCH-EDGEOPS-WIRE-01 ─────────────────────────────────────────────
+# Failure event types that warrant an immediate EdgeOps alert.
+_STITCH_FAILURE_EVENT_TYPES: frozenset[str] = frozenset({
+    "payment.failed",
+    "payment.cancelled",
+    "payment.expired",
+    "subscription.cancelled",
+    "subscription.expired",
+})
+
+_STITCH_FAILURE_EMOJI: dict[str, str] = {
+    "payment.failed": "❌",
+    "payment.cancelled": "🚫",
+    "payment.expired": "⏰",
+    "subscription.cancelled": "🚫",
+    "subscription.expired": "⏰",
+}
+
+
+async def _send_edgeops_payment_alert(
+    event_type: str,
+    outcome: dict[str, object],
+    event: dict[str, object],
+) -> None:
+    """Send a Stitch payment failure alert to the EdgeOps Telegram channel.
+
+    BUILD-STITCH-EDGEOPS-WIRE-01: Fires on payment.failed, payment.cancelled,
+    payment.expired, subscription.cancelled, subscription.expired.
+
+    Standing Order #20: EdgeOps alerts ONLY (chat_id -1003877525865).
+    NEVER sends to @MzansiEdgeAlerts.
+    """
+    import urllib.request as _urllib_request
+    import urllib.error as _urllib_error
+
+    token = os.environ.get("BOT_TOKEN", "")
+    if not token:
+        log.warning("_send_edgeops_payment_alert: BOT_TOKEN not set — alert skipped")
+        return
+
+    emoji = _STITCH_FAILURE_EMOJI.get(event_type, "⚠️")
+    user_id = outcome.get("user_id")
+    plan_code = outcome.get("plan_code") or event.get("data", {}).get("beneficiaryReference", "unknown")
+    amount_cents = outcome.get("amount_cents", 0)
+    amount_rands = (amount_cents or 0) / 100
+    outcome_label = outcome.get("outcome", "unknown")
+    provider_payment_id = event.get("data", {}).get("id", "n/a")
+
+    user_line = f"user_id={user_id}" if user_id else "user_id=unknown"
+    amount_line = f"R{amount_rands:.2f}" if amount_cents else "amount=unknown"
+
+    text = (
+        f"{emoji} <b>Stitch Payment Failure</b>\n\n"
+        f"<b>Event:</b> <code>{event_type}</code>\n"
+        f"<b>Outcome:</b> <code>{outcome_label}</code>\n"
+        f"<b>Plan:</b> <code>{plan_code}</code>\n"
+        f"<b>Amount:</b> {amount_line}\n"
+        f"<b>User:</b> {user_line}\n"
+        f"<b>Payment ID:</b> <code>{provider_payment_id}</code>"
+    )
+
+    payload = json.dumps({
+        "chat_id": _EDGEOPS_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+    }).encode("utf-8")
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    req = _urllib_request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        resp = _urllib_request.urlopen(req, timeout=8)
+        if resp.status == 200:
+            log.info(
+                "BUILD-STITCH-EDGEOPS-WIRE-01: EdgeOps alert sent event_type=%s user_id=%s",
+                event_type, user_id,
+            )
+        else:
+            log.warning(
+                "BUILD-STITCH-EDGEOPS-WIRE-01: EdgeOps alert HTTP %s", resp.status
+            )
+    except _urllib_error.HTTPError as exc:
+        log.warning("BUILD-STITCH-EDGEOPS-WIRE-01: EdgeOps alert HTTP error %s: %s", exc.code, exc.read()[:200])
+    except Exception as exc:
+        log.warning("BUILD-STITCH-EDGEOPS-WIRE-01: EdgeOps alert send error: %s", exc)
+
+
 def _derive_plan_code_from_reference(reference: str) -> str:
     parts = reference.split("-")
     if len(parts) >= 4:
@@ -27476,6 +27567,14 @@ async def _run_webhook_server(app_instance) -> None:
             analytics_track(int(user_id), "subscription_cancelled")
         elif user_id and event_type == "payment.failed":
             analytics_track(int(user_id), "payment_failed")
+
+        # BUILD-STITCH-EDGEOPS-WIRE-01: fire EdgeOps alert on any failure event.
+        # Runs for ALL failure types regardless of whether user_id was resolved —
+        # an unmatched payment failure is equally important to flag.
+        if event_type in _STITCH_FAILURE_EVENT_TYPES:
+            asyncio.create_task(
+                _send_edgeops_payment_alert(event_type, outcome, event)
+            )
 
         try:
             await _notify_payment_outcome(app_instance.bot, outcome)
