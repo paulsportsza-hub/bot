@@ -1070,8 +1070,24 @@ def _validate_narrative_for_persistence(
     # and Card 1 (Gujarat Titans vs RCB Gold 1.72 WSB, 30 Apr 2026): verdict
     # closed on Setup-style opener without ever telling the user to back anyone.
     if verdict_html:
+        # When evidence_pack has no team names (pregen path — evidence_json not
+        # passed to _store_narrative_cache), fall back to match_id parsing so
+        # verdicts like "Get on Manchester City win at 1.36" are not rejected
+        # for missing team_or_selection.
+        _ep_for_gate10 = evidence_pack
+        if match_id and (
+            not isinstance(evidence_pack, dict)
+            or not (evidence_pack.get("home_team") or evidence_pack.get("away_team"))
+        ):
+            _mid_stripped = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_id)
+            if "_vs_" in _mid_stripped:
+                _ht_raw, _at_raw = _mid_stripped.split("_vs_", 1)
+                _ep_for_gate10 = {
+                    "home_team": _ht_raw.replace("_", " "),
+                    "away_team": _at_raw.replace("_", " "),
+                }
         sev_close, reason_close = _check_verdict_closure_rule(
-            verdict_html, edge_tier, evidence_pack,
+            verdict_html, edge_tier, _ep_for_gate10,
         )
         if sev_close:
             failures.append(
