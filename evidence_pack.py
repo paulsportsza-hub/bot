@@ -4129,6 +4129,28 @@ _GEOGRAPHIC_WHITELIST = {
 #   • Do NOT add generic words that could legitimately be fabricated names.
 #   • Stadium partial names (e.g. "st james") guard against HTML-entity splits
 #     where "St James' Park" → regex extracts only "St James".
+#
+# FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+# `_load_stadium_known_nouns()` enriches KNOWN_PROPER_NOUNS with the canonical
+# stadiums.json fallback list (Rule 18). The cross-fixture venue-leak check
+# (`find_venue_leaks`) still uses pack-aware logic — these entries are only
+# whitelisted from the no_fabricated_names check, NOT the venue-leak check.
+def _load_stadium_known_nouns() -> "set[str]":
+    """Return lowercased stadiums.json venue list for KNOWN_PROPER_NOUNS seeding."""
+    try:
+        path = Path(__file__).resolve().parent / "data" / "stadiums.json"
+        payload = json.loads(path.read_text())
+    except Exception:
+        return set()
+    venues = payload.get("venues", []) if isinstance(payload, dict) else []
+    out: "set[str]" = set()
+    for v in venues:
+        if not isinstance(v, str):
+            continue
+        out.add(v.lower().strip())
+    return out
+
+
 KNOWN_PROPER_NOUNS: set[str] = {
     # ── English Premier League nicknames ────────────────────────────────────
     "the gunners", "gunners",           # Arsenal
@@ -4195,6 +4217,13 @@ KNOWN_PROPER_NOUNS: set[str] = {
     # ── Analytical terms capitalised in section headers ─────────────────────
     "monitor",
 }
+
+# FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+# Seed KNOWN_PROPER_NOUNS with the canonical stadiums.json fallback list per
+# Rule 18. The cross-fixture venue-leak check (`find_venue_leaks`) still uses
+# pack-aware logic — these entries are only whitelisted from the
+# `no_fabricated_names` proper-noun extraction in `verify_shadow_narrative`.
+KNOWN_PROPER_NOUNS |= _load_stadium_known_nouns()
 
 # Common English function words (≥4 chars) that are never proper nouns.
 # When a phrase's only long token is one of these, the short companion word
