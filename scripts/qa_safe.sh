@@ -99,7 +99,7 @@ if [ ${#BEFORE_DASHDASH[@]} -gt 0 ]; then
 fi
 
 # ── Build pytest command ────────────────────────────────────
-PYTEST_CMD=("python" "-m" "pytest")
+PYTEST_CMD=("python3" "-m" "pytest")
 
 if [ -n "$TARGET" ]; then
     # shellcheck disable=SC2206
