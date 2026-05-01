@@ -3390,6 +3390,20 @@ _VERDICT_RISK_STOPWORDS: frozenset = frozenset({
     "structural", "telemetry",
 })
 
+# Substrings that identify the 6 default "clean profile" risk factors emitted
+# by _build_risk_factors() when no specific signal fires. These phrases mean
+# "nothing to flag" — injecting words extracted from them (e.g. "clean",
+# "flags", "nothing") into "even with the {X} concern" produces contradictory
+# or nonsensical verdict copy. (FIX-W82-RISK-TAIL-CLEAN-PLACEHOLDER-01 — 2026-05-01)
+_NEUTRAL_RISK_INDICATORS: tuple = (
+    "clean signal across",            # default variant 0
+    "confirming signals all point",   # default variant 1
+    "reads clean here",               # default variant 2
+    "standard volatility on an open", # default variant 3
+    "match-day swing factors aside",  # default variant 4
+    "routine variance is the only",   # default variant 5
+)
+
 
 def _verdict_risk_clause(spec: NarrativeSpec) -> str:
     """Short risk-resolution clause for Verdict copy.
@@ -3410,12 +3424,24 @@ def _verdict_risk_clause(spec: NarrativeSpec) -> str:
     the gate 8c covenant (Risk↔Verdict cohesion) at W82 baseline time, even
     though baseline output bypasses the polish-time validator.
 
-    Returns "" when no risk factors are present.
+    FIX-W82-RISK-TAIL-CLEAN-PLACEHOLDER-01 (2026-05-01): returns "" when the
+    first risk factor is one of the 6 default "clean profile" phrases from
+    _build_risk_factors(). These phrases mean "nothing to flag" — injecting
+    their words into the tail template produces "even with the clean concern"
+    and similar contradictory output. The verdict action sentence ends on its
+    own period instead. Belt-and-suspenders: also returns "" when the extracted
+    snippet is "clean" (catches any phrasing not covered by the indicator list).
+
+    Returns "" when no risk factors are present or risk reads clean/neutral.
     """
     if not spec.risk_factors:
         return ""
     raw = (spec.risk_factors[0] or "").strip().rstrip(".")
     if not raw:
+        return ""
+    # Drop the tail when the risk factor is a default clean-profile phrase.
+    raw_lower = raw.lower()
+    if any(indicator in raw_lower for indicator in _NEUTRAL_RISK_INDICATORS):
         return ""
     words = [
         w for w in re.findall(r"[A-Za-z]{4,}", raw)
@@ -3424,6 +3450,10 @@ def _verdict_risk_clause(spec: NarrativeSpec) -> str:
     if not words:
         return ""
     snippet = words[0].lower()
+    # Belt-and-suspenders: drop the tail if the extracted word is itself a
+    # neutral indicator (e.g. "clean" from any phrase not listed above).
+    if snippet == "clean":
+        return ""
     seed = (spec.home_name or "") + (spec.away_name or "") + "riskclause"
     _v = _pick(seed, 3)
     # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2: V2
@@ -3858,7 +3888,16 @@ def _render_verdict_w82_pool(spec: NarrativeSpec) -> str:
     # from tip_data so the rendered verdict must clear the Diamond floor in
     # case this render is consumed for a Diamond card.
     if tier:
-        floor = MIN_VERDICT_CHARS_BY_TIER.get(tier, MIN_VERDICT_CHARS_BY_TIER["bronze"])
+        # Use max of tier-specific floor and VERDICT_TARGET_LOW so that
+        # verdicts where the risk tail was dropped (FIX-W82-RISK-TAIL-CLEAN-
+        # PLACEHOLDER-01) still clear the 140-char universal quality floor
+        # checked by test_deterministic_verdict.py.  Gold/Silver tier floors
+        # (110/80) were incidentally met by the appended risk tail; without it
+        # they may slip below 140.  VERDICT_TARGET_LOW is 140, same as Diamond.
+        floor = max(
+            MIN_VERDICT_CHARS_BY_TIER.get(tier, MIN_VERDICT_CHARS_BY_TIER["bronze"]),
+            VERDICT_TARGET_LOW,
+        )
         floor_tier = tier
     else:
         floor = MIN_VERDICT_CHARS_BY_TIER["diamond"]
