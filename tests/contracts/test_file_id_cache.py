@@ -16,8 +16,6 @@ Validates:
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import sys
 import time
@@ -185,12 +183,10 @@ async def test_s2_stores_file_id_after_send(tmp_path):
     call_kwargs = bot.send_photo.call_args.kwargs
     assert call_kwargs["photo"] == _FAKE_PNG
 
-    # Confirm file_id was persisted
-    _w = 480
-    _hash = hashlib.md5(
-        json.dumps({}, sort_keys=True, default=str).encode()
-    ).hexdigest()[:12]
-    stored = cache.get(f"edge_picks.html:{_w}x2:{_hash}")
+    # Confirm file_id was persisted under the canonical cache_key
+    # (INV-WAVE-F-GLOW-MISSING-PROD-01: cache_key now embeds template content version)
+    _key = card_sender._build_cache_key("edge_picks.html", {}, None)
+    stored = cache.get(_key)
     assert stored == _FAKE_FILE_ID
 
 
@@ -201,11 +197,7 @@ async def test_s3_fallback_on_rejected_file_id(tmp_path):
     import card_sender
 
     cache = FileIdCache(db_path=str(tmp_path / "s3.db"))
-    _w = 480
-    _hash = hashlib.md5(
-        json.dumps({}, sort_keys=True, default=str).encode()
-    ).hexdigest()[:12]
-    _key = f"edge_picks.html:{_w}x2:{_hash}"
+    _key = card_sender._build_cache_key("edge_picks.html", {}, None)
     cache.put(_key, "stale_file_id")
 
     bot = MagicMock()
@@ -263,29 +255,33 @@ async def test_s4_stores_file_id_from_edit_media_result(tmp_path):
                 message_to_edit=msg,
             )
 
-    _w = 480
-    _hash = hashlib.md5(
-        json.dumps({}, sort_keys=True, default=str).encode()
-    ).hexdigest()[:12]
-    stored = cache.get(f"edge_picks.html:{_w}x2:{_hash}")
+    _key = card_sender._build_cache_key("edge_picks.html", {}, None)
+    stored = cache.get(_key)
     assert stored == "edit_result_fid"
 
 
 def test_s5_build_cache_key_mirrors_renderer():
-    """S5: _build_cache_key output matches render_card_sync's key format."""
+    """S5: _build_cache_key delegates to card_renderer.build_cache_key.
+
+    INV-WAVE-F-GLOW-MISSING-PROD-01: both the in-memory PNG LRU and the
+    persistent Telegram file_id store must derive their key from the same
+    canonical helper so a template content change (CSS lift, layout edit,
+    etc.) busts both caches in lockstep.
+    """
     from card_sender import _build_cache_key
+    from card_renderer import build_cache_key as renderer_key
 
     template = "edge_detail.html"
     data = {"match_key": "arsenal_chelsea_2026-04-25", "tier": "gold"}
 
-    _w = 540
-    _dsf = 2
-    _expected_hash = hashlib.md5(
-        json.dumps(data, sort_keys=True, default=str).encode()
-    ).hexdigest()[:12]
-    _expected = f"{template}:{_w}x{_dsf}:{_expected_hash}"
-
-    assert _build_cache_key(template, data, 540) == _expected
+    assert _build_cache_key(template, data, 540) == renderer_key(template, data, 540, 2)
+    # Sanity: the new format embeds a v<hash> segment for the template content.
+    parts = _build_cache_key(template, data, 540).split(":")
+    assert len(parts) == 4
+    assert parts[0] == template
+    assert parts[1] == "540x2"
+    assert parts[2].startswith("v") and len(parts[2]) >= 5
+    assert len(parts[3]) == 12  # data hash
 
 
 def test_s5_build_cache_key_default_width():

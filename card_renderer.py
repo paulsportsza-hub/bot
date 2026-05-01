@@ -64,6 +64,58 @@ TEMPLATE_DIR = Path(__file__).parent / "card_templates"
 
 _env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)), autoescape=True)
 
+# INV-WAVE-F-GLOW-MISSING-PROD-01: mtime-keyed content hash so any template
+# edit busts both the in-memory PNG LRU and the persistent Telegram file_id
+# store. Pre-fix the cache_key only embedded template_name + width + dsf +
+# data_hash, so CSS-only template changes (e.g. lifting .logo-glow into
+# my_matches.html / match_detail.html via 2b843ed) left the key unchanged
+# and the bot kept serving the stale pre-glow Telegram file_id under its
+# 7-day TTL. Including a content version makes template edits self-busting.
+_template_version_cache: dict[str, tuple[int, str]] = {}
+_template_version_lock = threading.Lock()
+
+
+def template_version(template_name: str) -> str:
+    """Return an 8-char content hash of the named template.
+
+    Cached by file mtime so we re-hash only when the template changes.
+    Returns "missing" when the file is unreadable so a missing template
+    still produces a stable key (the render call will surface the error).
+    """
+    path = TEMPLATE_DIR / template_name
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        return "missing"
+    with _template_version_lock:
+        cached = _template_version_cache.get(template_name)
+        if cached is not None and cached[0] == mtime_ns:
+            return cached[1]
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return "missing"
+    digest = hashlib.md5(data).hexdigest()[:8]
+    with _template_version_lock:
+        _template_version_cache[template_name] = (mtime_ns, digest)
+    return digest
+
+
+def build_cache_key(
+    template_name: str,
+    data: dict,
+    width: int = 480,
+    device_scale_factor: int = 2,
+) -> str:
+    """Canonical cache key for both the in-memory PNG LRU and the file_id store."""
+    _data_hash = hashlib.md5(
+        json.dumps(data, sort_keys=True, default=str).encode()
+    ).hexdigest()[:12]
+    return (
+        f"{template_name}:{width}x{device_scale_factor}"
+        f":v{template_version(template_name)}:{_data_hash}"
+    )
+
 # ── Browser pool ──────────────────────────────────────────────────────────────
 # _pool["loop"]    — asyncio event loop running in the daemon thread
 # _pool["browser"] — persistent Chromium browser (launched once)
@@ -245,11 +297,10 @@ def render_card_sync(
     """
     from card_cache import card_cache as _cc
 
-    # Cache key: template + data hash (invalidates when data changes)
-    _data_hash = hashlib.md5(
-        json.dumps(data, sort_keys=True, default=str).encode()
-    ).hexdigest()[:12]
-    _cache_key = f"{template_name}:{width}x{device_scale_factor}:{_data_hash}"
+    # Cache key includes template content version so HTML edits self-bust the
+    # PNG LRU (and the persistent file_id store via card_sender, which mirrors
+    # this formula). See INV-WAVE-F-GLOW-MISSING-PROD-01.
+    _cache_key = build_cache_key(template_name, data, width, device_scale_factor)
 
     _cached = _cc.get(_cache_key)
     if _cached is not None:

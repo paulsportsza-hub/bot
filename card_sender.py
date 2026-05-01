@@ -15,12 +15,11 @@ BUILD-FILE-ID-REUSE-01:
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 
 from telegram import InputMediaPhoto
 
+from card_renderer import build_cache_key as _renderer_build_cache_key
 from card_renderer import render_card_sync
 
 try:
@@ -34,12 +33,17 @@ _DSF = 2  # device_scale_factor — must match render_card_sync's default
 
 
 def _build_cache_key(template: str, data: dict, width: int | None) -> str:
-    """Mirror render_card_sync's cache key so the file_id key matches the PNG key."""
+    """Mirror render_card_sync's cache key so the file_id key matches the PNG key.
+
+    Delegates to card_renderer.build_cache_key, which embeds the template
+    content version. INV-WAVE-F-GLOW-MISSING-PROD-01: prior to this delegation
+    the file_id store was keyed without the template version, so a CSS-only
+    template change (e.g. lifting .logo-glow into my_matches.html /
+    match_detail.html via 2b843ed) left the cache_key stable and the bot
+    kept reusing the stale pre-glow Telegram file_id under its 7-day TTL.
+    """
     _w = width if width is not None else 480
-    _data_hash = hashlib.md5(
-        json.dumps(data, sort_keys=True, default=str).encode()
-    ).hexdigest()[:12]
-    return f"{template}:{_w}x{_DSF}:{_data_hash}"
+    return _renderer_build_cache_key(template, data, _w, _DSF)
 
 
 async def send_card_or_fallback(
