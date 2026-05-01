@@ -3380,6 +3380,14 @@ _VERDICT_RISK_STOPWORDS: frozenset = frozenset({
     # / "the pricing concern" — both leak telemetry vocabulary into the
     # Verdict where it doesn't belong (brief Forbidden list).
     "price", "pricing", "priced", "movement", "angle", "stable",
+    # FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 (2026-05-01): exclude telemetry-
+    # vocabulary tokens from the snippet extractor. Otherwise risk factors
+    # starting with "Reads" / "Signals" produce "even with the reads concern"
+    # / "wary of the signal factor" — both match
+    # narrative_validator.TELEMETRY_VOCABULARY_PATTERNS and would fail any
+    # downstream validator scan applied to the W82 baseline output.
+    "reads", "read", "signals", "signal", "indicators", "indicator",
+    "structural", "telemetry",
 })
 
 
