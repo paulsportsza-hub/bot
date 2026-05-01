@@ -3851,22 +3851,40 @@ def _render_verdict_w82_pool(spec: NarrativeSpec) -> str:
     # Tier-floor padding — prepend tier-band enrichment when output is below
     # MIN_VERDICT_CHARS_BY_TIER. Padding lands BEFORE the action sentence so
     # the closure rule still finds action+team+odds in the LAST sentence.
-    floor = MIN_VERDICT_CHARS_BY_TIER.get(tier, MIN_VERDICT_CHARS_BY_TIER["bronze"])
+    #
+    # When spec.edge_tier is empty (bot.py deterministic-fallback path at
+    # line ~9051 builds a NarrativeSpec without populating edge_tier), fall
+    # back to the highest tier floor (140) — verdict-cache writer reads tier
+    # from tip_data so the rendered verdict must clear the Diamond floor in
+    # case this render is consumed for a Diamond card.
+    if tier:
+        floor = MIN_VERDICT_CHARS_BY_TIER.get(tier, MIN_VERDICT_CHARS_BY_TIER["bronze"])
+        floor_tier = tier
+    else:
+        floor = MIN_VERDICT_CHARS_BY_TIER["diamond"]
+        # Use action to choose an appropriate pad-variant register when tier
+        # is missing (deterministic-fallback path). Map action → tier vocabulary.
+        floor_tier = {
+            "strong back": "diamond",
+            "back": "gold",
+            "lean": "silver",
+            "speculative punt": "bronze",
+        }.get(action, "diamond")
     if len(text) < floor:
         seed = (spec.home_name or "") + (spec.away_name or "") + "tierpad"
-        if tier == "diamond":
+        if floor_tier == "diamond":
             pad_variants = [
                 "This is one of the better plays on the card today. ",
                 "Premium-grade case here, the depth of evidence holds. ",
                 "Strong conviction read with the case built across the board. ",
             ]
-        elif tier == "gold":
+        elif floor_tier == "gold":
             pad_variants = [
                 "Solid case here, the disciplined play stands. ",
                 "Supported edge with the form on side. ",
                 "Disciplined backer with the price holding. ",
             ]
-        elif tier == "silver":
+        elif floor_tier == "silver":
             pad_variants = [
                 "Measured engagement worth the position. ",
                 "Mild lean, sized to match the case. ",
