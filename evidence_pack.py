@@ -4715,16 +4715,34 @@ def verify_shadow_narrative(draft: str, pack: EvidencePack, spec) -> tuple[bool,
         header_window = sanitized[pos:pos + 48].lower()
         if not any(variant in header_window for variant in variants):
             section_pass = False
-    _record_hard(
-        "team_names_present",
-        _contains_alias_reference(lower, team_aliases["home"]) and _contains_alias_reference(lower, team_aliases["away"]),
-        f"Accepted home refs: {sorted(team_aliases['home'])}; away refs: {sorted(team_aliases['away'])}",
-    )
-    _record_hard(
-        "section_structure",
-        section_pass and positions == sorted(positions),
-        "All 4 section emojis must exist in order after sanitization.",
-    )
+    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+    # the polish path is now verdict-only. When the output carries zero of the
+    # 4 section emojis, treat it as verdict-only and skip the section-structure
+    # check + relax the team-names check (verdict spec allows the action close
+    # to mention only the picked side).
+    _verdict_only_mode = all(pos == -1 for pos in positions)
+    if _verdict_only_mode:
+        _record_hard(
+            "team_names_present",
+            _contains_alias_reference(lower, team_aliases["home"]) or _contains_alias_reference(lower, team_aliases["away"]),
+            f"Accepted home refs: {sorted(team_aliases['home'])}; away refs: {sorted(team_aliases['away'])}",
+        )
+        _record_hard(
+            "section_structure",
+            True,
+            "verdict-only mode: section_structure skipped (no 4-section output)",
+        )
+    else:
+        _record_hard(
+            "team_names_present",
+            _contains_alias_reference(lower, team_aliases["home"]) and _contains_alias_reference(lower, team_aliases["away"]),
+            f"Accepted home refs: {sorted(team_aliases['home'])}; away refs: {sorted(team_aliases['away'])}",
+        )
+        _record_hard(
+            "section_structure",
+            section_pass and positions == sorted(positions),
+            "All 4 section emojis must exist in order after sanitization.",
+        )
     bookmaker_pass, bookmaker_detail = _bookmaker_odds_match(sanitized, accepted_bookmaker_pairs)
     _record_hard(
         "bookmaker_odds_preserved",
