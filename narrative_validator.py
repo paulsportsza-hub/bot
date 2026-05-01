@@ -238,28 +238,59 @@ _STRONG_BAND_INCOMPATIBLE_RE: tuple[tuple[re.Pattern[str], str], ...] = tuple(
 #     Missing both → CRITICAL.
 #   - Bronze: action verb required; team / odds optional.
 #     Missing action verb → CRITICAL.
-# FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2.
-# Tighten the verdict closure rule to imperative-only. The declarative branch
-# ("is the pick", "is the play") was acceptable under
-# FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01's broadening, but the current brief
-# rolls that back: declarative recommendations are no longer treated as a
-# valid action close. The 9-imperative cluster matches the brief AC-1
-# verdict-shape spec emitted in `evidence_pack.format_evidence_prompt`.
+# FIX-VERDICT-CLOSURE-RULE-LOOSEN-AND-GERUND-ACCEPT-01 (2026-05-01) — AC-1.
+# Reverses the strict imperative-only tightening from
+# FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01. That tightening produced
+# zero throughput — 100% of premium polish refused, then 100% of W82 baselines
+# refused, plus blocking 6 Bronze speculative rows that close with sizing tails.
+# The loosened rule catches genuine failures (no action verb at all, Setup-style
+# observations as the close) while accepting legitimate prose shapes:
+#   - Imperatives: back, bet on, get on, get behind, take, lean on, ride, …
+#   - Gerunds: backing, taking, getting on, worth taking, …
+#   - Declaratives: "X is the pick / play / call / lean / bet / value"
+#   - Action prepositions: "worth a play on X", "worth a lean on X"
+# The sizing-tail case STILL fails (no action verb at all):
+#   FAIL: "Small-to-standard stake on this one at the current number."
+# The Setup-style observation STILL fails:
+#   FAIL: "That's where the analysis starts."
 _VERDICT_ACTION_VERBS: tuple[str, ...] = (
+    # Imperatives (9 clusters + get behind)
     r"back",
     r"bet\s+on",
     r"put\s+your\s+money\s+on",
-    r"get\s+on",
+    r"get\s+(?:on|behind)",
     r"take",
     r"lean\s+on",
     r"ride",
     r"hammer\s+it\s+on",
     r"smash",
+    # Gerunds
+    r"backing",
+    r"betting\s+on",
+    r"getting\s+on",
+    r"taking",
+    r"leaning\s+on",
+    r"riding",
+    r"hammering\s+it\s+on",
+    r"smashing",
+    r"worth\s+taking",
+    # Declaratives
+    r"is\s+the\s+(?:pick|play|call|lean|bet|value)",
+    # Action prepositions
+    r"worth\s+(?:a\s+)?(?:lean|back|punt|play|small)",
 )
 
 _VERDICT_ACTION_RE: re.Pattern[str] = re.compile(
-    r"\b(?:back|bet\s+on|put\s+your\s+money\s+on|get\s+on|take|"
-    r"lean\s+on|ride|hammer\s+it\s+on|smash)\b",
+    # Imperatives (9 clusters + get behind)
+    r"\b(?:back|bet\s+on|put\s+your\s+money\s+on|get\s+(?:on|behind)|take|"
+    r"lean\s+on|ride|hammer\s+it\s+on|smash)\b"
+    # Gerunds
+    r"|\b(?:backing|betting\s+on|getting\s+on|taking|"
+    r"leaning\s+on|riding|hammering\s+it\s+on|smashing|worth\s+taking)\b"
+    # Declaratives
+    r"|\bis\s+the\s+(?:pick|play|call|lean|bet|value)\b"
+    # Action prepositions
+    r"|\bworth\s+(?:a\s+)?(?:lean|back|punt|play|small)\b",
     re.IGNORECASE,
 )
 
