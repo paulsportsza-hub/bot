@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 pytest.skip(
     "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "

@@ -129,8 +129,23 @@ def _run_pool() -> None:
     loop.run_forever()
 
 
-_pool_thread = threading.Thread(target=_run_pool, daemon=True, name="card-renderer-pool")
-_pool_thread.start()
+# Lazy-init: thread starts on first render call, not at module import time.
+# This prevents a C-level segfault when pytest imports the module during
+# test collection (pytest_asyncio + Playwright piped IO + PIL extensions).
+_pool_start_lock = threading.Lock()
+_pool_started = False
+
+
+def _ensure_pool_started() -> None:
+    global _pool_started
+    if _pool_started:
+        return
+    with _pool_start_lock:
+        if _pool_started:
+            return
+        t = threading.Thread(target=_run_pool, daemon=True, name="card-renderer-pool")
+        t.start()
+        _pool_started = True
 
 
 async def _render_page(
@@ -241,6 +256,7 @@ def render_card_sync(
         log.debug("card_renderer: cache HIT for %s", _cache_key)
         return _cached
 
+    _ensure_pool_started()
     # Wait for pool to be ready (browser launch or error)
     if not _pool["ready"].wait(timeout=30):
         raise RuntimeError("card_renderer: browser pool did not initialise in 30s")
@@ -292,6 +308,7 @@ def warm_chromium() -> None:
         finally:
             await page.close()
 
+    _ensure_pool_started()
     if not _pool["ready"].wait(timeout=30):
         log.warning("warm_chromium: browser pool not ready — skipping")
         return
