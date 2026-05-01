@@ -10,7 +10,6 @@ Verifies that:
 
 from __future__ import annotations
 
-import ast
 import subprocess
 
 
@@ -62,7 +61,7 @@ class TestEdgeOpsAlertFunction:
 class TestFailureEventTypes:
     """AC-2: _STITCH_FAILURE_EVENT_TYPES covers all failure event types."""
 
-    def _get_failure_types(self) -> set[str]:
+    def _get_failure_types(self) -> str:
         out = subprocess.run(
             ["grep", "-A", "10", "_STITCH_FAILURE_EVENT_TYPES", "bot.py"],
             capture_output=True, text=True,
