@@ -84,6 +84,7 @@ except ImportError:
 _page_cache: dict[str, tuple[str, float]] = {}
 _page_cache_lock = threading.Lock()
 _PAGE_CACHE_TTL = 60  # seconds
+_REVENUE_CACHE_TTL = 3600  # 1h — revenue data is slow-moving
 # stale-while-revalidate window: serve cache up to this age while a background
 # thread refreshes. Keeps the p99 user-facing response snappy after the first
 # hit even when Notion is slow.
@@ -1955,6 +1956,7 @@ _ICON_SERVER = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stro
 _ICON_TASKHUB = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><rect x="3" y="13" width="6" height="6" rx="1"/><line x1="13" y1="8" x2="21" y2="8"/><line x1="13" y1="16" x2="21" y2="16"/><line x1="17" y1="5" x2="17" y2="11"/></svg>'
 _ICON_CHART = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>'
 _ICON_APPROVAL = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+_ICON_REVENUE  = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v2m0 8v2"/><path d="M9.5 9.5A2.5 2.5 0 0 1 12 8h.5a2.5 2.5 0 0 1 0 5h-1a2.5 2.5 0 0 0 0 5H12a2.5 2.5 0 0 0 2.5-2"/></svg>'
 
 
 
@@ -2303,6 +2305,7 @@ def _sidebar_html(active_view: str) -> str:
         ("health", "System Health", _ICON_SERVER, "/admin/health"),
         ("performance", "Edge Performance", _ICON_CHART, "/admin/performance"),
         ("social_ops", "Social Ops", _ICON_PLAY, "/admin/social-ops"),
+        ("revenue", "Revenue & Customers", _ICON_REVENUE, "/admin/revenue"),
     ]
     # Badge counts only genuinely failed/blocked items — awaiting approvals do not
     # surface here, since those live in-screen on the Social Ops view itself.
@@ -8917,6 +8920,297 @@ function copyPrompt(metricName, currentValue, expectedValue, lastTs, dbPath) {{
 </script>"""
 
 
+# -- Revenue & Customers -------------------------------------------------------
+
+_REVENUE_ACTIVE_STATUSES = ("confirmed", "payment_confirmed", "completed", "active", "paid", "succeeded")
+
+
+def _rev_rag(value, green, amber, higher_is_better=True) -> str:
+    if value is None:
+        return "c-grey"
+    if higher_is_better:
+        if value >= green:
+            return "c-green"
+        if value >= amber:
+            return "c-amber"
+        return "c-red"
+    else:
+        if value <= green:
+            return "c-green"
+        if value <= amber:
+            return "c-amber"
+        return "c-red"
+
+
+def _rev_currency(cents: int) -> str:
+    return f"R{cents // 100:,.0f}"
+
+
+def _rev_plan_mrr_cents(plan_code: str, amount_cents: int) -> int:
+    if "annual" in plan_code.lower():
+        return amount_cents // 12
+    return amount_cents
+
+
+def _posthog_dau() -> dict:
+    import urllib.request, urllib.error, json as _json
+    token = os.environ.get("POSTHOG_PERSONAL_API_KEY", "")
+    project_id = os.environ.get("POSTHOG_PROJECT_ID", "")
+    host = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com").rstrip("/")
+    if not token or not project_id:
+        return {"error": "POSTHOG_PERSONAL_API_KEY or POSTHOG_PROJECT_ID not set"}
+    try:
+        url = f"{host}/api/projects/{project_id}/insights/trend/?events=[{{\"id\":\"$pageview\"}}]&interval=day&date_from=-7d"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read())
+        series = data.get("result", [{}])[0].get("data", [])
+        return {"series": series[-7:] if len(series) >= 7 else series}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def render_revenue_content() -> str:
+    topbar = """<div class="topbar"><div class="topbar-title">Revenue &amp; Customers</div></div>"""
+
+    no_table_banner = ""
+    exception_banner = ""
+    active_subs = 0
+    mrr_net_cents = 0
+    mrr_gross_cents = 0
+    arr_cents = 0
+    arpu_cents = 0
+    ltv_cents = 0
+    churn_rate = None
+    refund_rate = None
+    trial_count = 0
+    cohort_rows = []
+    log_rows = []
+
+    try:
+        conn = db_connect(BOT_DB)
+        if not table_exists(conn, "payments"):
+            no_table_banner = '<div class="banner banner-warn">payments table not found in mzansiedge.db — no payment data yet.</div>'
+        else:
+            # Active subscriptions
+            active_rows = q_all(conn,
+                "SELECT plan_code, amount_cents, currency, is_founding, confirmed_at, user_id "
+                "FROM payments WHERE status IN ({})".format(
+                    ",".join("?" * len(_REVENUE_ACTIVE_STATUSES))),
+                _REVENUE_ACTIVE_STATUSES)
+            active_subs = len(active_rows)
+            for r in active_rows:
+                mrr_net_cents += _rev_plan_mrr_cents(r["plan_code"], r["amount_cents"])
+            mrr_gross_cents = mrr_net_cents
+            arr_cents = mrr_net_cents * 12
+            arpu_cents = mrr_net_cents // active_subs if active_subs else 0
+
+            # Total + refunds
+            all_rows = q_all(conn,
+                "SELECT plan_code, amount_cents, status, refunded_at, created_at, user_id, is_founding "
+                "FROM payments ORDER BY created_at DESC")
+            total_subs = len(all_rows)
+            refund_count = sum(1 for r in all_rows if r["refunded_at"])
+            refund_rate = round(refund_count / total_subs * 100, 1) if total_subs else 0
+
+            # Churn (cancelled in last 30d approximated from status)
+            cancelled_rows = q_all(conn,
+                "SELECT COUNT(*) as c FROM payments WHERE status IN ('cancelled','churned','expired') "
+                "AND updated_at >= datetime('now','-30 days')")
+            churn_count = cancelled_rows[0]["c"] if cancelled_rows else 0
+            churn_rate = round(churn_count / max(active_subs, 1) * 100, 1)
+
+            # LTV (12-month proxy)
+            ltv_cents = mrr_net_cents * 12 // max(active_subs, 1) if active_subs else 0
+
+            # Trial / pending count
+            trial_rows = q_all(conn,
+                "SELECT COUNT(*) as c FROM payments WHERE status NOT IN ({})".format(
+                    ",".join("?" * len(_REVENUE_ACTIVE_STATUSES))),
+                _REVENUE_ACTIVE_STATUSES)
+            trial_count = trial_rows[0]["c"] if trial_rows else 0
+
+            # Cohort breakdown by plan
+            cohort_rows = q_all(conn,
+                "SELECT plan_code, COUNT(*) as cnt, SUM(amount_cents) as total "
+                "FROM payments WHERE status IN ({}) GROUP BY plan_code ORDER BY total DESC".format(
+                    ",".join("?" * len(_REVENUE_ACTIVE_STATUSES))),
+                _REVENUE_ACTIVE_STATUSES)
+
+            # Recent payment log
+            log_rows = q_all(conn,
+                "SELECT user_id, plan_code, amount_cents, status, created_at "
+                "FROM payments ORDER BY created_at DESC LIMIT 20")
+
+            # Exception: pending payments with no confirmed subs
+            pending_rows = q_all(conn,
+                "SELECT COUNT(*) as c FROM payments WHERE status IN ('payment_created','awaiting_webhook','pending')")
+            pending_count = pending_rows[0]["c"] if pending_rows else 0
+            if pending_count and not active_subs:
+                exception_banner = (
+                    f'<div class="banner banner-warn">'
+                    f'{pending_count} payment(s) found but none confirmed yet — '
+                    f'MRR will update once Stitch confirms webhooks.</div>'
+                )
+    except Exception as exc:
+        exception_banner = f'<div class="banner banner-err">DB error: {exc}</div>'
+
+    # No-data empty-state
+    if not no_table_banner and not active_subs and not trial_count:
+        no_table_banner = (
+            '<div class="banner banner-info">'
+            'No payment data yet. Once Stitch webhooks confirm a subscription '
+            'this dashboard will populate automatically.</div>'
+        )
+
+    # --- PostHog sparkline ---
+    ph = _posthog_dau()
+    ph_html = ""
+    if "error" in ph:
+        ph_html = f'<p class="muted" style="padding:1rem 0">PostHog unavailable: {ph["error"]}</p>'
+    elif ph.get("series"):
+        pts = ",".join(str(int(v)) for v in ph["series"])
+        ph_html = f"""<canvas id="ph-spark" height="60" style="width:100%;max-width:420px"></canvas>
+<script>
+(function(){{
+  var ctx=document.getElementById('ph-spark').getContext('2d');
+  new Chart(ctx,{{type:'line',data:{{labels:[{pts}].map((_,i)=>i+1),
+    datasets:[{{data:[{pts}],borderColor:'#22c55e',tension:.35,pointRadius:2,fill:false}}]}},
+    options:{{plugins:{{legend:{{display:false}}}},scales:{{x:{{display:false}},y:{{display:false}}}}}}}});
+}})();
+</script>"""
+
+    # --- RAG classes ---
+    mrr_cls   = _rev_rag(mrr_net_cents, 500_00, 100_00)
+    subs_cls  = _rev_rag(active_subs, 50, 10)
+    churn_cls = _rev_rag(churn_rate or 0, 5, 15, higher_is_better=False)
+    refund_cls = _rev_rag(refund_rate or 0, 2, 5, higher_is_better=False)
+
+    # --- Tier 1 KPI strip ---
+    t1 = f"""
+<div class="kpi-strip">
+  <div class="kpi kpi-t1">
+    <div class="kpi-val {mrr_cls}">{_rev_currency(mrr_net_cents)}</div>
+    <div class="kpi-label">MRR (Net)</div>
+  </div>
+  <div class="kpi kpi-t1">
+    <div class="kpi-val {subs_cls}">{active_subs}</div>
+    <div class="kpi-label">Active Subs</div>
+  </div>
+  <div class="kpi kpi-t1">
+    <div class="kpi-val {churn_cls}">{churn_rate if churn_rate is not None else '—'}%</div>
+    <div class="kpi-label">Churn Rate (30d)</div>
+  </div>
+</div>"""
+
+    # --- Tier 2 KPI strip ---
+    t2 = f"""
+<div class="kpi-strip" style="margin-top:0">
+  <div class="kpi">
+    <div class="kpi-val">{_rev_currency(mrr_gross_cents)}</div>
+    <div class="kpi-label">MRR (Gross)</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-val">{_rev_currency(arr_cents)}</div>
+    <div class="kpi-label">ARR</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-val">{_rev_currency(arpu_cents)}</div>
+    <div class="kpi-label">ARPU</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-val">{trial_count}</div>
+    <div class="kpi-label">Pending / Trial</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-val {refund_cls}">{refund_rate if refund_rate is not None else '—'}%</div>
+    <div class="kpi-label">Refund Rate</div>
+  </div>
+</div>"""
+
+    # --- Payment log table ---
+    log_html = ""
+    if log_rows:
+        rows_html = ""
+        for r in log_rows:
+            amt = _rev_currency(r["amount_cents"])
+            status_cls = "c-green" if r["status"] in _REVENUE_ACTIVE_STATUSES else "c-amber"
+            rows_html += (
+                f'<tr><td>{r["user_id"]}</td><td>{r["plan_code"]}</td>'
+                f'<td>{amt}</td>'
+                f'<td class="{status_cls}">{r["status"]}</td>'
+                f'<td class="muted">{(r["created_at"] or "")[:16]}</td></tr>'
+            )
+        log_html = f"""
+<div class="panel" style="margin-top:1.5rem">
+  <div class="panel-head">Recent Payments</div>
+  <table class="tbl">
+    <thead><tr><th>User</th><th>Plan</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+</div>"""
+
+    # --- Cohort accordion ---
+    cohort_html = ""
+    if cohort_rows:
+        rows_html = ""
+        for r in cohort_rows:
+            rows_html += (
+                f'<tr><td>{r["plan_code"]}</td><td>{r["cnt"]}</td>'
+                f'<td>{_rev_currency(r["total"])}</td></tr>'
+            )
+        cohort_html = f"""
+<details class="panel" style="margin-top:1rem">
+  <summary class="panel-head" style="cursor:pointer">Plan Cohort Breakdown</summary>
+  <table class="tbl">
+    <thead><tr><th>Plan</th><th>Count</th><th>Revenue</th></tr></thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+</details>"""
+
+    ltv_html = f"""
+<details class="panel" style="margin-top:1rem">
+  <summary class="panel-head" style="cursor:pointer">LTV &amp; Unit Economics</summary>
+  <table class="tbl">
+    <tbody>
+      <tr><td>Avg LTV (12m proxy)</td><td>{_rev_currency(ltv_cents)}</td></tr>
+      <tr><td>ARPU</td><td>{_rev_currency(arpu_cents)}</td></tr>
+      <tr><td>ARR</td><td>{_rev_currency(arr_cents)}</td></tr>
+    </tbody>
+  </table>
+</details>"""
+
+    ph_accordion = f"""
+<details class="panel" style="margin-top:1rem">
+  <summary class="panel-head" style="cursor:pointer">PostHog DAU (7d)</summary>
+  <div style="padding:.75rem 1rem">{ph_html}</div>
+</details>"""
+
+    churn_risk_html = f"""
+<details class="panel" style="margin-top:1rem">
+  <summary class="panel-head" style="cursor:pointer">Churn Risk Signals</summary>
+  <table class="tbl">
+    <tbody>
+      <tr><td>Active subs</td><td class="{subs_cls}">{active_subs}</td></tr>
+      <tr><td>Churned / cancelled (30d)</td><td>{churn_rate}%</td></tr>
+      <tr><td>Refund rate</td><td class="{refund_cls}">{refund_rate}%</td></tr>
+      <tr><td>Pending / unconfirmed</td><td>{trial_count}</td></tr>
+    </tbody>
+  </table>
+</details>"""
+
+    return (
+        topbar
+        + (exception_banner or no_table_banner)
+        + t1 + t2
+        + log_html
+        + cohort_html
+        + ltv_html
+        + ph_accordion
+        + churn_risk_html
+    )
+
+
 # -- Shell renderer -----------------------------------------------------------
 
 def render_shell(active_view: str, content_html: str) -> str:
@@ -9058,7 +9352,36 @@ def admin_system():
 @app.route("/admin/customers")
 @require_auth
 def admin_customers_redirect():
-    return redirect("/admin/system", code=302)
+    return redirect("/admin/revenue", code=302)
+
+
+@app.route("/admin/revenue")
+@require_auth
+def admin_revenue():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("revenue_full")
+        if cached and (now - cached[1]) < _REVENUE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+    content = render_revenue_content()
+    html = render_shell("revenue", content)
+    with _page_cache_lock:
+        _page_cache["revenue_full"] = (html, now)
+    return Response(html, mimetype="text/html")
+
+
+@app.route("/admin/api/revenue")
+@require_auth
+def api_revenue():
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get("revenue_content")
+        if cached and (now - cached[1]) < _REVENUE_CACHE_TTL:
+            return Response(cached[0], mimetype="text/html")
+    content = render_revenue_content()
+    with _page_cache_lock:
+        _page_cache["revenue_content"] = (content, now)
+    return Response(content, mimetype="text/html")
 
 
 
