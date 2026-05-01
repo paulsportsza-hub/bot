@@ -43,6 +43,7 @@ sys.path.insert(0, _BOT_DIR)
 sys.path.insert(0, os.path.dirname(_BOT_DIR))
 
 from config import SCRAPERS_ROOT
+from db_connection import get_connection
 
 # ── GlitchTip ─────────────────────────────────────────────────────────────────
 _SCRAPERS_DIR = os.path.join(os.path.dirname(_BOT_DIR), "scrapers")
@@ -227,7 +228,7 @@ def write_integrity_event(
         return
     path = db_path or _get_db_path()
     try:
-        conn = sqlite3.connect(path, timeout=3)
+        conn = get_connection(path, timeout_ms=3000)
         cols = {row[1] for row in conn.execute("PRAGMA table_info(narrative_integrity_log)").fetchall()}
         if not cols:
             conn.close()
@@ -587,8 +588,7 @@ def run_monitor(db_path: str | None = None, dry_run: bool = False) -> dict[str, 
         log.warning("MONITOR: narrative DB not found at %s — skipping", path)
         return {}
 
-    conn = sqlite3.connect(path, timeout=10)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(path, timeout_ms=10000)
     results: dict[str, int] = {}
     cycle_signals: list[dict] = []
 
@@ -714,7 +714,7 @@ def run_monitor(db_path: str | None = None, dry_run: bool = False) -> dict[str, 
             _cutoff_24h_sql = (
                 datetime.now(SAST) - timedelta(hours=24)
             ).strftime("%Y-%m-%d %H:%M:%S")
-            _bot_conn = sqlite3.connect(_bot_db_path, timeout=10)
+            _bot_conn = get_connection(_bot_db_path, timeout_ms=10000)
             try:
                 _row6b = _bot_conn.execute(
                     "SELECT COUNT(*) FROM gold_verdict_failed_edges "
