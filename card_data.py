@@ -105,6 +105,52 @@ _TIER_META = {
 }
 
 _TIER_ORDER = ["diamond", "gold", "silver", "bronze"]
+_HOT_TIPS_ALLOC_TARGET = 10
+
+
+def _allocate_tips_by_tier(tips: list[dict], min_per_tier: int = 3) -> list[dict]:
+    """Return a tier-aware Hot Tips list while preserving order within each tier."""
+    if not tips:
+        return []
+
+    min_count = max(int(min_per_tier or 0), 0)
+    grouped: dict[str, list[tuple[int, dict]]] = {tier: [] for tier in _TIER_ORDER}
+
+    for idx, tip in enumerate(tips):
+        tier = (
+            tip.get("edge_tier")
+            or tip.get("display_tier")
+            or tip.get("edge_rating")
+            or tip.get("tier")
+            or "bronze"
+        )
+        tier_key = str(tier).lower().strip()
+        if tier_key not in grouped:
+            tier_key = "bronze"
+        grouped[tier_key].append((idx, tip))
+
+    allocated: list[dict] = []
+    selected_indexes: set[int] = set()
+
+    for tier in _TIER_ORDER:
+        for idx, tip in grouped[tier][:min_count]:
+            allocated.append(tip)
+            selected_indexes.add(idx)
+
+    target_count = max(min(len(tips), _HOT_TIPS_ALLOC_TARGET), len(allocated))
+    if len(allocated) >= target_count:
+        return allocated
+
+    for tier in _TIER_ORDER:
+        for idx, tip in grouped[tier]:
+            if len(allocated) >= target_count:
+                return allocated
+            if idx in selected_indexes:
+                continue
+            allocated.append(tip)
+            selected_indexes.add(idx)
+
+    return allocated
 
 # ── Sport icon helpers ──────────────────────────────────────────────────────────
 LEAGUE_SPORT_MAP: dict[str, str] = {

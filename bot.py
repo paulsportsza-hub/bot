@@ -124,6 +124,7 @@ from message_types import DigestMessage, DetailMessage, AlertMessage, ResultMess
 # BUILD-W3: image card pipeline
 from card_sender import send_card_or_fallback
 from card_data import (
+    _allocate_tips_by_tier,
     build_edge_picks_data,
     build_my_matches_data,
     build_edge_detail_data,  # noqa: F401 — available for ed: handler
@@ -10959,12 +10960,13 @@ async def _fetch_hot_tips_from_db_inner() -> list[dict]:
             "edge_score": composite_score,
         })
 
-    # Sort by edge score descending, take top 10
+    # Sort by edge score descending, then allocate slots across non-empty tiers.
     all_tips.sort(key=lambda t: (-t.get("edge_score", 0), -t["ev"]))
-    top_tips = all_tips[:10]
+    top_tips = _allocate_tips_by_tier(all_tips, min_per_tier=3)
     # W50-TIER: Use V2 computed tier as authoritative display_tier (not percentile override)
     for tip in top_tips:
         tip["display_tier"] = tip.get("edge_rating", "bronze")
+        tip["edge_tier"] = tip.get("edge_tier") or tip["display_tier"]
 
     # Re-sort by tier (diamond first) then EV descending within each tier
     _tier_sort_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
@@ -11748,7 +11750,7 @@ async def _fetch_hot_tips_all_sports() -> list[dict]:
     # Sort by edge rating (diamond first), then EV descending
     _rating_order = {EdgeRating.DIAMOND: 0, EdgeRating.GOLD: 1, EdgeRating.SILVER: 2, EdgeRating.BRONZE: 3}
     all_tips.sort(key=lambda t: (_rating_order.get(t.get("edge_rating", ""), 9), -t["ev"]))
-    top_tips = all_tips[:10]
+    top_tips = _allocate_tips_by_tier(all_tips, min_per_tier=3)
 
     near_miss_tips.sort(key=lambda t: (-t.get("ev", 0), -t.get("prob", 0)))
     thin_state = {
@@ -11777,10 +11779,10 @@ def _sort_tips_for_snapshot(tips: list[dict]) -> list[dict]:
     result = [t for t in tips if (t.get("ev") or 0) > 0 and (t.get("edge_score") or 0) >= 40]
     _tier_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
     result.sort(key=lambda t: (
-        _tier_order.get(str(t.get("display_tier", "bronze")).lower(), 9),
+        _tier_order.get(str(t.get("edge_tier") or t.get("display_tier") or "bronze").lower(), 9),
         -(t.get("ev") or 0),
     ))
-    return result
+    return _allocate_tips_by_tier(result, min_per_tier=3)
 
 
 async def _build_hot_tips_page(
@@ -11825,9 +11827,10 @@ async def _build_hot_tips_page(
     # BUILD-TIER-ORDER: Diamond > Gold > Silver > Bronze, then EV descending within tier.
     _tier_order = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
     tips.sort(key=lambda t: (
-        _tier_order.get(str(t.get("display_tier", "bronze")).lower(), 9),
+        _tier_order.get(str(t.get("edge_tier") or t.get("display_tier") or "bronze").lower(), 9),
         -(t.get("ev") or 0),
     ))
+    tips = _allocate_tips_by_tier(tips, min_per_tier=3)
     total = len(tips)
     total_pages = max((total + HOT_TIPS_PAGE_SIZE - 1) // HOT_TIPS_PAGE_SIZE, 1)
     page = max(0, min(page, total_pages - 1))
@@ -12512,7 +12515,7 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     # W84-P1: Fast serving path — read pre-computed edges from edge_results table.
     # This is a pure SQL SELECT (~5ms), zero edge computation, zero contention.
     # Populated by previous precompute cycles that survive scraper writes.
-    _fast_tips = await asyncio.to_thread(_load_tips_from_edge_results)
+    _fast_tips = await asyncio.to_thread(_load_tips_from_edge_results, 20)
     if _fast_tips:
         log.info("Cold path: serving %d tips from edge_results (fast path)", len(_fast_tips))
         # Populate game_tips_cache for tap detail
