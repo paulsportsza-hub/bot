@@ -63,26 +63,17 @@ _FORBIDDEN_PHRASES: tuple[str, ...] = _VERDICT_BANNED_TELEMETRY
 
 _TIER_VOCAB: dict[str, tuple[str, ...]] = {
     # Diamond — confident, premium, conviction.
-    # FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 (2026-05-01): added new pool
-    # vocabulary ("hammer it on", "standard-to-heavy stake") which the new
-    # 7-pattern variant pool emits as the Diamond imperative + sizing tail.
     "diamond": (
-        "hammer it on", "standard-to-heavy",
         "premium back", "strong back", "with conviction", "premium value",
         "the case is built", "one of the better plays",
     ),
-    # Gold — disciplined, supported, standard stake. FIX-NARRATIVE-W82-VARIANT-
-    # EXPANSION-01 added "get on" + "standard stake" as the new pool's Gold
-    # imperative + sizing.
+    # Gold — disciplined, supported, standard stake.
     "gold": (
-        "get on", "standard stake",
         "back ", "take ", "green light", "the call",
         "disciplined", "solid play", "case stands",
     ),
     # Silver — speculative-with-reasoning, mild lean, measured.
-    # FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 added "lean on" + "measured stake".
     "silver": (
-        "lean on", "measured stake",
         "mild lean", "is the lean", "measured play", "small-stake call",
         "small-to-standard",
     ),
@@ -281,39 +272,16 @@ class TestVoiceRubricSampleCoverage:
             )
 
     def test_r3_resolves_risk_factor_when_present(self, scenario, fixture):
-        """R3: Verdict references at least one risk-resolution clause when spec.risk_factors non-empty.
-
-        FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 (2026-05-01): the W82 7-pattern
-        pool resolves risk in TWO shapes:
-          - patterns 0-5: append the canonical _verdict_risk_clause snippet
-            ("factor in the X note", "wary of the X factor", etc.)
-          - pattern 6 (risk-frame-then-action): leads with the literal first
-            risk_factor sentence ("Squad rotation possible..."), so the
-            snippet may not appear but the underlying risk vocabulary does.
-
-        Either form satisfies Rule 9 cohesion. The test now accepts either
-        the canonical snippet OR a ≥4-char token from the first risk factor
-        appearing verbatim in the verdict.
-        """
+        """R3: Verdict references at least one risk-resolution clause when spec.risk_factors non-empty."""
         spec = _make_spec(fixture, scenario)
         verdict = _render_verdict(spec)
         clause = _verdict_risk_clause(spec)
-        if not clause:
-            return
-        if clause in verdict:
-            return  # canonical snippet path (patterns 0-5)
-        # Fallback path (pattern 6): scan the literal first risk factor for a
-        # significant token (≥4 chars) that appears in the verdict.
-        first_risk = (spec.risk_factors[0] if spec.risk_factors else "").lower()
-        verdict_lower = verdict.lower()
-        risk_tokens = [t.strip(",.;:") for t in first_risk.split() if len(t.strip(",.;:")) >= 4]
-        # Skip generic stopwords that would always overlap.
-        stopwords = {"the", "this", "that", "with", "from", "into", "after", "before"}
-        meaningful = [t for t in risk_tokens if t not in stopwords]
-        assert any(t in verdict_lower for t in meaningful), (
-            f"[{scenario['tier']}/{fixture['sport']}] Neither canonical risk clause "
-            f"{clause!r} nor any meaningful token from {first_risk!r} found in verdict: {verdict!r}"
-        )
+        if clause:
+            # The full clause OR the snippet inside it must appear.
+            assert clause in verdict, (
+                f"[{scenario['tier']}/{fixture['sport']}] Risk-resolution clause {clause!r} "
+                f"not woven into verdict: {verdict!r}"
+            )
 
     def test_r4_tier_banded_vocabulary(self, scenario, fixture):
         """R4: Verdict carries tier-banded confidence vocabulary."""
@@ -327,39 +295,24 @@ class TestVoiceRubricSampleCoverage:
         )
 
     def test_r5_length_within_tier_band(self, scenario, fixture):
-        """R5: Verdict length within [100, VERDICT_HARD_MAX].
-
-        FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 (2026-05-01) — AC-3 #6 specifies
-        the unified W82 char window 100-260 (target 140-200) across all tiers.
-        The previous tier-specific MIN_VERDICT_CHARS_BY_TIER floor (Diamond 140
-        / Gold 110 / Silver 80 / Bronze 60) governed the polish path; the W82
-        baseline pool now uses a uniform 100 floor.
-        """
+        """R5: Verdict length within [tier_floor, VERDICT_HARD_MAX]."""
         spec = _make_spec(fixture, scenario)
         verdict = _render_verdict(spec)
         tier = scenario["tier"]
-        # Unified W82 floor (100). Polish-path tier-specific floors live in
-        # MIN_VERDICT_CHARS_BY_TIER for the LLM gate; baseline is uniform.
-        assert 100 <= len(verdict) <= VERDICT_HARD_MAX, (
+        floor = MIN_VERDICT_CHARS_BY_TIER[tier]
+        # Within band: at least floor (per tier), at most VERDICT_HARD_MAX (260).
+        assert floor <= len(verdict) <= VERDICT_HARD_MAX, (
             f"[{tier}/{fixture['sport']}] Verdict length {len(verdict)} "
-            f"outside [100, {VERDICT_HARD_MAX}]: {verdict!r}"
+            f"outside [{floor}, {VERDICT_HARD_MAX}]: {verdict!r}"
         )
 
     def test_r6_max_two_sentences(self, scenario, fixture):
-        """R6: Verdict ≤ 3 complete sentences.
-
-        FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 (2026-05-01) — the brief AC-3
-        rhetorical patterns include 3-sentence shapes by design (stake-anchor
-        "<reason 1>. <reason 2>. {action}", question-into-action "Can {team}
-        {pose}? {answer}. {action}"). The previous ≤ 2 ceiling capped a
-        narrower variant pool; the new pool needs 3 sentences for these
-        rhetorical shapes. Total verdict char count remains capped at 260.
-        """
+        """R6: Verdict ≤ 2 complete sentences."""
         spec = _make_spec(fixture, scenario)
         verdict = _render_verdict(spec)
         n = _sentence_count(verdict)
-        assert n <= 3, (
-            f"[{scenario['tier']}/{fixture['sport']}] Verdict has {n} sentences (>3): {verdict!r}"
+        assert n <= 2, (
+            f"[{scenario['tier']}/{fixture['sport']}] Verdict has {n} sentences (>2): {verdict!r}"
         )
 
 

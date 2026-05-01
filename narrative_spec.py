@@ -153,7 +153,6 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
 
 _SETUP_CONTEXT_MAX_AGE_HOURS = 48.0
 _COACH_LOOKUP_CACHE: dict[str, object] | None = None
-_NICKNAME_LOOKUP_CACHE: dict[str, str] | None = None
 
 
 def _normalise_coach_lookup_name(name: str) -> str:
@@ -206,83 +205,6 @@ def lookup_coach(team_name: str) -> str:
             if isinstance(value, str):
                 return value
     return ""
-
-
-# ── Team Nickname Lookup (FIX-NARRATIVE-W82-VARIANT-EXPANSION-01) ─────────────
-
-def _normalise_nickname_lookup_name(name: str) -> str:
-    """Map team display name → nickname-table key."""
-    normalised = str(name or "").lower().strip()
-    normalised = re.sub(r"[\s\-]+", "_", normalised)
-    for suffix in ("_fc", "_sc", "_cf", "_afc"):
-        if normalised.endswith(suffix):
-            normalised = normalised[: -len(suffix)]
-    if normalised.startswith("the_"):
-        normalised = normalised[4:]
-    return normalised
-
-
-def _load_team_nicknames() -> dict[str, str]:
-    """Load curated team nickname table (bot/data/team_nicknames.json)."""
-    global _NICKNAME_LOOKUP_CACHE
-    if _NICKNAME_LOOKUP_CACHE is not None:
-        return _NICKNAME_LOOKUP_CACHE
-
-    candidates = [
-        Path(__file__).resolve().parent / "data" / "team_nicknames.json",
-        Path(__file__).resolve().parent.parent / "bot" / "data" / "team_nicknames.json",
-    ]
-    for path in candidates:
-        try:
-            payload = json.loads(path.read_text())
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            continue
-        result: dict[str, str] = {}
-        for k, v in payload.items():
-            if k.startswith("_"):
-                continue
-            if isinstance(v, str) and v:
-                result[k] = v
-        _NICKNAME_LOOKUP_CACHE = result
-        return _NICKNAME_LOOKUP_CACHE
-    _NICKNAME_LOOKUP_CACHE = {}
-    return _NICKNAME_LOOKUP_CACHE
-
-
-def lookup_nickname(team_name: str) -> str:
-    """Return canonical nickname for a team, or empty string when unavailable."""
-    if not team_name:
-        return ""
-    normalised = _normalise_nickname_lookup_name(team_name)
-    if not normalised:
-        return ""
-    table = _load_team_nicknames()
-    if normalised in table:
-        return table[normalised]
-    for key, val in table.items():
-        if normalised in key or key in normalised:
-            return val
-    return ""
-
-
-# ── W82 Variant Selector (FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 — AC-4) ──────
-
-def _select_w82_variant(home: str, away: str, tier: str, num_variants: int) -> int:
-    """MD5-deterministic variant index for the W82 imperative-closing verdict pool.
-
-    Returns h[0] % num_variants where h = MD5(home|away|tier).digest().
-    Same (home, away, tier) → same variant index every render. This is the
-    cache-coherence anchor: the pregen sweep and view-time synthesis must
-    produce IDENTICAL verdict text for the same fixture.
-
-    AC-4 contract: deterministic on (home, away, tier); different fixtures
-    distribute approximately uniformly across the variant pool.
-    """
-    if num_variants <= 0:
-        return 0
-    seed = f"{(home or '').lower()}|{(away or '').lower()}|{(tier or '').lower()}"
-    digest = hashlib.md5(seed.encode("utf-8")).digest()
-    return digest[0] % num_variants
 
 
 # ── Verdict Quality Gate (BUILD-VERDICT-QUALITY-GATE-01) ──────────────────────
@@ -1574,12 +1496,6 @@ class NarrativeSpec:
     # Edge tier (from edge_rating — used for tier-based language floor)
     edge_tier: str = ""           # "diamond" / "gold" / "silver" / "bronze" / ""
 
-    # Venue (verified scoreboard ESPN field — Rule 18 verified-list anchor).
-    # Populated by build_narrative_spec from ctx_data["venue"]; empty when
-    # ESPN coverage is missing. The W82 imperative-closing variant pool
-    # references venue in the form-anchor / action-led patterns when present.
-    venue: str = ""
-
     # Bookmaker coverage
     bookmaker_count: int = 0              # number of SA bookmakers pricing this match
 
@@ -2157,7 +2073,6 @@ def build_narrative_spec(
         context_freshness_hours=context_freshness_hours,
         context_is_fresh=context_is_fresh,
         scaffold=scaffold,
-        venue=str(ctx_data.get("venue", "") or "").strip(),
     )
 
     # BUILD-GATE-RELAX: Force cautious tone on ALL zero-signal edges — Paul 1 April 2026.
@@ -2692,7 +2607,7 @@ def _tmpl_anonymous(
         if pos is not None:
             parts = [f"{name} sit {ord_pos} in {comp}{pts_str} — steady with no strong narrative either way."]
         else:
-            parts = [f"{name} come into this without a loud storyline in {comp}, which keeps the contest market-first."]
+            parts = [f"{name} come into this without a loud storyline in {comp}, which keeps the read market-first."]
         if f:
             parts.append(f"Form reads {f}.")
         if last:
@@ -2705,7 +2620,7 @@ def _tmpl_anonymous(
         if pos is not None:
             parts = [f"{poss} side sit {ord_pos} in {comp} — outside both extremes and without a dominant storyline."]
         else:
-            parts = [f"{poss} side do not bring an obvious standings story into this {comp} spot, so the match has to be judged through the number."]
+            parts = [f"{poss} side do not bring an obvious standings story into this {comp} spot, so the match has to be read through the number."]
         if f:
             parts.append(f"Form reads {f}.")
         if last:
@@ -2732,7 +2647,7 @@ def _tmpl_neutral(
         elif pos is not None:
             parts.append(f"They sit {ord_pos} in {comp}, which keeps them in the middle of the wider picture.")
         else:
-            parts.append("Their picture is still forming ahead of kickoff.")
+            parts.append("The read on them is still forming ahead of kickoff.")
     elif v == 1:
         parts = [f"{name} look like one of those sides you assess by the latest run rather than the badge."]
         if form_note:
@@ -3013,7 +2928,7 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
             ],
             "multi_signal": [
                 f"With multiple indicators stacked behind it and a stronger-than-usual analytical lead, this is the sort of {posture_band} that can be stated more cleanly than usual.",
-                f"The supporting count gives this {posture_band} more authority, so the framing does not need to lean on theatre.",
+                f"The signal count gives this {posture_band} more authority, so the framing does not need to lean on theatre.",
             ],
         },
         "balanced": {
@@ -3026,8 +2941,8 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
                 f"There is enough there to keep it live, but not enough to pretend this is a runaway read.",
             ],
             "multi_signal": [
-                f"The support stack is real, but this still belongs in the disciplined bucket rather than the loud one.",
-                f"More than one indicator sharpens the view, although this still looks like a controlled posture rather than a statement play.",
+                f"The support stack is real, but the read still belongs in the disciplined bucket rather than the loud one.",
+                f"More than one indicator sharpens the view, although this still looks like a controlled read rather than a statement play.",
             ],
         },
         "cautious": {
@@ -3040,8 +2955,8 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
                 f"One indicator stops it from being purely thin, though not by enough to remove the caution.",
             ],
             "multi_signal": [
-                f"Multiple indicators are doing more work than the analytical gap itself, which makes this more about respecting the supporting evidence than pressing it.",
-                f"Multiple data points keep it credible, but the margin is still narrow and should be handled that way.",
+                f"Multiple indicators are doing more work than the analytical gap itself, which makes this more about respecting the read than pressing it.",
+                f"Multiple signals keep it credible, but the margin is still narrow and should be handled that way.",
             ],
         },
     }
@@ -3051,23 +2966,23 @@ def _render_setup_no_context(spec: NarrativeSpec) -> str:
     # without leaking pricing vocabulary into the Setup body.
     close_map = {
         "premium": [
-            f"That leaves a premium-grade analytical posture on a fixture where the structure matters as much as the names.",
-            f"The cleaner angle here is to trust the analytical shape and keep the language as composed as the setup.",
+            f"That leaves a premium-grade analytical read on a fixture where the structure matters as much as the names.",
+            f"The cleaner angle here is to trust the signal shape and keep the language as composed as the setup.",
             f"The indicator profile here is clean enough to lead with conviction, without embellishment.",
-            f"A premium posture on a fixture where the analytical case is the headline, not the supporting cast.",
+            f"A premium read on a fixture where the analytical signal is the headline, not the supporting cast.",
         ],
         "solid": [
             f"That keeps the focus on execution and analytical discipline rather than on borrowed narrative.",
-            f"It is a solid setup for a measured posture, with the indicator profile doing enough of the explanatory work.",
-            f"A workable, proportionate posture — the indicators have done their job and the analytical profile reflects it.",
-            f"Solid analytical context, no need to overreach — trust the indicator profile and stay disciplined.",
+            f"It is a solid setup for a measured read, with the indicator profile doing enough of the explanatory work.",
+            f"A workable, proportionate read — the indicators have done their job and the analytical profile reflects it.",
+            f"Solid signal context, no need to overreach — trust the read and stay disciplined.",
         ],
         "thin": [
             f"That is why the setup needs restraint: the frame is usable, but not rich enough for swagger.",
-            f"The right posture is compact and indicator-literate — trust the analytical structure and let it carry the weight.",
+            f"The right read is compact and signal-literate — trust the analytical structure and let it carry the weight.",
             f"Thin context calls for a proportionate play — a measured analytical position without an oversold case behind it.",
             f"The analytical posture here is disciplined: lean on the indicator profile, size conservatively, and stay proportionate.",
-            f"An indicator-led posture is the sharpest call here — what the data points say matters more than what the surrounding context confirms.",
+            f"A signal-led read is the sharpest call here — what the indicators say matters more than what the surrounding data confirms.",
         ],
     }
 
@@ -3380,14 +3295,6 @@ _VERDICT_RISK_STOPWORDS: frozenset = frozenset({
     # / "the pricing concern" — both leak telemetry vocabulary into the
     # Verdict where it doesn't belong (brief Forbidden list).
     "price", "pricing", "priced", "movement", "angle", "stable",
-    # FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 (2026-05-01): exclude telemetry-
-    # vocabulary tokens from the snippet extractor. Otherwise risk factors
-    # starting with "Reads" / "Signals" produce "even with the reads concern"
-    # / "wary of the signal factor" — both match
-    # narrative_validator.TELEMETRY_VOCABULARY_PATTERNS and would fail any
-    # downstream validator scan applied to the W82 baseline output.
-    "reads", "read", "signals", "signal", "indicators", "indicator",
-    "structural", "telemetry",
 })
 
 
@@ -3436,466 +3343,6 @@ def _verdict_risk_clause(spec: NarrativeSpec) -> str:
         f"wary of the {snippet} factor",
     ]
     return variants[_v]
-
-
-# ── W82 Imperative-Closing Variant Pool (FIX-NARRATIVE-W82-VARIANT-EXPANSION-01)
-#
-# Seven distinct rhetorical-shape verdict variants for actionable verdicts
-# (lean / back / strong back). Each variant closes with a complete sentence
-# matching the validator's verdict_closure_rule (action verb + team/selection
-# + odds — see narrative_validator._VERDICT_ACTION_RE / _VERDICT_ODDS_RE).
-#
-# Variant selection: MD5(home|away|tier) → index. Same fixture always picks
-# the same shape across pregen sweep + view-time synthesis (cache coherence).
-# Different fixtures distribute approximately uniformly across the 7 patterns,
-# providing the opening-shape diversity demanded by HG-4 of the brief.
-#
-# Variant tier-band tone is encoded in the action verb + sizing tail:
-#   - Diamond  (strong back) → "Hammer it on" / standard-to-heavy stake
-#   - Gold     (back)        → "Get on" or "Back" / standard stake
-#   - Silver   (lean)        → "Lean on" / measured stake
-#   - Bronze   (speculative) → "Take" / small stake (handled in legacy path)
-#
-# References enrichment fields when available, falls back gracefully:
-#   - team_nicknames.json → spec.home_name / spec.away_name → nickname
-#   - coaches.json (via lookup_coach) → spec.home_coach last name
-#   - ESPN scoreboard venue → spec.venue
-#   - last-five form → spec.home_form / spec.away_form
-#   - league position → spec.home_position / spec.away_position
-#
-# Banned phrases (per AC-3 #5): every pattern avoids the canonical
-# TELEMETRY_VOCABULARY_PATTERNS list — verified by
-# tests/contracts/test_w82_variant_expansion.py::test_no_banned_telemetry.
-
-def _last_name(full_name: str | None) -> str:
-    """Return the last whitespace-separated token of a coach/manager name."""
-    if not full_name:
-        return ""
-    parts = str(full_name).strip().split()
-    return parts[-1] if parts else ""
-
-
-def _team_label_w82(name: str, fallback: str = "") -> str:
-    """Return team display label, preferring curated nickname when available."""
-    nick = lookup_nickname(name) if name else ""
-    if nick:
-        return nick
-    if name:
-        return name
-    return fallback or "the side"
-
-
-def _possessive_team_label(name: str) -> str:
-    """Return a team label suitable for use after a possessive ('Slot's X').
-
-    Strips leading 'the ' from nicknames so 'Slot's the Reds' becomes
-    'Slot's Reds'. Falls back to the team name when no nickname is curated.
-    """
-    nick = lookup_nickname(name) if name else ""
-    if nick:
-        if nick.lower().startswith("the "):
-            return nick[4:]
-        return nick
-    return name or "the side"
-
-
-def _cap_first(text: str) -> str:
-    """Capitalise the first character of a string, leaving the rest as-is."""
-    if not text:
-        return text
-    return text[0].upper() + text[1:]
-
-
-def _action_verb_w82(action: str, tier: str) -> str:
-    """Imperative action verb for actionable W82 verdicts.
-
-    Diamond → "Hammer it on" (max conviction). Gold → "Get on" / "Back".
-    Silver → "Lean on" (measured). Bronze (speculative_punt) is handled via
-    the legacy speculative-punt branch in _render_verdict — kept here for
-    completeness so callers can use the helper for any tier.
-    """
-    a = (action or "").lower()
-    t = (tier or "").lower()
-    if a == "strong back" or t == "diamond":
-        return "Hammer it on"
-    if a == "back" or t == "gold":
-        return "Get on"
-    if a == "lean" or t == "silver":
-        return "Lean on"
-    return "Take"
-
-
-def _sizing_w82(action: str, tier: str) -> str:
-    """Sizing tail clause that closes the action sentence."""
-    a = (action or "").lower()
-    t = (tier or "").lower()
-    if a == "strong back" or t == "diamond":
-        return "standard-to-heavy stake"
-    if a == "back" or t == "gold":
-        return "standard stake"
-    if a == "lean" or t == "silver":
-        return "measured stake"
-    return "small stake"
-
-
-def _form_streak_phrase_w82(form: str, weak: bool = False) -> str:
-    """Concise form phrase from a WDL string. weak=True flips to negative framing."""
-    if not form:
-        return ""
-    f = "".join(c for c in form.upper() if c in "WDL")[:5]
-    if not f:
-        return ""
-    n = len(f)
-    w = f.count("W")
-    d = f.count("D")
-    l = f.count("L")
-    if weak:
-        if l >= 3:
-            return f"have lost {l} of their last {n}"
-        if w == 0:
-            return f"are winless in {n}"
-        if w == 1 and l >= 2:
-            return f"have one win in {n} with {l} losses"
-        return f"are mixed across the last {n}"
-    # Positive framing
-    if w >= 4:
-        return f"have {w} wins in {n}"
-    if w == 3 and l == 0:
-        return f"are unbeaten with {w} wins in {n}"
-    if w >= 3:
-        return f"are flying with {w} wins in {n}"
-    if d >= 3:
-        return f"are draw-heavy ({d} of {n})"
-    if w == 0 and l >= 3:
-        return "are stuck in a poor run"
-    return f"sit at {w}W-{d}D-{l}L in {n}"
-
-
-def _form_descriptor_w82(form: str, opposite: bool = False) -> str:
-    """One-line descriptor verb-phrase from a form string. Opposite=True
-    flips polarity for use in comparative ('A is good, B is opposite') frames."""
-    if not form:
-        return "are mid-pack" if not opposite else "look thin"
-    f = "".join(c for c in form.upper() if c in "WDL")[:5]
-    if not f:
-        return "are mid-pack" if not opposite else "look thin"
-    n = len(f)
-    w = f.count("W")
-    d = f.count("D")
-    l = f.count("L")
-    if opposite:
-        if l >= 3:
-            return "have shipped three or more in their last few"
-        if w == 0:
-            return "are winless lately"
-        if w == 1:
-            return "have only one win in their recent run"
-        return "look mixed away from home"
-    if w >= 4:
-        return "are firing"
-    if w == 3:
-        return "are humming along"
-    if d >= 3:
-        return "are stuck on draws"
-    if w == 0 and l >= 3:
-        return "are stuck in a poor run"
-    return "are mid-pack"
-
-
-def _pos_descriptor_w82(pos: int | None) -> str:
-    """Position-based descriptor for the stake-anchor pattern."""
-    if pos is None:
-        return ""
-    if pos <= 2:
-        return "near the top"
-    if pos <= 4:
-        return "in the top four"
-    if pos <= 8:
-        return "in the upper half"
-    if pos >= 14:
-        return "down in the bottom third"
-    return "mid-table"
-
-
-def _pick_first_meaningful_risk(risk_factors: list[str]) -> str:
-    """Return the first risk factor that isn't generic clean-risk filler."""
-    skip = ("no specific flags", "nothing obvious", "price and signals are aligned")
-    for rf in risk_factors or []:
-        if not rf:
-            continue
-        rf_lower = rf.lower()
-        if any(s in rf_lower for s in skip):
-            continue
-        return rf.rstrip(".")
-    return ""
-
-
-def _vp_action_led(spec: NarrativeSpec, verb: str, sizing: str) -> str:
-    """Pattern 0 — Action-led: imperative leads, single sentence with reason.
-
-    Shape: "{verb} {outcome} at {odds} with {bk} — {coach}'s {team} {form_phrase}{venue_clause}{away_note}, {sizing}."
-
-    Closure rule: action+outcome+odds in the SAME sentence (the only sentence)
-    so the validator's _last_sentence() finds them all.
-    """
-    outcome = spec.outcome_label or "this outcome"
-    odds = f"{spec.odds:.2f}" if spec.odds else "?"
-    bk = spec.bookmaker or "the market"
-    coach = _last_name(spec.home_coach)
-    form_phrase = _form_streak_phrase_w82(spec.home_form) or "have the platform here"
-    venue_clause = f" at {spec.venue}" if spec.venue else ""
-    away_label = _team_label_w82(spec.away_name, "the visitors")
-    away_form_note = _form_streak_phrase_w82(spec.away_form, weak=True) or "arrive without a clear edge"
-    away_clause = f" while {away_label} {away_form_note}"
-    if coach:
-        team_label = _possessive_team_label(spec.home_name)
-        reason = f"{coach}'s {team_label} {form_phrase}{venue_clause}{away_clause}"
-    else:
-        team_label = _team_label_w82(spec.home_name, "the home side")
-        reason = f"{_cap_first(team_label)} {form_phrase}{venue_clause}{away_clause}"
-    return f"{verb} {outcome} at {odds} with {bk} — {reason}, {sizing}."
-
-
-def _vp_stake_anchor(spec: NarrativeSpec, verb: str, sizing: str) -> str:
-    """Pattern 1 — Stake-anchor: two reasons → action close.
-
-    Shape: "{home_team} {pos_desc}. {away_team} {pos_desc}. {verb} {outcome} at {odds} with {bk}, {sizing}."
-    """
-    outcome = spec.outcome_label or "this outcome"
-    odds = f"{spec.odds:.2f}" if spec.odds else "?"
-    bk = spec.bookmaker or "the market"
-    home_label = _cap_first(_team_label_w82(spec.home_name, "The home side"))
-    away_label = _cap_first(_team_label_w82(spec.away_name, "The visitors"))
-    home_pos = _pos_descriptor_w82(spec.home_position)
-    away_pos = _pos_descriptor_w82(spec.away_position)
-    if home_pos and away_pos:
-        opener = f"{home_label} sit {home_pos}. {away_label} arrive {away_pos}."
-    elif home_pos:
-        opener = f"{home_label} sit {home_pos}. {away_label} bring uncertainty into this one."
-    elif spec.home_form:
-        opener = f"{home_label} {_form_streak_phrase_w82(spec.home_form) or 'set up well'}. {away_label} look the weaker side here."
-    else:
-        opener = f"{home_label} have the platform here. {away_label} arrive without a clear edge."
-    return f"{opener} {verb} {outcome} at {odds} with {bk}, {sizing}."
-
-
-def _vp_comparison(spec: NarrativeSpec, verb: str, sizing: str) -> str:
-    """Pattern 2 — Comparison: A {desc}, B {opposite desc}. Action close.
-
-    Shape: "{TEAM_A} {form_desc}, {TEAM_B} {opposite_form_desc}. {verb} {outcome} at {odds} with {bk}."
-    """
-    outcome = spec.outcome_label or "this outcome"
-    odds = f"{spec.odds:.2f}" if spec.odds else "?"
-    bk = spec.bookmaker or "the market"
-    home_label = _cap_first(_team_label_w82(spec.home_name, "The home side"))
-    # Mid-sentence usage — no capitalisation on the second clause.
-    away_label = _team_label_w82(spec.away_name, "the visitors")
-    home_desc = _form_descriptor_w82(spec.home_form, opposite=False)
-    away_desc = _form_descriptor_w82(spec.away_form, opposite=True)
-    venue_tag = f" at {spec.venue}" if spec.venue else ""
-    return f"{home_label} {home_desc}{venue_tag}, while {away_label} {away_desc}. {verb} {outcome} at {odds} with {bk}, {sizing}."
-
-
-def _vp_form_anchor(spec: NarrativeSpec, verb: str, sizing: str) -> str:
-    """Pattern 3 — Form-anchor: home form at venue, away form, action close.
-
-    Shape: "{home_form_phrase} {at_venue}, {away_form_phrase}. {verb} {outcome} at {odds} with {bk}, {sizing}."
-    """
-    outcome = spec.outcome_label or "this outcome"
-    odds = f"{spec.odds:.2f}" if spec.odds else "?"
-    bk = spec.bookmaker or "the market"
-    home_label = _cap_first(_team_label_w82(spec.home_name, "The home side"))
-    # Mid-sentence usage — no capitalisation on the second clause.
-    away_label = _team_label_w82(spec.away_name, "the visitors")
-    home_form_phrase = _form_streak_phrase_w82(spec.home_form) or "are well placed"
-    away_form_phrase = _form_streak_phrase_w82(spec.away_form, weak=True) or "look thin lately"
-    venue_at = f"at {spec.venue}" if spec.venue else "at home"
-    return (
-        f"{home_label} {home_form_phrase} {venue_at}, while {away_label} {away_form_phrase}. "
-        f"{verb} {outcome} at {odds} with {bk}, {sizing}."
-    )
-
-
-def _vp_manager_frame(spec: NarrativeSpec, verb: str, sizing: str) -> str:
-    """Pattern 4 — Manager-frame: {Coach}'s {team/nick} {descriptor}. Action close.
-
-    Shape: "{COACH}'s {team_or_nick} {form_descriptor}{venue_clause}. {verb} {outcome} at {odds} with {bk}, {sizing}."
-
-    Falls back to a venue/form-led opener when no coach data is available.
-    """
-    outcome = spec.outcome_label or "this outcome"
-    odds = f"{spec.odds:.2f}" if spec.odds else "?"
-    bk = spec.bookmaker or "the market"
-    coach = _last_name(spec.home_coach)
-    desc = _form_descriptor_w82(spec.home_form)
-    # Mid-sentence usage — no capitalisation on the second clause.
-    away_label = _team_label_w82(spec.away_name, "the visitors")
-    away_form_note = _form_streak_phrase_w82(spec.away_form, weak=True) or "arrive without a clear edge"
-    venue_clause = f" at {spec.venue}" if spec.venue else ""
-    if coach:
-        team_label = _possessive_team_label(spec.home_name)
-        opener = f"{coach}'s {team_label} {desc}{venue_clause}"
-    else:
-        team_label = _cap_first(_team_label_w82(spec.home_name, "The home side"))
-        venue_at = venue_clause or " at home"
-        opener = f"{team_label} {desc}{venue_at}"
-    return f"{opener}, while {away_label} {away_form_note}. {verb} {outcome} at {odds} with {bk}, {sizing}."
-
-
-def _vp_question_into_action(spec: NarrativeSpec, verb: str, sizing: str) -> str:
-    """Pattern 5 — Question-into-action: rhetorical Q → answer → action close.
-
-    Shape: "Can {team} {pose}? {answer}. {verb} {outcome} at {odds} with {bk}."
-    """
-    outcome = spec.outcome_label or "this outcome"
-    odds = f"{spec.odds:.2f}" if spec.odds else "?"
-    bk = spec.bookmaker or "the market"
-    home_label = _team_label_w82(spec.home_name, "the home side")
-    away_label = _team_label_w82(spec.away_name, "the visitors")
-    side = (spec.outcome or "").lower()
-    if side == "home":
-        team_q, pose = home_label, "hold the line at home"
-    elif side == "away":
-        team_q, pose = away_label, "carry their form on the road"
-    else:
-        team_q, pose = home_label, "edge a tight one"
-    if spec.ev_pct >= 5:
-        answer = "The numbers say yes"
-    elif spec.support_level >= 2:
-        answer = "The supporting case says yes"
-    else:
-        answer = "The price says yes"
-    # Question opener — keep nickname intact ("Can the Reds hold the line...")
-    # since it reads as natural commentary. Capitalise only when no leading "the".
-    if team_q.lower().startswith("the "):
-        team_q_disp = team_q
-    else:
-        team_q_disp = _cap_first(team_q)
-    return f"Can {team_q_disp} {pose}? {answer}. {verb} {outcome} at {odds} with {bk}, {sizing}."
-
-
-def _vp_risk_frame_action(spec: NarrativeSpec, verb: str, sizing: str) -> str:
-    """Pattern 6 — Risk-frame-then-action: name risk → despite that → action close.
-
-    Shape: "{risk}. Despite that, {verb} {outcome} at {odds} with {bk}, {sizing}."
-    """
-    outcome = spec.outcome_label or "this outcome"
-    odds = f"{spec.odds:.2f}" if spec.odds else "?"
-    bk = spec.bookmaker or "the market"
-    risk = _pick_first_meaningful_risk(spec.risk_factors)
-    if not risk:
-        risk = "Variance is the obvious risk on a card like this"
-    if len(risk) > 90:
-        risk = risk[:87].rstrip(",.;: ") + "..."
-    # Lowercase the verb after "Despite that, " for natural mid-sentence flow.
-    verb_mid = verb.lower()
-    return f"{risk}. Despite that, {verb_mid} {outcome} at {odds} with {bk}, {sizing}."
-
-
-# Pattern dispatch table — order locked. Adding a pattern requires updating
-# the AC-5 contract test (test_variant_pool_has_at_least_5_imperative_closing_variants).
-_W82_VARIANT_PATTERNS: tuple = (
-    _vp_action_led,
-    _vp_stake_anchor,
-    _vp_comparison,
-    _vp_form_anchor,
-    _vp_manager_frame,
-    _vp_question_into_action,
-    _vp_risk_frame_action,
-)
-
-
-def _render_verdict_w82_pool(spec: NarrativeSpec) -> str:
-    """Render an actionable verdict using the 7-pattern imperative-closing pool.
-
-    MD5-seeded selection per (home, away, tier). Returns a 100-260 char
-    verdict whose closing sentence carries action verb + outcome + odds +
-    bookmaker (passes verdict_closure_rule on every tier).
-
-    Risk↔Verdict cohesion (NARRATIVE-ACCURACY-01 Rule 9) — when
-    spec.risk_factors is non-empty, the pattern dispatcher passes a risk
-    clause that gets woven into the action sentence (patterns 0-5) or
-    consumed as the lead (pattern 6). Without the clause, the LLM-polish
-    Jaccard gate would reject every W82-baseline verdict for cards with
-    a risk factor.
-
-    Tier-floor padding (FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 — 2026-05-01):
-    when the rendered verdict falls short of MIN_VERDICT_CHARS_BY_TIER for
-    Diamond/Gold (140 / 110), prepend a tier-band-appropriate enrichment
-    sentence so the verdict-cache writer's quality gate accepts the W82
-    baseline. Padding lands BEFORE the action sentence so the closure rule
-    still finds action+team+odds in the LAST sentence.
-
-    Used for verdict_action ∈ {"lean", "back", "strong back"} — i.e. cards
-    where a positive bet is being recommended. The pass/monitor + speculative-
-    punt branches in _render_verdict() handle no-edge / negative scenarios.
-    """
-    action = (spec.verdict_action or "").lower()
-    tier = (spec.edge_tier or "").lower()
-    verb = _action_verb_w82(action, tier)
-    sizing = _sizing_w82(action, tier)
-    seed_tier = tier or action or "default"
-    idx = _select_w82_variant(spec.home_name, spec.away_name, seed_tier, len(_W82_VARIANT_PATTERNS))
-    text = _W82_VARIANT_PATTERNS[idx](spec, verb, sizing)
-
-    # Risk-resolution cohesion: weave a risk-clause into the closing sentence
-    # of patterns 0-5 (pattern 6 already leads with the risk). Skips when no
-    # meaningful risk-clause is available or pattern 6 was selected.
-    if idx != 6:  # pattern 6 = _vp_risk_frame_action (already references risk)
-        risk_clause = _verdict_risk_clause(spec)
-        if risk_clause:
-            # Strip trailing period, append " — {clause}." to keep the close
-            # within the same sentence the validator scans.
-            text = text.rstrip(".") + f" — {risk_clause}."
-
-    # Tier-floor padding — prepend tier-band enrichment when output is below
-    # MIN_VERDICT_CHARS_BY_TIER. Padding lands BEFORE the action sentence so
-    # the closure rule still finds action+team+odds in the LAST sentence.
-    #
-    # When spec.edge_tier is empty (bot.py deterministic-fallback path at
-    # line ~9051 builds a NarrativeSpec without populating edge_tier), fall
-    # back to the highest tier floor (140) — verdict-cache writer reads tier
-    # from tip_data so the rendered verdict must clear the Diamond floor in
-    # case this render is consumed for a Diamond card.
-    if tier:
-        floor = MIN_VERDICT_CHARS_BY_TIER.get(tier, MIN_VERDICT_CHARS_BY_TIER["bronze"])
-        floor_tier = tier
-    else:
-        floor = MIN_VERDICT_CHARS_BY_TIER["diamond"]
-        # Use action to choose an appropriate pad-variant register when tier
-        # is missing (deterministic-fallback path). Map action → tier vocabulary.
-        floor_tier = {
-            "strong back": "diamond",
-            "back": "gold",
-            "lean": "silver",
-            "speculative punt": "bronze",
-        }.get(action, "diamond")
-    if len(text) < floor:
-        seed = (spec.home_name or "") + (spec.away_name or "") + "tierpad"
-        if floor_tier == "diamond":
-            pad_variants = [
-                "This is one of the better plays on the card today. ",
-                "Premium-grade case here, the depth of evidence holds. ",
-                "Strong conviction read with the case built across the board. ",
-            ]
-        elif floor_tier == "gold":
-            pad_variants = [
-                "Solid case here, the disciplined play stands. ",
-                "Supported edge with the form on side. ",
-                "Disciplined backer with the price holding. ",
-            ]
-        elif floor_tier == "silver":
-            pad_variants = [
-                "Measured engagement worth the position. ",
-                "Mild lean, sized to match the case. ",
-                "Slight edge worth the controlled exposure. ",
-            ]
-        else:
-            pad_variants = ["", "", ""]
-        pad = pad_variants[_pick(seed, len(pad_variants))]
-        text = pad + text
-
-    return _cap_verdict(text)
 
 
 def _render_verdict(spec: NarrativeSpec) -> str:
@@ -4023,27 +3470,86 @@ def _render_verdict(spec: NarrativeSpec) -> str:
         _v = _pick(seed, len(_variants))
         return _cap_verdict(_variants[_v])
 
-    # ── Silver / Gold / Diamond — actionable verdicts route to W82 pool ──
-    # FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 (2026-05-01):
-    # The previous tier-banded 4-variant lists per action (lean / back / strong
-    # back) presented as a single skeleton at view-time because the validator
-    # gate stack (telemetry vocabulary, verdict closure, char range) plus the
-    # MD5 seed structure routed most live cards to the same template line.
-    # The new W82 imperative-closing variant pool replaces all three with a
-    # 7-pattern shape rotation seeded on (home, away, tier). Each pattern
-    # carries a distinct opening rhetorical shape (action-led, stake-anchor,
-    # comparison, form-anchor, manager-frame, question-into-action,
-    # risk-frame-then-action). Tier-band tone is encoded via _action_verb_w82
-    # + _sizing_w82, so the same 7 functions render Silver/Gold/Diamond
-    # appropriately. See _render_verdict_w82_pool above.
-    if action in ("lean", "back", "strong back"):
-        return _render_verdict_w82_pool(spec)
+    # ── Silver — lean, speculative-with-reasoning tone ──
+    # Canon: verdict-generator/SKILL.md tone band (Silver STRONG-with-caveat).
+    # 4 variants. NEVER uses "the lean is" (brief Forbidden) — uses "Mild lean
+    # on", "is the lean at", "as a measured play", "is a small-stake call".
+    if action == "lean":
+        seed = seed_base + "lean"
+        # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2:
+        # Replaced "loud signal backing" / "push the read" / "the read holds"
+        # — all Rule 17 hits via "the read" or signal vocabulary — with SA-voice
+        # phrasing. V0/V1/V2/V3 all carry an action verb (Back/Take/Worth)
+        # since the brief AC-2 test requires ≥25/30 verdicts contain one.
+        sup_phrase = sup or "the form holds without a loud backer"
+        _variants = [
+            # V0 — Back-as-mild-lean. BRAND-BIBLE-v3 §09 "value opportunity".
+            f"Back {outcome} at {odds_str} ({bk}) as a mild lean — {sup_phrase}, measured rather than loud. Small-to-standard stake on this one at the current number{_risk_tail}",
+            # V1 — Take-as-the-lean. COPYWRITING-DNA §8 "real Edge".
+            f"Take {outcome} at {odds_str} with {bk} as the lean — the price has room and {sup_phrase}. Engage without chasing on this one, the case is live{_risk_tail}",
+            # V2 — Take-as-a-measured-play. BRAND-BIBLE-v3 §08 "Sharp not cold".
+            f"Take {outcome} at {odds_str} with {bk} as a measured play — {sup_phrase}, enough behind it to engage but not enough to push the stake{_risk_tail}",
+            # V3 — Worth-taking. SA voice "sized accordingly".
+            f"Worth taking {outcome} at {odds_str} ({bk}) as a small-stake call — {sup_phrase}, the numbers suggest the lean and we'll size the play accordingly{_risk_tail}",
+        ]
+        _v = _pick(seed, len(_variants))
+        return _cap_verdict(_variants[_v])
 
-    # Defensive fallback: unrecognised actionable action (shouldn't fire in
-    # production — _classify_evidence + tier-floor logic produce one of the
-    # four canonical actions). Routes through the pool with whatever tier
-    # signal we have so we never return an empty verdict.
-    return _render_verdict_w82_pool(spec)
+    # ── Gold — back, disciplined tone ──
+    # Canon: verdict-generator/SKILL.md tone band (Gold SOLID).
+    # 4 variants. Confident but not arrogant — BRAND-BIBLE-v3 §08 "Confident not arrogant".
+    if action == "back":
+        seed = seed_base + "back"
+        # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2:
+        # Purged "the bookmaker has slipped" (V1+V3 leak), "the case as it
+        # stands" (V1 leak), "play on the read" (V0+V2 — `the read` regex),
+        # "the read has the case" (default sup_phrase). Replaced with "the
+        # line is too long for what we see", "the price has room", "solid
+        # play on the form". Every variant carries an action verb (Back/Take/
+        # Worth/Get on).
+        sup_phrase = sup or "the form has the case without overstating it"
+        _variants = [
+            # V0 — Disciplined back. COPYWRITING-DNA §8 "smarter choice".
+            f"Back {outcome} at {odds_str} with {bk} — {sup_phrase} and the price has room. The case stands at this number, disciplined play on the form{_risk_tail}",
+            # V1 — Standard-stake frame. BRAND-BIBLE-v3 §09 "supported edge".
+            f"Take {outcome} at {odds_str} with {bk} — {sup_phrase} and the line is too long for what we see. Standard stake on this one at the current number{_risk_tail}",
+            # V2 — Call-is-on frame.
+            f"Take {outcome} at {odds_str} with {bk} as the call — {sup_phrase}, solid play on the form at this number with no need to push the stake{_risk_tail}",
+            # V3 — Get-on frame. COPYWRITING-DNA §6 contrast — "Stop X. Start Y."
+            f"Get on {outcome} at {odds_str} ({bk}) — {sup_phrase} and the line looks soft. Disciplined back at this number, the case stands{_risk_tail}",
+        ]
+        _v = _pick(seed, len(_variants))
+        return _cap_verdict(_variants[_v])
+
+    # ── Diamond — strong back, confident tone (one of the better plays) ──
+    # Canon: verdict-generator/SKILL.md tone band (Diamond MAX) + BRAND-BIBLE-v3
+    # §09 "High conviction edge", "premium value".
+    # 4 variants. SA Braai Voice via "the case is built", "premium back".
+    seed = seed_base + "strongback"
+    # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2:
+    # Replaced "the depth of confirming signals most edges don't get" with
+    # SA-voice "the depth of evidence most edges don't carry". V2 previously
+    # said "Premium value on the read" — `the read` regex hit; replaced with
+    # "Premium value on the form".
+    sup_phrase = sup or "the depth of evidence most edges don't carry"
+    _variants = [
+        # V0 — Premium back. COPYWRITING-DNA §1b "Edges as Treasure" + Diamond rarity.
+        f"Premium back on {outcome} at {odds_str} with {bk} — {sup_phrase}, the case is built and the number holds. Standard-to-heavy stake on this one{_risk_tail}",
+        # V1 — Strong back conviction. BRAND-BIBLE-v3 §08 "Confident not arrogant".
+        f"Strong back on {outcome} at {odds_str} ({bk}) — {sup_phrase}, this is one of the better plays today and the price holds at this number{_risk_tail}",
+        # V2 — Market-mispriced framing. BRAND-BIBLE-v3 §09 "market mispriced".
+        f"Take {outcome} at {odds_str} with {bk} with conviction — the line is priced too soft and {sup_phrase}. Premium value on the form at this number{_risk_tail}",
+        # V3 — Back with confidence. COPYWRITING-DNA §10 "controlled, premium".
+        # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2: tail rewritten
+        # to clear the [140, 200] window in BOTH no-risk-factor (139 chars
+        # was the regression) and full-risk-factor (210 chars was the cap-fail)
+        # cases. "edges rarely live this thick" is +5 chars over the previous
+        # "edges live thinner" tail and still under the 200-char ceiling when
+        # the risk_tail fully expands.
+        f"Back {outcome} with {bk} at {odds_str} on conviction — {sup_phrase}, premium value on a card where edges rarely live this thick{_risk_tail}",
+    ]
+    _v = _pick(seed, len(_variants))
+    return _cap_verdict(_variants[_v])
 
 
 def _render_baseline(spec: NarrativeSpec) -> str:
