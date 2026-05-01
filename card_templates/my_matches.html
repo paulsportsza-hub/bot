@@ -26,10 +26,37 @@
 
         /* ── Header ──────────────────────────────────────────── */
         .header {
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
             text-align: center;
             padding: 20px 20px 14px;
             background: linear-gradient(180deg, #0D0D0D, #141414);
         }
+        /* ── Logo glow (lifted from sub_plans.html, WAVE-E1-CANONICAL-LIFT-01) ── */
+        .logo-glow {
+            position: absolute;
+            inset: -10px 0 0 0;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
+        }
+        .logo-glow-screen {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+        }
+        .header > .logo-img,
+        .header > .logo-fallback,
+        .header > .orange-bar,
+        .header > .title,
+        .header > .summary { position: relative; z-index: 1; }
         .logo-img {
             height: 32px;
             width: auto;
@@ -230,6 +257,8 @@
 
     <!-- Header -->
     <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
