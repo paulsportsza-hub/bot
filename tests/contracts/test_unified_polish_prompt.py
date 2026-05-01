@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-NARRATIVE-ROT-ROOT-01 (Phase 3) — Unified polish prompt contract.
 
 Phase 3 deliverables:
@@ -26,7 +35,6 @@ Contract guards (≥12 tests):
     instruction prefix in every branch
 """
 
-from __future__ import annotations
 
 import json
 import os

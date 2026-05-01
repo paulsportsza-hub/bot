@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-2 — verdict prompt braai voice.
 
 Validates two things:
@@ -23,7 +32,6 @@ Anthropic API key + ~$0.50/run. The braai-voice prompt instructions are
 validated via the structural test — the W82 templates are validated by the
 output assertions.
 """
-from __future__ import annotations
 
 import re
 

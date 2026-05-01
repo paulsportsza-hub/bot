@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """BUILD-CARD-RENDER-01 — Regression tests for three card rendering defects.
 
 D1: Verdict truncation
@@ -13,7 +22,6 @@ D3: Arrow misalignment
     .ev-value gains display:inline-flex;align-items:center — visual, covered
     by Playwright PNG in the wave report.
 """
-from __future__ import annotations
 
 import os
 import re

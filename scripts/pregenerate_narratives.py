@@ -36,21 +36,13 @@ from dotenv import load_dotenv
 _bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_bot_dir, ".env"))
 
-import openrouter_client as anthropic
-import anthropic_client as _anthropic_direct  # FIX-COST-WAVE-02: direct Anthropic for Sonnet narrative polish
-from validators.sport_context import validate_sport_text  # REGFIX-03 wiring
+# FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: pregen sweep produces W82 baseline only.
+# No Sonnet polish, no Haiku fallback, no LLM polish path. _render_baseline is canonical.
 from evidence_pack import (
     _build_h2h_injection,
     build_evidence_pack,
     _inject_h2h_sentence,
-    _build_sharp_injection,
-    _strip_model_generated_h2h_references,
-    _inject_sharp_sentence,
-    _strip_model_generated_sharp_references,
-    _suppress_shadow_banned_phrases,
-    format_evidence_prompt,
     serialise_evidence_pack,
-    verify_shadow_narrative,
 )
 
 # Configure the pregenerate logger directly rather than root via basicConfig.
@@ -64,102 +56,34 @@ if not log.handlers and not logging.getLogger().handlers:
     )
 log.setLevel(logging.INFO)
 
-# Model IDs
-MODELS = {
-    "full": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6"),
-    "refresh": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6"),
-    "uncached_only": os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6"),
-}
-SHADOW_MODEL = os.environ.get(
-    "NARRATIVE_SHADOW_MODEL",
-    os.environ.get("NARRATIVE_MODEL", "claude-sonnet-4-6"),
-)
-# BUILD-DUAL-MODEL-PREGEN: Haiku for non-edge match previews (~12x cheaper than Sonnet).
-HAIKU_MODEL = os.environ.get("NARRATIVE_HAIKU_MODEL", "claude-haiku-4-5-20251001")
-
-# FIX-COST-WAVE-02: initialised in pregen_narratives() — Sonnet polish routes
-# direct to Anthropic. `claude` (module singleton) stays on OpenRouter for
-# Haiku traffic (validator, non-edge preview, claims verifier) per AC-1.
-_narrative_claude: "_anthropic_direct.AsyncAnthropic | None" = None
-
-
-def _model_family_label(model_id: str) -> str:
-    """W93-COST: Derive the model-family label (haiku/opus/sonnet) from the model string.
-
-    Previously hardcoded "opus" or "sonnet" regardless of the actual model — which
-    mislabelled Haiku fallbacks as Sonnet and kept Opus references after Opus was
-    retired. Used for telemetry + Sentry tagging, not for user-facing copy.
-    """
-    m = (model_id or "").lower()
-    if "haiku" in m:
-        return "haiku"
-    if "opus" in m:
-        return "opus"
-    return "sonnet"
-# W84-CONFIRM-1: W84 is now the permanent default generation path.
-# The W84_SERVE env-var gate has been removed — W84 always serves.
+# FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: W82 deterministic baseline is the only path.
+NARRATIVE_SOURCE_LABEL = "w82"
 
 # Import narrative functions from bot.py (safe — guarded by __name__ == __main__)
+# FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: only baseline-path imports retained.
 import bot
 from bot import (
-    build_verified_narrative,
-    _build_analyst_prompt,
-    _build_edge_risk_prompt,
-    _build_setup_section_v2,
-    _build_verdict_from_signals_v2,
-    _build_edge_from_signals_v2,
-    _build_risk_from_signals_v2,
     _apply_sport_subs,
-    sanitize_ai_response,
-    validate_sport_context,
-    fact_check_output,
-    _clean_fact_checked_output,
-    get_verified_injuries,
-    _has_banned_patterns,
-    _format_verified_context,
-    _format_signal_data_for_prompt,
-    _build_programmatic_narrative,
-    _build_signal_only_narrative,
-    _validate_breakdown,
-    _get_cached_narrative,
-    _store_narrative_cache,
-    _generate_verdict_constrained,
-    _fact_check_verdict,
+    _check_verdict_balance,
     _compute_odds_hash,
     _ensure_narrative_cache_table,
-    _ensure_shadow_narratives_table,
-    _check_verdict_balance,
-    _extract_text_from_response,
-    _strip_preamble,
-    _store_shadow_narrative,
-    _sanitise_jargon,
     _final_polish,
-    WEB_SEARCH_TOOL,
-    SPORT_TERMINOLOGY,
-    _build_verified_scaffold,
-    _parse_story_types_from_scaffold,
-    _get_exemplars_for_prompt,
-    _build_rewrite_prompt,
-    _verify_rewrite,
-    _add_section_bold,
-    _build_polish_prompt,
-    _validate_polish,
+    _get_cached_narrative,
+    _sanitise_jargon,
+    _store_narrative_cache,
     _VERDICT_BLACKLIST,
 )
 import config
 
-# W81-HEALTH: Fail fast if required bot functions are missing (stale rename protection)
+# FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: rename-protection sentinel for the
+# W82 baseline rendering surface. If any of these are renamed/deleted by a future
+# wave, fail loud at startup rather than silently producing empty cache rows.
 _REQUIRED_BOT_FUNCTIONS = [
-    "build_verified_narrative",
-    "fact_check_output",
-    "_build_setup_section_v2",
-    "_clean_fact_checked_output",
-    "get_verified_injuries",
-    "_get_exemplars_for_prompt",
-    "_build_rewrite_prompt",
-    "_verify_rewrite",
-    "_build_polish_prompt",
-    "_validate_polish",
+    "_apply_sport_subs",
+    "_final_polish",
+    "_sanitise_jargon",
+    "_store_narrative_cache",
+    "_get_cached_narrative",
 ]
 _missing = [fn for fn in _REQUIRED_BOT_FUNCTIONS if not hasattr(bot, fn)]
 if _missing:
@@ -728,69 +652,10 @@ async def _get_enrichment(
 # ── W69-VERIFY Layer 2: Post-generation cross-check ──
 
 # Regex patterns for extracting factual claims from narratives
-_FORM_PATTERN = re.compile(r'(?:form|form reads|recent form)\s+(?:reads?\s+)?([WDL]{2,})', re.IGNORECASE)
-_POSITION_PATTERN = re.compile(r'sit\s+(\d+(?:st|nd|rd|th))\s+(?:on|with)\s+(\d+)\s+points?', re.IGNORECASE)
-_RECORD_PATTERN = re.compile(r'W(\d+)\s*(?:D(\d+)\s*)?L(\d+)', re.IGNORECASE)
-
-
-def _extract_claims(narrative: str) -> list[str]:
-    """Extract verifiable factual claims from a narrative."""
-    claims = []
-    for m in _FORM_PATTERN.finditer(narrative):
-        claims.append(f"Form: {m.group(1)}")
-    for m in _POSITION_PATTERN.finditer(narrative):
-        claims.append(f"Position: {m.group(1)} on {m.group(2)} points")
-    for m in _RECORD_PATTERN.finditer(narrative):
-        d = m.group(2) or "0"
-        claims.append(f"Record: W{m.group(1)} D{d} L{m.group(3)}")
-    return claims
-
-
-async def _verify_narrative_claims(
-    narrative: str,
-    home: str,
-    away: str,
-    claude: anthropic.AsyncAnthropic,
-) -> list[str]:
-    """Layer 2: Cross-check narrative claims using Haiku + web search.
-
-    Returns list of contradiction descriptions (empty = all clear).
-    """
-    claims = _extract_claims(narrative)
-    if not claims:
-        return []
-
-    claims_text = "\n".join(f"- {c}" for c in claims)
-    try:
-        resp = await claude.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=512,
-            system=(
-                "You are a sports fact-checker. Verify the following claims about "
-                f"{home} vs {away} using web search. For each claim, respond with "
-                "CONFIRMED or CONTRADICTED followed by the correct information. "
-                "Be concise — one line per claim."
-            ),
-            messages=[{"role": "user", "content": f"Verify these claims:\n{claims_text}"}],
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}],
-            timeout=30.0,
-        )
-        result = _extract_text_from_response(resp)
-        contradictions = []
-        for line in result.split("\n"):
-            if "CONTRADICTED" in line.upper():
-                contradictions.append(line.strip())
-        return contradictions
-    except Exception as exc:
-        log.warning("Layer 2 verification failed for %s vs %s: %s", home, away, exc)
-        return []
-
-
-def _shadow_token_count(resp) -> int:
-    usage = getattr(resp, "usage", None)
-    if not usage:
-        return 0
-    return int(getattr(usage, "input_tokens", 0) or 0) + int(getattr(usage, "output_tokens", 0) or 0)
+# FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: removed _extract_claims +
+# _verify_narrative_claims (Layer 2 LLM fact-checker — only fired against
+# Sonnet/Haiku polish output) and _shadow_token_count (LLM token telemetry
+# helper). The W82 baseline is deterministic Python; nothing to fact-check.
 
 
 # ── BASELINE-FIX: Data Source Alignment ──
@@ -1663,262 +1528,16 @@ def _load_pregen_edges(limit: int = 100, sport: str | None = None) -> list[dict]
 
 
 
-def _build_minimal_haiku_prompt(
-    home: str, away: str, sport: str, league: str, commence: str
-) -> str:
-    """Minimal context prompt for Haiku when evidence pack is empty.
-
-    FIX-HAIKU-GATE (AC-3): Non-edge matches have thin ESPN data so evidence
-    packs are empty. Build a prompt from always-present edge dict fields
-    (home/away names, sport, competition, date) rather than from the evidence pack.
-    """
-    from datetime import datetime
-
-    date_str = ""
-    if commence:
-        try:
-            dt = datetime.fromisoformat(commence.replace("Z", "+00:00"))
-            date_str = dt.strftime("%-d %B %Y")
-        except (ValueError, AttributeError):
-            date_str = commence[:10] if len(commence) >= 10 else commence
-
-    sport_display = sport.replace("_", " ").title()
-    league_display = league.replace("_", " ").upper() if league else "UNKNOWN"
-
-    parts = [
-        "Write an analytical match preview for the following fixture.",
-        "",
-        f"HOME: {home}",
-        f"AWAY: {away}",
-        f"SPORT: {sport_display}",
-        f"COMPETITION: {league_display}",
-    ]
-    if date_str:
-        parts.append(f"DATE: {date_str}")
-    parts.extend([
-        "",
-        "Use exactly these four section headers in order:",
-        "\U0001f4cb <b>The Setup</b>",
-        "\U0001f3af <b>The Edge</b>",
-        "\u26a0\ufe0f <b>The Risk</b>",
-        "\U0001f3c6 <b>Verdict</b>",
-        "",
-        "Keep analysis factual and concise. Do not recommend bets.",
-        "Do not use 'back', 'stake', or 'value play'. Mention both team names.",
-        "",
-        "BANNED PHRASES (automated rejection if used):",
-        "- 'proceed with caution', 'value play', 'grab it before', 'move fast'",
-        "- 'one to watch, not back', 'this one to watch', 'won't last forever'",
-        "- 'knockout football', 'knockout stakes', 'knockout stage'",
-        "- 'pure pricing call', 'thin support', 'numbers-only play'",
-    ])
-    return "\n".join(parts)
+# FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: removed _build_minimal_haiku_prompt
+# (only used by the now-deleted Haiku non-edge preview path).
 
 
-def _recover_missing_emoji_headers(text: str) -> str:
-    """Inject emoji section headers when text name is present but emoji is missing.
-
-    INV-SONNET-FALLBACK-01 RC-1: Haiku sometimes returns markdown or plain-text
-    headers instead of emoji headers. sanitize_ai_response() strips markdown but
-    does not always inject emojis. This recovery pass fills the gap.
-    """
-    _HEADER_PAIRS = [
-        ("\U0001f4cb", "The Setup"),   # 📋
-        ("\U0001f3af", "The Edge"),    # 🎯
-        ("\u26a0\ufe0f", "The Risk"),  # ⚠️
-        ("\U0001f3c6", "Verdict"),     # 🏆
-    ]
-    for emoji, header in _HEADER_PAIRS:
-        if emoji in text:
-            continue  # Emoji already present
-        # Try bare header text (with or without <b> tags, case-insensitive)
-        pattern = re.compile(
-            rf'^(\s*)(?:<b>)?\s*(?:The\s+)?{re.escape(header.replace("The ", ""))}(?:</b>)?\s*$',
-            re.MULTILINE | re.IGNORECASE,
-        )
-        match = pattern.search(text)
-        if match:
-            replacement = f"{match.group(1)}{emoji} <b>{header}</b>"
-            text = text[:match.start()] + replacement + text[match.end():]
-    return text
+# FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: removed _recover_missing_emoji_headers
+# and _validate_preview_polish (Haiku polish recovery + non-edge preview validator).
 
 
-def _validate_preview_polish(polished: str, spec) -> bool:
-    """Validate Haiku-polished match preview for non-edge matches.
-
-    BUILD-DUAL-MODEL-PREGEN: Simpler than verify_shadow_narrative — no
-    bookmaker/odds alignment required since this is a preview not a bet tip.
-    """
-    polished_lower = polished.lower()
-
-    # 1. All 4 section headers must be present
-    for header in ("\U0001f4cb", "\U0001f3af", "\u26a0\ufe0f", "\U0001f3c6"):
-        if header not in polished:
-            log.warning("PREVIEW REJECT: missing section header %s", header)
-            return False
-
-    # 2. Team names must survive (check first word of each team name)
-    home = getattr(spec, "home_name", None) or ""
-    away = getattr(spec, "away_name", None) or ""
-    if home and home.lower().split()[0] not in polished_lower:
-        log.warning("PREVIEW REJECT: home team '%s' missing", home)
-        return False
-    if away and away.lower().split()[0] not in polished_lower:
-        log.warning("PREVIEW REJECT: away team '%s' missing", away)
-        return False
-
-    # 3. No globally banned narrative phrases
-    if _has_banned_patterns(polished):
-        log.warning("PREVIEW REJECT: banned phrase detected")
-        return False
-
-    # 4. No betting recommendation language (preview mode only)
-    _bet_phrases = ["back this", "take the edge", "value play", "back at", "worth backing"]
-    for phrase in _bet_phrases:
-        if phrase in polished_lower:
-            log.warning("PREVIEW REJECT: bet recommendation phrase '%s' in preview", phrase)
-            return False
-
-    return True
-
-
-def generate_section(full_narrative: str, section_name: str) -> str:
-    """Extract a named section from full narrative HTML.
-
-    NARRATIVE-ACCURACY-01 Rule 3: generate_section() is the per-section
-    extraction step. Returns the section body text (without the header line).
-    """
-    _MARKERS = {
-        "setup": "\U0001f4cb",   # 📋
-        "edge": "\U0001f3af",    # 🎯
-        "risk": "⚠️",  # ⚠️
-        "verdict": "\U0001f3c6", # 🏆
-    }
-    marker = _MARKERS.get(section_name.lower(), "")
-    if not marker or marker not in full_narrative:
-        return full_narrative
-    start = full_narrative.find(marker)
-    # Find next section marker
-    remaining = full_narrative[start + 1:]
-    next_marker_pos = len(full_narrative)
-    for other_marker in _MARKERS.values():
-        if other_marker == marker:
-            continue
-        pos = remaining.find(other_marker)
-        if pos != -1:
-            absolute_pos = start + 1 + pos
-            if absolute_pos < next_marker_pos:
-                next_marker_pos = absolute_pos
-    section_text = full_narrative[start:next_marker_pos].strip()
-    # Strip header line (first line)
-    lines = section_text.split("\n", 1)
-    return lines[1].strip() if len(lines) > 1 else section_text
-
-
-async def generate_and_validate(
-    section_name: str,
-    section_text: str,
-    derived_claims: dict,
-    claude: anthropic.AsyncAnthropic,
-    model_id: str = "",
-) -> tuple[str, bool, int]:
-    """Validate a generated section against pre-computed derived claims.
-
-    NARRATIVE-ACCURACY-01 Rule 3: Validator runs a Haiku call at temperature=0
-    checking every claim in the section against DERIVED CLAIMS. On FAIL, one
-    retry pass strips the violations. Returns (text, was_validated, attempts).
-
-    The caller is responsible for storing setup_validated / verdict_validated
-    and corresponding attempts counts in narrative_cache.
-    """
-    if not section_text or not derived_claims:
-        return section_text, True, 1
-
-    _validator_model = "claude-haiku-4-5-20251001"
-
-    def _fmt_claims(claims: dict) -> str:
-        lines = []
-        for k, v in claims.items():
-            if v is not None and k != "sport":
-                lines.append(f"  {k}: {v}")
-        return "\n".join(lines) if lines else "  (no derived claims available)"
-
-    validator_prompt = (
-        f"You are a fact-checker reviewing a sports narrative {section_name} section.\n\n"
-        "DERIVED CLAIMS (pre-computed from real data — ground truth):\n"
-        f"{_fmt_claims(derived_claims)}\n\n"
-        f"NARRATIVE SECTION:\n{section_text}\n\n"
-        "Check ONLY whether the narrative contains specific numbers, counts, streaks, "
-        "or venue labels that CONTRADICT the derived claims above.\n"
-        "Do NOT flag: analytical opinions, information not in derived claims, general language.\n"
-        'Return JSON only: {"pass": true, "violations": []} or '
-        '{"pass": false, "violations": ["description"]}'
-    )
-
-    attempt = 1
-    try:
-        resp = await claude.messages.create(
-            model=_validator_model,
-            max_tokens=256,
-            temperature=0,
-            messages=[{"role": "user", "content": validator_prompt}],
-            timeout=15.0,
-        )
-        raw = ""
-        for block in (resp.content if hasattr(resp, "content") else []):
-            if hasattr(block, "text") and block.text:
-                raw += block.text
-        raw = raw.strip()
-        import json as _json
-        # Extract JSON if wrapped in code fences
-        _json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        result = _json.loads(_json_match.group(0)) if _json_match else {}
-        if result.get("pass", True):
-            return section_text, True, attempt
-        violations = result.get("violations", [])
-        if not violations:
-            return section_text, True, attempt
-        log.info(
-            "ACCURACY-VALIDATOR: %s section FAIL (%d violations) — retrying",
-            section_name, len(violations),
-        )
-        # Retry: ask Haiku to rewrite removing violations
-        attempt = 2
-        violation_list = "\n".join(f"- {v}" for v in violations[:5])
-        retry_prompt = (
-            f"Rewrite this sports narrative {section_name} section, removing only the "
-            f"following factual inaccuracies:\n{violation_list}\n\n"
-            "Keep all analytical opinions, tone, and structure intact.\n"
-            "Return only the corrected section text, no preamble.\n\n"
-            f"ORIGINAL:\n{section_text}"
-        )
-        retry_resp = await claude.messages.create(
-            model=_validator_model,
-            max_tokens=512,
-            temperature=0.5,
-            messages=[{"role": "user", "content": retry_prompt}],
-            timeout=20.0,
-        )
-        retry_text = ""
-        for block in (retry_resp.content if hasattr(retry_resp, "content") else []):
-            if hasattr(block, "text") and block.text:
-                retry_text += block.text
-        retry_text = retry_text.strip()
-        if retry_text and len(retry_text) > 20:
-            log.info(
-                "ACCURACY-VALIDATOR: %s section retry succeeded (%d chars)",
-                section_name, len(retry_text),
-            )
-            return retry_text, False, attempt  # validated=False: needed retry
-        # Double fail: return best-effort with ⚠ flag
-        log.warning(
-            "ACCURACY-VALIDATOR: %s section double-fail — publishing best-effort with ⚠",
-            section_name,
-        )
-        return f"⚠ {section_text}", False, attempt
-    except Exception as exc:
-        log.debug("ACCURACY-VALIDATOR: %s section validation error: %s", section_name, exc)
-        return section_text, True, 1  # treat as valid on error
+# FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: removed generate_section + generate_and_validate
+# (W84 Haiku validator pair — only fired against LLM polish output).
 
 
 def _is_past_kickoff(match_key: str, cutoff_hours: int = 24) -> bool:
@@ -1933,242 +1552,22 @@ def _is_past_kickoff(match_key: str, cutoff_hours: int = 24) -> bool:
         return False
 
 
-# FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): Premium-tier defer alert chat (EdgeOps).
-# When a Diamond/Gold card defers 3+ consecutive sweeps, alert is queued to this chat.
-# Test paths inspect the constant; production reads it directly.
-_PREMIUM_DEFER_ALERT_CHAT_ID = -1003877525865
-_PREMIUM_DEFER_ALERT_THRESHOLD = 3
-
-
-_THIN_EVIDENCE_DIRECTIVE = (
-    "\n\nTHIN-EVIDENCE MODE (FIX-W84-PREMIUM-MANDATORY-COVERAGE-01):\n"
-    "- ESPN context is empty or partial for this fixture. DO NOT manufacture concrete\n"
-    "  recent events (specific match scores, injury reports, transfer news, weather,\n"
-    "  managerial quotes). If you cite a fact, it MUST be visible in the EVIDENCE PACK\n"
-    "  above (form table, H2H ledger, ratings, sharp price, market-derived signals).\n"
-    "- Lead the analytical thrust with: (a) the verdict's analytical statement,\n"
-    "  (b) head-to-head + form table data even when shallow, (c) market-derived\n"
-    "  narrative such as price level, line shape, sharp/SA price gap.\n"
-    "- Aim for 800–1500 characters of polished prose. Clean and confident; never\n"
-    "  apologetic about thin evidence — the analytical frame replaces the missing facts.\n"
-)
-
-
-async def _attempt_haiku_polish_fallback(
-    claude: "anthropic.AsyncAnthropic",
-    evidence_pack,
-    spec,
-    tips: list,
-    match_key: str,
-    log,
-    thin_evidence: bool = False,
-) -> str | None:
-    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23) + FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-2.
-
-    Haiku polish fallback for premium-tier (Diamond+Gold) cards when Sonnet polish
-    has exhausted retries OR failed quality validation (banned phrase, length,
-    structure, GOLD-QUALITY-GATE rejection).
-
-    Returns the polished narrative on success, or None on failure (caller defers
-    the row write — never silently downgrades to W82 for premium tiers).
-
-    Uses Haiku 4.5 against the same `format_evidence_prompt(return_split=True)`
-    static/dynamic content as the Sonnet path so the cache prefix benefits remain
-    intact (Rule 22). Skips coverage-gate checks because the caller has already
-    decided premium intercept is appropriate.
-
-    When ``thin_evidence=True`` (caller indicates COVERAGE-GATE empty / THIN_ESPN
-    landed Sonnet on this match), a thin-evidence directive is appended to the
-    dynamic prompt segment instructing Haiku to ground claims in the evidence
-    pack only — preventing hallucinated concrete recent events.
-
-    Cost: Haiku is ~5× cheaper than Sonnet — escapes credit-balance dead state
-    when Sonnet keys are throttled.
-    """
-    if evidence_pack is None or spec is None:
-        return None
-    try:
-        _h_static, _h_dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
-        if thin_evidence:
-            _h_dynamic = _h_dynamic + _THIN_EVIDENCE_DIRECTIVE
-        # FIX-NARRATIVE-ROT-ROOT-01 HG-P3: in-flight pregen sweep verification log.
-        log.info(
-            "FIX-NARRATIVE-ROT-ROOT-01 polish_prompt_built path=haiku_fallback "
-            "match=%s tier=%s coaches_injected=%s data_availability_injected=%s",
-            match_key,
-            (getattr(spec, "edge_tier", "") or "unknown").lower(),
-            "CANONICAL MANAGERS" in _h_dynamic,
-            "DATA AVAILABILITY" in _h_dynamic,
-        )
-        _h_resp = await claude.messages.create(
-            model=HAIKU_MODEL,
-            max_tokens=1200,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": _h_static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-                    {"type": "text", "text": _h_dynamic},
-                ],
-            }],
-            timeout=30.0,
-        )
-        _h_draft = _strip_preamble(_extract_text_from_response(_h_resp)).strip()
-        if not _h_draft:
-            log.warning(
-                "PremiumPolishFallback: Haiku returned empty draft for %s", match_key,
-            )
-            return None
-        _h_sanitized = sanitize_ai_response(_h_draft)
-        _h_sanitized = _strip_model_generated_h2h_references(_h_sanitized)
-        _h_sanitized = _strip_model_generated_sharp_references(_h_sanitized)
-        # Inject H2H + sharp sentences (same pipeline as Sonnet path).
-        _h_h2h = _build_h2h_injection(evidence_pack, spec)
-        if _h_h2h:
-            _h_sanitized = _inject_h2h_sentence(_h_sanitized, _h_h2h)
-        _h_sharp = _build_sharp_injection(evidence_pack, spec)
-        if _h_sharp:
-            _h_sanitized = _inject_sharp_sentence(_h_sanitized, _h_sharp)
-        _h_sanitized = _suppress_shadow_banned_phrases(_h_sanitized)
-        # Verify against verify_shadow_narrative — same gate as Sonnet path.
-        _h_passed, _h_report = verify_shadow_narrative(_h_sanitized, evidence_pack, spec)
-        if not _h_passed:
-            _h_reasons = "; ".join(_h_report.get("rejection_reasons", [])[:3]) or "verification failed"
-            log.warning(
-                "PremiumPolishFallback: Haiku draft REJECTED by verify_shadow_narrative for %s: %s",
-                match_key, _h_reasons,
-            )
-            return None
-        _h_candidate = _h_report.get("sanitized_draft") or _h_sanitized
-        # Bookmaker realignment — same as Sonnet path.
-        _h_bk = tips[0]["bookie"] if tips else ""
-        _h_odds = tips[0]["odds"] if tips else 0
-        if _h_bk and _h_odds:
-            _h_candidate = _realign_verdict_bookmaker(_h_candidate, _h_bk, float(_h_odds))
-            if not _verdict_bookmaker_aligned(_h_candidate, _h_bk, float(_h_odds)):
-                log.warning(
-                    "PremiumPolishFallback: Haiku verdict realignment failed for %s "
-                    "(expected %s@%.2f) — deferring",
-                    match_key, _h_bk, _h_odds,
-                )
-                return None
-        # Sport validator — same gate as Sonnet path.
-        _h_sv_valid, _h_sv_banned = validate_sport_text(_h_candidate, spec.sport)
-        if not _h_sv_valid:
-            log.warning(
-                "PremiumPolishFallback: Haiku draft blocked by sport validator for %s: %s",
-                match_key, _h_sv_banned,
-            )
-            return None
-        log.info(
-            "PremiumPolishFallback: Haiku polish PASSED all gates for %s — serving as w84-haiku-fallback",
-            match_key,
-        )
-        return _h_candidate
-    except Exception as _h_err:
-        log.warning(
-            "PremiumPolishFallback: Haiku polish raised for %s: %s — deferring",
-            match_key, _h_err,
-        )
-        return None
-
-
-def _record_premium_defer(match_key: str, edge_tier: str, fixture: str, pick: str,
-                          reason: str, log) -> int:
-    """FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): persist a premium defer event in
-    `gold_verdict_failed_edges` (existing table) and return the cumulative consecutive
-    defer count for this match_key so the caller can decide whether to alert EdgeOps.
-
-    The existing table is reused intentionally — schema already carries match_key,
-    edge_tier, failure_reason, failed_at. The "consecutive" semantics are derived by
-    counting prior rows for the same match_key with no intervening success.
-    """
-    try:
-        from db_connection import get_connection as _gvf_conn
-        _db_p = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "data", "mzansiedge.db",
-        )
-        _gvf_c = _gvf_conn(_db_p, timeout_ms=3000)
-        try:
-            # Ensure table exists (mirror schema from existing _gold_verdict_failed handler).
-            _gvf_c.execute(
-                "CREATE TABLE IF NOT EXISTS gold_verdict_failed_edges ("
-                "match_key TEXT PRIMARY KEY, edge_tier TEXT NOT NULL, "
-                "fixture TEXT NOT NULL, pick TEXT NOT NULL, "
-                "failure_reason TEXT NOT NULL, "
-                "failed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
-                "consecutive_count INTEGER NOT NULL DEFAULT 1)"
-            )
-            # FIX-W84-PREMIUM-NO-FALLBACK-01: add column if missing on legacy DBs.
-            try:
-                _gvf_c.execute("ALTER TABLE gold_verdict_failed_edges ADD COLUMN consecutive_count INTEGER NOT NULL DEFAULT 1")
-            except sqlite3.OperationalError:
-                pass  # already present
-            # UPSERT: increment consecutive_count if row already exists for this match_key.
-            _gvf_c.execute(
-                "INSERT INTO gold_verdict_failed_edges "
-                "(match_key, edge_tier, fixture, pick, failure_reason, consecutive_count) "
-                "VALUES (?, ?, ?, ?, ?, 1) "
-                "ON CONFLICT(match_key) DO UPDATE SET "
-                "edge_tier=excluded.edge_tier, fixture=excluded.fixture, "
-                "pick=excluded.pick, failure_reason=excluded.failure_reason, "
-                "failed_at=CURRENT_TIMESTAMP, "
-                "consecutive_count=consecutive_count + 1",
-                (match_key, edge_tier, fixture, pick, reason),
-            )
-            _gvf_c.commit()
-            _row = _gvf_c.execute(
-                "SELECT consecutive_count FROM gold_verdict_failed_edges WHERE match_key = ?",
-                (match_key,),
-            ).fetchone()
-            return int(_row[0]) if _row else 1
-        finally:
-            _gvf_c.close()
-    except Exception as _err:
-        log.warning(
-            "PremiumDefer: failed to persist defer counter for %s: %s",
-            match_key, _err,
-        )
-        return 1  # safe default — never trigger alert on persistence failure
-
-
-def _clear_premium_defer(match_key: str, log) -> None:
-    """Clear the consecutive-defer counter for a match_key on successful polish.
-
-    Called when a previously-deferred premium card finally serves successfully —
-    resets the alert threshold so transient failures don't trigger unnecessary alerts.
-    """
-    try:
-        from db_connection import get_connection as _clr_conn
-        _db_p = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "data", "mzansiedge.db",
-        )
-        _clr_c = _clr_conn(_db_p, timeout_ms=3000)
-        try:
-            _clr_c.execute(
-                "DELETE FROM gold_verdict_failed_edges WHERE match_key = ?",
-                (match_key,),
-            )
-            _clr_c.commit()
-        finally:
-            _clr_c.close()
-    except Exception as _err:
-        log.debug(
-            "PremiumDefer: clear counter failed for %s: %s (non-blocking)",
-            match_key, _err,
-        )
+# FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: removed Haiku polish fallback,
+# premium-tier defer alert constants, thin-evidence directive, and the
+# _record_premium_defer / _clear_premium_defer table writers. The new
+# pregen path produces W82 baseline for every tier — no defers, no fallbacks.
+# gold_verdict_failed_edges table is left in place (cheap, harmless).
 
 
 async def _generate_one(
     edge: dict,
-    model_id: str,
-    claude: anthropic.AsyncAnthropic,
     sweep_type: str = "full",
 ) -> dict:
-    """Generate narrative for a single edge and store in cache.
+    """Render the W82 deterministic baseline for a single edge and stage cache write data.
 
-    Returns dict with match_key, success, model, duration.
+    FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: this is now the only narrative
+    generation path. Sonnet/Haiku polish has been ripped out — `_render_baseline`
+    is canonical for every tier. Returns dict with match_key, success, model, duration.
     """
     t0 = time.time()
     match_key = edge.get("match_key", "")
@@ -2183,7 +1582,6 @@ async def _generate_one(
     away_key = ""
 
     # Parse team names from match_key if not provided (edge_v2 dicts omit them)
-    # match_key format: "team_a_vs_team_b_YYYY-MM-DD"
     parts = match_key.rsplit("_", 1)[0] if "_" in match_key else match_key
     if "_vs_" in parts:
         home_key, away_key = parts.split("_vs_", 1)
@@ -2202,10 +1600,9 @@ async def _generate_one(
             sport = "boxing"
 
     # BASELINE-FIX: Refresh bookmaker+price from odds.db before building tips/spec.
-    # This ensures narrative verdict and SA Bookmaker Odds table use the same source.
     edge = await _refresh_edge_from_odds_db(edge)
 
-    # 1. Match context
+    # 1. Match context — feeds the NarrativeSpec; not used to call any LLM.
     _mk_date_m = re.search(r"(\d{4}-\d{2}-\d{2})$", match_key)
     _mk_date = _mk_date_m.group(1) if _mk_date_m else ""
     ctx = await _get_match_context(
@@ -2228,8 +1625,7 @@ async def _generate_one(
     )
     evidence_json = serialise_evidence_pack(evidence_pack)
 
-    # NARRATIVE-ACCURACY-01 Rule 1: pre-compute derived claims from team context.
-    # Must be computed BEFORE any LLM call. Dispatcher selects sport-specific handler.
+    # NARRATIVE-ACCURACY-01 Rule 1: pre-compute derived claims (kept for cache schema parity).
     _derived_claims: dict = {}
     try:
         from narrative_spec import build_derived_claims as _bdc
@@ -2249,13 +1645,9 @@ async def _generate_one(
     except Exception as _cov_err:
         log.debug("coverage_json computation failed: %s", _cov_err)
 
-    # 2. Build tips from edge data — include all fixtures (even zero/negative EV)
-    # so w84 polish can still produce rich narrative context (coaches, form, H2H).
-    # edge_v2 uses "edge_pct"/"outcome"/"fair_probability"; normalise field names
+    # 2. Build tips from edge data
     tips = []
     ev = bot._normalise_edge_pct_contract(edge.get("ev"), edge.get("edge_pct", 0))
-    # MY-MATCHES-RELIABILITY-FIX: build tips for ALL EV levels (including zero/negative).
-    # Negative-EV fixtures still get w84 polish for richer context (coaches, form, H2H).
     fair_prob = edge.get("fair_prob") or edge.get("fair_probability", 0)
     _bk_key = edge.get("best_bookmaker_key", "") or edge.get("bookmaker_key", "")
     tips.append({
@@ -2268,11 +1660,11 @@ async def _generate_one(
         "ev": ev,
         "prob": round(fair_prob * 100, 1) if fair_prob else 0,
         "edge_v2": edge,
-        "home_team": home,  # P0-2 FIX: required for _build_game_buttons CTA resolution
-        "away_team": away,  # P0-2 FIX: required for _build_game_buttons CTA resolution
+        "home_team": home,
+        "away_team": away,
     })
 
-    # 3. Build edge_data for NarrativeSpec (W82-WIRE)
+    # 3. Build edge_data for NarrativeSpec
     _pregen_sigs = edge.get("signals", {})
     _pregen_outcome_raw = edge.get("recommended_outcome") or edge.get("outcome", "?")
     _pregen_edge_data = {
@@ -2297,10 +1689,6 @@ async def _generate_one(
     }
 
     # BUILD-PREGEN-STUB-GATE-01: Skip pregen when edge_data sentinels are unresolved.
-    # Without this gate, "?" outcome / 0 odds / "?" bookmaker flow into the stub
-    # verdict formatter and ship as "Back — ? at 0.00. Edge confirmed." to subscribers.
-    # Retry on next sweep once upstream populates the edge. Carve-out: the non-edge
-    # baseline/preview path does not share these sentinels — let it through.
     if not edge.get("is_non_edge", False):
         _gate_outcome = _pregen_edge_data.get("outcome", "")
         _gate_odds = _pregen_edge_data.get("best_odds", 0) or 0
@@ -2322,19 +1710,12 @@ async def _generate_one(
                 "duration": time.time() - t0,
             }
 
-    use_web_search = sweep_type == "full"
-    model_label = "opus" if "opus" in model_id else "sonnet"
-
-    # 4. NarrativeSpec → deterministic baseline (W82-WIRE)
+    # 4. NarrativeSpec → deterministic baseline (W82 canonical, single path)
     narrative = ""
-    w82_baseline = ""
-    w82_polished = None
     spec = None
-    narrative_source = edge.get("narrative_source_hint", "w82")
-    verification_failure = ""  # BUILD-PREGEN-FIX-3: track why w84 failed
-    # BUILD-DUAL-MODEL-PREGEN: non-edge matches use Haiku (match preview mode)
+    narrative_source = NARRATIVE_SOURCE_LABEL  # always "w82"
     _is_non_edge = edge.get("is_non_edge", False)
-    served_model = "baseline" if narrative_source == "baseline_no_edge" else model_label
+    served_model = "baseline"
     try:
         from narrative_spec import build_narrative_spec, _render_baseline
         spec = build_narrative_spec(ctx, _pregen_edge_data, tips, sport)
@@ -2342,8 +1723,7 @@ async def _generate_one(
         narrative = _sanitise_jargon(narrative)
         narrative = _apply_sport_subs(narrative, sport)
         narrative = _final_polish(narrative, _pregen_edge_data)
-        w82_baseline = narrative
-        log.info("Pregen W82-WIRE: baseline rendered for %s", match_key)
+        log.info("Pregen W82-CANONICAL: baseline rendered for %s", match_key)
     except Exception:
         _ctx_home = (ctx or {}).get("home", {}) if ctx else {}
         _ctx_away = (ctx or {}).get("away", {}) if ctx else {}
@@ -2358,241 +1738,8 @@ async def _generate_one(
         )
         narrative = ""
 
-    # 5. W84-CONFIRM-1: W84 is the permanent default generation path.
-    # W82 baseline is always computed first and remains the per-row fallback.
-
-    # --- Coverage gate: compute BEFORE skip decision (BUILD-COVERAGE-GATE) ---
-    _coverage_level = "unknown"
-    if evidence_pack is not None:
-        _cm_gate = getattr(evidence_pack, "coverage_metrics", None)
-        if _cm_gate is not None:
-            _coverage_level = _cm_gate.level
-
-    # VERDICT-FIX Fix 3 + BUILD-COVERAGE-GATE: PARTIAL context with non-empty
-    # coverage (e.g. MMA fighter records, cricket standings) should still allow W84.
-    # FIX-HAIKU-GATE: non-edge matches bypass the PARTIAL+empty gate — thin evidence
-    # is expected for match previews and Haiku handles it with a minimal context prompt.
-    _partial = (ctx or {}).get("_context_mode") == "PARTIAL"
-    _skip_w84_partial = _partial and (_coverage_level == "empty") and not _is_non_edge
-    _skip_w84 = _skip_w84_partial or bool(edge.get("skip_sonnet_polish"))
-
-    # Empty evidence blocks W84 for Silver/Bronze edge matches only.
-    # Gold/Diamond: Sonnet polish attempted regardless — SA voice + odds/EV context
-    # produces richer narrative than deterministic baseline even with thin data
-    # (BUILD-NARRATIVE-VOICE-01 Rule 6). Fixes gold/diamond w82 entries for far-out matches.
-    # FIX-HAIKU-GATE: Non-edge (is_non_edge=True) bypasses this gate — thin evidence
-    # is expected for match previews and the Haiku path uses a minimal context prompt.
-    if _coverage_level == "empty" and not _is_non_edge:
-        _pregen_empty_tier = str(edge.get("tier", "bronze") or "bronze").lower()
-        if _pregen_empty_tier not in ("gold", "diamond"):
-            _skip_w84 = True
-            log.info(
-                "[COVERAGE-GATE] Skipping Sonnet polish for %s: empty evidence, tier=%s",
-                match_key, _pregen_empty_tier,
-            )
-        else:
-            log.info(
-                "[COVERAGE-GATE] Gold/Diamond — allowing Sonnet polish despite empty evidence for %s",
-                match_key,
-            )
-
-    # W93-COST (2026-04-22): Sonnet polish is gated to Gold/Diamond edges only.
-    # Silver/Bronze serve the deterministic W82 baseline — cuts polish calls by ~65%
-    # while preserving premium-tier quality. Non-edge previews stay on the Haiku path.
-    if not _skip_w84 and not _is_non_edge:
-        _pregen_tier_lower = str(edge.get("tier", "bronze") or "bronze").lower()
-        if _pregen_tier_lower not in ("gold", "diamond"):
-            _skip_w84 = True
-            log.info(
-                "[W93-TIER-GATE] Skipping Sonnet polish for %s: tier=%s (baseline only)",
-                match_key, _pregen_tier_lower,
-            )
-
-    if narrative and spec is not None and evidence_pack is not None and not _skip_w84:
-        try:
-            if _is_non_edge:
-                # BUILD-DUAL-MODEL-PREGEN: Haiku path for non-edge match previews.
-                # No bookmaker/odds alignment needed — this is an analytical preview.
-                # FIX-HAIKU-GATE (AC-3): use minimal prompt when evidence is empty.
-                if _coverage_level == "empty":
-                    prompt_text = _build_minimal_haiku_prompt(home, away, sport, league, commence)
-                    log.info(
-                        "[HAIKU-MINIMAL-CTX] Using minimal context prompt for %s", match_key
-                    )
-                else:
-                    _static, _dynamic = format_evidence_prompt(evidence_pack, spec, match_preview=True, return_split=True)
-                    prompt_text = [
-                        {"type": "text", "text": _static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-                        {"type": "text", "text": _dynamic},
-                    ]
-                resp = await claude.messages.create(
-                    model=HAIKU_MODEL,
-                    max_tokens=800,
-                    messages=[{"role": "user", "content": prompt_text}],
-                    timeout=30.0,
-                )
-                model_draft = _strip_preamble(_extract_text_from_response(resp)).strip()
-                sanitized_draft = sanitize_ai_response(model_draft)
-                sanitized_draft = _suppress_shadow_banned_phrases(sanitized_draft)
-                # INV-SONNET-FALLBACK-01 RC-1: recover missing emoji headers
-                sanitized_draft = _recover_missing_emoji_headers(sanitized_draft)
-                if _validate_preview_polish(sanitized_draft, spec):
-                    narrative = sanitized_draft
-                    narrative_source = "w84"
-                    served_model = "haiku"
-                    log.info("W84-HAIKU SERVED for %s", match_key)
-                else:
-                    log.warning("W84-HAIKU REJECT for %s — serving W82 fallback", match_key)
-            else:
-                # Sonnet path for edge matches.
-                _static, _dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
-                # FIX-NARRATIVE-ROT-ROOT-01 HG-P3: in-flight pregen sweep verification log.
-                log.info(
-                    "FIX-NARRATIVE-ROT-ROOT-01 polish_prompt_built path=sonnet_primary "
-                    "match=%s tier=%s coaches_injected=%s data_availability_injected=%s",
-                    match_key,
-                    (getattr(spec, "edge_tier", "") or "unknown").lower(),
-                    "CANONICAL MANAGERS" in _dynamic,
-                    "DATA AVAILABILITY" in _dynamic,
-                )
-                # FIX-COST-WAVE-02: route Sonnet narrative polish to direct Anthropic
-                # (NARRATIVE scope) when the module singleton is initialised by
-                # pregen_narratives(); fall back to the `claude` param so unit tests
-                # that pass a mocked client via _generate_one(..., claude=fake) still work.
-                _sonnet_client = _narrative_claude if _narrative_claude is not None else claude
-                # FIX-COST-WAVE-03: static/dynamic split — cache_control on static instructions
-                # only, not on match-specific evidence. Same static block across all matches →
-                # cache hits instead of write storm.
-                #
-                # FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): Premium tiers (Diamond+Gold) get
-                # exponential-backoff retry on transient Sonnet failures (rate limit, network,
-                # credit-balance burst). Silver/Bronze keep single-attempt behaviour so the
-                # existing W82 fallback fires fast. Retries stay scoped to the API call —
-                # downstream processing (verify/realign/validator) is unchanged.
-                # Read tier from edge dict (the canonical _pregen_edge_tier is
-                # computed later at line ~2397; replicate the same key access here).
-                _polish_tier = str(edge.get("tier", "bronze") or "bronze").lower()
-                _sonnet_attempts = 0
-                _max_sonnet_attempts = 3 if _polish_tier in ("gold", "diamond") else 1
-                _sonnet_resp = None
-                _last_sonnet_err: Exception | None = None
-                while _sonnet_attempts < _max_sonnet_attempts:
-                    _sonnet_attempts += 1
-                    try:
-                        _sonnet_resp = await _sonnet_client.messages.create(
-                            model=SHADOW_MODEL,
-                            max_tokens=1200,
-                            messages=[{
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": _static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-                                    {"type": "text", "text": _dynamic},
-                                ],
-                            }],
-                            timeout=45.0,
-                        )
-                        break
-                    except Exception as _se:
-                        _last_sonnet_err = _se
-                        if _sonnet_attempts < _max_sonnet_attempts:
-                            _backoff = 1.0 * (2 ** (_sonnet_attempts - 1))  # 1.0s → 2.0s
-                            log.warning(
-                                "PremiumPolishRetry: Sonnet attempt %d/%d failed for %s (tier=%s): %s — retrying in %.1fs",
-                                _sonnet_attempts, _max_sonnet_attempts, match_key,
-                                _polish_tier, _se, _backoff,
-                            )
-                            await asyncio.sleep(_backoff)
-                if _sonnet_resp is None:
-                    # All retries exhausted — surface to outer except handler.
-                    raise _last_sonnet_err if _last_sonnet_err else RuntimeError(
-                        "Sonnet polish attempts exhausted with no exception"
-                    )
-                resp = _sonnet_resp
-                model_draft = _strip_preamble(_extract_text_from_response(resp)).strip()
-                sanitized_draft = sanitize_ai_response(model_draft)
-                sanitized_draft = _strip_model_generated_h2h_references(sanitized_draft)
-                sanitized_draft = _strip_model_generated_sharp_references(sanitized_draft)
-                h2h_sentence = _build_h2h_injection(evidence_pack, spec)
-                if h2h_sentence:
-                    sanitized_draft = _inject_h2h_sentence(sanitized_draft, h2h_sentence)
-                sharp_sentence = _build_sharp_injection(evidence_pack, spec)
-                if sharp_sentence:
-                    sanitized_draft = _inject_sharp_sentence(sanitized_draft, sharp_sentence)
-                # R12-BUILD-03 Fix 3b: Suppress AFTER all injections (belt-and-suspenders)
-                sanitized_draft = _suppress_shadow_banned_phrases(sanitized_draft)
-
-                # R12-BUILD-03 Fix 2: Force-inject correct verdict bookmaker+odds
-                # BEFORE verify, so the verifier sees the correct data.
-                # Sonnet substitutes wrong bookmaker ~40% of the time for unusual names.
-                _fix2_bk = tips[0]["bookie"] if tips else ""
-                _fix2_odds = tips[0]["odds"] if tips else 0
-                if _fix2_bk and _fix2_odds:
-                    sanitized_draft = _realign_verdict_bookmaker(
-                        sanitized_draft, _fix2_bk, float(_fix2_odds)
-                    )
-                    # Fix 2b: If realign didn't fix it, force-inject bk@price into verdict
-                    if not _verdict_bookmaker_aligned(sanitized_draft, _fix2_bk, float(_fix2_odds)):
-                        import re as _re2
-                        _v_start = sanitized_draft.find("\U0001f3c6")  # 🏆
-                        if _v_start != -1:
-                            _v_section = sanitized_draft[_v_start:]
-                            _odds_str = f"{float(_fix2_odds):.2f}"
-                            # Find any "@ X.XX" or "at X.XX" pattern and replace with correct values
-                            _v_fixed = _re2.sub(
-                                r'(?:\b\w[\w\s]*?)\s*@\s*\d+\.\d{2}',
-                                f'{_fix2_bk} @ {_odds_str}',
-                                _v_section,
-                                count=1,
-                            )
-                            if _v_fixed == _v_section:
-                                # No @ pattern found — append recommendation
-                                _v_fixed = _v_section.rstrip() + f" ({_fix2_bk} @ {_odds_str})"
-                            sanitized_draft = sanitized_draft[:_v_start] + _v_fixed
-
-                passed, report = verify_shadow_narrative(sanitized_draft, evidence_pack, spec)
-                if passed:
-                    candidate = report.get("sanitized_draft") or sanitized_draft
-                    # BASELINE-FIX: Verify verdict bookmaker+price matches tip data
-                    _tip_bk = tips[0]["bookie"] if tips else ""
-                    _tip_odds = tips[0]["odds"] if tips else 0
-                    if _verdict_bookmaker_aligned(candidate, _tip_bk, _tip_odds):
-                        narrative = candidate
-                        narrative_source = "w84"
-                        served_model = _model_family_label(SHADOW_MODEL)
-                        log.info("W84 SERVED for %s", match_key)
-                    else:
-                        # Attempt to realign before falling back
-                        realigned = _realign_verdict_bookmaker(candidate, _tip_bk, _tip_odds)
-                        if _verdict_bookmaker_aligned(realigned, _tip_bk, _tip_odds):
-                            narrative = realigned
-                            narrative_source = "w84"
-                            served_model = _model_family_label(SHADOW_MODEL)
-                            log.info(
-                                "W84 SERVED (realigned) for %s: verdict → %s@%.2f",
-                                match_key, _tip_bk, _tip_odds,
-                            )
-                        else:
-                            verification_failure = f"verdict_mismatch: expected {_tip_bk}@{_tip_odds:.2f}"
-                            log.warning(
-                                "W84 VERDICT MISMATCH for %s: verdict has wrong bookmaker/price "
-                                "(expected %s@%.2f) — serving W82 fallback",
-                                match_key, _tip_bk, _tip_odds,
-                            )
-                else:
-                    reasons = "; ".join(report.get("rejection_reasons", [])[:3]) or "verification failed"
-                    verification_failure = f"verify_fail: {reasons}"
-                    log.warning("W84 VERIFY FAIL for %s: %s — serving W82 fallback", match_key, reasons)
-        except Exception as exc:
-            verification_failure = f"w84_error: {exc}"
-            log.warning("W84 ERROR for %s: %s — serving W82 fallback", match_key, exc)
-
-    # R11-BUILD-01 FIX-H2H-DUP-01: Skip injection if _render_setup already included H2H
-    # via _h2h_bridge() (h2h_summary in NarrativeSpec → "Head to head: ..." line).
-    # The existing `sentence in text` guard in _inject_h2h_sentence() does NOT catch this
-    # because _h2h_bridge produces "Head to head: {h2h}." while _build_h2h_injection
-    # produces "Head to head: {summary_text}, and the last meeting finished {score}." —
-    # identical content, different text → the substring check misses it.
-    if narrative and narrative_source == "w82" and evidence_pack is not None and spec is not None:
+    # H2H injection on the W82 baseline (only if not already present from _h2h_bridge).
+    if narrative and evidence_pack is not None and spec is not None:
         _spec_h2h = getattr(spec, "h2h_summary", "") or ""
         _h2h_already_present = (
             _spec_h2h
@@ -2606,373 +1753,14 @@ async def _generate_one(
     if not narrative or narrative.strip() == "NO_DATA":
         return {"match_key": match_key, "success": False, "duration": time.time() - t0}
 
-    # 7b. W69-VERIFY Layer 2: Post-generation cross-check (Opus full sweeps only)
-    # BUILD-SONNET-BURN-FIX-03 FIX-4: 1-in-3 sampling for high-confidence narratives
-    if use_web_search and narrative:
-        _confirming = _pregen_edge_data.get("confirming_signals", 0)
-        _should_fact_check = True
-        if _confirming >= 2:
-            _should_fact_check = int(hashlib.md5(match_key.encode()).hexdigest(), 16) % 3 == 0
-            if not _should_fact_check:
-                log.debug("Layer 2 fact-check sampled out for %s (confirming=%d)", match_key, _confirming)
-        contradictions = []
-        if _should_fact_check:
-            contradictions = await _verify_narrative_claims(narrative, home, away, claude)
-        if contradictions:
-            log.warning("Layer 2 contradictions for %s: %s", match_key, contradictions)
-            # Strip lines containing contradicted claims
-            for c in contradictions:
-                # Extract the claim text after "CONTRADICTED"
-                claim_text = c.split("CONTRADICTED", 1)[-1].strip().strip(":-— ")
-                if claim_text and len(claim_text) > 10:
-                    # Try to find and remove the offending line
-                    for line in narrative.split("\n"):
-                        if any(word in line.lower() for word in claim_text.lower().split()[:3]):
-                            narrative = narrative.replace(line, "")
-                            break
-            narrative = re.sub(r'\n{3,}', '\n\n', narrative)
-
-    # BASELINE-FIX: Final verdict alignment enforcement.
-    # After all post-processing (Layer 2 etc.), ensure the narrative still has
-    # the correct bookmaker+price matching the odds table tip data.
-    # BUILD-DUAL-MODEL-PREGEN: Skip for non-edge previews — no bet recommendation to align.
-    if narrative and tips and not _is_non_edge:
-        _final_bk = tips[0]["bookie"]
-        _final_odds = tips[0]["odds"]
-        if not _verdict_bookmaker_aligned(narrative, _final_bk, _final_odds):
-            narrative = _realign_verdict_bookmaker(narrative, _final_bk, _final_odds)
-            if not _verdict_bookmaker_aligned(narrative, _final_bk, _final_odds):
-                # Realignment failed — fall back to W82 baseline which is guaranteed correct
-                if w82_baseline:
-                    verification_failure = f"final_alignment: expected {_final_bk}@{_final_odds:.2f}"
-                    log.warning(
-                        "BASELINE-FIX: final alignment failed for %s — reverting to W82 baseline",
-                        match_key,
-                    )
-                    narrative = w82_baseline
-                    narrative_source = "w82"
-
-    # REGFIX-03 WIRED: Validate Sonnet-generated (W84) narrative against sport's
-    # banned-term dictionary BEFORE it reaches narrative_cache.
-    # Failure mode 3 (cricket described as "African football") can only originate
-    # in the W84 AI path — W82 baseline is code-generated and contamination-free.
-    if narrative and narrative_source == "w84":
-        _sv_valid, _sv_banned = validate_sport_text(narrative, sport)
-        if not _sv_valid:
-            verification_failure = f"sport_validator: banned terms {_sv_banned}"
-            log.warning(
-                "SPORT VALIDATOR BLOCKED: %s narrative for %s contained banned terms %s"
-                " — falling back to W82 template",
-                sport, match_key, _sv_banned,
-            )
-            if w82_baseline:
-                narrative = w82_baseline
-                narrative_source = "w82"
-
-    # FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): premium-tier intercept.
-    # If we reached this point with narrative_source == "w82" for a Diamond/Gold
-    # edge, ALL upstream Sonnet retry/verify/realign/validator paths failed.
-    # Per Paul's strategic call, premium subscribers MUST NOT silently see W82
-    # boilerplate. Try Haiku-narrative polish as last resort. If that also fails,
-    # defer (no row write) and increment consecutive-defer counter — alert
-    # EdgeOps when threshold reached.
-    _premium_polish_failed = False
-    _premium_intercept_tier = str(edge.get("tier", "bronze") or "bronze").lower()
-    if (
-        narrative_source in ("w82", "baseline_no_edge")
-        and _premium_intercept_tier in ("gold", "diamond")
-        and not _is_non_edge
-        and not _skip_w84
-    ):
-        log.info(
-            "PremiumPolishFallback: Sonnet exhausted for %s (tier=%s reason=%s) — attempting Haiku fallback",
-            match_key, _premium_intercept_tier, verification_failure or "unknown",
-        )
-        _haiku_narrative = await _attempt_haiku_polish_fallback(
-            claude, evidence_pack, spec, tips, match_key, log,
-        )
-        if _haiku_narrative:
-            narrative = _haiku_narrative
-            narrative_source = "w84-haiku-fallback"
-            served_model = "haiku"
-            verification_failure = ""
-            log.info(
-                "PremiumPolishFallback: Haiku polish SERVED for %s (tier=%s)",
-                match_key, _premium_intercept_tier,
-            )
-            # Successful fallback resets the consecutive-defer counter.
-            _clear_premium_defer(match_key, log)
-        else:
-            _premium_polish_failed = True
-
-    if _premium_polish_failed:
-        _pi_pick = (tips[0].get("outcome", "?") if tips else "?")
-        _pi_count = _record_premium_defer(
-            match_key,
-            _premium_intercept_tier,
-            f"{home} vs {away}",
-            _pi_pick,
-            verification_failure or "polish_chain_exhausted",
-            log,
-        )
-        if _pi_count >= _PREMIUM_DEFER_ALERT_THRESHOLD:
-            log.error(
-                "PremiumDeferAlert: %s has %d consecutive defers (tier=%s) — "
-                "ALERT_REQUIRED chat_id=%d",
-                match_key, _pi_count, _premium_intercept_tier,
-                _PREMIUM_DEFER_ALERT_CHAT_ID,
-            )
-        log.warning(
-            "PremiumDefer: %s deferred (tier=%s consecutive=%d) — no narrative_cache row written this sweep",
-            match_key, _premium_intercept_tier, _pi_count,
-        )
-        return {
-            "match_key": match_key,
-            "success": False,
-            "premium_deferred": True,
-            "premium_defer_count": _pi_count,
-            "duration": time.time() - t0,
-        }
-
-    # W91-P3 VERDICT-CAP-ALL-TIERS: apply `_cap_verdict` safety net for ALL
-    # tiers (not just gold/diamond).  Sonnet-polished narratives for silver
-    # and bronze edges have been observed emitting verdicts 220–314 chars,
-    # violating the _VERDICT_MAX_CHARS=200 hard cap documented in
-    # narrative_spec.py.  Applying the cap across every tier ensures
-    # QA tests and end users see a uniform maximum length.
+    # Verdict cap (defence in depth — narrative_spec.py also enforces this)
     _pregen_edge_tier = edge.get("tier", "bronze")
     if narrative and not _is_non_edge:
         from narrative_spec import cap_verdict_in_narrative as _cap_all
         narrative = _cap_all(narrative)
 
-    # BUILD-VERDICT-QUALITY-GATE-01: Gold/Diamond tier quality gate.
-    # If the final narrative's verdict is content-empty, attempt ONE Sonnet
-    # retry.  If the retry also fails, mark gold_verdict_failed and abort —
-    # do NOT serve the deterministic baseline for Gold/Diamond tier.
-    _gold_verdict_failed = False
-    if narrative and _pregen_edge_tier in ("gold", "diamond") and not _is_non_edge:
-        from narrative_spec import (
-            min_verdict_quality,
-            _extract_verdict_text,
-            cap_verdict_in_narrative,
-        )
-        # W91-VALIDATOR-REJECT Mode 2 fix: W84 Sonnet polish can emit verdicts
-        # up to 291 chars that pass verify_shadow_narrative() and then fail
-        # min_verdict_quality() on the length gate — inflating
-        # validator_reject_rate toward ALERT. Apply the `_cap_verdict` safety
-        # net (already enforced on every baseline render path) to the final
-        # narrative HTML before gating, so the quality check sees the capped
-        # verdict the user will actually receive.
-        narrative = cap_verdict_in_narrative(narrative)
-        _verdict_text_raw = _extract_verdict_text(narrative)
-        # INV-VERDICT-COACH-FABRICATION-01: build manager evidence for quality gate
-        _mgr_ep = None
-        if evidence_pack is not None:
-            _ep_espn_qg = getattr(evidence_pack, "espn_context", None)
-            _mgr_ep = {
-                "home_manager": ((getattr(_ep_espn_qg, "home_team", {}) or {}).get("coach") if _ep_espn_qg else None),
-                "away_manager": ((getattr(_ep_espn_qg, "away_team", {}) or {}).get("coach") if _ep_espn_qg else None),
-            }
-        # MONITOR-P0-FIX-01: instrument validator_attempt + bannned_template_hit
-        _log_integrity_event("validator_attempt", fixture_id=match_key)
-        _bt_idx = -1
-        if _verdict_text_raw:
-            from narrative_spec import check_banned_template as _cbt
-            _bt_idx = _cbt(_verdict_text_raw)
-            if _bt_idx >= 0:
-                _log_integrity_event("banned_template_hit", fixture_id=match_key,
-                                     reason=f"template_idx={_bt_idx}")
-        _failure_reason = "verdict_quality_gate_double_fail"
-        if not min_verdict_quality(_verdict_text_raw, tier=_pregen_edge_tier, evidence_pack=_mgr_ep):
-            # MONITOR-P0-FIX-01: instrument validator_rejection
-            _log_integrity_event("validator_rejection", fixture_id=match_key,
-                                 reason=f"tier={_pregen_edge_tier},len={len(_verdict_text_raw)}")
-            log.warning(
-                "GOLD-QUALITY-GATE: verdict failed quality check for %s "
-                "(tier=%s, verdict_len=%d)",
-                match_key, _pregen_edge_tier, len(_verdict_text_raw),
-            )
-
-            # AC3 F5 — FIX-VERDICT-SHAPE-GUARD-01: increment and check rejection count.
-            # After _BANNED_SHAPE_SKIP_THRESHOLD consecutive rejections for the same
-            # fixture, stop retrying and mark narrative_cache as skipped_banned_shape.
-            # W92-VERDICT-QUALITY P3: counter is now persisted in narrative_skip_log
-            # so rejections survive process restarts — _bump_skip_count handles both
-            # the in-memory cache and the DB row.
-            _cur_rejections = _bump_skip_count(match_key)
-            if _cur_rejections >= _BANNED_SHAPE_SKIP_THRESHOLD:
-                log.warning(
-                    "GOLD-QUALITY-GATE: %s has %d consecutive banned-shape rejections "
-                    "— marking skipped_banned_shape (threshold=%d, retry skipped)",
-                    match_key, _cur_rejections, _BANNED_SHAPE_SKIP_THRESHOLD,
-                )
-                try:
-                    from scrapers.db_connect import connect_odds_db as _sbs_conn
-                    _sbs_db = str(SCRAPERS_ROOT / "odds.db")
-                    _sbs_c = _sbs_conn(_sbs_db, timeout=3)
-                    try:
-                        _sbs_c.execute(
-                            "UPDATE narrative_cache SET quality_status=? WHERE match_id=?",
-                            ("skipped_banned_shape", match_key),
-                        )
-                        _sbs_c.commit()
-                    finally:
-                        _sbs_c.close()
-                except Exception as _sbs_err:
-                    log.warning(
-                        "AC3: could not mark skipped_banned_shape for %s: %s",
-                        match_key, _sbs_err,
-                    )
-                _failure_reason = (
-                    f"verdict_quality_gate_first_fail_threshold_skip_"
-                    f"threshold={_BANNED_SHAPE_SKIP_THRESHOLD}"
-                )
-                _gold_verdict_failed = True
-            else:
-                log.info(
-                    "GOLD-QUALITY-GATE: attempting Sonnet retry for %s "
-                    "(rejection=%d/%d)",
-                    match_key, _cur_rejections, _BANNED_SHAPE_SKIP_THRESHOLD,
-                )
-                # Retry: one more Sonnet generation attempt
-                _retry_narrative = ""
-                try:
-                    if evidence_pack is not None and spec is not None:
-                        _retry_static, _retry_dynamic = format_evidence_prompt(evidence_pack, spec, return_split=True)
-                        # FIX-NARRATIVE-ROT-ROOT-01 HG-P3: in-flight pregen sweep verification log.
-                        log.info(
-                            "FIX-NARRATIVE-ROT-ROOT-01 polish_prompt_built path=sonnet_retry "
-                            "match=%s tier=%s coaches_injected=%s data_availability_injected=%s",
-                            match_key,
-                            (getattr(spec, "edge_tier", "") or "unknown").lower(),
-                            "CANONICAL MANAGERS" in _retry_dynamic,
-                            "DATA AVAILABILITY" in _retry_dynamic,
-                        )
-                        # FIX-COST-WAVE-02: Sonnet retry also routes direct Anthropic
-                        # (NARRATIVE scope) when the module singleton is initialised.
-                        _retry_sonnet_client = _narrative_claude if _narrative_claude is not None else claude
-                        # FIX-COST-WAVE-03: same static/dynamic split as primary path —
-                        # retry hits the primary path's static cache write.
-                        _retry_resp = await _retry_sonnet_client.messages.create(
-                            model=SHADOW_MODEL,
-                            max_tokens=1200,
-                            messages=[{
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": _retry_static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-                                    {"type": "text", "text": _retry_dynamic},
-                                ],
-                            }],
-                            timeout=45.0,
-                        )
-                        _retry_draft = _strip_preamble(
-                            _extract_text_from_response(_retry_resp)
-                        ).strip()
-                        _retry_draft = sanitize_ai_response(_retry_draft)
-                        _retry_passed, _retry_report = verify_shadow_narrative(
-                            _retry_draft, evidence_pack, spec
-                        )
-                        if _retry_passed:
-                            _retry_narrative = (
-                                _retry_report.get("sanitized_draft") or _retry_draft
-                            )
-                except Exception as _gq_retry_err:
-                    log.warning(
-                        "GOLD-QUALITY-GATE: retry error for %s: %s",
-                        match_key, _gq_retry_err,
-                    )
-                # Evaluate retry result
-                if _retry_narrative:
-                    _retry_narrative = cap_verdict_in_narrative(_retry_narrative)
-                    _retry_verdict = _extract_verdict_text(_retry_narrative)
-                    if min_verdict_quality(_retry_verdict, tier=_pregen_edge_tier, evidence_pack=_mgr_ep):
-                        narrative = _retry_narrative
-                        narrative_source = "w84_quality_retry"
-                        log.info(
-                            "GOLD-QUALITY-GATE: retry succeeded for %s", match_key
-                        )
-                    else:
-                        _failure_reason = "verdict_quality_gate_double_fail"
-                        _gold_verdict_failed = True
-                        log.error(
-                            "GOLD-QUALITY-GATE: second attempt also failed for %s "
-                            "(tier=%s) — marking gold_verdict_failed",
-                            match_key, _pregen_edge_tier,
-                        )
-                else:
-                    _failure_reason = "verdict_quality_gate_retry_empty"
-                    _gold_verdict_failed = True
-                    log.error(
-                        "GOLD-QUALITY-GATE: retry returned no narrative for %s "
-                        "(tier=%s) — marking gold_verdict_failed",
-                        match_key, _pregen_edge_tier,
-                    )
-
-    if _gold_verdict_failed:
-        # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-2: before deferring on a
-        # GOLD-QUALITY-GATE failure, attempt Haiku polish fallback. The Sonnet
-        # quality-gate path was previously bypassing the Wave 2 intercept entirely
-        # (it returns early with `_gold_verdict_failed=True` BEFORE the intercept
-        # block runs). That gap meant any GOLD-QUALITY-GATE rejection silently
-        # produced no narrative_cache row → view-time fell through to synthesis
-        # baseline. Now: try Haiku with thin-evidence directive when coverage was
-        # empty; on success, write w84-haiku-fallback; on failure, defer cleanly
-        # via the same `_record_premium_defer` machinery the Wave 2 chain uses.
-        _qg_haiku_narrative = await _attempt_haiku_polish_fallback(
-            claude,
-            evidence_pack,
-            spec,
-            tips,
-            match_key,
-            log,
-            thin_evidence=(_coverage_level == "empty"),
-        )
-        if _qg_haiku_narrative:
-            log.info(
-                "GOLD-QUALITY-GATE: Haiku polish SERVED for %s (tier=%s reason=%s) — "
-                "FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 escalation",
-                match_key, _pregen_edge_tier, _failure_reason,
-            )
-            narrative = _qg_haiku_narrative
-            narrative_source = "w84-haiku-fallback"
-            served_model = "haiku"
-            verification_failure = ""
-            _gold_verdict_failed = False
-            _clear_premium_defer(match_key, log)
-        else:
-            # Both Sonnet (twice) and Haiku failed — defer via Wave 2 chain.
-            _qg_pick = (tips[0].get("outcome", "?") if tips else "?")
-            _qg_count = _record_premium_defer(
-                match_key,
-                _pregen_edge_tier,
-                f"{home} vs {away}",
-                _qg_pick,
-                _failure_reason or "verdict_quality_gate_haiku_also_failed",
-                log,
-            )
-            if _qg_count >= _PREMIUM_DEFER_ALERT_THRESHOLD:
-                log.error(
-                    "PremiumDeferAlert: %s has %d consecutive defers (tier=%s) — "
-                    "ALERT_REQUIRED chat_id=%d "
-                    "(FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 quality-gate path)",
-                    match_key, _qg_count, _pregen_edge_tier,
-                    _PREMIUM_DEFER_ALERT_CHAT_ID,
-                )
-            log.warning(
-                "GOLD-QUALITY-GATE: Sonnet retry + Haiku both failed for %s "
-                "(tier=%s consecutive=%d) — no narrative_cache row written this sweep",
-                match_key, _pregen_edge_tier, _qg_count,
-            )
-            return {
-                "match_key": match_key,
-                "success": False,
-                "gold_verdict_failed": True,
-                "premium_deferred": True,
-                "premium_defer_count": _qg_count,
-                "duration": time.time() - t0,
-            }
-
-    # 8. Build the full HTML message (simplified — no user-specific gating)
+    # 5. Build the full HTML message (used for logging/debug; the cache write
+    # passes "" for narrative_html per BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01)
     from html import escape as h
     hf, af = "", ""
     try:
@@ -2987,13 +1775,12 @@ async def _generate_one(
         lines.append(f"\U0001f4c5 {commence}")
     lines.append("")
 
-    # W75-FIX: edge_v2 tier is authoritative — no EV-threshold fallback
     edge_tier = edge.get("tier", "bronze")
 
     # Inject edge badge into verdict
     if narrative and tips:
         try:
-            from services.edge_rating import EdgeRating, EDGE_EMOJIS, EDGE_LABELS
+            from services.edge_rating import EDGE_EMOJIS, EDGE_LABELS  # type: ignore
             tier_emoji = EDGE_EMOJIS.get(edge_tier, "")
             tier_label = EDGE_LABELS.get(edge_tier, "")
             if tier_emoji and tier_label:
@@ -3026,11 +1813,7 @@ async def _generate_one(
 
     msg = _final_polish(_sanitise_jargon("\n".join(lines)))
 
-    # 9. Return cache-write data (caller batch-writes after all generation)
-    # D-04 FIX: When ESPN returns no data for this match, label model as
-    # "instant-baseline-no-ctx" so QA can distinguish genuinely enriched cards
-    # from generic ones. narrative_cache schema unchanged — model column only.
-    # AC-8 (P1P3-BUILD): build structured card data per edge and persist alongside narrative
+    # 6. Build the cache row (caller batch-writes after all generation)
     _structured_card_json = None
     try:
         from card_pipeline import build_card_data as _build_card
@@ -3049,7 +1832,7 @@ async def _generate_one(
     duration = time.time() - t0
     generation_ms = int(duration * 1000)
 
-    # PIPELINE-BUILD-01: Generate constrained verdict and extract spec metadata
+    # Verdict_html: deterministic _render_verdict only — no LLM.
     _verdict_html = None
     _evidence_class = None
     _tone_band = None
@@ -3060,94 +1843,17 @@ async def _generate_one(
         _tone_band = getattr(spec, "tone_band", None)
         try:
             from narrative_spec import _render_verdict as _rv_det
-            # BUILD-ALLOWED-ENRICHMENT-FIX-01: feed the Sonnet prompt with full context
-            # Source all values from the upstream evidence_pack — no re-query.
-            _ep = evidence_pack
-            _ep_espn = getattr(_ep, "espn_context", None) if _ep else None
-            _ep_h2h = getattr(_ep, "h2h", None) if _ep else None
-            _ep_inj = getattr(_ep, "injuries", None) if _ep else None
-            _ep_mov = getattr(_ep, "movements", None) if _ep else None
-            _ep_edge = getattr(_ep, "edge_state", None) if _ep else None
-            _ep_sa = getattr(_ep, "sa_odds", None) if _ep else None
-            _allowed = {
-                "matchup": f"{home} vs {away}",
-                "home_team": home,
-                "away_team": away,
-                "pick": tips[0]["outcome"] if tips else "",
-                "odds": tips[0]["odds"] if tips else 0,
-                "ev": tips[0]["ev"] if tips else 0,
-                "bookmaker": tips[0]["bookie"] if tips else "",
-                "confidence_tier": (
-                    "MAX" if (edge.get("composite_score") or 0) >= 95 else
-                    "STRONG" if (edge.get("composite_score") or 0) >= 85 else
-                    "SOLID" if (edge.get("composite_score") or 0) >= 70 else
-                    "MILD"
-                ),
-                # Enrichment keys — sourced from upstream evidence_pack
-                "form": (getattr(_ep_espn, "home_team", {}) or {}).get("form") if _ep_espn else None,
-                "recent_form": (getattr(_ep_espn, "home_team", {}) or {}).get("form") if _ep_espn else None,
-                "h2h": (getattr(_ep_h2h, "summary", {}) or {}) if _ep_h2h else None,
-                "head_to_head": getattr(_ep_h2h, "summary_text", None) if _ep_h2h else None,
-                "injuries": getattr(_ep_inj, "api_football", None) if _ep_inj else None,
-                "home_injuries": getattr(_ep_inj, "home_injuries", None) if _ep_inj else None,
-                "away_injuries": getattr(_ep_inj, "away_injuries", None) if _ep_inj else None,
-                "line_movement": getattr(_ep_mov, "net_direction", None) if _ep_mov else None,
-                "tipster": edge.get("tipster_score") or (getattr(_ep_edge, "tipster_score", None) if _ep_edge else None),
-                "venue": None,
-                "weather": None,
-                "pitch": None,
-                "momentum": (getattr(_ep_edge, "signals", {}) or {}) if _ep_edge else None,
-                "price_edge_bps": int((edge.get("price_edge_score") or (getattr(_ep_edge, "price_edge_score", 0.0) if _ep_edge else 0.0)) * 10000),
-                "market_consensus": getattr(_ep_sa, "bookmaker_count", None) if _ep_sa else None,
-                "squad": None,
-                # INV-VERDICT-COACH-FABRICATION-01: feed manager names from evidence_pack
-                "home_manager": (getattr(_ep_espn, "home_team", {}) or {}).get("coach") if _ep_espn else None,
-                "away_manager": (getattr(_ep_espn, "away_team", {}) or {}).get("coach") if _ep_espn else None,
-            }
-            _verdict_html = _generate_verdict_constrained(spec, _allowed)
-            # INV-VERDICT-COACH-FABRICATION-01: validate manager names in verdict
-            if _verdict_html:
-                from narrative_spec import validate_manager_names as _vmn, find_fabricated_manager_names as _ffmn
-                if not _vmn(_verdict_html, _allowed):
-                    # MONITOR-P0-FIX-01: instrument manager_name_fabrication_attempt
-                    _fab_names = _ffmn(_verdict_html, _allowed)
-                    _null_fields = [k for k in ("home_manager", "away_manager") if not _allowed.get(k)]
-                    _log_integrity_event(
-                        "manager_name_fabrication_attempt",
-                        fixture_id=match_key,
-                        reason=f"fabricated={','.join(_fab_names)};null_fields={','.join(_null_fields)}",
-                    )
-                    log.warning("COACH-FABRICATION-GATE: verdict rejected for %s — unknown manager name", match_key)
-                    _verdict_html = ""
-            if not _verdict_html:
-                _verdict_html = _rv_det(spec)
-            # BUILD-VERDICT-01: blacklist re-check — deterministic fallback can still emit banned phrases
+            _verdict_html = _rv_det(spec)
             if _verdict_html and _VERDICT_BLACKLIST and any(p in _verdict_html.lower() for p in _VERDICT_BLACKLIST):
                 _bv_action = getattr(spec, "verdict_action", "back") or "back"
                 _bv_outcome = getattr(spec, "outcome_label", "") or "this outcome"
                 _bv_odds = getattr(spec, "odds", 0) or 0
                 _verdict_html = f"{_bv_action.title()} — {_bv_outcome} at {_bv_odds:.2f}. Edge confirmed."
-            # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store (ceiling raised to 300 by BUILD-VERDICT-ENRICHMENT-FIX-01)
             if _verdict_html and len(_verdict_html) > 300:
                 _verdict_html = _verdict_html[:300].rsplit(" ", 1)[0].rstrip(",. ")
-            log.info("PIPELINE-BUILD-01: verdict generated for %s (constrained=%s)",
-                     match_key, bool(_verdict_html))
+            log.info("VERDICT-W82: rendered for %s (deterministic)", match_key)
         except Exception as _verd_err:
-            log.debug("PIPELINE-BUILD-01: verdict generation failed for %s: %s", match_key, _verd_err)
-            try:
-                from narrative_spec import _render_verdict as _rv_fb
-                _verdict_html = _rv_fb(spec)
-                # BUILD-VERDICT-01: blacklist re-check on fallback path
-                if _verdict_html and _VERDICT_BLACKLIST and any(p in _verdict_html.lower() for p in _VERDICT_BLACKLIST):
-                    _bv_action = getattr(spec, "verdict_action", "back") or "back"
-                    _bv_outcome = getattr(spec, "outcome_label", "") or "this outcome"
-                    _bv_odds = getattr(spec, "odds", 0) or 0
-                    _verdict_html = f"{_bv_action.title()} — {_bv_outcome} at {_bv_odds:.2f}. Edge confirmed."
-                # BUILD-VERDICT-CAP-01: belt-and-suspenders — cap before store (ceiling raised to 300 by BUILD-VERDICT-ENRICHMENT-FIX-01)
-                if _verdict_html and len(_verdict_html) > 300:
-                    _verdict_html = _verdict_html[:300].rsplit(" ", 1)[0].rstrip(",. ")
-            except Exception:
-                pass
+            log.debug("verdict deterministic render failed for %s: %s", match_key, _verd_err)
 
         # Serialise spec for cache
         try:
@@ -3173,42 +1879,6 @@ async def _generate_one(
         except Exception:
             pass
 
-    # NARRATIVE-ACCURACY-01 Rule 3: run generate_and_validate() on Setup + Verdict sections.
-    # W82 baseline is deterministic → always validated. W84 polish is LLM-generated → validate.
-    _setup_validated = 1
-    _verdict_validated = 1
-    _setup_attempts = 1
-    _verdict_attempts = 1
-    if narrative and narrative_source == "w84" and _derived_claims:
-        try:
-            _setup_text = generate_section(narrative, "setup")
-            _verdict_text = generate_section(narrative, "verdict")
-            if _setup_text:
-                _sv_text, _sv_ok, _sv_att = await generate_and_validate(
-                    "setup", _setup_text, _derived_claims, claude, model_id,
-                )
-                _setup_validated = 1 if _sv_ok else 0
-                _setup_attempts = _sv_att
-            if _verdict_text:
-                _vv_text, _vv_ok, _vv_att = await generate_and_validate(
-                    "verdict", _verdict_text, _derived_claims, claude, model_id,
-                )
-                _verdict_validated = 1 if _vv_ok else 0
-                _verdict_attempts = _vv_att
-            log.info(
-                "ACCURACY-01: %s setup_validated=%d(%d) verdict_validated=%d(%d)",
-                match_key, _setup_validated, _setup_attempts,
-                _verdict_validated, _verdict_attempts,
-            )
-        except Exception as _av_err:
-            log.debug("ACCURACY-01: generate_and_validate failed for %s: %s", match_key, _av_err)
-
-    # FIX-W84-PREMIUM-NO-FALLBACK-01 (Rule 23): clear consecutive-defer counter
-    # on successful premium-tier serve. Recovers gracefully when transient failure
-    # window closes — next defer (if any) starts the count fresh.
-    if _premium_intercept_tier in ("gold", "diamond") and narrative_source != "w82":
-        _clear_premium_defer(match_key, log)
-
     return {
         "match_key": match_key, "success": True, "model": _final_model,
         "duration": duration, "narrative": narrative,
@@ -3220,7 +1890,7 @@ async def _generate_one(
             "model": _final_model,
             "evidence_json": evidence_json,
             "narrative_source": narrative_source,
-            "verification_failure": verification_failure,
+            "verification_failure": "",
             "coverage_json": _coverage_json,
             "structured_card_json": _structured_card_json,
             "verdict_html": _verdict_html,
@@ -3229,29 +1899,17 @@ async def _generate_one(
             "spec_json": _spec_json_str,
             "context_json": _context_json_str,
             "generation_ms": generation_ms,
-            "setup_validated": _setup_validated,
-            "verdict_validated": _verdict_validated,
-            "setup_attempts": _setup_attempts,
-            "verdict_attempts": _verdict_attempts,
-            "_shadow": {
-                "match_key": match_key,
-                "pack": evidence_pack,
-                "spec": spec,
-                "evidence_json": evidence_json,
-                "w82_baseline": w82_baseline or narrative,
-                "w82_polished": w82_polished,
-                "richness_score": evidence_pack.richness_score,
-            },
+            "setup_validated": 1,
+            "verdict_validated": 1,
+            "setup_attempts": 1,
+            "verdict_attempts": 1,
         },
     }
 
 
 async def _verify_and_fill_cache(
     edges: list[dict],
-    model_id: str,
-    claude: anthropic.AsyncAnthropic,
     sweep: str,
-    shadow_tasks: list[asyncio.Task] | None = None,
 ) -> None:
     """Post-sweep: verify all edges have cache entries, fill gaps.
 
@@ -3279,7 +1937,7 @@ async def _verify_and_fill_cache(
         mk = edge.get("match_key", "")
         log.info("  Filling gap [%d/%d]: %s", i, len(gaps), mk)
         try:
-            result = await _generate_one(edge, model_id, claude, sweep_type=sweep)
+            result = await _generate_one(edge, sweep_type=sweep)
             if result.get("success") and result.get("_cache"):
                 pw = result["_cache"]
                 try:
@@ -3425,18 +2083,14 @@ def _resolve_kickoff(edge: dict, db_path: str) -> "datetime":
 
 
 async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: bool = False) -> None:
-    """Run the pre-generation sweep."""
-    model_id = MODELS.get(sweep, MODELS["refresh"])
-    # W93-COST: label derived from the actual model id (Haiku/Opus/Sonnet) — the
-    # sweep/full distinction stopped implying Opus when INV-SONNET-BURN-05 shifted
-    # NARRATIVE_MODEL to Haiku.
-    model_label = _model_family_label(model_id).capitalize()
+    """Run the pre-generation sweep.
+
+    FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: deterministic W82 baseline only —
+    no LLM client setup, no Sonnet/Haiku traffic, no model selection.
+    """
     log.info(
-        "Starting %s sweep with %s (%s) [shadow=%s]%s%s",
+        "Starting %s sweep (W82 baseline canonical, deterministic)%s%s",
         sweep,
-        model_label,
-        model_id,
-        _model_family_label(SHADOW_MODEL),
         f" sport={sport}" if sport else "",
         " [DRY RUN]" if dry_run else "",
     )
@@ -3667,27 +2321,19 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         log.info("No matches within %dh pregen window — nothing to do", _PREGEN_HORIZON_HOURS)
         return
 
-    # Initialize Claude client
-    claude = anthropic.AsyncAnthropic(api_key=os.getenv("OPENROUTER_API_KEY"))
-    # FIX-COST-WAVE-02: Sonnet narrative polish routes direct to Anthropic (NARRATIVE scope).
-    # Haiku traffic on `claude` stays on OpenRouter — per Phase 2 AC-1 Haiku is out of scope.
-    global _narrative_claude
-    _narrative_claude = _anthropic_direct.AsyncAnthropic(
-        scope_key_name="NARRATIVE_ANTHROPIC_API_KEY"
-    )
-
+    # FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: no Claude client — pregen sweep
+    # is pure Python (NarrativeSpec → _render_baseline). The validator stack at
+    # _store_narrative_cache fires on each row; that is the only quality gate.
     results = {
         "success": 0,
         "failed": 0,
         "skipped": 0,
-        "dropped": 0,  # BASELINE-FIX: match-level dedup drops
+        "dropped": 0,
         "total_duration": 0.0,
-        "w84_served": 0,
-        "w82_fallback": 0,
-        "haiku_calls": 0,  # BUILD-DUAL-MODEL-PREGEN: non-edge Haiku preview count
+        "w82_baseline_served": 0,
     }
     sweep_verdicts: list[str] = []
-    pending_writes: list[dict] = []  # W79-P3D: collect cache writes, batch after generation
+    pending_writes: list[dict] = []
 
     # BUILD-NARRATIVE-PREGEN-WINDOW-01: bounded concurrency via Semaphore.
     # At most _PREGEN_CONCURRENCY (3) matches are generated simultaneously,
@@ -3724,23 +2370,18 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
             _in_progress_matches.discard(mk)
             return
 
-        log.info("[%d/%d] Generating narrative for %s (%s)...", idx, total, mk, model_label)
+        log.info("[%d/%d] Generating W82 baseline for %s...", idx, total, mk)
 
         try:
             async with _sem:
-                result = await _generate_one(edge, model_id, claude, sweep_type=sweep)
+                result = await _generate_one(edge, sweep_type=sweep)
             if result.get("success"):
                 results["success"] += 1
                 log.info("  -> OK in %.1fs", result["duration"])
                 # Collect cache write for batch
                 if result.get("_cache"):
                     pending_writes.append(result["_cache"])
-                    if result["_cache"].get("narrative_source") == "w84":
-                        results["w84_served"] += 1
-                        if result["_cache"].get("model") == "haiku":
-                            results["haiku_calls"] += 1
-                    else:
-                        results["w82_fallback"] += 1
+                    results["w82_baseline_served"] += 1
                 # W67-CALIBRATE: collect verdict for balance check
                 narr = result.get("narrative", "")
                 if narr and "Verdict" in narr:
@@ -3772,34 +2413,15 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         _sweep_wall_elapsed,
     )
 
-    # W79-P3D: Batch-write all narratives to cache (separate from generation)
-    # BUILD-PREGEN-FIX PRE-3: Never overwrite w84 with w82 on ANY sweep type.
-    # BUILD-PREGEN-FIX-3: Extended to full sweeps. A full sweep's purpose is to
-    # ENRICH (w82→w84, w84→w84). If Opus fails verification and produces w82,
-    # the existing w84 is still valid product — preserve it.
+    # FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: every row is a fresh W82 baseline.
+    # No w84 preservation logic — there's no longer a w84 quality gradient to
+    # protect. The validator gates inside _store_narrative_cache fire on each
+    # write; rejected writes are refused there.
     if pending_writes:
         log.info("Writing %d narratives to cache...", len(pending_writes))
         write_ok = 0
-        w84_preserved = 0
         for pw in pending_writes:
-            new_source = pw.get("narrative_source", "w82")
             match_id = pw["match_id"]
-            # PRE-3 + BUILD-PREGEN-FIX-3: Preserve existing w84 on ALL sweep types
-            # when the new result is w82 or baseline_no_edge (Haiku fallback).
-            # Cold starts (no existing entry) still get w82/baseline_no_edge.
-            if new_source in ("w82", "baseline_no_edge"):
-                existing = await _get_cached_narrative(match_id)
-                if existing and existing.get("narrative_source") == "w84":
-                    _fail_reason = pw.get("verification_failure", "unknown")
-                    _sweep_label = "full sweep" if sweep == "full" else "refresh"
-                    log.warning(
-                        "[PREGEN-FULL] Preserving w84 for %s — "
-                        "Opus verification failed on %s. Keeping existing w84. "
-                        "Failure reason: %s",
-                        match_id, _sweep_label, _fail_reason,
-                    )
-                    w84_preserved += 1
-                    continue
             try:
                 # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — narrative_html
                 # generation retired. Verdict on the card image is the only
@@ -3811,7 +2433,7 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                     pw["edge_tier"],
                     pw["model"],
                     evidence_json=pw.get("evidence_json"),
-                    narrative_source=new_source,
+                    narrative_source=pw.get("narrative_source", NARRATIVE_SOURCE_LABEL),
                     coverage_json=pw.get("coverage_json"),
                     structured_card_json=pw.get("structured_card_json"),
                     verdict_html=pw.get("verdict_html"),
@@ -3825,40 +2447,38 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
             except Exception as exc:
                 log.warning("Cache write failed for %s: %s", match_id, exc)
         log.info(
-            "Cache writes: %d/%d successful, %d w84 preserved",
-            write_ok, len(pending_writes), w84_preserved,
+            "Cache writes: %d/%d successful (W82 baseline)",
+            write_ok, len(pending_writes),
         )
 
     # W67-CALIBRATE: Verdict balance check
     _check_verdict_balance(sweep_verdicts)
 
     # W79-P3D: Verify cache coverage after sweep
-    await _verify_and_fill_cache(edges, model_id, claude, sweep)
+    await _verify_and_fill_cache(edges, sweep)
 
-    # Summary
+    # Summary — FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: W82 is the only path.
     log.info(
         "\n=== Sweep Complete ===\n"
-        "Mode: %s (%s)\n"
+        "Mode: %s (W82 baseline canonical)\n"
         "Total: %d edges\n"
         "Generated: %d\n"
         "Failed: %d\n"
         "Skipped (no odds): %d\n"
         "Dropped (duplicate): %d\n"
-        "W84 served: %d (haiku: %d, sonnet: %d)\n"
+        "W82 baseline served: %d\n"
+        "W84 served: 0 (haiku: 0, sonnet: 0)\n"
         "W82 fallback: %d\n"
         "Total time: %.1fs\n"
         "Avg per edge: %.1fs",
         sweep,
-        model_label,
         len(edges),
         results["success"],
         results["failed"],
         results["skipped"],
         results["dropped"],
-        results["w84_served"],
-        results["haiku_calls"],
-        results["w84_served"] - results["haiku_calls"],
-        results["w82_fallback"],
+        results["w82_baseline_served"],
+        results["w82_baseline_served"],
         results["total_duration"],
         results["total_duration"] / max(len(edges), 1),
     )

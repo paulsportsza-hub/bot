@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-PREGEN-STATIC-PREFIX-PURE-01 — Polish-path cache_control prefix threshold.
 
 The cache_control directive on the polish-path system prompt is no-op'd by
@@ -28,7 +37,6 @@ Tests:
   bookmaker @ odds) stay in the dynamic suffix (below split).
 """
 
-from __future__ import annotations
 
 import os
 import sys

@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """CARD-REBUILD-04-03 — Verdict rewrite: prompt + max_tokens + blacklist.
 
 Acceptance tests for three defect fixes:
@@ -5,7 +14,6 @@ Acceptance tests for three defect fixes:
   D-02: phrase blacklist rejects general-knowledge verdicts
   D-16: verdict section header uses 🏆 not ⚠
 """
-from __future__ import annotations
 
 import os
 import sys

@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 — AC-2 regression guard.
 
 Premium-tier (Diamond+Gold) Sonnet rejection MUST escalate to Haiku polish
@@ -13,7 +22,6 @@ imports (Telegram, anthropic SDK, etc.) and is exercised by the live pregen
 sweep — covering it in a unit test would require mocking the entire universe.
 The static guard catches the common failure mode: someone removes a wire.
 """
-from __future__ import annotations
 
 from pathlib import Path
 

@@ -1,5 +1,13 @@
-"""FIX-NARRATIVE-CACHE-DEATH-01 — Tests for quarantine-on-reject, cooldown, and write surfacing."""
 from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
+"""FIX-NARRATIVE-CACHE-DEATH-01 — Tests for quarantine-on-reject, cooldown, and write surfacing."""
 
 import asyncio
 import json

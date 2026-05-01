@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-NARRATIVE-MMA-LORE-01 — Strip generic-lore phrases from combat-sport prose.
 
 Covers:
@@ -6,7 +15,6 @@ Covers:
   AC-5: format_evidence_prompt carries combat-specific instruction (both branches).
   AC-13: Sport coverage across MMA, boxing, UFC, Bellator, ONE FC.
 """
-from __future__ import annotations
 
 import os
 import sys

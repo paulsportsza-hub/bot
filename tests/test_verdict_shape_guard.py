@@ -1,9 +1,17 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-VERDICT-SHAPE-GUARD-01 — Unit tests for F1 shape guard in _generate_verdict().
 
 AC2: Stubs Anthropic client to return banned shape on attempt 1, valid shape on
 attempt 2. Asserts valid shape is returned and attempt 1's log line fires.
 """
-from __future__ import annotations
 
 import sys
 import os

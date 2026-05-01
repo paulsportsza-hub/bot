@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 — AC-2 contract tests.
 
 Superseded by FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01)
@@ -8,7 +17,6 @@ verdict_html only — see tests/contracts/test_strong_band_tone_lock.py.
 
 Brief: FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 (29 April 2026)
 """
-from __future__ import annotations
 
 import pytest
 

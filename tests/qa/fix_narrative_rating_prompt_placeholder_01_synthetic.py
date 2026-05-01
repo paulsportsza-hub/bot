@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-NARRATIVE-RATING-PROMPT-PLACEHOLDER-01 — synthetic-render evidence harness (AC-9b).
 
 Renders evidence_pack.format_evidence_prompt() for 5 non-Arsenal fixtures and
@@ -8,7 +17,6 @@ Run from /home/paulsportsza/bot:
 
 Output: /home/paulsportsza/reports/e2e-screenshots/FIX-NARRATIVE-RATING-PROMPT-PLACEHOLDER-01-{stamp}/
 """
-from __future__ import annotations
 
 import os
 import sys

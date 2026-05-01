@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-NARRATIVE-RISK-RESOLUTION-01 — Verdict prose must reference Risk.
 
 Covers:
@@ -5,7 +14,6 @@ Covers:
   AC-3: _validate_polish gate 8c rejects Verdict that ignores fixture-specific Risk.
   AC-5: evidence_pack.py prompt carries the VERDICT-CITES-RISK instruction.
 """
-from __future__ import annotations
 
 import os
 import sys

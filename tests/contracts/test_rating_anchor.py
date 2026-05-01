@@ -1,10 +1,18 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-NARRATIVE-RATING-ANCHOR-01 — Kill fabricated Elo/Glicko-2 numbers in prose.
 
 Covers:
   AC-2: Unit tests for _find_rating_anchor_violations (8 cases a-h).
   AC-3: _validate_polish gate 8d rejects polish containing ratings not in evidence pack.
 """
-from __future__ import annotations
 
 import os
 import sys

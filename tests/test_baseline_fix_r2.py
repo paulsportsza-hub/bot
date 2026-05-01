@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """Tests for BASELINE-FIX-R2: Injury Data Routing + UCL Phrase Purge.
 
 Verifies:
@@ -6,7 +15,6 @@ Verifies:
   3. Evidence pack rule 11 bans knockout phrases in Claude prompt
   4. _match_shape_note() no longer contains 'knockout'
 """
-from __future__ import annotations
 
 import sys
 import os

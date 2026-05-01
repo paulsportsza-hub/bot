@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1.
 
 The verdict polish prompt MUST carry the 4 mandatory anchors (HOME NICKNAME,
@@ -7,7 +16,6 @@ EVIDENCE PACK split sentinel) so Rule 22 prompt-cache discipline holds.
 
 Both branches (edge + match-preview) carry the same block.
 """
-from __future__ import annotations
 
 import os
 import sys

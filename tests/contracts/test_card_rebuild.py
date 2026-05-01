@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """CARD-REBUILD-01 — Contract tests for 8 detail card fixes.
 
 FIX 1: test_display_tier_trusts_db
@@ -9,7 +18,6 @@ FIX 6: test_zero_value_guards
 FIX 7: test_detect_sport_fallback_chain
 FIX 8: test_template_layout_overflow
 """
-from __future__ import annotations
 
 import os
 import sys

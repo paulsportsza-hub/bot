@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-W84-PREMIUM-NO-FALLBACK-01 — Diamond+Gold MUST NOT silently drop to W82.
 
 When Sonnet polish fails on a Diamond/Gold tier card, the new fallback chain is:
@@ -26,7 +35,6 @@ Tests:
 - test_premium_tier_intercept_decision_diamond_gold_intercept: simulation —
   Diamond+Gold polish failures trigger the intercept branch.
 """
-from __future__ import annotations
 
 import asyncio
 import os

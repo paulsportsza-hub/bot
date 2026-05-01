@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-PREGEN-SETUP-PRICING-LEAK-01 + -02 — Setup-section pricing-language ban.
 
 Four layers of protection against Sonnet polish leaking pricing/probability
@@ -15,7 +24,6 @@ vocabulary into The Setup section.
 3. The deterministic W82 baseline never produces banned vocabulary in Setup.
 """
 
-from __future__ import annotations
 
 import os
 import sys

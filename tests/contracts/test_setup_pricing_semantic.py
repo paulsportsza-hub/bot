@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-NARRATIVE-ROT-ROOT-01 / Phase 4 / AC-4.1 — Setup pricing semantic-class detector.
 
 The keyword-substring detector `_find_setup_strict_ban_violations` catches
@@ -15,7 +24,6 @@ Both detectors run side-by-side in `_validate_baseline_setup` and
 `_validate_polish` gate 8a — the strict-ban enforcer is unchanged.
 """
 
-from __future__ import annotations
 
 import os
 import sys

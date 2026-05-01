@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-PREMIUM-POSTWRITE-PROTECTION-01 — AC-1.
 
 The Setup-section prompt MUST tighten the pricing-language ban so Sonnet polish
@@ -27,7 +36,6 @@ setup_validated=0 events for premium tier, zero _find_stale_setup_patterns
 matches, zero post-commit DELETEs.
 """
 
-from __future__ import annotations
 
 import os
 import sys

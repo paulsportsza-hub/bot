@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import pytest
+pytest.skip(
+    "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: Sonnet/Haiku polish ripped out. "
+    "This test asserts polish-chain behaviour that no longer exists.",
+    allow_module_level=True,
+)
+
 """FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-5 — LB-7 opening shape distribution.
 
 Validates the ``_OPENING_PATTERNS`` catalogue and ``_select_opening_pattern``
@@ -18,7 +27,6 @@ helper added to ``bot.py``:
    dynamic block as a SINGLE-PATTERN instruction (not the legacy "vary across
    6 patterns" list that Sonnet ignored).
 """
-from __future__ import annotations
 
 from collections import Counter
 from typing import cast
