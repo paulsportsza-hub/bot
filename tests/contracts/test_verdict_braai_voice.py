@@ -114,7 +114,13 @@ def _make_spec() -> NarrativeSpec:
 
 
 def test_prompt_contains_braai_voice_block_match_preview(_patched_evidence_pack):
-    """Match-preview branch carries the ⛔ BRAAI VOICE marker + 4 BAD examples."""
+    """Match-preview branch carries the ⛔ BRAAI VOICE marker + AC-1 examples.
+
+    FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1
+    rewrote the static block to verdict-only with 3 new GOOD examples
+    (Slot/Anfield, Guardiola/Etihad, Pereira/Forest) + 3 new BAD examples
+    (data has a cleaner read, is the lean, Standard stake on X. Back X.).
+    """
     from evidence_pack import format_evidence_prompt
 
     pack = _patched_evidence_pack
@@ -122,19 +128,18 @@ def test_prompt_contains_braai_voice_block_match_preview(_patched_evidence_pack)
     prompt = format_evidence_prompt(pack, spec, match_preview=True)
     assert isinstance(prompt, str)
     assert "⛔ BRAAI VOICE — NOT QUANT VOICE" in prompt
-    # 4 BAD examples from brief AC-2.
-    assert "the supporting signals back the read" in prompt
-    assert "the bookmaker has slipped" in prompt
-    assert "the reads flag stays in view" in prompt
-    assert "Standard stake on the case as it stands" in prompt
-    # 3 GOOD examples from brief AC-2.
-    assert "Liverpool at 1.97 is too good" in prompt
-    assert "Brighton at 1.38 against a Wolves side" in prompt
-    assert "Pereira's Forest at 2.52" in prompt
+    # 3 BAD examples from AC-1.
+    assert "data has a cleaner read on X" in prompt
+    assert "is the lean" in prompt
+    assert "Standard stake on X. Back X." in prompt
+    # 3 GOOD examples from AC-1.
+    assert "Slot's Reds at home in front of Anfield" in prompt
+    assert "Guardiola's Sky Blues at the Etihad" in prompt
+    assert "Pereira's Forest at the City Ground" in prompt
 
 
 def test_prompt_contains_braai_voice_block_edge_branch(_patched_evidence_pack):
-    """Edge branch carries the same braai voice marker + examples."""
+    """Edge branch carries the same braai voice marker + AC-1 examples."""
     from evidence_pack import format_evidence_prompt
 
     pack = _patched_evidence_pack
@@ -142,8 +147,8 @@ def test_prompt_contains_braai_voice_block_edge_branch(_patched_evidence_pack):
     prompt = format_evidence_prompt(pack, spec, match_preview=False)
     assert isinstance(prompt, str)
     assert "⛔ BRAAI VOICE — NOT QUANT VOICE" in prompt
-    assert "the supporting signals back the read" in prompt
-    assert "Liverpool at 1.97 is too good" in prompt
+    assert "data has a cleaner read on X" in prompt
+    assert "Slot's Reds at home in front of Anfield" in prompt
 
 
 def test_braai_voice_block_sits_above_evidence_pack_split(_patched_evidence_pack):
@@ -171,14 +176,30 @@ def test_braai_voice_block_sits_above_evidence_pack_split(_patched_evidence_pack
 
 
 def test_action_verb_cluster_listed_in_prompt(_patched_evidence_pack):
+    """FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1:
+    the action-close instruction lists the 9 imperatives verbatim
+    (Back / Bet on / Put your money on / Get on / Take / Lean on / Ride /
+    Hammer it on / Smash)."""
     from evidence_pack import format_evidence_prompt
 
     pack = _patched_evidence_pack
     spec = _make_spec()
     prompt = format_evidence_prompt(pack, spec, match_preview=False)
-    # Brief AC-2 instructs the prompt to list the cluster verbatim.
-    assert "ACTION VERB CLUSTER" in prompt
-    assert "get on, back, take, worth, ride, leave" in prompt
+    assert "CLOSE WITH ACTION" in prompt
+    for imperative in (
+        "Back",
+        "Bet on",
+        "Put your money on",
+        "Get on",
+        "Take",
+        "Lean on",
+        "Ride",
+        "Hammer it on",
+        "Smash",
+    ):
+        assert imperative in prompt, (
+            f"imperative '{imperative}' missing from action-close cluster"
+        )
 
 
 # ── W82 baseline rendering tests (AC-2.2) ────────────────────────────────────

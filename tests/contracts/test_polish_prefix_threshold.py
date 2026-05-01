@@ -221,35 +221,32 @@ def test_split_sentinel_preserved() -> None:
 
 
 def test_static_block_carries_moved_content() -> None:
-    """AC-2: the 4 named blocks per INV-G4 live above the split.
-
-    Structural test — confirms the OUTPUT FORMAT section descriptions, BANNED
-    PHRASES (match_preview only), and VERDICT BODY EXCLUSION blocks are now
-    in the cacheable static prefix. These were below the split pre-fix.
+    """FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1:
+    the polish path now produces verdict-only output. The static prefix carries
+    the new STYLE & OUTPUT GUIDE wrapper + the 4-anchor verdict spec block
+    (MANDATORY ANCHORS, CLOSE WITH ACTION, GOOD/BAD examples, no-hedging /
+    no-telemetry rules) — Setup/Edge/Risk section instructions are stripped.
     """
     from evidence_pack import format_evidence_prompt
 
-    # Match-preview branch carries the BANNED PHRASES list; edge branch does not.
     for sport, match_preview, expected_in_static in [
         ("soccer", False, [
             "STYLE & OUTPUT GUIDE",
-            "📋 <b>The Setup</b>",
-            "🎯 <b>The Edge</b>",
-            "⚠️ <b>The Risk</b>",
-            "🏆 <b>Verdict</b>",
-            "VERDICT BODY EXCLUSION",
-            "STRICT BAN",
-            "Verdict cites: outcome + price + bookmaker by name",
+            "⛔ BRAAI VOICE — NOT QUANT VOICE.",
+            "MANDATORY ANCHORS",
+            "CLOSE WITH ACTION",
+            "Slot's Reds at home in front of Anfield",
+            "data has a cleaner read on X",
+            "NO HEDGING OPENERS",
+            "NO TELEMETRY VOCAB",
         ]),
         ("soccer", True, [
             "STYLE & OUTPUT GUIDE",
-            "📋 <b>The Setup</b>",
-            "🎯 <b>The Edge</b>",
-            "⚠️ <b>The Risk</b>",
-            "🏆 <b>Verdict</b>",
-            "VERDICT BODY EXCLUSION",
-            "BANNED PHRASES (automated rejection if used)",
-            "VERDICT QUALITY CONSTRAINT",
+            "⛔ BRAAI VOICE — NOT QUANT VOICE.",
+            "MANDATORY ANCHORS",
+            "CLOSE WITH ACTION",
+            "Slot's Reds at home in front of Anfield",
+            "data has a cleaner read on X",
         ]),
     ]:
         pack = _minimal_pack(sport=sport)
@@ -261,8 +258,7 @@ def test_static_block_carries_moved_content() -> None:
         for marker in expected_in_static:
             assert marker in static, (
                 f"Marker {marker!r} missing from static prefix for "
-                f"sport={sport} match_preview={match_preview} — block did "
-                "not move above the EVIDENCE PACK split"
+                f"sport={sport} match_preview={match_preview}"
             )
 
 

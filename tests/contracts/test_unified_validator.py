@@ -162,6 +162,14 @@ def test_clean_narrative_passes(evidence_pack_clean) -> None:
 # ── Test 3: Anfield in narrative → CRITICAL venue_leak ─────────────────────
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "Gate 1 narrative_html venue scan was dropped; verdict-only Gate 6 "
+        "covers verdict_html. See test_validator_scope_verdict_only.py "
+        "test_verdict_venue_gate_fires_on_unverified_venue for the live coverage."
+    )
+)
 def test_narrative_anfield_critical_venue_leak() -> None:
     narrative = _narrative(setup="The clash at Anfield will be tough for the visitors.")
     r = _validate_narrative_for_persistence(
@@ -181,6 +189,13 @@ def test_narrative_anfield_critical_venue_leak() -> None:
 # ── Test 4: Goodison Park → CRITICAL venue_leak (LB-1 regression) ──────────
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "narrative_html venue scan was dropped; verdict-only Gate 6 covers "
+        "verdict_html."
+    )
+)
 def test_narrative_goodison_critical_venue_leak() -> None:
     """LB-1 closure regression: Goodison was the canonical leak case. Everton
     moved to Hill Dickinson Stadium in August 2025 (CLAUDE.md Rule 2)."""
@@ -202,6 +217,13 @@ def test_narrative_goodison_critical_venue_leak() -> None:
 # ── Test 5: "Elo-implied 70%" → CRITICAL setup_pricing (LB-4) ──────────────
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "Gate 2a/2b setup_pricing was scoped to long-form Setup section. "
+        "Polish path is verdict-only now."
+    )
+)
 def test_setup_elo_implied_critical_pricing() -> None:
     narrative = _narrative(
         setup="Arsenal are Elo-implied 70% favourites at home. Strong showings recently."
@@ -222,6 +244,12 @@ def test_setup_elo_implied_critical_pricing() -> None:
 # ── Test 6: "84% to win" → CRITICAL setup_pricing ─────────────────────────
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "Gate 2a/2b setup_pricing was scoped to long-form Setup section."
+    )
+)
 def test_setup_integer_probability_critical_pricing() -> None:
     narrative = _narrative(
         setup="Arsenal have an 84% probability of winning this fixture at home."
@@ -243,10 +271,16 @@ def test_setup_integer_probability_critical_pricing() -> None:
 # ── Test 7: "Amorim's United" + Carrick evidence → manager_hallucination ──
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "Gate 3 manager-hallucination on all-sections (narrative_html) was "
+        "dropped. Verdict-only manager validation stays — see "
+        "test_validator_scope_verdict_only.py for the live coverage."
+    )
+)
 def test_amorim_united_with_carrick_evidence_critical(evidence_pack_man_utd_carrick) -> None:
-    """LB-2 closure regression. Phase 4 publishes
-    `validate_manager_names_in_all_sections`. When that helper isn't available
-    (Phase 4 still landing) we skip the assertion — the validator is no-op."""
+    """Superseded — verdict-only manager validation is now the live gate."""
     narrative = _narrative(
         setup="Amorim's United come into this with momentum.",
         verdict="Amorim's side back to winning ways.",
@@ -276,6 +310,13 @@ def test_amorim_united_with_carrick_evidence_critical(evidence_pack_man_utd_carr
 # ── Test 8: "Nuno's side" + Pereira evidence → manager_hallucination (LB-3) ─
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "Gate 3 manager-hallucination on all-sections (narrative_html) was "
+        "dropped. Verdict-only manager validation stays."
+    )
+)
 def test_nuno_forest_with_pereira_evidence_critical(evidence_pack_forest_pereira) -> None:
     narrative = _narrative(setup="Nuno's side will look to grind it out.")
     fake_violations = [_FakeManagerViolation(name="Nuno", section="setup")]
@@ -301,6 +342,14 @@ def test_nuno_forest_with_pereira_evidence_critical(evidence_pack_forest_pereira
 # ── Test 9: Fabricated H2H + empty matches → CRITICAL claim_h2h_fabricated (LB-5)
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "Gate 4 claim verification (claim_h2h_fabricated) was scoped to "
+        "evidence-pack-vs-narrative_html sections; no longer reachable now "
+        "that the polish path is verdict-only."
+    )
+)
 def test_fabricated_h2h_critical(evidence_pack_clean) -> None:
     """When evidence_pack.h2h.matches is empty, narrative MUST NOT cite H2H stats."""
     narrative = _narrative(
@@ -334,6 +383,13 @@ def test_fabricated_h2h_critical(evidence_pack_clean) -> None:
 # ── Test 10: WWWLD claim + data_available=False → MAJOR claim_evidence_mismatch ──
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "Gate 4 claim_evidence_mismatch was scoped to long-form sections; "
+        "polish path is verdict-only now."
+    )
+)
 def test_form_claim_no_evidence_major(evidence_pack_clean) -> None:
     """LB-B5 closure: form citation without backing data → MAJOR (not CRITICAL)."""
     narrative = _narrative(setup="Arsenal arrive on a WWWLD form streak.")
@@ -369,6 +425,14 @@ def test_form_claim_no_evidence_major(evidence_pack_clean) -> None:
 # ── Test 11: Premium tier (gold) + CRITICAL refuse path log marker ──────────
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "narrative_html venue scan (Gate 1) was dropped; this test asserted "
+        "the ValidatorVenueLeak log marker on narrative_html input. The "
+        "verdict-only Gate 6 covers verdict_html — see test_validator_scope_verdict_only.py."
+    )
+)
 def test_premium_critical_refuse_log_marker(caplog) -> None:
     narrative = _narrative(setup="A clash at Anfield will be tough.")
     # The validator only reports — but we assert the log marker text exists
@@ -425,6 +489,14 @@ def test_premium_major_fails_result() -> None:
 # ── Test 13: Non-premium (silver) + CRITICAL → refuse ──────────────────────
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2: "
+        "narrative_html venue scan (Gate 1) was dropped; this test relied on "
+        "Goodison Park leak detection in narrative_html. Verdict-only Gate 6 "
+        "covers the verdict surface."
+    )
+)
 def test_non_premium_critical_refuse() -> None:
     narrative = _narrative(setup="Trip to Goodison Park is tricky.")
     r = _validate_narrative_for_persistence(

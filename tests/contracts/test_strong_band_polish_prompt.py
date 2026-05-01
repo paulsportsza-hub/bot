@@ -1,18 +1,25 @@
 """FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 — AC-2 contract tests.
 
-Validates that `evidence_pack.format_evidence_prompt` injects the
-⛔ STRONG-BAND TIER (Diamond / Gold) — TONE LOCK block into the static
-cache prefix on BOTH branches (match_preview and edge).
-
-The block sits ABOVE the EVIDENCE PACK split sentinel so it is reused
-across every polish call without re-billing the prompt prefix
-(Rule 22 invariant).
+Superseded by FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01)
+AC-1: the polish prompt now produces verdict-only output and the legacy
+multi-section TONE LOCK block was stripped along with the Setup/Edge/Risk
+instructions. Strong-band tone enforcement moved to validator Gate 9 on
+verdict_html only — see tests/contracts/test_strong_band_tone_lock.py.
 
 Brief: FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 (29 April 2026)
 """
 from __future__ import annotations
 
 import pytest
+
+pytestmark = pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1: "
+        "polish prompt is verdict-only; legacy TONE LOCK section block stripped. "
+        "Strong-band scan stays in validator Gate 9 (verdict_html only) — "
+        "see test_strong_band_tone_lock.py for the live coverage."
+    )
+)
 
 from evidence_pack import EvidencePack, format_evidence_prompt
 from narrative_spec import NarrativeSpec

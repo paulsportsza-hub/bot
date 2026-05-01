@@ -39,6 +39,20 @@ from config import ensure_scrapers_importable
 
 ensure_scrapers_importable()
 
+# FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1
+# strips the Setup/Edge/Risk section instructions entirely. The polish path
+# is verdict-only; the Setup-section pricing-language ban tests below now
+# target dropped behaviour. Setup-pricing leakage is no longer a possible
+# failure mode of this prompt.
+pytestmark = pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1: "
+        "polish prompt is verdict-only; Setup section instructions stripped "
+        "and the matching validator gate dropped (AC-2). Section-pricing "
+        "leakage is no longer reachable by this prompt path."
+    )
+)
+
 
 def _minimal_pack(sport: str = "soccer", league: str = "Premier League"):
     """Build a minimal EvidencePack for prompt-rendering."""

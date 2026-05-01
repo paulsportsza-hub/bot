@@ -365,25 +365,22 @@ def test_e2e_clean_diamond_passes():
     assert sb_hedging == []
 
 
-def test_e2e_gold_narrative_section_leak_fires():
-    """Gate 9 fires on cautious-band leak in narrative_html (e.g. Setup section).
+def test_e2e_gold_verdict_cautious_band_leak_fires():
+    """Gate 9 fires on cautious-band leak in verdict_html on a Gold card.
 
-    The brief specifies tier-band-aware scan applies to BOTH narrative_html
-    AND verdict_html — a Gold card whose Setup section reads "the form
-    picture is unclear" is just as broken as one with that phrase in the
-    Verdict.
+    FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+    the narrative_html scope of Gate 9 was dropped; only the verdict_html
+    surface is scanned now (the polish path no longer writes the long-form
+    Setup/Edge/Risk sections). Test reframed to feed the cautious-band
+    leak through verdict_html instead.
     """
-    narrative_html = (
-        "📋 <b>The Setup</b>\n"
-        "The form picture is unclear on this one — without recent form or "
-        "head-to-head context, this is hard to read.\n\n"
-        "🎯 <b>The Edge</b>\nSomething about pricing.\n\n"
-        "⚠️ <b>The Risk</b>\nA risk factor.\n\n"
-        "🏆 <b>Verdict</b>\nBack Liverpool at 1.97 with Supabets."
+    verdict_html = (
+        "Slot's Reds at home, the form picture is unclear on this one — "
+        "Back Liverpool at 1.97 with Supabets."
     )
     content = {
-        "narrative_html": narrative_html,
-        "verdict_html": "",
+        "narrative_html": "",
+        "verdict_html": verdict_html,
         "match_id": "liverpool_vs_chelsea_2026-04-30",
         "narrative_source": "w84-haiku-fallback",
     }
@@ -395,7 +392,7 @@ def test_e2e_gold_narrative_section_leak_fires():
     assert result.severity == "CRITICAL"
     sb_failures = [f for f in result.failures if f.gate == "strong_band_tone"]
     assert len(sb_failures) >= 1
-    assert any("narrative_html" in f.section for f in sb_failures)
+    assert any("verdict_html" in f.section for f in sb_failures)
 
 
 # ── 7. Result idempotence (AC-1.7) ───────────────────────────────────────────

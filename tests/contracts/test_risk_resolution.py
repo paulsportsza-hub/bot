@@ -202,6 +202,15 @@ def test_validate_polish_rejects_when_verdict_ignores_risk():
 
 # ── AC-5: prompt contains VERDICT-CITES-RISK instruction ────────────────────
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1: "
+        "Setup/Edge/Risk section instructions stripped. The VERDICT-CITES-RISK "
+        "instruction was part of the long-form Verdict-section block, which "
+        "the polish path no longer emits. Verdict polish is now anchor-driven "
+        "(see test_verdict_prompt_anchors.py)."
+    )
+)
 def test_edge_prompt_contains_verdict_cites_risk_instruction():
     """format_evidence_prompt() edge branch must contain VERDICT-CITES-RISK block."""
     from evidence_pack import EvidencePack, format_evidence_prompt
@@ -237,6 +246,14 @@ def test_edge_prompt_contains_verdict_cites_risk_instruction():
     )
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1: "
+        "Setup/Edge/Risk section instructions stripped from polish prompt "
+        "(both branches). Verdict polish is anchor-driven; see "
+        "test_verdict_prompt_anchors.py."
+    )
+)
 def test_match_preview_prompt_contains_verdict_cites_risk_instruction():
     """format_evidence_prompt() match_preview branch must contain VERDICT-CITES-RISK block."""
     from evidence_pack import EvidencePack, format_evidence_prompt

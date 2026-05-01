@@ -247,11 +247,19 @@ _CLEAN_GOLD_NARRATIVE = (
 )
 
 
-def test_premium_telemetry_in_narrative_html_is_critical():
-    """Gold/Diamond tier with telemetry vocabulary in narrative_html → CRITICAL."""
+def test_premium_telemetry_in_verdict_html_is_critical():
+    """Gold/Diamond tier with telemetry vocabulary in verdict_html → CRITICAL.
+
+    FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+    the narrative_html scope of Gate 8 was dropped (no long-form sections
+    written). The verdict_html scan stays in force.
+    """
     content = {
-        "narrative_html": _GOLD_NARRATIVE_WITH_TELEMETRY,
-        "verdict_html": "Take Liverpool win at 1.97.",
+        "narrative_html": "",
+        "verdict_html": (
+            "Slot's Reds at home — the supporting signals back the read. "
+            "Take Liverpool at 1.97."
+        ),
         "match_id": "liverpool_vs_chelsea_2026-04-30",
         "narrative_source": "w84",
     }
@@ -265,10 +273,18 @@ def test_premium_telemetry_in_narrative_html_is_critical():
 
 
 def test_non_premium_telemetry_is_major():
-    """Silver/Bronze tier with telemetry vocabulary → MAJOR (quarantine, not refuse)."""
+    """Silver/Bronze tier with telemetry vocabulary in verdict_html → MAJOR.
+
+    FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+    narrative_html scope dropped; the test now feeds telemetry through
+    verdict_html directly so the verdict-only Gate 8 fires.
+    """
     content = {
-        "narrative_html": _GOLD_NARRATIVE_WITH_TELEMETRY,
-        "verdict_html": "Take this side at 2.50.",
+        "narrative_html": "",
+        "verdict_html": (
+            "Slot's Reds at home — the supporting signals back the read. "
+            "Take Liverpool at 2.50 with Supabets."
+        ),
         "match_id": "team_a_vs_team_b_2026-04-30",
         "narrative_source": "w82",
     }

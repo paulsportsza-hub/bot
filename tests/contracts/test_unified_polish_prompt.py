@@ -370,18 +370,15 @@ def test_data_availability_h2h_true_allows_citing():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1: "
+        "Setup section instructions stripped from polish prompt. The price-"
+        "free-zone block is no longer emitted; the polish path is verdict-only."
+    )
+)
 def test_setup_price_free_zone_in_every_branch():
-    from evidence_pack import format_evidence_prompt
-
-    pack = _build_pack()
-    spec = _build_spec()
-    full_edge = format_evidence_prompt(pack, spec)
-    full_preview = format_evidence_prompt(pack, spec, match_preview=True)
-
-    for full in (full_edge, full_preview):
-        assert "SETUP IS A PRICE-FREE ZONE" in full, (
-            "Setup pricing ban must appear in BOTH edge and preview branches"
-        )
+    """Superseded — see test_verdict_prompt_anchors.py for the new spec."""
 
 
 # ---------------------------------------------------------------------------

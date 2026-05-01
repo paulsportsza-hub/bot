@@ -86,55 +86,28 @@ def _minimal_spec(home: str = "Arsenal", away: str = "Fulham"):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1: "
+        "Setup/Edge/Risk section instructions stripped from polish prompt. "
+        "The 'STRICT BAN' Setup-section block is no longer emitted. The "
+        "polish path now produces verdict-only output and the new anchor "
+        "block is covered by tests/contracts/test_verdict_prompt_anchors.py."
+    )
+)
 def test_setup_instruction_contains_strict_ban_block():
-    """format_evidence_prompt() Setup section must enumerate the 11 banned tokens
-    + the literal phrase 'STRICT BAN'."""
-    from evidence_pack import format_evidence_prompt
+    """Superseded — see test_verdict_prompt_anchors.py for the new spec."""
 
-    prompt = format_evidence_prompt(_minimal_pack(), _minimal_spec())
 
-    assert "STRICT BAN" in prompt, (
-        "polish prompt missing 'STRICT BAN' anchor — prompt drift detected"
+@pytest.mark.skip(
+    reason=(
+        "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1: "
+        "Setup/Edge/Risk section instructions stripped from polish prompt "
+        "(both branches). Match-preview also produces verdict-only output."
     )
-
-    # Every banned token must appear inside the prompt.
-    for token in _BANNED_TOKENS:
-        assert token in prompt, f"banned-token '{token}' missing from polish prompt"
-
-    # The Setup section must NOT instruct Sonnet to pivot to odds/line-movements.
-    # Locate Setup-section instruction span (📋 to 🎯).
-    setup_idx = prompt.find("📋 <b>The Setup</b>")
-    edge_idx = prompt.find("🎯 <b>The Edge</b>")
-    assert setup_idx != -1 and edge_idx != -1
-    setup_block = prompt[setup_idx:edge_idx]
-    assert "Do NOT pivot to odds structure or line movements" in setup_block, (
-        "Setup section is missing the explicit 'Do NOT pivot to odds structure' clause"
-    )
-
-
+)
 def test_match_preview_branch_strict_ban_block():
-    """FIX-02 AC-5: format_evidence_prompt(match_preview=True) must also carry
-    the STRICT BAN block in The Setup section. The match_preview branch was
-    overlooked in FIX-01 and patched in FIX-02 (evidence_pack.py:2367)."""
-    from evidence_pack import format_evidence_prompt
-
-    prompt = format_evidence_prompt(
-        _minimal_pack(), _minimal_spec(), match_preview=True
-    )
-
-    assert "STRICT BAN" in prompt, (
-        "match_preview branch missing 'STRICT BAN' anchor — FIX-02 prompt drift"
-    )
-    for token in _BANNED_TOKENS:
-        assert token in prompt, f"banned-token '{token}' missing from match_preview prompt"
-
-    setup_idx = prompt.find("📋 <b>The Setup</b>")
-    edge_idx = prompt.find("🎯 <b>The Edge</b>")
-    assert setup_idx != -1 and edge_idx != -1
-    setup_block = prompt[setup_idx:edge_idx]
-    assert "Do NOT pivot to odds structure or line movements" in setup_block, (
-        "match_preview Setup section missing 'Do NOT pivot' clause"
-    )
+    """Superseded — see test_verdict_prompt_anchors.py for the new spec."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────

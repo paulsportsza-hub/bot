@@ -238,28 +238,28 @@ _STRONG_BAND_INCOMPATIBLE_RE: tuple[tuple[re.Pattern[str], str], ...] = tuple(
 #     Missing both → CRITICAL.
 #   - Bronze: action verb required; team / odds optional.
 #     Missing action verb → CRITICAL.
+# FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2.
+# Tighten the verdict closure rule to imperative-only. The declarative branch
+# ("is the pick", "is the play") was acceptable under
+# FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01's broadening, but the current brief
+# rolls that back: declarative recommendations are no longer treated as a
+# valid action close. The 9-imperative cluster matches the brief AC-1
+# verdict-shape spec emitted in `evidence_pack.format_evidence_prompt`.
 _VERDICT_ACTION_VERBS: tuple[str, ...] = (
-    # Imperative cluster (locked from b585c69 + verdict-generator skill rubric).
     r"back",
-    r"take",
     r"bet\s+on",
+    r"put\s+your\s+money\s+on",
     r"get\s+on",
-    r"put\s+(?:your\s+)?money\s+on",
-    r"hammer\s+it\s+on",
-    r"get\s+behind",
+    r"take",
     r"lean\s+on",
     r"ride",
+    r"hammer\s+it\s+on",
     r"smash",
 )
 
-# AC-1 broadening (this brief): the action verb cluster regex must accept BOTH
-# imperative and declarative shapes. Manchester City example "Guardiola's City
-# are the pick at Supabets 1.36." passes via the declarative branch; the
-# Liverpool-Chelsea Setup-style closer (no verb at all) still fails.
 _VERDICT_ACTION_RE: re.Pattern[str] = re.compile(
-    r"\b(?:back|take|bet\s+on|get\s+on|put\s+your\s+money|hammer\s+it|"
-    r"get\s+behind|lean\s+on|ride|smash)\b"
-    r"|\bis\s+the\s+(?:pick|play|call|lean|bet|value)\b",
+    r"\b(?:back|bet\s+on|put\s+your\s+money\s+on|get\s+on|take|"
+    r"lean\s+on|ride|hammer\s+it\s+on|smash)\b",
     re.IGNORECASE,
 )
 
@@ -823,169 +823,49 @@ def _validate_narrative_for_persistence(
     except ImportError:
         BANNED_NARRATIVE_PHRASES = []  # type: ignore[assignment]
 
-    # ── Gate 1: Venue leaks in narrative_html (LB-1 closure) ─────────────────
-    # BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01: verified-list mode.
-    # find_venue_leaks(text, pack) allows pack.venue (case-insensitive) and the
-    # canonical stadiums.json fallback when pack.venue is empty. Cross-fixture
-    # inventions of curated venues remain a leak.
-    if narrative_html:
-        venues = find_venue_leaks(narrative_html, evidence_pack)
-        if venues:
-            failures.append(
-                ValidationFailure(
-                    gate="venue_leak",
-                    severity="CRITICAL",
-                    detail=f"venues={venues!r}",
-                    section=_SECTION_NARRATIVE,
-                )
-            )
-            log.warning(
-                "FIX-NARRATIVE-ROT-ROOT-01 ValidatorVenueLeak match_id=%s "
-                "source=%s venues=%r",
-                match_id, source_label, venues,
-            )
+    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+    # Gates 1 (venue narrative_html scan), 2a/2b (setup_pricing), 3 (manager
+    # hallucination on all-sections), 4 (claim verification), and 11
+    # (vague_content) are dropped. They targeted long-form Setup/Edge/Risk
+    # narrative_html sections that the polish path no longer writes
+    # (BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 + this brief AC-1). The
+    # verdict-only equivalents below remain in force.
 
-    # ── Gate 2: Setup-section pricing leaks (LB-4 closure) ──────────────────
-    # Two detectors: existing strict-ban (token + decimal + integer-prob) and the
-    # Phase 4 semantic detector for "Elo-implied 70%" / "84% to win" patterns.
-    if narrative_html:
-        if _find_setup_strict_ban is not None:
+    # ── Gate 3 (verdict-only): Manager validation against coaches.json ──────
+    # Manager hallucination on the verdict surface still matters — the
+    # 4-anchor verdict spec mandates HOME/AWAY COACH surnames taken from
+    # CANONICAL MANAGERS. validate_manager_names returns False when the
+    # verdict introduces a name not in evidence_pack — flag CRITICAL.
+    if verdict_html and evidence_pack is not None:
+        try:
+            from narrative_spec import validate_manager_names as _validate_mgr_verdict
+        except ImportError:
+            _validate_mgr_verdict = None  # type: ignore[assignment]
+        if _validate_mgr_verdict is not None:
             try:
-                strict_reasons = _find_setup_strict_ban(narrative_html)
+                mgr_ok = _validate_mgr_verdict(verdict_html, evidence_pack)
             except Exception as exc:
-                strict_reasons = []
+                mgr_ok = True
                 log.warning(
-                    "FIX-NARRATIVE-ROT-ROOT-01 ValidatorStrictBanFailed "
-                    "match_id=%s err=%s",
+                    "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 "
+                    "ValidatorVerdictManagerCheckFailed match_id=%s err=%s",
                     match_id, exc,
                 )
-            if strict_reasons:
+            if not mgr_ok:
                 failures.append(
                     ValidationFailure(
-                        gate="setup_pricing",
+                        gate="manager_hallucination",
                         severity="CRITICAL",
-                        detail=f"reasons={strict_reasons!r}",
-                        section="setup",
+                        detail=f"verdict manager hallucination; sample={verdict_html[:120]!r}",
+                        section=_SECTION_VERDICT_HTML,
                     )
                 )
                 log.warning(
-                    "FIX-NARRATIVE-ROT-ROOT-01 ValidatorSetupPricingStrict "
-                    "match_id=%s source=%s reasons=%r",
-                    match_id, source_label, strict_reasons,
+                    "FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 "
+                    "ValidatorVerdictManagerHallucination match_id=%s "
+                    "source=%s tier=%s sample=%r",
+                    match_id, source_label, edge_tier, verdict_html[:120],
                 )
-
-        if _find_setup_pricing_semantic_violations is not None:
-            try:
-                semantic_reasons = _find_setup_pricing_semantic_violations(narrative_html)
-            except Exception as exc:
-                semantic_reasons = []
-                log.warning(
-                    "FIX-NARRATIVE-ROT-ROOT-01 ValidatorSetupSemanticFailed "
-                    "match_id=%s err=%s",
-                    match_id, exc,
-                )
-            if semantic_reasons:
-                failures.append(
-                    ValidationFailure(
-                        gate="setup_pricing_semantic",
-                        severity="CRITICAL",
-                        detail=f"reasons={semantic_reasons!r}",
-                        section="setup",
-                    )
-                )
-                log.warning(
-                    "FIX-NARRATIVE-ROT-ROOT-01 ValidatorSetupPricingSemantic "
-                    "match_id=%s source=%s reasons=%r",
-                    match_id, source_label, semantic_reasons,
-                )
-
-    # ── Gate 3: Manager hallucination across all sections (LB-2/LB-3) ───────
-    if narrative_html and evidence_pack is not None and validate_manager_names_in_all_sections is not None:
-        try:
-            mgr_violations = validate_manager_names_in_all_sections(
-                narrative_html, evidence_pack
-            )
-        except Exception as exc:
-            mgr_violations = []
-            log.warning(
-                "FIX-NARRATIVE-ROT-ROOT-01 ValidatorManagerCheckFailed "
-                "match_id=%s err=%s",
-                match_id, exc,
-            )
-        if mgr_violations:
-            # Phase 4 returns a list of `ManagerViolation` namedtuples — the
-            # detail string is `"<count> hallucinated managers: <names>"`.
-            try:
-                names = [getattr(v, "name", str(v)) for v in mgr_violations]
-            except Exception:
-                names = [str(mgr_violations)]
-            failures.append(
-                ValidationFailure(
-                    gate="manager_hallucination",
-                    severity="CRITICAL",
-                    detail=f"names={names!r}",
-                    section=_SECTION_NARRATIVE,
-                )
-            )
-            log.warning(
-                "FIX-NARRATIVE-ROT-ROOT-01 ValidatorManagerHallucination "
-                "match_id=%s source=%s names=%r",
-                match_id, source_label, names,
-            )
-
-    # ── Gate 4: Claim verification against evidence (LB-5 / LB-B5) ──────────
-    if narrative_html and evidence_pack is not None and validate_claims_against_evidence is not None:
-        try:
-            claim_violations = validate_claims_against_evidence(
-                narrative_html, evidence_pack
-            )
-        except Exception as exc:
-            claim_violations = []
-            log.warning(
-                "FIX-NARRATIVE-ROT-ROOT-01 ValidatorClaimCheckFailed "
-                "match_id=%s err=%s",
-                match_id, exc,
-            )
-        # Phase 4 returns ClaimViolation namedtuples with a `kind` attribute.
-        # H2H fabrications are CRITICAL (LB-5); form/record mismatches are MAJOR (LB-B5).
-        h2h_violations = []
-        evidence_violations = []
-        for v in claim_violations or []:
-            kind = (getattr(v, "kind", "") or "").lower()
-            if "h2h" in kind:
-                h2h_violations.append(v)
-            else:
-                evidence_violations.append(v)
-        if h2h_violations:
-            details = [getattr(v, "claim", str(v)) for v in h2h_violations]
-            failures.append(
-                ValidationFailure(
-                    gate="claim_h2h_fabricated",
-                    severity="CRITICAL",
-                    detail=f"claims={details!r}",
-                    section=_SECTION_NARRATIVE,
-                )
-            )
-            log.warning(
-                "FIX-NARRATIVE-ROT-ROOT-01 ValidatorClaimH2HFabricated "
-                "match_id=%s source=%s claims=%r",
-                match_id, source_label, details,
-            )
-        if evidence_violations:
-            details = [getattr(v, "claim", str(v)) for v in evidence_violations]
-            failures.append(
-                ValidationFailure(
-                    gate="claim_evidence_mismatch",
-                    severity="MAJOR",
-                    detail=f"claims={details!r}",
-                    section=_SECTION_NARRATIVE,
-                )
-            )
-            log.warning(
-                "FIX-NARRATIVE-ROT-ROOT-01 ValidatorClaimEvidenceMismatch "
-                "match_id=%s source=%s claims=%r",
-                match_id, source_label, details,
-            )
 
     # ── Gate 5: Verdict quality floor ───────────────────────────────────────
     if verdict_html:
@@ -1043,18 +923,20 @@ def _validate_narrative_for_persistence(
                     match_id, source_label, verdict_venues,
                 )
 
-    # ── Gate 7: BANNED_NARRATIVE_PHRASES across narrative + verdict ─────────
-    if BANNED_NARRATIVE_PHRASES:
-        combined = (narrative_html or "") + " " + (verdict_html or "")
-        combined_lower = combined.lower()
-        hits = [p for p in BANNED_NARRATIVE_PHRASES if p.lower() in combined_lower]
+    # ── Gate 7: BANNED_NARRATIVE_PHRASES on verdict_html ────────────────────
+    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+    # narrative_html no longer carries Setup/Edge/Risk sections; scope this
+    # scan to verdict_html only.
+    if BANNED_NARRATIVE_PHRASES and verdict_html:
+        verdict_lower = verdict_html.lower()
+        hits = [p for p in BANNED_NARRATIVE_PHRASES if p.lower() in verdict_lower]
         if hits:
             failures.append(
                 ValidationFailure(
                     gate="banned_phrase",
                     severity="MAJOR",
                     detail=f"hits={hits[:5]!r}",
-                    section=_SECTION_NARRATIVE,
+                    section=_SECTION_VERDICT_HTML,
                 )
             )
             log.warning(
@@ -1063,31 +945,13 @@ def _validate_narrative_for_persistence(
                 match_id, source_label, hits[:5],
             )
 
-    # ── Gate 8: Rule 17 telemetry vocabulary scan ───────────────────────────
-    # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-1.
-    # Scan BOTH verdict_html and narrative_html for telemetry vocabulary leaks.
+    # ── Gate 8: Rule 17 telemetry vocabulary scan on verdict_html ───────────
+    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+    # narrative_html scope dropped (no long-form sections written).
     # Premium tier (Diamond/Gold) hit → CRITICAL (refuse write).
     # Non-premium tier hit → MAJOR (quarantine).
     tier_lower = (edge_tier or "").lower()
     tele_severity: Severity = "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
-    if narrative_html:
-        narr_tele_hits = _check_telemetry_vocabulary(
-            narrative_html, edge_tier, "narrative_html"
-        )
-        if narr_tele_hits:
-            failures.append(
-                ValidationFailure(
-                    gate="telemetry_vocabulary",
-                    severity=tele_severity,
-                    detail=f"hits={narr_tele_hits!r}",
-                    section="narrative_html",
-                )
-            )
-            log.warning(
-                "FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 ValidatorTelemetryVocab "
-                "match_id=%s source=%s tier=%s section=narrative hits=%r",
-                match_id, source_label, edge_tier, narr_tele_hits,
-            )
     if verdict_html:
         v_tele_hits = _check_telemetry_vocabulary(
             verdict_html, edge_tier, "verdict_html"
@@ -1126,29 +990,8 @@ def _validate_narrative_for_persistence(
         # Bronze short-circuits inside `_check_tier_band_tone` (returns
         # empty hits + False hedging).
         sb_severity: Severity = "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
-        # Verdict scan runs against verdict_html (when present) AND the
-        # narrative-embedded verdict section. The narrative_html scan also
-        # picks up violations in The Setup / The Edge / The Risk where
-        # cautious-band vocabulary leaks (e.g. "the form picture is unclear"
-        # in The Setup of a Gold card).
-        if narrative_html:
-            narr_sb_hits, _narr_hedging = _check_tier_band_tone(
-                narrative_html, edge_tier, "narrative_html"
-            )
-            if narr_sb_hits:
-                failures.append(
-                    ValidationFailure(
-                        gate="strong_band_tone",
-                        severity=sb_severity,
-                        detail=f"hits={narr_sb_hits!r}",
-                        section="narrative_html",
-                    )
-                )
-                log.warning(
-                    "FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 ValidatorStrongBandTone "
-                    "match_id=%s source=%s tier=%s section=narrative hits=%r",
-                    match_id, source_label, edge_tier, narr_sb_hits,
-                )
+        # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+        # narrative_html scope dropped. The verdict-only scan stays.
         if verdict_html:
             v_sb_hits, v_hedging = _check_tier_band_tone(
                 verdict_html, edge_tier, "verdict_html"
@@ -1210,47 +1053,12 @@ def _validate_narrative_for_persistence(
                 match_id, source_label, edge_tier, reason_close,
             )
 
-    # ── Gate 11: Vague-content pattern ban (FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01) ─
-    # AC-2: scan narrative_html (Setup, Edge, Risk, Verdict surfaces) and
-    # verdict_html for empty-calorie / generic-prose patterns. Premium tier
-    # hit → CRITICAL; non-premium → MAJOR.
-    vague_severity: Severity = (
-        "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
-    )
-    if narrative_html:
-        narr_vague_hits = _check_vague_content_patterns(narrative_html)
-        if narr_vague_hits:
-            failures.append(
-                ValidationFailure(
-                    gate="vague_content",
-                    severity=vague_severity,
-                    detail=f"hits={narr_vague_hits!r}",
-                    section="narrative_html",
-                )
-            )
-            log.warning(
-                "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 "
-                "ValidatorVagueContent match_id=%s source=%s tier=%s "
-                "section=narrative hits=%r",
-                match_id, source_label, edge_tier, narr_vague_hits,
-            )
-    if verdict_html:
-        v_vague_hits = _check_vague_content_patterns(verdict_html)
-        if v_vague_hits:
-            failures.append(
-                ValidationFailure(
-                    gate="vague_content",
-                    severity=vague_severity,
-                    detail=f"verdict hits={v_vague_hits!r}",
-                    section=_SECTION_VERDICT_HTML,
-                )
-            )
-            log.warning(
-                "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 "
-                "ValidatorVagueContent match_id=%s source=%s tier=%s "
-                "section=verdict_html hits=%r",
-                match_id, source_label, edge_tier, v_vague_hits,
-            )
+    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+    # Gate 11 (vague_content pattern ban) is dropped. The Liverpool-Chelsea
+    # whole-verdict-opener pattern moves to the verdict-closure rule via the
+    # tightened imperative-only `_VERDICT_ACTION_RE`. The narrative_html scan
+    # was scoped to long-form Setup/Edge/Risk sections that no longer get
+    # written.
 
     # ── Outcome ──────────────────────────────────────────────────────────────
     crit = [f for f in failures if f.severity == "CRITICAL"]

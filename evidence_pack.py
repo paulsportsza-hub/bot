@@ -1612,6 +1612,72 @@ def _safe_display_name(name: str, fallback: str = "") -> str:
     return fallback
 
 
+# FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1 anchor 1.
+# Curated team nickname lookup. JSON lives at `data/team_nicknames.json` in the
+# bot tree (sibling to evidence_pack.py). Schema: lowercase _-separated team
+# key → SA braai-voice nickname phrase. Used by `format_evidence_prompt` to
+# inject HOME NICKNAME / AWAY NICKNAME into the verdict polish prompt's
+# dynamic block. Missing entries return "" — caller renders "(unknown)" and
+# the prompt instructs Sonnet to use the team's regular name.
+_NICKNAME_LOOKUP_CACHE: "dict[str, str] | None" = None
+
+
+def _normalise_nickname_lookup_key(name: str) -> str:
+    """Normalise display name to the JSON key shape: lowercase _-separated."""
+    text = str(name or "").lower().strip()
+    if not text:
+        return ""
+    for suffix in (" fc", " sc", " cf", " afc"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+    if text.startswith("the "):
+        text = text[4:]
+    text = text.replace("-", " ").replace("_", " ")
+    text = " ".join(text.split())
+    return text.replace(" ", "_")
+
+
+def _load_team_nicknames() -> "dict[str, str]":
+    """Load `data/team_nicknames.json` once; tolerate missing/malformed file."""
+    global _NICKNAME_LOOKUP_CACHE
+    if _NICKNAME_LOOKUP_CACHE is not None:
+        return _NICKNAME_LOOKUP_CACHE
+    nicknames_path = Path(__file__).resolve().parent / "data" / "team_nicknames.json"
+    try:
+        payload = json.loads(nicknames_path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        _NICKNAME_LOOKUP_CACHE = {}
+        return _NICKNAME_LOOKUP_CACHE
+    cache: "dict[str, str]" = {}
+    for key, value in payload.items():
+        if not isinstance(key, str) or key.startswith("_"):
+            continue
+        if isinstance(value, str) and value.strip():
+            cache[key.lower()] = value.strip()
+    _NICKNAME_LOOKUP_CACHE = cache
+    return _NICKNAME_LOOKUP_CACHE
+
+
+def lookup_team_nickname(team_name: str) -> str:
+    """Return curated nickname for a team display name, or "" when unknown."""
+    if not team_name:
+        return ""
+    table = _load_team_nicknames()
+    if not table:
+        return ""
+    key = _normalise_nickname_lookup_key(team_name)
+    if not key:
+        return ""
+    if key in table:
+        return table[key]
+    for candidate, nickname in table.items():
+        if key == candidate:
+            return nickname
+        if key.startswith(candidate + "_") or key.endswith("_" + candidate):
+            return nickname
+    return ""
+
+
 def _team_names_from_pack(pack: EvidencePack, spec) -> tuple[str, str]:
     home = _safe_display_name((pack.espn_context.home_team if pack.espn_context else {}).get("name", ""), getattr(spec, "home_name", ""))
     away = _safe_display_name((pack.espn_context.away_team if pack.espn_context else {}).get("name", ""), getattr(spec, "away_name", ""))
@@ -2295,36 +2361,14 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
     )
     # Sort vocabulary for deterministic prompt text (frozenset has no ordering).
     _analytical_vocab_list = ", ".join(sorted(ANALYTICAL_VOCABULARY))
-    # FIX-PREGEN-STATIC-PREFIX-PURE-01 (locked 2026-04-28, Rule 22):
-    # Split _verdict_quality_lines into static (no per-match interpolation) and
-    # dynamic (per-match _verdict_char_floor + _tier_key diamond conditional).
-    # The static portion — including the SA VOICE rules block — moves above the
-    # cache_control split via output_guide_static_lines below; the dynamic
-    # portion stays below the split inside the PER-MATCH CONSTRAINTS block.
-    _verdict_quality_static_lines = [
-        "",
-        "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
-        f"- TARGET band: {VERDICT_TARGET_LOW}–{VERDICT_TARGET_HIGH} characters. Hard max: {VERDICT_HARD_MAX} characters.",
-        "- Verdict MUST use at least 3 distinct analytical vocabulary terms from this list:",
-        f"  {_analytical_vocab_list}",
-        "- Verdict MUST end with a sentence terminator (. ! ? …).",
-        "- Verdict MUST NOT be a trivial shape. The following patterns are banned:",
-        "    (a) price-only openers like 'At <odds> on <book>' that carry no analytical content,",
-        "    (b) bare name-only shapes like '<Team>'s at <price>' with no reasoning,",
-        "    (c) one-line verdicts that only restate the market price without positional language.",
-        "",
-        "SA VOICE (REQUIRED — automatic rejection if verdict sounds generic or British):",
-        "- Use SA team nicknames where applicable:",
-        "  Kaizer Chiefs → Amakhosi | Orlando Pirates → The Bucs | Mamelodi Sundowns → Brazilians or Downs",
-        "  Bafana Bafana for SA national soccer | Proteas for SA cricket | Springboks/Boks for SA rugby",
-        "  Bulls, Stormers, Sharks, Lions for URC franchises",
-        "- For non-SA clubs: use manager SURNAME ONLY in possessive (Arteta's Arsenal, Slot's Reds, Amorim's United).",
-        "- Write like a sharp SA pundit: punchy, direct, evidence-grounded. Use plain SA phrases naturally",
-        "  (e.g. 'five on the bounce', 'back the Downs here', 'Amakhosi have the goods').",
-        "- Cite at least ONE specific number (e.g. odds, EV%, streak length, head-to-head record).",
-        "- FORBIDDEN: 'proceed with caution', 'worth backing', 'value play', 'value here',",
-        "  'can't lose', 'guaranteed', 'one to watch', 'smart money'.",
-    ]
+    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1:
+    # The polish path now produces a verdict-only output (BUILD-VERDICT-ONLY-
+    # STRIP-AI-BREAKDOWN-01 stripped the AI Breakdown surface; only verdict
+    # survives). The legacy multi-line VERDICT QUALITY + SA VOICE block is
+    # superseded by the unified `_verdict_anchor_static_lines` block built
+    # below, which carries the 4 mandatory anchors + action close + GOOD/BAD
+    # examples in the static cache prefix per Rule 22.
+    _verdict_quality_static_lines: list[str] = []
     _verdict_quality_dynamic_lines = [
         "",
         f"- Verdict MUST be at least {_verdict_char_floor} characters long ({_tier_key} tier floor).",
@@ -2334,6 +2378,48 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             "- DIAMOND TIER ONLY: Do NOT begin the verdict with 'At <price>' "
             "or any price-prefix construction. Lead with analytical posture, not the price."
         )
+
+    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1.
+    # The canonical verdict-only static block. Carries the 4 mandatory anchors
+    # + 9-imperative action close + 3 GOOD examples + 3 BAD examples + the no-
+    # hedging / no-telemetry rules. Sits in the static cache prefix (above the
+    # EVIDENCE PACK split sentinel) so prompt-cache discipline (Rule 22) is
+    # preserved. Both branches (edge + match-preview) render this block —
+    # match-preview's per-match override (below the split) softens the action
+    # close to a lean since previews don't recommend bets.
+    _verdict_anchor_static_lines = [
+        "",
+        "⛔ BRAAI VOICE — NOT QUANT VOICE.",
+        "",
+        "Write ONE verdict line for this betting card. 100-260 characters (target 140-200).",
+        "Voice: SA mate at a braai. Direct, confident, specific. No telemetry vocab.",
+        "",
+        "MANDATORY ANCHORS (verdict MUST contain ALL FOUR):",
+        "  HOME NICKNAME: see PER-MATCH CONSTRAINTS below for the value (team's recognised nickname, e.g. \"the Reds\", \"Sky Blues\", \"Gunners\"). If unknown, use the team's regular name.",
+        "  AWAY NICKNAME: see PER-MATCH CONSTRAINTS below for the value. Same rule on unknown.",
+        "  VENUE:         see PER-MATCH CONSTRAINTS below for the value (where the match is played, e.g. \"Anfield\", \"Etihad Stadium\"). If no venue is verified, omit venue mention.",
+        "  HOME COACH:    surname only, taken VERBATIM from the canonical-managers block below.",
+        "  AWAY COACH:    surname only, taken VERBATIM from the canonical-managers block below.",
+        "  ODDS:          recommended decimal odds + .co.za bookmaker name (see PER-MATCH CONSTRAINTS below).",
+        "",
+        "CLOSE WITH ACTION (the LAST sentence MUST contain ALL THREE):",
+        "  - Action verb (imperative): Back / Bet on / Put your money on / Get on / Take / Lean on / Ride / Hammer it on / Smash",
+        "  - Team name OR nickname",
+        "  - Odds shape (e.g. 1.97) + bookmaker (e.g. Supabets)",
+        "",
+        "GOOD examples (verbatim):",
+        "  \"Slot's Reds at home in front of Anfield, Salah back from injury and Chelsea bringing nothing on the road — five losses on the bounce. Get on Liverpool at 1.97 with Supabets.\"",
+        "  \"Guardiola's Sky Blues at the Etihad against a Brentford side that's lost five straight — the script writes itself. Take Manchester City at 1.36 with Supabets, measured stake.\"",
+        "  \"Pereira's Forest at the City Ground, Newcastle leaking late goals on the road — standard play. Back Forest at 2.52 with Supabets.\"",
+        "",
+        "BAD examples (auto-rejected):",
+        "  \"The data has a cleaner read on X — that's where the analysis starts.\" → no closure, no action, no nickname, no venue.",
+        "  \"X at Y with Z is the lean.\" → no nickname, no venue, no manager, no imperative.",
+        "  \"Standard stake on X. Back X.\" → no nickname, no venue, no manager, no odds in close.",
+        "",
+        "NO HEDGING OPENERS on premium tiers (no \"X is the pick, but...\" with hedging conjunction).",
+        "NO TELEMETRY VOCAB ever (no \"signals\", \"the read\", \"reads flag\", \"bookmaker has slipped\").",
+    ]
 
     # FIX-NARRATIVE-MMA-LORE-01 (locked 2026-04-25): combat-sport evidence law.
     # For MMA/boxing fixtures, evidence is structurally sparse (no team-level form,
@@ -2418,283 +2504,25 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
     # stay in the dynamic block below the split. Net zero content change —
     # only position. Pre-fix non-combat Sonnet prefix: 823 tokens (sub-min);
     # post-fix target: 1500–1700 tokens.
+    #
+    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1.
+    # Setup/Edge/Risk section instructions stripped — the polish path now
+    # produces a verdict-only output (BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01
+    # stripped the AI Breakdown surface; only the verdict is consumed). Both
+    # branches (edge + match-preview) carry the unified `_verdict_anchor_static_lines`
+    # block built above so the static cache prefix stays cache-discipline-clean
+    # per Rule 22.
     if match_preview:
         output_guide_static_lines = [
             "",
             "───────────── STYLE & OUTPUT GUIDE ─────────────",
-            "",
-            "Write exactly 4 sections in this order. Start directly with no preamble.",
-            "",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2/AC-3:
-            # ⛔ BRAAI VOICE — NOT QUANT VOICE — applies to every section.
-            # Sits in the static cache prefix (above EVIDENCE PACK split per
-            # Rule 22) so it is reused across every polish call without
-            # re-billing the prompt prefix.
-            "⛔ BRAAI VOICE — NOT QUANT VOICE — ABSOLUTE BAN ON TELEMETRY VOCAB:",
-            "Every section MUST sound like a SA mate at a braai who follows the sport, NOT a quant analyst's note.",
-            "  BAD: \"the supporting signals back the read\" → quant-speak. REJECTED.",
-            "  BAD: \"the bookmaker has slipped\" → jargon tic. REJECTED.",
-            "  BAD: \"the reads flag stays in view\" → unintelligible to readers. REJECTED.",
-            "  BAD: \"Standard stake on the case as it stands\" → wooden. REJECTED.",
-            "",
-            "  GOOD: \"Liverpool at 1.97 is too good — Slot's lot are flying, Chelsea have lost five on the bounce. Get on it before Supabets wakes up.\" → specific, confident, SA voice. ACCEPTED.",
-            "  GOOD: \"Brighton at 1.38 against a Wolves side that's only won twice in 12 — easy money, just be ready for the late equaliser.\" → conversational, real risk caveat. ACCEPTED.",
-            "  GOOD: \"Back Pereira's Forest at 2.52. Solid at home, Newcastle are leaking late goals. Standard stake.\" → manager attribution, evidence anchor, action verb. ACCEPTED.",
-            "",
-            "TONE: speak like a mate at a braai who follows the sport. Direct, specific, confident. SA voice OK. Hype NOT OK.",
-            "STRUCTURE: action-led or stat-led opening. Concrete evidence in the middle. One clear close.",
-            "ACTION VERB CLUSTER (use at least one in the Verdict on Bronze/Silver/Gold/Diamond cards): get on, back, take, worth, ride, leave.",
-            "",
-            # FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 (2026-04-29) AC-2 — Strong-band
-            # tone lock. Live failure case: Manchester City vs Brentford GOLD
-            # verdict at Supabets 1.36 read "the form picture is unclear and
-            # there's limited edge to work with here ... cautious lean rather
-            # than a confident call". Sonnet adapted tone to evidence (MILD
-            # signal) rather than tier (Strong-band Gold). This block tells
-            # Sonnet to REFRAME MILD as MEASURED on Strong-band cards.
-            #
-            # Sits in the static cache prefix (above EVIDENCE PACK split per
-            # Rule 22) so the instruction reuses the cached prompt prefix
-            # without re-billing.
-            "⚠️ STRONG-BAND TIER (Diamond / Gold) — TONE LOCK:",
-            "",
-            "This card is rated Strong-band. The verdict MUST speak with Strong-band confidence.",
-            "IF the underlying signal is MILD, reframe it as MEASURED confidence — NOT cautious withdrawal.",
-            "",
-            "ALLOWED reframes for MILD-confidence Strong-band:",
-            "  - \"Measured back at this number\"",
-            "  - \"Worth a measured stake\"",
-            "  - \"Solid lean\" (NOT \"cautious lean\")",
-            "  - \"Disciplined back\"",
-            "  - \"Worth getting in early\"",
-            "",
-            "BANNED on Strong-band (these are Bronze-tier vocabulary):",
-            "  - \"cautious\" / \"cautious lean\" / \"cautious play\"",
-            "  - \"limited edge\" / \"thin edge\" / \"no edge to work with\"",
-            "  - \"form picture is unclear\" / \"data is thin\" / \"without recent form\"",
-            "  - \"rather than a confident call\"",
-            "  - \"speculative punt\" (Bronze-only)",
-            "  - hedging openers: don't open the verdict body with \"but\", \"however\", \"though\"",
-            "",
-            "IF the evidence genuinely cannot support Strong-band confidence,",
-            "the verdict should still close with an action verb (\"back\", \"take\", \"get on\")",
-            "+ measured stake instruction — NEVER \"cautious lean\" or \"speculative\".",
-            "",
-            "GOOD Strong-band MILD-confidence example:",
-            "  \"Back City at 1.36 with Supabets — form solid, line slightly soft.",
-            "   Measured stake at this number, no need to push.\"",
-            "",
-            "BAD Strong-band example (cautious-band collapse):",
-            "  \"City are the pick at 1.36, but the form picture is unclear...",
-            "   cautious lean rather than a confident call.\"",
-            "",
-            "📋 <b>The Setup</b>",
-            "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-3 — SETUP voice examples.
-            "SETUP VOICE EXAMPLES:",
-            "  BAD: \"Slot's Reds sit on 58 points with a 17-7-10 record, scoring 2.4 goals per game, and arrive on a WWWLD run.\" → boilerplate template fingerprint (LB-7). REJECTED.",
-            "  GOOD: \"Liverpool come into this on the back of three straight wins, with Salah back from injury and Chelsea visiting after a brutal week. The points table tells the story — Reds chasing top four, Blues already looking at next season.\" → specific, narrative-led, no template. ACCEPTED.",
-            "Setup MUST NOT open with the <Manager>'s <Team> sit on N points template across multiple cards — vary the opening shape per the SETUP OPENING SHAPE instruction below.",
-            "",
-            "⛔ SETUP IS A PRICE-FREE ZONE — STRICT BAN — AUTOMATIC REJECTION IF VIOLATED:",
-            "The Setup section is for analytical context only — form, standings, injuries, news, ratings.",
-            "It MUST NOT contain ANY of: 'bookmaker', 'odds', 'price', 'priced', 'implied',",
-            "'implied probability', 'implied chance', 'fair probability', 'fair value',",
-            "'expected value', 'model reads'. No integer probability cites (e.g. 'a 30% probability').",
-            "No decimal probability cites (e.g. '0.85'). No bookmaker names. No EV percentages.",
-            "No 'fair value' or 'fair probability' claims. No 'Elo-implied' phrasing.",
-            "Decimal numbers are allowed ONLY in metric phrases — 'X.X goals per game',",
-            "'X.X points per game', 'X.X runs per game' — never in pricing or probability contexts.",
-            "Express probability ONLY as qualitative descriptors ('strong favourites',",
-            "'comfortable home edge', 'too close to call'). All pricing belongs in The Edge.",
-            "BAD: 'Arsenal are implied 78% to win at Hollywoodbets 1.45.' ← REJECTED.",
-            "GOOD: 'Arsenal arrive on a five-match winning run, sitting second on 70 points.' ← OK.",
-            "",
-            "If ESPN data is unavailable, pivot to: team strength ratings (use values VERBATIM from [TEAM RATINGS ANCHOR] — e.g. 'rated 150 points higher', then cite the exact numbers; NEVER invent or round any rating number), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. If TEAM RATINGS ANCHOR is not in the evidence pack, omit rating numbers entirely. Do NOT pivot to odds structure or line movements in The Setup — that is The Edge's job.",
-            "RATING ANCHOR LAW (AUTOMATIC REJECTION IF VIOLATED): Any 4-digit Elo or Glicko-2 rating number cited in Setup MUST appear VERBATIM in [TEAM RATINGS ANCHOR]. Do NOT invent, estimate, or round rating values.",
-            "",
-            "🎯 <b>The Edge</b>",
-            "2-3 sentences. Analyse the matchup: which team holds the advantage and why.",
-            "Reference odds structure and SA bookmaker pricing to illustrate market expectation.",
-            "Do NOT make a betting recommendation. Do NOT mention sharp bookmakers.",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-3 — EDGE voice examples.
-            "EDGE VOICE EXAMPLES:",
-            "  BAD: \"The Edge sits with Liverpool. Market: 1.97 vs model implied 1.62. Price edge: +18.3%. EV: +5.2%.\" → spreadsheet output. REJECTED.",
-            "  GOOD: \"Supabets at 1.97 is the play. Most books have moved to 1.85, Supabets hasn't — yet. Worth getting in before they catch up.\" → specific bookmaker, market-context aware, action close. ACCEPTED.",
-            "Edge MUST name the SA bookmaker by .co.za display name and cite the price (e.g. 'Supabets at 1.97'). Avoid 'price edge', 'edge confirms', 'structural signal', 'signal-aware', 'the model estimates', 'the model implies', 'the model prices' — all banned (Rule 17 telemetry vocabulary).",
-            "",
-            "⚠️ <b>The Risk</b>",
-            "1-3 sentences. State what could swing the match the other way.",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-3 — RISK voice examples.
-            "RISK VOICE EXAMPLES:",
-            "  BAD: \"Price and signals are aligned. Typical match uncertainty is the main remaining variable.\" → generic uncertainty boilerplate (QA-01 LB-D1/D2). REJECTED.",
-            "  GOOD: \"Big game energy is unpredictable — Chelsea could throw a spanner in the works if they actually show up. Stake size accordingly.\" → specific risk type, not generic uncertainty. ACCEPTED.",
-            "Risk MUST cite a SPECIFIC risk type (squad rotation, late-game discipline, weather, big-game energy, manager pressure, injury return, set-piece exposure, etc.) — never 'typical match uncertainty', 'standard variance', 'price and signals are aligned'.",
-            "",
-            "🏆 <b>Verdict</b>",
-            "1-2 sentences. Give a match outlook — who you lean toward and how the match might play out.",
-            "Do NOT recommend a bet or mention bet sizing.",
-            "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — acknowledging it ('factor in the defensive uncertainty'), resolving it ('discount the rotation concern'), or addressing it ('despite the form gap, the home advantage holds'). Generic closers like 'all things considered' or 'on balance' are banned.",
-            "",
-            "VERDICT QUALITY CONSTRAINT (AUTOMATIC REJECTION IF VIOLATED):",
-            "- Verdict MUST use at least 3 distinct analytical vocabulary terms from this list:",
-            f"  {_analytical_vocab_list}",
-            "- Verdict MUST NOT be a trivial shape (price-only openers, bare name-only shapes,",
-            "  or one-line verdicts that only restate the market price without positional language).",
-            "",
-            "BANNED PHRASES (automated rejection if used):",
-            "- 'proceed with caution', 'value play', 'grab it before', 'move fast'",
-            "- 'one to watch, not back', 'this one to watch', 'won't last forever'",
-            "- 'knockout football', 'knockout stakes', 'knockout stage'",
-            "- 'pure pricing call', 'thin support', 'numbers-only play'",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
-            # Verdict body excludes betting telemetry. The Verdict closes with a
-            # friend's read on the match — manager + price + bookmaker + Risk-
-            # factor resolution. EV percentages, indicator counts, and line-
-            # movement language belong in The Edge or The Risk, not the Verdict.
-            "VERDICT BODY EXCLUSION (Rule 17 — automatic rejection if any of these appear in the Verdict):",
-            "- '+X% EV' / '% EV' (EV percentages live in The Edge, not the Verdict)",
-            "- 'indicators line up' / 'supporting indicator' (indicator counts live in The Edge)",
-            "- 'line movement' / 'adverse movement' (line-movement language lives in The Edge)",
-            "- 'price is stable' / 'price angle' / 'priced in' (meta-betting lives in The Edge)",
-            "- 'the lean is' (analytical jargon)",
-            "- 'supported by data' (flat, generic — use SA Braai Voice phrasing)",
-            "Verdict cites: outcome + price + bookmaker by name, Risk-factor resolution, tier-banded confidence vocabulary. SA Braai Voice anchored to verdict-generator/SKILL.md + brand-voice canon (BRAND-BIBLE-v3 §08–09 + COPYWRITING-DNA §6/§8).",
+            *_verdict_anchor_static_lines,
         ]
     else:
         output_guide_static_lines = [
             "",
             "───────────── STYLE & OUTPUT GUIDE ─────────────",
-            "",
-            "Write exactly 4 sections in this order. Start directly with no preamble.",
-            "",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-29) AC-2/AC-3:
-            # ⛔ BRAAI VOICE — NOT QUANT VOICE — applies to every section.
-            # Sits in the static cache prefix (above EVIDENCE PACK split per
-            # Rule 22) so it is reused across every polish call without
-            # re-billing the prompt prefix.
-            "⛔ BRAAI VOICE — NOT QUANT VOICE — ABSOLUTE BAN ON TELEMETRY VOCAB:",
-            "Every section MUST sound like a SA mate at a braai who follows the sport, NOT a quant analyst's note.",
-            "  BAD: \"the supporting signals back the read\" → quant-speak. REJECTED.",
-            "  BAD: \"the bookmaker has slipped\" → jargon tic. REJECTED.",
-            "  BAD: \"the reads flag stays in view\" → unintelligible to readers. REJECTED.",
-            "  BAD: \"Standard stake on the case as it stands\" → wooden. REJECTED.",
-            "",
-            "  GOOD: \"Liverpool at 1.97 is too good — Slot's lot are flying, Chelsea have lost five on the bounce. Get on it before Supabets wakes up.\" → specific, confident, SA voice. ACCEPTED.",
-            "  GOOD: \"Brighton at 1.38 against a Wolves side that's only won twice in 12 — easy money, just be ready for the late equaliser.\" → conversational, real risk caveat. ACCEPTED.",
-            "  GOOD: \"Back Pereira's Forest at 2.52. Solid at home, Newcastle are leaking late goals. Standard stake.\" → manager attribution, evidence anchor, action verb. ACCEPTED.",
-            "",
-            "TONE: speak like a mate at a braai who follows the sport. Direct, specific, confident. SA voice OK. Hype NOT OK.",
-            "STRUCTURE: action-led or stat-led opening. Concrete evidence in the middle. One clear action close.",
-            "ACTION VERB CLUSTER (use at least one in the Verdict on Bronze/Silver/Gold/Diamond cards): get on, back, take, worth, ride, leave.",
-            "LENGTH: Verdict 100-260 chars (per Rule 22).",
-            "",
-            # FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 (2026-04-29) AC-2 — Strong-band
-            # tone lock. Live failure case: Manchester City vs Brentford GOLD
-            # verdict at Supabets 1.36 read "the form picture is unclear and
-            # there's limited edge to work with here ... cautious lean rather
-            # than a confident call". Sonnet adapted tone to evidence (MILD
-            # signal) rather than tier (Strong-band Gold). This block tells
-            # Sonnet to REFRAME MILD as MEASURED on Strong-band cards.
-            #
-            # Sits in the static cache prefix (above EVIDENCE PACK split per
-            # Rule 22) so the instruction reuses the cached prompt prefix
-            # without re-billing.
-            "⚠️ STRONG-BAND TIER (Diamond / Gold) — TONE LOCK:",
-            "",
-            "This card is rated Strong-band. The verdict MUST speak with Strong-band confidence.",
-            "IF the underlying signal is MILD, reframe it as MEASURED confidence — NOT cautious withdrawal.",
-            "",
-            "ALLOWED reframes for MILD-confidence Strong-band:",
-            "  - \"Measured back at this number\"",
-            "  - \"Worth a measured stake\"",
-            "  - \"Solid lean\" (NOT \"cautious lean\")",
-            "  - \"Disciplined back\"",
-            "  - \"Worth getting in early\"",
-            "",
-            "BANNED on Strong-band (these are Bronze-tier vocabulary):",
-            "  - \"cautious\" / \"cautious lean\" / \"cautious play\"",
-            "  - \"limited edge\" / \"thin edge\" / \"no edge to work with\"",
-            "  - \"form picture is unclear\" / \"data is thin\" / \"without recent form\"",
-            "  - \"rather than a confident call\"",
-            "  - \"speculative punt\" (Bronze-only)",
-            "  - hedging openers: don't open the verdict body with \"but\", \"however\", \"though\"",
-            "",
-            "IF the evidence genuinely cannot support Strong-band confidence,",
-            "the verdict should still close with an action verb (\"back\", \"take\", \"get on\")",
-            "+ measured stake instruction — NEVER \"cautious lean\" or \"speculative\".",
-            "",
-            "GOOD Strong-band MILD-confidence example:",
-            "  \"Back City at 1.36 with Supabets — form solid, line slightly soft.",
-            "   Measured stake at this number, no need to push.\"",
-            "",
-            "BAD Strong-band example (cautious-band collapse):",
-            "  \"City are the pick at 1.36, but the form picture is unclear...",
-            "   cautious lean rather than a confident call.\"",
-            "",
-            "📋 <b>The Setup</b>",
-            "2-4 sentences. Set the scene using standings, form, coaches, injuries, news, and Elo team strength.",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-3 — SETUP voice examples.
-            "SETUP VOICE EXAMPLES:",
-            "  BAD: \"Slot's Reds sit on 58 points with a 17-7-10 record, scoring 2.4 goals per game, and arrive on a WWWLD run.\" → boilerplate template fingerprint (LB-7). REJECTED.",
-            "  GOOD: \"Liverpool come into this on the back of three straight wins, with Salah back from injury and Chelsea visiting after a brutal week. The points table tells the story — Reds chasing top four, Blues already looking at next season.\" → specific, narrative-led, no template. ACCEPTED.",
-            "Setup MUST NOT open with the <Manager>'s <Team> sit on N points template across multiple cards — vary the opening shape per the SETUP OPENING SHAPE instruction below.",
-            "",
-            "⛔ SETUP IS A PRICE-FREE ZONE — STRICT BAN — AUTOMATIC REJECTION IF VIOLATED:",
-            "The Setup section is for analytical context only — form, standings, injuries, news, ratings.",
-            "It MUST NOT contain ANY of: 'bookmaker', 'odds', 'price', 'priced', 'implied',",
-            "'implied probability', 'implied chance', 'fair probability', 'fair value',",
-            "'expected value', 'model reads'. No integer probability cites (e.g. 'a 30% probability').",
-            "No decimal probability cites (e.g. '0.85'). No bookmaker names. No EV percentages.",
-            "No 'fair value' or 'fair probability' claims. No 'Elo-implied' phrasing.",
-            "Decimal numbers are allowed ONLY in metric phrases — 'X.X goals per game',",
-            "'X.X points per game', 'X.X runs per game' — never in pricing or probability contexts.",
-            "Express probability ONLY as qualitative descriptors ('strong favourites',",
-            "'comfortable home edge', 'too close to call'). All pricing belongs in The Edge.",
-            "BAD: 'Arsenal are implied 78% to win at Hollywoodbets 1.45.' ← REJECTED.",
-            "GOOD: 'Arsenal arrive on a five-match winning run, sitting second on 70 points.' ← OK.",
-            "",
-            "If ESPN data is unavailable, pivot to: team strength ratings (use values VERBATIM from [TEAM RATINGS ANCHOR] — e.g. 'rated 150 points higher', then cite the exact numbers; NEVER invent or round any rating number), tipster consensus (e.g. '3 of 5 tipsters back this'), and any available news/injury data. If TEAM RATINGS ANCHOR is not in the evidence pack, omit rating numbers entirely. Do NOT pivot to odds structure or line movements in The Setup — that is The Edge's job.",
-            "RATING ANCHOR LAW (AUTOMATIC REJECTION IF VIOLATED): Any 4-digit Elo or Glicko-2 rating number cited in Setup MUST appear VERBATIM in [TEAM RATINGS ANCHOR]. Do NOT invent, estimate, or round rating values.",
-            "",
-            "🎯 <b>The Edge</b>",
-            "2-3 sentences. Explain the pricing gap using edge analysis and SA bookmaker pricing only.",
-            "Do NOT mention sharp bookmakers or sharp prices. Any sharp context is injected separately.",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-3 — EDGE voice examples.
-            "EDGE VOICE EXAMPLES:",
-            "  BAD: \"The Edge sits with Liverpool. Market: 1.97 vs model implied 1.62. Price edge: +18.3%. EV: +5.2%.\" → spreadsheet output. REJECTED.",
-            "  GOOD: \"Supabets at 1.97 is the play. Most books have moved to 1.85, Supabets hasn't — yet. Worth getting in before they catch up.\" → specific bookmaker, market-context aware, action close. ACCEPTED.",
-            "Edge MUST name the SA bookmaker by .co.za display name and cite the price (e.g. 'Supabets at 1.97'). Avoid 'price edge', 'edge confirms', 'structural signal', 'signal-aware', 'the model estimates', 'the model implies', 'the model prices' — all banned (Rule 17 telemetry vocabulary).",
-            "",
-            "⚠️ <b>The Risk</b>",
-            "1-3 sentences. State what could make this angle wrong.",
-            "If evidence is thin, say that limited evidence depth is part of the risk.",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 AC-3 — RISK voice examples.
-            "RISK VOICE EXAMPLES:",
-            "  BAD: \"Price and signals are aligned. Typical match uncertainty is the main remaining variable.\" → generic uncertainty boilerplate (QA-01 LB-D1/D2). REJECTED.",
-            "  GOOD: \"Big game energy is unpredictable — Chelsea could throw a spanner in the works if they actually show up. Stake size accordingly.\" → specific risk type, not generic uncertainty. ACCEPTED.",
-            "Risk MUST cite a SPECIFIC risk type (squad rotation, late-game discipline, weather, big-game energy, manager pressure, injury return, set-piece exposure, etc.) — never 'typical match uncertainty', 'standard variance', 'price and signals are aligned'.",
-            "",
-            "🏆 <b>Verdict</b>",
-            "1-2 sentences. State the action and sizing guidance without upgrading it.",
-            "VERDICT-CITES-RISK (REQUIRED — automatic rejection if absent): The Verdict MUST reference at least one specific factor from The Risk section — resolving it ('discount the injury concern'), hedging on it ('live with the squad-rotation risk'), or pricing it ('the form gap is already in the number'). Generic closers like 'all things considered' or 'on balance' are banned. The card must read as one analytical voice, not two disconnected sections.",
-            # FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) — Rule 17:
-            # Verdict body excludes betting telemetry. EV/indicator-count/line-
-            # movement language belongs in The Edge, not the Verdict.
-            "VERDICT BODY EXCLUSION (Rule 17 — automatic rejection if any of these appear in the Verdict):",
-            "- '+X% EV' / '% EV' (EV percentages live in The Edge, not the Verdict)",
-            "- 'indicators line up' / 'supporting indicator' (indicator counts live in The Edge)",
-            "- 'line movement' / 'adverse movement' (line-movement language lives in The Edge)",
-            "- 'price is stable' / 'price angle' / 'priced in' (meta-betting lives in The Edge)",
-            "- 'the lean is' (analytical jargon)",
-            "- 'supported by data' (flat, generic — use SA Braai Voice phrasing)",
-            "Verdict cites: outcome + price + bookmaker by name, Risk-factor resolution, tier-banded confidence vocabulary. SA Braai Voice anchored to verdict-generator/SKILL.md + brand-voice canon (BRAND-BIBLE-v3 §08–09 + COPYWRITING-DNA §6/§8).",
-            # FIX-PREGEN-STATIC-PREFIX-PURE-01 — verdict-quality static base
-            # (SA VOICE rules block + literal verdict-shape constraints)
-            # moved from below the EVIDENCE PACK split per INV G4. The
-            # dynamic per-tier lines (_verdict_char_floor + diamond
-            # conditional) stay below the split inside PER-MATCH CONSTRAINTS.
-            *_verdict_quality_static_lines,
+            *_verdict_anchor_static_lines,
         ]
 
     prompt_parts = role_lines + [
@@ -2894,6 +2722,24 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
            else "you MUST NOT claim line movement, sharp action, or steam."),
     ]
 
+    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1.
+    # Inject HOME NICKNAME / AWAY NICKNAME / VENUE values per-match. The static
+    # prefix above carries the labels + rules; the dynamic block carries the
+    # values. Empty venue → explicit "(no venue verified)" sentinel matching
+    # the static block's "omit venue mention" instruction. Empty nickname →
+    # explicit "(unknown)" sentinel matching the static block's "use the team's
+    # regular name" instruction.
+    _home_nickname = lookup_team_nickname(home_name) or "(unknown)"
+    _away_nickname = lookup_team_nickname(away_name) or "(unknown)"
+    _venue_value = pack.venue if pack.venue else "(no venue verified)"
+    _verdict_anchor_dynamic_lines: list[str] = [
+        "",
+        "VERDICT ANCHORS (per-match values — use these verbatim):",
+        f"  HOME NICKNAME: {_home_nickname}",
+        f"  AWAY NICKNAME: {_away_nickname}",
+        f"  VENUE:         {_venue_value}",
+    ]
+
     # FIX-PREGEN-STATIC-PREFIX-PURE-01 (locked 2026-04-28, Rule 19):
     # Per-match interpolation block — moved BELOW the EVIDENCE PACK split so
     # the static OUTPUT FORMAT / BANNED PHRASES / VERDICT BODY EXCLUSION
@@ -2920,6 +2766,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             h2h_guardrail,
             *_canonical_manager_lines,
             *_data_availability_lines,
+            *_verdict_anchor_dynamic_lines,
         ])
     else:
         prompt_parts.extend([
@@ -2943,6 +2790,7 @@ def format_evidence_prompt(pack: EvidencePack, spec, match_preview: bool = False
             h2h_guardrail,
             *_canonical_manager_lines,
             *_data_availability_lines,
+            *_verdict_anchor_dynamic_lines,
             "",
             f"Name the bookmaker, odds, and the capped verdict posture for {spec.verdict_action}.",
             f"YOUR VERDICT MUST recommend {getattr(spec, 'bookmaker', '')} at {getattr(spec, 'odds', '')}. This is NON-NEGOTIABLE. Do not substitute any other bookmaker or price.",
