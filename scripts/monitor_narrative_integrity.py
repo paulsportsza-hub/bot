@@ -67,8 +67,10 @@ if not log.handlers:
 EDGE_OPS_CHAT_ID = -1003877525865
 
 # Alert thresholds
+# FIX-EDGEOPS-NOISE-CLEANUP-V2-01 D2: low_quality_verdict_count raised 1 → 5
+# (single low-quality verdict is too noisy; only fire on sustained pattern).
 _THRESHOLDS = {
-    "low_quality_verdict_count": 1,           # any low-quality verdict is worth alerting
+    "low_quality_verdict_count": 5,           # 5+ low-quality verdicts indicate a pattern
     "gold_edge_sonnet_fallback_rate": 60,     # warn when >60% of Gold/Diamond fall back from Sonnet to W82
     "gold_edge_double_fail_count_24h": 3,     # >=3 Gold/Diamond edges with both Sonnet attempts failing the quality gate
     "empty_verdict_count_24h": 3,             # more than 3 missing verdicts in 24h
@@ -77,6 +79,29 @@ _THRESHOLDS = {
     "banned_template_hit_rate": 10,           # >10% banned-template hit rate
     "manager_name_fabrication_attempts": 1,   # any fabrication attempt is worth alerting
 }
+
+# FIX-EDGEOPS-NOISE-CLEANUP-V2-01 B: cricket-international scope filter.
+# These 16 cricket entries (SA20 franchises + 10 international test sides) sit
+# outside Core 7 coaching-data audit cadence. They are tracked but excluded
+# from coach_freshness_pct so they do not generate noise alerts.
+CRICKET_OUT_OF_SCOPE_TEAMS: frozenset[str] = frozenset({
+    "sunrisers eastern cape",
+    "pretoria capitals",
+    "paarl royals",
+    "joburg super kings",
+    "durbans super giants",
+    "mi cape town",
+    "south africa",
+    "india",
+    "australia",
+    "england",
+    "new zealand",
+    "pakistan",
+    "sri lanka",
+    "west indies",
+    "bangladesh",
+    "zimbabwe",
+})
 
 # Debounce: 2 hours between repeated alerts for the same signal
 _DEBOUNCE_HOURS = 2
@@ -310,9 +335,33 @@ def signal_coach_freshness_pct() -> dict:
             "details": json.dumps({"error": str(exc)}),
         }
 
-    checked = result.get("checked", 0)
-    stale = len(result.get("stale", []))
-    missing = len(result.get("missing", []))
+    # FIX-EDGEOPS-NOISE-CLEANUP-V2-01 B: filter cricket-international entries
+    # that live outside Core 7 audit cadence. They remain in coaches.json for
+    # narrative use but must not contribute to the freshness alert signal.
+    raw_stale = result.get("stale", []) or []
+    raw_missing = result.get("missing", []) or []
+    raw_checked = result.get("checked", 0) or 0
+
+    def _is_in_scope_stale(entry: dict) -> bool:
+        if entry.get("sport") != "cricket":
+            return True
+        return entry.get("team", "").lower() not in CRICKET_OUT_OF_SCOPE_TEAMS
+
+    def _is_in_scope_missing(label: str) -> bool:
+        if "/" not in label:
+            return True
+        sport, team = label.split("/", 1)
+        if sport != "cricket":
+            return True
+        return team.lower() not in CRICKET_OUT_OF_SCOPE_TEAMS
+
+    in_scope_stale = [e for e in raw_stale if _is_in_scope_stale(e)]
+    in_scope_missing = [m for m in raw_missing if _is_in_scope_missing(m)]
+    out_of_scope = (len(raw_stale) - len(in_scope_stale)) + (len(raw_missing) - len(in_scope_missing))
+
+    checked = max(raw_checked - out_of_scope, 0)
+    stale = len(in_scope_stale)
+    missing = len(in_scope_missing)
 
     if checked == 0:
         pct = 0.0
@@ -464,14 +513,21 @@ def _fire_cycle_alerts(
             f"Detected at: {now_str}"
         )
         if not dry_run:
-            _send_edgeops_alert(signal_name, value, detail)
+            # FIX-EDGEOPS-NOISE-CLEANUP-V2-01 D1: narrative_integrity_monitor
+            # signals are DB-only — never Telegram. Sentry capture preserved
+            # so ops still gets visibility for critical-band events.
+            log.info(
+                "MONITOR: %s ALERT inserted into health_alerts (telegram_sent=0, "
+                "narrative_integrity_monitor self-alert suppression D1)",
+                signal_name,
+            )
             if _sentry:
                 _sentry.capture_message(
                     f"narrative_integrity: {signal_name} ALERT — value={value}",
                     level="error" if severity == "critical" else "warning",
                 )
         else:
-            log.info("DRY-RUN: would send EdgeOps alert signal=%s value=%s", signal_name, value)
+            log.info("DRY-RUN: would insert health_alert (no Telegram) signal=%s value=%s", signal_name, value)
 
 
 def _auto_resolve_alerts(
