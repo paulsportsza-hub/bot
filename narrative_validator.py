@@ -400,8 +400,12 @@ def _check_verdict_closure_rule(
     home_team = ""
     away_team = ""
     if isinstance(evidence_pack, dict):
-        home_team = str(evidence_pack.get("home_team") or "").strip()
-        away_team = str(evidence_pack.get("away_team") or "").strip()
+        # evidence_pack["home_team"] may be a string (test/direct caller) or a
+        # dict {"name": "...", "coach": ...} (serialised EvidencePack path).
+        _ht = evidence_pack.get("home_team") or ""
+        home_team = (_ht.get("name", "") if isinstance(_ht, dict) else str(_ht)).strip()
+        _at = evidence_pack.get("away_team") or ""
+        away_team = (_at.get("name", "") if isinstance(_at, dict) else str(_at)).strip()
     has_action, has_team, has_odds = _verdict_closure_components(
         verdict_html, home_team, away_team,
     )
