@@ -73,7 +73,6 @@ def build_sub_plans_data(
             "annual_savings": "save 33%",
             "features": [
                 "Every edge unlocked — Diamond picks are Diamond-only",
-                "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match",
                 "Personalised alerts tuned to your teams and bankroll",
                 "Line movement + sharp money + CLV tracking",
                 "Priority support when something doesn't look right",
@@ -118,7 +117,6 @@ def build_sub_upgrade_bronze_data(founding_days_left: int = 0) -> dict:
             "differentiator": "The whole edge system, nothing held back.",
             "features": [
                 "Every edge unlocked — Diamond picks are Diamond-only",
-                "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match",
                 "Personalised alerts tuned to your teams and bankroll",
             ],
             "callback": "sub:tier:diamond_monthly",
@@ -154,7 +152,6 @@ def build_sub_upgrade_gold_data(founding_days_left: int = 0) -> dict:
         "lock_note": "Diamond edges remain locked — upgrade to reach them.",
         "features": [
             "Every edge unlocked — Diamond picks are Diamond-only",
-            "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match",
             "Personalised alerts tuned to your teams and bankroll",
             "Line movement + sharp money + CLV tracking",
             "Priority support when something doesn't look right",

@@ -3283,9 +3283,14 @@ async def _verify_and_fill_cache(
             if result.get("success") and result.get("_cache"):
                 pw = result["_cache"]
                 try:
+                    # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — narrative_html
+                    # generation retired. Verdict on the card image is now the
+                    # only narrative surface. We pass "" for html so the
+                    # writer stores no long-form prose; verdict_html still
+                    # rides through and is what the card image consumes.
                     await _store_narrative_cache(
                         pw["match_id"],
-                        pw["html"],
+                        "",
                         pw["tips"],
                         pw["edge_tier"],
                         pw["model"],
@@ -3293,7 +3298,7 @@ async def _verify_and_fill_cache(
                         narrative_source=pw.get("narrative_source", "w82"),
                         coverage_json=pw.get("coverage_json"),
                         structured_card_json=pw.get("structured_card_json"),
-                        verdict_html=pw.get("verdict_html"),  # BUILD-VERDICT-PREGEN-01: write verdict_html alongside narrative_html so detail tap serves cached verdict instead of firing inline Haiku
+                        verdict_html=pw.get("verdict_html"),
                         evidence_class=pw.get("evidence_class"),
                         tone_band=pw.get("tone_band"),
                         spec_json=pw.get("spec_json"),
@@ -3796,9 +3801,12 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                     w84_preserved += 1
                     continue
             try:
+                # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — narrative_html
+                # generation retired. Verdict on the card image is the only
+                # narrative surface; pass "" for html, keep verdict_html.
                 await _store_narrative_cache(
                     match_id,
-                    pw["html"],
+                    "",
                     pw["tips"],
                     pw["edge_tier"],
                     pw["model"],
@@ -3806,7 +3814,7 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                     narrative_source=new_source,
                     coverage_json=pw.get("coverage_json"),
                     structured_card_json=pw.get("structured_card_json"),
-                    verdict_html=pw.get("verdict_html"),  # BUILD-VERDICT-PREGEN-01: write verdict_html alongside narrative_html so detail tap serves cached verdict instead of firing inline Haiku
+                    verdict_html=pw.get("verdict_html"),
                     evidence_class=pw.get("evidence_class"),
                     tone_band=pw.get("tone_band"),
                     spec_json=pw.get("spec_json"),

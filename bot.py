@@ -131,7 +131,6 @@ from card_data import (
     build_edge_summary_data,
 )
 from card_renderer import render_card_sync, warm_chromium as _warm_chromium
-from card_pipeline import render_ai_breakdown_card  # noqa: F401 — AI breakdown handler
 # BUILD-WAVE1-SUB-01: subscription card adapters
 # BUILD-WAVE2-ONBOARDING-01: onboarding card adapters
 from card_data_adapters import (
@@ -5027,7 +5026,6 @@ async def _show_plan_step(query, ob: dict) -> None:
         "• Line movement and full odds comparison unlocked\n\n"
         "💎 <b>Diamond — R199/month</b>\n"
         "• Every edge unlocked — Diamond picks are Diamond-only\n"
-        "• Full AI Breakdown: Setup, Edge, Risk, Verdict\n"
         "• Personalised alerts tuned to your teams and bankroll\n"
     )
 
@@ -14407,32 +14405,9 @@ def _build_hot_tips_detail_rows(
     rows: list[list[InlineKeyboardButton]] = []
     if primary_button is not None:
         rows.append([primary_button])
-    # Full AI Breakdown button — gated by has_narrative AND visibility
-    # (FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 AC-4). The visibility gate enforces
-    # narrative_source ∈ {w84, w84-haiku-fallback} plus per-section quality
-    # thresholds (≥200 chars + 3 entities for Setup, ≥100 chars + bookmaker +
-    # odds for Edge, ≥100 chars + risk noun for Risk). Hides the button on W82
-    # baselines, quarantined / deferred rows, and any row whose sections fail
-    # quality. user_tier presence is still required so the gate doesn't fire on
-    # contexts that don't pass it (e.g. early bootstrap callsites).
-    _show_breakdown_btn = (
-        has_narrative
-        and user_tier is not None
-        and bool(match_key)
-        and _breakdown_button_visible(match_key)
-    )
-    if _show_breakdown_btn:
-        _bk = _shorten_cb_key(match_key, max_len=64 - len("edge:breakdown:"))
-        if user_tier == "diamond":
-            rows.append([InlineKeyboardButton(
-                "🤖 Full AI Breakdown",
-                callback_data=f"edge:breakdown:{_bk}",
-            )])
-        else:
-            rows.append([InlineKeyboardButton(
-                "🔒 Full AI Breakdown",
-                callback_data=f"edge:breakdown_gate:{_bk}",
-            )])
+    # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — AI Breakdown surface stripped.
+    # Verdict on the card image is now the only narrative surface. has_narrative
+    # / user_tier / match_key params retained for callsite compatibility.
     rows.append([InlineKeyboardButton(
         "↩️ Back", callback_data=f"hot:back:{back_page}",
     )])
@@ -14945,88 +14920,14 @@ def _has_any_cached_narrative(match_id: str) -> bool:
 
 
 def _breakdown_button_visible(match_id: str) -> bool:
-    """FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-4.
+    """BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — surface stripped.
 
-    Return True iff the "🤖 Full AI Breakdown" button should be visible for
-    this match. Stricter than ``_has_any_cached_narrative`` — that function
-    gates content reachability (Rule 20 mechanical-consistency); this one
-    gates BUTTON visibility per Paul's directive: "rather don't show AI
-    breakdown unless there's something worth a monthly subscription behind
-    it because breaking our image-only rule and showing this vague, generic
-    crap is honestly worse than the alternative."
-
-    Five conditions (all must hold):
-      1. narrative_source IN ('w84','w84-haiku-fallback') — polish landed.
-      2. status IS NULL OR status NOT IN ('quarantined','deferred').
-      3. Setup section ≥ 200 chars + ≥ 3 named entities.
-      4. Edge section ≥ 100 chars + ≥ 1 bookmaker name + ≥ 1 odds shape.
-      5. Risk section ≥ 100 chars + ≥ 1 specific risk noun.
-
-    Best-effort: any DB error returns False (button hidden).
+    The AI Breakdown button surface was retired in this wave. The verdict
+    on the card image is now the only narrative surface. This function is
+    retained as defence-in-depth: any leftover callsite that still consults
+    it gets False, so no breakdown button can ever spawn.
     """
-    if not match_id:
-        return False
-    try:
-        from card_data import compute_breakdown_visibility as _cbv
-        from db_connection import get_connection as _gc
-        conn = _gc(_NARRATIVE_DB_PATH, timeout_ms=1500)
-        try:
-            try:
-                row = conn.execute(
-                    "SELECT narrative_html, narrative_source, "
-                    "       COALESCE(status, '') AS status "
-                    "FROM narrative_cache "
-                    "WHERE match_id = ? "
-                    "  AND COALESCE(quarantined, 0) = 0 "
-                    "  AND narrative_html IS NOT NULL "
-                    "  AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0 "
-                    "LIMIT 1",
-                    (match_id,),
-                ).fetchone()
-            except Exception:
-                # Older DBs may lack the status column — fall back without it.
-                row = conn.execute(
-                    "SELECT narrative_html, narrative_source, '' AS status "
-                    "FROM narrative_cache "
-                    "WHERE match_id = ? "
-                    "  AND narrative_html IS NOT NULL "
-                    "  AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0 "
-                    "LIMIT 1",
-                    (match_id,),
-                ).fetchone()
-            if not row:
-                return False
-            narrative_html, narrative_source, status = row
-            # Try to extract home/away from match_id for evidence_pack so the
-            # named-entity counter has team names to match against. Mirrors the
-            # extraction used in card_data.build_ai_breakdown_data.
-            import re as _re_v
-            home_team = ""
-            away_team = ""
-            mid_nodate = _re_v.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_id)
-            if "_vs_" in mid_nodate:
-                _h_raw, _a_raw = mid_nodate.split("_vs_", 1)
-                home_team = " ".join(w.capitalize() for w in _h_raw.split("_"))
-                away_team = " ".join(w.capitalize() for w in _a_raw.split("_"))
-            visible = _cbv(
-                {
-                    "narrative_html": narrative_html,
-                    "narrative_source": narrative_source,
-                    "status": status,
-                },
-                {
-                    "home_team": home_team,
-                    "away_team": away_team,
-                },
-            )
-            return bool(visible)
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    except Exception:
-        return False
+    return False
 
 
 async def _get_cached_narrative(match_id: str) -> dict | None:
@@ -24406,32 +24307,8 @@ def _build_game_buttons(
     if primary_button is not None:
         buttons.append([primary_button])
 
-    # Full AI Breakdown button — gated by has_narrative (Rule 20 read-side
-    # consistency) AND visibility (FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 AC-4).
-    # The visibility gate enforces narrative_source ∈ {w84, w84-haiku-fallback}
-    # plus per-section quality thresholds (≥200 chars + 3 entities for Setup,
-    # ≥100 chars + bookmaker + odds for Edge, ≥100 chars + risk noun for Risk).
-    # Hides the button on W82 baselines, quarantined / deferred rows, and any
-    # row whose sections fail quality.
-    # "edge:breakdown:" is 15 chars → Telegram 64-byte limit leaves max 49 chars for the key.
-    _BREAKDOWN_KEY_MAX = 64 - len("edge:breakdown:")  # 49
-    _show_breakdown = (
-        has_narrative
-        and bool(match_key)
-        and _breakdown_button_visible(match_key)
-    )
-    _breakdown_key = _shorten_cb_key(match_key, max_len=_BREAKDOWN_KEY_MAX) if (match_key and _show_breakdown) else ""
-    if _breakdown_key:
-        if user_tier == "diamond":
-            buttons.append([InlineKeyboardButton(
-                "🤖 Full AI Breakdown",
-                callback_data=f"edge:breakdown:{_breakdown_key}",
-            )])
-        else:
-            buttons.append([InlineKeyboardButton(
-                "🔒 Full AI Breakdown",
-                callback_data=f"edge:breakdown_gate:{_breakdown_key}",
-            )])
+    # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — AI Breakdown surface stripped.
+    # Verdict on the card image is now the only narrative surface.
 
     _back_cb = back_cb_override or "yg:all:0"
     buttons.append([InlineKeyboardButton("↩️ Back", callback_data=_back_cb)])
@@ -24475,209 +24352,31 @@ async def handle_unsubscribe(query, event_id: str) -> None:
 
 
 async def _handle_ai_breakdown(query, context, match_key: str) -> None:
-    """Render and deliver the Full AI Breakdown card for a Diamond user.
+    """BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — feature removed.
 
-    Delivers via _serve_response (same path as edge_detail) so the breakdown
-    card replaces the current message inline using edit_media, not send_photo.
-    This ensures Telegram displays it identically to Edge detail cards.
+    The AI Breakdown surface was retired. Verdict on the card image is now
+    the only narrative surface. This stub catches stale deeplinks (cached
+    keyboards, shared callback URLs) so they degrade gracefully instead of
+    crashing. The button was removed from `_build_game_buttons` and
+    `_build_hot_tips_detail_rows`; this handler should now be unreachable
+    via current keyboards.
     """
-    user_id = query.from_user.id
-
-    # Server-side tier gate (double-check — button only shown to diamond users)
-    # FIX-TIER-TEXT-SWEEP-01: deliver tier_lock_upsell card, never plain text.
-    tier = await get_effective_tier(user_id)
-    if tier != "diamond":
-        _abg_tip = await asyncio.to_thread(_load_edge_tip_by_key, match_key)
-        import re as _re_abg
-        _abg_mk_nd = _re_abg.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_key)
-        if "_vs_" in _abg_mk_nd:
-            _abg_h_slug, _abg_a_slug = _abg_mk_nd.split("_vs_", 1)
-        else:
-            _abg_h_slug = _abg_a_slug = _abg_mk_nd
-        _abg_home = _display_team_name(_abg_h_slug)
-        _abg_away = _display_team_name(_abg_a_slug)
-        _abg_signals = int((_abg_tip or {}).get("confirming_signals") or 0)
-        _abg_back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
-        try:
-            from card_pipeline import build_tier_lock_data as _build_abg_lock
-            _abg_lock_data = _build_abg_lock(
-                edge_tier="diamond",
-                home=_abg_home,
-                away=_abg_away,
-                sport_key=(_abg_tip or {}).get("sport", ""),
-                league=(_abg_tip or {}).get("league", ""),
-                kickoff_str="",
-                broadcast="",
-                confirming_signals=_abg_signals,
-                tracker_summary=None,
-            )
-            _abg_markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton(
-                    "💎 Unlock Diamond — from R199/mo",
-                    callback_data="sub:plans",
-                )],
-                [InlineKeyboardButton("↩️ Back", callback_data=_abg_back_cb)],
-            ])
-            # Capture detail card so breakdown_back restores it verbatim.
-            try:
-                if query.message and query.message.photo:
-                    _breakdown_back_cache[(user_id, match_key)] = (
-                        query.message.photo[-1].file_id,
-                        query.message.reply_markup,
-                    )
-            except Exception:
-                pass
-            await send_card_or_fallback(
-                bot=query.get_bot(),
-                chat_id=query.message.chat_id,
-                template="tier_lock_upsell.html",
-                data=_abg_lock_data,
-                text_fallback="🔒 Diamond Edge — upgrade to unlock.",
-                markup=_abg_markup,
-                message_to_edit=query.message,
-            )
-        except Exception as _abg_lock_err:
-            log.warning("_handle_ai_breakdown lock card failed for %s: %s", match_key, _abg_lock_err)
-            await _serve_response(
-                query, "🔒 Diamond Edge — upgrade to unlock.",
-                InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
-                    [InlineKeyboardButton("↩️ Back", callback_data=_abg_back_cb)],
-                ]),
-            )
-        return
-
-    # Capture the current detail card (photo file_id + markup) BEFORE replacing the
-    # message.  Stored in _breakdown_back_cache so ↩️ Back can restore it verbatim
-    # without re-entering the full edge:detail render chain.
-    _detail_file_id = ""
-    _detail_markup = None
+    _back_cb = (
+        f"edge:breakdown_back:"
+        f"{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
+    )
     try:
-        if query.message and query.message.photo:
-            _detail_file_id = query.message.photo[-1].file_id
-            _detail_markup = query.message.reply_markup
-    except Exception:
-        pass
-
-    from card_data import build_ai_breakdown_data as _build_bd_data
-
-    # FIX-AI-BREAKDOWN-DEFERRED-PLACEHOLDER-RENDER-01 AC-2 — deferred check
-    # MUST happen BEFORE render_ai_breakdown_card. Pre-fix, this handler ran
-    # `asyncio.gather(render_ai_breakdown_card, _build_bd_data)` in parallel,
-    # so the template render crashed with `'ev_pct' is undefined` whenever the
-    # underlying build returned a deferred sentinel ({"deferred": True, ...}).
-    # The crash was caught by the broad `except Exception` and the user saw
-    # "❌ Could not render breakdown" — masking the AC-2 placeholder branch
-    # below. By calling `_build_bd_data` first, we short-circuit to the
-    # placeholder path before the template ever runs.
-    try:
-        _bd = await asyncio.to_thread(_build_bd_data, match_key)
-    except Exception as exc:
-        log.error("AI breakdown data build failed for %s: %s", match_key, exc)
-        await query.message.reply_text("❌ Could not render breakdown. Please try again.")
-        return
-
-    # FIX-W84-PREMIUM-MANDATORY-COVERAGE-01 AC-3 + FIX-PREMIUM-POSTWRITE-PROTECTION-01 AC-2:
-    # deferred placeholder fires when card_data signals premium-tier defer-in-flight
-    # (Sonnet + Haiku polish both failed this sweep, defer row written) OR a
-    # status='quarantined' Gold/Diamond row exists. Premium consumers MUST NOT
-    # see baseline boilerplate or `'ev_pct' is undefined` errors during a live
-    # polish-failure window — show the "updating" banner instead.
-    if isinstance(_bd, dict) and _bd.get("deferred"):
-        _bd_reason = "quarantine" if _bd.get("quarantine_reason") else "defer"
-        _bd_tier_lower = (_bd.get("edge_tier") or "").lower()
-        log.info(
-            "FIX-AI-BREAKDOWN-DEFERRED-PLACEHOLDER-RENDER-01 PlaceholderServed "
-            "match_id=%s reason=%s tier=%s",
-            match_key,
-            _bd_reason,
-            _bd.get("edge_tier", ""),
-        )
-        _bd_back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
-        # FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-4:
-        # tier-aware placeholder copy. Diamond / Gold get tier-specific text;
-        # Silver / Bronze fall back to generic "full breakdown" (per AC-4 the
-        # visibility gate hides the button on lower tiers anyway, so the
-        # generic copy is a defence-in-depth fallback).
-        if _bd_tier_lower == "diamond":
-            _bd_tier_label = "Diamond breakdown"
-        elif _bd_tier_lower == "gold":
-            _bd_tier_label = "Gold breakdown"
-        else:
-            _bd_tier_label = "breakdown"
-        _placeholder_msg = (
-            "🔄 <b>AI Breakdown updating</b>\n\n"
-            "Our analyst polish for this premium card is regenerating right now. "
-            f"Refresh in a few minutes — the full {_bd_tier_label} will be ready."
-        )
         await _serve_response(
             query,
-            _placeholder_msg,
+            "🔍 The full breakdown surface has been retired. The card-image"
+            " verdict is the new home for the analysis.",
             InlineKeyboardMarkup([
-                [InlineKeyboardButton("↩️ Back", callback_data=_bd_back_cb)],
+                [InlineKeyboardButton("↩️ Back", callback_data=_back_cb)],
             ]),
         )
-        return
-
-    # Non-deferred path — render the breakdown card. Render is heavy (Playwright);
-    # only fire it when we know the data is full-shape.
-    try:
-        png_bytes = await asyncio.to_thread(render_ai_breakdown_card, match_key)
-    except Exception as exc:
-        log.error("AI breakdown render failed for %s: %s", match_key, exc)
-        await query.message.reply_text("❌ Could not render breakdown. Please try again.")
-        return
-
-    if not png_bytes:
-        await query.message.reply_text("❌ Breakdown not available for this match yet.")
-        return
-
-    # Persist captured detail card state for the back button
-    if _detail_file_id and _detail_markup:
-        _breakdown_back_cache[(user_id, match_key)] = (_detail_file_id, _detail_markup)
-
-    # Back button restores the exact detail card captured above (not a re-render).
-    _back_cb = f"edge:breakdown_back:{_shorten_cb_key(match_key, max_len=64 - len('edge:breakdown_back:'))}"
-
-    # CTA: extract the exact URL + label from the detail card's first button row.
-    # The detail card markup was captured above — row 0 button 0 is always the
-    # bookmaker CTA.  Reusing it verbatim guarantees identical link and text.
-    _rows: list[list[InlineKeyboardButton]] = []
-    _cta_extracted = False
-    try:
-        _kb = (_detail_markup.inline_keyboard if _detail_markup else None)
-        if _kb and _kb[0] and getattr(_kb[0][0], "url", None):
-            _rows.append([InlineKeyboardButton(_kb[0][0].text, url=_kb[0][0].url)])
-            _cta_extracted = True
-    except Exception:
-        pass
-
-    if not _cta_extracted:
-        # Fallback: rebuild from live tips or narrative_cache bookmaker key.
-        _bd_edge_tier = ((_bd or {}).get("tier_label", "") or "bronze").split()[0].lower()
-        _tips_for_cta = _game_tips_cache.get(match_key, [])
-        if _tips_for_cta:
-            _built = _build_game_buttons(
-                _tips_for_cta, match_key, user_id,
-                source="matches", user_tier="diamond",
-                edge_tier=_bd_edge_tier, has_narrative=False,
-            )
-            # Take only the primary CTA row (first row), skip the back row
-            if _built:
-                _rows.append(_built[0])
-        else:
-            _bk_key = (_bd or {}).get("best_bookmaker_key", "") or config.ACTIVE_BOOKMAKER
-            _aff_url = (
-                get_affiliate_url(_bk_key, match_id=match_key)
-                or config.get_active_bookmaker().get("website_url", "")
-            )
-            if _aff_url:
-                _bk_display = _display_bookmaker_name(_bk_key)
-                _cta_label = get_cta_label(_bk_display, match_id=match_key, bookmaker_key=_bk_key)
-                _rows.append([InlineKeyboardButton(f"📲 {_cta_label}", url=_aff_url)])
-
-    _rows.append([InlineKeyboardButton("↩️ Back", callback_data=_back_cb)])
-    await _serve_response(query, "", InlineKeyboardMarkup(_rows), photo=png_bytes)
+    except Exception as _stub_err:
+        log.warning("_handle_ai_breakdown stub failed for %s: %s", match_key, _stub_err)
+    return
 
 
 async def handle_tip_detail(query, ctx, action: str) -> None:

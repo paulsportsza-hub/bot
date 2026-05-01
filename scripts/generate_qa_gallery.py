@@ -159,16 +159,8 @@ def make_sample_data():
         "soccer", "Premier League", "Sun 27 Apr · 16:00",
         "SuperSport 3", 4, {"hit_rate_7d": 68, "roi_7d": 22},
     )
-    # ai_breakdown: built manually (real builder reads DB)
-    ai_breakdown = {
-        "home": "Kaizer Chiefs", "away": "Mamelodi Sundowns",
-        "tier_label": "GOLD EDGE", "ev_pct": 12.5, "verdict_tag": "STRONG BACK",
-        "setup_html": "<p>The Soweto Derby arrives at FNB with both clubs separated by 3 points.</p>",
-        "edge_html": "<p>Chiefs covered -0.5 in 6 of last 8 home outings vs top-6. Line value confirmed at 2.40.</p>",
-        "risk_html": "<p>Sundowns 7W-2D-1L away this season — they travel well.</p>",
-        "verdict_prose_html": "<p>Chiefs have won 4 of last 5 home fixtures against Sundowns. Value confirmed at 2.40.</p>",
-        "best_bookmaker_key": "betway",
-    }
+    # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — ai_breakdown surface retired.
+    # Template archived to archive/card_templates/ai_breakdown.html.
 
     # ── Match cards ──
     my_matches = build_my_matches_data([EDGE_MATCH, PLAIN_MATCH], page=1)
@@ -240,7 +232,6 @@ def make_sample_data():
         "edge_detail.html":      edge_detail,
         "edge_picks.html":       edge_picks,
         "edge_summary.html":     edge_summary,
-        "ai_breakdown.html":     ai_breakdown,
         "tier_lock_upsell.html": tier_lock,
         # Match
         "my_matches.html":   my_matches,

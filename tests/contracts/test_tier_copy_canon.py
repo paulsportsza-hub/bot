@@ -3,7 +3,10 @@
 Guards three non-negotiable rules from TIER-COPY-CANON.md:
   1. Bronze must never claim '24h delayed edges'.
   2. Gold must never claim AI breakdowns.
-  3. Diamond features list must contain all three pillar phrases.
+  3. Diamond features list must contain all pillar phrases.
+
+BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 (2026-05-01) — "full ai breakdown"
+removed from the Diamond pillars; the AI Breakdown surface was retired.
 """
 from card_data_adapters import (
     build_sub_plans_data,
@@ -13,8 +16,8 @@ from card_data_adapters import (
 
 _DIAMOND_PILLARS = [
     "every edge unlocked",
-    "full ai breakdown",
     "personalised alerts",
+    "line movement",
 ]
 
 
@@ -67,5 +70,6 @@ class TestTierCopyCanon:
         assert "features" in diamond, "Diamond entry in upgrade_bronze must have features list"
         combined = " ".join(diamond["features"]).lower()
         assert "every edge unlocked" in combined
-        assert "full ai breakdown" in combined
+        # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — "full ai breakdown"
+        # removed from upgrade_bronze Diamond features.
         assert "personalised alerts" in combined

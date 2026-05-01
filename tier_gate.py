@@ -141,7 +141,7 @@ def gate_narrative(edge_v2_result: dict[str, Any], user_tier: str) -> str:
     """Generate tier-appropriate narrative for an edge result.
 
     Bronze: short generic summary (no specific odds/bookmakers)
-    Gold: full AI breakdown with all signal bullets + red flags
+    Gold: full verdict with all signal bullets + red flags
     Diamond: Gold + line movement + sharp money + CLV context
     """
     gen = _ensure_narrative()
@@ -197,7 +197,7 @@ def get_upgrade_message(user_tier: str, context: str = "tip", proof_line: str = 
                 "🔒 <b>You've used your 3 free detail views for today.</b>\n\n"
                 "You can still browse all edges in the list.\n\n"
                 "🥇 <b>Upgrade to Gold</b> for unlimited detail views, "
-                "real-time edges, and full AI breakdowns.\n"
+                "real-time edges, and the full verdict line on every match.\n"
                 f"💰 R99/mo or R799/yr (save 33%){fm}\n\n"
                 "/subscribe — View plans"
                 )
@@ -206,7 +206,7 @@ def get_upgrade_message(user_tier: str, context: str = "tip", proof_line: str = 
             return _with_proof(
                 (
                 "🔒 <b>This is a 🥇 Gold Edge</b>\n\n"
-                "Unlock full odds, AI breakdown, and signal analysis.\n\n"
+                "Unlock full odds, the full verdict line, and signal analysis.\n\n"
                 f"🥇 <b>Gold: R99/mo or R799/yr (save 33%)</b>{fm}\n\n"
                 "/subscribe — View plans"
                 )
@@ -216,7 +216,6 @@ def get_upgrade_message(user_tier: str, context: str = "tip", proof_line: str = 
                 (
                 "🔒 <b>This is a 💎 Diamond Edge</b>\n\n"
                 "Every edge unlocked — Diamond picks are Diamond-only.\n"
-                "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match.\n"
                 "Personalised alerts tuned to your teams and bankroll.\n\n"
                 f"💎 <b>Diamond: R199/mo or R1,599/yr (save 33%)</b>{fm}\n\n"
                 "/subscribe — View plans"
@@ -235,7 +234,6 @@ def get_upgrade_message(user_tier: str, context: str = "tip", proof_line: str = 
             (
             "🔒 This is a 💎 <b>Diamond</b> feature.\n\n"
             "Every edge unlocked — Diamond picks are Diamond-only.\n"
-            "Full AI Breakdown: Setup, Edge, Risk, Verdict on every match.\n"
             "Personalised alerts tuned to your teams and bankroll.\n"
             "Line movement + sharp money + CLV tracking.\n\n"
             f"💎 <b>Diamond: R199/mo or R1,599/yr (save 33%)</b>{fm}\n\n"

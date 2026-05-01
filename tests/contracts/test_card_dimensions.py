@@ -43,7 +43,7 @@ LIST_TEMPLATES = {
     "my_matches.html",
     "edge_summary.html",
     "tier_page.html",
-    "ai_breakdown.html",
+    # ai_breakdown.html archived under BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01
     # BUILD-WAVE1-SUB-01
     "sub_upgrade_bronze.html",
     "sub_upgrade_gold.html",
