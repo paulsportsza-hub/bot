@@ -1819,28 +1819,15 @@ def _fire_channel_normalise_alert(raw: str) -> None:
             return
         _channel_normalise_alert_sent[key] = now
 
+    # AUDITOR-DIRECT 1 May 2026 PM: Telegram alert killed entirely.
+    # Unrecognised channel values are dev-time concerns ("add a mapping")
+    # not ops emergencies. Test injections (X, xyzzy_unknown_platform,
+    # totally_unknown_channel_xyz) flooded EdgeOps every 1-2 min despite
+    # the per-key 1h debounce. Logs + Sentry capture remain; the
+    # _channel_normalise_alert_sent debounce dict is now dead code but
+    # harmless to leave.
     log.warning("[channel-normalise] unrecognised channel value: %r — update _normalise_channel_key", raw)
-
-    token = os.environ.get("BOT_TOKEN", "")
-    if not token:
-        return
-    text = (
-        "⚠️ <b>Dashboard: unrecognised channel value</b>\n"
-        f"Raw value: <code>{html.escape(raw)}</code>\n"
-        "Action: add a mapping in <code>_normalise_channel_key</code> in health_dashboard.py."
-    )
-    try:
-        payload = json.dumps(
-            {"chat_id": _EDGEOPS_CHAT_ID_CHANNEL, "text": text, "parse_mode": "HTML"}
-        ).encode()
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=8)
-    except Exception as _te:
-        log.warning("[channel-normalise] EdgeOps alert failed: %s", _te)
+    # No Telegram send. Sentry MCP picks up the warning log if needed.
 
 
 def _normalise_channel_key(raw: str) -> str:
