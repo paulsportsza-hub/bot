@@ -1958,19 +1958,28 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 ])
             # BUILD-W3 / W3-FIX: My Matches card pagination (photo→photo, no flicker)
             _raw_games = _schedule_cache.get(user_id) or await _fetch_schedule_games(user_id)
-            _edge_info = _get_edge_info_for_games(_raw_games)
-            _mm_input = await _build_mm_matches_for_card_with_odds(_raw_games, _edge_info)
-            # W3-FIX: sort matches to align with build_my_matches_data() card [N] order
-            _mm_sorted = _sort_mm_snapshot(_mm_input)
-            _mm_games_snapshot[user_id] = _mm_sorted
-            _yg_card_data = build_my_matches_data(_mm_input, page=pg + 1)
-            _yg_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
-            await send_card_or_fallback(
-                bot=ctx.bot, chat_id=query.message.chat_id,
-                template="my_matches.html", data=_yg_card_data,
-                text_fallback=text, markup=_build_mm_card_markup(_mm_sorted, page=pg, sport_keys=_yg_sk, sport_filter=sf),
-                message_to_edit=query.message,
-            )
+            # Fix 3: when the schedule is empty do NOT render a placeholder card
+            # and cache its Telegram file_id — serve the text response directly so
+            # the empty-state file_id is never reused for a future non-empty schedule.
+            if not _raw_games:
+                try:
+                    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                except Exception as _yg_empty_err:
+                    log.warning("MM yg:all empty-state edit failed for user %s: %s", user_id, _yg_empty_err)
+            else:
+                _edge_info = _get_edge_info_for_games(_raw_games)
+                _mm_input = await _build_mm_matches_for_card_with_odds(_raw_games, _edge_info)
+                # W3-FIX: sort matches to align with build_my_matches_data() card [N] order
+                _mm_sorted = _sort_mm_snapshot(_mm_input)
+                _mm_games_snapshot[user_id] = _mm_sorted
+                _yg_card_data = build_my_matches_data(_mm_input, page=pg + 1)
+                _yg_sk = {config.LEAGUE_SPORT.get(g.get("league_key", "")) for g in _raw_games if config.LEAGUE_SPORT.get(g.get("league_key", ""))}
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=query.message.chat_id,
+                    template="my_matches.html", data=_yg_card_data,
+                    text_fallback=text, markup=_build_mm_card_markup(_mm_sorted, page=pg, sport_keys=_yg_sk, sport_filter=sf),
+                    message_to_edit=query.message,
+                )
         elif action.startswith("sport:"):
             # yg:sport:{key} → inline re-render with filter — serves image card (mirrors yg:all:N)
             parts = action.split(":")
@@ -13115,6 +13124,15 @@ async def cmd_schedule(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _fetch_schedule_games(user_id: int) -> list[dict]:
     """Fetch and cache schedule events for a user. Returns sorted event list."""
+    # Fix 2 (read side): honour the 60-second negative-cache TTL set after an
+    # empty result so we don't hammer the API+DB on every My Matches tap when
+    # the schedule is legitimately empty or both sources are under load.
+    _neg_ts = _schedule_cache_empty.get(user_id)
+    if _neg_ts is not None:
+        import time as _sched_time
+        if _sched_time.monotonic() - _neg_ts < 60.0:
+            return []
+
     from scripts.sports_data import fetch_events_for_league
     from services.odds_service import LEAGUE_MARKET_TYPE
 
@@ -13253,8 +13271,16 @@ async def _fetch_schedule_games(user_id: int) -> list[dict]:
             })
 
     all_events.sort(key=lambda e: e.get("commence_time", ""))
-    # Cache for pagination
-    _schedule_cache[user_id] = all_events
+    # Fix 1: never cache an empty result — a timeout on both sources produces an
+    # empty list that would poison _schedule_cache for the lifetime of the process.
+    # Fix 2 (write side): record the empty result with a monotonic timestamp so
+    # the 60-second negative-cache TTL prevents a thundering herd of cold fetches.
+    if all_events:
+        _schedule_cache[user_id] = all_events
+        _schedule_cache_empty.pop(user_id, None)
+    else:
+        import time as _sched_time
+        _schedule_cache_empty[user_id] = _sched_time.monotonic()
     return all_events
 
 
@@ -13423,6 +13449,10 @@ GAMES_PER_PAGE = 4
 
 # Cache for schedule games per user (user_id → list of event dicts)
 _schedule_cache: dict[int, list[dict]] = {}
+# Fix 2: negative-cache TTL — user_id → monotonic timestamp of last empty fetch.
+# Prevents thundering herd when both API and DB return empty simultaneously.
+# Entries expire after 60 s so fresh data is fetched on the next tap thereafter.
+_schedule_cache_empty: dict[int, float] = {}
 
 # Cache for game tips (event_id → list of tip dicts)
 _game_tips_cache: dict[str, list[dict]] = {}
