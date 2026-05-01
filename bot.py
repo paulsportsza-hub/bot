@@ -14604,6 +14604,7 @@ async def _store_narrative_cache(
     # below (banned phrases, venue leak, manager hallucination, closure rule,
     # char range, tone-band) fire on every W82 write and refuse rows that violate
     # the contract — regardless of tier.
+    _wg_src = (narrative_source or "").lower()
     # FIX-NARRATIVE-CACHE-SILENT-DROP-01 B.1: Default edge_tier to 'bronze' when pregen
     # produces an empty/None tier. Observed silent drop: arsenal_vs_fulham generated with
     # tier='' triggered sqlite3.IntegrityError (NOT NULL constraint failed) which was
