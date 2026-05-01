@@ -1006,21 +1006,36 @@ class TestRenderVerdict:
         assert "lean" in verdict.lower() or "the draw" in verdict.lower()
 
     def test_back_uses_back(self):
-        """W84-Q3: Back verdict uses 'back' or 'green light'."""
+        """W84-Q3 + FIX-NARRATIVE-W82-VARIANT-EXPANSION-01: Back verdict closes
+        with one of the brief AC-3 imperative action verbs.
+        """
         spec = self._spec("back", "standard stake", "confident")
-        verdict = _render_verdict(spec)
-        assert "back" in verdict.lower() or "green light" in verdict.lower()
+        verdict = _render_verdict(spec).lower()
+        # Brief AC-3 imperative cluster (any of these counts as a Gold close).
+        assert any(verb in verdict for verb in (
+            "back", "bet on", "put your money on", "get on", "take",
+            "lean on", "ride", "hammer it on", "smash", "green light",
+        )), f"Back verdict missing imperative action verb: {verdict!r}"
 
     def test_strong_back_confident_language(self):
-        """W84-Q3: Strong back verdict uses strong conviction language."""
+        """W84-Q3 + FIX-NARRATIVE-W82-VARIANT-EXPANSION-01: Strong back verdict
+        carries Diamond-tier conviction vocabulary.
+
+        Conviction is now expressed via the imperative action verb itself
+        ("Hammer it on" — Diamond) plus the standard-to-heavy stake sizing
+        tail. The previous "premium back" / "with conviction" wording lived
+        in the legacy 4-variant pool that the W82 7-pattern pool replaced.
+        """
         spec = self._spec("strong back", "confident stake", "strong")
-        verdict = _render_verdict(spec)
+        verdict = _render_verdict(spec).lower()
         assert (
-            "strong" in verdict.lower()
-            or "premium" in verdict.lower()
-            or "conviction" in verdict.lower()
-            or "confidence" in verdict.lower()
-        )
+            "hammer it on" in verdict
+            or "strong" in verdict
+            or "premium" in verdict
+            or "conviction" in verdict
+            or "confidence" in verdict
+            or "standard-to-heavy" in verdict
+        ), f"Strong back verdict missing Diamond-tier conviction language: {verdict!r}"
 
     def test_speculative_verdict_contains_no_banned_confident_phrases(self):
         spec = self._spec("speculative punt", "tiny exposure", "cautious")
@@ -1106,15 +1121,13 @@ class TestRenderVerdict:
         """Every verdict action × sizing renders within the locked char range.
 
         BUILD-VERDICT-FLOOR-01 originally enforced [140, 200].
-        FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) widens the ceiling to
-        VERDICT_HARD_MAX (260) per `feedback_verdict_char_range_unified.md`
-        (tier-uniform 100/140-200/260: hard floor 100, soft target 140-200,
-        hard ceiling 260). The brief Required item: "100–260 chars
-        (tier-uniform per feedback_verdict_char_range_unified.md)". 200 is
-        the SOFT target ceiling (logged as `verdict_suboptimal_length` if
-        exceeded); 260 is the HARD reject ceiling. Holistic Path A variants
-        with long team names + long bookmaker + risk_clause cohesion will
-        legitimately overshoot 200 — staying under 260 is the contract.
+        FIX-NARRATIVE-VOICE-COMPREHENSIVE-01 (2026-04-28) widened the ceiling to
+        VERDICT_HARD_MAX (260).
+        FIX-NARRATIVE-W82-VARIANT-EXPANSION-01 (2026-05-01) lowered the floor
+        to 100 per AC-3 #6 ("Pass char range 100-260, target 140-200"). The
+        new W82 imperative-closing pool produces verdicts as short as ~100
+        chars when team / bookmaker names are short — the unified contract
+        is now [100, 260], with [140, 200] as the soft target.
         """
         from narrative_spec import VERDICT_HARD_MAX
         cases = [
@@ -1140,8 +1153,8 @@ class TestRenderVerdict:
                 movement_direction="neutral",
             )
             verdict = _render_verdict(spec)
-            assert len(verdict) >= 140, (
-                f"Verdict for action={action!r} below floor ({len(verdict)} < 140): {verdict!r}"
+            assert len(verdict) >= 100, (
+                f"Verdict for action={action!r} below floor ({len(verdict)} < 100): {verdict!r}"
             )
             assert len(verdict) <= VERDICT_HARD_MAX, (
                 f"Verdict for action={action!r} exceeds hard max ({len(verdict)} > "
@@ -1375,11 +1388,15 @@ class TestVerdictCoherenceIntegration:
         return NarrativeSpec(**defaults)
 
     def test_back_verdict_in_length_window(self):
-        """BUILD-VERDICT-FLOOR-01: Back verdict renders in [140, 200] chars."""
+        """BUILD-VERDICT-FLOOR-01 + FIX-NARRATIVE-W82-VARIANT-EXPANSION-01:
+        Back verdict renders within the unified [100, 260] window. Target
+        soft band is [140, 200] but the new W82 pool can produce shorter
+        clean verdicts when team names are short.
+        """
         spec = self._spec()
         verdict = _render_verdict(spec)
-        assert 140 <= len(verdict) <= 200, (
-            f"Back verdict outside [140, 200] ({len(verdict)}): {verdict!r}"
+        assert 100 <= len(verdict) <= 260, (
+            f"Back verdict outside [100, 260] ({len(verdict)}): {verdict!r}"
         )
 
     def test_speculative_verdict_in_length_window(self):
@@ -1490,12 +1507,17 @@ class TestTierConvictionLanguage:
             )
 
     def test_diamond_verdict_uses_conviction_language(self):
-        """AC-2: Diamond verdict must use high-conviction language."""
+        """AC-2 + FIX-NARRATIVE-W82-VARIANT-EXPANSION-01: Diamond verdict
+        uses high-conviction language. Conviction is now expressed via the
+        Diamond imperative action verb ("Hammer it on") plus
+        "standard-to-heavy stake" sizing, which together carry the
+        Strong-band tier-floor signal.
+        """
         spec = self._diamond_spec()
         verdict = _render_verdict(spec)
         conviction_phrases = [
-            "strong back", "with conviction", "with confidence",
-            "premium play", "all point the same way",
+            "hammer it on", "strong back", "with conviction", "with confidence",
+            "premium play", "all point the same way", "standard-to-heavy",
         ]
         assert any(p in verdict.lower() for p in conviction_phrases), (
             f"Diamond verdict lacks conviction language: {verdict!r}"
@@ -1542,10 +1564,12 @@ class TestTierConvictionLanguage:
             assert phrase.lower() not in verdict.lower(), (
                 f"QA-29 D-1 regression: banned phrase {phrase!r} in Diamond verdict"
             )
-        # Must contain conviction language
+        # Must contain conviction language. FIX-NARRATIVE-W82-VARIANT-EXPANSION-01
+        # added "Hammer it on" + standard-to-heavy stake as the Diamond
+        # conviction surface (the brief AC-3 imperative cluster for Diamond).
         conviction_phrases = [
-            "strong back", "with conviction", "with confidence",
-            "premium play", "all point the same way",
+            "hammer it on", "strong back", "with conviction", "with confidence",
+            "premium play", "all point the same way", "standard-to-heavy",
         ]
         assert any(p in verdict.lower() for p in conviction_phrases), (
             f"QA-29 D-1 regression: Diamond verdict lacks conviction language: {verdict!r}"
