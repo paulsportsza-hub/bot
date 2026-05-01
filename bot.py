@@ -21124,6 +21124,13 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
 
     W82-POLISH: returns True if polish is safe to serve; False = serve baseline.
     evidence_pack: serialised evidence dict — provides team_ratings for gate 8d.
+
+    FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
+    polish output is now verdict-only (single line, 100-260 chars). The
+    long-form section gates (4 section headers, H2H/setup-context, setup-
+    pricing, risk-resolution) are dropped. Verdict-only gates remain:
+    banned phrases, tone-band, team names, bookmaker+odds, speculative-
+    language, rating-anchor, combat-lore, venue-leak, manager validation.
     """
     from narrative_spec import TONE_BANDS
     band = TONE_BANDS[spec.tone_band]
@@ -21148,19 +21155,20 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
             log.warning("POLISH REJECT: banned phrase '%s' in %s band", phrase, spec.tone_band)
             return False
 
-    # 3. All 4 section headers present
-    for header in ["📋", "🎯", "⚠️", "🏆"]:
-        if header not in polished:
-            log.warning("POLISH REJECT: missing section header %s", header)
-            return False
+    # 3. (DROPPED) FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01)
+    # 4-section header check removed — polish output is verdict-only now.
 
-    # 4. Essential facts survived — team names
-    if spec.home_name and spec.home_name.lower().split()[0] not in polished_lower:
-        log.warning("POLISH REJECT: home team '%s' missing", spec.home_name)
-        return False
-    if spec.away_name and spec.away_name.lower().split()[0] not in polished_lower:
-        log.warning("POLISH REJECT: away team '%s' missing", spec.away_name)
-        return False
+    # 4. Essential facts survived — team name (verdict-only output may carry
+    # one team name on the action close, not necessarily both).
+    _home_token = spec.home_name.lower().split()[0] if spec.home_name else ""
+    _away_token = spec.away_name.lower().split()[0] if spec.away_name else ""
+    if _home_token and _away_token:
+        if _home_token not in polished_lower and _away_token not in polished_lower:
+            log.warning(
+                "POLISH REJECT: neither team name present (home='%s', away='%s')",
+                spec.home_name, spec.away_name,
+            )
+            return False
 
     # 5. Bookmaker + odds
     if spec.bookmaker and spec.bookmaker.lower() not in polished_lower:
@@ -21170,15 +21178,8 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
         log.warning("POLISH REJECT: odds '%s' missing", spec.odds)
         return False
 
-    # 6. Verified H2H claims must survive unchanged or be omitted
-    if not _is_h2h_polish_safe(polished, spec):
-        log.warning("POLISH REJECT: H2H copy changed or introduced beyond verified spec")
-        return False
-
-    # 6b. Stale setup context must stay neutral — no fresh-form/team-state invention
-    if not getattr(spec, "context_is_fresh", True) and _setup_contains_form_or_team_state_claim(polished):
-        log.warning("POLISH REJECT: stale Setup context was upgraded into form/team-state claims")
-        return False
+    # 6. (DROPPED) Verified H2H polish-safety — verdict-only mode has no H2H section.
+    # 6b. (DROPPED) Stale-setup-context check — no Setup section in verdict-only mode.
 
     # 7. Speculative edge → no strong language
     if spec.evidence_class == "speculative":
@@ -21188,53 +21189,9 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
                 log.warning("POLISH REJECT: speculative but strong phrase '%s'", phrase)
                 return False
 
-    # 8. Quality check (form-as-headline, standalone records, generic teams)
-    violations = _quality_check(polished)
-    if violations:
-        log.warning("POLISH REJECT: quality violations %s", violations)
-        return False
-
-    # 8a. FIX-PREGEN-SETUP-PRICING-LEAK-01 / -02: defensive Setup-pricing gate.
-    # Two helpers run side-by-side:
-    #   - _find_stale_setup_patterns mirrors the cache-read absolute-ban detector
-    #     (decimal + price-context). Catches "implied probability of 0.85"-style leaks.
-    #   - _find_setup_strict_ban_violations (FIX-02) catches integer-percentage
-    #     probabilities, isolated banned tokens, and Elo-implied phrasing — the
-    #     gap surfaced post-FIX-01 on everton_vs_manchester_city_2026-05-04.
-    # See CLAUDE.md Narrative Generation Pipeline Rule 8.
-    _setup_leak_reasons = _find_stale_setup_patterns(polished)
-    if _setup_leak_reasons:
-        log.warning(
-            "POLISH REJECT: Setup-pricing leak (%s)", ", ".join(_setup_leak_reasons)
-        )
-        return False
-    _setup_strict_reasons = _find_setup_strict_ban_violations(polished)
-    if _setup_strict_reasons:
-        log.warning(
-            "POLISH REJECT: Setup-strict-ban (%s)", ", ".join(_setup_strict_reasons)
-        )
-        return False
-    # Phase 4 / AC-4.1 semantic-class detector — sibling of the strict-ban
-    # enforcer above. Catches "X% probability"-style outcome-verb patterns,
-    # model/Elo/Glicko-implied phrasing, and bookmaker-name leaks the
-    # keyword-substring detector misses.
-    # Phase 2 hook: when the unified `_validate_narrative_for_persistence` lands,
-    # it should call this helper alongside `_find_setup_strict_ban_violations`.
-    _setup_semantic_reasons = _find_setup_pricing_semantic_violations(polished)
-    if _setup_semantic_reasons:
-        log.warning(
-            "POLISH REJECT: Setup-pricing-semantic (%s)",
-            ", ".join(_setup_semantic_reasons),
-        )
-        return False
-
-    # 8c. FIX-NARRATIVE-RISK-RESOLUTION-01: Verdict prose must reference Risk.
-    _risk_resolution_reasons = _find_risk_resolution_violations(polished)
-    if _risk_resolution_reasons:
-        log.warning(
-            "POLISH REJECT: risk-resolution (%s)", ", ".join(_risk_resolution_reasons)
-        )
-        return False
+    # 8. (DROPPED) _quality_check — targeted long-form Setup/Edge/Risk shapes.
+    # 8a. (DROPPED) Setup-pricing-leak / strict-ban / semantic — no Setup section.
+    # 8c. (DROPPED) Risk-resolution Jaccard — no Risk section in verdict-only mode.
 
     # 8d. FIX-NARRATIVE-RATING-ANCHOR-01: Rating numbers must match evidence pack.
     _rating_reasons = _find_rating_anchor_violations(
@@ -21289,30 +21246,29 @@ def _validate_polish(polished: str, baseline: str, spec, evidence_pack: "dict | 
     except Exception as _mn_exc:
         log.debug("Manager-leak (all sections) check skipped: %s", _mn_exc)
 
-    # 8h. FIX-NARRATIVE-ROT-ROOT-01 / Phase 4 / AC-4.3: claim-source validation.
-    # Conservative: fires only on numeric claims (H2H counts, W-D-L records,
-    # form sequences, points totals) that conflict with the evidence pack OR
-    # appear when ESPN context flags `data_available=False`.
-    # Phase 2 hook: the unified persistence validator should call this helper.
-    try:
-        from narrative_spec import (
-            validate_claims_against_evidence as _vca,
-        )
-        _claim_violations = _vca(polished, evidence_pack)
-        if _claim_violations:
-            _bad = ", ".join(
-                f"{v.claim_class}={v.claim_text!r}@{v.section}({v.evidence_state})"
-                for v in _claim_violations[:5]
-            )
-            log.warning(
-                "FIX-NARRATIVE-ROT-ROOT-01 ClaimSourceLeak: %s", _bad,
-            )
-            log.warning("POLISH REJECT: claim-source (%s)", _bad)
-            return False
-    except Exception as _cs_exc:
-        log.debug("Claim-source check skipped: %s", _cs_exc)
+    # 8h. (DROPPED) FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01):
+    # claim-source validation targeted long-form section claims; no longer
+    # relevant for verdict-only output.
 
-    # 8b. BUILD-VERDICT-FLOOR-01: verdict section length gate [140, 200]
+    # 8i. FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-1:
+    # Verdict char range (Rule 22, 100-260 chars, target 140-200). The polish
+    # output IS the verdict, so the entire string is gate-checked here.
+    _polish_len = len(polished.strip())
+    if _polish_len < 100:
+        log.warning(
+            "POLISH REJECT: verdict %d chars < 100 (Rule 22 floor)",
+            _polish_len,
+        )
+        return False
+    if _polish_len > 260:
+        log.warning(
+            "POLISH REJECT: verdict %d chars > 260 (Rule 22 hard max)",
+            _polish_len,
+        )
+        return False
+
+    # 8b. BUILD-VERDICT-FLOOR-01: legacy verdict-section length gate (kept for
+    # the rare case the LLM still emits a 🏆 marker — should be a no-op now).
     _verdict_idx = polished.find("🏆")
     if _verdict_idx != -1:
         _verdict_body = polished[_verdict_idx:]
