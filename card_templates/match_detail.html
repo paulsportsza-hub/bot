@@ -41,10 +41,6 @@
             background: linear-gradient(90deg, #0D0D0D, #000);
             border-bottom: 1px solid #2A2A2A;
         }
-        .header > .logo-glow,
-        .header > .logo-glow-screen {
-            transform: translateX(-145px);
-        }
         /* ── Logo glow (lifted from sub_plans.html, WAVE-E1-CANONICAL-LIFT-01) ── */
         .logo-glow {
             position: absolute;
@@ -64,8 +60,16 @@
             background: radial-gradient(ellipse 32% 60% at 50% 28%,
                 #F7931A66 0%, #F7931A22 50%, transparent 80%);
         }
-        .header > .logo-img,
-        .header > .logo-fallback,
+        .header-brand {
+            position: relative;
+            z-index: 1;
+            isolation: isolate;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+        }
+        .header-brand > .logo-img,
+        .header-brand > .logo-fallback,
         .header > .header-badges { position: relative; z-index: 1; }
         .logo-img {
             height: 26px;
@@ -399,13 +403,15 @@
 
     <!-- ── 1. Header ─────────────────────────────────────────── -->
     <div class="header">
-        <div class="logo-glow"></div>
-        <div class="logo-glow-screen"></div>
-        {% if header_logo_b64 %}
-        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
-        {% else %}
-        <div class="logo-fallback">MzansiEdge</div>
-        {% endif %}
+        <div class="header-brand">
+            <div class="logo-glow"></div>
+            <div class="logo-glow-screen"></div>
+            {% if header_logo_b64 %}
+            <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+            {% else %}
+            <div class="logo-fallback">MzansiEdge</div>
+            {% endif %}
+        </div>
         <div class="header-badges">
             <div class="badge-my-match">
                 <span style="font-size: 11px;">{{ sport_emoji }}</span>
