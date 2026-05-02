@@ -46,62 +46,58 @@
             position: relative;
             z-index: 2;
         }
-        /* ── Right-side tier glow — FIX-MATCH-DETAIL-GLOW-CORRECT-01 ── */
-        /* Glow anchors top-right, emanating from the edge badge area.   */
+        /* ── Centre glow — FIX-MATCH-DETAIL-GLOW-CORRECT-01 ── */
         .logo-glow {
             position: absolute;
-            top: -10px;
+            top: 0;
+            left: 0;
             right: 0;
-            left: auto;
-            width: 260px;
-            height: 200px;
+            height: 260px;
             pointer-events: none;
             z-index: 0;
-            filter: blur(3px);
+            filter: blur(4px);
         }
         .logo-glow-screen {
             position: absolute;
             top: 0;
+            left: 0;
             right: 0;
-            left: auto;
-            width: 220px;
-            height: 170px;
+            height: 220px;
             pointer-events: none;
             z-index: 0;
             mix-blend-mode: screen;
         }
-        /* Tier-coloured gradients — right-anchored ellipse */
         .logo-glow-diamond {
-            background: radial-gradient(ellipse 75% 90% at 88% 20%,
-                #B9F2FF40 0%, #B9F2FF1A 45%, #B9F2FF08 70%, transparent 100%);
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #B9F2FF39 0%, #B9F2FF16 42%, #B9F2FF05 65%, transparent 90%);
         }
         .logo-glow-screen-diamond {
-            background: radial-gradient(ellipse 65% 65% at 92% 25%,
-                #B9F2FF70 0%, #B9F2FF28 50%, transparent 82%);
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #B9F2FF51 0%, #B9F2FF1F 45%, transparent 80%);
         }
         .logo-glow-gold {
-            background: radial-gradient(ellipse 75% 90% at 88% 20%,
-                #FFD70040 0%, #FFD7001A 45%, #FFD70008 70%, transparent 100%);
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #FFD70039 0%, #FFD70016 42%, #FFD70005 65%, transparent 90%);
         }
         .logo-glow-screen-gold {
-            background: radial-gradient(ellipse 65% 65% at 92% 25%,
-                #FFD70070 0%, #FFD70028 50%, transparent 82%);
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #FFD70051 0%, #FFD7001F 45%, transparent 80%);
         }
         .logo-glow-silver {
-            background: radial-gradient(ellipse 75% 90% at 88% 20%,
-                #CBD5E038 0%, #CBD5E016 45%, #CBD5E006 70%, transparent 100%);
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #CBD5E02B 0%, #CBD5E00F 42%, #CBD5E003 65%, transparent 90%);
         }
         .logo-glow-screen-silver {
-            background: radial-gradient(ellipse 65% 65% at 92% 25%,
-                #CBD5E060 0%, #CBD5E022 50%, transparent 82%);
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #CBD5E042 0%, #CBD5E018 45%, transparent 80%);
         }
         .logo-glow-bronze {
-            background: radial-gradient(ellipse 75% 90% at 88% 20%,
-                #E8A87C38 0%, #E8A87C18 45%, #E8A87C06 70%, transparent 100%);
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #E8A87C30 0%, #E8A87C13 42%, #E8A87C04 65%, transparent 90%);
         }
         .logo-glow-screen-bronze {
-            background: radial-gradient(ellipse 65% 65% at 92% 25%,
-                #E8A87C66 0%, #E8A87C24 50%, transparent 82%);
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #E8A87C47 0%, #E8A87C1B 45%, transparent 80%);
         }
         .header-brand {
             position: relative;
