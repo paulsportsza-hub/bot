@@ -46,26 +46,62 @@
             position: relative;
             z-index: 2;
         }
-        /* ── Logo glow (lifted from sub_plans.html, WAVE-E1-CANONICAL-LIFT-01) ── */
+        /* ── Right-side tier glow — FIX-MATCH-DETAIL-GLOW-CORRECT-01 ── */
+        /* Glow anchors top-right, emanating from the edge badge area.   */
         .logo-glow {
             position: absolute;
-            inset: -10px 0 auto 0;
-            height: 190px;
+            top: -10px;
+            right: 0;
+            left: auto;
+            width: 260px;
+            height: 200px;
             pointer-events: none;
             z-index: 0;
             filter: blur(3px);
-            background: radial-gradient(ellipse 50% 90% at 50% 25%,
-                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
         }
         .logo-glow-screen {
             position: absolute;
-            inset: 0 0 auto 0;
-            height: 160px;
+            top: 0;
+            right: 0;
+            left: auto;
+            width: 220px;
+            height: 170px;
             pointer-events: none;
             z-index: 0;
             mix-blend-mode: screen;
-            background: radial-gradient(ellipse 32% 60% at 50% 28%,
-                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+        }
+        /* Tier-coloured gradients — right-anchored ellipse */
+        .logo-glow-diamond {
+            background: radial-gradient(ellipse 75% 90% at 88% 20%,
+                #B9F2FF40 0%, #B9F2FF1A 45%, #B9F2FF08 70%, transparent 100%);
+        }
+        .logo-glow-screen-diamond {
+            background: radial-gradient(ellipse 65% 65% at 92% 25%,
+                #B9F2FF70 0%, #B9F2FF28 50%, transparent 82%);
+        }
+        .logo-glow-gold {
+            background: radial-gradient(ellipse 75% 90% at 88% 20%,
+                #FFD70040 0%, #FFD7001A 45%, #FFD70008 70%, transparent 100%);
+        }
+        .logo-glow-screen-gold {
+            background: radial-gradient(ellipse 65% 65% at 92% 25%,
+                #FFD70070 0%, #FFD70028 50%, transparent 82%);
+        }
+        .logo-glow-silver {
+            background: radial-gradient(ellipse 75% 90% at 88% 20%,
+                #CBD5E038 0%, #CBD5E016 45%, #CBD5E006 70%, transparent 100%);
+        }
+        .logo-glow-screen-silver {
+            background: radial-gradient(ellipse 65% 65% at 92% 25%,
+                #CBD5E060 0%, #CBD5E022 50%, transparent 82%);
+        }
+        .logo-glow-bronze {
+            background: radial-gradient(ellipse 75% 90% at 88% 20%,
+                #E8A87C38 0%, #E8A87C18 45%, #E8A87C06 70%, transparent 100%);
+        }
+        .logo-glow-screen-bronze {
+            background: radial-gradient(ellipse 65% 65% at 92% 25%,
+                #E8A87C66 0%, #E8A87C24 50%, transparent 82%);
         }
         .header-brand {
             position: relative;
@@ -410,9 +446,11 @@
 
     <!-- ── 1. Header ─────────────────────────────────────────── -->
     <div class="header">
+        {% if edge_badge_tier %}
+        <div class="logo-glow logo-glow-{{ edge_badge_tier }}"></div>
+        <div class="logo-glow-screen logo-glow-screen-{{ edge_badge_tier }}"></div>
+        {% endif %}
         <div class="header-brand">
-            <div class="logo-glow"></div>
-            <div class="logo-glow-screen"></div>
             {% if header_logo_b64 %}
             <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
             {% else %}
