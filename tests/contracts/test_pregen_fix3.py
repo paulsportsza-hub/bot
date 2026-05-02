@@ -242,15 +242,18 @@ class TestPregenFix3:
         assert pw["verification_failure"] != ""
 
     def test_log_line_exists_in_source(self):
-        """AC verification: the PREGEN-FULL log line exists in source code."""
+        """AC verification: source documents that w84 preservation is retired."""
         source_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "scripts", "pregenerate_narratives.py"
         )
         with open(source_path) as f:
             source = f.read()
-        assert "[PREGEN-FULL] Preserving w84" in source, (
-            "Log line [PREGEN-FULL] Preserving w84 must exist in pregenerate_narratives.py"
+        assert "FIX-DROP-SONNET-POLISH-W82-CANONICAL-01" in source
+        assert "No w84 preservation logic" in source, (
+            "pregenerate_narratives.py must document why full sweeps no longer "
+            "preserve historical w84 rows."
         )
-        assert "Failure reason:" in source, (
-            "Failure reason must be logged for COO review"
+        assert "validator gates inside _store_narrative_cache" in source, (
+            "Current W82 cache writes must rely on _store_narrative_cache "
+            "validator gates after w84 preservation retirement."
         )

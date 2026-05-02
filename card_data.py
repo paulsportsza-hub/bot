@@ -542,6 +542,79 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4, us
     }
 
 
+def _normalise_tier_key(raw: object, default: str = "bronze") -> str:
+    key = str(raw or default).lower().strip()
+    return key if key in _TIER_META else default
+
+
+def edge_picks_index_tier_locked(user_tier: str, edge_tier: str) -> bool:
+    """Return whether the index row should route through upgrade.
+
+    The list/detail surface can expose partial or blurred higher-tier previews.
+    The index is a tier entry menu, so tiers above the user's plan route to the
+    upsell even when the underlying list gate classifies them as previewable.
+    """
+    import tier_gate
+
+    user_key = _normalise_tier_key(user_tier)
+    edge_key = _normalise_tier_key(edge_tier)
+    access_level = tier_gate.get_edge_access_level(user_key, edge_key)
+    if access_level == "locked":
+        return True
+    return _TIER_META[edge_key]["rank"] < _TIER_META[user_key]["rank"]
+
+
+def build_edge_picks_index_data(user_tier: str, tier_counts: dict[str, int]) -> dict:
+    """Build edge_picks_index.html template data for the tier menu."""
+    counts = {key: 0 for key in _TIER_ORDER}
+    for raw_key, raw_count in (tier_counts or {}).items():
+        key = _normalise_tier_key(raw_key)
+        try:
+            count = int(raw_count or 0)
+        except (TypeError, ValueError):
+            count = 0
+        counts[key] += max(count, 0)
+
+    total_edges = sum(counts.values())
+    tier_summary = []
+    for key in _TIER_ORDER:
+        meta = _TIER_META[key]
+        tier_summary.append({
+            "emoji": meta["emoji"],
+            "count": counts[key],
+            "color": meta["color"],
+        })
+
+    default_key = next(
+        (key for key in _TIER_ORDER if not edge_picks_index_tier_locked(user_tier, key)),
+        "bronze",
+    )
+
+    tiers = []
+    for key in _TIER_ORDER:
+        meta = _TIER_META[key]
+        locked = edge_picks_index_tier_locked(user_tier, key)
+        tiers.append({
+            "key": key,
+            "emoji": meta["emoji"],
+            "label": meta["label"],
+            "color": meta["color"],
+            "count": counts[key],
+            "locked": locked,
+            "is_default": key == default_key and not locked,
+            "bg_alpha": meta["bg_alpha"],
+            "border_alpha": meta["border_alpha"],
+        })
+
+    return {
+        "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
+        "tier_summary": tier_summary,
+        "total_edges": total_edges,
+        "live_total": total_edges,
+        "tiers": tiers,
+    }
+
+
 def build_tier_page_data(tips: list[dict], tier: str) -> dict:
     """Build tier_page.html template data for a single tier.
 

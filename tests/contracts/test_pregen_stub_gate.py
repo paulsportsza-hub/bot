@@ -78,7 +78,7 @@ class TestOutcomeSentinel:
         from pregenerate_narratives import _generate_one
 
         edge = _base_edge(recommended_outcome="?")
-        result = asyncio.run(_generate_one(edge, "claude-sonnet", _NeverCallClaude()))
+        result = asyncio.run(_generate_one(edge))
 
         assert result["success"] is False
         assert result.get("skipped_incomplete") is True
@@ -95,7 +95,7 @@ class TestOutcomeSentinel:
 
         edge = _base_edge(recommended_outcome="")
         edge.pop("outcome", None)
-        result = asyncio.run(_generate_one(edge, "claude-sonnet", _NeverCallClaude()))
+        result = asyncio.run(_generate_one(edge))
 
         assert result["success"] is False
         assert result.get("skipped_incomplete") is True
@@ -112,7 +112,7 @@ class TestOddsSentinel:
         from pregenerate_narratives import _generate_one
 
         edge = _base_edge(best_odds=0)
-        result = asyncio.run(_generate_one(edge, "claude-sonnet", _NeverCallClaude()))
+        result = asyncio.run(_generate_one(edge))
 
         assert result["success"] is False
         assert result.get("skipped_incomplete") is True
@@ -123,7 +123,7 @@ class TestOddsSentinel:
 
         edge = _base_edge()
         edge.pop("best_odds", None)
-        result = asyncio.run(_generate_one(edge, "claude-sonnet", _NeverCallClaude()))
+        result = asyncio.run(_generate_one(edge))
 
         assert result["success"] is False
         assert result.get("skipped_incomplete") is True
@@ -140,7 +140,7 @@ class TestBookmakerSentinel:
         from pregenerate_narratives import _generate_one
 
         edge = _base_edge(best_bookmaker="?")
-        result = asyncio.run(_generate_one(edge, "claude-sonnet", _NeverCallClaude()))
+        result = asyncio.run(_generate_one(edge))
 
         assert result["success"] is False
         assert result.get("skipped_incomplete") is True
@@ -149,7 +149,7 @@ class TestBookmakerSentinel:
         from pregenerate_narratives import _generate_one
 
         edge = _base_edge(best_bookmaker="")
-        result = asyncio.run(_generate_one(edge, "claude-sonnet", _NeverCallClaude()))
+        result = asyncio.run(_generate_one(edge))
 
         assert result["success"] is False
         assert result.get("skipped_incomplete") is True
@@ -203,7 +203,7 @@ class TestNonEdgeCarveOut:
             # The non-edge path may still fail later (Claude is not mocked
             # deeply enough); we only care that the gate itself doesn't fire.
             try:
-                result = asyncio.run(_generate_one(edge, "claude-haiku", _NeverCallClaude()))
+                result = asyncio.run(_generate_one(edge))
             except Exception:
                 result = None
 
@@ -248,7 +248,7 @@ class TestCompleteEdgePassesGate:
              mock.patch.object(pgn, "build_evidence_pack", _ok_ep), \
              mock.patch.object(pgn, "_refresh_edge_from_odds_db", _ok_refresh):
             try:
-                result = asyncio.run(_generate_one(edge, "claude-sonnet", _NeverCallClaude()))
+                result = asyncio.run(_generate_one(edge))
             except Exception:
                 result = None
 

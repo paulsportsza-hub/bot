@@ -2,8 +2,9 @@
 
 The polish path is verdict-only (no Setup/Edge/Risk sections written). The
 validator stack drops the long-form gates that targeted narrative_html and
-keeps the verdict-only gates. The closure rule tightens to imperative-only
-(declarative "is the pick" no longer satisfies).
+keeps the verdict-only gates. A later closure-rule loosening accepts
+imperatives, gerunds, declaratives, and action prepositions when the close also
+has the selection/team and odds.
 """
 from __future__ import annotations
 
@@ -31,9 +32,8 @@ _NINE_IMPERATIVES_VERBS = (
     "Smash",
 )
 
-# Declarative shapes that PASSED under FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01
-# but are now REJECTED on premium tiers per AC-2 of this brief.
-_DECLARATIVE_REJECTS = (
+# Declarative shapes accepted after FIX-VERDICT-CLOSURE-RULE-LOOSEN-AND-GERUND-ACCEPT-01.
+_DECLARATIVE_ACCEPTS = (
     "is the pick",
     "is the play",
     "is the call",
@@ -185,18 +185,13 @@ def test_verdict_venue_gate_fires_on_unverified_venue():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test 5 — Closure rule REJECTS declarative phrases on Diamond/Gold.
+# Test 5 — Closure rule ACCEPTS declarative phrases on Diamond/Gold.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("declarative", _DECLARATIVE_REJECTS)
-def test_verdict_closure_rule_rejects_declarative_on_premium(declarative: str):
-    """`is the pick`, `is the play`, etc. no longer satisfy on Diamond/Gold.
-
-    Closing sentence has zero imperative tokens — only the declarative phrase.
-    The earlier sentence is intentionally clean of action verbs so the rule
-    fires on the closer alone.
-    """
+@pytest.mark.parametrize("declarative", _DECLARATIVE_ACCEPTS)
+def test_verdict_closure_rule_accepts_declarative_on_premium(declarative: str):
+    """`is the pick`, `is the play`, etc. satisfy on Diamond/Gold."""
     from narrative_validator import _check_verdict_closure_rule
 
     text = (
@@ -204,8 +199,8 @@ def test_verdict_closure_rule_rejects_declarative_on_premium(declarative: str):
         f"Liverpool {declarative} at 1.97 with Supabets."
     )
     severity, _reason = _check_verdict_closure_rule(text, "gold", _baseline_pack())
-    assert severity == "CRITICAL", (
-        f"declarative '{declarative}' should be CRITICAL on Gold — got {severity!r}"
+    assert severity is None, (
+        f"declarative '{declarative}' should pass on Gold — got {severity!r}"
     )
 
 
@@ -232,12 +227,12 @@ def test_verdict_closure_rule_accepts_all_9_imperatives(imperative: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test 7 — _VERDICT_ACTION_RE pattern: imperative-only, no declarative branch.
+# Test 7 — _VERDICT_ACTION_RE pattern includes accepted closure shapes.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_verdict_action_re_imperative_only():
-    """The regex source MUST NOT carry the `is the (pick|play|...)` branch."""
+def test_verdict_action_re_accepts_current_closure_shapes():
+    """The regex source carries imperatives, gerunds, and declaratives."""
     from narrative_validator import _VERDICT_ACTION_RE
 
     pattern_text = _VERDICT_ACTION_RE.pattern
@@ -246,7 +241,7 @@ def test_verdict_action_re_imperative_only():
         "back",
         "bet\\s+on",
         "put\\s+your\\s+money\\s+on",
-        "get\\s+on",
+        "get\\s+(?:on|behind)",
         "take",
         "lean\\s+on",
         "ride",
@@ -254,10 +249,10 @@ def test_verdict_action_re_imperative_only():
         "smash",
     ):
         assert verb in pattern_text, f"imperative '{verb}' missing from regex"
-    # Declarative branch removed.
-    assert "is\\s+the" not in pattern_text, (
-        "declarative branch ('is the pick/play/...') must be dropped per AC-2"
-    )
+    assert "backing" in pattern_text
+    assert "worth\\s+taking" in pattern_text
+    assert "is\\s+the" in pattern_text
+    assert "worth\\s+(?:a\\s+)?" in pattern_text
 
 
 # ─────────────────────────────────────────────────────────────────────────────

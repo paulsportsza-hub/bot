@@ -1742,6 +1742,25 @@ def _fetch_fb_groups_moq() -> list[dict]:
                     group_url = ctx_entry.get("url") or ""
                 except Exception:
                     pass
+            if not group_url:
+                try:
+                    import importlib.util as _importlib_util
+                    import sys as _sys
+                    _publisher_root = Path(__file__).resolve().parents[2] / "publisher"
+                    if str(_publisher_root) not in _sys.path:
+                        _sys.path.insert(0, str(_publisher_root))
+                    _ctx_path = _publisher_root / "autogen" / "fb_groups_daily.py"
+                    _spec = _importlib_util.spec_from_file_location(
+                        "_fb_groups_daily_context_fallback",
+                        _ctx_path,
+                    )
+                    if _spec and _spec.loader:
+                        _ctx_mod = _importlib_util.module_from_spec(_spec)
+                        _spec.loader.exec_module(_ctx_mod)
+                        ctx_entry = getattr(_ctx_mod, "_GROUP_CONTEXT", {}).get(group) or {}
+                        group_url = ctx_entry.get("url") or ""
+                except Exception:
+                    pass
 
             rows.append({
                 "id": item.get("id") or "",

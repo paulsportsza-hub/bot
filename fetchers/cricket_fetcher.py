@@ -405,8 +405,9 @@ def _get_elo_ratings(
     db_path: str | None = None,
 ) -> tuple[float | None, float | None]:
     """Fetch Elo/Glicko-2 ratings from DB if available for cricket."""
-    conn = get_connection(db_path or DB_PATH, readonly=True)
+    conn = None
     try:
+        conn = get_connection(db_path or DB_PATH, readonly=True)
         home_elo = None
         away_elo = None
         for team, setter in [(home_team, "home"), (away_team, "away")]:
@@ -426,7 +427,8 @@ def _get_elo_ratings(
     except Exception:
         return None, None
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 # ── Main Fetcher ──────────────────────────────────────────────────────────────

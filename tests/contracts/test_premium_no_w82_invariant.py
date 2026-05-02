@@ -1,38 +1,16 @@
-"""FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 — regression guard.
+"""FIX-DROP-SONNET-POLISH-W82-CANONICAL-01 — premium W82 regression guard.
 
-The Wave 2 chain (Rule 23) is the canonical no-fallback architecture for
-premium tiers (Diamond + Gold): Sonnet retry → Haiku-narrative fallback →
-defer with EdgeOps alert. The writer-level refusal at
-``bot.py::_store_narrative_cache`` is the second-layer enforcement covering
-bypass paths the Wave 2 chain doesn't intercept:
-
-* ``_skip_w84`` carve-out in ``pregenerate_narratives._generate_one`` (PARTIAL
-  coverage with ``_coverage_level == "empty"`` for Gold/Diamond, or
-  ``edge.skip_sonnet_polish`` flag) — the chain sees ``not _skip_w84`` and
-  skips the intercept entirely; ``_cache`` is built and the writer is invoked.
-* ``_is_non_edge`` carve-out — non-edge premium-tier previews bypass the
-  intercept by design.
-* The bot serve-time persist path at
-  ``bot.py::_generate_game_tips::_persist_narrative_bg`` invokes
-  ``_store_narrative_cache(..., model="sonnet")`` without overriding the
-  ``narrative_source="w82"`` default — the live-tap baseline lands in the
-  cache labelled with the W82 source string.
-
-Synthesis-on-tap (Rule 20) covers the resulting cache miss.
-``_has_any_cached_narrative`` returns True whenever ``edge_results`` has the
-match, and ``card_data._synthesize_breakdown_row_from_baseline`` produces a
-fresh baseline at view time. Silver and Bronze tier W82-write path is
-byte-identical pre/post (W93-TIER-GATE cost policy unchanged).
+W82 is now the canonical narrative path for all tiers. Premium (Diamond + Gold)
+rows are allowed when they pass the unified persistence validator; the old
+blanket writer refusal for ``w82`` / ``baseline_no_edge`` premium rows is
+retired.
 
 Tests:
 
-1. ``test_corpus_invariant_no_premium_w82_rows`` — corpus-level scan against
-   live ``narrative_cache``: zero rows where ``narrative_source = 'w82'`` AND
-   ``edge_tier IN ('diamond', 'gold')``.
-2. ``test_writer_refuses_gold_w82`` — Gold tier + ``narrative_source='w82'``
-   → no row persisted (AC-5(a)).
-3. ``test_writer_refuses_diamond_baseline_no_edge`` — Diamond +
-   ``baseline_no_edge`` → no row persisted (AC-5(b)).
+1. ``test_corpus_invariant_premium_w82_rows_not_quarantined`` — live
+   ``narrative_cache`` may contain premium W82 rows, but not quarantined ones.
+2. ``test_writer_persists_premium_w82_and_baseline_no_edge_when_validator_passes``
+   — source/tier alone does not block writes.
 4. ``test_writer_persists_silver_w82_unchanged`` — Silver + W82 → row
    persisted as before (AC-5(c) tier-scope guard).
 5. ``test_writer_persists_diamond_w84_unchanged`` — Diamond + W84 → row
@@ -40,10 +18,9 @@ Tests:
 6. ``test_writer_persists_gold_haiku_fallback_unchanged`` — Gold +
    ``w84-haiku-fallback`` → row persisted (Wave 2 success path is not
    blocked by the writer refusal).
-7. ``test_brief_log_marker_present_in_writer`` — source-level check: the
-   ``FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 PremiumW82WriteRefused``
-   log line is present in ``_store_narrative_cache``. Monitoring + AC-9
-   journalctl grep both depend on this exact string.
+7. ``test_premium_validator_marker_present_in_writer`` — source-level check:
+   premium writes are refused by ``PremiumValidatorRefused`` when validation
+   fails, not by a source/tier ban.
 """
 from __future__ import annotations
 
@@ -52,6 +29,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -71,8 +49,8 @@ _LIVE_ODDS_DB = Path(os.environ.get("ODDS_DB_PATH", "/home/paulsportsza/scrapers
 # ── 1. Corpus-level invariant against the live narrative_cache ────────────────
 
 
-def test_corpus_invariant_no_premium_w82_rows():
-    """AC-5 corpus invariant: zero non-expired premium-tier W82 rows.
+def test_corpus_invariant_premium_w82_rows_not_quarantined():
+    """Premium W82 rows are allowed, but invalid/quarantined rows are not.
 
     Skipped when the live odds.db isn't on disk (CI without the production
     artefact). The brief AC-7 verifies the same query post-deploy + cache
@@ -83,38 +61,48 @@ def test_corpus_invariant_no_premium_w82_rows():
 
     conn = sqlite3.connect(f"file:{_LIVE_ODDS_DB}?mode=ro", uri=True)
     try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(narrative_cache)")}
+        status_checks = []
+        if "status" in cols:
+            status_checks.append("COALESCE(status, '') = 'quarantined'")
+        if "quality_status" in cols:
+            status_checks.append("COALESCE(quality_status, '') IN ('quarantined', 'skipped_banned_shape')")
+        if not status_checks:
+            pytest.skip("narrative_cache has no status/quality_status columns to check")
+        bad_where = " OR ".join(status_checks)
         row = conn.execute(
             "SELECT count(*) FROM narrative_cache "
             "WHERE narrative_source IN ('w82', 'baseline_no_edge') "
             "AND edge_tier IN ('diamond', 'gold') "
-            "AND datetime(expires_at) > datetime('now')"
+            "AND datetime(expires_at) > datetime('now') "
+            f"AND ({bad_where})"
         ).fetchone()
     finally:
         conn.close()
 
-    premium_w82_rows = row[0] if row else 0
-    if premium_w82_rows:
+    bad_rows = row[0] if row else 0
+    if bad_rows:
         # Surface the offending rows so a failing CI run is debuggable
         # without re-querying the DB by hand.
         conn = sqlite3.connect(f"file:{_LIVE_ODDS_DB}?mode=ro", uri=True)
         try:
             offenders = conn.execute(
                 "SELECT match_id, narrative_source, edge_tier, "
-                "datetime(created_at), datetime(expires_at) "
+                "datetime(created_at), datetime(expires_at), "
+                "COALESCE(status, ''), COALESCE(quality_status, '') "
                 "FROM narrative_cache "
                 "WHERE narrative_source IN ('w82', 'baseline_no_edge') "
                 "AND edge_tier IN ('diamond', 'gold') "
                 "AND datetime(expires_at) > datetime('now') "
+                f"AND ({bad_where}) "
                 "ORDER BY created_at DESC LIMIT 25"
             ).fetchall()
         finally:
             conn.close()
         pytest.fail(
-            f"Corpus invariant violated: {premium_w82_rows} premium-tier "
-            f"W82 / baseline_no_edge rows present in narrative_cache. "
-            f"FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 writer-level "
-            f"refusal is the second-layer enforcement — re-introducing the "
-            f"safety-net write reopens the regression. Sample offenders:\n  "
+            f"Corpus invariant violated: {bad_rows} premium-tier W82 / "
+            f"baseline_no_edge rows are quarantined/invalid in narrative_cache. "
+            f"Sample offenders:\n  "
             + "\n  ".join(repr(o) for o in offenders[:10])
         )
 
@@ -202,19 +190,16 @@ def _stub_compute_odds_hash(*_args, **_kwargs):
 
 @pytest.mark.parametrize("source", ["w82", "baseline_no_edge"])
 @pytest.mark.parametrize("tier", ["gold", "diamond"])
-def test_writer_refuses_premium_w82_and_baseline_no_edge(tmp_path, source, tier):
-    """AC-5 (a) + (b): premium tier + W82-class source → no row persisted.
-
-    Parametrised over both ``narrative_source`` values the refusal must catch
-    (``w82`` and ``baseline_no_edge``) and both premium tier strings (Gold,
-    Diamond). The matrix is the brief's tier-scoped refusal contract.
-    """
+def test_writer_persists_premium_w82_and_baseline_no_edge_when_validator_passes(tmp_path, source, tier):
+    """Premium tier + W82-class source persists when validator passes."""
     db_path = _build_in_memory_narrative_db(tmp_path)
     store = _import_bot_writer(db_path)
 
     match_id = f"home_vs_away_2026-05-01_{source}_{tier}"
 
-    with patch("bot._compute_odds_hash", _stub_compute_odds_hash):
+    validator_pass = SimpleNamespace(passed=True, critical_count=0, major_count=0, failures=[])
+    with patch("bot._compute_odds_hash", _stub_compute_odds_hash), \
+         patch("narrative_validator._validate_narrative_for_persistence", return_value=validator_pass):
         asyncio.run(
             store(
                 match_id=match_id,
@@ -226,9 +211,9 @@ def test_writer_refuses_premium_w82_and_baseline_no_edge(tmp_path, source, tier)
             )
         )
 
-    assert _row_count(db_path, match_id) == 0, (
-        f"Writer persisted a premium-tier ({tier}) {source} row — refusal "
-        f"failed. Expected zero rows for match_id={match_id!r}."
+    assert _row_count(db_path, match_id) == 1, (
+        f"Writer refused a premium-tier ({tier}) {source} row despite passing "
+        f"validation. Expected one row for match_id={match_id!r}."
     )
 
 
@@ -350,58 +335,18 @@ def test_writer_persists_gold_haiku_fallback_unchanged(tmp_path):
 # ── 7. Source-level: brief log marker present ─────────────────────────────────
 
 
-def test_brief_log_marker_present_in_writer():
-    """Source-level: the brief's exact log marker is present in the writer.
-
-    AC-9 corpus-delta verification greps journalctl for
-    ``PremiumW82WriteRefused`` post-deploy. Monitoring depends on this
-    string being byte-identical to the brief.
-    """
+def test_premium_validator_marker_present_in_writer():
+    """Source-level: premium write refusal is validator-driven."""
     src = _BOT_PY.read_text()
     fn_start = src.index("async def _store_narrative_cache(")
     fn_end = src.index("\nasync def _store_narrative_evidence", fn_start)
     fn_body = src[fn_start:fn_end]
 
-    assert (
-        "FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 PremiumW82WriteRefused"
-        in fn_body
-    ), (
-        "Writer-level refusal log marker missing or renamed. Monitoring + "
-        "AC-9 journalctl grep both depend on this exact string. Do NOT "
-        "rename without coordinating with EdgeOps."
-    )
-
-    # The conditional must early-return — the refusal is what makes the
-    # marker semantically meaningful.
-    cond_idx = fn_body.index('if _wg_src in ("w82", "baseline_no_edge")')
-    line_start = fn_body.rfind("\n", 0, cond_idx) + 1
-    if_line = fn_body[line_start: fn_body.index("\n", cond_idx)]
-    if_indent = len(if_line) - len(if_line.lstrip())
-
-    block_lines: list[str] = []
-    cursor = fn_body.index("\n", cond_idx) + 1
-    while cursor < len(fn_body):
-        next_nl = fn_body.find("\n", cursor)
-        if next_nl == -1:
-            block_lines.append(fn_body[cursor:])
-            break
-        line = fn_body[cursor:next_nl]
-        cursor = next_nl + 1
-        if not line.strip():
-            block_lines.append(line)
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent <= if_indent:
-            break
-        block_lines.append(line)
-
-    block_body = "\n".join(block_lines)
-    has_return = any(
-        l.split("#", 1)[0].strip().startswith("return") for l in block_lines
-    )
-    assert has_return, (
-        "Writer-level refusal block does NOT contain an early `return`. "
-        "Without the return the refusal is logging-only and the W82 row "
-        "still gets persisted by the `_store()` body below. Block was:\n"
-        f"---\n{block_body}\n---"
+    assert "Rule 24 premium-W82 refusal lifted" in fn_body
+    assert "PremiumValidatorRefused" in fn_body
+    assert "PremiumW82WriteRefused" not in fn_body
+    marker_idx = fn_body.index("PremiumValidatorRefused")
+    validator_block = fn_body[marker_idx:fn_body.index("if not _premium and _crit", marker_idx)]
+    assert "return" in validator_block, (
+        "Premium validator refusal block must return before persistence."
     )

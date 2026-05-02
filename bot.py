@@ -126,6 +126,8 @@ from card_sender import send_card_or_fallback
 from card_data import (
     _allocate_tips_by_tier,
     build_edge_picks_data,
+    build_edge_picks_index_data,
+    edge_picks_index_tier_locked,
     build_my_matches_data,
     build_edge_detail_data,  # noqa: F401 — available for ed: handler
     build_match_detail_data,  # noqa: F401 — available for md: handler
@@ -2014,6 +2016,62 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             return
         elif action in ("go", "show"):
             await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
+        elif action.startswith("tier:"):
+            _tier_key = action.split(":", 1)[1].lower().strip()
+            if _tier_key not in _EDGE_PICKS_INDEX_TIERS:
+                await _do_hot_tips_flow(query.message.chat_id, ctx.bot, user_id=user_id)
+                return
+            _tier_source = _ht_tips_snapshot.get(user_id) or _hot_tips_cache.get("global", {}).get("tips", [])
+            _tier_tips = _filter_hot_tips_by_tier(_tier_source, _tier_key)
+            _tier_user = await get_effective_tier(user_id)
+            _tier_rv = 999
+            try:
+                from db_connection import get_connection as _tier_conn_fn
+                _tier_conn = _tier_conn_fn()
+                _, _tier_rv, _ = gate_edges(_tier_tips, user_id, _tier_user, _tier_conn)
+                _tier_conn.close()
+            except Exception:
+                pass
+            _tier_proof, _tier_summary = await asyncio.gather(
+                _get_hot_tips_result_proof(),
+                _get_edge_tracker_summary(7),
+            )
+            _tier_text, _tier_markup, _tier_rendered = await _build_hot_tips_page(
+                _tier_tips, page=0, user_tier=_tier_user,
+                remaining_views=_tier_rv, user_id=user_id,
+                hit_rate_7d=((_tier_proof.get("stats_7d", {}).get("hit_rate", 0) or 0) * 100),
+                last_10_results=_tier_proof.get("last_10_results"),
+                roi_7d=_tier_proof.get("roi_7d"),
+                recently_settled=_tier_proof.get("recently_settled"),
+                yesterday_results=_tier_proof.get("yesterday_results"),
+                edge_tracker_summary=_tier_summary,
+            )
+            if _tier_rendered:
+                _tier_card_data = build_edge_picks_data(
+                    _tier_rendered,
+                    page=1,
+                    per_page=HOT_TIPS_PAGE_SIZE,
+                    user_tier=_tier_user,
+                )
+                await send_card_or_fallback(
+                    bot=ctx.bot, chat_id=query.message.chat_id,
+                    template="edge_picks.html", data=_tier_card_data,
+                    text_fallback=_tier_text, markup=_tier_markup,
+                    message_to_edit=query.message,
+                )
+                _ht_page_state[user_id] = 0
+                _ht_tips_snapshot[user_id] = _tier_rendered
+            else:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await ctx.bot.send_message(
+                    query.message.chat_id,
+                    _tier_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_tier_markup,
+                )
         elif action.startswith("back"):
             # W84-HT2: hot:back:{page} — return to the exact page the user came from.
             # Use per-user snapshot (frozen tips copy) to prevent drift when global cache refreshes.
@@ -2073,8 +2131,21 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             _upg_tier = await get_effective_tier(user_id)
             _upg_summary = await _get_edge_tracker_summary(7)
             _upg_parts = action.split(":")
-            _upg_key = _resolve_cb_key(_upg_parts[1]) if len(_upg_parts) > 1 else ""
-            _upg_pg = int(_upg_parts[1]) if len(_upg_parts) > 1 and _upg_parts[1].isdigit() else None
+            _upg_requested_tier = (
+                _upg_parts[2].lower().strip()
+                if len(_upg_parts) > 2 and _upg_parts[1] == "tier"
+                else ""
+            )
+            _upg_key = (
+                _resolve_cb_key(_upg_parts[1])
+                if len(_upg_parts) > 1 and not _upg_requested_tier
+                else ""
+            )
+            _upg_pg = (
+                int(_upg_parts[1])
+                if len(_upg_parts) > 1 and _upg_parts[1].isdigit()
+                else None
+            )
             _upg_tip = next(
                 (t for t in (_ht_tips_snapshot.get(user_id) or []) if _tip_matches_hot_key(t, _upg_key)),
                 None,
@@ -2087,6 +2158,11 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 context="tip",
                 proof_line=_format_edge_tracker_record_line(_upg_summary),
             )
+            if _upg_requested_tier in _EDGE_PICKS_INDEX_TIERS:
+                _upg_text = (
+                    f"🔒 <b>{_upg_requested_tier.title()} Edge — Locked</b>\n\n"
+                    f"{_upg_text}"
+                )
             if _upg_tip and _upg_key and not _upg_parts[1].isdigit():
                 _upg_header = await _resolve_hot_tip_header(_upg_key, user_id, seed_tip=_upg_tip)
                 _upg_edge_tier = _upg_tip.get("display_tier", _upg_tip.get("edge_rating", "premium"))
@@ -2168,7 +2244,19 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     return
                 except Exception as _lock_err:
                     log.warning("tier_lock_upsell (hot) failed for %s: %s", _upg_key, _lock_err)
-            await query.edit_message_text(_upg_text, parse_mode=ParseMode.HTML, reply_markup=_upg_markup)
+            try:
+                await query.edit_message_text(_upg_text, parse_mode=ParseMode.HTML, reply_markup=_upg_markup)
+            except Exception:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await ctx.bot.send_message(
+                    query.message.chat_id,
+                    _upg_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_upg_markup,
+                )
         elif action.startswith("page:"):
             try:
                 page_num = int(action.split(":")[1])
@@ -11785,6 +11873,53 @@ def _sort_tips_for_snapshot(tips: list[dict]) -> list[dict]:
     return _allocate_tips_by_tier(result, min_per_tier=3)
 
 
+_EDGE_PICKS_INDEX_TIERS = ("diamond", "gold", "silver", "bronze")
+
+
+def _hot_tip_tier_key(tip: dict | None) -> str:
+    if not tip:
+        return "bronze"
+    raw = (
+        tip.get("edge_tier")
+        or tip.get("display_tier")
+        or tip.get("edge_rating")
+        or tip.get("tier")
+        or "bronze"
+    )
+    key = str(raw).lower().strip()
+    return key if key in _EDGE_PICKS_INDEX_TIERS else "bronze"
+
+
+def _tier_counts_for_index(tips: list[dict]) -> dict[str, int]:
+    counts = {key: 0 for key in _EDGE_PICKS_INDEX_TIERS}
+    for tip in tips or []:
+        counts[_hot_tip_tier_key(tip)] += 1
+    return counts
+
+
+def _filter_hot_tips_by_tier(tips: list[dict], tier_key: str) -> list[dict]:
+    key = str(tier_key or "").lower().strip()
+    if key not in _EDGE_PICKS_INDEX_TIERS:
+        return []
+    return [tip for tip in tips or [] if _hot_tip_tier_key(tip) == key]
+
+
+def _build_index_markup(user_tier: str, tier_counts: dict[str, int]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    counts = {key: int((tier_counts or {}).get(key, 0) or 0) for key in _EDGE_PICKS_INDEX_TIERS}
+    for key in _EDGE_PICKS_INDEX_TIERS:
+        locked = edge_picks_index_tier_locked(user_tier, key)
+        label = EDGE_LABELS.get(key, key.upper()).replace(" EDGE", "").title()
+        emoji = EDGE_EMOJIS.get(key, "")
+        suffix = "Upgrade" if locked else f"{counts[key]} live"
+        callback = f"hot:upgrade:tier:{key}" if locked else f"hot:tier:{key}"
+        rows.append([InlineKeyboardButton(
+            f"{emoji} {label} · {suffix}",
+            callback_data=callback,
+        )])
+    return InlineKeyboardMarkup(rows)
+
+
 async def _build_hot_tips_page(
     tips: list[dict], page: int = 0,
     user_tier: str = "diamond", remaining_views: int = 999,
@@ -12443,6 +12578,7 @@ def _blw_fire_tips(tips: list[dict], user_id_str: str) -> None:
 
 async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> None:
     """Core Hot Tips — fetch ALL tips, show tiered display (Wave 21)."""
+    HOT_TIPS_INDEX_ENABLED = os.getenv("HOT_TIPS_INDEX_ENABLED", "0") == "1"
     if user_id:
         _sentry_user(user_id)
     _ht_cache_state = "warm" if _hot_tips_cache.get("global", {}).get("tips") else "cold"
@@ -12495,7 +12631,15 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         # P0-FIX-02: use _wm_rendered (filtered+sorted) — NOT raw _cached_tips.
         # Raw cache may contain ev<=0 or edge_score<40 tips that buttons exclude.
         # FIX-HOT-TIPS-EMPTY-CARD-01: skip card when no renderable tips.
-        if _wm_rendered:
+        if HOT_TIPS_INDEX_ENABLED:
+            _wm_tier_counts = _tier_counts_for_index(_wm_rendered)
+            _wm_card_data = build_edge_picks_index_data(_wm_tier, _wm_tier_counts)
+            await send_card_or_fallback(
+                bot=bot, chat_id=chat_id,
+                template="edge_picks_index.html", data=_wm_card_data,  # A2-INDEX-SWAP
+                text_fallback=_wm_text, markup=_build_index_markup(_wm_tier, _wm_tier_counts),
+            )
+        elif _wm_rendered:
             _wm_card_data = build_edge_picks_data(_wm_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_wm_tier)
             await send_card_or_fallback(
                 bot=bot, chat_id=chat_id,
@@ -12569,7 +12713,15 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
         # P0-FIX-02: use _fast_rendered (filtered+sorted) — NOT raw _fast_tips.
         # FIX-HOT-TIPS-EMPTY-CARD-01: skip card when no renderable tips.
-        if _fast_rendered:
+        if HOT_TIPS_INDEX_ENABLED:
+            _fast_tier_counts = _tier_counts_for_index(_fast_rendered)
+            _fast_card_data = build_edge_picks_index_data(_fast_tier, _fast_tier_counts)
+            await send_card_or_fallback(
+                bot=bot, chat_id=chat_id,
+                template="edge_picks_index.html", data=_fast_card_data,  # A2-INDEX-SWAP
+                text_fallback=_fast_text, markup=_build_index_markup(_fast_tier, _fast_tier_counts),
+            )
+        elif _fast_rendered:
             _fast_card_data = build_edge_picks_data(_fast_rendered, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=_fast_tier)
             await send_card_or_fallback(
                 bot=bot, chat_id=chat_id,
@@ -12716,7 +12868,15 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     # BUILD-W3: send Edge Picks image card (falls back to text on render failure)
     # P0-FIX-02: use _rendered_tips (filtered+sorted) — NOT raw tips.
     # FIX-HOT-TIPS-EMPTY-CARD-01: skip card when no renderable tips.
-    if _rendered_tips:
+    if HOT_TIPS_INDEX_ENABLED:
+        _cold_tier_counts = _tier_counts_for_index(_rendered_tips)
+        _cold_card_data = build_edge_picks_index_data(user_tier, _cold_tier_counts)
+        await send_card_or_fallback(
+            bot=bot, chat_id=chat_id,
+            template="edge_picks_index.html", data=_cold_card_data,  # A2-INDEX-SWAP
+            text_fallback=text, markup=_build_index_markup(user_tier, _cold_tier_counts),
+        )
+    elif _rendered_tips:
         _cold_card_data = build_edge_picks_data(_rendered_tips, page=1, per_page=HOT_TIPS_PAGE_SIZE, user_tier=user_tier)
         await send_card_or_fallback(
             bot=bot, chat_id=chat_id,

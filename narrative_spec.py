@@ -153,6 +153,7 @@ TONE_BANDS: dict[str, dict[str, list[str]]] = {
 
 _SETUP_CONTEXT_MAX_AGE_HOURS = 48.0
 _COACH_LOOKUP_CACHE: dict[str, object] | None = None
+_COACH_LOOKUP_CACHE_PATH: str | None = None
 _NICKNAME_LOOKUP_CACHE: dict[str, str] | None = None
 
 
@@ -169,20 +170,23 @@ def _normalise_coach_lookup_name(name: str) -> str:
 
 def _load_coach_lookup() -> dict[str, object]:
     """Load the shared scrapers coach table without importing bot config."""
-    global _COACH_LOOKUP_CACHE
-    if _COACH_LOOKUP_CACHE is not None:
-        return _COACH_LOOKUP_CACHE
+    global _COACH_LOOKUP_CACHE, _COACH_LOOKUP_CACHE_PATH
 
     scrapers_root = Path(
         os.environ.get("SCRAPERS_ROOT", str(Path(__file__).resolve().parent.parent / "scrapers"))
     )
     coaches_path = scrapers_root / "coaches.json"
+    cache_path = str(coaches_path)
+    if _COACH_LOOKUP_CACHE is not None and _COACH_LOOKUP_CACHE_PATH == cache_path:
+        return _COACH_LOOKUP_CACHE
+
     try:
         payload = json.loads(coaches_path.read_text())
         soccer_coaches = payload.get("soccer", {})
         _COACH_LOOKUP_CACHE = soccer_coaches if isinstance(soccer_coaches, dict) else {}
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         _COACH_LOOKUP_CACHE = {}
+    _COACH_LOOKUP_CACHE_PATH = cache_path
     return _COACH_LOOKUP_CACHE
 
 

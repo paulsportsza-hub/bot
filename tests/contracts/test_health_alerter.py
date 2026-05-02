@@ -3,7 +3,7 @@
 Tests:
 - Alert trigger logic (stale/error alerts fire for pending status_degraded rows)
 - Dedup logic (same source not alerted twice within 2 hours)
-- Recovery detection (stale/error → healthy triggers recovery alert)
+- Recovery detection (stale/error → healthy records DB-only recovery)
 - Daily summary format and gate (07:00 SAST, once per day)
 - Quota alert format (>= threshold)
 - W81-DBLOCK: no raw sqlite3.connect() calls
@@ -261,11 +261,11 @@ def test_dedup_expires_after_2h(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 7 — Recovery alert fires when source returns to healthy
+# Test 7 — Recovery is recorded when source returns to healthy
 # ---------------------------------------------------------------------------
 
-def test_recovery_alert_fires(tmp_path):
-    """Recovery alert sent when source returns to green after a stale alert."""
+def test_recovery_recorded_without_telegram(tmp_path):
+    """Recovery is DB-only when source returns to green after a stale alert."""
     db_path = _make_db(tmp_path)
     conn = _open(db_path)
 
@@ -286,10 +286,16 @@ def test_recovery_alert_fires(tmp_path):
         with conn:
             count = ha._fire_recovery_alerts(conn)
 
+    row = conn.execute(
+        "SELECT message, telegram_sent FROM health_alerts "
+        "WHERE source_id='bk_hollywoodbets' AND alert_type='status_recovered'"
+    ).fetchone()
     conn.close()
-    assert count == 1, f"Expected 1 recovery alert, got {count}"
-    assert len(sent_messages) == 1
-    msg = sent_messages[0]
+    assert count == 0, f"Expected 0 Telegram recovery alerts, got {count}"
+    assert len(sent_messages) == 0
+    assert row is not None
+    msg = row[0]
+    assert row[1] == 0
     assert 'RECOVERED' in msg, f"Expected 'RECOVERED' in message: {msg}"
     assert 'Hollywoodbets' in msg
     assert 'Back online' in msg
@@ -299,8 +305,8 @@ def test_recovery_alert_fires(tmp_path):
 # Test 8 — Recovery format matches AC-5 spec
 # ---------------------------------------------------------------------------
 
-def test_recovery_format_matches_spec(tmp_path):
-    """Recovery text: ✅ RECOVERED: {source_name} — Back online."""
+def test_recovery_db_record_format_matches_spec(tmp_path):
+    """Recovery DB text: ✅ RECOVERED: {source_name} — Back online."""
     db_path = _make_db(tmp_path)
     conn = _open(db_path)
 
@@ -319,9 +325,15 @@ def test_recovery_format_matches_spec(tmp_path):
         with conn:
             ha._fire_recovery_alerts(conn)
 
+    row = conn.execute(
+        "SELECT message, telegram_sent FROM health_alerts "
+        "WHERE source_id='sharp_odds_api' AND alert_type='status_recovered'"
+    ).fetchone()
     conn.close()
-    assert sent_messages
-    msg = sent_messages[0]
+    assert sent_messages == []
+    assert row is not None
+    msg = row[0]
+    assert row[1] == 0
     assert '✅' in msg
     assert 'RECOVERED' in msg
     assert 'The Odds API' in msg

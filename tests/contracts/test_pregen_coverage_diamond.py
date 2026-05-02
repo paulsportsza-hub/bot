@@ -5,24 +5,19 @@ History:
   Stream4 refusal at `_store_narrative_cache` and serve-time `w82_for_tier`
   quarantine at `_get_cached_narrative` — to fix the "missing AI Breakdown
   button" symptom on premium-tier edges with failed Sonnet polish.
-- 2026-04-29 (FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01, this brief):
-  The Stream4 refusal was REINSTATED at the writer level for premium tiers
-  ONLY (Diamond + Gold). Rationale: Wave 2 (Rule 23) is the canonical
-  no-fallback chain (Sonnet retry → Haiku → defer); the writer-level refusal
-  is the second-layer enforcement covering bypass paths (`_skip_w84` /
-  `_is_non_edge` carve-outs at pregen, plus the bot serve-time persist whose
-  `live_tap=True` baseline gets labelled w82). Synthesis-on-tap (Rule 20)
-  covers the resulting cache miss. Silver + Bronze writer path is unchanged.
+- 2026-04-30 (FIX-DROP-SONNET-POLISH-W82-CANONICAL-01): the writer-level
+  premium W82 refusal was lifted again because W82 became the canonical
+  narrative path for all tiers. Premium write safety now comes from the unified
+  persistence validator, not from a blanket source/tier ban.
 
 Tests below cover the 2026-04-28 lifts that REMAIN intact:
 - Serve-time gate removed (reader returns w82 row for Gold/Diamond when one
-  exists — though after FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 the
-  cache will not contain any premium W82 rows in steady state).
+  exists).
 - Quarantine reason `w82_for_tier:` is no longer set anywhere.
 - CLAUDE.md Rule 21 carries the lift documentation.
 
-The writer-level behaviour is now covered by
-`tests/contracts/test_premium_no_w82_invariant.py` (the brief's AC-5).
+The writer-level behaviour is now covered by the unified persistence validator
+contracts and `test_no_gold_baseline_writes.py`.
 """
 from __future__ import annotations
 
@@ -35,13 +30,10 @@ _BOT_PY = Path(__file__).resolve().parents[2] / "bot.py"
 _CLAUDE_MD = Path(__file__).resolve().parents[2] / "CLAUDE.md"
 
 
-# ── Source-level: writer-level reinstatement of premium-tier refusal ──────────
+# ── Source-level: writer-level premium validator guard ───────────────────────
 #
-# The 2026-04-28 lift left the writer accepting premium-tier W82 rows on bypass
-# paths (`_skip_w84` / `_is_non_edge` carve-outs at pregen, plus the bot
-# serve-time persist whose `live_tap=True` baseline gets labelled w82). The
-# writer-level refusal is reinstated by FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01.
-# Detailed coverage of the refusal lives in `test_premium_no_w82_invariant.py`.
+# Premium W82 rows are allowed by source/tier, but the writer must still refuse
+# premium rows that fail the unified persistence validator.
 
 
 # ── Source-level: reader no longer quarantines ────────────────────────────────
@@ -130,20 +122,17 @@ def test_gate_lift_log_messages_use_brief_id():
     """Lift-marker logs reference the relevant brief ID for traceability.
 
     The 2026-04-28 read-side lift kept its `PremiumW82Serve` marker.
-    The writer-side `PremiumW82Write` marker was retired by
-    FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 (replaced with
-    `PremiumW82WriteRefused`). Test enforces both states.
+    The writer-side source/tier refusal marker is retired; premium write
+    refusals now happen through `PremiumValidatorRefused`.
     """
     src = _BOT_PY.read_text()
     assert "FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Serve" in src
-    assert (
-        "FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 PremiumW82WriteRefused"
-        in src
-    )
+    assert "PremiumValidatorRefused" in src
+    assert "Rule 24 premium-W82 refusal lifted" in src
+    assert "PremiumW82WriteRefused" not in src
     assert "FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Write " not in src, (
-        "Old PremiumW82Write marker still present — writer-level refusal not "
-        "fully migrated to the FIX-W84-PREMIUM-NO-FALLBACK-CLOSE-SAFETY-NET-01 "
-        "log signature."
+        "Old PremiumW82Write marker still present — writer-level policy should "
+        "be enforced by the unified persistence validator, not source/tier ban."
     )
 
 

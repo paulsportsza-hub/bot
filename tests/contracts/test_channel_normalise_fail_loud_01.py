@@ -3,8 +3,8 @@
 Verifies that _normalise_channel_key:
   1. Returns "" for unrecognised non-empty input.
   2. Logs a warning for unrecognised input.
-  3. Fires (attempts) an EdgeOps alert for unrecognised input.
-  4. Debounces repeated alerts for the same raw value.
+  3. Does not send EdgeOps Telegram alerts for unrecognised input.
+  4. Debounces repeated log-only alerts for the same raw value.
   5. Known channel values continue to map correctly (regression guard).
   6. Empty / whitespace-only input is silent (no alert).
 """
@@ -13,7 +13,7 @@ import logging
 import sys
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 def _import_module():
@@ -44,21 +44,18 @@ class TestNormaliseChannelKeyFailLoud(unittest.TestCase):
             f"Expected unrecognised-channel warning, got: {cm.output}",
         )
 
-    # ── 3. EdgeOps alert attempted for unknown input
-    def test_unknown_fires_edgeops_alert(self):
+    # ── 3. Unknown input logs only, with no EdgeOps Telegram alert
+    def test_unknown_logs_without_edgeops_alert(self):
+        raw = "absolutely_unknown_channel_99"
         with patch.object(self.mod, "os") as mock_os, \
-             patch("urllib.request.urlopen") as mock_urlopen:
+             patch("urllib.request.urlopen") as mock_urlopen, \
+             self.assertLogs("dashboard.health_dashboard", level="WARNING") as cm:
             mock_os.environ = {"BOT_TOKEN": "test_token_abc"}
             mock_os.path = __import__("os").path
-            mock_urlopen.return_value = MagicMock()
-            self.mod._normalise_channel_key("absolutely_unknown_channel_99")
-        mock_urlopen.assert_called_once()
-        call_args = mock_urlopen.call_args
-        req = call_args[0][0]
-        import json as _json
-        body = _json.loads(req.data.decode())
-        self.assertEqual(body["chat_id"], self.mod._EDGEOPS_CHAT_ID_CHANNEL)
-        self.assertIn("absolutely_unknown_channel_99", body["text"])
+            self.mod._normalise_channel_key(raw)
+        mock_urlopen.assert_not_called()
+        self.assertTrue(any(raw in line for line in cm.output), cm.output)
+        self.assertIn(raw, self.mod._channel_normalise_alert_sent)
 
     # ── 4. Debounce: second call within window does NOT fire alert again
     def test_debounce_suppresses_repeated_alert(self):
@@ -70,20 +67,23 @@ class TestNormaliseChannelKeyFailLoud(unittest.TestCase):
             self.mod._normalise_channel_key(raw)
         mock_urlopen.assert_not_called()
 
-    # ── 5. Debounce: call after window expires DOES fire alert
-    def test_debounce_fires_after_window(self):
+    # ── 5. Debounce: call after window expires logs again, but sends no Telegram alert
+    def test_debounce_logs_after_window(self):
         raw = "expired_debounce_channel"
         # Pre-seed as fired 2 hours ago (past the 1-hour window).
+        old_ts = time.time() - self.mod._CHANNEL_NORMALISE_DEBOUNCE_S - 1
         self.mod._channel_normalise_alert_sent[raw.lower().strip()] = (
-            time.time() - self.mod._CHANNEL_NORMALISE_DEBOUNCE_S - 1
+            old_ts
         )
         with patch.object(self.mod, "os") as mock_os, \
-             patch("urllib.request.urlopen") as mock_urlopen:
+             patch("urllib.request.urlopen") as mock_urlopen, \
+             self.assertLogs("dashboard.health_dashboard", level="WARNING") as cm:
             mock_os.environ = {"BOT_TOKEN": "tok"}
             mock_os.path = __import__("os").path
-            mock_urlopen.return_value = MagicMock()
             self.mod._normalise_channel_key(raw)
-        mock_urlopen.assert_called_once()
+        mock_urlopen.assert_not_called()
+        self.assertTrue(any(raw in line for line in cm.output), cm.output)
+        self.assertGreater(self.mod._channel_normalise_alert_sent[raw.lower().strip()], old_ts)
 
     # ── 6. Empty string: silent, no alert
     def test_empty_input_silent(self):

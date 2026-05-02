@@ -40,6 +40,7 @@ DETAIL_TEMPLATES = {
 }
 LIST_TEMPLATES = {
     "edge_picks.html",
+    "edge_picks_index.html",
     "my_matches.html",
     "edge_summary.html",
     "tier_page.html",

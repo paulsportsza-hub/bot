@@ -1,0 +1,352 @@
+<!-- canonical lift INV-HOT-TIPS-A2-IMPL-DESIGN-01 → BUILD-EDGE-PICKS-INDEX-WIRING-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #000000;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+        }
+        .card {
+            width: 100%;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+            border: none;
+            box-shadow: none;
+        }
+
+        /* ── Header (CANONICAL — orange glow behind logo, no division) ─── */
+        .header {
+            position: relative;
+            text-align: center;
+            padding: 22px 20px 16px;
+            isolation: isolate;
+            overflow: hidden;
+        }
+        .logo-glow {
+            position: absolute;
+            inset: -10px 0 0 0;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
+        }
+        .logo-glow-screen {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+        }
+        .header > .logo-img,
+        .header > .logo-fallback,
+        .header > .orange-bar,
+        .header > .title,
+        .header > .tier-summary,
+        .header > .subtitle { position: relative; z-index: 1; }
+        .logo-img {
+            height: 32px;
+            width: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
+        }
+        .title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: 3px;
+            margin-bottom: 6px;
+        }
+        .tier-summary {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            flex-wrap: wrap;
+            margin-top: 2px;
+        }
+        .tier-summary-item {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .tier-summary-sep {
+            font-size: 13px;
+            color: #444444;
+            margin: 0 5px;
+        }
+        .tier-summary-total {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 400;
+            font-family: 'Inter', sans-serif;
+            margin-left: 6px;
+        }
+
+        /* ── Tier list ───────────────────────────────────────────────────── */
+        .tier-list {
+            padding: 14px 14px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .tier-row {
+            display: flex;
+            align-items: center;
+            background: #1A1A1A;
+            border: 1px solid #2A2A2A;
+            border-left-width: 3px;
+            border-radius: 10px;
+            padding: 14px 16px;
+            position: relative;
+            min-height: 64px;
+        }
+        .tier-row.default-highlight {
+            border-width: 1px;
+            border-left-width: 3px;
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+        }
+        .tier-row.locked {
+            background: #131313;
+            border-color: #1F1F1F;
+            border-left-color: #2A2A2A;
+        }
+        .tier-row.empty-state-row {
+            opacity: 0.5;
+        }
+
+        /* Left block: emoji + tier text */
+        .tier-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+            min-width: 0;
+        }
+        .tier-emoji {
+            font-size: 26px;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        .tier-row.locked .tier-emoji {
+            filter: grayscale(0.6);
+            opacity: 0.55;
+        }
+        .tier-text {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .tier-name {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 1.6px;
+            line-height: 1;
+            margin-bottom: 4px;
+        }
+        .tier-row.locked .tier-name {
+            color: var(--text-secondary) !important;
+        }
+        .tier-status {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            color: var(--text-secondary);
+            line-height: 1.2;
+        }
+        .tier-status.your-default {
+            color: #F7931A;
+            font-weight: 700;
+        }
+        .tier-status.locked-cta {
+            color: var(--text-secondary);
+        }
+
+        /* Right block: count + lock */
+        .tier-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+            margin-left: 10px;
+        }
+        .tier-count {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 22px;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .tier-row.locked .tier-count {
+            color: var(--text-secondary);
+        }
+        .tier-count-label {
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            margin-top: 3px;
+        }
+        .tier-count-block {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+        }
+        .lock-icon {
+            font-size: 16px;
+            color: var(--text-secondary);
+            line-height: 1;
+        }
+        .tick-icon {
+            width: 22px;
+            height: 22px;
+            display: inline-block;
+            line-height: 0;
+            flex-shrink: 0;
+        }
+
+        /* ── Empty state ─────────────────────────────────────────────────── */
+        .empty-state {
+            text-align: center;
+            padding: 22px 20px 6px;
+        }
+        .empty-state-icon {
+            font-size: 30px;
+            margin-bottom: 8px;
+            opacity: 0.6;
+        }
+        .empty-state-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #FFFFFF;
+            margin-bottom: 4px;
+        }
+        .empty-state-sub {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        /* Footer removed per universal law §7 — card terminates with small black breathing strip below tier list. */
+    </style>
+</head>
+<body>
+<div class="card">
+
+    <!-- ── Header ─────────────────────────────────────────────────────── -->
+    <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">EDGE PICKS</div>
+        <div class="tier-summary">
+            {% for item in tier_summary %}
+            {% if not loop.first %}<span class="tier-summary-sep">&middot;</span>{% endif %}
+            <span class="tier-summary-item" style="color: {{ item.color }};">{{ item.emoji }}{{ item.count }}</span>
+            {% endfor %}
+            <span class="tier-summary-total">&mdash; {{ total_edges }} edge{{ 's' if total_edges != 1 else '' }} today</span>
+        </div>
+    </div>
+
+    <!-- ── Empty state header (only when live_total == 0) ─────────────── -->
+    {% if live_total == 0 %}
+    <div class="empty-state">
+        <div class="empty-state-icon">🌙</div>
+        <div class="empty-state-title">No live edges right now</div>
+        <div class="empty-state-sub">Check back soon &middot; we scan every 15 minutes</div>
+    </div>
+    {% endif %}
+
+    <!-- ── Tier rows ──────────────────────────────────────────────────── -->
+    <div class="tier-list">
+        {% for tier in tiers %}
+        {% set is_empty = (live_total == 0) %}
+        {% set tier_classes = [] %}
+        {% if tier.locked %}{% set _ = tier_classes.append('locked') %}{% endif %}
+        {% if tier.is_default and not tier.locked and not is_empty %}{% set _ = tier_classes.append('default-highlight') %}{% endif %}
+        {% if is_empty %}{% set _ = tier_classes.append('empty-state-row') %}{% endif %}
+
+        <div class="tier-row {{ tier_classes|join(' ') }}"
+             style="
+             {%- if tier.locked or is_empty -%}
+                 border-left-color: #2A2A2A;
+             {%- else -%}
+                 border-left-color: {{ tier.color }};
+                 {%- if tier.is_default -%}
+                     background: linear-gradient(90deg, {{ tier.color }}{{ tier.bg_alpha }} 0%, #1A1A1A 60%);
+                     border-color: {{ tier.color }}{{ tier.border_alpha }};
+                     border-left-color: {{ tier.color }};
+                 {%- endif -%}
+             {%- endif -%}
+             ">
+
+            <div class="tier-left">
+                <span class="tier-emoji">{{ tier.emoji }}</span>
+                <div class="tier-text">
+                    <span class="tier-name"
+                          style="{% if not tier.locked and not is_empty %}color: {{ tier.color }};{% else %}color: var(--text-secondary);{% endif %}">
+                        {{ tier.label }}
+                    </span>
+                    <span class="tier-status
+                                 {%- if tier.is_default and not tier.locked and not is_empty %} your-default{% endif -%}
+                                 {%- if tier.locked %} locked-cta{% endif -%}">
+                        {%- if is_empty -%}
+                            {%- if tier.locked -%}Upgrade to unlock{%- else -%}No live picks{%- endif -%}
+                        {%- elif tier.locked -%}
+                            Upgrade to unlock
+                        {%- elif tier.is_default -%}
+                            ★ Your default
+                        {%- else -%}
+                            Available on your plan
+                        {%- endif -%}
+                    </span>
+                </div>
+            </div>
+
+            <div class="tier-right">
+                <div class="tier-count-block">
+                    <span class="tier-count"
+                          style="{% if not tier.locked and not is_empty %}color: {{ tier.color }};{% else %}color: var(--text-secondary);{% endif %}">
+                        {{ tier.count }}
+                    </span>
+                    <span class="tier-count-label">live</span>
+                </div>
+                {% if tier.locked %}
+                <span class="lock-icon">🔒</span>
+                {% else %}
+                <svg class="tick-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M4 12.5 L10 18.5 L20 6" fill="none" stroke="{{ tier.color }}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                {% endif %}
+            </div>
+
+        </div>
+        {% endfor %}
+    </div>
+
+</div>
+</body>
+</html>

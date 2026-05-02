@@ -137,13 +137,13 @@ def test_image_failure_path_calls_continue_not_set_asset_link():
     )
 
 
-# ── (b) WA Channel rows must never include asset_link ─────────────────────────
+# ── (b) WA Channel rows include asset_link only when supplied ─────────────────
 
-def test_create_wa_channel_draft_has_no_asset_link():
-    """create_wa_channel_draft() must never set asset_link in the Notion payload.
+def test_create_wa_channel_draft_asset_link_is_conditional():
+    """create_wa_channel_draft() only sets Asset Link when asset_url is supplied.
 
-    WA Channel is TEXT-ONLY (BUILD-NEWS-IMAGE-TG-COMMUNITY-01). The Notion payload
-    for WA Channel rows must not include an Asset Link property.
+    Later WA Channel NB2-image support allows an optional image, but the helper
+    must not write an empty Asset Link property for text-only rows.
     """
     src = _read_source(_NOTION_CLIENT_PATH)
 
@@ -156,15 +156,9 @@ def test_create_wa_channel_draft_has_no_asset_link():
 
     body = fn_match.group(0)
 
-    assert "asset_link" not in body.lower(), (
-        "TG-COMMUNITY-IMAGE-LAW VIOLATION: create_wa_channel_draft() must NEVER "
-        "set asset_link — WA Channel is TEXT-ONLY. Found 'asset_link' in the "
-        "create_wa_channel_draft function body."
-    )
-    assert "Asset Link" not in body, (
-        "TG-COMMUNITY-IMAGE-LAW VIOLATION: create_wa_channel_draft() payload must "
-        "not include an 'Asset Link' Notion property. WA Channel is TEXT-ONLY."
-    )
+    assert "asset_url: str = \"\"" in body
+    assert "if asset_url:" in body
+    assert 'props["Asset Link"] = {"url": asset_url}' in body
 
 
 def test_wa_channel_draft_missing_from_image_generator_loop():

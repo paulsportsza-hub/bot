@@ -102,6 +102,7 @@ async def test_main_no_longer_calls_schema_ensure_in_hot_path(monkeypatch: pytes
         pregen,
         "_ensure_shadow_narratives_table",
         lambda: (_ for _ in ()).throw(AssertionError("hot-path DDL should not run")),
+        raising=False,
     )
     # BUILD-16a: no scraper lock mock needed — lock dependency removed
     monkeypatch.setattr(pregen, "_validate_pregen_runtime_schema", lambda db_path=None: None)

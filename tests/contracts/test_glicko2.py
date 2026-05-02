@@ -6,6 +6,7 @@ AC-8: Glicko-2 update equations (2), soccer config (1), rugby config (1),
 
 import math
 import os
+import sqlite3
 import sys
 
 # Allow imports from scrapers
@@ -13,6 +14,68 @@ _SCRAPERS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
 )
 sys.path.insert(0, _SCRAPERS_DIR)
+
+
+def _cricket_history_db(tmp_path):
+    """Create an isolated cricket history DB for contracts that train ratings."""
+    db = tmp_path / "cricket_glicko2.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE match_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sport TEXT NOT NULL,
+            match_date TEXT NOT NULL,
+            home_team TEXT NOT NULL,
+            away_team TEXT NOT NULL,
+            result TEXT NOT NULL,
+            home_score INTEGER,
+            away_score INTEGER
+        )
+        """
+    )
+    rows = [
+        ("2024-01-01", "kolkata_knight_riders", "mumbai_indians", "home", 185, 176),
+        ("2024-01-02", "chennai_super_kings", "punjab_kings", "home", 172, 160),
+        ("2024-01-03", "rajasthan_royals", "mumbai_indians", "away", 151, 154),
+        ("2024-01-04", "royal_challengers_bengaluru", "chennai_super_kings", "away", 168, 170),
+        ("2024-01-05", "sunrisers_hyderabad", "lucknow_super_giants", "home", 201, 187),
+        ("2024-01-06", "delhi_capitals", "gujarat_titans", "away", 144, 149),
+        ("2024-01-07", "india", "south_africa", "home", 196, 189),
+        ("2024-01-08", "south_africa", "india", "away", 161, 165),
+        ("2024-01-09", "kolkata_knight_riders", "punjab_kings", "home", 191, 183),
+        ("2024-01-10", "gujarat_titans", "delhi_capitals", "home", 177, 170),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO match_results (
+            sport, match_date, home_team, away_team, result, home_score, away_score
+        )
+        VALUES ('cricket', ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
+    return str(db)
+
+
+def _empty_ratings_db(tmp_path):
+    """Create an isolated DB where Glicko-2 can load an empty ratings table."""
+    from scrapers.elo.glicko2 import ensure_migration
+
+    db = tmp_path / "empty_glicko2.db"
+    ensure_migration(str(db))
+    return str(db)
+
+
+def _point_elo_helper_at_db(monkeypatch, db_path):
+    import scrapers.elo.elo_helper as elo_helper
+
+    monkeypatch.setattr(elo_helper, "DB_PATH", db_path)
+    elo_helper._glicko2.clear()
+    elo_helper._elo = None
+    return elo_helper
 
 
 # ---------------------------------------------------------------------------
@@ -174,21 +237,21 @@ def test_missing_team_graceful_null():
     assert pred["confidence"] == "low", "Unknown teams should have low confidence"
 
 
-def test_missing_team_null_in_helper():
+def test_missing_team_null_in_helper(tmp_path, monkeypatch):
     """AC-7: get_glicko2_rating returns None for teams with 0 matches."""
-    from scrapers.elo.elo_helper import get_glicko2_rating
+    elo_helper = _point_elo_helper_at_db(monkeypatch, _empty_ratings_db(tmp_path))
 
-    result = get_glicko2_rating(
+    result = elo_helper.get_glicko2_rating(
         "nonexistent_home_xyz", "nonexistent_away_xyz", "soccer"
     )
     assert result is None, "Should return None for unknown teams"
 
 
-def test_missing_team_null_unknown_teams_cricket():
+def test_missing_team_null_unknown_teams_cricket(tmp_path, monkeypatch):
     """AC-7: get_glicko2_rating returns None when both teams have 0 matches, even for cricket."""
-    from scrapers.elo.elo_helper import get_glicko2_rating
+    elo_helper = _point_elo_helper_at_db(monkeypatch, _empty_ratings_db(tmp_path))
 
-    result = get_glicko2_rating("totally_unknown_cricket_team_xyz", "also_unknown_xyz", "cricket")
+    result = elo_helper.get_glicko2_rating("totally_unknown_cricket_team_xyz", "also_unknown_xyz", "cricket")
     assert result is None, "Both teams at 0 matches → None even for supported sport"
 
 
@@ -294,11 +357,11 @@ def test_cricket_separate_from_soccer_rugby():
     assert cricket_rating.matches_played == 1, "India should have 1 match in cricket"
 
 
-def test_cricket_teams_rated_from_db():
+def test_cricket_teams_rated_from_db(tmp_path):
     """AC-1: Cricket teams are rated from historical match_results in odds.db."""
     from scrapers.elo.glicko2 import initialise_ratings
 
-    sys = initialise_ratings("cricket")
+    sys = initialise_ratings("cricket", _cricket_history_db(tmp_path))
     assert len(sys.ratings) >= 5, \
         f"Expected at least 5 cricket teams rated, got {len(sys.ratings)}"
 
@@ -310,11 +373,14 @@ def test_cricket_teams_rated_from_db():
     assert not missing, f"Expected cricket teams not rated: {missing}"
 
 
-def test_cricket_upcoming_match_has_ratings():
+def test_cricket_upcoming_match_has_ratings(tmp_path):
     """AC-4: Upcoming cricket fixtures can produce ratings for both teams."""
-    from scrapers.elo.glicko2 import Glicko2System
+    from scrapers.elo.glicko2 import Glicko2System, initialise_ratings
 
-    sys = Glicko2System("cricket")
+    db_path = _cricket_history_db(tmp_path)
+    initialise_ratings("cricket", db_path)
+
+    sys = Glicko2System("cricket", db_path)
     sys.load()
 
     # IPL 2026 teams currently active in odds.db
@@ -352,13 +418,17 @@ def test_cricket_glicko2_no_regression_soccer_rugby():
     assert rugby.rd_threshold == 70.0
 
 
-def test_cricket_feeds_elo_helper():
+def test_cricket_feeds_elo_helper(tmp_path, monkeypatch):
     """AC-3: Cricket Glicko-2 ratings feed into get_elo_probability via elo_helper."""
-    from scrapers.elo.elo_helper import get_elo_probability
+    from scrapers.elo.glicko2 import initialise_ratings
+
+    db_path = _cricket_history_db(tmp_path)
+    initialise_ratings("cricket", db_path)
+    elo_helper = _point_elo_helper_at_db(monkeypatch, db_path)
 
     # Use known-rated IPL teams — should return Glicko-2 result not Elo fallback
-    result = get_elo_probability("kolkata_knight_riders", "mumbai_indians", "cricket",
-                                  require_confidence="low")
+    result = elo_helper.get_elo_probability("kolkata_knight_riders", "mumbai_indians", "cricket",
+                                            require_confidence="low")
     assert result is not None, "Expected elo_probability result for known IPL teams"
     # Glicko-2 path: draw should be 0.0
     assert result["draw"] == 0.0, \

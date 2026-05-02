@@ -13,7 +13,6 @@ import os
 import sqlite3
 import sys
 import types
-import unittest.mock as mock
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -129,16 +128,7 @@ class TestGenerateOneKickoffFilter:
             "tier": "gold",
         }
 
-        # Claude client that raises if called — proves Sonnet is NOT invoked
-        class _NeverCallClaude:
-            class messages:
-                @staticmethod
-                async def create(*args, **kwargs):
-                    raise AssertionError("Sonnet must NOT be called for past-kickoff fixtures")
-
-        result = asyncio.run(
-            _generate_one(past_edge, "claude-sonnet", _NeverCallClaude())
-        )
+        result = asyncio.run(_generate_one(past_edge))
 
         assert result["success"] is False
         assert result.get("skipped_past_kickoff") is True

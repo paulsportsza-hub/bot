@@ -34,6 +34,7 @@ Variant LIST — dynamic 480×N where N ∈ [100, 1200]
     .card { width: 100% } (no fixed height — dynamic measurement via JS)
     Templates:
         edge_picks.html
+        edge_picks_index.html
         my_matches.html
         edge_summary.html
         tier_page.html
