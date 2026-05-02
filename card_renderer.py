@@ -129,7 +129,25 @@ _pool: dict = {
     "ready": threading.Event(),
     "error": None,
     "lock": threading.Lock(),
+    "render_sem": None,  # lazy-bound asyncio.Semaphore — created in pool loop
 }
+
+# INV-BOT-MY-MATCHES-SLOWDOWN-02: cap concurrent Playwright pages at 2 to prevent
+# render queue saturation when prerender (Sem(3) at bot.py:_edge_precompute_job),
+# pregen, and user taps stack on the single browser. Observed BUILD-SPEED prerender
+# duration tripled from 9.7s → 84.1s under load on 2 May 2026, blocking My Matches
+# warm-tap renders behind a 12s send_card_or_fallback timeout.
+_RENDER_CONCURRENCY_LIMIT = 2
+_SLOW_RENDER_WARN_MS = 3000.0  # WARN when an individual render exceeds 3s
+
+
+def _get_render_semaphore() -> asyncio.Semaphore:
+    """Return the pool-loop-bound semaphore; create it on first use inside the loop."""
+    sem = _pool["render_sem"]
+    if sem is None:
+        sem = asyncio.Semaphore(_RENDER_CONCURRENCY_LIMIT)
+        _pool["render_sem"] = sem
+    return sem
 
 
 async def _pool_init() -> None:
@@ -207,52 +225,70 @@ async def _render_page(
     width: int,
     device_scale_factor: int,
 ) -> bytes:
-    """Render one page using the pooled browser (runs in pool event loop)."""
-    browser = _pool["browser"]
-    template = _env.get_template(template_name)
-    html = template.render(**data)
+    """Render one page using the pooled browser (runs in pool event loop).
 
-    # CARD-FIX-DYN: dynamic height — measure actual content, clip to fit.
-    # Viewport starts tall (1200px) so content renders fully, then we clip
-    # to the real card height. Eliminates blank space on short cards.
-    _max_viewport_height = 1200
-    _start = time.monotonic()
-    page = await browser.new_page(
-        viewport={"width": width, "height": _max_viewport_height},
-        device_scale_factor=device_scale_factor,
-    )
-    try:
-        await page.set_content(html, wait_until="networkidle")
-        await page.wait_for_timeout(50)  # minimal settle time
+    INV-BOT-MY-MATCHES-SLOWDOWN-02: gated on a global asyncio.Semaphore so
+    concurrent renders cap at _RENDER_CONCURRENCY_LIMIT regardless of caller
+    (precompute, pregen, user tap). Wait time recorded separately to keep the
+    'card_render_complete' line comparable across loads.
+    """
+    sem = _get_render_semaphore()
+    _wait_start = time.monotonic()
+    async with sem:
+        _wait_ms = (time.monotonic() - _wait_start) * 1000
+        browser = _pool["browser"]
+        template = _env.get_template(template_name)
+        html = template.render(**data)
 
-        # Measure actual card content height via JS
-        _content_height = await page.evaluate(
-            """() => {
-                const card = document.querySelector('.card');
-                if (card) return Math.ceil(card.getBoundingClientRect().height);
-                return document.body.scrollHeight;
-            }"""
+        # CARD-FIX-DYN: dynamic height — measure actual content, clip to fit.
+        # Viewport starts tall (1200px) so content renders fully, then we clip
+        # to the real card height. Eliminates blank space on short cards.
+        _max_viewport_height = 1200
+        _start = time.monotonic()
+        page = await browser.new_page(
+            viewport={"width": width, "height": _max_viewport_height},
+            device_scale_factor=device_scale_factor,
         )
-        # Clamp: minimum 100px, maximum 1200px
-        _card_height = max(100, min(_content_height, _max_viewport_height))
+        try:
+            await page.set_content(html, wait_until="networkidle")
+            await page.wait_for_timeout(50)  # minimal settle time
 
-        png_bytes = await page.screenshot(
-            type="png",
-            clip={"x": 0, "y": 0, "width": width, "height": _card_height},
-        )
-    finally:
-        await page.close()
+            # Measure actual card content height via JS
+            _content_height = await page.evaluate(
+                """() => {
+                    const card = document.querySelector('.card');
+                    if (card) return Math.ceil(card.getBoundingClientRect().height);
+                    return document.body.scrollHeight;
+                }"""
+            )
+            # Clamp: minimum 100px, maximum 1200px
+            _card_height = max(100, min(_content_height, _max_viewport_height))
+
+            png_bytes = await page.screenshot(
+                type="png",
+                clip={"x": 0, "y": 0, "width": width, "height": _card_height},
+            )
+        finally:
+            await page.close()
 
     _elapsed_ms = (time.monotonic() - _start) * 1000
     log.info(
-        "card_render_complete template=%s elapsed_ms=%.1f bytes=%d size=%dx%dpx content_h=%d",
+        "card_render_complete template=%s elapsed_ms=%.1f wait_ms=%.1f bytes=%d size=%dx%dpx content_h=%d",
         template_name,
         _elapsed_ms,
+        _wait_ms,
         len(png_bytes),
         width * device_scale_factor,
         _card_height * device_scale_factor,
         _content_height,
     )
+    if _elapsed_ms > _SLOW_RENDER_WARN_MS or _wait_ms > _SLOW_RENDER_WARN_MS:
+        log.warning(
+            "card_render_slow template=%s elapsed_ms=%.1f wait_ms=%.1f — pool saturation suspected",
+            template_name,
+            _elapsed_ms,
+            _wait_ms,
+        )
     return png_bytes
 
 
