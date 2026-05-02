@@ -9126,38 +9126,66 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             else:
                 _use_cached_verdict = False
         if not _use_cached_verdict:
-            # FIX-DROP-SONNET-POLISH-W82-CANONICAL-01: serve-time verdict is now
-            # produced deterministically via narrative_spec._render_verdict —
-            # no LLM. The cached W82 verdict_html (when present) is the primary
-            # source; this path runs only on cache miss.
+            # FIX-CARD-VERDICT-RECOMMENDATION-ALIGNMENT-01 (2026-05-02):
+            # Card image and verdict text MUST reference the same recommended
+            # bet. When the cached verdict is stale (odds/bookmaker/EV/outcome
+            # drifted from the current edge_results row that the card image is
+            # rendering from), regenerate from the LIVE tip instead of falling
+            # back to the stale cache text. The pre-fix fallback re-served the
+            # same stale verdict_html and caused 8/25 cards in
+            # QA-LIVE-CARDS-EVERY-ACTIVE-01 to show a different team / odds /
+            # bookmaker in the verdict than the card image displayed
+            # (Brentford-vs-WestHam: card showed Brentford 1.91 @ PlayaBets;
+            # verdict said West Ham 3.87 @ PlayaBets).
+            #
+            # Generation contract: build a NarrativeSpec from the LIVE tip
+            # via build_narrative_spec(...) — the same path
+            # _generate_narrative_v2() and the W82 pregen pipeline use — so
+            # tier-aware verdict_action/verdict_sizing classification matches
+            # the rest of the surface. Then render via _render_verdict(spec).
+            # Zero LLM, deterministic, < 50ms.
             enriched["verdict"] = ""
-            if _cached_verdict:
-                _cv_fb = _cap_verdict(_cached_verdict.get("verdict_html", ""))
-                if _cv_fb and not (_VERDICT_BLACKLIST and any(p in _cv_fb.lower() for p in _VERDICT_BLACKLIST)):
-                    enriched["verdict"] = _cv_fb
-            if not enriched["verdict"]:
-                try:
-                    from narrative_spec import NarrativeSpec, _render_verdict as _ns_render_verdict
-                    _fb_spec = NarrativeSpec(
-                        home_name=enriched.get("home_team") or tip.get("home_team") or "",
-                        away_name=enriched.get("away_team") or tip.get("away_team") or "",
-                        competition=enriched.get("league_key") or tip.get("league_key") or tip.get("league") or "",
-                        sport=(tip.get("sport") or tip.get("sport_key") or "soccer").lower(),
-                        home_story_type="neutral",
-                        away_story_type="neutral",
-                        outcome_label=enriched.get("pick") or tip.get("outcome") or "",
-                        bookmaker=enriched.get("bookmaker") or tip.get("bookmaker") or "",
-                        odds=float(enriched.get("odds") or tip.get("odds") or 0),
-                        ev_pct=float(enriched.get("ev") or tip.get("ev") or 0),
-                        verdict_action="lean",
-                        verdict_sizing="small stake",
+            try:
+                from narrative_spec import (
+                    build_narrative_spec as _bns_align,
+                    _render_verdict as _ns_render_verdict,
+                )
+                _live_tip = dict(enriched)
+                # Ensure tier carries through to _extract_edge_data so
+                # build_narrative_spec()'s TONE-BANDS-FIX block elevates the
+                # spec to the badge-matching posture (e.g. Gold → lean
+                # minimum, Diamond → strong/confident).
+                if not _live_tip.get("display_tier") and not _live_tip.get("edge_rating"):
+                    _live_tip["display_tier"] = (
+                        tip.get("display_tier")
+                        or tip.get("edge_rating")
+                        or tip.get("edge_tier")
+                        or enriched.get("edge_tier")
+                        or "bronze"
                     )
-                    enriched["verdict"] = _ns_render_verdict(_fb_spec)
-                except Exception as _vfe:
-                    log.warning("verdict_deterministic_fallback_failed: %s %s", match_key, _vfe)
-                if not enriched["verdict"]:
-                    log.warning("contract_violation=verdict_empty match_key=%s", match_key)
-            # Store for next view (best-effort, fire-and-forget)
+                _live_home = enriched.get("home_team") or tip.get("home_team") or ""
+                _live_away = enriched.get("away_team") or tip.get("away_team") or ""
+                _live_sport = (
+                    tip.get("sport") or tip.get("sport_key")
+                    or enriched.get("sport") or "soccer"
+                ).lower()
+                _live_edge_data = _extract_edge_data(
+                    [_live_tip], _live_home, _live_away,
+                )
+                _live_spec = _bns_align({}, _live_edge_data, [_live_tip], _live_sport)
+                _fresh = _ns_render_verdict(_live_spec)
+                if _fresh:
+                    if _VERDICT_BLACKLIST and any(p in _fresh.lower() for p in _VERDICT_BLACKLIST):
+                        log.info("VERDICT_FRESH_BLACKLISTED: %s, dropping", match_key)
+                    else:
+                        enriched["verdict"] = _cap_verdict(_fresh, limit=_VERDICT_MAX_CHARS)
+            except Exception as _vfe:
+                log.warning("FIX-CARD-VERDICT-RECOMMENDATION-ALIGNMENT-01 fresh_render_failed: %s %s", match_key, _vfe)
+            if not enriched["verdict"]:
+                log.warning("contract_violation=verdict_empty match_key=%s", match_key)
+            # Store for next view (best-effort, fire-and-forget) — overwrites
+            # the stale narrative_cache.verdict_html so subsequent views serve
+            # the aligned verdict without re-rendering.
             if enriched["verdict"] and match_key:
                 try:
                     _store_verdict_cache_sync(match_key, enriched["verdict"], enriched)
