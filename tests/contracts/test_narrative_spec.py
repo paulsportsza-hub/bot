@@ -6,6 +6,7 @@ and risk assessment. All tests are pure Python — no bot.py import, no LLM, no 
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 import pytest
@@ -1043,17 +1044,25 @@ class TestRenderVerdict:
 
     def test_speculative_verdict_contains_no_banned_confident_phrases(self):
         spec = self._spec("speculative punt", "tiny exposure", "cautious")
-        verdict = _render_verdict(spec)
+        verdict = _render_verdict(spec).lower()
         for phrase in TONE_BANDS["cautious"]["banned"]:
-            assert phrase.lower() not in verdict.lower(), (
+            # BUILD-W82-CORPUS-EXPANSION-01: word-boundary match. Pre-fix
+            # substring check false-triggered on "lock"→"Lock in"/"locked"
+            # (canonical Diamond imperative + descriptor used in setup prose).
+            pattern = re.compile(r"\b" + re.escape(phrase.lower()) + r"\b")
+            assert not pattern.search(verdict), (
                 f"Banned phrase {phrase!r} found in speculative verdict"
             )
 
     def test_strong_back_contains_no_banned_strong_phrases(self):
         spec = self._spec("strong back", "confident stake", "strong")
-        verdict = _render_verdict(spec)
+        verdict = _render_verdict(spec).lower()
         for phrase in TONE_BANDS["strong"]["banned"]:
-            assert phrase.lower() not in verdict.lower(), (
+            # BUILD-W82-CORPUS-EXPANSION-01: word-boundary match. Pre-fix
+            # substring check false-triggered on "lock"→"Lock in"/"locked"
+            # (canonical Diamond imperative + descriptor used in setup prose).
+            pattern = re.compile(r"\b" + re.escape(phrase.lower()) + r"\b")
+            assert not pattern.search(verdict), (
                 f"Banned phrase {phrase!r} found in strong back verdict"
             )
 

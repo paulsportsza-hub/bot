@@ -1,28 +1,45 @@
-"""Deterministic verdict corpus — replaces W82 variable assembly.
+"""Deterministic verdict corpus — sport-banded, hand-authored.
 
-BUILD-W82-RIP-AND-REPLACE-01 (2026-05-02). Hand-authored 40 verdict sentences
-(10 per tier) plus 10 sport-agnostic concern prefixes. Hash-pick by
-(match_key, tier) for stability across reads of the same edge.
+BUILD-W82-CORPUS-EXPANSION-01 (2026-05-02). Replaces the 40-sentence flat
+corpus from BUILD-W82-RIP-AND-REPLACE-01 with a sport-banded 360-sentence
+corpus: 4 tiers × 3 sports × 30 sentences. Plus 25 concern prefixes.
 
-Slots: {team}, {odds}, {bookmaker} only. Zero connectors, zero risk-clause
-helpers, zero concessive logic, zero variant pool. When the concern prefix
-fires (has_real_risk(spec) is True), it concatenates with a single space —
-no linguistic bridge between prefix and verdict body.
+The motivation: 10 sentences per tier in the flat corpus meant subscribers
+saw the same Diamond verdict every ~10 Diamond cards, and "every signal
+aligned" sentences could pair with concern prefixes that asserted the
+opposite. This wave fixes both — bigger pool, sport-native voice, and a
+``claims_completeness`` tag that filters out completeness assertions when
+``has_real_risk(spec)`` fires.
 
-Voice rubric: .claude/skills/verdict-generator/SKILL.md (v2 Deterministic
-Mode section). SA-native English. Conviction tier-appropriate. Imperative
-close ("back / hammer / get on / take / bet / lock in / load up / go in /
-the play is / the call is / worth a"). 100-200 char range per sentence
-across realistic slot-fill spread.
+Slots: ``{team}``, ``{odds}``, ``{bookmaker}`` only. Zero connectors,
+zero risk-clause helpers, zero concessive logic. When ``has_real_risk``
+is True, the concern prefix concatenates with a single space — no
+linguistic bridge.
+
+Voice rubric: ``.claude/skills/verdict-generator/SKILL.md`` (v2 Deterministic
+Mode + Sport-Banded section). SA-native English. Conviction tier-appropriate.
+Imperative close. 100-200 char range per sentence after slot-fill. Sport-native
+vocabulary differentiates soccer / rugby / cricket.
+
+Tag rule: ``claims_completeness=True`` for sentences asserting full signal
+coverage ("every signal", "model and market both", "top to bottom",
+"the whole stack", "numbers and signals", "all aligned", "complete read").
+Filter rule: ``has_real_risk=True`` → pool is restricted to
+``claims_completeness=False`` to prevent contradiction with concern prefix.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
     from narrative_spec import NarrativeSpec
+
+
+_log = logging.getLogger(__name__)
 
 
 # ── Tier composite-score floors ───────────────────────────────────────────
@@ -36,65 +53,533 @@ TIER_FLOORS: dict[str, int] = {
 }
 
 
-# ── Verdict corpus — 40 sentences ─────────────────────────────────────────
-VERDICT_CORPUS: dict[str, list[str]] = {
-    "diamond": [
-        "This one is locked in across every signal we track — hammer {team} at {odds} on {bookmaker}, full confident stake on the day.",
-        "Model and market are pointing the same direction here. Load up on {team} at {odds} with {bookmaker}, heavy stake from kickoff.",
-        "Edge confirmed top to bottom and the price still hasn't moved — go in heavy on {team} at {odds} on {bookmaker}, standard-to-heavy stake.",
-        "Every signal we measure points the same way on this fixture. Bet {team} at {odds} with {bookmaker}, full confident stake on the day.",
-        "This is exactly what conviction looks like in our model. Lock in {team} at {odds} on {bookmaker}, standard-to-heavy stake from kickoff.",
-        "Numbers, signals, and the price are all aligned cleanly here. Get on {team} at {odds} with {bookmaker}, full confident stake.",
-        "Top-tier edge with the price still on offer through kickoff — hammer {team} at {odds} on {bookmaker}, standard-to-heavy stake.",
-        "Everything we measure has this one as a high-conviction play. Back {team} at {odds} with {bookmaker}, full confident stake on the day.",
-        "The bookies have got their numbers wrong on this one. Load up on {team} at {odds} on {bookmaker}, standard-to-heavy stake on the day.",
-        "Diamond-grade signal stack, clean read top to bottom — go in heavy on {team} at {odds} with {bookmaker}, full confident stake.",
-    ],
-    "gold": [
-        "The signals tell a clean story on this fixture — back {team} at {odds} with {bookmaker}, standard stake on the day.",
-        "Strong read across the indicators we trust most. Get on {team} at {odds} on {bookmaker}, standard stake from kickoff.",
-        "The model has a clear preference and the price reflects fair value — back {team} at {odds} with {bookmaker}, standard stake.",
-        "Solid edge with the supporting signals doing their job. Take {team} at {odds} on {bookmaker}, standard stake on the day.",
-        "The call is straightforward when the numbers read like this — back {team} at {odds} with {bookmaker}, standard stake on the day.",
-        "Everything the data says points the right direction here. Get on {team} at {odds} on {bookmaker}, standard stake on the day.",
-        "The price is fair to slightly generous on a confirmed edge — take {team} at {odds} with {bookmaker}, standard stake from kickoff.",
-        "Numbers and signals both nodding the same direction on this one. Back {team} at {odds} on {bookmaker}, standard stake on the day.",
-        "The market is offering value where the model has conviction — bet {team} at {odds} with {bookmaker}, standard stake on the day.",
-        "Gold-grade read with clean signal support behind it. Get on {team} at {odds} on {bookmaker}, standard stake from kickoff.",
-    ],
-    "silver": [
-        "The numbers lean this way without screaming it loud. The play is {team} at {odds} with {bookmaker}, standard stake on the day.",
-        "A measured read with the signals tilted the right way here. Back {team} at {odds} on {bookmaker}, standard stake on the day.",
-        "The edge is real and the conviction stays moderate today. The play is {team} at {odds} with {bookmaker}, standard stake on the day.",
-        "Decent value with supporting signals on the right side here. The play is {team} at {odds} on {bookmaker}, standard stake on the day.",
-        "Numbers tilt this way on a clean enough read of the fixture — back {team} at {odds} with {bookmaker}, standard stake on the day.",
-        "The model has a preference and the market is offering it. Take {team} at {odds} on {bookmaker}, standard stake on the day.",
-        "The signals support the call but the gap is not enormous. The play is {team} at {odds} with {bookmaker}, standard stake on the day.",
-        "Moderate edge with reasonable signal coverage on the day. The play is {team} at {odds} on {bookmaker}, standard stake from kickoff.",
-        "Worth the standard exposure on a measured read of the fixture — back {team} at {odds} with {bookmaker}, standard stake on the day.",
-        "Silver-grade signal with the price holding up through kickoff — take {team} at {odds} on {bookmaker}, standard stake on the day.",
-    ],
-    "bronze": [
-        "Light edge with supporting signals on the thinner side here. Worth a small play on {team} at {odds} with {bookmaker}, light stake.",
-        "The numbers nudge this way without much weight behind them. Worth a measured punt on {team} at {odds} on {bookmaker}, light stake.",
-        "A modest read with limited supporting evidence on the day. Worth a small punt on {team} at {odds} with {bookmaker}, light stake.",
-        "Bronze-tier signal — real edge but the conviction is thin today. Worth a small play on {team} at {odds} on {bookmaker}.",
-        "Marginal value where the model has only a slight preference. Worth a measured punt on {team} at {odds} with {bookmaker}, light stake.",
-        "Light support and a price that justifies a small position only. Worth a measured play on {team} at {odds} on {bookmaker}, light stake.",
-        "Edge exists, but conviction stays modest at this tier today. Worth a small play on {team} at {odds} with {bookmaker}.",
-        "The signal is there in muted form, not screaming the play out. Worth a measured punt on {team} at {odds} on {bookmaker}.",
-        "Modest read on a fixture with enough value to justify exposure. Worth a small play on {team} at {odds} with {bookmaker}, light stake.",
-        "Thin but real edge on the day — worth a measured punt on {team} at {odds} on {bookmaker}, light stake from kickoff.",
-    ],
+# ── VerdictSentence dataclass ─────────────────────────────────────────────
+@dataclass(frozen=True)
+class VerdictSentence:
+    """A single verdict template with a structural completeness tag.
+
+    Attributes:
+        text: the sentence with ``{team}``, ``{odds}``, ``{bookmaker}`` slots.
+        claims_completeness: True when the sentence asserts full signal
+            coverage (e.g. "every signal aligned", "model and market both").
+            Filter rule: when ``has_real_risk`` fires, only False sentences
+            are eligible — prevents the verdict body asserting completeness
+            while the concern prefix flags a real concern.
+    """
+
+    text: str
+    claims_completeness: bool
+
+
+def _v(text: str, claims_completeness: bool) -> VerdictSentence:
+    """Shorthand factory keeps the corpus literal compact."""
+    return VerdictSentence(text=text, claims_completeness=claims_completeness)
+
+
+# ── Sport bucket normalisation ────────────────────────────────────────────
+# Maps Core 7 sport keys (and their variants) to the three corpus buckets.
+# Anything outside Core 7 falls back to "soccer" with a log warning — fixture
+# blacklist keeps non-Core 7 leagues out of the verdict path in production,
+# so this fallback never fires in steady state.
+_SPORT_BUCKET_MAP: dict[str, str] = {
+    # Soccer variants
+    "soccer": "soccer",
+    "football": "soccer",
+    "epl": "soccer",
+    "psl": "soccer",
+    "ucl": "soccer",
+    "champions_league": "soccer",
+    "uefa_champions_league": "soccer",
+    "premier_league": "soccer",
+    "la_liga": "soccer",
+    "bundesliga": "soccer",
+    "serie_a": "soccer",
+    "ligue_1": "soccer",
+    # Rugby variants
+    "rugby": "rugby",
+    "urc": "rugby",
+    "super_rugby": "rugby",
+    "six_nations": "rugby",
+    "rugby_championship": "rugby",
+    "rugby_union": "rugby",
+    "rugbyunion_six_nations": "rugby",
+    # Cricket variants
+    "cricket": "cricket",
+    "ipl": "cricket",
+    "cricket_ipl": "cricket",
+    "sa20": "cricket",
+    "cricket_test": "cricket",
+    "csa_sa20": "cricket",
 }
 
 
-# ── Concern prefixes — 10 sport-agnostic sentences ────────────────────────
+def _normalise_sport_to_bucket(sport_key: str) -> str:
+    """Normalise a sport key to one of {"soccer", "rugby", "cricket"}.
+
+    Default unknown sport → "soccer" (most common path in production), with
+    a log-warn for visibility. Core 7 fixture_blacklist gates non-supported
+    leagues out of the verdict path, so the fallback never fires in
+    steady state.
+    """
+    key = (sport_key or "").lower().strip()
+    if not key:
+        return "soccer"
+    bucket = _SPORT_BUCKET_MAP.get(key)
+    if bucket is None:
+        # Try permissive prefix match before falling back — handles things
+        # like "soccer_premier_league" or sport keys with extra suffixes.
+        for prefix, mapped in (
+            ("soccer", "soccer"),
+            ("football", "soccer"),
+            ("rugby", "rugby"),
+            ("cricket", "cricket"),
+        ):
+            if key.startswith(prefix):
+                return mapped
+        _log.warning(
+            "verdict_corpus: unknown sport_key=%r, falling back to 'soccer'",
+            sport_key,
+        )
+        return "soccer"
+    return bucket
+
+
+# ── Verdict corpus — 360 sentences (4 tiers × 3 sports × 30) ──────────────
+#
+# Tag rule reminder: claims_completeness=True when the sentence text contains
+# ANY completeness-claim regex hit (every / all / whole / top to bottom /
+# complete / model and market / numbers and signals) used as a coverage
+# assertion. The contract test enforces tag consistency.
+#
+# Tier voice rubric (verdict-generator/SKILL.md):
+#   Diamond — maximum conviction: hammer / load up / go in heavy / lock in
+#   Gold    — strong:             back / get on / take / the call is / bet
+#   Silver  — measured:           the play is / take / back
+#   Bronze  — light:               worth a small play / worth a measured punt
+#
+# Sport-native vocabulary (illustrative, not exhaustive):
+#   Soccer (EPL/PSL/UCL): backline, midfield press, set-piece, finishing edge,
+#     away record, away day, home crowd, pressing intensity, transition speed,
+#     defensive shape, finishing chances, full-back overlap, wing play,
+#     deep-block, high line, front three, build-up, half-spaces, second balls,
+#     low block, double pivot, target man, channels, throw-in routine.
+#   Rugby (URC/Super Rugby/Six Nations): forward pack, set-piece dominance,
+#     scrum platform, lineout, breakdown, kicking game, line-speed, tight five,
+#     loose forwards, gainline, territory, possession, exit strategy, restart,
+#     maul, ruck speed, half-back combination, back-three counter, blitz
+#     defence, attacking shape, garryowen, contestable kick, jackler.
+#   Cricket (IPL/SA20): powerplay, middle overs, death overs, spin attack,
+#     pace battery, batting depth, top order, finishing kick, par score,
+#     surface read, dew factor, swing, bounce, turn, six-hitting power,
+#     run-rate, partnership, new-ball, slog overs, impact substitute, opener.
+
+VERDICT_CORPUS: dict[str, dict[str, list[VerdictSentence]]] = {
+    "diamond": {
+        "soccer": [
+            _v("Front three running riot, midfield press tightening the screw — hammer {team} at {odds} on {bookmaker}, full confident stake on the day.", False),
+            _v("Backline air-tight, set-piece threat is real, finishing edge clinical — load up on {team} at {odds} with {bookmaker}, heavy stake from kickoff.", False),
+            _v("Numbers, signals, and the price are all aligned cleanly — go in heavy on {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Pressing intensity tells the whole story on this fixture — hammer {team} at {odds} on {bookmaker}, full confident stake from kickoff.", True),
+            _v("Top to bottom, the edge holds up across the read — lock in {team} at {odds} on {bookmaker}, max stake on the day.", True),
+            _v("Away record holding strong, finishing edge sharp through the channels — bet {team} at {odds} with {bookmaker}, full confident stake on the day.", False),
+            _v("Model and market both reading this fixture the same way — back {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Defensive shape is locked, transitions cutting straight through — hammer {team} at {odds} on {bookmaker}, heavy stake from kickoff.", False),
+            _v("Set-piece threat is the killer dimension on this match — load up on {team} at {odds} with {bookmaker}, full stake on the day.", False),
+            _v("Every signal we measure has this side ahead on the day — go in heavy on {team} at {odds} on {bookmaker}, full confident stake.", True),
+            _v("Wide men in form, full-backs bombing forward, finishing clean — lock in {team} at {odds} on {bookmaker}, max stake on the day.", False),
+            _v("Home crowd a real factor, midfield is the engine room here — hammer {team} at {odds} on {bookmaker}, full stake from kickoff.", False),
+            _v("The whole tactical stack is pulling the same direction here. Bet {team} at {odds} with {bookmaker}, full confident stake on the day.", True),
+            _v("High line holding, pressing trap clinical, finishing third sharp — load up on {team} at {odds} with {bookmaker}, heavy stake from kickoff.", False),
+            _v("Recent form, away record, and head-to-head all on side — back {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Build-up phase clinical, second balls dominated through midfield — hammer {team} at {odds} on {bookmaker}, max stake on the day.", False),
+            _v("Top to bottom, this read holds firm across the lineup — go in heavy on {team} at {odds} on {bookmaker}, full confident stake from kickoff.", True),
+            _v("Bookies have priced this one wrong on every market we track — load up on {team} at {odds} with {bookmaker}, heavy stake on the day.", True),
+            _v("Pressing trap and finishing edge cutting through opposition shape — lock in {team} at {odds} on {bookmaker}, full stake from kickoff.", False),
+            _v("Numbers and signals both lining up the right way on this fixture — bet {team} at {odds} with {bookmaker}, full confident stake on the day.", True),
+            _v("Counter-attacking shape, transition speed, finishing third clinical — hammer {team} at {odds} on {bookmaker}, heavy stake on the day.", False),
+            _v("Set-piece dominance is the difference-maker on this fixture — back {team} at {odds} on {bookmaker}, full confident stake from kickoff.", False),
+            _v("Diamond-grade signal stack with the price still on offer here — go in heavy on {team} at {odds} on {bookmaker}, full stake from kickoff.", False),
+            _v("Backline is unbreakable, finishing chances clinical through the day — load up on {team} at {odds} with {bookmaker}, max stake on the day.", False),
+            _v("Every layer of the read points to this side winning today — hammer {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Wing play creating overloads, half-spaces wide open in attack — lock in {team} at {odds} on {bookmaker}, full confident stake from kickoff.", False),
+            _v("Front three connecting cleanly, midfield pivot dictating tempo here — bet {team} at {odds} with {bookmaker}, heavy stake on the day.", False),
+            _v("Top to bottom, the lineup is doing the heavy lifting on this one — load up on {team} at {odds} with {bookmaker}, full stake from kickoff.", True),
+            _v("Pressing high, defensive line bold, finishing chances real on the day — hammer {team} at {odds} on {bookmaker}, full confident stake on the day.", False),
+            _v("The whole tactical setup gives this side a clear edge today — go in heavy on {team} at {odds} on {bookmaker}, max stake on the day.", True),
+        ],
+        "rugby": [
+            _v("Forward pack dominating the gainline, set-piece platform locked — hammer {team} at {odds} on {bookmaker}, full confident stake on the day.", False),
+            _v("Tight five winning the collisions, breakdown speed is brutal — load up on {team} at {odds} with {bookmaker}, heavy stake from kickoff.", False),
+            _v("Numbers, signals, and the price are all pointing the same way — go in heavy on {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Set-piece dominance tells the whole story on this fixture — hammer {team} at {odds} on {bookmaker}, full confident stake from kickoff.", True),
+            _v("Top to bottom, the edge holds clean across the read here — lock in {team} at {odds} on {bookmaker}, max stake on the day.", True),
+            _v("Lineout firing, scrum platform stable, kicking game tactical — bet {team} at {odds} with {bookmaker}, full confident stake on the day.", False),
+            _v("Model and market both reading the forward battle the same — back {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Blitz defence is suffocating, line-speed is brutal at gainline — hammer {team} at {odds} on {bookmaker}, heavy stake from kickoff.", False),
+            _v("Back-three counter is the killer dimension on this fixture — load up on {team} at {odds} with {bookmaker}, full stake on the day.", False),
+            _v("Every signal across the forward and back unit is on side — go in heavy on {team} at {odds} on {bookmaker}, full confident stake.", True),
+            _v("Half-back combination clicking, exit strategy is clinical here — lock in {team} at {odds} on {bookmaker}, max stake on the day.", False),
+            _v("Home stadium gives them territorial control, kicking game tactical — hammer {team} at {odds} on {bookmaker}, full stake from kickoff.", False),
+            _v("The whole pack is doing the work for this attacking shape. Bet {team} at {odds} with {bookmaker}, full confident stake on the day.", True),
+            _v("Loose forwards dominant at the breakdown, ruck speed is fast — load up on {team} at {odds} with {bookmaker}, heavy stake from kickoff.", False),
+            _v("Recent form, set-piece numbers, and head-to-head all on side — back {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Maul control suffocating opposition exits, pressure relentless — hammer {team} at {odds} on {bookmaker}, max stake on the day.", False),
+            _v("Top to bottom, this read holds firm across the matchday squad — go in heavy on {team} at {odds} on {bookmaker}, full confident stake from kickoff.", True),
+            _v("Bookies have got this priced wrong on every line we track here — load up on {team} at {odds} with {bookmaker}, heavy stake on the day.", True),
+            _v("Scrum platform feeding the half-backs clean ball at the base — lock in {team} at {odds} on {bookmaker}, full stake from kickoff.", False),
+            _v("Numbers and signals both lining up behind this side cleanly — bet {team} at {odds} with {bookmaker}, full confident stake on the day.", True),
+            _v("Territory and possession game both controlled, kicking sharp — hammer {team} at {odds} on {bookmaker}, heavy stake on the day.", False),
+            _v("Set-piece dominance is the difference-maker on this fixture — back {team} at {odds} on {bookmaker}, full confident stake from kickoff.", False),
+            _v("Diamond-grade signal stack with the price still showing here — go in heavy on {team} at {odds} on {bookmaker}, full stake from kickoff.", False),
+            _v("Tight five locked, lineout firing, forward platform brutal here — load up on {team} at {odds} with {bookmaker}, max stake on the day.", False),
+            _v("Every layer of the read backs this side getting the win today — hammer {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Back row dominance at breakdown, jackler ruling the contest — lock in {team} at {odds} on {bookmaker}, full confident stake from kickoff.", False),
+            _v("Flyhalf controlling tempo, contestable kicks pinning opposition deep — bet {team} at {odds} with {bookmaker}, heavy stake on the day.", False),
+            _v("Top to bottom, the matchday squad is doing the work here — load up on {team} at {odds} with {bookmaker}, full stake from kickoff.", True),
+            _v("Aerial battle controlled, restarts won, set-piece platform real — hammer {team} at {odds} on {bookmaker}, full confident stake on the day.", False),
+            _v("The whole forward unit gives this side a clear edge on the day — go in heavy on {team} at {odds} on {bookmaker}, max stake on the day.", True),
+        ],
+        "cricket": [
+            _v("Powerplay openers in form, top order striking with intent — hammer {team} at {odds} on {bookmaker}, full confident stake on the day.", False),
+            _v("Pace battery sharp, spin attack on a turning surface — load up on {team} at {odds} with {bookmaker}, heavy stake from kickoff.", False),
+            _v("Numbers, signals, and the price are all aligned cleanly here — go in heavy on {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Batting depth tells the whole story on this fixture today — hammer {team} at {odds} on {bookmaker}, full confident stake from kickoff.", True),
+            _v("Top to bottom, the edge holds clean across the squad selection — lock in {team} at {odds} on {bookmaker}, max stake on the day.", True),
+            _v("Death overs specialists ready, finishing kick locked at the back end — bet {team} at {odds} with {bookmaker}, full confident stake on the day.", False),
+            _v("Model and market both reading the surface the same way here — back {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Six-hitting power through the middle order, spin a real weapon — hammer {team} at {odds} on {bookmaker}, heavy stake from kickoff.", False),
+            _v("Surface read favouring spin is the killer dimension here today — load up on {team} at {odds} with {bookmaker}, full stake on the day.", False),
+            _v("Every signal across batting and bowling is on side today — go in heavy on {team} at {odds} on {bookmaker}, full confident stake.", True),
+            _v("New-ball pair sharp, swing and seam through the powerplay overs — lock in {team} at {odds} on {bookmaker}, max stake on the day.", False),
+            _v("Home conditions a real factor, dew factor adds another angle — hammer {team} at {odds} on {bookmaker}, full stake from kickoff.", False),
+            _v("The whole batting card stacks up cleanly behind this side. Bet {team} at {odds} with {bookmaker}, full confident stake on the day.", True),
+            _v("Pacers extracting bounce, partnership-building through middle overs — load up on {team} at {odds} with {bookmaker}, heavy stake from kickoff.", False),
+            _v("Recent form, par score read, and head-to-head all on side — back {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Run-rate control tight, slog-overs hitters loaded for the back end — hammer {team} at {odds} on {bookmaker}, max stake on the day.", False),
+            _v("Top to bottom, this batting line-up is the deeper of the two — go in heavy on {team} at {odds} on {bookmaker}, full confident stake from kickoff.", True),
+            _v("Bookies have priced this wrong on every market we cover today — load up on {team} at {odds} with {bookmaker}, heavy stake on the day.", True),
+            _v("Spin attack on a low-bounce track, batters comfortable with turn — lock in {team} at {odds} on {bookmaker}, full stake from kickoff.", False),
+            _v("Numbers and signals both lining up clean behind this team today — bet {team} at {odds} with {bookmaker}, full confident stake on the day.", True),
+            _v("Powerplay six-hitting and middle-overs anchor both stacked here — hammer {team} at {odds} on {bookmaker}, heavy stake on the day.", False),
+            _v("Death-over yorkers and slower balls are the difference today — back {team} at {odds} on {bookmaker}, full confident stake from kickoff.", False),
+            _v("Diamond-grade signal stack with the price still on offer here — go in heavy on {team} at {odds} on {bookmaker}, full stake from kickoff.", False),
+            _v("Top order anchored, finishers loaded, par score read clean — load up on {team} at {odds} with {bookmaker}, max stake on the day.", False),
+            _v("Every layer of the squad read backs this side winning today — hammer {team} at {odds} on {bookmaker}, full stake on the day.", True),
+            _v("Impact substitute changing the dynamic, batting depth deeper — lock in {team} at {odds} on {bookmaker}, full confident stake from kickoff.", False),
+            _v("Wicket conditions favour their pace battery, swing on offer — bet {team} at {odds} with {bookmaker}, heavy stake on the day.", False),
+            _v("Top to bottom, the squad selection has the right mix today — load up on {team} at {odds} with {bookmaker}, full stake from kickoff.", True),
+            _v("Spin and pace combination matched to surface, partnerships set — hammer {team} at {odds} on {bookmaker}, full confident stake on the day.", False),
+            _v("The whole batting and bowling unit gives them a clear edge today — go in heavy on {team} at {odds} on {bookmaker}, max stake on the day.", True),
+        ],
+    },
+    "gold": {
+        "soccer": [
+            _v("Backline holding shape, midfield press doing the dirty work — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Front three connecting cleanly, finishing edge sharp on the day — get on {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("The model has a clear preference, and the price reflects fair value — back {team} at {odds} with {bookmaker}, standard stake.", False),
+            _v("Set-piece threat is real, away record holding up well — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The call is straightforward when the read holds together like this — back {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Numbers and signals both nodding the same direction here — get on {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Wing play creating overloads, full-back overlaps cutting through — take {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("Pressing intensity high, transitions clinical at both ends today — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The market is offering value where the model has conviction here — bet {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Gold-grade read with clean signal support behind it on the day — get on {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Build-up phase composed, second balls won through midfield clean — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Half-spaces wide open, finishing third clinical against deep-block — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Confirming signals stacked on the right side cleanly today — back {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("Defensive shape solid, double pivot dictating tempo from deep — get on {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Top to bottom, the read favours this side getting the result — bet {team} at {odds} with {bookmaker}, standard stake on the day.", True),
+            _v("Counter-attacking threat real, transition speed cutting through — take {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Recent form, away record, and head-to-head all read the same — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Set-piece dominance and finishing chances both stacking up here — get on {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("The call is straightforward when the signals read this clean today — bet {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Model and market both reading this fixture clearly the same way — take {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Pressing trap working, finishing third clinical through channels — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("High line holding firm, pressing intensity squeezing the opposition — get on {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("The whole midfield is dictating, double pivot doing the work today — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Wide men in form, finishing chances clean through the day — take {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("Solid edge on this fixture, supporting signals doing their job today — get on {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Numbers tell the story, the price is offering fair value — bet {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Front three connecting through half-spaces, build-up clean — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Home crowd a real factor, transitions cutting clean on the break — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("The price is fair to slightly generous on a confirmed read here — get on {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Top to bottom, the lineup looks the more balanced of the two sides — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", True),
+        ],
+        "rugby": [
+            _v("Forward pack winning the collisions, set-piece platform stable — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Lineout firing, scrum platform giving clean ball at the base — get on {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("The model has a clear preference, and the price reflects fair value — back {team} at {odds} with {bookmaker}, standard stake.", False),
+            _v("Breakdown speed is sharp, gainline contest going their way — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The call is straightforward when the forward battle reads like this — back {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Numbers and signals both nodding the same way on this fixture — get on {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Half-back combination clicking, exit strategy is clean today — take {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("Blitz defence aggressive, line-speed shutting down attacking shape — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The market is offering value where the read has conviction here — bet {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Gold-grade read with the forward platform doing the work today — get on {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Maul control giving territory, kicking game tactical and tight — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Loose forwards busy at breakdown, ruck speed quick on attack — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Confirming signals stacked on the right side cleanly today — back {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("Tight five locked, lineout dominance giving clean platform — get on {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Top to bottom, the matchday squad reads stronger on this fixture — bet {team} at {odds} with {bookmaker}, standard stake on the day.", True),
+            _v("Back-three counter dangerous, kicking game tactical and tight — take {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Recent form, set-piece numbers, and head-to-head all on side — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Forward pack and back-three counter both stacking up here — get on {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("The call is straightforward when the breakdown reads this clean — bet {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Model and market both reading the forward battle the same way — take {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Choke tackle clinical, jackler dominant at every breakdown — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Aerial contest controlled, restart receipt clean through the day — get on {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("The whole forward platform is dictating tempo through phases — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Flyhalf controlling tempo, contestable kicks pinning opposition deep — take {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("Solid edge on this fixture, supporting signals doing their job — get on {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Numbers tell the story, the price is offering fair value here — bet {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Scrum platform stable, set-piece dominance forcing penalties — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Home stadium giving territorial control, kicking sharp on exits — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("The price is fair to slightly generous on a confirmed read here — get on {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Top to bottom, the matchday 23 looks the deeper of the two squads — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", True),
+        ],
+        "cricket": [
+            _v("Top order in form, powerplay six-hitting power on the day — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Pace battery sharp, swing on offer through the new-ball overs — get on {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("The model has a clear preference, and the price reflects fair value — back {team} at {odds} with {bookmaker}, standard stake.", False),
+            _v("Spin attack reading the surface, batting depth deeper today — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The call is straightforward when the surface read holds like this today — back {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Numbers and signals both nodding the same way on this fixture — get on {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Death-overs specialists loaded, finishing kick clean at the back end — take {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("Middle-overs anchor steady, partnership-building through the spin — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The market is offering value where the read has conviction here — bet {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Gold-grade read with batting depth doing the work today — get on {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Pacers extracting bounce, swing through the powerplay phase — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Slog-overs hitters loaded, run-rate control through middle overs — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Confirming signals stacked on the right side cleanly today — back {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("New-ball pair clinical, top order anchored through powerplay — get on {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Top to bottom, this batting card looks the deeper today — bet {team} at {odds} with {bookmaker}, standard stake on the day.", True),
+            _v("Spin attack on a low-bounce track, batters reading turn well — take {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Recent form, par score read, and head-to-head all read the same — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Six-hitting power and pace battery both stacking up cleanly here — get on {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("The call is straightforward when the surface read is this clean today — bet {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Model and market both reading the par score the same way today — take {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Death-over yorkers and slower balls are the difference here — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Spin a real weapon on this surface, batters playing the angle — get on {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("The whole batting unit looks deeper across the order — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Impact substitute changing the dynamic at the back end — take {team} at {odds} with {bookmaker}, standard stake from kickoff.", False),
+            _v("Solid edge on this fixture, supporting signals doing their job here — get on {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Numbers tell the story, the price is offering fair value today — bet {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Wicket conditions favouring pace, batters needing to rebuild — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Home conditions a real factor, dew factor changing things later — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("The price is fair to slightly generous on a confirmed read here — get on {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Top to bottom, the squad selection has the right balance today — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", True),
+        ],
+    },
+    "silver": {
+        "soccer": [
+            _v("Backline solid enough, midfield press tilting things this way — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Front three connecting in patches, finishing edge present — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The edge is real and the conviction stays measured today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Set-piece threat present, away record reasonable on the day — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Numbers tilt this way on a clean enough read of the fixture — back {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("The model has a preference and the market is offering it here — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The signals support the call, but the gap is not enormous today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Moderate edge with reasonable signal coverage on the read — the play is {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Worth the standard exposure on a measured read of this fixture — back {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Silver-grade signal with the price holding up through kickoff — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Pressing intensity tilting things, transitions clean on counter — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Half-spaces opening, full-back overlaps creating openings — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Defensive shape decent, double pivot doing reasonable work today — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Recent form on side, away record solid enough today — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Numbers and signals both leaning this direction today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", True),
+            _v("Front three in form, finishing edge sharp through patches — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Counter-attacking threat real, transition speed cutting through — the play is {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Build-up phase composed enough, second balls won in patches — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Set-piece threat and finishing chances both leaning this way — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Top to bottom, the lineup looks slightly more balanced today — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Pressing trap working in patches, finishing third reasonable — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Wing play creating openings, half-spaces opening today — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Home crowd a factor, transitions cutting clean on the break — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Solid measured read with supporting signals on the right side — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Decent value with supporting signals on the right side here — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Pressing intensity decent, defensive line holding shape today — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("High line bold, transitions cutting through opposition shape — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Wide men in form, build-up phase composed through midfield — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Set-piece dominance present, finishing edge on side here — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Every supporting signal is leaning this direction today — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+        ],
+        "rugby": [
+            _v("Forward pack winning patches, set-piece reasonable on the day — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Lineout firing in patches, scrum platform decent at the base — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The edge is real and the conviction stays measured today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Breakdown speed sharp enough, gainline contest tilting their way — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Numbers tilt this way on a clean enough read of the forward battle — back {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("The model has a preference and the market is offering it here — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Signals support the call, but the gap is not enormous today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Moderate edge with reasonable signal coverage on the read — the play is {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Worth the standard exposure on a measured read of this fixture — back {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Silver-grade signal with the price holding up through kickoff — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Half-back combination working in patches, exits decent today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Blitz defence reasonable, line-speed shutting down patches — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Maul control patchy, kicking game tactical enough today — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Recent form on side, set-piece reasonable on this fixture — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Numbers and signals both leaning this direction on the day — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", True),
+            _v("Loose forwards busy at breakdown, ruck speed reasonable today — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Back-three counter dangerous in patches, kicks tactical — the play is {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Tight five working through phases, lineout reasonable today — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Forward platform and back-three counter both leaning this way — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Top to bottom, the matchday 23 looks slightly the more balanced — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Maul control patchy, choke tackle reasonable through phases — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Aerial battle decent, restart receipt reasonable today — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Home stadium a factor, kicking game pinning opposition exits — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Solid measured read with supporting signals on the right side — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Decent value with supporting signals on the right side here — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Breakdown speed reasonable, jackler busy in patches today — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Flyhalf controlling tempo, contestable kicks decent enough — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Set-piece dominance present in patches, scrum reasonable — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Forward pack winning patches, gainline contest decent — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Every supporting signal is leaning this direction today — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+        ],
+        "cricket": [
+            _v("Top order in form in patches, powerplay reasonable today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Pace battery sharp enough, swing through the new-ball overs — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("The edge is real and the conviction stays measured today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Spin attack reading the surface, batting depth reasonable today — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Numbers tilt this way on a clean enough read of the surface — back {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("The model has a preference and the market is offering it here — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Signals support the call, but the gap is not enormous today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Moderate edge with reasonable signal coverage on the read — the play is {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Worth the standard exposure on a measured read of this fixture — back {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Silver-grade signal with the price holding up through kickoff — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Death-overs specialists ready in patches, finishing reasonable — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Middle-overs anchor steady enough, partnership-building decent — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Pacers extracting bounce, swing through powerplay decent — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Recent form on side, par score read reasonable today — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Numbers and signals both leaning this direction on the day — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", True),
+            _v("Slog-overs hitters loaded, run-rate control reasonable today — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("New-ball pair sharp enough, top order anchored through patches — the play is {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Spin attack on this surface, batters reading turn reasonably — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Six-hitting power and pace battery both leaning this way today — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Top to bottom, this batting card looks slightly deeper today — back {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+            _v("Death-over yorkers reasonable, slower balls effective in patches — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Spin a weapon on this surface, partnership-building decent — take {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Home conditions a factor, dew factor changing things later — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Solid measured read with supporting signals on the right side — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Decent value with supporting signals on the right side here — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Wicket conditions favouring pace, batters needing patience — back {team} at {odds} on {bookmaker}, standard stake on the day.", False),
+            _v("Impact substitute changing the dynamic at the back end — take {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Powerplay six-hitting reasonable, middle overs steady today — the play is {team} at {odds} with {bookmaker}, standard stake on the day.", False),
+            _v("Top order anchored, finishers loaded for the back end — back {team} at {odds} on {bookmaker}, standard stake from kickoff.", False),
+            _v("Every supporting signal is leaning this direction today — the play is {team} at {odds} on {bookmaker}, standard stake on the day.", True),
+        ],
+    },
+    "bronze": {
+        "soccer": [
+            _v("Light edge with supporting signals on the thinner side here — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Numbers nudge this way without much weight behind them today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Modest read with limited supporting evidence on the day here — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Bronze-tier signal — real edge but the conviction is thin today — worth a small play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Marginal value where the model has only a slight preference here — worth a measured punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Light support and a price that justifies a small position only today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Edge exists, but conviction stays modest at this tier today here — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Signal is there in muted form, not screaming the play out today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Modest read on a fixture with enough value to justify exposure here — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Thin but real edge on the day with the price still on offer — worth a measured punt on {team} at {odds} on {bookmaker}, light stake from kickoff.", False),
+            _v("Backline holds in patches, midfield not pressing hard enough today — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Front three connecting in flashes, finishing edge thin today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Set-piece threat present in flashes, away record passable here — worth a small punt on {team} at {odds} with {bookmaker}, light stake from kickoff.", False),
+            _v("Pressing intensity flashes, transitions clean in patches today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Wing play creating chances in flashes, finishing third thin — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Recent form patchy on both sides, light edge here today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake on the day.", False),
+            _v("Numbers and signals both leaning slightly this way only — worth a small play on {team} at {odds} with {bookmaker}, light stake.", True),
+            _v("Counter-attacking threat in flashes, transition speed thin today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Build-up phase okay in patches, second balls won occasionally — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Half-spaces opening occasionally, finishing chances limited today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("High line risky in patches, pressing trap working occasionally — worth a small play on {team} at {odds} with {bookmaker}, light stake from kickoff.", False),
+            _v("Defensive shape okay, double pivot doing patchy work today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Wide men in flashes, build-up phase patchy through midfield — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Pressing trap working occasionally, finishing third inconsistent — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Set-piece dominance patchy, finishing edge thin on this read — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Home crowd a small factor, transitions occasionally clean today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Top to bottom, this lineup looks marginally the more balanced — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", True),
+            _v("Front three patchy, finishing chances thin through the day — worth a measured punt on {team} at {odds} on {bookmaker}, light stake from kickoff.", False),
+            _v("Pressing intensity occasional, defensive line holding in patches — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Build-up phase composed in flashes, second balls won occasionally — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+        ],
+        "rugby": [
+            _v("Light edge with supporting signals on the thinner side here — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Numbers nudge this way without much weight behind them today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Modest read with limited supporting evidence on the day here — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Bronze-tier signal — real edge but the conviction is thin today — worth a small play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Marginal value where the model has only a slight preference here — worth a measured punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Light support and a price that justifies a small position only today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Edge exists, but conviction stays modest at this tier today here — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Signal is there in muted form, not screaming the play out today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Modest read on a fixture with enough value to justify exposure here — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Thin but real edge on the day with the price still on offer — worth a measured punt on {team} at {odds} on {bookmaker}, light stake from kickoff.", False),
+            _v("Forward pack winning patches, set-piece platform passable today — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Lineout firing in flashes, scrum platform patchy at the base — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Breakdown speed sharp in flashes, gainline contest patchy today — worth a small punt on {team} at {odds} with {bookmaker}, light stake from kickoff.", False),
+            _v("Half-back combination patchy in flashes, exits inconsistent — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Blitz defence working occasionally, line-speed inconsistent — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Recent form on this fixture passable, light edge today here — worth a measured punt on {team} at {odds} on {bookmaker}, light stake on the day.", False),
+            _v("Numbers and signals both leaning slightly this way only today — worth a small play on {team} at {odds} with {bookmaker}, light stake.", True),
+            _v("Maul control patchy, kicking game tactical in flashes today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Loose forwards busy in patches, ruck speed inconsistent — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Back-three counter dangerous in flashes, kicks tactical — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Tight five working in patches, lineout reasonable today here — worth a small play on {team} at {odds} with {bookmaker}, light stake from kickoff.", False),
+            _v("Forward platform patchy, back-three counter inconsistent today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Aerial battle patchy, restart receipt inconsistent through phases — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Choke tackle working occasionally, jackler patchy at breakdown — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Set-piece dominance patchy, scrum platform inconsistent today — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Home stadium a small factor, kicking patchy through exits today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Top to bottom, the matchday 23 looks marginally the more balanced — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", True),
+            _v("Flyhalf patchy in tempo, contestable kicks landing occasionally — worth a measured punt on {team} at {odds} on {bookmaker}, light stake from kickoff.", False),
+            _v("Breakdown speed inconsistent, gainline contest patchy through phases — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Forward pack winning patches, set-piece platform passable today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+        ],
+        "cricket": [
+            _v("Light edge with supporting signals on the thinner side here — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Numbers nudge this way without much weight behind them today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Modest read with limited supporting evidence on the day here — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Bronze-tier signal — real edge but the conviction is thin today — worth a small play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Marginal value where the model has only a slight preference here — worth a measured punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Light support and a price that justifies a small position only today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Edge exists, but conviction stays modest at this tier today here — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Signal is there in muted form, not screaming the play out today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Modest read on a fixture with enough value to justify exposure here — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Thin but real edge on the day with the price still on offer — worth a measured punt on {team} at {odds} on {bookmaker}, light stake from kickoff.", False),
+            _v("Top order in flashes, powerplay six-hitting power patchy today — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Pace battery sharp in flashes, swing through new-ball patchy — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Spin attack reading the surface in patches, batting depth ok — worth a small punt on {team} at {odds} with {bookmaker}, light stake from kickoff.", False),
+            _v("Death-overs specialists patchy, finishing kick inconsistent today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Middle-overs anchor patchy, partnership-building inconsistent — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Recent form passable on this fixture, light edge today here — worth a measured punt on {team} at {odds} on {bookmaker}, light stake on the day.", False),
+            _v("Numbers and signals both leaning slightly this way only today — worth a small play on {team} at {odds} with {bookmaker}, light stake.", True),
+            _v("Pacers extracting bounce in flashes, swing through powerplay patchy — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Slog-overs hitters patchy, run-rate control inconsistent today — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("New-ball pair patchy, top order anchored in flashes today — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Spin attack on this surface, batters reading turn in flashes — worth a small play on {team} at {odds} with {bookmaker}, light stake from kickoff.", False),
+            _v("Six-hitting power patchy, pace battery inconsistent today — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Death-over yorkers patchy, slower balls effective in flashes — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Spin a weapon on this surface, partnership-building patchy here — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Wicket conditions slightly favouring pace, batters needing time — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Home conditions a small factor, dew factor changing things later — worth a measured play on {team} at {odds} on {bookmaker}, light stake.", False),
+            _v("Top to bottom, this batting card looks marginally the deeper today — worth a small punt on {team} at {odds} with {bookmaker}, light stake.", True),
+            _v("Impact substitute changing dynamic in flashes at the back end — worth a measured punt on {team} at {odds} on {bookmaker}, light stake from kickoff.", False),
+            _v("Powerplay six-hitting patchy, middle overs steady in flashes — worth a small play on {team} at {odds} with {bookmaker}, light stake.", False),
+            _v("Top order anchored in patches, finishers loaded for the back end — worth a measured punt on {team} at {odds} on {bookmaker}, light stake.", False),
+        ],
+    },
+}
+
+
+# ── Concern prefixes — 25 sentences (15 sport-agnostic + 10 sport-flavoured)
 # Used only when has_real_risk(spec) is True. Concatenated to verdict body
 # with a single space, no linguistic bridge. The verdict body still starts
 # with a capital letter — the reader's brain treats prefix + body as two
 # separate beats: "here's the concern" then "here's the call".
+#
+# All 25 prefixes are sport-agnostic-safe — sport-flavoured prefixes use sport
+# vocabulary (e.g. "the away record", "the breakdown battle") but assert no
+# tier conviction and contain no slot placeholders.
 CONCERN_PREFIXES: list[str] = [
+    # 15 sport-agnostic
     "Form is choppy on both sides.",
     "The injury report carries late risk.",
     "Late market money is leaning the other way.",
@@ -105,6 +590,22 @@ CONCERN_PREFIXES: list[str] = [
     "Squad rotation risk is in play here.",
     "The supporting signal stack is on the lighter side.",
     "There is a contradicting indicator to keep in mind.",
+    "Recent form has been patchy on both sides of the fixture.",
+    "Sharp money has been leaning the other direction late.",
+    "The composite read is closer to the tier floor than usual.",
+    "Travel and turnaround add a small variable to this fixture.",
+    "Confirming signals are on the thin side of comfort here.",
+    # 10 sport-flavoured (sport-agnostic-safe — no tier claims, no slot placeholders)
+    "The away record gives pause on this fixture.",       # soccer-flavoured
+    "Set-piece concession trends add a small risk.",      # soccer/rugby
+    "The breakdown battle is unpredictable on the day.",  # rugby
+    "The forward platform could swing either way today.", # rugby
+    "The surface might play differently than expected.",  # cricket
+    "Dew factor and toss could shift the picture late.",  # cricket
+    "The opposition has a recent run of clean sheets.",   # soccer
+    "Aerial duels and territorial control are tight.",    # rugby
+    "Wicket conditions are an unknown until the start.",  # cricket
+    "Squad fitness across the matchday list is borderline.",  # all
 ]
 
 
@@ -155,25 +656,32 @@ def has_real_risk(spec: "NarrativeSpec") -> bool:
 
 
 # ── Hash-picker — deterministic across reads of the same edge ─────────────
-def _pick(corpus: list[str], match_key: str, tier: str) -> str:
-    """Hash-pick a sentence from corpus by (match_key, tier).
+def _pick(items: list, match_key: str, salt: str) -> object:
+    """Hash-pick an element from ``items`` by ``(match_key, salt)``.
 
-    Uses MD5 for stable cross-process determinism. Same (match_key, tier)
-    always returns the same sentence; different keys spread across the pool.
+    Uses MD5 for stable cross-process determinism. Same ``(match_key, salt)``
+    always returns the same element; different keys spread across the pool.
+
+    The salt is typically ``f"{tier}|{sport}"`` for verdict-body picks and
+    ``f"{tier}|{sport}|prefix"`` for concern-prefix picks — keeping the two
+    pickers independent so a fixture's prefix and verdict don't co-correlate.
     """
-    seed = f"{match_key}|{tier}".encode("utf-8")
+    seed = f"{match_key}|{salt}".encode("utf-8")
     h = hashlib.md5(seed).hexdigest()
-    return corpus[int(h, 16) % len(corpus)]
+    return items[int(h, 16) % len(items)]
 
 
-# ── render_verdict — slot-fill + optional concern prefix ──────────────────
+# ── render_verdict — sport-banded slot-fill + optional concern prefix ─────
 def render_verdict(spec: "NarrativeSpec") -> str:
     """Render the deterministic verdict for ``spec``.
 
-    Reads ``spec.edge_tier`` to select the corpus pool. Hash-picks a sentence
-    by ``(spec.match_key, tier)``. Slot-fills {team}, {odds}, {bookmaker}.
-    Prepends a concern prefix (separator: single space) when
-    ``has_real_risk(spec)`` is True.
+    Reads ``spec.edge_tier`` to select the corpus tier and ``spec.sport``
+    to select the sport bucket. Hash-picks a sentence by
+    ``(spec.match_key, tier, sport)``. Slot-fills ``{team}``, ``{odds}``,
+    ``{bookmaker}``. Prepends a concern prefix (separator: single space)
+    when ``has_real_risk(spec)`` is True — and when the concern fires, the
+    sentence pool is filtered to ``claims_completeness=False`` to prevent
+    contradiction with the prefix.
 
     Returns the bare body when the spec is mid-renderer and a slot would
     otherwise resolve to empty (defensive — slot fills are always non-empty
@@ -183,8 +691,7 @@ def render_verdict(spec: "NarrativeSpec") -> str:
     ``edge_tier`` still get a tier-appropriate verdict.
     """
     tier = (getattr(spec, "edge_tier", "") or "").lower()
-    pool = VERDICT_CORPUS.get(tier)
-    if not pool:
+    if tier not in VERDICT_CORPUS:
         # Action-derived fallback when edge_tier is empty/unrecognised.
         action = (getattr(spec, "verdict_action", "") or "").lower()
         derived = {
@@ -193,7 +700,24 @@ def render_verdict(spec: "NarrativeSpec") -> str:
             "lean": "silver",
         }.get(action, "bronze")
         tier = derived
-        pool = VERDICT_CORPUS[tier]
+
+    sport_raw = (getattr(spec, "sport", "") or "").lower()
+    sport = _normalise_sport_to_bucket(sport_raw)
+
+    pool: list[VerdictSentence] = VERDICT_CORPUS[tier][sport]
+
+    # Filter rule: when the concern prefix will fire, restrict the pool to
+    # claims_completeness=False so the verdict body never contradicts the
+    # prefix's flagged concern.
+    risk_fires = has_real_risk(spec)
+    if risk_fires:
+        filtered = [vs for vs in pool if not vs.claims_completeness]
+        # Defensive: every (tier, sport) bucket has ≥15 False sentences by
+        # construction (test_filter_safety guards this), so this fallback
+        # never fires in production. Keep the guard so partial corpus edits
+        # in development don't crash the verdict path.
+        if filtered:
+            pool = filtered
 
     # Slot inputs — every production caller fills them via NarrativeSpec.
     team = (
@@ -213,11 +737,11 @@ def render_verdict(spec: "NarrativeSpec") -> str:
         or f"{getattr(spec, 'home_name', '')}|{getattr(spec, 'away_name', '')}"
     )
 
-    template = _pick(pool, match_key, tier)
-    body = template.format(team=team, odds=odds, bookmaker=bookmaker)
+    sentence: VerdictSentence = _pick(pool, match_key, f"{tier}|{sport}")  # type: ignore[assignment]
+    body = sentence.text.format(team=team, odds=odds, bookmaker=bookmaker)
 
-    if has_real_risk(spec):
-        prefix = _pick(CONCERN_PREFIXES, match_key, tier + ":prefix")
+    if risk_fires:
+        prefix: str = _pick(CONCERN_PREFIXES, match_key, f"{tier}|{sport}|prefix")  # type: ignore[assignment]
         return f"{prefix} {body}"
 
     return body
@@ -227,6 +751,8 @@ __all__ = [
     "VERDICT_CORPUS",
     "CONCERN_PREFIXES",
     "TIER_FLOORS",
+    "VerdictSentence",
+    "_normalise_sport_to_bucket",
     "has_real_risk",
     "render_verdict",
 ]
