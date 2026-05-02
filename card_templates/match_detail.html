@@ -31,8 +31,9 @@
         /* ── 1. Header ───────────────────────────────────────── */
         .header {
             position: relative;
+            z-index: 1;
             isolation: isolate;
-            overflow: hidden;
+            overflow: visible;
             padding: 12px 20px;
             display: flex;
             align-items: center;
@@ -41,10 +42,15 @@
             background: linear-gradient(90deg, #0D0D0D, #000);
             border-bottom: 1px solid #2A2A2A;
         }
+        .card > :not(.header) {
+            position: relative;
+            z-index: 2;
+        }
         /* ── Logo glow (lifted from sub_plans.html, WAVE-E1-CANONICAL-LIFT-01) ── */
         .logo-glow {
             position: absolute;
-            inset: -10px 0 0 0;
+            inset: -10px 0 auto 0;
+            height: 190px;
             pointer-events: none;
             z-index: 0;
             filter: blur(3px);
@@ -53,7 +59,8 @@
         }
         .logo-glow-screen {
             position: absolute;
-            inset: 0;
+            inset: 0 0 auto 0;
+            height: 160px;
             pointer-events: none;
             z-index: 0;
             mix-blend-mode: screen;
