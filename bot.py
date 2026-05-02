@@ -29757,6 +29757,7 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                         await asyncio.to_thread(
                             render_card_sync, "edge_picks.html", _pc_data,
                             cache_ttl=900,  # 15-min TTL for precomputed cards
+                            background=True,
                         )
                     log.info(
                         "BUILD-SPEED: prerendered %d Edge Picks card page(s) into PNG cache",
@@ -29835,6 +29836,7 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                             await asyncio.to_thread(
                                 render_card_sync, "edge_detail.html", _dd,
                                 cache_ttl=900,
+                                background=True,
                             )
                             return True
                         except Exception as _det_err:

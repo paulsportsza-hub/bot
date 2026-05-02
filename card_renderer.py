@@ -129,25 +129,40 @@ _pool: dict = {
     "ready": threading.Event(),
     "error": None,
     "lock": threading.Lock(),
-    "render_sem": None,  # lazy-bound asyncio.Semaphore — created in pool loop
+    "user_render_sem": None,  # lazy-bound — user-tap lane (3 slots)
+    "bg_render_sem": None,    # lazy-bound — background/precompute lane (1 slot)
 }
 
-# INV-BOT-MY-MATCHES-SLOWDOWN-02: cap concurrent Playwright pages at 2 to prevent
-# render queue saturation when prerender (Sem(3) at bot.py:_edge_precompute_job),
-# pregen, and user taps stack on the single browser. Observed BUILD-SPEED prerender
-# duration tripled from 9.7s → 84.1s under load on 2 May 2026, blocking My Matches
-# warm-tap renders behind a 12s send_card_or_fallback timeout.
-_RENDER_CONCURRENCY_LIMIT = 2
+# FIX-BOT-RENDER-SEMAPHORE-PRIORITY-02: two-lane render semaphore so background
+# precompute/pregen jobs (lane bg, 1 slot) cannot starve user-tap renders
+# (lane user, 3 slots). Observed BUILD-SPEED prerender holding both slots of the
+# old Semaphore(2), blocking My Matches warm-tap renders behind a 12s timeout.
+_USER_RENDER_CONCURRENCY = 3
+_BG_RENDER_CONCURRENCY = 1
 _SLOW_RENDER_WARN_MS = 3000.0  # WARN when an individual render exceeds 3s
 
 
-def _get_render_semaphore() -> asyncio.Semaphore:
-    """Return the pool-loop-bound semaphore; create it on first use inside the loop."""
-    sem = _pool["render_sem"]
+def _get_user_render_semaphore() -> asyncio.Semaphore:
+    """Return the user-tap render semaphore; create it on first use inside the pool loop."""
+    sem = _pool.get("user_render_sem")
     if sem is None:
-        sem = asyncio.Semaphore(_RENDER_CONCURRENCY_LIMIT)
-        _pool["render_sem"] = sem
+        sem = asyncio.Semaphore(_USER_RENDER_CONCURRENCY)
+        _pool["user_render_sem"] = sem
     return sem
+
+
+def _get_bg_render_semaphore() -> asyncio.Semaphore:
+    """Return the background render semaphore; create it on first use inside the pool loop."""
+    sem = _pool.get("bg_render_sem")
+    if sem is None:
+        sem = asyncio.Semaphore(_BG_RENDER_CONCURRENCY)
+        _pool["bg_render_sem"] = sem
+    return sem
+
+
+def _get_render_semaphore() -> asyncio.Semaphore:
+    """Legacy alias — routes to user semaphore."""
+    return _get_user_render_semaphore()
 
 
 async def _pool_init() -> None:
@@ -224,15 +239,15 @@ async def _render_page(
     data: dict,
     width: int,
     device_scale_factor: int,
+    background: bool = False,
 ) -> bytes:
     """Render one page using the pooled browser (runs in pool event loop).
 
-    INV-BOT-MY-MATCHES-SLOWDOWN-02: gated on a global asyncio.Semaphore so
-    concurrent renders cap at _RENDER_CONCURRENCY_LIMIT regardless of caller
-    (precompute, pregen, user tap). Wait time recorded separately to keep the
-    'card_render_complete' line comparable across loads.
+    FIX-BOT-RENDER-SEMAPHORE-PRIORITY-02: user-tap renders use the user lane
+    (Semaphore(3)); background precompute/pregen renders use the bg lane
+    (Semaphore(1)) so they cannot starve interactive taps.
     """
-    sem = _get_render_semaphore()
+    sem = _get_bg_render_semaphore() if background else _get_user_render_semaphore()
     _wait_start = time.monotonic()
     async with sem:
         _wait_ms = (time.monotonic() - _wait_start) * 1000
@@ -297,6 +312,7 @@ async def _render_page_safe(
     data: dict,
     width: int,
     device_scale_factor: int,
+    background: bool = False,
 ) -> bytes:
     """Render with automatic browser recovery on crash.
 
@@ -304,7 +320,7 @@ async def _render_page_safe(
     retries once. Non-browser errors are re-raised immediately.
     """
     try:
-        return await _render_page(template_name, data, width, device_scale_factor)
+        return await _render_page(template_name, data, width, device_scale_factor, background)
     except Exception as e:
         err_str = str(e).lower()
         if "closed" in err_str or "target" in err_str or "browser" in err_str:
@@ -312,7 +328,7 @@ async def _render_page_safe(
                 "card_renderer: browser crash detected (%s), recreating pool...", e
             )
             await _recreate_browser()
-            return await _render_page(template_name, data, width, device_scale_factor)
+            return await _render_page(template_name, data, width, device_scale_factor, background)
         raise  # non-browser error: re-raise as-is
 
 
@@ -323,11 +339,15 @@ def render_card_sync(
     device_scale_factor: int = 2,
     *,
     cache_ttl: int | None = None,
+    background: bool = False,
 ) -> bytes:
     """Render a card synchronously using the persistent browser pool.
 
     Safe to call from any thread (including asyncio.to_thread).
     Blocks until the render completes or raises on error.
+
+    Pass background=True for precompute/pregen callers so they use the bg
+    semaphore lane (1 slot) and cannot starve user-tap renders (3 slots).
 
     Results are cached in card_cache (in-memory LRU). Pass cache_ttl to
     override the default TTL (300s on-demand / 900s precomputed).
@@ -356,7 +376,7 @@ def render_card_sync(
         raise RuntimeError("card_renderer: pool loop is None")
 
     future = asyncio.run_coroutine_threadsafe(
-        _render_page_safe(template_name, data, width, device_scale_factor),
+        _render_page_safe(template_name, data, width, device_scale_factor, background),
         loop,
     )
     png_bytes = future.result(timeout=90)
