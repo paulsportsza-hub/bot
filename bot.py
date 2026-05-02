@@ -1665,7 +1665,7 @@ def _build_guide_topic_surface(topic_key: str) -> tuple[str, InlineKeyboardMarku
 
                 <b>Where it shows up</b>
                 • In <b>Top Edge Picks</b>, you see compact hints like aligned signals
-                • In detail, you see <b>Signal Breakdown</b> or <b>Signal Snapshot</b>
+                • In detail, you see <b>Edge Signals</b> or <b>Signal Snapshot</b>
                 • If a pick is marked <b>model-only</b>, the price is doing most of the work
             """),
             [[InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")]],
@@ -2640,7 +2640,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
             [InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb)],
         ])
-        _mme_text = f"🔒 <b>{_mme_tier_pretty} Edge — Locked</b>\n\nUpgrade to view the full breakdown."
+        _mme_text = f"🔒 <b>{_mme_tier_pretty} Edge — Locked</b>\n\nUpgrade to view the full pick analysis."
         _mme_chat_id = query.message.chat_id
         try:
             await query.message.delete()
@@ -4262,7 +4262,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     f"💎 <b>Your Diamond trial has been restarted!</b>\n\n"
                     f"You have until <b>{expiry}</b> to explore:\n"
                     "• All edge picks, every tier\n"
-                    "• Full AI breakdowns and signal analysis\n"
+                    "• Full pick analysis and signal context\n"
                     "• Line movement and sharp money indicators\n\n"
                     f"💎 <b>Keep Diamond: R199/mo or R1,599/yr (save 33%)</b>{founding_line}",
                     parse_mode=ParseMode.HTML,
@@ -5815,7 +5815,7 @@ async def handle_ob_done(query, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "💎 <b>You've got 7 days of Diamond access — FREE!</b>\n\n"
             "That means:\n"
             "• Full access to every edge across all tiers\n"
-            "• Unlimited detail views with AI breakdowns\n"
+            "• Unlimited detail views with pick analysis\n"
             "• Sharp money flow + line movement analysis\n\n"
             "After 7 days you'll move to our free Bronze plan. "
             "Upgrade anytime to keep Diamond.\n\n"
@@ -8131,7 +8131,7 @@ def _build_signal_detail_block(
             pass
 
     if mode == "full":
-        lines = ["📡 <b>Signal Breakdown</b>"]
+        lines = ["📡 <b>Edge Signals</b>"]
         if summary_bits:
             lines.append(" · ".join(summary_bits))
         if rows:
@@ -17163,7 +17163,7 @@ def _gate_signal_display(edge_v2: dict, user_tier: str, edge_tier: str) -> list[
     # 2-line summary for blurred/locked (Wave 26A-FIX BUG 4)
     return [
         f"📊 {sig_avail} edge signals analysed",
-        "🔒 Signal breakdown available on Gold.",
+        "🔒 Edge signals available on Gold.",
     ]
 
 
@@ -17744,7 +17744,7 @@ def _ensure_risk_not_empty(
                 elif sport in ("mma", "boxing"):
                     risk_parts.append("No specific risk signals detected — one round is all it takes in combat sports.")
                 elif sport == "rugby":
-                    risk_parts.append("No specific risk signals detected — discipline at the breakdown and set-piece execution could swing this.")
+                    risk_parts.append("No specific risk signals detected — discipline at the contact area and set-piece execution could swing this.")
                 else:
                     risk_parts.append("No specific risk signals detected — standard match variance applies.")
 
@@ -18227,7 +18227,7 @@ def build_verified_narrative(
         elif sport in ("mma", "boxing"):
             risk.append("No specific risk signals detected — one round is all it takes in combat sports.")
         elif sport == "rugby":
-            risk.append("No specific risk signals detected — discipline at the breakdown and set-piece execution could swing this.")
+            risk.append("No specific risk signals detected — discipline at the contact area and set-piece execution could swing this.")
         else:
             risk.append("No specific risk signals detected — standard match variance applies.")
 
@@ -18359,7 +18359,7 @@ def _build_signal_only_narrative(
         if sport == "cricket":
             risk_lines.append("No specific risk signals — a single bad innings can change everything.")
         elif sport == "rugby":
-            risk_lines.append("No specific risk signals — discipline at the breakdown could swing this.")
+            risk_lines.append("No specific risk signals — discipline at the contact area could swing this.")
         else:
             risk_lines.append("No specific risk signals detected — standard match variance applies.")
     parts.append(f"⚠️ <b>The Risk</b>\n{' '.join(risk_lines)}")
@@ -21851,11 +21851,11 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
         else:
             _tbc_lines.append(
                 "Neither team has been confirmed yet. "
-                "Check back closer to kickoff for the full AI breakdown."
+                "Check back closer to kickoff for the full pick analysis."
             )
         _tbc_lines.append("")
         _tbc_lines.append(
-            "💡 <i>Full AI breakdown will be available once both teams are confirmed.</i>"
+            "💡 <i>Full pick analysis will be available once both teams are confirmed.</i>"
         )
 
         _tbc_buttons = []
@@ -22683,7 +22683,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             lines.append(
                 "📊 Detailed analysis isn't available for this match yet.\n\n"
                 "We're tracking odds from all major SA bookmakers — "
-                "check back closer to kickoff for full breakdown, "
+                "check back closer to kickoff for full pick analysis, "
                 "odds comparison, and edge ratings.\n\n"
                 "💎 Meanwhile, check today's top edges across all sports."
             )
@@ -22706,7 +22706,7 @@ async def _generate_game_tips(query, ctx, event_id: str, user_id: int, source: s
             # Claude API failed (overloaded/timeout) — show hint
             lines.append(
                 "<i>AI analysis temporarily unavailable. "
-                "Tap this game again in a few minutes for a full breakdown.</i>"
+                "Tap this game again in a few minutes for full pick analysis.</i>"
             )
             lines.append("")
 
@@ -23313,7 +23313,7 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
     try:
         await _serve_response(
             query,
-            "🔍 The full breakdown surface has been retired. The card-image"
+            "🔍 The full analysis surface has been retired. The card-image"
             " verdict is the new home for the analysis.",
             InlineKeyboardMarkup([
                 [InlineKeyboardButton("↩️ Back", callback_data=_back_cb)],
@@ -25084,7 +25084,7 @@ def _format_results_text(
     # Tier breakdown table
     by_tier = stats.get("by_tier", {})
     if by_tier:
-        lines.append("<b>Tier Breakdown:</b>")
+        lines.append("<b>Tier Summary:</b>")
         visible = _RESULTS_VISIBLE_TIERS.get(user_tier, {"bronze", "silver"})
         for t in ("diamond", "gold", "silver", "bronze"):
             ts = by_tier.get(t)
@@ -25790,7 +25790,7 @@ async def _morning_teaser_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 if _consec >= 3:
                     lines.append("The market has been tight — check back for fresh edges.")
                 else:
-                    lines.append("🥇 <b>Upgrade to Gold</b> for unlimited details and full AI breakdowns.")
+                    lines.append("🥇 <b>Upgrade to Gold</b> for unlimited details and full pick analysis.")
                     lines.append("💰 <b>R99/mo</b> or <b>R799/yr</b> (save 33%)")
                     _fl = _founding_days_left()
                     if _fl > 0:
@@ -25913,7 +25913,7 @@ def _format_weekend_preview(upcoming: dict, user_tier: str) -> str:
                 tier_parts.append(f"{EDGE_EMOJIS.get(t, '')} {c} {t.title()}")
         if tier_parts:
             lines.append(" · ".join(tier_parts))
-        lines.append("\nAll yours — every edge, every breakdown.")
+        lines.append("\nAll yours — every edge, every pick detail.")
 
     elif user_tier == "gold":
         # Show edge counts, Diamond marked "(Diamond only)", rest marked "✅"
@@ -25951,7 +25951,7 @@ def _format_weekend_preview(upcoming: dict, user_tier: str) -> str:
         if locked_count > 0:
             lines.append(f"🔒 Plus <b>{locked_count} locked edge{'s' if locked_count != 1 else ''}</b>.\n")
         lines.append(
-            "🥇 <b>Upgrade to Gold</b> — unlimited details and full AI breakdowns.\n"
+            "🥇 <b>Upgrade to Gold</b> — unlimited details and full pick analysis.\n"
             "R99/mo or R799/yr (save 33%)"
         )
         founding_left = _founding_days_left()
@@ -26519,7 +26519,7 @@ async def _check_trial_expiry_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                         "💎 <b>Day 3 of your Diamond trial!</b>\n\n"
                         f"You've explored {views} edge detail{'s' if views != 1 else ''} so far.\n\n"
                         "Browse today's edges and see "
-                        "the full AI breakdowns while you have Diamond access.\n\n"
+                        "the full pick analysis while you have Diamond access.\n\n"
                         f"💎 <b>Keep Diamond: R199/mo or R1,599/yr (save 33%)</b>{_fm}"
                     ),
                     parse_mode=ParseMode.HTML,
@@ -26649,7 +26649,7 @@ async def cmd_restart_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
             f"💎 <b>Your Diamond trial has been restarted!</b>\n\n"
             f"You have until <b>{expiry}</b> to explore:\n"
             "• All edge picks, every tier\n"
-            "• Full AI breakdowns and signal analysis\n"
+            "• Full pick analysis and signal context\n"
             "• Line movement and sharp money indicators\n\n"
             f"💎 <b>Keep Diamond: R199/mo or R1,599/yr (save 33%)</b>{founding_line}",
             parse_mode=ParseMode.HTML,
@@ -27156,7 +27156,7 @@ def _subscribe_plan_text(user_tier: str = "bronze") -> tuple[str, InlineKeyboard
         "🥉 <b>Bronze — Free</b>\n"
         "• 3 tips per day · 24h delayed edges\n\n"
         "🥇 <b>Gold — R99/month</b>\n"
-        "• Unlimited tips · Real-time edges · Full AI breakdowns\n"
+        "• Unlimited tips · Real-time edges · Full pick analysis\n"
         "• <i>Annual: R799/year (save 33%)</i>\n\n"
         "💎 <b>Diamond — R199/month</b>\n"
         "• Everything in Gold · Line movement · Sharp money · CLV\n"
@@ -29178,7 +29178,7 @@ async def _qa_health_check(update: Update) -> None:
         "composite_sanity": "Composite sanity",
         "ev_vs_sharp": "EV vs sharp",
         "confirming_count": "Confirming count",
-        "breakdown_quality": "Breakdown quality",
+        "breakdown_quality": "Analysis quality",
     }
 
     result = await asyncio.to_thread(run_all_checks_for_display)
@@ -29337,7 +29337,7 @@ async def _build_morning_report() -> str:
         health_line,
         "",
         f"\u26a0\ufe0f <b>Fact-checker:</b> {strip_count} lines stripped "
-        f"across {len(breakdown_ids)} breakdowns yesterday",
+        f"across {len(breakdown_ids)} analysis updates yesterday",
         f"\U0001f916 <b>Bot uptime:</b> {uptime_hours}h (PID {pid})",
     ]
     return "\n".join(lines)
@@ -30226,7 +30226,7 @@ async def _qa_trigger_teaser(ctx, uid: int, tier: str) -> None:
         # Upgrade CTA with bold prices + Founding Member
         _cta = (
             "🥇 <b>Upgrade to Gold</b> for unlimited details, "
-            "real-time edges, and full AI breakdowns.\n"
+            "real-time edges, and full pick analysis.\n"
             "💰 <b>R99/mo</b> or <b>R799/yr</b> (save 33%)"
         )
         _fl = _founding_days_left()
