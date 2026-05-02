@@ -1493,8 +1493,16 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         # BUILD-WELCOME-SCREEN-02: image-first hero welcome
         _img_path = _welcome_img_path()
         if _img_path is not None:
-            with open(_img_path, "rb") as _fh:
-                await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(user.id))
+            try:
+                with open(_img_path, "rb") as _fh:
+                    await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(user.id))
+            except Exception:
+                log.warning("cmd_start: reply_photo failed for user %d, using text fallback", user.id)
+                await update.message.reply_text(
+                    f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_main_keyboard(),
+                )
         else:
             await update.message.reply_text(
                 f"<b>🇿🇦 Welcome back, {name}!</b>\n\n🔍 Today's edges are being calculated — tap 💎 Edge Picks to explore.",
@@ -1534,8 +1542,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     _img_path = _welcome_img_path()
     if _img_path is not None:
-        with open(_img_path, "rb") as _fh:
-            await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(update.effective_user.id))
+        try:
+            with open(_img_path, "rb") as _fh:
+                await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(update.effective_user.id))
+        except Exception:
+            log.warning("cmd_menu: reply_photo failed, using text fallback")
+            await update.message.reply_text(
+                "<b>🇿🇦 MzansiEdge</b>\n<b>🏠 Main Menu</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
+            )
     else:
         await update.message.reply_text(
             "<b>🇿🇦 MzansiEdge</b>\n<b>🏠 Main Menu</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
@@ -6239,8 +6253,14 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     if text == "🏠 Menu":
         _img_path = _welcome_img_path()
         if _img_path is not None:
-            with open(_img_path, "rb") as _fh:
-                await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(user_id))
+            try:
+                with open(_img_path, "rb") as _fh:
+                    await update.message.reply_photo(photo=_fh, reply_markup=await _welcome_kb(user_id))
+            except Exception:
+                log.warning("handle_keyboard_tap: reply_photo failed for Menu tap, using text fallback")
+                await update.message.reply_text(
+                    "<b>🇿🇦 MzansiEdge</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
+                )
         else:
             await update.message.reply_text(
                 "<b>🇿🇦 MzansiEdge</b>", parse_mode=ParseMode.HTML, reply_markup=kb_main()
