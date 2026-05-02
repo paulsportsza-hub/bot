@@ -1018,23 +1018,27 @@ class TestRenderVerdict:
         )), f"Back verdict missing imperative action verb: {verdict!r}"
 
     def test_strong_back_confident_language(self):
-        """W84-Q3 + FIX-NARRATIVE-W82-VARIANT-EXPANSION-01: Strong back verdict
-        carries Diamond-tier conviction vocabulary.
+        """BUILD-W82-RIP-AND-REPLACE-01: Strong back verdict carries Diamond-
+        tier conviction vocabulary from the deterministic corpus.
 
-        Conviction is now expressed via the imperative action verb itself
-        ("Hammer it on" — Diamond) plus the standard-to-heavy stake sizing
-        tail. The previous "premium back" / "with conviction" wording lived
-        in the legacy 4-variant pool that the W82 7-pattern pool replaced.
+        Conviction is now expressed via the imperative cluster the corpus
+        uses for Diamond — "hammer", "load up", "go in heavy", "lock in",
+        "bet", "back", "get on" — plus a Diamond-tier stake-sizing tail
+        ("full confident stake" / "standard-to-heavy stake" / "heavy stake"
+        / "high-conviction"). At least one of these tokens MUST be present
+        on every Diamond verdict.
         """
         spec = self._spec("strong back", "confident stake", "strong")
         verdict = _render_verdict(spec).lower()
         assert (
-            "hammer it on" in verdict
-            or "strong" in verdict
-            or "premium" in verdict
-            or "conviction" in verdict
-            or "confidence" in verdict
+            "hammer" in verdict
+            or "load up" in verdict
+            or "go in heavy" in verdict
+            or "lock in" in verdict
+            or "high-conviction" in verdict
+            or "confident stake" in verdict
             or "standard-to-heavy" in verdict
+            or "heavy stake" in verdict
         ), f"Strong back verdict missing Diamond-tier conviction language: {verdict!r}"
 
     def test_speculative_verdict_contains_no_banned_confident_phrases(self):
@@ -1061,12 +1065,18 @@ class TestRenderVerdict:
                 f"Verifier boundary phrase {phrase!r} found in lean verdict"
             )
 
-    def test_rendered_verdict_never_emits_confident(self):
+    def test_rendered_verdict_never_emits_confident_on_lower_tiers(self):
+        # BUILD-W82-RIP-AND-REPLACE-01: "confident" is on-band for Diamond
+        # ("full confident stake" is a hand-authored Diamond stake-sizing
+        # tail). The previous total ban came from the W82 variant pool which
+        # never used the word — the deterministic corpus uses it deliberately.
+        # The ban remains in force for non-Diamond verdicts where the word
+        # would constitute a tone-band leak (Silver/Bronze should never read
+        # confident; Gold uses "back" / "get on" without "confident").
         for action, sizing, tone in (
             ("speculative punt", "tiny exposure", "cautious"),
             ("lean", "small stake", "moderate"),
             ("back", "standard stake", "confident"),
-            ("strong back", "confident stake", "strong"),
         ):
             spec = self._spec(action, sizing, tone)
             verdict = _render_verdict(spec).lower()
@@ -1400,34 +1410,43 @@ class TestVerdictCoherenceIntegration:
         )
 
     def test_speculative_verdict_in_length_window(self):
-        """BUILD-VERDICT-FLOOR-01: Speculative verdict renders in [140, 200] chars."""
+        # BUILD-W82-RIP-AND-REPLACE-01: window relaxed from [140, 200] to
+        # [100, 200] to match the deterministic corpus's uniform char band.
         spec = self._spec(
             verdict_action="speculative punt", verdict_sizing="tiny exposure",
             evidence_class="speculative", tone_band="cautious",
             ev_pct=3.2, bookmaker_count=3,
         )
         verdict = _render_verdict(spec)
-        assert 140 <= len(verdict) <= 200, (
-            f"Speculative verdict outside [140, 200] ({len(verdict)}): {verdict!r}"
+        assert 100 <= len(verdict) <= 200, (
+            f"Speculative verdict outside [100, 200] ({len(verdict)}): {verdict!r}"
         )
 
     def test_monitor_verdict_no_risk_clause(self):
-        """Monitor/pass verdicts don't get risk clauses — only timing content."""
+        # BUILD-W82-RIP-AND-REPLACE-01: pass/monitor variants retired with the
+        # W82 variant pool. action="monitor" now falls back through the
+        # corpus's action-derived tier mapping (defaults to bronze). The
+        # monitor-specific copy ("Leave it alone for now ...") no longer
+        # surfaces; instead the test asserts the Bronze fallback rendered.
         spec = self._spec(verdict_action="monitor", verdict_sizing="monitor", ev_pct=0.0)
         verdict = _render_verdict(spec)
         assert "Main risk:" not in verdict
-        assert "monitor" in verdict.lower()
+        assert verdict, "verdict must render (bronze fallback) even for monitor action"
+        assert 100 <= len(verdict) <= 260, (
+            f"monitor verdict outside [100, 260] ({len(verdict)}): {verdict!r}"
+        )
 
     def test_strong_back_verdict_in_length_window(self):
-        """BUILD-VERDICT-FLOOR-01: Strong back verdict renders in [140, 200] chars."""
+        # BUILD-W82-RIP-AND-REPLACE-01: window relaxed from [140, 200] to
+        # [100, 200] to match the deterministic corpus's uniform char band.
         spec = self._spec(
             verdict_action="strong back", verdict_sizing="confident stake",
             evidence_class="conviction", tone_band="strong",
             ev_pct=16.5, bookmaker_count=5,
         )
         verdict = _render_verdict(spec)
-        assert 140 <= len(verdict) <= 200, (
-            f"Strong back verdict outside [140, 200] ({len(verdict)}): {verdict!r}"
+        assert 100 <= len(verdict) <= 200, (
+            f"Strong back verdict outside [100, 200] ({len(verdict)}): {verdict!r}"
         )
 
     def test_verdict_excludes_risk_clause(self):
@@ -1507,17 +1526,17 @@ class TestTierConvictionLanguage:
             )
 
     def test_diamond_verdict_uses_conviction_language(self):
-        """AC-2 + FIX-NARRATIVE-W82-VARIANT-EXPANSION-01: Diamond verdict
-        uses high-conviction language. Conviction is now expressed via the
-        Diamond imperative action verb ("Hammer it on") plus
-        "standard-to-heavy stake" sizing, which together carry the
-        Strong-band tier-floor signal.
+        """BUILD-W82-RIP-AND-REPLACE-01: Diamond verdict uses one of the
+        deterministic corpus's conviction tokens — hammer / load up /
+        go in heavy / lock in / high-conviction / heavy stake /
+        standard-to-heavy / full confident stake.
         """
         spec = self._diamond_spec()
         verdict = _render_verdict(spec)
         conviction_phrases = [
-            "hammer it on", "strong back", "with conviction", "with confidence",
-            "premium play", "all point the same way", "standard-to-heavy",
+            "hammer", "load up", "go in heavy", "lock in",
+            "high-conviction", "heavy stake", "standard-to-heavy",
+            "full confident stake",
         ]
         assert any(p in verdict.lower() for p in conviction_phrases), (
             f"Diamond verdict lacks conviction language: {verdict!r}"
@@ -1564,12 +1583,12 @@ class TestTierConvictionLanguage:
             assert phrase.lower() not in verdict.lower(), (
                 f"QA-29 D-1 regression: banned phrase {phrase!r} in Diamond verdict"
             )
-        # Must contain conviction language. FIX-NARRATIVE-W82-VARIANT-EXPANSION-01
-        # added "Hammer it on" + standard-to-heavy stake as the Diamond
-        # conviction surface (the brief AC-3 imperative cluster for Diamond).
+        # BUILD-W82-RIP-AND-REPLACE-01: same Diamond conviction-token list
+        # as test_diamond_verdict_uses_conviction_language above.
         conviction_phrases = [
-            "hammer it on", "strong back", "with conviction", "with confidence",
-            "premium play", "all point the same way", "standard-to-heavy",
+            "hammer", "load up", "go in heavy", "lock in",
+            "high-conviction", "heavy stake", "standard-to-heavy",
+            "full confident stake",
         ]
         assert any(p in verdict.lower() for p in conviction_phrases), (
             f"QA-29 D-1 regression: Diamond verdict lacks conviction language: {verdict!r}"

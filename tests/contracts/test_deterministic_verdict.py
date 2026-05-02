@@ -180,8 +180,12 @@ class TestDeterministicVerdictBlacklist:
     ])
     def test_verdict_not_empty_or_trivial(self, spec: NarrativeSpec) -> None:
         verdict = _render_verdict(spec)
-        assert verdict and len(verdict) >= 140, (
-            f"Verdict too short ({len(verdict)} chars, floor=140) for "
+        # BUILD-W82-RIP-AND-REPLACE-01 (2026-05-02): floor lowered from 140 to
+        # 100 to match the deterministic corpus's uniform char band. The
+        # corpus emits sentences in 100-200 chars across realistic slot fills;
+        # the previous 140-char floor was anchored to W82 verbose output.
+        assert verdict and len(verdict) >= 100, (
+            f"Verdict too short ({len(verdict)} chars, floor=100) for "
             f"{spec.sport}/{spec.verdict_action}/{spec.home_name} vs {spec.away_name}. "
             f"Got: {verdict!r}"
         )

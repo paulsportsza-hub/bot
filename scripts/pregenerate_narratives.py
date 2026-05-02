@@ -1842,7 +1842,7 @@ async def _generate_one(
         _evidence_class = getattr(spec, "evidence_class", None)
         _tone_band = getattr(spec, "tone_band", None)
         try:
-            from narrative_spec import _render_verdict as _rv_det
+            from verdict_corpus import render_verdict as _rv_det
             _verdict_html = _rv_det(spec)
             if _verdict_html and _VERDICT_BLACKLIST and any(p in _verdict_html.lower() for p in _VERDICT_BLACKLIST):
                 _bv_action = getattr(spec, "verdict_action", "back") or "back"

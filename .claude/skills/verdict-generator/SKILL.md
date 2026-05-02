@@ -264,8 +264,104 @@ Promoted verdict exemplars are stored in `bot/data/prose_exemplars.json` under t
 |------|------|
 | `bot/bot.py` | `_generate_verdict()`, `_generate_verdict_constrained()`, `_strip_markdown()`, `_fix_orphan_back()` |
 | `bot/narrative_spec.py` | `validate_manager_names()`, `validate_diamond_price_prefix()`, `validate_no_markdown_leak()`, `min_verdict_quality()` |
+| `bot/verdict_corpus.py` | v2 deterministic corpus — `VERDICT_CORPUS`, `CONCERN_PREFIXES`, `has_real_risk()`, `render_verdict()` |
 | `bot/data/coaches.json` | Curated manager list with `last_verified` dates |
 | `bot/data/prose_exemplars.json` | Style-guide exemplars + `verdict_bank` (12 locked exemplars) |
 | `bot/narrative_integrity_monitor.py` | `FRESHNESS_CHECK()` — stale coach alert |
 | `.claude/skills/verdict-generator/assets/verdict-prompt-template.md` | Prompt template reference |
 | `.claude/skills/verdict-generator/references/banned-templates.md` | Rejected pattern catalogue |
+
+---
+
+## v2 Deterministic Mode (BUILD-W82-RIP-AND-REPLACE-01 — 2026-05-02)
+
+### Why v2
+
+Six waves of W82 defects in five days surfaced a recurring pattern: each fix
+removed one defect class (variant pool size, validator gate, closure rule,
+clean-placeholder, connector valence) and the next wave surfaced a new one
+(mid-word truncation, concessive contradiction, fragment-stitching). The
+variable assembly engine was too clever for the value it produced. The fix
+is to retire it entirely and replace it with a hand-authored corpus.
+
+### Architecture
+
+- **Corpus location:** `bot/verdict_corpus.py`. 40 verdict sentences (10 per
+  tier — Diamond / Gold / Silver / Bronze) plus 10 sport-agnostic concern
+  prefixes. Hand-authored, voice-reviewed, locked.
+- **Hash-picker:** `_pick(corpus, match_key, tier)` uses MD5(`{match_key}|{tier}`)
+  modulo `len(corpus)`. Same `(match_key, tier)` → same sentence every render.
+  Different fixtures distribute approximately uniformly across the pool.
+- **Slot-fill rule:** every sentence carries exactly three slots: `{team}`,
+  `{odds}`, `{bookmaker}`. No other slots. The corpus author guarantees
+  these are positioned for grammatical fluency in every variant.
+- **Concern-prefix rule:** `has_real_risk(spec)` returns `True` when ANY of:
+  - `lineup_injury` contradicting (pick side has a non-empty injuries list)
+  - `line_movement` contradicting (`spec.movement_direction == "against"`)
+  - `composite_score < tier_min + 5` (within 5 pts of tier floor — marginal)
+  - `confirming_count == 0`
+  - `contradicting_count >= 2`
+
+  When True, a concern prefix is hash-picked from `CONCERN_PREFIXES` and
+  concatenated to the verdict body via a single space — **no linguistic bridge
+  between prefix and verdict body**. The reader's brain treats them as two
+  beats: "here's the concern" then "here's the call".
+
+- **Connector-ban rule:** zero concessive connectors anywhere in the corpus.
+  No "Despite that", "Even so", "Still,", "That said", "Even with that".
+  Regression-guarded by `tests/contracts/test_verdict_corpus.py`.
+
+### Tier voice rubric
+
+Every sentence honours the verdict-generator skill rubric. SA-native English.
+Conviction tier-appropriate. Imperative close. 100-200 chars across realistic
+slot-fill spread.
+
+| Tier    | Conviction      | Imperatives                                              |
+|---------|-----------------|----------------------------------------------------------|
+| Diamond | maximum         | hammer, load up, go in heavy, lock in, bet, back, get on |
+| Gold    | strong          | back, get on, take, the call is, bet                     |
+| Silver  | measured        | back, the play is, take                                  |
+| Bronze  | light           | worth a small play, worth a measured punt                |
+
+### Validator gates retained (v2)
+
+- **Char range** 100-200 (uniform `MIN_VERDICT_CHARS_BY_TIER` floor of 100;
+  `VERDICT_HARD_MAX` 260 accommodates the corpus body plus optional concern
+  prefix).
+- **Imperative-close** (`_CORPUS_IMPERATIVE_CLOSE_RE`) — last sentence MUST
+  contain one of the canonical imperatives. Diamond/Gold = CRITICAL on miss,
+  Silver/Bronze = MAJOR.
+- **Telemetry-vocab** (Rule 17 catalogue, e.g. "the signals", "the reads",
+  "bookmaker slipped").
+- **Vague-content** (e.g. "looks like the sort of", "takes shape").
+- **Venue verified-list** (Rule 18 — verified `pack.venue` allows match;
+  empty pack.venue allows curated stadiums.json fallback; cross-fixture
+  inventions remain leaks).
+- **Manager-name fabrication** (HG-1, against `coaches.json`).
+- **Markdown-leak** (HG-4).
+
+### Validator gates retired by v2
+
+- Tier-branching closure rule (`_check_verdict_closure_rule`) — replaced
+  with the uniform imperative-close gate.
+- Strong-band tone lock (`_check_tier_band_tone`) — corpus is uniform; no
+  cross-tier "cautious leaks" possible by construction.
+- Hedging-conditional opener — corpus has zero concessive connectors.
+- Diamond price-prefix shape (`<stake> returns <payout> · Edge confirmed`)
+  — incompatible with imperative close. `validate_diamond_price_prefix` is
+  retained as a True-returning shim for callsite stability.
+- Risk-clause valence checks — concern prefix concatenation makes the
+  Risk↔Verdict cohesion explicit; no Jaccard token-overlap needed.
+- Concessive-connector regex bans — corpus contains zero connectors.
+- Analytical-vocabulary count — anchored to old W82 verbose vocabulary.
+
+### Don'ts
+
+- Don't expand the corpus beyond 40 + 10 in this wave. Sport-banding and
+  size growth are explicit policy decisions, not incremental edits.
+- Don't add slots beyond `{team}`, `{odds}`, `{bookmaker}`. Other context
+  belongs in The Setup / The Edge / The Risk sections, not in the verdict.
+- Don't invent connectors between the concern prefix and the verdict body.
+  The two-beat structure ("concern. call.") is intentional — narrative bridge
+  re-introduces the failure modes the rip was meant to fix.

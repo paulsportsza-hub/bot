@@ -76,66 +76,13 @@ class TestFixOrphanBack:
         assert callable(_fix_orphan_back)
 
 
-# ── Defect 2 — Diamond 'At <price>' prefix gate ──────────────────────────────
-
-class TestValidateDiamondPricePrefix:
-    """validate_diamond_price_prefix() must hard-fail Diamond verdicts starting with 'At X.XX'."""
-
-    def _fn(self):
-        from narrative_spec import validate_diamond_price_prefix
-        return validate_diamond_price_prefix
-
-    def test_diamond_at_price_prefix_fails(self):
-        """Diamond verdict starting with 'At 1.85, ...' must return False."""
-        fn = self._fn()
-        verdict = "At 1.85, the Reds are the play — they've dominated their last four."
-        assert fn(verdict, "diamond") is False
-
-    def test_diamond_clean_lead_passes(self):
-        """Diamond verdict starting with pick/context passes."""
-        fn = self._fn()
-        verdict = "The Reds are the play at 1.85 — dominant recent form. Back Liverpool."
-        assert fn(verdict, "diamond") is True
-
-    def test_gold_at_price_prefix_passes(self):
-        """Gold tier is not gated — 'At 1.85, ...' is acceptable for Gold."""
-        fn = self._fn()
-        verdict = "At 1.85, the Reds are value here. Back Liverpool."
-        assert fn(verdict, "gold") is True
-
-    def test_silver_at_price_prefix_passes(self):
-        """Silver tier is not gated."""
-        fn = self._fn()
-        verdict = "At 2.10, there is value on the draw. Take the draw."
-        assert fn(verdict, "silver") is True
-
-    def test_bronze_at_price_prefix_passes(self):
-        """Bronze tier is not gated."""
-        fn = self._fn()
-        verdict = "At 1.55, Chiefs are slight value. Back Chiefs."
-        assert fn(verdict, "bronze") is True
-
-    def test_empty_tier_treated_as_non_diamond(self):
-        """Empty/None tier defaults to pass (non-diamond path)."""
-        fn = self._fn()
-        verdict = "At 1.85, the Reds are the play."
-        assert fn(verdict, "") is True
-        assert fn(verdict, None) is True  # type: ignore[arg-type]
-
-    def test_wired_into_min_verdict_quality(self):
-        """min_verdict_quality must reject a Diamond verdict with 'At <price>' prefix."""
-        from narrative_spec import min_verdict_quality
-        # Short enough to pass all other gates (len >= 160 for diamond)
-        diamond_fail = (
-            "At 1.85, the Reds are the play — they've dominated their last four "
-            "fixtures and the line has been drifting steadily their way all week. "
-            "The Gunners are in fine nick too. Back Liverpool."
-        )
-        assert len(diamond_fail) >= 160, "Test verdict must meet Diamond length floor"
-        result = min_verdict_quality(diamond_fail, tier="diamond")
-        assert result is False, "Diamond 'At <price>' verdict must fail min_verdict_quality"
-
-    def test_function_exported_from_narrative_spec(self):
-        """validate_diamond_price_prefix must be importable from narrative_spec."""
-        from narrative_spec import validate_diamond_price_prefix
-        assert callable(validate_diamond_price_prefix)
+# ── Defect 2 — Diamond 'At <price>' prefix gate (RETIRED) ────────────────────
+#
+# BUILD-W82-RIP-AND-REPLACE-01 (2026-05-02): the Diamond price-prefix gate
+# was specific to the W82 variable-assembly era's "At X.XX..." opener pattern.
+# The deterministic verdict_corpus closes Diamond verdicts with imperatives
+# (hammer / load up / go in heavy / lock in), so the gate's anti-pattern can
+# no longer surface. validate_diamond_price_prefix is retained as a True-
+# returning shim for callsite stability — see narrative_spec.py docstring.
+# Prior tests in this section were tightly coupled to the retired pattern
+# and are removed.

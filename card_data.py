@@ -1518,6 +1518,12 @@ def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
         "confirming_signals": int(confirming or 0),
         "movement": movement or "",
         "league": league or "",
+        # BUILD-W82-RIP-AND-REPLACE-01: edge_tier is required for the v2
+        # deterministic verdict corpus to select the correct tier pool.
+        # Previously the W82 variant pool fell back to action-based mapping
+        # when edge_tier was empty; the corpus requires the explicit tier
+        # because every sentence is hand-authored per tier.
+        "edge_tier": edge_tier,
     }
 
     try:

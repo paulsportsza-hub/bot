@@ -9168,8 +9168,8 @@ def _enrich_tip_for_card(tip: dict, match_key: str = "") -> dict:
             try:
                 from narrative_spec import (
                     build_narrative_spec as _bns_align,
-                    _render_verdict as _ns_render_verdict,
                 )
+                from verdict_corpus import render_verdict as _ns_render_verdict
                 _live_tip = dict(enriched)
                 # Ensure tier carries through to _extract_edge_data so
                 # build_narrative_spec()'s TONE-BANDS-FIX block elevates the

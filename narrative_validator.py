@@ -294,6 +294,19 @@ _VERDICT_ACTION_RE: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
+# BUILD-W82-RIP-AND-REPLACE-01 (2026-05-02) — corpus-imperative regex.
+# Tightly anchored to the exact imperatives the deterministic verdict_corpus
+# emits: back / hammer / get on / take / bet / lock in / load up / go in /
+# the play is / the call is / worth a. Used by the new uniform imperative-
+# close gate that replaces the tier-branching closure rule.
+_CORPUS_IMPERATIVE_CLOSE_RE: re.Pattern[str] = re.compile(
+    r"(?:^|\s)("
+    r"back|hammer|get\s+on|take|bet|lock\s+in|load\s+up|go\s+in|"
+    r"the\s+play\s+is|the\s+call\s+is|worth\s+a"
+    r")\b.*[\.!]?\s*$",
+    re.IGNORECASE,
+)
+
 # Odds shape: decimal (1.36-99.99), fraction (1/2, 11/10, 100/1), American (+150/-200).
 # Decimal range narrows to plausible betting odds; rejects "5.0" alone and "12.5 goals".
 _VERDICT_ODDS_RE: re.Pattern[str] = re.compile(
@@ -1006,110 +1019,62 @@ def _validate_narrative_for_persistence(
                 match_id, source_label, edge_tier, v_tele_hits,
             )
 
-    # ── Gate 9: Strong-band tone lock (FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01) ─
-    # Brief AC-1: Strong-band tier (Diamond + Gold) MUST speak Strong-band
-    # confidence. Cautious-band vocabulary collapses the verdict tone on a
-    # Strong-band card (live failure case 29 Apr 19:24 SAST).
+    # ── Gate 9: Imperative-close rule (BUILD-W82-RIP-AND-REPLACE-01) ────────
+    # The deterministic verdict_corpus emits sentences whose closing imperative
+    # is one of: back / hammer / get on / take / bet / lock in / load up /
+    # go in / the play is / the call is / worth a. The previous tier-branching
+    # closure rule (Diamond/Gold = action+team+odds; Silver = action+one-of;
+    # Bronze = action only) is retired — the corpus is uniform: every sentence
+    # carries action+team+odds+bookmaker by construction.
     #
-    # Tier-aware enforcement matrix (per brief AC-1):
-    #   - Diamond + Gold → CRITICAL (refuse write — synthesis-on-tap covers
-    #     the cache miss; Wave 2 Sonnet retry → Haiku → defer chain still
-    #     applies via the existing pregen flow).
-    #   - Silver → MAJOR (quarantine; some hedging is acceptable on Silver
-    #     but Strong-band cautious vocabulary is not — quarantined rows can
-    #     still be served via the read surface but are flagged for repolish).
-    #   - Bronze → ALLOWED (cautious-band IS Bronze's correct register;
-    #     `_check_tier_band_tone` skips the scan entirely when tier=bronze).
-    if tier_lower in ("diamond", "gold", "silver"):
-        # Strong-band severity: Diamond/Gold = CRITICAL; Silver = MAJOR.
-        # Bronze short-circuits inside `_check_tier_band_tone` (returns
-        # empty hits + False hedging).
-        sb_severity: Severity = "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
-        # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
-        # narrative_html scope dropped. The verdict-only scan stays.
-        if verdict_html:
-            v_sb_hits, v_hedging = _check_tier_band_tone(
-                verdict_html, edge_tier, "verdict_html"
-            )
-            if v_sb_hits:
-                failures.append(
-                    ValidationFailure(
-                        gate="strong_band_tone",
-                        severity=sb_severity,
-                        detail=f"verdict hits={v_sb_hits!r}",
-                        section=_SECTION_VERDICT_HTML,
-                    )
-                )
-                log.warning(
-                    "FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 ValidatorStrongBandTone "
-                    "match_id=%s source=%s tier=%s section=verdict_html hits=%r",
-                    match_id, source_label, edge_tier, v_sb_hits,
-                )
-            # Hedging-conditional opener fires on Strong-band verdict only.
-            # Silver allows mild hedging (lean tone band) so we scope the
-            # opener gate to Diamond + Gold per brief AC-1.
-            if v_hedging and tier_lower in ("diamond", "gold"):
-                failures.append(
-                    ValidationFailure(
-                        gate="strong_band_hedging_opener",
-                        severity="CRITICAL",
-                        detail=f"first_clause hedging conditional opener; sample={verdict_html[:100]!r}",
-                        section=_SECTION_VERDICT_HTML,
-                    )
-                )
-                log.warning(
-                    "FIX-NARRATIVE-TIER-BAND-TONE-LOCK-01 ValidatorStrongBandHedgingOpener "
-                    "match_id=%s source=%s tier=%s sample=%r",
-                    match_id, source_label, edge_tier, verdict_html[:100],
-                )
-
-    # ── Gate 10: Verdict closure rule (FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01) ─
-    # AC-1: the LAST sentence of verdict_html MUST close with an action verb
-    # (imperative OR declarative) plus tier-aware (team, odds) requirements.
-    # Live failure case 1 (Liverpool vs Chelsea Gold 1.97 Supabets, 29 Apr 2026)
-    # and Card 1 (Gujarat Titans vs RCB Gold 1.72 WSB, 30 Apr 2026): verdict
-    # closed on Setup-style opener without ever telling the user to back anyone.
+    # Tier-aware enforcement matrix:
+    #   - Diamond + Gold → CRITICAL (premium tier MUST clear imperative-close;
+    #     synthesis-on-tap covers the cache miss).
+    #   - Silver + Bronze → MAJOR (quarantine).
     if verdict_html:
-        # When evidence_pack has no team names (pregen path — evidence_json not
-        # passed to _store_narrative_cache), fall back to match_id parsing so
-        # verdicts like "Get on Manchester City win at 1.36" are not rejected
-        # for missing team_or_selection.
-        _ep_for_gate10 = evidence_pack
-        if match_id and (
-            not isinstance(evidence_pack, dict)
-            or not (evidence_pack.get("home_team") or evidence_pack.get("away_team"))
-        ):
-            _mid_stripped = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_id)
-            if "_vs_" in _mid_stripped:
-                _ht_raw, _at_raw = _mid_stripped.split("_vs_", 1)
-                _ep_for_gate10 = {
-                    "home_team": _ht_raw.replace("_", " "),
-                    "away_team": _at_raw.replace("_", " "),
-                }
-        sev_close, reason_close = _check_verdict_closure_rule(
-            verdict_html, edge_tier, _ep_for_gate10,
-        )
-        if sev_close:
+        last = _last_sentence(verdict_html)
+        imp_close_ok = bool(_CORPUS_IMPERATIVE_CLOSE_RE.search(last)) if last else False
+        if not imp_close_ok:
+            close_severity: Severity = (
+                "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
+            )
             failures.append(
                 ValidationFailure(
-                    gate="verdict_closure_rule",
-                    severity=sev_close,
-                    detail=reason_close,
+                    gate="imperative_close",
+                    severity=close_severity,
+                    detail=f"last sentence missing imperative; sample={last[:120]!r}",
                     section=_SECTION_VERDICT_HTML,
                 )
             )
             log.warning(
-                "FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 "
-                "ValidatorVerdictClosureRule match_id=%s source=%s tier=%s reason=%s",
-                match_id, source_label, edge_tier, reason_close,
+                "BUILD-W82-RIP-AND-REPLACE-01 ValidatorImperativeClose "
+                "match_id=%s source=%s tier=%s sample=%r",
+                match_id, source_label, edge_tier, last[:120],
             )
 
-    # FIX-VERDICT-PROMPT-ANCHORS-AND-VALIDATOR-SCOPE-01 (2026-05-01) — AC-2:
-    # Gate 11 (vague_content pattern ban) is dropped. The Liverpool-Chelsea
-    # whole-verdict-opener pattern moves to the verdict-closure rule via the
-    # tightened imperative-only `_VERDICT_ACTION_RE`. The narrative_html scan
-    # was scoped to long-form Setup/Edge/Risk sections that no longer get
-    # written.
+    # ── Gate 11: Vague-content pattern ban (retained from FIX-VERDICT-CLOSURE) ─
+    # BUILD-W82-RIP-AND-REPLACE-01: re-enabled per brief Phase 2d (validator
+    # simplification retains the vague-content gate). Premium tier hits are
+    # CRITICAL; non-premium are MAJOR.
+    if verdict_html:
+        v_vague_hits = _check_vague_content_patterns(verdict_html)
+        if v_vague_hits:
+            vague_severity: Severity = (
+                "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
+            )
+            failures.append(
+                ValidationFailure(
+                    gate="vague_content",
+                    severity=vague_severity,
+                    detail=f"verdict hits={v_vague_hits!r}",
+                    section=_SECTION_VERDICT_HTML,
+                )
+            )
+            log.warning(
+                "BUILD-W82-RIP-AND-REPLACE-01 ValidatorVagueContent "
+                "match_id=%s source=%s tier=%s hits=%r",
+                match_id, source_label, edge_tier, v_vague_hits,
+            )
 
     # ── Outcome ──────────────────────────────────────────────────────────────
     crit = [f for f in failures if f.severity == "CRITICAL"]
