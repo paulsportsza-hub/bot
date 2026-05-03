@@ -23,13 +23,38 @@
             border: none;
             box-shadow: none;
         }
-        /* Fix 5 / Fix 4: Header with gradient background */
+        /* ── Header (CANONICAL — brand-orange glow, no division) ── */
         .header {
+            position: relative;
             text-align: center;
             padding: 22px 20px 0;
-            background: linear-gradient(180deg, #0D0D0D, #141414);
-            border-bottom: 1px solid #2A2A2A;
+            isolation: isolate;
+            overflow: hidden;
         }
+        .header-glow {
+            position: absolute;
+            inset: -10px 0 0 0;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
+        }
+        .header-glow-screen {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+        }
+        .header > .logo-img,
+        .header > .logo-fallback,
+        .header > .orange-bar,
+        .header > .digest-header,
+        .header > .title,
+        .header > .subtitle { position: relative; z-index: 1; }
         .logo-img {
             height: 32px;
             width: auto;
@@ -152,46 +177,42 @@
             font-weight: 700;
             font-family: 'JetBrains Mono', monospace;
         }
-        /* Fix 3: bookmaker name under odds */
+        /* Footer removed per universal law §7 — top_pick block has its own bottom padding for breathing room. */
+        /* Bookmaker logo inside top_pick "@ {logo}" line */
         .pick-bookmaker {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
             font-size: 9px;
             color: var(--text-secondary);
             margin-top: 2px;
+        }
+        .pick-bookmaker .bk-logo {
+            height: 14px;
+            width: auto;
+            object-fit: contain;
+            display: inline-block;
+            vertical-align: middle;
         }
         .pick-ev {
             font-size: 13px;
             font-weight: 600;
             color: #00E676;
         }
-        /* Fix 4: footer gradient */
-        .footer {
-            background: linear-gradient(180deg, #141414, #0A0A0A);
-            border-top: 1px solid #2A2A2A;
-            padding: 12px 16px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .footer-url { font-size: 10px; color: var(--text-secondary); }
-        .footer-logo-img {
-            height: 16px;
-            width: auto;
-            opacity: 0.8;
-        }
     </style>
 </head>
 <body>
 <div class="card">
-    <!-- Fix 5/4: gradient header background -->
     <div class="header">
-        <!-- Fix 2: Real MzansiEdge wordmark logo -->
+        <div class="header-glow"></div>
+        <div class="header-glow-screen"></div>
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
-        <div style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
         {% endif %}
         <div class="orange-bar"></div>
-        <div class="digest-header">🌅 MORNING DIGEST</div>
+        <div class="digest-header">MORNING DIGEST</div>
         <div class="title">TODAY'S EDGE PICKS</div>
         <div class="subtitle">{{ total_edges }} edge{{ 's' if total_edges != 1 else '' }} live &middot; {{ date_label }}</div>
     </div>
@@ -231,7 +252,7 @@
                     <span class="pick-odds" style="color: {{ top_pick.tier_color }};">{{ top_pick.odds }}</span>
                     <!-- Fix 3: bookmaker name under odds -->
                     {% if top_pick.bookmaker %}
-                    <span class="pick-bookmaker">@ {{ top_pick.bookmaker }}</span>
+                    <span class="pick-bookmaker">@ {% if top_pick.bookmaker_logo_b64 %}<img class="bk-logo" src="{{ top_pick.bookmaker_logo_b64 }}" alt="{{ top_pick.bookmaker }}"/>{% else %}{{ top_pick.bookmaker }}{% endif %}</span>
                     {% endif %}
                 </div>
                 <span class="pick-ev">+{{ top_pick.ev }}% EV</span>
@@ -240,15 +261,6 @@
     </div>
     {% endif %}
 
-    <!-- Fix 4: footer gradient; Fix 2: real micro mark logo -->
-    <div class="footer">
-        <span class="footer-url">mzansiedge.co.za</span>
-        {% if footer_logo_b64 %}
-        <img class="footer-logo-img" src="{{ footer_logo_b64 }}" alt="ME" />
-        {% else %}
-        <div style="width:22px;height:22px;background:#F7931A;color:#000;font-size:9px;font-weight:800;border-radius:50%;display:flex;align-items:center;justify-content:center;">ME</div>
-        {% endif %}
-    </div>
 </div>
 </body>
 </html>
