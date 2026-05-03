@@ -5,39 +5,56 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        :root { --text-secondary: #B3B3B3; }
-        html, body {
-            margin: 0; padding: 0;
-            background: #000000;
-            width: 480px; height: 620px;
-            overflow: hidden;
+        :root {
+            --text-secondary: #B3B3B3;
+            --surface: #141414;
+            --border-soft: #1f1f23;
         }
+        html, body { margin: 0; padding: 0; background: #000000; }
         body {
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
-            width: 480px; height: 620px;
-            overflow: hidden;
+            width: 480px;
         }
         .card {
-            width: 480px; height: 620px;
+            width: 480px;
             display: flex; flex-direction: column;
             background: #0A0A0A;
-            overflow: hidden;
+            border: none;
+            box-shadow: none;
         }
 
-        /* ── 1. Header ── */
+        /* ── Upper glow zone — wraps header + matchup, glow stops at meta-bar ─── */
+        .upper-glow-zone {
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+        }
+        .upper-glow {
+            position: absolute; inset: -20px -10px;
+            pointer-events: none; z-index: 0;
+            filter: blur(2px);
+        }
+        .upper-glow-screen {
+            position: absolute; inset: 0;
+            pointer-events: none; z-index: 0;
+            mix-blend-mode: screen;
+        }
         .header {
+            position: relative; z-index: 2;
             padding: 8px 16px;
-            display: flex; align-items: center;
-            justify-content: space-between; gap: 10px;
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 10px;
+        }
+        .logo-img { height: 28px; width: auto; flex-shrink: 0; }
+        .logo-fallback {
+            font-size: 18px; font-weight: 800; letter-spacing: 0.1em;
+            background: linear-gradient(90deg, #F7931A, #FFBE45);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text;
             flex-shrink: 0;
         }
-        .logo-img { height: 26px; width: auto; flex-shrink: 0; }
-        .logo-fallback {
-            font-size: 16px; font-weight: 800; letter-spacing: 0.1em;
-            color: #FFFFFF; flex-shrink: 0;
-        }
         .lock-badge {
-            display: flex; align-items: center; gap: 6px;
+            display: inline-flex; align-items: center; gap: 6px;
             padding: 3px 12px; border-radius: 14px;
             border: 1px solid;
         }
@@ -46,20 +63,18 @@
             font-size: 10px; font-weight: 800; letter-spacing: 2px;
         }
 
-        /* ── 2. Match section ── */
+        /* ── 2. Matchup ──────────────────────────────────────────── */
         .matchup {
+            position: relative; z-index: 2;
             padding: 14px 18px 6px;
             text-align: center;
-            flex-shrink: 0;
         }
-        .sport-league-line {
+        .league-line {
             font-size: 12px; font-weight: 700;
             color: var(--text-secondary);
             margin-bottom: 8px;
         }
-        .teams-row {
-            display: flex; align-items: center; justify-content: center;
-        }
+        .teams-row { display: flex; align-items: center; justify-content: center; }
         .team-block {
             flex: 1; display: flex; flex-direction: column;
             align-items: center; min-width: 0;
@@ -76,189 +91,199 @@
             flex-shrink: 0; margin: 0 8px;
         }
 
-        /* ── 3. Meta bar ── */
+        /* ── 3. Meta bar (inside glow zone — no border-top, soft border-bottom only) ── */
         .meta-bar {
+            position: relative; z-index: 2;
             display: flex; align-items: center; justify-content: center;
-            gap: 12px; flex-wrap: wrap;
-            padding: 8px 18px;
-            border-top: 1px solid #2A2A2A;
+            gap: 14px; flex-wrap: wrap;
+            padding: 10px 18px;
             border-bottom: 1px solid #2A2A2A;
-            flex-shrink: 0;
         }
-        .meta-item { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+        .meta-item { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+        .ss-badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 0; line-height: 1;
+            transform: translateY(1px);
+        }
+        .ss-icon { height: 14px; width: 14px; object-fit: contain; display: block; }
+        .ss-num { font-size: 12px; font-weight: 700; color: var(--text-secondary); line-height: 1; }
 
-        /* ── 4. Locked section ── */
-        .locked-section {
-            margin: 12px 14px;
-            border: 1px solid #2A2A2A;
-            border-radius: 10px;
-            background: #0D0D1A;
+        /* ── 4. Locked preview — frosted glass over glowing tier emoji ─── */
+        .locked-preview {
+            position: relative;
+            margin: 14px 14px 6px;
+            height: 230px;
+            border-radius: 12px;
+            background: #0F0F0F;
+            border: 1px solid #1F1F1F;
             overflow: hidden;
-            position: relative;
-            flex: 1;
         }
-        .locked-content-area {
-            position: relative;
-            width: 100%; height: 100%;
-            background: radial-gradient(circle at 85% 15%,
-                rgba(247,147,26,0.25) 0%,
-                transparent 60%);
-            display: flex;
-            flex-direction: column;
+        /* Behind layer — giant tier emoji, glowing in tier color */
+        .locked-bg {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            filter: blur(14px);
+            transform: scale(1.05); /* hides blur edges at corners */
         }
-        /* Blurred rows — background texture */
-        .blurred-rows {
-            padding: 14px 16px;
-            flex: 1;
+        .locked-bg-emoji {
+            font-size: 200px; line-height: 1;
+            filter: drop-shadow(0 0 60px var(--locked-glow, rgba(255,215,0,0.85)));
+            opacity: 0.92;
         }
-        .locked-row {
-            display: flex; align-items: center; gap: 10px;
-            margin-bottom: 10px;
+        /* Frosted scrim — matte dark overlay so foreground content reads cleanly */
+        .locked-frost {
+            position: absolute; inset: 0;
+            background: linear-gradient(180deg, rgba(10,10,10,0.45) 0%, rgba(10,10,10,0.62) 100%);
         }
-        .blurred-block {
-            filter: blur(5px);
-            user-select: none; pointer-events: none;
-            flex: 1;
-            background: #1A1A2A;
-            border-radius: 6px;
-            padding: 10px 12px;
-        }
-        .blurred-block-2 {
-            filter: blur(5px);
-            user-select: none; pointer-events: none;
-            flex: 1;
-            background: #16162A;
-            border-radius: 6px;
-            padding: 10px 12px;
-        }
-        .blur-odds {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 22px; font-weight: 700;
-            color: #FFD700;
-        }
-        .blur-bookie {
-            font-size: 12px; color: var(--text-secondary); margin-top: 2px;
-        }
-        .blur-bar {
-            height: 10px; border-radius: 5px;
-            background: linear-gradient(90deg, #FFD700, #FF6B00);
-            margin-top: 6px; opacity: 0.7;
-        }
-        /* Centered overlay: 💎 → 🔒 → label → subtitle */
-        .lock-overlay {
-            position: absolute;
-            inset: 0;
+        /* Foreground — sharp, centered lock + label */
+        .locked-foreground {
+            position: relative; z-index: 1;
             display: flex; flex-direction: column;
             align-items: center; justify-content: center;
-            z-index: 1;
-        }
-        .lock-diamond {
-            font-size: 80px;
-            filter: drop-shadow(0 0 24px rgba(185,242,255,0.8));
-            line-height: 1;
-        }
-        .lock-padlock { font-size: 56px; margin-top: 12px; line-height: 1; }
-        .lock-label {
-            margin-top: 24px;
-            font-size: 18px; font-weight: 700;
-            color: #FFD700; letter-spacing: 2px;
+            height: 100%;
             text-align: center;
+            padding: 28px 24px;
         }
-        .lock-subtitle {
-            margin-top: 8px;
-            font-size: 13px; color: #999999;
+        .locked-padlock {
+            font-size: 56px; line-height: 1;
+            margin-bottom: 14px;
+            filter: drop-shadow(0 6px 14px rgba(0,0,0,0.65));
+        }
+        .locked-label {
+            font-size: 16px; font-weight: 800;
+            letter-spacing: 2.4px;
+            margin-bottom: 6px;
+        }
+        .locked-subtitle {
+            font-size: 12px; color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        /* ── 5. Upgrade options ───────────────────────────────────── */
+        .upgrade-section {
+            padding: 8px 14px 14px;
+        }
+        .upgrade-title {
+            font-size: 11px; font-weight: 700;
+            letter-spacing: 1.5px; text-transform: uppercase;
+            color: var(--text-secondary);
             text-align: center;
+            margin-bottom: 10px;
         }
-        /* Lock footer */
-        .lock-footer {
-            padding: 10px 16px;
-            border-top: 1px solid #2A2A2A;
-            background: #0D0D1A;
+        .plan-grid {
+            display: grid;
+            grid-template-columns: repeat(var(--plan-cols, 2), 1fr);
+            gap: 8px;
+        }
+        .plan-card {
+            background: var(--surface);
+            border: 1px solid var(--border-soft);
+            border-left-width: 3px;
+            border-radius: 8px;
+            padding: 10px 12px 12px;
+        }
+        .plan-tier-row {
             display: flex; align-items: center;
-            justify-content: center; gap: 20px;
-            flex-shrink: 0;
+            gap: 6px;
+            margin-bottom: 4px;
         }
-        .footer-signal {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px; color: #00E676;
+        .plan-emoji { font-size: 16px; line-height: 1; }
+        .plan-name {
+            font-size: 11px; font-weight: 800; letter-spacing: 1.4px;
         }
-        .footer-return {
+        .plan-price-row {
+            display: flex; align-items: baseline; gap: 4px;
+            margin-bottom: 6px;
+        }
+        .plan-price {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 11px; color: #F7931A;
+            font-size: 18px; font-weight: 700;
+            color: #FFFFFF;
+        }
+        .plan-period {
+            font-size: 10px; color: var(--text-secondary);
+        }
+        .plan-perk {
+            font-size: 11px; color: #DDDDDD;
+            line-height: 1.4;
         }
     </style>
 </head>
 <body>
 <div class="card">
 
-    <!-- ── 1. Header ── -->
-    <div class="header" style="background: linear-gradient(90deg, {{ tier_colour }}08, #0A0A0A); border-bottom: 1px solid {{ tier_colour }}20;">
+    <!-- ── Upper glow zone (wraps header + matchup, stops at meta-bar) ──── -->
+    <div class="upper-glow-zone">
+        <div class="upper-glow" style="
+            background: radial-gradient(ellipse 35% 130% at 92% 50%, {{ edge_tier_color }}10 0%, {{ edge_tier_color }}07 50%, transparent 90%);
+        "></div>
+        <div class="upper-glow-screen" style="
+            background: radial-gradient(ellipse 22% 100% at 92% 50%, {{ edge_tier_color }}1A 0%, {{ edge_tier_color }}0D 40%, transparent 80%);
+        "></div>
+
+    <!-- ── 1. Header ────────────────────────────────────────────── -->
+    <div class="header">
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
         <div class="logo-fallback">MzansiEdge</div>
         {% endif %}
-        <div class="lock-badge" style="background: {{ tier_colour }}15; border-color: {{ tier_colour }}30;">
+        <div class="lock-badge" style="background: {{ edge_tier_color }}18; border-color: {{ edge_tier_color }}55; box-shadow: 0 0 12px {{ edge_tier_color }}30;">
             <span class="lock-badge-icon">🔒</span>
-            <span class="lock-badge-text" style="color: {{ tier_colour }};">{{ edge_tier_display | upper }} EDGE</span>
+            <span class="lock-badge-text" style="color: {{ edge_tier_color }};">{{ edge_tier_label | upper }} EDGE</span>
         </div>
     </div>
 
-    <!-- ── 2. Match section ── -->
+    <!-- ── 2. Matchup ───────────────────────────────────────────── -->
     <div class="matchup">
-        <div class="sport-league-line">{{ sport_emoji }}  {{ league }}</div>
+        <div class="league-line">{{ sport_emoji }} {{ league }}</div>
         <div class="teams-row">
-            <div class="team-block">
-                <div class="team-name">{{ home }}</div>
-            </div>
+            <div class="team-block"><div class="team-name">{{ home }}</div></div>
             <div class="vs-badge">VS</div>
-            <div class="team-block">
-                <div class="team-name">{{ away }}</div>
-            </div>
+            <div class="team-block"><div class="team-name">{{ away }}</div></div>
         </div>
     </div>
 
-    <!-- ── 3. Meta bar ── -->
+    <!-- ── 3. Meta bar (inside glow zone — unified block) ────────── -->
     <div class="meta-bar">
-        {% if kickoff %}<span class="meta-item">⏰ {{ kickoff }}</span>{% endif %}
-        {% if broadcast %}<span class="meta-item">📺 {{ broadcast }}</span>{% endif %}
+        {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
+        {% if time %}<span class="meta-item">⏰ {{ time }} SAST</span>{% endif %}
+        {% if channel_dstv_num and ss_icon_b64 %}<span class="meta-item"><span class="ss-badge"><img src="data:image/png;base64,{{ ss_icon_b64 }}" class="ss-icon" alt="SS"><span class="ss-num">{{ channel_dstv_num }}</span></span></span>{% elif channel %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}
+    </div>
+    </div><!-- /.upper-glow-zone -->
+
+    <!-- ── 4. Locked preview — frosted glass with glowing tier emoji behind ── -->
+    <div class="locked-preview" style="--locked-glow: {{ edge_tier_color }}AA;">
+        <div class="locked-bg">
+            <span class="locked-bg-emoji">{{ edge_tier_emoji }}</span>
+        </div>
+        <div class="locked-frost"></div>
+        <div class="locked-foreground">
+            <div class="locked-padlock">🔒</div>
+            <div class="locked-label" style="color: {{ edge_tier_color }};">{{ edge_tier_label | upper }} SIGNAL LOCKED</div>
+            <div class="locked-subtitle">{{ locked_subtitle }}</div>
+        </div>
     </div>
 
-    <!-- ── 4. Locked section: blurred texture + centered icon overlay ── -->
-    <div class="locked-section">
-        <div class="locked-content-area">
-
-            <!-- Blurred rows: background texture only -->
-            <div class="blurred-rows">
-                <div class="locked-row">
-                    <div class="blurred-block">
-                        <div class="blur-odds">2.40 @ ██████</div>
-                        <div class="blur-bookie">🏦 ████████████ · EV +8.3%</div>
-                        <div class="blur-bar" style="width: 75%;"></div>
-                    </div>
+    <!-- ── 5. Upgrade options (tier-aware) ──────────────────────── -->
+    <div class="upgrade-section">
+        <div class="upgrade-title">
+            {% if upgrade_plans|length > 1 %}Unlock {{ edge_tier_label }} edges with one of these plans{% else %}Unlock {{ edge_tier_label }} edges with{% endif %}
+        </div>
+        <div class="plan-grid" style="--plan-cols: {{ upgrade_plans|length }};">
+            {% for plan in upgrade_plans %}
+            <div class="plan-card" style="border-left-color: {{ plan.color }};">
+                <div class="plan-tier-row">
+                    <span class="plan-emoji">{{ plan.emoji }}</span>
+                    <span class="plan-name" style="color: {{ plan.color }};">{{ plan.name | upper }}</span>
                 </div>
-                <div class="locked-row">
-                    <div class="blurred-block-2">
-                        <div class="blur-odds">████ ██████</div>
-                        <div class="blur-bookie">████ ██ ████ ███ ██</div>
-                    </div>
+                <div class="plan-price-row">
+                    <span class="plan-price">{{ plan.price }}</span>
+                    <span class="plan-period">/ {{ plan.period }}</span>
                 </div>
+                <div class="plan-perk">{{ plan.perk }}</div>
             </div>
-
-            <!-- Centered overlay: 💎 → 🔒 → "SIGNAL LOCKED" → subtitle -->
-            <div class="lock-overlay">
-                <div class="lock-diamond">💎</div>
-                <div class="lock-padlock">🔒</div>
-                <div class="lock-label">{{ edge_tier_display | upper }} SIGNAL LOCKED</div>
-                <div class="lock-subtitle">{{ confirming_signals }} premium signals behind the blur</div>
-            </div>
-
-            <!-- Footer: signal count + return hint -->
-            <div class="lock-footer">
-                <span class="footer-signal">📊 {{ confirming_signals }} signals confirm this edge</span>
-                {% if return_hint %}<span class="footer-return">💰 {{ return_hint }}</span>{% endif %}
-            </div>
-
+            {% endfor %}
         </div>
     </div>
 

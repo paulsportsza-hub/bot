@@ -1838,6 +1838,12 @@ _TIER_COLOUR: dict[str, str] = {
     "silver": "#C0C0C0",
     "bronze": "#CD7F32",
 }
+_TIER_EMOJI: dict[str, str] = {
+    "diamond": "💎",
+    "gold": "🥇",
+    "silver": "🥈",
+    "bronze": "🥉",
+}
 _RETURN_HINT_BY_TIER: dict[str, str] = {
     "diamond": "R100 stake · est. R240 return",
     "gold":    "R100 stake · est. R185 return",
@@ -1852,6 +1858,25 @@ _SPORT_EMOJI_MAP: dict[str, str] = {
     "tennis": "🎾",
     "basketball": "🏀",
 }
+# Plan info for upgrade_plans list in canonical tier_lock_upsell template
+_PLAN_INFO: dict[str, dict] = {
+    "gold": {
+        "emoji": "🥇",
+        "name": "Gold",
+        "color": "#FFD700",
+        "price": "R99",
+        "period": "month",
+        "perk": "Unlocks Gold edges + full AI analysis",
+    },
+    "diamond": {
+        "emoji": "💎",
+        "name": "Diamond",
+        "color": "#B9F2FF",
+        "price": "R199",
+        "period": "month",
+        "perk": "Unlocks Diamond + Gold edges + priority insights",
+    },
+}
 
 
 def _tier_sport_emoji(sport_key: str) -> str:
@@ -1859,6 +1884,22 @@ def _tier_sport_emoji(sport_key: str) -> str:
         if k in sport_key.lower():
             return v
     return "🏅"
+
+
+def _build_upgrade_plans(edge_tier: str, user_tier: str) -> list[dict]:
+    """Return plan dicts the user can buy to unlock edge_tier."""
+    tier = edge_tier.lower()
+    ut = user_tier.lower()
+    if tier == "gold":
+        plan_keys = ["gold", "diamond"]
+    elif tier == "diamond":
+        plan_keys = ["diamond"]
+    else:
+        plan_keys = ["gold", "diamond"]
+    # Filter out tiers the user already has
+    if ut == "gold":
+        plan_keys = [k for k in plan_keys if k != "gold"]
+    return [_PLAN_INFO[k] for k in plan_keys if k in _PLAN_INFO]
 
 
 def build_tier_lock_data(
@@ -1871,6 +1912,7 @@ def build_tier_lock_data(
     broadcast: str,
     confirming_signals: int,
     tracker_summary: dict | None,
+    user_tier: str = "bronze",
 ) -> dict:
     """Assemble template variables for tier_lock_upsell.html."""
     from card_data import logo_b64 as _logo_b64
@@ -1890,18 +1932,33 @@ def build_tier_lock_data(
     show_track_record = bool(hit_rate_pct > 0 or (roi and roi != 0))
 
     tier = edge_tier.lower() if edge_tier else "gold"
+    tier_color = _TIER_COLOUR.get(tier, "#FFD700")
+    confirming = int(confirming_signals or 0)
+
     return {
         "header_logo_b64": _logo_b64(_logo_path, max_height=64),
+        # Canonical variable names (WAVE-G2-CANONICAL-LIFT-01)
+        "edge_tier_color": tier_color,
+        "edge_tier_label": tier.title(),
+        "edge_tier_emoji": _TIER_EMOJI.get(tier, "🥇"),
+        "locked_subtitle": f"{confirming} confirming signal{'s' if confirming != 1 else ''} behind the blur",
+        "upgrade_plans": _build_upgrade_plans(tier, user_tier),
+        "date": kickoff_str,
+        "time": "",
+        "channel": broadcast or "",
+        "channel_dstv_num": "",
+        "ss_icon_b64": "",
+        # Legacy variable names (kept for callers that haven't updated)
         "edge_tier": tier,
         "edge_tier_display": tier.title(),
-        "tier_colour": _TIER_COLOUR.get(tier, "#FFD700"),
+        "tier_colour": tier_color,
         "sport_emoji": _tier_sport_emoji(sport_key),
         "home": home,
         "away": away,
         "league": league,
         "kickoff": kickoff_str,
         "broadcast": broadcast or "",
-        "confirming_signals": confirming_signals or 0,
+        "confirming_signals": confirming,
         "show_track_record": show_track_record,
         "hit_rate_7d": str(int(hit_rate_pct)),
         "roi_7d": roi_str,

@@ -32,7 +32,6 @@ DETAIL_TEMPLATES = {
     "sub_founding_live.html",
     # BUILD-HOME-WINNERS-CARD-01
     "home_winners.html",
-    "tier_lock_upsell.html",
     # BUILD-ONBOARDING-HYPE-PACK-01
     "onboarding_done.html",
     # BUILD-SETTINGS-SPORTS-CARD-01
@@ -91,6 +90,8 @@ LIST_TEMPLATES = {
     "bookmaker_directory.html",
     # BUILD-HELP-CARD-01
     "help.html",
+    # WAVE-G2-CANONICAL-LIFT-01
+    "tier_lock_upsell.html",
 }
 ALL_DECLARED = DETAIL_TEMPLATES | LIST_TEMPLATES
 
