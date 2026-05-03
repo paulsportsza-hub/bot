@@ -677,6 +677,7 @@ def build_tier_page_data(tips: list[dict], tier: str) -> dict:
             "ev": ev_str,
             "pick": pick_name,
             "bookmaker": bookmaker,
+            "bookmaker_logo_b64": tip.get("bookmaker_logo_b64") or "",
             "channel": tip.get("channel") or "",  # BUILD-KO-SUPERSPORT-PRIMARY-01
         })
 

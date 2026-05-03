@@ -15,19 +15,38 @@
             width: 100%;
             max-width: 480px;
             background: #0A0A0A;
-            border-radius: 14px;
+            border-radius: 0;
             overflow: hidden;
-            border: 1px solid #2A2A2A;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.6), 0 0 1px rgba(255,255,255,0.05);
+            border: none;
+            box-shadow: none;
         }
 
-        /* ── Tier Header Bar ─────────────────────────────────── */
+        /* ── Tier Header Bar (CANONICAL — tier-color glow, no division) ── */
         .tier-header {
+            position: relative;
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 16px 20px;
+            isolation: isolate;
+            overflow: hidden;
         }
+        .header-glow,
+        .header-glow-screen {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .header-glow {
+            inset: -20px -10px;
+            filter: blur(2px);
+        }
+        .header-glow-screen {
+            mix-blend-mode: screen;
+        }
+        .tier-header > .tier-header-left,
+        .tier-header > .tier-logo-img { position: relative; z-index: 1; }
         .tier-header-left {
             display: flex;
             align-items: center;
@@ -54,9 +73,8 @@
             font-weight: 400;
         }
         .tier-logo-img {
-            height: 22px;
+            height: 28px;
             width: auto;
-            opacity: 0.9;
         }
 
         /* ── Pick Rows ────────────────────────────────────────── */
@@ -154,27 +172,20 @@
             white-space: nowrap;
         }
         .pick-bookie {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: 4px;
             font-size: 9px;
             color: var(--text-secondary);
-            margin-left: 4px;
             white-space: nowrap;
         }
-
-        /* ── Footer ──────────────────────────────────────────── */
-        .footer {
-            background: linear-gradient(180deg, #141414, #0A0A0A);
-            border-top: 1px solid #2A2A2A;
-            padding: 12px 16px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 4px;
-        }
-        .footer-url { font-size: 10px; color: var(--text-secondary); }
-        .footer-logo-img {
-            height: 16px;
+        .pick-bookie .bk-logo {
+            height: 14px;
             width: auto;
-            opacity: 0.8;
+            object-fit: contain;
+            display: inline-block;
+            vertical-align: middle;
         }
     </style>
 </head>
@@ -182,9 +193,13 @@
 <div class="card">
 
     <!-- Tier Header Bar -->
-    <div class="tier-header"
-         style="background: linear-gradient(90deg, {{ tier.color }}15, #0A0A0A);
-                border-bottom: 1px solid {{ tier.color }}30;">
+    <div class="tier-header">
+        <div class="header-glow" style="
+            background: radial-gradient(ellipse 35% 180% at 92% 50%, {{ tier.color }}10 0%, {{ tier.color }}07 50%, transparent 90%);
+        "></div>
+        <div class="header-glow-screen" style="
+            background: radial-gradient(ellipse 22% 130% at 92% 50%, {{ tier.color }}1A 0%, {{ tier.color }}0D 40%, transparent 80%);
+        "></div>
         <div class="tier-header-left">
             <span class="tier-emoji">{{ tier.emoji }}</span>
             <div class="tier-label-block">
@@ -229,7 +244,7 @@
                     <span class="pick-name">{{ pick.pick }}</span>
                     {% endif %}
                     {% if pick.bookmaker %}
-                    <span class="pick-bookie">@ {{ pick.bookmaker }}</span>
+                    <span class="pick-bookie">@ {% if pick.bookmaker_logo_b64 %}<img class="bk-logo" src="{{ pick.bookmaker_logo_b64 }}" alt="{{ pick.bookmaker }}"/>{% else %}{{ pick.bookmaker }}{% endif %}</span>
                     {% endif %}
                 </div>
             </div>
@@ -238,15 +253,6 @@
         {% endfor %}
     </div>
 
-    <!-- Footer -->
-    <div class="footer">
-        <span class="footer-url">mzansiedge.co.za</span>
-        {% if footer_logo_b64 %}
-        <img class="footer-logo-img" src="{{ footer_logo_b64 }}" alt="ME" />
-        {% else %}
-        <div style="width:22px;height:22px;background:#F7931A;color:#000;font-size:9px;font-weight:800;border-radius:50%;display:flex;align-items:center;justify-content:center;">ME</div>
-        {% endif %}
-    </div>
 
 </div>
 </body>
