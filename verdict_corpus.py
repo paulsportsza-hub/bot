@@ -21,17 +21,25 @@ Mode + Sport-Banded section). SA-native English. Conviction tier-appropriate.
 Imperative close. 100-200 char range per sentence after slot-fill. Sport-native
 vocabulary differentiates soccer / rugby / cricket.
 
-Tag rule: ``claims_completeness=True`` for sentences asserting full signal
-coverage ("every signal", "model and market both", "top to bottom",
-"the whole stack", "numbers and signals", "all aligned", "complete read").
-Filter rule: ``has_real_risk=True`` → pool is restricted to
-``claims_completeness=False`` to prevent contradiction with concern prefix.
+Tag rules:
+  - ``claims_completeness=True`` for sentences asserting full signal coverage
+    ("every signal", "model and market both", "top to bottom", "the whole
+    stack", "numbers and signals", "all aligned", "complete read").
+  - ``claims_max_conviction=True`` is auto-derived from the sentence text with
+    ``_MAX_CONVICTION_TOKENS``.
+
+Filter rule: ``has_real_risk=True`` and tier is not Diamond -> pool is
+restricted to sentences where both flags are False before a concern prefix is
+prepended. Option A from FIX-VERDICT-CORPUS-ARCHITECTURE-HARDENING-01 keeps
+Diamond exempt from concern prefixes, so Diamond keeps its max-conviction
+closing language even when the risk heuristic fires.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -56,24 +64,39 @@ TIER_FLOORS: dict[str, int] = {
 # ── VerdictSentence dataclass ─────────────────────────────────────────────
 @dataclass(frozen=True)
 class VerdictSentence:
-    """A single verdict template with a structural completeness tag.
+    """A single verdict template with structural contradiction tags.
 
     Attributes:
         text: the sentence with ``{team}``, ``{odds}``, ``{bookmaker}`` slots.
         claims_completeness: True when the sentence asserts full signal
             coverage (e.g. "every signal aligned", "model and market both").
-            Filter rule: when ``has_real_risk`` fires, only False sentences
-            are eligible — prevents the verdict body asserting completeness
-            while the concern prefix flags a real concern.
+        claims_max_conviction: True when the sentence text uses maximum-
+            conviction betting language (e.g. "hammer", "load up", "max stake").
+
+        Filter rule: when ``has_real_risk`` fires for Gold/Silver/Bronze, only
+            sentences where both flags are False are eligible. This prevents
+            the verdict body asserting completeness or maximum conviction while
+            the concern prefix flags a real concern.
     """
 
     text: str
     claims_completeness: bool
+    claims_max_conviction: bool
 
 
 def _v(text: str, claims_completeness: bool) -> VerdictSentence:
     """Shorthand factory keeps the corpus literal compact."""
-    return VerdictSentence(text=text, claims_completeness=claims_completeness)
+    return VerdictSentence(
+        text=text,
+        claims_completeness=claims_completeness,
+        claims_max_conviction=bool(_MAX_CONVICTION_TOKENS.search(text)),
+    )
+
+
+_MAX_CONVICTION_TOKENS = re.compile(
+    r"\b(hammer|load up|go in heavy|max stake|full confident stake|lock in|heavy stake|full stake)\b",
+    re.IGNORECASE,
+)
 
 
 # ── Sport bucket normalisation ────────────────────────────────────────────
@@ -570,15 +593,14 @@ VERDICT_CORPUS: dict[str, dict[str, list[VerdictSentence]]] = {
 
 
 # ── Concern prefixes — 25 sentences (15 sport-agnostic + 10 sport-flavoured)
-# Used only when has_real_risk(spec) is True. Concatenated to verdict body
-# with a single space, no linguistic bridge. The verdict body still starts
-# with a capital letter — the reader's brain treats prefix + body as two
-# separate beats: "here's the concern" then "here's the call".
+# Used only when has_real_risk(spec) is True for Gold/Silver/Bronze. Concatenated
+# to verdict body with a single space, no linguistic bridge. The verdict body
+# still starts with a capital letter — the reader's brain treats prefix + body
+# as two separate beats: "here's the concern" then "here's the call".
 #
-# All 25 prefixes are sport-agnostic-safe — sport-flavoured prefixes use sport
-# vocabulary (e.g. "the away record", "the breakdown battle") but assert no
-# tier conviction and contain no slot placeholders.
-CONCERN_PREFIXES: list[str] = [
+# FIX-VERDICT-CORPUS-ARCHITECTURE-HARDENING-01: keep the exact prefix text, but
+# bucket by sport so cricket/rugby/soccer vocabulary cannot leak across sports.
+_CONCERN_PREFIX_TEXTS: list[str] = [
     # 15 sport-agnostic
     "Form is choppy on both sides.",
     "The injury report carries late risk.",
@@ -607,6 +629,42 @@ CONCERN_PREFIXES: list[str] = [
     "Wicket conditions are an unknown until the start.",  # cricket
     "Squad fitness across the matchday list is borderline.",  # all
 ]
+
+_CRICKET_PREFIX_MARKERS = re.compile(
+    r"\b(wicket|pitch|surface|dew|toss|batting|bowling)\b",
+    re.IGNORECASE,
+)
+_RUGBY_PREFIX_MARKERS = re.compile(
+    r"\b(scrum|lineout|breakdown|forward pack|forward platform|set-piece dominance|blitz|line-speed|gainline|ruck)\b",
+    re.IGNORECASE,
+)
+_SOCCER_PREFIX_MARKERS = re.compile(
+    r"\b(backline|midfield|pressing|wing|set-piece|away record|clean sheets)\b",
+    re.IGNORECASE,
+)
+
+
+def _classify_concern_prefixes(prefixes: list[str]) -> dict[str, list[str]]:
+    """Classify existing concern prefixes into sport buckets by vocabulary."""
+    buckets: dict[str, list[str]] = {"soccer": [], "rugby": [], "cricket": []}
+    for prefix in prefixes:
+        matched: list[str] = []
+        if _SOCCER_PREFIX_MARKERS.search(prefix):
+            matched.append("soccer")
+        if _RUGBY_PREFIX_MARKERS.search(prefix):
+            matched.append("rugby")
+        if _CRICKET_PREFIX_MARKERS.search(prefix):
+            matched.append("cricket")
+
+        if not matched:
+            matched = ["soccer", "rugby", "cricket"]
+
+        for sport in matched:
+            buckets[sport].append(prefix)
+    return buckets
+
+
+CONCERN_PREFIXES: dict[str, list[str]] = _classify_concern_prefixes(_CONCERN_PREFIX_TEXTS)
 
 
 # ── has_real_risk — deterministic risk flag ───────────────────────────────
@@ -671,6 +729,12 @@ def _pick(items: list, match_key: str, salt: str) -> object:
     return items[int(h, 16) % len(items)]
 
 
+def _pick_concern_prefix(sport: str, match_key: str, salt: str = "prefix") -> str:
+    """Pick a concern prefix from the normalised sport bucket only."""
+    sport_bucket = _normalise_sport_to_bucket(sport)
+    return _pick(CONCERN_PREFIXES[sport_bucket], match_key, f"{sport_bucket}|{salt}")  # type: ignore[return-value]
+
+
 # ── render_verdict — sport-banded slot-fill + optional concern prefix ─────
 def render_verdict(spec: "NarrativeSpec") -> str:
     """Render the deterministic verdict for ``spec``.
@@ -679,9 +743,12 @@ def render_verdict(spec: "NarrativeSpec") -> str:
     to select the sport bucket. Hash-picks a sentence by
     ``(spec.match_key, tier, sport)``. Slot-fills ``{team}``, ``{odds}``,
     ``{bookmaker}``. Prepends a concern prefix (separator: single space)
-    when ``has_real_risk(spec)`` is True — and when the concern fires, the
-    sentence pool is filtered to ``claims_completeness=False`` to prevent
-    contradiction with the prefix.
+    when ``has_real_risk(spec)`` is True for Gold/Silver/Bronze — and when the
+    concern fires, the sentence pool is filtered to
+    ``claims_completeness=False`` and ``claims_max_conviction=False`` to
+    prevent contradiction with the prefix. Diamond is intentionally exempt
+    from concern prefixes per Option A in
+    FIX-VERDICT-CORPUS-ARCHITECTURE-HARDENING-01.
 
     Returns the bare body when the spec is mid-renderer and a slot would
     otherwise resolve to empty (defensive — slot fills are always non-empty
@@ -706,16 +773,16 @@ def render_verdict(spec: "NarrativeSpec") -> str:
 
     pool: list[VerdictSentence] = VERDICT_CORPUS[tier][sport]
 
-    # Filter rule: when the concern prefix will fire, restrict the pool to
-    # claims_completeness=False so the verdict body never contradicts the
-    # prefix's flagged concern.
     risk_fires = has_real_risk(spec)
-    if risk_fires:
-        filtered = [vs for vs in pool if not vs.claims_completeness]
-        # Defensive: every (tier, sport) bucket has ≥15 False sentences by
-        # construction (test_filter_safety guards this), so this fallback
-        # never fires in production. Keep the guard so partial corpus edits
-        # in development don't crash the verdict path.
+    concern_fires = risk_fires and tier != "diamond"
+    if concern_fires:
+        filtered = [
+            vs for vs in pool
+            if not vs.claims_completeness and not vs.claims_max_conviction
+        ]
+        # Defensive: every Gold/Silver/Bronze (tier, sport) bucket has >=8
+        # safe sentences by contract. Keep the guard so partial corpus edits
+        # in development don't crash the verdict path before tests catch it.
         if filtered:
             pool = filtered
 
@@ -740,8 +807,8 @@ def render_verdict(spec: "NarrativeSpec") -> str:
     sentence: VerdictSentence = _pick(pool, match_key, f"{tier}|{sport}")  # type: ignore[assignment]
     body = sentence.text.format(team=team, odds=odds, bookmaker=bookmaker)
 
-    if risk_fires:
-        prefix: str = _pick(CONCERN_PREFIXES, match_key, f"{tier}|{sport}|prefix")  # type: ignore[assignment]
+    if concern_fires:
+        prefix = _pick_concern_prefix(sport, match_key, f"{tier}|prefix")
         return f"{prefix} {body}"
 
     return body
@@ -753,6 +820,8 @@ __all__ = [
     "TIER_FLOORS",
     "VerdictSentence",
     "_normalise_sport_to_bucket",
+    "_pick_concern_prefix",
+    "_MAX_CONVICTION_TOKENS",
     "has_real_risk",
     "render_verdict",
 ]

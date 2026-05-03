@@ -99,6 +99,19 @@ _CONTROL_CASES: tuple[tuple[str, str, str, str, float, str, float, str], ...] = 
 
 _ALL_CASES = _FAILURE_CASES + _CONTROL_CASES
 
+_BOOKMAKER_SWEEP_CASES: tuple[tuple[str, str, str, str, str, float], ...] = (
+    ("diamond", "soccer", "Manchester City", "Brentford", "Supabets", 1.40),
+    ("diamond", "rugby", "Bulls", "Stormers", "Hollywoodbets", 1.65),
+    ("gold", "cricket", "Delhi Capitals", "Chennai Super Kings", "WSB", 1.91),
+    ("gold", "soccer", "Liverpool", "Chelsea", "Supabets", 1.95),
+    ("silver", "soccer", "Stellenbosch", "Orlando Pirates", "Hollywoodbets", 1.90),
+    ("silver", "rugby", "Fijian Drua", "Highlanders", "Betway", 2.75),
+    ("silver", "cricket", "Sunrisers Hyderabad", "Kolkata Knight Riders", "Sportingbet", 1.63),
+    ("bronze", "soccer", "Arsenal", "Atletico Madrid", "SuperSportBet", 1.66),
+    ("bronze", "rugby", "Waratahs", "Western Force", "GBets", 1.68),
+    ("bronze", "cricket", "Punjab Kings", "Mumbai Indians", "PlayaBets", 2.80),
+)
+
 
 def _build_synthetic_tip(
     match_key: str, tier: str, outcome_key: str, outcome_label: str,
@@ -381,6 +394,104 @@ def test_bookmaker_drift_emits_aligned_verdict():
     assert "supersportbet" not in v_b.lower()
 
 
+def test_qa03_arsenal_atletico_bookmaker_pinned_to_edge_results() -> None:
+    """Regression: verdict cites edge_results.bookmaker, not latest odds book."""
+    from narrative_spec import build_narrative_spec, _render_verdict
+
+    tip = _build_synthetic_tip(
+        "arsenal_vs_atletico_madrid_2026-05-05",
+        "bronze",
+        "home",
+        "Arsenal",
+        1.66,
+        "PlayaBets",
+        1.2,
+        "soccer",
+    )
+    edge_data = {
+        "home_team": "Arsenal",
+        "away_team": "Atletico Madrid",
+        "league": "champions_league",
+        "best_bookmaker": "SuperSportBet",
+        "best_odds": 1.66,
+        "edge_pct": 1.2,
+        "outcome": "home",
+        "outcome_team": "Arsenal",
+        "confirming_signals": 1,
+        "contradicting_signals": 0,
+        "composite_score": 53.6,
+        "fair_prob": (1 + 1.2 / 100.0) / 1.66,
+        "edge_tier": "bronze",
+    }
+
+    spec = build_narrative_spec({}, edge_data, [tip], "soccer")
+    verdict = _render_verdict(spec)
+    assert spec.bookmaker.lower() == "supersportbet"
+    assert "supersportbet" in verdict.lower(), verdict
+    assert "playabets" not in verdict.lower(), verdict
+
+
+@pytest.mark.parametrize(
+    "tier,sport,home,away,bookmaker,odds",
+    _BOOKMAKER_SWEEP_CASES,
+    ids=[
+        f"{tier}-{sport}-{bookmaker}"
+        for tier, sport, _home, _away, bookmaker, _odds in _BOOKMAKER_SWEEP_CASES
+    ],
+)
+def test_10_fixture_bookmaker_sweep_uses_edge_results_bookmaker(
+    tier: str,
+    sport: str,
+    home: str,
+    away: str,
+    bookmaker: str,
+    odds: float,
+) -> None:
+    from narrative_spec import build_narrative_spec, _render_verdict
+
+    composite = {
+        "diamond": 92.0,
+        "gold": 78.0,
+        "silver": 65.0,
+        "bronze": 50.0,
+    }[tier]
+    support = 4 if tier == "diamond" else 3
+    edge_data = {
+        "home_team": home,
+        "away_team": away,
+        "league": "epl" if sport == "soccer" else ("urc" if sport == "rugby" else "ipl"),
+        "best_bookmaker": bookmaker,
+        "best_odds": odds,
+        "edge_pct": 3.0,
+        "outcome": "home",
+        "outcome_team": home,
+        "confirming_signals": support,
+        "contradicting_signals": 0,
+        "composite_score": composite,
+        "fair_prob": (1 + 3.0 / 100.0) / odds,
+        "edge_tier": tier,
+    }
+    tip = {
+        "match_key": f"{home.lower().replace(' ', '_')}_vs_{away.lower().replace(' ', '_')}_2026-05-05",
+        "home_team": home,
+        "away_team": away,
+        "outcome": home,
+        "outcome_key": "home",
+        "odds": odds,
+        "bookmaker": bookmaker,
+        "recommended_odds": odds,
+        "recommended_bookmaker": bookmaker,
+        "ev": 3.0,
+        "display_tier": tier,
+        "sport_key": sport,
+    }
+
+    spec = build_narrative_spec({}, edge_data, [tip], sport)
+    verdict = _render_verdict(spec)
+    assert spec.bookmaker.lower() == bookmaker.lower()
+    assert bookmaker.lower() in verdict.lower(), verdict
+
+
 def test_odds_drift_emits_aligned_verdict():
     """Changing the tip's odds propagates to verdict text."""
     from narrative_spec import build_narrative_spec, _render_verdict
@@ -451,3 +562,29 @@ def test_enrich_tip_for_card_fallback_does_not_reuse_stale_cache_text():
     assert "FIX-CARD-VERDICT-RECOMMENDATION-ALIGNMENT-01" in block
     assert "build_narrative_spec" in block
     assert "_render_verdict" in block
+
+
+def test_multibookmaker_enrichment_does_not_rewrite_verdict_source_fields() -> None:
+    """Source guard: odds_snapshots enrichment must not overwrite edge_results recommendation."""
+    bot_py = (_ROOT / "bot.py").read_text(encoding="utf-8")
+    start = bot_py.find("# R10-BUILD-01: Multi-BK enrichment")
+    end = bot_py.find("# AC-8: Optionally attach CLV", start) if start >= 0 else -1
+    assert start >= 0 and end > start, "multi-bookmaker enrichment block not found"
+    block = bot_py[start:end]
+    assert 'tips[-1]["bookmaker"] =' not in block
+    assert 'tips[-1]["bookmaker_key"] =' not in block
+    assert 'tips[-1]["odds"] =' not in block
+    assert "best_available_bookmaker" in block
+
+
+def test_pregen_refresh_skips_positive_edge_results_rows_source_guard() -> None:
+    pregen_py = (_ROOT / "scripts" / "pregenerate_narratives.py").read_text(encoding="utf-8")
+    start = pregen_py.find("async def _refresh_edge_from_odds_db")
+    end = pregen_py.find("match_key = edge.get", start) if start >= 0 else -1
+    assert start >= 0 and end > start, "_refresh_edge_from_odds_db guard block not found"
+    guard = pregen_py[start:end]
+    assert "FIX-VERDICT-CORPUS-ARCHITECTURE-HARDENING-01" in guard
+    assert 'not edge.get("is_non_edge", False)' in guard
+    assert 'edge.get("best_bookmaker")' in guard
+    assert 'edge.get("best_odds")' in guard
+    assert "return edge" in guard

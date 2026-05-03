@@ -10580,6 +10580,13 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
             "odds": _rec_odds,
             "bookmaker": _display_bookmaker_name(_raw_bk_key),
             "bookmaker_key": _raw_bk_key,
+            # FIX-VERDICT-CORPUS-ARCHITECTURE-HARDENING-01:
+            # edge_results is the frozen algo recommendation. Multi-bookmaker
+            # enrichment may add comparison prices, but verdict-bound fields
+            # must stay pinned to this row.
+            "recommended_odds": _rec_odds,
+            "recommended_bookmaker": _display_bookmaker_name(_raw_bk_key),
+            "recommended_bookmaker_key": _raw_bk_key,
             "ev": ev_pct,
             "prob": round(((1 + ev_pct / 100.0) / _rec_odds) * 100) if ev_pct > 0 and _rec_odds > 1.0 else 0,
             "kelly": 0,
@@ -10624,12 +10631,14 @@ def _load_tips_from_edge_results(limit: int = 10, skip_punt_filter: bool = False
                         _bk_dict[_bk] = float(_o)
                 if _bk_dict:
                     tips[-1]["odds_by_bookmaker"] = _bk_dict
-                    # BUILD-CTA-FIX: Sync top-level fields with best fresh bookmaker so
-                    # CTA button and narrative body read the same data source.
+                    # FIX-VERDICT-CORPUS-ARCHITECTURE-HARDENING-01:
+                    # Preserve top-level recommendation fields from edge_results.
+                    # The best fresh bookmaker remains available for CTA/compare
+                    # surfaces without rewriting the verdict source.
                     _best_bk_item = max(_bk_dict.items(), key=lambda x: x[1])
-                    tips[-1]["bookmaker_key"] = _best_bk_item[0]
-                    tips[-1]["bookmaker"] = _display_bookmaker_name(_best_bk_item[0])
-                    tips[-1]["odds"] = _best_bk_item[1]
+                    tips[-1]["best_available_bookmaker_key"] = _best_bk_item[0]
+                    tips[-1]["best_available_bookmaker"] = _display_bookmaker_name(_best_bk_item[0])
+                    tips[-1]["best_available_odds"] = _best_bk_item[1]
         except Exception:
             pass  # Keep single-BK fallback
 
@@ -20346,12 +20355,25 @@ def _extract_edge_data(
             _confirming = 0
         _contradicting = 0
         _comp_score = _cs
+    # FIX-VERDICT-CORPUS-ARCHITECTURE-HARDENING-01:
+    # NarrativeSpec.bookmaker/odds must trace to the frozen edge_results
+    # recommendation, not to latest-by-EV odds_snapshots enrichment.
+    _spec_bookmaker = (
+        best.get("recommended_bookmaker")
+        or best.get("edge_results_bookmaker")
+        or best.get("bookmaker")
+        or best.get("bookie")
+        or "?"
+    )
+    _spec_odds = best.get("recommended_odds")
+    if _spec_odds in (None, "", 0):
+        _spec_odds = best.get("edge_results_odds") or best.get("odds", 0)
     return {
         "home_team": home_team,
         "away_team": away_team,
         "league": v2.get("league", "") or best.get("league", ""),
-        "best_bookmaker": best.get("bookmaker", best.get("bookie", "?")),
-        "best_odds": best.get("odds", 0),
+        "best_bookmaker": _spec_bookmaker,
+        "best_odds": _spec_odds,
         "edge_pct": _display_ev,
         "fair_prob": _raw_prob / 100.0 if _raw_prob else 0.0,
         "outcome": outcome_raw,

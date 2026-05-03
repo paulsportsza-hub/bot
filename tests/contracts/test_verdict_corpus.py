@@ -98,8 +98,23 @@ _COMPLETENESS_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+_MAX_CONVICTION_REGEX = vc._MAX_CONVICTION_TOKENS
+
 _CONCESSIVE_RE = re.compile(
     r"\b(Despite that|Even so|Still,|That said|Even with that)\b",
+)
+
+_CRICKET_PREFIX_MARKERS = re.compile(
+    r"\b(wicket|pitch|surface|dew|toss|batting|bowling)\b",
+    re.IGNORECASE,
+)
+_RUGBY_PREFIX_MARKERS = re.compile(
+    r"\b(scrum|lineout|breakdown|forward pack|forward platform|set-piece dominance|blitz|line-speed|gainline|ruck)\b",
+    re.IGNORECASE,
+)
+_SOCCER_PREFIX_MARKERS = re.compile(
+    r"\b(backline|midfield|pressing|wing|set-piece|away record|clean sheets)\b",
+    re.IGNORECASE,
 )
 
 
@@ -120,6 +135,14 @@ def _jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b)
 
 
+def _all_prefixes() -> list[str]:
+    return [prefix for bucket in vc.CONCERN_PREFIXES.values() for prefix in bucket]
+
+
+def _unique_prefixes() -> list[str]:
+    return list(dict.fromkeys(_all_prefixes()))
+
+
 # ── 1. Bucket size — every (tier, sport) has exactly 30 sentences ─────────
 
 
@@ -132,18 +155,26 @@ def test_bucket_has_exactly_30_sentences(tier: str, sport: str) -> None:
     )
 
 
-# ── 2. Filter safety — every (tier, sport) has ≥15 False ──────────────────
+# ── 2. Filter safety — Gold/Silver/Bronze safe pool has >=8 sentences ─────
 
 
 @pytest.mark.parametrize("tier", _TIERS)
 @pytest.mark.parametrize("sport", _SPORTS)
-def test_filter_safety_minimum_15_false(tier: str, sport: str) -> None:
-    """Each bucket must have ≥15 sentences with claims_completeness=False so
-    the has_real_risk filter has a non-empty pool to draw from."""
+def test_filter_safety_minimum_8_non_diamond(tier: str, sport: str) -> None:
+    """Each non-Diamond bucket must have >=8 safe sentences for risk renders."""
     pool = vc.VERDICT_CORPUS[tier][sport]
-    false_count = sum(1 for s in pool if not s.claims_completeness)
-    assert false_count >= 15, (
-        f"({tier},{sport}) has only {false_count} False sentences (need ≥15)"
+    safe_count = sum(
+        1 for s in pool
+        if not s.claims_completeness and not s.claims_max_conviction
+    )
+    if tier == "diamond":
+        assert safe_count == 0, (
+            f"Diamond should remain max-conviction under Option A; got "
+            f"{safe_count} safe sentences in ({tier},{sport})"
+        )
+        return
+    assert safe_count >= 8, (
+        f"({tier},{sport}) has only {safe_count} safe sentences (need >=8)"
     )
 
 
@@ -164,24 +195,48 @@ def test_tag_consistency_completeness_regex(tier: str, sport: str) -> None:
             )
 
 
-# ── 4. Concern prefix expansion — exactly 25, period-terminated, no slots ─
+@pytest.mark.parametrize("tier", _TIERS)
+@pytest.mark.parametrize("sport", _SPORTS)
+def test_tag_consistency_max_conviction_regex(tier: str, sport: str) -> None:
+    """claims_max_conviction is auto-tagged from _MAX_CONVICTION_TOKENS."""
+    pool = vc.VERDICT_CORPUS[tier][sport]
+    for idx, vs in enumerate(pool):
+        expected = bool(_MAX_CONVICTION_REGEX.search(vs.text))
+        assert vs.claims_max_conviction is expected, (
+            f"({tier},{sport})[{idx}] max-conviction tag mismatch: {vs.text!r}"
+        )
 
 
-def test_concern_prefixes_exact_count() -> None:
-    assert len(vc.CONCERN_PREFIXES) == 25, (
-        f"Expected 25 concern prefixes, got {len(vc.CONCERN_PREFIXES)}"
+# ── 4. Concern prefix expansion — sport-bucketed, period-terminated, no slots ─
+
+
+def test_concern_prefixes_dict_shape() -> None:
+    assert isinstance(vc.CONCERN_PREFIXES, dict)
+    assert set(vc.CONCERN_PREFIXES.keys()) == {"soccer", "rugby", "cricket"}
+
+
+@pytest.mark.parametrize("sport", _SPORTS)
+def test_concern_prefix_bucket_minimum_8(sport: str) -> None:
+    assert len(vc.CONCERN_PREFIXES[sport]) >= 8, (
+        f"{sport} has only {len(vc.CONCERN_PREFIXES[sport])} prefixes"
+    )
+
+
+def test_concern_prefixes_exact_unique_count() -> None:
+    assert len(_unique_prefixes()) == 25, (
+        f"Expected 25 unique concern prefixes, got {len(_unique_prefixes())}"
     )
 
 
 def test_concern_prefixes_end_in_period() -> None:
-    for idx, prefix in enumerate(vc.CONCERN_PREFIXES):
+    for idx, prefix in enumerate(_unique_prefixes()):
         assert prefix.rstrip()[-1] == ".", (
             f"prefix[{idx}] missing terminator period: {prefix!r}"
         )
 
 
 def test_concern_prefixes_no_slot_placeholders() -> None:
-    for idx, prefix in enumerate(vc.CONCERN_PREFIXES):
+    for idx, prefix in enumerate(_unique_prefixes()):
         for slot in ("{team}", "{odds}", "{bookmaker}"):
             assert slot not in prefix, (
                 f"prefix[{idx}] contains slot {slot}: {prefix!r}"
@@ -195,11 +250,34 @@ def test_concern_prefixes_assert_no_tier_conviction() -> None:
         "hammer", "load up", "go in heavy", "lock in", "back ", "get on",
         "take ", "bet ", "the play is", "the call is", "worth a",
     )
-    for idx, prefix in enumerate(vc.CONCERN_PREFIXES):
+    for idx, prefix in enumerate(_unique_prefixes()):
         low = prefix.lower()
         for token in tier_imperatives:
             assert token not in low, (
                 f"prefix[{idx}] contains tier imperative {token!r}: {prefix!r}"
+            )
+
+
+def test_soccer_concern_prefix_bucket_has_no_foreign_sport_markers() -> None:
+    """Regression: soccer cards must not receive cricket/rugby concern terms."""
+    for prefix in vc.CONCERN_PREFIXES["soccer"]:
+        assert not _CRICKET_PREFIX_MARKERS.search(prefix), (
+            f"soccer prefix leaked cricket marker: {prefix!r}"
+        )
+        assert not _RUGBY_PREFIX_MARKERS.search(prefix), (
+            f"soccer prefix leaked rugby marker: {prefix!r}"
+        )
+
+
+@pytest.mark.parametrize("sport,foreign_regexes", [
+    ("rugby", (_CRICKET_PREFIX_MARKERS,)),
+    ("cricket", (_RUGBY_PREFIX_MARKERS, _SOCCER_PREFIX_MARKERS)),
+])
+def test_concern_prefix_bucket_foreign_marker_contract(sport: str, foreign_regexes: tuple[re.Pattern, ...]) -> None:
+    for prefix in vc.CONCERN_PREFIXES[sport]:
+        for regex in foreign_regexes:
+            assert not regex.search(prefix), (
+                f"{sport} prefix leaked foreign marker {regex.pattern!r}: {prefix!r}"
             )
 
 
@@ -236,7 +314,7 @@ def test_corpus_has_zero_concessive_connectors() -> None:
                 assert not _CONCESSIVE_RE.search(rendered), (
                     f"({tier},{sport})[{idx}] has concessive: {rendered!r}"
                 )
-    for idx, prefix in enumerate(vc.CONCERN_PREFIXES):
+    for idx, prefix in enumerate(_unique_prefixes()):
         assert not _CONCESSIVE_RE.search(prefix), (
             f"prefix[{idx}] has concessive: {prefix!r}"
         )
@@ -246,25 +324,24 @@ def test_corpus_has_zero_concessive_connectors() -> None:
 
 
 def test_no_contradiction_with_concern_prefix_exhaustive() -> None:
-    """HG-3: across all combinations of (concern prefix × completeness-claim
-    sentence × tier × sport), render_verdict with has_real_risk=True NEVER
-    produces a contradicting pair.
+    """HG-3: concern renders never combine a concern prefix with a flagged body.
 
-    This is the contradiction-impossible proof. The implementation guarantees
-    it by filtering the pool to claims_completeness=False before hash-pick
-    when has_real_risk fires; this test enumerates the search space and
-    confirms zero violations.
+    The flagged body set is any sentence with claims_completeness=True OR
+    claims_max_conviction=True. Diamond is Option-A exempt from concern
+    prefixes, so the concern search space covers Gold/Silver/Bronze.
     """
-    completeness_count = 0
-    prefix_count = len(vc.CONCERN_PREFIXES)
-    bucket_count = len(_TIERS) * len(_SPORTS)
+    flagged_count = 0
+    search_space = 0
     violations: list[str] = []
 
     for tier in _TIERS:
         for sport in _SPORTS:
             pool = vc.VERDICT_CORPUS[tier][sport]
-            true_pool = [s for s in pool if s.claims_completeness]
-            completeness_count += len(true_pool)
+            flagged_pool = [
+                s for s in pool
+                if s.claims_completeness or s.claims_max_conviction
+            ]
+            flagged_count += len(flagged_pool)
             # Synthesise a spec that triggers has_real_risk for this tier
             spec = _MockSpec(
                 edge_tier=tier,
@@ -282,6 +359,14 @@ def test_no_contradiction_with_concern_prefix_exhaustive() -> None:
             assert vc.has_real_risk(spec), (  # type: ignore[arg-type]
                 f"setup error: spec for ({tier},{sport}) doesn't trigger has_real_risk"
             )
+            if tier == "diamond":
+                rendered = vc.render_verdict(spec)  # type: ignore[arg-type]
+                assert not any(rendered.startswith(p) for p in _all_prefixes()), (
+                    f"Diamond risk render should be prefix-exempt: {rendered!r}"
+                )
+                continue
+
+            search_space += len(vc.CONCERN_PREFIXES[sport]) * len(flagged_pool)
             # Hash-pick across many synthetic match keys so we exercise the
             # filter across the full prefix×bucket space.
             for i in range(150):
@@ -289,7 +374,7 @@ def test_no_contradiction_with_concern_prefix_exhaustive() -> None:
                 rendered = vc.render_verdict(spec)  # type: ignore[arg-type]
                 # Identify which prefix and which body sentence were picked
                 used_prefix = None
-                for p in vc.CONCERN_PREFIXES:
+                for p in vc.CONCERN_PREFIXES[sport]:
                     if rendered.startswith(p):
                         used_prefix = p
                         break
@@ -297,8 +382,8 @@ def test_no_contradiction_with_concern_prefix_exhaustive() -> None:
                     f"no prefix in {rendered!r} (has_real_risk=True path)"
                 )
                 body = rendered[len(used_prefix) + 1:]
-                # The body must NOT come from a True-tagged sentence
-                for vs in true_pool:
+                # The body must NOT come from a flagged sentence
+                for vs in flagged_pool:
                     body_template_text = vs.text.format(
                         team="Liverpool", odds="1.96", bookmaker="SuperSportBet"
                     )
@@ -307,14 +392,11 @@ def test_no_contradiction_with_concern_prefix_exhaustive() -> None:
                             f"({tier},{sport}) prefix={used_prefix!r} body=True: {body!r}"
                         )
 
-    # Print search space size as the brief HG-3 deliverable
-    search_space = (
-        prefix_count * completeness_count * bucket_count
-    )
     print(
-        f"\nHG-3 search space: {prefix_count} prefixes × {completeness_count} "
-        f"completeness-True sentences × {bucket_count} buckets = "
-        f"{search_space:,} contradiction surfaces evaluated. Violations: 0"
+        f"\nHG-3 search space: sport-bucket concern prefixes × "
+        f"{flagged_count} flagged sentences (completeness or max-conviction) "
+        f"across non-Diamond buckets = {search_space:,} contradiction surfaces. "
+        f"Violations: 0"
     )
     assert not violations, f"HG-3 violations found:\n" + "\n".join(violations)
 
@@ -346,7 +428,7 @@ def test_concern_prefix_concat_total_within_260() -> None:
             team="Mamelodi Sundowns", odds="11.50", bookmaker="SuperSportBet"
         )),
     )
-    longest_prefix = max(vc.CONCERN_PREFIXES, key=len)
+    longest_prefix = max(_unique_prefixes(), key=len)
     body = longest_body.format(
         team="Mamelodi Sundowns", odds="11.50", bookmaker="SuperSportBet"
     )
@@ -561,7 +643,7 @@ def test_concern_prefix_concatenation_clean() -> None:
         match_key="liverpool_vs_chelsea_2026-05-04",
     )
     rendered = vc.render_verdict(spec)
-    assert any(rendered.startswith(p) for p in vc.CONCERN_PREFIXES), (
+    assert any(rendered.startswith(p) for p in vc.CONCERN_PREFIXES["soccer"]), (
         f"render does not start with a known concern prefix: {rendered!r}"
     )
     assert "Liverpool" in rendered
@@ -569,7 +651,7 @@ def test_concern_prefix_concatenation_clean() -> None:
     assert "SuperSportBet" in rendered
     assert ".." not in rendered, f"double punctuation in: {rendered!r}"
     assert "  " not in rendered, f"double space in: {rendered!r}"
-    for prefix in vc.CONCERN_PREFIXES:
+    for prefix in vc.CONCERN_PREFIXES["soccer"]:
         if rendered.startswith(prefix):
             body = rendered[len(prefix) + 1:]
             assert body and body[0].isupper(), (
@@ -593,10 +675,76 @@ def test_concern_prefix_only_fires_when_has_real_risk() -> None:
         match_key="liverpool_vs_chelsea_2026-05-04",
     )
     rendered = vc.render_verdict(spec)
-    for prefix in vc.CONCERN_PREFIXES:
+    for prefix in _all_prefixes():
         assert not rendered.startswith(prefix), (
             f"clean diamond render unexpectedly carries prefix: {rendered!r}"
         )
+
+
+def test_diamond_risk_is_concern_prefix_exempt() -> None:
+    """Option A: Diamond keeps body-only max-conviction copy when risk fires."""
+    spec = _MockSpec(
+        edge_tier="diamond",
+        sport="soccer",
+        outcome_label="Manchester City",
+        odds=1.40,
+        bookmaker="Supabets",
+        home_name="Manchester City",
+        away_name="Brentford",
+        composite_score=86,
+        support_level=0,
+        contradicting_signals=0,
+        match_key="manchester_city_vs_brentford_2026-05-09",
+    )
+    assert vc.has_real_risk(spec) is True  # type: ignore[arg-type]
+    rendered = vc.render_verdict(spec)  # type: ignore[arg-type]
+    assert not any(rendered.startswith(p) for p in _all_prefixes()), rendered
+    assert _MAX_CONVICTION_REGEX.search(rendered), rendered
+
+
+def test_pick_concern_prefix_soccer_100_hash_trials_no_foreign_markers() -> None:
+    for i in range(100):
+        prefix = vc._pick_concern_prefix("soccer", f"soccer_hash_trial_{i}")
+        assert prefix in vc.CONCERN_PREFIXES["soccer"]
+        assert not _CRICKET_PREFIX_MARKERS.search(prefix), prefix
+        assert not _RUGBY_PREFIX_MARKERS.search(prefix), prefix
+
+
+@pytest.mark.parametrize("tier", _TIERS)
+@pytest.mark.parametrize("sport", _SPORTS)
+def test_risk_render_sport_coverage_no_foreign_prefix_leaks(tier: str, sport: str) -> None:
+    spec = _MockSpec(
+        edge_tier=tier,
+        sport=sport,
+        outcome_label={
+            "soccer": "Arsenal",
+            "rugby": "Stormers",
+            "cricket": "Mumbai Indians",
+        }[sport],
+        odds=1.90,
+        bookmaker="Hollywoodbets",
+        home_name="Home",
+        away_name="Away",
+        composite_score=42,
+        support_level=0,
+        contradicting_signals=0,
+        match_key=f"{tier}_{sport}_risk_coverage",
+    )
+    rendered = vc.render_verdict(spec)  # type: ignore[arg-type]
+    if tier == "diamond":
+        assert not any(rendered.startswith(p) for p in _all_prefixes()), rendered
+        return
+
+    prefix = next((p for p in vc.CONCERN_PREFIXES[sport] if rendered.startswith(p)), None)
+    assert prefix is not None, rendered
+    if sport == "soccer":
+        assert not _CRICKET_PREFIX_MARKERS.search(prefix), prefix
+        assert not _RUGBY_PREFIX_MARKERS.search(prefix), prefix
+    elif sport == "rugby":
+        assert not _CRICKET_PREFIX_MARKERS.search(prefix), prefix
+    elif sport == "cricket":
+        assert not _RUGBY_PREFIX_MARKERS.search(prefix), prefix
+        assert not _SOCCER_PREFIX_MARKERS.search(prefix), prefix
 
 
 # ── has_real_risk corner cases (preserved from W82) ───────────────────────

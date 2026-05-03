@@ -659,8 +659,9 @@ async def _get_enrichment(
 
 
 # ── BASELINE-FIX: Data Source Alignment ──
-# Ensures narrative verdict bookmaker+price matches the SA Bookmaker Odds table.
-# Both must read from odds.db (single source of truth), not stale edge_results.
+# Snapshot-only baselines may still refresh bookmaker+price from odds.db. For
+# real edge_results rows, FIX-VERDICT-CORPUS-ARCHITECTURE-HARDENING-01 pins the
+# verdict bookmaker+price to the frozen algo recommendation in edge_results.
 
 _VALID_BK_DISPLAY = {
     "hollywoodbets", "betway", "supabets", "sportingbet",
@@ -684,14 +685,19 @@ def _log_integrity_event(signal: str, fixture_id: str = "", reason: str = "") ->
 
 
 async def _refresh_edge_from_odds_db(edge: dict) -> dict:
-    """Refresh bookmaker+price from odds.db so narrative and odds table agree.
+    """Refresh bookmaker+price from odds.db for non-edge snapshot baselines.
 
-    edge_results stores pre-computed edges that may be stale.  odds.db
-    (odds_latest) has the current best price.  This ensures the same price
-    feeds both the narrative verdict and the SA Bookmaker Odds display.
+    FIX-VERDICT-CORPUS-ARCHITECTURE-HARDENING-01:
+    Positive edge_results rows are already frozen recommendations. Re-deriving
+    their bookmaker from latest odds_snapshots/odds service can make the
+    verdict cite a different SA book than edge_results.bookmaker, so this helper
+    returns those rows unchanged.
 
     Updates edge dict in place and returns it.
     """
+    if not edge.get("is_non_edge", False) and edge.get("best_bookmaker") and edge.get("best_odds"):
+        return edge
+
     match_key = edge.get("match_key", "")
     outcome = edge.get("recommended_outcome") or edge.get("outcome", "")
     if not match_key or not outcome:
@@ -906,9 +912,9 @@ def _edge_from_serving_tip(tip: dict) -> dict | None:
         "sport": tip.get("sport_key", config.LEAGUE_SPORT.get(league, "soccer")),
         "recommended_outcome": raw_outcome,
         "outcome": raw_outcome,
-        "best_odds": edge_data.get("best_odds", tip.get("odds", 0)),
-        "best_bookmaker": edge_data.get("best_bookmaker", tip.get("bookmaker", "?")),
-        "best_bookmaker_key": tip.get("bookmaker_key", ""),
+        "best_odds": edge_data.get("best_odds", tip.get("recommended_odds", tip.get("odds", 0))),
+        "best_bookmaker": edge_data.get("best_bookmaker", tip.get("recommended_bookmaker", tip.get("bookmaker", "?"))),
+        "best_bookmaker_key": tip.get("recommended_bookmaker_key", tip.get("bookmaker_key", "")),
         "edge_pct": edge_data.get("edge_pct", tip.get("ev", 0)),
         "fair_probability": edge_data.get("fair_prob", 0.0),
         "composite_score": edge_data.get("composite_score", tip.get("edge_score", 0)),
@@ -1662,6 +1668,11 @@ async def _generate_one(
         "edge_v2": edge,
         "home_team": home,
         "away_team": away,
+        "edge_tier": edge.get("edge_tier") or edge.get("tier", "bronze"),
+        "display_tier": edge.get("edge_tier") or edge.get("tier", "bronze"),
+        "recommended_odds": edge.get("best_odds", 0),
+        "recommended_bookmaker": edge.get("best_bookmaker", "?"),
+        "recommended_bookmaker_key": _bk_key,
     })
 
     # 3. Build edge_data for NarrativeSpec
@@ -1686,6 +1697,7 @@ async def _generate_one(
         "stale_minutes": edge.get("stale_minutes", 0),
         "movement_direction": _pregen_sigs.get("movement", {}).get("direction", ""),
         "tipster_against": _pregen_sigs.get("tipster", {}).get("against_count", 0),
+        "edge_tier": edge.get("edge_tier") or edge.get("tier", "bronze"),
     }
 
     # BUILD-PREGEN-STUB-GATE-01: Skip pregen when edge_data sentinels are unresolved.
