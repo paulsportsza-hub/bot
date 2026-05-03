@@ -5,6 +5,15 @@ and asserts that _render_verdict() emits zero blacklisted phrases.
 
 Regression guard: if any test fails, a banned phrase has crept back into the
 deterministic verdict templates in narrative_spec.py.
+
+BUILD-VERDICT-SIGNAL-MAPPED-01 (2026-05-03): The corpus 100-char floor
+applies to the legacy corpus path. The new signal-mapped builder
+emits shorter, focused sentences per spec §10 (~130 chars target,
+non-Diamond closes drop odds+bookmaker so Gold/Silver/Bronze come in
+~50-90 chars). The autouse fixture pins the corpus path so this
+existing blacklist + char-range guard remains intact for the
+fallback. The new builder's blacklist coverage lives in
+test_verdict_signal_mapper.py.
 """
 from __future__ import annotations
 
@@ -16,6 +25,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import pytest
 from narrative_spec import NarrativeSpec, _render_verdict
 from bot import _VERDICT_BLACKLIST
+
+
+@pytest.fixture(autouse=True)
+def _force_corpus_path(monkeypatch):
+    """Pin _render_verdict to the legacy corpus path (signal-mapped flag off).
+
+    See module docstring — the 100-char floor and blacklist guarantees
+    apply to the corpus. The signal-mapped builder has its own coverage.
+    """
+    monkeypatch.setenv("USE_SIGNAL_MAPPED_VERDICTS", "0")
+    yield
 
 
 _SPORTS = ["soccer", "rugby", "cricket", "boxing"]

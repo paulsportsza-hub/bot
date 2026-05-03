@@ -30,6 +30,15 @@ Categories (per brief Phase 4 list):
     - Liverpool-Chelsea / Arsenal-Fulham regression fixtures
 
 All tests are pure Python (no DB, no LLM) — they run in milliseconds.
+
+BUILD-VERDICT-SIGNAL-MAPPED-01 (2026-05-03): The corpus is now the
+fallback path; the signal-mapped builder is the main path. These
+existing tests cover the corpus structure, slot-fill mechanics,
+sport-bucket selection, and concern-prefix discipline — all of which
+remain in place as the safety net. To keep the assertions stable, the
+module-level autouse fixture pins ``USE_SIGNAL_MAPPED_VERDICTS=0`` so
+``render_verdict`` always exercises the corpus path here. The new
+builder has its own contract suite at ``test_verdict_signal_mapper.py``.
 """
 from __future__ import annotations
 
@@ -39,6 +48,19 @@ from dataclasses import dataclass, field
 import pytest
 
 import verdict_corpus as vc
+
+
+@pytest.fixture(autouse=True)
+def _force_corpus_path(monkeypatch):
+    """Pin render_verdict to the legacy corpus path for this test module.
+
+    BUILD-VERDICT-SIGNAL-MAPPED-01 — the signal-mapped builder is the
+    main path under default flag, but these tests guard the corpus
+    fallback. Setting the flag off keeps the assertions stable while
+    HG-4 holds the corpus in place as the safety net.
+    """
+    monkeypatch.setenv("USE_SIGNAL_MAPPED_VERDICTS", "0")
+    yield
 
 
 # ── Shared fixtures ───────────────────────────────────────────────────────

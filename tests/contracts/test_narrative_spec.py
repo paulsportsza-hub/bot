@@ -2,6 +2,15 @@
 
 Covers classification boundaries, coherence enforcement, TONE_BANDS structure,
 and risk assessment. All tests are pure Python — no bot.py import, no LLM, no DB.
+
+BUILD-VERDICT-SIGNAL-MAPPED-01 (2026-05-03): TestRenderVerdict /
+TestVerdictCoherenceIntegration / TestTierConvictionLanguage /
+TestBaselineNoEdgeVerdictRiskDistinct guard the corpus-path verdict
+shape (length window, conviction language, monitor odds+bookmaker).
+The new spec §10 changes those properties for the signal-mapped main
+path. The autouse fixture below pins USE_SIGNAL_MAPPED_VERDICTS=0 so
+these classes continue to validate the legacy corpus path which
+remains in place as the safety net.
 """
 from __future__ import annotations
 
@@ -10,6 +19,14 @@ import re
 import sys
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _force_corpus_path(monkeypatch):
+    """Pin _render_verdict to the legacy corpus path for this module."""
+    monkeypatch.setenv("USE_SIGNAL_MAPPED_VERDICTS", "0")
+    yield
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 

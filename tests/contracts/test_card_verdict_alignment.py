@@ -53,6 +53,23 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _force_corpus_path(monkeypatch):
+    """Pin _render_verdict / render_verdict to the legacy corpus path.
+
+    BUILD-VERDICT-SIGNAL-MAPPED-01 (2026-05-03): The new spec §10 tier
+    actions explicitly remove odds + bookmaker from non-Diamond closes
+    (Gold = "back {team}, standard stake" etc.). The original alignment
+    guard from FIX-CARD-VERDICT-RECOMMENDATION-ALIGNMENT-01 was authored
+    against the corpus where every tier slot-fills {odds} and
+    {bookmaker}. Pinning the flag off keeps the corpus alignment guard
+    intact as the rollback regression. The signal-mapped path has its
+    own alignment + tier-action coverage in test_verdict_signal_mapper.py.
+    """
+    monkeypatch.setenv("USE_SIGNAL_MAPPED_VERDICTS", "0")
+    yield
+
+
 # ── Failure corpus from QA-LIVE-CARDS-EVERY-ACTIVE-01 ─────────────────────────
 # Each entry: (match_key, tier, outcome_key, outcome_label, odds, bookmaker_display, ev_pct, sport)
 

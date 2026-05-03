@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -48,6 +49,96 @@ if TYPE_CHECKING:  # pragma: no cover - import only for type hints
 
 
 _log = logging.getLogger(__name__)
+
+
+# ── BUILD-VERDICT-SIGNAL-MAPPED-01 (2026-05-03) feature flag ────────────────
+# When True (default), render_verdict routes through verdict_signal_mapper
+# first and only falls back to the 360-sentence corpus when the mapper
+# returns an empty body or fails the banned-term / live-commentary scanner.
+# Set USE_SIGNAL_MAPPED_VERDICTS=0 (or "false") to force the legacy corpus
+# path — used by HG-5 regression test for rollback safety.
+def _signal_mapped_enabled() -> bool:
+    raw = os.environ.get("USE_SIGNAL_MAPPED_VERDICTS")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _spec_to_signals(spec: "NarrativeSpec") -> dict[str, bool]:
+    """Adapt NarrativeSpec → 6-signal boolean dict for the new builder.
+
+    NarrativeSpec does not carry a raw signals dict (Phase 1 trace —
+    Notion: BUILD-VERDICT-SIGNAL-MAPPED-01). We derive presence
+    booleans from the existing spec fields:
+
+      - price_edge → ev_pct > 0 (every NarrativeSpec built from a tip
+        has a positive EV; this is the product's core value prop and
+        is implicitly always true on the main path).
+      - line_mvt   → movement_direction in ("for","against","unknown")
+        — fires when ANY movement signal exists, regardless of
+        direction. The favourable / against routing happens via
+        ``line_movement_direction`` separately.
+      - market     → bookmaker_count >= 3 (proxy for "wider market"
+        consensus — at least 3 SA books pricing the outcome).
+      - tipster    → tipster_available (signal data exists).
+      - form       → home_form OR away_form (form string present).
+      - injury     → injuries on the picked side; falls back to
+        either-side coverage when ``outcome`` is empty.
+
+    Out-of-scope (Phase 1 gap → follow-up brief
+    OPS-SPEC-SIGNAL-EXPOSURE-01): direct ``signals.market`` and
+    ``signals.form`` booleans on NarrativeSpec. Current proxies
+    track data presence, which is the contract §6 requires.
+    """
+    outcome = (getattr(spec, "outcome", "") or "").lower()
+    inj_home = list(getattr(spec, "injuries_home", []) or [])
+    inj_away = list(getattr(spec, "injuries_away", []) or [])
+    if outcome == "home":
+        injury_active = bool(inj_home)
+    elif outcome == "away":
+        injury_active = bool(inj_away)
+    else:
+        injury_active = bool(inj_home or inj_away)
+
+    movement = (getattr(spec, "movement_direction", "") or "").lower()
+    line_mvt_active = movement in ("for", "against", "unknown", "favourable")
+
+    bookmaker_count = int(getattr(spec, "bookmaker_count", 0) or 0)
+    market_active = bookmaker_count >= 3
+
+    tipster_active = bool(getattr(spec, "tipster_available", False))
+
+    home_form = (getattr(spec, "home_form", "") or "").strip()
+    away_form = (getattr(spec, "away_form", "") or "").strip()
+    form_active = bool(home_form or away_form)
+
+    ev_pct = float(getattr(spec, "ev_pct", 0) or 0)
+    price_edge_active = ev_pct > 0
+
+    return {
+        "price_edge": price_edge_active,
+        "line_mvt":   line_mvt_active,
+        "market":     market_active,
+        "tipster":    tipster_active,
+        "form":       form_active,
+        "injury":     injury_active,
+    }
+
+
+def _spec_movement_direction(spec: "NarrativeSpec") -> str:
+    """Map spec.movement_direction → mapper's three-value contract.
+
+    Mapper expects ``favourable`` / ``against`` / ``unknown``. Spec uses
+    ``for`` / ``against`` / ``neutral`` / ``unknown``. ``neutral`` is
+    treated as ``unknown`` so the special-case lead falls through to
+    the neutral phrasing (spec §6.2 unknown branch).
+    """
+    movement = (getattr(spec, "movement_direction", "") or "").lower()
+    if movement == "for":
+        return "favourable"
+    if movement == "against":
+        return "against"
+    return "unknown"
 
 
 # ── Tier composite-score floors ───────────────────────────────────────────
@@ -739,6 +830,20 @@ def _pick_concern_prefix(sport: str, match_key: str, salt: str = "prefix") -> st
 def render_verdict(spec: "NarrativeSpec") -> str:
     """Render the deterministic verdict for ``spec``.
 
+    BUILD-VERDICT-SIGNAL-MAPPED-01 (2026-05-03): Main path is now the
+    signal-mapped builder in ``verdict_signal_mapper.build_verdict``,
+    which grounds the verdict in the active card signals (Price Edge /
+    Line Mvt / Market / Tipster / Form / Injury) per the spec locked
+    in Notion ``355d9048d73c81f4a9b2ce69a63c7f27``. The 360-sentence
+    sport-banded corpus below is preserved as the fallback safety net
+    — it serves when the new builder returns an empty string OR when
+    the banned-term / live-commentary scanner fires on the new
+    builder's output. Feature flag ``USE_SIGNAL_MAPPED_VERDICTS`` (env
+    or settings) toggles this; default True. Set to ``0`` / ``false``
+    to force the legacy corpus path (HG-5 rollback regression).
+
+    Legacy fallback path (still active):
+
     Reads ``spec.edge_tier`` to select the corpus tier and ``spec.sport``
     to select the sport bucket. Hash-picks a sentence by
     ``(spec.match_key, tier, sport)``. Slot-fills ``{team}``, ``{odds}``,
@@ -767,6 +872,45 @@ def render_verdict(spec: "NarrativeSpec") -> str:
             "lean": "silver",
         }.get(action, "bronze")
         tier = derived
+
+    # ── BUILD-VERDICT-SIGNAL-MAPPED-01 main path ───────────────────────────
+    if _signal_mapped_enabled():
+        try:
+            from verdict_signal_mapper import build_verdict as _build_signal_verdict
+            from verdict_signal_mapper import validate_output as _validate_signal_verdict
+
+            team_for_action = (
+                getattr(spec, "outcome_label", "")
+                or getattr(spec, "home_name", "")
+                or "the pick"
+            ).strip()
+            odds_val = float(getattr(spec, "odds", 0) or 0)
+            bookmaker_val = (getattr(spec, "bookmaker", "") or "").strip()
+            mapped = _build_signal_verdict(
+                team=team_for_action,
+                tier=tier,
+                signals=_spec_to_signals(spec),
+                odds=(f"{odds_val:.2f}" if odds_val > 0 else None),
+                bookmaker=bookmaker_val or None,
+                line_movement_direction=_spec_movement_direction(spec),
+            )
+            ok, hits = _validate_signal_verdict(mapped)
+            if mapped and ok:
+                return mapped
+            if not ok:
+                _log.warning(
+                    "verdict-signal-mapper validation failed; falling back to corpus. "
+                    "tier=%s hits=%s",
+                    tier,
+                    hits,
+                )
+        except Exception as exc:  # pragma: no cover — defensive
+            _log.warning(
+                "verdict-signal-mapper failed; falling back to corpus. "
+                "tier=%s err=%s",
+                tier,
+                exc,
+            )
 
     sport_raw = (getattr(spec, "sport", "") or "").lower()
     sport = _normalise_sport_to_bucket(sport_raw)
