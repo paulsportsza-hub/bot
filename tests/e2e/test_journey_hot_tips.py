@@ -77,7 +77,11 @@ async def test_hot_go_dispatch_sends_hot_tips_surface(monkeypatch, test_edges) -
     # BUILD-W3: card pipeline sends photo, not plain text message
     ctx.bot.send_photo.assert_awaited_once()
     sent_markup = ctx.bot.send_photo.await_args.kwargs["reply_markup"]
-    assert any(cb.startswith("ep:pick:") for cb in _callbacks(sent_markup))
+    # HOT_TIPS_INDEX_ENABLED=1 → hot:tier:/hot:upgrade:tier: buttons; =0 → ep:pick: buttons
+    assert any(
+        cb.startswith("ep:pick:") or cb.startswith("hot:tier:") or cb.startswith("hot:upgrade:tier:")
+        for cb in _callbacks(sent_markup)
+    )
 
 
 async def test_build_hot_tips_page_shows_edge_cards(test_edges) -> None:

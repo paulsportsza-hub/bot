@@ -32,8 +32,31 @@
             box-shadow: none;
         }
 
-        /* ── 1. Header ───────────────────────────────────────── */
+        /* ── Upper glow zone — wraps header + matchup, glow stops at meta-bar ─── */
+        .upper-glow-zone {
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+        }
+        .upper-glow {
+            position: absolute;
+            inset: -20px -10px;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(2px);
+        }
+        .upper-glow-screen {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            mix-blend-mode: screen;
+        }
+
+        /* Header (sits above the glow) */
         .header {
+            position: relative;
+            z-index: 2;
             padding: 8px 16px;
             display: flex;
             align-items: center;
@@ -41,10 +64,11 @@
             gap: 10px;
         }
         .logo-img {
-            height: 26px;
+            height: 28px;
             width: auto;
             flex-shrink: 0;
         }
+        /* Brand bar removed — its 10px footprint was eating into the locked verdict-section size. */
         .logo-fallback {
             font-size: 18px;
             font-weight: 800;
@@ -123,19 +147,22 @@
         .prize-amount { color: #FFD700; font-weight: 600; }
         .hero-stake { color: var(--text-secondary); font-weight: 600; }
         .hero-arrow {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 5px;
+            width: 12px;
+            height: 12px;
+            flex-shrink: 0;
             color: var(--text-secondary);
-            font-weight: 900;
-            font-size: 1.1em;
-            margin: 0 4px;
-            display: inline-block;
-            vertical-align: middle;
-            line-height: 1;
-            align-self: center;
         }
+        .hero-arrow svg { width: 12px; height: 12px; display: block; }
         .hero-return { color: #FFD700; font-weight: 700; }
 
         /* ── 2. Matchup ──────────────────────────────────────── */
         .matchup {
+            position: relative;
+            z-index: 2;
             padding: 14px 18px 8px;
             text-align: center;
         }
@@ -211,15 +238,16 @@
           text-transform: uppercase;
         }
 
-        /* ── 3. Meta Bar ─────────────────────────────────────── */
+        /* ── 3. Meta Bar (inside glow zone — no border-top, soft border-bottom only) ── */
         .meta-bar {
+            position: relative;
+            z-index: 2;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 14px;
             flex-wrap: wrap;
             padding: 10px 18px;
-            border-top: 1px solid #2A2A2A;
             border-bottom: 1px solid #2A2A2A;
         }
         .meta-item {
@@ -238,16 +266,18 @@
             gap: 4px;
             background: transparent;
             border-radius: 4px;
-            padding: 1px 4px 1px 2px;
+            padding: 0;
+            line-height: 1;
+            transform: translateY(1px);
         }
         .ss-icon {
-            height: 18px;
-            width: 18px;
-            vertical-align: middle;
+            height: 14px;
+            width: 14px;
             object-fit: contain;
+            display: block;
         }
         .ss-num {
-            font-size: 10px;
+            font-size: 12px;
             font-weight: 700;
             color: var(--text-secondary);
             line-height: 1;
@@ -298,9 +328,6 @@
             font-size: 9px;
             color: var(--text-secondary);
         }
-        /* FIX-REGRESS-D1-BOOKMAKER-LINE-01: nowrap + overflow:hidden — wrapping is
-           physically impossible. Count drop (4→3→2) is enforced in the data layer
-           via card_width threshold before this template renders. */
         .bookie-chips-row {
             display: flex;
             flex-wrap: nowrap;
@@ -310,13 +337,23 @@
             margin-top: -2px;
         }
         .odds-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            padding: 3px 8px;
-            border-radius: 4px;
+            font-size: 12px;
+            padding: 5px 9px;
+            border-radius: 5px;
             border: 1px solid;
             white-space: nowrap;
             flex-shrink: 0;
+        }
+        .bk-logo {
+            height: 18px;
+            width: auto;
+            display: inline-block;
+            vertical-align: middle;
+            object-fit: contain;
         }
         /* FIX-REGRESS-D1-BOOKMAKER-LINE-01: injury row — collapses when empty */
         .injuries-line {
@@ -328,7 +365,7 @@
             text-overflow: ellipsis;
         }
 
-        /* ── 5. Edge Signals ─────────────────────────────────── */
+        /* ── 5. Edge Signals — prod-exact padding to keep verdict size locked ── */
         .signals-section {
             padding: 8px 18px 10px;
             border-top: 1px solid #2A2A2A;
@@ -336,20 +373,20 @@
         .section-hdr {
             font-size: 9px;
             font-weight: 700;
-            letter-spacing: 1px;
+            letter-spacing: 1.2px;
             text-transform: uppercase;
-            margin-bottom: 8px;
+            margin-bottom: 7px;
         }
         .signals-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 5px 10px;
-            margin-bottom: 10px;
+            gap: 5px 12px;
+            margin-bottom: 6px;
         }
         .signal-item {
             display: flex;
             align-items: center;
-            gap: 5px;
+            gap: 6px;
         }
         .signal-dot {
             width: 7px;
@@ -364,7 +401,7 @@
         .signal-dot.inactive {
             background: #77777730;
         }
-        .signal-lbl { font-size: 10px; }
+        .signal-lbl { font-size: 11px; font-weight: 500; }
         .bar-row {
             display: flex;
             align-items: center;
@@ -414,10 +451,12 @@
         .h2h-lbl-draw { font-size: 9px; color: var(--text-secondary); }
         .h2h-lbl-away { font-size: 9px; color: #FF5252; }
 
-        /* ── 7. Verdict (BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01: injury removed) */
+        /* ── 7. Verdict — LOCKED at prod values (size + position must not change) ── */
         .verdict-section {
             flex-grow: 1;
             min-height: 90px;
+            max-height: 130px;
+            overflow: hidden;
             padding: 10px 14px 12px;
             background: #141414;
             border-top: 1px solid #2A2A2A;
@@ -431,6 +470,10 @@
             line-height: 1.6;
             margin-top: 5px;
             white-space: pre-line;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 5;
+            -webkit-box-orient: vertical;
         }
         /* FIX-CARD-SURFACE-TIER-CAP-REASON-01: structural cap reason beneath verdict.
            Quieter than the verdict prose — italic, dimmer, smaller. Reads as context,
@@ -449,8 +492,21 @@
 <body>
 <div class="card">
 
-    <!-- ── 1. Header ─────────────────────────────────────────── -->
-    <div class="header" style="background: linear-gradient(90deg, {{ tier_color }}08, #0A0A0A); border-bottom: 1px solid {{ tier_color }}20;">
+    <!-- ── Upper glow zone (wraps header + matchup, stops at meta-bar) ──── -->
+    <div class="upper-glow-zone">
+        {% if tier %}
+        {# Layer A — soft right-side wash, blurred #}
+        <div class="upper-glow" style="
+            background: radial-gradient(ellipse 35% 130% at 92% 50%, {{ tier_color }}10 0%, {{ tier_color }}07 50%, transparent 90%);
+        "></div>
+        {# Layer B — screen-blend right-side spotlight #}
+        <div class="upper-glow-screen" style="
+            background: radial-gradient(ellipse 22% 100% at 92% 50%, {{ tier_color }}1A 0%, {{ tier_color }}0D 40%, transparent 80%);
+        "></div>
+        {% endif %}
+
+    <!-- ── 1. Header ────────────────────────────────────────────── -->
+    <div class="header">
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
@@ -458,12 +514,12 @@
         {% endif %}
         <div class="header-right">
             {% if tier %}
-            <div class="tier-badge" style="background: {{ tier_color }}12; border-color: {{ tier_color }}20;">
+            <div class="tier-badge" style="background: {{ tier_color }}18; border-color: {{ tier_color }}55; box-shadow: 0 0 12px {{ tier_color }}30;">
                 <span class="tier-badge-emoji">{{ tier_emoji }}</span>
                 <span class="tier-badge-name" style="color: {{ tier_color }};">{{ tier_name }} EDGE</span>
             </div>
             <div class="ev-display">
-                <span class="ev-value"><span class="hero-stake">R200</span><span class="hero-arrow">→</span><span class="hero-return">R{{ prize_return }}</span></span>
+                <span class="ev-value"><span class="hero-stake">R200</span><span class="hero-arrow"><svg viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M1 6 H10 M7 3 L10 6 L7 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="hero-return" style="color: {{ tier_color }};">R{{ prize_return }}</span></span>
             </div>
             {% else %}
             <div class="no-edge-badge">
@@ -510,15 +566,15 @@
         </div>
     </div>
 
-    <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
+    <!-- ── 3. Meta Bar (inside glow zone — unified block) ────── -->
     <div class="meta-bar">
         <span class="meta-item">📅 {{ date }}</span>
-        {#- FIX-REGRESS-D1-BOOKMAKER-LINE-01: kickoff time as dedicated meta item -#}
         {% if time %}<span class="meta-item">⏰ {{ time }} SAST</span>{% endif %}
         {% if venue %}<span class="meta-item">🏙️ {{ venue }}</span>{% endif %}
         {#- FIX-DSTV-CHANNEL-PERM-01 superseded by BUILD-CHANNEL-LOGOS-01: SS icon+DStv badge or text fallback -#}
         {% if channel %}{% if channel_dstv_num and ss_icon_b64 %}<span class="meta-item"><span class="ss-badge"><img src="data:image/png;base64,{{ ss_icon_b64 }}" class="ss-icon" alt="SS"><span class="ss-num">{{ channel_dstv_num }}</span></span></span>{% else %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}{% endif %}
     </div>
+    </div><!-- /.upper-glow-zone -->
 
     {% if tier %}
     <!-- ── 4. The Pick (edge only) ─────────────────────────── -->
@@ -542,11 +598,11 @@
         {% for o in all_odds %}
         {% if o.odds_float and o.odds_float > 0 %}
         {% if o.is_pick %}
-        <span class="odds-pill" style="background: {{ tier_color }}20; border: 1.5px solid {{ tier_color }}; color: {{ tier_color }}; font-weight: 600;">★ {{ o.bookie }} {{ o.odds }}</span>
+        <span class="odds-pill" style="background: {{ tier_color }}20; border: 1.5px solid {{ tier_color }}; color: {{ tier_color }}; font-weight: 600;">{% if o.logo_b64 %}<img class="bk-logo" src="{{ o.logo_b64 }}" alt="{{ o.bookie }}"/>{% else %}★ {{ o.bookie }}{% endif %} {{ o.odds }}</span>
         {% elif o.odds_float >= pick_odds_float %}
-        <span class="odds-pill" style="background: {{ tier_color }}12; border-color: {{ tier_color }}30; color: {{ tier_color }};">{{ o.bookie }} {{ o.odds }}</span>
+        <span class="odds-pill" style="background: {{ tier_color }}12; border-color: {{ tier_color }}30; color: {{ tier_color }};">{% if o.logo_b64 %}<img class="bk-logo" src="{{ o.logo_b64 }}" alt="{{ o.bookie }}"/>{% else %}{{ o.bookie }}{% endif %} {{ o.odds }}</span>
         {% else %}
-        <span class="odds-pill" style="background: #0A0A0A; border-color: #2A2A2A; color: var(--text-secondary);">{{ o.bookie }} {{ o.odds }}</span>
+        <span class="odds-pill" style="background: #0A0A0A; border-color: #2A2A2A; color: var(--text-secondary);">{% if o.logo_b64 %}<img class="bk-logo" src="{{ o.logo_b64 }}" alt="{{ o.bookie }}"/>{% else %}{{ o.bookie }}{% endif %} {{ o.odds }}</span>
         {% endif %}
         {% endif %}
         {% endfor %}
@@ -570,15 +626,7 @@
             </div>
             {% endfor %}
         </div>
-        {% if confidence and confidence != 0 %}
-        <div class="bar-row">
-            <span class="bar-label">Confidence</span>
-            <div class="bar-track">
-                <div class="bar-fill" style="width: {{ confidence }}%; background: {{ tier_color }};"></div>
-            </div>
-            <span class="bar-pct" style="color: {{ tier_color }};">{{ confidence_tier }}</span>
-        </div>
-        {% endif %}
+        {# Confidence bar removed per design — confidence_tier still drives verdict prose downstream. #}
     </div>
     {% endif %}
 
