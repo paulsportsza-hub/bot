@@ -26,13 +26,37 @@
             box-shadow: none;
         }
 
-        /* ── Header ──────────────────────────────────────────── */
+        /* ── Header (CANONICAL — orange glow behind logo, no division) ── */
         .header {
+            position: relative;
             text-align: center;
             padding: 22px 20px 16px;
-            background: linear-gradient(180deg, #0D0D0D, #141414);
-            border-bottom: 1px solid #2A2A2A;
+            isolation: isolate;
+            overflow: hidden;
         }
+        .header-glow {
+            position: absolute;
+            inset: -10px 0 0 0;
+            pointer-events: none;
+            z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
+        }
+        .header-glow-screen {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+        }
+        .header > .logo-img,
+        .header > .logo-fallback,
+        .header > .orange-bar,
+        .header > .title,
+        .header > .tier-summary { position: relative; z-index: 1; }
         .logo-img {
             height: 32px;
             width: auto;
@@ -215,11 +239,32 @@
             white-space: nowrap;
         }
         .pick-bookie {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: 4px;
             font-size: 9px;
             color: var(--text-secondary);
-            margin-left: 4px;
             white-space: nowrap;
         }
+        .pick-bookie .bk-logo {
+            height: 14px;
+            width: auto;
+            object-fit: contain;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        .pick-prize-arrow {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 10px;
+            height: 10px;
+            margin: 0 4px;
+            color: var(--text-secondary);
+            vertical-align: -1px;
+        }
+        .pick-prize-arrow svg { width: 10px; height: 10px; display: block; }
 
         /* ── Prize Return ─────────────────────────────────── */
         .pick-prize-line {
@@ -249,10 +294,12 @@
 
     <!-- Header -->
     <div class="header">
+        <div class="header-glow"></div>
+        <div class="header-glow-screen"></div>
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
-        <div style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
         {% endif %}
         <div class="orange-bar"></div>
         <div class="title">EDGE PICKS</div>
@@ -339,14 +386,14 @@
                     <span class="pick-name">{{ pick.pick }}</span>
                     {% endif %}
                     {% if pick.bookmaker %}
-                    <span class="pick-bookie">@ {{ pick.bookmaker }}</span>
+                    <span class="pick-bookie">@ {% if pick.bookmaker_logo_b64 %}<img class="bk-logo" src="{{ pick.bookmaker_logo_b64 }}" alt="{{ pick.bookmaker }}"/>{% else %}{{ pick.bookmaker }}{% endif %}</span>
                     {% endif %}
                 </div>
             </div>
 
             {% if pick.prize_return %}
             <div class="pick-prize-line">
-                <span class="pick-prize">R200 → <span class="prize-return">R{{ pick.prize_return }}</span></span>
+                <span class="pick-prize">R200<span class="pick-prize-arrow"><svg viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M1 6 H10 M7 3 L10 6 L7 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="prize-return">R{{ pick.prize_return }}</span></span>
             </div>
             {% endif %}
 
