@@ -598,3 +598,89 @@ def test_story_quiz_complete_all_off():
                                   "edu_tips", "market_movers", "bankroll_updates", "live_scores"]}
     d = build_story_quiz_complete_data(prefs)
     assert d["enabled_count"] == 0
+
+
+# ── FIX-ZERO-TEXT-EMPTY-STATES-01: empty-state card adapters ──────────────────
+
+from card_data_adapters import build_edge_picks_empty_data, build_live_games_empty_data
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader
+
+_TEMPLATE_DIR = Path(__file__).parent.parent / "card_templates"
+
+
+def _render_template(name: str, data: dict) -> str:
+    env = Environment(loader=FileSystemLoader(str(_TEMPLATE_DIR)), autoescape=True)
+    return env.get_template(name).render(**data)
+
+
+class TestEdgePicksEmptyData:
+    def test_required_keys_present(self):
+        d = build_edge_picks_empty_data()
+        assert "heading" in d
+        assert "body_text" in d
+        assert "cta_line" in d
+        assert "header_logo_b64" in d
+
+    def test_heading_non_empty(self):
+        d = build_edge_picks_empty_data()
+        assert d["heading"]
+
+    def test_body_text_non_empty(self):
+        d = build_edge_picks_empty_data()
+        assert d["body_text"]
+
+    def test_cta_line_non_empty(self):
+        d = build_edge_picks_empty_data()
+        assert d["cta_line"]
+
+    def test_template_renders(self):
+        d = build_edge_picks_empty_data()
+        html = _render_template("edge_picks_empty.html", d)
+        assert "EDGE PICKS" in html
+        assert d["heading"] in html
+        assert d["body_text"] in html
+        assert d["cta_line"] in html
+
+    def test_template_renders_without_logo(self):
+        d = build_edge_picks_empty_data()
+        d["header_logo_b64"] = ""
+        html = _render_template("edge_picks_empty.html", d)
+        assert "MzansiEdge" in html
+
+
+class TestLiveGamesEmptyData:
+    def test_required_keys_present(self):
+        d = build_live_games_empty_data()
+        assert "heading" in d
+        assert "body_text" in d
+        assert "cta_line" in d
+        assert "header_logo_b64" in d
+
+    def test_heading_non_empty(self):
+        d = build_live_games_empty_data()
+        assert d["heading"]
+
+    def test_body_text_non_empty(self):
+        d = build_live_games_empty_data()
+        assert d["body_text"]
+
+    def test_cta_line_non_empty(self):
+        d = build_live_games_empty_data()
+        assert d["cta_line"]
+
+    def test_template_renders(self):
+        d = build_live_games_empty_data()
+        html = _render_template("live_games_empty.html", d)
+        assert "LIVE GAMES" in html
+        assert d["heading"] in html
+        # body_text may contain apostrophes escaped to &#39; — check stable substring
+        assert "Open My Matches" in html
+        assert "Follow" in html
+        assert "My Matches to get started" in html
+
+    def test_template_renders_without_logo(self):
+        d = build_live_games_empty_data()
+        d["header_logo_b64"] = ""
+        html = _render_template("live_games_empty.html", d)
+        assert "MzansiEdge" in html

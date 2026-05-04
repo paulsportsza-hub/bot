@@ -1389,3 +1389,29 @@ def build_help_data() -> dict:
         "command_groups": _HELP_COMMAND_GROUPS,
         "header_logo_b64": _logo(),
     }
+
+
+def build_edge_picks_empty_data() -> dict:
+    """Empty-state card when no live edges are available — FIX-ZERO-TEXT-EMPTY-STATES-01."""
+    return {
+        "heading": "No Live Edges Right Now",
+        "body_text": (
+            "Our scanner is checking all major SA bookmakers.\n"
+            "Strong value spots appear when the market opens a gap."
+        ),
+        "cta_line": "Next check in ~15 minutes — pull down to refresh",
+        "header_logo_b64": _logo(),
+    }
+
+
+def build_live_games_empty_data() -> dict:
+    """Empty-state card when user has no active live-game subscriptions — FIX-ZERO-TEXT-EMPTY-STATES-01."""
+    return {
+        "heading": "No Live Games Tracked",
+        "body_text": (
+            "You're not following any games yet.\n"
+            "Open My Matches, tap a fixture, then hit Follow to get live score alerts."
+        ),
+        "cta_line": "Tap ⚽ My Matches to get started",
+        "header_logo_b64": _logo(),
+    }

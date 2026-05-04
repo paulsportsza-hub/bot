@@ -172,6 +172,8 @@ from card_data_adapters import (
     build_settings_sports_data,
     build_bookmaker_directory_data,
     build_help_data,
+    build_edge_picks_empty_data,
+    build_live_games_empty_data,
 )
 from narrative_spec import (
     _VERDICT_MAX_CHARS, _VERDICT_MIN_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
@@ -6365,12 +6367,17 @@ async def _show_live_games(update: Update, user_id: int) -> None:
     active = [s for s in subs if s.is_active]
 
     if not active:
-        await update.message.reply_text(
+        _lg_empty_fallback = (
             "🔴 <b>Live Games</b>\n\n"
             "You're not following any live games yet.\n\n"
             "Use ⚽ <b>My Matches</b> to find games, tap one for tips, "
-            "then hit <b>🔔 Follow this game</b> to get live updates.",
-            parse_mode=ParseMode.HTML,
+            "then hit <b>🔔 Follow this game</b> to get live updates."
+        )
+        await send_card_or_fallback(
+            bot=update.get_bot(),
+            chat_id=update.message.chat_id,
+            template="live_games_empty.html", data=build_live_games_empty_data(),
+            text_fallback=_lg_empty_fallback, markup=None,
         )
         return
 
@@ -12802,7 +12809,11 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
                 text_fallback=_wm_text, markup=_wm_markup,
             )
         else:
-            await bot.send_message(chat_id, _wm_text, parse_mode=ParseMode.HTML, reply_markup=_wm_markup)
+            await send_card_or_fallback(
+                bot=bot, chat_id=chat_id,
+                template="edge_picks_empty.html", data=build_edge_picks_empty_data(),
+                text_fallback=_wm_text, markup=_wm_markup,
+            )
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
@@ -12884,7 +12895,11 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
                 text_fallback=_fast_text, markup=_fast_markup,
             )
         else:
-            await bot.send_message(chat_id, _fast_text, parse_mode=ParseMode.HTML, reply_markup=_fast_markup)
+            await send_card_or_fallback(
+                bot=bot, chat_id=chat_id,
+                template="edge_picks_empty.html", data=build_edge_picks_empty_data(),
+                text_fallback=_fast_text, markup=_fast_markup,
+            )
         # W84-HT2: freeze page identity at render time
         if user_id:
             _ht_page_state[user_id] = 0
@@ -13039,7 +13054,11 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
             text_fallback=text, markup=markup,
         )
     else:
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        await send_card_or_fallback(
+            bot=bot, chat_id=chat_id,
+            template="edge_picks_empty.html", data=build_edge_picks_empty_data(),
+            text_fallback=text, markup=markup,
+        )
     # W84-HT2: freeze page identity at render time (cold path)
     if user_id:
         _ht_page_state[user_id] = 0

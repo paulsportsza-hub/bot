@@ -92,6 +92,9 @@ LIST_TEMPLATES = {
     "help.html",
     # WAVE-G2-CANONICAL-LIFT-01
     "tier_lock_upsell.html",
+    # FIX-ZERO-TEXT-EMPTY-STATES-01
+    "edge_picks_empty.html",
+    "live_games_empty.html",
 }
 ALL_DECLARED = DETAIL_TEMPLATES | LIST_TEMPLATES
 
