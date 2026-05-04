@@ -263,38 +263,70 @@ async def _run() -> int:
     # fingerprint immediately before the persist recheck — drastically
     # narrows the race window to a single asyncio scheduling boundary.
     _MAX_DRIFT_RETRIES = 4
+    # Codex pass-3 second review (Finding 1): persistence — not just
+    # generation success — is the wrapper's success criterion. Track
+    # persisted/drift-skipped/exception per edge so the summary line
+    # and exit code don't paint a false green when cache writes fail.
+    persistence: list[tuple[str, bool, bool, str]] = []  # (match_key, persisted, drift_skipped, error)
     for i, edge in enumerate(edges, 1):
         t0 = time.time()
         res: dict = {}
         success = False
         persisted = False
+        drift_skipped = False
+        error_msg = ""
         for retry in range(_MAX_DRIFT_RETRIES):
             try:
                 res = await pregen._generate_one(edge, sweep_type="full")
             except Exception as exc:
+                error_msg = str(exc)
                 print(f"[{i:>2}/{len(edges)}] EXC  {edge['match_key']}: {exc}")
-                res = {"match_key": edge["match_key"], "success": False, "error": str(exc)}
+                res = {"match_key": edge["match_key"], "success": False, "error": error_msg}
                 break
             success = bool(res.get("success"))
             if not success:
+                error_msg = res.get("error") or "generation failed"
                 break
             persisted = await _persist_one(res, pregen.log)
             if persisted:
                 break
+            # _persist_one returned False — either drift-skipped or store
+            # failure. Track the latter so the post-loop summary tells
+            # the operator the right story.
+            drift_skipped = True
             if retry < _MAX_DRIFT_RETRIES - 1:
                 pregen.log.info(
                     "rebuild_wrapper drift retry %d/%d for %s",
                     retry + 1, _MAX_DRIFT_RETRIES, edge["match_key"],
                 )
+        if not persisted and not error_msg:
+            error_msg = "drift_skipped_after_retries" if drift_skipped else "persist_failed"
         results.append(res)
+        persistence.append((edge["match_key"], persisted, drift_skipped, error_msg))
         elapsed = time.time() - t0
         print(
             f"[{i:>2}/{len(edges)}] {'OK ' if success else '!! '}"
-            f"{edge['match_key']:<55} ({elapsed:.1f}s, persist={persisted})"
+            f"{edge['match_key']:<55} "
+            f"({elapsed:.1f}s, gen={success}, persist={persisted})"
         )
 
-    successes = sum(1 for r in results if r.get("success"))
-    print(f"\nSUMMARY: {successes}/{len(edges)} successful in {time.time() - t_total:.1f}s")
+    persisted_count = sum(1 for _, p, _, _ in persistence if p)
+    drift_count = sum(1 for _, p, d, _ in persistence if d and not p)
+    failed_persist = [
+        (mk, err) for mk, p, _, err in persistence if not p
+    ]
+    print(
+        f"\nSUMMARY: persisted {persisted_count}/{len(edges)} "
+        f"in {time.time() - t_total:.1f}s "
+        f"(drift-skipped after retries: {drift_count})"
+    )
+    if failed_persist:
+        print("FAILED-TO-PERSIST:")
+        for mk, err in failed_persist:
+            print(f"  - {mk}: {err}")
+        # Exit non-zero so automation / operators see a clean failure
+        # instead of a false-green run when scrapers churn the live DB.
+        return 1
     return 0
 
 
