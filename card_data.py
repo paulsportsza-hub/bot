@@ -623,6 +623,7 @@ def build_edge_picks_index_data(user_tier: str, tier_counts: dict[str, int]) -> 
         "total_edges": total_edges,
         "live_total": total_edges,
         "tiers": tiers,
+        "top_tier": "bronze",
     }
 
 
