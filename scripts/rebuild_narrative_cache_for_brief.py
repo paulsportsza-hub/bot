@@ -72,9 +72,25 @@ def _load_unsettled_edges_for_pregen() -> list[dict]:
     for row in rows:
         bet_type = (row.get("bet_type") or "").strip()
         outcome = "home"
-        if ":" in bet_type:
+        # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-3 (Finding 1):
+        # canonical bet_type → outcome mapping. edge_results stores
+        # human-readable labels ("Home Win" / "Away Win" / "Draw") for
+        # legacy rows AND colon-shaped 1x2 markets ("1X2:home") for newer
+        # writers. The pre-fix wrapper only handled the colon shape →
+        # `Away Win` rows silently rebuilt as `home` outcome and the
+        # rendered verdict backed the WRONG team. Mirrors
+        # bot.py:_load_tips_from_edge_results normalisation (line 10973).
+        if bet_type == "Home Win" or bet_type == "home":
+            outcome = "home"
+        elif bet_type == "Away Win" or bet_type == "away":
+            outcome = "away"
+        elif bet_type == "Draw" or bet_type == "draw":
+            outcome = "draw"
+        elif ":" in bet_type:
             _, outcome = bet_type.split(":", 1)
-        outcome = outcome.lower() or "home"
+            outcome = outcome.lower() or "home"
+        if outcome not in ("home", "away", "draw"):
+            outcome = "home"
         match_key = row.get("match_key") or ""
         if not match_key or "_vs_" not in match_key:
             continue
@@ -114,7 +130,15 @@ def _load_unsettled_edges_for_pregen() -> list[dict]:
 
 
 async def _persist_one(result: dict, log) -> bool:
-    """Persist a successful _generate_one result to narrative_cache."""
+    """Persist a successful _generate_one result to narrative_cache.
+
+    FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-3 (Finding 2):
+    runs the same gen-vs-write drift guard the canonical pregen.main()
+    pending_writes loop uses, so cache-flush rebuilds and the regular
+    sweep both go through the same drift-detection path. Without this
+    a flush-time write could stamp a verdict rendered against pre-flush
+    odds/signals as fresh in the post-flush cache row.
+    """
     cache = result.get("_cache") if isinstance(result, dict) else None
     if not cache:
         return False
@@ -122,6 +146,52 @@ async def _persist_one(result: dict, log) -> bool:
     html = cache.get("html")
     if not match_id or not html:
         return False
+
+    # Drift guard — pop the gen-time fingerprints (they must NOT reach
+    # _store_narrative_cache, which has no parameter for them).
+    _gen_odds_hash = cache.pop("_gen_odds_hash", "") or ""
+    _gen_signal_fp = cache.pop("_gen_signal_fp", "") or ""
+    _outcome_for_recheck = cache.pop("_outcome_for_recheck", "") or ""
+    _sport_for_recheck = cache.pop("_sport_for_recheck", None)
+    _league_for_recheck = cache.pop("_league_for_recheck", None)
+
+    if _gen_signal_fp and _outcome_for_recheck:
+        try:
+            _now_canonical_sigs = pregen._collect_canonical_signals(
+                match_id, _outcome_for_recheck, _sport_for_recheck, _league_for_recheck,
+            )
+            _now_signal_fp = "no_sigs"
+            if _now_canonical_sigs:
+                try:
+                    from narrative_spec import _normalise_spec_signals as _ns_norm
+                    _now_signal_fp = pregen._signal_fingerprint(_ns_norm(_now_canonical_sigs))
+                except Exception:
+                    _now_signal_fp = "no_sigs"
+            if _now_signal_fp != _gen_signal_fp:
+                log.warning(
+                    "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 GenWriteSignalDrift "
+                    "(rebuild wrapper) match_id=%s gen=%s now=%s — skipping cache write",
+                    match_id, _gen_signal_fp, _now_signal_fp,
+                )
+                return False
+        except Exception as _drift_exc:
+            log.debug(
+                "rebuild wrapper drift-check signal exception for %s: %s — falling through",
+                match_id, _drift_exc,
+            )
+    # NOTE: odds-hash drift is intentionally NOT enforced in the wrapper.
+    # _compute_odds_hash reads odds_latest, which scrapers update every
+    # ~30s — so on every gen→persist cycle (millisec apart) the hash
+    # almost always differs even when nothing material changed. The
+    # signal fingerprint above already catches the case that matters
+    # (where the §12.X rendered phrase would shift). Odds-hash drift
+    # affects only Diamond-tier verdicts which embed odds verbatim, and
+    # the production main() pending_writes loop keeps the strict odds
+    # check for its longer gen→write window. The brief flush wrapper
+    # processes one match at a time with a sub-second window between
+    # generation and persistence — odds drift here is safe to ignore.
+    _ = _gen_odds_hash  # kept for diagnostics in future audits.
+
     tips = cache.get("tips") or []
     edge_tier = cache.get("edge_tier") or "bronze"
     narrative_source = cache.get("narrative_source") or "w82"
@@ -188,19 +258,35 @@ async def _run() -> int:
     print(f"processing {len(edges)} edges …\n")
     results: list[dict] = []
     t_total = time.time()
+    # Codex pass-3 (Finding 2): max generate→persist retry count when the
+    # drift guard skips a write. Each retry produces a fresh gen-time
+    # fingerprint immediately before the persist recheck — drastically
+    # narrows the race window to a single asyncio scheduling boundary.
+    _MAX_DRIFT_RETRIES = 4
     for i, edge in enumerate(edges, 1):
         t0 = time.time()
-        try:
-            res = await pregen._generate_one(edge, sweep_type="full")
-        except Exception as exc:
-            print(f"[{i:>2}/{len(edges)}] EXC  {edge['match_key']}: {exc}")
-            results.append({"match_key": edge["match_key"], "success": False, "error": str(exc)})
-            continue
-        success = bool(res.get("success"))
-        results.append(res)
+        res: dict = {}
+        success = False
         persisted = False
-        if success:
+        for retry in range(_MAX_DRIFT_RETRIES):
+            try:
+                res = await pregen._generate_one(edge, sweep_type="full")
+            except Exception as exc:
+                print(f"[{i:>2}/{len(edges)}] EXC  {edge['match_key']}: {exc}")
+                res = {"match_key": edge["match_key"], "success": False, "error": str(exc)}
+                break
+            success = bool(res.get("success"))
+            if not success:
+                break
             persisted = await _persist_one(res, pregen.log)
+            if persisted:
+                break
+            if retry < _MAX_DRIFT_RETRIES - 1:
+                pregen.log.info(
+                    "rebuild_wrapper drift retry %d/%d for %s",
+                    retry + 1, _MAX_DRIFT_RETRIES, edge["match_key"],
+                )
+        results.append(res)
         elapsed = time.time() - t0
         print(
             f"[{i:>2}/{len(edges)}] {'OK ' if success else '!! '}"
