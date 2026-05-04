@@ -30,6 +30,7 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 _DSF = 2  # device_scale_factor — must match render_card_sync's default
+_EDGEOPS_CHAT_ID = -1003877525865
 
 
 def _build_cache_key(template: str, data: dict, width: int | None) -> str:
@@ -81,6 +82,22 @@ async def send_card_or_fallback(
         When None, render_card_sync's default (480) applies. Pass 540 for
         match_detail.html to produce 1080px output; other templates keep 480.
     """
+    if template == "profile_home.html" and chat_id <= 0:
+        log.warning(
+            "FIX-PROFILE-CARD-SPAM-02: profile card send to non-DM blocked chat_id=%s",
+            chat_id,
+        )
+        try:
+            await bot.send_message(
+                chat_id=_EDGEOPS_CHAT_ID,
+                text=(
+                    f"⚠️ FIX-PROFILE-CARD-SPAM-02: profile card send blocked"
+                    f" chat_id={chat_id}"
+                ),
+            )
+        except Exception:
+            pass
+        return
     try:
         from file_id_cache import file_id_cache as _fid  # type: ignore[import]
 
