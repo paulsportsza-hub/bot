@@ -172,6 +172,13 @@ pushed parts.
 - Approved factories enforce WAL mode, `busy_timeout=30000`, and
   `check_same_thread=False`.
 - Regression guard: `tests/contracts/test_db_connection.py`.
+- Full audit + migration: `FIX-DBLOCK-CONNECTION-FACTORY-AUDIT-01` (2026-05-04). Broader guard: `tests/contracts/test_db_connection_factory.py`.
+
+#### Crontab Stagger (W81-DBLOCK AC-4 — FIX-DBLOCK-CONNECTION-FACTORY-AUDIT-01, 2026-05-04)
+- Scrapers split into Group A (HWB, Supabets, Betway, Sportingbet) at :02/:12/... and Group B (GBets, WSB, Playabets, SuperSportBet) at :07/:17/...
+- Validation moved :03→:08. Settlement moved :30→:33.
+- Group-specific lock files: `/tmp/mzansi_scraper_A.lock` / `_B.lock` (groups run concurrently).
+- Manual run: `bash scrapers/cron_scrape.sh A` or `bash scrapers/cron_scrape.sh B`.
 
 #### Singleton Enforcement (RUNTIME-R1 — Permanent)
 - `_acquire_pid_lock()` must use `fcntl.flock(LOCK_EX | LOCK_NB)` on

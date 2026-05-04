@@ -206,7 +206,10 @@ class TestSelectTopTierPickDiversity:
             conn.__exit__ = MagicMock(return_value=False)
             conn.row_factory = None
 
-            def execute(sql, params):
+            def execute(sql, params=None):
+                if params is None:
+                    # PRAGMA statements (no params) — return a no-op cursor
+                    return MagicMock()
                 tier = params[0]
                 raw_rows = rows_by_tier.get(tier, [])
                 cursor = MagicMock()

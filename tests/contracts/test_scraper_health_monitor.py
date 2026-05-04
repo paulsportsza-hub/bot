@@ -436,7 +436,12 @@ def test_was_alerted_recently_false_after_old_fail():
 
 def test_run_checks_returns_required_keys():
     """run_checks result must contain the 5 required top-level keys."""
-    with patch("contracts.monitors.scraper_health.connect_odds_db") as mock_conn_fn:
+    with (
+        patch("contracts.monitors.scraper_health.connect_odds_db") as mock_conn_fn,
+        # Prevent live Notion API calls in publisher checks (causes 30s timeout)
+        patch("contracts.monitors.scraper_health._notion_token", return_value=""),
+        patch("contracts.monitors.scraper_health._moq_db_id", return_value=""),
+    ):
         conn = _fresh_conn()
         _seed_bookmakers(conn, age_min=30.0)
         # Seed other tables with minimal data
@@ -474,12 +479,17 @@ def test_run_checks_returns_required_keys():
     assert "overall_status" in result
     assert "checks" in result
     assert "summary" in result
-    assert len(result["checks"]) == 6
+    assert len(result["checks"]) == 8  # 7 original scraper + edge_movement_population
 
 
 def test_run_checks_summary_counts_match():
-    """summary pass+fail+skip must equal 9 (6 scraper + 3 publisher checks)."""
-    with patch("contracts.monitors.scraper_health.connect_odds_db") as mock_conn_fn:
+    """summary pass+fail+skip must equal 11 (8 scraper + 3 publisher checks)."""
+    with (
+        patch("contracts.monitors.scraper_health.connect_odds_db") as mock_conn_fn,
+        # Prevent live Notion API calls in publisher checks (causes 30s timeout)
+        patch("contracts.monitors.scraper_health._notion_token", return_value=""),
+        patch("contracts.monitors.scraper_health._moq_db_id", return_value=""),
+    ):
         conn = _fresh_conn()
         shm._migrate(conn)
         mock_conn_fn.return_value = conn
@@ -487,4 +497,4 @@ def test_run_checks_summary_counts_match():
         result = shm.run_checks(dry_run=True)
 
     s = result["summary"]
-    assert s["pass"] + s["fail"] + s["skip"] == 9
+    assert s["pass"] + s["fail"] + s["skip"] == 11  # 8 scraper + 3 publisher

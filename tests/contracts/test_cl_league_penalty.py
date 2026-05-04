@@ -1,12 +1,12 @@
 """Contract tests for BUILD-CL-LEAGUE-PENALTY-01 — Champions League composite score penalty.
 
 AC-1: LEAGUE_EFFICIENCY_PENALTY config exists in edge_config.py
-AC-2: champions_league penalty is 1.15 (13% composite reduction)
-AC-3: europa_league penalty is 1.10
+AC-2: champions_league penalty is 1.0 (disabled — CL showed +16.5% ROI in 60d audit)
+AC-3: europa_league penalty is 1.0 (disabled — same rationale as CL)
 AC-4: Non-CL leagues return 1.0 (no penalty)
 AC-5: league_penalty key present in calculate_composite_edge() result dict
-AC-6: CL composite is ~13% lower than EPL for same match
-AC-7: CL match with raw composite 33 falls below Silver threshold (35) after penalty
+AC-6: CL and EPL composites are equal (no penalty applied)
+AC-7: CL match with raw composite 33 falls below Silver threshold (35)
 
 Total: 7 tests.
 """
@@ -39,13 +39,13 @@ def test_league_efficiency_penalty_config_exists():
 # ---------------------------------------------------------------------------
 
 def test_champions_league_penalty_is_1_15():
-    """champions_league key has penalty of 1.15."""
+    """champions_league penalty is 1.0 (disabled — CL +16.5% ROI in 60d audit)."""
     import scrapers.edge.edge_config as cfg
     assert "champions_league" in cfg.LEAGUE_EFFICIENCY_PENALTY, (
         "champions_league key missing from LEAGUE_EFFICIENCY_PENALTY"
     )
-    assert cfg.LEAGUE_EFFICIENCY_PENALTY["champions_league"] == 1.15, (
-        f"Expected 1.15, got {cfg.LEAGUE_EFFICIENCY_PENALTY['champions_league']}"
+    assert cfg.LEAGUE_EFFICIENCY_PENALTY["champions_league"] == 1.0, (
+        f"Expected 1.0 (disabled), got {cfg.LEAGUE_EFFICIENCY_PENALTY['champions_league']}"
     )
 
 
@@ -54,13 +54,13 @@ def test_champions_league_penalty_is_1_15():
 # ---------------------------------------------------------------------------
 
 def test_europa_league_penalty_is_1_10():
-    """europa_league key has penalty of 1.10."""
+    """europa_league penalty is 1.0 (disabled — same rationale as CL)."""
     import scrapers.edge.edge_config as cfg
     assert "europa_league" in cfg.LEAGUE_EFFICIENCY_PENALTY, (
         "europa_league key missing from LEAGUE_EFFICIENCY_PENALTY"
     )
-    assert cfg.LEAGUE_EFFICIENCY_PENALTY["europa_league"] == 1.10, (
-        f"Expected 1.10, got {cfg.LEAGUE_EFFICIENCY_PENALTY['europa_league']}"
+    assert cfg.LEAGUE_EFFICIENCY_PENALTY["europa_league"] == 1.0, (
+        f"Expected 1.0 (disabled), got {cfg.LEAGUE_EFFICIENCY_PENALTY['europa_league']}"
     )
 
 
@@ -103,7 +103,7 @@ def _mock_calc_env(monkeypatch_dict, league, fake_composite=40.0):
 
 
 def test_league_penalty_applied_in_composite():
-    """CL composite is ~13% lower than EPL composite for same raw signal score."""
+    """CL and EPL composites are equal (penalty disabled — both 1.0)."""
     import scrapers.edge.edge_config as cfg
 
     # Simulate raw composite 40 for both leagues
@@ -116,12 +116,8 @@ def test_league_penalty_applied_in_composite():
     epl_composite = round(raw_composite / epl_penalty, 1)
 
     assert epl_composite == 40.0, f"EPL should have no penalty, got {epl_composite}"
-    assert cl_composite < epl_composite, "CL composite should be lower than EPL"
-
-    reduction_pct = (epl_composite - cl_composite) / epl_composite * 100
-    # 1.15 divisor → reduction is (1 - 1/1.15) ≈ 13.0%
-    assert 12.0 <= reduction_pct <= 14.0, (
-        f"Expected ~13% reduction, got {reduction_pct:.1f}%"
+    assert cl_composite == epl_composite, (
+        f"CL penalty is disabled; composites should be equal. CL={cl_composite}, EPL={epl_composite}"
     )
 
 

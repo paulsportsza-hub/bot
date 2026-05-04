@@ -58,6 +58,7 @@ import logging
 import os
 import pathlib
 import re
+import sqlite3
 import textwrap
 from hashlib import md5 as _md5
 from html import escape as h
