@@ -3,25 +3,11 @@
 Tests _check_disk_usage() and _check_memory_available() status thresholds.
 """
 import sys
-import types
 import unittest
 from unittest.mock import patch, MagicMock
 
-# Minimal stubs so health_checker imports without a live DB or scrapers package
-_db_stub = types.ModuleType('scrapers')
-_db_stub.db_connect = types.ModuleType('scrapers.db_connect')
-_db_stub.db_connect.connect_odds_db = lambda *a, **k: None
-_db_stub.db_connect.connect_db = lambda *a, **k: None
-sys.modules.setdefault('scrapers', _db_stub)
-sys.modules.setdefault('scrapers.db_connect', _db_stub.db_connect)
-
-_cron_stub = types.ModuleType('cron_window')
-_cron_stub.parse_multi = lambda *a: []
-_cron_stub.is_in_any_window = lambda *a: False
-_cron_stub.last_window_close = lambda *a: None
-sys.modules.setdefault('cron_window', _cron_stub)
-
-sys.path.insert(0, '/home/paulsportsza/scripts')
+sys.path.insert(0, '/home/paulsportsza')        # real scrapers package
+sys.path.insert(0, '/home/paulsportsza/scripts') # real cron_window + health_checker
 from health_checker import _check_disk_usage, _check_memory_available, check_source
 
 
