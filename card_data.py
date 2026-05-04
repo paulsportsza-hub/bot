@@ -1485,10 +1485,26 @@ def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
     sport = (sport or "soccer").lower()
     edge_tier = (edge_tier or "bronze").lower()
 
-    # bet_type is shaped like "1X2:home" / "1X2:away" / "1X2:draw"; outcome is the suffix.
-    outcome = "home"
-    if bet_type and ":" in bet_type:
-        outcome = bet_type.split(":", 1)[1].lower()
+    # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-3 fifth review
+    # (Finding 3): edge_results stores human-readable bet_type labels
+    # ("Home Win" / "Away Win" / "Draw") for live rows AND colon-shaped
+    # 1x2 markets ("1X2:home") for legacy. The pre-fix card_data
+    # synthesis fallback only handled the colon shape — Away Win rows
+    # silently mapped to outcome='home', built the canonical signal
+    # recompute for the wrong outcome, and rendered a verdict backing
+    # the WRONG team. Mirror bot.py:_load_tips_from_edge_results +
+    # scripts/rebuild_narrative_cache_for_brief.py canonical mapping.
+    bt_clean = (bet_type or "").strip()
+    if bt_clean == "Home Win" or bt_clean == "home":
+        outcome = "home"
+    elif bt_clean == "Away Win" or bt_clean == "away":
+        outcome = "away"
+    elif bt_clean == "Draw" or bt_clean == "draw":
+        outcome = "draw"
+    elif ":" in bt_clean:
+        outcome = bt_clean.split(":", 1)[1].lower() or "home"
+    else:
+        outcome = "home"
     if outcome not in ("home", "away", "draw"):
         outcome = "home"
 

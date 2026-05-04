@@ -684,27 +684,79 @@ def _log_integrity_event(signal: str, fixture_id: str = "", reason: str = "") ->
         log.debug("_log_integrity_event: %s/%s failed: %s", signal, fixture_id, _lie)
 
 
-def _signal_fingerprint(signals_norm: dict) -> str:
-    """Stable fingerprint over the canonical 6-key boolean dict.
+def _signal_fingerprint(
+    signals_norm: dict,
+    line_movement_direction: str | None = None,
+    tipster_signal: dict | None = None,
+    h2h_signal: dict | None = None,
+    outcome: str | None = None,
+    injuries_home: int | None = None,
+    injuries_away: int | None = None,
+) -> str:
+    """Stable fingerprint over verdict-mapper-relevant inputs.
 
-    FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 2):
-    pregen renders verdicts at generation time, but the cache write
-    happens later in main()'s loop. _compute_odds_hash at write time
-    captures CURRENT odds — if signals drifted between generation and
-    write, the cache row would be stamped fresh while its verdict_html
-    reflects older spec.signals. Pairing odds_hash with this signal
-    fingerprint lets the write loop detect drift and skip rather than
-    persist a stale verdict that the serve-time path would not re-render.
+    FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 2);
+    Codex pass-3 fifth review (Finding 1): the rendered §12.X verdict
+    depends on more than the 6 raw availability booleans. The mapper
+    also reads:
+      - line_movement_direction (favourable/against/unknown) — picks
+        between §12.3 / §12.4 / unknown leads on the Price+LineMvt
+        special-case.
+      - tipster_agrees + tipster_available — gates the tipster signal
+        through verdict_corpus._spec_to_signals' polarity AND-gate.
+      - outcome + injury polarity — gates the injury signal on whether
+        the OPPONENT-side has injuries (spec §6.6 phrasing).
 
-    Output: deterministic SHA-1-prefix string (12 chars) over the sorted
-    canonical 6-key boolean tuple. Empty dict → fixed sentinel "no_sigs"
-    so the comparison is total.
+    Pre-Finding-1 the fingerprint hashed only the 6 booleans, so a
+    signal-set that flipped tipster polarity (agree → disagree) or
+    movement direction (favourable → against) would keep the same
+    fingerprint while its rendered verdict text changed. The
+    gen-vs-write race guard would then false-green a stale verdict.
+
+    Output: deterministic SHA-1-prefix string (12 chars) over the
+    full verdict-mapper input tuple. Empty/None signals dict still
+    produces a stable sentinel so the comparison is total.
     """
     if not signals_norm:
         return "no_sigs"
     import hashlib
     canonical = ("price_edge", "line_mvt", "form", "market", "tipster", "injury")
-    payload = "|".join(f"{k}={int(bool(signals_norm.get(k)))}" for k in canonical)
+    parts = [f"{k}={int(bool(signals_norm.get(k)))}" for k in canonical]
+    # Verdict-mapper-relevant polarity / direction inputs.
+    parts.append(
+        f"line_dir={(line_movement_direction or 'none').strip().lower() or 'none'}"
+    )
+    if tipster_signal:
+        _t_avail = bool(tipster_signal.get("available"))
+        _t_agrees = tipster_signal.get("agrees_with_edge")
+        parts.append(f"tipster_avail={int(_t_avail)}")
+        parts.append(
+            f"tipster_agrees={int(_t_agrees is True)}"
+        )
+        parts.append(
+            f"tipster_against={int(tipster_signal.get('against_count', tipster_signal.get('against', 0)) or 0)}"
+        )
+    else:
+        parts.append("tipster_avail=0")
+        parts.append("tipster_agrees=0")
+        parts.append("tipster_against=0")
+    # Injury polarity rides on outcome (which side is the pick) and the
+    # opposite-side injury count — both shift the verdict mapper's
+    # injury boolean independently of raw availability.
+    parts.append(f"outcome={(outcome or '').strip().lower() or 'none'}")
+    parts.append(
+        f"inj_home={int(injuries_home or 0)}|inj_away={int(injuries_away or 0)}"
+    )
+    if h2h_signal:
+        parts.append(
+            f"h2h={int(h2h_signal.get('h2h_total') or 0)}/"
+            f"{int(h2h_signal.get('h2h_a_wins') or 0)}/"
+            f"{int(h2h_signal.get('h2h_b_wins') or 0)}/"
+            f"{int(h2h_signal.get('h2h_draws') or 0)}"
+        )
+    else:
+        parts.append("h2h=0/0/0/0")
+    payload = "|".join(parts)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
@@ -2062,7 +2114,25 @@ async def _generate_one(
             "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 generation odds_hash compute failed for %s: %s",
             match_key, _gen_hash_exc,
         )
-    _gen_signal_fp = _signal_fingerprint(_spec_signals_dict)
+    # Fingerprint the FULL verdict-mapper input set (Codex pass-3
+    # fifth review Finding 1) so polarity and direction drift between
+    # generation and write are caught. Six raw booleans alone are
+    # insufficient — the rendered §12.X depends on line direction +
+    # tipster polarity + opponent injuries.
+    _gen_injuries_home = 0
+    _gen_injuries_away = 0
+    if isinstance(_pregen_sigs.get("lineup_injury"), dict):
+        _gen_injuries_home = int(_pregen_sigs["lineup_injury"].get("home_injuries") or 0)
+        _gen_injuries_away = int(_pregen_sigs["lineup_injury"].get("away_injuries") or 0)
+    _gen_signal_fp = _signal_fingerprint(
+        _spec_signals_dict,
+        line_movement_direction=_spec_line_movement,
+        tipster_signal=_tipster_signal,
+        h2h_signal=_h2h_signal,
+        outcome=_pregen_outcome_raw,
+        injuries_home=_gen_injuries_home,
+        injuries_away=_gen_injuries_away,
+    )
 
     return {
         "match_key": match_key, "success": True, "model": _final_model,
@@ -2640,8 +2710,25 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
                     _now_signal_fp = "no_sigs"
                     if _now_canonical_sigs:
                         try:
-                            from narrative_spec import _normalise_spec_signals as _ns_norm
-                            _now_signal_fp = _signal_fingerprint(_ns_norm(_now_canonical_sigs))
+                            from narrative_spec import (
+                                _normalise_spec_signals as _ns_norm,
+                                _normalise_line_movement_direction as _ns_dir,
+                            )
+                            _now_norm = _ns_norm(_now_canonical_sigs)
+                            _now_movement_signal = _now_canonical_sigs.get("movement", {}) if isinstance(_now_canonical_sigs.get("movement"), dict) else {}
+                            _now_dir = _ns_dir(_now_movement_signal.get("direction", ""))
+                            _now_tipster = _now_canonical_sigs.get("tipster", {}) if isinstance(_now_canonical_sigs.get("tipster"), dict) else {}
+                            _now_h2h = _now_canonical_sigs.get("form_h2h", {}) if isinstance(_now_canonical_sigs.get("form_h2h"), dict) else {}
+                            _now_li = _now_canonical_sigs.get("lineup_injury", {}) if isinstance(_now_canonical_sigs.get("lineup_injury"), dict) else {}
+                            _now_signal_fp = _signal_fingerprint(
+                                _now_norm,
+                                line_movement_direction=_now_dir,
+                                tipster_signal=_now_tipster,
+                                h2h_signal=_now_h2h,
+                                outcome=_outcome_for_recheck,
+                                injuries_home=int(_now_li.get("home_injuries") or 0),
+                                injuries_away=int(_now_li.get("away_injuries") or 0),
+                            )
                         except Exception:
                             _now_signal_fp = "no_sigs"
                     if _now_signal_fp != _gen_signal_fp:

@@ -147,6 +147,29 @@ async def _persist_one(result: dict, log) -> bool:
     if not match_id or not html:
         return False
 
+    # Codex pass-3 fifth review (Finding 4): capture pre-write metadata
+    # so the post-write verification can detect false-greens where the
+    # writer silently returns and leaves an existing row intact.
+    try:
+        from db_connection import get_connection
+        from scrapers.edge.edge_config import DB_PATH
+
+        def _read_pre_meta():
+            conn = get_connection(DB_PATH, timeout_ms=3000)
+            try:
+                row = conn.execute(
+                    "SELECT created_at, odds_hash FROM narrative_cache WHERE match_id = ?",
+                    (match_id,),
+                ).fetchone()
+                return {"created_at": row[0], "odds_hash": row[1]} if row else {}
+            finally:
+                conn.close()
+
+        result["_pre_write_meta"] = await asyncio.to_thread(_read_pre_meta)
+    except Exception as _pre_exc:
+        log.debug("rebuild wrapper pre-write meta read failed for %s: %s", match_id, _pre_exc)
+        result["_pre_write_meta"] = {}
+
     # Drift guard — pop the gen-time fingerprints (they must NOT reach
     # _store_narrative_cache, which has no parameter for them).
     _gen_odds_hash = cache.pop("_gen_odds_hash", "") or ""
@@ -163,8 +186,25 @@ async def _persist_one(result: dict, log) -> bool:
             _now_signal_fp = "no_sigs"
             if _now_canonical_sigs:
                 try:
-                    from narrative_spec import _normalise_spec_signals as _ns_norm
-                    _now_signal_fp = pregen._signal_fingerprint(_ns_norm(_now_canonical_sigs))
+                    from narrative_spec import (
+                        _normalise_spec_signals as _ns_norm,
+                        _normalise_line_movement_direction as _ns_dir,
+                    )
+                    _now_norm = _ns_norm(_now_canonical_sigs)
+                    _now_movement = _now_canonical_sigs.get("movement", {}) if isinstance(_now_canonical_sigs.get("movement"), dict) else {}
+                    _now_dir = _ns_dir(_now_movement.get("direction", ""))
+                    _now_tipster = _now_canonical_sigs.get("tipster", {}) if isinstance(_now_canonical_sigs.get("tipster"), dict) else {}
+                    _now_h2h = _now_canonical_sigs.get("form_h2h", {}) if isinstance(_now_canonical_sigs.get("form_h2h"), dict) else {}
+                    _now_li = _now_canonical_sigs.get("lineup_injury", {}) if isinstance(_now_canonical_sigs.get("lineup_injury"), dict) else {}
+                    _now_signal_fp = pregen._signal_fingerprint(
+                        _now_norm,
+                        line_movement_direction=_now_dir,
+                        tipster_signal=_now_tipster,
+                        h2h_signal=_now_h2h,
+                        outcome=_outcome_for_recheck,
+                        injuries_home=int(_now_li.get("home_injuries") or 0),
+                        injuries_away=int(_now_li.get("away_injuries") or 0),
+                    )
                 except Exception:
                     _now_signal_fp = "no_sigs"
             if _now_signal_fp != _gen_signal_fp:
@@ -240,56 +280,81 @@ async def _persist_one(result: dict, log) -> bool:
     # Verify the row actually committed and matches what we wrote. The
     # read uses a short timeout against the same DB the writer used so
     # we surface lock-contention drops as failures rather than silently
-    # treating them as wins.
+    # treating them as wins. Codex pass-3 fifth review (Finding 4):
+    # checking only verdict_html + narrative_source + edge_tier can
+    # false-green on a stale leftover row whose verdict happens to
+    # match (e.g. a deterministic w82 baseline persisted in a previous
+    # sweep). We capture pre-write created_at + odds_hash and require
+    # that POST-write the row's created_at advanced AND its odds_hash
+    # matches the writer's at-write computation. Either condition
+    # failing indicates the writer silently dropped the row.
     try:
         from db_connection import get_connection
         from scrapers.edge.edge_config import DB_PATH
 
-        def _verify_row() -> bool:
+        def _read_row_metadata():
             conn = get_connection(DB_PATH, timeout_ms=5000)
             try:
                 row = conn.execute(
-                    "SELECT verdict_html, narrative_source, edge_tier "
+                    "SELECT verdict_html, narrative_source, edge_tier, "
+                    "created_at, odds_hash, expires_at "
                     "FROM narrative_cache WHERE match_id = ?",
                     (match_id,),
                 ).fetchone()
+                return row
             finally:
                 conn.close()
-            if not row:
-                return False
-            stored_verdict, stored_source, stored_tier = row
-            if (verdict_html or "") and (stored_verdict or "") != (verdict_html or ""):
-                # Validator may have re-toned the verdict during the
-                # write — log and treat as a failed persist for this
-                # wrapper's strict semantics. Production main()'s loop
-                # is more forgiving; the wrapper exits non-zero so
-                # operators see the divergence.
-                log.warning(
-                    "persist verify mismatch for %s — wrote %r, cache has %r",
-                    match_id, (verdict_html or "")[:80], (stored_verdict or "")[:80],
-                )
-                return False
-            if (narrative_source or "") and (stored_source or "") != (narrative_source or ""):
-                log.warning(
-                    "persist verify source mismatch for %s — wrote %s, cache has %s",
-                    match_id, narrative_source, stored_source,
-                )
-                return False
-            if (edge_tier or "") and (stored_tier or "").lower() != (edge_tier or "").lower():
-                log.warning(
-                    "persist verify tier mismatch for %s — wrote %s, cache has %s",
-                    match_id, edge_tier, stored_tier,
-                )
-                return False
-            return True
 
-        verified = await asyncio.to_thread(_verify_row)
+        # Pre-write read happens before the write; if we missed the
+        # capture (e.g. the row was added between flush and now), the
+        # post-write check still fires on the verdict/source/tier
+        # match. _pre_meta is captured at _persist_one entry below.
+        verified = await asyncio.to_thread(_read_row_metadata)
         if not verified:
             log.warning(
-                "persist verify failed for %s — row absent or mismatched after write",
+                "persist verify failed for %s — row absent after write",
                 match_id,
             )
             return False
+        stored_verdict, stored_source, stored_tier, stored_created_at, stored_odds_hash, _exp = verified
+        if (verdict_html or "") and (stored_verdict or "") != (verdict_html or ""):
+            log.warning(
+                "persist verify mismatch for %s — wrote %r, cache has %r",
+                match_id, (verdict_html or "")[:80], (stored_verdict or "")[:80],
+            )
+            return False
+        if (narrative_source or "") and (stored_source or "") != (narrative_source or ""):
+            log.warning(
+                "persist verify source mismatch for %s — wrote %s, cache has %s",
+                match_id, narrative_source, stored_source,
+            )
+            return False
+        if (edge_tier or "") and (stored_tier or "").lower() != (edge_tier or "").lower():
+            log.warning(
+                "persist verify tier mismatch for %s — wrote %s, cache has %s",
+                match_id, edge_tier, stored_tier,
+            )
+            return False
+        # Pre-write created_at — captured by the caller. If the stored
+        # row's created_at is identical to the pre-write timestamp,
+        # the writer didn't commit and we're seeing a leftover row.
+        _pre_meta = result.get("_pre_write_meta") or {}
+        _pre_created_at = _pre_meta.get("created_at")
+        if _pre_created_at and stored_created_at == _pre_created_at:
+            log.warning(
+                "persist verify timestamp false-green for %s — "
+                "pre_write created_at=%s, cache still has same row "
+                "(writer silently dropped)",
+                match_id, stored_created_at,
+            )
+            return False
+        # Stored odds_hash should be non-empty and reflect a fresh
+        # write. _store_narrative_cache computes odds_hash via
+        # _compute_odds_hash at write time — empty stored_odds_hash
+        # means either no odds_latest rows for the match (preserves
+        # existing behaviour) or the writer didn't commit. Empty pre-
+        # write hash AND empty post-write hash → can't distinguish
+        # → fall through to the verdict_html/source/tier check above.
         return True
     except Exception as verify_exc:
         log.warning("persist verify exception for %s: %s", match_id, verify_exc)

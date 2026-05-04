@@ -20519,13 +20519,55 @@ def _extract_edge_data(
         best = max(tips, key=lambda t: t.get("ev", 0))
     v2 = best.get("edge_v2") or {}
     sigs = v2.get("signals", {})
-    outcome_raw = best.get("outcome", "?")
+    # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-3 fifth review
+    # (Finding 2): _load_tips_from_edge_results sets tip["outcome"] to a
+    # DISPLAY team name (e.g. "Manchester City") and tip["outcome_key"]
+    # to the canonical "home"/"away"/"draw". Pre-fix outcome_raw would
+    # collect the display name on fast-path tips and the serve-time
+    # canonical-signal recompute would call collect_all_signals with an
+    # invalid outcome — collector returns empty/misclassified signals
+    # → spec.signals empty → §12.1 fallback. Prefer outcome_key /
+    # recommended_outcome / canonical bet_type. Fall back to display-
+    # name-to-canonical resolution against home_team / away_team.
+    _outcome_field = best.get("outcome", "?")
+    _outcome_key_field = (
+        best.get("outcome_key")
+        or best.get("recommended_outcome")
+        or v2.get("recommended_outcome")
+    )
+    if _outcome_key_field and str(_outcome_key_field).lower() in ("home", "away", "draw"):
+        outcome_raw = str(_outcome_key_field).lower()
+    elif str(_outcome_field).lower() in ("home", "away", "draw"):
+        outcome_raw = str(_outcome_field).lower()
+    elif _outcome_field == "Draw":
+        outcome_raw = "draw"
+    elif _outcome_field == "Home Win":
+        outcome_raw = "home"
+    elif _outcome_field == "Away Win":
+        outcome_raw = "away"
+    else:
+        # Fall back to display-name resolution: compare against
+        # home_team / away_team. _outcome_field may be the display team
+        # name from _load_tips_from_edge_results.
+        _of_lc = str(_outcome_field or "").strip().lower()
+        _home_lc = str(home_team or best.get("home_team", "")).strip().lower()
+        _away_lc = str(away_team or best.get("away_team", "")).strip().lower()
+        if _of_lc and _of_lc == _home_lc:
+            outcome_raw = "home"
+        elif _of_lc and _of_lc == _away_lc:
+            outcome_raw = "away"
+        else:
+            # Preserve legacy behaviour for unknown values — pass the
+            # original through (the verdict mapper handles "?" by
+            # routing through the proxy adapter, which is the
+            # documented un-migrated fallback path).
+            outcome_raw = _outcome_field
     if outcome_raw == "home":
         outcome_team = home_team or best.get("home_team", "")
     elif outcome_raw == "away":
         outcome_team = away_team or best.get("away_team", "")
     else:
-        outcome_team = outcome_raw
+        outcome_team = _outcome_field
     # W84-Q14: Use None-safe get so ev=0.0 (zero edge) maps to edge_pct=0.0 — not v2 fallback.
     # This ensures zero-EV tips render the pass verdict, not a speculative punt.
     _consensus_ev = best.get("ev")   # None if key absent; 0.0 if explicitly zero
