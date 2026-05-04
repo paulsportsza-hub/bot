@@ -45,10 +45,15 @@ class TestSourceMarker:
             'Guard must check template == "profile_home.html"'
         )
 
-    def test_guard_checks_chat_id_lte_zero(self):
+    def test_guard_checks_chat_id_is_dm(self):
+        # Updated by FIX-PROFILE-CARD-SPAM-03: the guard now requires a
+        # positive int chat_id rather than the older `chat_id <= 0` form, so
+        # string @channel handles also fail-closed. Either form satisfies
+        # the FIX-02 invariant: profile_home must reach DMs only.
         src = (BOT_DIR / "card_sender.py").read_text(encoding="utf-8")
-        assert "chat_id <= 0" in src, (
-            "Guard must check chat_id <= 0 in card_sender.py"
+        assert "chat_id <= 0" in src or "chat_id > 0" in src, (
+            "Guard must check that chat_id identifies a DM (positive int) in"
+            " card_sender.py"
         )
 
 

@@ -340,6 +340,7 @@ def render_card_sync(
     *,
     cache_ttl: int | None = None,
     background: bool = False,
+    chat_id_hint: int | None = None,
 ) -> bytes:
     """Render a card synchronously using the persistent browser pool.
 
@@ -349,9 +350,36 @@ def render_card_sync(
     Pass background=True for precompute/pregen callers so they use the bg
     semaphore lane (1 slot) and cannot starve user-tap renders (3 slots).
 
+    Pass chat_id_hint to enable a destination-aware refusal at the lowest
+    render layer (FIX-PROFILE-CARD-SPAM-03). When the template is
+    ``profile_home.html`` and ``chat_id_hint <= 0`` (group / channel /
+    unknown), the render is refused with a ``RuntimeError`` so no profile
+    PNG bytes can ever reach a non-DM chat — even if a future caller skips
+    ``card_sender.send_card_or_fallback``. ``chat_id_hint=None`` preserves
+    the original (unhinted) behaviour for QA gallery / pregen callers that
+    don't have a chat target.
+
     Results are cached in card_cache (in-memory LRU). Pass cache_ttl to
     override the default TTL (300s on-demand / 900s precomputed).
     """
+    # FIX-PROFILE-CARD-SPAM-03: render-layer absolute ban for profile cards
+    # destined for non-DM chats. Raised before any browser work, before any
+    # cache lookup, and before any byte output exists — so there is no PNG
+    # for a downstream send to leak.
+    if (
+        template_name == "profile_home.html"
+        and chat_id_hint is not None
+        and chat_id_hint <= 0
+    ):
+        log.warning(
+            "FIX-PROFILE-CARD-SPAM-03: profile_home.html render refused chat_id=%s",
+            chat_id_hint,
+        )
+        raise RuntimeError(
+            "FIX-PROFILE-CARD-SPAM-03: profile_home.html render refused for "
+            f"non-DM chat_id={chat_id_hint}"
+        )
+
     from card_cache import card_cache as _cc
 
     # Cache key includes template content version so HTML edits self-bust the

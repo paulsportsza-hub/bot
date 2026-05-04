@@ -21,6 +21,10 @@ from telegram import InputMediaPhoto
 
 from card_renderer import build_cache_key as _renderer_build_cache_key
 from card_renderer import render_card_sync
+from card_send_context import (
+    reset_active_template as _reset_active_template,
+    set_active_template as _set_active_template,
+)
 
 try:
     import sentry_sdk as _sentry
@@ -82,7 +86,16 @@ async def send_card_or_fallback(
         When None, render_card_sync's default (480) applies. Pass 540 for
         match_detail.html to produce 1080px output; other templates keep 480.
     """
-    if template == "profile_home.html" and chat_id <= 0:
+    # FIX-PROFILE-CARD-SPAM-02 + 03: profile cards may only go to DMs. A DM
+    # chat_id is always a positive int. Anything else (string @channel
+    # usernames, groups, channels, supergroups, zero) is refused. The bool
+    # exclusion guards against True/False passing the int check.
+    _is_profile_dm = (
+        isinstance(chat_id, int)
+        and not isinstance(chat_id, bool)
+        and chat_id > 0
+    )
+    if template == "profile_home.html" and not _is_profile_dm:
         log.warning(
             "FIX-PROFILE-CARD-SPAM-02: profile card send to non-DM blocked chat_id=%s",
             chat_id,
@@ -98,6 +111,12 @@ async def send_card_or_fallback(
         except Exception:
             pass
         return
+
+    # FIX-PROFILE-CARD-SPAM-03: publish the active template so the Telegram-API
+    # layer guard installed in bot._install_send_photo_dm_guard can recognise
+    # raw send_photo calls that originated from this code path. The token is
+    # always reset in the finally block.
+    _ctx_token = _set_active_template(template)
     try:
         from file_id_cache import file_id_cache as _fid  # type: ignore[import]
 
@@ -134,10 +153,18 @@ async def send_card_or_fallback(
             # fall through to full render
 
         # ── Full render path ──────────────────────────────────────────────────
+        # FIX-PROFILE-CARD-SPAM-03: pass chat_id_hint so the renderer refuses
+        # profile_home.html when the destination chat is non-DM.
         if width is None:
-            png = await asyncio.to_thread(render_card_sync, template, data)
+            png = await asyncio.to_thread(
+                render_card_sync, template, data,
+                chat_id_hint=chat_id,
+            )
         else:
-            png = await asyncio.to_thread(render_card_sync, template, data, width)
+            png = await asyncio.to_thread(
+                render_card_sync, template, data, width,
+                chat_id_hint=chat_id,
+            )
 
         if message_to_edit and message_to_edit.photo:
             try:
@@ -178,3 +205,5 @@ async def send_card_or_fallback(
         log.error("card_sender: render failed for %s: %s", template, exc, exc_info=True)
         if _sentry:
             _sentry.capture_exception(exc)
+    finally:
+        _reset_active_template(_ctx_token)

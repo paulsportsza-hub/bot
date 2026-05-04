@@ -30918,11 +30918,150 @@ def _seconds_until_next_hour() -> float:
     return max(3600 - seconds_past, 60)  # at least 60s buffer
 
 
+def _install_send_photo_dm_guard(bot_instance) -> None:
+    """FIX-PROFILE-CARD-SPAM-03: Telegram-API-layer DM guard for profile cards.
+
+    Wraps ``send_photo`` and ``send_document`` on the bot so that any send
+    tagged as a profile card by the ``card_send_context`` ContextVar is
+    refused when the destination ``chat_id`` is non-DM (``<= 0``). The
+    wrapper still allows every non-profile send through unchanged. EdgeOps
+    is alerted on every block.
+
+    This is the third defensive layer alongside FIX-PROFILE-CARD-SPAM-01
+    (handler-level chat_id guards) and FIX-PROFILE-CARD-SPAM-02 (the
+    ``send_card_or_fallback`` early return). It closes any future code path
+    that issues a raw ``bot.send_photo`` for a profile-rendered PNG without
+    going through ``card_sender.send_card_or_fallback`` — provided the
+    caller used ``card_sender`` to drive the render.
+
+    PTB v20+ ``Bot`` and ``ExtBot`` use ``__slots__`` so instance-level
+    attribute assignment raises ``AttributeError`` ("Attribute `send_photo`
+    of class `ExtBot` can't be set"). On those types we patch the class
+    instead. For test fixtures (``MagicMock``) instance-level assignment
+    works and is preferred so we never pollute the ``MagicMock`` class.
+
+    Idempotent: re-running on an already-guarded class or instance is a
+    no-op.
+    """
+    from card_send_context import get_active_template as _get_active_template
+
+    _bot_cls = type(bot_instance)
+
+    # Exact-True sentinel so MagicMock instances (whose attribute access
+    # auto-creates truthy child mocks) do not short-circuit the install.
+    # We check both the class (production class-level patch) and the
+    # instance (test instance-level patch).
+    if getattr(_bot_cls, "_fix_profile_card_spam_03_guard_installed", None) is True:
+        return
+    if getattr(bot_instance, "_fix_profile_card_spam_03_guard_installed", None) is True:
+        return
+
+    def _make_guard(original, label):
+        """Build a wrapper that handles both class- and instance-patch modes.
+
+        When patched onto a class, the wrapper is invoked as a method, so the
+        first positional arg is ``self``. When patched onto an instance,
+        ``self`` is not auto-passed. We detect by checking whether ``args[0]``
+        is an instance of the bot class.
+        """
+        async def _guarded(*args, **kwargs):
+            if args and isinstance(args[0], _bot_cls):
+                _self = args[0]
+                rest_args = args[1:]
+            else:
+                _self = bot_instance
+                rest_args = args
+            chat_id = kwargs.get("chat_id")
+            if chat_id is None and rest_args:
+                chat_id = rest_args[0]
+            active_template = _get_active_template()
+            # Fail-closed for profile_home: a DM is the ONLY allowed
+            # destination, and a DM chat_id is always a positive int. Non-int
+            # forms (string @channel usernames, public-channel handles) and
+            # non-positive ints (groups, channels, supergroups, zero) are
+            # blocked. The `bool` exclusion guards against `True`/`False`
+            # passing as ints.
+            _is_dm_chat_id = (
+                isinstance(chat_id, int)
+                and not isinstance(chat_id, bool)
+                and chat_id > 0
+            )
+            if (
+                active_template == "profile_home.html"
+                and not _is_dm_chat_id
+            ):
+                log.warning(
+                    "FIX-PROFILE-CARD-SPAM-03: Telegram-API-layer block %s"
+                    " template=%s chat_id=%s",
+                    label,
+                    active_template,
+                    chat_id,
+                )
+                try:
+                    await _self.send_message(
+                        chat_id=_EDGEOPS_CHAT_ID,
+                        text=(
+                            f"⚠️ FIX-PROFILE-CARD-SPAM-03: {label} blocked at"
+                            f" Telegram-API layer chat_id={chat_id}"
+                        ),
+                    )
+                except Exception:
+                    pass
+                return None
+            return await original(*args, **kwargs)
+        return _guarded
+
+    # Try instance-level first (works on plain classes / MagicMock fixtures).
+    try:
+        _guarded_send_photo_inst = _make_guard(
+            bot_instance.send_photo, "send_photo",
+        )
+        _guarded_send_document_inst = _make_guard(
+            bot_instance.send_document, "send_document",
+        )
+        bot_instance.send_photo = _guarded_send_photo_inst
+        bot_instance.send_document = _guarded_send_document_inst
+        bot_instance._fix_profile_card_spam_03_guard_installed = True
+        log.info(
+            "FIX-PROFILE-CARD-SPAM-03: instance-level guard installed on %s",
+            _bot_cls.__name__,
+        )
+        return
+    except (AttributeError, TypeError) as _inst_exc:
+        log.info(
+            "FIX-PROFILE-CARD-SPAM-03: instance assignment refused on %s (%s)"
+            " — falling back to class-level patch",
+            _bot_cls.__name__,
+            _inst_exc,
+        )
+
+    # Fall back to class-level patching (PTB Bot / ExtBot use __slots__).
+    _guarded_send_photo_cls = _make_guard(_bot_cls.send_photo, "send_photo")
+    _guarded_send_document_cls = _make_guard(_bot_cls.send_document, "send_document")
+    _bot_cls.send_photo = _guarded_send_photo_cls
+    _bot_cls.send_document = _guarded_send_document_cls
+    _bot_cls._fix_profile_card_spam_03_guard_installed = True
+    log.info(
+        "FIX-PROFILE-CARD-SPAM-03: class-level guard installed on %s",
+        _bot_cls.__name__,
+    )
+
+
 async def _post_init(app_instance) -> None:
     """Run on bot startup: init DB, publish guides, register commands, schedule jobs."""
     global _hot_tips_fetch_lock, _g_bot
     _hot_tips_fetch_lock = asyncio.Lock()  # W84-P1: must be created inside async context
     _g_bot = app_instance.bot  # BUILD-WAVE2-ONBOARDING-01: bot ref for ob handlers without ctx
+    # FIX-PROFILE-CARD-SPAM-03: install the Telegram-API-layer DM guard before
+    # any handler can fire — must run before await db.init_db() so even
+    # startup-time profile sends are protected.
+    try:
+        _install_send_photo_dm_guard(app_instance.bot)
+    except Exception as _spam03_exc:
+        log.warning(
+            "FIX-PROFILE-CARD-SPAM-03: failed to install send_photo guard: %s",
+            _spam03_exc,
+        )
     await db.init_db()
 
     try:
