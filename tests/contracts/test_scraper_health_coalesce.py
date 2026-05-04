@@ -363,3 +363,52 @@ class TestMigrateAndCommitLockTolerance:
             stack.enter_context(patch("contracts.monitors.scraper_health.DBLOCK_ALERT_FILE", alert_file))
             # Should not raise even if _migrate and all checks are locked
             run_checks(dry_run=False)
+
+    def test_commit_lock_does_not_crash_run_checks(self, tmp_path):
+        """conn.commit() OperationalError must not abort run_checks."""
+        alert_file = str(tmp_path / "last_alert.txt")
+        alerts_sent: list[str] = []
+
+        def _send(msg, dry_run=False):
+            alerts_sent.append(msg)
+
+        def _genuine_stale(conn, run_ts):
+            return {
+                "check": "edge_pipeline_freshness",
+                "severity": "P0",
+                "status": "FAIL",
+                "detail": "Last edge recommended 200min ago",
+            }
+
+        def _pass(conn, run_ts):
+            return {"check": "bookmaker_odds_freshness", "severity": "P0", "status": "PASS", "detail": "ok"}
+
+        patches = {
+            "contracts.monitors.scraper_health._check_bookmaker_odds_freshness": _pass,
+            "contracts.monitors.scraper_health._check_scrape_run_continuity": _pass,
+            "contracts.monitors.scraper_health._check_scrape_run_errors": _pass,
+            "contracts.monitors.scraper_health._check_sharp_odds_freshness": _pass,
+            "contracts.monitors.scraper_health._check_fpl_injuries_freshness": _pass,
+            "contracts.monitors.scraper_health._check_edge_pipeline_freshness": _genuine_stale,
+            "contracts.monitors.scraper_health._check_publisher_log_freshness": _pub_pass_fn("publisher_log_freshness"),
+            "contracts.monitors.scraper_health._check_tg_community_asset_null": _pub_pass_fn("tg_community_asset_null"),
+            "contracts.monitors.scraper_health._check_autogen_image_log_freshness": _pub_pass_fn("autogen_image_log_freshness", "P1"),
+        }
+
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchone.return_value = None
+        # migrate succeeds, but commit raises
+        mock_conn.commit.side_effect = sqlite3.OperationalError("database is locked")
+
+        with contextlib.ExitStack() as stack:
+            for target, new_fn in patches.items():
+                stack.enter_context(patch(target, new=new_fn))
+            mock_db = stack.enter_context(patch("contracts.monitors.scraper_health.connect_odds_db"))
+            mock_db.return_value = mock_conn
+            stack.enter_context(patch("contracts.monitors.scraper_health._send_edgeops_alert", side_effect=_send))
+            stack.enter_context(patch("contracts.monitors.scraper_health.DBLOCK_ALERT_FILE", alert_file))
+            result = run_checks(dry_run=False)
+
+        # run_checks must not raise; alert for the genuine P0 must still fire
+        assert result is not None
+        assert len(alerts_sent) == 1
