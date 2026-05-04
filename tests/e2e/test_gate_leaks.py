@@ -76,7 +76,7 @@ class TestTierGateMatrix:
             # Bronze: complex gating
             ("bronze", "diamond", "locked"),
             ("bronze", "gold", "blurred"),
-            ("bronze", "silver", "partial"),
+            ("bronze", "silver", "full"),   # FIX-BRONZE-SILVER-ACCESS-01
             ("bronze", "bronze", "full"),
         ],
     )
@@ -110,8 +110,8 @@ class TestBronzeNeverSeesPaidData:
         # Blurred card shows return but not specific odds
         assert "@ 2.50" not in text
 
-    def test_bronze_silver_partial_no_bookmaker_link(self):
-        """Bronze viewing Silver edge: PARTIAL — no bookmaker deep link (TIER-GATE-IMPL-01)."""
+    def test_bronze_silver_full_has_bookmaker_link(self):
+        """FIX-BRONZE-SILVER-ACCESS-01: bronze→silver is FULL, shows bookmaker deep link."""
         from bot import _build_game_buttons
 
         tip = _make_tip("silver", odds=3.20)
@@ -124,10 +124,10 @@ class TestBronzeNeverSeesPaidData:
             edge_tier="silver",
             selected_outcome=tip["outcome"],
         )
-        # PARTIAL access → View Plans button, NOT bookmaker link
+        # FULL access → bookmaker CTA, NOT View Plans
         primary = rows[0][0]
-        assert "View Plans" in primary.text
-        assert primary.url is None  # No deep link
+        assert "View Plans" not in primary.text
+        assert primary.url is not None  # Deep link present
 
     def test_bronze_multi_page_no_leak(self):
         """Bronze can paginate without seeing locked data."""

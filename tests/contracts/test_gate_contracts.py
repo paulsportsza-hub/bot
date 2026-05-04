@@ -24,7 +24,7 @@ VALID_ACCESS_LEVELS = {"full", "partial", "blurred", "locked"}
 GATE_MATRIX = [
     # (user_tier, edge_tier, expected_access)
     ("bronze",  "bronze",  "full"),
-    ("bronze",  "silver",  "partial"),
+    ("bronze",  "silver",  "full"),   # FIX-BRONZE-SILVER-ACCESS-01
     ("bronze",  "gold",    "blurred"),
     ("bronze",  "diamond", "locked"),
     ("gold",    "bronze",  "full"),

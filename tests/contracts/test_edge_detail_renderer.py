@@ -270,22 +270,16 @@ class TestGating:
         assert "available on upgrade" in html
         assert "/subscribe" in html
 
-    def test_partial_return_visible_no_odds(self):
-        """GATE_MATRIX PARTIAL: return amount visible, NO odds/EV/bookmaker."""
+    def test_bronze_silver_full_access(self):
+        """FIX-BRONZE-SILVER-ACCESS-01: bronze→silver is now 'full', not 'partial'."""
         html = self._render("bronze", "silver", predicted_ev=5.0,
                             recommended_odds=2.0, confirming_signals=2)
-        # Return amount (2.0 * 300 = R600) IS shown
-        assert "R600" in html
-        assert "/subscribe" in html
-        # MUST NOT show decimal odds, EV value, or bookmaker
-        assert "@ 2.0" not in html and "@ 2.00" not in html
-        assert "+5.0%" not in html  # EV value must not appear
-        assert "5.0%" not in html   # EV value must not appear
-        assert "Betway" not in html
-        # MUST NOT show full analysis sections
-        assert "📋 <b>The Setup</b>" not in html
-        assert "🎯 <b>The Edge</b>" not in html
-        assert "🏆 <b>Verdict</b>" not in html
+        # Full rendering shows analysis sections
+        assert "📋 <b>The Setup</b>" in html
+        assert "🎯 <b>The Edge</b>" in html
+        assert "🏆 <b>Verdict</b>" in html
+        # No upgrade gate for silver content
+        assert "locked" not in html.lower() or "🔒" not in html
 
 
 # ── H2H Duplication ──────────────────────────────────────────

@@ -75,9 +75,11 @@ def get_edge_access_level(user_tier: str, edge_tier: str) -> str:
 
     Returns:
         "full" — user has full access
-        "partial" — odds visible, breakdown gated (Bronze viewing Silver)
         "blurred" — odds/bookmaker masked (Bronze viewing Gold)
-        "locked" — existence only (Bronze viewing Diamond)
+        "locked" — existence only (Bronze viewing Diamond, Gold viewing Diamond)
+
+    FIX-BRONZE-SILVER-ACCESS-01: Bronze can view Silver edges with full access
+    subject to the 3/day daily cap enforced via check_tip_limit().
     """
     tier = user_tier.lower().strip()
     edge = edge_tier.lower().strip()
@@ -88,11 +90,9 @@ def get_edge_access_level(user_tier: str, edge_tier: str) -> str:
         if edge == "diamond":
             return "locked"
         return "full"
-    # Bronze
-    if edge == "bronze":
+    # Bronze: full access to bronze + silver (within 3/day cap); gold blurred; diamond locked
+    if edge in ("bronze", "silver"):
         return "full"
-    if edge == "silver":
-        return "partial"
     if edge == "gold":
         return "blurred"
     return "locked"  # diamond
