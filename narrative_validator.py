@@ -295,16 +295,23 @@ _VERDICT_ACTION_RE: re.Pattern[str] = re.compile(
 )
 
 # BUILD-W82-RIP-AND-REPLACE-01 (2026-05-02) — corpus-imperative regex.
-# Tightly anchored to the exact imperatives the deterministic verdict_corpus
-# emits: back / hammer / get on / take / bet / lock in / load up / go in /
-# the play is / the call is / worth a. Used by the new uniform imperative-
-# close gate that replaces the tier-branching closure rule. Tier-appropriate
-# semantics for the corpus path are enforced by `claims_max_conviction`
-# filtering (see verdict_corpus._v / has_real_risk), NOT by this regex.
+# FIX-VERDICT-SIGNAL-MAPPED-CODEX-REVIEW-03 (2026-05-04) — "worth a"
+# removed from the universal alternation. Verified by codebase audit:
+# every corpus sentence using "worth a ..." closures lives in the Bronze
+# section of VERDICT_CORPUS only. Keeping "worth a" in this tier-uniform
+# regex created the round-3 cross-tier leak Codex flagged
+# (Diamond/Gold/Silver verdicts closing with the literal Bronze
+# signal-mapper closure ``worth a small play on X, light stake.`` passed
+# Gate 9 because ``worth a`` matched here before the tier-scoped check
+# fired). "worth a" is now exclusively in `_BRONZE_SIGNAL_MAPPER_CLOSE_RE`.
+# Other tier-uniform tokens (back / hammer / get on / take / bet / lock in /
+# load up / go in / the play is / the call is) remain — corpus authors
+# enforce conviction-language by claims_max_conviction filtering, not by
+# this regex.
 _CORPUS_IMPERATIVE_CLOSE_RE: re.Pattern[str] = re.compile(
     r"(?:^|\s)("
     r"back|hammer|get\s+on|take|bet|lock\s+in|load\s+up|go\s+in|"
-    r"the\s+play\s+is|the\s+call\s+is|worth\s+a"
+    r"the\s+play\s+is|the\s+call\s+is"
     r")\b.*[\.!]?\s*$",
     re.IGNORECASE,
 )
@@ -314,10 +321,16 @@ _CORPUS_IMPERATIVE_CLOSE_RE: re.Pattern[str] = re.compile(
 # the spec §10 imperatives to a single tier-agnostic alternation creates a
 # loophole where a Silver/Bronze polished verdict closing with "go big" or
 # a Diamond/Gold one closing with "lean ... standard stake" passes Gate 9.
+# Round 3 (FIX-VERDICT-SIGNAL-MAPPED-CODEX-REVIEW-03): the Bronze regex now
+# also covers the corpus-authored "worth a small play / worth a measured
+# punt / worth a small punt / worth a measured play" closures (all 18
+# sentences live in the Bronze section of VERDICT_CORPUS by codebase audit).
 # Each new imperative is keyed to the ONE tier the spec authorises:
 #   - Diamond → "hard to look past {team}, go big at {odds} on {bookmaker}"
 #   - Silver  → "lean {team}, standard stake"
-#   - Bronze  → "worth a small play on {team}, light stake"
+#   - Bronze  → "worth a small play on {team}, light stake" (signal-mapper)
+#               OR "worth a (small|measured) (play|punt) on ..." (legacy
+#               corpus Bronze section) OR "small play ..." (mapper short form)
 #   - Gold    → "back {team}, standard stake" — already covered by the
 #     legacy "back" alternation in _CORPUS_IMPERATIVE_CLOSE_RE.
 # `imperative_close_ok(text, tier)` is the single entry point: it accepts
@@ -337,7 +350,7 @@ _SILVER_SIGNAL_MAPPER_CLOSE_RE: re.Pattern[str] = re.compile(
 )
 _BRONZE_SIGNAL_MAPPER_CLOSE_RE: re.Pattern[str] = re.compile(
     r"(?:^|\s)("
-    r"worth\s+a\s+small\s+play|small\s+play"
+    r"worth\s+a|small\s+play"
     r")\b.*[\.!]?\s*$",
     re.IGNORECASE,
 )
@@ -348,28 +361,41 @@ def imperative_close_ok(text: str, tier: str) -> bool:
     imperative.
 
     Accepts the legacy corpus alternation for any tier (the corpus is
-    tier-uniform; tier semantics are enforced by ``claims_max_conviction``
-    filtering at the corpus picker), AND the spec §10 signal-mapper
-    imperatives keyed to their authorised tier — so a Silver/Bronze verdict
-    closing with ``go big`` (Diamond-only) or a Diamond/Gold one closing
-    with ``lean`` (Silver-only) fails Gate 9.
+    tier-uniform on tokens like ``back`` / ``hammer`` / ``take``; tier
+    semantics are enforced by ``claims_max_conviction`` filtering at the
+    corpus picker), AND the spec §10 signal-mapper imperatives keyed to
+    their authorised tier — so a Silver/Bronze verdict closing with
+    ``go big`` (Diamond-only), a Diamond/Gold one closing with ``lean``
+    (Silver-only), or a Diamond/Gold/Silver one closing with ``worth a
+    small play`` / ``worth a measured punt`` (Bronze-only, both signal-
+    mapper and corpus) all fail Gate 9.
 
     Empty / non-string text returns False. Unknown tiers fall back to the
     legacy corpus check only — no signal-mapper imperatives are added,
     matching the original gate behaviour.
+
+    NB: ``worth a`` was removed from the legacy alternation under
+    FIX-VERDICT-SIGNAL-MAPPED-CODEX-REVIEW-03. Audit of VERDICT_CORPUS
+    confirmed every "worth a ..." closure lives in the Bronze section
+    only, so the move is loss-free for the corpus path.
     """
     if not text:
         return False
-    if _CORPUS_IMPERATIVE_CLOSE_RE.search(text):
-        return True
     tier_lower = (tier or "").strip().lower()
+    # Tier-scoped imperatives are checked FIRST so the Bronze "worth a"
+    # / "small play" closures are matched against the Bronze branch only;
+    # the legacy alternation does NOT include "worth a" any more, but
+    # we keep the check ordering future-proof against further additions.
     if tier_lower == "diamond":
-        return bool(_DIAMOND_SIGNAL_MAPPER_CLOSE_RE.search(text))
-    if tier_lower == "silver":
-        return bool(_SILVER_SIGNAL_MAPPER_CLOSE_RE.search(text))
-    if tier_lower == "bronze":
-        return bool(_BRONZE_SIGNAL_MAPPER_CLOSE_RE.search(text))
-    return False
+        if _DIAMOND_SIGNAL_MAPPER_CLOSE_RE.search(text):
+            return True
+    elif tier_lower == "silver":
+        if _SILVER_SIGNAL_MAPPER_CLOSE_RE.search(text):
+            return True
+    elif tier_lower == "bronze":
+        if _BRONZE_SIGNAL_MAPPER_CLOSE_RE.search(text):
+            return True
+    return bool(_CORPUS_IMPERATIVE_CLOSE_RE.search(text))
 
 # Odds shape: decimal (1.36-99.99), fraction (1/2, 11/10, 100/1), American (+150/-200).
 # Decimal range narrows to plausible betting odds; rejects "5.0" alone and "12.5 goals".

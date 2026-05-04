@@ -681,6 +681,100 @@ def test_p2_imperative_close_empty_or_none_returns_false():
     assert imperative_close_ok(None, "diamond") is False  # type: ignore[arg-type]
 
 
+# FIX-VERDICT-SIGNAL-MAPPED-CODEX-REVIEW-03 (2026-05-04) — Codex round-3 P2:
+# the legacy `_CORPUS_IMPERATIVE_CLOSE_RE` still contained `worth a` as a
+# tier-uniform token, so a Diamond/Gold/Silver verdict closing with the
+# literal Bronze closure `worth a small play on X, light stake.` matched
+# the universal regex BEFORE the tier-scoped check fired. Fix: removed
+# `worth a` from the legacy alternation (verified by audit — all corpus
+# `worth a ...` closures live in the Bronze section only) and put it in
+# the Bronze tier-scoped regex.
+
+def test_p3_imperative_close_rejects_diamond_worth_a_small_play():
+    """Cross-tier — Diamond verdict closing with the literal Bronze closer
+    'worth a small play on X, light stake.' must fail Gate 9.
+    """
+    from narrative_validator import imperative_close_ok
+    txt = "worth a small play on Manchester City win, light stake."
+    assert not imperative_close_ok(txt, "diamond"), (
+        "Bronze 'worth a small play' closure must NOT clear Diamond gate; "
+        f"sample={txt!r}"
+    )
+
+
+def test_p3_imperative_close_rejects_gold_worth_a_small_play():
+    """Cross-tier — Gold verdict closing with Bronze 'worth a small play' fails."""
+    from narrative_validator import imperative_close_ok
+    txt = "worth a small play on Brighton win, light stake."
+    assert not imperative_close_ok(txt, "gold"), (
+        f"Bronze closure must NOT clear Gold gate; sample={txt!r}"
+    )
+
+
+def test_p3_imperative_close_rejects_silver_worth_a_small_play():
+    """Cross-tier — Silver verdict closing with Bronze 'worth a small play' fails."""
+    from narrative_validator import imperative_close_ok
+    txt = "worth a small play on Chelsea win, light stake."
+    assert not imperative_close_ok(txt, "silver"), (
+        f"Bronze closure must NOT clear Silver gate; sample={txt!r}"
+    )
+
+
+def test_p3_imperative_close_rejects_higher_tiers_corpus_bronze_closures():
+    """Cross-tier — every corpus-authored Bronze closure ('worth a small play',
+    'worth a measured punt', 'worth a small punt', 'worth a measured play')
+    must fail for Diamond / Gold / Silver. Verified against VERDICT_CORPUS
+    audit: all live in Bronze section.
+    """
+    from narrative_validator import imperative_close_ok
+    bronze_corpus_closures = [
+        "worth a small play on {team} at 1.40 with HWB, light stake.",
+        "worth a measured punt on {team} at 2.10 on Betway, light stake.",
+        "worth a small punt on {team} at 1.85 with Sportingbet, light stake.",
+        "worth a measured play on {team} at 3.50 on Betway, light stake.",
+    ]
+    for txt in bronze_corpus_closures:
+        for tier in ("diamond", "gold", "silver"):
+            assert not imperative_close_ok(txt, tier), (
+                f"Bronze corpus closure must NOT clear {tier} gate; "
+                f"sample={txt!r}"
+            )
+
+
+def test_p3_imperative_close_accepts_bronze_corpus_worth_a_variants():
+    """Positive control — every Bronze corpus closure clears Bronze gate."""
+    from narrative_validator import imperative_close_ok
+    bronze_corpus_closures = [
+        "worth a small play on Burnley at 3.20, light stake.",
+        "worth a measured punt on Wolves at 2.75 on Betway, light stake.",
+        "worth a small punt on Brighton at 2.10 with HWB, light stake.",
+        "worth a measured play on West Ham at 2.50 on Betway, light stake.",
+    ]
+    for txt in bronze_corpus_closures:
+        assert imperative_close_ok(txt, "bronze"), (
+            f"Bronze corpus closure must clear Bronze gate; sample={txt!r}"
+        )
+
+
+def test_p3_imperative_close_legacy_regex_no_longer_matches_worth_a():
+    """Verify the legacy alternation no longer contains 'worth a' — direct
+    structural assertion against the regex source pattern.
+    """
+    from narrative_validator import _CORPUS_IMPERATIVE_CLOSE_RE
+    pattern_source = _CORPUS_IMPERATIVE_CLOSE_RE.pattern
+    assert "worth" not in pattern_source, (
+        "_CORPUS_IMPERATIVE_CLOSE_RE must no longer contain 'worth' — round-3 "
+        "fix moved it exclusively to _BRONZE_SIGNAL_MAPPER_CLOSE_RE. Pattern: "
+        f"{pattern_source!r}"
+    )
+    # Direct match check: "worth a small play on X." should NOT match the
+    # legacy regex any more (only via the Bronze tier-scoped one).
+    txt = "worth a small play on Manchester City, light stake."
+    assert not _CORPUS_IMPERATIVE_CLOSE_RE.search(txt), (
+        f"Legacy regex must not match Bronze 'worth a' closure; sample={txt!r}"
+    )
+
+
 def test_p1_render_verdict_falls_back_when_quality_probe_fails(monkeypatch):
     """P1 — when min_verdict_quality probe rejects the mapper output (e.g. <100
     chars), render_verdict must fall back to the corpus path so the downstream
