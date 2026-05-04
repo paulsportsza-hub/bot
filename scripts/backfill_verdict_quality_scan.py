@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(_BOT_DIR))
 
 from config import SCRAPERS_ROOT
 from narrative_spec import min_verdict_quality, _extract_verdict_text
+from scrapers.db_connect import connect_odds_db as _connect_odds_db  # W81-DBLOCK
 
 _ODDS_DB = os.path.join(str(SCRAPERS_ROOT.parent), "scrapers", "odds.db")
 
@@ -83,7 +84,7 @@ def run_backfill(db_path: str | None = None) -> dict:
         log.error("backfill: DB not found at %s", path)
         return {"scanned": 0, "rejected": 0, "gold_rejected": 0, "bronze_rejected": 0}
 
-    conn = sqlite3.connect(path, timeout=30)
+    conn = _connect_odds_db(path, timeout=30)
     conn.row_factory = sqlite3.Row
     summary = {"scanned": 0, "rejected": 0, "gold_rejected": 0, "bronze_rejected": 0}
 

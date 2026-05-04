@@ -8,13 +8,17 @@ import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _proj_root not in sys.path:
+    sys.path.insert(0, _proj_root)
 
 import bot
+from scrapers.db_connect import connect_odds_db as _connect_odds_db  # W81-DBLOCK
 
 
 def _connect() -> sqlite3.Connection:
     bot._ensure_shadow_narratives_table()
-    conn = sqlite3.connect(bot._NARRATIVE_DB_PATH)
+    conn = _connect_odds_db(str(bot._NARRATIVE_DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
 

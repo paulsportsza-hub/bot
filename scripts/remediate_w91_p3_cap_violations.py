@@ -36,6 +36,8 @@ from pathlib import Path
 
 BOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BOT_DIR))
+if str(BOT_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(BOT_DIR.parent))
 
 from narrative_spec import _VERDICT_MAX_CHARS, _cap_verdict  # noqa: E402
 
@@ -85,8 +87,8 @@ def main() -> int:
 
     # Must open RW — the bot/pregen pipeline holds WAL so concurrent writes are
     # safe, but we still set busy_timeout to be kind to the live cron.
-    conn = sqlite3.connect(str(ODDS_DB), timeout=30.0)
-    conn.execute("PRAGMA busy_timeout=30000;")
+    from scrapers.db_connect import connect_odds_db as _connect_odds_db  # W81-DBLOCK
+    conn = _connect_odds_db(str(ODDS_DB), timeout=30)
 
     rows = conn.execute(
         "SELECT match_id, narrative_html, created_at FROM narrative_cache"

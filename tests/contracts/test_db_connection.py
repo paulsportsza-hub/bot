@@ -58,8 +58,6 @@ def test_no_raw_sqlite_connect():
         and "test_" not in line.split("/")[-1]   # exclude test_*.py files
         and ":memory:" not in line                # in-memory DBs for unit tests
         and "uri=True" not in line                # read-only URI mode (file:path?mode=ro)
-        and "shadow_review.py" not in line        # QA/diagnostic script, not production
-        and "qa3_reverify.py" not in line         # QA/diagnostic script, not production
     ]
 
     assert len(violations) == 0, (

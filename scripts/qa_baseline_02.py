@@ -32,6 +32,8 @@ from pathlib import Path
 BOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BOT_DIR))
 sys.path.insert(0, str(BOT_DIR.parent / "scrapers"))
+if str(BOT_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(BOT_DIR.parent))
 
 # Suppress Sentry before any imports from bot
 os.environ["SENTRY_DSN"] = ""
@@ -50,6 +52,7 @@ logging.basicConfig(level=logging.WARNING)
 log = logging.getLogger("qa_baseline_02")
 
 # ── Imports ──────────────────────────────────────────────────────────────
+from db_connect import connect_odds_db as _connect_odds_db  # W81-DBLOCK (scrapers/ on sys.path)
 import anthropic as _anthropic  # noqa: E402
 
 from narrative_spec import (  # noqa: E402
@@ -419,7 +422,7 @@ def _load_real_edges() -> dict[str, dict]:
     """Load unsettled edges from DB keyed by sport:tier:shape."""
     edges = {}
     try:
-        conn = sqlite3.connect(str(ODDS_DB))
+        conn = _connect_odds_db(str(ODDS_DB))
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
             SELECT match_key, sport, league, edge_tier, bet_type, composite_score,
