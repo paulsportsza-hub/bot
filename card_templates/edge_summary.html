@@ -245,8 +245,8 @@
 <div class="card">
     <div class="header">
         {% if top_tier %}
-        <div class="logo-glow logo-glow-{{ top_tier }}"></div>
-        <div class="logo-glow-screen logo-glow-screen-{{ top_tier }}"></div>
+        <div class="logo-glow logo-glow-{{ top_tier | lower }}"></div>
+        <div class="logo-glow-screen logo-glow-screen-{{ top_tier | lower }}"></div>
         {% endif %}
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />

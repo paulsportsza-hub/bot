@@ -546,8 +546,8 @@
     <!-- ── 1. Header ────────────────────────────────────────────── -->
     <div class="header">
         {% if tier %}
-        <div class="logo-glow logo-glow-{{ tier }}"></div>
-        <div class="logo-glow-screen logo-glow-screen-{{ tier }}"></div>
+        <div class="logo-glow logo-glow-{{ tier | lower }}"></div>
+        <div class="logo-glow-screen logo-glow-screen-{{ tier | lower }}"></div>
         {% endif %}
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />

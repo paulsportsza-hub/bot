@@ -29,6 +29,10 @@ Where `TIER_VAR` is the lowercase tier string for that template:
 All other `.header` children MUST have `position: relative; z-index: 1` so they render above the glow.
 `.header` itself MUST have `overflow: hidden`.
 
+> IMPORTANT: The tier variable MUST be lowercased when used in the class name.
+> Use `{{ TIER_VAR | lower }}` — never `{{ TIER_VAR }}` bare.
+> CSS classes are lowercase (logo-glow-gold) — title-case renders will silently produce no glow.
+
 ---
 
 ## Base Layer CSS
