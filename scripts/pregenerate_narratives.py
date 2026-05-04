@@ -1741,14 +1741,21 @@ async def _generate_one(
     # contract bot._extract_edge_data already uses on the live serve-time
     # path (HG-4 alignment with card_pipeline._compute_signals).
     _canonical_sigs = _collect_canonical_signals(match_key, _pregen_outcome_raw, sport, league)
-    if _canonical_sigs and not _pregen_sigs:
+    if _canonical_sigs:
+        # Canonical recompute is the single source of truth — overwrite
+        # any pre-populated entries upstream callers (e.g.
+        # _edge_from_serving_tip) attached. Codex pass-2 (Finding 2)
+        # surfaced a regression here: the upstream rebuild emits truncated
+        # movement subdicts shaped like `{"direction": "..."}` WITHOUT an
+        # `available` key, which collapses to line_mvt=False under
+        # _normalise_spec_signals — the verdict mapper then skipped the
+        # §12.4 Price+LineMvt special case and emitted the §12.1 primary+
+        # secondary phrase verbatim, undoing the brief on serving-tip
+        # callsites. Always trust canonical_sigs when present; fall back
+        # to the upstream truncated dict only when collect_all_signals
+        # returned {} (DB unreachable / collector outage). The canonical
+        # recompute MUST win on every key, not just the missing ones.
         _pregen_sigs = _canonical_sigs
-    elif _canonical_sigs:
-        # Fill missing keys from the canonical recompute without
-        # overwriting any pre-populated entries upstream callers may have
-        # already attached (e.g. _edge_from_serving_tip's truncated dict).
-        for _k, _v in _canonical_sigs.items():
-            _pregen_sigs.setdefault(_k, _v)
 
     # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 3):
     # premium-tier callsites MUST NOT cache a proxy-fallback verdict when
