@@ -244,3 +244,122 @@ class TestRunChecksCoalescing:
         assert os.path.exists(alert_file)
         content = open(alert_file).read().strip()
         datetime.fromisoformat(content)  # must be a valid ISO timestamp
+
+
+# ---------------------------------------------------------------------------
+# Codex-review blockers (second pass)
+# ---------------------------------------------------------------------------
+
+class TestCoalesceNonLockException:
+    """Blocker 1 — non-DB-lock same-exception cascade uses EXCEPTION CASCADE label."""
+
+    def test_network_error_cascade_not_labelled_db_locked(self):
+        fails = [_exc_fail(f"c{i}", "Connection refused") for i in range(6)]
+        result = _coalesce_p0_fails(fails, MONITOR_NAME)
+        assert len(result) == 1
+        r = result[0]
+        assert r["check"] == "exception_cascade"
+        assert "EXCEPTION CASCADE" in r["detail"]
+        assert "DB LOCKED" not in r["detail"]
+
+    def test_db_lock_exception_keeps_db_locked_label(self):
+        fails = [_exc_fail(f"c{i}", "database is locked") for i in range(3)]
+        result = _coalesce_p0_fails(fails, MONITOR_NAME)
+        assert result[0]["check"] == "db_lock_cascade"
+        assert "DB LOCKED" in result[0]["detail"]
+
+
+class TestWasAlertedRecentlyNarrowExcept:
+    """Blocker 2 — non-OperationalError DB failure should NOT fall back to file dedup."""
+
+    def test_programming_error_propagates_not_file_fallback(self, tmp_path):
+        from contracts.monitors.scraper_health import _was_alerted_recently
+        bad_conn = MagicMock()
+        bad_conn.execute.side_effect = sqlite3.ProgrammingError("closed")
+        alert_file = str(tmp_path / "last_alert.txt")
+        # Write a recent timestamp that would suppress if fallback ran
+        with open(alert_file, "w") as f:
+            f.write(datetime.now(timezone.utc).isoformat())
+        with patch("contracts.monitors.scraper_health.DBLOCK_ALERT_FILE", alert_file):
+            # ProgrammingError should propagate (not fall through to True suppression)
+            try:
+                result = _was_alerted_recently(bad_conn, "some_check")
+                # If it didn't raise, it must NOT have returned True (file-fallback suppression)
+                assert result is False
+            except sqlite3.ProgrammingError:
+                pass  # expected — the error propagated correctly
+
+
+class TestDedupFileOnlyForDbLock:
+    """Blocker 4 — dedup file must not be written for non-DB-lock P0 alerts."""
+
+    def test_non_lock_p0_does_not_write_dedup_file(self, tmp_path):
+        import os
+        alert_file = str(tmp_path / "last_alert.txt")
+        alerts_sent: list[str] = []
+
+        def _send(msg, dry_run=False):
+            alerts_sent.append(msg)
+
+        def _genuine_stale(conn, run_ts):
+            return {
+                "check": "edge_pipeline_freshness",
+                "severity": "P0",
+                "status": "FAIL",
+                "detail": "Last edge recommended 200min ago",
+            }
+
+        def _pass(conn, run_ts):
+            return {"check": "bookmaker_odds_freshness", "severity": "P0", "status": "PASS", "detail": "ok"}
+
+        patches = {
+            "contracts.monitors.scraper_health._check_bookmaker_odds_freshness": _pass,
+            "contracts.monitors.scraper_health._check_scrape_run_continuity": _pass,
+            "contracts.monitors.scraper_health._check_scrape_run_errors": _pass,
+            "contracts.monitors.scraper_health._check_sharp_odds_freshness": _pass,
+            "contracts.monitors.scraper_health._check_fpl_injuries_freshness": _pass,
+            "contracts.monitors.scraper_health._check_edge_pipeline_freshness": _genuine_stale,
+            "contracts.monitors.scraper_health._check_publisher_log_freshness": _pub_pass_fn("publisher_log_freshness"),
+            "contracts.monitors.scraper_health._check_tg_community_asset_null": _pub_pass_fn("tg_community_asset_null"),
+            "contracts.monitors.scraper_health._check_autogen_image_log_freshness": _pub_pass_fn("autogen_image_log_freshness", "P1"),
+        }
+
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchone.return_value = None
+
+        with contextlib.ExitStack() as stack:
+            for target, new_fn in patches.items():
+                stack.enter_context(patch(target, new=new_fn))
+            mock_db = stack.enter_context(patch("contracts.monitors.scraper_health.connect_odds_db"))
+            mock_db.return_value = mock_conn
+            stack.enter_context(patch("contracts.monitors.scraper_health._send_edgeops_alert", side_effect=_send))
+            stack.enter_context(patch("contracts.monitors.scraper_health.DBLOCK_ALERT_FILE", alert_file))
+            run_checks(dry_run=False)
+
+        # Alert was sent for the genuine P0
+        assert len(alerts_sent) == 1
+        # But the dedup file must NOT have been written
+        assert not os.path.exists(alert_file), "Dedup file should not be written for non-lock alerts"
+
+
+class TestMigrateAndCommitLockTolerance:
+    """Blocker 3 — _migrate and conn.commit OperationalError must not abort run_checks."""
+
+    def test_migrate_lock_does_not_crash_run_checks(self, tmp_path):
+        alert_file = str(tmp_path / "last_alert.txt")
+        alerts_sent: list[str] = []
+
+        def _send(msg, dry_run=False):
+            alerts_sent.append(msg)
+
+        mock_conn = MagicMock()
+        # _migrate calls conn.execute — make it raise on migration DDL
+        mock_conn.execute.side_effect = sqlite3.OperationalError("database is locked")
+
+        with contextlib.ExitStack() as stack:
+            mock_db = stack.enter_context(patch("contracts.monitors.scraper_health.connect_odds_db"))
+            mock_db.return_value = mock_conn
+            stack.enter_context(patch("contracts.monitors.scraper_health._send_edgeops_alert", side_effect=_send))
+            stack.enter_context(patch("contracts.monitors.scraper_health.DBLOCK_ALERT_FILE", alert_file))
+            # Should not raise even if _migrate and all checks are locked
+            run_checks(dry_run=False)
