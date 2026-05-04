@@ -30234,11 +30234,11 @@ async def _post_deploy_validation_job(ctx) -> None:
             log.warning("Failed to write validation report: %s", e)
 
         msg = format_telegram_message(report)
-        for admin_id in config.ADMIN_IDS:
-            try:
-                await ctx.bot.send_message(admin_id, msg, parse_mode="HTML")
-            except Exception as e:
-                log.warning("Failed to send validation to admin %d: %s", admin_id, e)
+        EDGEOPS_CHAT_ID = -1003877525865  # internal ops alerts (FIX-POST-DEPLOY-VALIDATION-ROUTING-01)
+        try:
+            await ctx.bot.send_message(EDGEOPS_CHAT_ID, msg, parse_mode="HTML")
+        except Exception as e:
+            log.warning("Failed to send validation to EdgeOps: %s", e)
 
         if report["failures"]:
             log.warning("Post-deploy validation FAILED: %s", report["failures"])
