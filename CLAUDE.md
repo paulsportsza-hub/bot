@@ -156,14 +156,15 @@ pushed parts.
   or `btts`, which sets draw_odds to 0 and populates home/away with
   BTTS values instead of win odds — corrupting all three market values.
 
-#### GATE_MATRIX Renderer Rules (TIER-GATE-IMPL-01 — Permanent)
-- **PARTIAL** access (`Bronze→Silver`): show return amount ONLY (`R{return} on R300`).
-  Never call `_section_edge()` from `_render_partial()`. It exposes odds, EV%, bookmaker.
+#### GATE_MATRIX Renderer Rules (TIER-GATE-IMPL-01 — amended FIX-BRONZE-SILVER-ACCESS-01)
+- **FULL** access (`Bronze→Silver`): full odds, EV%, bookmaker CTA, full analysis sections.
+  Subject to the 3/day daily cap enforced via `check_tip_limit()`. `_render_partial()` is
+  dead code for all standard tier combinations — do not call it for Bronze→Silver.
 - **BLURRED** access (`Bronze→Gold`): match header + badge + return hint only.
 - **LOCKED** access (`Bronze→Diamond`, `Gold→Diamond`): match header + badge + 🔒 only.
 - `check_gate_matrix()` in `scrapers/health_monitor.py` validates all 12 GATE_MATRIX
   combinations at runtime — keep it registered in `ALL_CHECKS`.
-- Regression guard: `tests/contracts/test_gate_contracts.py` — 155 tests cover the full matrix.
+- Regression guard: `tests/contracts/test_gate_contracts.py` + `tests/contracts/test_bronze_silver_access.py`.
 
 #### SQLite Connection Rules (W81-DBLOCK — Permanent)
 - Never call `sqlite3.connect()` directly.

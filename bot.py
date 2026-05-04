@@ -14602,20 +14602,33 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                         except (ValueError, IndexError):
                             _reject_espn = True  # Can't parse date → reject conservatively
                         if _reject_espn:
-                            log.warning(
-                                "Rejecting cached narrative for %s — ESPN data unavailable for ESPN-covered league %s",
-                                match_id, _ej_league,
+                            # Rule 21 carve-out (FIX-PREGEN-COVERAGE-DIAMOND-01): premium W82 /
+                            # baseline_no_edge rows are editorial-quality for all tiers — do not
+                            # quarantine them via the ESPN unavailability gate.
+                            _is_premium_w82 = (
+                                (tier or "").lower() in ("gold", "diamond")
+                                and (narrative_source or "").lower() in ("w82", "baseline_no_edge")
                             )
-                            try:
-                                conn.execute(
-                                    "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
-                                    "WHERE match_id = ?",
-                                    (f"espn_unavailable:{_ej_league}", match_id),
+                            if _is_premium_w82:
+                                log.debug(
+                                    "Rule21 ESPN-quarantine carve-out for %s (tier=%s source=%s)",
+                                    match_id, tier, narrative_source,
                                 )
-                                conn.commit()
-                            except sqlite3.OperationalError as exc:
-                                log.debug("Deferred ESPN cache quarantine for %s: %s", match_id, exc)
-                            return None
+                            else:
+                                log.warning(
+                                    "Rejecting cached narrative for %s — ESPN data unavailable for ESPN-covered league %s",
+                                    match_id, _ej_league,
+                                )
+                                try:
+                                    conn.execute(
+                                        "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                                        "WHERE match_id = ?",
+                                        (f"espn_unavailable:{_ej_league}", match_id),
+                                    )
+                                    conn.commit()
+                                except sqlite3.OperationalError as exc:
+                                    log.debug("Deferred ESPN cache quarantine for %s: %s", match_id, exc)
+                                return None
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     pass
 
@@ -14674,20 +14687,28 @@ async def _get_cached_narrative(match_id: str) -> dict | None:
                     except (ValueError, IndexError):
                         _w82_reject = True
                     if _w82_reject:
-                        log.warning(
-                            "Rejecting w82 cached narrative for %s — ESPN-covered league %s, forcing w84 regeneration",
-                            match_id, _w82_league,
-                        )
-                        try:
-                            conn.execute(
-                                "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
-                                "WHERE match_id = ?",
-                                (f"w82_espn_freshness:{_w82_league}", match_id),
+                        # Rule 21 carve-out (FIX-PREGEN-COVERAGE-DIAMOND-01): premium W82
+                        # rows are editorial-quality; never quarantine them via ESPN gates.
+                        if (tier or "").lower() in ("gold", "diamond"):
+                            log.debug(
+                                "Rule21 w82-freshness carve-out for %s (tier=%s source=w82)",
+                                match_id, tier,
                             )
-                            conn.commit()
-                        except sqlite3.OperationalError as exc:
-                            log.debug("Deferred w82 freshness cache quarantine for %s: %s", match_id, exc)
-                        return None
+                        else:
+                            log.warning(
+                                "Rejecting w82 cached narrative for %s — ESPN-covered league %s, forcing w84 regeneration",
+                                match_id, _w82_league,
+                            )
+                            try:
+                                conn.execute(
+                                    "UPDATE narrative_cache SET status = 'quarantined', quarantine_reason = ? "
+                                    "WHERE match_id = ?",
+                                    (f"w82_espn_freshness:{_w82_league}", match_id),
+                                )
+                                conn.commit()
+                            except sqlite3.OperationalError as exc:
+                                log.debug("Deferred w82 freshness cache quarantine for %s: %s", match_id, exc)
+                            return None
 
             # W84-Q3: Reject cached narratives containing legacy banned phrases
             if _has_banned_patterns(cleaned):
