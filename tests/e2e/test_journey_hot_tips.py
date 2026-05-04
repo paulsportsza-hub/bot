@@ -236,4 +236,4 @@ async def test_hot_upgrade_dispatch_returns_view_plans_and_back(
     markup = call["markup"]
     callbacks = _callbacks(markup)
     assert "sub:plans" in callbacks
-    assert "hot:back:0" in callbacks
+    assert "hot:go" in callbacks  # FIX-LOCKED-TIER-CARD-UX-01: back → tier picker

@@ -2234,12 +2234,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                     )
                     _tier_lock_markup = InlineKeyboardMarkup([
                         [InlineKeyboardButton(
-                            f"{_tier_lock_emoji} Unlock {_upg_requested_tier.title()} — View Plans",
+                            f"{_tier_lock_emoji} Upgrade to {_upg_requested_tier.title()} — View Plans",
                             callback_data="sub:plans",
                         )],
                         [InlineKeyboardButton(
                             "↩️ Back",
-                            callback_data=f"hot:back:{_ht_page_state.get(user_id, 0)}",
+                            callback_data="hot:go",
                         )],
                     ])
                     await send_card_or_fallback(
@@ -2270,14 +2270,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         ),
                         tracker_summary=_upg_summary,
                     )
+                    _upg_tier_emoji = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}.get(_upg_edge_tier, "🔒")
                     _lock_markup = InlineKeyboardMarkup([
                         [InlineKeyboardButton(
-                            f"💎 Unlock {_upg_edge_tier.title()}",
+                            f"{_upg_tier_emoji} Upgrade to {_upg_edge_tier.title()}",
                             callback_data="sub:plans",
                         )],
                         [InlineKeyboardButton(
                             "↩️ Back",
-                            callback_data=f"hot:back:{_ht_page_state.get(user_id, 0)}",
+                            callback_data="hot:go",
                         )],
                     ])
                     await send_card_or_fallback(
@@ -4076,7 +4077,7 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
                 _bg_markup = InlineKeyboardMarkup([
                     [InlineKeyboardButton(
-                        "💎 Unlock Diamond — from R199/mo",
+                        "💎 Upgrade to Diamond — from R199/mo",
                         callback_data="sub:plans",
                     )],
                     [InlineKeyboardButton("↩️ Back", callback_data=_bg_back_cb)],
@@ -4560,7 +4561,7 @@ async def handle_menu(query, action: str) -> None:
             )
             _lock_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton(
-                    f"{_lock_tier_emoji} Unlock {_wpl_tier.title()} — from R199/mo",
+                    f"{_lock_tier_emoji} Upgrade to {_wpl_tier.title()} — from R199/mo",
                     callback_data="sub:plans",
                 )],
                 [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
@@ -24032,7 +24033,7 @@ async def _handle_odds_comparison(query, event_id: str) -> None:
                 )
                 _oc_markup = InlineKeyboardMarkup([
                     [InlineKeyboardButton(
-                        f"{_oc_tier_emoji} Unlock {_oc_edge_tier.title()} — from R199/mo",
+                        f"{_oc_tier_emoji} Upgrade to {_oc_edge_tier.title()} — from R199/mo",
                         callback_data="sub:plans",
                     )],
                     [InlineKeyboardButton("↩️ Back", callback_data=_oc_back_cb)],
