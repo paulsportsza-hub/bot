@@ -207,6 +207,14 @@ async def _persist_one(result: dict, log) -> bool:
     generation_ms = int(cache.get("generation_ms") or 0)
 
     # bot._store_narrative_cache is the canonical async writer (W81-DBLOCK).
+    # Codex pass-3 fourth review (Finding 1): the writer is best-effort
+    # and can silently drop rows on lock contention or validator refusal
+    # without raising. A non-raising call therefore does NOT prove a row
+    # landed. After the call we read narrative_cache directly and only
+    # report persisted=True when the row's verdict_html matches what we
+    # asked the writer to persist (proves the commit, defends against
+    # validator refusal that re-tones the row, and rejects pre-existing
+    # leftovers from a prior sweep).
     try:
         await bot._store_narrative_cache(
             match_id,
@@ -225,9 +233,66 @@ async def _persist_one(result: dict, log) -> bool:
             context_json=context_json,
             generation_ms=generation_ms,
         )
-        return True
     except Exception as exc:
-        log.warning("persist failed for %s: %s", match_id, exc)
+        log.warning("persist write raised for %s: %s", match_id, exc)
+        return False
+
+    # Verify the row actually committed and matches what we wrote. The
+    # read uses a short timeout against the same DB the writer used so
+    # we surface lock-contention drops as failures rather than silently
+    # treating them as wins.
+    try:
+        from db_connection import get_connection
+        from scrapers.edge.edge_config import DB_PATH
+
+        def _verify_row() -> bool:
+            conn = get_connection(DB_PATH, timeout_ms=5000)
+            try:
+                row = conn.execute(
+                    "SELECT verdict_html, narrative_source, edge_tier "
+                    "FROM narrative_cache WHERE match_id = ?",
+                    (match_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if not row:
+                return False
+            stored_verdict, stored_source, stored_tier = row
+            if (verdict_html or "") and (stored_verdict or "") != (verdict_html or ""):
+                # Validator may have re-toned the verdict during the
+                # write — log and treat as a failed persist for this
+                # wrapper's strict semantics. Production main()'s loop
+                # is more forgiving; the wrapper exits non-zero so
+                # operators see the divergence.
+                log.warning(
+                    "persist verify mismatch for %s — wrote %r, cache has %r",
+                    match_id, (verdict_html or "")[:80], (stored_verdict or "")[:80],
+                )
+                return False
+            if (narrative_source or "") and (stored_source or "") != (narrative_source or ""):
+                log.warning(
+                    "persist verify source mismatch for %s — wrote %s, cache has %s",
+                    match_id, narrative_source, stored_source,
+                )
+                return False
+            if (edge_tier or "") and (stored_tier or "").lower() != (edge_tier or "").lower():
+                log.warning(
+                    "persist verify tier mismatch for %s — wrote %s, cache has %s",
+                    match_id, edge_tier, stored_tier,
+                )
+                return False
+            return True
+
+        verified = await asyncio.to_thread(_verify_row)
+        if not verified:
+            log.warning(
+                "persist verify failed for %s — row absent or mismatched after write",
+                match_id,
+            )
+            return False
+        return True
+    except Exception as verify_exc:
+        log.warning("persist verify exception for %s: %s", match_id, verify_exc)
         return False
 
 
