@@ -13,11 +13,12 @@ This contract ensures the regression cannot return via tracked code.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
+from pathlib import Path
 
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_THIS_FILE = os.path.abspath(__file__)
 sys.path.insert(0, _REPO_ROOT)
 
 
@@ -28,28 +29,28 @@ def test_deeplink_base_constant_has_no_edge_infix():
     assert "card_edge_" not in alerts_direct._DEEPLINK_BASE
 
 
-def _git_grep(pattern: str) -> list[str]:
-    """Return tracked lines matching pattern, or [] if no match.
+def _py_grep(pattern: str) -> list[str]:
+    """Return 'file:lineno:line' strings for .py files containing pattern.
 
-    Excludes this contract file itself — its docstrings and error messages
-    describe the banned literals and would otherwise self-trigger.
+    Excludes this contract file itself. Uses plain filesystem search because
+    the repo is configured with bare=true, making git grep unavailable.
     """
-    proc = subprocess.run(
-        [
-            "git", "grep", "-nI", "--", pattern,
-            "--", "*.py", ":(exclude)tests/contracts/test_deeplink_contract.py",
-        ],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode not in (0, 1):
-        raise AssertionError(f"git grep failed: {proc.stderr}")
-    return [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    hits: list[str] = []
+    repo = Path(_REPO_ROOT)
+    for py_file in repo.rglob("*.py"):
+        if str(py_file) == _THIS_FILE:
+            continue
+        try:
+            for lineno, line in enumerate(py_file.read_text(errors="replace").splitlines(), 1):
+                if pattern in line:
+                    hits.append(f"{py_file.relative_to(repo)}:{lineno}:{line.rstrip()}")
+        except OSError:
+            pass
+    return hits
 
 
 def test_no_start_card_edge_in_tracked_code():
-    hits = _git_grep("?start=card_edge_")
+    hits = _py_grep("?start=card_edge_")
     assert hits == [], (
         "Tracked code must not emit ?start=card_edge_ deep-links. "
         "Only card_<match_key> is produced by live URL surfaces.\n"
@@ -58,7 +59,7 @@ def test_no_start_card_edge_in_tracked_code():
 
 
 def test_no_slash_start_card_edge_in_tracked_code():
-    hits = _git_grep("/start card_edge_")
+    hits = _py_grep("/start card_edge_")
     assert hits == [], (
         "Tracked code must not send /start card_edge_ in tests or scripts. "
         "The edge_ infix matches no production URL producer and creates "
