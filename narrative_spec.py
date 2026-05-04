@@ -282,11 +282,32 @@ MIN_VERDICT_CHARS: int = 80  # legacy flat constant — use MIN_VERDICT_CHARS_BY
 # The previous tier-specific floors (140/110/80/60) were calibrated to the
 # old W82 variant assembly's verbose Diamond/Gold prose; they no longer match
 # the corpus design. A uniform floor keeps the validator simple and tier-blind.
+#
+# OPS-SPEC-SIGNAL-EXPOSURE-01 (2026-05-04): floor lowered from 100 to 50.
+# Rationale (Codex adversarial-review Finding #2): the 100-char floor was
+# calibrated for the verbose corpus output. The signal-mapped builder
+# (BUILD-VERDICT-SIGNAL-MAPPED-01) emits compact analytical sentences in
+# the 60–120-char band — most §12 combinations on Gold/Silver/Bronze fall
+# under 100 chars (e.g. "Recent form backs this — back Manchester City,
+# standard stake." = 62 chars). Without lowering the floor, render_verdict
+# silently swaps mapper output for corpus output whenever the mapper goes
+# under 100 chars, which means §12.2 (Price+Injury), §12.3/4 (Price+Line
+# Mvt), §12.5 (Form-only), §12.6 (Market-only), §12.7 (Tipster-only), and
+# §12.8 (no-signals fallback) never surface to non-Diamond subscribers in
+# production — defeating this brief's deliverable.
+#
+# 50 was chosen as the lowest defensible floor: still rejects the
+# AC-8 contract stub at "Back Arsenal." × 3 (39 chars) and the banned
+# single-action templates ("Back Arsenal." pattern), while accepting
+# every §12.X combination across realistic team-name lengths. The
+# downstream gates (banned-trivial templates, manager fabrication,
+# markdown leak, venue scan) catch any genuinely thin output the
+# length floor would otherwise mask.
 MIN_VERDICT_CHARS_BY_TIER: dict[str, int] = {
-    "diamond": 100,
-    "gold": 100,
-    "silver": 100,
-    "bronze": 100,
+    "diamond": 50,
+    "gold": 50,
+    "silver": 50,
+    "bronze": 50,
 }
 
 # BUILD-NARRATIVE-VOICE-01: unified target band + hard max (supersedes _VERDICT_MAX_CHARS=200)
