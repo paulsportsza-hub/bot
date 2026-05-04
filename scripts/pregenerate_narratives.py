@@ -684,6 +684,118 @@ def _log_integrity_event(signal: str, fixture_id: str = "", reason: str = "") ->
         log.debug("_log_integrity_event: %s/%s failed: %s", signal, fixture_id, _lie)
 
 
+async def _drift_checked_persist(pw: dict) -> tuple[bool, str]:
+    """Shared gen-vs-write drift guard + cache persist.
+
+    FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-3 sixth
+    review (Finding 2): the post-sweep _verify_and_fill_cache gap-fill
+    loop also calls _store_narrative_cache and was bypassing the drift
+    guard. Factored into a shared helper so EVERY narrative_cache write
+    from this module routes through the same drift-detection +
+    persist path.
+
+    `pw` must be the `_cache` dict shape returned by `_generate_one`,
+    including the reserved keys `_gen_odds_hash`, `_gen_signal_fp`,
+    `_outcome_for_recheck`, `_sport_for_recheck`, `_league_for_recheck`.
+    These are popped from the dict before _store_narrative_cache is
+    called (it has no parameters for them).
+
+    Returns (persisted, reason). reason is "" on success, otherwise
+    one of: "signal_drift", "odds_drift", "store_exception".
+    """
+    match_id = pw["match_id"]
+    _gen_odds_hash = pw.pop("_gen_odds_hash", "") or ""
+    _gen_signal_fp = pw.pop("_gen_signal_fp", "") or ""
+    _outcome_for_recheck = pw.pop("_outcome_for_recheck", "") or ""
+    _sport_for_recheck = pw.pop("_sport_for_recheck", None)
+    _league_for_recheck = pw.pop("_league_for_recheck", None)
+
+    if _gen_signal_fp and _outcome_for_recheck:
+        try:
+            _now_canonical_sigs = _collect_canonical_signals(
+                match_id,
+                _outcome_for_recheck,
+                _sport_for_recheck,
+                _league_for_recheck,
+            )
+            _now_signal_fp = "no_sigs"
+            if _now_canonical_sigs:
+                try:
+                    from narrative_spec import (
+                        _normalise_spec_signals as _ns_norm,
+                        _normalise_line_movement_direction as _ns_dir,
+                    )
+                    _now_norm = _ns_norm(_now_canonical_sigs)
+                    _now_movement_signal = _now_canonical_sigs.get("movement", {}) if isinstance(_now_canonical_sigs.get("movement"), dict) else {}
+                    _now_dir = _ns_dir(_now_movement_signal.get("direction", ""))
+                    _now_tipster = _now_canonical_sigs.get("tipster", {}) if isinstance(_now_canonical_sigs.get("tipster"), dict) else {}
+                    _now_h2h = _now_canonical_sigs.get("form_h2h", {}) if isinstance(_now_canonical_sigs.get("form_h2h"), dict) else {}
+                    _now_li = _now_canonical_sigs.get("lineup_injury", {}) if isinstance(_now_canonical_sigs.get("lineup_injury"), dict) else {}
+                    _now_signal_fp = _signal_fingerprint(
+                        _now_norm,
+                        line_movement_direction=_now_dir,
+                        tipster_signal=_now_tipster,
+                        h2h_signal=_now_h2h,
+                        outcome=_outcome_for_recheck,
+                        injuries_home=int(_now_li.get("home_injuries") or 0),
+                        injuries_away=int(_now_li.get("away_injuries") or 0),
+                    )
+                except Exception:
+                    _now_signal_fp = "no_sigs"
+            if _now_signal_fp != _gen_signal_fp:
+                log.warning(
+                    "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 GenWriteSignalDrift "
+                    "match_id=%s gen=%s now=%s — skipping cache write",
+                    match_id, _gen_signal_fp, _now_signal_fp,
+                )
+                return False, "signal_drift"
+        except Exception as _drift_exc:
+            log.debug(
+                "drift-guard signal exception for %s: %s — falling through to write",
+                match_id, _drift_exc,
+            )
+    if _gen_odds_hash:
+        try:
+            _now_odds_hash = (
+                await asyncio.to_thread(_compute_odds_hash, match_id) or ""
+            )
+            if _now_odds_hash and _now_odds_hash != _gen_odds_hash:
+                log.warning(
+                    "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 GenWriteOddsDrift "
+                    "match_id=%s gen=%s now=%s — skipping cache write",
+                    match_id, _gen_odds_hash, _now_odds_hash,
+                )
+                return False, "odds_drift"
+        except Exception as _drift_exc:
+            log.debug(
+                "drift-guard odds exception for %s: %s — falling through to write",
+                match_id, _drift_exc,
+            )
+
+    try:
+        await _store_narrative_cache(
+            match_id,
+            "",
+            pw["tips"],
+            pw["edge_tier"],
+            pw["model"],
+            evidence_json=pw.get("evidence_json"),
+            narrative_source=pw.get("narrative_source", NARRATIVE_SOURCE_LABEL),
+            coverage_json=pw.get("coverage_json"),
+            structured_card_json=pw.get("structured_card_json"),
+            verdict_html=pw.get("verdict_html"),
+            evidence_class=pw.get("evidence_class"),
+            tone_band=pw.get("tone_band"),
+            spec_json=pw.get("spec_json"),
+            context_json=pw.get("context_json"),
+            generation_ms=pw.get("generation_ms"),
+        )
+        return True, ""
+    except Exception as exc:
+        log.warning("Cache write raised for %s: %s", match_id, exc)
+        return False, "store_exception"
+
+
 def _signal_fingerprint(
     signals_norm: dict,
     line_movement_direction: str | None = None,
@@ -1809,27 +1921,32 @@ async def _generate_one(
         # recompute MUST win on every key, not just the missing ones.
         _pregen_sigs = _canonical_sigs
 
-    # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 3):
-    # premium-tier callsites MUST NOT cache a proxy-fallback verdict when
-    # canonical signals are unavailable. _collect_canonical_signals returns
-    # {} on collector failure (DB lock, schema drift, transient network) —
-    # without this guard a §12.1 monoculture row would land in the live
-    # cache for Diamond/Gold edges, undoing the pregen-side fix at the
-    # exact moment a transient outage paints over the brief's evidence.
-    # Behaviour: log a warning so monitoring catches collector regressions,
-    # then return a deferred sentinel result so main()'s gap-fill loop
-    # treats it the same as a polish-failure deferral and the next sweep
-    # retries with fresh data. Silver/Bronze tiers fall through to the
-    # legacy proxy adapter unchanged (W93-TIER-GATE cost policy).
+    # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 3),
+    # tightened in Codex pass-3 sixth review (Finding 1): premium-tier
+    # callsites MUST NOT cache a proxy-fallback verdict when canonical
+    # signals are unavailable. _collect_canonical_signals returns {} on
+    # collector failure. Pre-tightening the guard checked `not _pregen_sigs`,
+    # but `_pregen_sigs` is seeded from `edge['signals']` which can carry
+    # a TRUNCATED dict from _edge_from_serving_tip (movement / market /
+    # tipster subdicts WITHOUT the `available` flag). With a non-empty
+    # truncated dict the guard wouldn't fire, _pregen_sigs would
+    # normalise to false booleans, and the cache would land a §12.1-class
+    # row for premium tiers — exactly what this brief is fixing.
+    # Tightened: track `_canonical_sigs` success separately. Premium
+    # rows defer when the canonical recompute itself returned empty,
+    # regardless of any upstream truncated rebuild that happens to be
+    # non-empty. Silver/Bronze still fall through to the legacy proxy
+    # (W93-TIER-GATE cost policy).
     _premium_tier = (edge.get("edge_tier") or edge.get("tier") or "").lower()
     if (
         _premium_tier in ("gold", "diamond")
-        and not _pregen_sigs
+        and not _canonical_sigs
         and not edge.get("is_non_edge", False)
     ):
         log.warning(
             "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 PremiumCanonicalSignalsEmpty "
-            "match_key=%s tier=%s — deferring cache write to next sweep",
+            "match_key=%s tier=%s — deferring cache write to next sweep "
+            "(canonical recompute returned empty regardless of upstream rebuild state)",
             match_key, _premium_tier,
         )
         return {
@@ -2203,36 +2320,20 @@ async def _verify_and_fill_cache(
             result = await _generate_one(edge, sweep_type=sweep)
             if result.get("success") and result.get("_cache"):
                 pw = result["_cache"]
-                try:
-                    # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — narrative_html
-                    # generation retired. Verdict on the card image is now the
-                    # only narrative surface. We pass "" for html so the
-                    # writer stores no long-form prose; verdict_html still
-                    # rides through and is what the card image consumes.
-                    await _store_narrative_cache(
-                        pw["match_id"],
-                        "",
-                        pw["tips"],
-                        pw["edge_tier"],
-                        pw["model"],
-                        evidence_json=pw.get("evidence_json"),
-                        narrative_source=pw.get("narrative_source", "w82"),
-                        coverage_json=pw.get("coverage_json"),
-                        structured_card_json=pw.get("structured_card_json"),
-                        verdict_html=pw.get("verdict_html"),
-                        evidence_class=pw.get("evidence_class"),
-                        tone_band=pw.get("tone_band"),
-                        spec_json=pw.get("spec_json"),
-                        context_json=pw.get("context_json"),
-                        generation_ms=pw.get("generation_ms"),
-                        setup_validated=pw.get("setup_validated"),
-                        verdict_validated=pw.get("verdict_validated"),
-                        setup_attempts=pw.get("setup_attempts"),
-                        verdict_attempts=pw.get("verdict_attempts"),
-                    )
+                # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-3
+                # sixth review (Finding 2): route gap-fill writes through
+                # the SAME drift-checked persist helper main()'s
+                # pending_writes loop uses. Gap-fill regenerates after the
+                # batch write, so its gen→write window is potentially
+                # wider than the main loop's — making drift detection
+                # MORE important here, not less.
+                _persisted, _reason = await _drift_checked_persist(pw)
+                if _persisted:
                     log.info("  -> Gap filled for %s", mk)
-                except Exception as store_exc:
-                    log.warning("  -> Cache write failed for %s: %s", mk, store_exc)
+                elif _reason in ("signal_drift", "odds_drift"):
+                    log.warning("  -> Gap fill drift-skipped for %s (%s) — next sweep retries", mk, _reason)
+                else:
+                    log.warning("  -> Gap fill cache write failed for %s (%s)", mk, _reason)
             else:
                 log.warning("  -> Gap fill FAILED for %s", mk)
         except Exception as exc:
@@ -2687,103 +2788,24 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
         for pw in pending_writes:
             match_id = pw["match_id"]
 
-            # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 2):
-            # gen-vs-write race guard. _generate_one captured the odds_hash
-            # and signal fingerprint at render time; recompute both NOW
-            # (immediately before _store_narrative_cache) and skip the
-            # write on drift so we never stamp an outdated verdict_html as
-            # the fresh row. Re-running on the next sweep is cheap; serving
-            # a stale-but-marked-fresh verdict undoes the brief.
+            # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-3 sixth
+            # review (Finding 2): use the shared _drift_checked_persist helper
+            # so this loop and _verify_and_fill_cache go through identical
+            # gen-vs-write drift-detection. The helper pops the reserved
+            # _gen_* keys, runs the same fingerprint comparison, calls
+            # _store_narrative_cache only when drift checks pass, and
+            # returns a (persisted, reason) tuple so we can split write_ok
+            # vs write_drift the same way as before.
             try:
-                _gen_odds_hash = pw.pop("_gen_odds_hash", "") or ""
-                _gen_signal_fp = pw.pop("_gen_signal_fp", "") or ""
-                _outcome_for_recheck = pw.pop("_outcome_for_recheck", "") or ""
-                _sport_for_recheck = pw.pop("_sport_for_recheck", None)
-                _league_for_recheck = pw.pop("_league_for_recheck", None)
-                if _gen_signal_fp and _outcome_for_recheck:
-                    _now_canonical_sigs = _collect_canonical_signals(
-                        match_id,
-                        _outcome_for_recheck,
-                        _sport_for_recheck,
-                        _league_for_recheck,
-                    )
-                    _now_signal_fp = "no_sigs"
-                    if _now_canonical_sigs:
-                        try:
-                            from narrative_spec import (
-                                _normalise_spec_signals as _ns_norm,
-                                _normalise_line_movement_direction as _ns_dir,
-                            )
-                            _now_norm = _ns_norm(_now_canonical_sigs)
-                            _now_movement_signal = _now_canonical_sigs.get("movement", {}) if isinstance(_now_canonical_sigs.get("movement"), dict) else {}
-                            _now_dir = _ns_dir(_now_movement_signal.get("direction", ""))
-                            _now_tipster = _now_canonical_sigs.get("tipster", {}) if isinstance(_now_canonical_sigs.get("tipster"), dict) else {}
-                            _now_h2h = _now_canonical_sigs.get("form_h2h", {}) if isinstance(_now_canonical_sigs.get("form_h2h"), dict) else {}
-                            _now_li = _now_canonical_sigs.get("lineup_injury", {}) if isinstance(_now_canonical_sigs.get("lineup_injury"), dict) else {}
-                            _now_signal_fp = _signal_fingerprint(
-                                _now_norm,
-                                line_movement_direction=_now_dir,
-                                tipster_signal=_now_tipster,
-                                h2h_signal=_now_h2h,
-                                outcome=_outcome_for_recheck,
-                                injuries_home=int(_now_li.get("home_injuries") or 0),
-                                injuries_away=int(_now_li.get("away_injuries") or 0),
-                            )
-                        except Exception:
-                            _now_signal_fp = "no_sigs"
-                    if _now_signal_fp != _gen_signal_fp:
-                        log.warning(
-                            "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 GenWriteSignalDrift "
-                            "match_id=%s gen=%s now=%s — skipping cache write",
-                            match_id, _gen_signal_fp, _now_signal_fp,
-                        )
-                        write_drift += 1
-                        continue
-                if _gen_odds_hash:
-                    _now_odds_hash = (
-                        await asyncio.to_thread(_compute_odds_hash, match_id) or ""
-                    )
-                    if _now_odds_hash and _now_odds_hash != _gen_odds_hash:
-                        log.warning(
-                            "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 GenWriteOddsDrift "
-                            "match_id=%s gen=%s now=%s — skipping cache write",
-                            match_id, _gen_odds_hash, _now_odds_hash,
-                        )
-                        write_drift += 1
-                        continue
-            except Exception as _drift_exc:
-                # Best-effort guard — never block the legitimate write path
-                # on a drift-check exception. Persist + log for monitoring.
-                log.debug(
-                    "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 drift-guard exception "
-                    "for %s: %s — falling through to write",
-                    match_id, _drift_exc,
-                )
-
-            try:
-                # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — narrative_html
-                # generation retired. Verdict on the card image is the only
-                # narrative surface; pass "" for html, keep verdict_html.
-                await _store_narrative_cache(
-                    match_id,
-                    "",
-                    pw["tips"],
-                    pw["edge_tier"],
-                    pw["model"],
-                    evidence_json=pw.get("evidence_json"),
-                    narrative_source=pw.get("narrative_source", NARRATIVE_SOURCE_LABEL),
-                    coverage_json=pw.get("coverage_json"),
-                    structured_card_json=pw.get("structured_card_json"),
-                    verdict_html=pw.get("verdict_html"),
-                    evidence_class=pw.get("evidence_class"),
-                    tone_band=pw.get("tone_band"),
-                    spec_json=pw.get("spec_json"),
-                    context_json=pw.get("context_json"),
-                    generation_ms=pw.get("generation_ms"),
-                )
-                write_ok += 1
+                _persisted, _reason = await _drift_checked_persist(pw)
+                if _persisted:
+                    write_ok += 1
+                elif _reason in ("signal_drift", "odds_drift"):
+                    write_drift += 1
+                continue
             except Exception as exc:
                 log.warning("Cache write failed for %s: %s", match_id, exc)
+                continue
         log.info(
             "Cache writes: %d/%d successful (W82 baseline) — drift skips: %d",
             write_ok, len(pending_writes), write_drift,
