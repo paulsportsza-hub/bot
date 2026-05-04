@@ -4123,12 +4123,30 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         await _serve_response(query, text, markup)
     elif prefix == "profile":
         if action == "home":
+            _ph_chat_id = query.message.chat_id
+            if _ph_chat_id <= 0:
+                log.warning(
+                    "FIX-PROFILE-CARD-SPAM-01: profile:home blocked chat_id=%d user_id=%d (non-DM)",
+                    _ph_chat_id,
+                    query.from_user.id,
+                )
+                try:
+                    await query.get_bot().send_message(
+                        chat_id=_EDGEOPS_CHAT_ID,
+                        text=(
+                            f"⚠️ FIX-PROFILE-CARD-SPAM-01: profile:home blocked"
+                            f" user={query.from_user.id} chat={_ph_chat_id}"
+                        ),
+                    )
+                except Exception:
+                    pass
+                return
             card_data = await _collect_profile_card_data(query.from_user.id)
             markup = await _build_profile_buttons(query.from_user.id)
             text, _ = await _render_profile_home_surface(query.from_user.id)
             await send_card_or_fallback(
                 bot=query.get_bot(),
-                chat_id=query.message.chat_id,
+                chat_id=_ph_chat_id,
                 template="profile_home.html",
                 data=card_data,
                 text_fallback=text,
@@ -6355,12 +6373,30 @@ async def _show_stats_overview(update: Update, user_id: int) -> None:
 
 async def _show_profile(update: Update, user_id: int) -> None:
     """Show the profile image card from the sticky keyboard (BUILD-PROFILE-CARD-01)."""
+    _sf_chat_id = update.effective_chat.id
+    if _sf_chat_id <= 0:
+        log.warning(
+            "FIX-PROFILE-CARD-SPAM-01: profile card blocked chat_id=%d user_id=%d (non-DM)",
+            _sf_chat_id,
+            user_id,
+        )
+        try:
+            await update.get_bot().send_message(
+                chat_id=_EDGEOPS_CHAT_ID,
+                text=(
+                    f"⚠️ FIX-PROFILE-CARD-SPAM-01: profile card blocked"
+                    f" user={user_id} chat={_sf_chat_id}"
+                ),
+            )
+        except Exception:
+            pass
+        return
     card_data = await _collect_profile_card_data(user_id)
     buttons = await _build_profile_buttons(user_id)
     summary, _ = await _render_profile_home_surface(user_id)
     await send_card_or_fallback(
         bot=update.get_bot(),
-        chat_id=update.effective_chat.id,
+        chat_id=_sf_chat_id,
         template="profile_home.html",
         data=card_data,
         text_fallback=summary,
@@ -24389,11 +24425,29 @@ async def handle_settings(query, action: str) -> None:
         user = await db.get_user(user_id)
 
     if action == "home":
+        _sh_chat_id = query.message.chat_id
+        if _sh_chat_id <= 0:
+            log.warning(
+                "FIX-PROFILE-CARD-SPAM-01: settings:home blocked chat_id=%d user_id=%d (non-DM)",
+                _sh_chat_id,
+                user_id,
+            )
+            try:
+                await query.get_bot().send_message(
+                    chat_id=_EDGEOPS_CHAT_ID,
+                    text=(
+                        f"⚠️ FIX-PROFILE-CARD-SPAM-01: settings:home blocked"
+                        f" user={user_id} chat={_sh_chat_id}"
+                    ),
+                )
+            except Exception:
+                pass
+            return
         await _discard_settings_sports_state(user_id)
         card_data = await _collect_profile_card_data(user_id)
         await send_card_or_fallback(
             bot=query.get_bot(),
-            chat_id=query.message.chat_id,
+            chat_id=_sh_chat_id,
             template="profile_home.html",
             data=card_data,
             text_fallback="",
@@ -31257,7 +31311,7 @@ def main() -> None:
         r"|👤 Profile|⚙️ Settings|❓ Help|🔴 Live Games|📊 My Stats|📖 Betway Guide|🎯 Today's Picks|📅 Schedule"
         f"|{re.escape(_KEYBOARD_LABELS[0])})$"
     )
-    app.add_handler(MessageHandler(filters.Regex(_kb_pattern), handle_keyboard_tap))
+    app.add_handler(MessageHandler(filters.Regex(_kb_pattern) & filters.ChatType.PRIVATE, handle_keyboard_tap))
 
     # Free-text chat (also handles favourite input during onboarding)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, freetext_handler))
