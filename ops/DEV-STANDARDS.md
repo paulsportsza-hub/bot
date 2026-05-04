@@ -4,6 +4,7 @@
 > Referenced from CLAUDE.md.
 
 *Last updated: 17 April 2026 PM by AUDITOR (CLAUDE-MD-SO-SPLIT-01 Tier 1 — absorbed 6 SOs from CLAUDE.md: #15, #18, #19, #27 [reworded], #33, #36.)*
+*Updated: 4 May 2026 — BUILD-DEV-STANDARDS-V4.5-REVIEW-GATE-NARROW-01 — narrowed Codex Review Gate after FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 burned full 5h window on stacked Opus Max + adversarial.*
 
 ---
 
@@ -381,3 +382,85 @@ Canonical spec lives at [`reference/PROGRESS-TABLE-FORMAT.md`](../reference/PROG
 ```
 
 Mandatory for Edge LEAD: emit after every brief report lands, at every roadmap review, and when dispatching a new wave. Status values are strict (`Queued` · `In flight` · `Blocked` · `Complete` · `Failed` — no other labels). See canonical file for column specs, ordering rules, launch-gate row, and examples.
+
+---
+
+### Codex Review Gate (SO #45, v4.5 — LOCKED 4 May 2026)
+
+*Supersedes v4.4 (3 May 2026). Routing v1 pivot: Codex stops being a primary executor. Codex now runs as the universal reviewer invoked via `/codex:review` or `/codex:adversarial-review` at the end of every code-touching brief, before `mark_done.sh`. Claude (Sonnet | Opus Max Effort) executes; Codex reviews.*
+
+**Why v4.5:** FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 burned the entire Cowork 5h window (1h 39m executor wall-time, 171k tokens, 7% balance left) running Opus Max Effort + `/codex:adversarial-review` stacked on top. The trigger fired correctly per v4.4's mandatory list but the cost is incompatible with Routing v1 §4 cost discipline. Fix the rule, not the gate.
+
+#### Lifecycle (one extra mandatory step per brief)
+
+After commit + push, before `mark_done.sh`:
+1. Run `/codex:review` (standard) or `/codex:adversarial-review <focus>` (adversarial — see below) on the wave branch.
+2. If review returns blockers, address with additional commits + push, then re-run review.
+3. Only proceed to `mark_done.sh` when review returns no blockers.
+4. Include the review summary verbatim in the report under a `## Codex Review` section.
+5. State the outcome explicitly: `clean | blockers-addressed | bootstrap-exempt`.
+
+Reports without the `## Codex Review` section are INCOMPLETE and reopen the brief.
+
+#### Review modes
+
+- **`/codex:review`** — standard. Default for all briefs. Catches functional correctness, regressions, contract drift, gate coverage.
+- **`/codex:adversarial-review <focus text>`** — adversarial. DISCRETIONARY — invoked only when one of the conditions below is met. Never auto-fired from trigger match alone.
+
+**Adversarial is DISCRETIONARY. Invoked only when:**
+- (a) The brief AC explicitly sets `review_mode: adversarial-review` with a focus text, OR
+- (b) Standard `/codex:review` output itself recommends escalation, OR
+- (c) Paul override.
+
+The trigger list below no longer auto-fires adversarial.
+
+#### Adversarial-review mandatory triggers (narrowed 6 → 3)
+
+Adversarial review MUST be used (i.e. brief AC must declare `review_mode: adversarial-review`) when:
+
+1. New runtime path handling **money, payments, or auth**.
+2. Schema changes on tables with **retention / billing / compliance** impact.
+3. Migrations that are **not idempotent or not rollback-safe**.
+
+#### "Consider adversarial" advisory list (author judgement, not auto-fire)
+
+The following moved from mandatory to advisory. Author uses judgement — standard review is the default, adversarial is opt-in when the specific risk warrants it:
+
+- Concurrency-sensitive code (locks, queues, async handlers, scrapers).
+- Any change touching the dispatch system, bridge, or worktree-runner.
+- Any narrative / cache surface that ships to premium-tier users.
+
+#### Cost rule (NEW — v4.5)
+
+When executor model = **Opus Max Effort**, the default review is **standard `/codex:review`** unless the brief AC explicitly justifies adversarial (i.e. satisfies one of the 3 mandatory triggers above or has a Paul override). No stacking premium-on-premium without explicit justification in the brief body.
+
+#### Brief authoring rule
+
+Every brief's AC block MUST specify the review mode:
+
+```
+Review mode for this brief: review | adversarial-review
+```
+
+For `adversarial-review`, the focus text is also required. Implicit adversarial from trigger match alone is not permitted — the AC must declare it.
+
+#### Report format
+
+Every report MUST include:
+
+```markdown
+## Codex Review
+<review summary verbatim>
+Outcome: clean | blockers-addressed | bootstrap-exempt
+```
+
+#### Bootstrap exemption
+
+`BUILD-CODEX-PLUGIN-INSTALL-AND-VERIFY-01` and `BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-01` are exempt (ratifies the gate as canonical). All subsequent code-touching briefs MUST gate.
+
+#### Active vs Retired Agent set (post v4.4, unchanged in v4.5)
+
+- **Active 8**: Sonnet | Opus Max Effort × LEAD | AUDITOR | COO | NARRATIVE.
+- **Retired 8** (Codex executor agents — now reviewers only): Codex XHigh | Codex High × the four roles. Selectable transitionally; `enqueue.py` emits a stderr WARNING when dispatched.
+
+Mirror: `ops/MODEL-ROUTING.md` §9 (Cowork). Notion Routing v1 §10 (`354d9048-d73c-8138-bf72-d8ce7b768a08`).
