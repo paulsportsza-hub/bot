@@ -2219,6 +2219,39 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
                 fallback_page=_upg_pg,
             ))
+            # Tier-index tap (no specific match): show generic lock card instead of text.
+            if _upg_requested_tier and not _upg_tip:
+                try:
+                    from card_pipeline import build_tier_lock_data as _build_tier_lock
+                    _tier_lock_summary = await _get_edge_tracker_summary(7)
+                    _tier_lock_emoji = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}.get(_upg_requested_tier, "🔒")
+                    _tier_lock_data = _build_tier_lock(
+                        edge_tier=_upg_requested_tier,
+                        home="", away="",
+                        sport_key="", league="", kickoff_str="", broadcast="",
+                        confirming_signals=0,
+                        tracker_summary=_tier_lock_summary,
+                    )
+                    _tier_lock_markup = InlineKeyboardMarkup([
+                        [InlineKeyboardButton(
+                            f"{_tier_lock_emoji} Unlock {_upg_requested_tier.title()} — View Plans",
+                            callback_data="sub:plans",
+                        )],
+                        [InlineKeyboardButton(
+                            "↩️ Back",
+                            callback_data=f"hot:back:{_ht_page_state.get(user_id, 0)}",
+                        )],
+                    ])
+                    await send_card_or_fallback(
+                        bot=ctx.bot, chat_id=query.from_user.id,
+                        template="tier_lock_upsell.html", data=_tier_lock_data,
+                        text_fallback=f"🔒 {_upg_requested_tier.title()} Edge — upgrade to unlock.",
+                        markup=_tier_lock_markup,
+                        message_to_edit=query.message,
+                    )
+                    return
+                except Exception as _tier_lock_err:
+                    log.warning("tier_lock_upsell (tier-index) failed: %s", _tier_lock_err)
             # BUILD-TIER-LOCK-UPSELL-01: render image upsell card for locked tips
             if _upg_tip and _upg_key and _upg_header.get("home") and _upg_header.get("away"):
                 try:
@@ -2610,46 +2643,45 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
         _mme_tier_pretty = _mme_edge_tier.title()
         _mme_lock_home = (_mme_full_tip or {}).get("home") or _mme_match.get("home", "")
         _mme_lock_away = (_mme_full_tip or {}).get("away") or _mme_match.get("away", "")
-        if _mme_lock_home and _mme_lock_away:
-            try:
-                from card_pipeline import build_tier_lock_data as _build_mme_lock_data
-                _mme_lock_summary = await _get_edge_tracker_summary(7)
-                _mme_kt = _mme_match.get("time", "")
-                _mme_kd = _mme_match.get("date", "")
-                _mme_kickoff_str = f"{_mme_kd} {_mme_kt}".strip() if _mme_kt else _mme_kd
-                _mme_lock_data = _build_mme_lock_data(
-                    edge_tier=_mme_edge_tier,
-                    home=_mme_lock_home,
-                    away=_mme_lock_away,
-                    sport_key=(_mme_full_tip or {}).get("sport_key", ""),
-                    league=(_mme_full_tip or {}).get("league_display") or _mme_match.get("league", ""),
-                    kickoff_str=_mme_kickoff_str,
-                    broadcast=(_mme_full_tip or {}).get("broadcast", ""),
-                    confirming_signals=(
-                        (_mme_full_tip or {}).get("confirming_signals")
-                        or (((_mme_full_tip or {}).get("edge_v2") or {}).get("confirming_signals", 0))
-                    ),
-                    tracker_summary=_mme_lock_summary,
-                )
-                _mme_lock_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(
-                        f"💎 Unlock {_mme_tier_pretty}",
-                        callback_data="sub:plans",
-                    )],
-                    [InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb)],
-                ])
-                await send_card_or_fallback(
-                    bot=ctx.bot,
-                    chat_id=query.message.chat_id,
-                    template="tier_lock_upsell.html",
-                    data=_mme_lock_data,
-                    text_fallback=f"🔒 {_mme_tier_pretty} Edge — upgrade to unlock.",
-                    markup=_mme_lock_markup,
-                    message_to_edit=query.message,
-                )
-                return
-            except Exception as _mme_lock_err:
-                log.warning("tier_lock_upsell (mme) failed: %s", _mme_lock_err)
+        try:
+            from card_pipeline import build_tier_lock_data as _build_mme_lock_data
+            _mme_lock_summary = await _get_edge_tracker_summary(7)
+            _mme_kt = _mme_match.get("time", "")
+            _mme_kd = _mme_match.get("date", "")
+            _mme_kickoff_str = f"{_mme_kd} {_mme_kt}".strip() if _mme_kt else _mme_kd
+            _mme_lock_data = _build_mme_lock_data(
+                edge_tier=_mme_edge_tier,
+                home=_mme_lock_home,
+                away=_mme_lock_away,
+                sport_key=(_mme_full_tip or {}).get("sport_key", ""),
+                league=(_mme_full_tip or {}).get("league_display") or _mme_match.get("league", ""),
+                kickoff_str=_mme_kickoff_str,
+                broadcast=(_mme_full_tip or {}).get("broadcast", ""),
+                confirming_signals=(
+                    (_mme_full_tip or {}).get("confirming_signals")
+                    or (((_mme_full_tip or {}).get("edge_v2") or {}).get("confirming_signals", 0))
+                ),
+                tracker_summary=_mme_lock_summary,
+            )
+            _mme_lock_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    f"💎 Unlock {_mme_tier_pretty}",
+                    callback_data="sub:plans",
+                )],
+                [InlineKeyboardButton("↩️ Back", callback_data=_mme_back_cb)],
+            ])
+            await send_card_or_fallback(
+                bot=ctx.bot,
+                chat_id=query.message.chat_id,
+                template="tier_lock_upsell.html",
+                data=_mme_lock_data,
+                text_fallback=f"🔒 {_mme_tier_pretty} Edge — upgrade to unlock.",
+                markup=_mme_lock_markup,
+                message_to_edit=query.message,
+            )
+            return
+        except Exception as _mme_lock_err:
+            log.warning("tier_lock_upsell (mme) failed: %s", _mme_lock_err)
         # fallback: text-based lock message
         _mme_markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("📋 View Plans", callback_data="sub:plans")],
@@ -5056,10 +5088,10 @@ async def _show_edge_explainer(query, ob: dict) -> None:
         "When we spot a gap between what the bookies think and what "
         "our AI calculates, that's your Edge.\n\n"
         "💎 <b>Diamond Edge</b> — When you see this, you MOVE. Extremely rare, high confidence.\n"
-        "🥇 <b>Golden Edge</b> — Strong value. These are the bets that build bankrolls.\n"
+        "🥇 <b>Gold Edge</b> — Strong value. These are the bets that build bankrolls.\n"
         "🥈 <b>Silver Edge</b> — Solid edge. The numbers say there's value here.\n"
         "🥉 <b>Bronze Edge</b> — Small but positive. Worth considering.\n\n"
-        "<i>Pro tip: Focus on 💎 Diamond and 🥇 Golden — act fast, edges don't last.</i>"
+        "<i>Pro tip: Focus on 💎 Diamond and 🥇 Gold — act fast, edges don't last.</i>"
     )
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("Got it ✅", callback_data="ob_nav:edge_done")],
@@ -5951,10 +5983,10 @@ async def _handle_team_text_input(update: Update, ctx, ob: dict) -> None:
                     "When we spot a gap between what the bookies think and what "
                     "our AI calculates, that's your Edge.\n\n"
                     "💎 <b>Diamond Edge</b> — When you see this, you MOVE. Extremely rare, high confidence.\n"
-                    "🥇 <b>Golden Edge</b> — Strong value. These are the bets that build bankrolls.\n"
+                    "🥇 <b>Gold Edge</b> — Strong value. These are the bets that build bankrolls.\n"
                     "🥈 <b>Silver Edge</b> — Solid edge. The numbers say there's value here.\n"
                     "🥉 <b>Bronze Edge</b> — Small but positive. Worth considering.\n\n"
-                    "<i>Pro tip: Focus on 💎 Diamond and 🥇 Golden — act fast, edges don't last.</i>"
+                    "<i>Pro tip: Focus on 💎 Diamond and 🥇 Gold — act fast, edges don't last.</i>"
                 )
                 markup = InlineKeyboardMarkup([
                     [InlineKeyboardButton("Got it ✅", callback_data="ob_nav:edge_done")],
@@ -12031,7 +12063,7 @@ def _build_index_markup(user_tier: str, tier_counts: dict[str, int]) -> InlineKe
     counts = {key: int((tier_counts or {}).get(key, 0) or 0) for key in _EDGE_PICKS_INDEX_TIERS}
     for key in _EDGE_PICKS_INDEX_TIERS:
         locked = edge_picks_index_tier_locked(user_tier, key)
-        label = EDGE_LABELS.get(key, key.upper()).replace(" EDGE", "").title()
+        label = {"diamond": "Diamond", "gold": "Gold", "silver": "Silver", "bronze": "Bronze"}.get(key, key.title())
         emoji = EDGE_EMOJIS.get(key, "")
         suffix = "Upgrade" if locked else f"{counts[key]} live"
         callback = f"hot:upgrade:tier:{key}" if locked else f"hot:tier:{key}"

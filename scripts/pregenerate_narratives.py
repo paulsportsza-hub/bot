@@ -2010,8 +2010,8 @@ def _quarantine_stale_cache_rows(db_path: str | None = None) -> int:
     # This matches _is_past_kickoff which checks total_seconds > 24 * 3600.
     cutoff_date = datetime.now(SAST).strftime("%Y-%m-%d")
     try:
-        conn = sqlite3.connect(path, timeout=5.0)
-        conn.execute("PRAGMA journal_mode=WAL")
+        from scrapers.db_connect import connect_odds_db as _quarantine_conn
+        conn = _quarantine_conn(path, timeout=5)
         try:
             cur = conn.execute(
                 "UPDATE narrative_cache "

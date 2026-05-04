@@ -87,7 +87,8 @@ def _fetch_recent_rows(
     limit: int,
 ) -> Iterator[tuple[str, str]]:
     """Yield (match_id, narrative_html) tuples for the N most-recent rows."""
-    conn = sqlite3.connect(str(db_path))
+    from scrapers.db_connect import connect_odds_db as _mnd_conn
+    conn = _mnd_conn(str(db_path))
     try:
         cur = conn.execute(
             "SELECT match_id, narrative_html "

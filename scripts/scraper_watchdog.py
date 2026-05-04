@@ -97,8 +97,8 @@ def check_data_freshness():
         return  # Off-peak — scraper runs less frequently, skip check
 
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        conn.execute("PRAGMA busy_timeout=5000")
+        from scrapers.db_connect import connect_odds_db as _sw_conn
+        conn = _sw_conn(DB_PATH, timeout=5)
         row = conn.execute(
             "SELECT MAX(scraped_at) FROM odds_snapshots"
         ).fetchone()
@@ -135,7 +135,8 @@ def check_data_freshness():
 def check_db_lock():
     """Detect active DB write lock via BEGIN IMMEDIATE (2-second timeout)."""
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=2)
+        from scrapers.db_connect import connect_odds_db as _sw_lock_conn
+        conn = _sw_lock_conn(DB_PATH, timeout=2)
         conn.execute("PRAGMA busy_timeout=2000")
         conn.execute("BEGIN IMMEDIATE")
         conn.rollback()

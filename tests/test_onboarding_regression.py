@@ -407,7 +407,7 @@ class TestEdgeExplainerCopy:
         """Explainer must list all 4 Edge tiers with correct names."""
         source = (BOT_ROOT / "bot.py").read_text()
         assert "Diamond Edge" in source, "Diamond Edge tier missing from explainer"
-        assert "Golden Edge" in source, "Golden Edge tier missing from explainer"
+        assert "Gold Edge" in source, "Gold Edge tier missing from explainer"
         assert "Silver Edge" in source, "Silver Edge tier missing from explainer"
         assert "Bronze Edge" in source, "Bronze Edge tier missing from explainer"
 

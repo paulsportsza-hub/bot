@@ -260,7 +260,8 @@ def _select_top_tier_pick(today: str) -> tuple[str, dict] | None:
 
     any_diversity_excluded = False
     try:
-        conn = sqlite3.connect(SCRAPERS_DB, timeout=15)
+        from scrapers.db_connect import connect_odds_db as _rg_conn
+        conn = _rg_conn(SCRAPERS_DB, timeout=15)
         conn.row_factory = sqlite3.Row
         for tier in tiers_to_check:
             rows = conn.execute(sql, (tier,)).fetchall()

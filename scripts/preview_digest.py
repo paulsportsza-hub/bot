@@ -77,7 +77,8 @@ def build_tips_from_db(limit: int = 8) -> list[dict]:
         print(f"ERROR: DB not found: {SCRAPERS_DB}")
         return []
 
-    conn = sqlite3.connect(str(SCRAPERS_DB))
+    from scrapers.db_connect import connect_odds_db as _pd_conn
+    conn = _pd_conn(str(SCRAPERS_DB))
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """SELECT DISTINCT match_key, sport, league, edge_tier,

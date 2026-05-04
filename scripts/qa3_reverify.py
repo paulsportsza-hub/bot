@@ -215,7 +215,8 @@ def _reconstruct_pack(ev_data: dict) -> EvidencePack:
 
 
 def main():
-    conn = sqlite3.connect(DB)
+    from scrapers.db_connect import connect_odds_db as _qa3_conn
+    conn = _qa3_conn(DB)
     conn.row_factory = sqlite3.Row
 
     # Get the LATEST row per match_key (most recent shadow)

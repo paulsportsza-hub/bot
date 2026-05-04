@@ -11,6 +11,7 @@ and formats them for Telegram + log file output.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
 import sys
@@ -571,7 +572,7 @@ def format_telegram_message(results: dict) -> str:
         f"\U0001f534 <b>Post-deploy validation: {len(failures)} FAIL</b>\n",
     ]
     for f in failures:
-        lines.append(f"\u274c {f}")
+        lines.append(f"\u274c {html.escape(f)}")
 
     lines.append(f"\n\u2705 {pc}/{total} other checks passed.")
     lines.append(f"<i>{results['trigger']} | {ms:.0f}ms</i>")
