@@ -67,99 +67,122 @@ def _signal_mapped_enabled() -> bool:
 def _spec_to_signals(spec: "NarrativeSpec") -> dict[str, bool]:
     """Adapt NarrativeSpec → 6-signal boolean dict for the new builder.
 
-    NarrativeSpec does not carry a raw signals dict (Phase 1 trace —
-    Notion: BUILD-VERDICT-SIGNAL-MAPPED-01). We derive presence
-    booleans from the existing spec fields. Each signal is keyed to
-    "does this support the picked outcome", not just "does this data
-    exist" — so the mapper's positive phrasing ("team news gives it
-    extra weight", "outside support points this way") never lands on
-    a card where the underlying data CONTRADICTS the pick. Adapter
-    polarity hardened on 2026-05-04 in response to Codex adversarial-
-    review (P2 picked-side injury inversion + P2 tipster_agrees gate).
+    OPS-SPEC-SIGNAL-EXPOSURE-01 (2026-05-04): NarrativeSpec now carries a
+    native ``signals: dict[str, bool]`` field populated from the canonical
+    ``collect_all_signals`` output via ``_extract_edge_data``. When the
+    native dict is non-empty we read availability natively (single source
+    of truth shared with the card-image Edge Signal dots — HG-4) and
+    apply polarity filters against spec fields. When the native dict is
+    empty (un-migrated specs / live-tap path with no edge_v2 metadata),
+    we fall through to the BUILD-VERDICT-SIGNAL-MAPPED-01 proxy adapter
+    so the mapper never crashes on an empty spec.
 
-    Signal semantics:
-      - price_edge → ev_pct > 0 (every NarrativeSpec built from a tip
-        has a positive EV; this is the product's core value prop and
-        is implicitly always true on the main path).
-      - line_mvt   → movement_direction in ("for","against","unknown")
-        — fires when ANY movement signal exists, regardless of
-        direction. The favourable / against routing happens via
-        ``line_movement_direction`` separately.
-      - market     → bookmaker_count >= 3 (proxy for "wider market"
-        consensus — at least 3 SA books pricing the outcome).
-      - tipster    → tipster_available AND tipster_agrees == True.
-        A tipster signal that DISAGREES with our pick is contradicting
-        evidence, not support; the mapper must NOT emit "outside
-        support points this way" against the pick.
-      - form       → home_form OR away_form (form string present).
-      - injury     → opponent-side injuries (the OTHER team being
-        weakened supports our pick). Picked-side injuries are
-        contradicting evidence and ``has_real_risk`` handles them via
-        the corpus concern-prefix path; the mapper must NOT phrase
-        them as "team news gives it extra weight" for the picked side.
-        Empty outcome (no clear pick side) suppresses the signal — the
-        spec §6 sentences are explicitly "the OTHER team weakened"
-        framing only.
+    Polarity rules (applied in BOTH paths):
+      - price_edge → ``ev_pct > 0`` AND ``signals.price_edge`` raw fires
+        (the product's core value prop — always true on positive-EV main
+        path; native source confirms availability).
+      - line_mvt   → raw availability passes through; favourable/against
+        routing is downstream via ``_spec_movement_direction``.
+      - market     → raw availability is sufficient — multi-book consensus
+        is the §12.6 contract.
+      - tipster    → AND-gated on ``tipster_agrees is True`` so the mapper
+        never emits "outside support points this way" against the pick.
+      - form       → raw availability is sufficient — §12 form phrasing
+        ("recent form backs this") works for either-team form data.
+      - injury     → AND-gated on opponent-side injuries supplied by
+        ``get_verified_injuries``; picked-side injuries surface via the
+        concern-prefix path. Empty outcome (no clear pick side) suppresses
+        — spec §6.6 phrasing is explicitly "the OTHER team weakened".
 
-    Out-of-scope (Phase 1 gap → follow-up brief
-    OPS-SPEC-SIGNAL-EXPOSURE-01): direct ``signals.market`` and
-    ``signals.form`` booleans on NarrativeSpec. Current proxies
-    track data presence, which is the contract §6 requires.
+    HG-4 alignment: ``spec.signals`` (raw availability) and
+    ``card_pipeline._compute_signals`` (also raw availability, dot-render
+    contract) trace to the same upstream collect_all_signals output. The
+    polarity filters here apply on top of that shared source.
     """
     outcome = (getattr(spec, "outcome", "") or "").lower()
     inj_home = list(getattr(spec, "injuries_home", []) or [])
     inj_away = list(getattr(spec, "injuries_away", []) or [])
-    # Inversion: opponent injuries = support, picked-side injuries =
-    # risk (handled separately by has_real_risk + concern-prefix path).
-    # Empty outcome → suppressed (no pick side to evaluate against).
     if outcome == "home":
-        injury_active = bool(inj_away)
+        opponent_injuries = bool(inj_away)
     elif outcome == "away":
-        injury_active = bool(inj_home)
+        opponent_injuries = bool(inj_home)
     else:
-        injury_active = False
+        opponent_injuries = False
 
-    movement = (getattr(spec, "movement_direction", "") or "").lower()
-    line_mvt_active = movement in ("for", "against", "unknown", "favourable")
-
-    bookmaker_count = int(getattr(spec, "bookmaker_count", 0) or 0)
-    market_active = bookmaker_count >= 3
-
-    # Gate tipster on AGREEMENT, not just availability. tipster_agrees=None
-    # (no data) and tipster_agrees=False (against the pick) both suppress
-    # the signal — only an explicit True (tipsters concur with the pick)
-    # is treated as supporting. Spec §6.4 phrasing assumes alignment.
-    tipster_active = bool(getattr(spec, "tipster_available", False)) and (
+    tipster_agrees = bool(getattr(spec, "tipster_available", False)) and (
         getattr(spec, "tipster_agrees", None) is True
     )
 
+    raw = getattr(spec, "signals", None) or {}
+    if isinstance(raw, dict) and raw:
+        # ── Native path (OPS-SPEC-SIGNAL-EXPOSURE-01) ──────────────────
+        # spec.signals carries the canonical collect_all_signals
+        # availability shape (post _normalise_spec_signals). Apply the
+        # polarity gates above on top so positive phrasing only fires
+        # when the signal SUPPORTS the pick.
+        ev_pct = float(getattr(spec, "ev_pct", 0) or 0)
+        return {
+            "price_edge": bool(raw.get("price_edge")) and ev_pct > 0,
+            "line_mvt":   bool(raw.get("line_mvt")),
+            "market":     bool(raw.get("market")),
+            "tipster":    bool(raw.get("tipster")) and tipster_agrees,
+            "form":       bool(raw.get("form")),
+            "injury":     bool(raw.get("injury")) and opponent_injuries,
+        }
+
+    # ── Proxy fallback (BUILD-VERDICT-SIGNAL-MAPPED-01 path) ───────────
+    # Activated when spec.signals is empty — un-migrated specs from live-
+    # tap callers that bypass _extract_edge_data, contract tests that
+    # construct NarrativeSpec directly, or any future producer that
+    # forgets to populate the field. Fallback derives booleans from
+    # discrete spec fields (movement_direction, bookmaker_count,
+    # home_form/away_form, etc.) per the original adapter.
+    movement = (getattr(spec, "movement_direction", "") or "").lower()
+    line_mvt_active = movement in ("for", "against", "unknown", "favourable")
+    bookmaker_count = int(getattr(spec, "bookmaker_count", 0) or 0)
+    market_active = bookmaker_count >= 3
     home_form = (getattr(spec, "home_form", "") or "").strip()
     away_form = (getattr(spec, "away_form", "") or "").strip()
     form_active = bool(home_form or away_form)
-
     ev_pct = float(getattr(spec, "ev_pct", 0) or 0)
     price_edge_active = ev_pct > 0
-
     return {
         "price_edge": price_edge_active,
         "line_mvt":   line_mvt_active,
         "market":     market_active,
-        "tipster":    tipster_active,
+        "tipster":    tipster_agrees,
         "form":       form_active,
-        "injury":     injury_active,
+        "injury":     opponent_injuries,
     }
 
 
 def _spec_movement_direction(spec: "NarrativeSpec") -> str:
-    """Map spec.movement_direction → mapper's three-value contract.
+    """Map spec movement → mapper's three-value contract.
 
-    Mapper expects ``favourable`` / ``against`` / ``unknown``. Spec uses
-    ``for`` / ``against`` / ``neutral`` / ``unknown``. ``neutral`` is
-    treated as ``unknown`` so the special-case lead falls through to
-    the neutral phrasing (spec §6.2 unknown branch).
+    Mapper expects ``favourable`` / ``against`` / ``unknown``.
+
+    OPS-SPEC-SIGNAL-EXPOSURE-01 (2026-05-04): prefer the native
+    ``spec.line_movement_direction`` field (already in the 3-value
+    contract per ``_normalise_line_movement_direction``). Fall back
+    to mapping the legacy ``spec.movement_direction`` field
+    (``for`` / ``against`` / ``neutral`` / ``unknown``) when the
+    native field is unset — un-migrated specs and proxy-fallback path.
+    ``neutral``/``None`` collapse to ``unknown`` so the special-case
+    Price+LineMvt lead emits the neutral phrasing (spec §6.2 unknown
+    branch) rather than skipping the lead entirely.
     """
+    native = getattr(spec, "line_movement_direction", None)
+    if isinstance(native, str):
+        text = native.strip().lower()
+        if text == "favourable":
+            return "favourable"
+        if text == "against":
+            return "against"
+        if text == "unknown":
+            return "unknown"
+        # Fall through to legacy mapping for any other string value.
     movement = (getattr(spec, "movement_direction", "") or "").lower()
-    if movement == "for":
+    if movement in ("for", "favourable"):
         return "favourable"
     if movement == "against":
         return "against"

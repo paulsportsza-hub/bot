@@ -1579,6 +1579,17 @@ class NarrativeSpec:
     context_freshness_hours: float | None = None
     context_is_fresh: bool = True
 
+    # OPS-SPEC-SIGNAL-EXPOSURE-01: native canonical signal booleans + 3-value
+    # line-movement direction. Populated by build_narrative_spec from the
+    # collect_all_signals output via _extract_edge_data. Empty dict / None
+    # is the back-compat sentinel for un-migrated specs — verdict_corpus
+    # ._spec_to_signals falls back to its proxy adapter when signals is empty.
+    # The 6 keys mirror the card-image Edge Signal dot contract
+    # (price_edge / line_mvt / form / market / tipster / injury) so card and
+    # verdict reference a single source of truth (HG-4).
+    signals: dict[str, bool] = field(default_factory=dict)
+    line_movement_direction: str | None = None  # "favourable" / "against" / "unknown" / None
+
     # Raw scaffold (for LLM grounding in Stage 3)
     scaffold: str = ""
 
@@ -2021,6 +2032,132 @@ def _filter_team_setup_context(team: dict, *, fresh: bool) -> dict:
     return filtered
 
 
+# ── OPS-SPEC-SIGNAL-EXPOSURE-01 — signal-dict + line-movement-direction shapers ─
+
+# Canonical 6 signal keys exposed natively on NarrativeSpec.signals — mirror the
+# Edge Signal dot contract on the card image (HG-4 single source of truth).
+_SPEC_SIGNAL_KEYS: tuple[str, ...] = (
+    "price_edge",
+    "line_mvt",
+    "form",
+    "market",
+    "tipster",
+    "injury",
+)
+
+# Aliases the upstream collectors / wiring layer may emit. Mapped onto the
+# canonical 6 keys before storage so verdict_signal_mapper sees a uniform
+# shape regardless of producer naming.
+_SPEC_SIGNAL_ALIASES: dict[str, str] = {
+    "price_edge": "price_edge",
+    "priceEdge": "price_edge",
+    "Price Edge": "price_edge",
+    "line_mvt": "line_mvt",
+    "Line Mvt": "line_mvt",
+    "movement": "line_mvt",
+    "line_movement": "line_mvt",
+    "form": "form",
+    "Form": "form",
+    "form_h2h": "form",
+    "market": "market",
+    "Market": "market",
+    "market_agreement": "market",
+    "tipster": "tipster",
+    "Tipster": "tipster",
+    "injury": "injury",
+    "Injury": "injury",
+    "lineup_injury": "injury",
+    "team_news": "injury",
+}
+
+
+def _normalise_spec_signals(raw: object) -> dict[str, bool]:
+    """Coerce arbitrary signal payloads into the canonical 6-key boolean dict.
+
+    Accepts:
+      - empty / None → empty dict (back-compat sentinel for un-migrated specs;
+        verdict_corpus._spec_to_signals falls back to proxy adapter when empty).
+      - dict[str, bool|int|None] keyed by canonical names → kept as-is.
+      - dict[str, dict] from collect_all_signals (each value carries
+        ``available`` / ``signal_strength``) → flattened to ``available`` bool.
+      - dict with title-case keys ("Price Edge") or upstream aliases
+        ("movement", "form_h2h", "lineup_injury", "market_agreement",
+        "team_news") → re-keyed to canonical form.
+
+    Unknown keys are dropped. Missing canonical keys are NOT padded with False
+    so callers can distinguish "no data carried" (empty dict) from
+    "all-keys-False" (explicit empty signal-set per §12.8).
+    """
+    if not raw or not isinstance(raw, dict):
+        return {}
+    out: dict[str, bool] = {}
+    for key, value in raw.items():
+        canonical = _SPEC_SIGNAL_ALIASES.get(key) or _SPEC_SIGNAL_ALIASES.get(str(key).strip())
+        if canonical is None:
+            continue
+        if isinstance(value, bool):
+            flag = value
+        elif isinstance(value, (int, float)):
+            flag = bool(value)
+        elif isinstance(value, dict):
+            # collect_all_signals shape: {available: bool, signal_strength: float, ...}
+            flag = bool(value.get("available"))
+        elif value is None:
+            flag = False
+        elif isinstance(value, str):
+            flag = value.strip().lower() not in ("", "0", "false", "no", "none")
+        else:
+            flag = bool(value)
+        # First non-empty alias wins so canonical-name entries take precedence
+        # over aliases when both are present in the same payload.
+        out.setdefault(canonical, flag)
+        if flag:
+            out[canonical] = True
+    return out
+
+
+def _normalise_line_movement_direction(
+    direction: object,
+    fallback: object = None,
+) -> str | None:
+    """Map any movement-direction value to the verdict-mapper's 3-value contract.
+
+    Returns one of ``"favourable"`` / ``"against"`` / ``"unknown"`` / ``None``.
+
+    Inputs accepted:
+      - already-normalised values from the wiring layer ("favourable",
+        "against", "unknown") → passed through verbatim
+      - legacy NarrativeSpec.movement_direction values ("for" / "against" /
+        "neutral" / "unknown") → "for" → "favourable", "against" → "against",
+        anything else → "unknown" when truthy, else None
+      - empty / None → None (sentinel for "no data" — the verdict-mapper's
+        special-case Price+Line lead falls through to the neutral phrasing)
+
+    The ``fallback`` argument lets callers pass legacy ``movement_direction``
+    when the new ``line_movement_direction`` field is absent on the upstream
+    edge_data dict (un-migrated producers).
+    """
+    for candidate in (direction, fallback):
+        if candidate is None:
+            continue
+        text = str(candidate).strip().lower()
+        if not text:
+            continue
+        if text in ("favourable", "favorable", "for"):
+            return "favourable"
+        if text == "against":
+            return "against"
+        if text in ("neutral", "none"):
+            # Spec uses "neutral" as the explicit no-direction sentinel —
+            # treat as None so callers can distinguish "no movement data"
+            # from "movement data exists but direction is unknown".
+            return None
+        # Any other truthy string ("unknown" or producer-specific) maps to
+        # the unknown bucket so the verdict-mapper's neutral lead fires.
+        return "unknown"
+    return None
+
+
 # ── Main Builder ───────────────────────────────────────────────────────────────
 
 def build_narrative_spec(
@@ -2143,6 +2280,16 @@ def build_narrative_spec(
         tipster_available=edge_data.get("tipster_available", False),
         context_freshness_hours=context_freshness_hours,
         context_is_fresh=context_is_fresh,
+        # OPS-SPEC-SIGNAL-EXPOSURE-01 — native canonical signal booleans +
+        # normalised line-movement direction. Both fields default to the
+        # back-compat sentinel ({} / None) when edge_data does not carry them
+        # (un-migrated callers); verdict_corpus._spec_to_signals falls back
+        # to proxy adapter logic in that case.
+        signals=_normalise_spec_signals(edge_data.get("signals")),
+        line_movement_direction=_normalise_line_movement_direction(
+            edge_data.get("line_movement_direction"),
+            fallback=edge_data.get("movement_direction"),
+        ),
         scaffold=scaffold,
         venue=str(ctx_data.get("venue", "") or "").strip(),
     )

@@ -20404,6 +20404,30 @@ def _extract_edge_data(
     _spec_odds = best.get("recommended_odds")
     if _spec_odds in (None, "", 0):
         _spec_odds = best.get("edge_results_odds") or best.get("odds", 0)
+    # OPS-SPEC-SIGNAL-EXPOSURE-01: derive the canonical 6-key signal presence dict
+    # from the collect_all_signals output that ships in tip.edge_v2.signals. This
+    # is the single upstream source the card image's Edge Signal dots also draw
+    # from (HG-4 alignment). _normalise_spec_signals handles the 7-key →
+    # 6-key remap (movement→line_mvt, market_agreement→market, lineup_injury→
+    # injury, form_h2h→form) and flattens dict-of-dicts to .available booleans.
+    # Polarity (tipster_agrees, opposite-side injuries) is applied later in
+    # verdict_corpus._spec_to_signals against spec fields — keeping spec.signals
+    # raw matches the card-image dot contract.
+    _movement_signal = sigs.get("movement", {}) if isinstance(sigs.get("movement"), dict) else {}
+    _movement_dir_raw = _movement_signal.get("direction", "")
+    _normalise_signals_fn = None
+    _normalise_movement_fn = None
+    try:
+        from narrative_spec import (
+            _normalise_spec_signals as _normalise_signals_fn,
+            _normalise_line_movement_direction as _normalise_movement_fn,
+        )
+    except Exception:  # pragma: no cover — defensive: spec module always import-clean
+        log.debug("OPS-SPEC-SIGNAL-EXPOSURE-01: narrative_spec helpers unavailable; signals dict left empty")
+    _spec_signals_dict = _normalise_signals_fn(sigs) if (sigs and _normalise_signals_fn) else {}
+    _spec_line_movement = (
+        _normalise_movement_fn(_movement_dir_raw) if _normalise_movement_fn else None
+    )
     return {
         "home_team": home_team,
         "away_team": away_team,
@@ -20423,7 +20447,7 @@ def _extract_edge_data(
             if isinstance(sigs.get("market_agreement"), dict) else 0
         ),
         "stale_minutes": v2.get("stale_minutes", 0),
-        "movement_direction": sigs.get("movement", {}).get("direction", ""),
+        "movement_direction": _movement_dir_raw,
         "tipster_against": tipster_signal.get("against_count", tipster_signal.get("against", 0)),
         "tipster_agrees": tipster_signal.get("agrees_with_edge") if tipster_signal.get("available") else None,
         "tipster_available": bool(tipster_signal.get("available")),
@@ -20433,6 +20457,11 @@ def _extract_edge_data(
         "h2h_draws": h2h_signal.get("h2h_draws"),
         # TONE-BANDS-FIX: pass tier so build_narrative_spec() can enforce minimum posture
         "edge_tier": (best.get("display_tier") or best.get("edge_rating") or "").lower(),
+        # OPS-SPEC-SIGNAL-EXPOSURE-01: native canonical signal exposure on the
+        # spec — replaces the verdict_corpus._spec_to_signals proxy adapter
+        # path (kept as fallback when these are empty/None).
+        "signals": _spec_signals_dict,
+        "line_movement_direction": _spec_line_movement,
     }
 
 
