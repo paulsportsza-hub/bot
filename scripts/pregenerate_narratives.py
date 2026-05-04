@@ -684,6 +684,33 @@ def _log_integrity_event(signal: str, fixture_id: str = "", reason: str = "") ->
         log.debug("_log_integrity_event: %s/%s failed: %s", signal, fixture_id, _lie)
 
 
+def _collect_canonical_signals(match_key: str, outcome: str, sport: str | None, league: str | None) -> dict:
+    """FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Phase 3.
+
+    Re-run collect_all_signals at pregen time to obtain the canonical
+    7-key signal dict-of-dicts that build_narrative_spec() consumes via
+    _normalise_spec_signals. edge_results does not persist this dict
+    (only the confirming_signals count + a movement JSON), so we must
+    recompute from odds.db / form / lineup / tipster sources.
+
+    Synchronous DB-only collector; no HTTP, no ESPN. Same call shape as
+    bot._extract_edge_data uses upstream of the live serving path, so
+    pregen and serve-time spec.signals trace to a single source of truth
+    (HG-4 alignment with card_pipeline._compute_signals).
+
+    Returns {} on any error so the caller can fall through to the legacy
+    proxy adapter (back-compat with un-migrated builders).
+    """
+    if not match_key or not outcome:
+        return {}
+    try:
+        from scrapers.edge.signal_collectors import collect_all_signals
+        return collect_all_signals(match_key, outcome, sport=sport, league=league) or {}
+    except Exception as exc:
+        log.debug("PREGEN-SIGNALS: collect_all_signals failed for %s/%s: %s", match_key, outcome, exc)
+        return {}
+
+
 async def _refresh_edge_from_odds_db(edge: dict) -> dict:
     """Refresh bookmaker+price from odds.db for non-edge snapshot baselines.
 
@@ -1678,6 +1705,52 @@ async def _generate_one(
     # 3. Build edge_data for NarrativeSpec
     _pregen_sigs = edge.get("signals", {})
     _pregen_outcome_raw = edge.get("recommended_outcome") or edge.get("outcome", "?")
+
+    # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Phase 3: re-run
+    # collect_all_signals at pregen time to obtain the canonical 7-key
+    # dict-of-dicts that build_narrative_spec() consumes via
+    # _normalise_spec_signals. edge_results does not persist this dict
+    # (only confirming_signals count + a movement JSON), so without this
+    # recompute pregen passes signals={} and the verdict mapper falls
+    # through to the proxy adapter — producing the §12.1 monoculture
+    # observed pre-fix on every Gold card. Same single-source-of-truth
+    # contract bot._extract_edge_data already uses on the live serve-time
+    # path (HG-4 alignment with card_pipeline._compute_signals).
+    _canonical_sigs = _collect_canonical_signals(match_key, _pregen_outcome_raw, sport, league)
+    if _canonical_sigs and not _pregen_sigs:
+        _pregen_sigs = _canonical_sigs
+    elif _canonical_sigs:
+        # Fill missing keys from the canonical recompute without
+        # overwriting any pre-populated entries upstream callers may have
+        # already attached (e.g. _edge_from_serving_tip's truncated dict).
+        for _k, _v in _canonical_sigs.items():
+            _pregen_sigs.setdefault(_k, _v)
+
+    _movement_signal = _pregen_sigs.get("movement", {}) if isinstance(_pregen_sigs.get("movement"), dict) else {}
+    _tipster_signal = _pregen_sigs.get("tipster", {}) if isinstance(_pregen_sigs.get("tipster"), dict) else {}
+    _h2h_signal = _pregen_sigs.get("form_h2h", {}) if isinstance(_pregen_sigs.get("form_h2h"), dict) else {}
+    _movement_dir_raw = _movement_signal.get("direction", "")
+
+    # OPS-SPEC-SIGNAL-EXPOSURE-01 helpers — same normalisation that
+    # bot._extract_edge_data applies. Falls back to legacy behaviour
+    # when narrative_spec is unavailable (defensive — module is always
+    # importable in production).
+    _normalise_signals_fn = None
+    _normalise_movement_fn = None
+    try:
+        from narrative_spec import (
+            _normalise_spec_signals as _normalise_signals_fn,
+            _normalise_line_movement_direction as _normalise_movement_fn,
+        )
+    except Exception:
+        log.debug("PREGEN-SIGNALS: narrative_spec helpers unavailable; signals dict left empty")
+    _spec_signals_dict = (
+        _normalise_signals_fn(_pregen_sigs) if (_pregen_sigs and _normalise_signals_fn) else {}
+    )
+    _spec_line_movement = (
+        _normalise_movement_fn(_movement_dir_raw) if _normalise_movement_fn else None
+    )
+
     _pregen_edge_data = {
         "home_team": home,
         "away_team": away,
@@ -1695,9 +1768,29 @@ async def _generate_one(
         "market_agreement": _pregen_sigs.get("market_agreement", {}).get("score", 0) * 100
             if isinstance(_pregen_sigs.get("market_agreement"), dict) else 0,
         "stale_minutes": edge.get("stale_minutes", 0),
-        "movement_direction": _pregen_sigs.get("movement", {}).get("direction", ""),
-        "tipster_against": _pregen_sigs.get("tipster", {}).get("against_count", 0),
+        "movement_direction": _movement_dir_raw,
+        "tipster_against": _tipster_signal.get("against_count", _tipster_signal.get("against", 0)),
+        # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01: tipster polarity must
+        # ride through so verdict_corpus._spec_to_signals can apply the
+        # AND-gate (mapper never emits "outside support points this way"
+        # against the pick).
+        "tipster_agrees": _tipster_signal.get("agrees_with_edge") if _tipster_signal.get("available") else None,
+        "tipster_available": bool(_tipster_signal.get("available")),
+        # H2H fields populate spec.h2h_summary downstream; same shape
+        # bot._extract_edge_data passes through.
+        "h2h_total": _h2h_signal.get("h2h_total"),
+        "h2h_a_wins": _h2h_signal.get("h2h_a_wins"),
+        "h2h_b_wins": _h2h_signal.get("h2h_b_wins"),
+        "h2h_draws": _h2h_signal.get("h2h_draws"),
         "edge_tier": edge.get("edge_tier") or edge.get("tier", "bronze"),
+        # OPS-SPEC-SIGNAL-EXPOSURE-01 native canonical signal exposure on
+        # the spec — replaces the verdict_corpus._spec_to_signals proxy
+        # adapter path. When the canonical recompute returns an empty
+        # dict (e.g. odds.db unreachable), spec.signals stays empty and
+        # the mapper falls through to the legacy proxy — preserves
+        # back-compat at the cost of one §12.X surface per failure.
+        "signals": _spec_signals_dict,
+        "line_movement_direction": _spec_line_movement,
     }
 
     # BUILD-PREGEN-STUB-GATE-01: Skip pregen when edge_data sentinels are unresolved.

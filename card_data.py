@@ -1519,6 +1519,44 @@ def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
         "home_team": home,
         "away_team": away,
     }
+    # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Phase 3: synthesis-on-tap
+    # path (Rule 20 fallback) must ALSO produce canonical spec.signals so
+    # the verdict mapper picks the right §12 path instead of falling
+    # through to the proxy adapter. edge_results does not persist the
+    # canonical 7-key dict-of-dicts (only confirming_signals + movement
+    # JSON), so we recompute via collect_all_signals — same source
+    # bot._extract_edge_data uses on the live serve-time path. When the
+    # collector fails (odds.db unreachable, malformed match_key) we
+    # return {} and the mapper still degrades to the legacy proxy.
+    _canonical_sigs: dict = {}
+    try:
+        from scrapers.edge.signal_collectors import collect_all_signals
+        _canonical_sigs = collect_all_signals(match_id, outcome, sport=sport, league=league or None) or {}
+    except Exception as exc:
+        log.debug("baseline-fallback: collect_all_signals failed for %s: %s", match_id, exc)
+
+    _normalise_signals_fn = None
+    _normalise_movement_fn = None
+    try:
+        from narrative_spec import (
+            _normalise_spec_signals as _normalise_signals_fn,
+            _normalise_line_movement_direction as _normalise_movement_fn,
+        )
+    except Exception:
+        log.debug("baseline-fallback: narrative_spec helpers unavailable; signals dict left empty")
+
+    _movement_signal = _canonical_sigs.get("movement", {}) if isinstance(_canonical_sigs.get("movement"), dict) else {}
+    _tipster_signal = _canonical_sigs.get("tipster", {}) if isinstance(_canonical_sigs.get("tipster"), dict) else {}
+    _h2h_signal = _canonical_sigs.get("form_h2h", {}) if isinstance(_canonical_sigs.get("form_h2h"), dict) else {}
+    _movement_dir_raw = _movement_signal.get("direction", "") if isinstance(_movement_signal, dict) else ""
+
+    _spec_signals_dict = (
+        _normalise_signals_fn(_canonical_sigs) if (_canonical_sigs and _normalise_signals_fn) else {}
+    )
+    _spec_line_movement = (
+        _normalise_movement_fn(_movement_dir_raw) if _normalise_movement_fn else None
+    )
+
     edge_data = {
         "outcome": outcome,
         "outcome_label": outcome_label,
@@ -1530,6 +1568,7 @@ def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
         "composite_score": float(composite_score or 0),
         "confirming_signals": int(confirming or 0),
         "movement": movement or "",
+        "movement_direction": _movement_dir_raw,
         "league": league or "",
         # BUILD-W82-RIP-AND-REPLACE-01: edge_tier is required for the v2
         # deterministic verdict corpus to select the correct tier pool.
@@ -1537,6 +1576,22 @@ def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
         # when edge_tier was empty; the corpus requires the explicit tier
         # because every sentence is hand-authored per tier.
         "edge_tier": edge_tier,
+        # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Phase 3: tipster
+        # polarity rides through so verdict_corpus._spec_to_signals can
+        # apply the AND-gate (mapper never emits outside-support phrasing
+        # against the picked outcome).
+        "tipster_agrees": _tipster_signal.get("agrees_with_edge") if _tipster_signal.get("available") else None,
+        "tipster_available": bool(_tipster_signal.get("available")),
+        "tipster_against": _tipster_signal.get("against_count", _tipster_signal.get("against", 0)),
+        "h2h_total": _h2h_signal.get("h2h_total"),
+        "h2h_a_wins": _h2h_signal.get("h2h_a_wins"),
+        "h2h_b_wins": _h2h_signal.get("h2h_b_wins"),
+        "h2h_draws": _h2h_signal.get("h2h_draws"),
+        # OPS-SPEC-SIGNAL-EXPOSURE-01 native canonical signal exposure
+        # on the spec — replaces the verdict_corpus._spec_to_signals
+        # proxy adapter path.
+        "signals": _spec_signals_dict,
+        "line_movement_direction": _spec_line_movement,
     }
 
     try:
