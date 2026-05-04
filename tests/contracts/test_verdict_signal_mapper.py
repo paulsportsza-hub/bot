@@ -549,43 +549,136 @@ def test_pick_secondary_returns_none_when_only_primary_active():
 
 def test_p1_imperative_close_accepts_signal_mapper_diamond():
     """P1 — narrative_validator imperative-close gate must accept Diamond
-    'go big' / 'hard to look past' closures (was rejecting on _CORPUS_IMPERATIVE_CLOSE_RE).
+    'go big' / 'hard to look past' closures (was rejecting on
+    _CORPUS_IMPERATIVE_CLOSE_RE). Routed via tier-scoped helper to prevent
+    cross-tier acceptance (Codex round-2 P2).
     """
-    from narrative_validator import _CORPUS_IMPERATIVE_CLOSE_RE
+    from narrative_validator import imperative_close_ok
     diamond_close = "hard to look past Manchester City, go big at 1.40 on HWB."
-    assert _CORPUS_IMPERATIVE_CLOSE_RE.search(diamond_close), (
-        "Diamond signal-mapper closure must clear the imperative regex; "
+    assert imperative_close_ok(diamond_close, "diamond"), (
+        "Diamond signal-mapper closure must clear the imperative gate; "
         f"sample={diamond_close!r}"
     )
 
 
 def test_p1_imperative_close_accepts_signal_mapper_silver():
-    """P1 — Silver 'lean ... standard stake' closure must clear regex."""
-    from narrative_validator import _CORPUS_IMPERATIVE_CLOSE_RE
+    """P1 — Silver 'lean ... standard stake' closure must clear gate."""
+    from narrative_validator import imperative_close_ok
     silver_close = "lean Chelsea win, standard stake."
-    assert _CORPUS_IMPERATIVE_CLOSE_RE.search(silver_close), (
-        f"Silver signal-mapper closure must clear regex; sample={silver_close!r}"
+    assert imperative_close_ok(silver_close, "silver"), (
+        f"Silver signal-mapper closure must clear gate; sample={silver_close!r}"
     )
 
 
 def test_p1_imperative_close_accepts_signal_mapper_bronze():
-    """P1 — Bronze 'worth a small play ... light stake' closure clears regex
-    via 'worth a' alternation (already passed pre-fix; positive control).
+    """P1 — Bronze 'worth a small play ... light stake' closure clears via
+    legacy 'worth a' alternation in the corpus regex (positive control).
     """
-    from narrative_validator import _CORPUS_IMPERATIVE_CLOSE_RE
+    from narrative_validator import imperative_close_ok
     bronze_close = "worth a small play on Manchester City win, light stake."
-    assert _CORPUS_IMPERATIVE_CLOSE_RE.search(bronze_close), (
-        f"Bronze closure must clear regex; sample={bronze_close!r}"
+    assert imperative_close_ok(bronze_close, "bronze"), (
+        f"Bronze closure must clear gate; sample={bronze_close!r}"
     )
 
 
 def test_p1_imperative_close_accepts_gold():
     """P1 — Gold 'back ... standard stake' clears via existing 'back' alternation."""
-    from narrative_validator import _CORPUS_IMPERATIVE_CLOSE_RE
+    from narrative_validator import imperative_close_ok
     gold_close = "back Brighton & Hove Albion win, standard stake."
-    assert _CORPUS_IMPERATIVE_CLOSE_RE.search(gold_close), (
-        f"Gold closure must clear regex; sample={gold_close!r}"
+    assert imperative_close_ok(gold_close, "gold"), (
+        f"Gold closure must clear gate; sample={gold_close!r}"
     )
+
+
+# FIX-VERDICT-SIGNAL-MAPPED-CODEX-REVIEW-02 (2026-05-04) — Codex round-2 P2:
+# tier-scoped enforcement. Cross-tier closures must FAIL Gate 9 even though
+# the underlying spec §10 imperatives are themselves recognised.
+
+def test_p2_imperative_close_rejects_diamond_lean():
+    """Cross-tier — Diamond verdict closing with Silver 'lean ...' fails."""
+    from narrative_validator import imperative_close_ok
+    txt = "lean Manchester City win, standard stake."
+    assert not imperative_close_ok(txt, "diamond"), (
+        f"Silver 'lean ...' closure must NOT clear Diamond gate; sample={txt!r}"
+    )
+
+
+def test_p2_imperative_close_rejects_diamond_small_play():
+    """Cross-tier — Diamond verdict closing with Bronze 'small play' fails."""
+    from narrative_validator import imperative_close_ok
+    txt = "small play on Manchester City win, light stake."
+    assert not imperative_close_ok(txt, "diamond"), (
+        f"Bronze 'small play' closure must NOT clear Diamond gate; sample={txt!r}"
+    )
+
+
+def test_p2_imperative_close_rejects_gold_lean():
+    """Cross-tier — Gold verdict closing with Silver 'lean ...' fails."""
+    from narrative_validator import imperative_close_ok
+    txt = "lean Brighton & Hove Albion win, standard stake."
+    assert not imperative_close_ok(txt, "gold"), (
+        f"Silver 'lean ...' closure must NOT clear Gold gate; sample={txt!r}"
+    )
+
+
+def test_p2_imperative_close_rejects_silver_go_big():
+    """Cross-tier — Silver verdict closing with Diamond 'go big' fails."""
+    from narrative_validator import imperative_close_ok
+    txt = "hard to look past Chelsea, go big at 1.40 on HWB."
+    assert not imperative_close_ok(txt, "silver"), (
+        f"Diamond 'go big' closure must NOT clear Silver gate; sample={txt!r}"
+    )
+
+
+def test_p2_imperative_close_rejects_bronze_go_big():
+    """Cross-tier — Bronze verdict closing with Diamond 'go big' fails."""
+    from narrative_validator import imperative_close_ok
+    txt = "hard to look past Burnley, go big at 3.20 on Betway."
+    assert not imperative_close_ok(txt, "bronze"), (
+        f"Diamond 'go big' closure must NOT clear Bronze gate; sample={txt!r}"
+    )
+
+
+def test_p2_imperative_close_legacy_corpus_tokens_universal():
+    """Legacy corpus closures (back/take/bet/etc.) are tier-uniform — corpus
+    encodes tier semantics via claims_max_conviction, not the close regex.
+    Each legacy token must clear every tier's gate.
+    """
+    from narrative_validator import imperative_close_ok
+    legacy_closes = [
+        "back Manchester City to win at 1.40.",
+        "take Chelsea to win, full stake.",
+        "bet Liverpool, half stake.",
+        "lock in this pick at 2.10.",
+        "the play is Arsenal to win.",
+        "the call is Tottenham at 1.85.",
+    ]
+    for tier in ("diamond", "gold", "silver", "bronze"):
+        for txt in legacy_closes:
+            assert imperative_close_ok(txt, tier), (
+                f"Legacy corpus closure must clear gate for any tier; "
+                f"tier={tier} sample={txt!r}"
+            )
+
+
+def test_p2_imperative_close_unknown_tier_falls_back_to_corpus():
+    """Unknown tier (defensive): only legacy corpus tokens accepted; no
+    signal-mapper imperatives added.
+    """
+    from narrative_validator import imperative_close_ok
+    # Legacy corpus token clears
+    assert imperative_close_ok("back City to win.", "platinum") is True
+    # Signal-mapper Diamond closure does NOT clear under unknown tier
+    assert imperative_close_ok(
+        "hard to look past City, go big at 1.40 on HWB.", "platinum"
+    ) is False
+
+
+def test_p2_imperative_close_empty_or_none_returns_false():
+    """Defensive: empty / None text returns False, never True."""
+    from narrative_validator import imperative_close_ok
+    assert imperative_close_ok("", "diamond") is False
+    assert imperative_close_ok(None, "diamond") is False  # type: ignore[arg-type]
 
 
 def test_p1_render_verdict_falls_back_when_quality_probe_fails(monkeypatch):

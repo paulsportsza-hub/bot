@@ -294,23 +294,82 @@ _VERDICT_ACTION_RE: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
-# BUILD-VERDICT-SIGNAL-MAPPED-01 follow-up (2026-05-04) — corpus + signal-mapper
-# imperative regex. Originally tightly anchored to the verdict_corpus tokens
-# (back / hammer / get on / take / bet / lock in / load up / go in / the play
-# is / the call is / worth a). Extended to accept the spec §10 signal-mapper
-# imperatives ("hard to look past", "lean", "go big", "small play") so polish
-# and persistence gates accept the new builder's output. Gold "back …" still
-# matches via the leading "back" alternation; Silver "lean …", Bronze
-# "worth a small play …", and Diamond "hard to look past …, go big …" now
-# all clear the gate by construction.
+# BUILD-W82-RIP-AND-REPLACE-01 (2026-05-02) — corpus-imperative regex.
+# Tightly anchored to the exact imperatives the deterministic verdict_corpus
+# emits: back / hammer / get on / take / bet / lock in / load up / go in /
+# the play is / the call is / worth a. Used by the new uniform imperative-
+# close gate that replaces the tier-branching closure rule. Tier-appropriate
+# semantics for the corpus path are enforced by `claims_max_conviction`
+# filtering (see verdict_corpus._v / has_real_risk), NOT by this regex.
 _CORPUS_IMPERATIVE_CLOSE_RE: re.Pattern[str] = re.compile(
     r"(?:^|\s)("
     r"back|hammer|get\s+on|take|bet|lock\s+in|load\s+up|go\s+in|"
-    r"go\s+big|hard\s+to\s+look\s+past|lean|small\s+play|"
     r"the\s+play\s+is|the\s+call\s+is|worth\s+a"
     r")\b.*[\.!]?\s*$",
     re.IGNORECASE,
 )
+
+# FIX-VERDICT-SIGNAL-MAPPED-CODEX-REVIEW-02 (2026-05-04) — tier-scoped
+# signal-mapper imperatives. Per Codex adversarial-review round 2: adding
+# the spec §10 imperatives to a single tier-agnostic alternation creates a
+# loophole where a Silver/Bronze polished verdict closing with "go big" or
+# a Diamond/Gold one closing with "lean ... standard stake" passes Gate 9.
+# Each new imperative is keyed to the ONE tier the spec authorises:
+#   - Diamond → "hard to look past {team}, go big at {odds} on {bookmaker}"
+#   - Silver  → "lean {team}, standard stake"
+#   - Bronze  → "worth a small play on {team}, light stake"
+#   - Gold    → "back {team}, standard stake" — already covered by the
+#     legacy "back" alternation in _CORPUS_IMPERATIVE_CLOSE_RE.
+# `imperative_close_ok(text, tier)` is the single entry point: it accepts
+# legacy corpus closures for any tier (the corpus uses tier-uniform tokens
+# and enforces conviction via filtering, not the regex) PLUS the spec §10
+# tier-scoped imperatives. A future cross-tier leak from either generator
+# (corpus or mapper) hits a CRITICAL/MAJOR validation failure here.
+_DIAMOND_SIGNAL_MAPPER_CLOSE_RE: re.Pattern[str] = re.compile(
+    r"(?:^|\s)("
+    r"go\s+big|hard\s+to\s+look\s+past"
+    r")\b.*[\.!]?\s*$",
+    re.IGNORECASE,
+)
+_SILVER_SIGNAL_MAPPER_CLOSE_RE: re.Pattern[str] = re.compile(
+    r"(?:^|\s)lean\b.*[\.!]?\s*$",
+    re.IGNORECASE,
+)
+_BRONZE_SIGNAL_MAPPER_CLOSE_RE: re.Pattern[str] = re.compile(
+    r"(?:^|\s)("
+    r"worth\s+a\s+small\s+play|small\s+play"
+    r")\b.*[\.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def imperative_close_ok(text: str, tier: str) -> bool:
+    """Return True iff ``text``'s closing sentence carries a tier-appropriate
+    imperative.
+
+    Accepts the legacy corpus alternation for any tier (the corpus is
+    tier-uniform; tier semantics are enforced by ``claims_max_conviction``
+    filtering at the corpus picker), AND the spec §10 signal-mapper
+    imperatives keyed to their authorised tier — so a Silver/Bronze verdict
+    closing with ``go big`` (Diamond-only) or a Diamond/Gold one closing
+    with ``lean`` (Silver-only) fails Gate 9.
+
+    Empty / non-string text returns False. Unknown tiers fall back to the
+    legacy corpus check only — no signal-mapper imperatives are added,
+    matching the original gate behaviour.
+    """
+    if not text:
+        return False
+    if _CORPUS_IMPERATIVE_CLOSE_RE.search(text):
+        return True
+    tier_lower = (tier or "").strip().lower()
+    if tier_lower == "diamond":
+        return bool(_DIAMOND_SIGNAL_MAPPER_CLOSE_RE.search(text))
+    if tier_lower == "silver":
+        return bool(_SILVER_SIGNAL_MAPPER_CLOSE_RE.search(text))
+    if tier_lower == "bronze":
+        return bool(_BRONZE_SIGNAL_MAPPER_CLOSE_RE.search(text))
+    return False
 
 # Odds shape: decimal (1.36-99.99), fraction (1/2, 11/10, 100/1), American (+150/-200).
 # Decimal range narrows to plausible betting odds; rejects "5.0" alone and "12.5 goals".
@@ -1038,7 +1097,13 @@ def _validate_narrative_for_persistence(
     #   - Silver + Bronze → MAJOR (quarantine).
     if verdict_html:
         last = _last_sentence(verdict_html)
-        imp_close_ok = bool(_CORPUS_IMPERATIVE_CLOSE_RE.search(last)) if last else False
+        # FIX-VERDICT-SIGNAL-MAPPED-CODEX-REVIEW-02 (2026-05-04): tier-scoped
+        # check via imperative_close_ok — accepts legacy corpus closures for
+        # any tier AND spec §10 signal-mapper imperatives only for the tier
+        # the spec authorises (Diamond → "go big" / "hard to look past";
+        # Silver → "lean"; Bronze → "small play"). Cross-tier mismatches now
+        # fail Gate 9 with the same severity ladder.
+        imp_close_ok = imperative_close_ok(last, tier_lower) if last else False
         if not imp_close_ok:
             close_severity: Severity = (
                 "CRITICAL" if tier_lower in ("diamond", "gold") else "MAJOR"
