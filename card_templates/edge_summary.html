@@ -38,7 +38,7 @@
             z-index: 0;
             filter: blur(3px);
             background: radial-gradient(ellipse 50% 90% at 50% 25%,
-                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
+                {{ tier_color }}38 0%, {{ tier_color }}18 45%, {{ tier_color }}06 70%, transparent 100%);
         }
         .header-glow-screen {
             position: absolute;
@@ -47,7 +47,7 @@
             z-index: 0;
             mix-blend-mode: screen;
             background: radial-gradient(ellipse 32% 60% at 50% 28%,
-                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+                {{ tier_color }}66 0%, {{ tier_color }}22 50%, transparent 80%);
         }
         .header > .logo-img,
         .header > .logo-fallback,
