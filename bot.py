@@ -20593,6 +20593,46 @@ def _extract_edge_data(
         )
     except Exception:  # pragma: no cover — defensive: spec module always import-clean
         log.debug("OPS-SPEC-SIGNAL-EXPOSURE-01: narrative_spec helpers unavailable; signals dict left empty")
+
+    # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2: serve-time
+    # parity with the pregen recompute. _load_tips_from_edge_results
+    # returns tips with edge_v2 set to a slim dict (composite_score,
+    # edge_pct, outcome, confirming_signals only) — no signals or
+    # movement subdict. Without recomputing here the live serve-time
+    # verdict would fall through to the proxy adapter (§12.1 monoculture)
+    # for every cache-miss tap on a hot tip, even though pregen now
+    # produces a signal-grounded cache row. Recompute via
+    # collect_all_signals (same single source of truth pregen and
+    # card_pipeline._compute_signals use upstream) so the live render and
+    # the cache row trace to the same spec.signals shape.
+    if not sigs:
+        _live_match_key = best.get("match_id") or v2.get("match_key", "")
+        _live_outcome = outcome_raw
+        if _live_match_key and _live_outcome and _live_outcome not in ("", "?"):
+            try:
+                from scrapers.edge.signal_collectors import collect_all_signals
+                _live_canonical = collect_all_signals(
+                    _live_match_key,
+                    _live_outcome,
+                    sport=(best.get("sport") or "soccer"),
+                    league=v2.get("league") or best.get("league") or None,
+                ) or {}
+                if _live_canonical:
+                    sigs = _live_canonical
+                    _movement_signal = sigs.get("movement", {}) if isinstance(sigs.get("movement"), dict) else {}
+                    _movement_dir_raw = _movement_signal.get("direction", "")
+                    _tipster_recheck = sigs.get("tipster", {}) if isinstance(sigs.get("tipster"), dict) else {}
+                    if _tipster_recheck:
+                        tipster_signal = _tipster_recheck
+                    _h2h_recheck = sigs.get("form_h2h", {}) if isinstance(sigs.get("form_h2h"), dict) else {}
+                    if _h2h_recheck:
+                        h2h_signal = _h2h_recheck
+            except Exception as _live_sig_err:
+                log.debug(
+                    "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01: serve-time canonical-signal recompute failed for %s: %s",
+                    _live_match_key, _live_sig_err,
+                )
+
     _spec_signals_dict = _normalise_signals_fn(sigs) if (sigs and _normalise_signals_fn) else {}
     _spec_line_movement = (
         _normalise_movement_fn(_movement_dir_raw) if _normalise_movement_fn else None

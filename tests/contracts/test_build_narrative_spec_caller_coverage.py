@@ -49,14 +49,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # enforces no silent additions.
 
 _KNOWN_EMPTY_SIGNAL_CALLERS: tuple[tuple[str, str, str], ...] = (
-    # bot.py:_build_edge_only_section renders ONLY _render_setup when a
-    # league tag is missing — never feeds spec.verdict_action/sizing
-    # downstream.  Empty signals are safe because the §12.X verdict
-    # mapper is never invoked from this path.
+    # bot.py::_build_signal_only_narrative renders ONLY _render_setup from
+    # the build_narrative_spec({}, edge_data={}, tips=[], ...) call when
+    # the league tag is missing. The function continues building edge /
+    # risk / verdict from raw tip fields below, but the empty-spec
+    # build_narrative_spec call is consumed exclusively by
+    # _render_setup(_empty_spec). The returned spec is never passed to
+    # _render_verdict or render_verdict, so the verdict mapper never
+    # observes spec.signals from this callsite.  Codex adversarial-review
+    # pass-1 (2026-05-04) flagged the previous allowlist entry naming
+    # _build_edge_only_section — that function does not exist;
+    # _build_signal_only_narrative is the actual hosting symbol.
     (
         "bot.py",
-        "_build_edge_only_section",
-        "Setup-only fallback; no verdict surface",
+        "_build_signal_only_narrative",
+        "Empty-spec call consumed only by _render_setup — verdict mapper never observes spec.signals from this path",
+    ),
+    # scripts/qa_baseline_02.py::generate_narrative is QA-only synthetic
+    # tooling (48-fixture matrix benchmark — 4 tiers × 4 sports × 3
+    # fixture shapes). Never served to real users; never persisted to
+    # narrative_cache. Synthetic fixtures legitimately carry empty
+    # signals because the matrix's purpose is to baseline the
+    # _render_baseline output across coverage profiles, not to exercise
+    # the live signal pipeline.
+    (
+        "scripts/qa_baseline_02.py",
+        "generate_narrative",
+        "QA tooling — synthetic 48-fixture baseline matrix, never serves real users or persists to narrative_cache",
     ),
 )
 
@@ -70,20 +89,134 @@ def _list_production_callers() -> list[tuple[str, str]]:
     Returns list of (file_path_relative, function_name) tuples.  Each
     entry MUST EITHER appear in the allowlist OR be exercised by a
     populate-signals positive test below.
+
+    Codex adversarial-review pass-1 (2026-05-04) flagged the previous
+    hand-maintained list as drift-prone — see test_ast_scan_matches_inventory
+    below for the AST-based regression guard.
     """
     return [
-        # Live serve-time path — patched by OPS-SPEC-SIGNAL-EXPOSURE-01
+        # Live serve-time path — patched by OPS-SPEC-SIGNAL-EXPOSURE-01.
         ("bot.py", "_generate_narrative_v2"),
         # Card-image alignment fresh-render — uses _extract_edge_data
         # which populates signals via OPS-SPEC-SIGNAL-EXPOSURE-01.
+        # Imports build_narrative_spec aliased as `_bns_align`; the AST
+        # scan resolves the alias.
         ("bot.py", "_enrich_tip_for_card"),
-        # Setup-only fallback — allowlisted above.
-        ("bot.py", "_build_edge_only_section"),
+        # Empty-spec setup-only fallback — allowlisted above. The
+        # build_narrative_spec call inside this function is consumed
+        # exclusively by _render_setup; the rest of the function builds
+        # verdict from raw tip fields, not from spec.signals.
+        ("bot.py", "_build_signal_only_narrative"),
         # Pregenerator — patched by FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01.
         ("scripts/pregenerate_narratives.py", "_generate_one"),
         # Synthesis-on-tap fallback — patched by FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01.
         ("card_data.py", "_synthesize_breakdown_row_from_baseline"),
+        # QA tooling — allowlisted above. Synthetic 48-fixture matrix.
+        ("scripts/qa_baseline_02.py", "generate_narrative"),
     ]
+
+
+def _scan_production_callers() -> set[tuple[str, str]]:
+    """AST-based scan: find every production call to build_narrative_spec.
+
+    Returns set of (file_path_relative, enclosing_function_name) tuples.
+    Excludes test directories and the allowlist test file itself so the
+    inventory above stays the canonical list.
+
+    Codex adversarial-review pass-1: replaces the hand-maintained
+    inventory with a real source scan, so any new caller introduced in
+    a future wave fails this regression guard until it is either
+    documented in _list_production_callers (positive coverage) or
+    added to _KNOWN_EMPTY_SIGNAL_CALLERS (with justification).
+    """
+    import ast
+
+    repo_root = Path(__file__).resolve().parents[2]
+    excluded_dirs = {
+        "tests",
+        ".venv",
+        "venv",
+        "logs",
+        "data",
+        "static",
+        "card_assets",
+        "card_templates",
+        "reports",
+        "structured_logs",
+    }
+
+    findings: set[tuple[str, str]] = set()
+    for py_path in sorted(repo_root.rglob("*.py")):
+        rel = py_path.relative_to(repo_root)
+        if rel.parts and rel.parts[0] in excluded_dirs:
+            continue
+        # Skip test_*.py everywhere — production scope only.
+        if rel.name.startswith("test_") or rel.name.endswith("_test.py"):
+            continue
+        try:
+            src = py_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        try:
+            tree = ast.parse(src, filename=str(py_path))
+        except SyntaxError:
+            continue
+        # Walk imports first to discover aliases for build_narrative_spec.
+        # Pattern: `from narrative_spec import build_narrative_spec as <alias>`
+        # bot.py::_enrich_tip_for_card uses `_bns_align`; future waves may
+        # rename. Tracking aliases per-module keeps the scan robust.
+        aliases: set[str] = {"build_narrative_spec"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name == "build_narrative_spec" and alias.asname:
+                        aliases.add(alias.asname)
+            elif isinstance(node, ast.Assign):
+                # Detect: `_bns = build_narrative_spec` rebindings.
+                if (
+                    len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id in aliases
+                ):
+                    aliases.add(node.targets[0].id)
+
+        # Walk and track enclosing function for every Call node.
+        class _Walker(ast.NodeVisitor):
+            def __init__(self, alias_set: set[str]):
+                self.stack: list[str] = []
+                self.hits: set[tuple[str, str]] = set()
+                self._aliases = alias_set
+
+            def visit_FunctionDef(self, node: ast.FunctionDef):
+                self.stack.append(node.name)
+                self.generic_visit(node)
+                self.stack.pop()
+
+            def visit_AsyncFunctionDef(self, node):  # type: ignore[override]
+                self.stack.append(node.name)
+                self.generic_visit(node)
+                self.stack.pop()
+
+            def visit_Call(self, node: ast.Call):
+                func_name = ""
+                if isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+                elif isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+                # Match the bare callable name AND any attribute named
+                # build_narrative_spec (covers `narrative_spec.build_narrative_spec(...)`)
+                # AND any module-local alias like `_bns_align` from
+                # `from narrative_spec import build_narrative_spec as _bns_align`.
+                if func_name in self._aliases or func_name == "build_narrative_spec":
+                    enclosing = self.stack[-1] if self.stack else "<module>"
+                    self.hits.add((str(rel), enclosing))
+                self.generic_visit(node)
+
+        walker = _Walker(aliases)
+        walker.visit(tree)
+        findings.update(walker.hits)
+    return findings
 
 
 def _allowlist_keys() -> set[tuple[str, str]]:
@@ -156,6 +289,37 @@ def test_caller_inventory_has_no_silent_additions():
         f"Allowlist contains callers absent from inventory: {missing}. "
         "Either remove the allowlist entry or add the caller to "
         "_list_production_callers()."
+    )
+
+
+def test_ast_scan_matches_inventory():
+    """AST regression guard (Codex adversarial-review pass-1).
+
+    Walks every production *.py file (excluding tests/ and runtime
+    scratch dirs) and AST-extracts the enclosing function for each
+    `build_narrative_spec(...)` call. The set of (file, enclosing_fn)
+    tuples found in source MUST equal _list_production_callers() — any
+    new caller introduced by a future wave fails this assertion until
+    it's added to the inventory and either tested for populate-signals
+    OR documented in _KNOWN_EMPTY_SIGNAL_CALLERS.
+    """
+    scanned = _scan_production_callers()
+    documented = set(_list_production_callers())
+    new_callers = scanned - documented
+    removed_callers = documented - scanned
+    assert not new_callers, (
+        f"AST scan found build_narrative_spec callers not in inventory: "
+        f"{sorted(new_callers)}. Add them to _list_production_callers() "
+        f"and either provide a positive populate-signals test OR add an "
+        f"entry to _KNOWN_EMPTY_SIGNAL_CALLERS with justification."
+    )
+    # Also fail when documented callers vanish from source — the inventory
+    # should track real callsites, not historical ones.
+    assert not removed_callers, (
+        f"Documented callers no longer present in source: "
+        f"{sorted(removed_callers)}. Remove them from "
+        f"_list_production_callers() (and _KNOWN_EMPTY_SIGNAL_CALLERS if "
+        f"applicable)."
     )
 
 

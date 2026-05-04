@@ -684,6 +684,30 @@ def _log_integrity_event(signal: str, fixture_id: str = "", reason: str = "") ->
         log.debug("_log_integrity_event: %s/%s failed: %s", signal, fixture_id, _lie)
 
 
+def _signal_fingerprint(signals_norm: dict) -> str:
+    """Stable fingerprint over the canonical 6-key boolean dict.
+
+    FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 2):
+    pregen renders verdicts at generation time, but the cache write
+    happens later in main()'s loop. _compute_odds_hash at write time
+    captures CURRENT odds — if signals drifted between generation and
+    write, the cache row would be stamped fresh while its verdict_html
+    reflects older spec.signals. Pairing odds_hash with this signal
+    fingerprint lets the write loop detect drift and skip rather than
+    persist a stale verdict that the serve-time path would not re-render.
+
+    Output: deterministic SHA-1-prefix string (12 chars) over the sorted
+    canonical 6-key boolean tuple. Empty dict → fixed sentinel "no_sigs"
+    so the comparison is total.
+    """
+    if not signals_norm:
+        return "no_sigs"
+    import hashlib
+    canonical = ("price_edge", "line_mvt", "form", "market", "tipster", "injury")
+    payload = "|".join(f"{k}={int(bool(signals_norm.get(k)))}" for k in canonical)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
 def _collect_canonical_signals(match_key: str, outcome: str, sport: str | None, league: str | None) -> dict:
     """FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Phase 3.
 
@@ -1726,6 +1750,36 @@ async def _generate_one(
         for _k, _v in _canonical_sigs.items():
             _pregen_sigs.setdefault(_k, _v)
 
+    # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 3):
+    # premium-tier callsites MUST NOT cache a proxy-fallback verdict when
+    # canonical signals are unavailable. _collect_canonical_signals returns
+    # {} on collector failure (DB lock, schema drift, transient network) —
+    # without this guard a §12.1 monoculture row would land in the live
+    # cache for Diamond/Gold edges, undoing the pregen-side fix at the
+    # exact moment a transient outage paints over the brief's evidence.
+    # Behaviour: log a warning so monitoring catches collector regressions,
+    # then return a deferred sentinel result so main()'s gap-fill loop
+    # treats it the same as a polish-failure deferral and the next sweep
+    # retries with fresh data. Silver/Bronze tiers fall through to the
+    # legacy proxy adapter unchanged (W93-TIER-GATE cost policy).
+    _premium_tier = (edge.get("edge_tier") or edge.get("tier") or "").lower()
+    if (
+        _premium_tier in ("gold", "diamond")
+        and not _pregen_sigs
+        and not edge.get("is_non_edge", False)
+    ):
+        log.warning(
+            "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 PremiumCanonicalSignalsEmpty "
+            "match_key=%s tier=%s — deferring cache write to next sweep",
+            match_key, _premium_tier,
+        )
+        return {
+            "match_key": match_key,
+            "success": False,
+            "premium_signals_empty": True,
+            "duration": time.time() - t0,
+        }
+
     _movement_signal = _pregen_sigs.get("movement", {}) if isinstance(_pregen_sigs.get("movement"), dict) else {}
     _tipster_signal = _pregen_sigs.get("tipster", {}) if isinstance(_pregen_sigs.get("tipster"), dict) else {}
     _h2h_signal = _pregen_sigs.get("form_h2h", {}) if isinstance(_pregen_sigs.get("form_h2h"), dict) else {}
@@ -1984,6 +2038,25 @@ async def _generate_one(
         except Exception:
             pass
 
+    # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 2):
+    # capture generation-time odds + signal fingerprint so the deferred
+    # write in main() can skip rows whose underlying state drifted
+    # between generation and the cache INSERT. _store_narrative_cache
+    # computes its own odds_hash at write time; without these fingerprints
+    # a transient odds movement between generation and write would stamp
+    # the cache row "fresh" while serving a verdict rendered against
+    # older odds. The race window is small (seconds-to-minutes inside
+    # main()'s pending_writes loop) but real on heavy-scrape minutes.
+    _gen_odds_hash = ""
+    try:
+        _gen_odds_hash = await asyncio.to_thread(_compute_odds_hash, match_key) or ""
+    except Exception as _gen_hash_exc:
+        log.debug(
+            "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 generation odds_hash compute failed for %s: %s",
+            match_key, _gen_hash_exc,
+        )
+    _gen_signal_fp = _signal_fingerprint(_spec_signals_dict)
+
     return {
         "match_key": match_key, "success": True, "model": _final_model,
         "duration": duration, "narrative": narrative,
@@ -2008,6 +2081,14 @@ async def _generate_one(
             "verdict_validated": 1,
             "setup_attempts": 1,
             "verdict_attempts": 1,
+            # Codex pass-2 race guard: stored ONLY for the gen-vs-write
+            # check inside main()'s pending_writes loop. NOT persisted to
+            # narrative_cache (drop these keys before _store_narrative_cache).
+            "_gen_odds_hash": _gen_odds_hash,
+            "_gen_signal_fp": _gen_signal_fp,
+            "_outcome_for_recheck": _pregen_outcome_raw,
+            "_sport_for_recheck": sport,
+            "_league_for_recheck": league,
         },
     }
 
@@ -2525,8 +2606,66 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
     if pending_writes:
         log.info("Writing %d narratives to cache...", len(pending_writes))
         write_ok = 0
+        write_drift = 0
         for pw in pending_writes:
             match_id = pw["match_id"]
+
+            # FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 Codex pass-2 (Finding 2):
+            # gen-vs-write race guard. _generate_one captured the odds_hash
+            # and signal fingerprint at render time; recompute both NOW
+            # (immediately before _store_narrative_cache) and skip the
+            # write on drift so we never stamp an outdated verdict_html as
+            # the fresh row. Re-running on the next sweep is cheap; serving
+            # a stale-but-marked-fresh verdict undoes the brief.
+            try:
+                _gen_odds_hash = pw.pop("_gen_odds_hash", "") or ""
+                _gen_signal_fp = pw.pop("_gen_signal_fp", "") or ""
+                _outcome_for_recheck = pw.pop("_outcome_for_recheck", "") or ""
+                _sport_for_recheck = pw.pop("_sport_for_recheck", None)
+                _league_for_recheck = pw.pop("_league_for_recheck", None)
+                if _gen_signal_fp and _outcome_for_recheck:
+                    _now_canonical_sigs = _collect_canonical_signals(
+                        match_id,
+                        _outcome_for_recheck,
+                        _sport_for_recheck,
+                        _league_for_recheck,
+                    )
+                    _now_signal_fp = "no_sigs"
+                    if _now_canonical_sigs:
+                        try:
+                            from narrative_spec import _normalise_spec_signals as _ns_norm
+                            _now_signal_fp = _signal_fingerprint(_ns_norm(_now_canonical_sigs))
+                        except Exception:
+                            _now_signal_fp = "no_sigs"
+                    if _now_signal_fp != _gen_signal_fp:
+                        log.warning(
+                            "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 GenWriteSignalDrift "
+                            "match_id=%s gen=%s now=%s — skipping cache write",
+                            match_id, _gen_signal_fp, _now_signal_fp,
+                        )
+                        write_drift += 1
+                        continue
+                if _gen_odds_hash:
+                    _now_odds_hash = (
+                        await asyncio.to_thread(_compute_odds_hash, match_id) or ""
+                    )
+                    if _now_odds_hash and _now_odds_hash != _gen_odds_hash:
+                        log.warning(
+                            "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 GenWriteOddsDrift "
+                            "match_id=%s gen=%s now=%s — skipping cache write",
+                            match_id, _gen_odds_hash, _now_odds_hash,
+                        )
+                        write_drift += 1
+                        continue
+            except Exception as _drift_exc:
+                # Best-effort guard — never block the legitimate write path
+                # on a drift-check exception. Persist + log for monitoring.
+                log.debug(
+                    "FIX-PREGEN-SIGNALS-DROP-AND-CACHE-FLUSH-01 drift-guard exception "
+                    "for %s: %s — falling through to write",
+                    match_id, _drift_exc,
+                )
+
             try:
                 # BUILD-VERDICT-ONLY-STRIP-AI-BREAKDOWN-01 — narrative_html
                 # generation retired. Verdict on the card image is the only
@@ -2552,8 +2691,8 @@ async def main(sweep: str, sport: str | None = None, limit: int = 100, dry_run: 
             except Exception as exc:
                 log.warning("Cache write failed for %s: %s", match_id, exc)
         log.info(
-            "Cache writes: %d/%d successful (W82 baseline)",
-            write_ok, len(pending_writes),
+            "Cache writes: %d/%d successful (W82 baseline) — drift skips: %d",
+            write_ok, len(pending_writes), write_drift,
         )
 
     # W67-CALIBRATE: Verdict balance check
