@@ -559,9 +559,9 @@ def _normalise_tier_key(raw: object, default: str = "bronze") -> str:
 def edge_picks_index_tier_locked(user_tier: str, edge_tier: str) -> bool:
     """Return whether the index row should route through upgrade.
 
-    The list/detail surface can expose partial or blurred higher-tier previews.
-    The index is a tier entry menu, so tiers above the user's plan route to the
-    upsell even when the underlying list gate classifies them as previewable.
+    Full access (e.g. Bronze→Silver after FIX-BRONZE-SILVER-ACCESS-01) is never
+    locked — the tier is shown as accessible in the index.  Blurred/partial tiers
+    above the user's plan still route to upsell via the rank check.
     """
     import tier_gate
 
@@ -570,6 +570,8 @@ def edge_picks_index_tier_locked(user_tier: str, edge_tier: str) -> bool:
     access_level = tier_gate.get_edge_access_level(user_key, edge_key)
     if access_level == "locked":
         return True
+    if access_level == "full":
+        return False
     return _TIER_META[edge_key]["rank"] < _TIER_META[user_key]["rank"]
 
 

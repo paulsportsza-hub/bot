@@ -119,12 +119,15 @@ class TestCanonicalLaneCheck:
         assert "ALLOW_CANONICAL_MIX=1" in result.stderr
 
     def test_stdin_mode(self):
-        # Mixed staging via stdin.
+        # Mixed staging via stdin — must reject regardless of caller env.
+        env = os.environ.copy()
+        env["ALLOW_CANONICAL_MIX"] = "0"
         result = subprocess.run(
             ["bash", str(CHECK_SCRIPT), "-"],
             input="README.md\nstatic/qa-gallery/canonical/foo.png\n",
             capture_output=True,
             text=True,
+            env=env,
             cwd=str(REPO_ROOT),
             timeout=10,
         )

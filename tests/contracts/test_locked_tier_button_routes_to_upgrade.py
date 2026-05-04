@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 
 from bot import _EDGE_PICKS_INDEX_TIERS, _build_index_markup
+from card_data import edge_picks_index_tier_locked
 
 
-PLAN_RANK = {"diamond": 0, "gold": 1, "silver": 2, "bronze": 3}
 COUNTS = {"diamond": 1, "gold": 2, "silver": 3, "bronze": 4}
 
 
@@ -25,7 +25,7 @@ def test_locked_tier_buttons_route_to_upgrade(
     row_index = list(_EDGE_PICKS_INDEX_TIERS).index(edge_tier)
     callback_data = markup.inline_keyboard[row_index][0].callback_data
 
-    if PLAN_RANK[edge_tier] < PLAN_RANK[user_tier]:
+    if edge_picks_index_tier_locked(user_tier, edge_tier):
         assert callback_data == f"hot:upgrade:tier:{edge_tier}"
     else:
         assert callback_data == f"hot:tier:{edge_tier}"

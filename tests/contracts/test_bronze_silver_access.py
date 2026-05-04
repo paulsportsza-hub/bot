@@ -202,3 +202,44 @@ class TestBronzeDailyCapIncludesSilver:
             assert remaining == 999
         finally:
             os.unlink(db_path)
+
+
+class TestBronzeSilverIndexNotLocked:
+    """AC-5 (FIX-BRONZE-SILVER-ACCESS-01): tier index must NOT show Silver as locked for Bronze."""
+
+    def test_bronze_silver_index_not_locked(self):
+        """edge_picks_index_tier_locked must return False for bronze→silver (full access)."""
+        from card_data import edge_picks_index_tier_locked
+
+        result = edge_picks_index_tier_locked("bronze", "silver")
+        assert result is False, (
+            f"bronze→silver should NOT be locked in the tier index (full access). Got {result!r}. "
+            "FIX-BRONZE-SILVER-ACCESS-01 regression."
+        )
+
+    def test_bronze_gold_index_still_locked(self):
+        """Bronze→Gold (blurred) must remain locked in the tier index."""
+        from card_data import edge_picks_index_tier_locked
+
+        assert edge_picks_index_tier_locked("bronze", "gold") is True
+
+    def test_bronze_diamond_index_still_locked(self):
+        """Bronze→Diamond (locked) must remain locked in the tier index."""
+        from card_data import edge_picks_index_tier_locked
+
+        assert edge_picks_index_tier_locked("bronze", "diamond") is True
+
+    def test_gold_diamond_index_still_locked(self):
+        """Gold→Diamond (locked) must remain locked in the tier index."""
+        from card_data import edge_picks_index_tier_locked
+
+        assert edge_picks_index_tier_locked("gold", "diamond") is True
+
+    def test_diamond_all_not_locked(self):
+        """Diamond user sees all tiers as accessible."""
+        from card_data import edge_picks_index_tier_locked
+
+        for tier in ("diamond", "gold", "silver", "bronze"):
+            assert edge_picks_index_tier_locked("diamond", tier) is False, (
+                f"diamond→{tier} should not be locked"
+            )
