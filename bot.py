@@ -10737,11 +10737,22 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
     if not tips:
         return tips
 
-    def _live_ev_for_tip(tip: dict) -> tuple[str, float | None]:
-        """Compute live EV for one tip. Returns (match_key, ev_pct or None)."""
+    def _live_ev_for_tip(tip: dict) -> tuple[str, float | None, dict | None]:
+        """Compute live EV for one tip. Returns (match_key, ev_pct, edge_v2_result).
+
+        OPS-SPEC-SIGNAL-EXPOSURE-01 (Codex adversarial-review Finding #3 —
+        stale-signal mutation guard): also returns the fresh edge_v2
+        result dict so the merge step can replace ``tip["edge_v2"]``
+        atomically. Without this, ``_refresh_tip_evs`` would update
+        ``tip["ev"]`` while leaving ``tip["edge_v2"]["signals"]`` /
+        ``movement.direction`` stale — the new spec.signals path would
+        then pair fresh EV with stale signal availability, leaking
+        outdated movement / tipster / form state into the premium
+        verdict surface.
+        """
         mk = tip.get("match_id") or tip.get("event_id", "")
         if not mk:
-            return ("", None)
+            return ("", None, None)
         # Derive raw outcome from bet_type stored in edge_v2;
         # fall back to outcome_key for fast-path tips (edge_v2=None).
         _bet_type = (tip.get("edge_v2") or {}).get("outcome", "") or tip.get("outcome_key", "")
@@ -10765,8 +10776,8 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
                 _skip_log=True,  # W84-P0: user reads must not trigger DB writes
             )
             if result and result.get("predicted_ev") is not None:
-                return (mk, float(result["predicted_ev"]))
-            return (mk, None)
+                return (mk, float(result["predicted_ev"]), result)
+            return (mk, None, None)
         except Exception as _e:
             log.warning("scraper_boundary_failure site=edge_v2_9479 err=%s", _e)
             if sentry_sdk:
@@ -10774,7 +10785,7 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
                     scope.set_tag("contract_violation", "scraper_boundary")
                     scope.set_tag("boundary_site", "edge_v2_9479")
                     sentry_sdk.capture_exception(_e)
-            return (mk, None)
+            return (mk, None, None)
 
     # BUILD-QA22-FIX P1-1: Use partial results on timeout instead of discarding all
     _tasks = [asyncio.create_task(asyncio.to_thread(_live_ev_for_tip, t)) for t in tips]
@@ -10795,14 +10806,23 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
     except Exception:
         return tips  # Non-timeout gather error — serve original list
 
-    # Build match_key → live EV map
-    live_evs: dict[str, float | None] = {}
+    # Build match_key → (live EV, fresh edge_v2 result) map
+    # OPS-SPEC-SIGNAL-EXPOSURE-01: also carries fresh edge_v2 so the
+    # signals dict (collect_all_signals output) is refreshed in lockstep
+    # with EV — addresses Codex Finding #3 stale-signal mutation guard.
+    live_evs: dict[str, tuple[float | None, dict | None]] = {}
     for r in _raw:
         if isinstance(r, Exception):
             continue
-        mk, ev = r
+        if isinstance(r, tuple) and len(r) == 3:
+            mk, ev, fresh_edge_v2 = r
+        elif isinstance(r, tuple) and len(r) == 2:  # legacy 2-tuple
+            mk, ev = r
+            fresh_edge_v2 = None
+        else:
+            continue
         if mk:
-            live_evs[mk] = ev
+            live_evs[mk] = (ev, fresh_edge_v2)
 
     if not live_evs:
         return tips
@@ -10811,7 +10831,7 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
     for t in tips:
         mk = t.get("match_id") or t.get("event_id", "")
         if mk and mk in live_evs:
-            current_ev = live_evs[mk]
+            current_ev, fresh_edge_v2 = live_evs[mk]
             if current_ev is None:
                 # Could not compute live EV — keep tip (conservative), but log warning
                 log.warning("[BUILD-STALE-EV] EV lookup returned None for %s — keeping stale value", mk)
@@ -10822,6 +10842,14 @@ async def _refresh_tip_evs(tips: list[dict]) -> list[dict]:
                 continue  # Suppress — live EV is negative
             t = dict(t)  # Shallow copy — don't mutate shared cache dicts
             t["ev"] = round(current_ev, 1)
+            # OPS-SPEC-SIGNAL-EXPOSURE-01: refresh edge_v2 atomically.
+            # Without this, fresh EV pairs with stale movement/tipster/
+            # form signals — the verdict path's spec.signals dict would
+            # carry outdated availability flags. Replace the whole
+            # edge_v2 payload so the next _extract_edge_data sees a
+            # consistent (EV, signals) snapshot.
+            if fresh_edge_v2 is not None:
+                t["edge_v2"] = fresh_edge_v2
         result.append(t)
     return result
 

@@ -303,16 +303,56 @@ def _compute_signals(tip: dict | None, verified: dict) -> dict:
 
     Keys: ``price_edge``, ``form``, ``movement``, ``market``, ``tipster``,
     ``injury``.
+
+    OPS-SPEC-SIGNAL-EXPOSURE-01 (2026-05-04 — addresses Codex
+    adversarial-review Finding #1, signal single-truth invariant): when
+    the tip carries a canonical ``edge_v2.signals`` payload (i.e. the
+    output of ``collect_all_signals`` propagated through
+    ``calculate_composite_edge``), the dot booleans are derived from
+    that exact dict via ``narrative_spec._normalise_spec_signals`` —
+    the same helper that populates ``NarrativeSpec.signals`` for the
+    verdict path. This guarantees HG-4: card image dots and verdict
+    prose reference the same boolean state for any given tip. Falls
+    back to the legacy verified+tip derivation when ``edge_v2.signals``
+    is absent (non-edge match previews, deeplink resolver paths,
+    `_enrich_tip_for_card` calls without a live edge_v2 result).
     """
-    ev = float((tip or {}).get("ev") or 0)
+    tip = tip or {}
+    # ── Native path: use the same dict the verdict consumes ────────────
+    edge_v2_signals = (tip.get("edge_v2") or {}).get("signals") or {}
+    if edge_v2_signals:
+        try:
+            from narrative_spec import _normalise_spec_signals
+            normalised = _normalise_spec_signals(edge_v2_signals)
+            if normalised:
+                # The card-renderer keyspace uses "movement"; the spec
+                # contract uses "line_mvt". They are aliases —
+                # _SIGNAL_DISPLAY in card_data.py maps both to "Line Mvt"
+                # — but the card_generator.py dot-render reads "movement"
+                # by name, so we emit that key for card compatibility.
+                return {
+                    "price_edge": bool(normalised.get("price_edge")),
+                    "form":       bool(normalised.get("form")),
+                    "movement":   bool(normalised.get("line_mvt")),
+                    "market":     bool(normalised.get("market")),
+                    "tipster":    bool(normalised.get("tipster")),
+                    "injury":     bool(normalised.get("injury")),
+                }
+        except Exception:
+            # Defensive: never let the helper crash the card render
+            # path. Fall through to the legacy verified-context derivation.
+            pass
+
+    # ── Legacy path: verified+tip derivation (back-compat) ─────────────
+    ev = float(tip.get("ev") or 0)
     tipster = verified.get("tipster") or {}
     return {
         "price_edge": ev > 0,
         "form": bool(verified.get("results")),
         "movement": bool(
-            (tip or {}).get("movement")
-            or (tip or {}).get("line_movement")
-            or (tip or {}).get("movement_detected")
+            tip.get("movement")
+            or tip.get("line_movement")
+            or tip.get("movement_detected")
         ),
         "market": tipster.get("home_consensus_pct") is not None,
         "tipster": bool(tipster.get("sources")),
