@@ -28,18 +28,22 @@
             box-shadow: none;
         }
 
+        /* ── Glow zone: clips at bottom of meta-bar ─────────── */
+        .upper-section {
+            position: relative;
+            overflow: hidden;
+            isolation: isolate;
+        }
         /* ── 1. Header ───────────────────────────────────────── */
         .header {
             position: relative;
             z-index: 1;
-            isolation: isolate;
-            overflow: hidden;
+            overflow: visible;
             padding: 12px 20px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 10px;
-            background: linear-gradient(90deg, #0D0D0D, #000);
             border-bottom: 1px solid #2A2A2A;
         }
         .card > :not(.header) {
@@ -184,6 +188,8 @@
 
         /* ── 2. Matchup ──────────────────────────────────────── */
         .matchup {
+            position: relative;
+            z-index: 1;
             padding: 17px 20px 10px;
             text-align: center;
         }
@@ -248,13 +254,14 @@
 
         /* ── 3. Meta Bar ─────────────────────────────────────── */
         .meta-bar {
+            position: relative;
+            z-index: 1;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 12px;
             flex-wrap: wrap;
             padding: 9px 20px;
-            border-top: 1px solid #2A2A2A;
             border-bottom: 1px solid #2A2A2A;
         }
         .meta-item {
@@ -444,76 +451,80 @@
 <body>
 <div class="card">
 
-    <!-- ── 1. Header ─────────────────────────────────────────── -->
-    <div class="header">
+    <!-- ── Glow zone: header + matchup + meta-bar ────────────── -->
+    <div class="upper-section">
         {% if edge_badge_tier %}
         <div class="logo-glow logo-glow-{{ edge_badge_tier }}"></div>
         <div class="logo-glow-screen logo-glow-screen-{{ edge_badge_tier }}"></div>
         {% endif %}
-        <div class="header-brand">
-            {% if header_logo_b64 %}
-            <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
-            {% else %}
-            <div class="logo-fallback">MzansiEdge</div>
-            {% endif %}
-        </div>
-        <div class="header-badges">
-            <div class="badge-my-match">
-                <span style="font-size: 11px;">{{ sport_emoji }}</span>
-                <span class="badge-my-match-text">MY MATCH</span>
-            </div>
-            {% if edge_badge_tier %}
-            <div class="badge-edge badge-edge-{{ edge_badge_tier }}">
-                <span style="font-size: 11px;">{{ edge_badge_emoji }}</span>
-                <span class="badge-edge-text">{{ edge_badge_label }}</span>
-            </div>
-            {% else %}
-            <div class="badge-no-edge">
-                <span class="badge-no-edge-text">NO EDGE</span>
-            </div>
-            {% endif %}
-        </div>
-    </div>
 
-    <!-- ── 2. Matchup ────────────────────────────────────────── -->
-    <div class="matchup">
-        <div class="league-line">{{ sport_emoji }} {{ league }}</div>
-        <div class="teams-row">
-
-            <div class="team-block">
-                <div class="team-name">{{ home }}</div>
-                {% if home_form %}
-                <div class="form-row">
-                    {% for r in home_form %}
-                    <div class="form-box form-{{ r | lower }}">{{ r }}</div>
-                    {% endfor %}
+        <!-- ── 1. Header ──────────────────────────────────────── -->
+        <div class="header">
+            <div class="header-brand">
+                {% if header_logo_b64 %}
+                <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+                {% else %}
+                <div class="logo-fallback">MzansiEdge</div>
+                {% endif %}
+            </div>
+            <div class="header-badges">
+                <div class="badge-my-match">
+                    <span style="font-size: 11px;">{{ sport_emoji }}</span>
+                    <span class="badge-my-match-text">MY MATCH</span>
+                </div>
+                {% if edge_badge_tier %}
+                <div class="badge-edge badge-edge-{{ edge_badge_tier }}">
+                    <span style="font-size: 11px;">{{ edge_badge_emoji }}</span>
+                    <span class="badge-edge-text">{{ edge_badge_label }}</span>
+                </div>
+                {% else %}
+                <div class="badge-no-edge">
+                    <span class="badge-no-edge-text">NO EDGE</span>
                 </div>
                 {% endif %}
             </div>
-
-            <div class="vs-badge">VS</div>
-
-            <div class="team-block">
-                <div class="team-name">{{ away }}</div>
-                {% if away_form %}
-                <div class="form-row">
-                    {% for r in away_form %}
-                    <div class="form-box form-{{ r | lower }}">{{ r }}</div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
-
         </div>
-    </div>
 
-    <!-- ── 3. Meta Bar ───────────────────────────────────────── -->
-    <div class="meta-bar">
+        <!-- ── 2. Matchup ─────────────────────────────────────── -->
+        <div class="matchup">
+            <div class="league-line">{{ sport_emoji }} {{ league }}</div>
+            <div class="teams-row">
+
+                <div class="team-block">
+                    <div class="team-name">{{ home }}</div>
+                    {% if home_form %}
+                    <div class="form-row">
+                        {% for r in home_form %}
+                        <div class="form-box form-{{ r | lower }}">{{ r }}</div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div class="vs-badge">VS</div>
+
+                <div class="team-block">
+                    <div class="team-name">{{ away }}</div>
+                    {% if away_form %}
+                    <div class="form-row">
+                        {% for r in away_form %}
+                        <div class="form-box form-{{ r | lower }}">{{ r }}</div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ── 3. Meta Bar ────────────────────────────────────── -->
+        <div class="meta-bar">
         {% if date %}<span class="meta-item">📅 {{ date }}</span>{% endif %}
         {% if time %}<span class="meta-item">⏰ {{ time }}</span>{% endif %}
         {#- FIX-DSTV-CHANNEL-PERM-01 superseded by BUILD-CHANNEL-LOGOS-01: SS icon+DStv badge or text fallback -#}
         {% if channel %}{% if channel_dstv_num and ss_icon_b64 %}<span class="meta-item"><span class="ss-badge"><img src="data:image/png;base64,{{ ss_icon_b64 }}" class="ss-icon" alt="SS"><span class="ss-num">{{ channel_dstv_num }}</span></span></span>{% else %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}{% endif %}
-    </div>
+        </div>
+    </div><!-- /.upper-section -->
 
     <!-- ── 4. Market Overview ────────────────────────────────── -->
     <div class="market-section">

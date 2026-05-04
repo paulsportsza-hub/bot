@@ -101,7 +101,6 @@
         .header {
             position: relative;
             z-index: 2;
-            overflow: hidden;
             padding: 8px 16px;
             display: flex;
             align-items: center;
@@ -542,13 +541,13 @@
 
     <!-- ── Upper glow zone (wraps header + matchup, stops at meta-bar) ──── -->
     <div class="upper-glow-zone">
-
-    <!-- ── 1. Header ────────────────────────────────────────────── -->
-    <div class="header">
         {% if tier %}
         <div class="logo-glow logo-glow-{{ tier | lower }}"></div>
         <div class="logo-glow-screen logo-glow-screen-{{ tier | lower }}"></div>
         {% endif %}
+
+    <!-- ── 1. Header ────────────────────────────────────────────── -->
+    <div class="header">
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
