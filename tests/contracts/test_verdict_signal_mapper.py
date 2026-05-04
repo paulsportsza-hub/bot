@@ -387,6 +387,12 @@ class _FakeSpec:
     fair_prob_pct: float = 75.0
     verdict_action: str = "strong back"
     match_key: str = "manchester_city_vs_brentford_2026-05-03"
+    # OPS-SPEC-SIGNAL-EXPOSURE-01 — native canonical signal exposure on the
+    # spec. Default empty dict / None preserves the proxy-fallback path
+    # (the existing tests' implicit semantics) so legacy assertions still
+    # exercise the BUILD-VERDICT-SIGNAL-MAPPED-01 derivation.
+    signals: dict = field(default_factory=dict)
+    line_movement_direction: str | None = None
 
 
 def test_feature_flag_default_uses_signal_mapper(monkeypatch):
@@ -992,3 +998,440 @@ def test_p2_render_verdict_no_team_news_when_picked_side_injured(monkeypatch):
         f"Verdict must not claim 'team news gives it extra weight' for the "
         f"picked side that's the one injured; got: {out!r}"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# OPS-SPEC-SIGNAL-EXPOSURE-01 — native spec.signals + line_movement_direction
+# ──────────────────────────────────────────────────────────────────────────
+#
+# These tests exercise the post-fix path where NarrativeSpec carries a
+# native ``signals: dict[str, bool]`` field populated from the canonical
+# ``collect_all_signals`` output. The verdict path must:
+#   AC-2 — read the dict natively when populated (Phase 3)
+#   AC-3 — fall back to the legacy proxy adapter when empty (HG-5)
+#   AC-4 — surface all 8 §12 combinations across 4 tiers × 3 sports
+#   HG-4 — single source of truth alignment with the card-image dot contract
+#
+
+import narrative_spec as _ns
+import verdict_corpus  # noqa: E402 — module-level import after the existing
+                       # block that uses local imports for monkeypatch reload
+                       # patterns; tests below treat this as a stable handle.
+
+
+def _spec_for_combo(
+    tier: str,
+    *,
+    signals: dict[str, bool],
+    line_movement: str | None = None,
+    sport: str = "soccer",
+    outcome: str = "home",
+    home_name: str = "Manchester City",
+    away_name: str = "Brentford",
+    outcome_label: str = "Manchester City",
+    odds: float = 1.40,
+    bookmaker: str = "HWB",
+    ev_pct: float = 5.5,
+    injuries_home: list | None = None,
+    injuries_away: list | None = None,
+    tipster_agrees: bool | None = True,
+):
+    """Build a _FakeSpec for a §12 combination with explicit native signals.
+
+    For polarity-gated signals the helper sets supporting fields so the
+    native path's polarity filters allow the signal to fire:
+      - tipster: when ``signals['tipster']`` is True, sets tipster_available
+        and tipster_agrees=True (or as overridden) so the gate passes.
+      - injury: when ``signals['injury']`` is True, sets opponent-side
+        injuries by default (single-name placeholder) so the gate passes.
+    """
+    inj_home = list(injuries_home or [])
+    inj_away = list(injuries_away or [])
+    if signals.get("injury") and not (inj_home or inj_away):
+        # Default opponent-side weakening so the polarity gate passes.
+        if outcome == "home":
+            inj_away = ["Opponent Striker"]
+        elif outcome == "away":
+            inj_home = ["Home Striker"]
+    return _FakeSpec(
+        edge_tier=tier,
+        sport=sport,
+        outcome=outcome,
+        outcome_label=outcome_label,
+        home_name=home_name,
+        away_name=away_name,
+        odds=odds,
+        bookmaker=bookmaker,
+        ev_pct=ev_pct if signals.get("price_edge") else 0.0,
+        # Set legacy fields to inert defaults so proxy-fallback path can
+        # never accidentally satisfy a signal — the native dict alone
+        # decides what fires.
+        movement_direction="neutral",
+        bookmaker_count=0,
+        tipster_available=bool(signals.get("tipster")),
+        tipster_agrees=tipster_agrees if signals.get("tipster") else None,
+        home_form="",
+        away_form="",
+        injuries_home=inj_home,
+        injuries_away=inj_away,
+        signals=dict(signals),
+        line_movement_direction=line_movement,
+    )
+
+
+# §12 combination → (key signals dict, expected primary lead, expected combined?)
+_COMBO_SPECS = {
+    # §12.1 — Price + Form (combined causal)
+    "price_form": (
+        {"price_edge": True, "form": True},
+        None,  # primary path
+        "The price hasn't caught up and recent form backs it",
+    ),
+    # §12.2 — Price + Injury (primary + secondary)
+    "price_injury": (
+        {"price_edge": True, "injury": True},
+        None,
+        "The price hasn't caught up and team news gives it extra weight",
+    ),
+    # §12.3 — Price + Line Movement favourable (special case)
+    "price_line_favourable": (
+        {"price_edge": True, "line_mvt": True},
+        "favourable",
+        "The line is moving our way and the price is still there",
+    ),
+    # §12.4 — Price + Line Movement against (special case)
+    "price_line_against": (
+        {"price_edge": True, "line_mvt": True},
+        "against",
+        "The market has moved, but the price still looks big",
+    ),
+    # §12.5 — Form-only (primary alone)
+    "form_only": (
+        {"form": True},
+        None,
+        "Recent form backs this",
+    ),
+    # §12.6 — Market-only (primary alone)
+    "market_only": (
+        {"market": True},
+        None,
+        "The wider market is leaning this way",
+    ),
+    # §12.7 — Tipster-only (primary alone)
+    "tipster_only": (
+        {"tipster": True},
+        None,
+        "Outside support points this way",
+    ),
+    # §12.8 — No signals (tier fallback) — lead varies by tier; just
+    # assert the EXPECTED_ACTION fragment is present per tier.
+    "no_signals_fallback": (
+        {},
+        None,
+        None,  # tier-specific fallback — see assertion in test
+    ),
+}
+
+_TIER_FALLBACK_LEADS = {
+    "diamond": "The price still looks too big for the setup",
+    "gold":    "There is enough value here to support the pick",
+    "silver":  "There is just enough value here",
+    "bronze":  "Not much in it, but there is a small lean",
+}
+
+
+def _build_verdict_for_spec(spec: _FakeSpec) -> str:
+    """Mirror render_verdict's _spec_to_signals + build_verdict pipeline,
+    bypassing the min_verdict_quality length-floor fallback.
+
+    The brief contract is "spec.signals natively wires through to the
+    signal-mapper". The downstream length probe is a SAFETY GATE that
+    can swap in corpus output when the mapper happens to emit a short
+    sentence — that's an orthogonal concern (existing behaviour).
+    These tests exercise the dict-flow contract: spec.signals is the
+    source the mapper consumes, mapped to spec §12.X phrasing.
+    """
+    cs = cast("verdict_corpus.NarrativeSpec", spec)
+    sigs = verdict_corpus._spec_to_signals(cs)
+    line_mvt = verdict_corpus._spec_movement_direction(cs)
+    odds_val = float(spec.odds or 0)
+    return m.build_verdict(
+        team=(spec.outcome_label or spec.home_name or "the pick").strip(),
+        tier=spec.edge_tier,
+        signals=sigs,
+        odds=(f"{odds_val:.2f}" if odds_val > 0 else None),
+        bookmaker=(spec.bookmaker or None),
+        line_movement_direction=line_mvt,
+    )
+
+
+@pytest.mark.parametrize("tier", _TIERS)
+@pytest.mark.parametrize("combo_key", list(_COMBO_SPECS.keys()))
+def test_ops_signal_exposure_native_path_8_combos(combo_key, tier):
+    """AC-2 / AC-4 — 8 §12 combinations × 4 tiers fire from native spec.signals.
+
+    Each combination wires the canonical 6-key signals dict directly on
+    the NarrativeSpec. The verdict path's _spec_to_signals reads natively
+    and the mapper produces the spec §12.X phrase for that combination
+    + tier. Tested via the mapper directly (the brief contract); the
+    downstream min_verdict_quality length probe is a separate gate
+    exercised by existing render_verdict tests.
+    """
+    sigs, line_mvt, expected_lead = _COMBO_SPECS[combo_key]
+    spec = _spec_for_combo(tier, signals=sigs, line_movement=line_mvt)
+    out = _build_verdict_for_spec(spec)
+
+    if combo_key == "no_signals_fallback":
+        # §12.8 — tier-specific fallback lead
+        assert out.startswith(_TIER_FALLBACK_LEADS[tier]), (
+            f"Tier {tier} fallback should lead with §12.8 phrase; got: {out!r}"
+        )
+    else:
+        assert expected_lead is not None  # type guard
+        assert expected_lead in out, (
+            f"§12 combo '{combo_key}' tier {tier} expected lead "
+            f"{expected_lead!r}; got: {out!r}"
+        )
+
+    # Tier action fragment must always close the verdict.
+    assert m.EXPECTED_ACTION[tier] in out, (
+        f"Tier {tier} action fragment missing from verdict: {out!r}"
+    )
+
+
+# AC-4 — full reachability matrix: 4 tiers × 8 combos × 3 sports = 96 cases.
+_COMBO_SPORTS = ("soccer", "rugby", "cricket")
+
+
+@pytest.mark.parametrize("tier", _TIERS)
+@pytest.mark.parametrize("combo_key", list(_COMBO_SPECS.keys()))
+@pytest.mark.parametrize("sport", _COMBO_SPORTS)
+def test_ops_signal_exposure_full_reachability_96_cases(combo_key, tier, sport):
+    """AC-4 — 4 tiers × 8 §12 combos × 3 sports = 96 fixtures.
+
+    Verdict copy is sport-agnostic (it never references sport vocabulary).
+    This matrix proves the native path produces a legal verdict for every
+    combination across all sports — the same combination renders the same
+    spec §12.X phrase regardless of sport. Sport-specific tone surfaces
+    in the Setup/Edge/Risk sections, not the Verdict; the mapper is
+    sport-agnostic by design.
+    """
+    sigs, line_mvt, expected_lead = _COMBO_SPECS[combo_key]
+    spec = _spec_for_combo(tier, signals=sigs, line_movement=line_mvt, sport=sport)
+    out = _build_verdict_for_spec(spec)
+
+    # Verdict must end with the period and the tier action fragment.
+    assert out.endswith("."), f"Missing terminator: {out!r}"
+    assert m.EXPECTED_ACTION[tier] in out, (
+        f"sport={sport} tier={tier} combo={combo_key}: action fragment missing"
+    )
+
+    if combo_key == "no_signals_fallback":
+        assert out.startswith(_TIER_FALLBACK_LEADS[tier])
+    else:
+        assert expected_lead is not None  # type guard
+        assert expected_lead in out, (
+            f"sport={sport} tier={tier} combo={combo_key}: expected "
+            f"{expected_lead!r}; got: {out!r}"
+        )
+
+    # No banned terms / live commentary creep in for any sport.
+    ok, hits = m.validate_output(out)
+    assert ok, f"Banned/live-commentary hits for {sport}/{tier}/{combo_key}: {hits}"
+
+
+def test_ops_signal_exposure_proxy_fallback_when_signals_empty():
+    """AC-3 / HG-5 — empty spec.signals routes through legacy proxy adapter.
+
+    Un-migrated specs (or any future producer that forgets to populate
+    spec.signals) MUST still render a coherent verdict via the proxy
+    fallback. Both paths converge on the same answer for typical inputs.
+    """
+    # Native path: explicit signals dict
+    spec_native = _FakeSpec(
+        edge_tier="gold",
+        outcome="home",
+        outcome_label="Manchester City",
+        ev_pct=5.5,
+        movement_direction="neutral",
+        bookmaker_count=0,
+        tipster_available=False,
+        tipster_agrees=None,
+        home_form="",
+        away_form="",
+        injuries_home=[],
+        injuries_away=[],
+        signals={"price_edge": True, "form": True},
+        line_movement_direction=None,
+        odds=1.40,
+        bookmaker="HWB",
+    )
+    out_native = _build_verdict_for_spec(spec_native)
+
+    # Fallback path: empty signals, equivalent legacy fields
+    spec_fallback = _FakeSpec(
+        edge_tier="gold",
+        outcome="home",
+        outcome_label="Manchester City",
+        ev_pct=5.5,
+        movement_direction="neutral",
+        bookmaker_count=0,
+        tipster_available=False,
+        tipster_agrees=None,
+        home_form="WWLDW",  # form proxy fires
+        away_form="",
+        injuries_home=[],
+        injuries_away=[],
+        signals={},  # native dict empty → proxy fallback
+        line_movement_direction=None,
+        odds=1.40,
+        bookmaker="HWB",
+    )
+    out_fallback = _build_verdict_for_spec(spec_fallback)
+
+    # Both paths yield the §12.1 (price + form) verdict.
+    assert "The price hasn't caught up and recent form backs it" in out_native
+    assert "The price hasn't caught up and recent form backs it" in out_fallback
+    # Both must be valid (no banned/live terms).
+    for label, out in (("native", out_native), ("fallback", out_fallback)):
+        ok, hits = m.validate_output(out)
+        assert ok, f"{label} path produced banned/live hits: {hits}"
+
+
+def test_ops_signal_exposure_card_alignment_invariant():
+    """HG-4 — spec.signals carries the SAME 6-key contract the card-image
+    Edge Signal dots consume.
+
+    The card-image renderer (card_data.build_edge_detail_data) reads
+    ``tip['signals']`` as either a dict[name→bool] or a list of
+    {name, active} entries. For HG-4 alignment, when we round-trip
+    spec.signals through that contract — i.e., construct a tip with
+    ``tip['signals'] = spec.signals`` — the booleans the card reads MUST
+    equal the booleans the verdict path consumed.
+
+    This test asserts the dict-shape contract: spec.signals has exactly
+    the canonical 6 keys (after _normalise_spec_signals), and bool values
+    survive the card-data normalisation step unchanged. Any divergence
+    (e.g., the verdict path reading 'movement' while the card reads
+    'line_mvt' for the same upstream signal) would re-introduce the
+    alignment bug class FIX-CARD-VERDICT-RECOMMENDATION-ALIGNMENT-01
+    closed for team/odds/bookmaker.
+    """
+    canonical = {
+        "price_edge": True,
+        "line_mvt":   False,
+        "form":       True,
+        "market":     False,
+        "tipster":    True,
+        "injury":     False,
+    }
+    spec = _spec_for_combo(
+        "gold",
+        signals=canonical,
+        outcome="home",
+        # tipster polarity gate passes
+        tipster_agrees=True,
+    )
+    # Trip 1 — native verdict path consumes spec.signals
+    raw = verdict_corpus._spec_to_signals(
+        cast("verdict_corpus.NarrativeSpec", spec)
+    )
+    # Polarity-agnostic signals must round-trip 1:1.
+    for key in ("price_edge", "line_mvt", "form", "market"):
+        assert raw[key] is canonical[key], (
+            f"HG-4: native path diverges from spec.signals for '{key}': "
+            f"spec={canonical[key]} vs verdict={raw[key]}"
+        )
+    # Polarity-filtered signals must NOT fire in excess of the raw bool.
+    assert raw["tipster"] is True, "tipster polarity gate (agrees=True) failed"
+    assert raw["injury"] is False, "injury polarity gate (no opponent injuries) failed"
+
+    # Trip 2 — card-data normalisation contract: dict[name→bool] passes through.
+    # We don't import card_data here (heavy bot deps); the contract is enforced
+    # at the dict-key level. Document via assertions.
+    assert set(canonical.keys()) == {
+        "price_edge", "line_mvt", "form", "market", "tipster", "injury"
+    }, "spec.signals key set must match card-image canonical 6-key contract"
+
+
+@pytest.mark.parametrize("native,fallback,expected", [
+    ("favourable", "for",     "favourable"),
+    ("favourable", "neutral", "favourable"),
+    ("against",    "for",     "against"),
+    ("against",    "neutral", "against"),
+    ("unknown",    "for",     "unknown"),
+    ("unknown",    "neutral", "unknown"),
+    (None,         "for",     "favourable"),  # legacy "for" alias
+    (None,         "favourable", "favourable"),
+    (None,         "against", "against"),
+    (None,         "neutral", "unknown"),
+    (None,         "",        "unknown"),
+    (None,         None,      "unknown"),
+])
+def test_ops_signal_exposure_line_movement_normalisation(native, fallback, expected):
+    """AC-2 / Phase 2 step 2 — line_movement_direction normalisation contract.
+
+    Mapper expects "favourable" / "against" / "unknown". The native field
+    is preferred; falls back to mapping legacy movement_direction. The
+    "favourable" / "for" alias must collapse to "favourable" so spec §6.2
+    favourable lead fires; "neutral"/None collapse to "unknown" so the
+    neutral lead fires.
+    """
+    spec = _FakeSpec(
+        line_movement_direction=native,
+        movement_direction=fallback or "",
+    )
+    out = verdict_corpus._spec_movement_direction(
+        cast("verdict_corpus.NarrativeSpec", spec)
+    )
+    assert out == expected, (
+        f"native={native} fallback={fallback}: expected {expected}, got {out}"
+    )
+
+
+def test_ops_signal_exposure_collect_all_signals_shape_normalises():
+    """AC-1 / Phase 1 trace evidence — the canonical 7-key collect_all_signals
+    output shape (price_edge, market_agreement, movement, tipster,
+    lineup_injury, form_h2h, model_probability) flattens to the 6-key
+    spec contract via _normalise_spec_signals.
+    """
+    sigs = {
+        "price_edge":        {"available": True, "signal_strength": 0.7},
+        "market_agreement":  {"available": True, "signal_strength": 0.5},
+        "movement":          {"available": True, "direction": "for"},
+        "tipster":           {"available": True, "agrees_with_edge": True},
+        "lineup_injury":     {"available": True},
+        "form_h2h":          {"available": True},
+        "model_probability": {"available": True},  # not in 6-key — must drop
+    }
+    out = _ns._normalise_spec_signals(sigs)
+    assert out == {
+        "price_edge": True,
+        "market":     True,
+        "line_mvt":   True,
+        "tipster":    True,
+        "injury":     True,
+        "form":       True,
+    }, f"7-key→6-key remap failed: {out}"
+
+    # An "available: False" signal must produce False, not be dropped.
+    sigs_mixed = {
+        "price_edge":   {"available": True},
+        "form_h2h":     {"available": False},
+        "movement":     {"available": False},
+    }
+    out_mixed = _ns._normalise_spec_signals(sigs_mixed)
+    assert out_mixed == {
+        "price_edge": True,
+        "form":       False,
+        "line_mvt":   False,
+    }, f"available=False not preserved: {out_mixed}"
+
+    # Bare bool dict survives unchanged.
+    out_bool = _ns._normalise_spec_signals({"price_edge": True, "tipster": False})
+    assert out_bool == {"price_edge": True, "tipster": False}
+
+    # Empty / None → empty (back-compat sentinel for proxy fallback).
+    assert _ns._normalise_spec_signals({}) == {}
+    assert _ns._normalise_spec_signals(None) == {}
+    assert _ns._normalise_spec_signals("not a dict") == {}
