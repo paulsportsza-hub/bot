@@ -31,24 +31,60 @@
             isolation: isolate;
             overflow: hidden;
         }
-        .header-glow {
+        /* ===== CANONICAL GLOW (eb25301 — Paul-approved) ===== */
+        .logo-glow {
             position: absolute;
-            inset: -10px 0 0 0;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 260px;
             pointer-events: none;
             z-index: 0;
-            filter: blur(3px);
-            background: radial-gradient(ellipse 50% 90% at 50% 25%,
-                {{ tier_color }}38 0%, {{ tier_color }}18 45%, {{ tier_color }}06 70%, transparent 100%);
+            filter: blur(4px);
         }
-        .header-glow-screen {
+        .logo-glow-screen {
             position: absolute;
-            inset: 0;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 220px;
             pointer-events: none;
             z-index: 0;
             mix-blend-mode: screen;
-            background: radial-gradient(ellipse 32% 60% at 50% 28%,
-                {{ tier_color }}66 0%, {{ tier_color }}22 50%, transparent 80%);
         }
+        .logo-glow-diamond {
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #B9F2FF39 0%, #B9F2FF16 42%, #B9F2FF05 65%, transparent 90%);
+        }
+        .logo-glow-screen-diamond {
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #B9F2FF51 0%, #B9F2FF1F 45%, transparent 80%);
+        }
+        .logo-glow-gold {
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #FFD70039 0%, #FFD70016 42%, #FFD70005 65%, transparent 90%);
+        }
+        .logo-glow-screen-gold {
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #FFD70051 0%, #FFD7001F 45%, transparent 80%);
+        }
+        .logo-glow-silver {
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #CBD5E02B 0%, #CBD5E00F 42%, #CBD5E003 65%, transparent 90%);
+        }
+        .logo-glow-screen-silver {
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #CBD5E042 0%, #CBD5E018 45%, transparent 80%);
+        }
+        .logo-glow-bronze {
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #E8A87C30 0%, #E8A87C13 42%, #E8A87C04 65%, transparent 90%);
+        }
+        .logo-glow-screen-bronze {
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #E8A87C47 0%, #E8A87C1B 45%, transparent 80%);
+        }
+        /* ===== END CANONICAL GLOW ===== */
         .header > .logo-img,
         .header > .logo-fallback,
         .header > .orange-bar,
@@ -204,8 +240,10 @@
 <body>
 <div class="card">
     <div class="header">
-        <div class="header-glow"></div>
-        <div class="header-glow-screen"></div>
+        {% if top_tier %}
+        <div class="logo-glow logo-glow-{{ top_tier }}"></div>
+        <div class="logo-glow-screen logo-glow-screen-{{ top_tier }}"></div>
+        {% endif %}
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}

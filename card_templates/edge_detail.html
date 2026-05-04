@@ -38,31 +38,75 @@
             isolation: isolate;
             overflow: hidden;
         }
-        .upper-glow {
+        /* ===== CANONICAL GLOW (eb25301 — Paul-approved) ===== */
+        .logo-glow {
             position: absolute;
-            inset: -20px -10px;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 260px;
             pointer-events: none;
             z-index: 0;
-            filter: blur(2px);
+            filter: blur(4px);
         }
-        .upper-glow-screen {
+        .logo-glow-screen {
             position: absolute;
-            inset: 0;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 220px;
             pointer-events: none;
             z-index: 0;
             mix-blend-mode: screen;
         }
+        .logo-glow-diamond {
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #B9F2FF39 0%, #B9F2FF16 42%, #B9F2FF05 65%, transparent 90%);
+        }
+        .logo-glow-screen-diamond {
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #B9F2FF51 0%, #B9F2FF1F 45%, transparent 80%);
+        }
+        .logo-glow-gold {
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #FFD70039 0%, #FFD70016 42%, #FFD70005 65%, transparent 90%);
+        }
+        .logo-glow-screen-gold {
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #FFD70051 0%, #FFD7001F 45%, transparent 80%);
+        }
+        .logo-glow-silver {
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #CBD5E02B 0%, #CBD5E00F 42%, #CBD5E003 65%, transparent 90%);
+        }
+        .logo-glow-screen-silver {
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #CBD5E042 0%, #CBD5E018 45%, transparent 80%);
+        }
+        .logo-glow-bronze {
+            background: radial-gradient(ellipse 80% 70% at 50% 45%,
+                #E8A87C30 0%, #E8A87C13 42%, #E8A87C04 65%, transparent 90%);
+        }
+        .logo-glow-screen-bronze {
+            background: radial-gradient(ellipse 70% 60% at 50% 45%,
+                #E8A87C47 0%, #E8A87C1B 45%, transparent 80%);
+        }
+        /* ===== END CANONICAL GLOW ===== */
 
-        /* Header (sits above the glow) */
+        /* Header */
         .header {
             position: relative;
             z-index: 2;
+            overflow: hidden;
             padding: 8px 16px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 10px;
         }
+        .header > .logo-img,
+        .header > .logo-fallback,
+        .header > .header-right { position: relative; z-index: 1; }
         .logo-img {
             height: 28px;
             width: auto;
@@ -494,19 +538,13 @@
 
     <!-- ── Upper glow zone (wraps header + matchup, stops at meta-bar) ──── -->
     <div class="upper-glow-zone">
-        {% if tier %}
-        {# Layer A — soft right-side wash, blurred #}
-        <div class="upper-glow" style="
-            background: radial-gradient(ellipse 35% 130% at 92% 50%, {{ tier_color }}10 0%, {{ tier_color }}07 50%, transparent 90%);
-        "></div>
-        {# Layer B — screen-blend right-side spotlight #}
-        <div class="upper-glow-screen" style="
-            background: radial-gradient(ellipse 22% 100% at 92% 50%, {{ tier_color }}1A 0%, {{ tier_color }}0D 40%, transparent 80%);
-        "></div>
-        {% endif %}
 
     <!-- ── 1. Header ────────────────────────────────────────────── -->
     <div class="header">
+        {% if tier %}
+        <div class="logo-glow logo-glow-{{ tier }}"></div>
+        <div class="logo-glow-screen logo-glow-screen-{{ tier }}"></div>
+        {% endif %}
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}

@@ -258,14 +258,14 @@ def build_edge_summary_data(tips: list[dict]) -> dict:
     # Top pick: highest EV tip in highest-ranked tier
     top_pick = _pick_top(tips)
 
-    # Top tier color for header glow (diamond → gold → silver → bronze, whichever is present)
-    _tier_color = tiers[0]["color"] if tiers else "#FFD700"
+    # Top tier key for canonical header glow (diamond → gold → silver → bronze)
+    _top_tier = next((k for k in _TIER_ORDER if counts[k] > 0), "")
 
     return {
         "total_edges": len(tips),
         "tiers": tiers,
         "top_pick": top_pick,
-        "tier_color": _tier_color,
+        "top_tier": _top_tier,
         "date_label": datetime.now().strftime("%-d %b %Y"),
         "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
         "footer_logo_b64": logo_b64(_FOOTER_LOGO, max_height=32),
@@ -420,7 +420,7 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4, us
             "groups": [],
             "page": 1,
             "total_pages": 1,
-            "tier_color": "#FFD700",
+            "top_tier": "",
             "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
             "footer_logo_b64": logo_b64(_FOOTER_LOGO, max_height=32),
         }
@@ -536,8 +536,8 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4, us
                 "picks": groups_dict[tk],
             })
 
-    # Top tier color for header glow (diamond → gold → silver → bronze, whichever is present)
-    _top_tier_color = tier_summary[0]["color"] if tier_summary else "#FFD700"
+    # Top tier key for canonical header glow (diamond → gold → silver → bronze)
+    _top_tier = next((k for k in _TIER_ORDER if counts[k] > 0), "")
 
     return {
         "tier_summary": tier_summary,
@@ -545,7 +545,7 @@ def build_edge_picks_data(tips: list[dict], page: int = 1, per_page: int = 4, us
         "groups": groups,
         "page": page,
         "total_pages": total_pages,
-        "tier_color": _top_tier_color,
+        "top_tier": _top_tier,
         "header_logo_b64": logo_b64(_HEADER_LOGO, max_height=64),
         "footer_logo_b64": logo_b64(_FOOTER_LOGO, max_height=32),
     }
