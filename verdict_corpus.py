@@ -69,8 +69,15 @@ def _spec_to_signals(spec: "NarrativeSpec") -> dict[str, bool]:
 
     NarrativeSpec does not carry a raw signals dict (Phase 1 trace —
     Notion: BUILD-VERDICT-SIGNAL-MAPPED-01). We derive presence
-    booleans from the existing spec fields:
+    booleans from the existing spec fields. Each signal is keyed to
+    "does this support the picked outcome", not just "does this data
+    exist" — so the mapper's positive phrasing ("team news gives it
+    extra weight", "outside support points this way") never lands on
+    a card where the underlying data CONTRADICTS the pick. Adapter
+    polarity hardened on 2026-05-04 in response to Codex adversarial-
+    review (P2 picked-side injury inversion + P2 tipster_agrees gate).
 
+    Signal semantics:
       - price_edge → ev_pct > 0 (every NarrativeSpec built from a tip
         has a positive EV; this is the product's core value prop and
         is implicitly always true on the main path).
@@ -80,10 +87,19 @@ def _spec_to_signals(spec: "NarrativeSpec") -> dict[str, bool]:
         ``line_movement_direction`` separately.
       - market     → bookmaker_count >= 3 (proxy for "wider market"
         consensus — at least 3 SA books pricing the outcome).
-      - tipster    → tipster_available (signal data exists).
+      - tipster    → tipster_available AND tipster_agrees == True.
+        A tipster signal that DISAGREES with our pick is contradicting
+        evidence, not support; the mapper must NOT emit "outside
+        support points this way" against the pick.
       - form       → home_form OR away_form (form string present).
-      - injury     → injuries on the picked side; falls back to
-        either-side coverage when ``outcome`` is empty.
+      - injury     → opponent-side injuries (the OTHER team being
+        weakened supports our pick). Picked-side injuries are
+        contradicting evidence and ``has_real_risk`` handles them via
+        the corpus concern-prefix path; the mapper must NOT phrase
+        them as "team news gives it extra weight" for the picked side.
+        Empty outcome (no clear pick side) suppresses the signal — the
+        spec §6 sentences are explicitly "the OTHER team weakened"
+        framing only.
 
     Out-of-scope (Phase 1 gap → follow-up brief
     OPS-SPEC-SIGNAL-EXPOSURE-01): direct ``signals.market`` and
@@ -93,12 +109,15 @@ def _spec_to_signals(spec: "NarrativeSpec") -> dict[str, bool]:
     outcome = (getattr(spec, "outcome", "") or "").lower()
     inj_home = list(getattr(spec, "injuries_home", []) or [])
     inj_away = list(getattr(spec, "injuries_away", []) or [])
+    # Inversion: opponent injuries = support, picked-side injuries =
+    # risk (handled separately by has_real_risk + concern-prefix path).
+    # Empty outcome → suppressed (no pick side to evaluate against).
     if outcome == "home":
-        injury_active = bool(inj_home)
-    elif outcome == "away":
         injury_active = bool(inj_away)
+    elif outcome == "away":
+        injury_active = bool(inj_home)
     else:
-        injury_active = bool(inj_home or inj_away)
+        injury_active = False
 
     movement = (getattr(spec, "movement_direction", "") or "").lower()
     line_mvt_active = movement in ("for", "against", "unknown", "favourable")
@@ -106,7 +125,13 @@ def _spec_to_signals(spec: "NarrativeSpec") -> dict[str, bool]:
     bookmaker_count = int(getattr(spec, "bookmaker_count", 0) or 0)
     market_active = bookmaker_count >= 3
 
-    tipster_active = bool(getattr(spec, "tipster_available", False))
+    # Gate tipster on AGREEMENT, not just availability. tipster_agrees=None
+    # (no data) and tipster_agrees=False (against the pick) both suppress
+    # the signal — only an explicit True (tipsters concur with the pick)
+    # is treated as supporting. Spec §6.4 phrasing assumes alignment.
+    tipster_active = bool(getattr(spec, "tipster_available", False)) and (
+        getattr(spec, "tipster_agrees", None) is True
+    )
 
     home_form = (getattr(spec, "home_form", "") or "").strip()
     away_form = (getattr(spec, "away_form", "") or "").strip()
@@ -896,8 +921,41 @@ def render_verdict(spec: "NarrativeSpec") -> str:
             )
             ok, hits = _validate_signal_verdict(mapped)
             if mapped and ok:
-                return mapped
-            if not ok:
+                # Persistence-gate compatibility check: mapper output
+                # MUST clear the same min_verdict_quality floor that
+                # narrative_validator + _store_verdict_cache_sync apply
+                # downstream — otherwise the verdict would be silently
+                # quarantined or refused on write. Following Codex
+                # adversarial-review (P1, 2026-05-04). We import lazily
+                # because narrative_spec depends on this module at
+                # render time and we must avoid circular imports at
+                # module load. On any unexpected exception in the
+                # quality probe we accept the mapper output (the gate
+                # downstream will catch genuine misses) — the probe is
+                # an early-fail-fast hint, not the source of truth.
+                try:
+                    from narrative_spec import min_verdict_quality as _mvq
+
+                    if not _mvq(mapped, tier=tier, evidence_pack=None):
+                        _log.warning(
+                            "verdict-signal-mapper output failed "
+                            "min_verdict_quality probe; falling back "
+                            "to corpus. tier=%s len=%d sample=%r",
+                            tier,
+                            len(mapped),
+                            mapped[:120],
+                        )
+                    else:
+                        return mapped
+                except Exception as _quality_exc:  # pragma: no cover — defensive
+                    _log.debug(
+                        "verdict-signal-mapper quality probe raised; "
+                        "accepting mapper output. tier=%s err=%s",
+                        tier,
+                        _quality_exc,
+                    )
+                    return mapped
+            elif not ok:
                 _log.warning(
                     "verdict-signal-mapper validation failed; falling back to corpus. "
                     "tier=%s hits=%s",

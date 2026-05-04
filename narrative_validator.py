@@ -294,14 +294,19 @@ _VERDICT_ACTION_RE: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
-# BUILD-W82-RIP-AND-REPLACE-01 (2026-05-02) — corpus-imperative regex.
-# Tightly anchored to the exact imperatives the deterministic verdict_corpus
-# emits: back / hammer / get on / take / bet / lock in / load up / go in /
-# the play is / the call is / worth a. Used by the new uniform imperative-
-# close gate that replaces the tier-branching closure rule.
+# BUILD-VERDICT-SIGNAL-MAPPED-01 follow-up (2026-05-04) — corpus + signal-mapper
+# imperative regex. Originally tightly anchored to the verdict_corpus tokens
+# (back / hammer / get on / take / bet / lock in / load up / go in / the play
+# is / the call is / worth a). Extended to accept the spec §10 signal-mapper
+# imperatives ("hard to look past", "lean", "go big", "small play") so polish
+# and persistence gates accept the new builder's output. Gold "back …" still
+# matches via the leading "back" alternation; Silver "lean …", Bronze
+# "worth a small play …", and Diamond "hard to look past …, go big …" now
+# all clear the gate by construction.
 _CORPUS_IMPERATIVE_CLOSE_RE: re.Pattern[str] = re.compile(
     r"(?:^|\s)("
     r"back|hammer|get\s+on|take|bet|lock\s+in|load\s+up|go\s+in|"
+    r"go\s+big|hard\s+to\s+look\s+past|lean|small\s+play|"
     r"the\s+play\s+is|the\s+call\s+is|worth\s+a"
     r")\b.*[\.!]?\s*$",
     re.IGNORECASE,

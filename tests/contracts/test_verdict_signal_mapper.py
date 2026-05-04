@@ -369,6 +369,12 @@ class _FakeSpec:
     movement_direction: str = "for"
     bookmaker_count: int = 4
     tipster_available: bool = True
+    # FIX-VERDICT-SIGNAL-MAPPED-CODEX-REVIEW-01 (2026-05-04): tipster_agrees
+    # mirrors the production NarrativeSpec field. Default True keeps existing
+    # tests' "tipster fires" semantics — the new gate (P2) requires explicit
+    # agreement, so this default models the "tipsters concur with the pick"
+    # case that the original tests assumed implicitly.
+    tipster_agrees: bool | None = True
     home_form: str = "WWWDW"
     away_form: str = "LDLDD"
     injuries_home: list = field(default_factory=list)
@@ -533,3 +539,269 @@ def test_pick_secondary_returns_none_when_only_primary_active():
     sigs = {"price_edge": True, "form": False, "injury": False,
             "line_mvt": False, "market": False, "tipster": False}
     assert m.pick_secondary(sigs, "price_edge") is None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# FIX-VERDICT-SIGNAL-MAPPED-CODEX-REVIEW-01 (2026-05-04) — regression guards
+# for the 3 blockers Codex adversarial-review flagged on commit 4a115b9.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_p1_imperative_close_accepts_signal_mapper_diamond():
+    """P1 — narrative_validator imperative-close gate must accept Diamond
+    'go big' / 'hard to look past' closures (was rejecting on _CORPUS_IMPERATIVE_CLOSE_RE).
+    """
+    from narrative_validator import _CORPUS_IMPERATIVE_CLOSE_RE
+    diamond_close = "hard to look past Manchester City, go big at 1.40 on HWB."
+    assert _CORPUS_IMPERATIVE_CLOSE_RE.search(diamond_close), (
+        "Diamond signal-mapper closure must clear the imperative regex; "
+        f"sample={diamond_close!r}"
+    )
+
+
+def test_p1_imperative_close_accepts_signal_mapper_silver():
+    """P1 — Silver 'lean ... standard stake' closure must clear regex."""
+    from narrative_validator import _CORPUS_IMPERATIVE_CLOSE_RE
+    silver_close = "lean Chelsea win, standard stake."
+    assert _CORPUS_IMPERATIVE_CLOSE_RE.search(silver_close), (
+        f"Silver signal-mapper closure must clear regex; sample={silver_close!r}"
+    )
+
+
+def test_p1_imperative_close_accepts_signal_mapper_bronze():
+    """P1 — Bronze 'worth a small play ... light stake' closure clears regex
+    via 'worth a' alternation (already passed pre-fix; positive control).
+    """
+    from narrative_validator import _CORPUS_IMPERATIVE_CLOSE_RE
+    bronze_close = "worth a small play on Manchester City win, light stake."
+    assert _CORPUS_IMPERATIVE_CLOSE_RE.search(bronze_close), (
+        f"Bronze closure must clear regex; sample={bronze_close!r}"
+    )
+
+
+def test_p1_imperative_close_accepts_gold():
+    """P1 — Gold 'back ... standard stake' clears via existing 'back' alternation."""
+    from narrative_validator import _CORPUS_IMPERATIVE_CLOSE_RE
+    gold_close = "back Brighton & Hove Albion win, standard stake."
+    assert _CORPUS_IMPERATIVE_CLOSE_RE.search(gold_close), (
+        f"Gold closure must clear regex; sample={gold_close!r}"
+    )
+
+
+def test_p1_render_verdict_falls_back_when_quality_probe_fails(monkeypatch):
+    """P1 — when min_verdict_quality probe rejects the mapper output (e.g. <100
+    chars), render_verdict must fall back to the corpus path so the downstream
+    persistence gate doesn't silently quarantine or refuse the write.
+    """
+    monkeypatch.delenv("USE_SIGNAL_MAPPED_VERDICTS", raising=False)
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+
+    # Force the quality probe to always fail.
+    monkeypatch.setattr(
+        "narrative_spec.min_verdict_quality",
+        lambda *_a, **_kw: False,
+        raising=True,
+    )
+
+    spec = _FakeSpec(
+        edge_tier="silver",
+        outcome="home",
+        outcome_label="Aston Villa win",
+        odds=2.10,
+        bookmaker="Betway",
+        ev_pct=4.2,
+        movement_direction="neutral",
+        bookmaker_count=4,
+        tipster_available=False,
+        tipster_agrees=None,
+        home_form="WDLDW",
+        away_form="LDLDW",
+    )
+    out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", spec))
+    # Mapper output starts with "The price hasn't caught up..." — corpus does NOT.
+    assert not out.startswith("The price hasn't caught up"), (
+        f"render_verdict should fall back to corpus when quality probe fails; "
+        f"got mapper output: {out!r}"
+    )
+
+
+def test_p2_picked_side_home_injury_does_not_activate_injury_signal():
+    """P2 — when outcome=home AND home has injuries, the injury signal must
+    NOT activate. Picked-side injuries are contradicting evidence (handled by
+    has_real_risk + concern-prefix path), not supporting evidence.
+    """
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+    spec = _FakeSpec(
+        outcome="home",
+        outcome_label="Manchester City",
+        injuries_home=["De Bruyne", "Foden"],  # picked side has injuries
+        injuries_away=[],
+    )
+    sig = verdict_corpus._spec_to_signals(cast("verdict_corpus.NarrativeSpec", spec))
+    assert sig["injury"] is False, (
+        "Picked-side (home) injuries must NOT activate the injury signal — "
+        f"that's contradicting evidence, not support. Got: {sig}"
+    )
+
+
+def test_p2_picked_side_away_injury_does_not_activate_injury_signal():
+    """P2 — same inversion check for the away pick path."""
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+    spec = _FakeSpec(
+        outcome="away",
+        outcome_label="Brentford",
+        injuries_home=[],
+        injuries_away=["Mbeumo"],  # picked side has injuries
+    )
+    sig = verdict_corpus._spec_to_signals(cast("verdict_corpus.NarrativeSpec", spec))
+    assert sig["injury"] is False
+
+
+def test_p2_opposing_side_injury_activates_injury_signal_home_pick():
+    """P2 — when outcome=home AND AWAY has injuries, injury IS active
+    (opponent weakness supports our pick — spec §6.6 framing).
+    """
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+    spec = _FakeSpec(
+        outcome="home",
+        outcome_label="Manchester City",
+        injuries_home=[],
+        injuries_away=["Mbeumo"],  # OPPONENT injured
+    )
+    sig = verdict_corpus._spec_to_signals(cast("verdict_corpus.NarrativeSpec", spec))
+    assert sig["injury"] is True, (
+        "Opponent injuries must activate the injury signal — that's the "
+        "support direction the mapper's positive phrasing assumes."
+    )
+
+
+def test_p2_opposing_side_injury_activates_injury_signal_away_pick():
+    """P2 — symmetric: outcome=away AND HOME injured → injury active."""
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+    spec = _FakeSpec(
+        outcome="away",
+        outcome_label="Brentford",
+        injuries_home=["Foden"],  # OPPONENT injured
+        injuries_away=[],
+    )
+    sig = verdict_corpus._spec_to_signals(cast("verdict_corpus.NarrativeSpec", spec))
+    assert sig["injury"] is True
+
+
+def test_p2_empty_outcome_suppresses_injury_signal():
+    """P2 — when outcome is empty (no clear pick side), injury must NOT fire.
+    The mapper phrasing is "the OTHER team weakened" framing only — without
+    a pick side we can't decide which team's injuries are support vs risk.
+    """
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+    spec = _FakeSpec(
+        outcome="",
+        outcome_label="",
+        injuries_home=["A"],
+        injuries_away=["B"],
+    )
+    sig = verdict_corpus._spec_to_signals(cast("verdict_corpus.NarrativeSpec", spec))
+    assert sig["injury"] is False, (
+        "Empty outcome must suppress the injury signal."
+    )
+
+
+def test_p2_tipster_available_without_agreement_does_not_activate():
+    """P2 — tipster_available alone is insufficient. Without an explicit
+    tipster_agrees=True, the mapper would emit 'outside support points this
+    way' even when tipsters are AGAINST the pick. The fix gates on agreement.
+    """
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+    # Case 1: tipster_agrees=False (against the pick)
+    spec_against = _FakeSpec(tipster_available=True, tipster_agrees=False)
+    sig_against = verdict_corpus._spec_to_signals(
+        cast("verdict_corpus.NarrativeSpec", spec_against)
+    )
+    assert sig_against["tipster"] is False, (
+        f"tipster_agrees=False must suppress the signal; got {sig_against}"
+    )
+    # Case 2: tipster_agrees=None (no data)
+    spec_none = _FakeSpec(tipster_available=True, tipster_agrees=None)
+    sig_none = verdict_corpus._spec_to_signals(
+        cast("verdict_corpus.NarrativeSpec", spec_none)
+    )
+    assert sig_none["tipster"] is False, (
+        f"tipster_agrees=None must suppress the signal; got {sig_none}"
+    )
+
+
+def test_p2_tipster_active_only_when_agreement_explicit_true():
+    """P2 — only explicit tipster_agrees=True activates the signal."""
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+    spec = _FakeSpec(tipster_available=True, tipster_agrees=True)
+    sig = verdict_corpus._spec_to_signals(cast("verdict_corpus.NarrativeSpec", spec))
+    assert sig["tipster"] is True
+
+
+def test_p2_render_verdict_no_outside_support_when_tipsters_disagree(monkeypatch):
+    """P2 integration — render_verdict must NOT emit 'outside support points
+    this way' when tipsters disagree with the pick, even if the spec carries
+    tipster_available=True.
+    """
+    monkeypatch.delenv("USE_SIGNAL_MAPPED_VERDICTS", raising=False)
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+
+    spec = _FakeSpec(
+        edge_tier="bronze",
+        outcome_label="Brentford",
+        tipster_available=True,
+        tipster_agrees=False,  # against the pick
+        movement_direction="neutral",  # avoid Price+LineMvt special case
+        # zero out other signals so tipster would be the only candidate
+        # primary if it were active
+        bookmaker_count=2,
+        home_form="",
+        away_form="",
+        injuries_home=[],
+        injuries_away=[],
+        ev_pct=2.0,
+    )
+    out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", spec))
+    assert "outside support" not in out.lower(), (
+        f"Verdict must not claim 'outside support' when tipsters disagree; "
+        f"got: {out!r}"
+    )
+
+
+def test_p2_render_verdict_no_team_news_when_picked_side_injured(monkeypatch):
+    """P2 integration — render_verdict must NOT emit 'team news gives it extra
+    weight' when the PICKED side is the injured one. Picked-side injuries are
+    risk, not support.
+    """
+    monkeypatch.delenv("USE_SIGNAL_MAPPED_VERDICTS", raising=False)
+    import verdict_corpus
+    importlib.reload(verdict_corpus)
+
+    spec = _FakeSpec(
+        edge_tier="silver",
+        outcome="home",
+        outcome_label="Manchester City",
+        injuries_home=["De Bruyne"],  # picked side injured
+        injuries_away=[],
+        movement_direction="neutral",
+        tipster_available=False,
+        tipster_agrees=None,
+        bookmaker_count=2,
+        home_form="WWWDW",
+        away_form="LDLDD",
+        ev_pct=3.5,
+    )
+    out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", spec))
+    assert "team news" not in out.lower(), (
+        f"Verdict must not claim 'team news gives it extra weight' for the "
+        f"picked side that's the one injured; got: {out!r}"
+    )
