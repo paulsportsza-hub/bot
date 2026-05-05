@@ -155,16 +155,39 @@ async def send_card_or_fallback(
         # ── Full render path ──────────────────────────────────────────────────
         # FIX-PROFILE-CARD-SPAM-03: pass chat_id_hint so the renderer refuses
         # profile_home.html when the destination chat is non-DM.
-        if width is None:
-            png = await asyncio.to_thread(
-                render_card_sync, template, data,
-                chat_id_hint=chat_id,
+        # FIX-BOT-PERF-LATENCY-BOUNDS-01 (Driver B): bound the Chromium render
+        # so a single stalled render cannot hold the PTB dispatcher slot for up
+        # to 90s (Chromium hard timeout). On timeout we log + return, preserving
+        # the IMAGE ONLY rule (no user-visible text fallback per docstring).
+        try:
+            if width is None:
+                png = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        render_card_sync, template, data,
+                        chat_id_hint=chat_id,
+                    ),
+                    timeout=8.0,
+                )
+            else:
+                png = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        render_card_sync, template, data, width,
+                        chat_id_hint=chat_id,
+                    ),
+                    timeout=8.0,
+                )
+        except asyncio.TimeoutError:
+            log.warning(
+                "send_card_or_fallback render exceeded 8s for %s — releasing dispatcher",
+                template,
+                extra={"chat_id": chat_id, "width": width},
             )
-        else:
-            png = await asyncio.to_thread(
-                render_card_sync, template, data, width,
-                chat_id_hint=chat_id,
-            )
+            if _sentry:
+                _sentry.capture_message(
+                    f"card_render_timeout: template={template} width={width}",
+                    level="warning",
+                )
+            return
 
         if message_to_edit and message_to_edit.photo:
             try:

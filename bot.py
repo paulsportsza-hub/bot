@@ -2977,11 +2977,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 )
             if not _card_tip:
                 try:
-                    _card_seed = await asyncio.to_thread(_load_tips_from_edge_results, 50)
+                    # FIX-BOT-PERF-LATENCY-BOUNDS-01: bounded user-tap DB read.
+                    _card_seed = await asyncio.wait_for(
+                        asyncio.to_thread(_load_tips_from_edge_results, 50),
+                        timeout=2.5,
+                    )
                     _card_tip = next(
                         (t for t in (_card_seed or []) if t.get("match_id") == match_key),
                         None,
                     )
+                except asyncio.TimeoutError:
+                    log.warning("Card detail tip lookup exceeded 2.5s — degrading")
                 except Exception:
                     pass
 
@@ -3263,11 +3269,17 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             # BUILD-QA22-FIX P0-1: DB fallback when snapshot + cache are both empty (post-restart)
             if not _tip_for_v1:
                 try:
-                    _v1_seed = await asyncio.to_thread(_load_tips_from_edge_results, 50)
+                    # FIX-BOT-PERF-LATENCY-BOUNDS-01: bounded user-tap DB read.
+                    _v1_seed = await asyncio.wait_for(
+                        asyncio.to_thread(_load_tips_from_edge_results, 50),
+                        timeout=2.5,
+                    )
                     _tip_for_v1 = next(
                         (t for t in (_v1_seed or []) if t.get("match_id") == match_key),
                         None,
                     )
+                except asyncio.TimeoutError:
+                    log.warning("v1 detail tip lookup exceeded 2.5s — degrading")
                 except Exception:
                     pass
 
@@ -3329,8 +3341,12 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 _cr_tips = _game_tips_cache.get(match_key)
                 if not _cr_tips:
                     try:
-                        _seed = await asyncio.to_thread(
-                            _load_tips_from_edge_results, 50,
+                        # FIX-BOT-PERF-LATENCY-BOUNDS-01: bounded user-tap DB read.
+                        _seed = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                _load_tips_from_edge_results, 50,
+                            ),
+                            timeout=2.5,
                         )
                         _cr_tips = [
                             t for t in (_seed or [])
@@ -3338,6 +3354,9 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                         ][:1]
                         if _cr_tips and _seed:
                             _ht_tips_snapshot[user_id] = list(_seed)
+                    except asyncio.TimeoutError:
+                        log.warning("Card detail seed exceeded 2.5s — degrading")
+                        _cr_tips = []
                     except Exception:
                         _cr_tips = []
 
@@ -3459,9 +3478,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
                 # P0-FIX-01: apply same threshold filter as _build_hot_tips_page (>= 40)
                 if not _ht_tips_snapshot.get(user_id):
                     try:
-                        _seed_tips = await asyncio.to_thread(_load_tips_from_edge_results, 50)
+                        # FIX-BOT-PERF-LATENCY-BOUNDS-01: bounded user-tap DB read.
+                        _seed_tips = await asyncio.wait_for(
+                            asyncio.to_thread(_load_tips_from_edge_results, 50),
+                            timeout=2.5,
+                        )
                         if _seed_tips:
                             _ht_tips_snapshot[user_id] = _sort_tips_for_snapshot(_seed_tips)
+                    except asyncio.TimeoutError:
+                        log.warning("Hot Tips snapshot seed exceeded 2.5s — degrading")
                     except Exception:
                         pass
                 _r9_snap_chk = None
@@ -4015,7 +4040,15 @@ async def _dispatch_button(query, ctx, prefix: str, action: str) -> None:
             except Exception:
                 pass
 
-            _bg_tip = await asyncio.to_thread(_load_edge_tip_by_key, _bg_match_key)
+            # FIX-BOT-PERF-LATENCY-BOUNDS-01 (Codex iter-2): bounded user-tap DB read.
+            try:
+                _bg_tip = await asyncio.wait_for(
+                    asyncio.to_thread(_load_edge_tip_by_key, _bg_match_key),
+                    timeout=2.5,
+                )
+            except asyncio.TimeoutError:
+                log.warning("Breakdown-back edge_tip_by_key read exceeded 2.5s — degrading")
+                _bg_tip = None
             import re as _re_bg
             _bg_mk_nd = _re_bg.sub(r"_\d{4}-\d{2}-\d{2}$", "", _bg_match_key)
             if "_vs_" in _bg_mk_nd:
@@ -4457,11 +4490,28 @@ async def handle_menu(query, action: str) -> None:
             )
         # Slow path: load fresh from edge_results if not in any cache
         if _wp_tip is None:
-            _all = await asyncio.to_thread(_load_tips_from_edge_results, 100, True)
+            # FIX-BOT-PERF-LATENCY-BOUNDS-01: bounded user-tap DB read.
+            try:
+                _all = await asyncio.wait_for(
+                    asyncio.to_thread(_load_tips_from_edge_results, 100, True),
+                    timeout=2.5,
+                )
+            except asyncio.TimeoutError:
+                log.warning("Welcome-pick edge_results read exceeded 2.5s — degrading")
+                _all = []
             _wp_tip = next((t for t in _all if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key), None)
         # Final fallback: direct DB fetch by match_key (works even for settled picks)
+        # FIX-BOT-PERF-LATENCY-BOUNDS-01 (Codex iter-2): bound this user-tap read
+        # too — it queries the same odds.db that can be locked by a scraper write.
         if _wp_tip is None:
-            _wp_tip = await asyncio.to_thread(_load_edge_tip_by_key, _wp_key)
+            try:
+                _wp_tip = await asyncio.wait_for(
+                    asyncio.to_thread(_load_edge_tip_by_key, _wp_key),
+                    timeout=2.5,
+                )
+            except asyncio.TimeoutError:
+                log.warning("Welcome-pick edge_tip_by_key read exceeded 2.5s — degrading")
+                _wp_tip = None
         if not _wp_tip:
             await _do_hot_tips_flow(query.message.chat_id, _g_bot, user_id=user_id)
             return
@@ -4498,7 +4548,15 @@ async def handle_menu(query, action: str) -> None:
             return
         _wpl_key = _wpl.get("match_key", "")
         _wpl_tier = (_wpl.get("edge_tier") or "gold").lower()
-        _wpl_tip = await asyncio.to_thread(_load_edge_tip_by_key, _wpl_key)
+        # FIX-BOT-PERF-LATENCY-BOUNDS-01 (Codex iter-2): bounded user-tap DB read.
+        try:
+            _wpl_tip = await asyncio.wait_for(
+                asyncio.to_thread(_load_edge_tip_by_key, _wpl_key),
+                timeout=2.5,
+            )
+        except asyncio.TimeoutError:
+            log.warning("Welcome-pick-lock edge_tip_by_key read exceeded 2.5s — degrading")
+            _wpl_tip = None
         # Extract home/away from match_key
         import re as _re_wpl
         _wpl_mk_nd = _re_wpl.sub(r"_\d{4}-\d{2}-\d{2}$", "", _wpl_key)
@@ -12801,7 +12859,20 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
     # W84-P1: Fast serving path — read pre-computed edges from edge_results table.
     # This is a pure SQL SELECT (~5ms), zero edge computation, zero contention.
     # Populated by previous precompute cycles that survive scraper writes.
-    _fast_tips = await asyncio.to_thread(_load_tips_from_edge_results, 20)
+    # FIX-BOT-PERF-LATENCY-BOUNDS-01 (Driver C): bound the read so a stuck
+    # scraper write window cannot pin the PTB dispatcher slot for 60s
+    # (sqlite busy_timeout). On timeout, serve degraded (empty list) so the
+    # downstream cold-path or precompute fallback can still answer the user.
+    _fast_path_timed_out = False
+    try:
+        _fast_tips = await asyncio.wait_for(
+            asyncio.to_thread(_load_tips_from_edge_results, 20),
+            timeout=2.5,
+        )
+    except asyncio.TimeoutError:
+        log.warning("Hot Tips fast path DB read exceeded 2.5s — serving degraded (empty list)")
+        _fast_tips = []
+        _fast_path_timed_out = True
     if _fast_tips:
         log.info("Cold path: serving %d tips from edge_results (fast path)", len(_fast_tips))
         # Populate game_tips_cache for tap detail
@@ -12884,6 +12955,26 @@ async def _do_hot_tips_flow(chat_id: int, bot, user_id: int | None = None) -> No
         _blw_fire_tips(_fast_tips, str(user_id or "channel"))
         # Trigger background refresh so next tap gets freshly computed tips
         asyncio.create_task(_fetch_hot_tips_from_db())
+        return
+
+    # FIX-BOT-PERF-LATENCY-BOUNDS-01 (Driver C, Codex iter-1+3): if the fast-path
+    # read TIMED OUT (DB lock contention), do NOT fall through into the cold
+    # path — _fetch_hot_tips_from_db() runs a richer query against the same
+    # contended DB and would just compound the wait. Codex iter-3 also flagged
+    # that scheduling _fetch_hot_tips_from_db() from this branch queues more
+    # work behind the lock, so we deliberately do NOT spawn a background fetch
+    # here. The 15-min precompute cron (_edge_precompute_job) refills the
+    # cache once contention clears; user re-tap after a few seconds gets fresh
+    # data without us piling readers on a writer-locked DB.
+    if _fast_path_timed_out:
+        try:
+            await bot.send_message(
+                chat_id,
+                "⚽ Edge Picks are refreshing — tap again in a few seconds.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as _refresh_send_err:
+            log.warning("Hot Tips refresh nudge send failed: %s", _refresh_send_err)
         return
 
     # Cold path: no edge_results available (very first run, new install) — show brief spinner
@@ -30041,7 +30132,22 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             # _fetch_hot_tips_from_db_inner() (fragile) returns only 3 tips / 0 football.
             # Draw exclusion and MAX_RECOMMENDED_ODDS ceiling are already applied inside
             # _load_tips_from_edge_results(). Fallback to fragile path only when empty.
-            _er_tips = await asyncio.to_thread(_load_tips_from_edge_results, 20)
+            # FIX-BOT-PERF-LATENCY-BOUNDS-01: cron path is bounded (10s) so a stuck
+            # scraper write window cannot pin the precompute job indefinitely.
+            # Codex iter-4: distinguish TIMEOUT from a real empty result. On
+            # timeout the same scraper lock would also pin the fragile fallback
+            # (richer odds.db query), so we skip this cycle and let the next
+            # 15-min run retry. _hot_tips_cache keeps serving the prior tips.
+            _er_timed_out = False
+            try:
+                _er_tips = await asyncio.wait_for(
+                    asyncio.to_thread(_load_tips_from_edge_results, 20),
+                    timeout=10.0,
+                )
+            except asyncio.TimeoutError:
+                log.warning("Precompute edge_results read exceeded 10s — skipping cycle")
+                _er_tips = []
+                _er_timed_out = True
             if _er_tips:
                 tips = _er_tips
                 _hot_tips_cache["global"] = {
@@ -30050,6 +30156,12 @@ async def _edge_precompute_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     "thin_slate": len(tips) < 3,
                 }
                 log.info("Precompute: %d tips from edge_results (stable path)", len(tips))
+            elif _er_timed_out:
+                # Lock contention — keep the existing cache, do not run a
+                # heavier query against the same contended DB. The outer
+                # try/finally still resets _precompute_active on return.
+                _ep_mon.done()
+                return
             else:
                 log.warning(
                     "Precompute: edge_results empty — fallback to _fetch_hot_tips_from_db()",
@@ -31648,7 +31760,7 @@ def _acquire_pid_lock(path: str = "/tmp/mzansiedge.pid") -> None:
     signal.signal(signal.SIGINT, _signal_handler)
 
 
-def _log_startup_truth() -> None:
+def _log_startup_truth(app: Application | None = None) -> None:
     """Log a compact truth block at startup so freshness is always verifiable.
 
     Emitted immediately after the singleton lock is acquired.  Contains:
@@ -31656,6 +31768,8 @@ def _log_startup_truth() -> None:
       - git commit SHA (HEAD)
       - bot.py mtime (confirms code on disk matches what Python loaded)
       - singleton lock acquisition status
+      - update_processor.max_concurrent_updates + render/db deadlines
+        (FIX-BOT-PERF-LATENCY-BOUNDS-01) — only emitted when app is provided.
     Sentry also captures this as a structured event so duplicate-instance
     and stale-process incidents are surfaced in the dashboard.
     """
@@ -31692,6 +31806,20 @@ def _log_startup_truth() -> None:
     for line in truth_lines:
         log.info(line)
 
+    # FIX-BOT-PERF-LATENCY-BOUNDS-01 (AC-3): emit the latency-bound knobs at
+    # startup so we can grep journalctl for the active deadline values without
+    # reading the source. update_processor reflects PTB dispatcher concurrency
+    # (Driver A, deferred — value should remain 1 until B+C measurements land).
+    if app is not None:
+        try:
+            _mcu = app.update_processor.max_concurrent_updates
+        except Exception:
+            _mcu = "unavailable"
+        log.info(
+            "[STARTUP] update_processor.max_concurrent_updates=%s | render_deadline=8.0s | db_deadline=2.5s",
+            _mcu,
+        )
+
     # AC-7: bot_startup is routine operational noise — log to file only, not Sentry.
     # Sentry should capture exceptions and regressions, not every scheduled restart.
 
@@ -31713,9 +31841,11 @@ async def _post_shutdown(app_instance) -> None:
 
 def main() -> None:
     _acquire_pid_lock()
-    _log_startup_truth()
     log.info("Starting MzansiEdge bot…")
     app = Application.builder().token(config.BOT_TOKEN).build()
+    # FIX-BOT-PERF-LATENCY-BOUNDS-01: pass `app` so the truth block can include
+    # update_processor.max_concurrent_updates alongside the deadline knobs.
+    _log_startup_truth(app)
 
     # Initialise DB + register commands on startup
     app.post_init = _post_init
