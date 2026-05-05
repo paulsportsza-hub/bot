@@ -18,6 +18,18 @@ processes; different ``match_key`` spreads across the pool. Anchor
 phrasings from spec §12.1-§12.7 remain pool members so existing
 reachability contracts hold.
 
+FIX-VERDICT-VARIETY-PASS-5-LAND-01 (2026-05-05). Two follow-on fixes from
+the pass-5 adversarial-review that were stashed in the prior brief:
+(1) ``SECONDARY_PHRASES_LINE_MVT_UNKNOWN`` — a direction-neutral
+secondary pool for ``line_mvt`` so that under unknown / missing
+``line_movement_direction`` the secondary clause never emits a
+directional-assertion phrase (e.g. "the line movement backs the pick");
+(2) ``_PRICE_LINE_FAVOURABLE_BY_TIER`` / ``_PRICE_LINE_AGAINST_BY_TIER``
+— per-tier directional-lead dicts so Diamond / Gold / Silver / Bronze
+each render from their own pool with no cross-tier framing leak (pass-3
+isolated only the Bronze-specific anchors; pass-5 found Diamond / Gold /
+Silver still shared the same flat pool).
+
 The new builder grounds every verdict in the active Edge Signal dots
 visible on the card (Price Edge / Line Mvt / Market / Tipster / Form /
 Injury). It picks a primary + secondary driver per the priority order
@@ -141,6 +153,12 @@ SECONDARY_PHRASES: dict[str, tuple[str, ...]] = {
         "the form read supports it",
         "recent results give this weight",
     ),
+    # SECONDARY[line_mvt] is the directional pool — used when the line
+    # movement direction is favourable / against. The third entry "the line
+    # movement backs the pick" is a directional assertion that ONLY reads
+    # truthful when direction is known. For unknown direction, secondary
+    # picks route through SECONDARY_PHRASES_LINE_MVT_UNKNOWN below
+    # (FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 1).
     "line_mvt": (
         "the move has not taken the value away",
         "the line movement still leaves enough value",
@@ -160,16 +178,38 @@ SECONDARY_PHRASES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Direction-neutral SECONDARY[line_mvt] pool — used when the verdict's
+# line_movement_direction is missing / "unknown" / "neutral" so that the
+# secondary clause never asserts directional support the data has not
+# established (FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 1, Codex pass-5
+# 2026-05-05). Spec §6.2 unknown branch authors two phrasings ("the move
+# has not taken the value away" / "the line movement still leaves enough
+# value"); pool depth 2 leaves ≥3-distinct-secondary contracts under
+# 4-card variety stress, so three derived neutral variants extend the
+# pool. None of the entries contain the directional-assertion patterns
+# "backs the pick" / "moving our way" / "starting to follow" /
+# "beginning to move" — those phrases only render under known direction
+# via the directional lead pools or via SECONDARY_PHRASES["line_mvt"].
+SECONDARY_PHRASES_LINE_MVT_UNKNOWN: tuple[str, ...] = (
+    # §6.2 unknown branch (verbatim, secondary form).
+    "the move has not taken the value away",
+    "the line movement still leaves enough value",
+    # Derived neutral variants — restate the same "value remains intact"
+    # observation without claiming directional support.
+    "the line movement still leaves value",
+    "the value is still there after the move",
+    "the move has not eaten into the value",
+)
+
 
 # Special-case Price Edge + Line Movement leads (spec §12.3 / §12.4).
-# Two-layer pool: a tier-agnostic "generic" set that's safe for Diamond /
-# Gold / Silver tier-action closes (the §6.2 alternates joined with the
-# §12.3 / §12.4 tier-anchor tails), and per-tier additions that ONLY
-# surface for tiers where the spec authored the unique phrasing — so a
-# Diamond "go big" close never opens with the Bronze-specific weaker
-# framing "Small move this way..." or "...there is still a small lean"
-# (Codex adversarial-review pass-3, 2026-05-05). Spec-authored anchors
-# reachable per (direction, tier):
+# Per-tier dict: each tier renders ONLY from its own pool to prevent
+# cross-tier framing leaks (Diamond "...is still there" never lands in
+# front of a Gold "back" close; Gold "...still looks fair" never lands
+# in front of a Diamond "go big" close, etc.). FIX-VERDICT-VARIETY-PASS-
+# 5-LAND-01 Finding 3 (Codex pass-5 2026-05-05) — pass-3 isolated only
+# the Bronze-specific anchors; pass-5 found the residual Diamond/Gold/
+# Silver leak. Spec-authored anchors per (direction, tier):
 #   §12.3 Diamond  — "...and the price is still there"
 #   §12.3 Gold     — "...and the price still looks fair"
 #   §12.3 Bronze   — "Small move this way with a little value left"
@@ -177,38 +217,89 @@ SECONDARY_PHRASES: dict[str, tuple[str, ...]] = {
 #   §12.4 Gold     — "The line has shifted, but there is still value here"
 #   §12.4 Bronze   — "The price has moved, but there is still a small lean"
 # §12.3 Silver and §12.4 Silver are single-clause phrasings without the
-# composite price+line shape; left out here because the standard
-# primary+secondary path (PRIMARY[price_edge] × SECONDARY[line_mvt]) is
-# the natural route for those cells. Pool sizes per tier:
-#   favourable: D/G/S = 5, B = 5+1 = 6
-#   against:    D/G/S = 3, B = 3+1 = 4
-_PRICE_LINE_FAVOURABLE_LEADS: tuple[str, ...] = (
-    "The line is moving our way and the price is still there",
-    "The line is moving our way and the price still looks fair",
-    "The move is starting to follow this side and the price is still there",
-    "The market is beginning to move this way and the price is still there",
-    "The line movement backs the pick and the price is still there",
-)
-_PRICE_LINE_FAVOURABLE_BRONZE_ONLY: tuple[str, ...] = (
-    "Small move this way with a little value left",
-)
-_PRICE_LINE_AGAINST_LEADS: tuple[str, ...] = (
-    "The market has moved, but the price still looks big",
-    "The line has shifted, but there is still value here",
-    "The price has moved, but not enough to kill the play",
-)
-_PRICE_LINE_AGAINST_BRONZE_ONLY: tuple[str, ...] = (
-    "The price has moved, but there is still a small lean",
-)
+# composite price+line shape; the per-tier Silver pools below derive a
+# Silver-coloured composite tail ("...the price still has a small edge"
+# for favourable; "...there is still a small edge" / "...not enough to
+# kill the play" for against) by mechanical recombination of the §6.2
+# leads with the §12.8 Silver "small edge" framing (pre-approved spec
+# voice; the alternative — routing Silver through the primary+secondary
+# path while D/G/B use the directional pool — would split the §12.3/§12.4
+# render path on tier and complicate the contract).
+# Pool sizes per tier:
+#   favourable: D = 4, G = 4, S = 4, B = 4
+#   against:    D = 3, G = 3, S = 3, B = 3
+_PRICE_LINE_FAVOURABLE_BY_TIER: dict[str, tuple[str, ...]] = {
+    # Diamond — §6.2 favourable leads × §12.3-D tail "...the price is still there".
+    "diamond": (
+        "The line is moving our way and the price is still there",
+        "The move is starting to follow this side and the price is still there",
+        "The market is beginning to move this way and the price is still there",
+        "The line movement backs the pick and the price is still there",
+    ),
+    # Gold — §6.2 favourable leads × §12.3-G tail "...the price still looks fair".
+    "gold": (
+        "The line is moving our way and the price still looks fair",
+        "The move is starting to follow this side and the price still looks fair",
+        "The market is beginning to move this way and the price still looks fair",
+        "The line movement backs the pick and the price still looks fair",
+    ),
+    # Silver — §6.2 favourable leads × Silver-coloured derived tail
+    # "...the price still has a small edge" (matches the §12.8 Silver
+    # "small edge" framing already in _FALLBACK_BY_TIER below).
+    "silver": (
+        "The line is moving our way and the price still has a small edge",
+        "The move is starting to follow this side and the price still has a small edge",
+        "The market is beginning to move this way and the price still has a small edge",
+        "The line movement backs the pick and the price still has a small edge",
+    ),
+    # Bronze — §12.3-B anchor + 3 derived (§6.2 leads × §12.3-B tail
+    # "with a little value left"). Stays disjoint from D/G/S pools.
+    "bronze": (
+        "Small move this way with a little value left",
+        "The line is moving our way with a little value left",
+        "The move is starting to follow this side with a little value left",
+        "The market is beginning to move this way with a little value left",
+    ),
+}
+_PRICE_LINE_AGAINST_BY_TIER: dict[str, tuple[str, ...]] = {
+    # Diamond — §6.2 against leads × §12.4-D tail "...the price still looks big".
+    "diamond": (
+        "The market has moved, but the price still looks big",
+        "The line has shifted, but the price still looks big",
+        "The price has moved, but it still looks big",
+    ),
+    # Gold — §6.2 against leads × §12.4-G tail "...there is still value here".
+    "gold": (
+        "The line has shifted, but there is still value here",
+        "The market has moved, but there is still value here",
+        "The price has moved, but there is still value here",
+    ),
+    # Silver — §6.2 against leads × Silver-coloured derived tail
+    # ("...there is still a small edge" / "...not enough to kill the
+    # play"). The "not enough to kill the play" phrasing was previously
+    # the un-tiered third entry of the legacy flat against pool; its
+    # "thin but live" tone naturally homes in Silver here.
+    "silver": (
+        "The market has moved, but there is still a small edge",
+        "The line has shifted, but there is still a small edge",
+        "The price has moved, but not enough to kill the play",
+    ),
+    # Bronze — §12.4-B anchor + 2 derived (§6.2 leads × §12.4-B tail
+    # "but there is still a small lean").
+    "bronze": (
+        "The price has moved, but there is still a small lean",
+        "The market has moved, but there is still a small lean",
+        "The line has shifted, but there is still a small lean",
+    ),
+}
 # Direction "unknown" is NOT anchored in spec §12 (only §12.3 favourable
 # and §12.4 against have explicit anchors). When direction is unknown,
 # routing through the standard primary+secondary path lifts pool depth
-# to PRIMARY[price_edge] (5) × SECONDARY[line_mvt] (3) = 15 candidate
-# composites — the path that resolved the Paul-flagged 4-card monoculture
-# (FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01). The §6.2 unknown
-# phrasings ("The line movement still leaves enough value" / "The move
-# has not taken the value away") remain reachable as PRIMARY[line_mvt]
-# alternates and SECONDARY[line_mvt] alternates.
+# to PRIMARY[price_edge] (5) × SECONDARY_PHRASES_LINE_MVT_UNKNOWN (5) =
+# 25 candidate composites — the path that resolved the Paul-flagged
+# 4-card monoculture (FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01)
+# and now also bars directional-assertion phrasings under unknown
+# direction (FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 1).
 
 
 # ── Tier-action language (spec §10 — FIXED) ────────────────────────────────
@@ -452,37 +543,60 @@ def build_verdict(
             )
         salt_key = team_salt or "_no_key"
 
-    # Salt strategy: most paths use a plain "{role}|{signal}" salt for hash
-    # determinism. The favourable Price+Line direction salt mixes tier in
-    # because the favourable pool (size 6) coincidentally MD5-collides
-    # tier-uniform 4-card batches at modulo 6 for the Paul-flagged keys —
-    # adding tier breaks the collision pattern (Codex adversarial-review
-    # pass-2, 2026-05-05). The against pool (size 4) doesn't show the same
-    # collision pattern with the production keys we've measured, so it
-    # stays salt-pure to avoid the inverse regression. Primary/secondary
-    # salts deliberately stay tier-free — mixing tier there regressed the
-    # Paul-flagged 4-card variety on primary|price_edge in pass-2.
+    # Salt strategy: per-tier directional pools (Pass-5 Finding 3) make
+    # tier-mixing on the directional salts redundant for cross-tier
+    # collision avoidance — each tier picks from its own pool — but tier
+    # mixing is preserved because the per-tier pools have different sizes
+    # and entries, so a tier-pure salt could still collide unevenly. The
+    # primary/secondary salts deliberately stay tier-free — mixing tier
+    # there regressed the Paul-flagged 4-card variety on primary|
+    # price_edge in pass-2. The unknown-direction secondary[line_mvt]
+    # salt namespaces with "|unknown" so it draws independently from the
+    # directional secondary pool's hash distribution.
+    #
+    # Direction normalisation contract: only the explicit canonical
+    # values (`favourable` / `for` for favourable, `against` for against)
+    # route through the directional pools. EVERY other value — empty,
+    # `None`, `unknown`, `neutral`, AND any producer-specific sentinel
+    # (`none`, `n/a`, ...) — collapses to the unknown route. This keeps
+    # the secondary `line_mvt` clause neutral whenever direction has not
+    # been positively established (Codex pass-5-land adversarial-review,
+    # 2026-05-05 — closed-default avoids version-skew leak through
+    # SECONDARY_PHRASES["line_mvt"]'s directional entry).
+    direction = (line_movement_direction or "").strip().lower()
+    direction_known_favourable = direction in ("favourable", "for")
+    direction_known_against = direction == "against"
+    direction_unknown = not (direction_known_favourable or direction_known_against)
 
     # Special: Price Edge + Line Movement — directional anchor pools.
     if norm["price_edge"] and norm["line_mvt"]:
-        direction = (line_movement_direction or "").strip().lower()
-        if direction == "against":
-            against_pool = _PRICE_LINE_AGAINST_LEADS
-            if tier_key == "bronze":
-                against_pool = against_pool + _PRICE_LINE_AGAINST_BRONZE_ONLY
-            lead = _pick_variant(against_pool, salt_key, "price_line_against")
+        if direction_known_against:
+            # `_BY_TIER.get(tier_key, ...)["silver"]` is the documented
+            # fallback for any unrecognised tier string — mirrors the
+            # `tier_key = ... or "silver"` coercion at the top of this
+            # function. Production tiers are restricted to the canonical
+            # 4 by edge_rating, so this fallback is defensive only.
+            against_pool = _PRICE_LINE_AGAINST_BY_TIER.get(
+                tier_key, _PRICE_LINE_AGAINST_BY_TIER["silver"]
+            )
+            lead = _pick_variant(
+                against_pool, salt_key, f"price_line_against|{tier_key}"
+            )
             return f"{lead} — {action}."
-        if direction in ("favourable", "for"):
-            favourable_pool = _PRICE_LINE_FAVOURABLE_LEADS
-            if tier_key == "bronze":
-                favourable_pool = favourable_pool + _PRICE_LINE_FAVOURABLE_BRONZE_ONLY
+        if direction_known_favourable:
+            favourable_pool = _PRICE_LINE_FAVOURABLE_BY_TIER.get(
+                tier_key, _PRICE_LINE_FAVOURABLE_BY_TIER["silver"]
+            )
             lead = _pick_variant(
                 favourable_pool, salt_key, f"price_line_favourable|{tier_key}"
             )
             return f"{lead} — {action}."
-        # Direction unknown / neutral / None — fall through to the standard
-        # primary+secondary path. PRIMARY[price_edge] × SECONDARY[line_mvt]
-        # gives the variety that pool-depth=2 §6.2-unknown couldn't.
+        # Direction unknown / neutral / None / non-canonical sentinel —
+        # fall through to the standard primary+secondary path with the
+        # neutral SECONDARY_PHRASES_LINE_MVT_UNKNOWN pool below.
+        # PRIMARY[price_edge] × SECONDARY_PHRASES_LINE_MVT_UNKNOWN gives
+        # the variety that pool-depth=2 §6.2-unknown couldn't, with no
+        # directional-assertion leak.
 
     primary = pick_primary(norm)
     secondary = pick_secondary(norm, primary)
@@ -491,8 +605,17 @@ def build_verdict(
         primary_phrase = _pick_variant(
             PRIMARY_PHRASES[primary], salt_key, f"primary|{primary}"
         )
+        # Pass-5 Finding 1 — under unknown direction, route line_mvt-secondary
+        # through the direction-neutral pool so the secondary clause never
+        # asserts directional support the data has not established.
+        if secondary == "line_mvt" and direction_unknown:
+            secondary_pool = SECONDARY_PHRASES_LINE_MVT_UNKNOWN
+            secondary_salt = "secondary|line_mvt|unknown"
+        else:
+            secondary_pool = SECONDARY_PHRASES[secondary]
+            secondary_salt = f"secondary|{secondary}"
         secondary_phrase = _pick_variant(
-            SECONDARY_PHRASES[secondary], salt_key, f"secondary|{secondary}"
+            secondary_pool, salt_key, secondary_salt
         )
         return f"{primary_phrase} and {secondary_phrase} — {action}."
     if primary:
@@ -597,6 +720,7 @@ __all__ = [
     "SECONDARY_PRIORITY",
     "PRIMARY_PHRASES",
     "SECONDARY_PHRASES",
+    "SECONDARY_PHRASES_LINE_MVT_UNKNOWN",
     "BANNED_TERMS",
     "LIVE_COMMENTARY_TERMS",
     "EXPECTED_ACTION",

@@ -65,18 +65,16 @@ def _direction_lead_pool(leads: tuple[str, ...], action: str) -> set[str]:
 
 
 def _favourable_pool_for_tier(tier: str, action: str) -> set[str]:
-    """Spec §12.3 favourable lead pool with tier-specific Bronze additions."""
-    leads = m._PRICE_LINE_FAVOURABLE_LEADS
-    if tier.lower() == "bronze":
-        leads = leads + m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY
+    """Spec §12.3 favourable lead pool — per-tier dict
+    (FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 3)."""
+    leads = m._PRICE_LINE_FAVOURABLE_BY_TIER[tier.lower()]
     return _direction_lead_pool(leads, action)
 
 
 def _against_pool_for_tier(tier: str, action: str) -> set[str]:
-    """Spec §12.4 against lead pool with tier-specific Bronze additions."""
-    leads = m._PRICE_LINE_AGAINST_LEADS
-    if tier.lower() == "bronze":
-        leads = leads + m._PRICE_LINE_AGAINST_BRONZE_ONLY
+    """Spec §12.4 against lead pool — per-tier dict
+    (FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 3)."""
+    leads = m._PRICE_LINE_AGAINST_BY_TIER[tier.lower()]
     return _direction_lead_pool(leads, action)
 
 
@@ -123,15 +121,19 @@ def test_combo_price_injury(tier, action, anchor):
     assert out in pool, f"§12.2 output {out!r} not in pool"
 
 
-# Spec §12.3 — Price Edge + Line Movement (favourable)
+# Spec §12.3 — Price Edge + Line Movement (favourable). Per-tier anchors
+# (FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 3): each tier renders ONLY
+# from its own pool, so the §12.3 anchor differs per tier (Diamond
+# "...is still there", Gold "...still looks fair", Silver "...has a
+# small edge", Bronze "Small move this way with a little value left").
 @pytest.mark.parametrize("tier,action,anchor", [
     ("diamond", _DIAMOND_ACTION, f"The line is moving our way and the price is still there — {_DIAMOND_ACTION}."),
-    ("gold",    _GOLD_ACTION,    f"The line is moving our way and the price is still there — {_GOLD_ACTION}."),
-    ("silver",  _SILVER_ACTION,  f"The line is moving our way and the price is still there — {_SILVER_ACTION}."),
-    ("bronze",  _BRONZE_ACTION,  f"The line is moving our way and the price is still there — {_BRONZE_ACTION}."),
+    ("gold",    _GOLD_ACTION,    f"The line is moving our way and the price still looks fair — {_GOLD_ACTION}."),
+    ("silver",  _SILVER_ACTION,  f"The line is moving our way and the price still has a small edge — {_SILVER_ACTION}."),
+    ("bronze",  _BRONZE_ACTION,  f"Small move this way with a little value left — {_BRONZE_ACTION}."),
 ])
 def test_combo_price_line_favourable(tier, action, anchor):
-    """§12.3 — Price Edge + Line Movement (favourable): direction-pool lead."""
+    """§12.3 — Price Edge + Line Movement (favourable): per-tier pool lead."""
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={"price_edge": True, "line_mvt": True},
@@ -143,15 +145,18 @@ def test_combo_price_line_favourable(tier, action, anchor):
     assert out in pool, f"§12.3 favourable output {out!r} not in pool"
 
 
-# Spec §12.4 — Price Edge + Line Movement (against)
+# Spec §12.4 — Price Edge + Line Movement (against). Per-tier anchors
+# (FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 3): Diamond "...still looks
+# big", Gold "...there is still value here", Silver "...there is still a
+# small edge", Bronze "...there is still a small lean".
 @pytest.mark.parametrize("tier,action,anchor", [
     ("diamond", _DIAMOND_ACTION, f"The market has moved, but the price still looks big — {_DIAMOND_ACTION}."),
-    ("gold",    _GOLD_ACTION,    f"The market has moved, but the price still looks big — {_GOLD_ACTION}."),
-    ("silver",  _SILVER_ACTION,  f"The market has moved, but the price still looks big — {_SILVER_ACTION}."),
-    ("bronze",  _BRONZE_ACTION,  f"The market has moved, but the price still looks big — {_BRONZE_ACTION}."),
+    ("gold",    _GOLD_ACTION,    f"The line has shifted, but there is still value here — {_GOLD_ACTION}."),
+    ("silver",  _SILVER_ACTION,  f"The market has moved, but there is still a small edge — {_SILVER_ACTION}."),
+    ("bronze",  _BRONZE_ACTION,  f"The price has moved, but there is still a small lean — {_BRONZE_ACTION}."),
 ])
 def test_combo_price_line_against(tier, action, anchor):
-    """§12.4 — Price Edge + Line Movement (against): contrast direction pool."""
+    """§12.4 — Price Edge + Line Movement (against): per-tier pool lead."""
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={"price_edge": True, "line_mvt": True},
@@ -476,6 +481,16 @@ class _FakeSpec:
     line_movement_direction: str | None = None
 
 
+def _all_favourable_leads() -> list[str]:
+    """Flatten every per-tier favourable lead into a single list (pool-aware
+    assertion convenience for the feature-flag tests). Per-tier dict shape
+    landed in FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 3."""
+    leads: list[str] = []
+    for tier_pool in m._PRICE_LINE_FAVOURABLE_BY_TIER.values():
+        leads.extend(tier_pool)
+    return leads
+
+
 def test_feature_flag_default_uses_signal_mapper(monkeypatch):
     """HG-5 default — flag absent → signal-mapped output.
 
@@ -487,10 +502,10 @@ def test_feature_flag_default_uses_signal_mapper(monkeypatch):
     import verdict_corpus
     importlib.reload(verdict_corpus)
     out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", _FakeSpec()))
-    # Signal-mapper hits the §12.3 favourable special-case lead — any pool
-    # member is acceptable evidence the mapper fired.
+    # Signal-mapper hits the §12.3 favourable special-case lead — any
+    # member of the per-tier pools is acceptable evidence the mapper fired.
     assert any(
-        out.startswith(lead) for lead in m._PRICE_LINE_FAVOURABLE_LEADS
+        out.startswith(lead) for lead in _all_favourable_leads()
     ), f"Expected a §12.3 favourable lead pool member at the start of {out!r}"
     # And the action clause is the Diamond form
     assert "hard to look past Manchester City, go big at 1.40 on HWB" in out
@@ -504,7 +519,7 @@ def test_feature_flag_off_routes_to_corpus(monkeypatch):
     out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", _FakeSpec()))
     # Corpus output must NOT match any signal-mapped favourable lead
     assert not any(
-        out.startswith(lead) for lead in m._PRICE_LINE_FAVOURABLE_LEADS
+        out.startswith(lead) for lead in _all_favourable_leads()
     ), f"flag=0 routed to corpus but mapper fired: {out!r}"
     # Corpus still produces a Diamond action ending — slot-filled
     assert "Manchester City" in out
@@ -518,7 +533,7 @@ def test_feature_flag_false_string_routes_to_corpus(monkeypatch):
         importlib.reload(verdict_corpus)
         out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", _FakeSpec()))
         assert not any(
-            out.startswith(lead) for lead in m._PRICE_LINE_FAVOURABLE_LEADS
+            out.startswith(lead) for lead in _all_favourable_leads()
         ), f"flag={falsy!r} should route to corpus but signal-mapped fired: {out!r}"
 
 
@@ -1174,7 +1189,11 @@ def _spec_for_combo(
     )
 
 
-# §12 combination → (key signals dict, expected primary lead, expected combined?)
+# §12 combination → (key signals dict, line_movement direction, expected
+# anchor lead). For the per-tier directional combos (§12.3 / §12.4) the
+# anchor differs per tier (FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 3),
+# so the third tuple slot is None and the test resolves the anchor via
+# `_anchor_lead_for(combo_key, tier)` below.
 _COMBO_SPECS = {
     # §12.1 — Price + Form (combined causal)
     "price_form": (
@@ -1188,17 +1207,17 @@ _COMBO_SPECS = {
         None,
         "The price hasn't caught up and team news gives it extra weight",
     ),
-    # §12.3 — Price + Line Movement favourable (special case)
+    # §12.3 — Price + Line Movement favourable (special case, per-tier).
     "price_line_favourable": (
         {"price_edge": True, "line_mvt": True},
         "favourable",
-        "The line is moving our way and the price is still there",
+        None,  # anchor resolved per tier — see _anchor_lead_for
     ),
-    # §12.4 — Price + Line Movement against (special case)
+    # §12.4 — Price + Line Movement against (special case, per-tier).
     "price_line_against": (
         {"price_edge": True, "line_mvt": True},
         "against",
-        "The market has moved, but the price still looks big",
+        None,  # anchor resolved per tier — see _anchor_lead_for
     ),
     # §12.5 — Form-only (primary alone)
     "form_only": (
@@ -1226,6 +1245,25 @@ _COMBO_SPECS = {
         None,  # tier-specific fallback — see assertion in test
     ),
 }
+
+
+# Anchor leads for the per-tier directional combos (FIX-VERDICT-VARIETY-
+# PASS-5-LAND-01 Finding 3). Each tier's pool index 0 is the spec-anchor
+# (Diamond / Gold / Bronze §12.X) or the spec-derived neutral anchor for
+# Silver. Using `[0]` of each pool keeps this in lock-step with the
+# pool-level structure.
+def _anchor_lead_for(combo_key: str, tier: str) -> str | None:
+    """Resolve the §12.X anchor lead for combos whose anchor varies by tier.
+
+    Returns None for combos that already publish a static anchor in the
+    `_COMBO_SPECS` table.
+    """
+    t = tier.lower()
+    if combo_key == "price_line_favourable":
+        return m._PRICE_LINE_FAVOURABLE_BY_TIER[t][0]
+    if combo_key == "price_line_against":
+        return m._PRICE_LINE_AGAINST_BY_TIER[t][0]
+    return None
 
 _TIER_FALLBACK_LEADS = {
     "diamond": "The price still looks too big for the setup",
@@ -1258,14 +1296,10 @@ def _ops_combo_pool(combo_key: str, tier: str) -> set[str]:
     if combo_key == "price_injury":
         return {f"{p} and {s} — {action}." for p in m.PRIMARY_PHRASES["price_edge"] for s in m.SECONDARY_PHRASES["injury"]}
     if combo_key == "price_line_favourable":
-        leads = m._PRICE_LINE_FAVOURABLE_LEADS
-        if tier.lower() == "bronze":
-            leads = leads + m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY
+        leads = m._PRICE_LINE_FAVOURABLE_BY_TIER[tier.lower()]
         return {f"{lead} — {action}." for lead in leads}
     if combo_key == "price_line_against":
-        leads = m._PRICE_LINE_AGAINST_LEADS
-        if tier.lower() == "bronze":
-            leads = leads + m._PRICE_LINE_AGAINST_BRONZE_ONLY
+        leads = m._PRICE_LINE_AGAINST_BY_TIER[tier.lower()]
         return {f"{lead} — {action}." for lead in leads}
     if combo_key == "form_only":
         return {f"{p} — {action}." for p in m.PRIMARY_PHRASES["form"]}
@@ -1336,8 +1370,9 @@ def test_ops_signal_exposure_native_path_8_combos(combo_key, tier):
         )
     else:
         # §12.X anchor phrasing must remain a pool member (regression guard).
-        assert expected_lead is not None  # type guard
-        anchor_lead = expected_lead.strip()
+        anchor_lead = (expected_lead or _anchor_lead_for(combo_key, tier))
+        assert anchor_lead is not None  # type guard
+        anchor_lead = anchor_lead.strip()
         assert any(
             anchor_lead in candidate for candidate in pool
         ), (
@@ -1387,8 +1422,9 @@ def test_ops_signal_exposure_full_reachability_96_cases(combo_key, tier, sport):
         assert any(out.startswith(lead) for lead in m._FALLBACK_BY_TIER[tier])
     else:
         # §12.X anchor lead must remain reachable as a pool member.
-        assert expected_lead is not None  # type guard
-        anchor_lead = expected_lead.strip()
+        anchor_lead = (expected_lead or _anchor_lead_for(combo_key, tier))
+        assert anchor_lead is not None  # type guard
+        anchor_lead = anchor_lead.strip()
         assert any(anchor_lead in candidate for candidate in pool), (
             f"sport={sport} tier={tier} combo={combo_key}: §12 anchor lead "
             f"{anchor_lead!r} no longer reachable in pool"
@@ -1429,7 +1465,6 @@ def test_ops_signal_exposure_render_verdict_serves_section12_phrase(combo_key, t
         # we only assert action close + no banned terms here).
         pass
     else:
-        assert expected_lead is not None  # type guard
         # FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01: pool-aware. Output
         # for the spec.match_key fixture must be a pool member for the cell.
         # Anchor lead reachability is asserted at the pool level.
@@ -1440,7 +1475,9 @@ def test_ops_signal_exposure_render_verdict_serves_section12_phrase(combo_key, t
             f"({len(pool)} valid phrasings). The mapper output likely "
             f"failed the min_verdict_quality floor and fell back to corpus."
         )
-        anchor_lead = expected_lead.strip()
+        anchor_lead = (expected_lead or _anchor_lead_for(combo_key, tier))
+        assert anchor_lead is not None  # type guard
+        anchor_lead = anchor_lead.strip()
         assert any(anchor_lead in candidate for candidate in pool), (
             f"§12 anchor lead {anchor_lead!r} no longer reachable in "
             f"{combo_key}/{tier} pool"
@@ -1581,6 +1618,18 @@ def test_ops_signal_exposure_card_alignment_invariant():
     (None,         "neutral", "unknown"),
     (None,         "",        "unknown"),
     (None,         None,      "unknown"),
+    # FIX-VERDICT-VARIETY-PASS-5-LAND-01 Codex adversarial hardening:
+    # native field is closed-default authoritative when set. Native
+    # canonical aliases route through; non-canonical native sentinels
+    # collapse to "unknown" without consulting the legacy fallback.
+    ("for",        "neutral", "favourable"),  # native "for" alias.
+    ("for",        "against", "favourable"),  # native wins over conflicting legacy.
+    ("none",       "for",     "unknown"),     # closed-default — does NOT fall through.
+    ("n/a",        "for",     "unknown"),
+    ("tbd",        "favourable", "unknown"),
+    ("neutral",    "for",     "unknown"),     # native "neutral" → unknown, no legacy override.
+    ("",           "for",     "favourable"),  # empty native → legacy fallback fires.
+    ("   ",        "against", "against"),     # whitespace-only native → legacy fires.
 ])
 def test_ops_signal_exposure_line_movement_normalisation(native, fallback, expected):
     """AC-2 / Phase 2 step 2 — line_movement_direction normalisation contract.
@@ -1590,6 +1639,11 @@ def test_ops_signal_exposure_line_movement_normalisation(native, fallback, expec
     "favourable" / "for" alias must collapse to "favourable" so spec §6.2
     favourable lead fires; "neutral"/None collapse to "unknown" so the
     neutral lead fires.
+
+    FIX-VERDICT-VARIETY-PASS-5-LAND-01 (Codex adversarial pass):
+    closed-default — native field is authoritative when set. Non-canonical
+    native sentinels (`"none"`, `"n/a"`, etc.) collapse to `"unknown"`
+    rather than falling through to a stale legacy `movement_direction`.
     """
     spec = _FakeSpec(
         line_movement_direction=native,
@@ -1903,19 +1957,24 @@ def test_section12_anchors_remain_reachable_in_pools():
     # §12.2 Price Edge + Injury → primary same + secondary "team news
     #       gives it extra weight"
     assert "team news gives it extra weight" in m.SECONDARY_PHRASES["injury"]
-    # §12.3 Price Edge + Line Mvt favourable: tier-shared anchors
-    assert "The line is moving our way and the price is still there" in m._PRICE_LINE_FAVOURABLE_LEADS  # §12.3-D
-    assert "The line is moving our way and the price still looks fair" in m._PRICE_LINE_FAVOURABLE_LEADS  # §12.3-G
-    # §12.3-Bronze unique anchor lives in its own pool (Diamond/Gold/Silver
-    # must NOT pick this — the "with a little value left" framing is
-    # weaker than the higher-tier anchors authorise).
-    assert "Small move this way with a little value left" in m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY
-    assert "Small move this way with a little value left" not in m._PRICE_LINE_FAVOURABLE_LEADS
-    # §12.4 Price Edge + Line Mvt against
-    assert "The market has moved, but the price still looks big" in m._PRICE_LINE_AGAINST_LEADS  # §12.4-D
-    assert "The line has shifted, but there is still value here" in m._PRICE_LINE_AGAINST_LEADS  # §12.4-G
-    assert "The price has moved, but there is still a small lean" in m._PRICE_LINE_AGAINST_BRONZE_ONLY  # §12.4-B
-    assert "The price has moved, but there is still a small lean" not in m._PRICE_LINE_AGAINST_LEADS
+    # §12.3 Price Edge + Line Mvt favourable: per-tier dict
+    # (FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 3). Each tier carries
+    # its own anchor; cross-tier leak is prevented by isolated pools.
+    assert "The line is moving our way and the price is still there" in m._PRICE_LINE_FAVOURABLE_BY_TIER["diamond"]   # §12.3-D
+    assert "The line is moving our way and the price still looks fair" in m._PRICE_LINE_FAVOURABLE_BY_TIER["gold"]    # §12.3-G
+    assert "Small move this way with a little value left" in m._PRICE_LINE_FAVOURABLE_BY_TIER["bronze"]               # §12.3-B
+    # Diamond / Gold / Silver pools must NOT contain the Bronze §12.3-B
+    # anchor (weaker framing in front of stronger action closes).
+    assert "Small move this way with a little value left" not in m._PRICE_LINE_FAVOURABLE_BY_TIER["diamond"]
+    assert "Small move this way with a little value left" not in m._PRICE_LINE_FAVOURABLE_BY_TIER["gold"]
+    assert "Small move this way with a little value left" not in m._PRICE_LINE_FAVOURABLE_BY_TIER["silver"]
+    # §12.4 Price Edge + Line Mvt against — per-tier dict.
+    assert "The market has moved, but the price still looks big" in m._PRICE_LINE_AGAINST_BY_TIER["diamond"]          # §12.4-D
+    assert "The line has shifted, but there is still value here" in m._PRICE_LINE_AGAINST_BY_TIER["gold"]             # §12.4-G
+    assert "The price has moved, but there is still a small lean" in m._PRICE_LINE_AGAINST_BY_TIER["bronze"]          # §12.4-B
+    assert "The price has moved, but there is still a small lean" not in m._PRICE_LINE_AGAINST_BY_TIER["diamond"]
+    assert "The price has moved, but there is still a small lean" not in m._PRICE_LINE_AGAINST_BY_TIER["gold"]
+    assert "The price has moved, but there is still a small lean" not in m._PRICE_LINE_AGAINST_BY_TIER["silver"]
     # §12.5 Form-only → "Recent form backs this"
     assert "Recent form backs this" in m.PRIMARY_PHRASES["form"]
     # §12.6 Market-only → "The wider market is leaning this way"
@@ -1947,10 +2006,9 @@ def test_banned_term_sweep_all_pool_entries_individually():
     pools = {
         **{f"PRIMARY[{k}]": v for k, v in m.PRIMARY_PHRASES.items()},
         **{f"SECONDARY[{k}]": v for k, v in m.SECONDARY_PHRASES.items()},
-        "_PRICE_LINE_FAVOURABLE_LEADS": m._PRICE_LINE_FAVOURABLE_LEADS,
-        "_PRICE_LINE_FAVOURABLE_BRONZE_ONLY": m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY,
-        "_PRICE_LINE_AGAINST_LEADS":    m._PRICE_LINE_AGAINST_LEADS,
-        "_PRICE_LINE_AGAINST_BRONZE_ONLY": m._PRICE_LINE_AGAINST_BRONZE_ONLY,
+        "SECONDARY_PHRASES_LINE_MVT_UNKNOWN": m.SECONDARY_PHRASES_LINE_MVT_UNKNOWN,
+        **{f"_PRICE_LINE_FAVOURABLE_BY_TIER[{tier}]": v for tier, v in m._PRICE_LINE_FAVOURABLE_BY_TIER.items()},
+        **{f"_PRICE_LINE_AGAINST_BY_TIER[{tier}]": v for tier, v in m._PRICE_LINE_AGAINST_BY_TIER.items()},
         **{f"_FALLBACK[{tier}]": v for tier, v in m._FALLBACK_BY_TIER.items()},
     }
     for pool_name, pool in pools.items():
@@ -2027,8 +2085,8 @@ def test_bronze_only_directional_anchors_never_surface_for_higher_tiers(tier):
     framing reads weak in front of "go big" / "back" / "lean" closes.
     """
     bronze_only_phrases = (
-        list(m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY)
-        + list(m._PRICE_LINE_AGAINST_BRONZE_ONLY)
+        list(m._PRICE_LINE_FAVOURABLE_BY_TIER["bronze"])
+        + list(m._PRICE_LINE_AGAINST_BY_TIER["bronze"])
     )
     for direction in ("favourable", "against"):
         for mk_idx in range(50):
@@ -2133,8 +2191,377 @@ def test_draw_fixtures_render_distinct_verdicts_via_render_verdict():
     # All draw specs share team salt ("the draw"), tier (gold), signal combo
     # (price+line favourable), and direction (favourable). Without the
     # home/away match_key reconstruction every output would be identical.
-    # The reconstruction yields ≥2 distinct §12.3 favourable leads (pool=5).
+    # The reconstruction yields ≥2 distinct §12.3 favourable leads (pool=4
+    # after FIX-VERDICT-VARIETY-PASS-5-LAND-01 Finding 3 per-tier split).
     assert len(primaries) >= 2, (
         f"Draw-fixture monoculture: only {len(primaries)} distinct primaries "
         f"across 4 draw fixtures.\n" + "\n".join(outputs)
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# FIX-VERDICT-VARIETY-PASS-5-LAND-01 — Codex pass-5 fixes (2026-05-05).
+#
+# Finding 1: under unknown line_movement_direction the secondary line_mvt
+# pool must not emit any directional-assertion phrase. Resolved by routing
+# secondary picks to SECONDARY_PHRASES_LINE_MVT_UNKNOWN when direction is
+# unknown / missing / neutral.
+#
+# Finding 3: per-tier _PRICE_LINE_*_BY_TIER dicts replace the previously
+# tier-shared directional pools. Each tier renders ONLY from its own pool;
+# Diamond / Gold / Silver / Bronze framings never cross-contaminate.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+_DIRECTIONAL_ASSERTION_PATTERNS = (
+    "backs the pick",
+    "moving our way",
+    "starting to follow",
+    "beginning to move",
+)
+
+
+@pytest.mark.parametrize("signals,label", [
+    ({"price_edge": True, "line_mvt": True}, "price_line"),
+    ({"market": True, "line_mvt": True}, "market_line"),
+    ({"tipster": True, "line_mvt": True}, "tipster_line"),
+])
+def test_unknown_direction_no_directional_secondary_assertion(signals, label):
+    """Pass-5 Finding 1 — under unknown line_movement_direction, no render
+    that routes line_mvt into the secondary slot may surface a directional
+    assertion. 50 synthetic match_keys per primary context × the 4 banned
+    directional patterns.
+
+    Three primary contexts that route line_mvt into the secondary slot:
+      - price_edge primary (Price+Line unknown — Paul-flagged scenario,
+        falls through to primary+secondary path under unknown direction)
+      - market primary (line_mvt at SECONDARY rank 3 wins secondary slot
+        when injury / form are not active)
+      - tipster primary (same secondary-slot mechanics as market)
+
+    Without the fix the SECONDARY[line_mvt] pool's third entry ("the line
+    movement backs the pick") leaks into ~33% of renders under unknown
+    direction. The fix routes secondary-line_mvt under unknown direction
+    to SECONDARY_PHRASES_LINE_MVT_UNKNOWN, which contains zero directional
+    assertions.
+    """
+    failures: list[tuple[str, int, str, str]] = []
+    for i in range(50):
+        out = m.build_verdict(
+            team="Pick", tier="gold",
+            signals=signals,
+            odds="1.85", bookmaker="HWB",
+            line_movement_direction="unknown",
+            match_key=f"unknown_{label}_{i:03d}",
+        )
+        for needle in _DIRECTIONAL_ASSERTION_PATTERNS:
+            if needle in out:
+                failures.append((label, i, needle, out))
+    assert failures == [], (
+        f"HG-3 — directional-assertion leak under unknown direction "
+        f"({label}): {len(failures)} hits across 50 keys.\n"
+        f"First 3: {failures[:3]}"
+    )
+
+
+def test_unknown_direction_no_directional_secondary_assertion_none_direction():
+    """Pass-5 Finding 1 (companion) — `line_movement_direction=None` MUST
+    take the same neutral-secondary path as `unknown`. Production specs
+    can land on None when the proxy fallback runs without a line-movement
+    signal; the fix collapses None / "" / "unknown" / "neutral" onto the
+    direction-neutral pool.
+    """
+    failures: list[tuple[int, str, str]] = []
+    for i in range(50):
+        out = m.build_verdict(
+            team="Pick", tier="gold",
+            signals={"price_edge": True, "line_mvt": True},
+            odds="1.85", bookmaker="HWB",
+            line_movement_direction=None,
+            match_key=f"none_dir_{i:03d}",
+        )
+        for needle in _DIRECTIONAL_ASSERTION_PATTERNS:
+            if needle in out:
+                failures.append((i, needle, out))
+    assert failures == [], (
+        f"None-direction leaked directional assertions: {len(failures)} hits.\n"
+        f"First 3: {failures[:3]}"
+    )
+
+
+# Codex pass-5-land adversarial-review finding (2026-05-05): non-canonical
+# direction sentinels (e.g. the literal string "none", "n/a", any producer-
+# specific value) must collapse to the unknown route. The fix is closed-
+# default: only "favourable"/"for"/"against" route through directional
+# pools; everything else is treated as unknown. These regression tests
+# pin the closed-default behaviour against version-skewed callers.
+@pytest.mark.parametrize("sentinel", [
+    "none",
+    "n/a",
+    "tbd",
+    "pending",
+    "no-data",
+    "NEUTRAL",  # case variation of an already-known sentinel
+    "Favourable_legacy",  # producer-specific string that contains a
+                          # canonical fragment but is not the canonical
+                          # value — must NOT route through favourable.
+])
+def test_non_canonical_direction_sentinels_route_neutral(sentinel):
+    """Closed-default — any direction value not in the canonical set
+    {"favourable", "for", "against"} must collapse to the unknown route
+    so SECONDARY[line_mvt] never picks "the line movement backs the pick"
+    (or any other directional assertion).
+    """
+    failures: list[tuple[str, int, str, str]] = []
+    for i in range(20):
+        out = m.build_verdict(
+            team="Pick", tier="gold",
+            signals={"price_edge": True, "line_mvt": True},
+            odds="1.85", bookmaker="HWB",
+            line_movement_direction=sentinel,
+            match_key=f"sentinel_{sentinel}_{i:03d}",
+        )
+        for needle in _DIRECTIONAL_ASSERTION_PATTERNS:
+            if needle in out:
+                failures.append((sentinel, i, needle, out))
+        # Must NOT have entered either directional pool.
+        for entry in m._PRICE_LINE_FAVOURABLE_BY_TIER["gold"]:
+            if out.startswith(entry):
+                failures.append((sentinel, i, "favourable_pool_lead", out))
+        for entry in m._PRICE_LINE_AGAINST_BY_TIER["gold"]:
+            if out.startswith(entry):
+                failures.append((sentinel, i, "against_pool_lead", out))
+    assert failures == [], (
+        f"Non-canonical sentinel {sentinel!r} leaked through directional "
+        f"path: {len(failures)} hits.\nFirst 3: {failures[:3]}"
+    )
+
+
+def test_unknown_direction_secondary_pool_reachable():
+    """Positive control — every entry in SECONDARY_PHRASES_LINE_MVT_UNKNOWN
+    is a reachable pool member under the unknown-direction route. 200
+    synthetic match_keys with primary=price_edge, secondary=line_mvt,
+    direction unknown — the union of secondary-clauses must cover all 5
+    pool entries (statistical coverage check; MD5 mod 5 over 200 keys
+    hits each bucket P > 1 - (4/5)^200 ≈ 1.0).
+    """
+    seen_secondaries: set[str] = set()
+    pool = set(m.SECONDARY_PHRASES_LINE_MVT_UNKNOWN)
+    for i in range(200):
+        out = m.build_verdict(
+            team="Pick", tier="gold",
+            signals={"price_edge": True, "line_mvt": True},
+            odds="1.85", bookmaker="HWB",
+            line_movement_direction="unknown",
+            match_key=f"reach_{i:03d}",
+        )
+        # Output shape: "{primary} and {secondary} — {action}.".
+        body, _, _ = out.partition(" — ")
+        if " and " in body:
+            secondary = body.split(" and ", 1)[1]
+            seen_secondaries.add(secondary)
+    missing = pool - seen_secondaries
+    assert missing == set(), (
+        f"SECONDARY_PHRASES_LINE_MVT_UNKNOWN entries unreachable in 200-key "
+        f"sweep: {missing}"
+    )
+
+
+@pytest.mark.parametrize("tier", ["diamond", "gold", "silver", "bronze"])
+@pytest.mark.parametrize("direction", ["favourable", "against"])
+def test_per_tier_directional_pools_no_cross_tier_leak(tier, direction):
+    """Pass-5 Finding 3 — per-tier directional pools must isolate each
+    tier's framing. 50 synthetic match_keys per (tier, direction) cell.
+
+    Each render must (a) use a lead from the tier's OWN pool and (b)
+    contain none of the other tiers' tier-unique phrases. The §12.3-D
+    "...the price is still there" must never appear on a Gold close;
+    §12.3-G "...the price still looks fair" must never appear on a Diamond
+    close; the Bronze §12.3-B / §12.4-B anchors stay isolated as per
+    pass-3 (the existing Bronze isolation contract).
+    """
+    pool_dict = (
+        m._PRICE_LINE_FAVOURABLE_BY_TIER if direction == "favourable"
+        else m._PRICE_LINE_AGAINST_BY_TIER
+    )
+    own_pool = set(pool_dict[tier])
+    other_pools_union: set[str] = set()
+    for other_tier, entries in pool_dict.items():
+        if other_tier != tier:
+            other_pools_union.update(entries)
+    # Phrases unique to other tiers (any leak indicates cross-tier
+    # contamination).
+    other_only = other_pools_union - own_pool
+
+    leaks: list[tuple[str, str, str, int]] = []
+    for i in range(50):
+        out = m.build_verdict(
+            team="Pick", tier=tier,
+            signals={"price_edge": True, "line_mvt": True},
+            odds="2.10", bookmaker="Betway",
+            line_movement_direction=direction,
+            match_key=f"pertier_{tier}_{direction}_{i:03d}",
+        )
+        # Strip the action close to extract the lead phrase.
+        lead, _, _ = out.partition(" — ")
+        # (a) Lead must be a member of own pool.
+        if lead not in own_pool:
+            leaks.append(("lead_not_in_own_pool", lead, out, i))
+        # (b) No other-tier-only phrase may appear anywhere in the output.
+        for other_phrase in other_only:
+            if other_phrase in out:
+                leaks.append(("other_tier_leak", other_phrase, out, i))
+    assert leaks == [], (
+        f"HG-4 — cross-tier leak detected for tier={tier} direction={direction}: "
+        f"{len(leaks)} leaks.\nFirst 3: {leaks[:3]}"
+    )
+
+
+def test_per_tier_pool_data_structures_present():
+    """AC-1 sanity — the pass-5 pool data structures must exist with the
+    right shape and tier coverage. Frontline regression guard for any
+    rebase that silently reverts the per-tier dicts back to flat tuples.
+    """
+    # Finding 1 — direction-neutral SECONDARY[line_mvt] pool.
+    assert isinstance(m.SECONDARY_PHRASES_LINE_MVT_UNKNOWN, tuple)
+    assert len(m.SECONDARY_PHRASES_LINE_MVT_UNKNOWN) >= 3, (
+        "SECONDARY_PHRASES_LINE_MVT_UNKNOWN depth < 3 — variety contract"
+        "(≥3 distinct secondaries from 4 simultaneous keys) at risk"
+    )
+    # No directional assertion in any pool entry.
+    for entry in m.SECONDARY_PHRASES_LINE_MVT_UNKNOWN:
+        for needle in _DIRECTIONAL_ASSERTION_PATTERNS:
+            assert needle not in entry, (
+                f"SECONDARY_PHRASES_LINE_MVT_UNKNOWN entry {entry!r} contains "
+                f"directional assertion {needle!r}"
+            )
+
+    # Finding 3 — per-tier directional dicts.
+    assert isinstance(m._PRICE_LINE_FAVOURABLE_BY_TIER, dict)
+    assert isinstance(m._PRICE_LINE_AGAINST_BY_TIER, dict)
+    for tier in ("diamond", "gold", "silver", "bronze"):
+        assert tier in m._PRICE_LINE_FAVOURABLE_BY_TIER, (
+            f"_PRICE_LINE_FAVOURABLE_BY_TIER missing tier {tier!r}"
+        )
+        assert tier in m._PRICE_LINE_AGAINST_BY_TIER, (
+            f"_PRICE_LINE_AGAINST_BY_TIER missing tier {tier!r}"
+        )
+        assert len(m._PRICE_LINE_FAVOURABLE_BY_TIER[tier]) >= 1
+        assert len(m._PRICE_LINE_AGAINST_BY_TIER[tier]) >= 1
+
+    # Each tier's favourable / against pools must be disjoint from each
+    # other tier's pools (entry-level isolation).
+    for direction_dict in (m._PRICE_LINE_FAVOURABLE_BY_TIER, m._PRICE_LINE_AGAINST_BY_TIER):
+        all_tiers = list(direction_dict.keys())
+        for i, tier_a in enumerate(all_tiers):
+            for tier_b in all_tiers[i + 1:]:
+                pool_a = set(direction_dict[tier_a])
+                pool_b = set(direction_dict[tier_b])
+                shared = pool_a & pool_b
+                assert shared == set(), (
+                    f"Per-tier pool overlap between {tier_a} and {tier_b}: "
+                    f"{shared}"
+                )
+
+
+# Codex adversarial-review hardening (FIX-VERDICT-VARIETY-PASS-5-LAND-01).
+# End-to-end render_verdict regressions for the closed-default direction
+# contract: the adapter (`verdict_corpus._spec_movement_direction`) must
+# never coerce a non-canonical native sentinel back to a directional value
+# via the legacy `movement_direction` fallback.
+@pytest.mark.parametrize("native,legacy", [
+    ("none",    "for"),
+    ("n/a",     "favourable"),
+    ("tbd",     "for"),
+    ("pending", "against"),
+    ("neutral", "for"),
+])
+def test_render_verdict_non_canonical_native_does_not_leak_directional(native, legacy):
+    """End-to-end — render_verdict must serve a neutral verdict when the
+    native `line_movement_direction` is set to a non-canonical sentinel,
+    EVEN IF the legacy `movement_direction` is a canonical directional
+    value. The closed-default contract makes the native field
+    authoritative when present.
+    """
+    import importlib
+    import verdict_corpus as _vc
+    importlib.reload(_vc)
+
+    spec = _FakeSpec(
+        edge_tier="gold",
+        outcome="home",
+        outcome_label="Manchester City",
+        home_name="Manchester City",
+        away_name="Brentford",
+        odds=1.85,
+        bookmaker="HWB",
+        ev_pct=5.5,
+        movement_direction=legacy,
+        bookmaker_count=0,
+        tipster_available=False,
+        tipster_agrees=None,
+        home_form="",
+        away_form="",
+        injuries_home=[],
+        injuries_away=[],
+        signals={"price_edge": True, "line_mvt": True},
+        line_movement_direction=native,
+        match_key="city_vs_brentford_2026-05-09",
+    )
+    out = _vc.render_verdict(cast("verdict_corpus.NarrativeSpec", spec))
+
+    # No directional-assertion phrase may surface.
+    for needle in _DIRECTIONAL_ASSERTION_PATTERNS:
+        assert needle not in out, (
+            f"Non-canonical native={native!r} legacy={legacy!r} leaked "
+            f"directional phrase {needle!r}: {out!r}"
+        )
+    # The output must not lead with any entry from the favourable or
+    # against directional pools (those should not have been entered).
+    fav_pools = m._PRICE_LINE_FAVOURABLE_BY_TIER["gold"]
+    agn_pools = m._PRICE_LINE_AGAINST_BY_TIER["gold"]
+    for entry in fav_pools + agn_pools:
+        assert not out.startswith(entry), (
+            f"Non-canonical native={native!r} legacy={legacy!r} entered "
+            f"directional pool — leaked entry {entry!r} in {out!r}"
+        )
+
+
+def test_render_verdict_native_for_alias_routes_favourable():
+    """Native `line_movement_direction="for"` must alias to `favourable`
+    so the §12.3 favourable directional pool fires (matches build_verdict's
+    accepted directional set; avoids the alias being silently dropped to
+    `unknown` when no legacy fallback rescues it).
+    """
+    import importlib
+    import verdict_corpus as _vc
+    importlib.reload(_vc)
+
+    spec = _FakeSpec(
+        edge_tier="gold",
+        outcome="home",
+        outcome_label="Manchester City",
+        home_name="Manchester City",
+        away_name="Brentford",
+        odds=1.85,
+        bookmaker="HWB",
+        ev_pct=5.5,
+        movement_direction="neutral",  # legacy is non-directional.
+        bookmaker_count=0,
+        tipster_available=False,
+        tipster_agrees=None,
+        home_form="",
+        away_form="",
+        injuries_home=[],
+        injuries_away=[],
+        signals={"price_edge": True, "line_mvt": True},
+        line_movement_direction="for",
+        match_key="city_vs_brentford_2026-05-09",
+    )
+    out = _vc.render_verdict(cast("verdict_corpus.NarrativeSpec", spec))
+
+    # Output must lead with a member of the Gold favourable pool.
+    fav_gold = m._PRICE_LINE_FAVOURABLE_BY_TIER["gold"]
+    assert any(out.startswith(entry) for entry in fav_gold), (
+        f"Native `for` alias did not route through favourable pool: {out!r}"
     )

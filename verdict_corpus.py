@@ -167,20 +167,38 @@ def _spec_movement_direction(spec: "NarrativeSpec") -> str:
     to mapping the legacy ``spec.movement_direction`` field
     (``for`` / ``against`` / ``neutral`` / ``unknown``) when the
     native field is unset — un-migrated specs and proxy-fallback path.
-    ``neutral``/``None`` collapse to ``unknown`` so the special-case
-    Price+LineMvt lead emits the neutral phrasing (spec §6.2 unknown
-    branch) rather than skipping the lead entirely.
+
+    FIX-VERDICT-VARIETY-PASS-5-LAND-01 (2026-05-05) Codex adversarial
+    hardening: the native field is closed-default authoritative when
+    set. Only the canonical 3 values (``favourable`` / ``for`` /
+    ``against``) route through the directional path; every other native
+    value (``unknown`` / ``neutral`` / ``none`` / ``n/a`` / any
+    producer-specific sentinel) collapses to ``unknown`` WITHOUT
+    consulting the legacy ``movement_direction`` fallback. This stops
+    a producer who sets a non-canonical native sentinel but a stale
+    legacy ``"for"`` from rendering a directional verdict on a fixture
+    where the line-movement signal has not been positively established.
+    Legacy ``movement_direction`` is consulted only when the native
+    field is genuinely absent (None / empty / missing attribute).
     """
     native = getattr(spec, "line_movement_direction", None)
-    if isinstance(native, str):
+    if isinstance(native, str) and native.strip():
         text = native.strip().lower()
         if text == "favourable":
             return "favourable"
+        if text == "for":
+            # Native ``for`` aliases to ``favourable`` — matches
+            # build_verdict's accepted directional set.
+            return "favourable"
         if text == "against":
             return "against"
-        if text == "unknown":
-            return "unknown"
-        # Fall through to legacy mapping for any other string value.
+        # Native field is set but not canonical — closed default to
+        # ``unknown``. Do NOT fall through to legacy when native is
+        # explicitly populated; that would let stale legacy values
+        # override an intentionally-non-directional native.
+        return "unknown"
+    # Native field absent (None / "" / whitespace / missing attribute):
+    # consult the legacy mapping for un-migrated specs.
     movement = (getattr(spec, "movement_direction", "") or "").lower()
     if movement in ("for", "favourable"):
         return "favourable"
