@@ -110,13 +110,16 @@ PRIMARY_PHRASES: dict[str, tuple[str, ...]] = {
         "The broader market backs the lean",
         "The market support is on this side",
     ),
-    # §6.4 Tipster — 4 phrasings (legacy "Outside support points this way"
-    # anchor first; remaining are §6.4 verbatim).
+    # §6.4 Tipster — 4 spec-approved phrasings + legacy anchor (5 total).
+    # The legacy "Outside support points this way" anchor is preserved (it
+    # is the current §12.7 anchor and predates the §6.4 list); §6.4 #1-#4
+    # follow verbatim.
     "tipster": (
         "Outside support points this way",
         "There is extra support on this side",
         "The outside support lines up here",
         "Trusted support is pointing this way",
+        "External support backs this lean",
     ),
 }
 
@@ -133,6 +136,7 @@ SECONDARY_PHRASES: dict[str, tuple[str, ...]] = {
     ),
     "form": (
         "recent form backs it",
+        "form backs it",
         "form is on their side",
         "the form read supports it",
         "recent results give this weight",
@@ -158,22 +162,34 @@ SECONDARY_PHRASES: dict[str, tuple[str, ...]] = {
 
 
 # Special-case Price Edge + Line Movement leads (spec §12.3 / §12.4).
-# Pool entries built by composing §6.2 phrasings with the "and the price ..."
-# tail used in spec §12.3 anchors. Both spec-authored §12.3 anchors are
-# reachable: §12.3 Diamond uses "and the price is still there", §12.3 Gold
-# uses "and the price still looks fair" — both variants live in the pool
-# below. Pool sizes: favourable=5, against=3.
+# Pool entries combine §6.2 phrasings with the "and the price ..." tails
+# from §12.3 and the contrast tails from §12.4. Spec-authored anchors
+# reachable per direction:
+#   §12.3 Diamond — "...and the price is still there"
+#   §12.3 Gold    — "...and the price still looks fair"
+#   §12.3 Bronze  — "Small move this way with a little value left" (Bronze
+#                    cell carries unique phrasing not built from §6.2)
+#   §12.4 Diamond — "The market has moved, but the price still looks big"
+#   §12.4 Gold    — "The line has shifted, but there is still value here"
+#   §12.4 Bronze  — "The price has moved, but there is still a small lean"
+# §12.3 Silver and §12.4 Silver carry single-clause phrasings that are
+# reachable via the standard primary+secondary path when direction
+# normalisation drops to "unknown"; preserving them as direction-pool leads
+# is intentionally not done here to keep the price+line composite framing
+# tight. Pool sizes: favourable=6, against=4.
 _PRICE_LINE_FAVOURABLE_LEADS: tuple[str, ...] = (
     "The line is moving our way and the price is still there",
     "The line is moving our way and the price still looks fair",
     "The move is starting to follow this side and the price is still there",
     "The market is beginning to move this way and the price is still there",
     "The line movement backs the pick and the price is still there",
+    "Small move this way with a little value left",
 )
 _PRICE_LINE_AGAINST_LEADS: tuple[str, ...] = (
     "The market has moved, but the price still looks big",
     "The line has shifted, but there is still value here",
     "The price has moved, but not enough to kill the play",
+    "The price has moved, but there is still a small lean",
 )
 # Direction "unknown" is NOT anchored in spec §12 (only §12.3 favourable
 # and §12.4 against have explicit anchors). When direction is unknown,
@@ -386,6 +402,7 @@ def build_verdict(
     """
     norm = normalize_signals(signals)
     action = build_action(tier, team, odds, bookmaker)
+    tier_key = (tier or "").lower() or "silver"
 
     salt_key = (match_key or "").strip()
     if not salt_key:
@@ -399,6 +416,17 @@ def build_verdict(
             )
         salt_key = team_salt or "_no_key"
 
+    # Salt strategy: most paths use a plain "{role}|{signal}" salt for hash
+    # determinism. The favourable Price+Line direction salt mixes tier in
+    # because the favourable pool (size 6) coincidentally MD5-collides
+    # tier-uniform 4-card batches at modulo 6 for the Paul-flagged keys —
+    # adding tier breaks the collision pattern (Codex adversarial-review
+    # pass-2, 2026-05-05). The against pool (size 4) doesn't show the same
+    # collision pattern with the production keys we've measured, so it
+    # stays salt-pure to avoid the inverse regression. Primary/secondary
+    # salts deliberately stay tier-free — mixing tier there regressed the
+    # Paul-flagged 4-card variety on primary|price_edge in pass-2.
+
     # Special: Price Edge + Line Movement — directional anchor pools.
     if norm["price_edge"] and norm["line_mvt"]:
         direction = (line_movement_direction or "").strip().lower()
@@ -409,7 +437,7 @@ def build_verdict(
             return f"{lead} — {action}."
         if direction in ("favourable", "for"):
             lead = _pick_variant(
-                _PRICE_LINE_FAVOURABLE_LEADS, salt_key, "price_line_favourable"
+                _PRICE_LINE_FAVOURABLE_LEADS, salt_key, f"price_line_favourable|{tier_key}"
             )
             return f"{lead} — {action}."
         # Direction unknown / neutral / None — fall through to the standard
@@ -433,9 +461,8 @@ def build_verdict(
         )
         return f"{primary_phrase} — {action}."
 
-    tier_key = (tier or "").lower()
     fallback_pool = _FALLBACK_BY_TIER.get(tier_key, _FALLBACK_BY_TIER["silver"])
-    lead = _pick_variant(fallback_pool, salt_key, f"fallback|{tier_key or 'silver'}")
+    lead = _pick_variant(fallback_pool, salt_key, f"fallback|{tier_key}")
     return f"{lead} — {action}."
 
 
