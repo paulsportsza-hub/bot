@@ -119,6 +119,60 @@ async def test_settings_home_is_accessible(test_db) -> None:
     assert mock_card.call_args.kwargs.get("template") == "profile_home.html"
 
 
+async def test_cmd_settings_sends_settings_home_card(test_db, mock_update, mock_context) -> None:
+    """cmd_settings sends settings_home.html image card, not text."""
+    await db.upsert_user(41020, "settingsuser", "Paul")
+    await db.set_onboarding_done(41020)
+    user = MagicMock()
+    user.id = 41020
+    user.username = "settingsuser"
+    user.first_name = "Paul"
+    mock_update.effective_user = user
+
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.cmd_settings(mock_update, mock_context)
+
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "settings_home.html"
+    assert mock_update.message.reply_text.call_count == 0
+
+
+async def test_settings_keyboard_tap_sends_settings_home_card(test_db) -> None:
+    """Tapping ⚙️ Settings from the reply keyboard sends settings_home.html, not text."""
+    await db.upsert_user(41021, "kbsettings", "Tapper")
+    await db.set_onboarding_done(41021)
+
+    update = MagicMock()
+    update.effective_user = MagicMock()
+    update.effective_user.id = 41021
+    update.effective_user.username = "kbsettings"
+    update.effective_user.first_name = "Tapper"
+    update.message = MagicMock()
+    update.message.text = "⚙️ Settings"
+    update.message.chat_id = 41021
+    update.message.reply_text = AsyncMock()
+    update.get_bot = MagicMock()
+
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.handle_keyboard_tap(update, MagicMock())
+
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "settings_home.html"
+    assert update.message.reply_text.call_count == 0
+
+
+async def test_settings_else_fallback_sends_settings_home_card(test_db) -> None:
+    """handle_settings else-branch (unrecognized action) sends settings_home.html."""
+    await db.upsert_user(41022, "elseuser", "Elsie")
+    query = _make_query(user_id=41022)
+
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.handle_settings(query, "unrecognized_action")
+
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "settings_home.html"
+
+
 async def test_settings_sports_screen_shows_saved_sport(test_db) -> None:
     await db.upsert_user(41007, "sports", "Sports")
     await db.save_sport_pref(41007, "soccer")
@@ -191,18 +245,21 @@ async def test_help_command_shows_help_text(mock_update, mock_context) -> None:
 
 
 async def test_settings_notifications_screen_has_back_button(test_db) -> None:
-    # FIX-NOTIFICATIONS-DISABLE-01: notifications disabled — action redirects to settings home
+    # FIX-NOTIFICATIONS-DISABLE-01: notifications disabled — action redirects to settings home card
     await db.upsert_user(41015, "notifyscreen", "NotifyScreen")
     query = _make_query(user_id=41015)
 
-    await bot.handle_settings(query, "notify")
+    with patch("bot.send_card_or_fallback", new_callable=AsyncMock) as mock_card:
+        await bot.handle_settings(query, "notify")
 
-    markup = query.edit_message_text.call_args.kwargs["reply_markup"]
+    mock_card.assert_called_once()
+    assert mock_card.call_args.kwargs.get("template") == "settings_home.html"
+    # kb_settings() markup includes menu:home navigation
+    markup = mock_card.call_args.kwargs.get("markup")
     callbacks = [
         btn.callback_data
         for row in markup.inline_keyboard
         for btn in row
         if btn.callback_data
     ]
-    # Redirect lands on kb_settings() which uses menu:home for navigation
     assert "menu:home" in callbacks

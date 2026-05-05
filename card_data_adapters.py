@@ -1417,6 +1417,47 @@ def build_live_games_empty_data() -> dict:
     }
 
 
+# ── FIX-ZERO-TEXT-SETTINGS-HOME-01 ──────────────────────────────────────────
+
+_RISK_LABELS: dict[str, str] = {
+    "conservative": "Conservative",
+    "moderate": "Moderate",
+    "aggressive": "Aggressive",
+}
+
+_NOTIFY_HOUR_LABELS: dict[int, str] = {
+    7: "07:00 daily",
+    12: "12:00 daily",
+    18: "18:00 daily",
+    21: "21:00 daily",
+}
+
+
+def build_settings_home_data(user) -> dict:
+    """Settings home overview card — FIX-ZERO-TEXT-SETTINGS-HOME-01."""
+    risk = (getattr(user, "risk_profile", None) or "moderate").lower()
+    risk_display = _RISK_LABELS.get(risk, risk.title())
+
+    bankroll = getattr(user, "bankroll", None)
+    if bankroll:
+        bankroll_display = f"R{int(bankroll):,}/week"
+    else:
+        bankroll_display = "Not set"
+
+    hour = getattr(user, "notification_hour", None)
+    notify_display = _NOTIFY_HOUR_LABELS.get(hour, "Not set") if hour else "Not set"
+
+    first_name = (getattr(user, "first_name", None) or "").strip()
+
+    return {
+        "header_logo_b64": _logo(),
+        "first_name": first_name,
+        "risk_display": risk_display,
+        "bankroll_display": bankroll_display,
+        "notify_display": notify_display,
+    }
+
+
 # ── FIX-ZERO-TEXT-GUIDE-MENU-01 ──────────────────────────────────────────────
 
 _GUIDE_MENU_TOPICS: list[dict] = [

@@ -1,0 +1,157 @@
+<!-- VARIANT: DETAIL -->
+<!-- BRIEF: FIX-ZERO-TEXT-SETTINGS-HOME-01 -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            width: 480px;
+            padding: 2px;
+            box-sizing: content-box;
+        }
+        .card {
+            width: 480px;
+            height: 620px;
+            background: #0A0A0A;
+            border-radius: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            text-align: center;
+            padding: 22px 20px 16px;
+            background: linear-gradient(180deg, #0D0D0D, #141414);
+            border-bottom: 1px solid #2A2A2A;
+            flex-shrink: 0;
+        }
+        .logo-img {
+            height: 32px;
+            width: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px;
+            border-radius: 2px;
+        }
+        .title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: 3px;
+        }
+        .settings-list {
+            padding: 10px 14px 14px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+        .setting-row {
+            display: flex;
+            align-items: center;
+            padding: 16px 16px;
+            background: #1A1A1A;
+            border-radius: 10px;
+            border: 1px solid #2A2A2A;
+            margin-top: 10px;
+        }
+        .setting-icon {
+            font-size: 20px;
+            margin-right: 14px;
+            flex-shrink: 0;
+            width: 28px;
+            text-align: center;
+        }
+        .setting-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .setting-label {
+            font-size: 13px;
+            font-weight: 700;
+            color: #FFFFFF;
+        }
+        .setting-value {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 3px;
+        }
+        .setting-arrow {
+            font-size: 14px;
+            color: #555555;
+            margin-left: 12px;
+            flex-shrink: 0;
+        }
+        .hint {
+            font-size: 10px;
+            color: #555555;
+            text-align: center;
+            padding: 12px 20px 14px;
+            border-top: 1px solid #1E1E1E;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div style="font-size:22px;font-weight:800;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">⚙️ SETTINGS</div>
+    </div>
+    <div class="settings-list">
+        <div class="setting-row">
+            <span class="setting-icon">📊</span>
+            <div class="setting-info">
+                <div class="setting-label">Risk Profile</div>
+                <div class="setting-value">{{ risk_display }}</div>
+            </div>
+        </div>
+        <div class="setting-row">
+            <span class="setting-icon">💰</span>
+            <div class="setting-info">
+                <div class="setting-label">Bankroll</div>
+                <div class="setting-value">{{ bankroll_display }}</div>
+            </div>
+        </div>
+        <div class="setting-row">
+            <span class="setting-icon">🔔</span>
+            <div class="setting-info">
+                <div class="setting-label">Alerts</div>
+                <div class="setting-value">{{ notify_display }}</div>
+            </div>
+        </div>
+        <div class="setting-row">
+            <span class="setting-icon">⚽</span>
+            <div class="setting-info">
+                <div class="setting-label">My Sports</div>
+                <div class="setting-value">Tap below to manage</div>
+            </div>
+            <span class="setting-arrow">›</span>
+        </div>
+        <div class="setting-row">
+            <span class="setting-icon">🔄</span>
+            <div class="setting-info">
+                <div class="setting-label">Reset Profile</div>
+                <div class="setting-value">Clear all preferences</div>
+            </div>
+        </div>
+    </div>
+    <div class="hint">Select an option below</div>
+</div>
+</body>
+</html>

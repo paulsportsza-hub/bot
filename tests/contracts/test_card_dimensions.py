@@ -36,6 +36,8 @@ DETAIL_TEMPLATES = {
     "onboarding_done.html",
     # BUILD-SETTINGS-SPORTS-CARD-01
     "settings_sports.html",
+    # FIX-ZERO-TEXT-SETTINGS-HOME-01
+    "settings_home.html",
 }
 LIST_TEMPLATES = {
     "edge_picks.html",

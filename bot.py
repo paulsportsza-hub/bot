@@ -170,6 +170,7 @@ from card_data_adapters import (
     build_notify_live_score_data, build_notify_live_score_ft_data,
     build_profile_card_data,
     build_settings_sports_data,
+    build_settings_home_data,
     build_bookmaker_directory_data,
     build_help_data,
     build_edge_picks_empty_data,
@@ -1801,10 +1802,13 @@ async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode=ParseMode.HTML,
         )
         return
-    await update.message.reply_text(
-        "⚙️ <b>Settings</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb_settings(),
+    await send_card_or_fallback(
+        bot=update.get_bot(),
+        chat_id=update.message.chat_id,
+        template="settings_home.html",
+        data=build_settings_home_data(db_user),
+        text_fallback="⚙️ Settings",
+        markup=kb_settings(),
     )
 
 
@@ -6310,8 +6314,13 @@ async def handle_keyboard_tap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
                 parse_mode=ParseMode.HTML,
             )
             return
-        await update.message.reply_text(
-            "⚙️ <b>Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings(),
+        await send_card_or_fallback(
+            bot=update.get_bot(),
+            chat_id=update.message.chat_id,
+            template="settings_home.html",
+            data=build_settings_home_data(db_user),
+            text_fallback="⚙️ Settings",
+            markup=kb_settings(),
         )
     elif text == "❓ Help":
         await send_card_or_fallback(
@@ -24900,7 +24909,15 @@ async def handle_settings(query, action: str) -> None:
             reply_markup=kb,
         )
     else:
-        await query.edit_message_text("<b>⚙️ Settings</b>", parse_mode=ParseMode.HTML, reply_markup=kb_settings())
+        await send_card_or_fallback(
+            bot=query.get_bot(),
+            chat_id=query.from_user.id,
+            template="settings_home.html",
+            data=build_settings_home_data(user),
+            text_fallback="⚙️ Settings",
+            markup=kb_settings(),
+            message_to_edit=query.message,
+        )
 
 
 # ── Restart / back handlers ──────────────────────────────
