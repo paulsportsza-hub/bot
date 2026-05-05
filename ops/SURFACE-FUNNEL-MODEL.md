@@ -1,4 +1,4 @@
-# MzansiEdge Surface & Funnel Model — v5 (LOCKED 20 April 2026)
+# MzansiEdge Surface & Funnel Model — v5.1 (updated 25 April 2026)
 
 > **Authority:** This document is the **canonical, single source of truth** for how every MzansiEdge surface fits into the acquisition → conversion → delivery funnel. It supersedes any conflicting routing, CTA, or content-destination guidance in any other document, memory file, brief, or skill.
 >
@@ -12,7 +12,7 @@
 
 ## TL;DR — One-Paragraph Mental Model
 
-MzansiEdge runs a five-layer funnel. **Acquisition** is paid Meta ads (Funnel A direct to bot via landing page; Funnel C via WABA 1:1 — Funnel C is dark until Meta Business Manager verification). **Discovery** is every public, top-of-funnel surface (WA Channel, IG, TikTok, LinkedIn, Threads, Website) — all of these are teaser-only with a single primary CTA driving to Community. **Warming** is the TG Community where users get banter, weekly wraps, premium news posts, polls, free Bronze edges, and Silver content; Community is conversational and engagement-first. **Conversion** is the TG Bot freemium paywall — Bronze free, Gold R99/mo, Diamond R199/mo, Founding Member R699 lifetime. **Delivery** is the private TG Alerts channel (Gold floor, edge-cards-only, no news or banter), with Diamond exclusives delivered via Bot DM. WA Group is dark and waits on Meta BM + WAHA→Cloud API migration. Every public CTA is Bitly-wrapped for per-channel attribution, and any post referencing recent news/results/fixtures must be composed within 30 minutes of publish.
+MzansiEdge runs a five-layer funnel. **Acquisition** is paid Meta ads (Funnel A direct to bot via landing page; Funnel C via WABA 1:1 — Funnel C is BUILDING (MBM verified, CAPI + ad approval pending)). **Discovery** is every public, top-of-funnel surface (WA Channel, IG, TikTok, LinkedIn, Website) — all of these are teaser-only with a single primary CTA driving to Community. **Warming** is the TG Community where users get banter, weekly wraps, premium news posts, polls, free Bronze edges, and Silver content; Community is conversational and engagement-first. **Conversion** is the TG Bot freemium paywall — Bronze free, Gold R99/mo, Diamond R199/mo, Founding Member R699 lifetime. **Delivery** is the private TG Alerts channel (Gold floor, edge-cards-only, no news or banter), with Diamond exclusives delivered via Bot DM. WA Group is dark and waits on Meta BM + WAHA→Cloud API migration. Every public CTA is Bitly-wrapped for per-channel attribution, and any post referencing recent news/results/fixtures must be composed within 30 minutes of publish.
 
 ---
 
@@ -23,7 +23,7 @@ MzansiEdge runs a five-layer funnel. **Acquisition** is paid Meta ads (Funnel A 
 │ ACQUISITION (paid)                                                      │
 │   Meta Ads (R100/day)                                                   │
 │     Funnel A (R40/day) ─→ LP /analytics ─→ TG Bot      [LIVE post-LP]   │
-│     Funnel C (R60/day) ─→ WABA 1:1       ─→ TG Bot     [DARK, MBM gate] │
+│     Funnel C (R60/day) ─→ WABA 1:1       ─→ TG Bot     [BUILDING, CAPI gate] │
 │   Every ad creative carries a secondary CTA: → Community [bitly]        │
 └─────────────────────────────────────────────────────────────────────────┘
                                   ↓
@@ -33,7 +33,6 @@ MzansiEdge runs a five-layer funnel. **Acquisition** is paid Meta ads (Funnel A 
 │   Instagram (Reels + Stories + bio)   ─────→ Community [bitly]          │
 │   TikTok (caption + bio)              ─────→ Community [bitly]          │
 │   LinkedIn (native posts)             ─────→ Community [bitly]          │
-│   Threads (native posts)              ─────→ Community [bitly]          │
 │   Website (banner + /go router)       ─────→ Community [bitly]          │
 └─────────────────────────────────────────────────────────────────────────┘
                                   ↓
@@ -76,12 +75,12 @@ MzansiEdge runs a five-layer funnel. **Acquisition** is paid Meta ads (Funnel A 
 | # | Surface | State | Layer | Primary CTA / Role |
 |---|---|---|---|---|
 | 1 | Meta Ads — Funnel A | LIVE post-LP | Acquisition | Ad → LP /analytics → Bot |
-| 2 | Meta Ads — Funnel C | DARK (MBM gate) | Acquisition | Ad → WABA 1:1 → Bot |
+| 2 | Meta Ads — Funnel C | BUILDING (MBM verified) | Acquisition | Ad → WABA 1:1 → Bot |
 | 3 | WhatsApp Channel | LIVE auto (WAHA) | Discovery | Teasers + Top 5 Edges → Community |
 | 4 | Instagram Reels + Stories | LIVE | Discovery | Caption + bio router + Story sticker → Community |
 | 5 | TikTok (@heybru_za) | LIVE | Discovery | Caption + bio router → Community |
 | 6 | LinkedIn | LIVE | Discovery | Native post → Community |
-| 7 | Threads | LIVE | Discovery | Native post → Community |
+| 7 | Threads | DARK (Decommissioned 25 Apr 2026) | — | Decommissioned |
 | 8 | Website (mzansiedge.co.za) | LIVE | Discovery + LP | Pinned banner + /go router → Community |
 | 9 | Router page (/go) | TO BUILD | Router | Community / WA Channel / Bot self-select |
 | 10 | TG Community (@MzansiEdge) | LIVE | Warming | Discussion + free edges + news → Bot |
@@ -112,7 +111,7 @@ This table is the law for any publisher, generator, autogen, or scheduled task.
 | Match preview / signing news / recap / poll | TG Community | Conversation seeds |
 | Reel card video (B.R.U. drops, 3D card reveals) | IG Reels + TikTok + auto-mirror to IG Story | All CTAs → Community |
 | Diary-of-an-AI-Builder post | LinkedIn | Native clickable link → Community |
-| Threads native post | Threads | → Community (shares IG token) |
+| Threads native post | — (Threads decommissioned 25 Apr 2026) | Decommissioned — DARK |
 | Bot onboarding Community invite | Bot first-run | Paul + LEAD track |
 | Member invite / kick | TG Alerts (private) | Triggered by Stitch subscribe / unsubscribe webhook |
 
@@ -124,7 +123,7 @@ This table is the law for any publisher, generator, autogen, or scheduled task.
 
 Every public CTA is wrapped through a per-channel Bitly. Raw `t.me/...` or `mzansiedge.co.za/...` URLs are forbidden in any caption, autogen, or template.
 
-**Minimum 11-wrap set required by launch (27 April 2026):**
+**Minimum 10-wrap set required by launch (27 April 2026):** *(Threads decommissioned 25 Apr 2026 — wrap dropped from 11 to 10.)*
 
 | # | From → To | CTA Copy | Bitly Slug (canonical, audit-confirms) |
 |---|---|---|---|
@@ -138,7 +137,7 @@ Every public CTA is wrapped through a per-channel Bitly. Raw `t.me/...` or `mzan
 | 8 | Alerts → Bot (Diamond upgrade CTA) | `Unlock Diamond → [bitly]` | `me-al-up` |
 | 9 | LP → Bot | `Open the bot → [bitly]` | `me-lp-bot` |
 | 10 | Meta Ad Funnel A → LP | (campaign URL — wrapped) | `me-ad-a` |
-| 11 | Meta Ad Funnel C → WABA | (campaign URL — wrapped, dark until MBM) | `me-ad-c` |
+| 11 | Meta Ad Funnel C → WABA | (campaign URL — wrapped, CAPI gate pending) | `me-ad-c` |
 
 **Audit confirms (AUDIT-BITLY-INVENTORY-01):** the actual slugs above are the canonical naming target; the audit reports which exist, which are missing, and which need migration. Once audit lands, this table is updated with real Bitly URLs.
 
@@ -155,7 +154,7 @@ Any post referencing news, results, fixtures, or any time-sensitive fact within 
 This rule is candidate Standing Order #39, pending the freshness audit (`AUDIT-SCHEDULED-TASKS-FRESHNESS-01`). On audit landing, COO promotes to formal SO.
 
 ### Law 3 — Discovery surfaces are teaser-only
-WA Channel, IG, TikTok, LinkedIn, Threads, Website — none of these surfaces ever publish a full Gold or Diamond edge (team + bookmaker + odds). Safe envelopes:
+WA Channel, IG, TikTok, LinkedIn, Website — none of these surfaces ever publish a full Gold or Diamond edge (team + bookmaker + odds). Safe envelopes:
 - **Match + payout** (e.g. "Bangladesh vs Sri Lanka — R150 returns R300") — safe for any tier on any discovery surface
 - **Match name + tier badge** — safe
 - **Team + odds + bookmaker** — Gold/Diamond ONLY on private Delivery surfaces (Alerts for Gold, Bot DM for Diamond)
@@ -266,6 +265,7 @@ Any doc, memory file, brief, or skill that touches surfaces, CTAs, routing, or c
 
 ## 9. Version History
 
+- **v5.1 — 25 April 2026** — Threads decommissioned (was LIVE Discovery); Funnel C / WABA state shifted from DARK to BUILDING / LIVE-webhook (Meta Business Manager verified, WhatsApp templates approved, Cloud API webhook live per WA-CLOUD-API-01 commit 2026-04-24). Remaining Funnel C gates: BUILD-CAPI-01 + ad campaign approval. Bitly wrap set drops 11 → 10.
 - **v5 — 20 April 2026** — LOCKED. Adds IG Story link sticker, bio router page, content-type axis routing for Alerts vs Community split (Alerts = edge cards only, all news/wraps/premium → Community), Bitly enforcement law, 30-min freshness law, Top 5 Edges payout framing for WA Channel, single driving CTA `Full Edges On Telegram → [bitly]`. Supersedes v1–v4. Superbru wiped.
 - **v4 — 20 April 2026 (intermediate)** — Added Alerts content-type clarification (edge cards only).
 - **v3 — 20 April 2026 (intermediate)** — Added Top 5 Edges payout framing and single driving CTA.
