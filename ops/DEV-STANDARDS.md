@@ -100,6 +100,26 @@ Report evidence required: OCR raw text output + assertion results table (asserti
 
 ---
 
+### Multi-file refactor authoring discipline (LOCKED 2026-05-05)
+
+Briefs that modify >3 files MUST include exact OLD/NEW snippets per file in the AC body. Format:
+
+```
+File: path/to/file.py
+OLD:
+    <exact existing code line(s) to be replaced>
+NEW:
+    <exact replacement code line(s)>
+```
+
+- **Agent's job becomes find-and-replace, NOT discovery.** No grep, no exploration, minimal context accumulation.
+- File:line targets without OLD/NEW snippets are acceptable for single-file briefs OR for INV-class briefs where the agent must discover the bug. For mechanical FIX-class refactors touching >3 files, snippets are mandatory.
+- The brief author has already read the file; they include what they read in the brief. The agent does not re-discover.
+
+**Why:** autocompact thrash on multi-file refactors. Documented incident: `FIX-DBLOCK-RUNTIME-HOT-PATHS-01`, 12-minute thrash at 5% context. Each file in a multi-file refactor needs its own grep-then-read-then-edit cycle; brief-time discovery blows context faster than autocompact can recover.
+
+---
+
 ### Dispatch Format v4.2 (LOCKED — 28 April 2026, supersedes v4.1 — Pure Claude reconciliation)
 
 **This is the ONLY acceptable format for dispatching ANY brief (INV, BUILD, QA, FIX, investigation, marketing, SEO — all types, all agents: LEAD, COO, anyone else). Zero deviations. Any dispatch not matching this exact format will be rejected by Paul.**
