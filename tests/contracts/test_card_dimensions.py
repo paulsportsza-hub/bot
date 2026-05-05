@@ -95,6 +95,8 @@ LIST_TEMPLATES = {
     # FIX-ZERO-TEXT-EMPTY-STATES-01
     "edge_picks_empty.html",
     "live_games_empty.html",
+    # FIX-ZERO-TEXT-GUIDE-MENU-01
+    "guide_menu.html",
 }
 ALL_DECLARED = DETAIL_TEMPLATES | LIST_TEMPLATES
 

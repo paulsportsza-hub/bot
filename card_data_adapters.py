@@ -1415,3 +1415,22 @@ def build_live_games_empty_data() -> dict:
         "cta_line": "Tap ⚽ My Matches to get started",
         "header_logo_b64": _logo(),
     }
+
+
+# ── FIX-ZERO-TEXT-GUIDE-MENU-01 ──────────────────────────────────────────────
+
+_GUIDE_MENU_TOPICS: list[dict] = [
+    {"emoji": "💎", "title": "Edge Ratings", "description": "What do tiers mean?"},
+    {"emoji": "📶", "title": "Signals", "description": "What confirms a pick?"},
+    {"emoji": "🎯", "title": "How Edge-AI Works", "description": "Our method"},
+    {"emoji": "💰", "title": "Value Betting 101", "description": "EV in simple terms"},
+    {"emoji": "🏦", "title": "Bookmaker Quick Start", "description": "Place your first bet"},
+]
+
+
+def build_guide_menu_data() -> dict:
+    """Guide hub menu card — FIX-ZERO-TEXT-GUIDE-MENU-01."""
+    return {
+        "topics": _GUIDE_MENU_TOPICS,
+        "header_logo_b64": _logo(),
+    }

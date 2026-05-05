@@ -174,6 +174,7 @@ from card_data_adapters import (
     build_help_data,
     build_edge_picks_empty_data,
     build_live_games_empty_data,
+    build_guide_menu_data,
 )
 from narrative_spec import (
     _VERDICT_MAX_CHARS, _VERDICT_MIN_CHARS, _LLM_META_MARKERS, _reject_llm_meta_strings,
@@ -4615,10 +4616,17 @@ async def handle_menu(query, action: str) -> None:
 async def handle_guide(query, action: str) -> None:
     """Handle guide:* callbacks as a single edit-in-place education hub."""
     if action == "menu":
-        text, markup = _build_guide_menu_surface()
+        _, markup = _build_guide_menu_surface()
+        await send_card_or_fallback(
+            bot=_g_bot, chat_id=query.message.chat_id,
+            template="guide_menu.html", data=build_guide_menu_data(),
+            text_fallback="📖 Guide\n\nPick a topic:",
+            markup=markup,
+            message_to_edit=query.message,
+        )
     else:
         text, markup = _build_guide_topic_surface(action)
-    await _serve_response(query, text, markup)
+        await _serve_response(query, text, markup)
 
 
 # ── Sport / odds handlers ────────────────────────────────
@@ -6447,12 +6455,14 @@ async def _show_profile(update: Update, user_id: int) -> None:
 
 async def _show_betway_guide(update: Update) -> None:
     """Show the interactive guide hub from the sticky keyboard."""
-    text, markup = _build_guide_menu_surface()
-    await update.message.reply_text(
-        text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=markup,
-        disable_web_page_preview=True,
+    _, markup = _build_guide_menu_surface()
+    await send_card_or_fallback(
+        bot=_g_bot,
+        chat_id=update.message.chat_id,
+        template="guide_menu.html",
+        data=build_guide_menu_data(),
+        text_fallback="📖 Guide\n\nPick a topic:",
+        markup=markup,
     )
 
 

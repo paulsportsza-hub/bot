@@ -602,7 +602,7 @@ def test_story_quiz_complete_all_off():
 
 # ── FIX-ZERO-TEXT-EMPTY-STATES-01: empty-state card adapters ──────────────────
 
-from card_data_adapters import build_edge_picks_empty_data, build_live_games_empty_data
+from card_data_adapters import build_edge_picks_empty_data, build_live_games_empty_data, build_guide_menu_data
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
@@ -683,4 +683,42 @@ class TestLiveGamesEmptyData:
         d = build_live_games_empty_data()
         d["header_logo_b64"] = ""
         html = _render_template("live_games_empty.html", d)
+        assert "MzansiEdge" in html
+
+
+class TestGuideMenuData:
+    """Snapshot tests for guide_menu.html — FIX-ZERO-TEXT-GUIDE-MENU-01."""
+
+    def test_required_keys_present(self):
+        d = build_guide_menu_data()
+        assert "topics" in d
+        assert "header_logo_b64" in d
+
+    def test_topics_count(self):
+        d = build_guide_menu_data()
+        assert len(d["topics"]) == 5
+
+    def test_topics_have_required_fields(self):
+        d = build_guide_menu_data()
+        for topic in d["topics"]:
+            assert "emoji" in topic
+            assert "title" in topic
+            assert "description" in topic
+            assert topic["title"]
+            assert topic["description"]
+
+    def test_template_renders(self):
+        d = build_guide_menu_data()
+        html = _render_template("guide_menu.html", d)
+        assert "GUIDE" in html
+        assert "Edge Ratings" in html
+        assert "Signals" in html
+        assert "How Edge-AI Works" in html
+        assert "Value Betting 101" in html
+        assert "Bookmaker Quick Start" in html
+
+    def test_template_renders_without_logo(self):
+        d = build_guide_menu_data()
+        d["header_logo_b64"] = ""
+        html = _render_template("guide_menu.html", d)
         assert "MzansiEdge" in html

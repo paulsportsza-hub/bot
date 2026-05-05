@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; }
+
+        .header {
+            position: relative; text-align: center; padding: 20px 20px 14px;
+            isolation: isolate; overflow: hidden;
+        }
+        .logo-glow {
+            position: absolute; inset: -10px 0 0 0; pointer-events: none; z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #F7931A38 0%, #F7931A18 45%, #F7931A06 70%, transparent 100%);
+        }
+        .logo-glow-screen {
+            position: absolute; inset: 0; pointer-events: none; z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #F7931A66 0%, #F7931A22 50%, transparent 80%);
+        }
+        .header > .logo-img, .header > .logo-fallback,
+        .header > .orange-bar, .header > .title, .header > .subtitle { position: relative; z-index: 1; }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title {
+            font-size: 15px; font-weight: 700; color: #FFFFFF;
+            letter-spacing: 3px; margin-bottom: 5px;
+        }
+        .subtitle {
+            font-size: 11px; color: var(--text-secondary); font-weight: 400;
+        }
+
+        .body { padding: 14px 18px 18px; }
+
+        .topics { display: flex; flex-direction: column; gap: 8px; }
+
+        .topic-row {
+            display: flex; align-items: center; gap: 12px;
+            padding: 13px 14px;
+            background: #111111;
+            border: 1px solid #1E1E1E;
+            border-left: 3px solid #F7931A;
+            border-radius: 10px;
+        }
+        .topic-emoji {
+            font-size: 20px; flex-shrink: 0; width: 28px; text-align: center;
+        }
+        .topic-content { flex: 1; min-width: 0; }
+        .topic-title {
+            font-size: 13px; font-weight: 700; color: #FFFFFF;
+            margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .topic-desc {
+            font-size: 11px; color: var(--text-secondary); line-height: 1.4;
+        }
+        .topic-arrow {
+            font-size: 18px; color: #444; flex-shrink: 0; font-weight: 300;
+        }
+
+        .hint-line {
+            text-align: center;
+            font-size: 11px; color: var(--text-secondary);
+            padding-top: 10px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">GUIDE</div>
+        <div class="subtitle">Pick a topic below to learn more</div>
+    </div>
+
+    <div class="body">
+        <div class="topics">
+            {% for topic in topics %}
+            <div class="topic-row">
+                <span class="topic-emoji">{{ topic.emoji }}</span>
+                <div class="topic-content">
+                    <div class="topic-title">{{ topic.title | e }}</div>
+                    <div class="topic-desc">{{ topic.description | e }}</div>
+                </div>
+                <span class="topic-arrow">›</span>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="hint-line">Tap a topic below to learn more</div>
+    </div>
+</div>
+</body>
+</html>
