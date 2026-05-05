@@ -45,22 +45,25 @@ try:
     if _publisher_root not in _sys.path:
         _sys.path.insert(0, _publisher_root)
     from publisher.cadence import (
-        IG_REEL_SLOT       as _DASH_IG_REEL_SLOT,
-        TG_COMMUNITY_SLOT  as _DASH_TG_COMMUNITY_SLOT,
-        WA_CHANNEL_SLOT    as _DASH_WA_CHANNEL_SLOT,
+        IG_REEL_SLOT           as _DASH_IG_REEL_SLOT,
+        TG_COMMUNITY_SLOT      as _DASH_TG_COMMUNITY_SLOT,
+        WA_CHANNEL_SLOT        as _DASH_WA_CHANNEL_SLOT,
+        TG_COMMUNITY_HIT_SLOT  as _DASH_TG_HIT_SLOT,
     )
 except Exception:
     _DASH_IG_REEL_SLOT        = _DASH_REEL_SLOT_FALLBACK
     _DASH_TG_COMMUNITY_SLOT   = _DASH_TG_SLOT_FALLBACK
     _DASH_WA_CHANNEL_SLOT     = _DASH_WA_SLOT_FALLBACK
+    _DASH_TG_HIT_SLOT         = "09:00"
 
 
 def _cadence_slots_script() -> str:
     """Inject cadence slot constants as window.CADENCE_SLOTS for JS template use."""
     slots = {
-        "ig_reel":      _DASH_IG_REEL_SLOT,
-        "tg_community": _DASH_TG_COMMUNITY_SLOT,
-        "wa_channel":   _DASH_WA_CHANNEL_SLOT,
+        "ig_reel":                      _DASH_IG_REEL_SLOT,
+        "tg_community":                 _DASH_TG_COMMUNITY_SLOT,
+        "wa_channel":                   _DASH_WA_CHANNEL_SLOT,
+        "autogen_tg_winning_edge_hit":  _DASH_TG_HIT_SLOT,
     }
     return f'<script>window.CADENCE_SLOTS={json.dumps(slots)};</script>'
 
