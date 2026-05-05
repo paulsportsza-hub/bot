@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; }
+
+        .header {
+            position: relative; text-align: center; padding: 20px 20px 14px;
+            isolation: isolate; overflow: hidden;
+        }
+        .logo-glow {
+            position: absolute; inset: -10px 0 0 0; pointer-events: none; z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 60% 100% at 50% 30%,
+                #F7931A55 0%, #F7931A22 45%, #F7931A08 70%, transparent 100%);
+        }
+        .logo-glow-screen {
+            position: absolute; inset: 0; pointer-events: none; z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 36% 65% at 50% 30%,
+                #F7931A88 0%, #F7931A33 50%, transparent 80%);
+        }
+        .header > .logo-img, .header > .logo-fallback,
+        .header > .orange-bar, .header > .title, .header > .subline { position: relative; z-index: 1; }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .orange-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #FF6B00, #F7931A, #FFBE45);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title {
+            font-size: 14px; font-weight: 800; color: #F7931A; letter-spacing: 3px;
+            display: inline-flex; align-items: center; gap: 8px; justify-content: center;
+            margin-bottom: 5px;
+        }
+        .subline { font-size: 11px; color: var(--text-secondary); font-weight: 400; }
+
+        .body { padding: 16px 20px 18px; }
+
+        /* Price hero */
+        .price-hero {
+            position: relative;
+            text-align: center;
+            background: linear-gradient(135deg, #1A1200, #211800);
+            border: 1px solid #F7931A55;
+            border-left: 3px solid #F7931A; border-right: 3px solid #F7931A;
+            border-radius: 12px;
+            padding: 14px 16px 12px;
+            margin-bottom: 12px;
+            overflow: hidden; isolation: isolate;
+        }
+        .price-hero-glow {
+            position: absolute; inset: -30px -10px; pointer-events: none; z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 70% 100% at 50% 50%,
+                #F7931A30 0%, #F7931A10 50%, transparent 80%);
+        }
+        .price-hero > * { position: relative; z-index: 1; }
+        .price-label {
+            font-size: 10.5px; color: #F7931A; font-weight: 700;
+            letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px;
+        }
+        .price-amount {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 40px; font-weight: 700; color: #FFD700;
+            line-height: 1; letter-spacing: -1px;
+        }
+        .price-period { font-size: 13px; color: #FFBE45; font-weight: 600; margin-top: 4px; }
+
+        /* Slots row */
+        .slots-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 9px 14px;
+            background: #111111; border: 1px solid #1E1E1E; border-radius: 8px;
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+        .slots-label { color: var(--text-secondary); font-weight: 500; }
+        .slots-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+        }
+        .slots-value.ok { color: #5DD68F; }
+        .slots-value.low { color: #F7931A; }
+
+        /* Terms list */
+        .terms-list {
+            display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px;
+        }
+        .term {
+            display: flex; align-items: flex-start; gap: 9px;
+            padding: 8px 13px;
+            background: #111111; border: 1px solid #1E1E1E;
+            border-left: 3px solid #F7931A44; border-radius: 8px;
+            font-size: 11.5px; color: var(--text-secondary); line-height: 1.4;
+        }
+        .term-dot {
+            flex-shrink: 0; margin-top: 3px;
+            width: 6px; height: 6px; border-radius: 50%;
+            background: #F7931A;
+        }
+
+        /* Launch row */
+        .launch-row {
+            padding: 9px 14px;
+            background: #0F0F0F; border: 1px solid #2A2A2A; border-radius: 8px;
+            font-size: 11.5px; color: var(--text-secondary);
+            text-align: center;
+        }
+        .launch-row strong { color: #FFBE45; font-family: 'JetBrains Mono', monospace; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="orange-bar"></div>
+        <div class="title">🎁 FOUNDING MEMBER CHECKOUT</div>
+        <div class="subline">Read and confirm these terms before continuing</div>
+    </div>
+
+    <div class="body">
+        <div class="price-hero">
+            <div class="price-hero-glow"></div>
+            <div class="price-label">1 Year of 💎 Diamond Access</div>
+            <div class="price-amount">R{{ price_rands }}</div>
+            <div class="price-period">locked in for life as a founding member</div>
+        </div>
+
+        <div class="slots-row">
+            <span class="slots-label">Founding slots remaining</span>
+            <span class="slots-value {% if remaining > 10 %}ok{% else %}low{% endif %}">{{ remaining }} / {{ total_slots }}</span>
+        </div>
+
+        <div class="terms-list">
+            <div class="term">
+                <div class="term-dot"></div>
+                <span>Immediate Diamond access once payment is confirmed</span>
+            </div>
+            <div class="term">
+                <div class="term-dot"></div>
+                <span>Your founding price is preserved only while you stay continuously subscribed</span>
+            </div>
+            <div class="term">
+                <div class="term-dot"></div>
+                <span>If you cancel, you lose the founding price and rejoin at the then-current public price</span>
+            </div>
+            <div class="term">
+                <div class="term-dot"></div>
+                <span>Full refund available before launch · No refunds after launch</span>
+            </div>
+        </div>
+
+        <div class="launch-row">
+            Official launch date: <strong>{{ launch_date | e }}</strong>
+        </div>
+    </div>
+</div>
+</body>
+</html>

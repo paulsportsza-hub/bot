@@ -148,6 +148,8 @@ from card_data_adapters import (
     build_sub_founding_confirmed_data, build_sub_founding_soldout_data,
     build_sub_founding_ended_data, build_sub_founding_live_data,
     build_sub_expiry_notice_data, build_sub_trial_expiry_data,
+    build_sub_already_active_data, build_sub_plan_invalid_data,
+    build_sub_founding_disclosure_data,
     build_onboarding_welcome_data, build_onboarding_experience_data,
     build_onboarding_sports_data, build_onboarding_favourites_data,
     build_onboarding_favourites_manual_data, build_onboarding_fuzzy_suggest_data,
@@ -27589,10 +27591,20 @@ async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     user_tier = await get_effective_tier(user_id)
 
     if user_tier == "diamond":
-        await update.message.reply_text(
-            "✅ <b>You're already a 💎 Diamond member!</b>\n\n"
-            "Your subscription is active. Use /status to see details.",
-            parse_mode=ParseMode.HTML,
+        await send_card_or_fallback(
+            bot=update.get_bot(),
+            chat_id=update.effective_chat.id,
+            template="sub_already_active.html",
+            data=build_sub_already_active_data(tier=user_tier),
+            text_fallback=(
+                "✅ <b>You're already a 💎 Diamond member!</b>\n\n"
+                "Your subscription is active. Use /status to see details."
+            ),
+            markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 My Status", callback_data="sub:billing")],
+                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+            ]),
+            message_to_edit=None,
         )
         return ConversationHandler.END
 
@@ -27615,45 +27627,77 @@ async def _handle_sub_tier(query, plan_code: str) -> None:
     user_id = query.from_user.id
     product = config.STITCH_PRODUCTS.get(plan_code)
     if not product:
-        await query.edit_message_text(
-            "⚠️ Invalid plan. Use /subscribe to try again.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
-                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-            ]),
+        _pi_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+        ])
+        await send_card_or_fallback(
+            bot=query.get_bot(),
+            chat_id=query.message.chat_id,
+            template="sub_plan_invalid.html",
+            data=build_sub_plan_invalid_data(),
+            text_fallback="⚠️ Invalid plan. Use /subscribe to try again.",
+            markup=_pi_markup,
+            message_to_edit=query.message,
         )
         return
 
     db_user = await db.get_user(user_id)
     if product.get("founding") and db_user and getattr(db_user, "is_founding_member", False):
-        slot_number = getattr(db_user, "founding_slot_number", None)
-        await query.edit_message_text(
-            _founding_confirmation_text(int(slot_number or 0)),
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
-                [InlineKeyboardButton("📋 Status", callback_data="sub:billing")],
-            ]),
+        _slot_c = int(getattr(db_user, "founding_slot_number", None) or 0)
+        _mkp_fc = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Edge Picks", callback_data="hot:go")],
+            [InlineKeyboardButton("📋 Status", callback_data="sub:billing")],
+        ])
+        await send_card_or_fallback(
+            bot=query.get_bot(),
+            chat_id=query.message.chat_id,
+            template="sub_founding_confirmed.html",
+            data=build_sub_founding_confirmed_data(
+                slot_number=_slot_c,
+                founding_price_cents=config.FOUNDING_MEMBER_PRICE,
+            ),
+            text_fallback=_founding_confirmation_text(_slot_c),
+            markup=_mkp_fc,
+            message_to_edit=query.message,
         )
         return
 
     if product.get("founding"):
         remaining = await db.get_remaining_founding_slots()
         if remaining == 0:
-            await query.edit_message_text(
-                "⏰ <b>Founding slots are sold out</b>\n\n"
-                "The first 100 founding places have been taken.\n"
-                "Use /subscribe to see the current public plans.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
-                    [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
-                ]),
+            _mkp_so = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+                [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+            ])
+            await send_card_or_fallback(
+                bot=query.get_bot(),
+                chat_id=query.message.chat_id,
+                template="sub_founding_soldout.html",
+                data=build_sub_founding_soldout_data(),
+                text_fallback="⏰ Founding slots are sold out. Use /subscribe to see current plans.",
+                markup=_mkp_so,
+                message_to_edit=query.message,
             )
             return
+        _sold = await db.get_founding_member_count()
+        _remaining_slots = max(config.FOUNDING_MEMBER_SLOTS - _sold, 0)
         text, markup = await _build_founding_disclosure_surface()
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        await send_card_or_fallback(
+            bot=query.get_bot(),
+            chat_id=query.message.chat_id,
+            template="sub_founding_disclosure.html",
+            data=build_sub_founding_disclosure_data(
+                sold=_sold,
+                remaining=_remaining_slots,
+                total_slots=config.FOUNDING_MEMBER_SLOTS,
+                price_rands=config.FOUNDING_MEMBER_PRICE // 100,
+                launch_date=_founding_launch_date_label(),
+            ),
+            text_fallback=text,
+            markup=markup,
+            message_to_edit=query.message,
+        )
         _subscribe_state[user_id] = {"plan_code": plan_code, "disclosure_seen": True}
         analytics_track(user_id, "founding_disclosure_shown", {"plan": plan_code})
         return
@@ -27844,7 +27888,18 @@ async def _receive_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 async def cmd_subscribe_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel subscription flow."""
     _subscribe_state.pop(update.effective_user.id, None)
-    await update.message.reply_text("❌ Subscription cancelled.", parse_mode=ParseMode.HTML)
+    await send_card_or_fallback(
+        bot=update.get_bot(),
+        chat_id=update.effective_chat.id,
+        template="sub_cancel_done.html",
+        data=build_sub_cancel_done_data(),
+        text_fallback="❌ Subscription flow cancelled.",
+        markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✨ View Plans", callback_data="sub:plans")],
+            [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
+        ]),
+        message_to_edit=None,
+    )
     return ConversationHandler.END
 
 

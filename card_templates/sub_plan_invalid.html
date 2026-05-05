@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --text-secondary: #B3B3B3; }
+        html, body { margin: 0; padding: 0; background: #000000; }
+        body { font-family: 'Inter', -apple-system, system-ui, sans-serif; width: 480px; }
+        .card { width: 100%; background: #0A0A0A; }
+
+        .header {
+            position: relative; text-align: center; padding: 20px 20px 14px;
+            isolation: isolate; overflow: hidden;
+        }
+        .logo-glow {
+            position: absolute; inset: -10px 0 0 0; pointer-events: none; z-index: 0;
+            filter: blur(3px);
+            background: radial-gradient(ellipse 50% 90% at 50% 25%,
+                #FF525238 0%, #FF525218 45%, transparent 70%);
+        }
+        .logo-glow-screen {
+            position: absolute; inset: 0; pointer-events: none; z-index: 0;
+            mix-blend-mode: screen;
+            background: radial-gradient(ellipse 32% 60% at 50% 28%,
+                #FF525244 0%, #FF525218 50%, transparent 80%);
+        }
+        .header > .logo-img, .header > .logo-fallback,
+        .header > .red-bar, .header > .title, .header > .subline { position: relative; z-index: 1; }
+        .logo-img { height: 32px; width: auto; display: block; margin: 0 auto; }
+        .red-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #CC3333, #FF5252, #FF7070);
+            margin: 10px 20px; border-radius: 2px;
+        }
+        .title {
+            font-size: 14px; font-weight: 700; color: #FF5252;
+            letter-spacing: 3px; margin-bottom: 5px;
+        }
+        .subline { font-size: 11px; color: var(--text-secondary); font-weight: 400; }
+
+        .body { padding: 18px 20px 20px; }
+
+        .hero-block {
+            position: relative;
+            text-align: center;
+            background: #0F0F0F;
+            border: 1px solid #2A2A2A;
+            border-left: 3px solid #FF5252;
+            border-radius: 12px;
+            padding: 16px 18px 14px;
+            margin-bottom: 12px;
+            overflow: hidden; isolation: isolate;
+        }
+        .hero-glow {
+            position: absolute; inset: -30px -10px; pointer-events: none; z-index: 0;
+            filter: blur(20px);
+            background: radial-gradient(ellipse 50% 90% at 0% 50%,
+                #FF525220 0%, transparent 70%);
+        }
+        .hero-block > * { position: relative; z-index: 1; }
+
+        .hero-icon { font-size: 32px; line-height: 1; margin-bottom: 8px; }
+        .hero-title {
+            font-size: 17px; font-weight: 800; color: #FFFFFF;
+            margin-bottom: 4px; letter-spacing: -0.3px;
+        }
+        .hero-sub {
+            font-size: 12px; color: var(--text-secondary); line-height: 1.5;
+        }
+        .hero-sub code {
+            font-family: 'JetBrains Mono', monospace;
+            color: #F7931A; font-weight: 700;
+            background: #F7931A14;
+            padding: 1px 5px; border-radius: 3px;
+        }
+
+        .action-hint {
+            padding: 10px 14px;
+            background: #111111; border: 1px solid #1E1E1E;
+            border-left: 3px solid #F7931A; border-radius: 8px;
+            font-size: 12px; color: var(--text-secondary); line-height: 1.5;
+        }
+        .action-hint strong { color: #F7931A; font-weight: 700; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="header">
+        <div class="logo-glow"></div>
+        <div class="logo-glow-screen"></div>
+        {% if header_logo_b64 %}
+        <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+        {% else %}
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        {% endif %}
+        <div class="red-bar"></div>
+        <div class="title">INVALID PLAN</div>
+        <div class="subline">That plan code was not recognised</div>
+    </div>
+
+    <div class="body">
+        <div class="hero-block">
+            <div class="hero-glow"></div>
+            <div class="hero-icon">⚠️</div>
+            <div class="hero-title">Plan not found</div>
+            <div class="hero-sub">
+                That plan is no longer available or the link has expired.
+                Use <code>/subscribe</code> to browse current plans.
+            </div>
+        </div>
+
+        <div class="action-hint">
+            <strong>What to do:</strong> Tap "View Plans" below to see available Gold and Diamond subscriptions.
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -465,6 +465,58 @@ def build_sub_trial_expiry_data(
     }
 
 
+# ── 20: Already active (FIX-ZERO-TEXT-SUBSCRIBE-EDGE-CASES-01) ──────────────
+
+_TIER_COLORS: dict[str, str] = {
+    "bronze": "#CD7F32",
+    "silver": "#C0C0C0",
+    "gold": "#F7931A",
+    "diamond": "#B9F2FF",
+}
+_TIER_GLOWS: dict[str, str] = {
+    "bronze": "#CD7F3222",
+    "silver": "#C0C0C022",
+    "gold": "#F7931A22",
+    "diamond": "#B9F2FF22",
+}
+
+
+def build_sub_already_active_data(tier: str = "diamond") -> dict:
+    _tier = tier.lower()
+    return {
+        "tier_emoji": _TIER_EMOJIS.get(_tier, "🥉"),
+        "tier_name": _TIER_NAMES.get(_tier, _tier.title()),
+        "tier_color": _TIER_COLORS.get(_tier, "#F7931A"),
+        "tier_glow": _TIER_GLOWS.get(_tier, "#F7931A22"),
+        "header_logo_b64": _logo(),
+    }
+
+
+# ── 21: Plan invalid (FIX-ZERO-TEXT-SUBSCRIBE-EDGE-CASES-01) ─────────────────
+
+def build_sub_plan_invalid_data() -> dict:
+    return {"header_logo_b64": _logo()}
+
+
+# ── 22: Founding disclosure (FIX-ZERO-TEXT-SUBSCRIBE-EDGE-CASES-01) ──────────
+
+def build_sub_founding_disclosure_data(
+    sold: int = 0,
+    remaining: int = 100,
+    total_slots: int = 100,
+    price_rands: int = 699,
+    launch_date: str = "",
+) -> dict:
+    return {
+        "sold": sold,
+        "remaining": remaining,
+        "total_slots": total_slots,
+        "price_rands": price_rands,
+        "launch_date": launch_date,
+        "header_logo_b64": _logo(),
+    }
+
+
 # ── Wave 2: Onboarding card adapters (BUILD-WAVE2-ONBOARDING-01) ─────────────
 
 _RISK_DISPLAY = {
