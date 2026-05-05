@@ -64,6 +64,22 @@ def _direction_lead_pool(leads: tuple[str, ...], action: str) -> set[str]:
     return {f"{lead} — {action}." for lead in leads}
 
 
+def _favourable_pool_for_tier(tier: str, action: str) -> set[str]:
+    """Spec §12.3 favourable lead pool with tier-specific Bronze additions."""
+    leads = m._PRICE_LINE_FAVOURABLE_LEADS
+    if tier.lower() == "bronze":
+        leads = leads + m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY
+    return _direction_lead_pool(leads, action)
+
+
+def _against_pool_for_tier(tier: str, action: str) -> set[str]:
+    """Spec §12.4 against lead pool with tier-specific Bronze additions."""
+    leads = m._PRICE_LINE_AGAINST_LEADS
+    if tier.lower() == "bronze":
+        leads = leads + m._PRICE_LINE_AGAINST_BRONZE_ONLY
+    return _direction_lead_pool(leads, action)
+
+
 # Spec §12.1 — Price Edge + Form
 @pytest.mark.parametrize("tier,action,anchor", [
     ("diamond", _DIAMOND_ACTION, f"The price hasn't caught up and recent form backs it — {_DIAMOND_ACTION}."),
@@ -122,7 +138,7 @@ def test_combo_price_line_favourable(tier, action, anchor):
         odds="1.40", bookmaker="HWB",
         line_movement_direction="favourable",
     )
-    pool = _direction_lead_pool(m._PRICE_LINE_FAVOURABLE_LEADS, action)
+    pool = _favourable_pool_for_tier(tier, action)
     assert anchor in pool, "§12.3 favourable anchor must remain a pool member"
     assert out in pool, f"§12.3 favourable output {out!r} not in pool"
 
@@ -142,7 +158,7 @@ def test_combo_price_line_against(tier, action, anchor):
         odds="1.40", bookmaker="HWB",
         line_movement_direction="against",
     )
-    pool = _direction_lead_pool(m._PRICE_LINE_AGAINST_LEADS, action)
+    pool = _against_pool_for_tier(tier, action)
     assert anchor in pool, "§12.4 against anchor must remain a pool member"
     assert out in pool, f"§12.4 against output {out!r} not in pool"
 
@@ -1233,9 +1249,15 @@ def _ops_combo_pool(combo_key: str, tier: str) -> set[str]:
     if combo_key == "price_injury":
         return {f"{p} and {s} — {action}." for p in m.PRIMARY_PHRASES["price_edge"] for s in m.SECONDARY_PHRASES["injury"]}
     if combo_key == "price_line_favourable":
-        return {f"{lead} — {action}." for lead in m._PRICE_LINE_FAVOURABLE_LEADS}
+        leads = m._PRICE_LINE_FAVOURABLE_LEADS
+        if tier.lower() == "bronze":
+            leads = leads + m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY
+        return {f"{lead} — {action}." for lead in leads}
     if combo_key == "price_line_against":
-        return {f"{lead} — {action}." for lead in m._PRICE_LINE_AGAINST_LEADS}
+        leads = m._PRICE_LINE_AGAINST_LEADS
+        if tier.lower() == "bronze":
+            leads = leads + m._PRICE_LINE_AGAINST_BRONZE_ONLY
+        return {f"{lead} — {action}." for lead in leads}
     if combo_key == "form_only":
         return {f"{p} — {action}." for p in m.PRIMARY_PHRASES["form"]}
     if combo_key == "market_only":
@@ -1870,12 +1892,19 @@ def test_section12_anchors_remain_reachable_in_pools():
     # §12.2 Price Edge + Injury → primary same + secondary "team news
     #       gives it extra weight"
     assert "team news gives it extra weight" in m.SECONDARY_PHRASES["injury"]
-    # §12.3 Price Edge + Line Mvt favourable → "The line is moving our
-    #       way and the price is still there"
-    assert "The line is moving our way and the price is still there" in m._PRICE_LINE_FAVOURABLE_LEADS
-    # §12.4 Price Edge + Line Mvt against → "The market has moved, but
-    #       the price still looks big"
-    assert "The market has moved, but the price still looks big" in m._PRICE_LINE_AGAINST_LEADS
+    # §12.3 Price Edge + Line Mvt favourable: tier-shared anchors
+    assert "The line is moving our way and the price is still there" in m._PRICE_LINE_FAVOURABLE_LEADS  # §12.3-D
+    assert "The line is moving our way and the price still looks fair" in m._PRICE_LINE_FAVOURABLE_LEADS  # §12.3-G
+    # §12.3-Bronze unique anchor lives in its own pool (Diamond/Gold/Silver
+    # must NOT pick this — the "with a little value left" framing is
+    # weaker than the higher-tier anchors authorise).
+    assert "Small move this way with a little value left" in m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY
+    assert "Small move this way with a little value left" not in m._PRICE_LINE_FAVOURABLE_LEADS
+    # §12.4 Price Edge + Line Mvt against
+    assert "The market has moved, but the price still looks big" in m._PRICE_LINE_AGAINST_LEADS  # §12.4-D
+    assert "The line has shifted, but there is still value here" in m._PRICE_LINE_AGAINST_LEADS  # §12.4-G
+    assert "The price has moved, but there is still a small lean" in m._PRICE_LINE_AGAINST_BRONZE_ONLY  # §12.4-B
+    assert "The price has moved, but there is still a small lean" not in m._PRICE_LINE_AGAINST_LEADS
     # §12.5 Form-only → "Recent form backs this"
     assert "Recent form backs this" in m.PRIMARY_PHRASES["form"]
     # §12.6 Market-only → "The wider market is leaning this way"
@@ -1901,7 +1930,9 @@ def test_banned_term_sweep_all_pool_entries_individually():
         **{f"PRIMARY[{k}]": v for k, v in m.PRIMARY_PHRASES.items()},
         **{f"SECONDARY[{k}]": v for k, v in m.SECONDARY_PHRASES.items()},
         "_PRICE_LINE_FAVOURABLE_LEADS": m._PRICE_LINE_FAVOURABLE_LEADS,
+        "_PRICE_LINE_FAVOURABLE_BRONZE_ONLY": m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY,
         "_PRICE_LINE_AGAINST_LEADS":    m._PRICE_LINE_AGAINST_LEADS,
+        "_PRICE_LINE_AGAINST_BRONZE_ONLY": m._PRICE_LINE_AGAINST_BRONZE_ONLY,
         **{f"_FALLBACK[{tier}]": v for tier, v in m._FALLBACK_BY_TIER.items()},
     }
     for pool_name, pool in pools.items():
@@ -1964,6 +1995,79 @@ def test_paul_4_card_regression():
 # would collapse simultaneous draw cards to identical hashes despite
 # different fixtures. This test pins the reconstruction by exercising the
 # full render_verdict path on multiple draw specs.
+
+# Codex adversarial-review pass-3 Finding #1 — Bronze-specific Price+Line
+# anchors must not surface for Diamond / Gold / Silver tier actions
+# (tier-contract violation: weak Bronze framing in front of Diamond
+# "go big" close).
+
+@pytest.mark.parametrize("tier", ["diamond", "gold", "silver"])
+def test_bronze_only_directional_anchors_never_surface_for_higher_tiers(tier):
+    """Tier-contract guard: §12.3-Bronze "Small move..." and §12.4-Bronze
+    "...there is still a small lean" must not render for Diamond, Gold, or
+    Silver. Higher tiers carry stronger action language and the Bronze
+    framing reads weak in front of "go big" / "back" / "lean" closes.
+    """
+    bronze_only_phrases = (
+        list(m._PRICE_LINE_FAVOURABLE_BRONZE_ONLY)
+        + list(m._PRICE_LINE_AGAINST_BRONZE_ONLY)
+    )
+    for direction in ("favourable", "against"):
+        for mk_idx in range(50):
+            out = m.build_verdict(
+                team="Pick", tier=tier,
+                signals={"price_edge": True, "line_mvt": True},
+                odds="2.10", bookmaker="Betway",
+                line_movement_direction=direction,
+                match_key=f"sweep_match_{mk_idx:03d}",
+            )
+            for phrase in bronze_only_phrases:
+                assert phrase not in out, (
+                    f"Bronze-only phrase {phrase!r} leaked into {tier} "
+                    f"{direction} render: {out!r}"
+                )
+
+
+def test_bronze_directional_anchors_reachable_for_bronze_tier():
+    """Positive control — Bronze tier must have access to its own
+    spec-authored §12.3-B / §12.4-B anchors.
+    """
+    bronze_favourable_anchor = "Small move this way with a little value left"
+    bronze_against_anchor = "The price has moved, but there is still a small lean"
+    found_favourable = False
+    found_against = False
+    # Sweep enough match_keys to land on the bronze-only entries.
+    for mk_idx in range(200):
+        mk = f"bronze_sweep_{mk_idx:03d}"
+        out_fav = m.build_verdict(
+            team="Pick", tier="bronze",
+            signals={"price_edge": True, "line_mvt": True},
+            odds="2.10", bookmaker="Betway",
+            line_movement_direction="favourable",
+            match_key=mk,
+        )
+        if bronze_favourable_anchor in out_fav:
+            found_favourable = True
+        out_ag = m.build_verdict(
+            team="Pick", tier="bronze",
+            signals={"price_edge": True, "line_mvt": True},
+            odds="2.10", bookmaker="Betway",
+            line_movement_direction="against",
+            match_key=mk,
+        )
+        if bronze_against_anchor in out_ag:
+            found_against = True
+        if found_favourable and found_against:
+            break
+    assert found_favourable, (
+        f"§12.3-B anchor {bronze_favourable_anchor!r} unreachable for Bronze tier "
+        f"after 200 match_keys"
+    )
+    assert found_against, (
+        f"§12.4-B anchor {bronze_against_anchor!r} unreachable for Bronze tier "
+        f"after 200 match_keys"
+    )
+
 
 def test_draw_fixtures_render_distinct_verdicts_via_render_verdict():
     """Codex adversarial-review fix — simultaneous draw picks across

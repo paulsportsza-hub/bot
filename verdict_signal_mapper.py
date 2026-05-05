@@ -162,33 +162,42 @@ SECONDARY_PHRASES: dict[str, tuple[str, ...]] = {
 
 
 # Special-case Price Edge + Line Movement leads (spec §12.3 / §12.4).
-# Pool entries combine §6.2 phrasings with the "and the price ..." tails
-# from §12.3 and the contrast tails from §12.4. Spec-authored anchors
-# reachable per direction:
-#   §12.3 Diamond — "...and the price is still there"
-#   §12.3 Gold    — "...and the price still looks fair"
-#   §12.3 Bronze  — "Small move this way with a little value left" (Bronze
-#                    cell carries unique phrasing not built from §6.2)
-#   §12.4 Diamond — "The market has moved, but the price still looks big"
-#   §12.4 Gold    — "The line has shifted, but there is still value here"
-#   §12.4 Bronze  — "The price has moved, but there is still a small lean"
-# §12.3 Silver and §12.4 Silver carry single-clause phrasings that are
-# reachable via the standard primary+secondary path when direction
-# normalisation drops to "unknown"; preserving them as direction-pool leads
-# is intentionally not done here to keep the price+line composite framing
-# tight. Pool sizes: favourable=6, against=4.
+# Two-layer pool: a tier-agnostic "generic" set that's safe for Diamond /
+# Gold / Silver tier-action closes (the §6.2 alternates joined with the
+# §12.3 / §12.4 tier-anchor tails), and per-tier additions that ONLY
+# surface for tiers where the spec authored the unique phrasing — so a
+# Diamond "go big" close never opens with the Bronze-specific weaker
+# framing "Small move this way..." or "...there is still a small lean"
+# (Codex adversarial-review pass-3, 2026-05-05). Spec-authored anchors
+# reachable per (direction, tier):
+#   §12.3 Diamond  — "...and the price is still there"
+#   §12.3 Gold     — "...and the price still looks fair"
+#   §12.3 Bronze   — "Small move this way with a little value left"
+#   §12.4 Diamond  — "The market has moved, but the price still looks big"
+#   §12.4 Gold     — "The line has shifted, but there is still value here"
+#   §12.4 Bronze   — "The price has moved, but there is still a small lean"
+# §12.3 Silver and §12.4 Silver are single-clause phrasings without the
+# composite price+line shape; left out here because the standard
+# primary+secondary path (PRIMARY[price_edge] × SECONDARY[line_mvt]) is
+# the natural route for those cells. Pool sizes per tier:
+#   favourable: D/G/S = 5, B = 5+1 = 6
+#   against:    D/G/S = 3, B = 3+1 = 4
 _PRICE_LINE_FAVOURABLE_LEADS: tuple[str, ...] = (
     "The line is moving our way and the price is still there",
     "The line is moving our way and the price still looks fair",
     "The move is starting to follow this side and the price is still there",
     "The market is beginning to move this way and the price is still there",
     "The line movement backs the pick and the price is still there",
+)
+_PRICE_LINE_FAVOURABLE_BRONZE_ONLY: tuple[str, ...] = (
     "Small move this way with a little value left",
 )
 _PRICE_LINE_AGAINST_LEADS: tuple[str, ...] = (
     "The market has moved, but the price still looks big",
     "The line has shifted, but there is still value here",
     "The price has moved, but not enough to kill the play",
+)
+_PRICE_LINE_AGAINST_BRONZE_ONLY: tuple[str, ...] = (
     "The price has moved, but there is still a small lean",
 )
 # Direction "unknown" is NOT anchored in spec §12 (only §12.3 favourable
@@ -431,13 +440,17 @@ def build_verdict(
     if norm["price_edge"] and norm["line_mvt"]:
         direction = (line_movement_direction or "").strip().lower()
         if direction == "against":
-            lead = _pick_variant(
-                _PRICE_LINE_AGAINST_LEADS, salt_key, "price_line_against"
-            )
+            against_pool = _PRICE_LINE_AGAINST_LEADS
+            if tier_key == "bronze":
+                against_pool = against_pool + _PRICE_LINE_AGAINST_BRONZE_ONLY
+            lead = _pick_variant(against_pool, salt_key, "price_line_against")
             return f"{lead} — {action}."
         if direction in ("favourable", "for"):
+            favourable_pool = _PRICE_LINE_FAVOURABLE_LEADS
+            if tier_key == "bronze":
+                favourable_pool = favourable_pool + _PRICE_LINE_FAVOURABLE_BRONZE_ONLY
             lead = _pick_variant(
-                _PRICE_LINE_FAVOURABLE_LEADS, salt_key, f"price_line_favourable|{tier_key}"
+                favourable_pool, salt_key, f"price_line_favourable|{tier_key}"
             )
             return f"{lead} — {action}."
         # Direction unknown / neutral / None — fall through to the standard
