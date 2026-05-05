@@ -9,7 +9,8 @@ BUILD-QA-RUBRIC-RUNNER-01 — Phase C
   CardOCRV2 (a superset of CardOCR).  The ground-truth suite is unaffected
   because it imports vision_ocr.ocr_card() directly, never this bridge.
 
-OCR_PROMPT is immutable per SO #30.  V2 is a new constant in ocr_prompt.py.
+OCR_PROMPT is immutable per SO #47 (renumbered from #30 — see ops/SO-CATALOG.md).
+V2 is a new constant in ocr_prompt.py.
 """
 from __future__ import annotations
 

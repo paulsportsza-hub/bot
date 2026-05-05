@@ -35,7 +35,7 @@ Rules:
 """
 
 # ── V2 prompt — backward-compatible extension ───────────────────────────────
-# OCR_PROMPT is IMMUTABLE (SO #30). Add new prompts as new constants only.
+# OCR_PROMPT is IMMUTABLE (SO #47, renumbered from #30 — see ops/SO-CATALOG.md). Add new prompts as new constants only.
 # Switch via config.USE_OCR_V2. Ground-truth suite continues to use OCR_PROMPT (V1).
 
 OCR_PROMPT_V2 = """You are reading a delivered MzansiEdge betting card screenshot.
