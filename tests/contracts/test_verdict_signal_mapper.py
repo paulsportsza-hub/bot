@@ -221,19 +221,28 @@ def test_combo_tipster_only(tier, action, anchor):
 
 
 # Spec §12.8 — No-strong-signals fallback
-@pytest.mark.parametrize("tier,expected_lead", [
+@pytest.mark.parametrize("tier,anchor", [
     ("diamond", "The price still looks too big for the setup"),
     ("gold",    "There is enough value here to support the pick"),
     ("silver",  "There is just enough value here"),
     ("bronze",  "Not much in it, but there is a small lean"),
 ])
-def test_combo_no_signals_fallback(tier, expected_lead):
-    """§12.8 — empty signals dict per tier → tier-specific fallback lead."""
+def test_combo_no_signals_fallback(tier, anchor):
+    """§12.8 — empty signals dict per tier renders a tier-fallback lead.
+
+    FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01 (Codex pass-4): pool
+    expanded from 1 to 3 entries per tier. Output must lead with one of
+    the pool members; the §12.8 anchor remains at index 0.
+    """
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={}, odds="1.40", bookmaker="HWB",
     )
-    assert out.startswith(expected_lead)
+    pool_leads = m._FALLBACK_BY_TIER[tier]
+    assert anchor in pool_leads, "§12.8 anchor must remain a pool member"
+    assert any(out.startswith(lead) for lead in pool_leads), (
+        f"Tier {tier} output {out!r} does not lead with a §12.8 pool member"
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -1320,8 +1329,10 @@ def test_ops_signal_exposure_native_path_8_combos(combo_key, tier):
         f"SECTION12-BUCKET-01)"
     )
     if combo_key == "no_signals_fallback":
-        assert out.startswith(_TIER_FALLBACK_LEADS[tier]), (
-            f"Tier {tier} fallback should lead with §12.8 phrase; got: {out!r}"
+        # §12.8 expanded to 3 alternates per tier (Codex pass-4); output
+        # must lead with one of them.
+        assert any(out.startswith(lead) for lead in m._FALLBACK_BY_TIER[tier]), (
+            f"Tier {tier} fallback should lead with a §12.8 pool member; got: {out!r}"
         )
     else:
         # §12.X anchor phrasing must remain a pool member (regression guard).
@@ -1373,7 +1384,7 @@ def test_ops_signal_exposure_full_reachability_96_cases(combo_key, tier, sport):
         f"in pool of {len(pool)} valid phrasings"
     )
     if combo_key == "no_signals_fallback":
-        assert out.startswith(_TIER_FALLBACK_LEADS[tier])
+        assert any(out.startswith(lead) for lead in m._FALLBACK_BY_TIER[tier])
     else:
         # §12.X anchor lead must remain reachable as a pool member.
         assert expected_lead is not None  # type guard
@@ -1911,11 +1922,18 @@ def test_section12_anchors_remain_reachable_in_pools():
     assert "The wider market is leaning this way" in m.PRIMARY_PHRASES["market"]
     # §12.7 Tipster-only → "Outside support points this way"
     assert "Outside support points this way" in m.PRIMARY_PHRASES["tipster"]
-    # §12.8 fallback by tier — single-entry pools per spec.
-    assert m._FALLBACK_BY_TIER["diamond"] == ("The price still looks too big for the setup",)
-    assert m._FALLBACK_BY_TIER["gold"] == ("There is enough value here to support the pick",)
-    assert m._FALLBACK_BY_TIER["silver"] == ("There is just enough value here",)
-    assert m._FALLBACK_BY_TIER["bronze"] == ("Not much in it, but there is a small lean",)
+    # §12.8 fallback by tier — anchors remain pool members; pool depth
+    # expanded with editorial alternates after Codex pass-4 (single-phrase
+    # pools couldn't satisfy the brief's 4-card variety contract).
+    assert m._FALLBACK_BY_TIER["diamond"][0] == "The price still looks too big for the setup"
+    assert m._FALLBACK_BY_TIER["gold"][0]    == "There is enough value here to support the pick"
+    assert m._FALLBACK_BY_TIER["silver"][0]  == "There is just enough value here"
+    assert m._FALLBACK_BY_TIER["bronze"][0]  == "Not much in it, but there is a small lean"
+    for tier in ("diamond", "gold", "silver", "bronze"):
+        assert len(m._FALLBACK_BY_TIER[tier]) >= 4, (
+            f"§12.8 {tier} pool depth {len(m._FALLBACK_BY_TIER[tier])} < 4 — "
+            f"variety contract for 4-card simultaneous fallback violated"
+        )
 
 
 # Banned-term sweep — every pool entry × every cartesian combo must clear

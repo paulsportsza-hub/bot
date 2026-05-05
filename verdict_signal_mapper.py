@@ -360,14 +360,41 @@ def pick_secondary(signals: Mapping[str, bool], primary: str | None) -> str | No
 
 # ── Fallback leads (spec §12.8) ────────────────────────────────────────────
 # Tier-specific fallback leads. Spec §12.8 authors a single phrase per
-# tier (no §6 alternate fallback phrasings). Tuples kept for shape parity
-# with the §6-backed pools, single-entry pools short-circuit in
-# :func:`_pick_variant`.
+# tier; the brief's variety contract for ≥3 distinct primaries across 4
+# simultaneous cards requires pool depth >= 3, which single-entry pools
+# cannot provide (Codex adversarial-review pass-4, 2026-05-05). Each tier
+# extends the spec anchor with two editorial alternates that:
+#   - keep the no-strong-signals editorial framing of §12.8 (generic
+#     "value/edge in the setup" language, no signal-specific claims)
+#   - clear the §15.1 banned-term and §15.2 live-commentary scanners
+#   - mirror the tier conviction the §12.8 anchor sets (Diamond strong /
+#     Gold supporting / Silver thin / Bronze marginal)
+# The §12.8 anchor stays at index 0 of each tuple (regression guard).
 _FALLBACK_BY_TIER: dict[str, tuple[str, ...]] = {
-    "diamond": ("The price still looks too big for the setup",),
-    "gold":    ("There is enough value here to support the pick",),
-    "silver":  ("There is just enough value here",),
-    "bronze":  ("Not much in it, but there is a small lean",),
+    "diamond": (
+        "The price still looks too big for the setup",
+        "There is real edge in the price right now",
+        "The setup still favours the play at this price",
+        "The price still has plenty behind it for this play",
+    ),
+    "gold": (
+        "There is enough value here to support the pick",
+        "There is enough behind this lean to back it",
+        "The setup gives this side enough support",
+        "The price still favours backing this side",
+    ),
+    "silver": (
+        "There is just enough value here",
+        "There is a slim but live edge to lean on",
+        "The setup leaves a small edge for this side",
+        "The lean is thin but still live at this price",
+    ),
+    "bronze": (
+        "Not much in it, but there is a small lean",
+        "There is a small edge worth a measured play",
+        "Light value, but the lean is still there",
+        "A small angle is worth a measured play here",
+    ),
 }
 
 

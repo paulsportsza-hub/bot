@@ -1611,6 +1611,15 @@ class NarrativeSpec:
     signals: dict[str, bool] = field(default_factory=dict)
     line_movement_direction: str | None = None  # "favourable" / "against" / "unknown" / None
 
+    # FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01 (Codex pass-4): the
+    # canonical edge_results match_key used for hash-distributed verdict
+    # phrasing in verdict_signal_mapper. Populated by build_narrative_spec
+    # from edge_data["match_key"] so the verdict mapper's _pick_variant
+    # gets the same fixture-level discriminator the corpus _pick uses.
+    # Empty string is the back-compat sentinel; verdict_corpus.render_verdict
+    # falls back to "{home_name}|{away_name}" reconstruction in that case.
+    match_key: str = ""
+
     # Raw scaffold (for LLM grounding in Stage 3)
     scaffold: str = ""
 
@@ -2311,6 +2320,7 @@ def build_narrative_spec(
             edge_data.get("line_movement_direction"),
             fallback=edge_data.get("movement_direction"),
         ),
+        match_key=str(edge_data.get("match_key") or "").strip(),
         scaffold=scaffold,
         venue=str(ctx_data.get("venue", "") or "").strip(),
     )
