@@ -1808,51 +1808,6 @@ async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-# ── /odds ─────────────────────────────────────────────────
-
-async def cmd_odds(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    rows: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for lg_key, api_key in config.SPORTS_MAP.items():
-        lg = config.ALL_LEAGUES.get(lg_key)
-        sport_key = config.LEAGUE_SPORT.get(lg_key)
-        sport = config.ALL_SPORTS.get(sport_key) if sport_key else None
-        emoji = sport.emoji if sport else "🏅"
-        label = lg.label if lg else lg_key
-        row.append(InlineKeyboardButton(f"{emoji} {label}", callback_data=f"sport:{lg_key}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    kb = InlineKeyboardMarkup(rows)
-    await update.message.reply_text(
-        "<b>Choose a sport to view odds:</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb,
-    )
-
-
-# ── /tip ──────────────────────────────────────────────────
-
-async def cmd_tip(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    rows: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for s in config.SPORTS:
-        row.append(InlineKeyboardButton(f"{s.emoji} {s.label}", callback_data=f"ai:{s.key}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    kb = InlineKeyboardMarkup(rows)
-    await update.message.reply_text(
-        "<b>Choose a sport for an AI tip:</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb,
-    )
-
-
 # ── Callback router ──────────────────────────────────────
 
 async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -13251,8 +13206,8 @@ async def _run_spinner(message, text: str, stop_event: asyncio.Event, max_second
 
 
 async def cmd_picks(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Legacy /picks → redirects to Hot Tips."""
-    await _show_hot_tips(update, ctx, update.effective_user.id)
+    """Legacy /picks → forwards to DigestMessage image card."""
+    await cmd_today(update, ctx)
 
 
 async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -24891,25 +24846,6 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
-# ── Admin: /stats ─────────────────────────────────────────
-
-async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id not in config.ADMIN_IDS:
-        return
-    count = await db.get_user_count()
-    tips = await db.get_recent_tips(limit=100)
-    wins = sum(1 for t in tips if t.result == "win")
-    losses = sum(1 for t in tips if t.result == "loss")
-    pending = sum(1 for t in tips if t.result is None or t.result == "pending")
-    text = textwrap.dedent(f"""\
-        <b>📊 Admin Stats</b>
-
-        👥 Users: <b>{count}</b>
-        📝 Tips: <b>{len(tips)}</b>
-        ✅ Wins: <b>{wins}</b> | ❌ Losses: <b>{losses}</b> | ⏳ Pending: <b>{pending}</b>
-    """)
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-
 
 # ── Edge Tracker / Results ────────────────────────────────
 
@@ -31561,15 +31497,12 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("odds", cmd_odds))
-    app.add_handler(CommandHandler("tip", cmd_tip))
     app.add_handler(CommandHandler("picks", cmd_picks))
     app.add_handler(CommandHandler("tips", cmd_picks))
     app.add_handler(CommandHandler("today", cmd_today))  # P3-02: DigestMessage
     app.add_handler(CommandHandler("schedule", cmd_schedule))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("admin", cmd_admin))
-    app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("upgrade", cmd_upgrade))
     app.add_handler(CommandHandler("billing", cmd_billing))

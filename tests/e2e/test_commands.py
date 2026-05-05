@@ -22,8 +22,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 # All commands registered in main()
 REGISTERED_COMMANDS = [
-    "start", "menu", "help", "odds", "tip", "picks", "tips",
-    "schedule", "settings", "admin", "stats", "status", "upgrade",
+    "start", "menu", "help", "picks", "tips",
+    "schedule", "settings", "admin", "status", "upgrade",
     "billing", "founding", "restart_trial", "results", "track",
     "mute", "unmute", "quiet", "qa", "subscribe", "feedback",
 ]
@@ -40,14 +40,11 @@ class TestCommandHandlersExist:
             "start": "cmd_start",
             "menu": "cmd_menu",
             "help": "cmd_help",
-            "odds": "cmd_odds",
-            "tip": "cmd_tip",
             "picks": "cmd_picks",
             "tips": "cmd_picks",  # alias
             "schedule": "cmd_schedule",
             "settings": "cmd_settings",
             "admin": "cmd_admin",
-            "stats": "cmd_stats",
             "status": "cmd_status",
             "upgrade": "cmd_upgrade",
             "billing": "cmd_billing",
@@ -73,7 +70,7 @@ class TestCommandHandlersExist:
         import bot
         async_handlers = [
             "cmd_start", "cmd_menu", "cmd_help", "cmd_picks",
-            "cmd_settings", "cmd_stats", "cmd_results", "cmd_mute",
+            "cmd_settings", "cmd_results", "cmd_mute",
             "cmd_subscribe", "cmd_qa",
         ]
         for name in async_handlers:
