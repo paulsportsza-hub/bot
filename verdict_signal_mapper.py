@@ -159,13 +159,13 @@ SECONDARY_PHRASES: dict[str, tuple[str, ...]] = {
 
 # Special-case Price Edge + Line Movement leads (spec §12.3 / §12.4).
 # Pool entries built by composing §6.2 phrasings with the "and the price ..."
-# tail used in spec §12.3 anchors. The first entry per pool is the spec
-# §12.X Diamond-tier anchor; remaining entries are §6.2 alternates joined
-# with a price-still-there tail so the composite still reads as a Price+Line
-# Mvt sentence (§12.3 Gold tier uses "and the price still looks fair" — both
-# variants are reachable). Pool sizes: favourable=4, against=3.
+# tail used in spec §12.3 anchors. Both spec-authored §12.3 anchors are
+# reachable: §12.3 Diamond uses "and the price is still there", §12.3 Gold
+# uses "and the price still looks fair" — both variants live in the pool
+# below. Pool sizes: favourable=5, against=3.
 _PRICE_LINE_FAVOURABLE_LEADS: tuple[str, ...] = (
     "The line is moving our way and the price is still there",
+    "The line is moving our way and the price still looks fair",
     "The move is starting to follow this side and the price is still there",
     "The market is beginning to move this way and the price is still there",
     "The line movement backs the pick and the price is still there",

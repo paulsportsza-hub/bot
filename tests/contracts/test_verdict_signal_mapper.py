@@ -1955,3 +1955,64 @@ def test_paul_4_card_regression():
         f"All {len(outputs)} cards still start with monoculture prefix "
         f"{monoculture_prefix!r} — fix did not land."
     )
+
+
+# Codex adversarial-review Finding #1 (2026-05-05) — draw-fixture regression.
+# NarrativeSpec carries no match_key field, so render_verdict reconstructs
+# one from "{home_name}|{away_name}". For draw picks outcome_label is always
+# "the draw"; without the home/away reconstruction the team-salt fallback
+# would collapse simultaneous draw cards to identical hashes despite
+# different fixtures. This test pins the reconstruction by exercising the
+# full render_verdict path on multiple draw specs.
+
+def test_draw_fixtures_render_distinct_verdicts_via_render_verdict():
+    """Codex adversarial-review fix — simultaneous draw picks across
+    different fixtures must produce different verdict text. The spec's
+    outcome_label="the draw" makes team-salt fallback collide; the
+    home/away match_key reconstruction in render_verdict prevents this.
+    """
+    import importlib
+    import verdict_corpus as _vc
+    importlib.reload(_vc)
+
+    draws = [
+        ("Arsenal",         "Tottenham"),
+        ("Liverpool",       "Chelsea"),
+        ("Manchester City", "Brentford"),
+        ("Newcastle",       "Aston Villa"),
+    ]
+    outputs: list[str] = []
+    primaries = set()
+    for home, away in draws:
+        spec = _FakeSpec(
+            edge_tier="gold",
+            outcome="draw",
+            outcome_label="the draw",
+            home_name=home,
+            away_name=away,
+            odds=3.40,
+            bookmaker="HWB",
+            ev_pct=5.5,
+            movement_direction="for",  # → favourable; hits §12.3 pool
+            bookmaker_count=4,
+            tipster_available=False,
+            tipster_agrees=None,
+            home_form="WDLDW",
+            away_form="LWDLW",
+            injuries_home=[],
+            injuries_away=[],
+            signals={"price_edge": True, "line_mvt": True},
+            line_movement_direction="favourable",
+            match_key="",  # critical: no spec-level match_key forces home/away reconstruction
+        )
+        out = _vc.render_verdict(cast("verdict_corpus.NarrativeSpec", spec))
+        outputs.append(out)
+        primaries.add(_primary_lead_of(out))
+    # All draw specs share team salt ("the draw"), tier (gold), signal combo
+    # (price+line favourable), and direction (favourable). Without the
+    # home/away match_key reconstruction every output would be identical.
+    # The reconstruction yields ≥2 distinct §12.3 favourable leads (pool=5).
+    assert len(primaries) >= 2, (
+        f"Draw-fixture monoculture: only {len(primaries)} distinct primaries "
+        f"across 4 draw fixtures.\n" + "\n".join(outputs)
+    )

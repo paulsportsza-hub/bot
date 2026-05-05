@@ -934,6 +934,23 @@ def render_verdict(spec: "NarrativeSpec") -> str:
             ).strip()
             odds_val = float(getattr(spec, "odds", 0) or 0)
             bookmaker_val = (getattr(spec, "bookmaker", "") or "").strip()
+            # FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01: NarrativeSpec
+            # has no match_key field, so we reconstruct one from home/away
+            # the same way the legacy corpus path (line 1028-1031 below)
+            # does. Without this, draw picks collapse to outcome_label="the
+            # draw" salt and simultaneous draw cards re-monoculture; non-draw
+            # picks fall back to team-salt which has identical-team
+            # collisions across competition slates. Mirrors verdict_corpus
+            # ._pick keying so corpus and signal-mapper share the same
+            # match-level entropy source.
+            mapper_match_key = (
+                (getattr(spec, "match_key", "") or "").strip()
+                or "|".join(filter(None, (
+                    (getattr(spec, "home_name", "") or "").strip(),
+                    (getattr(spec, "away_name", "") or "").strip(),
+                )))
+                or None
+            )
             mapped = _build_signal_verdict(
                 team=team_for_action,
                 tier=tier,
@@ -941,7 +958,7 @@ def render_verdict(spec: "NarrativeSpec") -> str:
                 odds=(f"{odds_val:.2f}" if odds_val > 0 else None),
                 bookmaker=bookmaker_val or None,
                 line_movement_direction=_spec_movement_direction(spec),
-                match_key=(getattr(spec, "match_key", "") or "").strip() or None,
+                match_key=mapper_match_key,
             )
             ok, hits = _validate_signal_verdict(mapped)
             if mapped and ok:
