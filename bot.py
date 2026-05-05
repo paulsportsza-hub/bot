@@ -23526,6 +23526,85 @@ async def _handle_ai_breakdown(query, context, match_key: str) -> None:
     return
 
 
+async def _send_tip_lock_upsell_card(
+    *,
+    query,
+    ctx,
+    edge_tier: str,
+    user_tier: str,
+    home: str,
+    away: str,
+    sport_key: str,
+    league: str,
+    kickoff: str,
+    broadcast: str,
+    confirming_signals: int,
+    locked_subtitle: str | None = None,
+    cta_label: str | None = None,
+    back_cb: str = "hot:go",
+    fallback_text: str | None = None,
+    tracker_summary: dict | None = None,
+) -> bool:
+    """FIX-ZERO-TEXT-LOCKED-DETAIL-GATES-01 — send a tier_lock_upsell image card.
+
+    Used by handle_tip_detail's gate states (cap-exhausted, blurred, locked,
+    partial, stale-cache) so no gate degrades to plain text. Returns True on
+    successful render+send, False on any failure (caller falls through to the
+    pre-existing text-based behaviour as a non-silent safety net).
+    """
+    try:
+        from card_pipeline import build_tier_lock_data as _build_tlu
+        _summary = (
+            tracker_summary
+            if tracker_summary is not None
+            else await _get_edge_tracker_summary(7)
+        )
+        _tier_norm = (edge_tier or "gold").lower()
+        _emoji = {"diamond": "💎", "gold": "🥇", "silver": "🥈", "bronze": "🥉"}.get(
+            _tier_norm, "🔒"
+        )
+        _data = _build_tlu(
+            edge_tier=_tier_norm,
+            home=home or "",
+            away=away or "",
+            sport_key=sport_key or "",
+            league=league or "",
+            kickoff_str=kickoff or "",
+            broadcast=broadcast or "",
+            confirming_signals=int(confirming_signals or 0),
+            tracker_summary=_summary,
+            user_tier=(user_tier or "bronze").lower(),
+        )
+        if locked_subtitle:
+            _data["locked_subtitle"] = locked_subtitle
+        _markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                cta_label or f"{_emoji} Upgrade to {_tier_norm.title()} — View Plans",
+                callback_data="sub:plans",
+            )],
+            [InlineKeyboardButton("↩️ Back", callback_data=back_cb)],
+        ])
+        await send_card_or_fallback(
+            bot=ctx.bot,
+            chat_id=query.message.chat_id,
+            template="tier_lock_upsell.html",
+            data=_data,
+            text_fallback=(
+                fallback_text
+                or f"🔒 {_tier_norm.title()} Edge — upgrade to unlock."
+            ),
+            markup=_markup,
+            message_to_edit=query.message,
+        )
+        return True
+    except Exception as _tlu_err:
+        log.warning(
+            "FIX-ZERO-TEXT-LOCKED-DETAIL-GATES-01 tip_lock_card failed: %s",
+            _tlu_err,
+        )
+        return False
+
+
 async def handle_tip_detail(query, ctx, action: str) -> None:
     """Handle tip:detail:{event_id}:{index} — show detailed tip info."""
     parts = action.split(":")
@@ -23540,14 +23619,34 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
 
     tips = _game_tips_cache.get(event_id, [])
     if tip_idx < 0 or tip_idx >= len(tips):
-        await query.edit_message_text(
-            "⚠️ Tip data expired. Tap the game again for fresh analysis.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
-                query.from_user.id,
-                match_key=event_id,
-            )),
-        )
+        # FIX-ZERO-TEXT-LOCKED-DETAIL-GATES-01: serve image card on stale cache
+        # (typically post-restart). Bronze fallback edge_tier; subtitle clarifies
+        # the state. Back button routes to the Edge Picks tier index (hot:go).
+        try:
+            _expired_user_tier = await get_effective_tier(query.from_user.id) or "bronze"
+        except Exception:
+            _expired_user_tier = "bronze"
+        _expired_home, _expired_away = _teams_from_vs_event_id(event_id)
+        if not await _send_tip_lock_upsell_card(
+            query=query, ctx=ctx,
+            edge_tier="gold",
+            user_tier=_expired_user_tier,
+            home=_expired_home, away=_expired_away,
+            sport_key="", league="",
+            kickoff="", broadcast="",
+            confirming_signals=0,
+            locked_subtitle="Tip data refreshed — tap a tip to load fresh analysis.",
+            back_cb="hot:go",
+            fallback_text="⚠️ Tip data expired. Tap the game again for fresh analysis.",
+        ):
+            await query.edit_message_text(
+                "⚠️ Tip data expired. Tap the game again for fresh analysis.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                    query.from_user.id,
+                    match_key=event_id,
+                )),
+            )
         return
 
     tip = tips[tip_idx]
@@ -23606,14 +23705,33 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
             context="tip",
             proof_line=_format_edge_tracker_record_line(_upgrade_summary),
         )
-        await query.edit_message_text(
-            _upgrade_text, parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
-                user_id,
-                match_key=match_key,
-                primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
-            )),
-        )
+        # FIX-ZERO-TEXT-LOCKED-DETAIL-GATES-01: cap-exhausted gate → image card.
+        _cap_home_display = h(tip.get("home_team", "") or "")
+        _cap_away_display = h(tip.get("away_team", "") or "")
+        if not await _send_tip_lock_upsell_card(
+            query=query, ctx=ctx,
+            edge_tier=edge_tier or "gold",
+            user_tier=_user_tier or "bronze",
+            home=_cap_home_display,
+            away=_cap_away_display,
+            sport_key=tip.get("sport_key", "") or "",
+            league=tip.get("league", "") or "",
+            kickoff="",
+            broadcast="",
+            confirming_signals=0,
+            locked_subtitle="Daily tip limit reached — upgrade for unlimited access.",
+            back_cb="hot:go",
+            fallback_text=_upgrade_text,
+            tracker_summary=_upgrade_summary,
+        ):
+            await query.edit_message_text(
+                _upgrade_text, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(_build_hot_tips_detail_rows(
+                    user_id,
+                    match_key=match_key,
+                    primary_button=InlineKeyboardButton("📋 View Plans", callback_data="sub:plans"),
+                )),
+            )
         return
 
     # ── Wave 26A: Locked detail view gating ──────────────────
@@ -23675,6 +23793,25 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
                 _f7_db_date = await asyncio.to_thread(_get_edge_result_match_date, match_key)
                 if _f7_db_date:
                     _ld_kickoff = _f7_db_date
+
+        # FIX-ZERO-TEXT-LOCKED-DETAIL-GATES-01: serve image card for blurred /
+        # locked gate states. Falls through to the legacy text composition only
+        # on render failure (non-silent safety net).
+        _ld_v2 = tip.get("edge_v2") or {}
+        _ld_confirming = int(_ld_v2.get("confirming_signals") or 0)
+        if await _send_tip_lock_upsell_card(
+            query=query, ctx=ctx,
+            edge_tier=_edge_tier,
+            user_tier=_user_tier or "bronze",
+            home=_ld_home, away=_ld_away,
+            sport_key=tip.get("sport_key", "") or "",
+            league=_ld_league or "",
+            kickoff=_ld_kickoff or "",
+            broadcast=_ld_broadcast or "",
+            confirming_signals=_ld_confirming,
+            back_cb="hot:go",
+        ):
+            return
 
         _ld_text = f"🔒 <b>{_tier_name} Edge — Locked</b>\n\n"
         _ld_text += f"{_sport_emoji} <b>{_ld_home} vs {_ld_away}</b>\n"
@@ -23745,6 +23882,25 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
         _pd_broadcast = _pd_bc.get("broadcast", "")
         _pd_league = tip.get("league", "")
         _pd_tier_emoji = EDGE_EMOJIS.get(_edge_tier, "🥈")
+
+        # FIX-ZERO-TEXT-LOCKED-DETAIL-GATES-01: serve image card for partial
+        # gate (legacy / dead path under FIX-BRONZE-SILVER-ACCESS-01 but still
+        # reachable; cover for safety). Falls through to legacy text on failure.
+        _pd_v2 = tip.get("edge_v2") or {}
+        _pd_confirming = int(_pd_v2.get("confirming_signals") or 0)
+        if await _send_tip_lock_upsell_card(
+            query=query, ctx=ctx,
+            edge_tier=_edge_tier,
+            user_tier=_user_tier or "bronze",
+            home=_pd_home, away=_pd_away,
+            sport_key=tip.get("sport_key", "") or "",
+            league=_pd_league or "",
+            kickoff=_pd_kickoff or "",
+            broadcast=_pd_broadcast or "",
+            confirming_signals=_pd_confirming,
+            back_cb="hot:go",
+        ):
+            return
 
         _pd_odds_val = tip.get("odds", 0) or 0
         _pd_ret_amount = _pd_odds_val * 300 if _pd_odds_val else 0
@@ -23979,6 +24135,27 @@ async def handle_tip_detail(query, ctx, action: str) -> None:
     _banner = _qa_banner(user_id)
     if _banner:
         text = _banner + text
+
+    # FIX-ZERO-TEXT-LOCKED-DETAIL-GATES-01: serve canonical card pipeline image
+    # for full-access tip details. Falls through to legacy text on render
+    # failure so the user never sees nothing under load.
+    try:
+        _td_card_served = await _serve_card_detail(
+            query, match_key or event_id, tip, user_id,
+            _user_tier, _edge_tier,
+            back_page=_resolve_hot_tips_back_page(user_id, match_key),
+            include_analysis=True,
+            source="edge_picks",
+            has_narrative=_td_has_narrative,
+        )
+    except Exception as _td_card_err:
+        log.warning(
+            "FIX-ZERO-TEXT-LOCKED-DETAIL-GATES-01 full-access card failed: %s",
+            _td_card_err,
+        )
+        _td_card_served = False
+    if _td_card_served:
+        return
 
     await query.edit_message_text(
         text, parse_mode=ParseMode.HTML,
