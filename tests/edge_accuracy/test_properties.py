@@ -139,7 +139,12 @@ class TestGateReturnsValidLevel:
 
 # ── Property 5: Draw cap ratio ──
 
+# OPS-EDGE-ACCURACY-GATE-FLAKINESS-01: live_db-marked. Calls get_top_edges(),
+# which writes to odds.db via log_edges_batch() and contends with running
+# scrapers — produces sqlite3 "database is locked" → 120s timeout flakes that
+# block the pre-merge gate. Run via `pytest -m live_db` for smoke coverage.
 @pytest.mark.timeout(120)
+@pytest.mark.live_db
 class TestDrawCapRatio:
 
     def test_draw_ratio_capped(self):

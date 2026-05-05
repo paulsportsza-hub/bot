@@ -2,6 +2,15 @@
 
 Verifies Diamond meets all 3 criteria, tier ordering is consistent,
 and no negative EV edges surface to users.
+
+OPS-EDGE-ACCURACY-GATE-FLAKINESS-01: Marked `live_db` so the pre-merge gate
+skips these. Pass/fail depends on whatever rows happen to be in scrapers/odds.db
+at test time (stale prices, kickoff-window churn, scraper write contention),
+which produced inconsistent failures across consecutive gate runs and blocked
+unrelated commits. Run explicitly via `pytest -m live_db tests/edge_accuracy/`
+for smoke coverage. Production tier-classification logic is unchanged; the
+threshold contract is also covered by synthetic property-based tests in
+test_properties.py (TestTierDeterministic, TestSubThresholdNeverSurfaces).
 """
 
 from __future__ import annotations
@@ -21,7 +30,7 @@ from scrapers.edge.edge_config import TIER_THRESHOLDS, NON_SHARP_TIER_THRESHOLDS
 # Live-pipeline tests run the full edge pipeline against live odds.db.
 # Under scraper write contention the DB busy_timeout can push each test past
 # the global 30s limit.  120s is safe and still bounded.
-pytestmark = pytest.mark.timeout(120)
+pytestmark = [pytest.mark.timeout(120), pytest.mark.live_db]
 
 TIER_ORDER = {"diamond": 4, "gold": 3, "silver": 2, "bronze": 1}
 
