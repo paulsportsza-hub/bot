@@ -941,6 +941,7 @@ def render_verdict(spec: "NarrativeSpec") -> str:
                 odds=(f"{odds_val:.2f}" if odds_val > 0 else None),
                 bookmaker=bookmaker_val or None,
                 line_movement_direction=_spec_movement_direction(spec),
+                match_key=(getattr(spec, "match_key", "") or "").strip() or None,
             )
             ok, hits = _validate_signal_verdict(mapped)
             if mapped and ok:

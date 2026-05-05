@@ -37,125 +37,171 @@ _GOLD_ACTION = "back Manchester City, standard stake"
 _SILVER_ACTION = "lean Manchester City, standard stake"
 _BRONZE_ACTION = "worth a small play on Manchester City, light stake"
 
+# FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01: pool-aware assertions.
+# Phrasings are now hash-distributed pools per match_key (the brief's anti-
+# monoculture fix). Existing tests check that:
+#   1. Output ends with the tier action fragment.
+#   2. Output is one of the valid {primary} and {secondary} cartesian
+#      combinations for the (signal_combo, tier) cell.
+#   3. The §12.X anchor remains a reachable pool member (regression guard).
+
+def _two_part_pool(primary_key: str, secondary_key: str, action: str) -> set[str]:
+    """All valid f"{primary} and {secondary} — {action}." combinations."""
+    return {
+        f"{p} and {s} — {action}."
+        for p in m.PRIMARY_PHRASES[primary_key]
+        for s in m.SECONDARY_PHRASES[secondary_key]
+    }
+
+
+def _primary_only_pool(primary_key: str, action: str) -> set[str]:
+    """All valid f"{primary} — {action}." combinations."""
+    return {f"{p} — {action}." for p in m.PRIMARY_PHRASES[primary_key]}
+
+
+def _direction_lead_pool(leads: tuple[str, ...], action: str) -> set[str]:
+    """All valid f"{lead} — {action}." combinations for the special-case path."""
+    return {f"{lead} — {action}." for lead in leads}
+
+
 # Spec §12.1 — Price Edge + Form
-@pytest.mark.parametrize("tier,expected", [
-    ("diamond", f"The price hasn't caught up and recent form backs it — {_DIAMOND_ACTION}."),
-    ("gold",    f"The price hasn't caught up and recent form backs it — {_GOLD_ACTION}."),
-    ("silver",  f"The price hasn't caught up and recent form backs it — {_SILVER_ACTION}."),
-    ("bronze",  f"The price hasn't caught up and recent form backs it — {_BRONZE_ACTION}."),
+@pytest.mark.parametrize("tier,action,anchor", [
+    ("diamond", _DIAMOND_ACTION, f"The price hasn't caught up and recent form backs it — {_DIAMOND_ACTION}."),
+    ("gold",    _GOLD_ACTION,    f"The price hasn't caught up and recent form backs it — {_GOLD_ACTION}."),
+    ("silver",  _SILVER_ACTION,  f"The price hasn't caught up and recent form backs it — {_SILVER_ACTION}."),
+    ("bronze",  _BRONZE_ACTION,  f"The price hasn't caught up and recent form backs it — {_BRONZE_ACTION}."),
 ])
-def test_combo_price_form(tier, expected):
-    """§12.1 — Price Edge + Form: primary phrase + secondary phrase form."""
+def test_combo_price_form(tier, action, anchor):
+    """§12.1 — Price Edge + Form: primary phrase + secondary phrase form.
+
+    Output is one of the PRIMARY[price_edge] × SECONDARY[form] combinations;
+    the spec §12.1 anchor "The price hasn't caught up and recent form backs
+    it" stays a reachable pool member (regression guard).
+    """
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={"price_edge": True, "form": True},
         odds="1.40", bookmaker="HWB",
     )
-    assert out == expected
+    pool = _two_part_pool("price_edge", "form", action)
+    assert anchor in pool, "§12.1 anchor must remain a pool member"
+    assert out in pool, f"§12.1 output {out!r} not in pool"
 
 
 # Spec §12.2 — Price Edge + Injury
-@pytest.mark.parametrize("tier,expected", [
-    ("diamond", f"The price hasn't caught up and team news gives it extra weight — {_DIAMOND_ACTION}."),
-    ("gold",    f"The price hasn't caught up and team news gives it extra weight — {_GOLD_ACTION}."),
-    ("silver",  f"The price hasn't caught up and team news gives it extra weight — {_SILVER_ACTION}."),
-    ("bronze",  f"The price hasn't caught up and team news gives it extra weight — {_BRONZE_ACTION}."),
+@pytest.mark.parametrize("tier,action,anchor", [
+    ("diamond", _DIAMOND_ACTION, f"The price hasn't caught up and team news gives it extra weight — {_DIAMOND_ACTION}."),
+    ("gold",    _GOLD_ACTION,    f"The price hasn't caught up and team news gives it extra weight — {_GOLD_ACTION}."),
+    ("silver",  _SILVER_ACTION,  f"The price hasn't caught up and team news gives it extra weight — {_SILVER_ACTION}."),
+    ("bronze",  _BRONZE_ACTION,  f"The price hasn't caught up and team news gives it extra weight — {_BRONZE_ACTION}."),
 ])
-def test_combo_price_injury(tier, expected):
+def test_combo_price_injury(tier, action, anchor):
     """§12.2 — Price Edge + Injury: primary then injury secondary."""
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={"price_edge": True, "injury": True},
         odds="1.40", bookmaker="HWB",
     )
-    assert out == expected
+    pool = _two_part_pool("price_edge", "injury", action)
+    assert anchor in pool, "§12.2 anchor must remain a pool member"
+    assert out in pool, f"§12.2 output {out!r} not in pool"
 
 
 # Spec §12.3 — Price Edge + Line Movement (favourable)
-@pytest.mark.parametrize("tier,expected", [
-    ("diamond", f"The line is moving our way and the price is still there — {_DIAMOND_ACTION}."),
-    ("gold",    f"The line is moving our way and the price is still there — {_GOLD_ACTION}."),
-    ("silver",  f"The line is moving our way and the price is still there — {_SILVER_ACTION}."),
-    ("bronze",  f"The line is moving our way and the price is still there — {_BRONZE_ACTION}."),
+@pytest.mark.parametrize("tier,action,anchor", [
+    ("diamond", _DIAMOND_ACTION, f"The line is moving our way and the price is still there — {_DIAMOND_ACTION}."),
+    ("gold",    _GOLD_ACTION,    f"The line is moving our way and the price is still there — {_GOLD_ACTION}."),
+    ("silver",  _SILVER_ACTION,  f"The line is moving our way and the price is still there — {_SILVER_ACTION}."),
+    ("bronze",  _BRONZE_ACTION,  f"The line is moving our way and the price is still there — {_BRONZE_ACTION}."),
 ])
-def test_combo_price_line_favourable(tier, expected):
-    """§12.3 — Price Edge + Line Movement (favourable): special-case lead."""
+def test_combo_price_line_favourable(tier, action, anchor):
+    """§12.3 — Price Edge + Line Movement (favourable): direction-pool lead."""
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={"price_edge": True, "line_mvt": True},
         odds="1.40", bookmaker="HWB",
         line_movement_direction="favourable",
     )
-    assert out == expected
+    pool = _direction_lead_pool(m._PRICE_LINE_FAVOURABLE_LEADS, action)
+    assert anchor in pool, "§12.3 favourable anchor must remain a pool member"
+    assert out in pool, f"§12.3 favourable output {out!r} not in pool"
 
 
 # Spec §12.4 — Price Edge + Line Movement (against)
-@pytest.mark.parametrize("tier,expected", [
-    ("diamond", f"The market has moved, but the price still looks big — {_DIAMOND_ACTION}."),
-    ("gold",    f"The market has moved, but the price still looks big — {_GOLD_ACTION}."),
-    ("silver",  f"The market has moved, but the price still looks big — {_SILVER_ACTION}."),
-    ("bronze",  f"The market has moved, but the price still looks big — {_BRONZE_ACTION}."),
+@pytest.mark.parametrize("tier,action,anchor", [
+    ("diamond", _DIAMOND_ACTION, f"The market has moved, but the price still looks big — {_DIAMOND_ACTION}."),
+    ("gold",    _GOLD_ACTION,    f"The market has moved, but the price still looks big — {_GOLD_ACTION}."),
+    ("silver",  _SILVER_ACTION,  f"The market has moved, but the price still looks big — {_SILVER_ACTION}."),
+    ("bronze",  _BRONZE_ACTION,  f"The market has moved, but the price still looks big — {_BRONZE_ACTION}."),
 ])
-def test_combo_price_line_against(tier, expected):
-    """§12.4 — Price Edge + Line Movement (against): contrast lead."""
+def test_combo_price_line_against(tier, action, anchor):
+    """§12.4 — Price Edge + Line Movement (against): contrast direction pool."""
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={"price_edge": True, "line_mvt": True},
         odds="1.40", bookmaker="HWB",
         line_movement_direction="against",
     )
-    assert out == expected
+    pool = _direction_lead_pool(m._PRICE_LINE_AGAINST_LEADS, action)
+    assert anchor in pool, "§12.4 against anchor must remain a pool member"
+    assert out in pool, f"§12.4 against output {out!r} not in pool"
 
 
 # Spec §12.5 — Form only
-@pytest.mark.parametrize("tier,expected", [
-    ("diamond", f"Recent form backs this — {_DIAMOND_ACTION}."),
-    ("gold",    f"Recent form backs this — {_GOLD_ACTION}."),
-    ("silver",  f"Recent form backs this — {_SILVER_ACTION}."),
-    ("bronze",  f"Recent form backs this — {_BRONZE_ACTION}."),
+@pytest.mark.parametrize("tier,action,anchor", [
+    ("diamond", _DIAMOND_ACTION, f"Recent form backs this — {_DIAMOND_ACTION}."),
+    ("gold",    _GOLD_ACTION,    f"Recent form backs this — {_GOLD_ACTION}."),
+    ("silver",  _SILVER_ACTION,  f"Recent form backs this — {_SILVER_ACTION}."),
+    ("bronze",  _BRONZE_ACTION,  f"Recent form backs this — {_BRONZE_ACTION}."),
 ])
-def test_combo_form_only(tier, expected):
+def test_combo_form_only(tier, action, anchor):
     """§12.5 — Form only: clean causal shape."""
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={"form": True},
         odds="1.40", bookmaker="HWB",
     )
-    assert out == expected
+    pool = _primary_only_pool("form", action)
+    assert anchor in pool, "§12.5 anchor must remain a pool member"
+    assert out in pool, f"§12.5 output {out!r} not in pool"
 
 
 # Spec §12.6 — Market only
-@pytest.mark.parametrize("tier,expected", [
-    ("diamond", f"The wider market is leaning this way — {_DIAMOND_ACTION}."),
-    ("gold",    f"The wider market is leaning this way — {_GOLD_ACTION}."),
-    ("silver",  f"The wider market is leaning this way — {_SILVER_ACTION}."),
-    ("bronze",  f"The wider market is leaning this way — {_BRONZE_ACTION}."),
+@pytest.mark.parametrize("tier,action,anchor", [
+    ("diamond", _DIAMOND_ACTION, f"The wider market is leaning this way — {_DIAMOND_ACTION}."),
+    ("gold",    _GOLD_ACTION,    f"The wider market is leaning this way — {_GOLD_ACTION}."),
+    ("silver",  _SILVER_ACTION,  f"The wider market is leaning this way — {_SILVER_ACTION}."),
+    ("bronze",  _BRONZE_ACTION,  f"The wider market is leaning this way — {_BRONZE_ACTION}."),
 ])
-def test_combo_market_only(tier, expected):
+def test_combo_market_only(tier, action, anchor):
     """§12.6 — Market only."""
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={"market": True},
         odds="1.40", bookmaker="HWB",
     )
-    assert out == expected
+    pool = _primary_only_pool("market", action)
+    assert anchor in pool, "§12.6 anchor must remain a pool member"
+    assert out in pool, f"§12.6 output {out!r} not in pool"
 
 
 # Spec §12.7 — Tipster only
-@pytest.mark.parametrize("tier,expected", [
-    ("diamond", f"Outside support points this way — {_DIAMOND_ACTION}."),
-    ("gold",    f"Outside support points this way — {_GOLD_ACTION}."),
-    ("silver",  f"Outside support points this way — {_SILVER_ACTION}."),
-    ("bronze",  f"Outside support points this way — {_BRONZE_ACTION}."),
+@pytest.mark.parametrize("tier,action,anchor", [
+    ("diamond", _DIAMOND_ACTION, f"Outside support points this way — {_DIAMOND_ACTION}."),
+    ("gold",    _GOLD_ACTION,    f"Outside support points this way — {_GOLD_ACTION}."),
+    ("silver",  _SILVER_ACTION,  f"Outside support points this way — {_SILVER_ACTION}."),
+    ("bronze",  _BRONZE_ACTION,  f"Outside support points this way — {_BRONZE_ACTION}."),
 ])
-def test_combo_tipster_only(tier, expected):
+def test_combo_tipster_only(tier, action, anchor):
     """§12.7 — Tipster only (use sparingly, here as primary fallback)."""
     out = m.build_verdict(
         team="Manchester City", tier=tier,
         signals={"tipster": True},
         odds="1.40", bookmaker="HWB",
     )
-    assert out == expected
+    pool = _primary_only_pool("tipster", action)
+    assert anchor in pool, "§12.7 anchor must remain a pool member"
+    assert out in pool, f"§12.7 output {out!r} not in pool"
 
 
 # Spec §12.8 — No-strong-signals fallback
@@ -257,11 +303,16 @@ def test_live_commentary_sweep_zero_hits():
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_alignment_price_implies_price_edge_active():
-    """If verdict mentions 'price' AND any signal is active, price_edge or line_mvt is True.
+    """If verdict mentions 'price' AND any signal is active, price_edge,
+    line_mvt, or injury is True.
 
+    Spec §6.6 phrase 4 ("The price still looks light against the team news")
+    is a verbatim approved injury phrasing that mentions "price"; with the
+    pool expansion (FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01) it is
+    reachable when the injury signal alone fires. The alignment contract
+    therefore expands to allow injury as a third path to price-mentions.
     The all-empty signal case routes to the §12.8 fallback lead, which uses
     pricing language by spec design (every edge is a price-driven concept).
-    Alignment therefore only applies when at least one signal fired.
     """
     for tier in _TIERS:
         for combo in _synthetic_signal_combos():
@@ -273,8 +324,13 @@ def test_alignment_price_implies_price_edge_active():
                 line_movement_direction="favourable",
             )
             if " price " in f" {out.lower()} ":
-                assert combo.get("price_edge") or combo.get("line_mvt"), (
-                    f"verdict mentions 'price' but neither price_edge nor line_mvt active. "
+                assert (
+                    combo.get("price_edge")
+                    or combo.get("line_mvt")
+                    or combo.get("injury")
+                ), (
+                    f"verdict mentions 'price' but no price-bearing signal "
+                    f"active (price_edge / line_mvt / injury). "
                     f"tier={tier} combo={combo} out={out}"
                 )
 
@@ -396,13 +452,21 @@ class _FakeSpec:
 
 
 def test_feature_flag_default_uses_signal_mapper(monkeypatch):
-    """HG-5 default — flag absent → signal-mapped output."""
+    """HG-5 default — flag absent → signal-mapped output.
+
+    FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01: §12.3 favourable lead
+    is now a pool of 4 phrasings; pool-aware assertion picks any pool
+    member as evidence of mapper-path selection.
+    """
     monkeypatch.delenv("USE_SIGNAL_MAPPED_VERDICTS", raising=False)
     import verdict_corpus
     importlib.reload(verdict_corpus)
     out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", _FakeSpec()))
-    # Signal-mapper hits the §12.3 favourable special-case lead
-    assert out.startswith("The line is moving our way and the price is still there")
+    # Signal-mapper hits the §12.3 favourable special-case lead — any pool
+    # member is acceptable evidence the mapper fired.
+    assert any(
+        out.startswith(lead) for lead in m._PRICE_LINE_FAVOURABLE_LEADS
+    ), f"Expected a §12.3 favourable lead pool member at the start of {out!r}"
     # And the action clause is the Diamond form
     assert "hard to look past Manchester City, go big at 1.40 on HWB" in out
 
@@ -413,8 +477,10 @@ def test_feature_flag_off_routes_to_corpus(monkeypatch):
     import verdict_corpus
     importlib.reload(verdict_corpus)
     out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", _FakeSpec()))
-    # Corpus output must NOT match the signal-mapped lead
-    assert not out.startswith("The line is moving our way and the price is still there")
+    # Corpus output must NOT match any signal-mapped favourable lead
+    assert not any(
+        out.startswith(lead) for lead in m._PRICE_LINE_FAVOURABLE_LEADS
+    ), f"flag=0 routed to corpus but mapper fired: {out!r}"
     # Corpus still produces a Diamond action ending — slot-filled
     assert "Manchester City" in out
 
@@ -426,9 +492,9 @@ def test_feature_flag_false_string_routes_to_corpus(monkeypatch):
         import verdict_corpus
         importlib.reload(verdict_corpus)
         out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", _FakeSpec()))
-        assert not out.startswith("The line is moving our way"), (
-            f"flag={falsy!r} should route to corpus but signal-mapped fired"
-        )
+        assert not any(
+            out.startswith(lead) for lead in m._PRICE_LINE_FAVOURABLE_LEADS
+        ), f"flag={falsy!r} should route to corpus but signal-mapped fired: {out!r}"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -812,10 +878,14 @@ def test_p1_render_verdict_falls_back_when_quality_probe_fails(monkeypatch):
         away_form="LDLDW",
     )
     out = verdict_corpus.render_verdict(cast("verdict_corpus.NarrativeSpec", spec))
-    # Mapper output starts with "The price hasn't caught up..." — corpus does NOT.
-    assert not out.startswith("The price hasn't caught up"), (
+    # FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01: pool-aware. Mapper
+    # output would begin with one of PRIMARY[price_edge] (5 phrasings);
+    # corpus output begins with sport-banded sentence stems that don't
+    # overlap. Assert NO mapper primary lead appears at the start.
+    mapper_primary_leads = m.PRIMARY_PHRASES["price_edge"]
+    assert not any(out.startswith(lead) for lead in mapper_primary_leads), (
         f"render_verdict should fall back to corpus when quality probe fails; "
-        f"got mapper output: {out!r}"
+        f"got mapper-style output: {out!r}"
     )
 
 
@@ -1140,6 +1210,45 @@ _TIER_FALLBACK_LEADS = {
 }
 
 
+def _ops_combo_pool(combo_key: str, tier: str) -> set[str]:
+    """Return the full pool of valid render outputs for an OPS §12 combo cell.
+
+    FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01: phrasings hash-distribute
+    across pools, so the assertion shape changes from "verdict contains the
+    spec §12.X anchor" to "verdict is a pool member for the combo cell" —
+    the anchor stays a reachable pool member (verified separately).
+    """
+    if tier.lower() == "diamond":
+        action = _DIAMOND_ACTION
+    elif tier.lower() == "gold":
+        action = _GOLD_ACTION
+    elif tier.lower() == "silver":
+        action = _SILVER_ACTION
+    elif tier.lower() == "bronze":
+        action = _BRONZE_ACTION
+    else:
+        action = _SILVER_ACTION  # mirror builder's unknown-tier default
+    if combo_key == "price_form":
+        return {f"{p} and {s} — {action}." for p in m.PRIMARY_PHRASES["price_edge"] for s in m.SECONDARY_PHRASES["form"]}
+    if combo_key == "price_injury":
+        return {f"{p} and {s} — {action}." for p in m.PRIMARY_PHRASES["price_edge"] for s in m.SECONDARY_PHRASES["injury"]}
+    if combo_key == "price_line_favourable":
+        return {f"{lead} — {action}." for lead in m._PRICE_LINE_FAVOURABLE_LEADS}
+    if combo_key == "price_line_against":
+        return {f"{lead} — {action}." for lead in m._PRICE_LINE_AGAINST_LEADS}
+    if combo_key == "form_only":
+        return {f"{p} — {action}." for p in m.PRIMARY_PHRASES["form"]}
+    if combo_key == "market_only":
+        return {f"{p} — {action}." for p in m.PRIMARY_PHRASES["market"]}
+    if combo_key == "tipster_only":
+        return {f"{p} — {action}." for p in m.PRIMARY_PHRASES["tipster"]}
+    if combo_key == "no_signals_fallback":
+        # §12.8 — single-entry tuple per tier (spec authors only one fallback
+        # phrase per tier). Pool depth 1 = same output every match_key.
+        return {f"{lead} — {action}." for lead in m._FALLBACK_BY_TIER[tier.lower()]}
+    raise AssertionError(f"unknown combo_key: {combo_key}")
+
+
 def _build_verdict_for_spec(spec: _FakeSpec) -> str:
     """Mirror render_verdict's _spec_to_signals + build_verdict pipeline,
     bypassing the min_verdict_quality length-floor fallback.
@@ -1162,6 +1271,7 @@ def _build_verdict_for_spec(spec: _FakeSpec) -> str:
         odds=(f"{odds_val:.2f}" if odds_val > 0 else None),
         bookmaker=(spec.bookmaker or None),
         line_movement_direction=line_mvt,
+        match_key=(getattr(spec, "match_key", "") or "").strip() or None,
     )
 
 
@@ -1181,16 +1291,25 @@ def test_ops_signal_exposure_native_path_8_combos(combo_key, tier):
     spec = _spec_for_combo(tier, signals=sigs, line_movement=line_mvt)
     out = _build_verdict_for_spec(spec)
 
+    pool = _ops_combo_pool(combo_key, tier)
+    assert out in pool, (
+        f"§12 combo '{combo_key}' tier {tier}: out {out!r} not in pool "
+        f"of {len(pool)} valid phrasings (FIX-VERDICT-VARIETY-WITHIN-"
+        f"SECTION12-BUCKET-01)"
+    )
     if combo_key == "no_signals_fallback":
-        # §12.8 — tier-specific fallback lead
         assert out.startswith(_TIER_FALLBACK_LEADS[tier]), (
             f"Tier {tier} fallback should lead with §12.8 phrase; got: {out!r}"
         )
     else:
+        # §12.X anchor phrasing must remain a pool member (regression guard).
         assert expected_lead is not None  # type guard
-        assert expected_lead in out, (
-            f"§12 combo '{combo_key}' tier {tier} expected lead "
-            f"{expected_lead!r}; got: {out!r}"
+        anchor_lead = expected_lead.strip()
+        assert any(
+            anchor_lead in candidate for candidate in pool
+        ), (
+            f"§12 anchor lead {anchor_lead!r} no longer reachable in "
+            f"{combo_key}/{tier} pool"
         )
 
     # Tier action fragment must always close the verdict.
@@ -1226,13 +1345,20 @@ def test_ops_signal_exposure_full_reachability_96_cases(combo_key, tier, sport):
         f"sport={sport} tier={tier} combo={combo_key}: action fragment missing"
     )
 
+    pool = _ops_combo_pool(combo_key, tier)
+    assert out in pool, (
+        f"sport={sport} tier={tier} combo={combo_key}: out {out!r} not "
+        f"in pool of {len(pool)} valid phrasings"
+    )
     if combo_key == "no_signals_fallback":
         assert out.startswith(_TIER_FALLBACK_LEADS[tier])
     else:
+        # §12.X anchor lead must remain reachable as a pool member.
         assert expected_lead is not None  # type guard
-        assert expected_lead in out, (
-            f"sport={sport} tier={tier} combo={combo_key}: expected "
-            f"{expected_lead!r}; got: {out!r}"
+        anchor_lead = expected_lead.strip()
+        assert any(anchor_lead in candidate for candidate in pool), (
+            f"sport={sport} tier={tier} combo={combo_key}: §12 anchor lead "
+            f"{anchor_lead!r} no longer reachable in pool"
         )
 
     # No banned terms / live commentary creep in for any sport.
@@ -1271,12 +1397,20 @@ def test_ops_signal_exposure_render_verdict_serves_section12_phrase(combo_key, t
         pass
     else:
         assert expected_lead is not None  # type guard
-        assert expected_lead in out, (
+        # FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01: pool-aware. Output
+        # for the spec.match_key fixture must be a pool member for the cell.
+        # Anchor lead reachability is asserted at the pool level.
+        pool = _ops_combo_pool(combo_key, tier)
+        assert out in pool, (
             f"PRODUCTION REACHABILITY FAIL — tier={tier} combo={combo_key}: "
-            f"expected §12 phrase {expected_lead!r}; got render_verdict "
-            f"output {out!r}. The mapper output likely failed the "
-            f"min_verdict_quality floor and fell back to corpus — "
-            f"defeating native §12 surfacing."
+            f"render_verdict output {out!r} not in §12 pool "
+            f"({len(pool)} valid phrasings). The mapper output likely "
+            f"failed the min_verdict_quality floor and fell back to corpus."
+        )
+        anchor_lead = expected_lead.strip()
+        assert any(anchor_lead in candidate for candidate in pool), (
+            f"§12 anchor lead {anchor_lead!r} no longer reachable in "
+            f"{combo_key}/{tier} pool"
         )
 
 
@@ -1329,9 +1463,16 @@ def test_ops_signal_exposure_proxy_fallback_when_signals_empty():
     )
     out_fallback = _build_verdict_for_spec(spec_fallback)
 
-    # Both paths yield the §12.1 (price + form) verdict.
-    assert "The price hasn't caught up and recent form backs it" in out_native
-    assert "The price hasn't caught up and recent form backs it" in out_fallback
+    # Both paths yield a §12.1 (Price + Form) verdict — pool-aware after
+    # FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01: any cartesian member
+    # of PRIMARY[price_edge] × SECONDARY[form] is acceptable.
+    section12_pool = _two_part_pool("price_edge", "form", _GOLD_ACTION)
+    assert out_native in section12_pool, (
+        f"native path output {out_native!r} not in §12.1 pool"
+    )
+    assert out_fallback in section12_pool, (
+        f"fallback path output {out_fallback!r} not in §12.1 pool"
+    )
     # Both must be valid (no banned/live terms).
     for label, out in (("native", out_native), ("fallback", out_fallback)):
         ok, hits = m.validate_output(out)
@@ -1475,3 +1616,342 @@ def test_ops_signal_exposure_collect_all_signals_shape_normalises():
     assert _ns._normalise_spec_signals({}) == {}
     assert _ns._normalise_spec_signals(None) == {}
     assert _ns._normalise_spec_signals("not a dict") == {}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# FIX-VERDICT-VARIETY-WITHIN-SECTION12-BUCKET-01 — within-bucket variety
+# ──────────────────────────────────────────────────────────────────────────
+#
+# Hash-distributed phrasing pools fix the §12-cell monoculture Paul flagged
+# 2026-05-04: 4 simultaneous Gold/Silver cards with identical signal posture
+# (Price + LineMvt unknown) all rendered the same §6.2-unknown phrase
+# verbatim. The contract these tests guard:
+#
+#   HG-3 — 4 simultaneous Gold cards / different match_keys / same signal
+#          posture render ≥3 distinct primary phrases.
+#   HG-6 — same (match_key, signal_combo, tier) is deterministic across
+#          100 iterations.
+#   Distribution — 50 synthetic match_keys with the same signal_combo +
+#          tier exercise ≥60% of the pool's phrasings.
+#   Backward-compat — missing match_key falls back to team-keyed pick;
+#          valid output produced (warning, not error).
+#
+
+def _primary_lead_of(out: str) -> str:
+    """Return the primary clause (substring before " and " or " — ")."""
+    if " and " in out:
+        return out.split(" and ", 1)[0]
+    if " — " in out:
+        return out.split(" — ", 1)[0]
+    return out
+
+
+def _four_paul_flagged_match_keys() -> list[str]:
+    """The 4 production match_keys Paul flagged 2026-05-04."""
+    return [
+        "manchester_city_vs_brentford_2026-05-09",
+        "liverpool_vs_chelsea_2026-05-09",
+        "brighton_vs_wolves_2026-05-09",
+        "fulham_vs_bournemouth_2026-05-09",
+    ]
+
+
+def _four_curated_spread_match_keys() -> list[str]:
+    """4 match_keys curated to spread across all primary-salt pools.
+
+    The Paul-flagged 4-tuple has an unlucky MD5 collision on
+    "primary|form" (all 4 hash to index 0 of PRIMARY[form]). Production
+    diversity makes this rare (P ≈ 0.8% for a random 4-tuple in a pool of
+    5), but the unit-test assertion needs robust spread regardless of
+    luck. This curated set was verified offline to deliver ≥3 distinct
+    indices across primary|form / primary|tipster / primary|market /
+    primary|injury / primary|price_edge salts.
+    """
+    return [
+        "arsenal_vs_tottenham_2026-05-10",
+        "newcastle_vs_aston_villa_2026-05-10",
+        "sundowns_vs_kaizer_chiefs_2026-05-12",
+        "manchester_united_vs_everton_2026-05-16",
+    ]
+
+
+def test_within_bucket_variety_4_simultaneous_gold_match_keys():
+    """HG-3 — 4 simultaneous Gold cards with identical signal posture but
+    different match_keys render ≥3 distinct primary phrases.
+
+    The Paul-flagged scenario: Price Edge + LineMvt unknown. Direction
+    "unknown" routes through the standard primary+secondary path so
+    PRIMARY[price_edge] (5) × SECONDARY[line_mvt] (3) gives variety.
+    """
+    sigs = {"price_edge": True, "line_mvt": True}
+    primaries = set()
+    outputs: list[str] = []
+    for mk in _four_paul_flagged_match_keys():
+        out = m.build_verdict(
+            team="Pick", tier="gold", signals=sigs,
+            odds="1.40", bookmaker="HWB",
+            line_movement_direction=None,  # unknown direction
+            match_key=mk,
+        )
+        outputs.append(out)
+        primaries.add(_primary_lead_of(out))
+    assert len(primaries) >= 3, (
+        f"HG-3 violation: {len(primaries)} distinct primary phrases across 4 "
+        f"simultaneous cards (need ≥3). Outputs:\n" + "\n".join(outputs)
+    )
+
+
+# Same shape across additional (tier, signal_combo) cells.
+@pytest.mark.parametrize("tier", ["diamond", "gold", "silver", "bronze"])
+@pytest.mark.parametrize("combo,direction", [
+    ({"price_edge": True, "form": True}, None),
+    ({"price_edge": True, "injury": True}, None),
+    ({"form": True}, None),
+    ({"market": True}, None),
+    ({"tipster": True}, None),
+])
+def test_within_bucket_variety_per_tier_per_combo(tier, combo, direction):
+    """HG-3 — for each tier × each signal combo, 4 different match_keys
+    produce ≥3 distinct primary phrases.
+
+    Uses the curated 4-tuple (not Paul's Price+LineMvt set, which has a
+    natural MD5 collision on "primary|form" salt). The Paul match_keys are
+    exercised in :func:`test_paul_4_card_regression` against their actual
+    Price+LineMvt-unknown signal posture.
+    """
+    primaries = set()
+    outputs: list[str] = []
+    for mk in _four_curated_spread_match_keys():
+        out = m.build_verdict(
+            team="Pick", tier=tier, signals=combo,
+            odds="2.10", bookmaker="Betway",
+            line_movement_direction=direction,
+            match_key=mk,
+        )
+        outputs.append(out)
+        primaries.add(_primary_lead_of(out))
+    assert len(primaries) >= 3, (
+        f"Variety violation tier={tier} combo={combo} direction={direction}: "
+        f"only {len(primaries)} distinct primaries across 4 match_keys. "
+        f"Outputs:\n" + "\n".join(outputs)
+    )
+
+
+@pytest.mark.parametrize("tier", ["diamond", "gold", "silver", "bronze"])
+def test_within_bucket_variety_at_least_2_distinct_against_lead(tier):
+    """For the smaller _PRICE_LINE_AGAINST_LEADS pool (depth=3), 4 random
+    match_keys may produce 2 distinct outputs (3 distinct only ~44% of
+    the time). The variety contract relaxes to ≥2 distinct here, since
+    the spec §6.2-against pool only authors 3 phrasings — the alternative
+    would be inventing phrasings without spec authority.
+    """
+    primaries = set()
+    for mk in _four_paul_flagged_match_keys():
+        out = m.build_verdict(
+            team="Pick", tier=tier,
+            signals={"price_edge": True, "line_mvt": True},
+            odds="2.10", bookmaker="Betway",
+            line_movement_direction="against",
+            match_key=mk,
+        )
+        primaries.add(_primary_lead_of(out))
+    assert len(primaries) >= 2, (
+        f"§12.4 against pool variety: tier={tier}: only "
+        f"{len(primaries)} distinct primaries across 4 match_keys"
+    )
+
+
+# Determinism — same (match_key, signal_combo, tier) → same output forever.
+def test_determinism_same_inputs_same_output_100_iterations():
+    """HG-6 — same (match_key, signal_combo, tier) picks the same phrasing
+    across 100 iterations (cross-process cache safety; MD5 is stable).
+    """
+    inputs = dict(
+        team="Manchester City", tier="gold",
+        signals={"price_edge": True, "form": True},
+        odds="1.40", bookmaker="HWB",
+        match_key="manchester_city_vs_brentford_2026-05-09",
+    )
+    first = m.build_verdict(**inputs)
+    for _ in range(100):
+        assert m.build_verdict(**inputs) == first, (
+            f"Non-deterministic: same inputs produced different outputs."
+        )
+
+
+# Distribution — 50 match_keys exercise ≥60% of the pool.
+def test_distribution_50_match_keys_exercise_60pct_of_primary_pool():
+    """The hash-distribution must spread across the pool. 50 synthetic
+    match_keys exercising the same (signal_combo, tier) cell should hit
+    ≥60% of the pool's primary phrasings (statistical sanity check on
+    MD5 mod uniformity for typical pool sizes 3-5).
+    """
+    sigs = {"price_edge": True, "form": True}  # PRIMARY[price_edge] pool=5
+    seen = set()
+    for i in range(50):
+        out = m.build_verdict(
+            team="Pick", tier="gold", signals=sigs,
+            odds="1.40", bookmaker="HWB",
+            match_key=f"synthetic_match_{i:03d}",
+        )
+        seen.add(_primary_lead_of(out))
+    pool = set(m.PRIMARY_PHRASES["price_edge"])
+    coverage = len(seen & pool) / len(pool)
+    assert coverage >= 0.6, (
+        f"Pool coverage {coverage:.1%} < 60% over 50 match_keys. "
+        f"Hit {len(seen & pool)}/{len(pool)} pool members: {seen & pool}"
+    )
+
+
+# Backward-compat — missing match_key falls back to team salt.
+def test_backward_compat_missing_match_key_falls_back_to_team_salt(caplog):
+    """Brief Phase 2 step 6 — missing match_key falls back to team salt
+    and emits a debug warning. Output is still deterministic and valid.
+    """
+    import logging
+    caplog.set_level(logging.DEBUG, logger="verdict_signal_mapper")
+    out = m.build_verdict(
+        team="Manchester City", tier="gold",
+        signals={"price_edge": True, "form": True},
+        odds="1.40", bookmaker="HWB",
+        match_key=None,
+    )
+    # Output must still be a valid §12.1 pool member.
+    pool = _two_part_pool("price_edge", "form", _GOLD_ACTION)
+    assert out in pool, f"backward-compat output not in pool: {out!r}"
+    # Determinism: re-invoking with same team yields same output.
+    out2 = m.build_verdict(
+        team="Manchester City", tier="gold",
+        signals={"price_edge": True, "form": True},
+        odds="1.40", bookmaker="HWB",
+        match_key=None,
+    )
+    assert out == out2, "team-salt fallback must be deterministic"
+
+
+def test_backward_compat_empty_string_match_key_falls_back_to_team_salt():
+    """Empty-string match_key triggers the same fallback path as None."""
+    out_empty = m.build_verdict(
+        team="Liverpool", tier="silver",
+        signals={"form": True},
+        odds="2.10", bookmaker="Betway",
+        match_key="",
+    )
+    out_whitespace = m.build_verdict(
+        team="Liverpool", tier="silver",
+        signals={"form": True},
+        odds="2.10", bookmaker="Betway",
+        match_key="   ",
+    )
+    out_none = m.build_verdict(
+        team="Liverpool", tier="silver",
+        signals={"form": True},
+        odds="2.10", bookmaker="Betway",
+        match_key=None,
+    )
+    # All three flavours of "missing" produce the same output.
+    assert out_empty == out_whitespace == out_none, (
+        f"empty/whitespace/None match_key must collapse to the same "
+        f"team-salt fallback: empty={out_empty!r} ws={out_whitespace!r} "
+        f"none={out_none!r}"
+    )
+
+
+# Anchor reachability — every spec §12 anchor stays in the relevant pool
+# (regression guard for the brief's "anchors stay reachable" rule).
+def test_section12_anchors_remain_reachable_in_pools():
+    """HG-4 / Brief AC-2 — every spec §12.1-§12.7 anchor sub-phrase must
+    remain a member of the post-fix pools.
+    """
+    # §12.1 Price Edge + Form → primary "The price hasn't caught up" +
+    #       secondary "recent form backs it"
+    assert "The price hasn't caught up" in m.PRIMARY_PHRASES["price_edge"]
+    assert "recent form backs it" in m.SECONDARY_PHRASES["form"]
+    # §12.2 Price Edge + Injury → primary same + secondary "team news
+    #       gives it extra weight"
+    assert "team news gives it extra weight" in m.SECONDARY_PHRASES["injury"]
+    # §12.3 Price Edge + Line Mvt favourable → "The line is moving our
+    #       way and the price is still there"
+    assert "The line is moving our way and the price is still there" in m._PRICE_LINE_FAVOURABLE_LEADS
+    # §12.4 Price Edge + Line Mvt against → "The market has moved, but
+    #       the price still looks big"
+    assert "The market has moved, but the price still looks big" in m._PRICE_LINE_AGAINST_LEADS
+    # §12.5 Form-only → "Recent form backs this"
+    assert "Recent form backs this" in m.PRIMARY_PHRASES["form"]
+    # §12.6 Market-only → "The wider market is leaning this way"
+    assert "The wider market is leaning this way" in m.PRIMARY_PHRASES["market"]
+    # §12.7 Tipster-only → "Outside support points this way"
+    assert "Outside support points this way" in m.PRIMARY_PHRASES["tipster"]
+    # §12.8 fallback by tier — single-entry pools per spec.
+    assert m._FALLBACK_BY_TIER["diamond"] == ("The price still looks too big for the setup",)
+    assert m._FALLBACK_BY_TIER["gold"] == ("There is enough value here to support the pick",)
+    assert m._FALLBACK_BY_TIER["silver"] == ("There is just enough value here",)
+    assert m._FALLBACK_BY_TIER["bronze"] == ("Not much in it, but there is a small lean",)
+
+
+# Banned-term sweep — every pool entry × every cartesian combo must clear
+# the §15.1 / §15.2 scanners. Independent of build_verdict path.
+def test_banned_term_sweep_all_pool_entries_individually():
+    """Every authored pool entry passes the banned-term scanner standalone.
+    Catches a regression where adding a §6 alternate happened to embed
+    a banned term (e.g., "EV", "composite").
+    """
+    failures: list[tuple[str, str, list[str]]] = []
+    pools = {
+        **{f"PRIMARY[{k}]": v for k, v in m.PRIMARY_PHRASES.items()},
+        **{f"SECONDARY[{k}]": v for k, v in m.SECONDARY_PHRASES.items()},
+        "_PRICE_LINE_FAVOURABLE_LEADS": m._PRICE_LINE_FAVOURABLE_LEADS,
+        "_PRICE_LINE_AGAINST_LEADS":    m._PRICE_LINE_AGAINST_LEADS,
+        **{f"_FALLBACK[{tier}]": v for tier, v in m._FALLBACK_BY_TIER.items()},
+    }
+    for pool_name, pool in pools.items():
+        for entry in pool:
+            ok, hits = m.validate_output(entry)
+            if not ok:
+                failures.append((pool_name, entry, hits))
+    assert failures == [], (
+        f"Pool entries with banned-term hits: {failures[:3]}"
+    )
+
+
+def test_paul_4_card_regression():
+    """HG-3 hard requirement — the 4 specific match_keys Paul flagged
+    2026-05-04 with their actual edge_results signal posture (Price + LineMvt
+    unknown direction) must produce ≥3 distinct primary phrases.
+
+    Verbatim cache scenario: 4 simultaneous Gold/Silver cards rendering
+    "The move has not taken the value away — back/lean {team}" was the
+    bug; this regression test pins the fix.
+    """
+    cards = [
+        # (match_key, team, tier)
+        ("manchester_city_vs_brentford_2026-05-09", "Manchester City win", "gold"),
+        ("liverpool_vs_chelsea_2026-05-09",         "Liverpool win",       "gold"),
+        ("brighton_vs_wolves_2026-05-09",           "Brighton & Hove Albion win", "silver"),
+        ("fulham_vs_bournemouth_2026-05-09",        "AFC Bournemouth win", "silver"),
+    ]
+    sigs = {"price_edge": True, "line_mvt": True}
+    primaries = set()
+    outputs: list[str] = []
+    for mk, team, tier in cards:
+        out = m.build_verdict(
+            team=team, tier=tier, signals=sigs,
+            odds="1.85", bookmaker="HWB",
+            line_movement_direction=None,  # unknown — the Paul-flagged scenario
+            match_key=mk,
+        )
+        outputs.append(out)
+        primaries.add(_primary_lead_of(out))
+    assert len(primaries) >= 3, (
+        f"Paul 4-card regression: only {len(primaries)} distinct primaries "
+        f"across the 4 match_keys (HG-3 hard requirement: ≥3). "
+        f"Outputs:\n" + "\n".join(outputs)
+    )
+    # Verbatim NO-MONOCULTURE check: the failing prefix Paul flagged must
+    # not appear in EVERY output.
+    monoculture_prefix = "The move has not taken the value away"
+    monoculture_count = sum(out.startswith(monoculture_prefix) for out in outputs)
+    assert monoculture_count < len(outputs), (
+        f"All {len(outputs)} cards still start with monoculture prefix "
+        f"{monoculture_prefix!r} — fix did not land."
+    )
