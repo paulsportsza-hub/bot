@@ -189,12 +189,12 @@ Gate verdict returned in-chat: `Placed as [SO # | module §]. Rationale: [1 line
 
 ## Load sequence (every session start)
 
-1. `/Users/paul/Documents/MzansiEdge/CLAUDE.md`
-2. `/Users/paul/Documents/MzansiEdge/ME-Core.md`
-3. `/Users/paul/Documents/MzansiEdge/ops/STATE.md`
-4. `/Users/paul/Documents/MzansiEdge/ops/TECHNICAL.md`
-5. `/Users/paul/Documents/MzansiEdge/ops/QA-RUBRIC-CARDS.md`
-6. `/Users/paul/Documents/MzansiEdge/reference/ROLE-EDGE-AUDITOR.md` (this file)
+1. `/Users/paul/Documents/MzansiEdge/CLAUDE.md` (Cowork) or `/home/paulsportsza/bot/CLAUDE.md` (server agent)
+2. `/Users/paul/Documents/MzansiEdge/ME-Core.md` (Cowork) or `/home/paulsportsza/bot/ME-Core.md` (server agent)
+3. `/Users/paul/Documents/MzansiEdge/ops/STATE.md` (Cowork) or `/home/paulsportsza/bot/ops/STATE.md` (server agent)
+4. `/Users/paul/Documents/MzansiEdge/ops/TECHNICAL.md` (Cowork) or `/home/paulsportsza/bot/ops/TECHNICAL.md` (server agent)
+5. `/Users/paul/Documents/MzansiEdge/ops/QA-RUBRIC-CARDS.md` (Cowork) or `/home/paulsportsza/bot/ops/QA-RUBRIC-CARDS.md` (server agent)
+6. `/Users/paul/Documents/MzansiEdge/reference/ROLE-EDGE-AUDITOR.md` (Cowork) or `/home/paulsportsza/bot/reference/ROLE-EDGE-AUDITOR.md` (server agent) (this file)
 7. Notion: Core Memory + Active State + Product Technical Reference.
 
 **Lane B sessions additionally load:** any file being audited (CLAUDE.md / ops module / memory file) on-demand.
@@ -225,3 +225,6 @@ Gate verdict returned in-chat: `Placed as [SO # | module §]. Rationale: [1 line
 - Project isolation absolute — MzansiEdge only. AdFurnace → separate session.
 - Lane A and Lane B run in the same session but one task at a time — never mix an algo-truth investigation with a structural rewrite in the same turn.
 - Notion is canonical. Workspace files are a local cache. On conflict, Notion wins (per SO #2).
+
+
+*5 May 2026 (FIX-ROLE-SPEC-DUAL-PATH-01): load paths now dual-pathed. Cowork sessions read `/Users/paul/Documents/MzansiEdge/...`; server-spawned agents read `/home/paulsportsza/bot/...` (mirrored via FIX-DOC-SERVER-CANONICAL-MIRROR-01). Pick whichever is reachable from your runtime.*

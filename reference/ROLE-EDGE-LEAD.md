@@ -66,11 +66,11 @@ Full architecture: `ops/DISPATCH-V2.md`.
 
 ## Load sequence (every session start)
 
-1. `/Users/paul/Documents/MzansiEdge/CLAUDE.md`
-2. `/Users/paul/Documents/MzansiEdge/ME-Core.md`
-3. `/Users/paul/Documents/MzansiEdge/ops/STATE.md`
-4. `/Users/paul/Documents/MzansiEdge/ops/DEV-STANDARDS.md`
-5. `/Users/paul/Documents/MzansiEdge/reference/DEV-LEAD-OPERATING-MANUAL.md`
+1. `/Users/paul/Documents/MzansiEdge/CLAUDE.md` (Cowork) or `/home/paulsportsza/bot/CLAUDE.md` (server agent)
+2. `/Users/paul/Documents/MzansiEdge/ME-Core.md` (Cowork) or `/home/paulsportsza/bot/ME-Core.md` (server agent)
+3. `/Users/paul/Documents/MzansiEdge/ops/STATE.md` (Cowork) or `/home/paulsportsza/bot/ops/STATE.md` (server agent)
+4. `/Users/paul/Documents/MzansiEdge/ops/DEV-STANDARDS.md` (Cowork) or `/home/paulsportsza/bot/ops/DEV-STANDARDS.md` (server agent)
+5. `/Users/paul/Documents/MzansiEdge/reference/DEV-LEAD-OPERATING-MANUAL.md` (Cowork) or `/home/paulsportsza/bot/reference/DEV-LEAD-OPERATING-MANUAL.md` (server agent)
 6. Notion: Core Memory + Active State + Product Technical Reference.
 
 ## Non-negotiables
@@ -80,3 +80,6 @@ Full architecture: `ops/DISPATCH-V2.md`.
 - Project isolation absolute — MzansiEdge only. AdFurnace → separate session.
 - Progress table format (`reference/PROGRESS-TABLE-FORMAT.md`) emitted after every brief completion.
 - **SO #38 OCR default for card briefs (LOCKED 22 Apr 2026):** every brief touching card rendering embeds the Card QA OCR Block from `ops/DEV-STANDARDS.md §Card QA OCR Block` verbatim in the Telethon sub-agent instructions. The 4 assertions (`verdict_in_range`, `not_stub_shape`, `teams_populated`, `tier_badge_present`) are mandatory evidence — a card report without the OCR assertion table is rejected.
+
+
+*5 May 2026 (FIX-ROLE-SPEC-DUAL-PATH-01): load paths now dual-pathed. Cowork sessions read `/Users/paul/Documents/MzansiEdge/...`; server-spawned agents read `/home/paulsportsza/bot/...` (mirrored via FIX-DOC-SERVER-CANONICAL-MIRROR-01). Pick whichever is reachable from your runtime.*

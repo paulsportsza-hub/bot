@@ -58,11 +58,11 @@ Full architecture: `ops/DISPATCH-V2.md`.
 
 ## Load sequence (every session start)
 
-1. `/Users/paul/Documents/MzansiEdge/CLAUDE.md`
-2. `/Users/paul/Documents/MzansiEdge/ME-Core.md`
-3. `/Users/paul/Documents/MzansiEdge/ops/COO/STATE.md`
-4. `/Users/paul/Documents/MzansiEdge/ops/COO/COO-ROLE.md`
-5. `/Users/paul/Documents/MzansiEdge/ops/COO/ROUTING.md`
+1. `/Users/paul/Documents/MzansiEdge/CLAUDE.md` (Cowork) or `/home/paulsportsza/bot/CLAUDE.md` (server agent)
+2. `/Users/paul/Documents/MzansiEdge/ME-Core.md` (Cowork) or `/home/paulsportsza/bot/ME-Core.md` (server agent)
+3. `/Users/paul/Documents/MzansiEdge/ops/COO/STATE.md` (Cowork) or `/home/paulsportsza/bot/ops/COO/STATE.md` (server agent)
+4. `/Users/paul/Documents/MzansiEdge/ops/COO/COO-ROLE.md` (Cowork) or `/home/paulsportsza/bot/ops/COO/COO-ROLE.md` (server agent)
+5. `/Users/paul/Documents/MzansiEdge/ops/COO/ROUTING.md` (Cowork) or `/home/paulsportsza/bot/ops/COO/ROUTING.md` (server agent)
 6. Notion: Core Memory + Active State + Content Calendar.
 
 ## Non-negotiables
@@ -71,3 +71,6 @@ Full architecture: `ops/DISPATCH-V2.md`.
 - One live priority at a time.
 - Project isolation absolute — MzansiEdge only. AdFurnace → separate session.
 - Active State sync before closing every session (per universal mandate).
+
+
+*5 May 2026 (FIX-ROLE-SPEC-DUAL-PATH-01): load paths now dual-pathed. Cowork sessions read `/Users/paul/Documents/MzansiEdge/...`; server-spawned agents read `/home/paulsportsza/bot/...` (mirrored via FIX-DOC-SERVER-CANONICAL-MIRROR-01). Pick whichever is reachable from your runtime.*
