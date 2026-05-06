@@ -26,12 +26,12 @@ Variant DETAIL — fixed 480×620
     .card { width: 480px; height: 620px }
     Templates:
         edge_detail.html
-        match_detail.html
-    Rationale: detail cards have consistent content shape; fixed dimensions give
+    Rationale: edge detail has a consistent content shape; fixed dimensions give
     predictable composition. The 620px height was locked in commit 5885fa9.
 
 Variant LIST — dynamic 480×N where N ∈ [100, 1200]
-    .card { width: 100% } (no fixed height — dynamic measurement via JS)
+    .card declares no fixed height — dynamic measurement via JS captures the
+    actual card height.
     Templates:
         edge_picks.html
         edge_picks_index.html
@@ -41,8 +41,11 @@ Variant LIST — dynamic 480×N where N ∈ [100, 1200]
         ai_breakdown.html
         sub_payment_confirmed.html
         profile_home.html
+        match_detail.html
     Rationale: list-like content varies in item count — dynamic height eliminates
     blank-space padding. ai_breakdown sections vary greatly in prose length.
+    match_detail joined the adaptive match card family under
+    FIX-CARD-MATCH-CANONICAL-FAMILY-01.
 
 Enforcement note: Validated by tests/contracts/test_card_dimensions.py.
 """

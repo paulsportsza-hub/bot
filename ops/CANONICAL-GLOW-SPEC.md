@@ -1,11 +1,13 @@
 # Canonical Card Glow Spec
 
 **Locked:** 4 May 2026 | **Commits:** eb25301 (match_detail) · 4c610f3 (edge templates)
+**Amended:** 6 May 2026 | **Brief:** FIX-CARD-MATCH-CANONICAL-FAMILY-01 (match-family exception)
 **Authority:** Paul direct approval after 12-step iterative tuning
 
 > DO NOT modify alpha values, ellipse dimensions, or gradient centre without a new brief explicitly approved by Paul.
 > DO NOT use a single `{{ tier_color }}` variable in CSS. Use per-tier CSS classes (see below).
 > Agents reading card templates MUST read this file before making any changes to glow-related CSS.
+> Exception: `match_detail.html` now uses the adaptive match-family upper glow documented below.
 
 ---
 
@@ -21,10 +23,12 @@ Insert as **direct children of `.header`** (NOT inside any sub-container):
 ```
 
 Where `TIER_VAR` is the lowercase tier string for that template:
-- `match_detail.html` → `edge_badge_tier`
 - `edge_detail.html` → `tier`
 - `edge_picks.html` → `top_tier`
 - `edge_summary.html` → `top_tier`
+
+`match_detail.html` is no longer part of this header-contained logo glow shell.
+It uses the match-family upper glow zone below.
 
 All other `.header` children MUST have `position: relative; z-index: 1` so they render above the glow.
 `.header` itself MUST have `overflow: hidden`.
@@ -32,6 +36,23 @@ All other `.header` children MUST have `position: relative; z-index: 1` so they 
 > IMPORTANT: The tier variable MUST be lowercased when used in the class name.
 > Use `{{ TIER_VAR | lower }}` — never `{{ TIER_VAR }}` bare.
 > CSS classes are lowercase (logo-glow-gold) — title-case renders will silently produce no glow.
+
+---
+
+## Match-Family Upper Glow
+
+`FIX-CARD-MATCH-CANONICAL-FAMILY-01` approved `match_detail.html` to use the
+adaptive match-family upper glow instead of the header-contained `.logo-glow`
+shell.
+
+- Structure: `.upper-glow-zone` is a direct `.card` child and wraps the header,
+  matchup, and meta bar.
+- Colour: resolve `edge_badge_color` first; otherwise map lowercase
+  `edge_badge_tier` to the canonical tier colour; otherwise fall back to
+  brand orange `#F7931A`.
+- Geometry and alpha are locked for this shell:
+  - `.upper-glow`: `ellipse 35% 130% at 92% 50%`, alpha stops `10` and `07`
+  - `.upper-glow-screen`: `ellipse 22% 100% at 92% 50%`, alpha stops `1A` and `0D`
 
 ---
 
