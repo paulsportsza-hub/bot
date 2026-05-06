@@ -34,9 +34,13 @@ circular import. Helpers are imported lazily inside `validate_narrative_for_pers
 from __future__ import annotations
 
 import logging
+import os
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Literal
+
+import verdict_engine_v2
 
 log = logging.getLogger(__name__)
 
@@ -850,6 +854,371 @@ _SECTION_VERDICT_HTML = "verdict_html"
 _SECTION_NARRATIVE = "all"
 
 
+_V2_FLAG_FALSE_VALUES = {"0", "false", "no", "off", ""}
+_V2_SPORT_VOCAB_BANS: dict[str, tuple[str, ...]] = {
+    "soccer": ("powerplay", "wicket", "set-piece", "breakdown", "scrum", "lineout"),
+    "cricket": ("anfield", "set-piece", "scrum", "lineout", "midfield"),
+    "rugby": ("powerplay", "wicket", "innings", "anfield"),
+}
+_V2_DELEGATION_BYPASS: ContextVar[bool] = ContextVar(
+    "narrative_validator_v2_delegation_bypass",
+    default=False,
+)
+
+
+def _verdict_engine_v2_enabled() -> bool:
+    if _V2_DELEGATION_BYPASS.get():
+        return False
+    return os.environ.get("VERDICT_ENGINE_V2", "1").strip().lower() not in _V2_FLAG_FALSE_VALUES
+
+
+def _text_or_empty(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _text_or_none(value: Any) -> str | None:
+    text = _text_or_empty(value).strip()
+    return text or None
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _text_or_none(value)
+        if text:
+            return text
+    return ""
+
+
+def _dict_team_name(value: Any) -> str:
+    if isinstance(value, dict):
+        return _first_text(value.get("name"), value.get("display_name"), value.get("team"))
+    return _first_text(value)
+
+
+def _parse_match_key_teams(match_key: str) -> tuple[str, str]:
+    key = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", match_key or "")
+    if "_vs_" not in key:
+        return "", ""
+    home_raw, away_raw = key.split("_vs_", 1)
+    return (
+        " ".join(part.capitalize() for part in home_raw.split("_") if part),
+        " ".join(part.capitalize() for part in away_raw.split("_") if part),
+    )
+
+
+def _normalise_outcome_key(value: Any) -> str:
+    text = _text_or_empty(value).strip().lower()
+    if text in {"home", "home win", "1"}:
+        return "home"
+    if text in {"away", "away win", "2"}:
+        return "away"
+    if text in {"draw", "x"}:
+        return "draw"
+    if ":" in text:
+        return _normalise_outcome_key(text.split(":", 1)[1])
+    return ""
+
+
+def _odds_for_v2(value: Any) -> str | float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return str(value)
+
+
+def _signal_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, bool):
+        return {"available": value}
+    if value in (None, ""):
+        return {"available": False}
+    return {"available": bool(value)}
+
+
+def _signals_for_v2(evidence_pack: dict[str, Any]) -> dict[str, Any]:
+    raw = evidence_pack.get("signals") if isinstance(evidence_pack, dict) else None
+    aliases = {
+        **verdict_engine_v2.ALIASES,
+        "line_movement": "movement",
+        "team_news": "lineup_injury",
+        "injury": "lineup_injury",
+        "form": "form_h2h",
+        "market": "market_agreement",
+    }
+    signals: dict[str, Any] = {
+        key: {"available": False} for key in verdict_engine_v2.CANONICAL_SIGNALS
+    }
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            canonical = aliases.get(str(key), str(key))
+            if canonical in signals:
+                signals[canonical] = _signal_payload(value)
+        return signals
+
+    confirming = evidence_pack.get("confirming_signals")
+    try:
+        confirming_count = int(confirming or 0)
+    except (TypeError, ValueError):
+        confirming_count = 0
+    if confirming_count > 0:
+        signals["form_h2h"] = {"available": True}
+    if evidence_pack.get("recommended_odds") or evidence_pack.get("odds") or evidence_pack.get("predicted_ev"):
+        signals["price_edge"] = {"available": True}
+    movement = _first_text(evidence_pack.get("line_movement_direction"), evidence_pack.get("movement"))
+    if movement:
+        signals["movement"] = {"available": True, "direction": movement}
+    return signals
+
+
+def _match_key_from_legacy(content: dict[str, Any], evidence_pack: dict[str, Any]) -> str:
+    return _first_text(
+        content.get("match_key"),
+        content.get("match_id"),
+        evidence_pack.get("match_key"),
+        evidence_pack.get("match_id"),
+        evidence_pack.get("event_id"),
+    )
+
+
+def _has_v2_context(evidence_pack: dict[str, Any]) -> bool:
+    return any(
+        key in evidence_pack and evidence_pack.get(key) not in (None, "", {}, [])
+        for key in (
+            "signals",
+            "recommended_team",
+            "pick_team",
+            "selection",
+            "outcome_key",
+            "outcome",
+            "bet_type",
+            "recommended_odds",
+            "odds",
+            "predicted_ev",
+            "confirming_signals",
+            "sport",
+            "sport_key",
+        )
+    )
+
+
+def _recommended_from_legacy(
+    text: str,
+    evidence_pack: dict[str, Any],
+    home_name: str,
+    away_name: str,
+) -> str:
+    explicit = _first_text(
+        evidence_pack.get("recommended_team"),
+        evidence_pack.get("pick_team"),
+        evidence_pack.get("selection"),
+    )
+    if explicit:
+        return explicit
+
+    outcome_key = _normalise_outcome_key(
+        _first_text(
+            evidence_pack.get("outcome_key"),
+            evidence_pack.get("outcome"),
+            evidence_pack.get("bet_type"),
+        )
+    )
+    if outcome_key == "home":
+        return home_name
+    if outcome_key == "away":
+        return away_name
+    if outcome_key == "draw":
+        return "Draw"
+
+    text_lower = text.lower()
+    home_hit = bool(home_name and home_name.lower() in text_lower)
+    away_hit = bool(away_name and away_name.lower() in text_lower)
+    if home_hit and not away_hit:
+        return home_name
+    if away_hit and not home_hit:
+        return away_name
+    return _first_text(evidence_pack.get("outcome_label"), home_name)
+
+
+def _verdict_context_from_legacy(
+    text: str,
+    content: dict[str, Any],
+    evidence_pack: dict | None,
+    edge_tier: str,
+) -> verdict_engine_v2.VerdictContext:
+    pack: dict[str, Any] = evidence_pack if isinstance(evidence_pack, dict) else {}
+    match_key = _match_key_from_legacy(content, pack)
+    parsed_home, parsed_away = _parse_match_key_teams(match_key)
+    home_name = _first_text(
+        pack.get("home_name"),
+        pack.get("home"),
+        _dict_team_name(pack.get("home_team")),
+        content.get("home_name"),
+        content.get("home_team"),
+        parsed_home,
+    )
+    away_name = _first_text(
+        pack.get("away_name"),
+        pack.get("away"),
+        _dict_team_name(pack.get("away_team")),
+        content.get("away_name"),
+        content.get("away_team"),
+        parsed_away,
+    )
+    recommended_team = _recommended_from_legacy(text, pack, home_name, away_name)
+    league = _first_text(pack.get("league"), pack.get("league_key"), pack.get("competition"))
+    sport = _first_text(pack.get("sport"), pack.get("sport_key"), "soccer")
+    return verdict_engine_v2.VerdictContext(
+        match_key=match_key or "|".join(part for part in (home_name, away_name) if part),
+        edge_revision=_first_text(
+            pack.get("edge_revision"),
+            pack.get("recommended_at"),
+            pack.get("updated_at"),
+            match_key,
+        ),
+        sport=sport.lower(),
+        league=league,
+        home_name=home_name,
+        away_name=away_name,
+        recommended_team=recommended_team,
+        outcome_label=_first_text(pack.get("outcome_label"), recommended_team),
+        odds=_odds_for_v2(
+            _first_text(pack.get("recommended_odds"), pack.get("odds"), pack.get("best_odds"))
+        ),
+        bookmaker=_text_or_none(
+            _first_text(
+                pack.get("recommended_bookmaker"),
+                pack.get("bookmaker"),
+                pack.get("bookie"),
+            )
+        ),
+        tier=(edge_tier or pack.get("edge_tier") or pack.get("tier") or "bronze").lower(),
+        signals=_signals_for_v2(pack),
+        evidence_pack=pack or None,
+        home_form=_text_or_none(pack.get("home_form")),
+        away_form=_text_or_none(pack.get("away_form")),
+        h2h=_text_or_none(_first_text(pack.get("h2h"), pack.get("h2h_summary"))),
+        injuries_home=tuple(pack.get("injuries_home") or ()),
+        injuries_away=tuple(pack.get("injuries_away") or ()),
+        venue=_text_or_none(pack.get("venue")),
+        coach=_text_or_none(pack.get("coach")),
+        nickname=_text_or_none(pack.get("nickname")),
+        bookmaker_count=(
+            int(pack["bookmaker_count"])
+            if isinstance(pack.get("bookmaker_count"), int) and not isinstance(pack.get("bookmaker_count"), bool)
+            else None
+        ),
+        line_movement_direction=_text_or_none(
+            _first_text(pack.get("line_movement_direction"), pack.get("movement"))
+        ),
+        tipster_sources_count=(
+            int(pack["tipster_sources_count"])
+            if isinstance(pack.get("tipster_sources_count"), int) and not isinstance(pack.get("tipster_sources_count"), bool)
+            else None
+        ),
+    )
+
+
+def _sport_vocab_errors(text: str, ctx: verdict_engine_v2.VerdictContext) -> tuple[str, ...]:
+    sport = (ctx.sport or "").lower()
+    if sport in {"football", "epl", "psl", "ucl", "premier_league"}:
+        sport = "soccer"
+    elif sport in {"ipl", "cricket_t20"}:
+        sport = "cricket"
+    elif sport in {"urc", "super_rugby", "six_nations"}:
+        sport = "rugby"
+    terms = _V2_SPORT_VOCAB_BANS.get(sport, ())
+    lower = text.lower()
+    return tuple(
+        f"sport_vocabulary:{term}"
+        for term in terms
+        if re.search(rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])", lower)
+    )
+
+
+def _v2_validation_result(errors: tuple[str, ...], section: str) -> ValidationResult:
+    failures = [
+        ValidationFailure(
+            gate=f"v2_{error.split(':', 1)[0]}",
+            severity="CRITICAL",
+            detail=error,
+            section=section,
+        )
+        for error in errors
+    ]
+    return ValidationResult(
+        passed=not failures,
+        failures=failures,
+        severity="CRITICAL" if failures else None,
+    )
+
+
+def _merge_validation_results(*results: ValidationResult) -> ValidationResult:
+    failures: list[ValidationFailure] = []
+    for result in results:
+        failures.extend(result.failures)
+    crit = [f for f in failures if f.severity == "CRITICAL"]
+    major = [f for f in failures if f.severity == "MAJOR"]
+    if crit:
+        severity: Severity | None = "CRITICAL"
+    elif major:
+        severity = "MAJOR"
+    elif failures:
+        severity = "MINOR"
+    else:
+        severity = None
+    return ValidationResult(
+        passed=(not crit and not major),
+        failures=failures,
+        severity=severity,
+    )
+
+
+def _validate_text_with_v2(
+    text: str,
+    content: dict[str, Any],
+    evidence_pack: dict | None,
+    edge_tier: str,
+    *,
+    section: str,
+) -> ValidationResult:
+    if not text:
+        return ValidationResult(passed=True)
+    ctx = _verdict_context_from_legacy(text, content, evidence_pack, edge_tier)
+    errors = tuple(verdict_engine_v2.validate_verdict(text, ctx))
+    errors = tuple(dict.fromkeys((*errors, *_sport_vocab_errors(text, ctx))))
+    return _v2_validation_result(errors, section)
+
+
+def _validate_verdict_legacy_path(
+    verdict_html: str,
+    edge_tier: str,
+    evidence_pack: dict | None,
+    source_label: str,
+) -> ValidationResult:
+    token = _V2_DELEGATION_BYPASS.set(True)
+    try:
+        return validate_narrative_for_persistence(
+            content={
+                "narrative_html": "",
+                "verdict_html": verdict_html,
+                "match_id": (
+                    evidence_pack.get("match_id", "")
+                    if isinstance(evidence_pack, dict) else ""
+                ),
+                "narrative_source": source_label,
+            },
+            evidence_pack=evidence_pack,
+            edge_tier=edge_tier,
+            source_label=source_label,
+        )
+    finally:
+        _V2_DELEGATION_BYPASS.reset(token)
+
+
 def _extract_setup_section(narrative_html: str) -> str:
     """Best-effort extraction of the Setup section from a narrative HTML block.
 
@@ -915,7 +1284,31 @@ def validate_narrative_for_persistence(
     produces structurally identical results (same gate ordering, same
     detail strings). This is asserted by the contract test suite.
     """
-    failures: list[ValidationFailure] = []
+    _v2_failures: list[ValidationFailure] = []
+    if _verdict_engine_v2_enabled():
+        _pack = evidence_pack if isinstance(evidence_pack, dict) else {}
+        _match_key = _match_key_from_legacy(content, _pack)
+        if _has_v2_context(_pack):
+            try:
+                _v2_result = _validate_text_with_v2(
+                    content.get("verdict_html") or content.get("narrative_html") or "",
+                    content,
+                    evidence_pack,
+                    edge_tier,
+                    section=(
+                        _SECTION_VERDICT_HTML
+                        if content.get("verdict_html")
+                        else _SECTION_NARRATIVE
+                    ),
+                )
+                _v2_failures = list(_v2_result.failures)
+            except Exception as exc:
+                log.warning(
+                    "NARRATIVE_VALIDATOR_V2_DELEGATION_FAIL match_key=%s err=%s",
+                    _match_key, exc, exc_info=True,
+                )
+
+    failures: list[ValidationFailure] = list(_v2_failures)
     narrative_html = content.get("narrative_html") or ""
     verdict_html = content.get("verdict_html") or ""
     match_id = content.get("match_id", "")
@@ -1233,19 +1626,52 @@ def validate_verdict_for_persistence(
     ValidationResult
         Reports findings; never makes write decisions.
     """
-    if not verdict_html:
-        return ValidationResult(passed=True)
-    return validate_narrative_for_persistence(
-        content={
+    if _verdict_engine_v2_enabled():
+        _content = {
             "narrative_html": "",
             "verdict_html": verdict_html,
             "match_id": (
                 evidence_pack.get("match_id", "")
                 if isinstance(evidence_pack, dict) else ""
             ),
-            "narrative_source": source_label,
-        },
-        evidence_pack=evidence_pack if isinstance(evidence_pack, dict) else None,
-        edge_tier=edge_tier,
-        source_label=source_label,
+        }
+        _match_key = _match_key_from_legacy(
+            _content,
+            evidence_pack if isinstance(evidence_pack, dict) else {},
+        )
+        if _has_v2_context(evidence_pack if isinstance(evidence_pack, dict) else {}):
+            try:
+                _v2_result = _validate_text_with_v2(
+                    verdict_html,
+                    _content,
+                    evidence_pack,
+                    edge_tier,
+                    section=_SECTION_VERDICT_HTML,
+                )
+            except Exception as exc:
+                log.warning(
+                    "NARRATIVE_VALIDATOR_V2_DELEGATION_FAIL match_key=%s err=%s",
+                    _match_key, exc, exc_info=True,
+                )
+                return _validate_verdict_legacy_path(
+                    verdict_html,
+                    edge_tier,
+                    evidence_pack if isinstance(evidence_pack, dict) else None,
+                    source_label,
+                )
+            _legacy_result = _validate_verdict_legacy_path(
+                verdict_html,
+                edge_tier,
+                evidence_pack if isinstance(evidence_pack, dict) else None,
+                source_label,
+            )
+            return _merge_validation_results(_v2_result, _legacy_result)
+
+    if not verdict_html:
+        return ValidationResult(passed=True)
+    return _validate_verdict_legacy_path(
+        verdict_html,
+        edge_tier,
+        evidence_pack if isinstance(evidence_pack, dict) else None,
+        source_label,
     )
