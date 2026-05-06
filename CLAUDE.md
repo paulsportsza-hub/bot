@@ -86,6 +86,14 @@
 
 Locked 2026-04-28 by `FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01`. The breakdown readers (`card_data.py:build_ai_breakdown_data` plus both `bot.py:_get_cached_narrative` branches) must keep the `narrative_html IS NOT NULL AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0` filter. Verdict-cache rows intentionally write `narrative_html=''`, so `_get_cached_verdict` is exempt because it serves `verdict_html` directly.
 
+### Rule 21 — w82 / baseline_no_edge are valid for ALL tiers
+
+Locked 2026-04-28 by `FIX-PREGEN-COVERAGE-DIAMOND-01`. The old Stream4 write refusal and serve-time `w82_for_tier:gold|diamond` quarantine are lifted: `w82` and `baseline_no_edge` rows are valid for Bronze, Silver, Gold, and Diamond. Premium write safety comes from the unified persistence validator and locked narrative quality rules, not from a blanket source/tier ban. Premium-tier baseline writes and serves must keep the `FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Write` / `PremiumW82Serve` log markers so polish-failure rates stay monitorable.
+
+### OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01 — Canonical lane commit discipline
+
+Locked 2026-04-28 by `OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01`. `static/qa-gallery/canonical/**` is the hand-curated design source of truth. Canonical writes are atomic-commit-only: commit canonical assets in their own transaction, separate from code/config changes. The pre-commit hook `.githooks/pre-commit` calls `scripts/canonical_lane_check.sh` and rejects mixed canonical/non-canonical staging unless `ALLOW_CANONICAL_MIX=1` is used with an audit trail. Auto-regen pipelines write to `static/qa-gallery/latest/` or dated folders, never to `canonical/`.
+
 ### Where the other 25 SOs live (moved 17 April 2026 PM)
 
 | Target module | Moved SOs | # |

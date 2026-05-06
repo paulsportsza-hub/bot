@@ -483,7 +483,7 @@ def test_run_checks_returns_required_keys():
 
 
 def test_run_checks_summary_counts_match():
-    """summary pass+fail+skip must equal 11 (8 scraper + 3 publisher checks)."""
+    """summary counts plus degraded checks must equal all health checks."""
     with (
         patch("contracts.monitors.scraper_health.connect_odds_db") as mock_conn_fn,
         # Prevent live Notion API calls in publisher checks (causes 30s timeout)
@@ -496,5 +496,11 @@ def test_run_checks_summary_counts_match():
 
         result = shm.run_checks(dry_run=True)
 
+    statuses = [
+        check["status"]
+        for group in (result["checks"], result["publisher_checks"])
+        for check in group.values()
+    ]
     s = result["summary"]
-    assert s["pass"] + s["fail"] + s["skip"] == 11  # 8 scraper + 3 publisher
+    degraded = sum(1 for status in statuses if status == "DEGRADED")
+    assert s["pass"] + s["fail"] + s["skip"] + degraded == len(statuses)

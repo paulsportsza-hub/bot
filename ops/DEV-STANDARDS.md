@@ -3,21 +3,21 @@
 > **Source of truth for agent briefing, delegation, and QA standards.**
 > Referenced from CLAUDE.md.
 
-*Last updated: 4 May 2026 by Sonnet - AUDITOR (BUILD-DEV-STANDARDS-V45-REVIEW-GATE-NARROW-01 — v4.4 → v4.5, narrows Codex Review Gate after FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 burned full 5h Cowork window on stacked Opus Max + mandatory adversarial: `/codex:adversarial-review` is now DISCRETIONARY (opt-in via brief AC, not auto-fired); mandatory adversarial triggers narrowed 6→3 (money/payments, auth/settlement, non-rollback-safe migrations); cost rule added). Earlier history: 3 May 2026 by Opus Max Effort - AUDITOR (BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-01 — v4.3 → v4.4, ratifies Codex Review Gate as canonical brief lifecycle / SO #45). 17 April 2026 PM by AUDITOR (CLAUDE-MD-SO-SPLIT-01 Tier 1 — absorbed 6 SOs from CLAUDE.md: #15, #18, #19, #27 [reworded], #33, #36.)*
+*Last updated: 4 May 2026 by Sonnet - AUDITOR (BUILD-DEV-STANDARDS-V45-REVIEW-GATE-NARROW-01 — v4.4 → v4.5, narrows Codex Review Gate after FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 burned full 5h Cowork window on stacked Opus Max + mandatory adversarial: `/codex:adversarial-review --wait <focus text>` is now DISCRETIONARY (opt-in via brief AC, not auto-fired); mandatory adversarial triggers narrowed 6→3 (money/payments, auth/settlement, non-rollback-safe migrations); cost rule added). Earlier history: 3 May 2026 by Opus Max Effort - AUDITOR (BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-01 — v4.3 → v4.4, ratifies Codex Review Gate as canonical brief lifecycle / SO #45). 17 April 2026 PM by AUDITOR (CLAUDE-MD-SO-SPLIT-01 Tier 1 — absorbed 6 SOs from CLAUDE.md: #15, #18, #19, #27 [reworded], #33, #36.)*
 
 ---
 
 ## Codex Review Gate (v4.5 — LOCKED 4 May 2026, supersedes v4.4)
 
-**v4.5 narrows the Codex Review Gate to fix the cost-stacking failure mode.** Standard `/codex:review` remains mandatory on every code-touching brief; `/codex:adversarial-review` is now **DISCRETIONARY** — opt-in via brief AC, NOT auto-fired by trigger match. v4.4's mandatory trigger list (6 categories) is narrowed to **3 hard categories** (money/payments, auth/settlement, non-rollback-safe migrations); the other three move to ADVISORY ("Consider adversarial"). Cost rule added: when executor = Opus Max Effort, default review = standard `/codex:review` unless brief AC explicitly justifies adversarial. **Driver:** FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 stacked Opus Max + mandatory adversarial on a dispatch-system trigger and burned the full 5h Cowork window (1h 39m, 171k tokens, 7% balance left) — incompatible with Routing v1 §4 cost discipline.
+**v4.5 narrows the Codex Review Gate to fix the cost-stacking failure mode.** Standard `/codex:review --wait` remains mandatory on every code-touching brief; `/codex:adversarial-review --wait <focus text>` is now **DISCRETIONARY** — opt-in via brief AC, NOT auto-fired by trigger match. v4.4's mandatory trigger list (6 categories) is narrowed to **3 hard categories** (money/payments, auth/settlement, non-rollback-safe migrations); the other three move to ADVISORY ("Consider adversarial"). Cost rule added: when executor = Opus Max Effort, default review = standard `/codex:review --wait` unless brief AC explicitly justifies adversarial. **Driver:** FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 stacked Opus Max + mandatory adversarial on a dispatch-system trigger and burned the full 5h Cowork window (1h 39m, 171k tokens, 7% balance left) — incompatible with Routing v1 §4 cost discipline.
 
-Routing v1 pivot otherwise unchanged: Codex stops being a primary executor; Codex runs as the universal reviewer invoked via `/codex:review` or `/codex:adversarial-review` at the end of every code-touching brief, before `mark_done.sh`. Claude (Sonnet or Opus Max Effort) executes; Codex reviews. Locked under SO #45.
+Routing v1 pivot otherwise unchanged: Codex stops being a primary executor; Codex runs as the universal reviewer invoked via `/codex:review --wait` or `/codex:adversarial-review --wait <focus text>` at the end of every code-touching brief, before `mark_done.sh`. Claude (Sonnet or Opus Max Effort) executes; Codex reviews. Locked under SO #45.
 
 ### Lifecycle (one extra mandatory step per brief)
 
 Standard brief execution gains one mandatory step between commit + push and `mark_done.sh`:
 
-1. After commit + push, before `mark_done.sh`, run `/codex:review` (or `/codex:adversarial-review <focus text>` when AC explicitly declared) on the wave branch from inside the executing Claude Code session.
+1. After commit + push, before `mark_done.sh`, run `/codex:review --wait` (or `/codex:adversarial-review --wait <focus text>` when AC explicitly declared) on the wave branch from inside the executing Claude Code session.
 2. If review returns blockers, address them with additional commits + push, then re-run review.
 3. Only proceed to `mark_done.sh` when review returns no blockers.
 4. Include the review summary verbatim in the report under a `## Codex Review` section.
@@ -25,10 +25,10 @@ Standard brief execution gains one mandatory step between commit + push and `mar
 
 ### Review modes
 
-- **`/codex:review`** — DEFAULT, MANDATORY. Functional correctness, regressions, contract drift, gate coverage. Use on every code-touching brief unless adversarial is explicitly declared.
-- **`/codex:adversarial-review <focus text>`** — DISCRETIONARY (v4.5). Adversarial second-pair-of-eyes on a specified failure-class focus. Invoked only when (a) brief AC explicitly sets `review_mode: adversarial-review` with focus text, (b) standard `/codex:review` output recommends escalation, or (c) Paul override. Trigger list does NOT auto-fire adversarial in v4.5.
+- **`/codex:review --wait`** — DEFAULT, MANDATORY. Functional correctness, regressions, contract drift, gate coverage. Use on every code-touching brief unless adversarial is explicitly declared.
+- **`/codex:adversarial-review --wait <focus text>`** — DISCRETIONARY (v4.5). Adversarial second-pair-of-eyes on a specified failure-class focus. Invoked only when (a) brief AC explicitly sets `review_mode: adversarial-review` with focus text, (b) standard `/codex:review --wait` output recommends escalation, or (c) Paul override. Trigger list does NOT auto-fire adversarial in v4.5.
 
-### When to use `/codex:adversarial-review` (mandatory triggers — narrowed v4.5)
+### When to use `/codex:adversarial-review --wait <focus text>` (mandatory triggers — narrowed v4.5)
 
 **Mandatory triggers (3 hard categories — adversarial REQUIRED in brief AC):**
 
@@ -42,11 +42,11 @@ Standard brief execution gains one mandatory step between commit + push and `mar
 - Changes touching the dispatch system, bridge, or worktree-runner.
 - Narrative / cache surfaces that ship to premium-tier users.
 
-For advisory items, the author decides per-brief whether the architectural risk warrants the cost of an adversarial review. Standard `/codex:review` is sufficient for the majority; reserve adversarial for genuinely high-blast-radius changes within those categories.
+For advisory items, the author decides per-brief whether the architectural risk warrants the cost of an adversarial review. Standard `/codex:review --wait` is sufficient for the majority; reserve adversarial for genuinely high-blast-radius changes within those categories.
 
 ### Cost rule (v4.5 NEW)
 
-When the executor model is Opus Max Effort, default review = standard `/codex:review` unless the brief AC explicitly justifies adversarial in writing. No stacking premium-on-premium without justification. This rule exists because Opus Max Effort + adversarial Codex on the same brief routinely consumes the entire 5h Cowork window — incompatible with parallel orchestration.
+When the executor model is Opus Max Effort, default review = standard `/codex:review --wait` unless the brief AC explicitly justifies adversarial in writing. No stacking premium-on-premium without justification. This rule exists because Opus Max Effort + adversarial Codex on the same brief routinely consumes the entire 5h Cowork window — incompatible with parallel orchestration.
 
 ### Brief authoring rule (v4.5 amended)
 
@@ -145,7 +145,7 @@ Review mode for this brief: `<review | adversarial-review>`  ← MUST be explici
 <If executor=Opus Max Effort and review_mode=adversarial-review: justification: "<why premium-on-premium cost is warranted>">
 
 After commit + push, before mark_done.sh:
-1. Run `/codex:review` (or `/codex:adversarial-review <focus text>` when explicitly declared) on the wave branch.
+1. Run `/codex:review --wait` (or `/codex:adversarial-review --wait <focus text>` when explicitly declared) on the wave branch.
 2. If review returns blockers, address them with additional commits + push, then re-run review.
 3. Only proceed to mark_done.sh when review returns no blockers.
 4. Include the review summary verbatim in the report under a `## Codex Review` section.
