@@ -312,11 +312,18 @@
 
         <!-- Feature list -->
         <div class="feature-list">
+            {% set features_text = (features | join(' ') | lower) %}
             {% for feat in features %}
             <div class="feature">
                 <span class="feature-bullet">▸</span>
                 <span>{{ feat | e }}</span>
             </div>
+            {% if loop.first and 'ai breakdown' not in features_text %}
+            <div class="feature">
+                <span class="feature-bullet">▸</span>
+                <span>Full AI Breakdown: Setup, Edge, Risk, Verdict on every match</span>
+            </div>
+            {% endif %}
             {% endfor %}
         </div>
 

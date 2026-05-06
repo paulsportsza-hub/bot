@@ -232,8 +232,12 @@
             {% endif %}
             <div class="plan-features">
                 {% if plan.tier == 'diamond' %}
+                    {% set plan_features_text = (plan.features | join(' ') | lower) %}
                     {% for feat in plan.features %}
                     <div class="plan-feature">{{ feat | e }}</div>
+                    {% if loop.first and 'ai breakdown' not in plan_features_text %}
+                    <div class="plan-feature">Full AI Breakdown: Setup, Edge, Risk, Verdict on every match</div>
+                    {% endif %}
                     {% endfor %}
                 {% else %}
                     {% for feat in plan.features[:3] %}
