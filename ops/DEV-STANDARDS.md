@@ -68,12 +68,13 @@ Reports without this section are INCOMPLETE and the brief reopens. AUDITOR verif
 
 ### Bootstrap exemption
 
-Only two briefs are bootstrap-exempt because they ratify or install the gate itself:
+Only three briefs are bootstrap-exempt because they ratify or amend the gate itself:
 
 - `BUILD-CODEX-PLUGIN-INSTALL-AND-VERIFY-01` (server-side `/codex:*` plugin install).
 - `BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-01` (this brief — ratifies the gate as canonical lifecycle).
+- `BUILD-DEV-STANDARDS-V4.5-REVIEW-GATE-NARROW-01` (narrows the gate and cost rule).
 
-All subsequent code-touching briefs MUST gate. Reports for the two exempt briefs include `Outcome: bootstrap-exempt` instead of `clean`.
+All subsequent code-touching briefs MUST gate. Reports for the three exempt briefs include `Outcome: bootstrap-exempt` instead of `clean`.
 
 ### Why
 

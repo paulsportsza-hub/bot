@@ -254,9 +254,9 @@ After commit + push, before mark_done.sh: (1) if `DISPATCH_MODE=hybrid`, run `/c
 
 ### Adversarial-review mandatory triggers (narrowed 6 → 3 in v4.5)
 
-- New runtime path handling money, payments, or auth. (KEPT)
-- Schema changes on tables with retention/billing/compliance impact. (KEPT)
-- Migrations that are not idempotent / not rollback-safe. (KEPT)
+- New runtime path handling money or payments. (KEPT)
+- New runtime path handling auth or settlement. (KEPT)
+- Migrations that are not rollback-safe. (KEPT)
 - MOVED TO ADVISORY: Concurrency-sensitive code (locks, queues, async handlers, scrapers).
 - MOVED TO ADVISORY: Any change touching the dispatch system, bridge, or worktree-runner.
 - MOVED TO ADVISORY: Any narrative/cache surface that ships to premium-tier users.
@@ -277,7 +277,7 @@ BUILD-CODEX-PLUGIN-INSTALL-AND-VERIFY-01, BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-0
 
 Active 8: Sonnet - LEAD | Sonnet - AUDITOR | Sonnet - COO | Sonnet - NARRATIVE | Opus Max Effort - LEAD | Opus Max Effort - AUDITOR | Opus Max Effort - COO | Opus Max Effort - NARRATIVE.
 
-Retired 8 (RETIRED 3 May 2026 — Codex executor agents now run as reviewers via `/codex:*` slash commands): Codex XHigh - LEAD/AUDITOR/COO/NARRATIVE | Codex High - LEAD/AUDITOR/COO/NARRATIVE.
+Retired 8 (RETIRED 3 May 2026 in hybrid dispatch — Codex XHigh/Codex High are no longer primary Claude-bridge executor selections; hybrid uses `/codex:review --wait`, while pure-codex dispatch uses the fresh `codex exec` sub-agent path from `FIX-SO45-CODEX-INLINE-SUBAGENT-01`): Codex XHigh - LEAD/AUDITOR/COO/NARRATIVE | Codex High - LEAD/AUDITOR/COO/NARRATIVE.
 
 ### Why
 
