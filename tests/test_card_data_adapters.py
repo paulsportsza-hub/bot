@@ -614,6 +614,22 @@ def _render_template(name: str, data: dict) -> str:
     return env.get_template(name).render(**data)
 
 
+def test_onboarding_favourites_template_renders_team_names():
+    d = build_onboarding_favourites_data(
+        "soccer",
+        "Soccer",
+        "⚽",
+        teams=[
+            {"name": "Manchester United", "selected": True},
+            {"name": "Kaizer Chiefs", "selected": False},
+        ],
+        selected_count=1,
+    )
+    html = _render_template("onboarding_favourites.html", d)
+    assert "Manchester United" in html
+    assert "Kaizer Chiefs" in html
+
+
 class TestEdgePicksEmptyData:
     def test_required_keys_present(self):
         d = build_edge_picks_empty_data()

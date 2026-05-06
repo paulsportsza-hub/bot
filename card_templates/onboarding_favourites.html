@@ -58,7 +58,7 @@
             {% if teams %}
             {% for team in teams %}
             <div class="team-row {% if team.selected %}selected{% endif %}">
-                <span class="team-label">{{ team.label }}</span>
+                <span class="team-label">{{ team.label | default(team.name, true) }}</span>
                 {% if team.selected %}
                 <span class="team-check">✓</span>
                 {% else %}

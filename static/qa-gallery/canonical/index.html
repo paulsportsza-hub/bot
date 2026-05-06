@@ -119,10 +119,10 @@
   <div class="design-notes">
     <h4>1 · Header (every edge-tier surface)</h4>
     <ul>
-      <li><strong>Logo</strong>: <code>mzansiedge-wordmark-dark-transparent.png</code> at <code>height: 28px</code> (detail/breakdown) or <code>32px</code> (list/index). Loaded via <code>card_data.logo_b64()</code> as base64 data URI. Text fallback only if image absent.</li>
-      <li><strong>Glow zone — covers header + matchup + meta-bar as one unified block</strong> (templates: <code>edge_detail</code>, <code>ai_breakdown</code>, <code>tier_lock_upsell</code>):
+      <li><strong>Logo</strong>: <code>mzansiedge-wordmark-dark-transparent.png</code> at <code>height: 28px</code> (detail) or <code>32px</code> (list/index). Loaded via <code>card_data.logo_b64()</code> as base64 data URI. Text fallback only if image absent.</li>
+      <li><strong>Glow zone — covers header + matchup + meta-bar as one unified block</strong> (templates: <code>edge_detail</code>, <code>tier_lock_upsell</code>):
         <ul>
-          <li>Wrap <code>.header</code> + <code>.matchup</code> (or <code>.match-meta</code> kicker+title for ai_breakdown) + <code>.meta-bar</code> in <code>&lt;div class="upper-glow-zone"&gt;</code>. Wrapper has <code>position: relative; isolation: isolate; overflow: hidden</code>.</li>
+          <li>Wrap <code>.header</code> + <code>.matchup</code> + <code>.meta-bar</code> in <code>&lt;div class="upper-glow-zone"&gt;</code>. Wrapper has <code>position: relative; isolation: isolate; overflow: hidden</code>.</li>
           <li>Two glow layers inside the wrapper at <code>z-index: 0</code>:
             <ul>
               <li>Layer A (<code>.upper-glow</code>, blurred 2px): <code>radial-gradient(ellipse 35% 130% at 92% 50%, {tc}10 0%, {tc}07 50%, transparent 90%)</code></li>
@@ -131,7 +131,6 @@
           </li>
           <li>All inner content (header / matchup / meta-bar) lifted to <code>z-index: 2</code>.</li>
           <li><strong>Drop the hard dividing line above the meta-bar.</strong> Remove <code>border-top: 1px solid #2A2A2A</code> from <code>.meta-bar</code>. Keep <code>border-bottom</code> (separates the unified upper block from the analysis section below — THE PICK / prose / locked-preview).</li>
-          <li>For ai_breakdown specifically: the prod template originally nested <code>.meta-bar</code> inside <code>.match-meta</code>. Canonical pulls <code>.meta-bar</code> out as a sibling of <code>.match-meta</code> (with explicit <code>padding: 8px 18px</code> to replace the lost <code>margin: 0 -18px</code>) so the glow can flow seamlessly to its bottom.</li>
           <li>Header padding stays at prod values (<code>8px 16px</code>) — do NOT enlarge (eats verdict space on edge_detail).</li>
           <li><strong>Banned</strong>: <code>border-top</code> on <code>.meta-bar</code> (creates the hard dividing line); glow radials extending past the meta-bar's bottom border; header background gradients.</li>
         </ul>
@@ -204,7 +203,7 @@
   <div class="design-notes">
     <h4>6 · Two glow types — one per surface family</h4>
     <ul>
-      <li><strong>Tier-color glow</strong> (cyan/yellow/silver/bronze): for surfaces tied to a specific edge tier. Used by <code>edge_detail.html</code>, <code>ai_breakdown.html</code>, <code>edge_picks.html</code>, <code>edge_picks_index_v1.html</code>, <code>tier_page.html</code>, <code>tier_lock_upsell.html</code>.</li>
+      <li><strong>Tier-color glow</strong> (cyan/yellow/silver/bronze): for surfaces tied to a specific edge tier. Used by <code>edge_detail.html</code>, <code>edge_picks.html</code>, <code>edge_picks_index_v1.html</code>, <code>tier_page.html</code>, <code>tier_lock_upsell.html</code>.</li>
       <li><strong>Brand-orange glow</strong> (gradient <code>#FF6B00 → #F7931A → #FFBE45</code>): for surfaces NOT tied to a tier. Used by all <code>sub_*</code>, <code>onboarding_*</code>, <code>profile_home</code>, <code>my_matches</code>, <code>match_detail</code>, <code>my_teams</code>, <code>settings_sports</code>, <code>help</code>, <code>bookmaker_directory</code>, <code>home_winners</code>, <code>story_quiz_*</code>. Reference: existing prod <code>sub_payment_error.html</code> + <code>home_winners.html</code>.</li>
       <li><strong>Glow placement</strong>: right side of header only (same dual-layer recipe as edge_detail), alphas adjusted to whatever reads best per surface but never extends below the header.</li>
       <li><strong>Banned</strong>: mixed tier+orange on same card; full-card border glows; glow on cards explicitly representing "calm" UX (e.g. settings).</li>
@@ -569,61 +568,6 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">edge_detail_gold.png</span><span class="variant-tag">Gold · #FFD700</span></div><img src="edge_detail_gold.png" alt="edge_detail — Gold"></div>
       <div class="variant"><div class="variant-header"><span class="variant-name">edge_detail_silver.png</span><span class="variant-tag">Silver · #A0AEC0</span></div><img src="edge_detail_silver.png" alt="edge_detail — Silver"></div>
       <div class="variant"><div class="variant-header"><span class="variant-name">edge_detail_bronze.png</span><span class="variant-tag">Bronze · #CD7F32</span></div><img src="edge_detail_bronze.png" alt="edge_detail — Bronze"></div>
-    </div>
-  </section>
-
-  <!-- ── ai_breakdown.html ───────────────────────────────────── -->
-  <section class="template-block">
-    <div class="tpl-header">
-      <span class="tpl-name">ai_breakdown.html</span>
-      <span class="tpl-status canonical">✅ Canonical</span>
-      <span class="tpl-meta">Approved 2026-04-25 · LIST variant 480×N · 4 tier renders</span>
-    </div>
-    <p class="tpl-summary">
-      Full AI breakdown card. Sent on the AI deep-dive flow. 4 prose sections (Setup / Edge / Risk / Verdict)
-      wrapped in the unified header system: logo + right-side tier-glow + match meta with SS badge.
-      <strong>No footer</strong> — card terminates immediately below the Verdict block.
-      Section left-borders + tag colors are <strong>fixed</strong> (gold/green/red), matching live prod —
-      tier-coloured signals live only in the header glow + tier badge + EV display.
-    </p>
-
-    <div class="design-notes">
-      <h4>Design notes (locked constraints)</h4>
-      <ul>
-        <li>Header pattern matches <code>edge_detail.html</code> (§ Design System 1) — same logo + right-side-only tier-glow + tier badge.</li>
-        <li>EV % shown in tier color in the header right.</li>
-        <li>Match title: <strong>full team names always</strong> (max 2 lines) — never truncate "Mamelodi Sun..." or similar.</li>
-        <li>Meta bar: league emoji, date, time, SS DStv badge — separated by 14px gap, centred, on top + bottom borders.</li>
-        <li><strong>Section left-borders are FIXED</strong> (matches live <code>bot/card_templates/ai_breakdown.html</code>): Setup = <code>#F5B800</code> (gold), Edge = green, Risk = red, Verdict = <code>#F5B800</code> with subtle <code>rgba(245,184,0,0.05)</code> bg gradient. <strong>Banned</strong>: tier-colouring section borders.</li>
-        <li><strong>Section tags are FIXED colors</strong> (matches live): Setup <code>tag-gold "CONTEXT"</code>, Edge <code>tag-green "+X.X% EV"</code>, Risk <code>tag-red "CAUTION"</code>, Verdict <code>tag-gold "{verdict_tag}"</code>.</li>
-        <li><strong>verdict_tag legitimate values</strong> (from <code>bot/card_data.py:1199-1213</code>): <code>STRONG BACK / BACK / MILD LEAN / SPECULATIVE / MONITOR / VERDICT</code>. <strong>Banned</strong>: <code>"LEAN"</code> alone (must be <code>"MILD LEAN"</code>), <code>"PASS"</code>, or any value outside the legitimate set.</li>
-        <li><strong>No footer.</strong> Card closes off immediately after the Verdict block. The standard <code>mzansiedge.co.za · Bet responsibly · 18+</code> footer is omitted on this surface.</li>
-        <li><strong>Adaptive height (LIST variant)</strong> — <code>card_renderer.py:40</code> JS-measures content and clips the card to actual height. Total heights vary per render: Diamond 618 / Gold 578 / Silver 538 / Bronze 538 logical px.</li>
-        <li><strong>Card terminates with a small black breathing strip</strong> below the Verdict section:
-          <ul>
-            <li><code>.section { padding: 10px 13px 8px }</code> — verdict text breathes 8px inside the grey section bg (#141416)</li>
-            <li><code>.sections { padding: 10px 16px 10px }</code> — card extends 10px past the section, showing the card bg (#0a0a0b ≈ pure black) as a clean black breathing strip before the card edge</li>
-          </ul>
-          <strong>Banned</strong>: zero <code>.sections</code> bottom padding (verdict touches card edge — too tight) AND large <code>.sections</code> bottom padding (negative space).
-        </li>
-      </ul>
-    </div>
-
-    <div class="impl-targets">
-      <h4>Implementer agent — targets</h4>
-      <ul>
-        <li>Replace <code>bot/card_templates/ai_breakdown.html</code> with canonical version (lift from <code>/tmp/ai_breakdown_canonical.html</code>) — keeps the 4-section structure, adds unified header + meta bar, <strong>removes the footer entirely</strong>, fixes section borders/tags to prod-spec colors.</li>
-        <li>Update <code>bot/card_data.py:build_ai_breakdown_data</code> to provide: <code>tier</code>, <code>tier_emoji</code>, <code>tier_label</code>, <code>tier_color</code>, <code>header_logo_b64</code>, <code>ss_icon_b64</code>, <code>channel_dstv_num</code>, <code>league</code>, <code>sport_emoji</code>, <code>date</code>, <code>time</code>, <code>verdict_tag</code>. (No <code>footer_logo_b64</code> needed — footer dropped.)</li>
-        <li><code>verdict_tag</code> derivation already exists at <code>card_data.py:1199-1213</code> — produces <code>STRONG BACK / BACK / MILD LEAN / SPECULATIVE / MONITOR / VERDICT</code>. No change needed.</li>
-        <li>Acceptance: <code>latest/ai_breakdown.png</code> must match <code>canonical/ai_breakdown_{tier}.png</code> for the corresponding tier render. No team-name truncation, no footer, fixed badge colors.</li>
-      </ul>
-    </div>
-
-    <div class="variants">
-      <div class="variant"><div class="variant-header"><span class="variant-name">ai_breakdown_diamond.png</span><span class="variant-tag">Diamond · #B9F2FF</span></div><img src="ai_breakdown_diamond.png" alt="ai_breakdown — Diamond"></div>
-      <div class="variant"><div class="variant-header"><span class="variant-name">ai_breakdown_gold.png</span><span class="variant-tag">Gold · #FFD700</span></div><img src="ai_breakdown_gold.png" alt="ai_breakdown — Gold"></div>
-      <div class="variant"><div class="variant-header"><span class="variant-name">ai_breakdown_silver.png</span><span class="variant-tag">Silver · #A0AEC0</span></div><img src="ai_breakdown_silver.png" alt="ai_breakdown — Silver"></div>
-      <div class="variant"><div class="variant-header"><span class="variant-name">ai_breakdown_bronze.png</span><span class="variant-tag">Bronze · #CD7F32</span></div><img src="ai_breakdown_bronze.png" alt="ai_breakdown — Bronze"></div>
     </div>
   </section>
 
@@ -1717,12 +1661,11 @@ if user_tier == "gold":
   </section>
 
   <!-- ── onboarding_favourites_manual.html (Wave AF — Batch 8 · Onboarding core 4/8) ── -->
-  <!-- CORRECTION 2026-04-27: original Wave AF rendered onboarding_favourites.html
-       (list-with-buttons UI). Telethon capture confirmed the actual prod flow at
+  <!-- CORRECTION 2026-04-27: original Wave AF treated onboarding_favourites.html
+       (list-with-buttons UI) as the primary Step 3 surface. Telethon capture confirmed the actual prod flow at
        Step 3/5 is text-input via onboarding_favourites_manual.html → fuzzy match →
-       onboarding_team_celebration.html. The list-with-buttons template is dead code
-       in onboarding (only reachable via deprecated "back to list" path). Replaced
-       Wave AF with the correct primary-flow templates. -->
+       onboarding_team_celebration.html. The list-with-buttons template is retained
+       for routed legacy list callbacks and has separate canonical coverage below. -->
   <section class="template-block">
     <div class="tpl-header">
       <span class="tpl-name">onboarding_favourites_manual.html</span>
@@ -1746,7 +1689,7 @@ if user_tier == "gold":
         <li><strong>Header — sport-context</strong>: same step-progress dots pattern (3 done/active, 2 grey) + sport emoji + name. Same architecture as Wave AE (sports) but the title slot is replaced by the current sport's identity.</li>
         <li><strong>Type-here CTA — GREEN accent</strong>: <code>#5DD68F</code> left-border + soft green wash + green "Type your answer in the chat below ↓" + ⌨️ keyboard glyph. Green is the canonical "do this now" affordance — same hue as the green tick on success affirmations (<code>sub_payment_confirmed</code>, <code>sub_billing_active</code>) but used here for an actionable instruction.</li>
         <li><strong>Example box — neutral grey accent</strong>: secondary helper info, not the action. <code>EXAMPLE</code> label in 9.5px secondary-grey + 12px white sample text. Replaces prod's flat tinted box.</li>
-        <li><strong>Why the list-with-buttons depiction was wrong</strong>: prod's <code>onboarding_favourites.html</code> template (list-with-buttons) is reachable only via a deprecated <code>ob_fav_back</code> callback path. The PRIMARY entry to Step 3/5 is <code>_show_next_team_prompt</code> which renders <code>onboarding_favourites_manual.html</code>. User types, fuzzy-match runs, matched teams display in the celebration card. There is no real "list-with-buttons" UX in modern onboarding.</li>
+        <li><strong>Why the list-with-buttons depiction was wrong</strong>: prod's <code>onboarding_favourites.html</code> template is not the PRIMARY entry to Step 3/5. The primary entry is <code>_show_next_team_prompt</code>, which renders <code>onboarding_favourites_manual.html</code>. The list surface remains routed through legacy favourite callbacks and is covered by its own canonical block.</li>
         <li><strong>No footer</strong> per universal §7.</li>
       </ul>
     </div>
@@ -1755,7 +1698,7 @@ if user_tier == "gold":
       <h4>Implementer agent — targets</h4>
       <ul>
         <li>Replace <code>bot/card_templates/onboarding_favourites_manual.html</code> with the canonical (lift from <code>/tmp/onboarding_favourites_manual_canonical.html</code>). Remove gradient header background + border-bottom; insert <code>.logo-glow</code> + <code>.logo-glow-screen</code>; replace plain <code>.step-badge</code> with <code>.step-progress</code> dots + "Step 3 of 5" label; restyle <code>.chat-directive</code> as the green-accent <code>.type-cta</code> (left-border + soft glow + ⌨️ glyph); restyle <code>.example-box</code> with neutral grey left-border.</li>
-        <li><strong>Optional follow-up</strong>: deprecate <code>bot/card_templates/onboarding_favourites.html</code> (the list-with-buttons template). It's only reachable via the <code>ob_fav_back</code> deprecated callback path. If kept, it should also follow the canonical patterns — but better practice is to remove the template + the <code>handle_ob_fav_back</code> handler entirely.</li>
+        <li><code>bot/card_templates/onboarding_favourites.html</code> remains a retained routed surface for legacy list callbacks; see its separate canonical block added 2026-05-06.</li>
         <li><code>bot/card_data_adapters.py:build_onboarding_favourites_manual_data</code> already emits the right shape (<code>sport</code>, <code>fav_label</code>, <code>example</code>). No data-side changes needed.</li>
         <li>Acceptance: <code>latest/onboarding_favourites_manual.png</code> matches <code>canonical/onboarding_favourites_manual_canonical_soccer.png</code>. Brand-orange logo glow + step-progress dots (3 done/active, 2 grey) + sport-context header. Green type-here CTA with ⌨️. Grey example box. No footer.</li>
       </ul>
@@ -2475,7 +2418,7 @@ if user_tier == "gold":
       5 win rows with sport emoji + match + bet line + R100→{return} display. Each row's left-border AND
       return value colour driven by the edge tier (Diamond cyan / Gold orange / Silver+Bronze green for
       successful smaller-tier hits). RG copy at bottom (locked per CLAUDE.md notification law 5).
-      DETAIL 480×620 fixed canvas. <strong>Closes the entire 51-card design system.</strong>
+      DETAIL 480×620 fixed canvas. Part of the fully covered live card design system.
     </p>
 
     <div class="design-notes">
@@ -2505,28 +2448,268 @@ if user_tier == "gold":
       <div class="variant"><div class="variant-header"><span class="variant-name">home_winners_canonical_empty.png</span><span class="variant-tag">No resolved picks yet</span></div><img src="home_winners_canonical_empty.png" alt="home_winners empty"></div>
     </div>
   </section>
+
+  <!-- ── edge_picks_empty.html (coverage gap canonicalized 2026-05-06) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">edge_picks_empty.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-05-06 · LIST adaptive · empty edge-picks state</span>
+    </div>
+    <p class="tpl-summary">
+      Empty state for Top Edge Picks when no tier-qualified live edges are available. Retained because the hot-picks paths still render this template from <code>bot.py</code>.
+    </p>
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange logo glow.</li>
+        <li><strong>Purpose</strong>: calm empty-state copy with a clear scanner-next-check CTA.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Retain <code>bot/card_templates/edge_picks_empty.html</code> and <code>build_edge_picks_empty_data()</code>; current live render is the canonical target.</li>
+        <li>Acceptance: <code>latest/edge_picks_empty.png</code> matches <code>canonical/edge_picks_empty_canonical.png</code>.</li>
+      </ul>
+    </div>
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">edge_picks_empty_canonical.png</span><span class="variant-tag">No live edges</span></div><img src="edge_picks_empty_canonical.png" alt="edge_picks_empty canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── guide_menu.html (coverage gap canonicalized 2026-05-06) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">guide_menu.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-05-06 · LIST adaptive · guide hub</span>
+    </div>
+    <p class="tpl-summary">
+      Interactive guide hub shown from <code>/guide</code> and guide callbacks. Retained because both command and keyboard flows still render <code>guide_menu.html</code>.
+    </p>
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange logo glow.</li>
+        <li><strong>Topic rows</strong>: compact explanation menu with five routed guide topics.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Retain <code>bot/card_templates/guide_menu.html</code> and <code>build_guide_menu_data()</code>; current live render is the canonical target.</li>
+        <li>Acceptance: <code>latest/guide_menu.png</code> matches <code>canonical/guide_menu_canonical.png</code>.</li>
+      </ul>
+    </div>
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">guide_menu_canonical.png</span><span class="variant-tag">Guide hub</span></div><img src="guide_menu_canonical.png" alt="guide_menu canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── live_games_empty.html (coverage gap canonicalized 2026-05-06) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">live_games_empty.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-05-06 · LIST adaptive · live-games empty state</span>
+    </div>
+    <p class="tpl-summary">
+      Empty state for users with no followed live games. Retained because the live-games callback still renders this template when the user has no active tracked games.
+    </p>
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange logo glow.</li>
+        <li><strong>Purpose</strong>: directs users back to My Matches to follow fixtures.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Retain <code>bot/card_templates/live_games_empty.html</code> and <code>build_live_games_empty_data()</code>; current live render is the canonical target.</li>
+        <li>Acceptance: <code>latest/live_games_empty.png</code> matches <code>canonical/live_games_empty_canonical.png</code>.</li>
+      </ul>
+    </div>
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">live_games_empty_canonical.png</span><span class="variant-tag">No followed live games</span></div><img src="live_games_empty_canonical.png" alt="live_games_empty canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── onboarding_favourites.html (coverage gap canonicalized 2026-05-06) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">onboarding_favourites.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-05-06 · LIST adaptive · routed legacy favourites list</span>
+    </div>
+    <p class="tpl-summary">
+      Favourite team list surface retained for routed <code>ob_fav</code>, <code>ob_fav_suggest</code>, and <code>ob_fav_back</code> callbacks. It is not the primary Step 3 entry, but it remains live and tested.
+    </p>
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange onboarding surface.</li>
+        <li><strong>Selection pattern</strong>: selected teams use the existing orange-accent row state; unselected rows stay neutral.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Retain <code>bot/card_templates/onboarding_favourites.html</code> while the callbacks remain routed and covered by tests.</li>
+        <li>Acceptance: <code>latest/onboarding_favourites.png</code> matches <code>canonical/onboarding_favourites_canonical_soccer.png</code>.</li>
+      </ul>
+    </div>
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">onboarding_favourites_canonical_soccer.png</span><span class="variant-tag">Soccer · 1 selected</span></div><img src="onboarding_favourites_canonical_soccer.png" alt="onboarding_favourites soccer"></div>
+    </div>
+  </section>
+
+  <!-- ── settings_home.html (coverage gap canonicalized 2026-05-06) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">settings_home.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-05-06 · DETAIL 480×620 · settings overview</span>
+    </div>
+    <p class="tpl-summary">
+      Settings overview shown from <code>/settings</code>, reply-keyboard Settings, and settings fallback paths. Retained because the settings journey tests assert this image card is sent.
+    </p>
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: calm settings surface; no decorative glow beyond the template's existing restrained treatment.</li>
+        <li><strong>DETAIL canvas</strong>: fixed 480×620 logical px.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Retain <code>bot/card_templates/settings_home.html</code> and <code>build_settings_home_data()</code>; current live render is the canonical target.</li>
+        <li>Acceptance: <code>latest/settings_home.png</code> matches <code>canonical/settings_home_canonical.png</code>.</li>
+      </ul>
+    </div>
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">settings_home_canonical.png</span><span class="variant-tag">Moderate · R1,500/week · 08:00</span></div><img src="settings_home_canonical.png" alt="settings_home canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_already_active.html (coverage gap canonicalized 2026-05-06) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_already_active.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-05-06 · LIST adaptive · active subscription guard</span>
+    </div>
+    <p class="tpl-summary">
+      Subscription guard shown when an already-active user attempts to start a duplicate plan flow. Retained because the subscribe path still renders this edge-case card.
+    </p>
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: tier-aware badge and glow from the current active tier.</li>
+        <li><strong>Canonical sample</strong>: Diamond active member.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Retain <code>bot/card_templates/sub_already_active.html</code> and <code>build_sub_already_active_data()</code>; current live render is the canonical target.</li>
+        <li>Acceptance: <code>latest/sub_already_active.png</code> matches <code>canonical/sub_already_active_canonical_diamond.png</code>.</li>
+      </ul>
+    </div>
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_already_active_canonical_diamond.png</span><span class="variant-tag">Diamond active</span></div><img src="sub_already_active_canonical_diamond.png" alt="sub_already_active diamond"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_founding_disclosure.html (coverage gap canonicalized 2026-05-06) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_founding_disclosure.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-05-06 · LIST adaptive · founding disclosure</span>
+    </div>
+    <p class="tpl-summary">
+      Founding-member disclosure card shown before founding checkout. Retained because the subscription founding flow still renders this compliance surface.
+    </p>
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange founding surface.</li>
+        <li><strong>Slot math</strong>: sample locks sold, remaining, total slots, and founding price into the visual contract.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Retain <code>bot/card_templates/sub_founding_disclosure.html</code> and <code>build_sub_founding_disclosure_data()</code>; current live render is the canonical target.</li>
+        <li>Acceptance: <code>latest/sub_founding_disclosure.png</code> matches <code>canonical/sub_founding_disclosure_canonical.png</code>.</li>
+      </ul>
+    </div>
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_founding_disclosure_canonical.png</span><span class="variant-tag">38 sold · 62 remaining · R699</span></div><img src="sub_founding_disclosure_canonical.png" alt="sub_founding_disclosure canonical"></div>
+    </div>
+  </section>
+
+  <!-- ── sub_plan_invalid.html (coverage gap canonicalized 2026-05-06) ── -->
+  <section class="template-block">
+    <div class="tpl-header">
+      <span class="tpl-name">sub_plan_invalid.html</span>
+      <span class="tpl-status canonical">✅ Canonical</span>
+      <span class="tpl-meta">Approved 2026-05-06 · LIST adaptive · invalid plan guard</span>
+    </div>
+    <p class="tpl-summary">
+      Subscription guard shown when a plan callback is malformed or no longer valid. Retained because the subscribe path still renders this edge-case card.
+    </p>
+    <div class="design-notes">
+      <h4>Design notes</h4>
+      <ul>
+        <li><strong>Glow type</strong>: brand-orange subscription guard.</li>
+        <li><strong>Purpose</strong>: error recovery with a clear return-to-plans route.</li>
+        <li><strong>No footer</strong> per universal §7.</li>
+      </ul>
+    </div>
+    <div class="impl-targets">
+      <h4>Implementer agent — targets</h4>
+      <ul>
+        <li>Retain <code>bot/card_templates/sub_plan_invalid.html</code> and <code>build_sub_plan_invalid_data()</code>; current live render is the canonical target.</li>
+        <li>Acceptance: <code>latest/sub_plan_invalid.png</code> matches <code>canonical/sub_plan_invalid_canonical.png</code>.</li>
+      </ul>
+    </div>
+    <div class="variants">
+      <div class="variant"><div class="variant-header"><span class="variant-name">sub_plan_invalid_canonical.png</span><span class="variant-tag">Invalid plan recovery</span></div><img src="sub_plan_invalid_canonical.png" alt="sub_plan_invalid canonical"></div>
+    </div>
+  </section>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
-<!-- 🔄 In review section — every live bot image (51 templates)              -->
+<!-- 🔄 In review section — every live bot image (58 templates)              -->
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 
 <div class="status-section">
-  <h2 class="status-heading in-review">🔄 In review <span class="count">(0 live bot renders — all 51 templates design-locked!)</span></h2>
+  <h2 class="status-heading in-review">🔄 In review <span class="count">(0 live bot renders — all 58 templates design-locked!)</span></h2>
 
   <div class="design-notes" style="margin-bottom:24px">
     <h4>System rollout — dispatch order (Paul reviews each batch)</h4>
     <ul>
-      <li><strong>Batch 1 — Edge surfaces (4 cards):</strong> <code>edge_picks.html</code>, <code>edge_summary.html</code>, <code>tier_page.html</code>, <code>tier_lock_upsell.html</code>. Tier-color glow. Highest-traffic. <em>Start here.</em></li>
-      <li><strong>Batch 2 — Match surfaces (2 cards):</strong> <code>my_matches.html</code>, <code>match_detail.html</code>. Brand-orange glow. Reuses ai_breakdown header pattern.</li>
-      <li><strong>Batch 3 — Subscription core (5 cards):</strong> <code>sub_plans.html</code>, <code>sub_payment_ready.html</code>, <code>sub_payment_confirmed.html</code>, <code>sub_payment_error.html</code>, <code>sub_billing_active.html</code>. Brand-orange glow. Conversion-critical surfaces.</li>
+      <li><strong>Batch 1 — Edge surfaces (5 cards):</strong> <code>edge_picks.html</code>, <code>edge_picks_empty.html</code>, <code>edge_summary.html</code>, <code>tier_page.html</code>, <code>tier_lock_upsell.html</code>. Tier-color glow. Highest-traffic. <em>Start here.</em></li>
+      <li><strong>Batch 2 — Match/live surfaces (3 cards):</strong> <code>my_matches.html</code>, <code>match_detail.html</code>, <code>live_games_empty.html</code>. Brand-orange glow. Reuses edge-detail header discipline.</li>
+      <li><strong>Batch 3 — Subscription core (7 cards):</strong> <code>sub_plans.html</code>, <code>sub_plan_invalid.html</code>, <code>sub_already_active.html</code>, <code>sub_payment_ready.html</code>, <code>sub_payment_confirmed.html</code>, <code>sub_payment_error.html</code>, <code>sub_billing_active.html</code>. Brand-orange glow. Conversion-critical surfaces.</li>
       <li><strong>Batch 4 — Subscription state (5 cards):</strong> <code>sub_status_active.html</code>, <code>sub_status_bronze.html</code>, <code>sub_billing_inactive.html</code>, <code>sub_trial_expiry.html</code>, <code>sub_expiry_notice.html</code>. Brand-orange glow.</li>
       <li><strong>Batch 5 — Subscription upgrade (3 cards):</strong> <code>sub_upgrade_bronze.html</code>, <code>sub_upgrade_gold.html</code>, <code>sub_upgrade_diamond_max.html</code>. Tier-color glow (target tier).</li>
-      <li><strong>Batch 6 — Subscription founding (4 cards):</strong> <code>sub_founding_live.html</code>, <code>sub_founding_confirmed.html</code>, <code>sub_founding_ended.html</code>, <code>sub_founding_soldout.html</code>. Brand-orange glow + 🎁 founding badge.</li>
+      <li><strong>Batch 6 — Subscription founding (5 cards):</strong> <code>sub_founding_live.html</code>, <code>sub_founding_disclosure.html</code>, <code>sub_founding_confirmed.html</code>, <code>sub_founding_ended.html</code>, <code>sub_founding_soldout.html</code>. Brand-orange glow + 🎁 founding badge.</li>
       <li><strong>Batch 7 — Subscription cancel/exit (3 cards):</strong> <code>sub_cancel_confirm.html</code>, <code>sub_cancel_done.html</code>, <code>sub_email_redirect.html</code>. Brand-orange glow.</li>
-      <li><strong>Batch 8 — Onboarding core (7 cards):</strong> <code>onboarding_welcome.html</code>, <code>onboarding_experience.html</code>, <code>onboarding_sports.html</code>, <code>onboarding_favourites_manual.html</code>, <code>onboarding_team_celebration.html</code>, <code>onboarding_fuzzy_suggest.html</code>, <code>onboarding_edge_explainer.html</code>. Brand-orange glow. <em>Note: <code>onboarding_favourites.html</code> (list-with-buttons) was removed from this batch — Telethon capture confirmed Step 3/5 is text-input only via <code>onboarding_favourites_manual.html</code>; the list-with-buttons template is dead code in onboarding flow.</em></li>
+      <li><strong>Batch 8 — Onboarding core (8 cards):</strong> <code>onboarding_welcome.html</code>, <code>onboarding_experience.html</code>, <code>onboarding_sports.html</code>, <code>onboarding_favourites.html</code>, <code>onboarding_favourites_manual.html</code>, <code>onboarding_team_celebration.html</code>, <code>onboarding_fuzzy_suggest.html</code>, <code>onboarding_edge_explainer.html</code>. Brand-orange glow. <em>Note: <code>onboarding_favourites_manual.html</code> is the primary Step 3 text-input flow; <code>onboarding_favourites.html</code> is retained for routed list callbacks.</em></li>
       <li><strong>Batch 9 — Onboarding finalise (7 cards):</strong> <code>onboarding_risk.html</code>, <code>onboarding_bankroll.html</code>, <code>onboarding_bankroll_custom.html</code>, <code>onboarding_notify.html</code>, <code>onboarding_summary.html</code>, <code>onboarding_done.html</code>, <code>onboarding_restart.html</code>. Brand-orange glow.</li>
-      <li><strong>Batch 10 — Story quiz + utility (8 cards):</strong> <code>story_quiz_step.html</code>, <code>story_quiz_complete.html</code>, <code>profile_home.html</code>, <code>my_teams.html</code>, <code>settings_sports.html</code>, <code>help.html</code>, <code>bookmaker_directory.html</code>, <code>home_winners.html</code>. Brand-orange glow.</li>
+      <li><strong>Batch 10 — Story quiz + utility (10 cards):</strong> <code>story_quiz_step.html</code>, <code>story_quiz_complete.html</code>, <code>profile_home.html</code>, <code>my_teams.html</code>, <code>settings_home.html</code>, <code>settings_sports.html</code>, <code>guide_menu.html</code>, <code>help.html</code>, <code>bookmaker_directory.html</code>, <code>home_winners.html</code>. Brand-orange glow.</li>
     </ul>
     <p style="margin-top:8px;color:#999"><strong>Process per batch:</strong> read prod template → apply universal laws (§7) + glow type from §6 → use canonical emoji set (§5) → render PNGs → Paul reviews → promote to ✅ Canonical.</p>
   </div>
