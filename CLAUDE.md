@@ -152,3 +152,18 @@ Spec: `reference/ROLE-EDGE-AUDITOR.md`. Loads: `CLAUDE.md` + `ME-Core.md` + `ops
 Coding agents dispatched by any lead do NOT load this CLAUDE.md. They receive a self-contained brief with all context embedded.
 
 **Pre-draft duplicate-check (28 Apr 2026):** before drafting ANY new brief, the dispatcher does a quick Pipeline DS + Briefs DB search for adjacent in-flight or recently-closed work. Surface duplicates to the requester before writing.
+
+---
+
+## Locked Implementation Rules
+
+Permanent implementation decisions locked by past briefs. Contract tests anchor these.
+
+### Rule 19 — AI Breakdown reader filters empty narrative_html
+`card_data.build_ai_breakdown_data()` must filter out rows where `narrative_html` is empty / NULL before returning. Empty rows produce stub cards. Locked by `FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01`.
+
+### Rule 21 — w82 / baseline_no_edge are valid for ALL tiers
+The serve-time quarantine gate that blocked w82/baseline_no_edge rows for Gold/Diamond was removed. Both narrative types are valid for all tiers; premium write safety comes from the unified persistence validator, not from a blanket source/tier ban. Locked by `FIX-PREGEN-COVERAGE-DIAMOND-01`.
+
+### OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01 — Canonical lane commit discipline
+Two lanes: **canonical/** (static assets — images, PDFs, fonts) and **non-canonical/** (all other code/config). Mixed-lane staging in a single commit is forbidden. Use atomic-commit-only: one commit per lane. The pre-commit hook (`scripts/canonical_lane_check.sh`) enforces this at commit time. Override with `ALLOW_CANONICAL_MIX=1` (audit-trailed). Locked by `OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01`.

@@ -258,8 +258,6 @@ class DigestMessage:
         if row:
             buttons.append(row)
 
-        lines.append("<i>Tap any pick for full analysis →</i>")
-
         # Optional expandable stats summary blockquote (P3-04)
         if stats_summary:
             lines.append("")
