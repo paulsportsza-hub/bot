@@ -763,6 +763,110 @@ async def test_fire_diamond_edge_dms_marks_timeout_unknown_and_blocks(
 
 
 @pytest.mark.asyncio
+async def test_fire_diamond_edge_dms_blocks_unresolved_for_muted_user(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import bot
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "card_pipeline",
+        SimpleNamespace(
+            render_card_bytes=lambda *args, **kwargs: (b"png", None, None)
+        ),
+    )
+
+    row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
+    conn = sqlite3.connect(db_path)
+    try:
+        bot._ensure_tier_fire_diamond_dm_log_schema(conn)
+        conn.execute(
+            "INSERT INTO alerts_diamond_dm_log "
+            "(edge_id, row_version, user_id, status, sent_at) "
+            "VALUES (?, ?, 101, 'unknown', ?)",
+            ("edge_contract_alerts_dedup_01", row_version, time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def fake_diamond_users():
+        return [101]
+
+    async def fake_can_send(user_id):
+        return False
+
+    class FakeTelegramBot:
+        async def send_photo(self, chat_id, photo, reply_markup=None):
+            raise AssertionError("should not send while unresolved")
+
+    monkeypatch.setattr(bot.db, "get_active_diamond_users", fake_diamond_users)
+    monkeypatch.setattr(bot, "_can_send_notification", fake_can_send)
+
+    assert not await bot._fire_diamond_edge_dms(
+        SimpleNamespace(bot=FakeTelegramBot()),
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "contract_home_vs_contract_away_2026-05-17",
+        "edge_contract_alerts_dedup_01",
+        row_version,
+    )
+
+
+@pytest.mark.asyncio
+async def test_fire_diamond_edge_dms_blocks_unresolved_for_omitted_user(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import bot
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "card_pipeline",
+        SimpleNamespace(
+            render_card_bytes=lambda *args, **kwargs: (b"png", None, None)
+        ),
+    )
+
+    row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
+    conn = sqlite3.connect(db_path)
+    try:
+        bot._ensure_tier_fire_diamond_dm_log_schema(conn)
+        conn.execute(
+            "INSERT INTO alerts_diamond_dm_log "
+            "(edge_id, row_version, user_id, status, sent_at) "
+            "VALUES (?, ?, 101, 'posting', ?)",
+            ("edge_contract_alerts_dedup_01", row_version, time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def fake_diamond_users():
+        return []
+
+    monkeypatch.setattr(bot.db, "get_active_diamond_users", fake_diamond_users)
+
+    assert not await bot._fire_diamond_edge_dms(
+        SimpleNamespace(bot=SimpleNamespace()),
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "contract_home_vs_contract_away_2026-05-17",
+        "edge_contract_alerts_dedup_01",
+        row_version,
+    )
+
+
+@pytest.mark.asyncio
 async def test_diamond_dm_retryable_failure_leaves_edge_unposted(
     monkeypatch,
     tmp_path,
@@ -919,6 +1023,45 @@ async def test_final_mark_revalidates_unsettled_result(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tier_fire_alert_uses_claimed_row_tip_not_latest_match_reload(
+    monkeypatch,
+    tmp_path,
+):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+
+    def fail_latest_reload(*args, **kwargs):
+        raise AssertionError("tier-fire must not reload unconstrained latest match_key")
+
+    seen: list[tuple[float, str, bool]] = []
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        seen.append(
+            (
+                tip["odds"],
+                tip["bookmaker_key"],
+                bool(tip.get("_alerts_claimed_row_version")),
+            )
+        )
+        return alerts_direct.AlertsSendResult(
+            "https://t.me/c/3789410835/1",
+            new_send=True,
+        )
+
+    monkeypatch.setattr(bot, "_load_tips_from_edge_results", fail_latest_reload)
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    assert seen == [(1.95, "playabets", True)]
+
+
+@pytest.mark.asyncio
 async def test_diamond_new_channel_send_dms_even_when_mark_race_loses(
     monkeypatch,
     tmp_path,
@@ -987,22 +1130,20 @@ async def test_tier_fire_alerts_claim_revalidates_current_row(monkeypatch, tmp_p
     _create_alerts_edge_db(db_path)
     monkeypatch.setattr(edge_config, "DB_PATH", db_path)
 
-    def settle_after_select(limit=50, skip_punt_filter=True):
-        conn = sqlite3.connect(db_path)
-        try:
-            conn.execute(
-                "UPDATE edge_results SET result = 'hit' WHERE edge_id = ?",
-                ("edge_contract_alerts_dedup_01",),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-        return [
-            {
-                "match_id": "contract_home_vs_contract_away_2026-05-17",
-                "match_key": "contract_home_vs_contract_away_2026-05-17",
-            }
-        ]
+    original_db_write_retry = bot._db_write_retry
+
+    def settle_before_claim(sql, params, *args, **kwargs):
+        if "SET posted_to_alerts_direct_claimed_at" in sql:
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    "UPDATE edge_results SET result = 'hit' WHERE edge_id = ?",
+                    ("edge_contract_alerts_dedup_01",),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return original_db_write_retry(sql, params, *args, **kwargs)
 
     sends: list[str] = []
 
@@ -1010,7 +1151,7 @@ async def test_tier_fire_alerts_claim_revalidates_current_row(monkeypatch, tmp_p
         sends.append(edge_id)
         return "https://t.me/c/3789410835/1"
 
-    monkeypatch.setattr(bot, "_load_tips_from_edge_results", settle_after_select)
+    monkeypatch.setattr(bot, "_db_write_retry", settle_before_claim)
     monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
 
     await bot._tier_fire_alerts_job(SimpleNamespace())
@@ -1117,6 +1258,45 @@ def test_alerts_send_log_dedupes_per_edge_row_version(monkeypatch, tmp_path):
     finally:
         conn.close()
     assert rows == [("version-1", "sent"), ("version-2", "sending")]
+
+
+def test_alerts_send_log_legacy_sent_row_blocks_versioned_resend(
+    monkeypatch,
+    tmp_path,
+):
+    import bot_lib.alerts_direct as alerts_direct
+
+    db_path = str(tmp_path / "odds.db")
+    monkeypatch.setenv("ALERTS_SEND_LOG_DB_PATH", db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        alerts_direct._ensure_alerts_send_log_schema(conn)
+        conn.execute(
+            "INSERT INTO alerts_send_log "
+            "(edge_id, match_key, tier, row_version, channel, status, "
+            "image_bytes_size, msg_url, sent_at) "
+            "VALUES (?, ?, 'gold', '', 'alerts', 'sent', 0, ?, ?)",
+            (
+                "edge_contract_alerts_dedup_01",
+                "contract_home_vs_contract_away_2026-05-17",
+                "https://t.me/c/3789410835/legacy",
+                time.time(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    acquired, existing_url, reservation_id = alerts_direct._reserve_send_sync(
+        "edge_contract_alerts_dedup_01",
+        "contract_home_vs_contract_away_2026-05-17",
+        "gold",
+        "version-1",
+    )
+
+    assert acquired is False
+    assert existing_url == "https://t.me/c/3789410835/legacy"
+    assert reservation_id is None
 
 
 def test_stale_send_log_owner_cannot_release_or_finalize_reclaimed_reservation(

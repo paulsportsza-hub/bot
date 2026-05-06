@@ -73,11 +73,12 @@ def _sync_render_card(tip: dict, buttons: list | None = None) -> bytes:
     # Hydrate tip with full DB enrichment so the card is identical to ep:pick.
     # _enrich_tip_for_card (bot.py) is safe to import here: alerts_direct always
     # runs inside the bot process where bot is already in sys.modules.
-    try:
-        from bot import _enrich_tip_for_card  # type: ignore[import]
-        tip = _enrich_tip_for_card(tip, match_key)
-    except Exception as _hydrate_err:
-        log.warning("alerts_direct: tip hydration failed (%s) — card may be partial", _hydrate_err)
+    if not tip.get("_alerts_claimed_row_version"):
+        try:
+            from bot import _enrich_tip_for_card  # type: ignore[import]
+            tip = _enrich_tip_for_card(tip, match_key)
+        except Exception as _hydrate_err:
+            log.warning("alerts_direct: tip hydration failed (%s) — card may be partial", _hydrate_err)
 
     img_bytes, _, _ = render_card_bytes(match_key, tip, include_analysis=False, buttons=buttons)
     return img_bytes
@@ -203,6 +204,20 @@ def _reserve_send_sync(
             "AND status = 'sending' AND sent_at < ?",
             (edge_id, _ALERTS_SEND_CHANNEL, row_version, stale_before),
         )
+        if row_version:
+            legacy_row = conn.execute(
+                "SELECT status, msg_url FROM alerts_send_log "
+                "WHERE edge_id = ? AND channel = ? AND row_version = '' "
+                "ORDER BY sent_at DESC LIMIT 1",
+                (edge_id, _ALERTS_SEND_CHANNEL),
+            ).fetchone()
+            if legacy_row:
+                conn.commit()
+                if legacy_row[0] == "sent":
+                    return False, legacy_row[1] or "already_sent", None
+                if legacy_row[0] == "unknown":
+                    return False, ALERTS_SEND_UNKNOWN, None
+                return False, None, None
         cur = conn.execute(
             "INSERT OR IGNORE INTO alerts_send_log"
             " (edge_id, match_key, tier, row_version, channel, status, image_bytes_size, msg_url, sent_at)"

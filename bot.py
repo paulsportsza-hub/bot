@@ -26210,6 +26210,53 @@ def _release_tier_fire_diamond_dm_sync(
             _tfadm_conn.close()
 
 
+def _has_unresolved_tier_fire_diamond_dm_sync(edge_id: str, row_version: str) -> bool:
+    if not edge_id or not row_version:
+        return False
+    import time as _tfadm_time
+    from scrapers.db_connect import connect_odds_db as _tfadm_conn_fn
+    from scrapers.edge.edge_config import DB_PATH as _tfadm_db
+
+    _tfadm_conn = None
+    try:
+        _tfadm_conn = _tfadm_conn_fn(_tfadm_db)
+        _ensure_tier_fire_diamond_dm_log_schema(_tfadm_conn)
+        _now = _tfadm_time.time()
+        _stale_before = _now - _TIER_FIRE_DIAMOND_DM_STALE_SECONDS
+        _tfadm_conn.execute(
+            "UPDATE alerts_diamond_dm_log "
+            "SET status = 'unknown', sent_at = ? "
+            "WHERE edge_id = ? AND row_version = ? "
+            "AND status = 'posting' AND sent_at < ?",
+            (_now, edge_id, row_version, _stale_before),
+        )
+        _tfadm_conn.execute(
+            "DELETE FROM alerts_diamond_dm_log "
+            "WHERE edge_id = ? AND row_version = ? "
+            "AND status = 'sending' AND sent_at < ?",
+            (edge_id, row_version, _stale_before),
+        )
+        _row = _tfadm_conn.execute(
+            "SELECT 1 FROM alerts_diamond_dm_log "
+            "WHERE edge_id = ? AND row_version = ? "
+            "AND status IN ('sending', 'posting', 'unknown') "
+            "LIMIT 1",
+            (edge_id, row_version),
+        ).fetchone()
+        _tfadm_conn.commit()
+        return _row is not None
+    except Exception as _tfadm_exc:
+        log.warning(
+            "_fire_diamond_edge_dms: unresolved-state check failed edge_id=%s: %s",
+            edge_id,
+            _tfadm_exc,
+        )
+        return True
+    finally:
+        if _tfadm_conn is not None:
+            _tfadm_conn.close()
+
+
 def _tier_fire_diamond_dm_failure_state(exc: Exception) -> str:
     name = exc.__class__.__name__.lower()
     msg = str(exc).lower()
@@ -26289,11 +26336,6 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ALERTS_SEND_UNKNOWN as _alerts_send_unknown,
         post_to_alerts as _alerts_post,
     )
-
-    # Load canonical tip dicts — same format and enrichment as the hot tips list.
-    # This ensures _enrich_tip_for_card produces identical output to ep:pick.
-    _tfa_seed = _load_tips_from_edge_results(limit=50, skip_punt_filter=True)
-    _tfa_seed_by_mk = {t.get("match_id", ""): t for t in _tfa_seed}
 
     for _tfa_row in _tfa_rows:
         _tfa_edge_id = _tfa_row.get("edge_id") or ""
@@ -26376,40 +26418,36 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             _tfa_assigned_at = _tfa_t.time()
 
-        # Prefer canonical tip from _load_tips_from_edge_results (has bookmaker_key,
-        # sport_key, odds_by_bookmaker, edge_v2, league_key — all needed by
-        # _enrich_tip_for_card to match ep:pick output exactly).
-        _tfa_tip_seed = _tfa_seed_by_mk.get(_tfa_mk)
-        if _tfa_tip_seed:
-            _tfa_tip = {**_tfa_tip_seed, "edge_id": _tfa_edge_id, "match_key": _tfa_mk}
-        else:
-            # Fallback for draws or zero-signal edges filtered by _load_tips_from_edge_results
-            import re as _tfa_re
-            _tfa_mk_nd = _tfa_re.sub(r"_\d{4}-\d{2}-\d{2}$", "", _tfa_mk)
-            _tfa_home_raw, _tfa_away_raw = (_tfa_mk_nd.split("_vs_", 1) + [_tfa_mk_nd])[:2]
-            _tfa_home = _display_team_name(_tfa_home_raw)
-            _tfa_away = _display_team_name(_tfa_away_raw)
-            _tfa_outcome_raw = _tfa_row.get("bet_type") or "home"
-            _tfa_outcome_key = {"Home Win": "home", "Away Win": "away", "Draw": "draw"}.get(_tfa_outcome_raw, _tfa_outcome_raw.lower())
-            _tfa_league_key = (_tfa_row.get("league") or "").lower()
-            _tfa_raw_bk = (_tfa_row.get("bookmaker") or "").lower()
-            _tfa_tip = {
-                "match_id": _tfa_mk, "match_key": _tfa_mk, "edge_id": _tfa_edge_id,
-                "home_team": _tfa_home, "away_team": _tfa_away,
-                "outcome": {"home": _tfa_home, "away": _tfa_away, "draw": "Draw"}.get(_tfa_outcome_key, _tfa_outcome_raw),
-                "outcome_key": _tfa_outcome_key,
-                "odds": float(_tfa_row.get("recommended_odds") or 0),
-                "bookmaker": _display_bookmaker_name(_tfa_raw_bk),
-                "bookmaker_key": _tfa_raw_bk,
-                "ev": float(_tfa_row.get("predicted_ev") or 0),
-                "league": _get_league_display(_tfa_league_key, _tfa_home, _tfa_away),
-                "league_key": _tfa_league_key,
-                "display_tier": _tfa_tier, "edge_tier": _tfa_tier, "edge_rating": _tfa_tier,
-                "edge_score": float(_tfa_row.get("composite_score") or 0),
-                "confirming_signals": int(_tfa_row.get("confirming_signals") or 0),
-                "edge_v2": {"composite_score": float(_tfa_row.get("composite_score") or 0), "confirming_signals": int(_tfa_row.get("confirming_signals") or 0)},
-            }
+        # Build the posted card input from the claimed row itself. A separate
+        # match_key latest-row reload can drift across row versions while the
+        # claim/final mark still fence the older row.
+        import re as _tfa_re
+        _tfa_mk_nd = _tfa_re.sub(r"_\d{4}-\d{2}-\d{2}$", "", _tfa_mk)
+        _tfa_home_raw, _tfa_away_raw = (_tfa_mk_nd.split("_vs_", 1) + [_tfa_mk_nd])[:2]
+        _tfa_home = _display_team_name(_tfa_home_raw)
+        _tfa_away = _display_team_name(_tfa_away_raw)
+        _tfa_outcome_raw = _tfa_row.get("bet_type") or "home"
+        _tfa_outcome_key = {"Home Win": "home", "Away Win": "away", "Draw": "draw"}.get(_tfa_outcome_raw, _tfa_outcome_raw.lower())
+        _tfa_league_key = (_tfa_row.get("league") or "").lower()
+        _tfa_raw_bk = (_tfa_row.get("bookmaker") or "").lower()
+        _tfa_tip = {
+            "match_id": _tfa_mk, "match_key": _tfa_mk, "edge_id": _tfa_edge_id,
+            "home_team": _tfa_home, "away_team": _tfa_away,
+            "outcome": {"home": _tfa_home, "away": _tfa_away, "draw": "Draw"}.get(_tfa_outcome_key, _tfa_outcome_raw),
+            "outcome_key": _tfa_outcome_key,
+            "odds": float(_tfa_row.get("recommended_odds") or 0),
+            "bookmaker": _display_bookmaker_name(_tfa_raw_bk),
+            "bookmaker_key": _tfa_raw_bk,
+            "ev": float(_tfa_row.get("predicted_ev") or 0),
+            "league": _get_league_display(_tfa_league_key, _tfa_home, _tfa_away),
+            "league_key": _tfa_league_key,
+            "display_tier": _tfa_tier, "edge_tier": _tfa_tier, "edge_rating": _tfa_tier,
+            "edge_score": float(_tfa_row.get("composite_score") or 0),
+            "confirming_signals": int(_tfa_row.get("confirming_signals") or 0),
+            "edge_v2": {"composite_score": float(_tfa_row.get("composite_score") or 0), "confirming_signals": int(_tfa_row.get("confirming_signals") or 0)},
+        }
         _tfa_tip["_alerts_row_version"] = _tfa_row_version
+        _tfa_tip["_alerts_claimed_row_version"] = True
         _tfa_tip["recommended_at"] = _tfa_row.get("recommended_at") or _tfa_tip.get(
             "recommended_at",
             "",
@@ -26585,6 +26623,21 @@ async def _fire_diamond_edge_dms(
         log.debug("_fire_diamond_edge_dms: DB query failed: %s", _dd_exc)
         return False
 
+    _dd_use_delivery_log = bool(edge_id and row_version)
+    if _dd_use_delivery_log:
+        _dd_unresolved = await asyncio.to_thread(
+            _has_unresolved_tier_fire_diamond_dm_sync,
+            edge_id,
+            row_version,
+        )
+        if _dd_unresolved:
+            log.error(
+                "_fire_diamond_edge_dms: unresolved DM state blocks edge closure "
+                "edge_id=%s",
+                edge_id,
+            )
+            return False
+
     if not _dd_users:
         return True
 
@@ -26614,7 +26667,6 @@ async def _fire_diamond_edge_dms(
     ]])
 
     import io as _dd_io
-    _dd_use_delivery_log = bool(edge_id and row_version)
     _dd_retryable_failure = False
     for _dd_uid in _dd_users:
         try:
