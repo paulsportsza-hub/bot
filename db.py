@@ -166,6 +166,24 @@ class Payment(Base):
     )
 
 
+class PaymentEvent(Base):
+    __tablename__ = "payment_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_event_id", name="uq_payment_events_provider_event_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    payment_id: Mapped[int | None] = mapped_column(Integer)
+    provider: Mapped[str] = mapped_column(String(32), default="stitch")
+    provider_event_id: Mapped[str] = mapped_column(String(128))
+    provider_payment_id: Mapped[str | None] = mapped_column(String(128))
+    provider_reference: Mapped[str | None] = mapped_column(String(255))
+    event_status: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 # ── Helper functions ──────────────────────────────────────
 
 async def init_db() -> None:
@@ -174,6 +192,7 @@ async def init_db() -> None:
     # SQLite column migration for existing databases
     await _migrate_columns()
     await _ensure_payments_table()
+    await _ensure_payment_events_table()
     await _ensure_founding_indexes()
     await _backfill_founding_state()
     # Wave 25C: ensure user_edge_views table exists
@@ -277,6 +296,44 @@ async def _ensure_payments_table() -> None:
             WHERE provider_event_id IS NOT NULL;
     """
 
+    db_url = config.DATABASE_URL
+    if "sqlite" not in db_url:
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql(ddl)
+        return
+
+    db_path = config.DATABASE_PATH
+    if db_path is None:
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql(ddl)
+        return
+
+    import aiosqlite
+
+    try:
+        async with aiosqlite.connect(db_path.as_posix()) as conn:
+            await conn.executescript(ddl)
+            await conn.commit()
+    except Exception:
+        pass
+
+
+async def _ensure_payment_events_table() -> None:
+    """Create provider webhook event ledger for subscription idempotency."""
+    ddl = """
+        CREATE TABLE IF NOT EXISTS payment_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            payment_id INTEGER,
+            provider TEXT NOT NULL DEFAULT 'stitch',
+            provider_event_id TEXT NOT NULL,
+            provider_payment_id TEXT,
+            provider_reference TEXT,
+            event_status TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_events_provider_event
+            ON payment_events(provider, provider_event_id);
+    """
     db_url = config.DATABASE_URL
     if "sqlite" not in db_url:
         async with engine.begin() as conn:
@@ -1153,12 +1210,22 @@ async def apply_payment_event(
         async with async_session() as s:
             if provider_event_id:
                 existing_event = await s.execute(
+                    select(PaymentEvent).where(
+                        PaymentEvent.provider == provider,
+                        PaymentEvent.provider_event_id == provider_event_id,
+                    )
+                )
+                if existing_event.scalars().first():
+                    outcome["outcome"] = "duplicate_webhook"
+                    return outcome
+
+                existing_payment_event = await s.execute(
                     select(Payment).where(
                         Payment.provider == provider,
                         Payment.provider_event_id == provider_event_id,
                     )
                 )
-                if existing_event.scalars().first():
+                if existing_payment_event.scalars().first():
                     outcome["outcome"] = "duplicate_webhook"
                     return outcome
 
@@ -1192,16 +1259,30 @@ async def apply_payment_event(
             payment.amount_cents = amount_cents
             payment.plan_code = plan_code
             payment.is_founding = plan_code == "founding_diamond"
+            if provider_event_id:
+                s.add(PaymentEvent(
+                    payment_id=payment.id,
+                    provider=provider,
+                    provider_event_id=provider_event_id,
+                    provider_payment_id=provider_payment_id,
+                    provider_reference=provider_reference,
+                    event_status=event_status,
+                ))
 
             user = await s.get(User, payment.user_id) if payment.user_id else None
             if payment.user_id:
                 outcome["user_id"] = payment.user_id
 
             terminal_successes = {"confirmed", "confirmed_no_slot", "refunded"}
+            terminal_failures = {"cancelled", "failed", "expired"}
             is_subscription_renewal = (
                 event_type == "subscription.renewed"
                 and plan_code != "founding_diamond"
             )
+            if event_status == "confirmed" and payment.status in terminal_failures:
+                outcome["outcome"] = "stale_success"
+                await s.commit()
+                return outcome
             if (
                 event_status == "confirmed"
                 and payment.status in terminal_successes
@@ -1209,6 +1290,7 @@ async def apply_payment_event(
             ):
                 outcome["outcome"] = "duplicate_payment"
                 outcome["slot_number"] = payment.founding_slot_number
+                await s.commit()
                 return outcome
 
             if event_status in {"cancelled", "failed", "expired"}:

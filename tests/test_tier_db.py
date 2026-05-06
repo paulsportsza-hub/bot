@@ -209,6 +209,23 @@ class TestApplyPaymentEventSubscriptionFailures:
         assert payment.status == "cancelled"
         assert payment.billing_status == "cancelled"
 
+        stale_created = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6101-diamond-monthly-aa",
+            provider_payment_id="sub_cancel_6101",
+            provider_event_id="evt-sub-created-6101-late",
+            plan_code="diamond_monthly",
+            amount_cents=19900,
+            event_status="confirmed",
+            billing_status="active",
+            raw_event="{}",
+            event_type="subscription.created",
+        )
+        user = await db.get_user(6101)
+        assert stale_created["outcome"] == "stale_success"
+        assert user.subscription_status == "cancelled"
+        assert user.user_tier == "bronze"
+
     @pytest.mark.asyncio
     async def test_unmatched_payment_failure_does_not_downgrade_active_user(self, test_db):
         await db.upsert_user(6102, "failed-pay", "Failed Pay")
@@ -300,6 +317,65 @@ class TestApplyPaymentEventSubscriptionFailures:
         assert user.subscription_status == "active"
         assert user.user_tier == "gold"
         assert user.tier_expires_at >= first_expiry + dt.timedelta(days=29)
+
+    @pytest.mark.asyncio
+    async def test_replayed_subscription_created_after_cancel_does_not_reactivate(self, test_db):
+        await db.upsert_user(6105, "replay-sub", "Replay Sub")
+        await db.create_payment_record(
+            user_id=6105,
+            plan_code="gold_monthly",
+            amount_cents=9900,
+            provider_reference="mze-6105-gold-monthly-replay",
+            provider="stitch",
+            provider_payment_id="sub_replay_6105",
+            checkout_url="https://mock.stitch.money/subscriptions/sub_replay_6105",
+            billing_status="awaiting_webhook",
+        )
+
+        created = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6105-gold-monthly-replay",
+            provider_payment_id="sub_replay_6105",
+            provider_event_id="evt-sub-created-6105",
+            plan_code="gold_monthly",
+            amount_cents=9900,
+            event_status="confirmed",
+            billing_status="active",
+            raw_event="{}",
+            event_type="subscription.created",
+        )
+        cancelled = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6105-gold-monthly-replay",
+            provider_payment_id="sub_replay_6105",
+            provider_event_id="evt-sub-cancelled-6105",
+            plan_code="gold_monthly",
+            amount_cents=9900,
+            event_status="cancelled",
+            billing_status="cancelled",
+            raw_event="{}",
+            event_type="subscription.cancelled",
+        )
+        replay = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6105-gold-monthly-replay",
+            provider_payment_id="sub_replay_6105",
+            provider_event_id="evt-sub-created-6105",
+            plan_code="gold_monthly",
+            amount_cents=9900,
+            event_status="confirmed",
+            billing_status="active",
+            raw_event="{}",
+            event_type="subscription.created",
+        )
+
+        user = await db.get_user(6105)
+        assert created["outcome"] == "confirmed"
+        assert cancelled["subscription_deactivated"] is True
+        assert replay["outcome"] == "duplicate_webhook"
+        assert user.subscription_status == "cancelled"
+        assert user.user_tier == "bronze"
+        assert user.billing_status == "cancelled"
 
     @pytest.mark.asyncio
     async def test_founding_subscription_cancel_clears_founding_entitlement(self, test_db):
