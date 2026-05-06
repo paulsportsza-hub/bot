@@ -189,10 +189,10 @@ CREATE TABLE "narrative_cache" (
 | 6 | `created_at` | TIMESTAMP NOT NULL | Defaults to `CURRENT_TIMESTAMP` but all writers pass `now.isoformat()` explicitly. | All writers | Health check, staleness logging | Telemetry |
 | 7 | `expires_at` | TIMESTAMP NOT NULL | `created_at + _NARRATIVE_CACHE_TTL` (6h default) or 24h for Haiku previews. TTL check in `_get_cached_narrative` returns None when expired. | All writers | Every reader (TTL check) | TTL eviction |
 | 8 | `evidence_json` | TEXT (nullable) | Serialised `evidence_pack` — ESPN context, H2H raw, injuries, tipster rows, sharp injection. Used by serve-time gates to verify ESPN coverage and protect cached H2H from revalidation. | `_store_narrative_cache`, `_store_narrative_evidence` (UPDATE at `bot.py:15166`) | `_get_cached_narrative` (gates 3 & 10), `_generate_game_tips` | ESPN availability gate + H2H freshness skip |
-| 9 | `narrative_source` | TEXT NOT NULL DEFAULT 'w82' | Active values observed in DB: `w84` (Sonnet polish), `w82` (deterministic baseline), `baseline_no_edge` (no-edge card preview), `verdict-cache` (standalone verdict-only row), `haiku_preview` (24h match-preview cache). Drives Gold/Diamond tier gate at `bot.py:14421` and ESPN freshness gate at `bot.py:14440`. | All writers (each passes its own constant) | `_get_cached_narrative` (gates 4 & 5), pregen sweep targeting | Content-source classification + gate routing |
+| 9 | `narrative_source` | TEXT NOT NULL DEFAULT 'w82' | Active values observed in DB: `w84` (Sonnet polish), `w82` (deterministic baseline), `baseline_no_edge` (no-edge card preview), `verdict-cache` (standalone verdict-only row), `haiku_preview` (24h match-preview cache). Drives the `PremiumW82Serve` monitor hook for premium `w82` / `baseline_no_edge` reads and the ESPN freshness gate for non-premium `w82`. | All writers (each passes its own constant) | `_get_cached_narrative` monitor/freshness checks, pregen sweep targeting | Content-source classification + gate routing |
 | 10 | `coverage_json` | TEXT (nullable) | `evidence_pack.coverage_metrics` — which signals fired for the narrative. | `_store_narrative_cache` | `_get_cached_narrative` | Telemetry / debugging |
 | 11 | `structured_card_json` | TEXT (nullable) | **Currently unread anywhere.** Written by pregen for future structured card rendering. Not consumed by `build_edge_detail_data`, `build_ai_breakdown_data`, or any live surface. See gap G3 in section 13. | `_store_narrative_cache` (pregen only) | — | Unused (dead-letter) |
-| 12 | `verdict_html` | TEXT (nullable, CHECK 1–260) | Standalone verdict text. 260-char hard max enforced by DB CHECK. Truncated at last sentence boundary by `_store_narrative_cache` at `bot.py:14740`. Preserved across INSERT OR REPLACE by the read-before-write guard at `bot.py:14769-14778`. | `_store_narrative_cache`, `_store_verdict_cache_sync` (UPDATE at `bot.py:15120`, INSERT minimal row at `bot.py:15131`) | `_get_cached_verdict`, `_get_cached_narrative` (C.1 gate at `bot.py:14513`), `build_ai_breakdown_data` (tag only) | **Main Edge card image** (direct verdict display) |
+| 12 | `verdict_html` | TEXT (nullable, CHECK 1–260) | Standalone verdict text. 260-char hard max enforced by DB CHECK. Truncated at last sentence boundary by `_store_narrative_cache` at `bot.py:15155-15161`. Preserved across INSERT OR REPLACE by the read-before-write guard at `bot.py:15258-15275`. | `_store_narrative_cache`, `_store_verdict_cache_sync` (UPDATE at `bot.py:15770`, INSERT minimal row at `bot.py:15792`) | `_get_cached_verdict`, `_get_cached_narrative` (C.1 gate at `bot.py:14910`), `build_ai_breakdown_data` (tag only) | **Main Edge card image** (direct verdict display) |
 | 13 | `evidence_class` | TEXT (nullable) | `NarrativeSpec._classify_evidence()` output: speculative / lean / supported / conviction. | `_store_narrative_cache` | `_get_cached_verdict`, `build_ai_breakdown_data` (verdict_tag fallback keyword match) | AI Breakdown verdict tag only |
 | 14 | `tone_band` | TEXT (nullable) | Tone band from `TONE_BANDS` dict: cautious / moderate / confident / strong. Drives banned-phrase checks in polish validator. | `_store_narrative_cache` | `_get_cached_verdict` | Polish gate context |
 | 15 | `spec_json` | TEXT (nullable) | Serialised `NarrativeSpec` dataclass used by renderer. Currently not re-read by any live path — written for future rehydration. | `_store_narrative_cache` | — | Dead-letter (same as #11) |
@@ -283,10 +283,10 @@ surface depends on which surface is rendering next.
 
 | # | Function | file:line | Trigger | Columns WRITTEN | Columns NULL / default | INSERT mode | Pre-write validation |
 |---|---|---|---|---|---|---|---|
-| 1 | `_store_narrative_cache` (primary) | `bot.py:14673-14874` | Called by `_generate_game_tips` (serve-time) and by `pregenerate_narratives._generate_one` (cron). Main writer. | `match_id, narrative_html, model, edge_tier, tips_json, odds_hash, evidence_json, narrative_source, coverage_json, created_at, expires_at, structured_card_json, verdict_html, evidence_class, tone_band, spec_json, context_json, generation_ms, setup_validated, verdict_validated, setup_attempts, verdict_attempts` (22 cols) | `quality_status` (NULL), `quarantined` (0 default), `status` (NULL default), `quarantine_reason` (NULL default) — writer does not set these; gates do | **INSERT OR REPLACE** (full row) | (a) Premium-tier refusal: if `narrative_source in ("w82","baseline_no_edge") AND edge_tier in ("gold","diamond")` → **return without writing** (`bot.py:14716-14724`). (b) Tier default: empty `edge_tier` → `"bronze"` (`bot.py:14730`). (c) Verdict truncation: if `len(verdict_html) > 260` → `_trim_to_last_sentence(..., max_chars=260)` (`bot.py:14740`). (d) Verdict preservation: if `verdict_html is None`, read existing row's `verdict_html` and reuse (`bot.py:14769-14778`) — prevents wipe. |
-| 2 | `_store_narrative_cache` (retry after OperationalError 'locked') | `bot.py:14831-14867` | Same as #1, but on first attempt lock | Same as #1 | Same | INSERT OR REPLACE | Same pre-validation; single 0.1s sleep + one retry. If retry fails, Sentry warning message, silent drop. |
-| 3 | `_store_verdict_cache_sync` (UPDATE path) | `bot.py:15118-15125` | Called by `_enrich_tip_for_card` after live `_generate_verdict()`. Existing row found. | `verdict_html` (UPDATE SET), `quality_status` (conditionally cleared from `'skipped_banned_shape'`) | All other columns untouched | UPDATE | Pre-gate: `min_verdict_quality(verdict, tier, evidence_pack)` at `bot.py:15085`. On fail, silent skip + Sentry breadcrumb. |
-| 4 | `_store_verdict_cache_sync` (INSERT minimal path) | `bot.py:15126-15145` | Same entry, no existing row | `match_id, narrative_html='', verdict_html, model='view-time', edge_tier, tips_json=[tip_data], odds_hash, narrative_source='verdict-cache', created_at, expires_at` | `evidence_json, coverage_json, structured_card_json, evidence_class, tone_band, spec_json, context_json, generation_ms, setup_validated(default 1), verdict_validated(default 1), setup_attempts(default 1), verdict_attempts(default 1), quality_status, quarantined(0), status, quarantine_reason` | INSERT OR REPLACE | Same pre-gate. Note: `narrative_html` is empty string (non-NULL), not NULL — satisfies NOT NULL constraint while signalling "verdict-only row". |
+| 1 | `_store_narrative_cache` (primary) | `bot.py:15094-15460` | Called by `_generate_game_tips` (serve-time) and by `pregenerate_narratives._generate_one` (cron). Main writer. | `match_id, narrative_html, model, edge_tier, tips_json, odds_hash, evidence_json, narrative_source, coverage_json, created_at, expires_at, structured_card_json, verdict_html, evidence_class, tone_band, spec_json, context_json, generation_ms, setup_validated, verdict_validated, setup_attempts, verdict_attempts` (22 cols) | `quality_status` (NULL unless validator marks non-premium MAJOR as `quarantined`), `quarantined` (0 default), `status` (NULL default), `quarantine_reason` (NULL default) — read gates set `status`/`quarantine_reason` | **INSERT OR REPLACE** (full row) | (a) No source/tier blanket refusal for premium `w82` or `baseline_no_edge`; the retired writer-side W82 marker must not return. (b) Tier default: empty `edge_tier` → `"bronze"`. (c) Verdict truncation: if `len(verdict_html) > 260` → `_trim_to_last_sentence(..., max_chars=260)`. (d) W82 setup-pricing guard can still refuse invalid baseline text. (e) Unified persistence validator is authoritative: premium Gold/Diamond rows with CRITICAL or MAJOR failures log `FIX-NARRATIVE-ROT-ROOT-01 PremiumValidatorRefused` and return before writing. (f) Verdict preservation: if `verdict_html is None`, read existing row's `verdict_html` and reuse — prevents wipe. |
+| 2 | `_store_narrative_cache` (retry after OperationalError 'locked') | `bot.py:15325-15370` | Same as #1, but on first attempt lock | Same as #1 | Same | INSERT OR REPLACE | Same pre-validation; single 0.1s sleep + one retry. If retry fails, Sentry warning message, silent drop. |
+| 3 | `_store_verdict_cache_sync` (UPDATE path) | `bot.py:15767-15788` | Called by `_enrich_tip_for_card` after live `_generate_verdict()`. Existing row found. | `verdict_html`, `engine_version`, `tips_json`, `odds_hash`, `created_at`, `expires_at`, `quality_status` | Narrative columns untouched | UPDATE | Pre-gate: `min_verdict_quality(verdict, tier, evidence_pack)` at `bot.py:15622`. On fail, silent skip + Sentry breadcrumb. |
+| 4 | `_store_verdict_cache_sync` (INSERT minimal path) | `bot.py:15789-15807` | Same entry, no existing row | `match_id, narrative_html='', verdict_html, model='view-time', edge_tier, tips_json=[tip_data], odds_hash, narrative_source='verdict-cache', created_at, expires_at, engine_version` | `evidence_json, coverage_json, structured_card_json, evidence_class, tone_band, spec_json, context_json, generation_ms, setup_validated(default 1), verdict_validated(default 1), setup_attempts(default 1), verdict_attempts(default 1), quality_status, quarantined(0), status, quarantine_reason` | INSERT OR REPLACE | Same pre-gate. Note: `narrative_html` is empty string (non-NULL), not NULL — satisfies NOT NULL constraint while signalling "verdict-only row". |
 | 5 | `_generate_haiku_match_summary` writer | `bot.py:20784` (approx) | Haiku 2-3 sentence preview cache. 24h TTL. | `match_id, narrative_html(=summary), model='haiku-4.5', edge_tier='bronze', tips_json='[]', odds_hash='', narrative_source='haiku_preview', created_at, expires_at` | `evidence_json, coverage_json, structured_card_json, verdict_html, evidence_class, tone_band, spec_json, context_json, generation_ms, setup_validated, verdict_validated, setup_attempts, verdict_attempts, quality_status, quarantined, status, quarantine_reason` | INSERT OR REPLACE | `_has_haiku_banned_pattern(summary, sport)` pre-gate (bet language, hallucination markers, wrong-sport terms). |
 | 6 | `_store_narrative_evidence` | `bot.py:15166` | Background fill when evidence_pack arrives after narrative was cached. | `evidence_json` only (UPDATE SET) | — | UPDATE | None — best-effort. |
 | 7 | 10 quality-gate UPDATE sites in `_get_cached_narrative` | `bot.py:14354, 14369, 14406, 14428, 14477, 14491, 14541, 14574, 14586, 14605, 14648` | Serve-time quality failure | `status='quarantined', quarantine_reason=<reason>` | — | UPDATE | The check itself is the validation. |
@@ -377,8 +377,8 @@ Every `SELECT ... FROM narrative_cache` site in `bot.py`:
 | 1 | Stale Setup patterns (regex on cleaned body) | `bot.py:14344-14361` | cleaned `narrative_html` | UPDATE SET status='quarantined', quarantine_reason=<joined reasons> | e.g. generic "take on" / "limited context" |
 | 2 | Stale Setup context claims (evidence mismatch) | `bot.py:14362-14376` | `narrative_html` + `evidence_json` | UPDATE SET status='quarantined' | `stale_setup_context_claims` |
 | 3 | ESPN unavailable for ESPN-covered league ≤7d | `bot.py:14377-14415` | `evidence_json.espn_context.data_available`, `evidence_json.league`, `match_id` date suffix | UPDATE SET status='quarantined' | `espn_unavailable:<league>` |
-| 4 | Gold/Diamond forbidden w82/baseline_no_edge | `bot.py:14417-14435` | `narrative_source`, `edge_tier` | UPDATE SET status='quarantined' | `w82_for_tier:<tier>` |
-| 5 | w82 for ESPN-covered league ≤7d | `bot.py:14437-14484` | `narrative_source`, league from `evidence_json` or `edge_results` fallback, date | UPDATE SET status='quarantined' | `w82_espn_freshness:<league>` |
+| 4 | Premium w82/baseline serve monitor | `bot.py:14818-14837` | `narrative_source`, `edge_tier` | None — continue serving and log `FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Serve` | — |
+| 5 | Non-premium w82 for ESPN-covered league ≤7d | `bot.py:14839-14894` | `narrative_source`, league from `evidence_json` or `edge_results` fallback, date, `edge_tier` | UPDATE SET status='quarantined'; premium Gold/Diamond rows are carved out | `w82_espn_freshness:<league>` |
 | 6 | Banned phrases in cached body | `bot.py:14486-14498` | cleaned `narrative_html` | UPDATE SET status='quarantined' | `banned_patterns` |
 | 7 | **C.1 — `min_verdict_quality()` on `verdict_html` (standalone only)** | `bot.py:14293-14342` | `verdict_html` column only — embedded verdict is no longer gated here (BUILD-C1-OPTIONA-PHASE1-BREAKDOWN-01) | UPDATE SET status='quarantined' | `verdict_quality:standalone_ok=<bool>` |
 | 8 | Old-format HTML headers missing (non-w82/baseline/verdict-cache) | `bot.py:14555-14581` | `narrative_html`, `narrative_source` | UPDATE SET status='quarantined' | `old_format_headers:<source>` |
@@ -389,19 +389,19 @@ Every `SELECT ... FROM narrative_cache` site in `bot.py`:
 
 ### 7b. Pre-write gate in `_store_narrative_cache`
 
-- **Stream 4 F1-F2 refusal** at `bot.py:14716-14724`:
-  - If `narrative_source in {w82, baseline_no_edge}` AND `edge_tier in {gold, diamond}` → refuse write, log
-    `FIX-NARRATIVE-CACHE-SILENT-DROP-01 Stream4Refused`, emit Sentry warning.
-  - Rationale: premium tiers must carry Sonnet-polished (w84) narratives or no row at all.
-- **Tier default** at `bot.py:14730`: empty edge_tier → `"bronze"` to satisfy NOT NULL.
-- **Verdict truncation** at `bot.py:14740`: `> 260 chars` → `_trim_to_last_sentence(..., max_chars=260)`.
-- **Verdict preservation** at `bot.py:14769-14778`: if incoming `verdict_html` is None, reuse the existing row's `verdict_html`.
+- **Premium W82 write refusal is retired**:
+  - `w82` and `baseline_no_edge` are valid sources for every tier. The old source/tier blanket refusal and retired writer-side W82 marker must not return.
+  - Premium write refusal is validator-driven: Gold/Diamond rows with CRITICAL or MAJOR unified-validator failures return before persistence and log `FIX-NARRATIVE-ROT-ROOT-01 PremiumValidatorRefused`.
+  - Rationale: premium fallback rows are allowed, but invalid premium content is still blocked by the unified persistence validator.
+- **Tier default** at `bot.py:15145-15150`: empty edge_tier → `"bronze"` to satisfy NOT NULL.
+- **Verdict truncation** at `bot.py:15155-15161`: `> 260 chars` → `_trim_to_last_sentence(..., max_chars=260)`.
+- **Verdict preservation** at `bot.py:15258-15275`: if incoming `verdict_html` is None, reuse the existing row's `verdict_html`.
 
 ### 7c. Pre-write gate in `_store_verdict_cache_sync`
 
-- `min_verdict_quality(verdict_html, tier, evidence_pack)` at `bot.py:15085`. On fail:
+- `min_verdict_quality(verdict_html, tier, evidence_pack)` at `bot.py:15622`. On fail:
   - No DB write.
-  - Sentry breadcrumb `verdict_cache_rejected` at `bot.py:15094`.
+  - Sentry breadcrumb `verdict_cache_rejected` at `bot.py:15633`.
   - Warning log with match_key, tier, len, sample.
 
 ### 7d. `min_verdict_quality()` itself — 8 gates (`narrative_spec.py:407-464`)
@@ -679,15 +679,18 @@ if it is violated.
   generation time. Leaving this at `None` is intentional; flipping it on
   without a loaded pack would cause false-positive quarantines.
 
-### INV-6 — Premium tiers (Gold, Diamond) must never serve `w82` or `baseline_no_edge` source narratives
+### INV-6 — Premium `w82` / `baseline_no_edge` rows must pass the unified validator before persistence
 
-- **Evidence**: Pre-write refuse at `bot.py:14716-14724` (`Stream4Refused`)
-  + serve-time Gate 4 at `bot.py:14421-14435`.
-- **Enforcement**: Two layers — refuse the write + reject the read.
-- **If violated**: A Gold/Diamond user would see a thin, deterministic
-  baseline when the pregen sweep produced no polish. The double-layer
-  means even if a w82 row slipped into the table, it would be quarantined
-  on first read.
+- **Evidence**: Serve-time read lift and monitor marker at `bot.py:14818-14837`
+  (`PremiumW82Serve`) + unified validator refusal at `bot.py:15228-15234`
+  (`PremiumValidatorRefused`).
+- **Enforcement**: Writes are allowed by source/tier, then refused only when
+  the unified persistence validator finds premium CRITICAL or MAJOR failures.
+  Reads continue serving premium `w82` / `baseline_no_edge` rows and log the
+  monitor marker instead of quarantining with `w82_for_tier`.
+- **If violated**: Reintroducing a source/tier write ban would recreate missing
+  premium cache rows when polish is unavailable. Bypassing the validator would
+  allow invalid premium fallback content to persist.
 
 ### INV-7 — Every write that populates the main 22-column INSERT OR REPLACE must emit a `FIX-NARRATIVE-CACHE-SILENT-DROP-01 CommitOK` log line
 

@@ -14,7 +14,7 @@ Tests below cover the 2026-04-28 lifts that REMAIN intact:
 - Serve-time gate removed (reader returns w82 row for Gold/Diamond when one
   exists).
 - Quarantine reason `w82_for_tier:` is no longer set anywhere.
-- CLAUDE.md Rule 21 carries the lift documentation.
+- CLAUDE.md Rule 21 carries the validator-driven premium W82 documentation.
 
 The writer-level behaviour is now covered by the unified persistence validator
 contracts and `test_no_gold_baseline_writes.py`.
@@ -159,5 +159,8 @@ def test_get_cached_verdict_still_serves_verdict_cache_rows_for_card():
 
 def test_claude_md_rule_21_present():
     md = _CLAUDE_MD.read_text()
-    assert "### Rule 21 — w82 / baseline_no_edge are valid for ALL tiers" in md
+    assert "### Rule 21 — premium w82 / baseline_no_edge writes are validator-driven" in md
     assert "FIX-PREGEN-COVERAGE-DIAMOND-01" in md
+    assert "PremiumW82Serve" in md
+    assert "PremiumValidatorRefused" in md
+    assert "PremiumW82Write" not in md

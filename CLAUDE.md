@@ -86,6 +86,10 @@
 
 Locked 2026-04-28 by `FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01`. The breakdown readers (`card_data.py:build_ai_breakdown_data` plus both `bot.py:_get_cached_narrative` branches) must keep the `narrative_html IS NOT NULL AND LENGTH(TRIM(COALESCE(narrative_html, ''))) > 0` filter. Verdict-cache rows intentionally write `narrative_html=''`, so `_get_cached_verdict` is exempt because it serves `verdict_html` directly.
 
+### Rule 21 — premium w82 / baseline_no_edge writes are validator-driven
+
+Locked 2026-04-28 by `FIX-PREGEN-COVERAGE-DIAMOND-01`; updated 2026-05-06 by `FIX-DOCS-RULE-21-PREMIUM-W82-CLEANUP-01`. Gold/Diamond cache reads may serve `w82` or `baseline_no_edge` rows when polish is unavailable, and `_get_cached_narrative` keeps the `FIX-PREGEN-COVERAGE-DIAMOND-01 PremiumW82Serve` marker for monitoring. The retired writer-side W82 marker must not return. Premium write safety now comes from the unified persistence validator; premium rows that fail validation are refused with `FIX-NARRATIVE-ROT-ROOT-01 PremiumValidatorRefused`.
+
 ### Where the other 25 SOs live (moved 17 April 2026 PM)
 
 | Target module | Moved SOs | # |
