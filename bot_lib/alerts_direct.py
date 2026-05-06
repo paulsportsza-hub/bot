@@ -87,6 +87,13 @@ _PUBLISHED_URL_BASE = "https://t.me/c/3789410835"
 _SEND_RESERVATION_STALE_SECONDS = 10 * 60
 
 
+class AlertsSendResult(str):
+    def __new__(cls, value: str, *, new_send: bool):
+        obj = str.__new__(cls, value)
+        obj.alerts_new_send = new_send
+        return obj
+
+
 def _alerts_db_path() -> str:
     return os.environ.get(
         "ALERTS_SEND_LOG_DB_PATH",
@@ -161,6 +168,12 @@ def _reserve_send_sync(
         now = time.time()
         stale_before = now - _SEND_RESERVATION_STALE_SECONDS
         conn.execute(
+            "UPDATE alerts_send_log "
+            "SET status = 'unknown' "
+            "WHERE edge_id = ? AND channel = ? AND status = 'posting' AND sent_at < ?",
+            (edge_id, _ALERTS_SEND_CHANNEL, stale_before),
+        )
+        conn.execute(
             "DELETE FROM alerts_send_log "
             "WHERE edge_id = ? AND channel = ? AND status = 'sending' AND sent_at < ?",
             (edge_id, _ALERTS_SEND_CHANNEL, stale_before),
@@ -210,7 +223,8 @@ def _release_send_reservation_sync(edge_id: str, reservation_id: int | None) -> 
         _ensure_alerts_send_log_schema(conn)
         conn.execute(
             "DELETE FROM alerts_send_log "
-            "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'sending'",
+            "WHERE id = ? AND edge_id = ? AND channel = ? "
+            "AND status IN ('sending', 'posting')",
             (reservation_id, edge_id, _ALERTS_SEND_CHANNEL),
         )
         conn.commit()
@@ -236,7 +250,7 @@ def _touch_send_reservation_sync(edge_id: str, reservation_id: int | None) -> bo
         _ensure_alerts_send_log_schema(conn)
         cur = conn.execute(
             "UPDATE alerts_send_log "
-            "SET sent_at = ? "
+            "SET status = 'posting', sent_at = ? "
             "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'sending'",
             (time.time(), reservation_id, edge_id, _ALERTS_SEND_CHANNEL),
         )
@@ -277,7 +291,7 @@ def _finalize_send_log_sync(
             "UPDATE alerts_send_log "
             "SET match_key = ?, tier = ?, status = 'sent', "
             "image_bytes_size = ?, msg_url = ?, sent_at = ? "
-            "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'sending'",
+            "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'posting'",
             (
                 match_key,
                 tier,
@@ -319,7 +333,7 @@ def _mark_send_log_unknown_sync(edge_id: str, reservation_id: int | None) -> Non
         conn.execute(
             "UPDATE alerts_send_log "
             "SET status = 'unknown', sent_at = ? "
-            "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'sending'",
+            "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'posting'",
             (time.time(), reservation_id, edge_id, _ALERTS_SEND_CHANNEL),
         )
         conn.commit()
@@ -397,7 +411,7 @@ async def post_to_alerts(
             edge_id,
             existing_msg_url,
         )
-        return existing_msg_url
+        return AlertsSendResult(existing_msg_url, new_send=False)
     if not reservation_acquired:
         log.info("alerts_direct: skipped in-flight duplicate edge_id=%s", edge_id)
         return None
@@ -462,7 +476,7 @@ async def post_to_alerts(
         reservation_id,
     )
 
-    return msg_url
+    return AlertsSendResult(msg_url, new_send=True)
 
 
 def _emit_latency_event(

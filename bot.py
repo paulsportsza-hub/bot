@@ -26116,6 +26116,10 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             continue
 
         if _tfa_msg_url:
+            _tfa_new_channel_send = bool(
+                getattr(_tfa_msg_url, "alerts_new_send", True)
+            )
+            _tfa_marked_ok = False
             # AC-F: mark posted_to_alerts_direct=1 after successful claimed send.
             try:
                 _tfa_marked = _db_write_retry(
@@ -26133,13 +26137,15 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                         "_tier_fire_alerts_job: mark skipped for edge_id=%s; state changed before mark",
                         _tfa_edge_id,
                     )
+                else:
+                    _tfa_marked_ok = True
             except Exception as _tfa_mark_exc:
                 log.error(
                     "_tier_fire_alerts_job: mark failed after send for edge_id=%s; leaving claimed to prevent duplicate: %s",
                     _tfa_edge_id, _tfa_mark_exc,
                 )
             # AC-E: Diamond edges also DM active Diamond subscribers personally.
-            if _tfa_tier == "diamond":
+            if _tfa_tier == "diamond" and _tfa_new_channel_send and _tfa_marked_ok:
                 await _fire_diamond_edge_dms(ctx, _tfa_tip, _tfa_mk)
         else:
             try:

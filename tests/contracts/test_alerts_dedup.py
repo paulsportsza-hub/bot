@@ -357,6 +357,56 @@ async def test_tier_fire_alerts_job_processes_diamond_and_dms(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_diamond_retry_existing_channel_send_does_not_duplicate_dm(
+    monkeypatch,
+    tmp_path,
+):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("UPDATE edge_results SET edge_tier = 'diamond'")
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setattr(
+        bot,
+        "_load_tips_from_edge_results",
+        lambda limit=50, skip_punt_filter=True: [
+            {
+                "match_id": "contract_home_vs_contract_away_2026-05-17",
+                "match_key": "contract_home_vs_contract_away_2026-05-17",
+                "display_tier": "diamond",
+                "edge_tier": "diamond",
+            }
+        ],
+    )
+
+    dms: list[str] = []
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        return alerts_direct.AlertsSendResult(
+            "https://t.me/c/3789410835/1",
+            new_send=False,
+        )
+
+    async def fake_fire_diamond_edge_dms(ctx, tip, match_key):
+        dms.append(match_key)
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+    monkeypatch.setattr(bot, "_fire_diamond_edge_dms", fake_fire_diamond_edge_dms)
+
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    assert dms == []
+
+
+@pytest.mark.asyncio
 async def test_tier_fire_alerts_claim_revalidates_current_row(monkeypatch, tmp_path):
     import bot
     import bot_lib.alerts_direct as alerts_direct
@@ -512,6 +562,53 @@ def test_stale_send_log_owner_cannot_release_or_finalize_reclaimed_reservation(
     finally:
         conn.close()
     assert rows == [(new_id, "sent", "https://t.me/c/3789410835/new")]
+
+
+def test_stale_posting_reservation_becomes_unknown_not_retried(monkeypatch, tmp_path):
+    import bot_lib.alerts_direct as alerts_direct
+
+    db_path = str(tmp_path / "odds.db")
+    monkeypatch.setenv("ALERTS_SEND_LOG_DB_PATH", db_path)
+
+    acquired, existing_url, reservation_id = alerts_direct._reserve_send_sync(
+        "edge_contract_alerts_dedup_01",
+        "contract_home_vs_contract_away_2026-05-17",
+        "gold",
+    )
+    assert (acquired, existing_url) == (True, None)
+    assert alerts_direct._touch_send_reservation_sync(
+        "edge_contract_alerts_dedup_01",
+        reservation_id,
+    ) is True
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE alerts_send_log SET sent_at = ? WHERE id = ?",
+            (time.time() - alerts_direct._SEND_RESERVATION_STALE_SECONDS - 1, reservation_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    acquired, existing_url, new_id = alerts_direct._reserve_send_sync(
+        "edge_contract_alerts_dedup_01",
+        "contract_home_vs_contract_away_2026-05-17",
+        "gold",
+    )
+
+    assert acquired is False
+    assert existing_url == alerts_direct.ALERTS_SEND_UNKNOWN
+    assert new_id is None
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, status FROM alerts_send_log WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == (reservation_id, "unknown")
 
 
 @pytest.mark.asyncio
