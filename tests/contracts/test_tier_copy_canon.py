@@ -7,10 +7,13 @@ Guards three non-negotiable rules from TIER-COPY-CANON.md:
      canonical Full AI Breakdown entitlement.
 """
 from card_data_adapters import (
+    build_onboarding_plan_text,
+    build_subscribe_plan_picker_text,
     build_sub_plans_data,
     build_sub_upgrade_gold_data,
     build_sub_upgrade_bronze_data,
 )
+from tier_gate import get_upgrade_message
 
 _DIAMOND_PILLARS = [
     "every edge unlocked",
@@ -71,3 +74,20 @@ class TestTierCopyCanon:
         assert "every edge unlocked" in combined
         assert "full ai breakdown" in combined
         assert "personalised alerts" in combined
+
+    def test_text_fallback_helpers_have_diamond_pillars(self):
+        for text in (
+            build_onboarding_plan_text(),
+            build_subscribe_plan_picker_text(),
+        ):
+            combined = text.lower()
+            assert "every edge unlocked" in combined
+            assert "full ai breakdown" in combined
+            assert "personalised alerts" in combined
+
+    def test_locked_diamond_upsells_have_diamond_pillars(self):
+        for user_tier in ("bronze", "gold"):
+            combined = get_upgrade_message(user_tier, context="diamond_edge").lower()
+            assert "every edge unlocked" in combined
+            assert "full ai breakdown" in combined
+            assert "personalised alerts" in combined

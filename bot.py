@@ -139,6 +139,7 @@ from card_renderer import render_card_sync, warm_chromium as _warm_chromium
 # BUILD-WAVE2-ONBOARDING-01: onboarding card adapters
 from card_data_adapters import (
     build_sub_plans_data, build_sub_upgrade_bronze_data, build_sub_upgrade_gold_data,
+    build_onboarding_plan_text, build_subscribe_plan_picker_text,
     build_sub_upgrade_diamond_max_data, build_sub_payment_ready_data,
     build_sub_payment_error_data, build_sub_email_redirect_data,
     build_sub_status_active_data, build_sub_status_bronze_data,
@@ -5206,28 +5207,7 @@ async def _show_plan_step(query, ob: dict) -> None:
     ob["step"] = "plan"
     founding_left = _founding_days_left()
 
-    text = (
-        "<b>Choose Your Plan</b>\n\n"
-        "🥉 <b>Bronze — Free</b>\n"
-        "• 3 detail views per day\n"
-        "• Gold edges blurred, Diamond locked\n"
-        "• Morning teaser picks\n\n"
-        "🥇 <b>Gold — R99/month</b>\n"
-        "• Unlimited detail views — no daily cap\n"
-        "• Full card detail on every Bronze, Silver and Gold pick\n"
-        "• Line movement and full odds comparison unlocked\n\n"
-        "💎 <b>Diamond — R199/month</b>\n"
-        "• Every edge unlocked — Diamond picks are Diamond-only\n"
-        "• Full AI Breakdown: Setup, Edge, Risk, Verdict on every match\n"
-        "• Personalised alerts tuned to your teams and bankroll\n"
-    )
-
-    if founding_left > 0:
-        text += (
-            f"\n🎁 <b>Founding Member — R699/year Diamond</b>\n"
-            f"• Full Diamond access for 1 year\n"
-            f"• Only {founding_left} days left!\n"
-        )
+    text = build_onboarding_plan_text(founding_left)
 
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton("🥉 Continue with Bronze", callback_data="ob_plan:bronze")],
@@ -28438,28 +28418,7 @@ def _subscribe_plan_text(user_tier: str = "bronze") -> tuple[str, InlineKeyboard
     """Build plan picker text + buttons for /subscribe and onboarding Step 6."""
     founding_left = _founding_days_left()
 
-    text = (
-        "📋 <b>MzansiEdge Plans</b>\n\n"
-        "🥉 <b>Bronze — Free</b>\n"
-        "• 3 full detail views per day across any tier\n"
-        "• Gold edges blurred, Diamond locked until you upgrade\n\n"
-        "🥇 <b>Gold — R99/month</b>\n"
-        "• Unlimited tips · Real-time edges · Full pick analysis\n"
-        "• <i>Annual: R799/year (save 33%)</i>\n\n"
-        "💎 <b>Diamond — R199/month</b>\n"
-        "• Every edge unlocked — Diamond picks are Diamond-only\n"
-        "• Full AI Breakdown: Setup, Edge, Risk, Verdict on every match\n"
-        "• Line movement · sharp money · CLV tracking\n"
-        "• <i>Annual: R1,599/year (save 33%)</i>\n"
-    )
-    if founding_left > 0:
-        text += (
-            f"\n🎁 <b>Founding Member — R699/year Diamond</b>\n"
-            f"• Full Diamond access for 1 year\n"
-            f"• <i>Only {founding_left} days left!</i>\n"
-        )
-
-    text += "\n<b>Choose a plan to continue:</b>"
+    text = build_subscribe_plan_picker_text(founding_left)
 
     rows: list[list[InlineKeyboardButton]] = []
     if user_tier == "bronze":

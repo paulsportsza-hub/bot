@@ -158,3 +158,94 @@ class TestDeactivateSubscription:
         assert user.user_tier == "bronze"
         assert user.tier_expires_at is None
         assert user.subscription_status == "cancelled"
+
+
+class TestApplyPaymentEventSubscriptionFailures:
+    """Provider failure events must not leave stale paid entitlements active."""
+
+    @pytest.mark.asyncio
+    async def test_matching_subscription_cancel_downgrades_active_user(self, test_db):
+        await db.upsert_user(6101, "cancel-sub", "Cancel Sub")
+        expiry = dt.datetime(2027, 4, 1, tzinfo=dt.timezone.utc)
+        await db.activate_subscription(
+            6101,
+            "sub_cancel_6101",
+            "diamond_monthly",
+            user_tier="diamond",
+            tier_expires_at=expiry,
+            payment_reference="mze-6101-diamond-monthly-aa",
+        )
+        await db.create_payment_record(
+            user_id=6101,
+            plan_code="diamond_monthly",
+            amount_cents=19900,
+            provider_reference="mze-6101-diamond-monthly-aa",
+            provider="stitch",
+            provider_payment_id="sub_cancel_6101",
+            checkout_url="https://mock.stitch.money/subscriptions/sub_cancel_6101",
+            billing_status="active",
+        )
+
+        outcome = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6101-diamond-monthly-aa",
+            provider_payment_id="sub_cancel_6101",
+            provider_event_id="evt-sub-cancel-6101",
+            plan_code="diamond_monthly",
+            amount_cents=19900,
+            event_status="cancelled",
+            billing_status="cancelled",
+            raw_event="{}",
+        )
+
+        user = await db.get_user(6101)
+        payment = await db.get_payment_by_reference("stitch", "mze-6101-diamond-monthly-aa")
+        assert outcome["outcome"] == "cancelled"
+        assert user.subscription_status == "cancelled"
+        assert user.user_tier == "bronze"
+        assert user.tier_expires_at is None
+        assert user.billing_status == "cancelled"
+        assert payment.status == "cancelled"
+        assert payment.billing_status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_unmatched_payment_failure_does_not_downgrade_active_user(self, test_db):
+        await db.upsert_user(6102, "failed-pay", "Failed Pay")
+        expiry = dt.datetime(2027, 4, 1, tzinfo=dt.timezone.utc)
+        await db.activate_subscription(
+            6102,
+            "sub_active_6102",
+            "gold_monthly",
+            user_tier="gold",
+            tier_expires_at=expiry,
+            payment_reference="mze-6102-gold-monthly-active",
+        )
+        await db.create_payment_record(
+            user_id=6102,
+            plan_code="gold_monthly",
+            amount_cents=9900,
+            provider_reference="mze-6102-gold-monthly-failed",
+            provider="stitch",
+            provider_payment_id="pay_failed_6102",
+            checkout_url="https://mock.stitch.money/checkout/pay_failed_6102",
+            billing_status="awaiting_webhook",
+        )
+
+        outcome = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6102-gold-monthly-failed",
+            provider_payment_id="pay_failed_6102",
+            provider_event_id="evt-pay-failed-6102",
+            plan_code="gold_monthly",
+            amount_cents=9900,
+            event_status="failed",
+            billing_status="failed",
+            raw_event="{}",
+        )
+
+        user = await db.get_user(6102)
+        assert outcome["outcome"] == "failed"
+        assert user.subscription_status == "active"
+        assert user.user_tier == "gold"
+        assert user.tier_expires_at == expiry.replace(tzinfo=None)
+        assert user.billing_status == "active"

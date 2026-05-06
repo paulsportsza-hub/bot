@@ -1175,7 +1175,20 @@ async def apply_payment_event(
             if event_status in {"cancelled", "failed", "expired"}:
                 payment.status = event_status
                 payment.billing_status = billing_status
-                if user and user.subscription_status != "active":
+                matched_active_subscription = (
+                    user is not None
+                    and event_status in {"cancelled", "expired"}
+                    and plan_code != "founding_diamond"
+                    and user.subscription_status == "active"
+                    and bool(provider_payment_id)
+                    and user.subscription_code == provider_payment_id
+                )
+                if matched_active_subscription:
+                    user.subscription_status = "cancelled"
+                    user.user_tier = "bronze"
+                    user.tier_expires_at = None
+                    user.billing_status = billing_status
+                elif user and user.subscription_status != "active":
                     user.billing_status = billing_status
                 await s.commit()
                 outcome["outcome"] = event_status

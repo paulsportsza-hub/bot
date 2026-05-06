@@ -25,6 +25,60 @@ def _logo() -> str:
     return _logo_b64(_HEADER_LOGO, max_height=64)
 
 
+def build_onboarding_plan_text(founding_days_left: int = 0) -> str:
+    """Choose-plan fallback copy used when the onboarding plan card cannot render."""
+    text = (
+        "<b>Choose Your Plan</b>\n\n"
+        "🥉 <b>Bronze — Free</b>\n"
+        "• 3 detail views per day\n"
+        "• Gold edges blurred, Diamond locked\n"
+        "• Morning teaser picks\n\n"
+        "🥇 <b>Gold — R99/month</b>\n"
+        "• Unlimited detail views — no daily cap\n"
+        "• Full card detail on every Bronze, Silver and Gold pick\n"
+        "• Line movement and full odds comparison unlocked\n\n"
+        "💎 <b>Diamond — R199/month</b>\n"
+        "• Every edge unlocked — Diamond picks are Diamond-only\n"
+        "• Full AI Breakdown: Setup, Edge, Risk, Verdict on every match\n"
+        "• Personalised alerts tuned to your teams and bankroll\n"
+    )
+
+    if founding_days_left > 0:
+        text += (
+            f"\n🎁 <b>Founding Member — R699/year Diamond</b>\n"
+            f"• Full Diamond access for 1 year\n"
+            f"• Only {founding_days_left} days left!\n"
+        )
+    return text
+
+
+def build_subscribe_plan_picker_text(founding_days_left: int = 0) -> str:
+    """Plan picker fallback copy used when the subscription card cannot render."""
+    text = (
+        "📋 <b>MzansiEdge Plans</b>\n\n"
+        "🥉 <b>Bronze — Free</b>\n"
+        "• 3 full detail views per day across any tier\n"
+        "• Gold edges blurred, Diamond locked until you upgrade\n\n"
+        "🥇 <b>Gold — R99/month</b>\n"
+        "• Unlimited tips · Real-time edges · Full pick analysis\n"
+        "• <i>Annual: R799/year (save 33%)</i>\n\n"
+        "💎 <b>Diamond — R199/month</b>\n"
+        "• Every edge unlocked — Diamond picks are Diamond-only\n"
+        "• Full AI Breakdown: Setup, Edge, Risk, Verdict on every match\n"
+        "• Personalised alerts tuned to your teams and bankroll\n"
+        "• Line movement · sharp money · CLV tracking\n"
+        "• <i>Annual: R1,599/year (save 33%)</i>\n"
+    )
+    if founding_days_left > 0:
+        text += (
+            f"\n🎁 <b>Founding Member — R699/year Diamond</b>\n"
+            f"• Full Diamond access for 1 year\n"
+            f"• <i>Only {founding_days_left} days left!</i>\n"
+        )
+
+    return text + "\n<b>Choose a plan to continue:</b>"
+
+
 # ── 1: Plans ──────────────────────────────────────────────────────────────────
 
 def build_sub_plans_data(
