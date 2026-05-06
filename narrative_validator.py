@@ -1044,8 +1044,11 @@ def _edge_context_from_match_key(match_key: str) -> dict[str, Any]:
     conn = None
     try:
         from config import ODDS_DB_PATH
-        from db_connection import get_connection
-        conn = get_connection(str(ODDS_DB_PATH), readonly=True, timeout_ms=1500)
+        from scrapers.db_connect import connect_odds_db_readonly
+        conn = connect_odds_db_readonly(str(ODDS_DB_PATH), timeout=1.5)
+        conn.row_factory = lambda cursor, row: dict(
+            zip([col[0] for col in cursor.description], row)
+        )
         row = conn.execute(
             """
             SELECT match_key, edge_id, sport, league, edge_tier, composite_score,
@@ -1637,7 +1640,16 @@ def validate_narrative_for_persistence(
     # Surface the explicit leak so the caller log carries the venue names.
     # BUILD-EVIDENCE-ENRICH-VENUE-SCOREBOARD-PROJECTION-01: verified-list mode.
     if verdict_html:
-        verdict_venues = find_venue_leaks(verdict_html, evidence_pack)
+        try:
+            verdict_venues = find_venue_leaks(verdict_html, evidence_pack)
+        except Exception as exc:
+            if not _v2_failures:
+                raise
+            verdict_venues = []
+            log.warning(
+                "NARRATIVE_VALIDATOR_V2_LEGACY_MERGE_FAIL match_key=%s err=%s",
+                match_id, exc, exc_info=True,
+            )
         if verdict_venues:
             # Don't double-fail if Gate 1 already caught it via narrative_html.
             already_failed = any(

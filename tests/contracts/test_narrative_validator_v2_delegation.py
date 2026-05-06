@@ -6,6 +6,7 @@ import logging
 import pytest
 
 import narrative_validator as nv
+import narrative_spec
 import verdict_engine_v2
 
 
@@ -192,6 +193,39 @@ def test_v2_reject_survives_legacy_merge_exception(monkeypatch, caplog):
     assert "unsupported_form_claim" in _details(result)
     assert "NARRATIVE_VALIDATOR_V2_LEGACY_MERGE_FAIL" in caplog.text
     assert "legacy boom" in caplog.text
+
+
+def test_v2_narrative_reject_survives_legacy_gate_exception(monkeypatch, caplog):
+    monkeypatch.setenv("VERDICT_ENGINE_V2", "1")
+    monkeypatch.setattr(
+        verdict_engine_v2,
+        "validate_verdict",
+        lambda _text, _ctx, **_kwargs: ("forced_v2_reject",),
+    )
+    monkeypatch.setattr(narrative_spec, "min_verdict_quality", lambda *_a, **_kw: True)
+
+    def venue_boom(*_args, **_kwargs):
+        raise RuntimeError("legacy venue boom")
+
+    monkeypatch.setattr(narrative_spec, "find_venue_leaks", venue_boom)
+    caplog.set_level(logging.WARNING)
+
+    result = nv.validate_narrative_for_persistence(
+        content={
+            "narrative_html": "",
+            "verdict_html": GOOD_VERDICT,
+            "match_id": "liverpool_vs_chelsea_2026-05-07",
+            "narrative_source": "w84",
+        },
+        evidence_pack=_pack(),
+        edge_tier="gold",
+        source_label="w84",
+    )
+
+    assert result.passed is False
+    assert "forced_v2_reject" in _details(result)
+    assert "NARRATIVE_VALIDATOR_V2_LEGACY_MERGE_FAIL" in caplog.text
+    assert "legacy venue boom" in caplog.text
 
 
 def test_legacy_path_unchanged_under_flag_off(monkeypatch):
