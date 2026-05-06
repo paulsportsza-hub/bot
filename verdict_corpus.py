@@ -42,13 +42,219 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping
+
+import verdict_engine_v2
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
     from narrative_spec import NarrativeSpec
 
 
 _log = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+_USE_V2 = os.environ.get("VERDICT_ENGINE_V2", "1") not in ("0", "false", "False", "no", "")
+
+
+# Legacy fallback only. V2 lives in verdict_engine_v2.
+# render_verdict() routes to V2 when VERDICT_ENGINE_V2=1 (default).
+# Corpus data structures below are reachable only when VERDICT_ENGINE_V2=0
+# OR when V2 returns invalid/empty (defence-in-depth).
+# Do not extend this corpus for new verdict work.
+
+
+_V2_SIGNAL_ALIASES: dict[str, str] = {
+    **verdict_engine_v2.ALIASES,
+    "line_movement": "movement",
+}
+_V2_CANONICAL_SIGNALS = set(verdict_engine_v2.CANONICAL_SIGNALS)
+_V2_ALLOWED_SIGNALS = _V2_CANONICAL_SIGNALS | set(_V2_SIGNAL_ALIASES)
+
+
+def _text_or_empty(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _text_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _text_or_none(value)
+        if text:
+            return text
+    return ""
+
+
+def _odds_for_v2(value: Any) -> str | float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"odds must be numeric, string, or None; got {type(value).__name__}")
+
+
+def _odds_text_for_boundary(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if float(value) <= 0:
+            return None
+        return f"{float(value):.2f}"
+    text = str(value).strip()
+    return text if text and text != "—" else None
+
+
+def _int_or_none(value: Any, field_name: str) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be int or None; got {type(value).__name__}")
+    return value
+
+
+def _list_attr_for_v2(spec: "NarrativeSpec", field_name: str) -> list[str]:
+    value = getattr(spec, field_name, None)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError(f"{field_name} must be list[str]; got {type(value).__name__}")
+    return list(value)
+
+
+def _mapping_or_none(value: Any, field_name: str) -> Mapping[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{field_name} must be a mapping or None; got {type(value).__name__}")
+    return value
+
+
+def _signals_for_v2(raw: Any) -> dict[str, Any]:
+    if raw in (None, ""):
+        raw = {}
+    if not isinstance(raw, Mapping):
+        raise TypeError(f"signals must be a mapping; got {type(raw).__name__}")
+
+    signals: dict[str, Any] = {key: False for key in verdict_engine_v2.CANONICAL_SIGNALS}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            raise TypeError(f"signals keys must be str; got {type(key).__name__}")
+        if key not in _V2_ALLOWED_SIGNALS:
+            raise ValueError(f"unexpected signal key: {key}")
+        if not isinstance(value, (bool, Mapping)):
+            raise TypeError(
+                f"signals[{key!r}] must be bool or mapping; got {type(value).__name__}"
+            )
+        signals[_V2_SIGNAL_ALIASES.get(key, key)] = value
+    return signals
+
+
+def _recommended_team_for_v2(spec: "NarrativeSpec") -> str:
+    return _first_text(
+        getattr(spec, "recommended_team", None),
+        getattr(spec, "outcome_label", None),
+        getattr(spec, "home_name", None),
+    )
+
+
+def _coach_for_v2(spec: "NarrativeSpec", recommended_team: str) -> str | None:
+    explicit = _text_or_none(getattr(spec, "coach", None))
+    if explicit:
+        return explicit
+
+    recommended_norm = recommended_team.strip().lower()
+    home = _text_or_empty(getattr(spec, "home_name", "")).strip().lower()
+    away = _text_or_empty(getattr(spec, "away_name", "")).strip().lower()
+    if recommended_norm and home and (recommended_norm == home or recommended_norm in home or home in recommended_norm):
+        return _text_or_none(getattr(spec, "home_coach", None))
+    if recommended_norm and away and (recommended_norm == away or recommended_norm in away or away in recommended_norm):
+        return _text_or_none(getattr(spec, "away_coach", None))
+    return None
+
+
+def _spec_to_verdict_context(spec: "NarrativeSpec") -> verdict_engine_v2.VerdictContext:
+    recommended_team = _recommended_team_for_v2(spec)
+    match_key = _text_or_empty(getattr(spec, "match_key", ""))
+    edge_revision = _first_text(
+        getattr(spec, "edge_revision", None),
+        getattr(spec, "recommended_at", None),
+        match_key,
+    )
+    raw_signals = getattr(spec, "signals", {})
+    if not raw_signals:
+        raw_signals = _spec_to_signals(spec)
+    values = {
+        "match_key": match_key,
+        "edge_revision": edge_revision,
+        "sport": _text_or_empty(getattr(spec, "sport", "")),
+        "league": _text_or_empty(getattr(spec, "league", getattr(spec, "competition", ""))),
+        "home_name": _text_or_empty(getattr(spec, "home_name", "")),
+        "away_name": _text_or_empty(getattr(spec, "away_name", "")),
+        "recommended_team": recommended_team,
+        "outcome_label": _text_or_empty(getattr(spec, "outcome_label", "")),
+        "odds": _odds_for_v2(getattr(spec, "odds", None)),
+        "bookmaker": _text_or_none(getattr(spec, "bookmaker", None)),
+        "tier": _text_or_empty(getattr(spec, "edge_tier", "")),
+        "kickoff_utc": _text_or_none(getattr(spec, "kickoff_utc", None)),
+        "signals": _signals_for_v2(raw_signals),
+        "evidence_pack": _mapping_or_none(getattr(spec, "evidence_pack", None), "evidence_pack"),
+        "home_form": _text_or_none(getattr(spec, "home_form", None)),
+        "away_form": _text_or_none(getattr(spec, "away_form", None)),
+        "h2h": _text_or_none(getattr(spec, "h2h", getattr(spec, "h2h_summary", None))),
+        "injuries_home": _list_attr_for_v2(spec, "injuries_home"),
+        "injuries_away": _list_attr_for_v2(spec, "injuries_away"),
+        "venue": _text_or_none(getattr(spec, "venue", None)),
+        "coach": _coach_for_v2(spec, recommended_team),
+        "nickname": _text_or_none(getattr(spec, "nickname", None)),
+        "bookmaker_count": _int_or_none(getattr(spec, "bookmaker_count", None), "bookmaker_count"),
+        "line_movement_direction": _text_or_none(getattr(spec, "line_movement_direction", None)),
+        "tipster_sources_count": _int_or_none(
+            getattr(spec, "tipster_sources_count", None),
+            "tipster_sources_count",
+        ),
+    }
+    field_names = set(verdict_engine_v2.VerdictContext.__dataclass_fields__)
+    return verdict_engine_v2.VerdictContext(
+        **{key: value for key, value in values.items() if key in field_names}
+    )
+
+
+def _v2_render_boundary_miss(text: str, spec: "NarrativeSpec") -> str | None:
+    if len(text) < 100:
+        return "below_min_verdict_quality"
+
+    tier = _text_or_empty(getattr(spec, "edge_tier", "")).lower()
+    if tier == "diamond":
+        diamond_tokens = (
+            "hammer",
+            "load up",
+            "go in heavy",
+            "lock in",
+            "high-conviction",
+            "heavy stake",
+            "standard-to-heavy",
+            "full confident stake",
+        )
+        if not any(token in text.lower() for token in diamond_tokens):
+            return "missing_diamond_conviction_language"
+
+    odds = _odds_text_for_boundary(getattr(spec, "odds", None))
+    if odds and odds not in text:
+        return "missing_recommendation_odds"
+
+    bookmaker = _text_or_none(getattr(spec, "bookmaker", None))
+    if bookmaker and bookmaker.lower() not in text.lower():
+        return "missing_recommendation_bookmaker"
+
+    return None
 
 
 # ── BUILD-VERDICT-SIGNAL-MAPPED-01 (2026-05-03) feature flag ────────────────
@@ -928,6 +1134,32 @@ def render_verdict(spec: "NarrativeSpec") -> str:
     so legacy callers that build a NarrativeSpec without populating
     ``edge_tier`` still get a tier-appropriate verdict.
     """
+    if _USE_V2:
+        try:
+            ctx = _spec_to_verdict_context(spec)
+            result = verdict_engine_v2.render_verdict_v2(ctx)
+            if result and getattr(result, "valid", False) and getattr(result, "text", ""):
+                boundary_miss = _v2_render_boundary_miss(result.text, spec)
+                if boundary_miss is None:
+                    return result.text
+                log.info(
+                    "VERDICT_V2_FALL_THROUGH match_key=%s reason=%s",
+                    getattr(spec, "match_key", "<missing>"),
+                    boundary_miss,
+                )
+            else:
+                log.info(
+                    "VERDICT_V2_FALL_THROUGH match_key=%s reason=invalid_or_empty_v2_result",
+                    getattr(spec, "match_key", "<missing>"),
+                )
+        except Exception as exc:
+            log.warning(
+                "VERDICT_V2_RENDER_FAIL match_key=%s reason=%r",
+                getattr(spec, "match_key", "<missing>"),
+                exc,
+            )
+            # Fall through to the legacy path below.
+
     tier = (getattr(spec, "edge_tier", "") or "").lower()
     if tier not in VERDICT_CORPUS:
         # Action-derived fallback when edge_tier is empty/unrecognised.

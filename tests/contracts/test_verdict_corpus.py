@@ -42,6 +42,7 @@ builder has its own contract suite at ``test_verdict_signal_mapper.py``.
 """
 from __future__ import annotations
 
+import importlib
 import re
 from dataclasses import dataclass, field
 
@@ -59,6 +60,8 @@ def _force_corpus_path(monkeypatch):
     fallback. Setting the flag off keeps the assertions stable while
     HG-4 holds the corpus in place as the safety net.
     """
+    monkeypatch.setenv("VERDICT_ENGINE_V2", "0")
+    monkeypatch.setattr(vc, "_USE_V2", False)
     monkeypatch.setenv("USE_SIGNAL_MAPPED_VERDICTS", "0")
     yield
 
@@ -75,6 +78,8 @@ class _MockSpec:
     outcome_label: str = ""
     odds: float = 0.0
     bookmaker: str = ""
+    league: str = "epl"
+    recommended_team: str = ""
     home_name: str = ""
     away_name: str = ""
     composite_score: float = 0.0
@@ -85,7 +90,21 @@ class _MockSpec:
     injuries_home: list = field(default_factory=list)
     injuries_away: list = field(default_factory=list)
     match_key: str = ""
+    edge_revision: str = ""
+    recommended_at: str = ""
+    kickoff_utc: str | None = None
     verdict_action: str = ""
+    signals: dict = field(default_factory=dict)
+    evidence_pack: dict | None = None
+    h2h: str = ""
+    home_form: str | None = None
+    away_form: str | None = None
+    venue: str | None = None
+    coach: str | None = None
+    nickname: str | None = None
+    bookmaker_count: int | None = None
+    line_movement_direction: str | None = None
+    tipster_sources_count: int | None = None
 
 
 # Realistic slot-fill spread:
@@ -645,6 +664,107 @@ def test_render_verdict_action_fallback_when_tier_unknown() -> None:
     assert _IMPERATIVE_CLOSE_RE.search(last), (
         f"action-fallback verdict missing imperative: {rendered!r}"
     )
+
+
+def _v2_ready_spec(**overrides) -> _MockSpec:
+    data = {
+        "edge_tier": "gold",
+        "sport": "soccer",
+        "league": "epl",
+        "outcome": "home",
+        "outcome_label": "Liverpool",
+        "recommended_team": "Liverpool",
+        "home_name": "Liverpool",
+        "away_name": "Chelsea",
+        "odds": 1.96,
+        "bookmaker": "SuperSportBet",
+        "composite_score": 82,
+        "support_level": 4,
+        "match_key": "liverpool_vs_chelsea_v2_route_1",
+        "edge_revision": "rev-1",
+        "home_form": "WWWDW",
+        "away_form": "LDLDD",
+        "signals": {"price_edge": True, "form": True, "market": True},
+        "line_movement_direction": "favourable",
+        "bookmaker_count": 4,
+    }
+    data.update(overrides)
+    return _MockSpec(**data)
+
+
+def _legacy_expected_for(spec: _MockSpec) -> str:
+    tier = (getattr(spec, "edge_tier", "") or "").lower()
+    if tier not in vc.VERDICT_CORPUS:
+        action = (getattr(spec, "verdict_action", "") or "").lower()
+        tier = {
+            "strong back": "diamond",
+            "back": "gold",
+            "lean": "silver",
+        }.get(action, "bronze")
+
+    sport = vc._normalise_sport_to_bucket((getattr(spec, "sport", "") or "").lower())
+    pool = vc.VERDICT_CORPUS[tier][sport]
+    team = (
+        getattr(spec, "outcome_label", "")
+        or getattr(spec, "home_name", "")
+        or "the pick"
+    ).strip()
+    odds_val = float(getattr(spec, "odds", 0) or 0)
+    odds = f"{odds_val:.2f}" if odds_val else "—"
+    bookmaker = (getattr(spec, "bookmaker", "") or "—").strip()
+    match_key = (
+        getattr(spec, "match_key", None)
+        or f"{getattr(spec, 'home_name', '')}|{getattr(spec, 'away_name', '')}"
+    )
+    sentence: vc.VerdictSentence = vc._pick(pool, match_key, f"{tier}|{sport}")  # type: ignore[assignment]
+    return sentence.text.format(team=team, odds=odds, bookmaker=bookmaker)
+
+
+def test_render_verdict_routes_to_v2_when_flag_default(monkeypatch) -> None:
+    monkeypatch.delenv("VERDICT_ENGINE_V2", raising=False)
+    importlib.reload(vc)
+
+    spec = _v2_ready_spec()
+    ctx = vc._spec_to_verdict_context(spec)
+    expected = vc.verdict_engine_v2.render_verdict_v2(ctx)
+
+    assert expected.valid
+    assert vc.render_verdict(spec) == expected.text
+
+
+def test_render_verdict_routes_to_legacy_when_flag_off(monkeypatch) -> None:
+    monkeypatch.setenv("VERDICT_ENGINE_V2", "0")
+    importlib.reload(vc)
+
+    spec = _v2_ready_spec()
+
+    assert vc.render_verdict(spec) == _legacy_expected_for(spec)
+
+
+def test_v2_routing_falls_back_to_legacy_when_v2_returns_invalid(monkeypatch) -> None:
+    monkeypatch.delenv("VERDICT_ENGINE_V2", raising=False)
+    importlib.reload(vc)
+
+    spec = _v2_ready_spec()
+    invalid = vc.verdict_engine_v2.VerdictResult(
+        text="",
+        valid=False,
+        fallback=True,
+        primary_fact_type="test_invalid",
+    )
+    monkeypatch.setattr(vc.verdict_engine_v2, "render_verdict_v2", lambda _ctx: invalid)
+
+    assert vc.render_verdict(spec) == _legacy_expected_for(spec)
+
+
+def test_v2_adapter_edge_revision_fallback_chain() -> None:
+    explicit = _v2_ready_spec(edge_revision="edge-rev-7", recommended_at="rec-1")
+    recommended = _v2_ready_spec(edge_revision="", recommended_at="rec-2")
+    match_key = _v2_ready_spec(edge_revision="", recommended_at="")
+
+    assert vc._spec_to_verdict_context(explicit).edge_revision == "edge-rev-7"
+    assert vc._spec_to_verdict_context(recommended).edge_revision == "rec-2"
+    assert vc._spec_to_verdict_context(match_key).edge_revision == match_key.match_key
 
 
 # ── Concern-prefix concatenation cleanliness (preserved from W82) ─────────

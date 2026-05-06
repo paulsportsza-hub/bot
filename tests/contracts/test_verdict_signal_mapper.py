@@ -26,6 +26,14 @@ import pytest
 import verdict_signal_mapper as m
 
 
+@pytest.fixture(autouse=True)
+def _force_v2_wrapper_off_for_signal_mapper_contracts(monkeypatch):
+    """Keep this file scoped to the pre-V2 signal-mapper wrapper contract."""
+    monkeypatch.setenv("VERDICT_ENGINE_V2", "0")
+    if "verdict_corpus" in globals():
+        monkeypatch.setattr(verdict_corpus, "_USE_V2", False, raising=False)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # §12 — exact combination mappings × 4 tiers
 # ──────────────────────────────────────────────────────────────────────────
