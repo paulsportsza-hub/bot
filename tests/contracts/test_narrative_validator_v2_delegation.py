@@ -6,6 +6,7 @@ import logging
 import pytest
 
 import narrative_validator as nv
+import verdict_engine_v2
 
 
 GOOD_VERDICT = (
@@ -51,7 +52,7 @@ def test_v2_delegation_happy_path_flag_on(monkeypatch):
         calls.append((text, ctx))
         return ()
 
-    monkeypatch.setattr(nv.verdict_engine_v2, "validate_verdict", fake_validate)
+    monkeypatch.setattr(verdict_engine_v2, "validate_verdict", fake_validate)
 
     result = nv.validate_narrative_for_persistence(
         content={
@@ -70,6 +71,37 @@ def test_v2_delegation_happy_path_flag_on(monkeypatch):
     assert calls[0][0] == GOOD_VERDICT
     assert calls[0][1].match_key == "liverpool_vs_chelsea_2026-05-07"
     assert calls[0][1].recommended_team == "Liverpool"
+
+
+def test_v2_delegation_uses_edge_state_outcome_and_signals(monkeypatch):
+    monkeypatch.setenv("VERDICT_ENGINE_V2", "1")
+    pack = {
+        "match_id": "liverpool_vs_chelsea_2026-05-07",
+        "match_key": "liverpool_vs_chelsea_2026-05-07",
+        "home_team": "Liverpool",
+        "away_team": "Chelsea",
+        "sport": "soccer",
+        "league": "epl",
+        "recommended_odds": 1.96,
+        "bookmaker": "Supabets",
+        "edge_state": {
+            "outcome": "Home Win",
+            "signals": {
+                "price_edge": {"available": True},
+                "form_h2h": {"available": True},
+            },
+        },
+    }
+
+    result = nv.validate_verdict_for_persistence(
+        "Recent results strengthen the case for Chelsea. Back Chelsea at 1.96 with Supabets, standard stake.",
+        "gold",
+        pack,
+        "verdict-cache",
+    )
+
+    assert result.passed is False
+    assert "verdict_missing_recommended_team_or_nickname" in _details(result)
 
 
 def test_v2_delegation_signal_claim_rejection(monkeypatch):
@@ -124,7 +156,7 @@ def test_v2_delegation_engine_exception_falls_through_to_legacy(
     def boom(_text, _ctx, **_kwargs):
         raise RuntimeError("boom v2")
 
-    monkeypatch.setattr(nv.verdict_engine_v2, "validate_verdict", boom)
+    monkeypatch.setattr(verdict_engine_v2, "validate_verdict", boom)
     caplog.set_level(logging.WARNING)
 
     result = nv.validate_verdict_for_persistence(
@@ -140,13 +172,35 @@ def test_v2_delegation_engine_exception_falls_through_to_legacy(
     assert "boom v2" in caplog.text
 
 
+def test_v2_reject_survives_legacy_merge_exception(monkeypatch, caplog):
+    monkeypatch.setenv("VERDICT_ENGINE_V2", "1")
+
+    def legacy_boom(*_args, **_kwargs):
+        raise RuntimeError("legacy boom")
+
+    monkeypatch.setattr(nv, "_validate_verdict_legacy_path", legacy_boom)
+    caplog.set_level(logging.WARNING)
+
+    result = nv.validate_verdict_for_persistence(
+        "Recent results strengthen the case for Liverpool. Back Liverpool at 1.96 with Supabets, standard stake.",
+        "gold",
+        _pack(signals={"price_edge": {"available": True}}),
+        "verdict-cache",
+    )
+
+    assert result.passed is False
+    assert "unsupported_form_claim" in _details(result)
+    assert "NARRATIVE_VALIDATOR_V2_LEGACY_MERGE_FAIL" in caplog.text
+    assert "legacy boom" in caplog.text
+
+
 def test_legacy_path_unchanged_under_flag_off(monkeypatch):
     monkeypatch.setenv("VERDICT_ENGINE_V2", "0")
 
-    def fail_if_called(_text, _ctx, **_kwargs):
+    def fail_if_called():
         raise AssertionError("V2 should not run when VERDICT_ENGINE_V2=0")
 
-    monkeypatch.setattr(nv.verdict_engine_v2, "validate_verdict", fail_if_called)
+    monkeypatch.setattr(nv, "_verdict_engine_v2_module", fail_if_called)
     pack = _pack()
 
     cases = {

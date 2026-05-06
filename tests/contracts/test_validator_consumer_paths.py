@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import bot
 import db_connection
+import narrative_validator as nv
 
 
 GOOD_VERDICT = (
@@ -56,7 +57,6 @@ def _tip_data(form_available: bool):
         "edge_tier": "gold",
         "bookmaker": "Supabets",
         "odds": 1.96,
-        "evidence_pack": _pack(form_available),
     }
 
 
@@ -73,6 +73,11 @@ def _wrote_verdict(conn: _DummyConnection) -> bool:
 
 def test_bot_validator_call_consistent_under_v2_flag_on(monkeypatch):
     monkeypatch.setenv("VERDICT_ENGINE_V2", "1")
+    monkeypatch.setattr(
+        nv,
+        "_edge_context_from_match_key",
+        lambda _match_key: _pack(form_available=True),
+    )
     good_conn = _install_dummy_db(monkeypatch)
 
     bot._store_verdict_cache_sync(
@@ -83,6 +88,11 @@ def test_bot_validator_call_consistent_under_v2_flag_on(monkeypatch):
 
     assert _wrote_verdict(good_conn)
 
+    monkeypatch.setattr(
+        nv,
+        "_edge_context_from_match_key",
+        lambda _match_key: _pack(form_available=False),
+    )
     bad_conn = _install_dummy_db(monkeypatch)
     bot._store_verdict_cache_sync(
         "liverpool_vs_chelsea_2026-05-07",
@@ -95,6 +105,11 @@ def test_bot_validator_call_consistent_under_v2_flag_on(monkeypatch):
 
 def test_bot_validator_call_consistent_under_v2_flag_off(monkeypatch):
     monkeypatch.setenv("VERDICT_ENGINE_V2", "0")
+    monkeypatch.setattr(
+        nv,
+        "_edge_context_from_match_key",
+        lambda _match_key: _pack(form_available=False),
+    )
     conn = _install_dummy_db(monkeypatch)
 
     bot._store_verdict_cache_sync(

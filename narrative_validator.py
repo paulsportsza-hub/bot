@@ -34,13 +34,13 @@ circular import. Helpers are imported lazily inside `validate_narrative_for_pers
 from __future__ import annotations
 
 import logging
+import importlib
 import os
 import re
+from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Literal
-
-import verdict_engine_v2
 
 log = logging.getLogger(__name__)
 
@@ -872,6 +872,10 @@ def _verdict_engine_v2_enabled() -> bool:
     return os.environ.get("VERDICT_ENGINE_V2", "1").strip().lower() not in _V2_FLAG_FALSE_VALUES
 
 
+def _verdict_engine_v2_module() -> Any:
+    return importlib.import_module("verdict_engine_v2")
+
+
 def _text_or_empty(value: Any) -> str:
     if value is None:
         return ""
@@ -939,10 +943,61 @@ def _signal_payload(value: Any) -> Any:
     return {"available": bool(value)}
 
 
-def _signals_for_v2(evidence_pack: dict[str, Any]) -> dict[str, Any]:
-    raw = evidence_pack.get("signals") if isinstance(evidence_pack, dict) else None
+def _payload_get(payload: Any, key: str) -> Any:
+    if isinstance(payload, Mapping):
+        return payload.get(key)
+    return getattr(payload, key, None)
+
+
+def _iter_v2_payloads(evidence_pack: dict[str, Any]) -> list[Any]:
+    if not isinstance(evidence_pack, Mapping):
+        return []
+    payloads: list[Any] = [evidence_pack]
+    for key in ("edge_state", "edge_v2", "edge_result", "recommendation"):
+        nested = evidence_pack.get(key)
+        if isinstance(nested, Mapping) or hasattr(nested, "__dict__"):
+            payloads.append(nested)
+    return payloads
+
+
+def _first_v2_value(evidence_pack: dict[str, Any], *keys: str) -> Any:
+    for payload in _iter_v2_payloads(evidence_pack):
+        for key in keys:
+            value = _payload_get(payload, key)
+            if value not in (None, "", {}, []):
+                return value
+    return None
+
+
+def _signals_from_card_pipeline(match_key: str, tip: dict[str, Any]) -> dict[str, Any]:
+    if not match_key:
+        return {}
+    try:
+        from card_pipeline import build_verified_data_block, _compute_signals
+        verified = build_verified_data_block(match_key)
+        card_signals = _compute_signals(tip, verified)
+    except Exception as exc:
+        log.debug(
+            "NARRATIVE_VALIDATOR_V2_SIGNAL_CONTEXT_MISS match_key=%s err=%s",
+            match_key, exc,
+        )
+        return {}
+    if not isinstance(card_signals, Mapping):
+        return {}
+    return {
+        "price_edge": {"available": bool(card_signals.get("price_edge"))},
+        "form_h2h": {"available": bool(card_signals.get("form"))},
+        "movement": {"available": bool(card_signals.get("movement"))},
+        "market_agreement": {"available": bool(card_signals.get("market"))},
+        "tipster": {"available": bool(card_signals.get("tipster"))},
+        "lineup_injury": {"available": bool(card_signals.get("injury"))},
+    }
+
+
+def _signals_for_v2(evidence_pack: dict[str, Any], engine: Any) -> dict[str, Any]:
+    raw = _first_v2_value(evidence_pack, "signals")
     aliases = {
-        **verdict_engine_v2.ALIASES,
+        **engine.ALIASES,
         "line_movement": "movement",
         "team_news": "lineup_injury",
         "injury": "lineup_injury",
@@ -950,7 +1005,7 @@ def _signals_for_v2(evidence_pack: dict[str, Any]) -> dict[str, Any]:
         "market": "market_agreement",
     }
     signals: dict[str, Any] = {
-        key: {"available": False} for key in verdict_engine_v2.CANONICAL_SIGNALS
+        key: {"available": False} for key in engine.CANONICAL_SIGNALS
     }
     if isinstance(raw, dict):
         for key, value in raw.items():
@@ -959,16 +1014,15 @@ def _signals_for_v2(evidence_pack: dict[str, Any]) -> dict[str, Any]:
                 signals[canonical] = _signal_payload(value)
         return signals
 
-    confirming = evidence_pack.get("confirming_signals")
-    try:
-        confirming_count = int(confirming or 0)
-    except (TypeError, ValueError):
-        confirming_count = 0
-    if confirming_count > 0:
-        signals["form_h2h"] = {"available": True}
-    if evidence_pack.get("recommended_odds") or evidence_pack.get("odds") or evidence_pack.get("predicted_ev"):
+    if (
+        _first_v2_value(evidence_pack, "recommended_odds", "odds", "best_odds")
+        or _first_v2_value(evidence_pack, "predicted_ev", "ev")
+    ):
         signals["price_edge"] = {"available": True}
-    movement = _first_text(evidence_pack.get("line_movement_direction"), evidence_pack.get("movement"))
+    movement = _first_text(
+        _first_v2_value(evidence_pack, "line_movement_direction"),
+        _first_v2_value(evidence_pack, "movement"),
+    )
     if movement:
         signals["movement"] = {"available": True, "direction": movement}
     return signals
@@ -984,46 +1038,184 @@ def _match_key_from_legacy(content: dict[str, Any], evidence_pack: dict[str, Any
     )
 
 
-def _has_v2_context(evidence_pack: dict[str, Any]) -> bool:
-    return any(
-        key in evidence_pack and evidence_pack.get(key) not in (None, "", {}, [])
-        for key in (
-            "signals",
-            "recommended_team",
-            "pick_team",
-            "selection",
-            "outcome_key",
-            "outcome",
-            "bet_type",
-            "recommended_odds",
-            "odds",
-            "predicted_ev",
-            "confirming_signals",
-            "sport",
-            "sport_key",
+def _edge_context_from_match_key(match_key: str) -> dict[str, Any]:
+    if not match_key:
+        return {}
+    conn = None
+    try:
+        from config import ODDS_DB_PATH
+        from db_connection import get_connection
+        conn = get_connection(str(ODDS_DB_PATH), readonly=True, timeout_ms=1500)
+        row = conn.execute(
+            """
+            SELECT match_key, edge_id, sport, league, edge_tier, composite_score,
+                   bet_type, recommended_odds, bookmaker, predicted_ev,
+                   recommended_at, match_date, confirming_signals, movement
+            FROM edge_results
+            WHERE match_key = ? AND result IS NULL
+            ORDER BY COALESCE(recommended_at, '') DESC, id DESC
+            LIMIT 1
+            """,
+            (match_key,),
+        ).fetchone()
+    except Exception as exc:
+        log.debug(
+            "NARRATIVE_VALIDATOR_V2_EDGE_CONTEXT_MISS match_key=%s err=%s",
+            match_key, exc,
+        )
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    if not row:
+        return {}
+
+    row_data = dict(row)
+    home_name, away_name = _parse_match_key_teams(match_key)
+    outcome_key = _normalise_outcome_key(row_data.get("bet_type"))
+    outcome_team = {"home": home_name, "away": away_name, "draw": "Draw"}.get(outcome_key, "")
+    tip = {
+        "event_id": match_key,
+        "match_id": match_key,
+        "match_key": match_key,
+        "sport_key": row_data.get("sport") or "",
+        "home_team": home_name,
+        "away_team": away_name,
+        "outcome": outcome_team,
+        "outcome_key": outcome_key,
+        "odds": row_data.get("recommended_odds"),
+        "recommended_odds": row_data.get("recommended_odds"),
+        "bookmaker": row_data.get("bookmaker"),
+        "ev": row_data.get("predicted_ev"),
+        "movement": row_data.get("movement"),
+    }
+    signals = _signals_from_card_pipeline(match_key, tip)
+    if not signals:
+        signals = {
+            "price_edge": {
+                "available": bool(row_data.get("recommended_odds") or row_data.get("predicted_ev"))
+            },
+            "movement": {"available": bool(row_data.get("movement"))},
+        }
+    return {
+        "match_id": match_key,
+        "match_key": match_key,
+        "home_team": home_name,
+        "away_team": away_name,
+        "sport": row_data.get("sport"),
+        "league": row_data.get("league"),
+        "edge_tier": row_data.get("edge_tier"),
+        "recommended_team": outcome_team,
+        "outcome_label": outcome_team,
+        "outcome_key": outcome_key,
+        "outcome": row_data.get("bet_type"),
+        "bet_type": row_data.get("bet_type"),
+        "recommended_odds": row_data.get("recommended_odds"),
+        "bookmaker": row_data.get("bookmaker"),
+        "recommended_bookmaker": row_data.get("bookmaker"),
+        "predicted_ev": row_data.get("predicted_ev"),
+        "recommended_at": row_data.get("recommended_at"),
+        "confirming_signals": row_data.get("confirming_signals"),
+        "movement": row_data.get("movement"),
+        "signals": signals,
+        "edge_state": {
+            "outcome": row_data.get("bet_type"),
+            "edge_tier": row_data.get("edge_tier"),
+            "confirming_signals": row_data.get("confirming_signals"),
+            "signals": signals,
+        },
+    }
+
+
+def _has_recommendation_context(evidence_pack: dict[str, Any]) -> bool:
+    return _first_v2_value(
+        evidence_pack,
+        "recommended_team",
+        "pick_team",
+        "selection",
+        "outcome_key",
+        "outcome",
+        "bet_type",
+        "outcome_label",
+    ) is not None
+
+
+def _has_team_context(evidence_pack: dict[str, Any]) -> bool:
+    return bool(
+        _first_text(
+            _first_v2_value(evidence_pack, "home_name"),
+            _first_v2_value(evidence_pack, "home"),
+            _dict_team_name(evidence_pack.get("home_team")),
+        )
+        and _first_text(
+            _first_v2_value(evidence_pack, "away_name"),
+            _first_v2_value(evidence_pack, "away"),
+            _dict_team_name(evidence_pack.get("away_team")),
         )
     )
 
 
+def _v2_pack_for_validation(
+    content: dict[str, Any],
+    evidence_pack: dict | None,
+) -> dict[str, Any]:
+    pack: dict[str, Any] = dict(evidence_pack) if isinstance(evidence_pack, Mapping) else {}
+    match_key = _match_key_from_legacy(content, pack)
+    has_v2_context = _has_v2_context(pack)
+    lookup_needed = (
+        (not has_v2_context and not _has_team_context(pack))
+        or (has_v2_context and not _has_recommendation_context(pack))
+    )
+    if match_key and lookup_needed:
+        edge_context = _edge_context_from_match_key(match_key)
+        if edge_context:
+            merged = dict(edge_context)
+            merged.update(pack)
+            pack = merged
+    return pack
+
+
+def _has_v2_context(evidence_pack: dict[str, Any]) -> bool:
+    return _first_v2_value(
+        evidence_pack,
+        "signals",
+        "recommended_team",
+        "pick_team",
+        "selection",
+        "outcome_key",
+        "outcome",
+        "bet_type",
+        "recommended_odds",
+        "odds",
+        "predicted_ev",
+        "confirming_signals",
+        "sport",
+        "sport_key",
+    ) is not None
+
+
 def _recommended_from_legacy(
-    text: str,
+    _text: str,
     evidence_pack: dict[str, Any],
     home_name: str,
     away_name: str,
 ) -> str:
     explicit = _first_text(
-        evidence_pack.get("recommended_team"),
-        evidence_pack.get("pick_team"),
-        evidence_pack.get("selection"),
+        _first_v2_value(evidence_pack, "recommended_team"),
+        _first_v2_value(evidence_pack, "pick_team"),
+        _first_v2_value(evidence_pack, "selection"),
     )
     if explicit:
         return explicit
 
     outcome_key = _normalise_outcome_key(
         _first_text(
-            evidence_pack.get("outcome_key"),
-            evidence_pack.get("outcome"),
-            evidence_pack.get("bet_type"),
+            _first_v2_value(evidence_pack, "outcome_key"),
+            _first_v2_value(evidence_pack, "outcome"),
+            _first_v2_value(evidence_pack, "bet_type"),
         )
     )
     if outcome_key == "home":
@@ -1033,14 +1225,7 @@ def _recommended_from_legacy(
     if outcome_key == "draw":
         return "Draw"
 
-    text_lower = text.lower()
-    home_hit = bool(home_name and home_name.lower() in text_lower)
-    away_hit = bool(away_name and away_name.lower() in text_lower)
-    if home_hit and not away_hit:
-        return home_name
-    if away_hit and not home_hit:
-        return away_name
-    return _first_text(evidence_pack.get("outcome_label"), home_name)
+    return _first_text(_first_v2_value(evidence_pack, "outcome_label"), home_name)
 
 
 def _verdict_context_from_legacy(
@@ -1048,35 +1233,40 @@ def _verdict_context_from_legacy(
     content: dict[str, Any],
     evidence_pack: dict | None,
     edge_tier: str,
-) -> verdict_engine_v2.VerdictContext:
+) -> Any:
+    engine = _verdict_engine_v2_module()
     pack: dict[str, Any] = evidence_pack if isinstance(evidence_pack, dict) else {}
     match_key = _match_key_from_legacy(content, pack)
     parsed_home, parsed_away = _parse_match_key_teams(match_key)
     home_name = _first_text(
-        pack.get("home_name"),
-        pack.get("home"),
+        _first_v2_value(pack, "home_name"),
+        _first_v2_value(pack, "home"),
         _dict_team_name(pack.get("home_team")),
         content.get("home_name"),
         content.get("home_team"),
         parsed_home,
     )
     away_name = _first_text(
-        pack.get("away_name"),
-        pack.get("away"),
+        _first_v2_value(pack, "away_name"),
+        _first_v2_value(pack, "away"),
         _dict_team_name(pack.get("away_team")),
         content.get("away_name"),
         content.get("away_team"),
         parsed_away,
     )
     recommended_team = _recommended_from_legacy(text, pack, home_name, away_name)
-    league = _first_text(pack.get("league"), pack.get("league_key"), pack.get("competition"))
-    sport = _first_text(pack.get("sport"), pack.get("sport_key"), "soccer")
-    return verdict_engine_v2.VerdictContext(
+    league = _first_text(
+        _first_v2_value(pack, "league"),
+        _first_v2_value(pack, "league_key"),
+        _first_v2_value(pack, "competition"),
+    )
+    sport = _first_text(_first_v2_value(pack, "sport"), _first_v2_value(pack, "sport_key"), "soccer")
+    return engine.VerdictContext(
         match_key=match_key or "|".join(part for part in (home_name, away_name) if part),
         edge_revision=_first_text(
-            pack.get("edge_revision"),
-            pack.get("recommended_at"),
-            pack.get("updated_at"),
+            _first_v2_value(pack, "edge_revision"),
+            _first_v2_value(pack, "recommended_at"),
+            _first_v2_value(pack, "updated_at"),
             match_key,
         ),
         sport=sport.lower(),
@@ -1084,35 +1274,49 @@ def _verdict_context_from_legacy(
         home_name=home_name,
         away_name=away_name,
         recommended_team=recommended_team,
-        outcome_label=_first_text(pack.get("outcome_label"), recommended_team),
+        outcome_label=_first_text(_first_v2_value(pack, "outcome_label"), recommended_team),
         odds=_odds_for_v2(
-            _first_text(pack.get("recommended_odds"), pack.get("odds"), pack.get("best_odds"))
+            _first_text(
+                _first_v2_value(pack, "recommended_odds"),
+                _first_v2_value(pack, "odds"),
+                _first_v2_value(pack, "best_odds"),
+            )
         ),
         bookmaker=_text_or_none(
             _first_text(
-                pack.get("recommended_bookmaker"),
-                pack.get("bookmaker"),
-                pack.get("bookie"),
+                _first_v2_value(pack, "recommended_bookmaker"),
+                _first_v2_value(pack, "bookmaker"),
+                _first_v2_value(pack, "bookie"),
             )
         ),
-        tier=(edge_tier or pack.get("edge_tier") or pack.get("tier") or "bronze").lower(),
-        signals=_signals_for_v2(pack),
+        tier=(
+            edge_tier
+            or _first_v2_value(pack, "edge_tier")
+            or _first_v2_value(pack, "tier")
+            or "bronze"
+        ).lower(),
+        signals=_signals_for_v2(pack, engine),
         evidence_pack=pack or None,
-        home_form=_text_or_none(pack.get("home_form")),
-        away_form=_text_or_none(pack.get("away_form")),
-        h2h=_text_or_none(_first_text(pack.get("h2h"), pack.get("h2h_summary"))),
+        home_form=_text_or_none(_first_v2_value(pack, "home_form")),
+        away_form=_text_or_none(_first_v2_value(pack, "away_form")),
+        h2h=_text_or_none(
+            _first_text(_first_v2_value(pack, "h2h"), _first_v2_value(pack, "h2h_summary"))
+        ),
         injuries_home=tuple(pack.get("injuries_home") or ()),
         injuries_away=tuple(pack.get("injuries_away") or ()),
-        venue=_text_or_none(pack.get("venue")),
-        coach=_text_or_none(pack.get("coach")),
-        nickname=_text_or_none(pack.get("nickname")),
+        venue=_text_or_none(_first_v2_value(pack, "venue")),
+        coach=_text_or_none(_first_v2_value(pack, "coach")),
+        nickname=_text_or_none(_first_v2_value(pack, "nickname")),
         bookmaker_count=(
             int(pack["bookmaker_count"])
             if isinstance(pack.get("bookmaker_count"), int) and not isinstance(pack.get("bookmaker_count"), bool)
             else None
         ),
         line_movement_direction=_text_or_none(
-            _first_text(pack.get("line_movement_direction"), pack.get("movement"))
+            _first_text(
+                _first_v2_value(pack, "line_movement_direction"),
+                _first_v2_value(pack, "movement"),
+            )
         ),
         tipster_sources_count=(
             int(pack["tipster_sources_count"])
@@ -1122,7 +1326,7 @@ def _verdict_context_from_legacy(
     )
 
 
-def _sport_vocab_errors(text: str, ctx: verdict_engine_v2.VerdictContext) -> tuple[str, ...]:
+def _sport_vocab_errors(text: str, ctx: Any) -> tuple[str, ...]:
     sport = (ctx.sport or "").lower()
     if sport in {"football", "epl", "psl", "ucl", "premier_league"}:
         sport = "soccer"
@@ -1187,8 +1391,9 @@ def _validate_text_with_v2(
 ) -> ValidationResult:
     if not text:
         return ValidationResult(passed=True)
+    engine = _verdict_engine_v2_module()
     ctx = _verdict_context_from_legacy(text, content, evidence_pack, edge_tier)
-    errors = tuple(verdict_engine_v2.validate_verdict(text, ctx))
+    errors = tuple(engine.validate_verdict(text, ctx))
     errors = tuple(dict.fromkeys((*errors, *_sport_vocab_errors(text, ctx))))
     return _v2_validation_result(errors, section)
 
@@ -1286,14 +1491,14 @@ def validate_narrative_for_persistence(
     """
     _v2_failures: list[ValidationFailure] = []
     if _verdict_engine_v2_enabled():
-        _pack = evidence_pack if isinstance(evidence_pack, dict) else {}
+        _pack = _v2_pack_for_validation(content, evidence_pack)
         _match_key = _match_key_from_legacy(content, _pack)
         if _has_v2_context(_pack):
             try:
                 _v2_result = _validate_text_with_v2(
                     content.get("verdict_html") or content.get("narrative_html") or "",
                     content,
-                    evidence_pack,
+                    _pack,
                     edge_tier,
                     section=(
                         _SECTION_VERDICT_HTML
@@ -1635,16 +1840,14 @@ def validate_verdict_for_persistence(
                 if isinstance(evidence_pack, dict) else ""
             ),
         }
-        _match_key = _match_key_from_legacy(
-            _content,
-            evidence_pack if isinstance(evidence_pack, dict) else {},
-        )
-        if _has_v2_context(evidence_pack if isinstance(evidence_pack, dict) else {}):
+        _pack = _v2_pack_for_validation(_content, evidence_pack)
+        _match_key = _match_key_from_legacy(_content, _pack)
+        if _has_v2_context(_pack):
             try:
                 _v2_result = _validate_text_with_v2(
                     verdict_html,
                     _content,
-                    evidence_pack,
+                    _pack,
                     edge_tier,
                     section=_SECTION_VERDICT_HTML,
                 )
@@ -1659,12 +1862,32 @@ def validate_verdict_for_persistence(
                     evidence_pack if isinstance(evidence_pack, dict) else None,
                     source_label,
                 )
-            _legacy_result = _validate_verdict_legacy_path(
-                verdict_html,
-                edge_tier,
-                evidence_pack if isinstance(evidence_pack, dict) else None,
-                source_label,
-            )
+            try:
+                _legacy_result = _validate_verdict_legacy_path(
+                    verdict_html,
+                    edge_tier,
+                    evidence_pack if isinstance(evidence_pack, dict) else None,
+                    source_label,
+                )
+            except Exception as exc:
+                log.warning(
+                    "NARRATIVE_VALIDATOR_V2_LEGACY_MERGE_FAIL match_key=%s err=%s",
+                    _match_key, exc, exc_info=True,
+                )
+                if not _v2_result.passed:
+                    return _v2_result
+                return ValidationResult(
+                    passed=False,
+                    failures=[
+                        ValidationFailure(
+                            gate="legacy_validator_exception",
+                            severity="CRITICAL",
+                            detail=f"err={exc}",
+                            section=_SECTION_VERDICT_HTML,
+                        )
+                    ],
+                    severity="CRITICAL",
+                )
             return _merge_validation_results(_v2_result, _legacy_result)
 
     if not verdict_html:
