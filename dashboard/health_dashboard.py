@@ -539,7 +539,7 @@ def _truncate(text: str | None, max_len: int) -> str:
 def build_coverage_matrix(conn) -> list[dict]:
     if not table_exists(conn, "odds_snapshots"):
         return []
-    # Card-ready = Core-7 upcoming match has odds from >= 2 distinct SA bookmakers.
+    # Card-ready = Core-7 plus seasonal bridge upcoming match has odds from >= 2 distinct SA bookmakers.
     # This replaces the old narrative_source (w84/w82) approach — card data
     # availability is the correct metric for the image-card system.
     rows = q_all(conn, """
@@ -555,7 +555,7 @@ def build_coverage_matrix(conn) -> list[dict]:
               AND  date(substr(match_id, -10)) <  date('now', '+2 hours', '+8 days')
               AND (
                     (sport = 'football' AND league IN ('epl', 'psl', 'champions_league'))
-                 OR (sport = 'rugby'    AND league IN ('urc', 'super_rugby', 'six_nations'))
+                 OR (sport = 'rugby'    AND league IN ('urc', 'super_rugby', 'six_nations', 'currie_cup', 'rugby_championship'))
                  OR (sport = 'cricket'  AND league = 'ipl')
               )
             GROUP BY match_id, sport, league

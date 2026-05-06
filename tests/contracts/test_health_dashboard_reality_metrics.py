@@ -99,6 +99,10 @@ def test_card_coverage_matrix_is_core7_and_upcoming_only():
     rows = [
         ("betway", f"a_vs_b_{today}", "football", "epl", "now"),
         ("supabets", f"a_vs_b_{today}", "football", "epl", "now"),
+        ("betway", f"wp_vs_bulls_{today}", "rugby", "currie_cup", "now"),
+        ("supabets", f"wp_vs_bulls_{today}", "rugby", "currie_cup", "now"),
+        ("betway", f"boks_vs_all_blacks_{today}", "rugby", "rugby_championship", "now"),
+        ("supabets", f"boks_vs_all_blacks_{today}", "rugby", "rugby_championship", "now"),
         ("betway", f"fighter_a_vs_fighter_b_{today}", "combat", "ufc", "now"),
         ("betway", f"test_a_vs_test_b_{today}", "cricket", "test_cricket", "now"),
         ("betway", "old_a_vs_old_b_2026-01-01", "football", "psl", "now"),
@@ -111,7 +115,9 @@ def test_card_coverage_matrix_is_core7_and_upcoming_only():
     coverage = dash.build_coverage_matrix(conn)
 
     assert [(r["sport"], r["league"], r["total"], r["card_ready"]) for r in coverage if r["total"] > 0] == [
-        ("football", "EPL", 1, 1)
+        ("football", "EPL", 1, 1),
+        ("rugby", "CURRIE CUP", 1, 1),
+        ("rugby", "RUGBY CHAMPIONSHIP", 1, 1),
     ]
 
 
