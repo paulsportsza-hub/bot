@@ -218,6 +218,35 @@ def _release_send_reservation_sync(edge_id: str, reservation_id: int | None) -> 
             conn.close()
 
 
+def _touch_send_reservation_sync(edge_id: str, reservation_id: int | None) -> bool:
+    if not edge_id or reservation_id is None:
+        return False
+    db_path = _alerts_db_path()
+    try:
+        from scrapers.db_connect import connect_odds_db  # type: ignore[import]
+    except ImportError as exc:
+        log.warning("alerts_direct: _touch_send_reservation_sync import error: %s", exc)
+        return False
+    conn = None
+    try:
+        conn = connect_odds_db(db_path)
+        _ensure_alerts_send_log_schema(conn)
+        cur = conn.execute(
+            "UPDATE alerts_send_log "
+            "SET sent_at = ? "
+            "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'sending'",
+            (time.time(), reservation_id, edge_id, _ALERTS_SEND_CHANNEL),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    except Exception as exc:
+        log.warning("alerts_direct: send reservation heartbeat failed: %s", exc)
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _finalize_send_log_sync(
     edge_id: str,
     match_key: str,
@@ -356,6 +385,19 @@ async def post_to_alerts(
 
     caption = ""
     reply_markup = _build_deeplink_markup(_dl_key_with_tier)
+
+    reservation_current = await asyncio.to_thread(
+        _touch_send_reservation_sync,
+        edge_id,
+        reservation_id,
+    )
+    if not reservation_current:
+        log.warning(
+            "alerts_direct: reservation lost before send edge_id=%s reservation_id=%s",
+            edge_id,
+            reservation_id,
+        )
+        return None
 
     msg_url = await asyncio.to_thread(_post_sync, token, png_bytes, caption, reply_markup)
     if not msg_url:

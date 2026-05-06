@@ -25953,14 +25953,12 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 FROM edge_results e
                 WHERE e.result IS NULL
                   AND e.edge_tier = 'gold'
+                  AND e.posted_to_alerts_direct = 0
                   AND (
-                    e.posted_to_alerts_direct = 0
+                    e.posted_to_alerts_direct_claim_id IS NULL
                     OR (
-                      e.posted_to_alerts_direct = -1
-                      AND (
-                        e.posted_to_alerts_direct_claimed_at IS NULL
-                        OR e.posted_to_alerts_direct_claimed_at <= datetime('now', '-10 minutes')
-                      )
+                      e.posted_to_alerts_direct_claimed_at IS NULL
+                      OR e.posted_to_alerts_direct_claimed_at <= datetime('now', '-10 minutes')
                     )
                   )
                   AND e.recommended_at >= datetime('now', '-2 hours')
@@ -25996,22 +25994,19 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             _tfa_claimed = _db_write_retry(
                 "UPDATE edge_results "
-                "SET posted_to_alerts_direct = -1, "
-                "posted_to_alerts_direct_claimed_at = datetime('now'), "
+                "SET posted_to_alerts_direct_claimed_at = datetime('now'), "
                 "posted_to_alerts_direct_claim_id = ? "
                 "WHERE edge_id = ? "
                 "AND result IS NULL "
                 "AND edge_tier = ? "
                 "AND recommended_at = ? "
                 "AND recommended_at >= datetime('now', '-2 hours') "
+                "AND posted_to_alerts_direct = 0 "
                 "AND ("
-                "  posted_to_alerts_direct = 0 "
+                "  posted_to_alerts_direct_claim_id IS NULL "
                 "  OR ("
-                "    posted_to_alerts_direct = -1 "
-                "    AND ("
-                "      posted_to_alerts_direct_claimed_at IS NULL "
-                "      OR posted_to_alerts_direct_claimed_at <= datetime('now', '-10 minutes')"
-                "    )"
+                "    posted_to_alerts_direct_claimed_at IS NULL "
+                "    OR posted_to_alerts_direct_claimed_at <= datetime('now', '-10 minutes')"
                 "  )"
                 ")",
                 (
@@ -26088,10 +26083,9 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as _tfa_post_exc:
             try:
                 _db_write_retry(
-                    "UPDATE edge_results SET posted_to_alerts_direct = 0 "
-                    ", posted_to_alerts_direct_claimed_at = NULL "
+                    "UPDATE edge_results SET posted_to_alerts_direct_claimed_at = NULL "
                     ", posted_to_alerts_direct_claim_id = NULL "
-                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1 "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = 0 "
                     "AND posted_to_alerts_direct_claim_id = ?",
                     (_tfa_edge_id, _tfa_claim_id),
                     retries=5,
@@ -26118,7 +26112,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     "UPDATE edge_results SET posted_to_alerts_direct = 1 "
                     ", posted_to_alerts_direct_claimed_at = NULL "
                     ", posted_to_alerts_direct_claim_id = NULL "
-                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1 "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = 0 "
                     "AND posted_to_alerts_direct_claim_id = ?",
                     (_tfa_edge_id, _tfa_claim_id),
                     retries=10,
@@ -26140,10 +26134,9 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             try:
                 _db_write_retry(
-                    "UPDATE edge_results SET posted_to_alerts_direct = 0 "
-                    ", posted_to_alerts_direct_claimed_at = NULL "
+                    "UPDATE edge_results SET posted_to_alerts_direct_claimed_at = NULL "
                     ", posted_to_alerts_direct_claim_id = NULL "
-                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1 "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = 0 "
                     "AND posted_to_alerts_direct_claim_id = ?",
                     (_tfa_edge_id, _tfa_claim_id),
                     retries=5,

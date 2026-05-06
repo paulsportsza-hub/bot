@@ -152,8 +152,9 @@ async def test_tier_fire_alerts_job_reclaims_stale_claim(monkeypatch, tmp_path):
     try:
         conn.execute(
             "UPDATE edge_results "
-            "SET posted_to_alerts_direct = -1, "
-            "posted_to_alerts_direct_claimed_at = datetime('now', '-11 minutes')"
+            "SET posted_to_alerts_direct = 0, "
+            "posted_to_alerts_direct_claimed_at = datetime('now', '-11 minutes'), "
+            "posted_to_alerts_direct_claim_id = 'old-owner'"
         )
         conn.commit()
     finally:
@@ -176,7 +177,7 @@ async def test_stale_claim_owner_cannot_release_reclaimed_edge(monkeypatch, tmp_
     try:
         conn.execute(
             "UPDATE edge_results "
-            "SET posted_to_alerts_direct = -1, "
+            "SET posted_to_alerts_direct = 0, "
             "posted_to_alerts_direct_claimed_at = datetime('now', '-11 minutes'), "
             "posted_to_alerts_direct_claim_id = 'old-owner'"
         )
@@ -206,7 +207,7 @@ async def test_stale_claim_owner_cannot_release_reclaimed_edge(monkeypatch, tmp_
             "UPDATE edge_results SET posted_to_alerts_direct = 0, "
             "posted_to_alerts_direct_claimed_at = NULL, "
             "posted_to_alerts_direct_claim_id = NULL "
-            "WHERE edge_id = ? AND posted_to_alerts_direct = -1 "
+            "WHERE edge_id = ? AND posted_to_alerts_direct = 0 "
             "AND posted_to_alerts_direct_claim_id = ?",
             (edge_id, "old-owner"),
             db_path=db_path,
@@ -226,6 +227,47 @@ async def test_stale_claim_owner_cannot_release_reclaimed_edge(monkeypatch, tmp_
     finally:
         conn.close()
     assert row == (1, None)
+
+
+@pytest.mark.asyncio
+async def test_tier_fire_claim_keeps_posted_flag_boolean_visible(monkeypatch, tmp_path):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setattr(
+        bot,
+        "_load_tips_from_edge_results",
+        lambda limit=50, skip_punt_filter=True: [
+            {
+                "match_id": "contract_home_vs_contract_away_2026-05-17",
+                "match_key": "contract_home_vs_contract_away_2026-05-17",
+            }
+        ],
+    )
+
+    observed: list[tuple[int, bool]] = []
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT posted_to_alerts_direct, posted_to_alerts_direct_claim_id "
+                "FROM edge_results WHERE edge_id = ?",
+                (edge_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        observed.append((row[0], bool(row[1])))
+        return "https://t.me/c/3789410835/1"
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    assert observed == [(0, True)]
 
 
 @pytest.mark.asyncio
@@ -346,6 +388,14 @@ def test_stale_send_log_owner_cannot_release_or_finalize_reclaimed_reservation(
     assert (acquired, existing_url) == (True, None)
     assert new_id != old_id
 
+    assert alerts_direct._touch_send_reservation_sync(
+        "edge_contract_alerts_dedup_01",
+        old_id,
+    ) is False
+    assert alerts_direct._touch_send_reservation_sync(
+        "edge_contract_alerts_dedup_01",
+        new_id,
+    ) is True
     alerts_direct._release_send_reservation_sync(
         "edge_contract_alerts_dedup_01",
         old_id,
@@ -376,3 +426,46 @@ def test_stale_send_log_owner_cannot_release_or_finalize_reclaimed_reservation(
     finally:
         conn.close()
     assert rows == [(new_id, "sent", "https://t.me/c/3789410835/new")]
+
+
+@pytest.mark.asyncio
+async def test_post_to_alerts_aborts_if_reservation_lost_before_send(
+    monkeypatch,
+    tmp_path,
+):
+    import bot_lib.alerts_direct as alerts_direct
+
+    db_path = str(tmp_path / "odds.db")
+    monkeypatch.setenv("ALERTS_SEND_LOG_DB_PATH", db_path)
+    monkeypatch.setenv("TELEGRAM_PUBLISHER_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(alerts_direct, "_emit_latency_event", lambda *args, **kwargs: None)
+
+    def render_and_steal_reservation(tip):
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "DELETE FROM alerts_send_log "
+                "WHERE edge_id = ? AND channel = 'alerts' AND status = 'sending'",
+                ("edge_contract_alerts_dedup_01",),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return b"png"
+
+    post_calls: list[str] = []
+
+    def fake_post_sync(token, png_bytes, caption, reply_markup):
+        post_calls.append("called")
+        return "https://t.me/c/3789410835/1"
+
+    monkeypatch.setattr(alerts_direct, "_sync_render_card", render_and_steal_reservation)
+    monkeypatch.setattr(alerts_direct, "_post_sync", fake_post_sync)
+
+    result = await alerts_direct.post_to_alerts(
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "edge_contract_alerts_dedup_01",
+    )
+
+    assert result is None
+    assert post_calls == []
