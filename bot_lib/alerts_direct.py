@@ -24,6 +24,7 @@ import time
 log = logging.getLogger("bot.alerts_direct")
 
 _ALERTS_CHANNEL_ID = "-1003789410835"
+_ALERTS_SEND_CHANNEL = "alerts"
 # IN_APP_DEEPLINK: navigation for already-subscribed Founders Floor members.
 # Not an acquisition CTA — raw t.me deeplink is intentional (no Bitly wrap).
 _DEEPLINK_BASE = "https://t.me/mzansiedge_bot?start=card_"
@@ -84,6 +85,65 @@ def _sync_render_card(tip: dict, buttons: list | None = None) -> bytes:
 _PUBLISHED_URL_BASE = "https://t.me/c/3789410835"
 
 
+def _ensure_alerts_send_log_schema(conn) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS alerts_send_log (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            edge_id          TEXT,
+            match_key        TEXT,
+            tier             TEXT,
+            channel          TEXT NOT NULL DEFAULT 'alerts',
+            image_bytes_size INTEGER,
+            msg_url          TEXT,
+            sent_at          REAL NOT NULL
+        )
+    """)
+    _cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(alerts_send_log)").fetchall()
+    }
+    if "channel" not in _cols:
+        conn.execute(
+            "ALTER TABLE alerts_send_log "
+            "ADD COLUMN channel TEXT NOT NULL DEFAULT 'alerts'"
+        )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uix_alerts_send_log_edge_channel "
+        "ON alerts_send_log(edge_id, channel)"
+    )
+
+
+def _existing_send_url_sync(edge_id: str) -> str | None:
+    """Return an existing Alerts send URL for this edge, if one was already logged."""
+    if not edge_id:
+        return None
+    db_path = os.path.expanduser("~/scrapers/odds.db")
+    try:
+        from scrapers.db_connect import connect_odds_db  # type: ignore[import]
+    except ImportError as exc:
+        log.warning("alerts_direct: _existing_send_url_sync import error: %s", exc)
+        return None
+    conn = None
+    try:
+        conn = connect_odds_db(db_path)
+        _ensure_alerts_send_log_schema(conn)
+        row = conn.execute(
+            "SELECT msg_url FROM alerts_send_log "
+            "WHERE edge_id = ? AND channel = ? "
+            "ORDER BY sent_at DESC LIMIT 1",
+            (edge_id, _ALERTS_SEND_CHANNEL),
+        ).fetchone()
+        conn.commit()
+        if row:
+            return row[0] or "already_sent"
+    except Exception as exc:
+        log.warning("alerts_direct: existing send lookup failed: %s", exc)
+    finally:
+        if conn is not None:
+            conn.close()
+    return None
+
+
 def _log_send_sync(
     edge_id: str,
     match_key: str,
@@ -105,22 +165,20 @@ def _log_send_sync(
     conn = None
     try:
         conn = connect_odds_db(db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS alerts_send_log (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                edge_id          TEXT,
-                match_key        TEXT,
-                tier             TEXT,
-                image_bytes_size INTEGER,
-                msg_url          TEXT,
-                sent_at          REAL NOT NULL
-            )
-        """)
+        _ensure_alerts_send_log_schema(conn)
         conn.execute(
-            "INSERT INTO alerts_send_log"
-            " (edge_id, match_key, tier, image_bytes_size, msg_url, sent_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (edge_id, match_key, tier, image_bytes_size, msg_url, time.time()),
+            "INSERT OR IGNORE INTO alerts_send_log"
+            " (edge_id, match_key, tier, channel, image_bytes_size, msg_url, sent_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                edge_id,
+                match_key,
+                tier,
+                _ALERTS_SEND_CHANNEL,
+                image_bytes_size,
+                msg_url,
+                time.time(),
+            ),
         )
         conn.commit()
     except Exception as exc:
@@ -177,6 +235,15 @@ async def post_to_alerts(
     Returns:
         Telegram message URL on success, None on failure.
     """
+    existing_msg_url = await asyncio.to_thread(_existing_send_url_sync, edge_id)
+    if existing_msg_url:
+        log.info(
+            "alerts_direct: skipped duplicate edge_id=%s existing_url=%s",
+            edge_id,
+            existing_msg_url,
+        )
+        return existing_msg_url
+
     token = os.environ.get("TELEGRAM_PUBLISHER_BOT_TOKEN", "")
     if not token:
         log.error("alerts_direct: TELEGRAM_PUBLISHER_BOT_TOKEN not set")

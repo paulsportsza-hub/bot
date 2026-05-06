@@ -25857,12 +25857,49 @@ async def _after_send(user_id: int):
     await db.increment_push_count(user_id)
 
 
+def _db_write_retry(
+    sql: str,
+    params: tuple = (),
+    *,
+    retries: int = 5,
+    backoff_ms: int = 200,
+    db_path: str | None = None,
+) -> int:
+    """Run one SQLite write against odds.db with lock retry; return rowcount."""
+    import time as _dbwr_time
+
+    from scrapers.db_connect import connect_odds_db as _dbwr_conn_fn
+    from scrapers.edge.edge_config import DB_PATH as _dbwr_default_db
+
+    _dbwr_target = db_path or _dbwr_default_db
+    _dbwr_retries = max(1, retries)
+    for _dbwr_attempt in range(_dbwr_retries):
+        _dbwr_conn = None
+        try:
+            _dbwr_conn = _dbwr_conn_fn(_dbwr_target)
+            _dbwr_cur = _dbwr_conn.execute(sql, params)
+            _dbwr_conn.commit()
+            return int(_dbwr_cur.rowcount)
+        except sqlite3.OperationalError as _dbwr_exc:
+            if (
+                "locked" not in str(_dbwr_exc).lower()
+                or _dbwr_attempt == _dbwr_retries - 1
+            ):
+                raise
+            _dbwr_time.sleep((backoff_ms / 1000.0) * (2 ** _dbwr_attempt))
+        finally:
+            if _dbwr_conn is not None:
+                _dbwr_conn.close()
+    return 0
+
+
 async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """BUILD-BOT-ALERTS-DIRECT-01: Post new Gold/Diamond edges to @MzansiEdgeAlerts.
 
     Runs every 30 seconds. Queries edge_results for gold/diamond edges with
-    posted_to_alerts_direct=0 and fires the canonical card to the Alerts channel.
-    Marks posted_to_alerts_direct=1 after successful delivery to prevent duplicates
+    posted_to_alerts_direct=0, atomically claims each candidate, and fires the
+    canonical card to the Alerts channel. Marks posted_to_alerts_direct=1 after
+    successful delivery to prevent duplicates
     (AC-F dedup gate — belt-and-braces with publisher's skip guard in telegram_alerts).
 
     Gold  → Alerts channel post (Founders Floor experience).
@@ -25914,6 +25951,28 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not _tfa_edge_id or not _tfa_mk:
             continue
 
+        try:
+            _tfa_claimed = _db_write_retry(
+                "UPDATE edge_results SET posted_to_alerts_direct = -1 "
+                "WHERE edge_id = ? AND posted_to_alerts_direct = 0",
+                (_tfa_edge_id,),
+                retries=5,
+                backoff_ms=200,
+            )
+        except Exception as _tfa_claim_exc:
+            log.warning(
+                "_tier_fire_alerts_job: claim failed for edge_id=%s: %s",
+                _tfa_edge_id,
+                _tfa_claim_exc,
+            )
+            continue
+        if _tfa_claimed == 0:
+            log.debug(
+                "_tier_fire_alerts_job: skip already claimed/posted edge_id=%s",
+                _tfa_edge_id,
+            )
+            continue
+
         # timestamp for latency tracking (AC-J)
         _tfa_assigned_at: float | None = None
         try:
@@ -25960,32 +26019,69 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "edge_v2": {"composite_score": float(_tfa_row.get("composite_score") or 0), "confirming_signals": int(_tfa_row.get("confirming_signals") or 0)},
             }
 
-        _tfa_msg_url = await _alerts_post(_tfa_tip, _tfa_edge_id, _tfa_assigned_at)
+        try:
+            _tfa_msg_url = await _alerts_post(_tfa_tip, _tfa_edge_id, _tfa_assigned_at)
+        except Exception as _tfa_post_exc:
+            try:
+                _db_write_retry(
+                    "UPDATE edge_results SET posted_to_alerts_direct = 0 "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1",
+                    (_tfa_edge_id,),
+                    retries=5,
+                    backoff_ms=200,
+                )
+            except Exception as _tfa_release_exc:
+                log.error(
+                    "_tier_fire_alerts_job: release failed after post exception edge_id=%s: %s",
+                    _tfa_edge_id,
+                    _tfa_release_exc,
+                )
+            log.warning(
+                "_tier_fire_alerts_job: post raised for edge_id=%s tier=%s: %s",
+                _tfa_edge_id,
+                _tfa_tier,
+                _tfa_post_exc,
+            )
+            continue
 
         if _tfa_msg_url:
-            # AC-F: mark posted_to_alerts_direct=1 to prevent double-post
+            # AC-F: mark posted_to_alerts_direct=1 after successful claimed send.
             try:
-                from scrapers.db_connect import connect_odds_db as _tfa_mark_fn
-                from scrapers.edge.edge_config import DB_PATH as _tfa_mark_db
-                _tfa_mark_conn = _tfa_mark_fn(_tfa_mark_db)
-                try:
-                    _tfa_mark_conn.execute(
-                        "UPDATE edge_results SET posted_to_alerts_direct = 1 "
-                        "WHERE edge_id = ?",
-                        (_tfa_edge_id,),
+                _tfa_marked = _db_write_retry(
+                    "UPDATE edge_results SET posted_to_alerts_direct = 1 "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1",
+                    (_tfa_edge_id,),
+                    retries=10,
+                    backoff_ms=500,
+                )
+                if _tfa_marked == 0:
+                    log.warning(
+                        "_tier_fire_alerts_job: mark skipped for edge_id=%s; state changed before mark",
+                        _tfa_edge_id,
                     )
-                    _tfa_mark_conn.commit()
-                finally:
-                    _tfa_mark_conn.close()
             except Exception as _tfa_mark_exc:
-                log.warning(
-                    "_tier_fire_alerts_job: mark failed for edge_id=%s: %s",
+                log.error(
+                    "_tier_fire_alerts_job: mark failed after send for edge_id=%s; leaving claimed to prevent duplicate: %s",
                     _tfa_edge_id, _tfa_mark_exc,
                 )
             # AC-E: Diamond edges also DM active Diamond subscribers personally.
             if _tfa_tier == "diamond":
                 await _fire_diamond_edge_dms(ctx, _tfa_tip, _tfa_mk)
         else:
+            try:
+                _db_write_retry(
+                    "UPDATE edge_results SET posted_to_alerts_direct = 0 "
+                    "WHERE edge_id = ? AND posted_to_alerts_direct = -1",
+                    (_tfa_edge_id,),
+                    retries=5,
+                    backoff_ms=200,
+                )
+            except Exception as _tfa_release_exc:
+                log.error(
+                    "_tier_fire_alerts_job: release failed after empty post result edge_id=%s: %s",
+                    _tfa_edge_id,
+                    _tfa_release_exc,
+                )
             log.warning(
                 "_tier_fire_alerts_job: post returned None for edge_id=%s tier=%s",
                 _tfa_edge_id, _tfa_tier,
