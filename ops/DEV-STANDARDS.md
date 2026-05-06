@@ -76,6 +76,55 @@ Sonnet-LEAD's commit-discipline pattern (multiple SO #41 violations Apr–May 20
 
 **v4.5 narrowing rationale:** v4.4's mandatory trigger list was too broad — "any change touching the dispatch system" alone fires on basically every bridge brief. Stacked with Opus Max Effort executor (the right model for hard concurrency / cache / runtime work), the combined cost burned the full 5h Cowork window per brief, blocking parallel orchestration. v4.5 keeps the gate's value (mandatory standard review) while moving the cost-stacking trigger categories to advisory. Premium models are accelerators, not comfort blankets — Routing v1 §4.
 
+### Pure-Codex Sub-Agent Review (LOCKED 6 May 2026 — `FIX-SO45-CODEX-INLINE-SUBAGENT-01`)
+
+When `DISPATCH_MODE=pure-codex` (Codex is the executor), the `/codex:review` plugin / companion path is REDUNDANT — the executor is already Codex; calling its own plugin adds no cross-process cross-process eyes value, and the `codex review --commit` non-interactive subcommand has hung agents on background-task UX (13+ minute waits with no progress). **The new pattern: agent spawns a fresh `codex exec` sub-agent inline, synchronous, no plugin dependency.**
+
+**Mechanism.** After commit + push, before `mark_done.sh`, the executor agent runs:
+
+```bash
+DIFF=$(git show --stat --patch HEAD)
+codex --profile xhigh exec --quiet "$(cat <<EOF
+You are an INDEPENDENT reviewer with NO prior context on this brief. Examine the diff below.
+
+Brief: <BRIEF-ID> — <one-line summary from brief title>
+
+Diff (commit $(git rev-parse HEAD)):
+${DIFF}
+
+Review for: race conditions, auth gaps, data-loss windows, migration rollback safety, logic errors, contract violations, missed callers of shared behaviour, gate coverage.
+
+Output exactly this structure:
+
+## Codex Sub-Agent Review
+
+Outcome: clean | blockers-addressed | needs-changes
+
+Findings:
+- [P0|P1|P2|P3] <file:line> — <one-line description>
+- (or "none" if no findings)
+EOF
+)"
+```
+
+The new `codex exec --quiet` invocation is a fresh process, fresh context, no shared session with the executor. That's the unbiased sub-agent. It returns to stdout synchronously (no background-task UX), so the agent can capture verbatim and embed in the report.
+
+**Adversarial framing.** When `review_mode: adversarial-review` is declared in the brief AC (or a hard trigger fires — money/auth/non-rollback-safe migration), the prompt above is amended:
+
+```
+You are an ADVERSARIAL reviewer. Your job is to FIND failure modes, not validate.
+Specific focus: <focus text from brief AC, e.g. "concurrent-write race on bot.py:render_card_image">
+Be hostile. Look for what could go wrong. Edge cases. Missing locks. Auth bypasses. 
+If you find ANY plausible failure mode, return needs-changes regardless of how unlikely.
+Output structure same as standard review.
+```
+
+**Report section.** Agent embeds the sub-agent's stdout VERBATIM under a `## Codex Sub-Agent Review` heading (note: heading distinguishes the new pattern from the old `## Codex Review` plugin section — useful for archive/audit). Outcome line MUST appear: `clean | blockers-addressed | needs-changes | bootstrap-exempt`. Reports without this section reopen the brief.
+
+**Hybrid mode unchanged.** When `DISPATCH_MODE=hybrid` (Claude executor), `/codex:review --wait` slash command IS the canonical pattern — it provides genuine cross-process eyes (Claude executor, Codex reviewer). Don't invent new patterns when the existing one works.
+
+**What's wrong with the old plugin path under pure-codex (driver for the rewrite):** the `/codex:review --wait` slash invokes `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review` which spawns a NEW codex companion process — fine in principle, but its `codex review --commit <sha>` invocation is the non-interactive companion CLI which (a) backgrounds without `--wait` (the slash translates `--wait` correctly when fired from the slash, but when `codex` itself spawns an `exec`-style sub-agent it doesn't have an analogous flag), (b) spawns a `Waiting for background terminal` UX that has hung agents 13+ min with no completion signal, (c) the slash command itself isn't always installed in spawn environments. Direct `codex exec --quiet "<prompt>"` skips all of that — synchronous, no plugin, fresh context.
+
 ### Mirror
 
 This section is paired with Routing v1 §10 on Notion (page `354d9048-d73c-8138-bf72-d8ce7b768a08`) and `ops/MODEL-ROUTING.md` (Cowork). Notion is canonical for routing decisions; DEV-STANDARDS is canonical for brief lifecycle and reporting protocol.
