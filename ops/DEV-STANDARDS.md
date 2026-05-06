@@ -3,9 +3,109 @@
 > **Source of truth for agent briefing, delegation, and QA standards.**
 > Referenced from CLAUDE.md.
 
-*Last updated: 17 April 2026 PM by AUDITOR (CLAUDE-MD-SO-SPLIT-01 Tier 1 — absorbed 6 SOs from CLAUDE.md: #15, #18, #19, #27 [reworded], #33, #36.)*
-*Updated: 4 May 2026 — BUILD-DEV-STANDARDS-V4.5-REVIEW-GATE-NARROW-01 — narrowed Codex Review Gate after FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 burned full 5h window on stacked Opus Max + adversarial.*
-*Updated: 5 May 2026 — FIX-CODEX-REVIEW-WAIT-FLAG-CANONICAL-01 — enforced `--wait` flag on all /codex:review and /codex:adversarial-review references. Bypasses interactive background/foreground prompt that defeats the gate in bridge-spawned dispatch context.*
+*Last updated: 4 May 2026 by Sonnet - AUDITOR (BUILD-DEV-STANDARDS-V45-REVIEW-GATE-NARROW-01 — v4.4 → v4.5, narrows Codex Review Gate after FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 burned full 5h Cowork window on stacked Opus Max + mandatory adversarial: `/codex:adversarial-review` is now DISCRETIONARY (opt-in via brief AC, not auto-fired); mandatory adversarial triggers narrowed 6→3 (money/payments, auth/settlement, non-rollback-safe migrations); cost rule added). Earlier history: 3 May 2026 by Opus Max Effort - AUDITOR (BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-01 — v4.3 → v4.4, ratifies Codex Review Gate as canonical brief lifecycle / SO #45). 17 April 2026 PM by AUDITOR (CLAUDE-MD-SO-SPLIT-01 Tier 1 — absorbed 6 SOs from CLAUDE.md: #15, #18, #19, #27 [reworded], #33, #36.)*
+
+---
+
+## Codex Review Gate (v4.5 — LOCKED 4 May 2026, supersedes v4.4)
+
+**v4.5 narrows the Codex Review Gate to fix the cost-stacking failure mode.** Standard `/codex:review` remains mandatory on every code-touching brief; `/codex:adversarial-review` is now **DISCRETIONARY** — opt-in via brief AC, NOT auto-fired by trigger match. v4.4's mandatory trigger list (6 categories) is narrowed to **3 hard categories** (money/payments, auth/settlement, non-rollback-safe migrations); the other three move to ADVISORY ("Consider adversarial"). Cost rule added: when executor = Opus Max Effort, default review = standard `/codex:review` unless brief AC explicitly justifies adversarial. **Driver:** FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 stacked Opus Max + mandatory adversarial on a dispatch-system trigger and burned the full 5h Cowork window (1h 39m, 171k tokens, 7% balance left) — incompatible with Routing v1 §4 cost discipline.
+
+Routing v1 pivot otherwise unchanged: Codex stops being a primary executor; Codex runs as the universal reviewer invoked via `/codex:review` or `/codex:adversarial-review` at the end of every code-touching brief, before `mark_done.sh`. Claude (Sonnet or Opus Max Effort) executes; Codex reviews. Locked under SO #45.
+
+### Lifecycle (one extra mandatory step per brief)
+
+Standard brief execution gains one mandatory step between commit + push and `mark_done.sh`:
+
+1. After commit + push, before `mark_done.sh`, run `/codex:review` (or `/codex:adversarial-review <focus text>` when AC explicitly declared) on the wave branch from inside the executing Claude Code session.
+2. If review returns blockers, address them with additional commits + push, then re-run review.
+3. Only proceed to `mark_done.sh` when review returns no blockers.
+4. Include the review summary verbatim in the report under a `## Codex Review` section.
+5. State the outcome explicitly: `Outcome: clean | blockers-addressed | bootstrap-exempt`.
+
+### Review modes
+
+- **`/codex:review`** — DEFAULT, MANDATORY. Functional correctness, regressions, contract drift, gate coverage. Use on every code-touching brief unless adversarial is explicitly declared.
+- **`/codex:adversarial-review <focus text>`** — DISCRETIONARY (v4.5). Adversarial second-pair-of-eyes on a specified failure-class focus. Invoked only when (a) brief AC explicitly sets `review_mode: adversarial-review` with focus text, (b) standard `/codex:review` output recommends escalation, or (c) Paul override. Trigger list does NOT auto-fire adversarial in v4.5.
+
+### When to use `/codex:adversarial-review` (mandatory triggers — narrowed v4.5)
+
+**Mandatory triggers (3 hard categories — adversarial REQUIRED in brief AC):**
+
+- New runtime path that handles **money or payments**.
+- New runtime path that handles **auth or settlement**.
+- Migrations that are **not rollback-safe** (any migration where rollback would lose data or break invariants).
+
+**Advisory list (3 categories — "Consider adversarial" — author judgement, NOT auto-fire):**
+
+- Concurrency-sensitive code (locks, queues, async handlers, scrapers).
+- Changes touching the dispatch system, bridge, or worktree-runner.
+- Narrative / cache surfaces that ship to premium-tier users.
+
+For advisory items, the author decides per-brief whether the architectural risk warrants the cost of an adversarial review. Standard `/codex:review` is sufficient for the majority; reserve adversarial for genuinely high-blast-radius changes within those categories.
+
+### Cost rule (v4.5 NEW)
+
+When the executor model is Opus Max Effort, default review = standard `/codex:review` unless the brief AC explicitly justifies adversarial in writing. No stacking premium-on-premium without justification. This rule exists because Opus Max Effort + adversarial Codex on the same brief routinely consumes the entire 5h Cowork window — incompatible with parallel orchestration.
+
+### Brief authoring rule (v4.5 amended)
+
+Every brief's AC block MUST explicitly declare `review_mode: review | adversarial-review` — no implicit escalation from trigger match. For `adversarial-review`, the focus text must state what to challenge. The Canonical Brief Template Block (see § Canonical Brief Template Blocks below) is mandatory in every dispatched brief. Dispatcher tooling (LEAD / COO / NARRATIVE / AUDITOR / any drafter) must embed the block verbatim before sending.
+
+### Report format
+
+Every report MUST include a `## Codex Review` section with:
+
+- The full review summary verbatim (copy-paste from the slash-command output).
+- An explicit `Outcome: clean | blockers-addressed | bootstrap-exempt` line.
+
+Reports without this section are INCOMPLETE and the brief reopens. AUDITOR verifies on every worker return; COO blocks merge of any wave whose reports fail this check.
+
+### Bootstrap exemption
+
+Only two briefs are bootstrap-exempt because they ratify or install the gate itself:
+
+- `BUILD-CODEX-PLUGIN-INSTALL-AND-VERIFY-01` (server-side `/codex:*` plugin install).
+- `BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-01` (this brief — ratifies the gate as canonical lifecycle).
+
+All subsequent code-touching briefs MUST gate. Reports for the two exempt briefs include `Outcome: bootstrap-exempt` instead of `clean`.
+
+### Why
+
+Sonnet-LEAD's commit-discipline pattern (multiple SO #41 violations Apr–May 2026) showed that pre-commit testing alone catches mechanical errors but not architectural risks (race conditions, auth gaps, data-loss windows, migration rollback safety). The Codex review gate adds a second pair of eyes before any merge becomes irreversible. Pre-merge tests verify "did we break the existing contract?"; the standard review verifies "did we ship the right contract for this change?". The discretionary adversarial mode handles the small subset of changes where the architectural risk genuinely warrants the additional cost.
+
+**v4.5 narrowing rationale:** v4.4's mandatory trigger list was too broad — "any change touching the dispatch system" alone fires on basically every bridge brief. Stacked with Opus Max Effort executor (the right model for hard concurrency / cache / runtime work), the combined cost burned the full 5h Cowork window per brief, blocking parallel orchestration. v4.5 keeps the gate's value (mandatory standard review) while moving the cost-stacking trigger categories to advisory. Premium models are accelerators, not comfort blankets — Routing v1 §4.
+
+### Mirror
+
+This section is paired with Routing v1 §10 on Notion (page `354d9048-d73c-8138-bf72-d8ce7b768a08`) and `ops/MODEL-ROUTING.md` (Cowork). Notion is canonical for routing decisions; DEV-STANDARDS is canonical for brief lifecycle and reporting protocol.
+
+---
+
+## Canonical Brief Template Blocks
+
+The following blocks are mandatory in every dispatched brief. Each block goes verbatim into the brief's Notion page body. Dispatchers (LEAD / COO / NARRATIVE / AUDITOR / any drafter) embed them before sending.
+
+### Codex Review Gate (mandatory, SO #45)
+
+```
+**Codex Review Gate (mandatory, SO #45 — v4.5)**
+
+Review mode for this brief: `<review | adversarial-review>`  ← MUST be explicitly declared (no implicit escalation)
+<If adversarial-review: focus text: "<what to challenge>">
+<If executor=Opus Max Effort and review_mode=adversarial-review: justification: "<why premium-on-premium cost is warranted>">
+
+After commit + push, before mark_done.sh:
+1. Run `/codex:review` (or `/codex:adversarial-review <focus text>` when explicitly declared) on the wave branch.
+2. If review returns blockers, address them with additional commits + push, then re-run review.
+3. Only proceed to mark_done.sh when review returns no blockers.
+4. Include the review summary verbatim in the report under a `## Codex Review` section.
+5. State the outcome: `clean | blockers-addressed | bootstrap-exempt`.
+```
+
+Dispatcher tooling guidance: every dispatched brief MUST include the Codex Review Gate block above with `review_mode` explicitly declared. Briefs missing it are non-compliant under v4.5 and must be re-issued.
+
+---
 
 ---
 
@@ -100,50 +200,61 @@ Report evidence required: OCR raw text output + assertion results table (asserti
 
 ---
 
-### Multi-file refactor authoring discipline (LOCKED 2026-05-05)
+### Multi-file refactor authoring discipline — blast-radius scoped (LOCKED 6 May 2026, supersedes 5 May rev)
 
-Briefs that modify >3 files MUST include exact OLD/NEW snippets per file in the AC body. Format:
+**The 5 May rule was too aggressive.** Triggering on raw file count (incl. tests) blocked normal responsible fixes that touched 4 files where 2 were tests. New rule scopes discipline to PRODUCTION-file blast radius and exempts incidental tests.
 
-```
-File: path/to/file.py
-OLD:
-    <exact existing code line(s) to be replaced>
-NEW:
-    <exact replacement code line(s)>
-```
+**Trigger ladder:**
 
-- **Agent's job becomes find-and-replace, NOT discovery.** No grep, no exploration, minimal context accumulation.
-- File:line targets without OLD/NEW snippets are acceptable for single-file briefs OR for INV-class briefs where the agent must discover the bug. For mechanical FIX-class refactors touching >3 files, snippets are mandatory.
-- The brief author has already read the file; they include what they read in the brief. The agent does not re-discover.
+1. **≤3 production files** → agent may proceed with normal grep+read discovery. No pre-baked snippets required. Tests don't count regardless of how many.
+2. **>3 production files** → brief AC MUST contain explicit per-file intent + OLD/NEW snippets per file, OR carry a pre-flight approval token (`Pre-flight: approved by <role> for discovery-mode (>3 files)` — used when the change is genuinely exploratory and the dispatcher accepts the thrash risk).
+3. **Tests count toward the threshold ONLY when** the test change requires broad fixture / harness / framework refactor that itself shapes the production change (e.g. introducing a new test base class that 8 tests inherit from, or a shared mock that touches 5 fixture files). A targeted test added alongside a single-file production fix doesn't count.
+4. **Shared-behavior changes** (modifying a util, contract, public function, base class, or signal used by ≥3 callers) require an extra-review block in the brief AC declaring the shared surface + caller scan, EVEN IF only 1 file actually changes. Format: `Shared-behavior: <symbol/file:line> · callers: <grep result, count + locations>`. Reviewer (Codex sub-agent or LEAD) eyes the caller scan to confirm no missed downstream impact.
 
-**Why:** autocompact thrash on multi-file refactors. Documented incident: `FIX-DBLOCK-RUNTIME-HOT-PATHS-01`, 12-minute thrash at 5% context. Each file in a multi-file refactor needs its own grep-then-read-then-edit cycle; brief-time discovery blows context faster than autocompact can recover.
+**Why:** agents executing multi-file refactors without explicit per-file snippets must Grep+Read each file to locate the change site — multiplied by file count, context bloats, autocompact fires, brief dies. Two documented incidents (4-5 May 2026): `FIX-DBLOCK-RUNTIME-HOT-PATHS-01` (12-min thrash, 7 production files); `FIX-BRIEF-AUTHORING-MULTIFILE-DISCIPLINE-01` (24-min thrash, 4 production files). But the same rule applied to a 2-prod-file + 2-test-file fix wrongly blocks normal work. Blast radius matters; raw count doesn't.
+
+**Authoring rules when the >3-prod trigger fires (mandatory in the AC body):**
+
+1. **Per-file OLD/NEW snippets.** For each PRODUCTION file the brief touches, the AC includes a fenced block: full server-absolute path, exact OLD code (sufficient surrounding context for unique match: typically 5-15 lines), exact NEW code, expected character delta. Copy-paste fidelity. Tests don't need this unless they hit rule 3 above.
+2. **Line range hint per file.** Each file gets `Read` instruction with `offset`/`limit` covering only the change region (SO #30 compliance). The agent never reads full files.
+3. **No "discover the call site" instructions.** Phrases like "find every place X is called", "update all callers" are AUTHOR responsibility — the author runs the grep, lists file:line:snippet results, bakes them into the AC. If the author can't enumerate sites, the brief is INV-class, not FIX-class.
+4. **One commit one push.** Agent applies all snippets in a single working-tree session, runs the contract test, commits once.
+5. **Contract test scope:** if the brief ships >3 production-file edits, the contract test MUST be a single regex/AST scan across all touched files (not per-file unit tests).
+
+**Pre-send check (dispatcher):** before sending any FIX/BUILD brief touching >3 PRODUCTION files (test count excluded), count the OLD/NEW snippets in the AC. If snippet count < production file count, the brief is non-compliant — re-author or attach `Pre-flight: approved` token before dispatch.
+
+**Cost rule:** if a brief genuinely needs >3 production-file edits AND >3 sites of judgement (i.e. the author can't pre-bake snippets without doing the agent's work), split it into N atomic single-file briefs and dispatch sequentially. Atomic single-file briefs cannot thrash.
+
+**Driver for the 6 May revision (`FIX-SO30-BLAST-RADIUS-01`):** the original 5 May rule started rejecting normal 2-prod + 2-test fixes that posed no real thrash risk. Goal of the rule is preventing autocompact thrash on genuinely large refactors, not gating routine work behind ceremony. Blast-radius framing keeps the guardrail where the risk lives and removes it from where it doesn't.
 
 ---
 
-### Dispatch Format v4.2 (LOCKED — 28 April 2026, supersedes v4.1 — Pure Claude reconciliation)
+### Dispatch Format v4.3 (LOCKED — 2 May 2026 PM, supersedes v4.2 — Routing v1 reconciliation)
 
-**This is the ONLY acceptable format for dispatching ANY brief (INV, BUILD, QA, FIX, investigation, marketing, SEO — all types, all agents: LEAD, COO, anyone else). Zero deviations. Any dispatch not matching this exact format will be rejected by Paul.**
+**This is the ONLY acceptable format for dispatching ANY brief (INV, BUILD, QA, FIX, INVESTIGATE-REGRESS, MARKETING, SEO — all types, all agents: LEAD, AUDITOR, COO, NARRATIVE). Zero deviations. Any dispatch not matching this exact format will be rejected by Paul.**
 
-**What changed in v4.2 (28 Apr 2026 — Pure Claude Ecosystem lock):** v4.1's multi-CLI taxonomy `(claude)` / `(codex)` / `(cowork)` / `(cursor)` directly contradicted `feedback_pure_claude_ecosystem.md` — both LOCKED on 18 April 2026. The contradiction was the root cause of the FIX-CLAUDEMD-D2-SUPERVISOR-01 "Codex attribution leak" surfaced by AUDITOR Lane B on 28 Apr 2026. v4.2 collapses the `(cli)` taxonomy to **two options only: `(claude)` and `(cowork)`.** `(codex)` and `(cursor)` are explicitly BANNED. Historical `codex-*.md` reports filed 17-28 Apr 2026 under `/home/paulsportsza/reports/` are tagged retroactive-noncompliant — not recovered, not deleted, just flagged. `.codex/` server-side auth is archived as part of `OPS-CHAOS-CLEANUP-01`.
+**What changed in v4.3 (2 May 2026 PM — Routing v1 reconciliation):** v4.2's Pure Claude Ecosystem lock banned `(codex)` from the `(cli)` parenthetical — but [Model Routing v1](https://www.notion.so/354d9048d73c8138bf72d8ce7b768a08) reverses that ban: codex is canonical again for hard code root-cause + mechanical acceleration. v4.3 **eliminates the separate `Model` + `(cli)` fields** and replaces them with a single `Agent` token drawn directly from the 16 canonical Routing v1 options. The executor (claude vs codex) is implicit in the Agent name (`Codex XHigh` → codex; `Sonnet` → claude). One source of truth, no contradictions, no hand-mapping. The Notion brief's `Agent` property, the dispatch header, and the agent's report all use the SAME exact string.
 
-**What changed in v4.1 (18 Apr 2026, NOW SUPERSEDED BY v4.2):** added mandatory `(cli)` parenthetical on the Model token so the dispatcher and the report agree on which CLI ran the brief. Also locked the Agent-field taxonomy for reports. Solved the "Dataminer/Codex/Claude" report-label confusion raised by Paul on 17 Apr PM. **Retired by v4.2's Pure Claude reconciliation.**
+**What changed in v4.2 (28 Apr 2026, NOW SUPERSEDED BY v4.3):** collapsed `(cli)` to `(claude)` / `(cowork)` only — banned `(codex)` and `(cursor)`. Pure Claude Ecosystem lock. **Retired by v4.3's Routing v1 reconciliation — codex is permitted again.** Reports filed 28 Apr–2 May under `(claude)` / `(cowork)` remain compliant historical artifacts; new dispatches MUST use v4.3's `Agent` string.
+
+**What changed in v4.1 (18 Apr 2026, SUPERSEDED):** added mandatory `(cli)` parenthetical. Solved persona-label confusion. **Retired by v4.2 then v4.3.**
 
 **Every dispatch has exactly two parts. Em dashes (`—`), not hyphens (`-`).**
 
 **Part 1 — Bold metadata header** (markdown bold, OUTSIDE and ABOVE the code block, on its own line):
 
 ```
-**[N] — Model (cli) [flags] — Mode — TYPE — Priority**
+**[N] — Agent — Mode — TYPE — Priority**
 ```
 
 Field spec:
 - `[N]` — sequential number in square brackets across this dispatch (`[1]`, `[2]`, `[3]` …).
-- `Model` — exactly one of: `Opus`, `Sonnet`, `Haiku`, `GPT-5`, `GPT-5-Codex`. Never "agent type," never "opus-4-7" or any model string. Capitalised.
-- `(cli)` — **MANDATORY, lowercase, in parentheses, immediately after Model.** Exactly one of: `(claude)`, `(cowork)`. `(codex)` and `(cursor)` are BANNED per Pure Claude Ecosystem lock (v4.2, 28 Apr 2026). Identifies which Claude executor runs the brief. Reports must echo this exact string in the `Agent:` field.
-- `[flags]` — optional. If using Opus with max reasoning, append ` --effort max` AFTER the `(cli)` token (e.g. `Opus (claude) --effort max`). No other flags.
+- `Agent` — **exactly one of the 16 canonical Routing v1 strings:** `{Codex XHigh | Codex High | Opus Max Effort | Sonnet} - {LEAD | AUDITOR | COO | NARRATIVE}`. Cased exactly. Hyphen separator (not em dash) between model and role. Examples: `Sonnet - LEAD`, `Codex XHigh - AUDITOR`, `Opus Max Effort - COO`, `Codex High - NARRATIVE`. The Notion brief's `Agent` select MUST match this string verbatim. The bridge maps it to the executor command via `spawn_sequence._MODEL_KEYWORDS`. **Legacy strings retained transitionally** (`XHigh / High / Medium - X`, plain `Opus - X`, `Sonnet - LEAD (legacy)`) — do NOT use for new briefs.
 - `Mode` — exactly one of: `Parallel` (runs concurrently with its sibling dispatches), `Sequential` (must wait on prior brief in this dispatch), `Standalone` (single brief, no siblings). Capitalised. **See Mode Selection Rule below — same-repo briefs MUST be Sequential.**
-- `TYPE` — the brief family, UPPERCASE: `INV`, `BUILD`, `QA`, `FIX`, `INVESTIGATE-REGRESS`, `MARKETING`, `SEO`, etc. Matches the first token of the BRIEF-ID inside the block.
+- `TYPE` — the brief family, UPPERCASE: `INV`, `BUILD`, `QA`, `FIX`, `INVESTIGATE-REGRESS`, `MARKETING`, `SEO`, `OPS`, `DOCS`. Matches the first token of the BRIEF-ID inside the block.
 - `Priority` — exactly one of: `P0`, `P1`, `P2`. P0 = launch-blocking, P1 = this-week, P2 = post-launch.
+
+**Routing v1 model-selection guidance (read [Notion canonical](https://www.notion.so/354d9048d73c8138bf72d8ce7b768a08) before drafting):** Sonnet is the default executor (70-80% of work). Escalate to Codex High for mechanical (grep/scripts/test harness/log parse), Opus Max Effort for judgement (algo/brand/launch gates/adversarial review), Codex XHigh for hard code root-cause (concurrency/cache/DB/runtime, post-Sonnet-failure deep fix). Do NOT default to the strongest model.
 
 **Mode Selection Rule (LOCKED — 27 April 2026 — same-repo serialization):**
 
@@ -165,7 +276,7 @@ The `Mode` flag is **load-bearing** — it determines whether briefs run concurr
 | `mzansiedge-wp` | `/var/www/mzansiedge-wp` | LP, blog, WP theme, hero pages |
 | `Cowork` (no git) | n/a | `daily-*` scheduled task prompts (use `update_scheduled_task` directly, not via brief) |
 
-**Part 2 — Code block** (fenced — **this is what the bridge pastes into the spawned Claude Code session. Cowork agents NEVER paste this manually.** See `ops/DISPATCH-V2.md §The Dispatch Block`). Exactly four lines, in this exact order:
+**Part 2 — Code block** (fenced, copy-paste ready — Paul pastes the entire block unchanged into the coding agent's terminal). Exactly four lines, in this exact order:
 
 ```
 BRIEF-ID — Descriptive Title YYYY-MM-DD [optional score/metric]
@@ -191,31 +302,40 @@ Line-by-line spec:
 
 **Canonical example (single brief):**
 
-**[3] — Opus (claude) --effort max — Standalone — INV — P0**
+**[3] — Opus Max Effort - AUDITOR — Standalone — INV — P0**
 
 ```
-INVESTIGATE-REGRESS — Narrative Regression 2026-04-17 0.0/10
-https://www.notion.so/345d9048d73c817c9d2bc224fd94b424
+INV-DISPATCH-SYSTEM-DEBUG-SWEEP-01 — Bridge pattern detector audit 2026-05-02
+https://www.notion.so/353d9048d73c8124b28ed86236bd910d
 NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
 Execute this brief.
 ```
 
 **Canonical example (multi-brief wave):**
 
-**[1] — Opus (claude) --effort max — Parallel — INV — P0**
+**[1] — Codex XHigh - LEAD — Parallel — INV — P0**
 
 ```
-W29-INV — Edge Algorithm Coverage Analysis 2026-04-17
+INV-EDGE-RANKING-CONCURRENCY-01 — Diamond/Gold ranking instability under load 2026-05-02
 https://www.notion.so/abc123
 NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
 Execute this brief.
 ```
 
-**[2] — Sonnet (claude) — Sequential — BUILD — P1**
+**[2] — Sonnet - LEAD — Sequential — BUILD — P1**
 
 ```
-IMG-PW3 — My Matches Card Template 2026-04-17
+BUILD-CARD-TEMPLATE-MY-MATCHES-01 — My Matches Card Template 2026-05-02
 https://www.notion.so/def456
+NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
+Execute this brief.
+```
+
+**[3] — Codex High - AUDITOR — Sequential — QA — P2**
+
+```
+QA-CALL-SITE-MAP-CARD-RENDERER-01 — Map all card_renderer.render() callers 2026-05-02
+https://www.notion.so/ghi789
 NOTION_TOKEN: ntn_REPLACE_WITH_NOTION_TOKEN
 Execute this brief.
 ```
@@ -224,12 +344,14 @@ Execute this brief.
 1. Is the header line bold markdown and OUTSIDE the code block? ✅/❌
 2. Does the header use em dashes (`—`), not hyphens? ✅/❌
 3. Is the number in brackets (`[3]`, not `3`)? ✅/❌
-4. **Does the Model token carry a lowercase `(cli)` parenthetical** — one of `(claude)` / `(cowork)` only? `(codex)` and `(cursor)` are BANNED per Pure Claude Ecosystem lock. ✅/❌
-5. Does the header end with a Priority (`P0`/`P1`/`P2`)? ✅/❌
-6. Inside the block: BRIEF-ID line → URL → `NOTION_TOKEN:` → `Execute this brief.` — in that order? ✅/❌
-7. Is the token label exactly `NOTION_TOKEN:` (not `Use notion API token:`)? ✅/❌
-8. Are there any lines outside the 4 canonical ones? ❌ (should be no)
-9. **Mode selection check:** for every brief marked `Parallel`, did you confirm it targets a DIFFERENT repo from every other `Parallel` sibling in this wave? Same-repo `Parallel` is a violation — downgrade the later one(s) to `Sequential`. ✅/❌
+4. **Is the `Agent` token exactly one of the 16 canonical Routing v1 strings** (`{Codex XHigh | Codex High | Opus Max Effort | Sonnet} - {LEAD | AUDITOR | COO | NARRATIVE}`)? Hyphen separator between model and role. Cased exactly. ✅/❌
+5. **Does the Agent in the header match the `Agent` select on the Notion brief verbatim?** ✅/❌
+6. Does the header end with a Priority (`P0`/`P1`/`P2`)? ✅/❌
+7. Inside the block: BRIEF-ID line → URL → `NOTION_TOKEN:` → `Execute this brief.` — in that order? ✅/❌
+8. Is the token label exactly `NOTION_TOKEN:` (not `Use notion API token:`)? ✅/❌
+9. Are there any lines outside the 4 canonical ones? ❌ (should be no)
+10. **Mode selection check:** for every brief marked `Parallel`, did you confirm it targets a DIFFERENT repo from every other `Parallel` sibling in this wave? Same-repo `Parallel` is a violation — downgrade the later one(s) to `Sequential`. ✅/❌
+11. **Routing v1 fit check:** is this the cheapest/fastest model that can safely complete the task? Have you applied the escalation triggers in [MODEL-ROUTING.md §4](https://www.notion.so/354d9048d73c8138bf72d8ce7b768a08)? ✅/❌
 
 Any ❌ → dispatch is wrong. Fix before sending. No exceptions.
 
@@ -237,101 +359,57 @@ Any ❌ → dispatch is wrong. Fix before sending. No exceptions.
 
 ---
 
-### SSH-Enqueue (canonical) — LOCKED 30 April 2026
+### Agent Report — Filename & Header Schema (LOCKED 2 May 2026 PM — Routing v1 reconciliation)
 
-**Supersedes** the `dispatch_runner.sh` manual-paste model
-(BUILD-WORKTREE-DISPATCH-RUNNER-01). Cowork agents NEVER paste the dispatch
-block manually. Bridge handles everything after `ssh` exits.
+**Why:** Reports must echo the dispatch's `Agent` string verbatim so dispatcher and executor agree on which model+role ran the brief. Routing v1 collapses the prior `Agent` (CLI taxonomy) + `Model` (AI model) split into a single canonical string from the 16-option set.
 
-Full architecture at `ops/DISPATCH-V2.md`.
+**Agent taxonomy — Routing v1 LOCKED 2 May 2026:**
 
-**Command (Cowork-side):**
+The `Agent:` field in every report MUST exactly match the dispatch header's `Agent` token, drawn from the 16 canonical Routing v1 options:
 
-```bash
-KEY=$(find /sessions -name "id_ed25519" -path "*.cowork-ssh*" -print -quit)
-ssh -i "$KEY" -o StrictHostKeyChecking=no -o BatchMode=yes paulsportsza@37.27.179.53 \
-  -- '--notion-url <NOTION-URL> --role edge_<lead|auditor|coo> --mode <sequential|parallel>'
-```
+| Model | LEAD | AUDITOR | COO | NARRATIVE |
+|---|---|---|---|---|
+| Codex XHigh | ✅ | ✅ | rare | rare |
+| Codex High | ✅ | ✅ | ✅ | rare |
+| Opus Max Effort | ✅ | ✅ | ✅ | ✅ |
+| Sonnet (default) | ✅ | ✅ | ✅ | ✅ |
 
-**enqueue.py flags:**
+**Legacy strings retained transitionally** (in-flight briefs from before Routing v1; do NOT use for new dispatches):
+- `XHigh / High / Medium - X` (Codex-cutover-era, 1 May 2026)
+- `Opus / Opus Max Effort / Sonnet - X` (pre-cutover Claude legacy)
+- Pure-Claude v4.2 `claude` / `cowork` CLI tags
 
-| Flag | Values | Default |
-|------|--------|---------|
-| `--notion-url` | full Notion URL | *(required)* |
-| `--role` | `edge_lead`, `edge_auditor`, `edge_coo` | `edge_lead` |
-| `--target-repo` | repo name | `bot` |
-| `--mode` | `sequential`, `parallel` | `sequential` |
-| `--depends-on` | `<id1,id2>` | *(none)* |
-| `--no-cmux-validation` | flag | off |
+**Not allowed in the `Agent:` field:** any persona standalone (`Dataminer`, `AUDITOR`, `LEAD`, `COO`), any nickname, any non-canonical combination, any CLI tag (`(claude)`, `(codex)`).
 
-**What happens after `ssh` exits:**
-1. `pending/<BRIEF-ID>.yaml` written on server.
-2. `dispatch-promoter.service` polls every 5s → promotes to `ready/` when deps
-   clear and mode allows.
-3. Mac `cmux-bridge` polls `ready/` → creates CMUX workspace, spawns
-   `mosh + claude`, pastes the 4-line dispatch block automatically.
-4. Claude Code session executes brief autonomously. Cowork agent's
-   responsibility ends at step 1.
-
-**Wave worktree contract (unchanged from BUILD-WORKTREE-DISPATCH-RUNNER-01):**
-- Wave-class file edits in `/home/paulsportsza/bot/` main tree are refused at
-  commit time. Carve-outs: `ops/`, `reference/`, `COO/`, `HANDOFFS/`,
-  `CLAUDE.md`, `static/qa-gallery/canonical/`.
-- Audit-trailed bypass: `WAVE_GUARD_BYPASS=1 git commit ...`
-  (controller-approved only).
-
-**Pure Claude Ecosystem (v4.2) — still enforced:** only `claude` CLI. `codex`
-and `cursor` are banned. `dispatch-promoter` rejects briefs carrying banned CLI
-tags.
-
-**Regression guards:**
-- `tests/contracts/test_dispatch_runner_so41.py` — covers the SO #41 contract
-  (subprocess + temp git repo, no live Notion or claude calls).
-
----
-
-### Agent Report — Filename & Header Schema (LOCKED 18 April 2026)
-
-**Why:** Reports were being filed as `Agent: Dataminer`, `Agent: Codex`, etc., with no canonical taxonomy. Paul flagged 17 Apr PM. This section is the taxonomy. Every dispatcher embeds it in the brief. Every executing agent echoes it in the report.
-
-**Agent taxonomy (lowercase, exactly one of) — Pure Claude Ecosystem LOCKED 28 April 2026:**
-- `claude` — Claude Code CLI (server or local)
-- `cowork` — Cowork desktop session (AUDITOR / LEAD / COO)
-
-**BANNED (per Pure Claude Ecosystem lock, 28 Apr 2026):**
-- `codex` — OpenAI Codex CLI. Was permitted 17-28 Apr 2026; reports filed under this label are retroactive-noncompliant.
-- `cursor` — Cursor IDE agent. Was permitted 17-28 Apr 2026; same retroactive-noncompliant status.
-
-Any report filed with `Agent: codex` or `Agent: cursor` after 28 Apr 2026 is invalid and the brief reopens.
-
-**Not allowed in the `Agent:` field:** any persona (`Dataminer`, `AUDITOR`, `LEAD`, `COO`), any model name (`opus`, `sonnet`), any nickname. Personas go in `Dispatcher:` if needed. Models go in `Model:`.
-
-**Report filename schema:** `<agent>-<BRIEF-ID>-<YYYYMMDD-HHMM>.md`
-- `<agent>` — lowercase from the taxonomy above.
+**Report filename schema:** `<agent-slug>-<BRIEF-ID>-<YYYYMMDD-HHMM>.md`
+- `<agent-slug>` — Routing v1 string lowercased and hyphenated (`sonnet-lead`, `codex-xhigh-auditor`, `opus-max-effort-coo`, `codex-high-narrative`). The bridge accepts the canonical mixed-case form too if you prefer.
 - `<BRIEF-ID>` — exact ID from the dispatch block line 1.
 - `<YYYYMMDD-HHMM>` — UTC timestamp. SAST offset noted in report body.
 
-Example: `claude-INV-PRECOMPUTE-DEAD-WATCH-01-20260418-0830.md` ✅
+Example: `opus-max-effort-auditor-INV-DISPATCH-SYSTEM-DEBUG-SWEEP-01-20260502-0940.md` ✅
 
 **Report body — first 6 lines, exact order:**
 
 ```
 # <BRIEF-ID> — <outcome>
 **Wave:** <BRIEF-ID>
-**Agent:** claude | cowork
-**Model:** Opus | Sonnet | Haiku | GPT-5 | GPT-5-Codex
+**Agent:** <one of the 16 canonical Routing v1 strings>
 **Date:** YYYY-MM-DD
 **Status:** Complete | Blocked | Escalated
+**Routing fit:** <one sentence — why this model was the right cheapest/fastest fit per Routing v1>
 ```
+
+The `Routing fit` line is new in v4.3 and required per [MODEL-ROUTING.md §6](https://www.notion.so/354d9048d73c8138bf72d8ce7b768a08). One sentence. Triggers escalation review if absent.
 
 **Brief template (dispatchers must embed verbatim in the Notion page body):**
 
 > **Report filing — mandatory**
 > After completion, file your report at:
-> - Filename: `<agent>-<BRIEF-ID>-<YYYYMMDD-HHMM>.md` (agent lowercase: `claude` or `cowork` only)
-> - First 6 lines of body must be the canonical header (`# …`, `**Wave:**`, `**Agent:**`, `**Model:**`, `**Date:**`, `**Status:**`).
+> - Filename: `<agent-slug>-<BRIEF-ID>-<YYYYMMDD-HHMM>.md` (slug = lowercased Routing v1 string with hyphens, e.g. `sonnet-auditor`, `codex-xhigh-lead`).
+> - First 6 lines of body must be the canonical header (`# …`, `**Wave:**`, `**Agent:**`, `**Date:**`, `**Status:**`, `**Routing fit:**`).
+> - The `Agent:` field MUST match the dispatch header's `Agent` token exactly — same as the Notion brief's `Agent` select.
 > - Push to Agent Reports Pipeline via `push-report` (see SO #35).
-> - Use the CLI name from the dispatch header's `(cli)` parenthetical — do NOT invent a persona name. Only `claude` or `cowork` are permitted (per v4.2 Pure Claude Ecosystem lock).
+> - One-sentence `Routing fit` justification mandatory per Routing v1 §6.
 
 ---
 
@@ -403,85 +481,3 @@ Canonical spec lives at [`reference/PROGRESS-TABLE-FORMAT.md`](../reference/PROG
 ```
 
 Mandatory for Edge LEAD: emit after every brief report lands, at every roadmap review, and when dispatching a new wave. Status values are strict (`Queued` · `In flight` · `Blocked` · `Complete` · `Failed` — no other labels). See canonical file for column specs, ordering rules, launch-gate row, and examples.
-
----
-
-### Codex Review Gate (SO #45, v4.5 — LOCKED 4 May 2026)
-
-*Supersedes v4.4 (3 May 2026). Routing v1 pivot: Codex stops being a primary executor. Codex now runs as the universal reviewer invoked via `/codex:review --wait` or `/codex:adversarial-review --wait` at the end of every code-touching brief, before `mark_done.sh`. Claude (Sonnet | Opus Max Effort) executes; Codex reviews. The `--wait` flag bypasses the interactive background/foreground prompt — without it, the review runs as a background task and may not complete before the session exits, defeating the gate.*
-
-**Why v4.5:** FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 burned the entire Cowork 5h window (1h 39m executor wall-time, 171k tokens, 7% balance left) running Opus Max Effort + `/codex:adversarial-review` (without `--wait`) stacked on top. The trigger fired correctly per v4.4's mandatory list but the cost is incompatible with Routing v1 §4 cost discipline. Fix the rule, not the gate.
-
-#### Lifecycle (one extra mandatory step per brief)
-
-After commit + push, before `mark_done.sh`:
-1. Run `/codex:review --wait` (standard) or `/codex:adversarial-review --wait <focus>` (adversarial — see below) on the wave branch. (`--wait` bypasses the interactive background/foreground prompt.)
-2. If review returns blockers, address with additional commits + push, then re-run review.
-3. Only proceed to `mark_done.sh` when review returns no blockers.
-4. Include the review summary verbatim in the report under a `## Codex Review` section.
-5. State the outcome explicitly: `clean | blockers-addressed | bootstrap-exempt`.
-
-Reports without the `## Codex Review` section are INCOMPLETE and reopen the brief.
-
-#### Review modes
-
-- **`/codex:review --wait`** — standard. Default for all briefs. Catches functional correctness, regressions, contract drift, gate coverage.
-- **`/codex:adversarial-review --wait <focus text>`** — adversarial. DISCRETIONARY — invoked only when one of the conditions below is met. Never auto-fired from trigger match alone.
-
-**Adversarial is DISCRETIONARY. Invoked only when:**
-- (a) The brief AC explicitly sets `review_mode: adversarial-review` with a focus text, OR
-- (b) Standard `/codex:review --wait` output itself recommends escalation, OR
-- (c) Paul override.
-
-The trigger list below no longer auto-fires adversarial.
-
-#### Adversarial-review mandatory triggers (narrowed 6 → 3)
-
-Adversarial review MUST be used (i.e. brief AC must declare `review_mode: adversarial-review`) when:
-
-1. New runtime path handling **money, payments, or auth**.
-2. Schema changes on tables with **retention / billing / compliance** impact.
-3. Migrations that are **not idempotent or not rollback-safe**.
-
-#### "Consider adversarial" advisory list (author judgement, not auto-fire)
-
-The following moved from mandatory to advisory. Author uses judgement — standard review is the default, adversarial is opt-in when the specific risk warrants it:
-
-- Concurrency-sensitive code (locks, queues, async handlers, scrapers).
-- Any change touching the dispatch system, bridge, or worktree-runner.
-- Any narrative / cache surface that ships to premium-tier users.
-
-#### Cost rule (NEW — v4.5)
-
-When executor model = **Opus Max Effort**, the default review is **standard `/codex:review --wait`** unless the brief AC explicitly justifies adversarial (i.e. satisfies one of the 3 mandatory triggers above or has a Paul override). No stacking premium-on-premium without explicit justification in the brief body.
-
-#### Brief authoring rule
-
-Every brief's AC block MUST specify the review mode:
-
-```
-Review mode for this brief: review | adversarial-review
-```
-
-For `adversarial-review`, the focus text is also required. Implicit adversarial from trigger match alone is not permitted — the AC must declare it.
-
-#### Report format
-
-Every report MUST include:
-
-```markdown
-## Codex Review
-<review summary verbatim>
-Outcome: clean | blockers-addressed | bootstrap-exempt
-```
-
-#### Bootstrap exemption
-
-`BUILD-CODEX-PLUGIN-INSTALL-AND-VERIFY-01` and `BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-01` are exempt (ratifies the gate as canonical). All subsequent code-touching briefs MUST gate.
-
-#### Active vs Retired Agent set (post v4.4, unchanged in v4.5)
-
-- **Active 8**: Sonnet | Opus Max Effort × LEAD | AUDITOR | COO | NARRATIVE.
-- **Retired 8** (Codex executor agents — now reviewers only): Codex XHigh | Codex High × the four roles. Selectable transitionally; `enqueue.py` emits a stderr WARNING when dispatched.
-
-Mirror: `ops/MODEL-ROUTING.md` §9 (Cowork). Notion Routing v1 §10 (`354d9048-d73c-8138-bf72-d8ce7b768a08`).
