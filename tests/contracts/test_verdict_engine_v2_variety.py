@@ -1,45 +1,4 @@
-import importlib.util
-import sys
-import types
-from pathlib import Path
-
-
-_MISSING = object()
-
-
-def _install_engine_package():
-    root = Path(__file__).resolve().parents[2]
-    module_path = root / "bot" / "verdict_engine_v2.py"
-    previous_bot = sys.modules.get("bot", _MISSING)
-    previous_submodule = sys.modules.get("bot.verdict_engine_v2", _MISSING)
-    package = types.ModuleType("bot")
-    package.__path__ = [str(module_path.parent)]
-    sys.modules["bot"] = package
-    spec = importlib.util.spec_from_file_location("bot.verdict_engine_v2", module_path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["bot.verdict_engine_v2"] = module
-    spec.loader.exec_module(module)
-    return previous_bot, previous_submodule
-
-
-_previous_bot, _previous_submodule = _install_engine_package()
-
-from bot.verdict_engine_v2 import VerdictContext, render_verdict_v2  # noqa: E402
-
-
-def _restore_bot_imports():
-    if _previous_bot is _MISSING:
-        sys.modules.pop("bot", None)
-    else:
-        sys.modules["bot"] = _previous_bot
-    if _previous_submodule is _MISSING:
-        sys.modules.pop("bot.verdict_engine_v2", None)
-    else:
-        sys.modules["bot.verdict_engine_v2"] = _previous_submodule
-
-
-_restore_bot_imports()
+from verdict_engine_v2 import VerdictContext, render_verdict_v2
 
 
 TEAMS = (
