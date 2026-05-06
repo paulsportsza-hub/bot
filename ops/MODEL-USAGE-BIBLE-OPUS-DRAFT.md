@@ -209,6 +209,23 @@ EOF
 
 If the Claude CLI cannot support non-interactive prompt execution reliably, a
 small wrapper should call Anthropic Messages API directly with the same contract.
+To be buildable as a gate, the wrapper must own the mechanics instead of leaving
+them to each executor:
+
+- Diff selection: default to `git merge-base HEAD origin/main` -> `HEAD`; if the
+  branch is already on `main`, use `git show --stat --patch HEAD`. The report
+  records the exact base and head SHAs.
+- Exit behavior: reviewer process exits `0` only for `Outcome: clean` or
+  `Outcome: blockers-addressed`; exits non-zero for `needs-changes`, timeout,
+  malformed output, or API/CLI failure.
+- Persistence: stdout is written to
+  `/tmp/_reviews/<BRIEF-ID>/<head-sha>-claude-review.md` and embedded verbatim
+  in the agent report. The path is included in the report for audit recovery.
+- Timeout: wrapper enforces the SLA budget, kills the subprocess on timeout, and
+  writes a synthetic `Outcome: needs-changes` block with the timeout reason.
+- Blocking integration: `mark_done.sh` or a pre-done bridge hook checks the
+  report for the review block and refuses completion when the wrapper returned
+  non-zero or the latest head SHA lacks a matching review artifact.
 
 Tradeoffs:
 
@@ -437,6 +454,33 @@ The right shape is:
 
 ### Proposed Signatures
 
+Signature matching must be deterministic:
+
+- Paths are repo-relative POSIX paths from queue metadata, never absolute local
+  paths. `target_repo` supplies the repo root.
+- `brief_terms` are lowercased tokens from brief ID, title, AC headings, and risk
+  tags. They are not extracted from arbitrary chat history.
+- Lists inside a match key are OR conditions. Different keys contribute score,
+  not an implicit AND, unless the signature sets `required_keys`.
+- Scores are explicit: `risk_tags=100`, `brief_terms=40`, `paths=35`,
+  `repos=25`, `klass=15`. Mandatory-boundary signatures add `+1000`.
+- `signature_matches()` returns a numeric score. `signature_priority()` sorts by
+  mandatory boundary first, then score, then declared signature order. Equal top
+  scores call `ambiguous_route()`.
+- `risk_tags` is the canonical metadata key. Any legacy `risk` value is
+  normalized into `risk_tags` at enqueue time.
+- Review modes normalize through one helper:
+
+```python
+def normalize_review_mode(raw: str) -> Literal["standard", "adversarial"]:
+    value = (raw or "review").strip().lower()
+    if value in {"review", "standard"}:
+        return "standard"
+    if value in {"adversarial-review", "adversarial"}:
+        return "adversarial"
+    raise ValueError(f"unknown review mode: {raw!r}")
+```
+
 ```python
 TASK_SIGNATURES = [
     {
@@ -462,8 +506,9 @@ TASK_SIGNATURES = [
                     "paths": ["dispatch_promoter.py", "enqueue.py", "cmux_bridge/*.py", "mark_done.sh"]},
         "executor": ["codex", "--profile", "xhigh"],
         "reviewer": "opus-max-effort",
-        "review_mode": "standard",
+        "review_mode": "adversarial",
         "mechanism": "claude-review",
+        "mandatory_boundary": "dispatch_false_completion",
     },
     {
         "name": "model_doctrine_or_launch_judgement",
@@ -495,7 +540,7 @@ TASK_SIGNATURES = [
     },
     {
         "name": "routine_docs_content",
-        "matches": {"klass": ["DOCS", "CONTENT"], "risk": ["low"]},
+        "matches": {"klass": ["DOCS", "CONTENT"], "risk_tags": ["low"]},
         "executor": ["claude", "--model", "sonnet"],
         "reviewer": "codex-xhigh",
         "review_mode": "standard",
@@ -544,15 +589,20 @@ def resolve_full_stack_route(meta: BriefExecutionMeta) -> Route:
     if manual:
         return manual
 
-    matches = [sig for sig in TASK_SIGNATURES if signature_matches(sig, meta)]
+    requested_review = normalize_review_mode(meta.review_mode)
+    matches = [
+        (signature_matches(sig, meta), sig)
+        for sig in TASK_SIGNATURES
+        if signature_matches(sig, meta) > 0
+    ]
     if not matches:
-        return class_default_route(meta.klass)
+        return class_default_route(meta.klass, requested_review)
 
-    matches.sort(key=lambda sig: signature_priority(sig, meta), reverse=True)
-    top = matches[0]
-    if len(matches) > 1 and signature_priority(matches[0], meta) == signature_priority(matches[1], meta):
-        return ambiguous_route(meta, matches[:2])
-    return route_from_signature(top)
+    matches.sort(key=lambda item: signature_priority(item[1], meta, item[0]), reverse=True)
+    top_score, top = matches[0]
+    if len(matches) > 1 and signature_priority(matches[0][1], meta, matches[0][0]) == signature_priority(matches[1][1], meta, matches[1][0]):
+        return ambiguous_route(meta, [matches[0][1], matches[1][1]], requested_review)
+    return route_from_signature(top, requested_review)
 ```
 
 `ambiguous_route()` should choose the safer executor (usually Codex XHigh for
@@ -681,6 +731,8 @@ Reviewer rotation:
 
 Review mechanisms:
 - `codex exec --quiet` for Codex reviewing Claude output.
+- Use the server-supported equivalent (`codex exec -p xhigh` on current CLI) when
+  `--quiet` is unavailable; the review helper owns this CLI compatibility.
 - Claude subprocess/API reviewer for Claude reviewing Codex output, or Cowork
   review queue when the judgement context exceeds a diff.
 - Hybrid selection: code-touching bounded briefs use subprocess/API review;
