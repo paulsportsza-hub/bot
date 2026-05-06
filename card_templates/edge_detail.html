@@ -38,64 +38,44 @@
             isolation: isolate;
             overflow: hidden;
         }
-        /* =========================================================
-         * CANONICAL GLOW — eb25301 / 4c610f3 — DO NOT MODIFY
-         * Paul-approved 12-step tuning. Alpha values are locked.
-         * Spec: /home/paulsportsza/bot/ops/CANONICAL-GLOW-SPEC.md
-         * ========================================================= */
-        .logo-glow {
+        .upper-glow {
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 260px;
+            inset: -20px -10px;
             pointer-events: none;
             z-index: 0;
-            filter: blur(4px);
+            filter: blur(2px);
         }
-        .logo-glow-screen {
+        .upper-glow-screen {
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 220px;
+            inset: 0;
             pointer-events: none;
             z-index: 0;
             mix-blend-mode: screen;
         }
-        .logo-glow-diamond {
-            background: radial-gradient(ellipse 80% 70% at 50% 45%,
-                #B9F2FF39 0%, #B9F2FF16 42%, #B9F2FF05 65%, transparent 90%);
+        .upper-glow-diamond {
+            background: radial-gradient(ellipse 35% 130% at 92% 50%, #B9F2FF10 0%, #B9F2FF07 50%, transparent 90%);
         }
-        .logo-glow-screen-diamond {
-            background: radial-gradient(ellipse 70% 60% at 50% 45%,
-                #B9F2FF51 0%, #B9F2FF1F 45%, transparent 80%);
+        .upper-glow-screen-diamond {
+            background: radial-gradient(ellipse 22% 100% at 92% 50%, #B9F2FF1A 0%, #B9F2FF0D 40%, transparent 80%);
         }
-        .logo-glow-gold {
-            background: radial-gradient(ellipse 80% 70% at 50% 45%,
-                #FFD70039 0%, #FFD70016 42%, #FFD70005 65%, transparent 90%);
+        .upper-glow-gold {
+            background: radial-gradient(ellipse 35% 130% at 92% 50%, #FFD70010 0%, #FFD70007 50%, transparent 90%);
         }
-        .logo-glow-screen-gold {
-            background: radial-gradient(ellipse 70% 60% at 50% 45%,
-                #FFD70051 0%, #FFD7001F 45%, transparent 80%);
+        .upper-glow-screen-gold {
+            background: radial-gradient(ellipse 22% 100% at 92% 50%, #FFD7001A 0%, #FFD7000D 40%, transparent 80%);
         }
-        .logo-glow-silver {
-            background: radial-gradient(ellipse 80% 70% at 50% 45%,
-                #CBD5E02B 0%, #CBD5E00F 42%, #CBD5E003 65%, transparent 90%);
+        .upper-glow-silver {
+            background: radial-gradient(ellipse 35% 130% at 92% 50%, #A0AEC010 0%, #A0AEC007 50%, transparent 90%);
         }
-        .logo-glow-screen-silver {
-            background: radial-gradient(ellipse 70% 60% at 50% 45%,
-                #CBD5E042 0%, #CBD5E018 45%, transparent 80%);
+        .upper-glow-screen-silver {
+            background: radial-gradient(ellipse 22% 100% at 92% 50%, #A0AEC01A 0%, #A0AEC00D 40%, transparent 80%);
         }
-        .logo-glow-bronze {
-            background: radial-gradient(ellipse 80% 70% at 50% 45%,
-                #E8A87C30 0%, #E8A87C13 42%, #E8A87C04 65%, transparent 90%);
+        .upper-glow-bronze {
+            background: radial-gradient(ellipse 35% 130% at 92% 50%, #CD7F3210 0%, #CD7F3207 50%, transparent 90%);
         }
-        .logo-glow-screen-bronze {
-            background: radial-gradient(ellipse 70% 60% at 50% 45%,
-                #E8A87C47 0%, #E8A87C1B 45%, transparent 80%);
+        .upper-glow-screen-bronze {
+            background: radial-gradient(ellipse 22% 100% at 92% 50%, #CD7F321A 0%, #CD7F320D 40%, transparent 80%);
         }
-        /* ===== END CANONICAL GLOW ===== */
 
         /* Header */
         .header {
@@ -389,14 +369,14 @@
             gap: 7px;
             font-family: 'JetBrains Mono', monospace;
             font-size: 12px;
-            padding: 5px 9px;
+            padding: 4px 8px;
             border-radius: 5px;
             border: 1px solid;
             white-space: nowrap;
             flex-shrink: 0;
         }
         .bk-logo {
-            height: 18px;
+            height: 24px;
             width: auto;
             display: inline-block;
             vertical-align: middle;
@@ -517,10 +497,13 @@
             line-height: 1.6;
             margin-top: 5px;
             white-space: pre-line;
-            overflow: hidden;
             display: -webkit-box;
-            -webkit-line-clamp: 5;
+            -webkit-line-clamp: 4;
             -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .verdict-section.has-cap-reason .verdict-text {
+            -webkit-line-clamp: 2;
         }
         /* FIX-CARD-SURFACE-TIER-CAP-REASON-01: structural cap reason beneath verdict.
            Quieter than the verdict prose — italic, dimmer, smaller. Reads as context,
@@ -534,6 +517,16 @@
             padding-top: 6px;
             border-top: 1px dashed #2A2A2A;
         }
+        .verdict-section.has-cap-reason .cap-reason-text {
+            font-size: 10px;
+            line-height: 1.3;
+            margin-top: 6px;
+            padding-top: 5px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
     </style>
 </head>
 <body>
@@ -542,8 +535,10 @@
     <!-- ── Upper glow zone (wraps header + matchup, stops at meta-bar) ──── -->
     <div class="upper-glow-zone">
         {% if tier %}
-        <div class="logo-glow logo-glow-{{ tier | lower }}"></div>
-        <div class="logo-glow-screen logo-glow-screen-{{ tier | lower }}"></div>
+        {# Layer A — soft right-side wash, blurred #}
+        <div class="upper-glow upper-glow-{{ tier | lower }}"></div>
+        {# Layer B — screen-blend right-side spotlight #}
+        <div class="upper-glow-screen upper-glow-screen-{{ tier | lower }}"></div>
         {% endif %}
 
     <!-- ── 1. Header ────────────────────────────────────────────── -->
@@ -691,7 +686,7 @@
     <!-- ── 7. Verdict (edge only) ──────────────────────────── -->
     <!-- BUILD-EDGE-CARD-INJURY-TO-MYMATCHES-01: injury widget removed from Edge cards -->
     {% if tier and verdict %}
-    <div class="verdict-section">
+    <div class="verdict-section{% if cap_reason %} has-cap-reason{% endif %}">
         <div class="section-hdr" style="color: #FFB300;">🏆 VERDICT</div>
         <div class="verdict-text">{{ verdict }}</div>
         {# FIX-CARD-SURFACE-TIER-CAP-REASON-01: structural cap explanation beneath verdict.
