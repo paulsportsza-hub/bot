@@ -4,8 +4,8 @@ BUILD-CARD-DIMENSIONS-LOCK-01
 Validates that every template in card_templates/ belongs to a declared variant
 and that its .card CSS matches the variant spec.
 
-  Variant DETAIL — fixed 480×620: edge_detail.html, match_detail.html
-  Variant LIST   — dynamic 480×N: all other templates
+  Variant DETAIL — fixed 480×620: edge_detail.html and fixed-card peers
+  Variant LIST   — dynamic 480×N: list/adaptive detail templates
 
 Failing tests mean:
   test_template_in_declared_variant  → a new template was added without declaring its variant
@@ -26,7 +26,6 @@ _TEMPLATE_DIR = os.path.normpath(
 
 DETAIL_TEMPLATES = {
     "edge_detail.html",
-    "match_detail.html",
     # BUILD-WAVE1-SUB-01
     "sub_plans.html",
     "sub_founding_live.html",
@@ -42,6 +41,7 @@ DETAIL_TEMPLATES = {
 LIST_TEMPLATES = {
     "edge_picks.html",
     "edge_picks_index.html",
+    "match_detail.html",  # FIX-CARD-MATCH-CANONICAL-FAMILY-01: canonical adaptive LIST variant
     "my_matches.html",
     "edge_summary.html",
     "tier_page.html",

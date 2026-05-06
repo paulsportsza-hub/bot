@@ -11,8 +11,6 @@
             padding: 0;
             background: #000000;
             width: 480px;
-            height: 620px;
-            overflow: hidden;
         }
         body {
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
@@ -20,7 +18,6 @@
         }
         .card {
             width: 480px;
-            height: 620px;
             background: #0A0A0A;
             border-radius: 0;
             overflow: hidden;
@@ -28,96 +25,37 @@
             box-shadow: none;
         }
 
-        /* ── Glow zone: clips at bottom of meta-bar ─────────── */
-        .upper-section {
+        /* ── Upper glow zone (CANONICAL — wraps header + matchup + meta-bar) ── */
+        .upper-glow-zone {
             position: relative;
-            overflow: hidden;
             isolation: isolate;
+            overflow: hidden;
         }
-        /* ── 1. Header ───────────────────────────────────────── */
-        .header {
-            position: relative;
-            z-index: 1;
-            overflow: visible;
-            padding: 12px 20px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            border-bottom: 1px solid #2A2A2A;
-        }
-        .card > :not(.header) {
-            position: relative;
-            z-index: 2;
-        }
-        /* =========================================================
-         * CANONICAL GLOW — eb25301 / 4c610f3 — DO NOT MODIFY
-         * Paul-approved 12-step tuning. Alpha values are locked.
-         * Spec: /home/paulsportsza/bot/ops/CANONICAL-GLOW-SPEC.md
-         * ========================================================= */
-        .logo-glow {
+        .upper-glow {
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 260px;
+            inset: -20px -10px;
             pointer-events: none;
             z-index: 0;
-            filter: blur(4px);
+            filter: blur(2px);
         }
-        .logo-glow-screen {
+        .upper-glow-screen {
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 220px;
+            inset: 0;
             pointer-events: none;
             z-index: 0;
             mix-blend-mode: screen;
         }
-        .logo-glow-diamond {
-            background: radial-gradient(ellipse 80% 70% at 50% 45%,
-                #B9F2FF39 0%, #B9F2FF16 42%, #B9F2FF05 65%, transparent 90%);
-        }
-        .logo-glow-screen-diamond {
-            background: radial-gradient(ellipse 70% 60% at 50% 45%,
-                #B9F2FF51 0%, #B9F2FF1F 45%, transparent 80%);
-        }
-        .logo-glow-gold {
-            background: radial-gradient(ellipse 80% 70% at 50% 45%,
-                #FFD70039 0%, #FFD70016 42%, #FFD70005 65%, transparent 90%);
-        }
-        .logo-glow-screen-gold {
-            background: radial-gradient(ellipse 70% 60% at 50% 45%,
-                #FFD70051 0%, #FFD7001F 45%, transparent 80%);
-        }
-        .logo-glow-silver {
-            background: radial-gradient(ellipse 80% 70% at 50% 45%,
-                #CBD5E02B 0%, #CBD5E00F 42%, #CBD5E003 65%, transparent 90%);
-        }
-        .logo-glow-screen-silver {
-            background: radial-gradient(ellipse 70% 60% at 50% 45%,
-                #CBD5E042 0%, #CBD5E018 45%, transparent 80%);
-        }
-        .logo-glow-bronze {
-            background: radial-gradient(ellipse 80% 70% at 50% 45%,
-                #E8A87C30 0%, #E8A87C13 42%, #E8A87C04 65%, transparent 90%);
-        }
-        .logo-glow-screen-bronze {
-            background: radial-gradient(ellipse 70% 60% at 50% 45%,
-                #E8A87C47 0%, #E8A87C1B 45%, transparent 80%);
-        }
-        .header-brand {
+
+        /* ── 1. Header (CANONICAL — transparent, no border-bottom) ── */
+        .header {
             position: relative;
-            z-index: 1;
-            isolation: isolate;
-            flex-shrink: 0;
+            z-index: 2;
+            padding: 8px 16px;
             display: flex;
             align-items: center;
+            justify-content: space-between;
+            gap: 10px;
         }
-        .header-brand > .logo-img,
-        .header-brand > .logo-fallback,
-        .header > .header-badges { position: relative; z-index: 1; }
         .logo-img {
             height: 26px;
             width: auto;
@@ -189,7 +127,7 @@
         /* ── 2. Matchup ──────────────────────────────────────── */
         .matchup {
             position: relative;
-            z-index: 1;
+            z-index: 2;
             padding: 17px 20px 10px;
             text-align: center;
         }
@@ -255,7 +193,7 @@
         /* ── 3. Meta Bar ─────────────────────────────────────── */
         .meta-bar {
             position: relative;
-            z-index: 1;
+            z-index: 2;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -451,22 +389,27 @@
 <body>
 <div class="card">
 
-    <!-- ── Glow zone: header + matchup + meta-bar ────────────── -->
-    <div class="upper-section">
-        {% if edge_badge_tier %}
-        <div class="logo-glow logo-glow-{{ edge_badge_tier }}"></div>
-        <div class="logo-glow-screen logo-glow-screen-{{ edge_badge_tier }}"></div>
-        {% endif %}
+    {# Conditional glow color: tier-color if has edge, brand-orange otherwise #}
+    {% set _tier_glow = {"diamond": "#B9F2FF", "gold": "#FFD700", "silver": "#CBD5E0", "bronze": "#E8A87C"} %}
+    {% set _tier = (edge_badge_tier | default("", true)) | lower %}
+    {% set _glow = edge_badge_color | default("", true) or _tier_glow.get(_tier, "#F7931A") %}
+
+    <!-- ── Upper glow zone (header + matchup + meta-bar as unified block) ── -->
+    <div class="upper-glow-zone">
+        <div class="upper-glow" style="
+            background: radial-gradient(ellipse 35% 130% at 92% 50%, {{ _glow }}10 0%, {{ _glow }}07 50%, transparent 90%);
+        "></div>
+        <div class="upper-glow-screen" style="
+            background: radial-gradient(ellipse 22% 100% at 92% 50%, {{ _glow }}1A 0%, {{ _glow }}0D 40%, transparent 80%);
+        "></div>
 
         <!-- ── 1. Header ──────────────────────────────────────── -->
         <div class="header">
-            <div class="header-brand">
-                {% if header_logo_b64 %}
-                <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
-                {% else %}
-                <div class="logo-fallback">MzansiEdge</div>
-                {% endif %}
-            </div>
+            {% if header_logo_b64 %}
+            <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
+            {% else %}
+            <div class="logo-fallback">MzansiEdge</div>
+            {% endif %}
             <div class="header-badges">
                 <div class="badge-my-match">
                     <span style="font-size: 11px;">{{ sport_emoji }}</span>
@@ -524,11 +467,11 @@
         {#- FIX-DSTV-CHANNEL-PERM-01 superseded by BUILD-CHANNEL-LOGOS-01: SS icon+DStv badge or text fallback -#}
         {% if channel %}{% if channel_dstv_num and ss_icon_b64 %}<span class="meta-item"><span class="ss-badge"><img src="data:image/png;base64,{{ ss_icon_b64 }}" class="ss-icon" alt="SS"><span class="ss-num">{{ channel_dstv_num }}</span></span></span>{% else %}<span class="meta-item">📺 {{ channel }}</span>{% endif %}{% endif %}
         </div>
-    </div><!-- /.upper-section -->
+    </div><!-- /.upper-glow-zone -->
 
     <!-- ── 4. Market Overview ────────────────────────────────── -->
     <div class="market-section">
-        <div class="section-hdr" style="color: #FFD700;">⭐ MARKET OVERVIEW</div>
+        <div class="section-hdr" style="color: #FFD700;">MARKET OVERVIEW</div>
         <div class="odds-grid">
             <div class="odds-col">
                 <div class="odds-outcome-label">{{ home }}</div>
@@ -559,7 +502,7 @@
     <!-- ── 5. Key Stats ──────────────────────────────────────── -->
     {% if stats %}
     <div class="stats-section">
-        <div class="section-hdr" style="color: #F7931A;">📊 KEY STATS</div>
+        <div class="section-hdr" style="color: #F7931A;">KEY STATS</div>
         <div class="stats-grid">
             {% for s in stats %}
             <div class="stat-card">
@@ -575,7 +518,7 @@
     <!-- ── 6. Injury Watch (conditional) ────────────────────── -->
     {% if home_injuries or away_injuries %}
     <div class="injury-section">
-        <div class="section-hdr" style="color: #FF5252;">🏥 INJURY WATCH</div>
+        <div class="section-hdr" style="color: #FF5252;">⚠️ INJURY WATCH</div>
         {% if home_injuries %}
         <div class="injury-team-row">
             <span class="injury-team-name">{{ home }}:</span>
@@ -598,7 +541,7 @@
     <!-- ── 8. Haiku Analysis ─────────────────────────────────── -->
     {% if analysis_text %}
     <div class="analysis-section">
-        <div class="section-hdr" style="color: #9B59B6;">📝 MATCH PREVIEW</div>
+        <div class="section-hdr" style="color: var(--text-secondary);">MATCH PREVIEW</div>
         <p class="analysis-text">{{ analysis_text }}</p>
     </div>
     {% endif %}

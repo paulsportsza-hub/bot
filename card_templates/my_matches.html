@@ -24,14 +24,13 @@
             box-shadow: none;
         }
 
-        /* ── Header ──────────────────────────────────────────── */
+        /* ── Header (CANONICAL — orange logo glow, no division) ── */
         .header {
             position: relative;
-            isolation: isolate;
-            overflow: hidden;
             text-align: center;
             padding: 20px 20px 14px;
-            background: linear-gradient(180deg, #0D0D0D, #141414);
+            isolation: isolate;
+            overflow: hidden;
         }
         /* ── Logo glow (lifted from sub_plans.html, WAVE-E1-CANONICAL-LIFT-01) ── */
         .logo-glow {
@@ -262,7 +261,7 @@
         {% if header_logo_b64 %}
         <img class="logo-img" src="{{ header_logo_b64 }}" alt="MzansiEdge" />
         {% else %}
-        <div style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
+        <div class="logo-fallback" style="font-size:22px;font-weight:800;letter-spacing:0.1em;background:linear-gradient(90deg,#F7931A,#FFBE45);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MzansiEdge</div>
         {% endif %}
         <div class="orange-bar"></div>
         <div class="title">MY MATCHES</div>
