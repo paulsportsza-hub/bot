@@ -1,99 +1,72 @@
 """
-Regression guard: FIX-CODEX-REVIEW-WAIT-FLAG-CANONICAL-01
+Regression guard: SO #45 pure-codex review gate.
 
-Asserts that no canonical doc contains a bare /codex:review or
-/codex:adversarial-review invocation without the --wait flag on the same line.
-
-Excludes:
-  - Lines that are themselves documentation of the bare command
-    (i.e. lines containing "bypasses", "interactive", "without --wait",
-     "background task", example/docstring markers)
-  - Lines inside <example> markers (AC-5 carve-out)
+Pure-codex dispatch must direct agents to spawn a fresh inline
+``codex --profile xhigh exec --quiet`` review sub-agent after commit + push.
+The ``/codex:review --wait`` slash path remains canonical only for explicit
+hybrid-mode Claude-executor briefs.
 """
-import re
 import pathlib
 
 _REPO_ROOT = pathlib.Path(__file__).parents[2]  # bot/
 _COWORK_ROOT = pathlib.Path("/home/paulsportsza")
 
-CANONICAL_DOCS = [
-    _REPO_ROOT / "ops" / "DEV-STANDARDS.md",
-    _COWORK_ROOT / "ops" / "DEV-STANDARDS.md",  # symlink → same file, kept for explicitness
+_DEV_STANDARDS = _REPO_ROOT / "ops" / "DEV-STANDARDS.md"
+_SPAWN_SEQUENCE_SURFACES = [
+    _COWORK_ROOT / "dispatch" / "cmux_bridge" / "spawn_sequence.py",
+    _REPO_ROOT / "infra" / "dispatch" / "bridge" / "spawn_sequence.py",
 ]
 
-# Lines containing any of these strings are excluded from the check
-_EXCLUSION_PATTERNS = [
-    "--wait",          # the correct form — already has the flag
-    "bypasses",        # explanation text
-    "interactive",     # explanation text
-    "without --wait",  # explanation text ("without --wait" describes the bad case)
-    "background task", # explanation text
-    "<example>",       # inside example block
-    "</example>",      # inside example block
-]
 
-# Regex that matches a bare invocation (no --wait on the line)
-_BARE_REVIEW_RE = re.compile(r"`?/codex:review(?!\s+--wait)(?:`|\s|$)")
-_BARE_ADVERSARIAL_RE = re.compile(r"`?/codex:adversarial-review(?!\s+--wait)(?:`|\s|$)")
-
-
-def _is_excluded(line: str) -> bool:
-    return any(pat in line for pat in _EXCLUSION_PATTERNS)
-
-
-def _check_doc(path: pathlib.Path) -> list[tuple[int, str]]:
-    """Return list of (line_number, line_text) that violate the rule."""
-    violations = []
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return []  # doc may only exist on Cowork — skip silently
-
-    inside_example = False
-    for lineno, line in enumerate(text.splitlines(), start=1):
-        if "<example>" in line:
-            inside_example = True
-        if "</example>" in line:
-            inside_example = False
-        if inside_example:
-            continue
-        if _is_excluded(line):
-            continue
-        if _BARE_REVIEW_RE.search(line) or _BARE_ADVERSARIAL_RE.search(line):
-            violations.append((lineno, line.strip()))
-    return violations
-
-
-def test_dev_standards_no_bare_codex_review():
-    """DEV-STANDARDS.md must not contain bare /codex:review without --wait."""
-    path = _REPO_ROOT / "ops" / "DEV-STANDARDS.md"
-    violations = _check_doc(path)
-    assert violations == [], (
-        f"Bare /codex:review (without --wait) found in {path}:\n"
-        + "\n".join(f"  line {ln}: {txt}" for ln, txt in violations)
-    )
-
-
-def test_dev_standards_no_bare_codex_adversarial_review():
-    """DEV-STANDARDS.md must not contain bare /codex:adversarial-review without --wait."""
-    path = _REPO_ROOT / "ops" / "DEV-STANDARDS.md"
-    violations = [
-        (ln, txt) for ln, txt in _check_doc(path)
-        if "/codex:adversarial-review" in txt
+def test_dev_standards_documents_pure_codex_inline_subagent():
+    text = _DEV_STANDARDS.read_text(encoding="utf-8")
+    required = [
+        "### Pure-Codex Sub-Agent Review",
+        "codex --profile xhigh exec --quiet",
+        "## Codex Sub-Agent Review",
+        "Outcome: clean | blockers-addressed | needs-changes",
+        "Hybrid mode unchanged",
+        "/codex:review --wait",
     ]
-    assert violations == [], (
-        f"Bare /codex:adversarial-review (without --wait) found in {path}:\n"
-        + "\n".join(f"  line {ln}: {txt}" for ln, txt in violations)
-    )
+    missing = [needle for needle in required if needle not in text]
+    assert missing == []
 
 
-def test_spawn_sequence_reminder_present():
-    """spawn_sequence.py kickoff message must mention --wait for codex review."""
-    path = _COWORK_ROOT / "dispatch" / "cmux_bridge" / "spawn_sequence.py"
-    try:
+def test_dev_standards_limits_wait_slash_to_hybrid_mode():
+    text = _DEV_STANDARDS.read_text(encoding="utf-8")
+    hybrid_idx = text.index("Hybrid mode unchanged")
+    wait_idx = text.index("/codex:review --wait", hybrid_idx)
+    inline_idx = text.index("codex --profile xhigh exec --quiet")
+
+    assert inline_idx < hybrid_idx
+    assert wait_idx > hybrid_idx
+
+
+def test_spawn_sequence_review_gate_present_on_available_surfaces():
+    checked = []
+
+    for path in _SPAWN_SEQUENCE_SURFACES:
+        if not path.exists():
+            continue
+
         text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return  # server-only file; skip on Cowork
-    assert "--wait" in text and "codex:review" in text, (
-        "spawn_sequence.py kickoff must include --wait reminder for /codex:review"
-    )
+        checked.append(path)
+
+        required = [
+            "SO #45 REVIEW GATE",
+            "codex --profile xhigh exec --quiet",
+            "## Codex Sub-Agent Review",
+            "Outcome: clean | blockers-addressed | needs-changes",
+            "HYBRID-MODE CAVEAT",
+            "DISPATCH_MODE=hybrid",
+            "/codex:review --wait",
+        ]
+        missing = [needle for needle in required if needle not in text]
+        assert missing == [], f"{path} missing {missing}"
+
+        caveat_idx = text.index("HYBRID-MODE CAVEAT")
+        wait_idx = text.index("/codex:review --wait")
+        assert wait_idx > caveat_idx
+        assert "always pass --wait" not in text
+
+    assert checked, "No spawn_sequence.py surfaces were available to check"
