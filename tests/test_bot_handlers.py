@@ -172,6 +172,62 @@ async def test_handle_menu_home(test_db, mock_update, mock_context):
     assert "Main Menu" in text
 
 
+async def test_handle_menu_pick_missing_pick_resets_welcome(mock_update):
+    """menu:pick must not strand the welcome card on Loading when no pick exists."""
+    query = mock_update.callback_query
+    query.from_user.id = 77781
+    query.message.chat_id = 77781
+    query.message.edit_caption = AsyncMock()
+
+    with patch("bot._load_welcome_pick", return_value=None), \
+         patch("bot._welcome_img_path", return_value=None), \
+         patch("bot._do_hot_tips_flow", new_callable=AsyncMock) as hot_tips_flow:
+        await bot.handle_menu(query, "pick")
+
+    query.message.edit_caption.assert_awaited_once_with("Loading...")
+    query.edit_message_text.assert_awaited_once()
+    call_args = query.edit_message_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "Main Menu" in text
+    hot_tips_flow.assert_not_awaited()
+
+
+async def test_handle_menu_pick_card_failure_resets_welcome(mock_update):
+    """menu:pick must reset the welcome card if edge_detail rendering fails."""
+    query = mock_update.callback_query
+    user_id = 77782
+    match_key = "chiefs_vs_pirates_2026-05-06"
+    tip = {
+        "match_key": match_key,
+        "match_id": match_key,
+        "event_id": match_key,
+        "home_team": "Chiefs",
+        "away_team": "Pirates",
+        "display_tier": "gold",
+    }
+    query.from_user.id = user_id
+    query.message.chat_id = user_id
+    query.message.edit_caption = AsyncMock()
+
+    with patch("bot._load_welcome_pick", return_value={"match_key": match_key, "edge_tier": "gold"}), \
+         patch.dict(bot._ht_tips_snapshot, {user_id: [tip]}), \
+         patch("bot._enrich_tip_for_card", return_value=tip), \
+         patch("bot.build_edge_detail_data", return_value={"match_key": match_key}), \
+         patch("bot.get_effective_tier", new_callable=AsyncMock, return_value="gold"), \
+         patch("bot._has_any_cached_narrative", return_value=False), \
+         patch("bot._build_game_buttons", return_value=[[bot.InlineKeyboardButton("Menu", callback_data="nav:main")]]), \
+         patch("bot.send_card_or_fallback", new_callable=AsyncMock, side_effect=RuntimeError("render failed")) as send_card, \
+         patch("bot._welcome_img_path", return_value=None):
+        await bot.handle_menu(query, "pick")
+
+    send_card.assert_awaited_once()
+    assert send_card.call_args.kwargs["template"] == "edge_detail.html"
+    query.edit_message_text.assert_awaited_once()
+    call_args = query.edit_message_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "Main Menu" in text
+
+
 async def test_handle_menu_help(test_db, mock_update, mock_context):
     """menu:help callback should show help."""
     query = mock_update.callback_query

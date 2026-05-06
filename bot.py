@@ -4456,6 +4456,26 @@ async def _serve_response(query, text: str, markup, photo=None) -> None:
             )
 
 
+async def _reset_menu_pick_to_welcome(query) -> None:
+    text = "<b>🇿🇦 MzansiEdge</b>\n<b>🏠 Main Menu</b>"
+    _img_path = _welcome_img_path()
+    try:
+        if _img_path is not None:
+            await _serve_response(query, "", kb_main(), photo=_img_path.read_bytes())
+        else:
+            await _serve_response(query, text, kb_main())
+        return
+    except Exception as exc:
+        log.warning("menu:pick welcome reset failed; falling back to text menu: %s", exc)
+    try:
+        await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
+    except Exception:
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main())
+        except Exception as exc:
+            log.warning("menu:pick fallback text reset failed: %s", exc)
+
+
 async def handle_menu(query, action: str) -> None:
     if action == "home":
         _img_path = _welcome_img_path()
@@ -4474,67 +4494,73 @@ async def handle_menu(query, action: str) -> None:
             await query.message.edit_caption("Loading...")
         except Exception:
             pass
-        _wp = await asyncio.to_thread(_load_welcome_pick)
-        if not _wp:
-            await _do_hot_tips_flow(query.message.chat_id, _g_bot, user_id=user_id)
-            return
-        _wp_key = _wp.get("match_key", "")
-        # Fast path: find the tip in the user's snapshot or global hot-tips cache
-        _wp_tip = next(
-            (t for t in (_ht_tips_snapshot.get(user_id) or []) if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
-            None,
-        )
-        if _wp_tip is None:
+        try:
+            try:
+                _wp = await asyncio.wait_for(asyncio.to_thread(_load_welcome_pick), timeout=2.5)
+            except asyncio.TimeoutError:
+                log.warning("Welcome-pick lookup exceeded 2.5s — resetting welcome card")
+                _wp = None
+            if not _wp:
+                raise ValueError("no welcome pick available")
+            _wp_key = _wp.get("match_key", "")
+            # Fast path: find the tip in the user's snapshot or global hot-tips cache
             _wp_tip = next(
-                (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
+                (t for t in (_ht_tips_snapshot.get(user_id) or []) if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
                 None,
             )
-        # Slow path: load fresh from edge_results if not in any cache
-        if _wp_tip is None:
-            # FIX-BOT-PERF-LATENCY-BOUNDS-01: bounded user-tap DB read.
-            try:
-                _all = await asyncio.wait_for(
-                    asyncio.to_thread(_load_tips_from_edge_results, 100, True),
-                    timeout=2.5,
+            if _wp_tip is None:
+                _wp_tip = next(
+                    (t for t in _hot_tips_cache.get("global", {}).get("tips", []) if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key),
+                    None,
                 )
-            except asyncio.TimeoutError:
-                log.warning("Welcome-pick edge_results read exceeded 2.5s — degrading")
-                _all = []
-            _wp_tip = next((t for t in _all if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key), None)
-        # Final fallback: direct DB fetch by match_key (works even for settled picks)
-        # FIX-BOT-PERF-LATENCY-BOUNDS-01 (Codex iter-2): bound this user-tap read
-        # too — it queries the same odds.db that can be locked by a scraper write.
-        if _wp_tip is None:
-            try:
-                _wp_tip = await asyncio.wait_for(
-                    asyncio.to_thread(_load_edge_tip_by_key, _wp_key),
-                    timeout=2.5,
-                )
-            except asyncio.TimeoutError:
-                log.warning("Welcome-pick edge_tip_by_key read exceeded 2.5s — degrading")
-                _wp_tip = None
-        if not _wp_tip:
-            await _do_hot_tips_flow(query.message.chat_id, _g_bot, user_id=user_id)
-            return
-        _wp_enriched = await asyncio.to_thread(_enrich_tip_for_card, _wp_tip, _wp_key)
-        _wp_data = build_edge_detail_data(_wp_enriched)
-        _wp_user_tier = await get_effective_tier(user_id)
-        _wp_edge_tier = (_wp_tip.get("display_tier") or _wp_tip.get("edge_rating") or _wp_tip.get("tier") or "gold").lower()
-        _wp_has_narrative = await asyncio.to_thread(_has_any_cached_narrative, _wp_key)
-        _wp_btn_rows = _build_game_buttons(
-            [_wp_tip], event_id=_wp_key, user_id=user_id,
-            source="edge_picks", user_tier=_wp_user_tier, edge_tier=_wp_edge_tier,
-            back_page=_ht_page_state.get(user_id, 0), has_narrative=_wp_has_narrative,
-        )
-        _wp_fallback = (
-            f"<b>{h(_wp_tip.get('home_team', ''))} vs {h(_wp_tip.get('away_team', ''))}</b>"
-        )
-        await send_card_or_fallback(
-            bot=_g_bot, chat_id=query.message.chat_id,
-            template="edge_detail.html", data=_wp_data,
-            text_fallback=_wp_fallback, markup=InlineKeyboardMarkup(_wp_btn_rows),
-            message_to_edit=query.message,
-        )
+            # Slow path: load fresh from edge_results if not in any cache
+            if _wp_tip is None:
+                # FIX-BOT-PERF-LATENCY-BOUNDS-01: bounded user-tap DB read.
+                try:
+                    _all = await asyncio.wait_for(
+                        asyncio.to_thread(_load_tips_from_edge_results, 100, True),
+                        timeout=2.5,
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("Welcome-pick edge_results read exceeded 2.5s — degrading")
+                    _all = []
+                _wp_tip = next((t for t in _all if t.get("match_key") == _wp_key or t.get("match_id") == _wp_key or t.get("event_id") == _wp_key), None)
+            # Final fallback: direct DB fetch by match_key (works even for settled picks)
+            # FIX-BOT-PERF-LATENCY-BOUNDS-01 (Codex iter-2): bound this user-tap read
+            # too — it queries the same odds.db that can be locked by a scraper write.
+            if _wp_tip is None:
+                try:
+                    _wp_tip = await asyncio.wait_for(
+                        asyncio.to_thread(_load_edge_tip_by_key, _wp_key),
+                        timeout=2.5,
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("Welcome-pick edge_tip_by_key read exceeded 2.5s — degrading")
+                    _wp_tip = None
+            if not _wp_tip:
+                raise ValueError("welcome pick detail unavailable")
+            _wp_enriched = await asyncio.to_thread(_enrich_tip_for_card, _wp_tip, _wp_key)
+            _wp_data = build_edge_detail_data(_wp_enriched)
+            _wp_user_tier = await get_effective_tier(user_id)
+            _wp_edge_tier = (_wp_tip.get("display_tier") or _wp_tip.get("edge_rating") or _wp_tip.get("tier") or "gold").lower()
+            _wp_has_narrative = await asyncio.to_thread(_has_any_cached_narrative, _wp_key)
+            _wp_btn_rows = _build_game_buttons(
+                [_wp_tip], event_id=_wp_key, user_id=user_id,
+                source="edge_picks", user_tier=_wp_user_tier, edge_tier=_wp_edge_tier,
+                back_page=_ht_page_state.get(user_id, 0), has_narrative=_wp_has_narrative,
+            )
+            _wp_fallback = (
+                f"<b>{h(_wp_tip.get('home_team', ''))} vs {h(_wp_tip.get('away_team', ''))}</b>"
+            )
+            await send_card_or_fallback(
+                bot=_g_bot, chat_id=query.message.chat_id,
+                template="edge_detail.html", data=_wp_data,
+                text_fallback=_wp_fallback, markup=InlineKeyboardMarkup(_wp_btn_rows),
+                message_to_edit=query.message,
+            )
+        except Exception as exc:
+            log.warning("menu:pick failed after loading state; resetting welcome card: %s", exc)
+            await _reset_menu_pick_to_welcome(query)
 
     elif action == "pick_lock":
         # Locked "Edge of The Day" button — non-paying user taps.
