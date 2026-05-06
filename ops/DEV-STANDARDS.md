@@ -3,32 +3,36 @@
 > **Source of truth for agent briefing, delegation, and QA standards.**
 > Referenced from CLAUDE.md.
 
-*Last updated: 4 May 2026 by Sonnet - AUDITOR (BUILD-DEV-STANDARDS-V45-REVIEW-GATE-NARROW-01 — v4.4 → v4.5, narrows Codex Review Gate after FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 burned full 5h Cowork window on stacked Opus Max + mandatory adversarial: `/codex:adversarial-review` is now DISCRETIONARY (opt-in via brief AC, not auto-fired); mandatory adversarial triggers narrowed 6→3 (money/payments, auth/settlement, non-rollback-safe migrations); cost rule added). Earlier history: 3 May 2026 by Opus Max Effort - AUDITOR (BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-01 — v4.3 → v4.4, ratifies Codex Review Gate as canonical brief lifecycle / SO #45). 17 April 2026 PM by AUDITOR (CLAUDE-MD-SO-SPLIT-01 Tier 1 — absorbed 6 SOs from CLAUDE.md: #15, #18, #19, #27 [reworded], #33, #36.)*
+*Last updated: 6 May 2026 by Codex XHigh - AUDITOR (FIX-DOCS-SO45-ROUTING-MIRROR-CLEANUP-01 — aligns Codex Review Gate template with the pure-codex inline sub-agent lock event `FIX-SO45-CODEX-INLINE-SUBAGENT-01`: hybrid uses `/codex:review --wait`; pure-codex uses `codex --profile xhigh exec --quiet`). Earlier history: 4 May 2026 by Sonnet - AUDITOR (BUILD-DEV-STANDARDS-V45-REVIEW-GATE-NARROW-01 — v4.4 → v4.5, narrows Codex Review Gate after FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 burned full 5h Cowork window on stacked Opus Max + mandatory adversarial; adversarial review is now DISCRETIONARY via brief AC; mandatory adversarial triggers narrowed 6→3; cost rule added). 3 May 2026 by Opus Max Effort - AUDITOR (BUILD-DEV-STANDARDS-V4.4-REVIEW-GATE-01 — v4.3 → v4.4, ratifies Codex Review Gate as canonical brief lifecycle / SO #45). 17 April 2026 PM by AUDITOR (CLAUDE-MD-SO-SPLIT-01 Tier 1 — absorbed 6 SOs from CLAUDE.md: #15, #18, #19, #27 [reworded], #33, #36.)*
 
 ---
 
-## Codex Review Gate (v4.5 — LOCKED 4 May 2026, supersedes v4.4)
+## Codex Review Gate (v4.5 — LOCKED 4 May 2026, amended 6 May 2026)
 
-**v4.5 narrows the Codex Review Gate to fix the cost-stacking failure mode.** Standard `/codex:review` remains mandatory on every code-touching brief; `/codex:adversarial-review` is now **DISCRETIONARY** — opt-in via brief AC, NOT auto-fired by trigger match. v4.4's mandatory trigger list (6 categories) is narrowed to **3 hard categories** (money/payments, auth/settlement, non-rollback-safe migrations); the other three move to ADVISORY ("Consider adversarial"). Cost rule added: when executor = Opus Max Effort, default review = standard `/codex:review` unless brief AC explicitly justifies adversarial. **Driver:** FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 stacked Opus Max + mandatory adversarial on a dispatch-system trigger and burned the full 5h Cowork window (1h 39m, 171k tokens, 7% balance left) — incompatible with Routing v1 §4 cost discipline.
+**v4.5 narrows the Codex Review Gate to fix the cost-stacking failure mode.** Standard review remains mandatory on every code-touching brief, but the canonical invocation is mode-aware: `DISPATCH_MODE=hybrid` uses `/codex:review --wait`; `DISPATCH_MODE=pure-codex` uses a fresh inline `codex exec` sub-agent (`codex --profile xhigh exec --quiet`) per `FIX-SO45-CODEX-INLINE-SUBAGENT-01`. Adversarial review is **DISCRETIONARY** — opt-in via brief AC, NOT auto-fired by trigger match. v4.4's mandatory trigger list (6 categories) is narrowed to **3 hard categories** (money/payments, auth/settlement, non-rollback-safe migrations); the other three move to ADVISORY ("Consider adversarial"). Cost rule added: when executor = Opus Max Effort, default review = standard review unless brief AC explicitly justifies adversarial. **Driver:** FIX-BRIDGE-SPAWN-AND-DONE-OPUS-MAX-FINAL-01 stacked Opus Max + mandatory adversarial on a dispatch-system trigger and burned the full 5h Cowork window (1h 39m, 171k tokens, 7% balance left) — incompatible with Routing v1 §4 cost discipline.
 
-Routing v1 pivot otherwise unchanged: Codex stops being a primary executor; Codex runs as the universal reviewer invoked via `/codex:review` or `/codex:adversarial-review` at the end of every code-touching brief, before `mark_done.sh`. Claude (Sonnet or Opus Max Effort) executes; Codex reviews. Locked under SO #45.
+Routing v1 pivot otherwise unchanged: Codex stops being a primary executor in hybrid dispatch; Claude (Sonnet or Opus Max Effort) executes and Codex reviews. Under pure-codex dispatch, the executor is already Codex, so the unbiased second pass is a separate `codex exec` process with fresh context. Both paths run after commit + push and before `mark_done.sh`. Locked under SO #45; pure-codex amendment locked 6 May 2026 by `FIX-SO45-CODEX-INLINE-SUBAGENT-01`.
 
 ### Lifecycle (one extra mandatory step per brief)
 
 Standard brief execution gains one mandatory step between commit + push and `mark_done.sh`:
 
-1. After commit + push, before `mark_done.sh`, run `/codex:review` (or `/codex:adversarial-review <focus text>` when AC explicitly declared) on the wave branch from inside the executing Claude Code session.
+1. After commit + push, before `mark_done.sh`, choose the review mechanism by dispatch mode:
+   - `DISPATCH_MODE=hybrid`: run `/codex:review --wait` (or `/codex:adversarial-review --wait <focus text>` when AC explicitly declared) on the wave branch from inside the executing Claude Code session.
+   - `DISPATCH_MODE=pure-codex`: run `codex --profile xhigh exec --quiet "<review prompt>"` as a fresh inline sub-agent from inside the executing Codex session.
 2. If review returns blockers, address them with additional commits + push, then re-run review.
 3. Only proceed to `mark_done.sh` when review returns no blockers.
-4. Include the review summary verbatim in the report under a `## Codex Review` section.
-5. State the outcome explicitly: `Outcome: clean | blockers-addressed | bootstrap-exempt`.
+4. Include the review summary verbatim in the report under `## Codex Review` for hybrid mode or `## Codex Sub-Agent Review` for pure-codex mode.
+5. State the outcome explicitly: `Outcome: clean | blockers-addressed | needs-changes | bootstrap-exempt`.
 
 ### Review modes
 
-- **`/codex:review`** — DEFAULT, MANDATORY. Functional correctness, regressions, contract drift, gate coverage. Use on every code-touching brief unless adversarial is explicitly declared.
-- **`/codex:adversarial-review <focus text>`** — DISCRETIONARY (v4.5). Adversarial second-pair-of-eyes on a specified failure-class focus. Invoked only when (a) brief AC explicitly sets `review_mode: adversarial-review` with focus text, (b) standard `/codex:review` output recommends escalation, or (c) Paul override. Trigger list does NOT auto-fire adversarial in v4.5.
+- **Hybrid standard:** `/codex:review --wait` — DEFAULT, MANDATORY when Claude is the executor. Functional correctness, regressions, contract drift, gate coverage. Use on every code-touching hybrid brief unless adversarial is explicitly declared.
+- **Hybrid adversarial:** `/codex:adversarial-review --wait <focus text>` — DISCRETIONARY (v4.5). Adversarial second-pair-of-eyes on a specified failure-class focus. Invoked only when (a) brief AC explicitly sets `review_mode: adversarial-review` with focus text, (b) standard hybrid review output recommends escalation, or (c) Paul override. Trigger list does NOT auto-fire adversarial in v4.5.
+- **Pure-codex standard:** `codex --profile xhigh exec --quiet "<review prompt>"` — DEFAULT, MANDATORY when Codex is the executor. This is the `FIX-SO45-CODEX-INLINE-SUBAGENT-01` lock event: a fresh process, fresh context, synchronous stdout, no slash-command/plugin dependency.
+- **Pure-codex adversarial:** same `codex exec` mechanism with the adversarial prompt framing from §Pure-Codex Sub-Agent Review when AC explicitly declares `review_mode: adversarial-review` or a hard trigger applies.
 
-### When to use `/codex:adversarial-review` (mandatory triggers — narrowed v4.5)
+### When to use adversarial review (mandatory triggers — narrowed v4.5)
 
 **Mandatory triggers (3 hard categories — adversarial REQUIRED in brief AC):**
 
@@ -42,11 +46,11 @@ Standard brief execution gains one mandatory step between commit + push and `mar
 - Changes touching the dispatch system, bridge, or worktree-runner.
 - Narrative / cache surfaces that ship to premium-tier users.
 
-For advisory items, the author decides per-brief whether the architectural risk warrants the cost of an adversarial review. Standard `/codex:review` is sufficient for the majority; reserve adversarial for genuinely high-blast-radius changes within those categories.
+For advisory items, the author decides per-brief whether the architectural risk warrants the cost of an adversarial review. Standard review is sufficient for the majority; reserve adversarial for genuinely high-blast-radius changes within those categories.
 
 ### Cost rule (v4.5 NEW)
 
-When the executor model is Opus Max Effort, default review = standard `/codex:review` unless the brief AC explicitly justifies adversarial in writing. No stacking premium-on-premium without justification. This rule exists because Opus Max Effort + adversarial Codex on the same brief routinely consumes the entire 5h Cowork window — incompatible with parallel orchestration.
+When the executor model is Opus Max Effort, default review = hybrid standard `/codex:review --wait` unless the brief AC explicitly justifies adversarial in writing. No stacking premium-on-premium without justification. This rule exists because Opus Max Effort + adversarial Codex on the same brief routinely consumes the entire 5h Cowork window — incompatible with parallel orchestration.
 
 ### Brief authoring rule (v4.5 amended)
 
@@ -54,10 +58,11 @@ Every brief's AC block MUST explicitly declare `review_mode: review | adversaria
 
 ### Report format
 
-Every report MUST include a `## Codex Review` section with:
+Every report MUST include the review section for its dispatch mode:
 
-- The full review summary verbatim (copy-paste from the slash-command output).
-- An explicit `Outcome: clean | blockers-addressed | bootstrap-exempt` line.
+- Hybrid: `## Codex Review` with the full slash-command summary verbatim.
+- Pure-codex: `## Codex Sub-Agent Review` with the full `codex exec` stdout verbatim.
+- An explicit `Outcome: clean | blockers-addressed | needs-changes | bootstrap-exempt` line.
 
 Reports without this section are INCOMPLETE and the brief reopens. AUDITOR verifies on every worker return; COO blocks merge of any wave whose reports fail this check.
 
@@ -78,7 +83,7 @@ Sonnet-LEAD's commit-discipline pattern (multiple SO #41 violations Apr–May 20
 
 ### Pure-Codex Sub-Agent Review (LOCKED 6 May 2026 — `FIX-SO45-CODEX-INLINE-SUBAGENT-01`)
 
-When `DISPATCH_MODE=pure-codex` (Codex is the executor), the `/codex:review` plugin / companion path is REDUNDANT — the executor is already Codex; calling its own plugin adds no cross-process cross-process eyes value, and the `codex review --commit` non-interactive subcommand has hung agents on background-task UX (13+ minute waits with no progress). **The new pattern: agent spawns a fresh `codex exec` sub-agent inline, synchronous, no plugin dependency.**
+When `DISPATCH_MODE=pure-codex` (Codex is the executor), the `/codex:review --wait` plugin / companion path is REDUNDANT — the executor is already Codex; calling its own plugin adds no cross-process eyes value, and the `codex review --commit` non-interactive subcommand has hung agents on background-task UX (13+ minute waits with no progress). **The new pattern: agent spawns a fresh `codex exec` sub-agent inline, synchronous, no plugin dependency.**
 
 **Mechanism.** After commit + push, before `mark_done.sh`, the executor agent runs:
 
@@ -145,11 +150,12 @@ Review mode for this brief: `<review | adversarial-review>`  ← MUST be explici
 <If executor=Opus Max Effort and review_mode=adversarial-review: justification: "<why premium-on-premium cost is warranted>">
 
 After commit + push, before mark_done.sh:
-1. Run `/codex:review` (or `/codex:adversarial-review <focus text>` when explicitly declared) on the wave branch.
-2. If review returns blockers, address them with additional commits + push, then re-run review.
-3. Only proceed to mark_done.sh when review returns no blockers.
-4. Include the review summary verbatim in the report under a `## Codex Review` section.
-5. State the outcome: `clean | blockers-addressed | bootstrap-exempt`.
+1. If `DISPATCH_MODE=hybrid`: run `/codex:review --wait` (or `/codex:adversarial-review --wait <focus text>` when explicitly declared) on the wave branch.
+2. If `DISPATCH_MODE=pure-codex`: run `codex --profile xhigh exec --quiet "<review prompt>"` as a fresh inline sub-agent per `FIX-SO45-CODEX-INLINE-SUBAGENT-01`.
+3. If review returns blockers / `needs-changes`, address them with additional commits + push, then re-run review.
+4. Only proceed to mark_done.sh when review returns no blockers.
+5. Include the review summary verbatim in the report under `## Codex Review` for hybrid or `## Codex Sub-Agent Review` for pure-codex.
+6. State the outcome: `clean | blockers-addressed | needs-changes | bootstrap-exempt`.
 ```
 
 Dispatcher tooling guidance: every dispatched brief MUST include the Codex Review Gate block above with `review_mode` explicitly declared. Briefs missing it are non-compliant under v4.5 and must be re-issued.
