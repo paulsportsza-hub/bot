@@ -132,12 +132,10 @@
         {% endif %}
         <div class="orange-bar"></div>
         <div class="step-progress">
-            <span class="step-dot done"></span>
-            <span class="step-dot done"></span>
-            <span class="step-dot done"></span>
-            <span class="step-dot done"></span>
-            <span class="step-dot active"></span>
-            <span class="step-label">Step 5 of 5</span>
+            {% for i in range(total_steps) %}
+            <span class="step-dot {% if i + 1 < step %}done{% elif i + 1 == step %}active{% endif %}"></span>
+            {% endfor %}
+            <span class="step-label">Step {{ step }} of {{ total_steps }}</span>
         </div>
         <div class="title">WEEKLY BANKROLL</div>
     </div>
