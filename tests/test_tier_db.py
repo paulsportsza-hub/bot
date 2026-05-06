@@ -251,3 +251,101 @@ class TestApplyPaymentEventSubscriptionFailures:
         assert user.user_tier == "gold"
         assert user.tier_expires_at == expiry.replace(tzinfo=None)
         assert user.billing_status == "active"
+
+    @pytest.mark.asyncio
+    async def test_subscription_renewal_extends_existing_confirmed_access(self, test_db):
+        await db.upsert_user(6103, "renew-sub", "Renew Sub")
+        await db.create_payment_record(
+            user_id=6103,
+            plan_code="gold_monthly",
+            amount_cents=9900,
+            provider_reference="mze-6103-gold-monthly-renew",
+            provider="stitch",
+            provider_payment_id="sub_renew_6103",
+            checkout_url="https://mock.stitch.money/subscriptions/sub_renew_6103",
+            billing_status="awaiting_webhook",
+        )
+
+        first = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6103-gold-monthly-renew",
+            provider_payment_id="sub_renew_6103",
+            provider_event_id="evt-sub-created-6103",
+            plan_code="gold_monthly",
+            amount_cents=9900,
+            event_status="confirmed",
+            billing_status="active",
+            raw_event="{}",
+            event_type="subscription.created",
+        )
+        first_user = await db.get_user(6103)
+        first_expiry = first_user.tier_expires_at
+
+        renewed = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6103-gold-monthly-renew",
+            provider_payment_id="sub_renew_6103",
+            provider_event_id="evt-sub-renewed-6103",
+            plan_code="gold_monthly",
+            amount_cents=9900,
+            event_status="confirmed",
+            billing_status="active",
+            raw_event="{}",
+            event_type="subscription.renewed",
+        )
+
+        user = await db.get_user(6103)
+        assert first["outcome"] == "confirmed"
+        assert renewed["outcome"] == "renewed"
+        assert user.subscription_status == "active"
+        assert user.user_tier == "gold"
+        assert user.tier_expires_at >= first_expiry + dt.timedelta(days=29)
+
+    @pytest.mark.asyncio
+    async def test_founding_subscription_cancel_clears_founding_entitlement(self, test_db):
+        await db.upsert_user(6104, "cancel-founder", "Cancel Founder")
+        await db.create_payment_record(
+            user_id=6104,
+            plan_code="founding_diamond",
+            amount_cents=69900,
+            provider_reference="mze-6104-founding-diamond-aa",
+            provider="stitch",
+            provider_payment_id="sub_found_6104",
+            checkout_url="https://mock.stitch.money/subscriptions/sub_found_6104",
+            is_founding=True,
+            billing_status="awaiting_webhook",
+        )
+
+        confirmed = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6104-founding-diamond-aa",
+            provider_payment_id="sub_found_6104",
+            provider_event_id="evt-founder-created-6104",
+            plan_code="founding_diamond",
+            amount_cents=69900,
+            event_status="confirmed",
+            billing_status="active",
+            raw_event="{}",
+            event_type="subscription.created",
+        )
+        assert confirmed["outcome"] == "confirmed"
+
+        cancelled = await db.apply_payment_event(
+            provider="stitch",
+            provider_reference="mze-6104-founding-diamond-aa",
+            provider_payment_id="sub_found_6104",
+            provider_event_id="evt-founder-cancelled-6104",
+            plan_code="founding_diamond",
+            amount_cents=69900,
+            event_status="cancelled",
+            billing_status="cancelled",
+            raw_event="{}",
+            event_type="subscription.cancelled",
+        )
+
+        user = await db.get_user(6104)
+        assert cancelled["subscription_deactivated"] is True
+        assert user.subscription_status == "cancelled"
+        assert user.user_tier == "bronze"
+        assert user.is_founding_member is False
+        assert user.founding_slot_number is None

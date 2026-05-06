@@ -30,6 +30,7 @@ async def test_manual_verify_does_not_become_source_of_truth_in_real_mode():
 
     with (
         patch.object(bot.config, "STITCH_MOCK_MODE", False),
+        patch.object(bot.db, "get_payment_by_provider_payment_id", new_callable=AsyncMock, return_value=None),
         patch.object(bot.stitch_service, "get_payment_status", new_callable=AsyncMock, return_value={"status": "success"}),
         patch.object(bot, "_process_stitch_event", new_callable=AsyncMock) as process_event,
     ):

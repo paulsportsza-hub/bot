@@ -27948,7 +27948,27 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
     await query.answer("⏳ Checking payment status…")
 
     try:
-        result = await stitch_service.get_payment_status(payment_id)
+        payment = await db.get_payment_by_provider_payment_id("stitch", payment_id)
+        state = _subscribe_state.get(user_id, {})
+        plan_code = (
+            getattr(payment, "plan_code", None)
+            or state.get("plan_code")
+            or ""
+        )
+        product = config.STITCH_PRODUCTS.get(plan_code, {})
+        is_subscription = bool(
+            (
+                plan_code
+                and plan_code != "founding_diamond"
+                and not product.get("founding")
+            )
+            or payment_id.startswith(("sub_", "mock-sub-"))
+        )
+
+        if is_subscription:
+            result = await stitch_service.get_subscription_status(payment_id)
+        else:
+            result = await stitch_service.get_payment_status(payment_id)
         status = result.get("status", "")
 
         if status == "success":
@@ -27960,19 +27980,23 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
                 )
                 outcome = await _process_stitch_event(event)
                 analytics_track(user_id, "subscription_confirmed", {
-                    "plan": "founding_diamond",
+                    "plan": plan_code or "unknown",
                     "method": "mock_webhook",
                     "outcome": outcome.get("outcome", "unknown"),
                 })
                 asyncio.create_task(
-                    meta_capi.fire_purchase_event(user_id, 69900, "founding_diamond")
+                    meta_capi.fire_purchase_event(
+                        user_id,
+                        int(outcome.get("amount_cents") or product.get("price", 0)),
+                        plan_code or "unknown",
+                    )
                 )
-                if outcome.get("outcome") in {"confirmed", "already_founding_member"}:
+                if outcome.get("outcome") in {"confirmed", "already_founding_member", "renewed"}:
                     slot_number = int(outcome.get("slot_number") or 0)
                     text = (
                         _founding_confirmation_text(slot_number)
                         if slot_number else
-                        "✅ <b>Payment confirmed!</b>\n\nYour access is active now."
+                        "✅ <b>Payment confirmed!</b>\n\nYour paid access is active now."
                     )
                     await _serve_response(
                         query, text,
@@ -28009,8 +28033,7 @@ async def _handle_sub_verify(query, payment_id: str) -> None:
             await _serve_response(
                 query,
                 _pending_webhook_text(status),
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
+                InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Check Again", callback_data=f"sub:verify:{payment_id}")],
                     [InlineKeyboardButton("↩️ Menu", callback_data="nav:main")],
                 ]),
@@ -28269,11 +28292,13 @@ async def _notify_payment_outcome(bot, outcome: dict[str, object]) -> None:
             parse_mode=ParseMode.HTML,
         )
     elif outcome.get("outcome") == "failed":
+        plan_code = str(outcome.get("plan_code") or "")
+        retry_command = "/founding" if plan_code == "founding_diamond" else "/subscribe"
         await bot.send_message(
             chat_id=int(user_id),
             text=(
                 "⚠️ <b>Payment failed</b>\n\n"
-                "No access changes were made. Use /founding to try again."
+                f"No access changes were made. Use {retry_command} to try again."
             ),
             parse_mode=ParseMode.HTML,
         )
@@ -28396,7 +28421,7 @@ async def _process_stitch_event(event: dict) -> dict[str, object]:
     try:
         data = event.get("data", {})
         provider_payment_id = data.get("id", "")
-        provider_reference = data.get("beneficiaryReference", "")
+        provider_reference = data.get("beneficiaryReference") or data.get("merchantReference", "")
         external_ref = data.get("externalReference", "")
         provider_event_id = event.get("id")
         plan_code = _derive_plan_code_from_reference(provider_reference)
@@ -28432,6 +28457,7 @@ async def _process_stitch_event(event: dict) -> dict[str, object]:
             event_status=event_status,
             billing_status=billing_status,
             raw_event=json.dumps(event, sort_keys=True),
+            event_type=event.get("type", ""),
         )
         outcome["plan_code"] = plan_code or "founding_diamond"
         outcome["amount_cents"] = amount_cents
@@ -29093,7 +29119,7 @@ async def _run_webhook_server(app_instance) -> None:
         user_id = outcome.get("user_id")
         if user_id and event_type in ("payment.complete", "subscription.created", "subscription.renewed"):
             analytics_track(int(user_id), "subscription_confirmed", {
-                "plan": "founding_diamond",
+                "plan": str(outcome.get("plan_code", "unknown")),
                 "outcome": outcome.get("outcome", "unknown"),
             })
             asyncio.create_task(

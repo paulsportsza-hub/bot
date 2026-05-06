@@ -246,6 +246,46 @@ class StitchService:
         log.error("Stitch Express: could not retrieve status for %s", payment_id)
         return {"status": "unknown", "payment_id": payment_id}
 
+    async def get_subscription_status(self, subscription_id: str) -> dict[str, Any]:
+        """Query recurring subscription status."""
+        if self._is_mock():
+            from services.stitch_mock import MockStitchService
+            return await MockStitchService().get_subscription_status(subscription_id)
+
+        token = await self.get_client_token(scope="client_recurringpaymentconsentrequest")
+        status_map = {
+            "ACTIVE": "success",
+            "APPROVED": "success",
+            "COMPLETED": "success",
+            "COMPLETE": "success",
+            "SUCCESS": "success",
+            "PENDING": "pending",
+            "CREATED": "pending",
+            "CANCELLED": "cancelled",
+            "CANCELED": "cancelled",
+            "EXPIRED": "expired",
+            "FAILED": "error",
+        }
+
+        async with _stitch_session() as session:
+            async with session.get(
+                f"{self.SUBSCRIPTIONS_URL}/{subscription_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as resp:
+                if resp.status == 200:
+                    body = await resp.json()
+                    if body.get("success"):
+                        subscription = body.get("data", {}).get("subscription", {})
+                        raw_status = str(subscription.get("status", ""))
+                        return {
+                            "status": status_map.get(raw_status.upper(), "pending"),
+                            "payment_id": subscription_id,
+                            "raw_status": raw_status,
+                        }
+
+        log.error("Stitch Express: could not retrieve subscription status for %s", subscription_id)
+        return {"status": "unknown", "payment_id": subscription_id}
+
     def verify_webhook(self, headers: dict[str, str], body: bytes) -> bool:
         """Verify Stitch Express webhook Svix signature.
 

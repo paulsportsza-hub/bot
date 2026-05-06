@@ -99,6 +99,16 @@ class MockStitchService:
         if not reference:
             reference = f"mze-{user_id}-{plan_code.replace('_', '-')}-mocksub"
         sub_id = f"mock-sub-{uuid.uuid4().hex[:12]}"
+        _mock_payments[sub_id] = {
+            "payment_id": sub_id,
+            "user_id": user_id,
+            "reference": reference,
+            "amount_cents": amount_cents,
+            "status": "pending",
+            "is_subscription": True,
+            "plan_code": plan_code,
+        }
+        _mock_payments[reference] = _mock_payments[sub_id]
         result = {
             "subscription_id": sub_id,
             "checkout_url": f"https://mock.stitch.money/subscriptions/{sub_id}",
@@ -107,6 +117,31 @@ class MockStitchService:
         }
         log.info("[MOCK] Created subscription: %s for user %s (%s)", sub_id, user_id, plan_code)
         return result
+
+    async def get_subscription_status(self, subscription_id: str) -> dict[str, Any]:
+        """Simulate recurring subscription status checks."""
+        stored = _mock_payments.get(subscription_id, {})
+        if "fail" in subscription_id:
+            status = "error"
+            raw = "FAILED"
+        elif "cancel" in subscription_id:
+            status = "cancelled"
+            raw = "CANCELLED"
+        elif "expire" in subscription_id:
+            status = "expired"
+            raw = "EXPIRED"
+        else:
+            status = "success"
+            raw = "ACTIVE"
+            if stored:
+                stored["status"] = status
+
+        log.info("[MOCK] Subscription status for %s: %s", subscription_id, status)
+        return {
+            "status": status,
+            "payment_id": subscription_id,
+            "raw_status": raw,
+        }
 
     async def get_payment(self, payment_id: str) -> dict[str, Any]:
         """Return stored mock payment metadata."""
@@ -124,7 +159,7 @@ class MockStitchService:
         user_id = int(stored.get("user_id", 0))
         amount_cents = int(stored.get("amount_cents", 0))
         reference = stored.get("reference", payment_id)
-        return simulate_webhook_payload(
+        event = simulate_webhook_payload(
             payment_id=payment_id,
             user_id=user_id,
             status=status,
@@ -132,6 +167,10 @@ class MockStitchService:
             reference=reference,
             event_id=event_id,
         )
+        if stored.get("is_subscription"):
+            event["type"] = "subscription.created" if status == "complete" else "subscription.cancelled"
+            event["data"]["merchantReference"] = reference
+        return event
 
 
 def simulate_webhook_payload(

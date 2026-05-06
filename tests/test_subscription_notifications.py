@@ -46,3 +46,21 @@ async def test_subscription_expiry_notification_not_silent():
     text = fake_bot.send_message.call_args.kwargs["text"]
     assert "Subscription expired" in text
     assert "founding slot" not in text.lower()
+
+
+async def test_regular_checkout_failed_notification_uses_subscribe_retry():
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock()
+
+    await bot._notify_payment_outcome(
+        fake_bot,
+        {
+            "user_id": 6102,
+            "outcome": "failed",
+            "plan_code": "gold_monthly",
+        },
+    )
+
+    text = fake_bot.send_message.call_args.kwargs["text"]
+    assert "Use /subscribe" in text
+    assert "Use /founding" not in text

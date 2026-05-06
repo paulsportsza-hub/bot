@@ -914,15 +914,45 @@ async def activate_subscription(
             await s.commit()
 
 
+def _subscription_period_delta(plan_code: str) -> dt.timedelta:
+    return dt.timedelta(days=365) if "annual" in plan_code else dt.timedelta(days=30)
+
+
+def _extended_subscription_expiry(
+    now: dt.datetime,
+    current_expires_at: dt.datetime | None,
+    plan_code: str,
+) -> dt.datetime:
+    base = now
+    if current_expires_at is not None:
+        current = current_expires_at
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=dt.timezone.utc)
+        if current > now:
+            base = current
+    return base + _subscription_period_delta(plan_code)
+
+
+def _downgrade_paid_subscription(user: User, billing_status: str, *, clear_founding: bool) -> None:
+    user.subscription_status = "cancelled"
+    user.user_tier = "bronze"
+    user.tier_expires_at = None
+    user.billing_status = billing_status
+    if clear_founding:
+        user.is_founding_member = False
+        user.founding_slot_number = None
+
+
 async def deactivate_subscription(user_id: int) -> None:
     """Deactivate user subscription (cancelled or expired). Resets to bronze tier."""
     async with async_session() as s:
         user = await s.get(User, user_id)
         if user:
-            user.subscription_status = "cancelled"
-            user.user_tier = "bronze"
-            user.tier_expires_at = None
-            user.billing_status = "cancelled"
+            _downgrade_paid_subscription(
+                user,
+                "cancelled",
+                clear_founding=bool(user.is_founding_member),
+            )
             await s.commit()
 
 
@@ -1108,6 +1138,7 @@ async def apply_payment_event(
     event_status: str,
     billing_status: str,
     raw_event: str | None,
+    event_type: str | None = None,
 ) -> dict[str, object]:
     """Apply a provider event idempotently and return a structured outcome."""
     for _attempt in range(3):
@@ -1167,7 +1198,15 @@ async def apply_payment_event(
                 outcome["user_id"] = payment.user_id
 
             terminal_successes = {"confirmed", "confirmed_no_slot", "refunded"}
-            if event_status == "confirmed" and payment.status in terminal_successes:
+            is_subscription_renewal = (
+                event_type == "subscription.renewed"
+                and plan_code != "founding_diamond"
+            )
+            if (
+                event_status == "confirmed"
+                and payment.status in terminal_successes
+                and not is_subscription_renewal
+            ):
                 outcome["outcome"] = "duplicate_payment"
                 outcome["slot_number"] = payment.founding_slot_number
                 return outcome
@@ -1178,16 +1217,16 @@ async def apply_payment_event(
                 matched_active_subscription = (
                     user is not None
                     and event_status in {"cancelled", "expired"}
-                    and plan_code != "founding_diamond"
                     and user.subscription_status == "active"
                     and bool(provider_payment_id)
                     and user.subscription_code == provider_payment_id
                 )
                 if matched_active_subscription:
-                    user.subscription_status = "cancelled"
-                    user.user_tier = "bronze"
-                    user.tier_expires_at = None
-                    user.billing_status = billing_status
+                    _downgrade_paid_subscription(
+                        user,
+                        billing_status,
+                        clear_founding=plan_code == "founding_diamond",
+                    )
                     outcome["subscription_deactivated"] = True
                 elif user and user.subscription_status != "active":
                     user.billing_status = billing_status
@@ -1244,11 +1283,15 @@ async def apply_payment_event(
                     outcome["outcome"] = "confirmed"
                     outcome["slot_number"] = next_slot
             else:
-                expires = now + (dt.timedelta(days=365) if "annual" in plan_code else dt.timedelta(days=30))
+                expires = _extended_subscription_expiry(
+                    now,
+                    getattr(user, "tier_expires_at", None),
+                    plan_code,
+                )
                 user.subscription_status = "active"
                 user.subscription_code = provider_payment_id
                 user.plan_code = plan_code
-                user.subscription_started_at = now
+                user.subscription_started_at = user.subscription_started_at or now
                 user.user_tier = "diamond" if "diamond" in plan_code else "gold"
                 user.tier_expires_at = expires
                 user.payment_provider = provider
@@ -1256,8 +1299,8 @@ async def apply_payment_event(
                 user.billing_status = "active"
                 payment.status = "confirmed"
                 payment.billing_status = "active"
-                payment.confirmed_at = now
-                outcome["outcome"] = "confirmed"
+                payment.confirmed_at = payment.confirmed_at or now
+                outcome["outcome"] = "renewed" if is_subscription_renewal else "confirmed"
 
             try:
                 await s.commit()
