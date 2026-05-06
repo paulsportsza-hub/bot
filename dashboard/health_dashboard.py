@@ -539,7 +539,7 @@ def _truncate(text: str | None, max_len: int) -> str:
 def build_coverage_matrix(conn) -> list[dict]:
     if not table_exists(conn, "odds_snapshots"):
         return []
-    # Card-ready = match has odds from >= 2 distinct SA bookmakers in last 7 days.
+    # Card-ready = Core-7 upcoming match has odds from >= 2 distinct SA bookmakers.
     # This replaces the old narrative_source (w84/w82) approach — card data
     # availability is the correct metric for the image-card system.
     rows = q_all(conn, """
@@ -551,6 +551,13 @@ def build_coverage_matrix(conn) -> list[dict]:
                    COUNT(DISTINCT bookmaker)                                   AS bk_count
             FROM   odds_snapshots
             WHERE  scraped_at >= datetime('now', '-7 days')
+              AND  date(substr(match_id, -10)) >= date('now', '+2 hours')
+              AND  date(substr(match_id, -10)) <  date('now', '+2 hours', '+8 days')
+              AND (
+                    (sport = 'football' AND league IN ('epl', 'psl', 'champions_league'))
+                 OR (sport = 'rugby'    AND league IN ('urc', 'super_rugby', 'six_nations'))
+                 OR (sport = 'cricket'  AND league = 'ipl')
+              )
             GROUP BY match_id, sport, league
         ) u
         GROUP BY u.sport, u.league
@@ -2534,6 +2541,127 @@ _STATUS_DISPLAY = {
 }
 
 
+_SOURCE_HEALTH_BOOKMAKERS = {
+    "bk_hollywoodbets": "hollywoodbets",
+    "bk_supabets": "supabets",
+    "bk_playabets": "playabets",
+    "bk_betway": "betway",
+    "bk_sportingbet": "sportingbet",
+    "bk_gbets": "gbets",
+    "bk_wsb": "wsb",
+    "bk_supersportbet": "supersportbet",
+}
+
+
+def _dashboard_status_from_minutes(elapsed_minutes: int, expected_interval: int) -> str:
+    """Mirror health_checker.status_from_minutes for dashboard live overrides."""
+    if expected_interval == 0:
+        return "black"
+    green_factor = 0.85 if expected_interval >= 1440 else 0.5
+    if elapsed_minutes < expected_interval * green_factor:
+        return "green"
+    if elapsed_minutes < expected_interval:
+        return "yellow"
+    if elapsed_minutes < expected_interval * 3:
+        return "red"
+    return "black"
+
+
+def _dashboard_compute_status(source_row: dict, minutes_since: int, now_utc) -> str:
+    """Cron-window-aware dashboard status for live source overrides."""
+    interval = source_row.get("expected_interval_minutes") or 0
+    cron = source_row.get("cron_schedule") or ""
+    if not cron or cron.strip() in ("on-demand", "@reboot"):
+        return _dashboard_status_from_minutes(minutes_since, interval)
+
+    try:
+        import importlib.util as _ilu
+        _cw_spec = _ilu.spec_from_file_location(
+            "_cron_window",
+            os.path.join(os.path.expanduser("~"), "scripts", "cron_window.py")
+        )
+        _cw = _ilu.module_from_spec(_cw_spec)
+        _cw_spec.loader.exec_module(_cw)
+        _windows = _cw.parse_multi(cron)
+        if not _windows:
+            return _dashboard_status_from_minutes(minutes_since, interval)
+        if _cw.is_in_any_window(_windows, now_utc):
+            return _dashboard_status_from_minutes(minutes_since, interval)
+        _last_close = _cw.last_window_close(_windows, now_utc)
+        if _last_close is None:
+            return _dashboard_status_from_minutes(minutes_since, interval)
+        _last_success_dt = now_utc - timedelta(minutes=minutes_since)
+        if _last_success_dt >= _last_close - timedelta(minutes=interval):
+            return "green"
+        _overdue = int((_last_close - _last_success_dt).total_seconds() / 60)
+        return _dashboard_status_from_minutes(_overdue, interval)
+    except Exception:
+        return _dashboard_status_from_minutes(minutes_since, interval)
+
+
+def _build_live_source_overrides(conn) -> dict:
+    """Read live raw evidence for sources whose health rows can lag behind DB locks."""
+    overrides: dict = {}
+    if conn is None:
+        return overrides
+
+    try:
+        rows = q_all(conn, """
+            SELECT bookmaker, MAX(scraped_at) AS last_success_at, COUNT(*) AS rows_24h
+            FROM odds_snapshots
+            WHERE scraped_at >= datetime('now', '-24 hours')
+            GROUP BY bookmaker
+        """)
+        reverse_bk = {v: k for k, v in _SOURCE_HEALTH_BOOKMAKERS.items()}
+        for row in rows:
+            source_id = reverse_bk.get(row["bookmaker"])
+            if source_id:
+                overrides[source_id] = {
+                    "last_success_at": row["last_success_at"],
+                    "last_rows_produced": row["rows_24h"],
+                }
+    except Exception:
+        pass
+
+    try:
+        row = q_one(conn, """
+            SELECT MAX(scraped_at) AS last_success_at, COUNT(*) AS rows_24h
+            FROM sharp_odds
+            WHERE scraped_at >= datetime('now', '-24 hours')
+        """)
+        if row and row["last_success_at"]:
+            overrides["sharp_odds_api"] = {
+                "last_success_at": row["last_success_at"],
+                "last_rows_produced": row["rows_24h"],
+            }
+    except Exception:
+        pass
+
+    try:
+        res = _read_server_resources()
+        disk_pct = res.get("disk_pct")
+        if disk_pct is not None:
+            overrides["sys_disk_usage"] = {
+                "status": "red" if disk_pct > 90 else ("yellow" if disk_pct > 80 else "green"),
+                "last_success_at": datetime.now(_UTC).isoformat().replace("+00:00", "Z"),
+                "last_rows_produced": disk_pct,
+                "last_error": f"disk={disk_pct}% ({res.get('disk_used')}/{res.get('disk_total')})",
+            }
+        mem_avail_mb = res.get("mem_avail_mb")
+        if mem_avail_mb is not None:
+            mem_gb = mem_avail_mb / 1024
+            overrides["sys_memory_available"] = {
+                "status": "red" if mem_gb < 1.0 else ("yellow" if mem_gb < 2.0 else "green"),
+                "last_success_at": datetime.now(_UTC).isoformat().replace("+00:00", "Z"),
+                "last_rows_produced": mem_avail_mb,
+                "last_error": f"mem_available={mem_gb:.2f}GB",
+            }
+    except Exception:
+        pass
+
+    return overrides
+
+
 def build_source_health_monitor(conn):
     """Return source health monitor dict for rendering.
 
@@ -2574,22 +2702,41 @@ def build_source_health_monitor(conn):
     sources_by_category = {cat: [] for cat in _CATEGORY_ORDER}
     critical_issues = []
 
-    now_sast = datetime.now(_SAST) if hasattr(datetime, 'now') else None
+    now_utc = datetime.now(_UTC) if hasattr(datetime, 'now') else None
+    live_overrides = _build_live_source_overrides(conn)
     for row in rows:
         d = dict(row)
+        source_id = d.get("source_id")
+        live = live_overrides.get(source_id)
+        if live:
+            for key, value in live.items():
+                if value is not None:
+                    d[key] = value
         interval = d.get("expected_interval_minutes") or 0
         raw_status = d.get("status") or "black"
+        if live and live.get("status"):
+            raw_status = live["status"]
         # AC-1: on-demand services (interval=0) with no success show as grey, never red/black
         status = "grey" if (interval == 0 and raw_status == "black") else raw_status
         # Freshness override: if interval > 0 and last_success exceeds interval, force RED
         # Uses cron-window-aware logic so time-window scrapers don't fire overnight false alarms
-        if interval > 0 and now_sast and d.get("last_success_at"):
+        if live and not live.get("status") and interval > 0 and now_utc and d.get("last_success_at"):
             try:
                 _ls = d["last_success_at"].replace("Z", "+00:00")
                 _last_dt = datetime.fromisoformat(_ls)
                 if _last_dt.tzinfo is None:
                     _last_dt = _last_dt.replace(tzinfo=_UTC)
-                _age_min = (now_sast - _last_dt).total_seconds() / 60
+                _age_min = max(0, int((now_utc - _last_dt).total_seconds() / 60))
+                status = _dashboard_compute_status(d, _age_min, now_utc)
+            except (ValueError, TypeError):
+                pass
+        elif interval > 0 and now_utc and d.get("last_success_at") and not source_id.startswith("sys_"):
+            try:
+                _ls = d["last_success_at"].replace("Z", "+00:00")
+                _last_dt = datetime.fromisoformat(_ls)
+                if _last_dt.tzinfo is None:
+                    _last_dt = _last_dt.replace(tzinfo=_UTC)
+                _age_min = (now_utc - _last_dt).total_seconds() / 60
 
                 _truly_stale = True
                 _cron_sched = d.get("cron_schedule") or ""
@@ -2603,8 +2750,8 @@ def build_source_health_monitor(conn):
                         _cw = _ilu.module_from_spec(_cw_spec)
                         _cw_spec.loader.exec_module(_cw)
                         _windows = _cw.parse_multi(_cron_sched)
-                        if _windows and not _cw.is_in_any_window(_windows, now_sast):
-                            _last_close = _cw.last_window_close(_windows, now_sast)
+                        if _windows and not _cw.is_in_any_window(_windows, now_utc):
+                            _last_close = _cw.last_window_close(_windows, now_utc)
                             if _last_close is None or _last_dt >= _last_close - timedelta(minutes=interval):
                                 _truly_stale = False  # outside window and caught the last window
                     except Exception:
@@ -8365,10 +8512,26 @@ def render_unified_health_content(conn, db_status: str) -> str:
     _brl_orphan_rate = 0.0
     try:
         if conn and table_exists(conn, "edge_results") and table_exists(conn, "bet_recommendations_log"):
-            _r_served = q_one(conn, "SELECT COUNT(*) AS cnt FROM edge_results WHERE recommended_at > datetime('now','-1 day')")
-            _r_logged = q_one(conn, "SELECT COUNT(*) AS cnt FROM bet_recommendations_log WHERE logged_at > datetime('now','-1 day')")
-            _brl_served = (_r_served["cnt"] if _r_served else 0) or 0
-            _brl_logged = (_r_logged["cnt"] if _r_logged else 0) or 0
+            _r = q_one(conn, """
+                WITH calibration_edges AS (
+                    SELECT edge_id
+                    FROM edge_results
+                    WHERE datetime(recommended_at) > datetime('now','-1 day')
+                      AND datetime(recommended_at) < datetime('now','-1 hour')
+                      AND result IS NULL
+                ),
+                logged_edges AS (
+                    SELECT DISTINCT edge_id
+                    FROM bet_recommendations_log
+                )
+                SELECT
+                    COUNT(*) AS served,
+                    SUM(CASE WHEN l.edge_id IS NOT NULL THEN 1 ELSE 0 END) AS logged
+                FROM calibration_edges e
+                LEFT JOIN logged_edges l ON l.edge_id = e.edge_id
+            """)
+            _brl_served = (_r["served"] if _r else 0) or 0
+            _brl_logged = (_r["logged"] if _r else 0) or 0
             if _brl_served > 0:
                 _orphans = max(0, _brl_served - _brl_logged)
                 _brl_orphan_rate = round(_orphans / _brl_served * 100, 1)

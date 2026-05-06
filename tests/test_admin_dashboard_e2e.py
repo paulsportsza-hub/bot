@@ -102,46 +102,12 @@ def _extract_first_number(text: str | None) -> float | None:
 # ---------------------------------------------------------------------------
 
 def _db_system_health_score(conn) -> float:
-    """Compute system_score from source_health_current + source_registry.
-
-    Mirrors dashboard freshness override: sources past their expected_interval
-    are treated as RED regardless of stored status.
-    """
+    """Compute system_score through the same builder used by the dashboard."""
     try:
-        rows = conn.execute("""
-            SELECT r.expected_interval_minutes, h.status, h.last_success_at
-            FROM source_registry r
-            LEFT JOIN source_health_current h ON h.source_id = r.source_id
-            WHERE r.enabled = 1
-        """).fetchall()
+        from dashboard import health_dashboard as dash
+        return dash.build_source_health_monitor(conn)["system_score"]
     except Exception:
         return -1.0
-    now_utc = datetime.now(timezone.utc)
-    scored = [r for r in rows if (r["expected_interval_minutes"] or 0) > 0]
-    if not scored:
-        return 0.0
-    weights = {"green": 100, "yellow": 60, "red": 20, "black": 0}
-    total = 0
-    for r in scored:
-        raw_status = r["status"] or "black"
-        interval = r["expected_interval_minutes"] or 0
-        # AC-1: on-demand (interval=0) already excluded by filter above
-        status = raw_status
-        # Freshness override: if last_success exceeds interval, treat as RED
-        ls = r["last_success_at"] or ""
-        if interval > 0 and ls:
-            try:
-                s = ls.replace("Z", "+00:00")
-                last_dt = datetime.fromisoformat(s)
-                if last_dt.tzinfo is None:
-                    last_dt = last_dt.replace(tzinfo=timezone.utc)
-                age_min = (now_utc - last_dt).total_seconds() / 60
-                if age_min > interval:
-                    status = "red"
-            except (ValueError, TypeError):
-                pass
-        total += weights.get(status, 0)
-    return round(total / len(scored), 1)
 
 
 def _db_active_scrapers(conn) -> int:
