@@ -152,3 +152,16 @@ Spec: `reference/ROLE-EDGE-AUDITOR.md`. Loads: `CLAUDE.md` + `ME-Core.md` + `ops
 Coding agents dispatched by any lead do NOT load this CLAUDE.md. They receive a self-contained brief with all context embedded.
 
 **Pre-draft duplicate-check (28 Apr 2026):** before drafting ANY new brief, the dispatcher does a quick Pipeline DS + Briefs DB search for adjacent in-flight or recently-closed work. Surface duplicates to the requester before writing.
+
+---
+
+## Locked Code Rules (agent reference)
+
+### Rule 19 — AI Breakdown reader filters empty narrative_html
+The AI Breakdown surface (card_data.py) must never display rows with `narrative_html IS NULL OR narrative_html = ''`. Instant-baseline fallback rows are excluded by this filter. Brief: FIX-AI-BREAKDOWN-EMPTY-NARRATIVE-FILTER-01. (LOCKED 2026-04-28.)
+
+### Rule 21 — w82 / baseline_no_edge are valid for ALL tiers
+`w82_for_tier` and `baseline_no_edge` rows are valid pregen rows for ALL subscription tiers including Diamond. Do NOT filter them out during pregen coverage checks. Brief: FIX-PREGEN-COVERAGE-DIAMOND-01. (LOCKED 2026-04-28.)
+
+### Canonical Lane Commit Discipline — OPS-CANONICAL-LANE-COMMIT-DISCIPLINE-01
+Writes to `static/qa-gallery/canonical/` are atomic-commit-only — never mixed with non-canonical/ files in the same commit. The `scripts/canonical_lane_check.sh` pre-commit hook enforces this. Bypass requires `CANONICAL_LANE_BYPASS=1` (audit-trailed). (LOCKED 2026-04-28.)

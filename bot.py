@@ -31921,6 +31921,24 @@ async def _post_shutdown(app_instance) -> None:
         log.warning("Error disposing database engine on shutdown: %s", exc)
 
 
+async def _show_profile_from_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Thin /profile command wrapper — mirrors the '👤 Profile' keyboard tap."""
+    user_id = update.effective_user.id
+    db_user = await db.get_user(user_id)
+    if not db_user or not db_user.onboarding_done:
+        await update.message.reply_text(
+            "👤 Complete onboarding first!\n\nUse /start to get set up.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await _show_profile(update, user_id)
+
+
+async def _show_guide_from_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Thin /guide command wrapper — mirrors the '📖 Guide' keyboard tap."""
+    await _show_betway_guide(update)
+
+
 def main() -> None:
     _acquire_pid_lock()
     log.info("Starting MzansiEdge bot…")
@@ -31975,6 +31993,8 @@ def main() -> None:
     app.add_handler(CommandHandler("unmute", cmd_mute))
     app.add_handler(CommandHandler("quiet", cmd_mute))
     app.add_handler(CommandHandler("qa", cmd_qa))  # TODO: Remove before launch
+    app.add_handler(CommandHandler("profile", _show_profile_from_command))
+    app.add_handler(CommandHandler("guide", _show_guide_from_command))
 
     # Callback query handler (prefix:action routing)
     app.add_handler(CallbackQueryHandler(on_button))
