@@ -352,6 +352,7 @@ async def test_tier_fire_alerts_job_processes_diamond_and_dms(monkeypatch, tmp_p
         ctx, tip, match_key, edge_id="", row_version=""
     ):
         dms.append(match_key)
+        return True
 
     monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
     monkeypatch.setattr(bot, "_fire_diamond_edge_dms", fake_fire_diamond_edge_dms)
@@ -405,6 +406,7 @@ async def test_diamond_retry_existing_channel_send_fires_missing_dms(
         ctx, tip, match_key, edge_id="", row_version=""
     ):
         dms.append(match_key)
+        return True
 
     monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
     monkeypatch.setattr(bot, "_fire_diamond_edge_dms", fake_fire_diamond_edge_dms)
@@ -455,6 +457,11 @@ async def test_fire_diamond_edge_dms_skips_users_already_logged(
         row_version,
         101,
     )
+    assert bot._touch_tier_fire_diamond_dm_sync(
+        "edge_contract_alerts_dedup_01",
+        row_version,
+        101,
+    )
     bot._mark_tier_fire_diamond_dm_sent_sync(
         "edge_contract_alerts_dedup_01",
         row_version,
@@ -468,14 +475,14 @@ async def test_fire_diamond_edge_dms_skips_users_already_logged(
             sent_users.append(chat_id)
 
     ctx = SimpleNamespace(bot=FakeTelegramBot())
-    await bot._fire_diamond_edge_dms(
+    assert await bot._fire_diamond_edge_dms(
         ctx,
         {"match_key": "contract_home_vs_contract_away_2026-05-17"},
         "contract_home_vs_contract_away_2026-05-17",
         "edge_contract_alerts_dedup_01",
         row_version,
     )
-    await bot._fire_diamond_edge_dms(
+    assert await bot._fire_diamond_edge_dms(
         ctx,
         {"match_key": "contract_home_vs_contract_away_2026-05-17"},
         "contract_home_vs_contract_away_2026-05-17",
@@ -495,6 +502,155 @@ async def test_fire_diamond_edge_dms_skips_users_already_logged(
     finally:
         conn.close()
     assert rows == [(101, "sent"), (202, "sent")]
+
+
+@pytest.mark.asyncio
+async def test_fire_diamond_edge_dms_does_not_retry_stale_posting_dm(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import bot
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "card_pipeline",
+        SimpleNamespace(
+            render_card_bytes=lambda *args, **kwargs: (b"png", None, None)
+        ),
+    )
+
+    async def fake_diamond_users():
+        return [101]
+
+    async def fake_can_send(user_id):
+        return True
+
+    async def fake_after_send(user_id):
+        return None
+
+    monkeypatch.setattr(bot.db, "get_active_diamond_users", fake_diamond_users)
+    monkeypatch.setattr(bot, "_can_send_notification", fake_can_send)
+    monkeypatch.setattr(bot, "_after_send", fake_after_send)
+
+    original_mark_sent = bot._mark_tier_fire_diamond_dm_sent_sync
+    monkeypatch.setattr(
+        bot,
+        "_mark_tier_fire_diamond_dm_sent_sync",
+        lambda *args, **kwargs: False,
+    )
+
+    sent_users: list[int] = []
+
+    class FakeTelegramBot:
+        async def send_photo(self, chat_id, photo, reply_markup=None):
+            sent_users.append(chat_id)
+
+    row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
+    ctx = SimpleNamespace(bot=FakeTelegramBot())
+    assert await bot._fire_diamond_edge_dms(
+        ctx,
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "contract_home_vs_contract_away_2026-05-17",
+        "edge_contract_alerts_dedup_01",
+        row_version,
+    )
+    assert sent_users == [101]
+
+    monkeypatch.setattr(bot, "_mark_tier_fire_diamond_dm_sent_sync", original_mark_sent)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE alerts_diamond_dm_log SET sent_at = ? WHERE edge_id = ?",
+            (
+                time.time() - bot._TIER_FIRE_DIAMOND_DM_STALE_SECONDS - 1,
+                "edge_contract_alerts_dedup_01",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await bot._fire_diamond_edge_dms(
+        ctx,
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "contract_home_vs_contract_away_2026-05-17",
+        "edge_contract_alerts_dedup_01",
+        row_version,
+    )
+    assert sent_users == [101]
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT status FROM alerts_diamond_dm_log WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("unknown",)
+
+
+@pytest.mark.asyncio
+async def test_diamond_dm_retryable_failure_leaves_edge_unposted(
+    monkeypatch,
+    tmp_path,
+):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("UPDATE edge_results SET edge_tier = 'diamond'")
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setattr(
+        bot,
+        "_load_tips_from_edge_results",
+        lambda limit=50, skip_punt_filter=True: [
+            {
+                "match_id": "contract_home_vs_contract_away_2026-05-17",
+                "match_key": "contract_home_vs_contract_away_2026-05-17",
+                "display_tier": "diamond",
+                "edge_tier": "diamond",
+            }
+        ],
+    )
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        return alerts_direct.AlertsSendResult(
+            "https://t.me/c/3789410835/1",
+            new_send=True,
+        )
+
+    async def fake_fire_diamond_edge_dms(
+        ctx, tip, match_key, edge_id="", row_version=""
+    ):
+        return False
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+    monkeypatch.setattr(bot, "_fire_diamond_edge_dms", fake_fire_diamond_edge_dms)
+
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT posted_to_alerts_direct, posted_to_alerts_direct_claim_id "
+            "FROM edge_results WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == (0, None)
 
 
 @pytest.mark.asyncio
@@ -520,7 +676,10 @@ async def test_final_mark_revalidates_sent_row_version(monkeypatch, tmp_path):
     async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
         conn = sqlite3.connect(db_path)
         try:
-            conn.execute("UPDATE edge_results SET bet_type = 'Away Win'")
+            conn.execute(
+                "UPDATE edge_results SET recommended_odds = 2.15, "
+                "bookmaker = 'betway', predicted_ev = 0.12"
+            )
             conn.commit()
         finally:
             conn.close()
@@ -593,6 +752,7 @@ async def test_diamond_new_channel_send_dms_even_when_mark_race_loses(
         ctx, tip, match_key, edge_id="", row_version=""
     ):
         dms.append(match_key)
+        return True
 
     monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
     monkeypatch.setattr(bot, "_fire_diamond_edge_dms", fake_fire_diamond_edge_dms)
