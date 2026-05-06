@@ -5218,6 +5218,7 @@ async def _show_plan_step(query, ob: dict) -> None:
         "• Line movement and full odds comparison unlocked\n\n"
         "💎 <b>Diamond — R199/month</b>\n"
         "• Every edge unlocked — Diamond picks are Diamond-only\n"
+        "• Full AI Breakdown: Setup, Edge, Risk, Verdict on every match\n"
         "• Personalised alerts tuned to your teams and bankroll\n"
     )
 
@@ -28440,12 +28441,15 @@ def _subscribe_plan_text(user_tier: str = "bronze") -> tuple[str, InlineKeyboard
     text = (
         "📋 <b>MzansiEdge Plans</b>\n\n"
         "🥉 <b>Bronze — Free</b>\n"
-        "• 3 tips per day · 24h delayed edges\n\n"
+        "• 3 full detail views per day across any tier\n"
+        "• Gold edges blurred, Diamond locked until you upgrade\n\n"
         "🥇 <b>Gold — R99/month</b>\n"
         "• Unlimited tips · Real-time edges · Full pick analysis\n"
         "• <i>Annual: R799/year (save 33%)</i>\n\n"
         "💎 <b>Diamond — R199/month</b>\n"
-        "• Everything in Gold · Line movement · Sharp money · CLV\n"
+        "• Every edge unlocked — Diamond picks are Diamond-only\n"
+        "• Full AI Breakdown: Setup, Edge, Risk, Verdict on every match\n"
+        "• Line movement · sharp money · CLV tracking\n"
         "• <i>Annual: R1,599/year (save 33%)</i>\n"
     )
     if founding_left > 0:
