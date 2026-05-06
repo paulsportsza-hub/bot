@@ -28225,12 +28225,47 @@ async def _notify_payment_outcome(bot, outcome: dict[str, object]) -> None:
             parse_mode=ParseMode.HTML,
         )
     elif outcome.get("outcome") == "cancelled":
-        await bot.send_message(
-            chat_id=int(user_id),
-            text=(
+        plan_code = str(outcome.get("plan_code") or "")
+        if outcome.get("subscription_deactivated"):
+            text = (
+                "🚫 <b>Subscription cancelled</b>\n\n"
+                "Your paid access has been deactivated. Use /subscribe if you want to choose a plan again."
+            )
+        elif plan_code == "founding_diamond":
+            text = (
                 "⚠️ <b>Payment cancelled</b>\n\n"
                 "No founding slot was assigned. Use /founding to try again if slots remain."
-            ),
+            )
+        else:
+            text = (
+                "⚠️ <b>Checkout cancelled</b>\n\n"
+                "No access changes were made. Use /subscribe to try again."
+            )
+        await bot.send_message(
+            chat_id=int(user_id),
+            text=text,
+            parse_mode=ParseMode.HTML,
+        )
+    elif outcome.get("outcome") == "expired":
+        plan_code = str(outcome.get("plan_code") or "")
+        if outcome.get("subscription_deactivated"):
+            text = (
+                "⏰ <b>Subscription expired</b>\n\n"
+                "Your paid access has been deactivated. Use /subscribe if you want to choose a plan again."
+            )
+        elif plan_code == "founding_diamond":
+            text = (
+                "⏰ <b>Payment link expired</b>\n\n"
+                "No founding slot was assigned. Use /founding to try again if slots remain."
+            )
+        else:
+            text = (
+                "⏰ <b>Checkout expired</b>\n\n"
+                "No access changes were made. Use /subscribe to try again."
+            )
+        await bot.send_message(
+            chat_id=int(user_id),
+            text=text,
             parse_mode=ParseMode.HTML,
         )
     elif outcome.get("outcome") == "failed":

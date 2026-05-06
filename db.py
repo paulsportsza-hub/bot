@@ -1188,6 +1188,7 @@ async def apply_payment_event(
                     user.user_tier = "bronze"
                     user.tier_expires_at = None
                     user.billing_status = billing_status
+                    outcome["subscription_deactivated"] = True
                 elif user and user.subscription_status != "active":
                     user.billing_status = billing_status
                 await s.commit()

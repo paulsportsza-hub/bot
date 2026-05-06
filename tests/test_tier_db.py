@@ -201,6 +201,7 @@ class TestApplyPaymentEventSubscriptionFailures:
         user = await db.get_user(6101)
         payment = await db.get_payment_by_reference("stitch", "mze-6101-diamond-monthly-aa")
         assert outcome["outcome"] == "cancelled"
+        assert outcome["subscription_deactivated"] is True
         assert user.subscription_status == "cancelled"
         assert user.user_tier == "bronze"
         assert user.tier_expires_at is None
@@ -245,6 +246,7 @@ class TestApplyPaymentEventSubscriptionFailures:
 
         user = await db.get_user(6102)
         assert outcome["outcome"] == "failed"
+        assert "subscription_deactivated" not in outcome
         assert user.subscription_status == "active"
         assert user.user_tier == "gold"
         assert user.tier_expires_at == expiry.replace(tzinfo=None)
