@@ -254,8 +254,8 @@ def test_synthesize_baseline_returns_none_when_no_edge_results(monkeypatch):
         db.unlink(missing_ok=True)
 
 
-def test_synthesize_baseline_returns_six_tuple_when_edge_exists(monkeypatch):
-    """With an edge_results row, synthesis returns a 6-tuple in DB row shape."""
+def test_synthesize_baseline_populates_verdict_html_via_shared_renderer(monkeypatch):
+    """With an edge_results row, synthesis renders verdict_html from verdict_corpus."""
     db = _seed_temp_db()
     try:
         _insert_edge_result(db, "synth_vs_match_2026-05-10", tier="gold")
@@ -264,6 +264,14 @@ def test_synthesize_baseline_returns_six_tuple_when_edge_exists(monkeypatch):
         if target != db:
             target.unlink(missing_ok=True)
             target.symlink_to(db)
+        actual_render = card_data.verdict_corpus.render_verdict
+        captured = {}
+
+        def _capture_render(spec):
+            captured["spec"] = spec
+            return actual_render(spec)
+
+        monkeypatch.setattr(card_data.verdict_corpus, "render_verdict", _capture_render)
         result = card_data._synthesize_breakdown_row_from_baseline(
             "synth_vs_match_2026-05-10"
         )
@@ -273,9 +281,95 @@ def test_synthesize_baseline_returns_six_tuple_when_edge_exists(monkeypatch):
         assert isinstance(narrative_html, str) and len(narrative_html) > 100
         assert edge_tier == "gold"
         assert tips_json.startswith("[")
-        assert verdict_html == ""
+        assert verdict_html
+        assert captured["spec"].match_key == "synth_vs_match_2026-05-10"
+        assert verdict_html == actual_render(captured["spec"])
         assert evidence_class == ""
         assert created_at  # ISO timestamp
+    finally:
+        db.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("render_mode", ["raises", "empty"])
+def test_synthesize_baseline_handles_verdict_render_failure_gracefully(
+    monkeypatch,
+    caplog,
+    render_mode,
+):
+    """Verdict render failure preserves the existing empty-string safe shell."""
+    db = _seed_temp_db()
+    try:
+        _insert_edge_result(db, "safe_vs_shell_2026-05-10", tier="silver")
+        monkeypatch.setenv("SCRAPERS_ROOT", str(db.parent))
+        target = db.parent / "odds.db"
+        if target != db:
+            target.unlink(missing_ok=True)
+            target.symlink_to(db)
+
+        actual_render = card_data.verdict_corpus.render_verdict
+        calls = {"count": 0}
+
+        def _broken_render(_spec):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return actual_render(_spec)
+            if render_mode == "raises":
+                raise RuntimeError("synthetic render failure")
+            return ""
+
+        monkeypatch.setattr(card_data.verdict_corpus, "render_verdict", _broken_render)
+        caplog.set_level("WARNING", logger=card_data.log.name)
+
+        result = card_data._synthesize_breakdown_row_from_baseline(
+            "safe_vs_shell_2026-05-10"
+        )
+
+        assert result is not None
+        assert result[3] == ""
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "safe_vs_shell_2026-05-10" in log_text
+        assert (
+            "CARD_DATA_SYNTHESIS_VERDICT_RENDER_FAIL" in log_text
+            or "CARD_DATA_SYNTHESIS_VERDICT_RENDER_EMPTY" in log_text
+        )
+    finally:
+        db.unlink(missing_ok=True)
+
+
+def test_synthesize_baseline_does_not_regress_baseline_html(monkeypatch):
+    """Adding verdict_html does not alter the baseline narrative assembly."""
+    db = _seed_temp_db()
+    try:
+        _insert_edge_result(db, "baseline_vs_same_2026-05-10", tier="gold")
+        monkeypatch.setenv("SCRAPERS_ROOT", str(db.parent))
+        target = db.parent / "odds.db"
+        if target != db:
+            target.unlink(missing_ok=True)
+            target.symlink_to(db)
+        captured = {}
+        actual_render = card_data.verdict_corpus.render_verdict
+        calls = {"count": 0}
+
+        def _capture_render(spec):
+            calls["count"] += 1
+            captured["spec"] = spec
+            if calls["count"] == 1:
+                return actual_render(spec)
+            return "Back Baseline at 1.85 with Hollywoodbets, standard stake."
+
+        monkeypatch.setattr(card_data.verdict_corpus, "render_verdict", _capture_render)
+        result = card_data._synthesize_breakdown_row_from_baseline(
+            "baseline_vs_same_2026-05-10"
+        )
+
+        assert result is not None
+        from narrative_spec import _render_baseline
+
+        monkeypatch.setattr(card_data.verdict_corpus, "render_verdict", actual_render)
+        captured["spec"].match_key = ""
+        assert result[0] == _render_baseline(captured["spec"])
+        captured["spec"].match_key = "baseline_vs_same_2026-05-10"
+        assert result[3] == "Back Baseline at 1.85 with Hollywoodbets, standard stake."
     finally:
         db.unlink(missing_ok=True)
 

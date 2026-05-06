@@ -13,6 +13,8 @@ import re as _re
 from datetime import datetime
 from pathlib import Path
 
+import verdict_corpus
+
 
 def _extract_dstv_num(channel: str) -> str:
     """Extract DStv channel number from channel string e.g. 'SuperSport (DStv 203)' → '203'."""
@@ -1435,7 +1437,7 @@ def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
     ``_generate_narrative_v2(live_tap=True)`` and the Hot Tips warm path.
     Latency target: < 100ms (deterministic templates only).
 
-    Returns ``(narrative_html, edge_tier, tips_json, verdict_html='',
+    Returns ``(narrative_html, edge_tier, tips_json, verdict_html,
               evidence_class='', created_at_iso)`` matching the DB row order,
     or ``None`` when there is no edge data for this match either (truly
     unreachable). The caller then returns ``None`` to its own caller.
@@ -1621,6 +1623,26 @@ def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
     if not baseline_html or not baseline_html.strip():
         return None
 
+    if not getattr(spec, "match_key", ""):
+        spec.match_key = match_id
+
+    verdict_html = ""
+    try:
+        _verdict_text = verdict_corpus.render_verdict(spec)
+        verdict_html = _verdict_text or ""
+        if not verdict_html:
+            log.warning(
+                "CARD_DATA_SYNTHESIS_VERDICT_RENDER_EMPTY match_key=%s",
+                getattr(spec, "match_key", "<missing>"),
+            )
+    except Exception as exc:
+        log.warning(
+            "CARD_DATA_SYNTHESIS_VERDICT_RENDER_FAIL match_key=%s reason=%r",
+            getattr(spec, "match_key", "<missing>"),
+            exc,
+        )
+        verdict_html = ""
+
     now_iso = datetime.now(timezone.utc).isoformat()
     log.info(
         "AI_BREAKDOWN_BASELINE_FALLBACK match_id=%s tier=%s sport=%s len=%d",
@@ -1630,7 +1652,7 @@ def _synthesize_breakdown_row_from_baseline(match_id: str) -> tuple | None:
         baseline_html,           # narrative_html
         edge_tier,               # edge_tier
         _json.dumps([tip_dict], default=str),  # tips_json
-        "",                      # verdict_html (empty — verdict_tag derived below)
+        verdict_html,            # verdict_html
         "",                      # evidence_class
         now_iso,                 # created_at
     )
