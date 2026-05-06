@@ -25952,7 +25952,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                        e.composite_score, e.confirming_signals
                 FROM edge_results e
                 WHERE e.result IS NULL
-                  AND e.edge_tier = 'gold'
+                  AND e.edge_tier IN ('gold', 'diamond')
                   AND e.posted_to_alerts_direct = 0
                   AND (
                     e.posted_to_alerts_direct_claim_id IS NULL
@@ -25975,7 +25975,10 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _tfa_rows:
         return
 
-    from bot_lib.alerts_direct import post_to_alerts as _alerts_post
+    from bot_lib.alerts_direct import (
+        ALERTS_SEND_UNKNOWN as _alerts_send_unknown,
+        post_to_alerts as _alerts_post,
+    )
 
     # Load canonical tip dicts — same format and enrichment as the hot tips list.
     # This ensures _enrich_tip_for_card produces identical output to ep:pick.
@@ -26102,6 +26105,13 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 _tfa_edge_id,
                 _tfa_tier,
                 _tfa_post_exc,
+            )
+            continue
+
+        if _tfa_msg_url == _alerts_send_unknown:
+            log.error(
+                "_tier_fire_alerts_job: ambiguous send for edge_id=%s; keeping claim fenced",
+                _tfa_edge_id,
             )
             continue
 

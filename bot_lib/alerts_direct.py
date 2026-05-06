@@ -25,6 +25,7 @@ log = logging.getLogger("bot.alerts_direct")
 
 _ALERTS_CHANNEL_ID = "-1003789410835"
 _ALERTS_SEND_CHANNEL = "alerts"
+ALERTS_SEND_UNKNOWN = "__alerts_send_unknown__"
 # IN_APP_DEEPLINK: navigation for already-subscribed Founders Floor members.
 # Not an acquisition CTA — raw t.me deeplink is intentional (no Bitly wrap).
 _DEEPLINK_BASE = "https://t.me/mzansiedge_bot?start=card_"
@@ -183,6 +184,8 @@ def _reserve_send_sync(
         conn.commit()
         if row and row[0] == "sent":
             return False, row[1] or "already_sent", None
+        if row and row[0] == "unknown":
+            return False, ALERTS_SEND_UNKNOWN, None
         return False, None, None
     except Exception as exc:
         log.warning("alerts_direct: send reservation failed: %s", exc)
@@ -300,6 +303,33 @@ def _finalize_send_log_sync(
             conn.close()
 
 
+def _mark_send_log_unknown_sync(edge_id: str, reservation_id: int | None) -> None:
+    if not edge_id or reservation_id is None:
+        return
+    db_path = _alerts_db_path()
+    try:
+        from scrapers.db_connect import connect_odds_db  # type: ignore[import]
+    except ImportError as exc:
+        log.warning("alerts_direct: _mark_send_log_unknown_sync import error: %s", exc)
+        return
+    conn = None
+    try:
+        conn = connect_odds_db(db_path)
+        _ensure_alerts_send_log_schema(conn)
+        conn.execute(
+            "UPDATE alerts_send_log "
+            "SET status = 'unknown', sent_at = ? "
+            "WHERE id = ? AND edge_id = ? AND channel = ? AND status = 'sending'",
+            (time.time(), reservation_id, edge_id, _ALERTS_SEND_CHANNEL),
+        )
+        conn.commit()
+    except Exception as exc:
+        log.warning("alerts_direct: send reservation unknown-mark failed: %s", exc)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _post_sync(token: str, png_bytes: bytes, caption: str, reply_markup: dict) -> str | None:
     """Post card to Alerts channel synchronously (direct HTTP — no publisher imports)."""
     import io
@@ -330,7 +360,7 @@ def _post_sync(token: str, png_bytes: bytes, caption: str, reply_markup: dict) -
         return f"{_PUBLISHED_URL_BASE}/{message_id}"
     except Exception as exc:
         log.warning("alerts_direct: sendPhoto failed: %s", exc)
-        return None
+        return ALERTS_SEND_UNKNOWN
 
 
 async def post_to_alerts(
@@ -359,6 +389,9 @@ async def post_to_alerts(
         _dl_tier_now,
     )
     if existing_msg_url:
+        if existing_msg_url == ALERTS_SEND_UNKNOWN:
+            log.warning("alerts_direct: skipped unknown prior send edge_id=%s", edge_id)
+            return ALERTS_SEND_UNKNOWN
         log.info(
             "alerts_direct: skipped duplicate edge_id=%s existing_url=%s",
             edge_id,
@@ -400,6 +433,9 @@ async def post_to_alerts(
         return None
 
     msg_url = await asyncio.to_thread(_post_sync, token, png_bytes, caption, reply_markup)
+    if msg_url == ALERTS_SEND_UNKNOWN:
+        await asyncio.to_thread(_mark_send_log_unknown_sync, edge_id, reservation_id)
+        return ALERTS_SEND_UNKNOWN
     if not msg_url:
         await asyncio.to_thread(_release_send_reservation_sync, edge_id, reservation_id)
         return None

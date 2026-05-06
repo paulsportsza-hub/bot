@@ -271,6 +271,92 @@ async def test_tier_fire_claim_keeps_posted_flag_boolean_visible(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_tier_fire_ambiguous_send_keeps_claim_fenced(monkeypatch, tmp_path):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setattr(
+        bot,
+        "_load_tips_from_edge_results",
+        lambda limit=50, skip_punt_filter=True: [
+            {
+                "match_id": "contract_home_vs_contract_away_2026-05-17",
+                "match_key": "contract_home_vs_contract_away_2026-05-17",
+            }
+        ],
+    )
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        return alerts_direct.ALERTS_SEND_UNKNOWN
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT posted_to_alerts_direct, posted_to_alerts_direct_claim_id "
+            "FROM edge_results WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row[0] == 0
+    assert row[1]
+
+
+@pytest.mark.asyncio
+async def test_tier_fire_alerts_job_processes_diamond_and_dms(monkeypatch, tmp_path):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("UPDATE edge_results SET edge_tier = 'diamond'")
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setattr(
+        bot,
+        "_load_tips_from_edge_results",
+        lambda limit=50, skip_punt_filter=True: [
+            {
+                "match_id": "contract_home_vs_contract_away_2026-05-17",
+                "match_key": "contract_home_vs_contract_away_2026-05-17",
+                "display_tier": "diamond",
+                "edge_tier": "diamond",
+            }
+        ],
+    )
+
+    sends: list[str] = []
+    dms: list[str] = []
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        sends.append(edge_id)
+        return "https://t.me/c/3789410835/1"
+
+    async def fake_fire_diamond_edge_dms(ctx, tip, match_key):
+        dms.append(match_key)
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+    monkeypatch.setattr(bot, "_fire_diamond_edge_dms", fake_fire_diamond_edge_dms)
+
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    assert sends == ["edge_contract_alerts_dedup_01"]
+    assert dms == ["contract_home_vs_contract_away_2026-05-17"]
+
+
+@pytest.mark.asyncio
 async def test_tier_fire_alerts_claim_revalidates_current_row(monkeypatch, tmp_path):
     import bot
     import bot_lib.alerts_direct as alerts_direct
@@ -426,6 +512,41 @@ def test_stale_send_log_owner_cannot_release_or_finalize_reclaimed_reservation(
     finally:
         conn.close()
     assert rows == [(new_id, "sent", "https://t.me/c/3789410835/new")]
+
+
+@pytest.mark.asyncio
+async def test_post_to_alerts_keeps_unknown_reservation_on_ambiguous_send(
+    monkeypatch,
+    tmp_path,
+):
+    import bot_lib.alerts_direct as alerts_direct
+
+    db_path = str(tmp_path / "odds.db")
+    monkeypatch.setenv("ALERTS_SEND_LOG_DB_PATH", db_path)
+    monkeypatch.setenv("TELEGRAM_PUBLISHER_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(alerts_direct, "_sync_render_card", lambda tip: b"png")
+    monkeypatch.setattr(alerts_direct, "_emit_latency_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        alerts_direct,
+        "_post_sync",
+        lambda token, png_bytes, caption, reply_markup: alerts_direct.ALERTS_SEND_UNKNOWN,
+    )
+
+    result = await alerts_direct.post_to_alerts(
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "edge_contract_alerts_dedup_01",
+    )
+
+    assert result == alerts_direct.ALERTS_SEND_UNKNOWN
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT status FROM alerts_send_log WHERE edge_id = ? AND channel = 'alerts'",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("unknown",)
 
 
 @pytest.mark.asyncio
