@@ -29,7 +29,7 @@ Lazy imports
 ------------
 `bot.py` imports this module at the top of `_store_narrative_cache` and the
 verdict-cache writer. Importing `bot` here at module load would create a
-circular import. Helpers are imported lazily inside `_validate_narrative_for_persistence`.
+circular import. Helpers are imported lazily inside `validate_narrative_for_persistence`.
 """
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ _PREMIUM_ONLY_TELEMETRY_LABELS: frozenset[str] = frozenset({"speculative punt"})
 #   2. Evidence-poor hedging — "form picture is unclear", "without recent form"
 #   3. Hedging closers — "rather than a confident call", "monitor only"
 #
-# Tier-aware caller policy (in `_validate_narrative_for_persistence`):
+# Tier-aware caller policy (in `validate_narrative_for_persistence`):
 #   - Diamond + Gold hit → CRITICAL (refuse write — synthesis-on-tap covers
 #     the cache miss; pregen retries via Wave 2 chain).
 #   - Silver hit → MAJOR (quarantine; some hedging is acceptable on Silver
@@ -877,7 +877,7 @@ def _extract_setup_section(narrative_html: str) -> str:
     return rest[:next_idx]
 
 
-def _validate_narrative_for_persistence(
+def validate_narrative_for_persistence(
     content: dict[str, Any],
     evidence_pack: dict | None,
     edge_tier: str,
@@ -1194,7 +1194,7 @@ def _validate_narrative_for_persistence(
 #
 # Verdict-only validator subset. Wired into every verdict-cache write site
 # (currently `_store_verdict_cache_sync` in bot.py). Runs the verdict-relevant
-# gates from `_validate_narrative_for_persistence`:
+# gates from `validate_narrative_for_persistence`:
 #   - Venue leaks in verdict_html (Gate 6 mirror)
 #   - BANNED_NARRATIVE_PHRASES on verdict_html (Gate 7 mirror)
 #   - Telemetry vocabulary on verdict_html (Gate 8 mirror)
@@ -1203,10 +1203,10 @@ def _validate_narrative_for_persistence(
 #   - Vague-content patterns on verdict_html (Gate 11)
 #   - min_verdict_quality (single MAJOR-or-CRITICAL gate)
 #
-# This is a thin wrapper around `_validate_narrative_for_persistence` that
+# This is a thin wrapper around `validate_narrative_for_persistence` that
 # passes an empty narrative_html so only verdict-relevant gates fire. Tier
 # enforcement is the caller's responsibility (writer applies the matrix).
-def _validate_verdict_for_persistence(
+def validate_verdict_for_persistence(
     verdict_html: str,
     edge_tier: str,
     evidence_pack: dict | None,
@@ -1235,7 +1235,7 @@ def _validate_verdict_for_persistence(
     """
     if not verdict_html:
         return ValidationResult(passed=True)
-    return _validate_narrative_for_persistence(
+    return validate_narrative_for_persistence(
         content={
             "narrative_html": "",
             "verdict_html": verdict_html,

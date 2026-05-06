@@ -60,9 +60,9 @@ def _baseline_pack():
 def test_dropped_gates_no_op_on_empty_narrative_html():
     """Empty narrative_html → no failures attributed to Gates 1/2a/2b/3 (long-
     form)/4/11. Verdict-only gates may still fire on verdict_html."""
-    from narrative_validator import _validate_narrative_for_persistence
+    from narrative_validator import validate_narrative_for_persistence
 
-    res = _validate_narrative_for_persistence(
+    res = validate_narrative_for_persistence(
         content={
             "narrative_html": "",
             "verdict_html": "Get on Liverpool at 1.97 with Supabets.",
@@ -98,14 +98,14 @@ def test_dropped_gates_no_op_on_empty_narrative_html():
 def test_setup_pricing_gate_no_longer_fires():
     """Even if a (no-longer-written) narrative_html had pricing leaks in Setup,
     the validator no longer flags `setup_pricing` — the gate was removed."""
-    from narrative_validator import _validate_narrative_for_persistence
+    from narrative_validator import validate_narrative_for_persistence
 
     leaking_setup = (
         "📋 <b>The Setup</b>\nLiverpool are implied 78% to win at Hollywoodbets 1.45. "
         "Strong favourites at this fair value, expected value gap.\n"
         "🎯 <b>The Edge</b>\nx\n⚠️ <b>The Risk</b>\nx\n🏆 <b>Verdict</b>\nx"
     )
-    res = _validate_narrative_for_persistence(
+    res = validate_narrative_for_persistence(
         content={
             "narrative_html": leaking_setup,
             "verdict_html": "Back Liverpool at 1.97 with Supabets.",
@@ -128,7 +128,7 @@ def test_setup_pricing_gate_no_longer_fires():
 
 def test_vague_content_gate_no_longer_fires():
     """The vague_content scan was scoped to long-form sections; dropped here."""
-    from narrative_validator import _validate_narrative_for_persistence
+    from narrative_validator import validate_narrative_for_persistence
 
     vague_narrative = (
         "📋 <b>The Setup</b>\nLooks like the sort of fixture that takes shape "
@@ -138,7 +138,7 @@ def test_vague_content_gate_no_longer_fires():
         "volatility are the only live variables.\n"
         "🏆 <b>Verdict</b>\nStandard play."
     )
-    res = _validate_narrative_for_persistence(
+    res = validate_narrative_for_persistence(
         content={
             "narrative_html": vague_narrative,
             "verdict_html": "Get on Liverpool at 1.97 with Supabets.",
@@ -160,10 +160,10 @@ def test_vague_content_gate_no_longer_fires():
 
 def test_verdict_venue_gate_fires_on_unverified_venue():
     """Cross-fixture venue invention in verdict_html is CRITICAL."""
-    from narrative_validator import _validate_narrative_for_persistence
+    from narrative_validator import validate_narrative_for_persistence
 
     # pack.venue = Anfield. Verdict cites Stamford Bridge — leak.
-    res = _validate_narrative_for_persistence(
+    res = validate_narrative_for_persistence(
         content={
             "narrative_html": "",
             "verdict_html": (
@@ -264,7 +264,7 @@ def test_verdict_telemetry_gate_fires_only_on_verdict_html():
     """Rule 17 telemetry leak in verdict_html → CRITICAL on Gold.
     Same leak in narrative_html does NOT add a duplicate failure entry
     (narrative_html scope was dropped)."""
-    from narrative_validator import _validate_narrative_for_persistence
+    from narrative_validator import validate_narrative_for_persistence
 
     leaky_verdict = (
         "Slot's Reds at home — the supporting signals back the read. "
@@ -274,7 +274,7 @@ def test_verdict_telemetry_gate_fires_only_on_verdict_html():
         "📋 <b>The Setup</b>\nthe supporting signals back the read.\n"
         "🎯 <b>The Edge</b>\nx\n⚠️ <b>The Risk</b>\nx\n🏆 <b>Verdict</b>\nx"
     )
-    res = _validate_narrative_for_persistence(
+    res = validate_narrative_for_persistence(
         content={
             "narrative_html": leaky_narrative,
             "verdict_html": leaky_verdict,

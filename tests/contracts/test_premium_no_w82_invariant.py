@@ -199,7 +199,7 @@ def test_writer_persists_premium_w82_and_baseline_no_edge_when_validator_passes(
 
     validator_pass = SimpleNamespace(passed=True, critical_count=0, major_count=0, failures=[])
     with patch("bot._compute_odds_hash", _stub_compute_odds_hash), \
-         patch("narrative_validator._validate_narrative_for_persistence", return_value=validator_pass):
+         patch("narrative_validator.validate_narrative_for_persistence", return_value=validator_pass):
         asyncio.run(
             store(
                 match_id=match_id,

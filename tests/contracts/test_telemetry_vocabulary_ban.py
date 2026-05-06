@@ -5,7 +5,7 @@ Scope
 Validates that `narrative_validator._check_telemetry_vocabulary` fires on each
 banned regex pattern from QA-01 §6.3 + §6.4, passes clean text, applies the
 tier-aware enforcement matrix (Bronze allowed `speculative punt`, Gold/Diamond
-banned), and integrates with `_validate_narrative_for_persistence` such that
+banned), and integrates with `validate_narrative_for_persistence` such that
 premium-tier hits are CRITICAL and non-premium hits are MAJOR.
 
 False-positive risk
@@ -19,7 +19,7 @@ from __future__ import annotations
 from narrative_validator import (
     TELEMETRY_VOCABULARY_PATTERNS,
     _check_telemetry_vocabulary,
-    _validate_narrative_for_persistence,
+    validate_narrative_for_persistence,
 )
 
 
@@ -222,7 +222,7 @@ def test_other_patterns_fire_on_all_tiers():
         assert "the signals" in hits, f"tier={tier} did not fire"
 
 
-# ── 4. Integration with _validate_narrative_for_persistence ──────────────────
+# ── 4. Integration with validate_narrative_for_persistence ──────────────────
 
 
 _GOLD_NARRATIVE_WITH_TELEMETRY = (
@@ -263,7 +263,7 @@ def test_premium_telemetry_in_verdict_html_is_critical():
         "match_id": "liverpool_vs_chelsea_2026-04-30",
         "narrative_source": "w84",
     }
-    result = _validate_narrative_for_persistence(
+    result = validate_narrative_for_persistence(
         content, evidence_pack=None, edge_tier="gold", source_label="w84"
     )
     assert not result.passed
@@ -288,7 +288,7 @@ def test_non_premium_telemetry_is_major():
         "match_id": "team_a_vs_team_b_2026-04-30",
         "narrative_source": "w82",
     }
-    result = _validate_narrative_for_persistence(
+    result = validate_narrative_for_persistence(
         content, evidence_pack=None, edge_tier="silver", source_label="w82"
     )
     tele_failures = [f for f in result.failures if f.gate == "telemetry_vocabulary"]
@@ -303,7 +303,7 @@ def test_clean_premium_narrative_passes_telemetry_gate():
         "match_id": "liverpool_vs_chelsea_2026-04-30",
         "narrative_source": "w84",
     }
-    result = _validate_narrative_for_persistence(
+    result = validate_narrative_for_persistence(
         content, evidence_pack=None, edge_tier="gold", source_label="w84"
     )
     tele_failures = [f for f in result.failures if f.gate == "telemetry_vocabulary"]
@@ -318,7 +318,7 @@ def test_telemetry_in_verdict_html_only_fires():
         "match_id": "liverpool_vs_chelsea_2026-04-30",
         "narrative_source": "verdict-cache",
     }
-    result = _validate_narrative_for_persistence(
+    result = validate_narrative_for_persistence(
         content, evidence_pack=None, edge_tier="diamond", source_label="verdict-cache"
     )
     tele_failures = [f for f in result.failures if f.gate == "telemetry_vocabulary"]
@@ -345,7 +345,7 @@ def test_speculative_punt_on_bronze_does_not_fail_validator():
         "match_id": "team_a_vs_team_b_2026-04-30",
         "narrative_source": "w82",
     }
-    result = _validate_narrative_for_persistence(
+    result = validate_narrative_for_persistence(
         content, evidence_pack=None, edge_tier="bronze", source_label="w82"
     )
     tele_failures = [f for f in result.failures if f.gate == "telemetry_vocabulary"]
@@ -367,10 +367,10 @@ def test_validator_idempotent_under_telemetry_gate():
         "match_id": "liverpool_vs_chelsea_2026-04-30",
         "narrative_source": "w84",
     }
-    r1 = _validate_narrative_for_persistence(
+    r1 = validate_narrative_for_persistence(
         content, evidence_pack=None, edge_tier="gold", source_label="w84"
     )
-    r2 = _validate_narrative_for_persistence(
+    r2 = validate_narrative_for_persistence(
         content, evidence_pack=None, edge_tier="gold", source_label="w84"
     )
     assert r1.passed == r2.passed

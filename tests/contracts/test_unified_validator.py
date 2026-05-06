@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from narrative_validator import (  # noqa: E402  (import after sys.path)
     ValidationFailure,
     ValidationResult,
-    _validate_narrative_for_persistence,
+    validate_narrative_for_persistence,
 )
 
 
@@ -123,7 +123,7 @@ def _narrative(setup: str = "", edge: str = "", risk: str = "", verdict: str = "
 
 
 def test_empty_content_none_evidence_passes() -> None:
-    r = _validate_narrative_for_persistence(
+    r = validate_narrative_for_persistence(
         content={"narrative_html": "", "verdict_html": "", "match_id": "x_vs_y_2026-04-29",
                  "narrative_source": "w82"},
         evidence_pack=None,
@@ -146,7 +146,7 @@ def test_clean_narrative_passes(evidence_pack_clean) -> None:
         verdict="Arteta's Gunners look poised — back the home win at 1.85.",
     )
     verdict = "Arteta's Gunners look poised — back the home win at 1.85."
-    r = _validate_narrative_for_persistence(
+    r = validate_narrative_for_persistence(
         content={"narrative_html": narrative, "verdict_html": verdict,
                  "match_id": "arsenal_vs_tottenham_2026-04-29", "narrative_source": "w84"},
         evidence_pack=evidence_pack_clean,
@@ -172,7 +172,7 @@ def test_clean_narrative_passes(evidence_pack_clean) -> None:
 )
 def test_narrative_anfield_critical_venue_leak() -> None:
     narrative = _narrative(setup="The clash at Anfield will be tough for the visitors.")
-    r = _validate_narrative_for_persistence(
+    r = validate_narrative_for_persistence(
         content={"narrative_html": narrative, "verdict_html": "",
                  "match_id": "liverpool_vs_x_2026-04-29", "narrative_source": "w84"},
         evidence_pack=None,
@@ -200,7 +200,7 @@ def test_narrative_goodison_critical_venue_leak() -> None:
     """LB-1 closure regression: Goodison was the canonical leak case. Everton
     moved to Hill Dickinson Stadium in August 2025 (CLAUDE.md Rule 2)."""
     narrative = _narrative(setup="A trip to Goodison Park is always tricky.")
-    r = _validate_narrative_for_persistence(
+    r = validate_narrative_for_persistence(
         content={"narrative_html": narrative, "verdict_html": "",
                  "match_id": "everton_vs_x_2026-04-29", "narrative_source": "w82"},
         evidence_pack=None,
@@ -228,7 +228,7 @@ def test_setup_elo_implied_critical_pricing() -> None:
     narrative = _narrative(
         setup="Arsenal are Elo-implied 70% favourites at home. Strong showings recently."
     )
-    r = _validate_narrative_for_persistence(
+    r = validate_narrative_for_persistence(
         content={"narrative_html": narrative, "verdict_html": "",
                  "match_id": "arsenal_vs_x_2026-04-29", "narrative_source": "w84"},
         evidence_pack=None,
@@ -254,7 +254,7 @@ def test_setup_integer_probability_critical_pricing() -> None:
     narrative = _narrative(
         setup="Arsenal have an 84% probability of winning this fixture at home."
     )
-    r = _validate_narrative_for_persistence(
+    r = validate_narrative_for_persistence(
         content={"narrative_html": narrative, "verdict_html": "",
                  "match_id": "arsenal_vs_x_2026-04-29", "narrative_source": "w84"},
         evidence_pack=None,
@@ -292,7 +292,7 @@ def test_amorim_united_with_carrick_evidence_critical(evidence_pack_man_utd_carr
         create=True,
         return_value=fake_violations,
     ):
-        r = _validate_narrative_for_persistence(
+        r = validate_narrative_for_persistence(
             content={"narrative_html": narrative, "verdict_html": "",
                      "match_id": "manchester_united_vs_brighton_2026-04-29",
                      "narrative_source": "w84"},
@@ -325,7 +325,7 @@ def test_nuno_forest_with_pereira_evidence_critical(evidence_pack_forest_pereira
         create=True,
         return_value=fake_violations,
     ):
-        r = _validate_narrative_for_persistence(
+        r = validate_narrative_for_persistence(
             content={"narrative_html": narrative, "verdict_html": "",
                      "match_id": "nottingham_forest_vs_brentford_2026-04-29",
                      "narrative_source": "w84"},
@@ -366,7 +366,7 @@ def test_fabricated_h2h_critical(evidence_pack_clean) -> None:
         create=True,
         return_value=fake_violations,
     ):
-        r = _validate_narrative_for_persistence(
+        r = validate_narrative_for_persistence(
             content={"narrative_html": narrative, "verdict_html": "",
                      "match_id": "x_vs_y_2026-04-29", "narrative_source": "w84"},
             evidence_pack=pack,
@@ -404,7 +404,7 @@ def test_form_claim_no_evidence_major(evidence_pack_clean) -> None:
         create=True,
         return_value=fake_violations,
     ):
-        r = _validate_narrative_for_persistence(
+        r = validate_narrative_for_persistence(
             content={"narrative_html": narrative, "verdict_html": "",
                      "match_id": "arsenal_vs_x_2026-04-29", "narrative_source": "w84"},
             evidence_pack=pack,
@@ -438,7 +438,7 @@ def test_premium_critical_refuse_log_marker(caplog) -> None:
     # The validator only reports — but we assert the log marker text exists
     # in the validator's own log path so the caller's log is consistent.
     with caplog.at_level("WARNING", logger="narrative_validator"):
-        r = _validate_narrative_for_persistence(
+        r = validate_narrative_for_persistence(
             content={"narrative_html": narrative, "verdict_html": "",
                      "match_id": "liverpool_vs_x_2026-04-29", "narrative_source": "w84"},
             evidence_pack=None,
@@ -473,7 +473,7 @@ def test_premium_major_fails_result() -> None:
     # Force a MAJOR-only failure via the BANNED_NARRATIVE_PHRASES gate.
     # "value play" is on the banned list.
     narrative_with_banned = narrative + "\n\n\U0001f3c6 <b>Verdict</b>\nA classic value play here."
-    r = _validate_narrative_for_persistence(
+    r = validate_narrative_for_persistence(
         content={"narrative_html": narrative_with_banned,
                  "verdict_html": "A classic value play here.",
                  "match_id": "x_vs_y_2026-04-29", "narrative_source": "w84"},
@@ -499,7 +499,7 @@ def test_premium_major_fails_result() -> None:
 )
 def test_non_premium_critical_refuse() -> None:
     narrative = _narrative(setup="Trip to Goodison Park is tricky.")
-    r = _validate_narrative_for_persistence(
+    r = validate_narrative_for_persistence(
         content={"narrative_html": narrative, "verdict_html": "",
                  "match_id": "everton_vs_x_2026-04-29", "narrative_source": "w82"},
         evidence_pack=None,
@@ -667,10 +667,10 @@ def test_validator_is_idempotent() -> None:
     narrative = _narrative(setup="Trip to Anfield is brutal.")
     content = {"narrative_html": narrative, "verdict_html": "",
                "match_id": "x_vs_y_2026-04-29", "narrative_source": "w84"}
-    r1 = _validate_narrative_for_persistence(
+    r1 = validate_narrative_for_persistence(
         content=content, evidence_pack=None, edge_tier="gold", source_label="w84"
     )
-    r2 = _validate_narrative_for_persistence(
+    r2 = validate_narrative_for_persistence(
         content=content, evidence_pack=None, edge_tier="gold", source_label="w84"
     )
     assert r1.passed == r2.passed

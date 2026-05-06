@@ -15128,7 +15128,7 @@ async def _store_narrative_cache(
     #   - Non-premium + MAJOR → write with quality_status='quarantined'
     # Sits AFTER the Rule 23 / Rule 24 (premium W82 refusal) and AFTER the
     # legacy _validate_baseline_setup gate (kept for log-marker compatibility).
-    from narrative_validator import _validate_narrative_for_persistence
+    from narrative_validator import validate_narrative_for_persistence
 
     _evidence_pack_dict: dict | None = None
     if evidence_json:
@@ -15140,7 +15140,7 @@ async def _store_narrative_cache(
         except Exception:
             _evidence_pack_dict = None
 
-    _validation = _validate_narrative_for_persistence(
+    _validation = validate_narrative_for_persistence(
         content={
             "narrative_html": html,
             "verdict_html": verdict_html,
@@ -15538,7 +15538,7 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
         return
 
     # FIX-VERDICT-CLOSURE-MINIMAL-RESTORE-01 (2026-04-30) — AC-3.
-    # Route verdict-cache through the dedicated `_validate_verdict_for_persistence`
+    # Route verdict-cache through the dedicated `validate_verdict_for_persistence`
     # helper (verdict-only subset of the unified validator). Tier-aware
     # enforcement matrix matching AC-1:
     #   - Diamond + Gold: CRITICAL → refuse write (log PremiumVerdictRefused).
@@ -15547,8 +15547,8 @@ def _store_verdict_cache_sync(match_key: str, verdict_html: str, tip_data: dict)
     # MINOR severity is informational; never blocks.
     _vc_quality_status: str | None = None
     try:
-        from narrative_validator import _validate_verdict_for_persistence as _vvfp
-        # The verdict-only validator wraps `_validate_narrative_for_persistence`;
+        from narrative_validator import validate_verdict_for_persistence as _vvfp
+        # The verdict-only validator wraps `validate_narrative_for_persistence`;
         # gates 6 (verdict venue), 7 (banned phrases), 8 (telemetry), 9
         # (strong-band tone), 10 (closure rule), 11 (vague content) all fire
         # against verdict_html when narrative_html is empty.
@@ -16656,7 +16656,7 @@ def _find_setup_pricing_semantic_violations(narrative: str) -> list[str]:
         )
 
     # Phase 2 hook (left for the unified validator):
-    #   The unified `_validate_narrative_for_persistence()` (planned for Phase 2)
+    #   The unified `validate_narrative_for_persistence()` (planned for Phase 2)
     #   should call this helper alongside `_find_setup_strict_ban_violations`
     #   and merge results into a single failure-reason list.
     return list(dict.fromkeys(hits))

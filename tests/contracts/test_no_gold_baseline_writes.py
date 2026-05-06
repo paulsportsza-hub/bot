@@ -33,7 +33,7 @@ def test_store_narrative_cache_has_premium_validator_guard(bot_module):
         pytest.skip("cannot inspect source of _store_narrative_cache")
 
     assert "Rule 24 premium-W82 refusal lifted" in src
-    assert "_validate_narrative_for_persistence" in src
+    assert "validate_narrative_for_persistence" in src
     assert '("gold", "diamond")' in src
     assert "PremiumValidatorRefused" in src
     assert "return" in src[src.index("PremiumValidatorRefused"):], (
