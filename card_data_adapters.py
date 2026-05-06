@@ -6,6 +6,8 @@ from card_data import logo_b64 as _logo_b64
 
 _BOT_DIR = Path(__file__).parent
 _HEADER_LOGO = _BOT_DIR / "assets" / "LOGO" / "mzansiedge-wordmark-dark-transparent.png"
+_BOOKMAKER_LOGO_DIR = _BOT_DIR.parent / "assets" / "bookmakers"
+_CANONICAL_BOOKMAKER_LOGO_DIR = Path("/home/paulsportsza/assets/bookmakers")
 
 _TIER_EMOJIS: dict[str, str] = {
     "bronze": "🥉",
@@ -23,6 +25,13 @@ _TIER_NAMES: dict[str, str] = {
 
 def _logo() -> str:
     return _logo_b64(_HEADER_LOGO, max_height=64)
+
+
+def _bookmaker_logo(name: str) -> str:
+    logo_path = _BOOKMAKER_LOGO_DIR / f"logo-{name}.png"
+    if not logo_path.exists():
+        logo_path = _CANONICAL_BOOKMAKER_LOGO_DIR / f"logo-{name}.png"
+    return _logo_b64(logo_path, max_height=64)
 
 
 # ── 1: Plans ──────────────────────────────────────────────────────────────────
@@ -1364,30 +1373,35 @@ def build_bookmaker_directory_data() -> dict:
             "name": "Betway",
             "offer": "Fast payouts · Wide markets · Great live betting",
             "domain": "betway.co.za",
+            "logo_b64": _bookmaker_logo("betway"),
         },
         {
             "badge": "🎬",
             "name": "Hollywoodbets",
             "offer": "SA's favourite · USSD betting · Top Bet games",
             "domain": "hollywoodbets.net",
+            "logo_b64": _bookmaker_logo("hollywoodbets"),
         },
         {
             "badge": "⚡",
             "name": "Sportingbet",
             "offer": "Competitive odds · Quick registration · Live streaming",
             "domain": "sportingbet.co.za",
+            "logo_b64": _bookmaker_logo("sportingbet"),
         },
         {
             "badge": "🌟",
             "name": "SupaBets",
             "offer": "Easy sign-up · Popular in SA · Good promos",
             "domain": "supabets.co.za",
+            "logo_b64": _bookmaker_logo("supabets"),
         },
         {
             "badge": "🎰",
             "name": "GBets",
             "offer": "Sharp odds · Goldrush Group · Growing fast",
             "domain": "gbets.co.za",
+            "logo_b64": _bookmaker_logo("gbets"),
         },
     ]
     return {
