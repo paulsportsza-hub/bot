@@ -26021,10 +26021,11 @@ def _reserve_tier_fire_diamond_dm_sync(
             (_now, edge_id, row_version, user_id, _stale_before),
         )
         _tfadm_conn.execute(
-            "DELETE FROM alerts_diamond_dm_log "
+            "UPDATE alerts_diamond_dm_log "
+            "SET status = 'unknown', sent_at = ? "
             "WHERE edge_id = ? AND row_version = ? AND user_id = ? "
             "AND status = 'sending' AND sent_at < ?",
-            (edge_id, row_version, user_id, _stale_before),
+            (_now, edge_id, row_version, user_id, _stale_before),
         )
         _cur = _tfadm_conn.execute(
             "INSERT OR IGNORE INTO alerts_diamond_dm_log "

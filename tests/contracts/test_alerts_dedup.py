@@ -938,6 +938,55 @@ async def test_fire_diamond_edge_dms_blocks_stale_sending_for_omitted_user(
     assert row == ("unknown",)
 
 
+def test_reserve_diamond_dm_preserves_stale_sending_as_unknown(
+    monkeypatch,
+    tmp_path,
+):
+    import bot
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+
+    row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
+    conn = sqlite3.connect(db_path)
+    try:
+        bot._ensure_tier_fire_diamond_dm_log_schema(conn)
+        conn.execute(
+            "INSERT INTO alerts_diamond_dm_log "
+            "(edge_id, row_version, user_id, status, sent_at) "
+            "VALUES (?, ?, 101, 'sending', ?)",
+            (
+                "edge_contract_alerts_dedup_01",
+                row_version,
+                time.time() - bot._TIER_FIRE_DIAMOND_DM_STALE_SECONDS - 1,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert (
+        bot._reserve_tier_fire_diamond_dm_sync(
+            "edge_contract_alerts_dedup_01",
+            row_version,
+            101,
+        )
+        is None
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT user_id, status FROM alerts_diamond_dm_log WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [(101, "unknown")]
+
+
 @pytest.mark.asyncio
 async def test_diamond_dm_retryable_failure_leaves_edge_unposted(
     monkeypatch,
