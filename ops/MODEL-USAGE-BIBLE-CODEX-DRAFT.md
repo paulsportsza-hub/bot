@@ -1,8 +1,8 @@
 # MzansiEdge Model Usage Bible - Codex Evidence Draft
 
-Brief: `INV-MODEL-USAGE-BIBLE-CODEX-PERSPECTIVE-01`  
-Authoring model: Codex XHigh  
-Date: 2026-05-06  
+Brief: `INV-MODEL-USAGE-BIBLE-CODEX-PERSPECTIVE-01`
+Authoring model: Codex XHigh
+Date: 2026-05-06
 Status: draft for AUDITOR reconciliation, not a routing lock
 
 ## Evidence Base
@@ -181,6 +181,13 @@ class ReviewJob:
     risk_tags: tuple[str, ...]
     review_mode: Literal["review", "adversarial-review"]
 
+@dataclass(frozen=True)
+class ReviewPlan:
+    executor_model: str
+    reviewer_model: str
+    review_mode: Literal["review", "adversarial-review"]
+    reason: str
+
 REVIEW_ROTATION = {
     "sonnet": "codex-xhigh",
     "codex-xhigh": "opus-max",
@@ -188,17 +195,16 @@ REVIEW_ROTATION = {
     "haiku": "codex-xhigh",
 }
 
-def enqueue_review_job(meta: BriefMeta, head_sha: str) -> ReviewJob:
-    reviewer = REVIEW_ROTATION[normalise_model(meta.executor_model)]
+def enqueue_review_job(meta: BriefMeta, head_sha: str, plan: ReviewPlan) -> ReviewJob:
     return ReviewJob(
         brief_id=meta.brief_id,
-        executor_model=meta.executor_model,
-        reviewer_model=reviewer,
+        executor_model=plan.executor_model,
+        reviewer_model=plan.reviewer_model,
         repo=meta.target_repo,
         head_sha=head_sha,
         diff_stat=git_show_stat(head_sha),
         risk_tags=tuple(meta.risk_tags),
-        review_mode=meta.review_mode,
+        review_mode=plan.review_mode,
     )
 ```
 
@@ -406,7 +412,12 @@ MODEL_COMMANDS = {
 def _resolve_full_stack(meta: BriefMeta) -> tuple[list[str], ReviewPlan]:
     if meta.declared_model_override:
         executor = normalise_model(meta.declared_model_override)
-        return MODEL_COMMANDS[executor], reviewer_for(executor, meta)
+        return MODEL_COMMANDS[executor], ReviewPlan(
+            executor_model=executor,
+            reviewer_model=reviewer_for(executor, meta),
+            review_mode=meta.review_mode,
+            reason="declared model override",
+        )
 
     prod_file_count = count_production_paths(meta.touched_paths)
     for sig in TASK_SIGNATURES:
@@ -414,13 +425,15 @@ def _resolve_full_stack(meta: BriefMeta) -> tuple[list[str], ReviewPlan]:
             executor = sig["executor"]
             review_mode = max_review_mode(meta.review_mode, sig["review_mode"])
             return MODEL_COMMANDS[executor], ReviewPlan(
-                reviewer=sig["reviewer"],
+                executor_model=executor,
+                reviewer_model=sig["reviewer"],
                 review_mode=review_mode,
                 reason=sig["reason"],
             )
 
     return MODEL_COMMANDS["sonnet"], ReviewPlan(
-        reviewer="codex-xhigh",
+        executor_model="sonnet",
+        reviewer_model="codex-xhigh",
         review_mode=meta.review_mode,
         reason="safe default",
     )
