@@ -865,6 +865,78 @@ async def test_fire_diamond_edge_dms_blocks_unresolved_for_omitted_user(
         row_version,
     )
 
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT status FROM alerts_diamond_dm_log WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("posting",)
+
+
+@pytest.mark.asyncio
+async def test_fire_diamond_edge_dms_blocks_stale_sending_for_omitted_user(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import bot
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "card_pipeline",
+        SimpleNamespace(
+            render_card_bytes=lambda *args, **kwargs: (b"png", None, None)
+        ),
+    )
+
+    row_version = "2026-05-06T08:00:00|diamond|Home Win|1.95|playabets|0.08"
+    conn = sqlite3.connect(db_path)
+    try:
+        bot._ensure_tier_fire_diamond_dm_log_schema(conn)
+        conn.execute(
+            "INSERT INTO alerts_diamond_dm_log "
+            "(edge_id, row_version, user_id, status, sent_at) "
+            "VALUES (?, ?, 101, 'sending', ?)",
+            (
+                "edge_contract_alerts_dedup_01",
+                row_version,
+                time.time() - bot._TIER_FIRE_DIAMOND_DM_STALE_SECONDS - 1,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def fake_diamond_users():
+        return []
+
+    monkeypatch.setattr(bot.db, "get_active_diamond_users", fake_diamond_users)
+
+    assert not await bot._fire_diamond_edge_dms(
+        SimpleNamespace(bot=SimpleNamespace()),
+        {"match_key": "contract_home_vs_contract_away_2026-05-17"},
+        "contract_home_vs_contract_away_2026-05-17",
+        "edge_contract_alerts_dedup_01",
+        row_version,
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT status FROM alerts_diamond_dm_log WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("unknown",)
+
 
 @pytest.mark.asyncio
 async def test_diamond_dm_retryable_failure_leaves_edge_unposted(
@@ -1020,6 +1092,54 @@ async def test_final_mark_revalidates_unsettled_result(monkeypatch, tmp_path):
     finally:
         conn.close()
     assert row == (0, None)
+
+
+@pytest.mark.asyncio
+async def test_tier_fire_alerts_null_confirming_signals_can_claim_and_mark(
+    monkeypatch,
+    tmp_path,
+):
+    import bot
+    import bot_lib.alerts_direct as alerts_direct
+    import scrapers.edge.edge_config as edge_config
+
+    db_path = str(tmp_path / "odds.db")
+    _create_alerts_edge_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE edge_results SET confirming_signals = NULL WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setattr(edge_config, "DB_PATH", db_path)
+
+    sends: list[tuple[str, int | None]] = []
+
+    async def fake_post_to_alerts(tip, edge_id, tier_assigned_at=None):
+        sends.append((edge_id, tip.get("confirming_signals")))
+        return alerts_direct.AlertsSendResult(
+            "https://t.me/c/3789410835/1",
+            new_send=True,
+        )
+
+    monkeypatch.setattr(alerts_direct, "post_to_alerts", fake_post_to_alerts)
+
+    await bot._tier_fire_alerts_job(SimpleNamespace())
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT posted_to_alerts_direct, posted_to_alerts_direct_claim_id "
+            "FROM edge_results WHERE edge_id = ?",
+            ("edge_contract_alerts_dedup_01",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert sends == [("edge_contract_alerts_dedup_01", 0)]
+    assert row == (1, None)
 
 
 @pytest.mark.asyncio

@@ -26231,10 +26231,11 @@ def _has_unresolved_tier_fire_diamond_dm_sync(edge_id: str, row_version: str) ->
             (_now, edge_id, row_version, _stale_before),
         )
         _tfadm_conn.execute(
-            "DELETE FROM alerts_diamond_dm_log "
+            "UPDATE alerts_diamond_dm_log "
+            "SET status = 'unknown', sent_at = ? "
             "WHERE edge_id = ? AND row_version = ? "
             "AND status = 'sending' AND sent_at < ?",
-            (edge_id, row_version, _stale_before),
+            (_now, edge_id, row_version, _stale_before),
         )
         _row = _tfadm_conn.execute(
             "SELECT 1 FROM alerts_diamond_dm_log "
@@ -26342,6 +26343,7 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         _tfa_mk = _tfa_row.get("match_key") or ""
         _tfa_tier = (_tfa_row.get("edge_tier") or "gold").lower()
         _tfa_row_version = _tier_fire_alerts_row_version(_tfa_row)
+        _tfa_confirming_signals = _tfa_row.get("confirming_signals")
         if not _tfa_edge_id or not _tfa_mk:
             continue
 
@@ -26363,7 +26365,10 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "AND league = ? "
                 "AND match_date = ? "
                 "AND composite_score = ? "
-                "AND confirming_signals = ? "
+                "AND ("
+                "  (confirming_signals IS NULL AND ? IS NULL) "
+                "  OR confirming_signals = ?"
+                ") "
                 "AND recommended_at = ? "
                 "AND recommended_at >= datetime('now', '-2 hours') "
                 "AND posted_to_alerts_direct = 0 "
@@ -26386,7 +26391,8 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     _tfa_row.get("league") or "",
                     _tfa_row.get("match_date") or "",
                     _tfa_row.get("composite_score") or 0,
-                    _tfa_row.get("confirming_signals") or 0,
+                    _tfa_confirming_signals,
+                    _tfa_confirming_signals,
                     _tfa_row.get("recommended_at") or "",
                 ),
                 retries=5,
@@ -26543,7 +26549,10 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     "AND league = ? "
                     "AND match_date = ? "
                     "AND composite_score = ? "
-                    "AND confirming_signals = ?",
+                    "AND ("
+                    "  (confirming_signals IS NULL AND ? IS NULL) "
+                    "  OR confirming_signals = ?"
+                    ")",
                     (
                         _tfa_edge_id,
                         _tfa_claim_id,
@@ -26557,7 +26566,8 @@ async def _tier_fire_alerts_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                         _tfa_row.get("league") or "",
                         _tfa_row.get("match_date") or "",
                         _tfa_row.get("composite_score") or 0,
-                        _tfa_row.get("confirming_signals") or 0,
+                        _tfa_confirming_signals,
+                        _tfa_confirming_signals,
                     ),
                     retries=10,
                     backoff_ms=500,
